@@ -19,6 +19,8 @@
  * never existed, which is a pointer nobody could follow.)
  */
 
+import { navCatalog } from "@/lib/shell/nav-catalog"
+
 /**
  * Exact route matches and prefixes.
  *
@@ -115,9 +117,27 @@ export const FULL_VIEWPORT_ROUTE_PATTERNS: readonly string[] = [
   "/devices/remote-desktop",
 ]
 
+let patterns: readonly string[] | undefined
+
+/**
+ * {@link FULL_VIEWPORT_ROUTE_PATTERNS} plus the route of every active module
+ * destination marked `fullViewport` in its manifest (an exact match). A
+ * module's page declares its shape where it declares its rail entry, so it
+ * edits nothing here.
+ */
+export function fullViewportRoutePatterns(): readonly string[] {
+  patterns ??= [
+    ...FULL_VIEWPORT_ROUTE_PATTERNS,
+    ...navCatalog()
+      .filter((entry) => entry.fullViewport)
+      .map((entry) => entry.route),
+  ]
+  return patterns
+}
+
 /** Whether the compact shell must give this route a definite viewport height. */
 export function needsFullViewport(pathname: string): boolean {
-  for (const pattern of FULL_VIEWPORT_ROUTE_PATTERNS) {
+  for (const pattern of fullViewportRoutePatterns()) {
     // The root route is exact, never a prefix. Every other trailing slash means
     // "and everything under it", which for `"/"` would be the entire app.
     if (pattern === "/") {

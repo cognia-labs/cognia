@@ -21,6 +21,7 @@ import {
   resolveWelcomeStatsPrefs,
   type StoredWelcomeStatsPrefs,
 } from "@/lib/chat/welcome-stats-prefs"
+import { hostModules } from "@/lib/modules/registry"
 import {
   LEGACY_MOBILE_QUICK_ACTION_IDS,
   MOBILE_QUICK_ACTION_CATALOG,
@@ -168,7 +169,17 @@ export function normalizeMobileEntries(raw: unknown): GlanceMobileEntry[] {
   return out
 }
 
-const SHORTCUT_IDS: ReadonlySet<string> = new Set(MOBILE_QUICK_ACTION_CATALOG.map((a) => a.id))
+/**
+ * Every shortcut id a grid may store: the built-ins and each module
+ * destination's `mobileShortcut`, whatever the module's stage, so a stored
+ * shortcut of a module that is off for now is kept rather than dropped.
+ */
+const SHORTCUT_IDS: ReadonlySet<string> = new Set([
+  ...MOBILE_QUICK_ACTION_CATALOG.map((a) => a.id),
+  ...hostModules().flatMap((manifest) =>
+    (manifest.nav ?? []).filter((entry) => entry.mobileShortcut).map((entry) => entry.id)
+  ),
+])
 
 /**
  * Repair a shortcut list: renamed ids mapped, unknown ids dropped, duplicates

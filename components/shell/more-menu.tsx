@@ -58,6 +58,8 @@ export function MoreMenuContent({
   testIdPrefix,
 }: MoreMenuContentProps) {
   const t = useTranslations("desktop.guildRail")
+  // Destination labels are full keys: a module's live in its own namespace.
+  const tLabel = useTranslations()
   const [query, setQuery] = useState("")
   const inputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -68,12 +70,12 @@ export function MoreMenuContent({
     return items.filter((item) =>
       // Localized label first; id/route/aliases match the ⌘K provider's
       // keyword set so "More" and global search agree on what a term finds.
-      [t(item.i18nKey), item.id, item.route, item.aliasKey ? t(`aliases.${item.aliasKey}`) : ""]
+      [tLabel(item.labelKey), item.id, item.route, item.aliasesKey ? tLabel(item.aliasesKey) : ""]
         .join(" ")
         .toLowerCase()
         .includes(q)
     )
-  }, [items, query, t])
+  }, [items, query, tLabel])
 
   const sections = useMemo(() => groupSidebarNavByCategory(filtered), [filtered])
   // What Enter in the filter opens: the first entry as displayed, which is
@@ -159,7 +161,7 @@ export function MoreMenuContent({
                 {t(`categories.${section.category}`)}
               </div>
               {section.items.map((item) => {
-                const label = t(item.i18nKey)
+                const label = tLabel(item.labelKey)
                 const active = isActive(item.route)
                 const count = navBadgeCount(badges, item.id)
                 return (

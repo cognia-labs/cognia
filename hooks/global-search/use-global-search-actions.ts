@@ -99,7 +99,8 @@ export function useGlobalSearchActions({
   close,
 }: UseGlobalSearchActionsOptions) {
   const t = useTranslations("globalSearch")
-  const railT = useTranslations("desktop.guildRail")
+  // Page labels are full keys: a module's live in its own namespace.
+  const labelT = useTranslations()
   const router = useRouter()
   // Read at render, while the dialog is still open over the page it acts on.
   const pathname = usePathname()
@@ -147,7 +148,7 @@ export function useGlobalSearchActions({
         toast.info(t("toasts.noNavigationPage"))
         return
       }
-      const label = railT(page.i18nKey)
+      const label = labelT(page.labelKey)
       // Literal keys on purpose, so the i18n audits can see every one in use.
       const [write, done]: [(pageId: string) => Promise<void>, string] =
         id === "pin-current-page"
@@ -168,7 +169,7 @@ export function useGlobalSearchActions({
         )
       }
     },
-    [pathname, t, railT]
+    [pathname, t, labelT]
   )
 
   /*

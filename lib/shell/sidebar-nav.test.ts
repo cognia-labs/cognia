@@ -11,6 +11,7 @@ import {
   defaultModeOrder,
   getSidebarCatalog,
   mergeVisibleModeOrder,
+  navEntryIcon,
   migrateLegacyIds,
   moveVisibleMode,
   navItemForPath,
@@ -19,6 +20,8 @@ import {
   type SidebarCatalogItem,
 } from "./sidebar-nav"
 import type { RuntimeSnapshot } from "@/lib/runtime/operation-availability"
+import { resolveLucideIcon } from "@/lib/icons/lucide-catalog"
+import { buildNavCatalog, navCatalog } from "@/lib/shell/nav-catalog"
 
 describe("SIDEBAR_NAV_ICONS", () => {
   it("maps every catalog id to an icon", () => {
@@ -58,10 +61,46 @@ describe("migrateLegacyIds", () => {
   })
 })
 
+describe("navEntryIcon", () => {
+  it("draws a built-in from the table and a module destination from its icon name", () => {
+    expect(navEntryIcon({ id: "inbox" })).toBe(SIDEBAR_NAV_ICONS.inbox)
+    expect(navEntryIcon({ id: "demo", iconName: "Users" })).toBe(resolveLucideIcon("Users"))
+  })
+
+  it("draws every destination of the generated catalog", () => {
+    for (const entry of navCatalog())
+      expect([entry.id, navEntryIcon(entry) === undefined]).toEqual([entry.id, false])
+  })
+})
+
 describe("getSidebarCatalog", () => {
+  it("lists a module destination among the built-ins, drawn with its own icon", () => {
+    const catalog = buildNavCatalog(SIDEBAR_NAV_META, [
+      {
+        id: "demo",
+        nav: [
+          {
+            id: "demo",
+            route: "/demo",
+            label: "demo.nav.label",
+            icon: "Users",
+            group: "feature",
+            category: "agents",
+            after: "inbox",
+          },
+        ],
+      },
+    ])
+    const cat = getSidebarCatalog("tauri", undefined, catalog)
+    const index = cat.findIndex((item) => item.id === "demo")
+    expect(cat[index - 1]?.id).toBe("inbox")
+    expect(cat[index]).toMatchObject({ labelKey: "demo.nav.label", module: "demo" })
+    expect(cat[index]?.Icon).toBe(resolveLucideIcon("Users"))
+  })
+
   it("returns the full catalog with icons on desktop", () => {
     const cat = getSidebarCatalog("tauri")
-    expect(cat).toHaveLength(SIDEBAR_NAV_META.length)
+    expect(cat).toHaveLength(navCatalog().length)
     expect(cat.every((c) => typeof c.Icon === "function" || typeof c.Icon === "object")).toBe(true)
   })
 

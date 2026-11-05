@@ -38,7 +38,8 @@ import { useMobileGlanceContext } from "./mobile-glance-provider"
 
 export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
   const t = useTranslations("glance.modules.quick")
-  const tActions = useTranslations("mobile.home.actions")
+  // Shortcut labels are full keys: a module's live in its own namespace.
+  const tActions = useTranslations()
   const router = useRouter()
   const reduce = useReducedMotion()
   const illustrated = useIllustratedNavigationIcons()
@@ -78,7 +79,7 @@ export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
           </span>
           <div className="-my-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
             {items.map((item) => {
-              const label = tActions(item.i18nKey)
+              const label = tActions(item.labelKey)
               return (
                 <button
                   key={item.id}
@@ -160,7 +161,7 @@ export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
               />
             </span>
             <span className="w-full truncate text-[11px] leading-tight text-muted-foreground group-active:text-foreground">
-              {tActions(item.i18nKey)}
+              {tActions(item.labelKey)}
             </span>
           </motion.button>
         ))}

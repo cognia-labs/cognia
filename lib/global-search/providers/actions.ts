@@ -307,7 +307,7 @@ function navigationCandidates(ctx: GlobalSearchContext): ActionCandidate[] {
   const rows: ActionCandidate[] = []
   const page = nav.currentPage
   if (page) {
-    const label = t(`desktop.guildRail.${page.i18nKey}`)
+    const label = t(page.labelKey)
     if (!nav.currentPinned) {
       rows.push({
         id: "pin-current-page",

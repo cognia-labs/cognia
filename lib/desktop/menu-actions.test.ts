@@ -104,7 +104,7 @@ jest.mock("@cognia/logging", () => ({
 import { readFileSync } from "fs"
 import { join } from "path"
 
-import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
+import { navCatalog } from "@/lib/shell/nav-catalog"
 
 import { GO_MENU_SECTIONS } from "./go-menu"
 import {
@@ -181,12 +181,7 @@ test("MENU_ACTION_IDS is a stable list — every id is unique", () => {
 
 test("GO_MENU_IDS is one go-<id> per catalog entry plus DMs / Canvas / Settings", () => {
   expect([...GO_MENU_IDS].sort()).toEqual(
-    [
-      ...SIDEBAR_NAV_META.map((meta) => `go-${meta.id}`),
-      "go-dms",
-      "go-canvas",
-      "go-settings",
-    ].sort()
+    [...navCatalog().map((meta) => `go-${meta.id}`), "go-dms", "go-canvas", "go-settings"].sort()
   )
 })
 
@@ -225,7 +220,7 @@ test("MENU_ACTION_IDS is the command ids followed by the go ids, with no go id h
 })
 
 test("GO_ROUTES maps every non-DM/Canvas go id to its catalog route", () => {
-  for (const meta of SIDEBAR_NAV_META) {
+  for (const meta of navCatalog()) {
     const id = `go-${meta.id}`
     expect(GO_ROUTES[id]).toBe(id === "go-inbox" ? "/inbox/all" : meta.route)
   }
@@ -690,9 +685,19 @@ describe("Rust menu parity (source-parsed)", () => {
   })
 
   test("the native Go submenu's labels are the rail's English labels", () => {
+    // Labels are full keys (a module destination's live in its own namespace),
+    // so they are looked up in the English aggregate.
     const en = JSON.parse(
-      readFileSync(join(__dirname, "..", "..", "i18n", "messages", "en", "desktop.json"), "utf8")
-    ) as { guildRail: Record<string, unknown> }
+      readFileSync(join(__dirname, "..", "..", "i18n", "messages", "en.json"), "utf8")
+    ) as Record<string, unknown>
+    const english = (key: string): unknown =>
+      key
+        .split(".")
+        .reduce<unknown>(
+          (node, part) =>
+            node && typeof node === "object" ? (node as Record<string, unknown>)[part] : undefined,
+          en
+        )
     const labelKeyById = new Map<string, string>(
       GO_MENU_SECTIONS.flatMap((section) =>
         section.map((item): [string, string] => [item.id, item.labelKey])
@@ -701,7 +706,7 @@ describe("Rust menu parity (source-parsed)", () => {
     for (const [id, label] of rustGoMenuSections().flat()) {
       const labelKey = labelKeyById.get(id)
       expect(labelKey).toBeDefined()
-      expect([id, label]).toEqual([id, en.guildRail[labelKey as string]])
+      expect([id, label]).toEqual([id, english(labelKey as string)])
     }
   })
 

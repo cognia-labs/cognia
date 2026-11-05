@@ -23,7 +23,8 @@ export interface BarTitleLabel {
 }
 
 export function useBarTitle({ followRoute = true }: { followRoute?: boolean } = {}): BarTitleLabel {
-  const tRail = useTranslations("desktop.guildRail")
+  // Page labels are full keys: a module's live in its own namespace.
+  const tLabel = useTranslations()
   const pathname = usePathname() ?? "/"
   const { label: conversation } = useActiveSessionLabel()
   const title = resolveBarTitle(followRoute ? pathname : "/", conversation)
@@ -31,7 +32,7 @@ export function useBarTitle({ followRoute = true }: { followRoute?: boolean } = 
     case "conversation":
       return { title, label: title.label }
     case "page":
-      return { title, label: tRail(title.i18nKey) }
+      return { title, label: tLabel(title.labelKey) }
     case "app":
       return { title, label: null }
   }

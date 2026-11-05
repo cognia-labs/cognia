@@ -40,7 +40,8 @@ export interface GoMenuItemsProps {
 }
 
 export function GoMenuItems({ kit, surface, handlerFor, withLabel = false }: GoMenuItemsProps) {
-  const tRail = useTranslations("desktop.guildRail")
+  // Go-menu labels are full keys: a module's live in its own namespace.
+  const tRail = useTranslations()
   const tMenu = useTranslations("desktop.menu")
   const { Item, Label, Separator } = kit
   return (

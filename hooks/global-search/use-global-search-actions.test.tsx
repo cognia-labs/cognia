@@ -31,9 +31,13 @@ const saveSettings = jest.fn(async (_patch: Record<string, unknown>) => undefine
 const settingsState: { settings: { sidebarSide?: "left" | "right" } | null } = { settings: {} }
 let mockPathname: string | null = "/inbox/c"
 
+// Destination labels are full keys (`desktop.guildRail.inbox`); reading a
+// built-in one back as its suffix keeps the assertions naming the destination.
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
-    vars ? `${key}:${JSON.stringify(vars)}` : key,
+  useTranslations: () => (key: string, vars?: Record<string, unknown>) => {
+    const label = key.replace(/^desktop\.guildRail\./, "")
+    return vars ? `${label}:${JSON.stringify(vars)}` : label
+  },
 }))
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push }),

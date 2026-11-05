@@ -1,7 +1,7 @@
 import { renderHook } from "@testing-library/react"
 
 jest.mock("next-intl", () => ({
-  useTranslations: (ns: string) => (key: string) => `${ns}.${key}`,
+  useTranslations: (ns?: string) => (key: string) => (ns ? `${ns}.${key}` : key),
 }))
 
 const pathRef = { value: "/" as string | null }

@@ -26,9 +26,10 @@
  * - `tables` only declare ownership; the schema stays in `CURRENT_SCHEMA`.
  *
  * The registries generated from these fields arrive registry by registry
- * (§13). Since M1, `searchProviders`, `slashCommands` and `settingsSections` are
- * generated (`scripts/build/gen-module-registry.mjs`) and read by their shells;
- * every other field is shape-checked by the gate and read by nothing yet.
+ * (§13). `searchProviders`, `slashCommands` and `settingsSections` (M1) and
+ * `nav` (M2) are generated (`scripts/build/gen-module-registry.mjs`) and read
+ * by their shells; every other field is shape-checked by the gate and read by
+ * nothing yet.
  */
 
 import type { ComponentType } from "react"
@@ -37,6 +38,7 @@ import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/bu
 import type { GlobalSearchProvider } from "@/lib/global-search/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type { CanonicalExtensionPoint } from "@/lib/plugin/contracts/plugin-points"
+import type { SidebarNavCategory, SidebarNavMeta } from "@/types/shell/sidebar"
 
 /** A lazy entry. The only kind of code a manifest may hold. */
 export type LazyModule<T = unknown> = () => Promise<T>
@@ -149,6 +151,8 @@ export interface HostModuleManifest {
   /** Global-search providers (ADR-0129), registered beside the built-ins. */
   searchProviders?: LazyModule<ModuleSearchProvidersModule>
   slashCommands?: readonly ModuleSlashCommand[]
+  /** Navigation catalog destinations, placed among the built-ins by `after`. */
+  nav?: readonly ModuleNavEntry[]
   prompts?: LazyModule
   flags?: Readonly<Record<string, ModuleFlag>>
   /** i18n namespace under `i18n/messages/<locale>/`. */
@@ -187,9 +191,57 @@ export interface ModuleSettingsSection {
   load: LazyModule<ModuleSettingsSectionModule>
 }
 
+/**
+ * A destination on the navigation catalog: the desktop rail and its More
+ * menu, the Go menu, ⌘K, the bar title and the surface boundary
+ * (`lib/shell/sidebar-nav.ts:sidebarNavCatalog`), as `SidebarNavMeta`
+ * describes the built-in ones.
+ *
+ * A host-layer field, although the rail is UI: every reader of the catalog is
+ * under `lib/`, and the UI registry lives under `components/`, which `lib`
+ * does not import (ADR-0250 phase 2). It is plain data, and the icon is a
+ * name, so the brain carries only strings.
+ */
 export interface ModuleNavEntry {
+  /** Stable key, persisted in `SidebarLayout`. Never reused or renamed. */
+  id: string
+  /** Top-level route under `app/`. */
   route: string
+  /** Full i18n key in the module's own namespace: `"squads.nav.label"`. */
+  label: string
+  /** Full i18n key of a comma-separated list of extra ⌘K search terms. */
+  aliases?: string
+  /** A Lucide icon name from the catalog (`lib/icons/lucide-catalog.tsx`), e.g. `"Users"`. */
   icon: string
+  /** As `SidebarNavMeta.group`. */
+  group: SidebarNavMeta["group"]
+  /** As `SidebarNavMeta.category`: the More-menu section. */
+  category: SidebarNavCategory
+  /**
+   * The catalog id this entry follows, in the catalog and in the Go menu
+   * alike; absent means the end of the catalog.
+   */
+  after?: string
+  /** Where the Go menu places it, when that differs from `after`. */
+  goMenuAfter?: string
+  /** As `SidebarNavMeta.desktopOnly`. */
+  desktopOnly?: boolean
+  /** As `SidebarNavMeta.hostOperationGated`. */
+  hostOperationGated?: boolean
+  /** The route owns the viewport (`lib/shell/full-viewport-routes.ts`). */
+  fullViewport?: boolean
+  /**
+   * A shortcut in the phone's quick-action grid (`lib/shell/mobile-home-nav.ts`),
+   * under the same id, route and label.
+   */
+  mobileShortcut?: {
+    /** A Lucide icon name. */
+    icon: string
+    /** A `MobileSpotIconName`: the illustration Anime mode draws. */
+    spotIcon: string
+    /** The shortcut id this one follows in the catalog; absent means the end. */
+    after?: string
+  }
 }
 
 /** A side effect that needs React context, the router, i18n or toasts. Not a runtime. */
@@ -201,8 +253,13 @@ export interface ModuleEffect {
 export interface UiModuleManifest {
   /** Equals the directory name: `components/<id>/module.ui.ts`. */
   id: string
+  /**
+   * Host components filling canonical extension points. The gate checks each
+   * point is canonical and each entry lazy; no module fills one yet, so no
+   * shell reads this field until the first contributor brings the render path
+   * (ADR-0250 §14, M2).
+   */
   slots?: Partial<Record<CanonicalExtensionPoint, LazyModule>>
   settingsSections?: readonly ModuleSettingsSection[]
-  nav?: readonly ModuleNavEntry[]
   effects?: readonly ModuleEffect[]
 }

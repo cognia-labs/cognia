@@ -9,8 +9,10 @@ import type { SelectedGuild } from "@/stores/ui"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { DEFAULT_SIDEBAR_LAYOUT } from "@/types/shell/sidebar"
 
+// Destination labels are full keys (`desktop.guildRail.inbox`); reading a
+// built-in one back as its suffix keeps the assertions naming the destination.
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: () => (key: string) => key.replace(/^desktop\.guildRail\./, ""),
 }))
 
 const routerPush = jest.fn()

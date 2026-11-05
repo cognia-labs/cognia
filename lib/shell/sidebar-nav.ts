@@ -48,18 +48,21 @@ import {
   resolveOrderedLayout,
   type ResolvedOrderedCatalog,
 } from "@/lib/shell/layout-partition"
+import { resolveLucideIcon } from "@/lib/icons/lucide-catalog"
 import type { RuntimeSnapshot } from "@/lib/runtime/operation-availability"
 import { getSurfaceContract, shouldShowSurface } from "@/lib/runtime/surface-contract"
+import { navCatalog, type NavCatalogEntry } from "@/lib/shell/nav-catalog"
 import {
   CANVAS_MODE_ID,
   LEGACY_SIDEBAR_NAV_IDS,
-  SIDEBAR_NAV_META,
   type SidebarLayout,
   type SidebarModesLayout,
-  type SidebarNavMeta,
 } from "@/types/shell/sidebar"
 
-/** id → rail icon. Must cover every id in `SIDEBAR_NAV_META`. */
+/**
+ * id → rail icon. Must cover every id in `SIDEBAR_NAV_META`; a module's
+ * destination names its own icon in its manifest instead.
+ */
 export const SIDEBAR_NAV_ICONS: Record<string, LucideIcon> = {
   workflows: WorkflowIcon,
   inbox: InboxIcon,
@@ -97,8 +100,21 @@ export const SIDEBAR_NAV_ICONS: Record<string, LucideIcon> = {
 }
 
 /** A catalog entry with its resolved icon. */
-export interface SidebarCatalogItem extends SidebarNavMeta {
+export interface SidebarCatalogItem extends NavCatalogEntry {
   Icon: LucideIcon
+}
+
+/**
+ * A destination's rail icon: the built-in table's, else the Lucide icon its
+ * module names. `ActivityIcon` only if neither resolves, which the tests and
+ * the module gate both rule out.
+ */
+export function navEntryIcon(entry: Pick<NavCatalogEntry, "id" | "iconName">): LucideIcon {
+  return (
+    SIDEBAR_NAV_ICONS[entry.id] ??
+    (entry.iconName ? resolveLucideIcon(entry.iconName) : null) ??
+    ActivityIcon
+  )
 }
 
 /**
@@ -115,50 +131,53 @@ export interface SidebarCatalogItem extends SidebarNavMeta {
  */
 export function getSidebarCatalog(
   platform: Platform,
-  runtimeSnapshot?: RuntimeSnapshot
+  runtimeSnapshot?: RuntimeSnapshot,
+  catalog: readonly NavCatalogEntry[] = navCatalog()
 ): SidebarCatalogItem[] {
-  return SIDEBAR_NAV_META.filter((meta) => {
-    if (platform === "tauri") return true
-    // Remote control of something only a host runs: shown only while the
-    // paired host advertises it. Checked first, so neither the mobile
-    // `desktopOnly` rule nor the contract's `standalone` column (the pet's is
-    // `explain`, which `shouldShowSurface` would let through) can override it.
-    if (meta.hostOperationGated) {
-      const operation = getSurfaceContract(meta.id)?.operation
-      return (
-        operation !== undefined &&
-        runtimeSnapshot !== undefined &&
-        hostAdvertisesOperation(runtimeSnapshot, operation)
-      )
-    }
-    // `desktopOnly` is a shell constraint, not a runtime capability. A paired
-    // desktop may advertise the underlying operation to a phone, but the
-    // mobile drawer must still not expose destinations designed only for the
-    // desktop shell. Check this before the runtime contract so the initial
-    // target-less snapshot cannot temporarily reveal them either.
-    if (platform === "mobile" && meta.desktopOnly) return false
-    // A desktop-only surface with no host operation cannot be served by any
-    // companion, so no runtime snapshot can make it reachable here. Without
-    // this the web path below consulted only the surface contract, and a
-    // `standalone: "explain"` surface showed in a browser's rail and ⌘K as a
-    // page that could only explain it does not run there.
-    if (meta.desktopOnly && !getSurfaceContract(meta.id)?.operation) return false
-    if (runtimeSnapshot) {
-      const contract = getSurfaceContract(meta.id)
-      // No `platform !== "tauri"` guard: the `tauri` case returned above, so it
-      // was always true by the time control reached here.
-      if (runtimeSnapshot.target === null && contract?.standalone === "hidden") {
-        return false
+  return catalog
+    .filter((meta) => {
+      if (platform === "tauri") return true
+      // Remote control of something only a host runs: shown only while the
+      // paired host advertises it. Checked first, so neither the mobile
+      // `desktopOnly` rule nor the contract's `standalone` column (the pet's is
+      // `explain`, which `shouldShowSurface` would let through) can override it.
+      if (meta.hostOperationGated) {
+        const operation = getSurfaceContract(meta.id)?.operation
+        return (
+          operation !== undefined &&
+          runtimeSnapshot !== undefined &&
+          hostAdvertisesOperation(runtimeSnapshot, operation)
+        )
       }
-      return contract ? shouldShowSurface(contract, runtimeSnapshot) : false
-    }
-    const contract = getSurfaceContract(meta.id)
-    if (contract?.standalone === "hidden") return false
-    return !meta.desktopOnly
-  }).map((m) => ({
-    ...m,
-    Icon: SIDEBAR_NAV_ICONS[m.id] ?? ActivityIcon,
-  }))
+      // `desktopOnly` is a shell constraint, not a runtime capability. A paired
+      // desktop may advertise the underlying operation to a phone, but the
+      // mobile drawer must still not expose destinations designed only for the
+      // desktop shell. Check this before the runtime contract so the initial
+      // target-less snapshot cannot temporarily reveal them either.
+      if (platform === "mobile" && meta.desktopOnly) return false
+      // A desktop-only surface with no host operation cannot be served by any
+      // companion, so no runtime snapshot can make it reachable here. Without
+      // this the web path below consulted only the surface contract, and a
+      // `standalone: "explain"` surface showed in a browser's rail and ⌘K as a
+      // page that could only explain it does not run there.
+      if (meta.desktopOnly && !getSurfaceContract(meta.id)?.operation) return false
+      if (runtimeSnapshot) {
+        const contract = getSurfaceContract(meta.id)
+        // No `platform !== "tauri"` guard: the `tauri` case returned above, so it
+        // was always true by the time control reached here.
+        if (runtimeSnapshot.target === null && contract?.standalone === "hidden") {
+          return false
+        }
+        return contract ? shouldShowSurface(contract, runtimeSnapshot) : false
+      }
+      const contract = getSurfaceContract(meta.id)
+      if (contract?.standalone === "hidden") return false
+      return !meta.desktopOnly
+    })
+    .map((m) => ({
+      ...m,
+      Icon: navEntryIcon(m),
+    }))
 }
 
 /**

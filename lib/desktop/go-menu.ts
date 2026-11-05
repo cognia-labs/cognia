@@ -5,12 +5,14 @@
  * `components/desktop/go-menu-items.tsx`), the command-center caret's curated
  * subset, and the id set `lib/desktop/menu-actions.ts` routes.
  *
- * Derived from the navigation catalog (`SIDEBAR_NAV_META`, which the desktop
- * shell shows in full) plus three destinations the catalog leaves out: the
- * two chat guilds (Chats, Canvas — they switch the rail's guild rather than
- * open a route) and the footer Settings button. {@link GO_MENU_LAYOUT} only
- * decides order and section breaks; labels and icons come from the rail, so
- * the menu and the rail speak one vocabulary (`desktop.guildRail.*`).
+ * Derived from the navigation catalog (`lib/shell/nav-catalog.ts`, which the
+ * desktop shell shows in full) plus three destinations the catalog leaves
+ * out: the two chat guilds (Chats, Canvas — they switch the rail's guild
+ * rather than open a route) and the footer Settings button.
+ * {@link GO_MENU_LAYOUT} only decides order and section breaks for the
+ * built-ins; a module's destination goes after its `goMenuAfter` anchor.
+ * Labels and icons come from the rail, so the menu and the rail speak one
+ * vocabulary.
  *
  * The native menu (`src-tauri/src/menu.rs:GO_MENU_SECTIONS`) mirrors this
  * table id for id, section for section, with the rail's English labels;
@@ -28,8 +30,8 @@
 
 import { MessagesSquareIcon, PencilRulerIcon, SettingsIcon, type LucideIcon } from "lucide-react"
 
-import { SIDEBAR_NAV_ICONS } from "@/lib/shell/sidebar-nav"
-import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
+import { BUILTIN_NAV_NAMESPACE, navCatalog, type NavCatalogEntry } from "@/lib/shell/nav-catalog"
+import { navEntryIcon } from "@/lib/shell/sidebar-nav"
 
 /**
  * A Go-menu id: `go-<destination>`. A template-literal type rather than a
@@ -42,7 +44,7 @@ export type GoMenuId = `go-${string}`
 export interface GoMenuItem {
   /** The menu id both the native menu and the in-app menus dispatch. */
   id: GoMenuId
-  /** Key under `desktop.guildRail` — the same label the rail shows. */
+  /** Full i18n key — the same label the rail shows. */
   labelKey: string
   /** The destination's rail icon. */
   Icon: LucideIcon
@@ -54,18 +56,19 @@ export interface GoMenuItem {
  * its Canvas mode and its footer Settings button.
  */
 const GO_MENU_EXTRAS: Readonly<Record<string, Omit<GoMenuItem, "id">>> = {
-  dms: { labelKey: "directMessages", Icon: MessagesSquareIcon },
-  canvas: { labelKey: "canvas", Icon: PencilRulerIcon },
-  settings: { labelKey: "settings", Icon: SettingsIcon },
+  dms: { labelKey: `${BUILTIN_NAV_NAMESPACE}.directMessages`, Icon: MessagesSquareIcon },
+  canvas: { labelKey: `${BUILTIN_NAV_NAMESPACE}.canvas`, Icon: PencilRulerIcon },
+  settings: { labelKey: `${BUILTIN_NAV_NAMESPACE}.settings`, Icon: SettingsIcon },
 }
 
 /**
- * Order and section breaks, by destination id (a catalog id or a
+ * Order and section breaks, by destination id (a built-in catalog id or a
  * {@link GO_MENU_EXTRAS} key). A separator goes between sections. Every
- * catalog id should appear exactly once — `go-menu.test.ts` pins that — but
+ * built-in id should appear exactly once — `go-menu.test.ts` pins that — but
  * one that is missing still reaches the menu through
  * {@link resolveGoMenuSections}, so a new rail destination is never
- * unreachable from Go.
+ * unreachable from Go. A module's destination is not listed here: it names
+ * its anchor in its manifest.
  */
 export const GO_MENU_LAYOUT: readonly (readonly string[])[] = [
   [
@@ -99,25 +102,44 @@ export const GO_MENU_LAYOUT: readonly (readonly string[])[] = [
 ]
 
 /**
+ * `layout` with each module destination the layout does not list placed
+ * right after its `goMenuAfter` anchor, in catalog order. An anchor the
+ * layout does not have leaves the destination unplaced.
+ */
+function placeModuleEntries(
+  layout: readonly (readonly string[])[],
+  entries: readonly NavCatalogEntry[]
+): string[][] {
+  const sections = layout.map((section) => [...section])
+  for (const entry of entries) {
+    if (!entry.module || !entry.goMenuAfter) continue
+    if (sections.some((section) => section.includes(entry.id))) continue
+    const section = sections.find((ids) => ids.includes(entry.goMenuAfter!))
+    if (section) section.splice(section.indexOf(entry.goMenuAfter) + 1, 0, entry.id)
+  }
+  return sections
+}
+
+/**
  * Resolve a layout against the catalog. Unknown ids are dropped (a layout
  * entry for a destination that no longer exists must not render a dead
- * item); catalog entries the layout does not place get their own section
- * just before the last one, so they stay reachable until someone files them.
- * Empty sections are dropped. Exported for tests.
+ * item); a module destination joins after its anchor; catalog entries still
+ * unplaced get their own section just before the last one, so they stay
+ * reachable until someone files them. Empty sections are dropped. Exported
+ * for tests.
  */
 export function resolveGoMenuSections(
-  layout: readonly (readonly string[])[]
+  layout: readonly (readonly string[])[],
+  entries: readonly NavCatalogEntry[] = navCatalog()
 ): readonly (readonly GoMenuItem[])[] {
-  const catalog = new Map(SIDEBAR_NAV_META.map((meta) => [meta.id, meta]))
+  const catalog = new Map(entries.map((entry) => [entry.id, entry]))
   const placed = new Set<string>()
   const resolve = (key: string): GoMenuItem | null => {
     if (placed.has(key)) return null
-    const meta = catalog.get(key)
-    if (meta) {
-      const Icon = SIDEBAR_NAV_ICONS[meta.id]
-      if (!Icon) return null
+    const entry = catalog.get(key)
+    if (entry) {
       placed.add(key)
-      return { id: `go-${meta.id}`, labelKey: meta.i18nKey, Icon }
+      return { id: `go-${entry.id}`, labelKey: entry.labelKey, Icon: navEntryIcon(entry) }
     }
     const extra = GO_MENU_EXTRAS[key]
     if (!extra) return null
@@ -125,11 +147,12 @@ export function resolveGoMenuSections(
     return { id: `go-${key}`, ...extra }
   }
 
-  const sections = layout.map((section) =>
+  const sections = placeModuleEntries(layout, entries).map((section) =>
     section.map(resolve).filter((item): item is GoMenuItem => item !== null)
   )
-  const unplaced = SIDEBAR_NAV_META.filter((meta) => !placed.has(meta.id))
-    .map((meta) => resolve(meta.id))
+  const unplaced = entries
+    .filter((entry) => !placed.has(entry.id))
+    .map((entry) => resolve(entry.id))
     .filter((item): item is GoMenuItem => item !== null)
   if (unplaced.length > 0) sections.splice(Math.max(sections.length - 1, 0), 0, unplaced)
   return sections.filter((section) => section.length > 0)

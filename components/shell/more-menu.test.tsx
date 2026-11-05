@@ -24,7 +24,15 @@ import type { SidebarNavCategory } from "@/types/shell/sidebar"
 const Icon = (() => null) as unknown as LucideIcon
 
 function item(id: string, category: SidebarNavCategory, aliasKey?: string): SidebarCatalogItem {
-  return { id, route: `/${id}`, i18nKey: id, group: "auxiliary", category, aliasKey, Icon }
+  return {
+    id,
+    route: `/${id}`,
+    labelKey: id,
+    group: "auxiliary",
+    category,
+    ...(aliasKey ? { aliasesKey: `aliases.${aliasKey}` } : {}),
+    Icon,
+  }
 }
 
 const ITEMS: SidebarCatalogItem[] = [
@@ -90,7 +98,7 @@ describe("MoreMenuContent", () => {
     expect(screen.queryByTestId("more-item-plugins")).not.toBeInTheDocument()
     expect(screen.queryByText("categories.spaces")).not.toBeInTheDocument()
 
-    // aliasKey terms resolve too ("aliases.devices" under the mocked t).
+    // alias terms resolve too ("aliases.devices" under the mocked t).
     await user.clear(filter)
     await user.type(filter, "aliases.devices")
     expect(screen.getByTestId("more-item-devices")).toBeInTheDocument()

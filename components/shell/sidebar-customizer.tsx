@@ -142,6 +142,8 @@ function ModesCustomizer() {
 
 export function SidebarCustomizer(): React.ReactElement {
   const t = useTranslations("desktop.guildRail")
+  // Destination labels are full keys: a module's live in its own namespace.
+  const tLabel = useTranslations()
   const platform = usePlatform()
   const { resolved, pin, unpin, hide, show, reorderPinned, reset, side, setSide } =
     useSidebarLayout()
@@ -154,7 +156,7 @@ export function SidebarCustomizer(): React.ReactElement {
   const setWidth = useUIStore((state) => state.setSidebarWidth)
 
   const toItems = (items: typeof resolved.pinned): CustomizerItem[] =>
-    items.map((i) => ({ id: i.id, Icon: i.Icon, label: t(i.i18nKey) }))
+    items.map((i) => ({ id: i.id, Icon: i.Icon, label: tLabel(i.labelKey) }))
 
   // "Restore defaults" is a no-op when the live layout already matches the
   // factory default. Off the desktop shell the desktop-only items are absent

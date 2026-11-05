@@ -21,6 +21,7 @@ import {
   main,
   readManifest,
   validateHostManifest,
+  validateUiManifest,
 } from "./check-modules.mjs"
 import { GENERATED_HOST, GENERATED_UI, renderRegistries } from "./lib/module-manifests.mjs"
 import { createContext } from "./convergence/counter.mjs"
@@ -436,6 +437,139 @@ test("G5: contributions are checked for shape, icon and clashes between modules"
   assert.ok(result.errors.some((e) => e.includes("label is a full i18n key")))
   assert.ok(
     result.errors.some((e) => e.includes('slash command /crew is also contributed by "crew"'))
+  )
+})
+
+const NAV_ENTRY = {
+  id: "crew",
+  route: "/crew",
+  label: "crew.nav.label",
+  icon: "Users",
+  group: "feature",
+  category: "agents",
+}
+const VOCABULARY = {
+  iconNames: new Set(["Users"]),
+  spotIconNames: new Set(["agent-teams"]),
+  extensionPoints: new Set(["chat.header"]),
+}
+
+test("validateHostManifest checks nav entries against the catalog's vocabulary", () => {
+  const nav = (entry) =>
+    validateHostManifest(
+      { id: "crew", kind: "module", stage: "beta", nav: [entry] },
+      "crew",
+      VOCABULARY
+    )
+  assert.deepEqual(nav(NAV_ENTRY), [])
+  assert.deepEqual(
+    nav({
+      ...NAV_ENTRY,
+      after: "agents",
+      goMenuAfter: "plugins",
+      aliases: "crew.nav.aliases",
+      fullViewport: true,
+      mobileShortcut: { icon: "Users", spotIcon: "agent-teams", after: "twin" },
+    }),
+    []
+  )
+  const errors = nav({
+    ...NAV_ENTRY,
+    id: "Crew",
+    route: "crew",
+    label: "crewLabel",
+    aliases: "crewAliases",
+    icon: "users-x",
+    group: "main",
+    category: "work",
+    fullViewport: "yes",
+    badge: 1,
+    mobileShortcut: { icon: "Users", spotIcon: "crew-art", after: 3, size: "s" },
+  })
+  for (const expected of [
+    'unknown field "badge"',
+    "nav[0].id is lower-case kebab",
+    'nav[0].route is a top-level route ("/x")',
+    "nav[0].label is a full i18n key",
+    "nav[0].aliases is a full i18n key",
+    'nav[0].icon "users-x" is not a Lucide icon name',
+    "nav[0].group is one of feature, auxiliary",
+    "nav[0].category is one of explore, agents, spaces, insights, system, you",
+    "nav[0].fullViewport is true or false",
+    'nav[0].mobileShortcut: unknown field "size"',
+    'nav[0].mobileShortcut.spotIcon "crew-art" is not a MobileSpotIconName',
+    "nav[0].mobileShortcut.after is text",
+  ])
+    assert.ok(
+      errors.some((e) => e.includes(expected)),
+      `${expected} in ${errors.join("; ")}`
+    )
+  assert.ok(
+    validateHostManifest(
+      { id: "crew", kind: "module", stage: "beta", nav: [NAV_ENTRY, NAV_ENTRY] },
+      "crew"
+    ).includes('nav[1].id "crew" is listed twice')
+  )
+})
+
+test("validateUiManifest checks slots against the canonical points; nav is a host field", () => {
+  assert.deepEqual(
+    validateUiManifest(
+      { id: "crew", slots: { "chat.header": { $lazy: "./x" } } },
+      "crew",
+      VOCABULARY
+    ),
+    []
+  )
+  const errors = validateUiManifest(
+    { id: "crew", slots: { "chat.nowhere": { $lazy: "./x" }, "chat.header": "x" }, nav: [] },
+    "crew",
+    VOCABULARY
+  )
+  assert.ok(errors.includes('slots["chat.nowhere"] is not a CANONICAL_EXTENSION_POINTS entry'))
+  assert.ok(errors.some((e) => e.startsWith('slots["chat.header"] is a lazy entry')))
+  assert.ok(errors.includes('unknown field "nav"'))
+})
+
+test("the gate reads the spot icons and extension points from the tree, and nav ids clash", () => {
+  const navManifest = (id) =>
+    HOST_MANIFEST.replace('id: "crew",', `id: "${id}",`).replace(
+      "  searchProviders:",
+      `  nav: [{ id: "crew", route: "/${id}", label: "${id}.nav.label", icon: "Users", group: "feature", category: "agents", mobileShortcut: { icon: "Users", spotIcon: "nope" } }],\n  searchProviders:`
+    )
+  const result = run(
+    moduleTree({
+      "components/mobile/mobile-spot-icon.tsx":
+        'export const MOBILE_SPOT_ICON_NAMES = ["agent-teams", "fleet"] as const\n',
+      "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.ts": [
+        "export const CANONICAL_EXTENSION_POINTS = [",
+        "  // A comment between entries is skipped.",
+        '  "chat.header",',
+        "] as const",
+        "",
+      ].join("\n"),
+      "components/crew/module.ui.ts": UI_MANIFEST.replace(
+        "  settingsSections:",
+        '  slots: { "chat.footer": () => import("./section") },\n  settingsSections:'
+      ),
+      "lib/crew/module.ts": navManifest("crew"),
+      "lib/other/module.ts": navManifest("other"),
+      "lib/other/search.ts": "export const searchProviders = []\n",
+      "lib/other/slash.ts": "export const run = () => {}\n",
+    })
+  )
+  assert.ok(
+    result.errors.some((e) =>
+      e.includes('mobileShortcut.spotIcon "nope" is not a MobileSpotIconName')
+    )
+  )
+  assert.ok(
+    result.errors.some((e) =>
+      e.includes('slots["chat.footer"] is not a CANONICAL_EXTENSION_POINTS entry')
+    )
+  )
+  assert.ok(
+    result.errors.some((e) => e.includes('navigation entry crew is also contributed by "crew"'))
   )
 })
 

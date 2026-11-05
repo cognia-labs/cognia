@@ -117,7 +117,7 @@ export function useGlobalSearchContext({
   const shellNav = useMemo<GlobalSearchShellNav>(() => {
     const page = navItemForPath(pathname ?? "", catalog)
     return {
-      currentPage: page ? { id: page.id, i18nKey: page.i18nKey } : null,
+      currentPage: page ? { id: page.id, labelKey: page.labelKey } : null,
       currentPinned: page ? resolved.pinned.some((item) => item.id === page.id) : false,
       currentHidden: page ? resolved.hidden.some((item) => item.id === page.id) : false,
       railCollapsed,

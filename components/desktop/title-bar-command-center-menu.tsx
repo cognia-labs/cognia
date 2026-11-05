@@ -83,7 +83,8 @@ export function TitleBarCommandCenterMenu({
 }) {
   const t = useTranslations("desktop.titleBar.commandCenter")
   const tMenu = useTranslations("desktop.menu")
-  const tRail = useTranslations("desktop.guildRail")
+  // Go-menu labels are full keys: a module's live in its own namespace.
+  const tRail = useTranslations()
   const recent = recentSessions.slice(0, MAX_RECENT)
   const paletteShortcut = useAppShortcutLabel("app.commandPalette.toggle")
 

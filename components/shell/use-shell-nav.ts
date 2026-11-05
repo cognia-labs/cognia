@@ -356,7 +356,8 @@ export interface ShellNavModel extends ShellNav, ShellModeOrdering {
  * per surface (each mounts its own popover and dialog), not shared.
  */
 export function useShellNavModel(): ShellNavModel {
-  const t = useTranslations("desktop.guildRail")
+  // Destination labels are full keys: a module's live in its own namespace.
+  const tLabel = useTranslations()
   const nav = useShellNav()
   const {
     pendingRoute,
@@ -387,7 +388,7 @@ export function useShellNavModel(): ShellNavModel {
     },
     [modes.visible, modeLabel]
   )
-  const pinnedLabel = useCallback((item: SidebarCatalogItem) => t(item.i18nKey), [t])
+  const pinnedLabel = useCallback((item: SidebarCatalogItem) => tLabel(item.labelKey), [tLabel])
   const pinnedIds = useMemo(() => resolved.pinned.map((item) => item.id), [resolved.pinned])
   const pinnedLabelById = useCallback(
     (id: string) => {

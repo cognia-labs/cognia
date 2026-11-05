@@ -98,7 +98,7 @@ describe("actions provider", () => {
     const nav = (over: Partial<typeof TEST_SHELL_NAV> = {}) =>
       host({ shellNav: { ...TEST_SHELL_NAV, ...over } })
     const ids = (ctx: ReturnType<typeof makeTestContext>) => actionCandidates(ctx).map((c) => c.id)
-    const inbox = { id: "inbox", i18nKey: "inbox" }
+    const inbox = { id: "inbox", labelKey: "desktop.guildRail.inbox" }
 
     it("offers no page command off every catalog route", () => {
       const out = ids(nav())
@@ -122,7 +122,7 @@ describe("actions provider", () => {
 
     it("labels through the i18n key, not the id", () => {
       const rows = actionCandidates(
-        nav({ currentPage: { id: "source-control", i18nKey: "sourceControl" } })
+        nav({ currentPage: { id: "source-control", labelKey: "desktop.guildRail.sourceControl" } })
       )
       expect(rows.find((c) => c.id === "pin-current-page")!.title).toBe(
         'globalSearch.actions.pinPage:{"page":"desktop.guildRail.sourceControl"}'

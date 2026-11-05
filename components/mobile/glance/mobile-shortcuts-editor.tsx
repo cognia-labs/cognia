@@ -48,7 +48,8 @@ export interface MobileShortcutsEditorProps {
 
 export function MobileShortcutsEditor({ shortcuts, onChange }: MobileShortcutsEditorProps) {
   const t = useTranslations("mobile.home.customize")
-  const tActions = useTranslations("mobile.home.actions")
+  // Shortcut labels are full keys: a module's live in its own namespace.
+  const tActions = useTranslations()
   const catalog = React.useMemo(() => getMobileQuickActionCatalog(), [])
   const resolved = React.useMemo(
     () => resolveMobileShortcuts(catalog, shortcuts),
@@ -102,9 +103,9 @@ export function MobileShortcutsEditor({ shortcuts, onChange }: MobileShortcutsEd
                   <ActiveRow
                     key={item.id}
                     item={item}
-                    label={tActions(item.i18nKey)}
-                    dragLabel={t("dragLabel", { action: tActions(item.i18nKey) })}
-                    removeLabel={t("removeLabel", { action: tActions(item.i18nKey) })}
+                    label={tActions(item.labelKey)}
+                    dragLabel={t("dragLabel", { action: tActions(item.labelKey) })}
+                    removeLabel={t("removeLabel", { action: tActions(item.labelKey) })}
                     onRemove={() => onChange(activeIds.filter((id) => id !== item.id))}
                   />
                 ))}
@@ -128,14 +129,14 @@ export function MobileShortcutsEditor({ shortcuts, onChange }: MobileShortcutsEd
                 <span aria-hidden className="size-10 shrink-0" />
                 <NavigationIcon id={item.id} defaultArtwork={item.spotIcon} fallback={item.Icon} className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-[15px] text-muted-foreground">
-                  {tActions(item.i18nKey)}
+                  {tActions(item.labelKey)}
                 </span>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   className="size-10"
-                  aria-label={t("addLabel", { action: tActions(item.i18nKey) })}
+                  aria-label={t("addLabel", { action: tActions(item.labelKey) })}
                   onClick={() => onChange([...activeIds, item.id])}
                   data-testid={`mobile-shortcuts-add-${item.id}`}
                 >

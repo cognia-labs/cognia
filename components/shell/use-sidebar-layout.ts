@@ -35,11 +35,11 @@ import {
   type ResolvedSidebar,
   type SidebarCatalogItem,
 } from "@/lib/shell/sidebar-nav"
+import { knownNavIds } from "@/lib/shell/nav-catalog"
 import { moveTeamInOrder } from "@/lib/shell/team-order"
 import {
   DEFAULT_SIDEBAR_LAYOUT,
   DEFAULT_SIDEBAR_SIDE,
-  SIDEBAR_NAV_META,
   type SidebarLayout,
   type SidebarModesLayout,
   type SidebarSide,
@@ -104,7 +104,7 @@ type SidebarLayoutMutation = (current: SidebarLayout) => SidebarLayout
  * filtering. A stored pin outside this set is a retired destination and is
  * safe to drop; one inside it is only hidden from the current catalog.
  */
-const KNOWN_SIDEBAR_NAV_IDS: ReadonlySet<string> = new Set(SIDEBAR_NAV_META.map((m) => m.id))
+const KNOWN_SIDEBAR_NAV_IDS: ReadonlySet<string> = knownNavIds()
 
 // `saveSettings` serializes writes, but serializing already-computed patches
 // is not enough: two fast clicks could both derive from the same rendered

@@ -35,7 +35,7 @@ import {
 } from "@/lib/runtime/connection-notice-claim"
 import { needsFullViewport } from "@/lib/shell/full-viewport-routes"
 import { useAccountStore } from "@/stores/account/account-store"
-import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
+import { navCatalogEntry } from "@/lib/shell/nav-catalog"
 
 export function SurfaceAvailabilityBoundary({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -171,7 +171,8 @@ function SurfaceUnavailable({
   platform: Platform
 }) {
   const t = useTranslations("runtime.surfaceBoundary")
-  const tNav = useTranslations("desktop.guildRail")
+  // Destination labels are full keys: a module's live in its own namespace.
+  const tNav = useTranslations()
   const offline = availability.state === "offline"
   // This page IS the connection report for the route. The shell banner above
   // it said "Reconnecting…" while the page said "Host offline": two answers
@@ -191,7 +192,7 @@ function SurfaceUnavailable({
   // The states are generic ("Capability unavailable on this target"), so name
   // the page they are standing in for — picked from the nav or a link, that is
   // the one thing the reader knows.
-  const nav = SIDEBAR_NAV_META.find((meta) => meta.id === contract.id)
+  const nav = navCatalogEntry(contract.id)
 
   return (
     // `flex-1` + `w-full` because this lands in whatever slot the platform
@@ -220,7 +221,7 @@ function SurfaceUnavailable({
               className="text-xs font-medium text-muted-foreground"
               data-testid="surface-unavailable-name"
             >
-              {tNav(nav.i18nKey)}
+              {tNav(nav.labelKey)}
             </p>
           ) : null}
           <h1 id="surface-unavailable-title" className="text-lg font-semibold tracking-tight">

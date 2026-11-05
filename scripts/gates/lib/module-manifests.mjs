@@ -42,12 +42,13 @@ export const HOST_FIELDS = [
   "workflowNodes",
   "searchProviders",
   "slashCommands",
+  "nav",
   "prompts",
   "flags",
   "messages",
 ]
 /** Top-level fields of `UiModuleManifest`. */
-export const UI_FIELDS = ["id", "slots", "settingsSections", "nav", "effects"]
+export const UI_FIELDS = ["id", "slots", "settingsSections", "effects"]
 /** Fields of `ModuleSlashCommand`. */
 export const SLASH_COMMAND_FIELDS = [
   "name",
@@ -71,6 +72,27 @@ export const SETTINGS_SECTION_FIELDS = [
   "keywords",
   "load",
 ]
+/** Fields of `ModuleNavEntry`. */
+export const NAV_ENTRY_FIELDS = [
+  "id",
+  "route",
+  "label",
+  "aliases",
+  "icon",
+  "group",
+  "category",
+  "after",
+  "goMenuAfter",
+  "desktopOnly",
+  "hostOperationGated",
+  "fullViewport",
+  "mobileShortcut",
+]
+/** Fields of `ModuleNavEntry.mobileShortcut`. */
+export const MOBILE_SHORTCUT_FIELDS = ["icon", "spotIcon", "after"]
+/** `SidebarNavMeta.group` and `SidebarNavCategory` (`types/shell/sidebar.ts`). */
+export const NAV_GROUPS = ["feature", "auxiliary"]
+export const NAV_CATEGORIES = ["explore", "agents", "spaces", "insights", "system", "you"]
 export const KINDS = ["kernel", "module"]
 export const STAGES = ["kernel", "stable", "beta", "experimental", "deprecated"]
 
@@ -84,6 +106,8 @@ const HOST_MANIFEST = /^lib\/([^/]+)\/module\.ts$/
 const UI_MANIFEST = /^components\/([^/]+)\/module\.ui\.ts$/
 const SLASH_NAME = /^[a-z][a-z0-9-]*$/
 const SECTION_ID = /^[a-z][a-zA-Z0-9-]*$/
+const NAV_ID = /^[a-z][a-z0-9-]*$/
+const NAV_ROUTE = /^\/[a-z0-9][a-z0-9/-]*$/
 
 // ------------------------------------------------------------------ read
 
@@ -278,7 +302,81 @@ function settingsSectionErrors(sections, iconNames) {
   return errors
 }
 
-export function validateHostManifest(manifest, id) {
+function navErrors(entries, vocabulary) {
+  if (!Array.isArray(entries)) return ["nav is a list of destinations"]
+  const { iconNames, spotIconNames } = vocabulary
+  const errors = []
+  const ids = new Set()
+  const icon = (value, at) => {
+    if (!isText(value)) errors.push(`${at} is required`)
+    else if (iconNames && !iconNames.has(value))
+      errors.push(`${at} "${value}" is not a Lucide icon name (e.g. "Users")`)
+  }
+  entries.forEach((entry, index) => {
+    const at = `nav[${index}]`
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      errors.push(`${at} is not an object`)
+      return
+    }
+    errors.push(...unknownFields(entry, NAV_ENTRY_FIELDS, at))
+    if (!NAV_ID.test(entry.id ?? "")) errors.push(`${at}.id is lower-case kebab`)
+    else if (ids.has(entry.id)) errors.push(`${at}.id "${entry.id}" is listed twice`)
+    ids.add(entry.id)
+    if (!NAV_ROUTE.test(entry.route ?? "")) errors.push(`${at}.route is a top-level route ("/x")`)
+    for (const field of ["label", "aliases"]) {
+      if (field === "label" && !isText(entry.label)) errors.push(`${at}.label is required`)
+      else if (entry[field] !== undefined && !(isText(entry[field]) && entry[field].includes(".")))
+        errors.push(`${at}.${field} is a full i18n key ("<namespace>.<key>")`)
+    }
+    icon(entry.icon, `${at}.icon`)
+    if (!NAV_GROUPS.includes(entry.group))
+      errors.push(`${at}.group is one of ${NAV_GROUPS.join(", ")}`)
+    if (!NAV_CATEGORIES.includes(entry.category))
+      errors.push(`${at}.category is one of ${NAV_CATEGORIES.join(", ")}`)
+    for (const field of ["after", "goMenuAfter"])
+      if (entry[field] !== undefined && !isText(entry[field])) errors.push(`${at}.${field} is text`)
+    for (const field of ["desktopOnly", "hostOperationGated", "fullViewport"])
+      if (entry[field] !== undefined && typeof entry[field] !== "boolean")
+        errors.push(`${at}.${field} is true or false`)
+    const shortcut = entry.mobileShortcut
+    if (shortcut !== undefined) {
+      if (!shortcut || typeof shortcut !== "object" || Array.isArray(shortcut)) {
+        errors.push(`${at}.mobileShortcut is an object`)
+      } else {
+        errors.push(...unknownFields(shortcut, MOBILE_SHORTCUT_FIELDS, `${at}.mobileShortcut`))
+        icon(shortcut.icon, `${at}.mobileShortcut.icon`)
+        if (!isText(shortcut.spotIcon)) errors.push(`${at}.mobileShortcut.spotIcon is required`)
+        else if (spotIconNames && !spotIconNames.has(shortcut.spotIcon))
+          errors.push(
+            `${at}.mobileShortcut.spotIcon "${shortcut.spotIcon}" is not a MobileSpotIconName`
+          )
+        if (shortcut.after !== undefined && !isText(shortcut.after))
+          errors.push(`${at}.mobileShortcut.after is text`)
+      }
+    }
+  })
+  return errors
+}
+
+/** The module's own slots: each a canonical extension point holding a lazy entry. */
+function slotErrors(slots, extensionPoints) {
+  if (!slots || typeof slots !== "object" || Array.isArray(slots))
+    return ["slots maps canonical extension points to lazy entries"]
+  const errors = []
+  for (const [point, entry] of Object.entries(slots)) {
+    if (extensionPoints && !extensionPoints.has(point))
+      errors.push(`slots["${point}"] is not a CANONICAL_EXTENSION_POINTS entry`)
+    if (!isLazy(entry)) errors.push(`slots["${point}"] is a lazy entry \`() => import("…")\``)
+  }
+  return errors
+}
+
+/**
+ * `vocabulary` holds the name sets the caller can read from the tree:
+ * `iconNames` (the Lucide catalog), `spotIconNames` (`MobileSpotIconName`) and
+ * `extensionPoints` (`CANONICAL_EXTENSION_POINTS`). An absent set is not checked.
+ */
+export function validateHostManifest(manifest, id, vocabulary = {}) {
   const errors = []
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
     return ["manifest is not an object"]
@@ -303,13 +401,14 @@ export function validateHostManifest(manifest, id) {
     errors.push('searchProviders is a lazy entry `() => import("…")`')
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
+  if (manifest.nav !== undefined) errors.push(...navErrors(manifest.nav, vocabulary))
   if (manifest.messages !== undefined && !isText(manifest.messages))
     errors.push("messages is an i18n namespace")
   return errors
 }
 
-/** `iconNames`: the Lucide catalog's icon names, when the caller can supply them. */
-export function validateUiManifest(manifest, id, iconNames) {
+/** `vocabulary`: as for {@link validateHostManifest}. */
+export function validateUiManifest(manifest, id, vocabulary = {}) {
   const errors = []
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
     return ["manifest is not an object"]
@@ -317,7 +416,9 @@ export function validateUiManifest(manifest, id, iconNames) {
     if (!UI_FIELDS.includes(key)) errors.push(`unknown field "${key}"`)
   if (manifest.id !== id) errors.push(`id "${manifest.id}" must equal its directory "${id}"`)
   if (manifest.settingsSections !== undefined)
-    errors.push(...settingsSectionErrors(manifest.settingsSections, iconNames))
+    errors.push(...settingsSectionErrors(manifest.settingsSections, vocabulary.iconNames))
+  if (manifest.slots !== undefined)
+    errors.push(...slotErrors(manifest.slots, vocabulary.extensionPoints))
   return errors
 }
 

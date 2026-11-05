@@ -102,6 +102,11 @@ export const TABLE_CATALOG_FILE = "lib/data-governance/table-catalog.ts"
 /** The Lucide catalog's names, which a settings section's `icon` must be one of. */
 export const LUCIDE_NAMES_FILE =
   "packages/plugin-contract/src/lib/icons/lucide-icon-names.generated.json"
+/** `MOBILE_SPOT_ICON_NAMES`, which a nav entry's `mobileShortcut.spotIcon` must be one of. */
+export const SPOT_ICON_FILE = "components/mobile/mobile-spot-icon.tsx"
+/** `CANONICAL_EXTENSION_POINTS`, which a UI manifest's `slots` keys must be. */
+export const EXTENSION_POINTS_FILE =
+  "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.ts"
 
 export const CLASSES = ["foundation", "kernel", "module", "shell"]
 const RANK = { foundation: 0, kernel: 1, module: 2, shell: 3 }
@@ -181,9 +186,13 @@ function collectManifests(ctx, files) {
   const handles = ctx.exists(CODEOWNERS_FILE)
     ? codeownerHandles(ctx.read(CODEOWNERS_FILE))
     : new Set()
-  const iconNames = ctx.exists(LUCIDE_NAMES_FILE)
-    ? new Set(JSON.parse(ctx.read(LUCIDE_NAMES_FILE)).iconNames)
-    : undefined
+  const vocabulary = {
+    iconNames: ctx.exists(LUCIDE_NAMES_FILE)
+      ? new Set(JSON.parse(ctx.read(LUCIDE_NAMES_FILE)).iconNames)
+      : undefined,
+    spotIconNames: constStringList(ctx, SPOT_ICON_FILE, "MOBILE_SPOT_ICON_NAMES"),
+    extensionPoints: constStringList(ctx, EXTENSION_POINTS_FILE, "CANONICAL_EXTENSION_POINTS"),
+  }
   for (const file of files) {
     const kind = manifestKind(file)
     if (!kind) continue
@@ -194,8 +203,8 @@ function collectManifests(ctx, files) {
       value === undefined
         ? []
         : hostMatch
-          ? validateHostManifest(value, id)
-          : validateUiManifest(value, id, iconNames)
+          ? validateHostManifest(value, id, vocabulary)
+          : validateUiManifest(value, id, vocabulary)
     const lazyErrors = lazyEntries(value)
       .filter(({ spec }) => !resolveModule(ctx, spec, file))
       .map(({ at, spec }) => `${at}: lazy entry "${spec}" does not resolve`)
@@ -229,12 +238,37 @@ function collectManifests(ctx, files) {
       (manifest) => manifest.settingsSections,
       "id",
       "settings section "
-    )
+    ),
+    ...duplicateContributions(host, (manifest) => manifest.nav, "id", "navigation entry ")
   )
   return { host, ui, errors, warnings }
 }
 
-/** Two modules contributing the same slash command or section id would shadow each other. */
+/**
+ * The string literals of `export const <name> = [ … ]` in `file`, or undefined
+ * when the file or the list is absent (a fixture tree). Comments between the
+ * entries are skipped; anything else that is not a string literal is not a list
+ * this can read.
+ */
+export function constStringList(ctx, file, name) {
+  if (!ctx.exists(file)) return undefined
+  const sourceFile = ctx.ast(file)
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== name) continue
+      const list = declaration.initializer && unwrap(declaration.initializer)
+      if (!list || !ts.isArrayLiteralExpression(list)) return undefined
+      const names = list.elements.map((element) =>
+        ts.isStringLiteralLike(element) ? element.text : null
+      )
+      return names.includes(null) ? undefined : new Set(names)
+    }
+  }
+  return undefined
+}
+
+/** Two modules contributing the same slash command, section or nav id would shadow each other. */
 function duplicateContributions(manifests, list, key, label) {
   const errors = []
   const seen = new Map()

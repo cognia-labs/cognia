@@ -288,8 +288,8 @@ describe("useShellNavModel", () => {
     expect(result.current.modeLabelById("p:gone")).toBe("p:gone")
 
     const inbox = result.current.layout.resolved.pinned.find((item) => item.id === "inbox")!
-    expect(result.current.pinnedLabel(inbox)).toBe(inbox.i18nKey)
-    expect(result.current.pinnedLabelById("inbox")).toBe(inbox.i18nKey)
+    expect(result.current.pinnedLabel(inbox)).toBe(inbox.labelKey)
+    expect(result.current.pinnedLabelById("inbox")).toBe(inbox.labelKey)
     expect(result.current.pinnedLabelById("skills")).toBe("skills")
     expect(result.current.pinnedIds).toEqual([...DEFAULT_SIDEBAR_LAYOUT.pinned])
   })

@@ -34,7 +34,7 @@ import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layo
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
 import type { AppLanguage, AppSettings, ChatSession } from "@cognia/agent-config-types"
 import { requestCommandPalette } from "@/lib/shell/command-palette-request"
-import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
+import { navCatalog } from "@/lib/shell/nav-catalog"
 import { GO_MENU_IDS, isGoMenuId, type GoMenuId } from "@/lib/desktop/go-menu"
 
 const log = loggers.ui
@@ -196,7 +196,7 @@ const GO_ROUTE_OVERRIDES: Readonly<Record<string, string>> = {
  */
 export const GO_ROUTES: Readonly<Record<string, string>> = {
   ...Object.fromEntries(
-    SIDEBAR_NAV_META.map((meta) => {
+    navCatalog().map((meta) => {
       const id = `go-${meta.id}`
       return [id, GO_ROUTE_OVERRIDES[id] ?? meta.route]
     })

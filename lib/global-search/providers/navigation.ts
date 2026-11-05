@@ -49,12 +49,18 @@ export function navigationCandidates(ctx: GlobalSearchContext): NavCandidate[] {
   const pages = getSidebarCatalog(ctx.platform, ctx.runtimeSnapshot).map(
     (item: SidebarCatalogItem): NavCandidate => ({
       id: `page:${item.id}`,
-      title: ctx.t(`desktop.guildRail.${item.i18nKey}`),
+      title: ctx.t(item.labelKey),
       route: item.route,
       // `aliasKey` carries a localized, comma-separated alias list — the retired
       // name of a surface this one absorbed. Without it, a page that swallowed
       // another simply stops answering to the old name.
-      keywords: [item.id, item.route, item.group, item.category, ...aliasesFor(ctx, item.aliasKey)],
+      keywords: [
+        item.id,
+        item.route,
+        item.group,
+        item.category,
+        ...aliasesFor(ctx, item.aliasesKey),
+      ],
       icon: { lucide: item.Icon },
       action: { type: "navigate", href: item.route },
     })
@@ -62,10 +68,10 @@ export function navigationCandidates(ctx: GlobalSearchContext): NavCandidate[] {
   return [...guilds, ...pages]
 }
 
-/** Split the localized alias string into search terms. */
-function aliasesFor(ctx: GlobalSearchContext, aliasKey: string | undefined): string[] {
-  if (!aliasKey) return []
-  const raw = ctx.t(`desktop.guildRail.aliases.${aliasKey}`)
+/** Split the localized alias string (a full i18n key) into search terms. */
+function aliasesFor(ctx: GlobalSearchContext, aliasesKey: string | undefined): string[] {
+  if (!aliasesKey) return []
+  const raw = ctx.t(aliasesKey)
   return raw
     .split(/[,，]/)
     .map((part) => part.trim())

@@ -50,6 +50,22 @@ describe("manifest-types", () => {
           load: async () => ({ run: () => undefined }),
         },
       ],
+      nav: [
+        {
+          id: "pet",
+          route: "/pet",
+          label: "pet.nav.label",
+          aliases: "pet.nav.aliases",
+          icon: "PawPrint",
+          group: "feature",
+          category: "agents",
+          after: "goals",
+          goMenuAfter: "goals",
+          hostOperationGated: true,
+          fullViewport: true,
+          mobileShortcut: { icon: "PawPrint", spotIcon: "pet", after: "twin" },
+        },
+      ],
       prompts: () => import("./define"),
       flags: { proactiveChat: { default: false } },
       messages: "pet",
@@ -75,7 +91,6 @@ describe("manifest-types", () => {
           load: async () => ({ default: () => null }),
         },
       ],
-      nav: [{ route: "/pet", icon: "paw-print" }],
       effects: [{ name: "pet-window-title", load: () => import("./define") }],
     }
     expect(manifest.settingsSections).toHaveLength(1)

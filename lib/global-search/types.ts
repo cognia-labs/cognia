@@ -420,9 +420,9 @@ export interface GlobalSearchShellNav {
    * The rail catalog entry the route in front belongs to (`navItemForPath`),
    * or `null` off every catalog route: `/`, `/settings`, a page the rail does
    * not list. Only what a title needs: the id the layout stores and the
-   * `desktop.guildRail.*` label key.
+   * full label key.
    */
-  currentPage: { id: string; i18nKey: string } | null
+  currentPage: { id: string; labelKey: string } | null
   /** `currentPage` sits in the pinned block. `false` when there is no page. */
   currentPinned: boolean
   /** `currentPage` is hidden from the rail and More. `false` when there is no page. */

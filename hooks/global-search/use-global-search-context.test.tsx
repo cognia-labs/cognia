@@ -61,9 +61,9 @@ jest.mock("next/navigation", () => ({ usePathname: () => mockPathname }))
 // context makes of it. One stable object, as the hook memoises its own.
 const sidebarLayout = {
   catalog: [
-    { id: "inbox", route: "/inbox", i18nKey: "inbox" },
-    { id: "source-control", route: "/source-control", i18nKey: "sourceControl" },
-    { id: "logs", route: "/logs", i18nKey: "logs" },
+    { id: "inbox", route: "/inbox", labelKey: "desktop.guildRail.inbox" },
+    { id: "source-control", route: "/source-control", labelKey: "desktop.guildRail.sourceControl" },
+    { id: "logs", route: "/logs", labelKey: "desktop.guildRail.logs" },
   ],
   resolved: {
     pinned: [{ id: "inbox" }],
@@ -225,7 +225,7 @@ describe("useGlobalSearchContext", () => {
     it("resolves the route in front onto the catalog, pinned or not", () => {
       mockPathname = "/inbox/c"
       expect(shellNav()).toEqual({
-        currentPage: { id: "inbox", i18nKey: "inbox" },
+        currentPage: { id: "inbox", labelKey: "desktop.guildRail.inbox" },
         currentPinned: true,
         currentHidden: false,
         railCollapsed: false,
@@ -234,7 +234,7 @@ describe("useGlobalSearchContext", () => {
       })
       mockPathname = "/source-control"
       expect(shellNav()).toMatchObject({
-        currentPage: { id: "source-control", i18nKey: "sourceControl" },
+        currentPage: { id: "source-control", labelKey: "desktop.guildRail.sourceControl" },
         currentPinned: false,
         currentHidden: false,
       })

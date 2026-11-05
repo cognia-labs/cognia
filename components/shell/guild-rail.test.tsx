@@ -52,8 +52,10 @@ function withTooltipProvider(node: React.ReactNode) {
 
 const logInfo = jest.fn()
 
+// Destination labels are full keys (`desktop.guildRail.inbox`); reading a
+// built-in one back as its suffix keeps the assertions naming the destination.
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: () => (key: string) => key.replace(/^desktop\.guildRail\./, ""),
 }))
 
 const routerPush = jest.fn()

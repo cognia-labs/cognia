@@ -43,7 +43,7 @@ export type NavBadgeSource =
   | "bots.attention"
 
 /**
- * Which catalog item (`SIDEBAR_NAV_META` id) each source badges. The one table
+ * Which catalog item (`lib/shell/nav-catalog.ts` id) each source badges. The one table
  * to read when asking "why does Inbox show a 4".
  */
 export const NAV_BADGE_TARGETS: Readonly<Record<NavBadgeSource, string>> = {

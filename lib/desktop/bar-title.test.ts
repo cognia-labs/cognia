@@ -15,17 +15,26 @@ test("an untitled conversation is still the chat home's subject", () => {
 test("another page is named by its rail label, not by the last conversation", () => {
   expect(resolveBarTitle("/workflows", "Refactor the parser")).toEqual({
     kind: "page",
-    i18nKey: "workflows",
+    labelKey: "desktop.guildRail.workflows",
   })
 })
 
 test("a nested route is named by the page it belongs to", () => {
-  expect(resolveBarTitle("/inbox/123", null)).toEqual({ kind: "page", i18nKey: "inbox" })
+  expect(resolveBarTitle("/inbox/123", null)).toEqual({
+    kind: "page",
+    labelKey: "desktop.guildRail.inbox",
+  })
 })
 
 test("Settings is a page even though the rail catalog does not list it", () => {
-  expect(resolveBarTitle("/settings", "Chat")).toEqual({ kind: "page", i18nKey: "settings" })
-  expect(resolveBarTitle("/settings/about", "Chat")).toEqual({ kind: "page", i18nKey: "settings" })
+  expect(resolveBarTitle("/settings", "Chat")).toEqual({
+    kind: "page",
+    labelKey: "desktop.guildRail.settings",
+  })
+  expect(resolveBarTitle("/settings/about", "Chat")).toEqual({
+    kind: "page",
+    labelKey: "desktop.guildRail.settings",
+  })
 })
 
 test("a route the rail does not list is named by the app alone", () => {

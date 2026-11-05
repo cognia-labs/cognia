@@ -14,13 +14,15 @@ jest.mock("@/hooks/chat/use-active-session-label", () => ({
 const pathRef = { value: "/" }
 jest.mock("next/navigation", () => ({ usePathname: () => pathRef.value }))
 
+// Page labels are full keys (`desktop.guildRail.workflows`); a built-in one
+// reads back as its suffix so the assertions name the page.
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: { count: number; title: string }) =>
     key === "appName"
       ? "Cognia"
       : key === "titleWithCount" && values
         ? `(${values.count}) ${values.title}`
-        : key,
+        : key.replace(/^desktop\.guildRail\./, ""),
 }))
 
 const isTauriMock = jest.fn(() => false)

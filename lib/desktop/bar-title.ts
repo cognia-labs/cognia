@@ -11,8 +11,8 @@
  * the active conversation's label and translates the result.
  */
 
+import { BUILTIN_NAV_NAMESPACE, navCatalog } from "@/lib/shell/nav-catalog"
 import { navItemForPath } from "@/lib/shell/sidebar-nav"
-import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
 
 export type BarTitle =
   /**
@@ -21,8 +21,8 @@ export type BarTitle =
    * has a title (or while none is open).
    */
   | { kind: "conversation"; label: string | null }
-  /** A page the rail lists; `i18nKey` is under `desktop.guildRail.*`. */
-  | { kind: "page"; i18nKey: string }
+  /** A page the rail lists; `labelKey` is a full i18n key. */
+  | { kind: "page"; labelKey: string }
   /** Nothing to name beyond the app. */
   | { kind: "app" }
 
@@ -34,8 +34,8 @@ export function resolveBarTitle(pathname: string, conversationLabel: string | nu
     return { kind: "conversation", label: conversationLabel?.trim() || null }
   }
   if (pathname === SETTINGS_ROUTE || pathname.startsWith(`${SETTINGS_ROUTE}/`)) {
-    return { kind: "page", i18nKey: "settings" }
+    return { kind: "page", labelKey: `${BUILTIN_NAV_NAMESPACE}.settings` }
   }
-  const page = navItemForPath(pathname, SIDEBAR_NAV_META)
-  return page ? { kind: "page", i18nKey: page.i18nKey } : { kind: "app" }
+  const page = navItemForPath(pathname, navCatalog())
+  return page ? { kind: "page", labelKey: page.labelKey } : { kind: "app" }
 }
