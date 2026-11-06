@@ -22,11 +22,7 @@ import { useLocale, useTranslations } from "next-intl"
 import { startNewSession } from "@/lib/chat/start-session"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { storeExternalMemory } from "@/lib/memory/api/store-memory"
-import {
-  speakSelection,
-  stopSelectionSpeech,
-  watchSelectionSpeech,
-} from "@/lib/tts/speak-selection"
+import { loadPort } from "@/lib/modules/ports"
 import {
   SELECTION_RESULT_EVENT,
   SELECTION_ACTION_CATALOG_EVENT,
@@ -377,25 +373,42 @@ export function SelectionToolbarInitializer() {
       }
     }
 
+    // Read aloud through the `speech` port (ADR-0250 §14). Where no module
+    // provides it, the toolbar hears at once that nothing is playing.
     const beginSpeaking = (candidate: ExternalSelectionCandidate) => {
       stopWatching?.()
-      stopWatching = watchSelectionSpeech(candidate.id, (update) => {
-        void emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_SPEECH_EVENT, {
-          candidateId: candidate.id,
-          playing: update.playing,
-          progress: update.progress,
-        })
-        if (!update.playing) {
-          stopWatching?.()
-          stopWatching = null
-        }
-      })
-      void speakSelection({ candidateId: candidate.id, text: candidate.text }).catch(() => {
+      stopWatching = null
+      const ended = () => {
         void emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_SPEECH_EVENT, {
           candidateId: candidate.id,
           playing: false,
         })
-      })
+      }
+      void loadPort("speech")
+        .then((speech) => {
+          if (!alive) return
+          if (!speech) {
+            ended()
+            return
+          }
+          stopWatching?.()
+          stopWatching = speech.readAloud.watchSelection(candidate.id, (update) => {
+            void emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_SPEECH_EVENT, {
+              candidateId: candidate.id,
+              playing: update.playing,
+              progress: update.progress,
+            })
+            if (!update.playing) {
+              stopWatching?.()
+              stopWatching = null
+            }
+          })
+          return speech.readAloud.speakSelection({
+            candidateId: candidate.id,
+            text: candidate.text,
+          })
+        })
+        .catch(ended)
     }
 
     const stageIntoComposer = async (payload: SelectionStagePayload) => {
@@ -513,7 +526,11 @@ export function SelectionToolbarInitializer() {
         void consumePendingStage()
       }),
       listen<{ candidateId: string }>(SELECTION_SPEECH_STOP_EVENT, (event) => {
-        if (alive) stopSelectionSpeech(event.payload.candidateId)
+        if (!alive) return
+        const { candidateId } = event.payload
+        void loadPort("speech")
+          .then((speech) => speech?.readAloud.stopSelection(candidateId))
+          .catch(() => {})
       }).then((dispose) => {
         if (alive) unlistens.push(dispose)
         else safeUnlisten(dispose)

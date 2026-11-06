@@ -60,13 +60,12 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer"
 import { useBackDismiss } from "@/hooks/ui/use-back-dismiss"
-import { useReadAloudStatus } from "@/hooks/media/use-read-aloud-status"
+import { useReadAloudStatus } from "@/hooks/chat/use-read-aloud-status"
 import { share } from "@/lib/capacitor/share"
 import { notify, selectionFeedback } from "@/lib/capacitor/haptics"
 import { buildMessagePermalink } from "@/lib/chat/message-permalink"
 import { writeClipboardText } from "@/lib/tauri/clipboard"
-import { speakChatMessage } from "@/lib/tts/speak-chat-message"
-import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
+import { loadPort } from "@/lib/modules/ports"
 import { STAGGER_CHILD, STAGGER_CONTAINER } from "@/lib/ui/motion"
 import { BranchDialog } from "@/components/chat/branch-dialog"
 import { BranchNavigator } from "@/components/chat/branch-navigator"
@@ -164,9 +163,11 @@ export function MessageActionSheet({
     message ? s.bookmarkedIds.includes(message.id) : false
   )
   const toggleBookmark = useChatStore((s) => s.toggleBookmark)
-  const { isActive: readAloudActive, isLoading: readAloudLoading } = useReadAloudStatus(
-    message?.id ?? ""
-  )
+  const {
+    available: readAloudAvailable,
+    isActive: readAloudActive,
+    isLoading: readAloudLoading,
+  } = useReadAloudStatus(message?.id ?? "")
 
   const text = message ? extractPlainText(message) : ""
   // Per-message token/cost — on desktop this lives in the hover-only action bar
@@ -194,7 +195,8 @@ export function MessageActionSheet({
         hasSession: Boolean(branchSessionId),
         canEdit: Boolean(onEditResend),
         canRegenerate: Boolean(onRegenerate),
-        canReadAloud: ttsEnabled,
+        // Off where no module provides the `speech` port (ADR-0250 §14).
+        canReadAloud: ttsEnabled && readAloudAvailable,
         canDelete: Boolean(onDelete),
         canSelect: Boolean(onSelect),
         // This sheet is the touch surface the capability exists for.
@@ -209,6 +211,7 @@ export function MessageActionSheet({
       onEditResend,
       onRegenerate,
       onSelect,
+      readAloudAvailable,
       text,
       ttsEnabled,
     ]
@@ -378,16 +381,22 @@ export function MessageActionSheet({
   const onReadAloud = () => {
     if (!message || !text) return
     void selectionFeedback()
-    if (readAloudActive) {
-      ttsOrchestrator.stop()
-      onOpenChange(false)
-      return
-    }
+    const messageId = message.id
+    const stopping = readAloudActive
     // Fire-and-forget like `ReadAloudButton` — progress surfaces in the
-    // global TtsNowPlayingBar, so the sheet can close immediately.
-    void speakChatMessage({ messageId: message.id, text, character }).catch(() => {
-      void notify("error")
-    })
+    // speech module's global "now playing" bar, so the sheet closes at once.
+    void loadPort("speech")
+      .then((speech) => {
+        if (!speech) return
+        if (stopping) {
+          speech.readAloud.stop()
+          return
+        }
+        return speech.readAloud.speakChatMessage({ messageId, text, character })
+      })
+      .catch(() => {
+        void notify("error")
+      })
     onOpenChange(false)
   }
 

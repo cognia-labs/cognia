@@ -199,7 +199,11 @@
     },
     "connectors": {
       "class": "module",
-      "api": ["lib/connectors/bus.ts", "lib/connectors/outbound-runner.ts"]
+      "api": [
+        "lib/connectors/bus.ts",
+        "lib/connectors/hitl/approval-registry.ts",
+        "lib/connectors/outbound-runner.ts"
+      ]
     },
     "constants": {
       "class": "foundation"
@@ -673,7 +677,8 @@
     },
     "settings-store": {
       "class": "kernel",
-      "note": "The settings store (stores/settings and the non-UI settings code); the settings UI is the `settings` shell."
+      "api": ["hooks/settings/use-setting-draft.ts"],
+      "note": "The settings store (stores/settings and the non-UI settings code); the settings UI is the `settings` shell. `api` is the draft hook settings sections edit with."
     },
     "sftp": {
       "class": "module"
@@ -808,10 +813,6 @@
     "tray-panel": {
       "class": "module"
     },
-    "tts": {
-      "class": "module",
-      "api": ["lib/tts/speak-pet.ts"]
-    },
     "twin": {
       "class": "module",
       "api": ["lib/twin/distill/llm.ts", "lib/twin/runtime/build-deps.ts"]
@@ -836,9 +837,6 @@
       "class": "foundation"
     },
     "vector": {
-      "class": "module"
-    },
-    "voice": {
       "class": "module"
     },
     "vscode-compat": {
@@ -1315,6 +1313,11 @@
       "prefix": "lib/db/workflow-stats.ts",
       "owner": "workflow",
       "why": "Single-user data file (ADR-0250 M2): only `workflow` imports it."
+    },
+    {
+      "prefix": "lib/tts/keyring.ts",
+      "owner": "settings-store",
+      "why": "The speech provider keys the settings store loads, saves and clears (`providerKeys`); the rest of `lib/tts/` is the speech module's (ADR-0250 M3). It moves with the provider-key settings when settings keys get owners."
     }
   ]
 }

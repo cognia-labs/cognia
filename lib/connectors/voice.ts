@@ -1,13 +1,10 @@
-/** Synthesis for connector delivery, sharing the app's TTS settings and engine. */
+/**
+ * Synthesis for connector delivery, through the `speech` port (ADR-0250 §14):
+ * the same TTS settings, keys and engine as reading aloud.
+ */
 import { hasNoLeakingPii } from "@cognia/redact"
-import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
-import { selectSpeechSettings } from "@/lib/tts/speech-settings"
-import { providerKeyMapToSettingsMap } from "@/lib/tts/keyring"
-import {
-  resolveCharacterVoice,
-  type CharacterVoiceSource,
-} from "@/lib/plugin/character-pack/character-voice"
-import { useSettingsStore } from "@/stores/settings"
+import { loadPort } from "@/lib/modules/ports"
+import type { CharacterVoiceSource } from "@/lib/plugin/character-pack/character-voice"
 import { canTranscodeAudio, normalizeAudioMime, transcodeAudio } from "@/lib/audio/transcode"
 import type { PlatformAdapter } from "@/types/connectors/adapter"
 import type { ConversationReference } from "@/types/connectors/event"
@@ -37,14 +34,12 @@ export async function synthesizeConnectorVoice(input: {
   // Validate the complete source even for local synthesis or cache hits: the
   // resulting bytes leave the device through the connector.
   if (!hasNoLeakingPii(input.text)) throw new Error("Voice text rejected by the PII gate")
-  await useSettingsStore.getState().ensureProviderKeys()
+  const speech = await loadPort("speech")
+  if (!speech) throw new Error("Speech synthesis is not available on this host")
   input.signal?.throwIfAborted()
-  const store = useSettingsStore.getState()
-  const base = selectSpeechSettings(store.settings)
-  const overlay = input.character ? resolveCharacterVoice(input.character) : undefined
-  const result = await ttsOrchestrator.synthesize(input.text, {
-    speechSettings: { ...base, ...overlay },
-    providerSettings: providerKeyMapToSettingsMap(store.providerKeys),
+  const result = await speech.synthesize({
+    text: input.text,
+    character: input.character,
     signal: input.signal,
     approveText: hasNoLeakingPii,
   })

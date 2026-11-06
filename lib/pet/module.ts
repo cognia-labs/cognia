@@ -27,9 +27,9 @@ export default defineHostModule({
     "lib/tauri/pet-window.ts",
   ],
   // The event sources the pet reacts to (attention, background tasks,
-  // capture, connectors, git, terminal), what it speaks and remembers with
-  // (memory, tts, twin), the console's plugin slots, and the share hash its
-  // paired-phone client signs with. G4 checks this equals what it imports.
+  // capture, connectors, git, terminal), what it remembers with (memory,
+  // twin), the console's plugin slots, and the share hash its paired-phone
+  // client signs with. G4 checks this equals what it imports.
   dependsOn: [
     "attention",
     "background-tasks",
@@ -40,9 +40,10 @@ export default defineHostModule({
     "plugin",
     "share",
     "terminal",
-    "tts",
     "twin",
   ],
+  // It speaks through the `speech` port, and stays silent without one.
+  requires: ["speech?"],
   // What other modules use: which window this is (account gates, appearance,
   // the tray), revealing the pet (island, tray panel), the pet's view and care
   // condition (tray, glance), its paired-phone client and request ids (glance,

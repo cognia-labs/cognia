@@ -2,10 +2,10 @@
   "version": 1,
   "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
   "cycles": {
-    "largestLibComponent": 168
+    "largestLibComponent": 167
   },
   "size": {
-    "modules": 136,
+    "modules": 135,
     "experimental": 0,
     "tables": 401,
     "unclaimedTables": 370,
@@ -223,7 +223,6 @@
     "components/runtime/app-runtime.tsx -> skill-recorder",
     "components/runtime/app-runtime.tsx -> support",
     "components/runtime/app-runtime.tsx -> thread-handoff",
-    "components/runtime/app-runtime.tsx -> tts",
     "components/runtime/app-runtime.tsx -> vector",
     "components/runtime/app-runtime.tsx -> workflow",
     "components/runtime/platform-desktop-initializers.tsx -> initializers",
@@ -1062,7 +1061,6 @@
     "stores/remote-host/remote-host-store.ts -> codeserver",
     "stores/settings/settings-store.ts -> appearance",
     "stores/settings/settings-store.ts -> routing",
-    "stores/settings/settings-store.ts -> tts",
     "stores/skills/recorder-store.ts -> skill-recorder",
     "stores/ui/ui-store.ts -> chat",
     "stores/ui/ui-store.ts -> desktop",

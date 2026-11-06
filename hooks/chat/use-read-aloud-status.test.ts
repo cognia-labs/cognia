@@ -1,15 +1,40 @@
 import { act, renderHook } from "@testing-library/react"
 
-import { useReadAloudStatus } from "./use-read-aloud-status"
-import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
+import {
+  __resetPortsForTesting,
+  __setPortForTesting,
+  __setPortModulesForTesting,
+} from "@/lib/modules/ports"
+import type { SpeechPort } from "@/types/modules/ports/speech"
 
-// Reach into the singleton's private setState so we can drive state changes
-// the way the orchestrator itself would (notifying subscribers).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const setState = (patch: Record<string, unknown>) => (ttsOrchestrator as any).setState(patch)
+import { useReadAloudStatus } from "./use-read-aloud-status"
+
+// A stand-in for the speech port's one player: state plus subscribers, driven
+// the way the orchestrator drives its own (every change notifies).
+type PlayerState = Record<string, unknown>
+let state: PlayerState = {}
+const listeners = new Set<(s: PlayerState) => void>()
+const setState = (patch: PlayerState) => {
+  state = { ...state, ...patch }
+  for (const listener of [...listeners]) listener(state)
+}
+const speech = {
+  readAloud: {
+    getState: () => state,
+    subscribe: (listener: (s: PlayerState) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    stop: () => setState({ activeSourceId: undefined, playbackState: "idle" }),
+  },
+} as unknown as SpeechPort
+const player = speech.readAloud
 
 beforeEach(() => {
-  setState({ activeSourceId: undefined, playbackState: "idle", progress: 0 })
+  __resetPortsForTesting()
+  __setPortForTesting("speech", speech)
+  listeners.clear()
+  state = { activeSourceId: undefined, playbackState: "idle", progress: 0 }
 })
 
 describe("useReadAloudStatus", () => {
@@ -57,7 +82,34 @@ describe("useReadAloudStatus", () => {
     const { result } = renderHook(() => useReadAloudStatus("msg-1"))
     act(() => setState({ activeSourceId: "msg-1", playbackState: "playing" }))
     expect(result.current.isActive).toBe(true)
-    act(() => ttsOrchestrator.stop())
+    act(() => player.stop())
     expect(result.current.isActive).toBe(false)
+  })
+
+  it("is available while the speech port is provided", () => {
+    const { result } = renderHook(() => useReadAloudStatus("msg-1"))
+    expect(result.current.available).toBe(true)
+  })
+
+  it("is unavailable and idle where no module provides the speech port", () => {
+    __setPortForTesting("speech", null)
+    const { result } = renderHook(() => useReadAloudStatus("msg-1"))
+    expect(result.current.available).toBe(false)
+    expect(result.current.isActive).toBe(false)
+    expect(result.current.playbackState).toBe("idle")
+  })
+
+  it("reads as idle until the port has loaded", () => {
+    __resetPortsForTesting()
+    __setPortModulesForTesting([
+      {
+        id: "speech",
+        kind: "module",
+        stage: "stable",
+        provides: [{ port: "speech", load: () => new Promise(() => {}) }],
+      },
+    ])
+    const { result } = renderHook(() => useReadAloudStatus("msg-1"))
+    expect(result.current.playbackState).toBe("idle")
   })
 })

@@ -7183,14 +7183,16 @@ export function useClaudeChat() {
       // because `deriveAllowRuleFromApproval` returns null for plugin tools and
       // that bare list is only consulted by the sidecar — the voice session
       // would have kept asking forever.
+      // Asked of the `speech` port (ADR-0250 §14); without one, no live voice
+      // session exists to have asked.
       {
-        const { isRealtimeToolApprovalRequestId, grantRealtimeToolAlwaysAllow } =
-          await import("@/lib/voice/live/approval")
-        if (isRealtimeToolApprovalRequestId(approval.requestId)) {
+        const { loadPort } = await import("@/lib/modules/ports")
+        const speech = await loadPort("speech")
+        if (speech?.live.isToolApprovalRequest(approval.requestId)) {
           if (decision === "allow_always") {
             const settingsState = useSettingsStore.getState()
             const ap = settingsState.settings?.agentPermissions ?? {}
-            const nextRules = grantRealtimeToolAlwaysAllow(
+            const nextRules = speech.live.allowToolAlways(
               approval.sessionId,
               approval.toolName,
               ap.toolRules

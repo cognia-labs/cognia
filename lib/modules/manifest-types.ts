@@ -30,7 +30,9 @@
  * (§13). `searchProviders`, `slashCommands` and `settingsSections` (M1), and
  * `nav`, `runtimes`, `slots` and `effects` (M2) are generated
  * (`scripts/build/gen-module-registry.mjs`) and read by their shells and hosts;
- * every other field is shape-checked by the gate and read by nothing yet.
+ * `provides` and `requires` (M3) are read by `lib/modules/ports.ts` from the
+ * host registry. Every other field is shape-checked by the gate and read by
+ * nothing yet.
  */
 
 import type { ComponentType } from "react"
@@ -155,10 +157,20 @@ export interface RendererRuntimeEntry extends ModuleRuntimeEntryBase {
   load: LazyModule<RendererRuntimeAdapter>
 }
 
-/** An implementation of a kernel capability port (`ocr`, `speech`, `forge`, …). */
+/** What a port provision's `load` resolves to: the implementation, as `port`. */
+export interface ModulePortModule {
+  port: unknown
+}
+
+/**
+ * An implementation of a kernel capability port (`ocr`, `speech`, `forge`, …):
+ * `port` is the id a contract in `types/modules/ports/<id>.ts` declares, and
+ * `load` brings the file that exports the implementation as `port`. Users ask
+ * `lib/modules/ports.ts` for it by id; one active module provides each port.
+ */
 export interface ModulePortProvision {
   port: string
-  load: LazyModule
+  load: LazyModule<ModulePortModule>
 }
 
 /** A contribution the shell or kernel collects lazily. */
@@ -215,7 +227,11 @@ export interface HostModuleManifest {
   /** Concrete public files other modules may import (G3). Never a barrel. */
   api?: readonly string[]
   provides?: readonly ModulePortProvision[]
-  /** Ports this module needs; a trailing `?` marks an optional one (`"ocr?"`). */
+  /**
+   * Ports this module's files ask `lib/modules/ports.ts` for; a trailing `?`
+   * marks one it copes without (`"ocr?"`). Exactly the ports its files ask
+   * for (G4); a required one must have an active provider (G5).
+   */
   requires?: readonly string[]
 
   runtimes?: readonly ModuleRuntime[]

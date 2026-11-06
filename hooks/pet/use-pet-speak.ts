@@ -37,7 +37,7 @@ import { hasNoLeakingPii } from "@cognia/redact"
 import { appendPetTurn, listRecentPetTurns } from "@/lib/db/pet-conversation"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
-import { speakPetText } from "@/lib/tts/speak-pet"
+import { loadPort } from "@/lib/modules/ports"
 import { resolveCharacterById } from "@/lib/db/characters"
 import type { CharacterVoiceSource } from "@/lib/plugin/character-pack/character-voice"
 import { usePetStore, type PetBubble } from "@/stores/pet/pet-store"
@@ -74,7 +74,10 @@ async function speakPetReply(
       )) as CharacterVoiceSource | null) ?? null
     voiceCache.set(characterId, voice)
   }
-  await speakPetText(text, voice ?? undefined)
+  // Through the `speech` port (ADR-0250 §14): where no module provides it,
+  // the pet stays silent.
+  const speech = await loadPort("speech")
+  await speech?.readAloud.speakPet(text, voice ?? undefined)
 }
 
 export interface UsePetSpeakArgs {

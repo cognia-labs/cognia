@@ -19,3 +19,5 @@ export function SpeechSection() {
     </div>
   )
 }
+
+export default SpeechSection

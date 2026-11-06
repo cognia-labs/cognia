@@ -5,7 +5,7 @@
  *
  * Two paths, both gated by `ttsEnabled && ttsAutoPlay`:
  *  - **Streaming** (W7): while a turn is in flight, the assistant's text is fed
- *    to `speakChatMessageStream` as it grows (diffed off the chat store), so the
+ *    to the speech port's `speakChatMessageStream` as it grows (diffed off the chat store), so the
  *    first audio starts before the reply is finished. Starting a stream marks
  *    the message id as spoken so the turn-complete path below skips it — no
  *    double-speak.
@@ -15,7 +15,8 @@
  *
  * A side-effect-only hook: returns nothing and never throws into the chat loop
  * (synthesis errors are caught + logged; the orchestrator arbitrates a user
- * manually starting a different read).
+ * manually starting a different read). It reads aloud through the `speech`
+ * port (ADR-0250 §14); where no module provides the port, nothing is read.
  */
 
 import { useEffect, useRef } from "react"
@@ -23,8 +24,8 @@ import type { UIMessage } from "ai"
 
 import { useSettingsStore } from "@/stores/settings"
 import { canAutoPlayTTS } from "@cognia/tts/auto-play-gates"
-import { speakChatMessage, speakChatMessageStream } from "@/lib/tts/speak-chat-message"
-import { createPushableStream, type PushableStream } from "@/lib/tts/pushable-stream"
+import { loadPort } from "@/lib/modules/ports"
+import { createPushableStream, type PushableStream } from "@/lib/utils/pushable-stream"
 import type { Character } from "@cognia/agent-config-types"
 import { loggers } from "@cognia/logging"
 
@@ -121,13 +122,22 @@ export function useChatAutoPlayTTS({
       // Mark spoken up front so the turn-complete effect doesn't re-read it.
       lastAutoPlayedId.current = last.id
       const character = resolveCharacter(last, characterById, directCharacter)
-      void speakChatMessageStream(pushable.stream, { messageId: last.id, character }).catch(
-        (err) => {
+      void loadPort("speech")
+        .then((speech) => {
+          if (!speech) {
+            pushable.close()
+            return
+          }
+          return speech.readAloud.speakChatMessageStream(pushable.stream, {
+            messageId: last.id,
+            character,
+          })
+        })
+        .catch((err) => {
           loggers.tts.warn("streaming auto-play failed", {
             err: err instanceof Error ? err.message : String(err),
           })
-        }
-      )
+        })
     }
 
     const current = streamSession.current
@@ -164,10 +174,12 @@ export function useChatAutoPlayTTS({
     lastAutoPlayedId.current = last.id
     const character = resolveCharacter(last, characterById, directCharacter)
 
-    void speakChatMessage({ messageId: last.id, text, character }).catch((err) => {
-      loggers.tts.warn("auto-play failed", {
-        err: err instanceof Error ? err.message : String(err),
+    void loadPort("speech")
+      .then((speech) => speech?.readAloud.speakChatMessage({ messageId: last.id, text, character }))
+      .catch((err) => {
+        loggers.tts.warn("auto-play failed", {
+          err: err instanceof Error ? err.message : String(err),
+        })
       })
-    })
   }, [status, messages, ttsEnabled, ttsAutoPlay, characterById, directCharacter])
 }

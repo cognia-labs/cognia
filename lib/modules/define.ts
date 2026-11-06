@@ -20,6 +20,7 @@ export type {
   ModuleHost,
   ModuleKind,
   ModuleNavEntry,
+  ModulePortModule,
   ModulePortProvision,
   ModuleRuntime,
   ModuleRuntimeBoot,

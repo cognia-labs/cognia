@@ -87,8 +87,10 @@ async function denyThroughChannel(
     await denyViaApprovalRegistry(sessionId, requestId)
     return
   }
-  const { isRealtimeToolApprovalRequestId } = await import("@/lib/voice/live/approval")
-  if (isRealtimeToolApprovalRequestId(requestId)) {
+  // A live voice session's tool call, asked of the `speech` port (ADR-0250 §14).
+  const { loadPort } = await import("@/lib/modules/ports")
+  const speech = await loadPort("speech")
+  if (speech?.live.isToolApprovalRequest(requestId)) {
     await denyViaApprovalRegistry(sessionId, requestId)
     return
   }

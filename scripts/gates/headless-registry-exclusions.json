@@ -152,20 +152,18 @@
     "components/providers/initializers/selection-toolbar-initializer.tsx": {
       "symbols": [
         "subscribeQuickActions",
-        "watchSelectionSpeech",
+        "loadPort",
         "SelectionQuickActionError",
         "classifySelection",
         "executePluginSelectionQuickAction",
         "getCurrentSelectionCandidate",
         "listQuickActions",
         "pluginActionIsEligible",
-        "speakSelection",
-        "stopSelectionSpeech",
         "takePendingSelectionStage",
         "enhancePrompt",
         "getQuickAction"
       ],
-      "reason": "Reads the OS-level text selection through the desktop selection-perception bus (ADR-0093/0095). Desktop selection awareness is one of ADR-0059 D7's recorded physical boundaries: there is no OS selection to observe in a container. subscribeQuickActions keeps the selection overlay's action list in step with the plugin quick-action registry. It exists to repaint a native always-on-top window over whatever application currently owns the OS text selection, which is the same recorded ADR-0059 D7 physical boundary as watchSelectionSpeech above. A brain has no window server to paint on and no selection to act on, so the subscription would fire into nothing. Every symbol serves the native selection toolbar over the OS text selection (ADR-0093/0095). They read the current selection candidate and staged selection from the desktop perception bus (lib/tauri/selection-toolbar.ts), classify it, build and run the plugin quick-action catalogue for the overlay window (lib/selection/plugin-actions.ts, action-layout.ts) and speak or stop speaking it (lib/tts/speak-selection.ts). Desktop selection awareness is a recorded ADR-0059 D7 physical boundary: a brain has no OS selection and no overlay window."
+      "reason": "Reads the OS-level text selection through the desktop selection-perception bus (ADR-0093/0095). Desktop selection awareness is one of ADR-0059 D7's recorded physical boundaries: there is no OS selection to observe in a container. subscribeQuickActions keeps the selection overlay's action list in step with the plugin quick-action registry. It exists to repaint a native always-on-top window over whatever application currently owns the OS text selection, which is the same recorded ADR-0059 D7 physical boundary as reading the selection aloud. A brain has no window server to paint on and no selection to act on, so the subscription would fire into nothing. Every symbol serves the native selection toolbar over the OS text selection (ADR-0093/0095). They read the current selection candidate and staged selection from the desktop perception bus (lib/tauri/selection-toolbar.ts), classify it, build and run the plugin quick-action catalogue for the overlay window (lib/selection/plugin-actions.ts, action-layout.ts) and speak or stop speaking it through the speech port (loadPort, lib/modules/ports.ts, ADR-0250 M3). Desktop selection awareness is a recorded ADR-0059 D7 physical boundary: a brain has no OS selection and no overlay window."
     },
     "components/providers/initializers/selection-toolbar-restore-initializer.tsx": {
       "symbols": ["startSelectionToolbar", "migrateSelectionToolbarMode"],

@@ -40,8 +40,13 @@ jest.mock("@/lib/pet/llm/character-persona", () => ({
 // The pet's new voice (W11): mock the speak entry + the character loader so the
 // test stays hermetic (no orchestrator / Dexie).
 const speakPetText = jest.fn().mockResolvedValue(undefined)
-jest.mock("@/lib/tts/speak-pet", () => ({
-  speakPetText: (...a: unknown[]) => speakPetText(...a),
+// The `speech` port: `null` where no module provides it.
+let speechProvided = true
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) =>
+    id === "speech" && speechProvided
+      ? { readAloud: { speakPet: (...a: unknown[]) => speakPetText(...a) } }
+      : null,
 }))
 const resolveCharacterById = jest.fn().mockResolvedValue(null)
 jest.mock("@/lib/db/characters", () => ({
@@ -107,6 +112,7 @@ beforeEach(() => {
   recallAboutUser.mockReset().mockResolvedValue("")
   resolveCharacterPersona.mockReset().mockResolvedValue(null)
   speakPetText.mockReset().mockResolvedValue(undefined)
+  speechProvided = true
   resolveCharacterById.mockReset().mockResolvedValue(null)
   setLlmSpeak(true)
 })
@@ -153,6 +159,14 @@ describe("usePetSpeak", () => {
     expect(speakPetText).toHaveBeenCalledWith("Hehe, hello friend!", {
       voiceProfile: { provider: "openai", voiceId: "nova" },
     })
+  })
+
+  it("still answers in a bubble, silently, where no module provides the speech port", async () => {
+    speechProvided = false
+    renderHook(() => usePetSpeak({ profile, view, enabled: true }))
+    await emitTalk("hello there")
+    expect(usePetStore.getState().bubble?.text).toBe("Hehe, hello friend!")
+    expect(speakPetText).not.toHaveBeenCalled()
   })
 
   it("does not speak template fallbacks — only real replies", async () => {

@@ -113,7 +113,6 @@ import { PerfHudMount } from "@/components/providers/initializers/perf-hud-mount
 import { ModuleEffectsHost } from "@/components/providers/initializers/module-effects-host"
 import { CaptureMount } from "@/components/capture/capture-mount"
 import { LightweightRouteShell } from "@/components/runtime/lightweight-route-shell"
-import { TtsNowPlayingBar } from "@/components/tts/tts-now-playing-bar"
 import { AskUserDialog } from "@/components/chat/ask-user-dialog"
 import { SkillRecorderRoot } from "@/components/skills/recorder/recorder-root"
 import { installVectorRuntimeAdapters } from "@/lib/vector/runtime-adapters"
@@ -498,8 +497,9 @@ export function AppRuntime({ children }: { children: React.ReactNode }) {
                              * bottom-right box would cover the tab bar. */}
                             <PerfHudMount />
                             {/* Feature modules' `effects` (ADR-0250 §14), the pet's
-                             * controller among them: each gates itself (the pet on
-                             * its setting and the window role). */}
+                             * controller and speech's "now playing" bar among them:
+                             * each gates itself (the pet on its setting and the
+                             * window role, the bar on something playing). */}
                             <ModuleEffectsHost />
                             {/* Pointer particle/trail overlay — renders null unless
                              * an effect is selected, and stands down under reduced
@@ -508,8 +508,6 @@ export function AppRuntime({ children }: { children: React.ReactNode }) {
                             {/* Content-capture confirm bubble + clipboard watcher —
                              * self-gates on the capture setting (disabled by default). */}
                             <CaptureMount />
-                            {/* Global TTS "now playing" bar — self-hides when idle. */}
-                            <TtsNowPlayingBar />
                             {/* Modal for the agent's `ask_user` tool — self-hides when
                              * no prompt is pending. */}
                             <AskUserDialog />

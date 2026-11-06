@@ -1,6 +1,7 @@
 /**
- * A push → async-iterable bridge. React re-renders push text deltas in; the TTS
- * orchestrator's `speakStream` pulls them out as an `AsyncIterable<string>`.
+ * A push → async-iterable bridge. A producer pushes chunks in as they arrive
+ * (the chat's auto-play pushes a reply's text deltas); a consumer pulls them
+ * out as an `AsyncIterable<string>` (the speech port reads them aloud).
  * Values pushed before the consumer asks for them are buffered in order.
  */
 export interface PushableStream {

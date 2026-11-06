@@ -30,8 +30,10 @@ import {
   GENERATED_HOST,
   GENERATED_UI,
   MODULE_HOSTS,
+  PORT_PROVISION_FIELDS,
   RUNTIME_BOOTS,
   RUNTIME_FIELDS,
+  declaredPorts,
   renderRegistries,
 } from "./lib/module-manifests.mjs"
 import { createContext } from "./convergence/counter.mjs"
@@ -139,6 +141,7 @@ test("the gate's field lists match lib/modules/manifest-types.ts", () => {
   assert.deepEqual([...SETTINGS_SECTION_FIELDS].sort(), fields("ModuleSettingsSection"))
   assert.deepEqual([...RUNTIME_FIELDS].sort(), fields("ModuleRuntime"))
   assert.deepEqual([...EFFECT_FIELDS].sort(), fields("ModuleEffect"))
+  assert.deepEqual([...PORT_PROVISION_FIELDS].sort(), fields("ModulePortProvision"))
   // The string unions the runtime vocabulary mirrors.
   const union = (text, name) =>
     [
@@ -730,6 +733,103 @@ test("validateUiManifest checks effects: named once each, loaded lazily", () => 
   ])
     assert.ok(errors.includes(expected), `missing: ${expected}\n${errors.join("\n")}`)
   assert.ok(errors.some((error) => error.startsWith("effects[0].load is a lazy entry")))
+})
+
+test("declaredPorts reads one port per contract file under types/modules/ports/", () => {
+  assert.deepEqual(
+    [
+      ...declaredPorts([
+        "types/modules/ports/speech.ts",
+        "types/modules/ports/ocr.ts",
+        "types/modules/ports/speech.test.ts",
+        "types/modules/ports/nested/x.ts",
+        "types/modules/other.ts",
+      ]),
+    ].sort(),
+    ["ocr", "speech"]
+  )
+})
+
+test("validateHostManifest checks provides and requires against the declared ports", () => {
+  const ports = { ports: new Set(["speech", "ocr"]) }
+  const check = (fields) =>
+    validateHostManifest({ id: "crew", kind: "module", stage: "beta", ...fields }, "crew", ports)
+  assert.deepEqual(
+    check({
+      provides: [{ port: "speech", load: { $lazy: "./port" } }],
+      requires: ["ocr?"],
+    }),
+    []
+  )
+  const errors = check({
+    provides: [
+      { port: "speech", load: "./port" },
+      { port: "speech", load: { $lazy: "./port" } },
+      { port: "vision", load: { $lazy: "./vision" }, hosts: ["desktop"] },
+      { port: "Bad Id", load: { $lazy: "./x" } },
+    ],
+    requires: ["ocr", "ocr?", "vision", "Not A Port"],
+  })
+  for (const expected of [
+    'provides[1].port "speech" is listed twice',
+    'provides[2].port "vision" has no contract types/modules/ports/vision.ts',
+    'provides[2]: unknown field "hosts"',
+    "provides[3].port is a lower-case kebab port id",
+    'requires names port "ocr" twice',
+    'requires "vision": no contract types/modules/ports/vision.ts declares that port',
+    'requires "Not A Port" is a port id, optionally ending in "?"',
+  ])
+    assert.ok(errors.includes(expected), `missing: ${expected}\n${errors.join("\n")}`)
+  assert.ok(errors.some((error) => error.startsWith("provides[0].load is a lazy entry")))
+  assert.deepEqual(check({ provides: "speech" }), ["provides is a list of port provisions"])
+})
+
+test("ports: a provider exports `port`, one module provides each, and requires equals what files ask for", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/modules/ports.ts": "export async function loadPort(id) { return id }\n",
+    "types/modules/ports/speech.ts": "export interface SpeechPort { x: 1 }\n",
+    "types/modules/ports/ocr.ts": "export interface OcrPort { x: 1 }\n",
+    "types/modules/ports/vision.ts": "export interface VisionPort { x: 1 }\n",
+    // Provides speech, but its file exports no `port`.
+    "lib/speech/module.ts": hostManifest(
+      "speech",
+      'provides: [{ port: "speech", load: () => import("./port") }]'
+    ),
+    "lib/speech/port.ts": "export const notPort = {}\n",
+    // A second provider of speech; experimental, so it does not satisfy a requirement.
+    "lib/voice/module.ts": `import { defineHostModule } from "@/lib/modules/define"
+export default defineHostModule({ id: "voice", kind: "module", stage: "experimental", provides: [{ port: "speech", load: () => import("./port") }, { port: "vision", load: () => import("./vision") }] })
+`,
+    "lib/voice/port.ts": "export const port = {}\n",
+    "lib/voice/vision.ts": "const port = {}\nexport { port }\n",
+    // Asks for speech without requiring it; requires ocr it never asks for, and
+    // vision without "?" although only an experimental module provides it.
+    "lib/pet/module.ts": hostManifest("pet", 'requires: ["ocr?", "vision"]'),
+    "lib/pet/speak.ts": `import { loadPort } from "@/lib/modules/ports"
+// loadPort("ocr") in a comment is not a call.
+export const speak = () => loadPort("speech")
+export const see = () => loadPort("vision")
+`,
+    // Requires the port it provides.
+    "lib/crew/module.ts": hostManifest(
+      "crew",
+      'provides: [{ port: "ocr", load: () => import("./ocr") }], requires: ["ocr"]'
+    ),
+    "lib/crew/ocr.ts": "export function port() {}\n",
+  })
+  const errors = result.errors.filter((error) => /port/.test(error))
+  for (const expected of [
+    "lib/speech/module.ts: provides[0]: lib/speech/port.ts exports no `port`",
+    'lib/voice/module.ts: port speech is also contributed by "speech"',
+    'G4 lib/pet/module.ts: lib/pet/speak.ts asks for port "speech" but "pet"\'s requires does not name it',
+    'G4 lib/pet/module.ts: requires port "ocr", which no file of "pet" asks for',
+    'G5 lib/pet/module.ts: requires port "vision" but no active module provides it (mark it "vision?" if "pet" copes without)',
+    'G4 lib/crew/module.ts: requires port "ocr", which it provides',
+  ])
+    assert.ok(errors.includes(expected), `missing: ${expected}\n${errors.join("\n")}`)
+  assert.equal(errors.length, 6, errors.join("\n"))
 })
 
 test("runtime adapters resolve from their manifest and export start; names are unique across modules", () => {

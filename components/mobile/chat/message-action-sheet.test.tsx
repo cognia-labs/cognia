@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { UIMessage } from "ai"
 
@@ -106,21 +106,14 @@ jest.mock("@/stores/settings", () => ({
   useSettingsStore: (selector: (s: typeof settingsState) => unknown) => selector(settingsState),
 }))
 
-const readAloudStatus = { isActive: false, isLoading: false }
-jest.mock("@/hooks/media/use-read-aloud-status", () => ({
+const readAloudStatus = { available: true, isActive: false, isLoading: false }
+jest.mock("@/hooks/chat/use-read-aloud-status", () => ({
   __esModule: true,
   useReadAloudStatus: () => readAloudStatus,
 }))
 
-jest.mock("@/lib/tts/speak-chat-message", () => ({
-  __esModule: true,
-  speakChatMessage: jest.fn(async () => {}),
-}))
-
-jest.mock("@/lib/tts/tts-orchestrator", () => ({
-  __esModule: true,
-  ttsOrchestrator: { stop: jest.fn() },
-}))
+const mockSpeak = jest.fn(async () => {})
+const mockTtsStop = jest.fn()
 
 // BranchNavigator reads the chat store's live messages; stub it so the
 // "variants" wrapper row can be asserted without store plumbing.
@@ -131,14 +124,17 @@ jest.mock("@/components/chat/branch-navigator", () => ({
 
 import { share } from "@/lib/capacitor/share"
 import { toast } from "sonner"
-import { speakChatMessage } from "@/lib/tts/speak-chat-message"
-import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
+import { __resetPortsForTesting, __setPortForTesting } from "@/lib/modules/ports"
+import type { SpeechPort } from "@/types/modules/ports/speech"
 
 const mockShare = share as jest.Mock
 const mockToastSuccess = toast.success as jest.Mock
 const mockToastError = toast.error as jest.Mock
-const mockSpeak = speakChatMessage as jest.Mock
-const mockTtsStop = ttsOrchestrator.stop as jest.Mock
+const speech = {
+  readAloud: { speakChatMessage: mockSpeak, stop: mockTtsStop },
+} as unknown as SpeechPort
+/** Let the speech port's (already resolved) load hand over to the tap. */
+const flush = () => act(async () => {})
 
 const messages = {
   mobile: {
@@ -274,6 +270,9 @@ describe("MessageActionSheet", () => {
     mockToastError.mockReset()
     mockSpeak.mockClear()
     mockTtsStop.mockClear()
+    __resetPortsForTesting()
+    __setPortForTesting("speech", speech)
+    readAloudStatus.available = true
     chatState.toggleBookmark.mockClear()
     chatState.bookmarkedIds = []
     chatState.sessions = {}
@@ -609,11 +608,12 @@ describe("MessageActionSheet", () => {
     expect(screen.getByTestId("message-action-bookmark")).toHaveTextContent("Remove bookmark")
   })
 
-  it("starts read-aloud with the message text + character and closes", () => {
+  it("starts read-aloud with the message text + character and closes", async () => {
     const onOpenChange = jest.fn()
     const character = { voiceProfile: undefined }
     renderSheet(makeMessage("say this"), onOpenChange, { character })
     fireEvent.click(screen.getByTestId("message-action-read-aloud"))
+    await flush()
     expect(mockSpeak).toHaveBeenCalledWith({
       messageId: "m1",
       text: "say this",
@@ -622,14 +622,21 @@ describe("MessageActionSheet", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
-  it("stops read-aloud when it is already active", () => {
+  it("stops read-aloud when it is already active", async () => {
     readAloudStatus.isActive = true
     renderSheet(makeMessage("say this"), jest.fn())
     const row = screen.getByTestId("message-action-read-aloud")
     expect(row).toHaveTextContent("Stop reading")
     fireEvent.click(row)
+    await flush()
     expect(mockTtsStop).toHaveBeenCalledTimes(1)
     expect(mockSpeak).not.toHaveBeenCalled()
+  })
+
+  it("hides the read-aloud row where no module provides the speech port", () => {
+    readAloudStatus.available = false
+    renderSheet(makeMessage("hello"), jest.fn())
+    expect(screen.queryByTestId("message-action-read-aloud")).not.toBeInTheDocument()
   })
 
   it("hides the read-aloud row when TTS is disabled or the message is not assistant", () => {

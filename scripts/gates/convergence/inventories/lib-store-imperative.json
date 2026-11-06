@@ -1547,17 +1547,6 @@
       ]
     },
     {
-      "key": "lib/connectors/voice.ts",
-      "owner": "lib/connectors",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
       "key": "lib/context-workbench/active-context.ts",
       "owner": "lib/context-workbench",
       "note": "",
@@ -4433,6 +4422,17 @@
     },
     {
       "key": "lib/tts/speak-selection.ts",
+      "owner": "lib/tts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/tts/synthesize-speech.ts",
       "owner": "lib/tts",
       "note": "",
       "imports": [

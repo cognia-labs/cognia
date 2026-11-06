@@ -3,18 +3,13 @@ jest.mock("@/lib/audio/transcode", () => ({
   transcodeAudio: jest.fn(),
 }))
 import { transcodeAudio } from "@/lib/audio/transcode"
-jest.mock("@/lib/tts/tts-orchestrator", () => ({ ttsOrchestrator: { synthesize: jest.fn() } }))
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: {
-    getState: () => ({
-      ensureProviderKeys: async () => {},
-      settings: { ttsProvider: "openai", openaiVoice: "alloy", openaiResponseFormat: "aac" },
-      providerKeys: {},
-    }),
-  },
+// The `speech` port: `null` where no module provides it.
+const mockSpeech = { synthesize: jest.fn() }
+let mockSpeechProvided = true
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "speech" && mockSpeechProvided ? mockSpeech : null),
 }))
 import { synthesizeConnectorVoice, connectorVoiceFormats } from "./voice"
-import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
 import type { PlatformAdapter } from "@/types/connectors/adapter"
 const adapter = {
   meta: { capabilities: ["send.voice"] },
@@ -22,7 +17,8 @@ const adapter = {
 } as unknown as PlatformAdapter
 const target = { platform: "qq-official", adapterId: "a", scene: "group" }
 beforeEach(() => {
-  jest.mocked(ttsOrchestrator.synthesize).mockReset()
+  mockSpeechProvided = true
+  jest.mocked(mockSpeech.synthesize).mockReset()
   jest
     .mocked(transcodeAudio)
     .mockReset()
@@ -35,7 +31,7 @@ beforeEach(() => {
     })
 })
 it("uses configured TTS and character voice without local playback, retaining real bytes and format", async () => {
-  jest.mocked(ttsOrchestrator.synthesize).mockResolvedValue({
+  jest.mocked(mockSpeech.synthesize).mockResolvedValue({
     success: true,
     audioData: new Uint8Array([1, 2, 3]).buffer,
     mimeType: "audio/mpeg",
@@ -55,16 +51,20 @@ it("uses configured TTS and character voice without local playback, retaining re
     mimeType: "audio/mpeg",
     transcript: "Hello",
   })
-  expect(ttsOrchestrator.synthesize).toHaveBeenCalledWith(
-    "Hello",
+  expect(mockSpeech.synthesize).toHaveBeenCalledWith(
     expect.objectContaining({
-      speechSettings: expect.objectContaining({
-        ttsProvider: "openai",
-        openaiVoice: "nova",
-        openaiResponseFormat: "aac",
-      }),
+      text: "Hello",
+      character: { voiceProfile: { provider: "openai", voiceId: "nova" } },
+      approveText: expect.any(Function),
     })
   )
+})
+it("fails plainly where no module provides the speech port", async () => {
+  mockSpeechProvided = false
+  await expect(synthesizeConnectorVoice({ adapter, target, text: "Hello" })).rejects.toThrow(
+    "Speech synthesis is not available on this host"
+  )
+  expect(mockSpeech.synthesize).not.toHaveBeenCalled()
 })
 it("admits SILK-only destinations through generic conversion and still gates PII", async () => {
   expect(connectorVoiceFormats({ ...adapter, voiceFormats: () => ["audio/silk"] }, target)).toEqual(
@@ -73,10 +73,10 @@ it("admits SILK-only destinations through generic conversion and still gates PII
   await expect(
     synthesizeConnectorVoice({ adapter, target, text: "private@example.com" })
   ).rejects.toThrow(/PII/)
-  expect(ttsOrchestrator.synthesize).not.toHaveBeenCalled()
+  expect(mockSpeech.synthesize).not.toHaveBeenCalled()
 })
 it("does not mislabel unsupported provider audio as a supported codec", async () => {
-  jest.mocked(ttsOrchestrator.synthesize).mockResolvedValue({
+  jest.mocked(mockSpeech.synthesize).mockResolvedValue({
     success: true,
     audioData: new ArrayBuffer(3),
     mimeType: "audio/webm",
@@ -92,7 +92,7 @@ it.each(["audio/mpeg", "audio/aac", "audio/mp4", "audio/x-m4a"])(
   "converts C2C %s through the shared byte API and retains the spoken transcript",
   async (mimeType) => {
     const signal = new AbortController().signal
-    jest.mocked(ttsOrchestrator.synthesize).mockResolvedValue({
+    jest.mocked(mockSpeech.synthesize).mockResolvedValue({
       success: true,
       audioData: new Uint8Array([1, 2, 3]).buffer,
       mimeType,
@@ -125,11 +125,11 @@ it.each(["audio/mpeg", "audio/aac", "audio/mp4", "audio/x-m4a"])(
       target: "silk",
       signal,
     })
-    expect(ttsOrchestrator.synthesize).toHaveBeenCalledTimes(1)
+    expect(mockSpeech.synthesize).toHaveBeenCalledTimes(1)
   }
 )
 it("validates nominal SILK and never exports corrupt provider bytes", async () => {
-  jest.mocked(ttsOrchestrator.synthesize).mockResolvedValue({
+  jest.mocked(mockSpeech.synthesize).mockResolvedValue({
     success: true,
     audioData: new Uint8Array([1, 2, 3]).buffer,
     mimeType: "audio/silk",
@@ -152,9 +152,9 @@ it("stops before synthesis when cancelled and rechecks cancellation after synthe
   await expect(
     synthesizeConnectorVoice({ adapter, target, text: "Hello", signal: controller.signal })
   ).rejects.toMatchObject({ name: "AbortError" })
-  expect(ttsOrchestrator.synthesize).not.toHaveBeenCalled()
+  expect(mockSpeech.synthesize).not.toHaveBeenCalled()
   const active = new AbortController()
-  jest.mocked(ttsOrchestrator.synthesize).mockImplementation(async () => {
+  jest.mocked(mockSpeech.synthesize).mockImplementation(async () => {
     active.abort()
     return {
       success: true,
@@ -173,7 +173,7 @@ it("stops before synthesis when cancelled and rechecks cancellation after synthe
 it("uses shared encoded-format admission for a native M4A destination", async () => {
   const destination = { ...adapter, voiceFormats: () => ["audio/x-m4a"] }
   expect(connectorVoiceFormats(destination, target)).toEqual(["audio/x-m4a"])
-  jest.mocked(ttsOrchestrator.synthesize).mockResolvedValue({
+  jest.mocked(mockSpeech.synthesize).mockResolvedValue({
     success: true,
     audioData: new Uint8Array([1, 2, 3]).buffer,
     mimeType: "audio/mp4",

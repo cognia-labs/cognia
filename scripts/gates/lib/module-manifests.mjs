@@ -95,6 +95,10 @@ export const MOBILE_SHORTCUT_FIELDS = ["after"]
 export const RUNTIME_FIELDS = ["name", "criticality", "boot", "adapters", "absent"]
 export const BRAIN_ADAPTER_FIELDS = ["module", "hosts"]
 export const EFFECT_FIELDS = ["name", "load"]
+/** Fields of `ModulePortProvision`. */
+export const PORT_PROVISION_FIELDS = ["port", "load"]
+/** Where the kernel declares each port's contract: `types/modules/ports/<id>.ts`. */
+export const PORTS_DIR = "types/modules/ports/"
 /** `ModuleHost`, `HeadlessHost` and `ModuleRuntimeBoot` (`lib/modules/manifest-types.ts`). */
 export const MODULE_HOSTS = ["brain", "desktop", "mobile"]
 export const BRAIN_PROFILES = ["brain", "person-brain"]
@@ -130,6 +134,7 @@ const SECTION_ID = /^[a-z][a-zA-Z0-9-]*$/
 const NAV_ID = /^[a-z][a-z0-9-]*$/
 const NAV_ROUTE = /^\/[a-z0-9][a-z0-9/-]*$/
 const RUNTIME_NAME = /^[a-z][a-z0-9-]*$/
+const PORT_ID = /^[a-z][a-z0-9-]*$/
 /** An adapter specifier: beside the manifest (`./…`) or rooted (`@/…`), never a package. */
 const ADAPTER_SPEC = /^(\.\/|@\/)[A-Za-z0-9_./-]+$/
 
@@ -481,6 +486,57 @@ function effectErrors(effects) {
   return errors
 }
 
+/** The port ids a module's contracts declare: `types/modules/ports/<id>.ts`, tests aside. */
+export function declaredPorts(files) {
+  const ports = new Set()
+  for (const file of files) {
+    if (!file.startsWith(PORTS_DIR)) continue
+    const name = file.slice(PORTS_DIR.length)
+    if (/^[^/]+\.ts$/.test(name) && !/\.(?:test|d)\.ts$/.test(name)) ports.add(name.slice(0, -3))
+  }
+  return ports
+}
+
+/**
+ * `provides`: each a port the kernel declares, provided once per manifest and
+ * loaded lazily. `ports` is the declared set; absent, it is not checked.
+ */
+function provisionErrors(provides, ports) {
+  if (!Array.isArray(provides)) return ["provides is a list of port provisions"]
+  const errors = []
+  const seen = new Set()
+  provides.forEach((provision, index) => {
+    const at = `provides[${index}]`
+    if (!provision || typeof provision !== "object" || Array.isArray(provision)) {
+      errors.push(`${at} is not an object`)
+      return
+    }
+    errors.push(...unknownFields(provision, PORT_PROVISION_FIELDS, at))
+    if (!PORT_ID.test(provision.port ?? "")) errors.push(`${at}.port is a lower-case kebab port id`)
+    else if (seen.has(provision.port)) errors.push(`${at}.port "${provision.port}" is listed twice`)
+    else if (ports && !ports.has(provision.port))
+      errors.push(`${at}.port "${provision.port}" has no contract ${PORTS_DIR}${provision.port}.ts`)
+    seen.add(provision.port)
+    if (!isLazy(provision.load)) errors.push(`${at}.load is a lazy entry \`() => import("…")\``)
+  })
+  return errors
+}
+
+/** `requires`: declared ports, each once; a trailing `?` marks an optional one. */
+function requirementErrors(requires, ports) {
+  const errors = []
+  const seen = new Set()
+  for (const entry of requires) {
+    const id = entry.endsWith("?") ? entry.slice(0, -1) : entry
+    if (!PORT_ID.test(id)) errors.push(`requires "${entry}" is a port id, optionally ending in "?"`)
+    else if (seen.has(id)) errors.push(`requires names port "${id}" twice`)
+    else if (ports && !ports.has(id))
+      errors.push(`requires "${entry}": no contract ${PORTS_DIR}${id}.ts declares that port`)
+    seen.add(id)
+  }
+  return errors
+}
+
 /** The module's own slots: each a canonical extension point holding a lazy entry. */
 function slotErrors(slots, extensionPoints) {
   if (!slots || typeof slots !== "object" || Array.isArray(slots))
@@ -496,8 +552,9 @@ function slotErrors(slots, extensionPoints) {
 
 /**
  * `vocabulary` holds the name sets the caller can read from the tree:
- * `iconNames` (the Lucide catalog), `spotIconNames` (`MobileSpotIconName`) and
- * `extensionPoints` (`CANONICAL_EXTENSION_POINTS`). An absent set is not checked.
+ * `iconNames` (the Lucide catalog), `spotIconNames` (`MobileSpotIconName`),
+ * `extensionPoints` (`CANONICAL_EXTENSION_POINTS`) and `ports` (the contracts
+ * under `types/modules/ports/`). An absent set is not checked.
  */
 export function validateHostManifest(manifest, id, vocabulary = {}) {
   const errors = []
@@ -526,6 +583,10 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
     errors.push(...slashCommandErrors(manifest.slashCommands))
   if (manifest.nav !== undefined) errors.push(...navErrors(manifest.nav, vocabulary))
   if (manifest.runtimes !== undefined) errors.push(...runtimeErrors(manifest.runtimes))
+  if (manifest.provides !== undefined)
+    errors.push(...provisionErrors(manifest.provides, vocabulary.ports))
+  if (isStringArray(manifest.requires))
+    errors.push(...requirementErrors(manifest.requires, vocabulary.ports))
   if (manifest.messages !== undefined && !isText(manifest.messages))
     errors.push("messages is an i18n namespace")
   return errors

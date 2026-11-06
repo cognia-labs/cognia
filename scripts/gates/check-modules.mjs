@@ -78,6 +78,7 @@ import { createContext, importsIn, resolveModule } from "./convergence/counter.m
 import {
   GENERATED_FILES,
   GENERATOR,
+  declaredPorts,
   lazyEntries,
   manifestKind,
   readManifest,
@@ -202,6 +203,7 @@ function collectManifests(ctx, files) {
       : undefined,
     spotIconNames: constStringList(ctx, SPOT_ICON_FILE, "MOBILE_SPOT_ICON_NAMES"),
     extensionPoints: constStringList(ctx, EXTENSION_POINTS_FILE, "CANONICAL_EXTENSION_POINTS"),
+    ports: declaredPorts(files),
   }
   for (const file of files) {
     const kind = manifestKind(file)
@@ -219,7 +221,9 @@ function collectManifests(ctx, files) {
       .filter(({ spec }) => !resolveModule(ctx, spec, file))
       .map(({ at, spec }) => `${at}: lazy entry "${spec}" does not resolve`)
     const adapterErrors =
-      hostMatch && !shapeErrors.length ? runtimeAdapterErrors(ctx, file, value) : []
+      hostMatch && !shapeErrors.length
+        ? [...runtimeAdapterErrors(ctx, file, value), ...provisionExportErrors(ctx, file, value)]
+        : []
     for (const message of [...readErrors, ...shapeErrors, ...lazyErrors, ...adapterErrors])
       errors.push(`${file}: ${message}`)
     if (!value) continue
@@ -252,7 +256,9 @@ function collectManifests(ctx, files) {
       "settings section "
     ),
     ...duplicateContributions(host, (manifest) => manifest.nav, "id", "navigation entry "),
-    ...duplicateContributions(host, (manifest) => manifest.runtimes, "name", "runtime ")
+    ...duplicateContributions(host, (manifest) => manifest.runtimes, "name", "runtime "),
+    // One provider per port: `lib/modules/ports.ts` refuses two at runtime.
+    ...duplicateContributions(host, (manifest) => manifest.provides, "port", "port ")
   )
   return { host, ui, errors, warnings }
 }
@@ -283,25 +289,26 @@ export function constStringList(ctx, file, name) {
 
 /** Whether a module exports `start`: a function, a `const`, or a re-export. */
 export function exportsStart(sourceFile) {
+  return exportsName(sourceFile, "start")
+}
+
+/** Whether a module exports `name` as a value: a function, a `const`, or a re-export. */
+export function exportsName(sourceFile, name) {
   const exported = (node) =>
     ts.canHaveModifiers(node) &&
     (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
   for (const statement of sourceFile.statements) {
-    if (
-      ts.isFunctionDeclaration(statement) &&
-      statement.name?.text === "start" &&
-      exported(statement)
-    )
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === name && exported(statement))
       return true
     if (ts.isVariableStatement(statement) && exported(statement))
       for (const declaration of statement.declarationList.declarations)
-        if (ts.isIdentifier(declaration.name) && declaration.name.text === "start") return true
+        if (ts.isIdentifier(declaration.name) && declaration.name.text === name) return true
     if (
       ts.isExportDeclaration(statement) &&
       !statement.isTypeOnly &&
       statement.exportClause &&
       ts.isNamedExports(statement.exportClause) &&
-      statement.exportClause.elements.some((element) => element.name.text === "start")
+      statement.exportClause.elements.some((element) => element.name.text === name)
     )
       return true
   }
@@ -322,6 +329,87 @@ function runtimeAdapterErrors(ctx, file, manifest) {
       else if (!exportsStart(ctx.ast(target))) errors.push(`${at}: ${target} exports no \`start\``)
     }
   })
+  return errors
+}
+
+/** Each port provision's file exports the implementation as `port`. */
+function provisionExportErrors(ctx, file, manifest) {
+  const errors = []
+  ;(manifest.provides ?? []).forEach((provision, index) => {
+    const spec = provision?.load?.$lazy
+    if (typeof spec !== "string") return
+    const target = resolveModule(ctx, spec, file)
+    // An unresolved lazy entry is already reported with the other lazy entries.
+    if (target && !exportsName(ctx.ast(target), "port"))
+      errors.push(`provides[${index}]: ${target} exports no \`port\``)
+  })
+  return errors
+}
+
+/** The port ids a file asks for: `loadPort("…")`, `readPort("…")` or `usePort("…")`. */
+export function portsAskedFor(sourceFile) {
+  const asked = new Set()
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      PORT_READERS.has(node.expression.text) &&
+      node.arguments[0] &&
+      ts.isStringLiteralLike(node.arguments[0])
+    )
+      asked.add(node.arguments[0].text)
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return asked
+}
+
+const PORT_READERS = new Set(["loadPort", "readPort", "usePort"])
+
+/**
+ * Ports (G4, G5). A manifest module's `requires` names exactly the ports its
+ * files ask for (with or without `?`), and a port it requires without `?` has
+ * an active provider. A module does not require a port it provides.
+ */
+export function portErrors(ctx, manifests, owners) {
+  const errors = []
+  const provided = new Map()
+  for (const [id, { manifest }] of manifests.host)
+    if (manifest.stage !== "experimental")
+      for (const provision of manifest.provides ?? []) provided.set(provision.port, id)
+  const asked = new Map()
+  for (const [file, { owner }] of owners) {
+    if (!manifests.host.has(owner) || manifestKind(file)) continue
+    for (const port of portsAskedFor(ctx.ast(file))) {
+      if (!asked.has(owner)) asked.set(owner, new Map())
+      if (!asked.get(owner).has(port)) asked.get(owner).set(port, file)
+    }
+  }
+  for (const [id, { file, manifest }] of manifests.host) {
+    const own = new Set((manifest.provides ?? []).map((provision) => provision.port))
+    const required = new Map()
+    for (const entry of Array.isArray(manifest.requires) ? manifest.requires : []) {
+      if (typeof entry !== "string") continue
+      const optional = entry.endsWith("?")
+      required.set(optional ? entry.slice(0, -1) : entry, optional)
+    }
+    const used = asked.get(id) ?? new Map()
+    for (const [port, user] of [...used].sort()) {
+      if (own.has(port) || required.has(port)) continue
+      errors.push(
+        `G4 ${file}: ${user} asks for port "${port}" but "${id}"'s requires does not name it`
+      )
+    }
+    for (const [port, optional] of [...required].sort()) {
+      if (own.has(port)) errors.push(`G4 ${file}: requires port "${port}", which it provides`)
+      else if (!used.has(port))
+        errors.push(`G4 ${file}: requires port "${port}", which no file of "${id}" asks for`)
+      if (!optional && !own.has(port) && !provided.has(port))
+        errors.push(
+          `G5 ${file}: requires port "${port}" but no active module provides it (mark it "${port}?" if "${id}" copes without)`
+        )
+    }
+  }
   return errors
 }
 
@@ -828,6 +916,7 @@ export function computeModules(ctx) {
     ...ownershipErrors,
     ...dependsOnErrors(manifests, registry),
     ...registryErrors(ctx, manifests),
+    ...portErrors(ctx, manifests, owners),
   ]
 
   for (const [id, files] of moduleApi)

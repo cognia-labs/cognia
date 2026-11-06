@@ -73,16 +73,25 @@ const speakSelectionMock = jest.fn()
 const stopSelectionSpeechMock = jest.fn()
 let speechSubscriber: ((update: { playing: boolean; progress?: number }) => void) | null = null
 const unwatchMock = jest.fn()
-jest.mock("@/lib/tts/speak-selection", () => ({
-  speakSelection: (...args: unknown[]) => speakSelectionMock(...args),
-  stopSelectionSpeech: (...args: unknown[]) => stopSelectionSpeechMock(...args),
-  watchSelectionSpeech: (
-    _candidateId: string,
-    onChange: (update: { playing: boolean; progress?: number }) => void
-  ) => {
-    speechSubscriber = onChange
-    return unwatchMock
-  },
+// The `speech` port: `null` where no module provides it.
+let speechProvided = true
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) =>
+    id === "speech" && speechProvided
+      ? {
+          readAloud: {
+            speakSelection: (...args: unknown[]) => speakSelectionMock(...args),
+            stopSelection: (...args: unknown[]) => stopSelectionSpeechMock(...args),
+            watchSelection: (
+              _candidateId: string,
+              onChange: (update: { playing: boolean; progress?: number }) => void
+            ) => {
+              speechSubscriber = onChange
+              return unwatchMock
+            },
+          },
+        }
+      : null,
 }))
 
 const pushMock = jest.fn()
@@ -129,6 +138,7 @@ beforeEach(() => {
   executePluginSelectionQuickActionMock.mockResolvedValue(undefined)
   storeExternalMemoryMock.mockResolvedValue({ ok: true, stored: true, consolidated: false })
   speakSelectionMock.mockResolvedValue(undefined)
+  speechProvided = true
   useChatStore.getState().clear()
   useComposerIntentStore.setState({ pendingBySession: {} })
 })
@@ -465,6 +475,25 @@ describe("speak", () => {
         playing: false,
       })
     )
+  })
+
+  it("tells the toolbar nothing plays where no module provides the speech port", async () => {
+    speechProvided = false
+    render(<SelectionToolbarInitializer />)
+    await waitFor(() => expect(stage()).toBeDefined())
+
+    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "speak" } })
+    await act(async () => {
+      stage()?.({ payload: null })
+    })
+
+    await waitFor(() =>
+      expect(emitToMock).toHaveBeenCalledWith("selection-toolbar", "selection://speech", {
+        candidateId: "candidate-1",
+        playing: false,
+      })
+    )
+    expect(speakSelectionMock).not.toHaveBeenCalled()
   })
 
   it("stops only the candidate the toolbar asked about", async () => {
