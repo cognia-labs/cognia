@@ -41,6 +41,8 @@ export interface MenuEntryPresentation {
   sectionLabel: (section: IssueMenuSectionId) => string
   entryLabel: (section: IssueMenuSectionId, entry: IssueMenuEntry) => string
   entryIcon: (section: IssueMenuSectionId, entry: IssueMenuEntry) => ReactNode
+  /** Why a disabled entry is refused, when the menu has to say it. */
+  entryHint: (entry: IssueMenuEntry) => string | null
 }
 
 export function useMenuEntryPresentation({
@@ -88,6 +90,9 @@ export function useMenuEntryPresentation({
       }
     },
 
+    entryHint: (entry) =>
+      entry.collabRefusal ? t(`assignee.sharedRefusal.${entry.collabRefusal}`) : null,
+
     entryIcon: (section, entry) => {
       switch (section) {
         case "status":
@@ -114,4 +119,14 @@ export function useMenuEntryPresentation({
       }
     },
   }
+}
+
+/** The muted second line under a refused entry. Renders nothing without a hint. */
+export function EntryHint({ hint, testId }: { hint: string | null; testId: string }) {
+  if (!hint) return null
+  return (
+    <span className="text-muted-foreground whitespace-normal text-xs" data-testid={testId}>
+      {hint}
+    </span>
+  )
 }

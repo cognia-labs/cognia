@@ -2,12 +2,12 @@
 
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 
-import { renderHook } from "@testing-library/react"
+import { render, renderHook, screen } from "@testing-library/react"
 import type { IssueMenuEntry } from "@/lib/issues/menu-model"
 import type { IssueProject } from "@/types/issues"
 import type { LabelRow } from "@/types/labels"
 import type { AssigneeOption } from "../assignee-picker"
-import { useMenuEntryPresentation } from "./menu-entry-presentation"
+import { EntryHint, useMenuEntryPresentation } from "./menu-entry-presentation"
 
 const entry = (id: string): IssueMenuEntry => ({
   id,
@@ -103,5 +103,25 @@ describe("useMenuEntryPresentation", () => {
     expect(p.entryIcon("assignee", entry("agent:a1"))).toBeNull()
     expect(p.entryIcon("labels", entry("ghost"))).toBeNull()
     expect(p.entryIcon("project", entry("ghost"))).toBeNull()
+  })
+
+  it("says why a shared row refuses an entry, and nothing otherwise", () => {
+    const p = usePresentation()
+    expect(p.entryHint({ ...entry("human:self"), collabRefusal: "anonymous-human" })).toBe(
+      "assignee.sharedRefusal.anonymous-human"
+    )
+    expect(p.entryHint(entry("human:self"))).toBeNull()
+  })
+})
+
+describe("EntryHint", () => {
+  it("renders the hint under its test id", () => {
+    render(<EntryHint hint="why" testId="hint" />)
+    expect(screen.getByTestId("hint")).toHaveTextContent("why")
+  })
+
+  it("renders nothing without a hint", () => {
+    const { container } = render(<EntryHint hint={null} testId="hint" />)
+    expect(container).toBeEmptyDOMElement()
   })
 })

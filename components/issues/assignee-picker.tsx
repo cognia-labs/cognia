@@ -30,6 +30,7 @@ import {
 import { useClientLiveQuery } from "@/hooks/data"
 import { listCharacters } from "@/lib/db/characters"
 import { actorKey } from "@/lib/issues/board-model"
+import { collabActorRefusal, collabAssigneeKey } from "@/lib/issues/collab-actor"
 import { SELF_ACTOR_KEY } from "@/lib/issues/run/running"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -78,6 +79,12 @@ export interface AssigneePickerProps {
   value: IssueActor | null | undefined
   onChange: (actor: IssueActor | null) => void
   disabled?: boolean
+  /**
+   * Set when the issue lives on the collaboration plane (ADR-0149 §10).
+   * `selfUserId` is the signed-in person "Me" resolves to; an option the
+   * plane cannot name is shown disabled with the reason, never offered.
+   */
+  shared?: { selfUserId: string | null }
   "data-testid"?: string
 }
 
@@ -86,6 +93,7 @@ export function AssigneePicker({
   value,
   onChange,
   disabled,
+  shared,
   "data-testid": testId = "issue-assignee-picker",
 }: AssigneePickerProps) {
   const t = useTranslations("issues")
@@ -106,7 +114,10 @@ export function AssigneePicker({
     )
   }, [characters, teamsById, workspaceId, t])
 
-  const currentKey = actorKey(value ?? undefined) ?? UNASSIGNED_VALUE
+  const currentKey =
+    (shared
+      ? collabAssigneeKey(value, shared.selfUserId, actorKey)
+      : actorKey(value ?? undefined)) ?? UNASSIGNED_VALUE
   // A stored assignee whose Character/team was since deleted still needs a
   // visible row, or the Select silently shows nothing.
   const known = options.some((option) => option.key === currentKey)
@@ -144,15 +155,27 @@ export function AssigneePicker({
           return (
             <SelectGroup key={group}>
               <SelectLabel>{label}</SelectLabel>
-              {rows.map((option) => (
-                <SelectItem
-                  key={option.key}
-                  value={option.key}
-                  data-testid={`${testId}-${option.key}`}
-                >
-                  {option.actor.label}
-                </SelectItem>
-              ))}
+              {rows.map((option) => {
+                const refusal = shared ? collabActorRefusal(option.actor, shared.selfUserId) : null
+                return (
+                  <SelectItem
+                    key={option.key}
+                    value={option.key}
+                    disabled={refusal !== null}
+                    data-testid={`${testId}-${option.key}`}
+                  >
+                    {option.actor.label}
+                    {refusal ? (
+                      <span
+                        className="text-muted-foreground text-xs"
+                        data-testid={`${testId}-${option.key}-refusal`}
+                      >
+                        {t(`assignee.sharedRefusal.${refusal}`)}
+                      </span>
+                    ) : null}
+                  </SelectItem>
+                )
+              })}
             </SelectGroup>
           )
         })}

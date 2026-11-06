@@ -13,11 +13,13 @@
  */
 
 import { actorKey } from "./board-model"
-import { canApplyBulkAction, type IssueBulkAction } from "./bulk-actions"
+import { canApplyBulkAction, type BulkActionContext, type IssueBulkAction } from "./bulk-actions"
+import { collabAssigneeKey } from "./collab-actor"
 import type { AssigneeOption } from "@/components/issues/assignee-picker"
 import { ISSUE_PRIORITIES, ISSUE_STATUSES } from "@/types/issues"
 import type { IssueCycle, IssueProject } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
+import type { CollabActorRefusal } from "@/types/issues/collab"
 import type { LabelRow } from "@/types/labels"
 
 /** A menu section's identity, also its i18n key suffix and test-id stem. */
@@ -31,6 +33,8 @@ export interface IssueMenuEntry {
   disabled: boolean
   /** The issue already has this value. */
   checked: boolean
+  /** Set when a shared row refuses this assignee; the menu shows why. */
+  collabRefusal?: CollabActorRefusal
 }
 
 export interface IssueMenuSection {
@@ -46,6 +50,12 @@ export interface IssueMenuInput {
   assigneeOptions: readonly AssigneeOption[]
   /** Cycles and milestones of the workspace. Omitted means no cycle section. */
   cycles?: readonly IssueCycle[]
+  /**
+   * The signed-in person "Me" resolves to on the collaboration plane (`null`:
+   * nobody). On a shared row it greys out assignees the plane cannot name and
+   * ticks "Me" for the person's own `usr_…`. Absent: unknown.
+   */
+  collabSelfUserId?: string | null
 }
 
 function entry(
@@ -53,9 +63,17 @@ function entry(
   action: IssueBulkAction,
   item: UnifiedIssueItem,
   running: boolean,
-  checked: boolean
+  checked: boolean,
+  context: BulkActionContext = {}
 ): IssueMenuEntry {
-  return { id, action, disabled: !canApplyBulkAction(item, action, running).ok, checked }
+  const verdict = canApplyBulkAction(item, action, running, context)
+  return {
+    id,
+    action,
+    disabled: !verdict.ok,
+    checked,
+    ...(!verdict.ok && verdict.reason === "collab-actor" ? { collabRefusal: verdict.refusal } : {}),
+  }
 }
 
 /**
@@ -73,8 +91,14 @@ export function buildIssueMenuSections({
   projects,
   assigneeOptions,
   cycles = [],
+  collabSelfUserId,
 }: IssueMenuInput): IssueMenuSection[] {
-  const currentAssignee = actorKey(item.assignee)
+  const shared = item.kind === "collab"
+  const currentAssignee = shared
+    ? collabAssigneeKey(item.assignee, collabSelfUserId, actorKey)
+    : actorKey(item.assignee)
+  const assigneeContext: BulkActionContext =
+    collabSelfUserId === undefined ? {} : { collabSelfUserId }
 
   const sections: IssueMenuSection[] = [
     {
@@ -98,14 +122,22 @@ export function buildIssueMenuSections({
     {
       id: "assignee",
       entries: [
-        entry("none", { kind: "assignee", to: null }, item, running, currentAssignee === null),
+        entry(
+          "none",
+          { kind: "assignee", to: null },
+          item,
+          running,
+          currentAssignee === null,
+          assigneeContext
+        ),
         ...assigneeOptions.map((option) =>
           entry(
             option.key,
             { kind: "assignee", to: option.actor },
             item,
             running,
-            currentAssignee === option.key
+            currentAssignee === option.key,
+            assigneeContext
           )
         ),
       ],

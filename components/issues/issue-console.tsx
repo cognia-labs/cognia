@@ -55,6 +55,7 @@ import { useClientLiveQuery } from "@/hooks/data"
 import { useBreakpoint } from "@/hooks/ui"
 import { useIssueSyncAvailability } from "./kept-copy-source-state"
 import { useAssigneeOptions } from "@/hooks/issues/use-assignee-options"
+import { collabSelfUserIdOf, useCollabSelf } from "@/hooks/issues/use-collab-self"
 import { useIssueSelection } from "@/hooks/issues/use-issue-selection"
 import { useIssueShortcuts } from "@/hooks/issues/use-issue-shortcuts"
 import { useUnifiedIssues } from "@/hooks/issues/use-unified-issues"
@@ -75,7 +76,12 @@ import {
   type IssueBoardFilter,
   type IssueDropAction,
 } from "@/lib/issues/board-model"
-import { applyIssueBulkAction, type IssueBulkAction } from "@/lib/issues/bulk-actions"
+import {
+  applyIssueBulkAction,
+  canApplyBulkAction,
+  type BulkActionContext,
+  type IssueBulkAction,
+} from "@/lib/issues/bulk-actions"
 import { buildIssueLabelCatalogue } from "@/lib/issues/github-label-display"
 import { computeProgressFromIssues } from "@/lib/issues/project-progress"
 import {
@@ -630,10 +636,31 @@ export function IssueConsole({
    * GitHub rows cannot all be written, and "12 updated" when four were skipped
    * is a claim the user has no way to check.
    */
+  // Who "Me" is on a shared board; shared rows refuse an assignee the
+  // collaboration plane cannot name (ADR-0149 §10).
+  const collabSelfUserId = collabSelfUserIdOf(useCollabSelf())
+  const bulkContext = useMemo<BulkActionContext>(
+    () => (collabSelfUserId === undefined ? {} : { collabSelfUserId }),
+    [collabSelfUserId]
+  )
+
   const runBulk = useCallback(
     async (targets: readonly UnifiedIssueItem[], action: IssueBulkAction) => {
       const by: IssueActor = { kind: "human" }
-      const outcome = await applyIssueBulkAction(targets, action, by, runningUnifiedIds)
+      // A shared-actor refusal is a skip without a state-machine reason, so
+      // name it here when it is why nothing landed.
+      const collabRefusal = targets
+        .map((item) =>
+          canApplyBulkAction(item, action, runningUnifiedIds.has(item.unifiedId), bulkContext)
+        )
+        .find((verdict) => !verdict.ok && verdict.reason === "collab-actor")
+      const outcome = await applyIssueBulkAction(
+        targets,
+        action,
+        by,
+        runningUnifiedIds,
+        bulkContext
+      )
       if (outcome.failed > 0) {
         toast.error(t("bulk.failed", { count: outcome.failed }))
       } else if (outcome.applied === 0) {
@@ -641,7 +668,9 @@ export function IssueConsole({
         toast.error(
           outcome.reason
             ? t(`board.denied.${outcome.reason}`, { source: t("source.local") })
-            : t("bulk.nothing")
+            : collabRefusal && !collabRefusal.ok && collabRefusal.reason === "collab-actor"
+              ? t(`assignee.sharedRefusal.${collabRefusal.refusal}`)
+              : t("bulk.nothing")
         )
       } else if (outcome.skipped > 0) {
         toast.warning(t("bulk.skipped", { count: outcome.applied, skipped: outcome.skipped }))
@@ -649,7 +678,7 @@ export function IssueConsole({
         toast.success(t("bulk.applied", { count: outcome.applied }))
       }
     },
-    [runningUnifiedIds, t]
+    [runningUnifiedIds, bulkContext, t]
   )
 
   /**
@@ -667,6 +696,7 @@ export function IssueConsole({
         projects={projects ?? []}
         assigneeOptions={assigneeOptions}
         cycles={cycles ?? []}
+        collabSelfUserId={collabSelfUserId}
         onAction={(action) => void runBulk([item], action)}
         onOpen={() => setSelectedId(item.unifiedId)}
         onRequestDelete={() => setDeleteTargets([item])}
@@ -674,7 +704,15 @@ export function IssueConsole({
         {children}
       </IssueContextMenu>
     ),
-    [runningUnifiedIds, writableLabels, projects, assigneeOptions, cycles, runBulk]
+    [
+      runningUnifiedIds,
+      writableLabels,
+      projects,
+      assigneeOptions,
+      cycles,
+      collabSelfUserId,
+      runBulk,
+    ]
   )
 
   /**
@@ -879,6 +917,7 @@ export function IssueConsole({
               content: (
                 <IssueDetailPanel
                   item={selected}
+                  collabSelfUserId={collabSelfUserId}
                   labelsById={labelsById}
                   projectNamesById={projectNamesById}
                   labels={writableLabels}
@@ -928,6 +967,7 @@ export function IssueConsole({
         projects={projects ?? []}
         assigneeOptions={assigneeOptions}
         cycles={cycles ?? []}
+        bulkContext={bulkContext}
         onAction={(action) => void runBulk(checkedItems, action)}
         onRequestDelete={() => setDeleteTargets(checkedItems)}
         onToggleAll={selection.toggleAll}

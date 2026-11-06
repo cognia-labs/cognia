@@ -522,7 +522,12 @@
   "assignee": {
     "agents": "Agents",
     "teams": "Squads",
-    "missing": "no longer exists"
+    "missing": "no longer exists",
+    "sharedRefusal": {
+      "anonymous-human": "Sign in to assign yourself on a shared board.",
+      "not-a-user-id": "This person has no member account the shared board can name.",
+      "missing-id": "This agent or team has no id, so the shared board cannot name it."
+    }
   },
   "run": {
     "section": "Runs",

@@ -24018,6 +24018,11 @@
     "assignee": {
       "agents": "Agents",
       "missing": "no longer exists",
+      "sharedRefusal": {
+        "anonymous-human": "Sign in to assign yourself on a shared board.",
+        "missing-id": "This agent or team has no id, so the shared board cannot name it.",
+        "not-a-user-id": "This person has no member account the shared board can name."
+      },
       "teams": "Squads"
     },
     "board": {

@@ -172,6 +172,46 @@ describe("IssueBulkToolbar", () => {
       expect(screen.getByTestId("issue-bulk-delete")).toBeDisabled()
     })
 
+    it("counts out a shared row that cannot name Me (ADR-0149 §10)", async () => {
+      const user = userEvent.setup()
+      const shared = item({ kind: "collab", capabilities: FULL_ISSUE_CAPABILITIES })
+      const me = {
+        key: "human:self",
+        actor: { kind: "human" as const, label: "Me" },
+        group: "human" as const,
+      }
+      renderToolbar({
+        items: [shared],
+        assigneeOptions: [me],
+        bulkContext: { collabSelfUserId: null },
+      })
+      await user.click(screen.getByTestId("issue-bulk-assignee"))
+      expect(await screen.findByTestId("issue-bulk-assignee-human:self")).toHaveAttribute(
+        "aria-disabled",
+        "true"
+      )
+    })
+
+    it("lets a shared row take Me once the person is known", async () => {
+      const user = userEvent.setup()
+      const shared = item({ kind: "collab", capabilities: FULL_ISSUE_CAPABILITIES })
+      const me = {
+        key: "human:self",
+        actor: { kind: "human" as const, label: "Me" },
+        group: "human" as const,
+      }
+      renderToolbar({
+        items: [shared],
+        assigneeOptions: [me],
+        bulkContext: { collabSelfUserId: "usr_aaaaaaaaaaaaaaaaaaaaaaaa" },
+      })
+      await user.click(screen.getByTestId("issue-bulk-assignee"))
+      expect(await screen.findByTestId("issue-bulk-assignee-human:self")).not.toHaveAttribute(
+        "aria-disabled",
+        "true"
+      )
+    })
+
     it("accounts for the run guard in the status counts", async () => {
       const user = userEvent.setup()
       const running = item()

@@ -225,3 +225,56 @@ describe("canDeleteIssue", () => {
     expect(canDeleteIssue(item(), true)).toBe(true)
   })
 })
+
+describe("buildIssueMenuSections on a shared row (ADR-0149 §10)", () => {
+  const ADA = "usr_aaaaaaaaaaaaaaaaaaaaaaaa"
+  const me: AssigneeOption = {
+    key: "human:self",
+    actor: { kind: "human", label: "Me" },
+    group: "human",
+  }
+  const sharedItem = (over: Partial<UnifiedIssueItem> = {}) =>
+    item({ kind: "collab", capabilities: FULL_ISSUE_CAPABILITIES, ...over })
+  const assignee = (sections: IssueMenuSection[]) => section(sections, "assignee")!.entries
+
+  it("greys out Me with the refusal when nobody is signed in", () => {
+    const entries = assignee(
+      build({ item: sharedItem(), assigneeOptions: [me, scout], collabSelfUserId: null })
+    )
+    expect(entries.find((entry) => entry.id === "human:self")).toMatchObject({
+      disabled: true,
+      collabRefusal: "anonymous-human",
+    })
+    // An agent and unassign still name someone (or no one) the plane accepts.
+    expect(entries.find((entry) => entry.id === "agent:a1")).toMatchObject({ disabled: false })
+    expect(entries.find((entry) => entry.id === "agent:a1")).not.toHaveProperty("collabRefusal")
+    expect(entries.find((entry) => entry.id === "none")).toMatchObject({ disabled: false })
+  })
+
+  it("offers Me once someone is signed in, and ticks it for their own id", () => {
+    const entries = assignee(
+      build({
+        item: sharedItem({ assignee: { kind: "human", id: ADA, label: "Ada" } }),
+        assigneeOptions: [me, scout],
+        collabSelfUserId: ADA,
+      })
+    )
+    expect(entries.find((entry) => entry.id === "human:self")).toMatchObject({
+      disabled: false,
+      checked: true,
+    })
+  })
+
+  it("does not narrow while who is signed in is unknown, nor on a local row", () => {
+    expect(
+      assignee(build({ item: sharedItem(), assigneeOptions: [me] })).find(
+        (entry) => entry.id === "human:self"
+      )
+    ).toMatchObject({ disabled: false })
+    expect(
+      assignee(build({ assigneeOptions: [me], collabSelfUserId: null })).find(
+        (entry) => entry.id === "human:self"
+      )
+    ).toMatchObject({ disabled: false })
+  })
+})

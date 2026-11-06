@@ -25,7 +25,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { countApplicableItems, type IssueBulkAction } from "@/lib/issues/bulk-actions"
+import {
+  countApplicableItems,
+  type BulkActionContext,
+  type IssueBulkAction,
+} from "@/lib/issues/bulk-actions"
 import { ISSUE_PRIORITIES, ISSUE_STATUSES } from "@/types/issues"
 import type { IssueCycle, IssueProject } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
@@ -40,6 +44,8 @@ export interface IssueBulkToolbarProps {
   projects: readonly IssueProject[]
   assigneeOptions: readonly AssigneeOption[]
   cycles?: readonly IssueCycle[]
+  /** What the gate knows beyond each row: who "Me" is on a shared board. */
+  bulkContext?: BulkActionContext
   onAction: (action: IssueBulkAction) => void
   onRequestDelete: () => void
   /** Ticks every row currently on screen; a second call clears. */
@@ -56,6 +62,7 @@ export function IssueBulkToolbar({
   projects,
   assigneeOptions,
   cycles = [],
+  bulkContext,
   onAction,
   onRequestDelete,
   onToggleAll,
@@ -71,7 +78,8 @@ export function IssueBulkToolbar({
    * option so a mixed selection says up front that it will only reach some of
    * the rows, instead of reporting it afterwards.
    */
-  const applicable = (action: IssueBulkAction) => countApplicableItems(items, action, runningIds)
+  const applicable = (action: IssueBulkAction) =>
+    countApplicableItems(items, action, runningIds, bulkContext)
 
   const deletable = applicable({ kind: "delete" })
 

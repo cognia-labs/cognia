@@ -30,6 +30,7 @@ import { statusCategoryOf } from "@/types/issues"
 import type { IssueSourceAdapter, IssueSourceQuery, UnifiedIssueItem } from "@/types/issues/unified"
 import { makeUnifiedIssueId, READ_ONLY_ISSUE_CAPABILITIES } from "@/types/issues/unified"
 
+import { narrowCollabActor, readCollabSelf, type CollabSelf } from "@/lib/issues/collab-actor"
 import { observeIssueList } from "./live"
 import { getIssueSourceRegistry, type IssueSourceRegistry } from "./registry"
 
@@ -106,71 +107,99 @@ async function listCollabMirrorIssues(query: IssueSourceQuery): Promise<UnifiedI
   return rows.map(toUnifiedCollabIssue)
 }
 
-export const collabIssueSource: IssueSourceAdapter = {
-  kind: "collab",
-  label: "Shared",
-  list: listCollabMirrorIssues,
-  // A pull writes the mirror, so a shared issue another member filed or moved
-  // appears without anyone touching a local row.
-  subscribe: (query, observer) => observeIssueList(() => listCollabMirrorIssues(query), observer),
-  async mutate(sourceId, action) {
-    const row = await getCollabIssue(sourceId)
-    if (!row || !Number.isSafeInteger(row.revision)) {
-      throw new Error("collaboration server does not support writable issue revisions")
-    }
-    if (action.kind === "comment") {
+export interface CollabIssueSourceDeps {
+  /** Who "Me" is, read only when an assignee needs it. */
+  readSelf: () => Promise<CollabSelf | null>
+}
+
+/**
+ * The source, with its one outside read injectable. `collabIssueSource` below
+ * is the instance the tracker registers.
+ */
+export function createCollabIssueSource(
+  deps: CollabIssueSourceDeps = { readSelf: () => readCollabSelf() }
+): IssueSourceAdapter {
+  return {
+    kind: "collab",
+    label: "Shared",
+    list: listCollabMirrorIssues,
+    // A pull writes the mirror, so a shared issue another member filed or moved
+    // appears without anyone touching a local row.
+    subscribe: (query, observer) => observeIssueList(() => listCollabMirrorIssues(query), observer),
+    async mutate(sourceId, action) {
+      const row = await getCollabIssue(sourceId)
+      if (!row || !Number.isSafeInteger(row.revision)) {
+        throw new Error("collaboration server does not support writable issue revisions")
+      }
+      if (action.kind === "comment") {
+        await enqueueCollabMutation({
+          command: "collab_issue_append_event",
+          orgId: row.orgId,
+          entityType: "issue",
+          entityId: row.id,
+          payload: {
+            issueId: row.id,
+            kind: "commented",
+            // Mentions are declared ids, never parsed out of `body`: the server
+            // validates each against workspace membership (ADR-0207 §2).
+            payload:
+              action.mentions && action.mentions.length > 0
+                ? { body: action.body, mentions: [...new Set(action.mentions)] }
+                : { body: action.body },
+          },
+        })
+        return
+      }
+      // `project` is refused rather than sent: the server's `PatchIssueBody`
+      // has no `issueProjectId` field and ignores unknown keys, so the move
+      // would return 200, bump the revision, and change nothing.
+      if (
+        action.kind === "delete" ||
+        action.kind === "addLabel" ||
+        action.kind === "removeLabel" ||
+        action.kind === "project"
+      ) {
+        throw new Error(`collaboration issue does not support ${action.kind}`)
+      }
+      // An assignee crosses onto the plane only once it names someone the plane
+      // can name (ADR-0149 §10): a refusal throws here, before anything is
+      // queued, instead of being rejected by the server after the click.
+      const patch =
+        action.kind === "status"
+          ? { status: action.to }
+          : action.kind === "title"
+            ? { title: action.to }
+            : action.kind === "description"
+              ? { body: action.to }
+              : action.kind === "priority"
+                ? { priority: action.to }
+                : {
+                    assignee:
+                      action.to === null
+                        ? null
+                        : narrowCollabActor(
+                            action.to,
+                            action.to.kind === "human" && !action.to.id?.trim()
+                              ? await deps.readSelf()
+                              : null
+                          ),
+                  }
       await enqueueCollabMutation({
-        command: "collab_issue_append_event",
+        command: "collab_issue_patch",
         orgId: row.orgId,
         entityType: "issue",
         entityId: row.id,
         payload: {
           issueId: row.id,
-          kind: "commented",
-          // Mentions are declared ids, never parsed out of `body`: the server
-          // validates each against workspace membership (ADR-0207 §2).
-          payload:
-            action.mentions && action.mentions.length > 0
-              ? { body: action.body, mentions: [...new Set(action.mentions)] }
-              : { body: action.body },
+          baseRevision: row.revision,
+          ...patch,
         },
       })
-      return
-    }
-    // `project` is refused rather than sent: the server's `PatchIssueBody`
-    // has no `issueProjectId` field and ignores unknown keys, so the move
-    // would return 200, bump the revision, and change nothing.
-    if (
-      action.kind === "delete" ||
-      action.kind === "addLabel" ||
-      action.kind === "removeLabel" ||
-      action.kind === "project"
-    ) {
-      throw new Error(`collaboration issue does not support ${action.kind}`)
-    }
-    const patch =
-      action.kind === "status"
-        ? { status: action.to }
-        : action.kind === "title"
-          ? { title: action.to }
-          : action.kind === "description"
-            ? { body: action.to }
-            : action.kind === "priority"
-              ? { priority: action.to }
-              : { assignee: action.to }
-    await enqueueCollabMutation({
-      command: "collab_issue_patch",
-      orgId: row.orgId,
-      entityType: "issue",
-      entityId: row.id,
-      payload: {
-        issueId: row.id,
-        baseRevision: row.revision,
-        ...patch,
-      },
-    })
-  },
+    },
+  }
 }
+
+export const collabIssueSource: IssueSourceAdapter = createCollabIssueSource()
 
 /**
  * Register the source. Named and shaped like its four siblings so

@@ -1,9 +1,4 @@
-import {
-  issueActorsResolvable,
-  resolveCollabActor,
-  toCollabActor,
-  type CollabActorRefusal,
-} from "./collab"
+import { resolveCollabActor, type CollabActorRefusal } from "./collab"
 
 import type { IssueActor } from "./index"
 
@@ -73,55 +68,5 @@ describe("resolveCollabActor", () => {
   it("trims, so a padded id is not a different person", () => {
     const resolved = resolveCollabActor({ kind: "human", id: ` ${ADA} ` })
     expect(resolved).toEqual({ ok: true, actor: { kind: "human", id: ADA } })
-  })
-})
-
-describe("toCollabActor", () => {
-  it("discards the reason but not the refusal", () => {
-    expect(toCollabActor({ kind: "human" })).toBeNull()
-    expect(toCollabActor({ kind: "human" }, ADA)).toEqual({ kind: "human", id: ADA })
-  })
-})
-
-describe("issueActorsResolvable", () => {
-  it("passes when every actor present can be named", () => {
-    expect(
-      issueActorsResolvable(
-        { createdBy: { kind: "human" }, assignee: { kind: "agent", id: "char_7" } },
-        ADA
-      )
-    ).toEqual({ ok: true })
-  })
-
-  it("passes for an unassigned issue — absent is not unresolvable", () => {
-    expect(issueActorsResolvable({ createdBy: { kind: "human" } }, ADA)).toEqual({ ok: true })
-    expect(issueActorsResolvable({ createdBy: { kind: "human" }, assignee: null }, ADA)).toEqual({
-      ok: true,
-    })
-  })
-
-  it("names the field that refused, so the caller can say which one", () => {
-    expect(
-      issueActorsResolvable(
-        { createdBy: { kind: "human", id: ADA }, assignee: { kind: "human", id: "local" } },
-        ADA
-      )
-    ).toEqual({ ok: false, field: "assignee", reason: "not-a-user-id" })
-  })
-
-  it("refuses the whole issue when the author cannot be named", () => {
-    // Publishing an issue whose assignee resolves but whose author does not
-    // would put an authorless card on a shared board.
-    expect(
-      issueActorsResolvable({ createdBy: { kind: "human" }, assignee: { kind: "human", id: ADA } })
-    ).toEqual({ ok: false, field: "createdBy", reason: "anonymous-human" })
-  })
-
-  it("reports the author before the assignee when both refuse", () => {
-    const result = issueActorsResolvable({
-      createdBy: { kind: "human" },
-      assignee: { kind: "agent" },
-    })
-    expect(result).toEqual({ ok: false, field: "createdBy", reason: "anonymous-human" })
   })
 })

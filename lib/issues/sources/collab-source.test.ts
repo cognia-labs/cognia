@@ -5,12 +5,14 @@
 import { replaceCollabIssues } from "@/lib/db/collab-issue-mirror"
 import type { CollabIssueMirrorRow } from "@/lib/db/collab-issue-mirror-types"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { CollabActorRefusedError } from "@/lib/issues/collab-actor"
 import type { IssueSourceAdapter, IssueSourceQuery } from "@/types/issues/unified"
 import { createIssueSourceRegistry } from "./registry"
 
 import {
   collabIssueIdentifier,
   collabIssueSource,
+  createCollabIssueSource,
   registerCollabIssueSource,
   toUnifiedCollabIssue,
 } from "./collab-source"
@@ -203,6 +205,88 @@ describe("collabIssueSource.mutate", () => {
       title: "Renamed",
     })
     expect(queued[0]?.payload).not.toHaveProperty("issueProjectId")
+  })
+})
+
+describe("collabIssueSource.mutate assignee (ADR-0149 §10)", () => {
+  async function queuedPatches() {
+    const { getDb } = await import("@/lib/db/schema")
+    return (await getDb().mobileOutboundQueue.toArray()).map((job) => job.payload)
+  }
+
+  it("resolves Me to the signed-in person before queuing, with their name", async () => {
+    await replaceCollabIssues({ orgId: ORG }, [row({ id: "iss_me", revision: 5 })])
+    const readSelf = jest.fn(async () => ({ userId: ADA, label: "Ada" }))
+    const source = createCollabIssueSource({ readSelf })
+
+    await source.mutate?.(
+      "iss_me",
+      { kind: "assignee", to: { kind: "human", label: "Me" } },
+      { kind: "human", id: ADA }
+    )
+
+    expect(await queuedPatches()).toEqual([
+      expect.objectContaining({
+        issueId: "iss_me",
+        baseRevision: 5,
+        assignee: { kind: "human", id: ADA, label: "Ada" },
+      }),
+    ])
+    expect(readSelf).toHaveBeenCalledTimes(1)
+  })
+
+  it("refuses Me with nobody signed in and queues nothing", async () => {
+    await replaceCollabIssues({ orgId: ORG }, [row({ id: "iss_anon", revision: 1 })])
+    const source = createCollabIssueSource({ readSelf: async () => null })
+
+    const attempt = source.mutate?.(
+      "iss_anon",
+      { kind: "assignee", to: { kind: "human", label: "Me" } },
+      { kind: "human" }
+    )
+    await expect(attempt).rejects.toBeInstanceOf(CollabActorRefusedError)
+    await expect(attempt).rejects.toMatchObject({ reason: "anonymous-human" })
+    expect(await queuedPatches()).toEqual([])
+  })
+
+  it("passes a named actor through without reading who is signed in", async () => {
+    await replaceCollabIssues({ orgId: ORG }, [row({ id: "iss_agent", revision: 2 })])
+    const readSelf = jest.fn(async () => null)
+    const source = createCollabIssueSource({ readSelf })
+
+    await source.mutate?.(
+      "iss_agent",
+      { kind: "assignee", to: { kind: "agent", id: "char_7", label: "Scout" } },
+      { kind: "human", id: ADA }
+    )
+
+    expect(await queuedPatches()).toEqual([
+      expect.objectContaining({ assignee: { kind: "agent", id: "char_7", label: "Scout" } }),
+    ])
+    expect(readSelf).not.toHaveBeenCalled()
+  })
+
+  it("refuses a human that is not a member account", async () => {
+    await replaceCollabIssues({ orgId: ORG }, [row({ id: "iss_local", revision: 2 })])
+    const source = createCollabIssueSource({ readSelf: async () => ({ userId: ADA }) })
+
+    await expect(
+      source.mutate?.(
+        "iss_local",
+        { kind: "assignee", to: { kind: "human", id: "local-person" } },
+        { kind: "human", id: ADA }
+      )
+    ).rejects.toMatchObject({ reason: "not-a-user-id" })
+    expect(await queuedPatches()).toEqual([])
+  })
+
+  it("unassigns with an explicit null", async () => {
+    await replaceCollabIssues({ orgId: ORG }, [row({ id: "iss_none", revision: 3 })])
+    const source = createCollabIssueSource({ readSelf: async () => null })
+
+    await source.mutate?.("iss_none", { kind: "assignee", to: null }, { kind: "human" })
+
+    expect(await queuedPatches()).toEqual([expect.objectContaining({ assignee: null })])
   })
 })
 

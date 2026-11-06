@@ -219,4 +219,27 @@ describe("IssueContextMenu", () => {
     await user.pointer({ keys: "[MouseRight]", target: screen.getByTestId("anchor") })
     expect(screen.queryByTestId("issue-context-labels")).not.toBeInTheDocument()
   })
+
+  it("greys out Me on a shared row with nobody signed in, and says why", async () => {
+    const user = userEvent.setup()
+    renderMenu({
+      item: item({ kind: "collab", capabilities: FULL_ISSUE_CAPABILITIES }),
+      assigneeOptions: [
+        { key: "human:self", actor: { kind: "human", label: "Me" }, group: "human" },
+        { key: "agent:a1", actor: { kind: "agent", id: "a1", label: "Scout" }, group: "agent" },
+      ],
+      collabSelfUserId: null,
+    })
+    await openSub(user, "issue-context-assignee")
+    expect(await screen.findByTestId("issue-context-assignee-human:self")).toHaveAttribute(
+      "data-disabled"
+    )
+    expect(screen.getByTestId("issue-context-assignee-human:self-hint")).toHaveTextContent(
+      "assignee.sharedRefusal.anonymous-human"
+    )
+    expect(screen.getByTestId("issue-context-assignee-agent:a1")).not.toHaveAttribute(
+      "data-disabled"
+    )
+    expect(screen.queryByTestId("issue-context-assignee-agent:a1-hint")).toBeNull()
+  })
 })

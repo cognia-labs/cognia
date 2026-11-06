@@ -22,6 +22,16 @@ jest.mock("@/lib/db/collab-workspace-mirror", () => ({
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({
   enqueueCollabMutation: (...a: unknown[]) => mockEnqueueCollabMutation(...a),
 }))
+const ADA = "usr_aaaaaaaaaaaaaaaaaaaaaaaa"
+let mockCollabSelf: { userId: string; label?: string } | null | undefined = undefined
+jest.mock("@/hooks/issues/use-collab-self", () => ({
+  ...jest.requireActual("@/hooks/issues/use-collab-self"),
+  useCollabSelf: () => mockCollabSelf,
+}))
+jest.mock("@/lib/issues/collab-actor", () => ({
+  ...jest.requireActual("@/lib/issues/collab-actor"),
+  readCollabSelf: async () => mockCollabSelf ?? null,
+}))
 jest.mock("./assignee-picker", () => ({
   AssigneePicker: () => <div data-testid="assignee-picker-stub" />,
 }))
@@ -257,6 +267,65 @@ describe("CreateIssuePage", () => {
     )
     expect(props.onCreated).not.toHaveBeenCalled()
     expect(mockCreateIssue).not.toHaveBeenCalled()
+  })
+
+  describe("a shared create names its assignee on the plane (ADR-0149 §10)", () => {
+    afterEach(() => {
+      mockCollabSelf = undefined
+    })
+
+    async function openShared() {
+      mockGetCollabWorkspace.mockResolvedValue({ orgId: "org-1" })
+      const user = userEvent.setup()
+      const props = renderPage({ onSharedQueued: jest.fn() })
+      return { user, props }
+    }
+
+    it("sends Me as the signed-in person, under their own name", async () => {
+      mockCollabSelf = { userId: ADA, label: "Ada" }
+      const { user, props } = await openShared()
+      await user.click(screen.getByTestId("create-assign-me"))
+      await user.click(await screen.findByTestId("create-issue-destination"))
+      await user.click(await screen.findByRole("option", { name: "create.destinationShared" }))
+      await user.type(screen.getByTestId("create-issue-title"), "Shared work")
+      await user.click(screen.getByTestId("create-issue-submit"))
+      await waitFor(() => expect(props.onSharedQueued).toHaveBeenCalledWith("op_1"))
+      expect(mockEnqueueCollabMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "collab_issue_create",
+          payload: expect.objectContaining({
+            assignee: { kind: "human", id: ADA, label: "Ada" },
+          }),
+        })
+      )
+    })
+
+    it("refuses Me with nobody signed in instead of filing it unassigned", async () => {
+      mockCollabSelf = null
+      const { user, props } = await openShared()
+      // Picked while the destination was still local, where Me is fine.
+      await user.click(screen.getByTestId("create-assign-me"))
+      await user.click(await screen.findByTestId("create-issue-destination"))
+      await user.click(await screen.findByRole("option", { name: "create.destinationShared" }))
+      await user.type(screen.getByTestId("create-issue-title"), "Shared work")
+      await user.click(screen.getByTestId("create-issue-submit"))
+      expect(await screen.findByTestId("create-issue-error")).toHaveTextContent(
+        "assignee.sharedRefusal.anonymous-human"
+      )
+      expect(mockEnqueueCollabMutation).not.toHaveBeenCalled()
+      expect(props.onSharedQueued).not.toHaveBeenCalled()
+    })
+
+    it("disables the Assign me shortcut on a shared create with nobody signed in", async () => {
+      mockCollabSelf = null
+      const { user } = await openShared()
+      await user.click(await screen.findByTestId("create-issue-destination"))
+      await user.click(await screen.findByRole("option", { name: "create.destinationShared" }))
+      expect(screen.getByTestId("create-assign-me")).toBeDisabled()
+      expect(screen.getByTestId("create-assign-me-refusal")).toHaveTextContent(
+        "assignee.sharedRefusal.anonymous-human"
+      )
+    })
   })
 
   it("picks a parent through the relationships row", async () => {

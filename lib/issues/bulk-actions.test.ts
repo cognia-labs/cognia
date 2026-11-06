@@ -49,6 +49,7 @@ import {
   countApplicableItems,
   type IssueBulkAction,
 } from "./bulk-actions"
+import { getIssueSourceRegistry, resetIssueSourceRegistry } from "./sources/registry"
 
 const BY: IssueActor = { kind: "human" }
 
@@ -321,5 +322,81 @@ describe("applyIssueBulkAction", () => {
     })
     await applyIssueBulkAction([item(), item()], { kind: "priority", to: "low" }, BY)
     expect(order).toEqual(["start:s1", "end:s1", "start:s2", "end:s2"])
+  })
+})
+
+describe("shared rows and the collaboration plane (ADR-0149 §10)", () => {
+  const ADA = "usr_aaaaaaaaaaaaaaaaaaaaaaaa"
+  const ME: IssueBulkAction = { kind: "assignee", to: { kind: "human", label: "Me" } }
+  const shared = () => item({ kind: "collab", capabilities: FULL_ISSUE_CAPABILITIES })
+
+  afterEach(() => resetIssueSourceRegistry())
+
+  it("refuses Me on a shared row when nobody is signed in, naming why", () => {
+    expect(canApplyBulkAction(shared(), ME, false, { collabSelfUserId: null })).toEqual({
+      ok: false,
+      reason: "collab-actor",
+      refusal: "anonymous-human",
+    })
+  })
+
+  it("lets Me through once someone is signed in, and always lets unassign through", () => {
+    expect(canApplyBulkAction(shared(), ME, false, { collabSelfUserId: ADA })).toEqual({
+      ok: true,
+    })
+    expect(
+      canApplyBulkAction(shared(), { kind: "assignee", to: null }, false, {
+        collabSelfUserId: null,
+      })
+    ).toEqual({ ok: true })
+  })
+
+  it("leaves the decision to the source while who is signed in is unknown", () => {
+    expect(canApplyBulkAction(shared(), ME, false)).toEqual({ ok: true })
+  })
+
+  it("never narrows a local row", () => {
+    expect(canApplyBulkAction(item(), ME, false, { collabSelfUserId: null })).toEqual({ ok: true })
+  })
+
+  it("counts only the rows that can take the assignee", () => {
+    expect(countApplicableItems([item(), shared()], ME, NONE, { collabSelfUserId: null })).toBe(1)
+    expect(countApplicableItems([item(), shared()], ME, NONE, { collabSelfUserId: ADA })).toBe(2)
+  })
+
+  it("skips a refused shared row without a state-machine reason and never writes it", async () => {
+    const mutate = jest.fn(async () => undefined)
+    getIssueSourceRegistry().register({
+      kind: "collab",
+      label: "Shared",
+      list: async () => [],
+      subscribe: () => () => undefined,
+      mutate,
+    })
+
+    const outcome = await applyIssueBulkAction([item(), shared()], ME, BY, NONE, {
+      collabSelfUserId: null,
+    })
+
+    expect(outcome).toEqual({ applied: 1, skipped: 1, failed: 0 })
+    expect(setIssueAssignee).toHaveBeenCalledTimes(1)
+    expect(mutate).not.toHaveBeenCalled()
+  })
+
+  it("hands a nameable assignee to the shared source", async () => {
+    const mutate = jest.fn(async () => undefined)
+    getIssueSourceRegistry().register({
+      kind: "collab",
+      label: "Shared",
+      list: async () => [],
+      subscribe: () => () => undefined,
+      mutate,
+    })
+    const row = shared()
+
+    const outcome = await applyIssueBulkAction([row], ME, BY, NONE, { collabSelfUserId: ADA })
+
+    expect(outcome).toEqual({ applied: 1, skipped: 0, failed: 0 })
+    expect(mutate).toHaveBeenCalledWith(row.sourceId, ME, BY)
   })
 })

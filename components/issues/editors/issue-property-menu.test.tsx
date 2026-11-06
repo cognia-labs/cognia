@@ -78,6 +78,30 @@ describe("IssuePropertyMenu", () => {
     expect(await screen.findByTestId("prop-in_progress")).toHaveAttribute("aria-disabled", "true")
   })
 
+  it("says why a shared row refuses an assignee", async () => {
+    const user = userEvent.setup()
+    renderMenu({
+      section: {
+        id: "assignee",
+        entries: [
+          { id: "none", action: { kind: "assignee", to: null }, disabled: false, checked: true },
+          {
+            id: "human:self",
+            action: { kind: "assignee", to: { kind: "human" } },
+            disabled: true,
+            checked: false,
+            collabRefusal: "anonymous-human",
+          },
+        ],
+      },
+    })
+    await user.click(screen.getByTestId("prop"))
+    expect(await screen.findByTestId("prop-human:self-hint")).toHaveTextContent(
+      "assignee.sharedRefusal.anonymous-human"
+    )
+    expect(screen.queryByTestId("prop-none-hint")).toBeNull()
+  })
+
   it("renders no trigger at all when every entry is refused", () => {
     renderMenu({ disabled: true })
     expect(screen.queryByTestId("prop")).not.toBeInTheDocument()

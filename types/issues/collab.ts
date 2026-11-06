@@ -83,30 +83,3 @@ export function resolveCollabActor(
     ? { ok: true, actor: { ...actor, id: self } }
     : { ok: false, reason: "not-a-user-id" }
 }
-
-/** The same, discarding the reason. Prefer the full result where it is shown. */
-export function toCollabActor(actor: IssueActor, signedInUserId?: string): CollabIssueActor | null {
-  const resolved = resolveCollabActor(actor, signedInUserId)
-  return resolved.ok ? resolved.actor : null
-}
-
-/**
- * Whether every actor on an issue can be named, so the issue as a whole may
- * cross onto the plane.
- *
- * Checked together on purpose: publishing an issue whose author resolves but
- * whose assignee does not would put a card on a shared board assigned to
- * nobody, which is exactly the state this ADR exists to remove.
- */
-export function issueActorsResolvable(
-  issue: { createdBy?: IssueActor | null; assignee?: IssueActor | null },
-  signedInUserId?: string
-): { ok: true } | { ok: false; field: "createdBy" | "assignee"; reason: CollabActorRefusal } {
-  for (const field of ["createdBy", "assignee"] as const) {
-    const actor = issue[field]
-    if (!actor) continue
-    const resolved = resolveCollabActor(actor, signedInUserId)
-    if (!resolved.ok) return { ok: false, field, reason: resolved.reason }
-  }
-  return { ok: true }
-}

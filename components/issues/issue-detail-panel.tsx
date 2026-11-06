@@ -98,6 +98,8 @@ export interface IssueDetailPanelProps {
   assigneeOptions?: readonly AssigneeOption[]
   /** Cycles of the workspace, for the planning section's cycle menu. */
   cycles?: readonly IssueCycle[]
+  /** Who "Me" is on a shared board (`null`: nobody signed in). See `IssueMenuInput`. */
+  collabSelfUserId?: string | null
   /** Every item on the board, for parent, blocker and sub-issue lookups. */
   items?: readonly UnifiedIssueItem[]
   /** Select another issue (a parent, a blocker, a child) in the console. */
@@ -131,6 +133,7 @@ export function IssueDetailPanel({
   projects = [],
   assigneeOptions = [],
   cycles = [],
+  collabSelfUserId,
   items = [],
   onOpenIssue,
   onCreateSubIssue,
@@ -231,8 +234,9 @@ export function IssueDetailPanel({
         projects,
         assigneeOptions,
         cycles,
+        ...(collabSelfUserId !== undefined ? { collabSelfUserId } : {}),
       }),
-    [item, running, writableLabels, projects, assigneeOptions, cycles]
+    [item, running, writableLabels, projects, assigneeOptions, cycles, collabSelfUserId]
   )
   const presentation = useMenuEntryPresentation({
     labels: writableLabels,

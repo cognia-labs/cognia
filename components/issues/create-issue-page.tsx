@@ -81,6 +81,13 @@ import {
 } from "@/lib/issues/service"
 import { getCollabWorkspace } from "@/lib/db/collab-workspace-mirror"
 import { enqueueCollabMutation } from "@/lib/db/mobile-outbound-queue"
+import {
+  CollabActorRefusedError,
+  collabActorRefusal,
+  narrowCollabActor,
+  readCollabSelf,
+} from "@/lib/issues/collab-actor"
+import { collabSelfUserIdOf, useCollabSelf } from "@/hooks/issues/use-collab-self"
 import { buildHeadlessTurnLlmClient } from "@/lib/ai/headless-turn-llm-client"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import {
@@ -207,6 +214,13 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
   const [createAnother, setCreateAnother] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A shared create names its assignee on the collaboration plane, where "Me"
+  // is the signed-in person (ADR-0149 §10). Unknown until the first read.
+  const collabSelfUserId = collabSelfUserIdOf(useCollabSelf())
+  const sharedAssignee =
+    destination === "shared" && collabSelfUserId !== undefined
+      ? { selfUserId: collabSelfUserId }
+      : undefined
 
   const needsProject = props.projects.length === 0 || creatingProject
   const patch = useCallback((next: Partial<FormState>) => {
@@ -276,6 +290,11 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
     try {
       if (destination === "shared") {
         if (!sharedOrgId || !selectedProjectId) throw new Error(t("create.sharedUnavailable"))
+        // Narrowed, never dropped: an assignee the plane cannot name stops the
+        // create and says why instead of filing the issue unassigned.
+        const assignee = form.assignee
+          ? narrowCollabActor(form.assignee, await readCollabSelf())
+          : undefined
         const queued = await enqueueCollabMutation({
           command: "collab_issue_create",
           orgId: sharedOrgId,
@@ -286,7 +305,7 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
             issueProjectId: selectedProjectId,
             title: form.title,
             ...(form.description.trim() ? { body: form.description.trim() } : {}),
-            ...(form.assignee?.id ? { assignee: form.assignee } : {}),
+            ...(assignee ? { assignee } : {}),
             status: form.status,
           },
           label: form.title,
@@ -345,7 +364,13 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
       }
       return true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(
+        cause instanceof CollabActorRefusedError
+          ? t(`assignee.sharedRefusal.${cause.reason}`)
+          : cause instanceof Error
+            ? cause.message
+            : String(cause)
+      )
       return false
     } finally {
       setBusy(false)
@@ -361,6 +386,7 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
     identity,
     setIdentity,
     sharedOrgId,
+    sharedAssignee,
     destination,
     setDestination,
     createAnother,
@@ -689,6 +715,35 @@ function ProjectField({
         </SelectItem>
       </SelectContent>
     </Select>
+  )
+}
+
+/**
+ * "Assign me". On a shared create with nobody signed in, "Me" names nobody
+ * the collaboration plane knows, so the shortcut is disabled and says why.
+ */
+function AssignMeButton({ form }: { form: Form }) {
+  const t = form.t
+  const refusal = form.sharedAssignee
+    ? collabActorRefusal({ kind: "human" }, form.sharedAssignee.selfUserId)
+    : null
+  return (
+    <div className="flex flex-col gap-0.5">
+      <button
+        type="button"
+        disabled={refusal !== null}
+        onClick={() => form.patch({ assignee: { kind: "human", label: t("actor.human") } })}
+        data-testid="create-assign-me"
+        className="w-fit text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+      >
+        {t("create.assignMe")}
+      </button>
+      {refusal ? (
+        <span className="text-xs text-muted-foreground" data-testid="create-assign-me-refusal">
+          {t(`assignee.sharedRefusal.${refusal}`)}
+        </span>
+      ) : null}
+    </div>
   )
 }
 
@@ -1669,21 +1724,11 @@ export function CreateIssuePage(props: CreateIssuePageProps) {
                 <AssigneePicker
                   value={form.form.assignee}
                   onChange={(actor) => form.patch({ assignee: actor })}
+                  {...(form.sharedAssignee ? { shared: form.sharedAssignee } : {})}
                   data-testid="create-issue-assignee"
                 />
               </div>
-              {form.form.assignee?.kind !== "human" ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    form.patch({ assignee: { kind: "human", label: t("actor.human") } })
-                  }
-                  data-testid="create-assign-me"
-                  className="w-fit text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  {t("create.assignMe")}
-                </button>
-              ) : null}
+              {form.form.assignee?.kind !== "human" ? <AssignMeButton form={form} /> : null}
             </PageFieldRow>
 
             {extended ? (

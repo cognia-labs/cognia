@@ -130,6 +130,47 @@ describe("AssigneePicker", () => {
     expect(screen.getByTestId("select")).toHaveAttribute("data-disabled", "true")
   })
 
+  describe("on a shared issue (ADR-0149 §10)", () => {
+    const ADA = "usr_aaaaaaaaaaaaaaaaaaaaaaaa"
+
+    it("greys out Me with the reason when nobody is signed in", () => {
+      render(
+        <AssigneePicker
+          value={null}
+          onChange={jest.fn()}
+          shared={{ selfUserId: null }}
+          data-testid="picker"
+        />
+      )
+      expect(screen.getByTestId("picker-human:self")).toHaveAttribute("disabled")
+      expect(screen.getByTestId("picker-human:self-refusal")).toHaveTextContent(
+        "assignee.sharedRefusal.anonymous-human"
+      )
+      // Agents carry their own ids, so the plane can name them.
+      expect(screen.getByTestId("picker-agent:c1")).not.toHaveAttribute("disabled")
+      expect(screen.queryByTestId("picker-agent:c1-refusal")).toBeNull()
+    })
+
+    it("shows the signed-in person's own assignment as Me, not as a missing actor", () => {
+      render(
+        <AssigneePicker
+          value={{ kind: "human", id: ADA, label: "Ada" }}
+          onChange={jest.fn()}
+          shared={{ selfUserId: ADA }}
+          data-testid="picker"
+        />
+      )
+      expect(screen.getByTestId("select")).toHaveAttribute("data-value", "human:self")
+      expect(screen.queryByTestId("picker-stale")).toBeNull()
+      expect(screen.getByTestId("picker-human:self")).not.toHaveAttribute("disabled")
+    })
+
+    it("leaves a local issue's options alone", () => {
+      render(<AssigneePicker value={null} onChange={jest.fn()} data-testid="picker" />)
+      expect(screen.getByTestId("picker-human:self")).not.toHaveAttribute("disabled")
+    })
+  })
+
   it("hides empty groups and tolerates no active workspace", () => {
     characters = []
     teams = {}

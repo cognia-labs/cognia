@@ -24018,6 +24018,11 @@
     "assignee": {
       "agents": "Agent",
       "missing": "已不存在",
+      "sharedRefusal": {
+        "anonymous-human": "登录后才能在共享看板上把议题指派给自己。",
+        "missing-id": "这个智能体或小队没有 id，共享看板无法识别。",
+        "not-a-user-id": "这个人没有共享看板能识别的成员账号。"
+      },
       "teams": "小队"
     },
     "board": {

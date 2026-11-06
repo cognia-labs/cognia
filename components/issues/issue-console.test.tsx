@@ -153,8 +153,16 @@ jest.mock("@/hooks/issues/use-assignee-options", () => ({
 }))
 
 const mockApplyBulk = jest.fn().mockResolvedValue({ applied: 1, skipped: 0, failed: 0 })
+const mockCanApplyBulk = jest.fn((..._a: unknown[]): unknown => ({ ok: true }))
 jest.mock("@/lib/issues/bulk-actions", () => ({
   applyIssueBulkAction: (...a: unknown[]) => mockApplyBulk(...a),
+  canApplyBulkAction: (...a: unknown[]) => mockCanApplyBulk(...a),
+}))
+
+let mockCollabSelf: { userId: string; label?: string } | null | undefined = undefined
+jest.mock("@/hooks/issues/use-collab-self", () => ({
+  ...jest.requireActual("@/hooks/issues/use-collab-self"),
+  useCollabSelf: () => mockCollabSelf,
 }))
 
 const mockMoveIssue = jest.fn().mockResolvedValue(null)
@@ -353,6 +361,7 @@ function callProp<T extends unknown[]>(
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockCollabSelf = undefined
   mockSyncAvailability.mockReturnValue({ canSync: true })
   window.localStorage.clear()
   useIssueViewStore.getState().reset()
@@ -906,7 +915,8 @@ describe("IssueConsole", () => {
         expect.arrayContaining([expect.objectContaining({ unifiedId: "local:i1" })]),
         { kind: "priority", to: "high" },
         { kind: "human" },
-        expect.any(Set)
+        expect.any(Set),
+        {}
       )
       expect(toastCalls).toContainEqual(["success", "bulk.applied:1"])
     })
@@ -932,6 +942,31 @@ describe("IssueConsole", () => {
         ;(bulkProps.onAction as (a: unknown) => void)({ kind: "status", to: "done" })
       })
       expect(toastCalls).toContainEqual(["error", "board.denied.runtime-owned:source.local"])
+    })
+
+    it("names why a shared row cannot take the assignee (ADR-0149 §10)", async () => {
+      mockCollabSelf = null
+      mockCanApplyBulk.mockReturnValueOnce({
+        ok: false,
+        reason: "collab-actor",
+        refusal: "anonymous-human",
+      })
+      mockApplyBulk.mockResolvedValueOnce({ applied: 0, skipped: 1, failed: 0 })
+      await selectOne()
+      await act(async () => {
+        ;(bulkProps.onAction as (a: unknown) => void)({
+          kind: "assignee",
+          to: { kind: "human", label: "Me" },
+        })
+      })
+      expect(mockApplyBulk).toHaveBeenCalledWith(
+        expect.any(Array),
+        { kind: "assignee", to: { kind: "human", label: "Me" } },
+        { kind: "human" },
+        expect.any(Set),
+        { collabSelfUserId: null }
+      )
+      expect(toastCalls).toContainEqual(["error", "assignee.sharedRefusal.anonymous-human"])
     })
 
     it("reports a failure as a failure", async () => {
@@ -1070,7 +1105,8 @@ describe("IssueConsole", () => {
         [card],
         { kind: "priority", to: "low" },
         { kind: "human" },
-        expect.any(Set)
+        expect.any(Set),
+        {}
       )
       expect(toastCalls).toContainEqual(["success", "bulk.applied:1"])
     })

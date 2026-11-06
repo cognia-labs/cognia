@@ -26,7 +26,7 @@ import {
 import type { IssueBulkAction } from "@/lib/issues/bulk-actions"
 import type { IssueMenuSection } from "@/lib/issues/menu-model"
 import { cn } from "@/lib/utils"
-import type { MenuEntryPresentation } from "./menu-entry-presentation"
+import { EntryHint, type MenuEntryPresentation } from "./menu-entry-presentation"
 
 export interface IssuePropertyMenuProps {
   section: IssueMenuSection
@@ -84,8 +84,12 @@ export function IssuePropertyMenu({
             data-testid={`${testId}-${entry.id}`}
           >
             {presentation.entryIcon(section.id, entry)}
-            <span className="min-w-0 flex-1 truncate">
-              {presentation.entryLabel(section.id, entry)}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{presentation.entryLabel(section.id, entry)}</span>
+              <EntryHint
+                hint={presentation.entryHint(entry)}
+                testId={`${testId}-${entry.id}-hint`}
+              />
             </span>
             <CheckIcon className={cn("size-3.5", !entry.checked && "invisible")} />
           </DropdownMenuItem>

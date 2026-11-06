@@ -39,6 +39,8 @@ import {
   updateIssue,
 } from "@/lib/db/issues"
 import { canMoveIssue, type IssueMoveDenial } from "./state-machine"
+import { collabActorRefusal } from "./collab-actor"
+import type { CollabActorRefusal } from "@/types/issues/collab"
 import type { IssueActor } from "@/types/issues"
 import type { IssueSourceMutation, UnifiedIssueItem } from "@/types/issues/unified"
 import { parseUnifiedIssueId } from "@/types/issues/unified"
@@ -108,6 +110,22 @@ function toSourceMutation(action: IssueBulkAction): IssueSourceMutation | null {
   }
 }
 
+/** What the gate knows beyond the item itself. */
+export interface BulkActionContext {
+  /**
+   * The signed-in person "Me" resolves to on the collaboration plane, `null`
+   * when nobody is signed in. Absent means unknown: the gate then leaves a
+   * shared row's assignee to the source, which refuses it at write time.
+   */
+  collabSelfUserId?: string | null
+}
+
+export type BulkActionVerdict =
+  | { ok: true }
+  | { ok: false; reason: IssueMoveDenial }
+  /** A shared row's assignee the collaboration plane cannot name (ADR-0149 §10). */
+  | { ok: false; reason: "collab-actor"; refusal: CollabActorRefusal }
+
 /**
  * May this action run on this item? Pure, and exported so the toolbar can grey
  * out an action the whole selection would refuse instead of offering it and
@@ -116,8 +134,9 @@ function toSourceMutation(action: IssueBulkAction): IssueSourceMutation | null {
 export function canApplyBulkAction(
   item: UnifiedIssueItem,
   action: IssueBulkAction,
-  runActive: boolean
-): { ok: true } | { ok: false; reason: IssueMoveDenial } {
+  runActive: boolean,
+  context: BulkActionContext = {}
+): BulkActionVerdict {
   const capability = requiredCapability(action)
   if (!item.capabilities[capability]) {
     return { ok: false, reason: "federated-read-only" }
@@ -128,6 +147,15 @@ export function canApplyBulkAction(
     if (!verdict.allowed) return { ok: false, reason: verdict.reason }
   }
 
+  if (
+    item.kind === "collab" &&
+    action.kind === "assignee" &&
+    context.collabSelfUserId !== undefined
+  ) {
+    const refusal = collabActorRefusal(action.to, context.collabSelfUserId)
+    if (refusal) return { ok: false, reason: "collab-actor", refusal }
+  }
+
   return { ok: true }
 }
 
@@ -135,11 +163,13 @@ export function canApplyBulkAction(
 export function countApplicableItems(
   items: readonly UnifiedIssueItem[],
   action: IssueBulkAction,
-  runningIds: ReadonlySet<string>
+  runningIds: ReadonlySet<string>,
+  context: BulkActionContext = {}
 ): number {
   return items.reduce(
     (total, item) =>
-      total + (canApplyBulkAction(item, action, runningIds.has(item.unifiedId)).ok ? 1 : 0),
+      total +
+      (canApplyBulkAction(item, action, runningIds.has(item.unifiedId), context).ok ? 1 : 0),
     0
   )
 }
@@ -224,7 +254,8 @@ export async function applyIssueBulkAction(
   items: readonly UnifiedIssueItem[],
   action: IssueBulkAction,
   by: IssueActor,
-  runningIds: ReadonlySet<string> = new Set()
+  runningIds: ReadonlySet<string> = new Set(),
+  context: BulkActionContext = {}
 ): Promise<IssueBulkOutcome> {
   let applied = 0
   let skipped = 0
@@ -232,10 +263,12 @@ export async function applyIssueBulkAction(
   let reason: IssueMoveDenial | undefined
 
   for (const item of items) {
-    const verdict = canApplyBulkAction(item, action, runningIds.has(item.unifiedId))
+    const verdict = canApplyBulkAction(item, action, runningIds.has(item.unifiedId), context)
     if (!verdict.ok) {
       skipped += 1
-      reason ??= verdict.reason
+      // The outcome's reason names a state-machine denial; a shared-actor
+      // refusal is counted as a skip and explained where the actor is picked.
+      if (verdict.reason !== "collab-actor") reason ??= verdict.reason
       continue
     }
     const parsed = parseUnifiedIssueId(item.unifiedId)

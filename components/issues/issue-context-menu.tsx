@@ -42,7 +42,7 @@ import type { IssueCycle, IssueProject } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
 import type { AssigneeOption } from "./assignee-picker"
-import { useMenuEntryPresentation } from "./editors/menu-entry-presentation"
+import { EntryHint, useMenuEntryPresentation } from "./editors/menu-entry-presentation"
 
 export interface IssueContextMenuProps {
   item: UnifiedIssueItem
@@ -52,6 +52,8 @@ export interface IssueContextMenuProps {
   projects: readonly IssueProject[]
   assigneeOptions: readonly AssigneeOption[]
   cycles?: readonly IssueCycle[]
+  /** Who "Me" is on a shared board (`null`: nobody signed in). See `IssueMenuInput`. */
+  collabSelfUserId?: string | null
   onAction: (action: IssueBulkAction) => void
   onOpen?: () => void
   /** Opens the confirmation dialog; deletion never happens from the menu itself. */
@@ -66,6 +68,7 @@ export function IssueContextMenu({
   projects,
   assigneeOptions,
   cycles,
+  collabSelfUserId,
   onAction,
   onOpen,
   onRequestDelete,
@@ -74,8 +77,17 @@ export function IssueContextMenu({
   const t = useTranslations("issues")
 
   const sections = useMemo(
-    () => buildIssueMenuSections({ item, running, labels, projects, assigneeOptions, cycles }),
-    [item, running, labels, projects, assigneeOptions, cycles]
+    () =>
+      buildIssueMenuSections({
+        item,
+        running,
+        labels,
+        projects,
+        assigneeOptions,
+        cycles,
+        ...(collabSelfUserId !== undefined ? { collabSelfUserId } : {}),
+      }),
+    [item, running, labels, projects, assigneeOptions, cycles, collabSelfUserId]
   )
   const presentation = useMenuEntryPresentation({ labels, projects, assigneeOptions, cycles })
 
@@ -108,8 +120,12 @@ export function IssueContextMenu({
                   data-testid={`issue-context-${section.id}-${entry.id}`}
                 >
                   {presentation.entryIcon(section.id, entry)}
-                  <span className="flex-1 truncate">
-                    {presentation.entryLabel(section.id, entry)}
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">{presentation.entryLabel(section.id, entry)}</span>
+                    <EntryHint
+                      hint={presentation.entryHint(entry)}
+                      testId={`issue-context-${section.id}-${entry.id}-hint`}
+                    />
                   </span>
                   {entry.checked ? <CheckIcon className="size-3.5" /> : null}
                 </ContextMenuItem>
