@@ -516,7 +516,7 @@ function AutoSaveTag() {
  */
 function CollaborationHost({ documentId }: { documentId: string }) {
   const t = useTranslations("canvas.panels")
-  // Feature-flag gate: `canvas.collaboration.v1` (env / localStorage override),
+  // Feature-flag gate: `canvas.collaboration.v1` (build, local opt-out only),
   // narrowed by the org's server decision. When disabled, the panel shows the
   // hint but no "open collaboration" entry.
   const collaborationEnabled = useCanvasCollaborationEnabled()

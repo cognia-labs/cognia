@@ -30,8 +30,20 @@ import {
   outcomeMessageValues,
   REFUSAL_KEYS,
 } from "@/lib/sandbox/environment-outcome-message"
-import type { SandboxPlacementReport } from "@/lib/sandbox/placement-report"
+import type { CredentialDelivery, SandboxPlacementReport } from "@/lib/sandbox/placement-report"
 import { cn } from "@/lib/utils"
+
+/**
+ * One sentence per delivery mode: an injected credential is readable by the
+ * agent, so it must never read as stripped (Rule 7). `gateway-lease` is an
+ * older Host's name for brokered delivery.
+ */
+const CREDENTIAL_KEYS: Record<CredentialDelivery, "brokered" | "injectedEnv" | "none"> = {
+  brokered: "brokered",
+  "gateway-lease": "brokered",
+  "injected-env": "injectedEnv",
+  none: "none",
+}
 
 export interface SandboxPlacementBadgeProps {
   agentId: string
@@ -142,7 +154,9 @@ function Sandboxed({ report, className }: { report: SandboxPlacementReport; clas
       : report.egressEnforced === false
         ? t("tooltip.egressNotEnforced", { tier: egressTier })
         : undefined,
-    report.credentialsMode ? t("tooltip.credentials", { mode: report.credentialsMode }) : undefined,
+    report.credentialsMode
+      ? t(`tooltip.credentials.${CREDENTIAL_KEYS[report.credentialsMode]}`)
+      : undefined,
     ...remoteLines(report, t),
     report.deliveryRecordError ? tDelivery("persistFailed") : undefined,
     report.delivery ? tDelivery(`cleanup.${report.delivery.cleanupState}`) : undefined,

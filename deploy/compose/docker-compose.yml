@@ -120,6 +120,11 @@ services:
       # container image (ADR-0182). Store only its SHA-256 here. Blank means
       # no Host has that authority, and those routes answer 401.
       COLLAB_INTERNAL_SERVICE_CREDENTIAL_SHA256: ${COLLAB_INTERNAL_SERVICE_CREDENTIAL_SHA256:-}
+      # Which organizations each of those credentials may query: a JSON object
+      # mapping each hash to org ids, or "*" for every organization and the
+      # deployment-wide shared-chat metrics. Blank leaves every credential
+      # deployment-wide.
+      COLLAB_INTERNAL_SERVICE_CREDENTIAL_SCOPES: ${COLLAB_INTERNAL_SERVICE_CREDENTIAL_SCOPES:-}
       COLLAB_LOGTO_ENDPOINT: ${COLLAB_LOGTO_ENDPOINT:-${LOGTO_ENDPOINT:-}}
       COLLAB_LOGTO_M2M_CLIENT_ID: ${COLLAB_LOGTO_M2M_CLIENT_ID:-}
       COLLAB_LOGTO_M2M_CLIENT_SECRET: ${COLLAB_LOGTO_M2M_CLIENT_SECRET:-}

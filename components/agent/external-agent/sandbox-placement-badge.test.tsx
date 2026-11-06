@@ -86,6 +86,29 @@ describe("SandboxPlacementBadge", () => {
     expect(text).toContain("Credentials: none")
   })
 
+  // Rule 7: an injected credential is readable by the agent, so only `none`
+  // may say the keys were stripped; `gateway-lease` is an older Host's name
+  // for brokered delivery.
+  it.each([
+    ["injected-env", en.placement.tooltip.credentials.injectedEnv],
+    ["brokered", en.placement.tooltip.credentials.brokered],
+    ["gateway-lease", en.placement.tooltip.credentials.brokered],
+    ["none", en.placement.tooltip.credentials.none],
+  ] as const)("labels %s credential delivery as such", async (mode, sentence) => {
+    act(() =>
+      recordPlacementReport({
+        agentId: "a1",
+        kind: "sandbox",
+        tier: "gvisor",
+        credentialsMode: mode,
+      })
+    )
+    renderBadge()
+    const text = await tooltipText("sandbox-placement-sandboxed")
+    expect(text).toContain(sentence)
+    if (mode !== "none") expect(text).not.toContain("stripped")
+  })
+
   // A Host that did not say whether egress is enforced has not said it is
   // unenforced either.
   it("says nothing about egress when the Host said nothing", async () => {

@@ -23,7 +23,8 @@ pub fn parse_hashes(value: Option<&str>) -> anyhow::Result<Option<String>> {
 }
 
 pub fn parse_scopes(value: Option<&str>, configured: Option<&str>) -> anyhow::Result<Option<CredentialScopes>> {
-    let Some(value) = value else { return Ok(None) };
+    // Blank is unset: Compose forwards an unset variable as an empty string.
+    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else { return Ok(None) };
     let scopes: CredentialScopes = serde_json::from_str(value)
         .map_err(|_| anyhow::anyhow!("COLLAB_INTERNAL_SERVICE_CREDENTIAL_SCOPES must be a JSON object mapping hashes to org-id arrays"))?;
     for (hash, orgs) in &scopes {
@@ -68,6 +69,8 @@ mod tests {
         let b = "cd".repeat(32);
         let configured = format!("{a},{b}");
         assert!(parse_scopes(None, Some(&configured)).unwrap().is_none());
+        assert!(parse_scopes(Some(""), Some(&configured)).unwrap().is_none());
+        assert!(parse_scopes(Some("  "), None).unwrap().is_none());
         assert!(allows(None, &a, Some("org_other")));
         assert!(allows(None, &a, None));
         let raw = json!({a.clone(): ["org_alpha"]}).to_string();
@@ -81,7 +84,7 @@ mod tests {
         assert!(allows(Some(&scopes), &a, None));
         assert!(allows(Some(&scopes), &a, Some("org_other")));
         assert!(!allows(Some(&CredentialScopes::new()), &a, Some("org_alpha")));
-        for bad in ["".into(), "null".into(), "[]".into(), "{}x".into(),
+        for bad in ["null".into(), "[]".into(), "{}x".into(),
             json!({a.clone(): "org_alpha"}).to_string(), json!({a.clone(): [1]}).to_string(),
             json!({a.to_uppercase(): []}).to_string(), json!({"ef".repeat(32): []}).to_string(),
             json!({a.clone(): ["invalid/path"]}).to_string()] {

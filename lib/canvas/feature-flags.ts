@@ -52,11 +52,20 @@ function readEnvCanvasFeatureFlags(): Partial<Record<CanvasFeatureFlag, boolean>
   return result
 }
 
+/**
+ * The build sets each flag (`NEXT_PUBLIC_CANVAS_*`, else the default); the
+ * stored choice then applies. The AI workbench is a local surface, so a stored
+ * choice overrides the build either way. Collaboration reaches the shared
+ * collaboration server, so a stored choice may only turn it off: local state
+ * never widens what the build and the server allow.
+ */
 export function getCanvasFeatureFlags(): Record<CanvasFeatureFlag, boolean> {
+  const build = { ...DEFAULT_CANVAS_FEATURE_FLAGS, ...readEnvCanvasFeatureFlags() }
+  const stored = readStoredCanvasFeatureFlags()
   return {
-    ...DEFAULT_CANVAS_FEATURE_FLAGS,
-    ...readEnvCanvasFeatureFlags(),
-    ...readStoredCanvasFeatureFlags(),
+    "canvas.aiWorkbench.v1": stored["canvas.aiWorkbench.v1"] ?? build["canvas.aiWorkbench.v1"],
+    "canvas.collaboration.v1":
+      build["canvas.collaboration.v1"] && stored["canvas.collaboration.v1"] !== false,
   }
 }
 

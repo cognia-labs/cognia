@@ -19234,7 +19234,11 @@
       "sandboxedUntiered": "Sandbox",
       "tooltip": {
         "bundle": "Agent bundle: {tag} ({libc})",
-        "credentials": "Credentials: {mode} — host provider keys are stripped before the container starts",
+        "credentials": {
+          "brokered": "Credentials: brokered — the agent uses provider keys through the gateway and cannot read them",
+          "injectedEnv": "Credentials: injected into the environment — the agent can read these keys",
+          "none": "Credentials: none — host provider keys are stripped before the container starts"
+        },
         "egressEnforced": "Network: {tier}, enforced",
         "egressNotEnforced": "Network: {tier}, recorded but not enforced",
         "image": "Image: {image}",

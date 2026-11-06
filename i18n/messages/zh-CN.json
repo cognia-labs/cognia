@@ -19234,7 +19234,11 @@
       "sandboxedUntiered": "沙箱",
       "tooltip": {
         "bundle": "Agent 运行时包：{tag}（{libc}）",
-        "credentials": "凭据：{mode} —— 宿主 provider 凭据在容器启动前即被剥离",
+        "credentials": {
+          "brokered": "凭据：经网关代理 —— 智能体通过网关使用 provider 凭据，无法读取其内容",
+          "injectedEnv": "凭据：注入环境变量 —— 智能体可以读取这些凭据",
+          "none": "凭据：无 —— 宿主 provider 凭据在容器启动前即被剥离"
+        },
         "egressEnforced": "网络：{tier}，已强制执行",
         "egressNotEnforced": "网络：{tier}，仅记录、未强制执行",
         "image": "镜像：{image}",

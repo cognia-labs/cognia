@@ -126,7 +126,7 @@ describe("canvas feature flags", () => {
     expect(flags["canvas.collaboration.v1"]).toBe(true)
   })
 
-  it("localStorage takes precedence over env", async () => {
+  it("a stored AI workbench choice overrides the build", async () => {
     process.env.NEXT_PUBLIC_CANVAS_AI_WORKBENCH_V1 = "false"
     localStorage.setItem(
       "cognia-canvas-feature-flags-v1",
@@ -137,6 +137,30 @@ describe("canvas feature flags", () => {
 
     const { getCanvasFeatureFlags } = await import("./feature-flags")
     expect(getCanvasFeatureFlags()["canvas.aiWorkbench.v1"]).toBe(true)
+  })
+
+  // Collaboration reaches the shared server: a stored choice can turn it off
+  // but never back on over a build that says no.
+  it("never lets a stored choice enable collaboration the build turned off", async () => {
+    process.env.NEXT_PUBLIC_CANVAS_COLLABORATION_V1 = "false"
+    localStorage.setItem(
+      "cognia-canvas-feature-flags-v1",
+      JSON.stringify({ "canvas.collaboration.v1": true })
+    )
+
+    const { getCanvasFeatureFlags } = await import("./feature-flags")
+    expect(getCanvasFeatureFlags()["canvas.collaboration.v1"]).toBe(false)
+  })
+
+  it("lets a stored choice turn collaboration off over a build that allows it", async () => {
+    process.env.NEXT_PUBLIC_CANVAS_COLLABORATION_V1 = "true"
+    localStorage.setItem(
+      "cognia-canvas-feature-flags-v1",
+      JSON.stringify({ "canvas.collaboration.v1": false })
+    )
+
+    const { getCanvasFeatureFlags } = await import("./feature-flags")
+    expect(getCanvasFeatureFlags()["canvas.collaboration.v1"]).toBe(false)
   })
 
   it("isCanvasFeatureFlagEnabled returns boolean for known flag", async () => {
