@@ -196,6 +196,11 @@
     "goal_resume",
     "goal_subgoals_generate",
     "goal_verify_retry",
+    "host_installer_inspect",
+    "host_installer_install",
+    "host_installer_pair",
+    "host_installer_ssh_open",
+    "host_installer_uninstall",
     "host_runtime_restart",
     "host_update_install",
     "lsp_host_ensure",
@@ -646,6 +651,10 @@
     {
       "arm": "github_runner_list",
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
+    },
+    {
+      "arm": "host_installer_close",
+      "reason": "Drops a desktop installer session and its SSH connection; runs nothing on either machine."
     },
     {
       "arm": "host_runtime_status",

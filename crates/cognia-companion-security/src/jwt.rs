@@ -261,7 +261,8 @@ mod tests {
             ("crates/cognia-companion/src/org_policy.rs", include_str!("../../cognia-companion/src/org_policy.rs"), 1),
             ("crates/cognia-companion/src/api.rs", include_str!("../../cognia-companion/src/api.rs"), 1),
             ("crates/cognia-companion/src/ws.rs", include_str!("../../cognia-companion/src/ws.rs"), 1),
-            ("crates/cognia-companion-rpc/src/managed_desktops.rs", include_str!("../../cognia-companion-rpc/src/managed_desktops.rs"), 1),
+            // The second site refuses the service plane as an acceptance admin.
+            ("crates/cognia-companion-rpc/src/managed_desktops.rs", include_str!("../../cognia-companion-rpc/src/managed_desktops.rs"), 2),
             ("crates/cognia-companion-rpc/src/remote_desktops.rs", include_str!("../../cognia-companion-rpc/src/remote_desktops.rs"), 1),
             // P6c: the eighth site keeps the operator outside person session authority.
             ("crates/cognia-companion-rpc/src/rpc.rs", include_str!("../../cognia-companion-rpc/src/rpc.rs"), 8),
