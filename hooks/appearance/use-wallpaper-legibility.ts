@@ -33,7 +33,7 @@ import {
   analyzeWallpaperSource,
   type WallpaperThemeAnalysis,
 } from "@/lib/appearance/wallpaper-theme-generator"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import type { Wallpaper } from "@/types/appearance"
 
 export interface UseWallpaperLegibilityArgs {
@@ -94,7 +94,7 @@ export function useWallpaperLegibility({
     if (typeof document === "undefined" || !document.body) return
     // Paint-through pet / island windows force the wallpaper off; there is
     // nothing to guard and no reason to decode an image there.
-    if (isSecondaryOverlayRole(getPetWindowRole())) {
+    if (isSecondaryOverlayRole(getWindowRole())) {
       clearMaxWeight()
       return
     }

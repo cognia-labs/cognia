@@ -5,14 +5,14 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
     vars ? `${key}:${JSON.stringify(vars)}` : key,
 }))
-jest.mock("@/lib/tauri/pet-window", () => ({ showMainWindow: jest.fn() }))
+jest.mock("@/lib/tauri/overlay-windows", () => ({ showMainWindow: jest.fn() }))
 jest.mock("@/lib/tauri/tray-panel", () => ({
   closeTrayPanel: jest.fn().mockResolvedValue(true),
   runNativeTrayAction: jest.fn().mockResolvedValue(true),
   sendTrayPanelRequest: jest.fn().mockResolvedValue(true),
 }))
 
-import { showMainWindow } from "@/lib/tauri/pet-window"
+import { showMainWindow } from "@/lib/tauri/overlay-windows"
 import { closeTrayPanel, runNativeTrayAction, sendTrayPanelRequest } from "@/lib/tauri/tray-panel"
 import type { TrayPanelAction } from "@/lib/tray-panel/types"
 

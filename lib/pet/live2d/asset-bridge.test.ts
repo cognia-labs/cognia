@@ -9,8 +9,8 @@ import {
   requestMirroredLive2dAsset,
   getMirroredLive2dRow,
 } from "./asset-bridge"
-import { getPetWindowRole } from "@/lib/pet/window-role"
-jest.mock("@/lib/pet/window-role", () => ({ getPetWindowRole: jest.fn(() => "web") }))
+import { getWindowRole } from "@/lib/platform/window-role"
+jest.mock("@/lib/platform/window-role", () => ({ getWindowRole: jest.fn(() => "web") }))
 import { MAX_MODEL_BYTES } from "./constants"
 
 class Wire implements AssetChannel {
@@ -401,7 +401,7 @@ it("keeps the production mirror alive across multiple consumers and StrictMode r
     }
   }
   globalThis.BroadcastChannel = FakeBroadcastChannel as unknown as typeof BroadcastChannel
-  jest.mocked(getPetWindowRole).mockReturnValue("overlay")
+  jest.mocked(getWindowRole).mockReturnValue("overlay")
   let offA = () => {},
     offB = () => {},
     offC = () => {}
@@ -432,6 +432,6 @@ it("keeps the production mirror alive across multiple consumers and StrictMode r
     offC()
     await flush()
     globalThis.BroadcastChannel = original
-    jest.mocked(getPetWindowRole).mockReturnValue("web")
+    jest.mocked(getWindowRole).mockReturnValue("web")
   }
 })

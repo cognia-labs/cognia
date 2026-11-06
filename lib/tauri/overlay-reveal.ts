@@ -1,5 +1,5 @@
 // Shared first-paint reveal for the transparent desktop overlay windows (pet
-// sprite, pet click popup, and fleet island). Rust creates these windows
+// sprite, pet click popup, fleet island, tray panel). Rust creates these windows
 // `visible(false)` and never shows them on the create path, because on Windows
 // a `transparent(true)` window shown before its WebView commits a first paint
 // renders an opaque (black) rectangle until a recomposite — the "invisible /
@@ -7,14 +7,17 @@
 // (layout, then post-commit) guarantee the transparent, background-free frame
 // is on screen before the window appears. Mirrors the main window's
 // `WindowShowInitializer` contract.
+//
+// Every overlay uses it, so it lives in the foundation layer beside the window
+// role (`lib/platform/window-role.ts`) rather than in one feature (ADR-0250 §14).
 
 import { isTauri } from "@/lib/platform/detect"
 import { isMacPlatform } from "@/lib/tauri/os"
-import { revealIslandWindow, revealPetWindow } from "@/lib/tauri/pet-window"
+import { revealIslandWindow, revealPetWindow } from "@/lib/tauri/overlay-windows"
 import { revealTrayPanel } from "@/lib/tauri/tray-panel"
-import { getPetWindowRole, PET_POPUP_WINDOW_LABEL, PET_WINDOW_LABEL } from "@/lib/pet/window-role"
+import { getWindowRole, PET_POPUP_WINDOW_LABEL, PET_WINDOW_LABEL } from "@/lib/platform/window-role"
 
-export interface PetWindowRevealOptions {
+export interface OverlayWindowRevealOptions {
   /**
    * Also focus the window right after showing it. The click popup needs this:
    * its native blur-to-close handler (Rust `WindowEvent::Focused(false)`) can
@@ -24,7 +27,7 @@ export interface PetWindowRevealOptions {
 }
 
 /**
- * Schedule the current pet window's reveal after its first painted frame.
+ * Schedule the current overlay window's reveal after its first painted frame.
  * Returns a cancel function for the effect cleanup. No-op off Tauri (web /
  * tests never open these windows).
  *
@@ -38,7 +41,7 @@ export interface PetWindowRevealOptions {
  * through the OS event loop, so the two resizes aren't coalesced into a no-op.
  * Restoring the exact size + `resizable(false)` leaves the layout untouched.
  */
-export function schedulePetWindowReveal(options: PetWindowRevealOptions = {}): () => void {
+export function scheduleOverlayWindowReveal(options: OverlayWindowRevealOptions = {}): () => void {
   if (!isTauri()) return () => {}
   let raf1 = 0
   let raf2 = 0
@@ -48,7 +51,7 @@ export function schedulePetWindowReveal(options: PetWindowRevealOptions = {}): (
       try {
         if (cancelled) return
         if (isMacPlatform()) {
-          const role = getPetWindowRole()
+          const role = getWindowRole()
           if (role === "island") {
             await revealIslandWindow(Boolean(options.focus))
           } else if (role === "tray-panel") {
@@ -67,7 +70,7 @@ export function schedulePetWindowReveal(options: PetWindowRevealOptions = {}): (
         ])
         if (cancelled) return
         const win = getCurrentWindow()
-        const role = getPetWindowRole()
+        const role = getWindowRole()
         if (role === "overlay" || role === "popup") {
           // The pet windows show through their native owner on every
           // platform: it checks the open generation first, so a close that

@@ -6,7 +6,7 @@
 "use client"
 
 import { useEffect } from "react"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { useShortcutStore } from "./registry"
 
 export function useSyncShortcutsToRust(): void {

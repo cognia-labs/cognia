@@ -14,7 +14,7 @@ import { emitPetEvent } from "@/lib/pet/events/pet-event-bus"
 import type { PetCharacterBinding, PetProfile } from "@/types/pet"
 import { migrateLegacyPetBinding } from "@/lib/pet/binding/resolve-skin"
 import { isPetMirrorShell } from "@/lib/pet/remote/mirror"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { usePetStore } from "@/stores/pet/pet-store"
 
 export interface UsePetResult {
@@ -33,7 +33,7 @@ export interface UsePetResult {
 }
 
 export function usePet(activeCharacterId?: string | null): UsePetResult {
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   const secondary = role === "overlay" || role === "popup"
   const snapshot = usePetStore((s) => s.profileSnapshot)
   const storedProfile = useLiveQuery(

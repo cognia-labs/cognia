@@ -16,8 +16,8 @@ jest.mock("@/lib/appearance/wallpaper-theme-generator", () => ({
 }))
 
 let role: string | null = null
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => role,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => role,
   isSecondaryOverlayRole: (r: string | null) => r === "pet-overlay",
 }))
 

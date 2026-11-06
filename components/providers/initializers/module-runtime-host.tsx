@@ -20,7 +20,7 @@ import { loggers } from "@cognia/logging"
 import type { ModuleRuntimeBoot, RendererRuntimeContext } from "@/lib/modules/manifest-types"
 import { startModuleRuntimes } from "@/lib/modules/runtime-runner"
 import { RENDERER_HOST, rendererRuntimes } from "@/lib/modules/runtimes"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import { useAccountStore } from "@/stores/account/account-store"
 
 /** Each group's last teardown, which its next run waits for. */
@@ -34,7 +34,7 @@ export function ModuleRuntimeHost({ boot }: { boot?: ModuleRuntimeBoot }) {
 
   useEffect(() => {
     if (!accountId) return
-    if (isSecondaryOverlayRole(getPetWindowRole())) return
+    if (isSecondaryOverlayRole(getWindowRole())) return
     const entries = rendererRuntimes(boot)
     if (!entries.length) return
     const key = boot ?? "main"

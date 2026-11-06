@@ -29,7 +29,7 @@ import { liveQuery } from "dexie"
 import { getPetModel } from "@/lib/db/pet-models"
 import { loadLive2dSkinAsset } from "@/lib/pet/skin-assets"
 import { startMainLive2dAssets } from "@/lib/pet/live2d/asset-bridge"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { startMainMediaAssets } from "@/lib/pet/media-packs/asset-bridge"
 
 /** Minimal `BroadcastChannel` surface for DI in tests. */
@@ -81,7 +81,7 @@ export function startMainPetBridge(deps: MainPetBridgeDeps = {}): () => void {
   const store = deps.store ?? usePetStore
   const emit = deps.emit ?? emitPetEvent
   const mediaAssets =
-    getPetWindowRole() === "main"
+    getWindowRole() === "main"
       ? startMainMediaAssets({
           selectedPack: () => {
             const state = store.getState()
@@ -92,7 +92,7 @@ export function startMainPetBridge(deps: MainPetBridgeDeps = {}): () => void {
         })
       : undefined
   const assets =
-    getPetWindowRole() === "main"
+    getWindowRole() === "main"
       ? startMainLive2dAssets({
           selectedModel: () => {
             const state = store.getState()

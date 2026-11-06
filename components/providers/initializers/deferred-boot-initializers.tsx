@@ -13,7 +13,7 @@ import {
   subscribeBootCapabilities,
   type BootCapability,
 } from "@/lib/boot/capabilities"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 
 /**
  * Client-mount probe via `useSyncExternalStore` (not `useState` + effect, which
@@ -104,7 +104,7 @@ export function DeferredBootInitializers() {
   // boot concern (workflow/gateway/connector/scheduler/agent-team runtimes).
   // Running them in a pet window is wasted work — skip all capability groups
   // there, same as desktop-only-initializers.tsx.
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   if (isSecondaryOverlayRole(role)) return null
 
   return (

@@ -3,18 +3,19 @@
 // Each would otherwise make a second copy, binding, folder or library file
 // when a phone loses the reply and presses again.
 //
-// The semantics are remote pet care's (`lib/pet/remote/idempotency.ts`), and
-// so is the implementation: keyed on the AUTHENTICATED device
+// The semantics are remote pet care's, and the implementation is the
+// companion's shared ledger (`lib/companion/idempotency-ledger.ts`): keyed on
+// the AUTHENTICATED device
 // (`callerDeviceId`, injected server-side) and the body `idempotencyKey`, the
 // in-flight promise stored so a concurrent retry joins it, a rejection
 // forgotten so a transient failure can be retried with the same key.
 
-import { createPetIdempotencyLedger, type PetIdempotencyLedger } from "@/lib/pet/remote/idempotency"
+import { createIdempotencyLedger, type IdempotencyLedger } from "@/lib/companion/idempotency-ledger"
 
-export type FilesIdempotencyLedger = PetIdempotencyLedger
+export type FilesIdempotencyLedger = IdempotencyLedger
 
 export function createFilesIdempotencyLedger(
-  opts: Parameters<typeof createPetIdempotencyLedger>[0] = {}
+  opts: Parameters<typeof createIdempotencyLedger>[0] = {}
 ): FilesIdempotencyLedger {
-  return createPetIdempotencyLedger(opts)
+  return createIdempotencyLedger(opts)
 }

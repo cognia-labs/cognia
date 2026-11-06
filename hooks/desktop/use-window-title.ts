@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { useBarTitle } from "@/hooks/desktop/use-bar-title"
 import { isTauri } from "@/lib/tauri"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { loggers } from "@cognia/logging"
 
 const log = loggers.ui

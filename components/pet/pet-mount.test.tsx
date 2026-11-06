@@ -4,7 +4,7 @@ const usePetEventBus = jest.fn()
 const ensurePetAccountId = jest.fn().mockResolvedValue("acct-1")
 const ensurePetProfile = jest.fn().mockResolvedValue(undefined)
 const useActiveCharacterId = jest.fn<string | undefined, []>()
-const getPetWindowRole = jest.fn<"main" | "overlay" | "popup" | "web", []>()
+const getWindowRole = jest.fn<"main" | "overlay" | "popup" | "web", []>()
 const isTauri = jest.fn<boolean, []>()
 const usePlatform = jest.fn<"tauri" | "mobile" | "web", []>()
 const startMainPetBridge = jest.fn<() => void, [unknown?]>()
@@ -42,8 +42,8 @@ jest.mock("@/hooks/pet/use-active-character-id", () => ({
 }))
 jest.mock("@/lib/pet/bones/account-id", () => ({ ensurePetAccountId: () => ensurePetAccountId() }))
 jest.mock("@/lib/pet/runtime/init-pet", () => ({ ensurePetProfile: () => ensurePetProfile() }))
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => getPetWindowRole(),
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => getWindowRole(),
   isSecondaryOverlayRole: (role: string) =>
     role === "overlay" || role === "popup" || role === "island",
 }))
@@ -93,8 +93,8 @@ beforeEach(() => {
   ensurePetProfile.mockClear()
   useActiveCharacterId.mockReset()
   useActiveCharacterId.mockReturnValue(undefined)
-  getPetWindowRole.mockReset()
-  getPetWindowRole.mockReturnValue("main")
+  getWindowRole.mockReset()
+  getWindowRole.mockReturnValue("main")
   isTauri.mockReset()
   isTauri.mockReturnValue(false)
   usePlatform.mockReset()
@@ -203,7 +203,7 @@ describe("PetMount", () => {
 
   it("renders nothing and disables the controller in the overlay window role", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("overlay")
+    getWindowRole.mockReturnValue("overlay")
     const { container } = render(<PetMount />)
     expect(container.firstChild).toBeNull()
     // Controller (event bus) stays off so XP is never double-awarded.
@@ -214,7 +214,7 @@ describe("PetMount", () => {
 
   it("renders nothing and disables the controller in the popup window role", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("popup")
+    getWindowRole.mockReturnValue("popup")
     isTauri.mockReturnValue(true)
     const { container } = render(<PetMount />)
     expect(container.firstChild).toBeNull()
@@ -227,7 +227,7 @@ describe("PetMount", () => {
 
   it("does not start the main bridge off Tauri", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(false)
     render(<PetMount />)
     expect(startMainPetBridge).not.toHaveBeenCalled()
@@ -235,7 +235,7 @@ describe("PetMount", () => {
 
   it("starts the main bridge in the main window under Tauri and disposes on unmount", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     const { unmount } = render(<PetMount />)
     expect(startMainPetBridge).toHaveBeenCalledTimes(1)
@@ -255,7 +255,7 @@ describe("PetMount", () => {
         },
       },
     }
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
 
     render(<PetMount />)
@@ -285,7 +285,7 @@ describe("PetMount", () => {
         },
       },
     }
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
 
     render(<PetMount />)
@@ -308,7 +308,7 @@ describe("PetMount", () => {
         desktopPet: { enabled: true, clickThrough: false, size: 128, position: null },
       },
     }
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     isPetWindowOpen.mockResolvedValue(true)
 
@@ -325,7 +325,7 @@ describe("PetMount", () => {
         desktopPet: { enabled: true, clickThrough: true, size: 128, position: null },
       },
     }
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     isPetWindowOpen.mockResolvedValue(true)
 
@@ -342,7 +342,7 @@ describe("PetMount", () => {
         desktopPet: { enabled: true, clickThrough: false, size: 128, position: null },
       },
     }
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     let resolveProbe!: (open: boolean) => void
     isPetWindowOpen.mockReturnValue(
@@ -362,7 +362,7 @@ describe("PetMount", () => {
 
   it("routes the popup's open-console request to the console's canonical href", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     render(<PetMount />)
     const deps = startMainPetBridge.mock.calls[0][0] as {
@@ -378,7 +378,7 @@ describe("PetMount", () => {
 
   it("registers the window + interaction commands while enabled on the main desktop window, disposing on unmount", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     const { unmount } = render(<PetMount />)
     expect(registerPetCommands).toHaveBeenCalledTimes(1)
@@ -396,7 +396,7 @@ describe("PetMount", () => {
         size: 96,
       },
     }
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     render(<PetMount />)
     // Every pet command stays registered while the pet is off, so a bound
@@ -407,7 +407,7 @@ describe("PetMount", () => {
 
   it("localizes the command titles the tray and keybinding sheet show", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     render(<PetMount />)
     expect(registerPetCommands.mock.calls[0][0]?.windowTitle).toBe("Toggle desktop pet")
@@ -423,7 +423,7 @@ describe("PetMount", () => {
 
   it("answers a shortcut pressed while the pet is off with a notification, and only that refusal", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     render(<PetMount />)
     const onRefused = registerPetCommands.mock.calls[0][0]!.onRefused!
@@ -439,7 +439,7 @@ describe("PetMount", () => {
 
   it("registers no pet commands on a secondary window or mobile", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("overlay")
+    getWindowRole.mockReturnValue("overlay")
     isTauri.mockReturnValue(true)
     render(<PetMount />)
     expect(registerPetCommands).not.toHaveBeenCalled()
@@ -447,7 +447,7 @@ describe("PetMount", () => {
 
   it("renders nothing and disables the controller on the Capacitor mobile shell", () => {
     settingsValue = ENABLED_SETTINGS
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     usePlatform.mockReturnValue("mobile")
     const { container } = render(<PetMount />)
     // The floating widget would cover bottom-right action buttons on mobile, so
@@ -483,7 +483,7 @@ describe("PetMount", () => {
         size: 96,
       },
     }
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
     render(<PetMount />)
     expect(startMainPetBridge).not.toHaveBeenCalled()
@@ -493,7 +493,7 @@ describe("PetMount", () => {
 it("does not mount or initialize any pet runtime on web with saved enabled settings", () => {
   settingsValue = ENABLED_SETTINGS
   usePlatform.mockReturnValue("web")
-  getPetWindowRole.mockReturnValue("web")
+  getWindowRole.mockReturnValue("web")
   const { container } = render(<PetMount />)
   expect(container).toBeEmptyDOMElement()
   expect(usePetEventBus).toHaveBeenCalledWith(false, undefined)
@@ -506,7 +506,7 @@ it("does not mount or initialize any pet runtime on web with saved enabled setti
 
 describe("PetMount — desktop surfaces and window lifecycle", () => {
   beforeEach(() => {
-    getPetWindowRole.mockReturnValue("main")
+    getWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
   })
 

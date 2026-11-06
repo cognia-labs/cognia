@@ -377,7 +377,7 @@ export function SelectionToolbarView() {
   // Reveal only once the window has been sized to its content. Replaces a
   // double-rAF guess, and on Windows the resize doubles as the recomposite
   // nudge a `transparent(true)` window needs to avoid painting black
-  // (see `lib/pet/reveal.ts` for the same quirk on the pet windows).
+  // (see `lib/tauri/overlay-reveal.ts` for the same quirk on the pet windows).
   const measured = geometry.measured
   useEffect(() => {
     if (!candidate || !measured) return

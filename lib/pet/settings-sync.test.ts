@@ -19,9 +19,9 @@ jest.mock("@/stores/settings", () => ({
     subscribe: jest.fn(() => () => {}),
   },
 }))
-jest.mock("@/lib/pet/window-role", () => ({ getPetWindowRole: jest.fn(() => "web") }))
-import { getPetWindowRole } from "@/lib/pet/window-role"
-beforeEach(() => jest.mocked(getPetWindowRole).mockReturnValue("web"))
+jest.mock("@/lib/platform/window-role", () => ({ getWindowRole: jest.fn(() => "web") }))
+import { getWindowRole } from "@/lib/platform/window-role"
+beforeEach(() => jest.mocked(getWindowRole).mockReturnValue("web"))
 
 import {
   PET_SETTINGS_CHANNEL,
@@ -89,7 +89,7 @@ const flush = async () => {
 }
 
 it("projects only presentation settings from main for a late secondary window", async () => {
-  jest.mocked(getPetWindowRole).mockReturnValue("main")
+  jest.mocked(getWindowRole).mockReturnValue("main")
   const bus = createBus(),
     store = makeStore({
       ...DEFAULT_PET_SETTINGS,
@@ -118,7 +118,7 @@ it("projects only presentation settings from main for a late secondary window", 
 })
 
 it("applies validated main presentation without reopening a secondary account database", async () => {
-  jest.mocked(getPetWindowRole).mockReturnValue("overlay")
+  jest.mocked(getWindowRole).mockReturnValue("overlay")
   const bus = createBus(),
     readPersisted = jest.fn(),
     applyLocal = jest.fn()
@@ -475,7 +475,7 @@ describe("default deps", () => {
 })
 
 it("saves only allowed desktop patches in the owning account and rejects stale scopes", async () => {
-  jest.mocked(getPetWindowRole).mockReturnValue("main")
+  jest.mocked(getWindowRole).mockReturnValue("main")
   const bus = createBus(),
     store = makeStore({
       ...DEFAULT_PET_SETTINGS,
@@ -525,7 +525,7 @@ it("saves only allowed desktop patches in the owning account and rejects stale s
 })
 
 it("retains an early projection and reapplies it after local hydration", async () => {
-  jest.mocked(getPetWindowRole).mockReturnValue("overlay")
+  jest.mocked(getWindowRole).mockReturnValue("overlay")
   const bus = createBus(),
     applyLocal = jest.fn()
   let hydrated!: () => void
@@ -556,7 +556,7 @@ it("retains an early projection and reapplies it after local hydration", async (
 })
 
 it("passes a captured database and active guard through the serialized settings queue", async () => {
-  jest.mocked(getPetWindowRole).mockReturnValue("main")
+  jest.mocked(getWindowRole).mockReturnValue("main")
   const owner = { name: "owner-A" } as ReturnType<typeof getDb>
   jest.mocked(getDb).mockReturnValue(owner)
   jest.mocked(getSettings).mockResolvedValue({ petSettings: DEFAULT_PET_SETTINGS } as never)
@@ -579,7 +579,7 @@ it("passes a captured database and active guard through the serialized settings 
 })
 
 it("rejects late RPC replies from a retired account and cancels pending writes on disposal", async () => {
-  jest.mocked(getPetWindowRole).mockReturnValue("overlay")
+  jest.mocked(getWindowRole).mockReturnValue("overlay")
   const bus = createBus(),
     original = globalThis.BroadcastChannel
   globalThis.BroadcastChannel = jest.fn((name: string) =>

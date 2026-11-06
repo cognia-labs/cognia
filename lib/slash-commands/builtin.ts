@@ -31,7 +31,6 @@ import { dispatchGoalSubcommand } from "./actions/goal"
 import { dispatchPlanSubcommand } from "./actions/plan"
 import { dispatchIssueSubcommand } from "./actions/issue"
 import { handleBestOfN } from "./actions/best-of-n"
-import { dispatchPetSubcommand } from "./actions/pet"
 import { dispatchLarkSubcommand } from "./actions/lark"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { dispatchLoopSubcommand } from "./actions/loop"
@@ -478,22 +477,6 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
     argumentHint: "[2|3|4] <prompt> | status | cancel | pick <candidate>",
     argumentOptions: ["2", "3", "4", "status", "cancel", "pick"],
     handler: handleBestOfN,
-  },
-  // Desktop-app only, like the pet itself (ADR-0058 D9). It stays listed on
-  // every host, following `/record-skill`, and answers honestly where the pet
-  // cannot run instead of confirming care nothing received: the handler goes
-  // through the pet's access gate (`lib/slash-commands/actions/pet.ts`).
-  {
-    name: "pet",
-    description: "Check on or care for your desktop pet (feed, play, clean, …).",
-    scope: "builtin",
-    category: "system",
-    argumentHint: "<status | feed | play | pet | sleep | clean | treat>",
-    argumentOptions: ["status", "feed", "play", "pet", "sleep", "clean", "treat"],
-    handler: async (ctx) => {
-      const result = await dispatchPetSubcommand(ctx.args)
-      ctx.pushSystemMessage(result.system)
-    },
   },
   {
     name: "loop",

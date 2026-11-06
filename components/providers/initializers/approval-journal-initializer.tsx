@@ -3,7 +3,7 @@
 import { useEffect } from "react"
 import { useTranslations } from "next-intl"
 
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import {
   unannouncedInterrupted,
   useApprovalJournalStore,

@@ -9,10 +9,10 @@ description: 在透明浮层窗口中运行的 Shimeji 式伙伴：五种窗口�
 
 <TLDR>
   宠物在独立的透明置顶 Tauri 窗口中运行。
-  同一份产物由 `PetWindowRole`（`lib/pet/window-role.ts:18`）决定启动为五种角色中的哪一种。
+  同一份产物由 `WindowRole`（`lib/platform/window-role.ts`）决定启动为五种角色中的哪一种。
   Rust 以 `visible(false)` 创建这些窗口，并且**绝不**在创建路径上显示它们：
   在 Windows 上，一个 `transparent(true)` 窗口若在其 WebView 完成首帧提交之前被显示，
-  会渲染成一块不透明的黑矩形。渲染端在挂载后调用共享的揭示逻辑（`lib/pet/reveal.ts`），
+  会渲染成一块不透明的黑矩形。渲染端在挂载后调用共享的揭示逻辑（`lib/tauri/overlay-reveal.ts`），
   等待**两个 rAF** —— 先布局、后提交 —— 确保透明帧已显示后，再显示窗口。
   底层模拟包括：需求衰减、照料状态、金币与商店、经验与升级、成就，
   以及带弹道计算的移动状态机。
@@ -31,14 +31,14 @@ description: 在透明浮层窗口中运行的 Shimeji 式伙伴：五种窗口�
 ## 五种窗口角色，同一份产物
 
 ```ts
-type PetWindowRole = "main" | "overlay" | "popup" | "island" | "web"
+type WindowRole = "main" | "overlay" | "popup" | "island" | "web"
 ```
 
-同一份静态导出会启动进每一种角色；`getPetWindowRole()`（`lib/pet/window-role.ts:70`）从 Tauri webview label 解析出当前角色 —— `PET_WINDOW_LABEL`（`"pet"`）、`PET_POPUP_WINDOW_LABEL`（`"pet-popup"`）、`ISLAND_WINDOW_LABEL`（`"island"`）。`isSecondaryOverlayRole()` 与 `isMainAppWindow()` 是守卫：它们阻止仅限主窗口的工作 —— 启动引导、迁移、单例 —— 在三个浮层窗口里额外再跑三遍。
+同一份静态导出会启动进每一种角色；`getWindowRole()`（`lib/platform/window-role.ts`）从 Tauri webview label 解析出当前角色 —— `PET_WINDOW_LABEL`（`"pet"`）、`PET_POPUP_WINDOW_LABEL`（`"pet-popup"`）、`ISLAND_WINDOW_LABEL`（`"island"`）。`isSecondaryOverlayRole()` 与 `isMainAppWindow()` 是守卫：它们阻止仅限主窗口的工作 —— 启动引导、迁移、单例 —— 在三个浮层窗口里额外再跑三遍。
 
 ## 揭示协议源自一个真实 bug
 
-透明浮层窗口是「创建时隐藏、由渲染端揭示」，而不是由 Rust 显示。在 WebView 完成首帧提交之前显示一个 `transparent(true)` 窗口，在 Windows 上会得到一块不透明黑矩形，直到某个操作强制重新合成 ——也就是「不可见 / 点一下才出现」那个 bug。`lib/pet/reveal.ts` 会等待两个动画帧（先布局，再提交后）才调用 `revealPetWindow()` / `revealIslandWindow()`，与主窗口的 `WindowShowInitializer` 契约保持一致。渲染端的揭示在所有平台上都经过 Rust（面板代数检查让落在打开与首帧之间的关闭胜过揭示），随后把尺寸微调一个像素以强制重新合成。已有窗口在首帧绘制之前不会再次显示。启动脚本会给悬浮窗与弹出窗口路由打上 `data-pet-overlay` 标记，因此它们在 React hydrate 之前背景就是透明的。
+透明浮层窗口是「创建时隐藏、由渲染端揭示」，而不是由 Rust 显示。在 WebView 完成首帧提交之前显示一个 `transparent(true)` 窗口，在 Windows 上会得到一块不透明黑矩形，直到某个操作强制重新合成 ——也就是「不可见 / 点一下才出现」那个 bug。`lib/tauri/overlay-reveal.ts` 会等待两个动画帧（先布局，再提交后）才调用 `revealPetWindow()` / `revealIslandWindow()`，与主窗口的 `WindowShowInitializer` 契约保持一致。渲染端的揭示在所有平台上都经过 Rust（面板代数检查让落在打开与首帧之间的关闭胜过揭示），随后把尺寸微调一个像素以强制重新合成。已有窗口在首帧绘制之前不会再次显示。启动脚本会给悬浮窗与弹出窗口路由打上 `data-pet-overlay` 标记，因此它们在 React hydrate 之前背景就是透明的。
 
 ## 窗口管线
 
@@ -80,7 +80,7 @@ lib/pet/
   bones/generate.ts  palettes.ts  prng.ts  account-id.ts   # 确定性的程序化外观
   state/reducer.ts             # 状态机
   runtime/pet-controller.ts  pet-view.ts  init-pet.ts  apply-event.ts
-  overlay-geometry.ts  popup-geometry.ts  window-role.ts  reveal.ts
+  overlay-geometry.ts  popup-geometry.ts
 ```
 
 由 `account-id.ts` 播种的 `bones/prng.ts`，正是同一账号下宠物生成外观保持稳定、而不会每次启动重掷的原因。

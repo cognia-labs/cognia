@@ -297,6 +297,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 休眠：`experimental` 模块不填充插槽，也不挂载副作用。`slots.test.tsx` 和副作用宿主的测试固定了这一点。
   - `pet` 是试点。它的 manifest 拥有自己的表、悬浮窗与弹窗路由、设置分区，以及 `pet-mount` 副作用（`PetMount`，另有 Capacitor 版本），后者原先是手动挂载的。雷达是独立模块，从自己的 UI manifest 填充 `pet.console.tab`，不再由控制台直接导入。
   - 宠物没有页面。它的控制台就是「设置 → 宠物」分区（ADR-0058 D16），所以 manifest 不声明 `nav`，侧栏、Go 菜单、原生菜单和 ⌘K 都没有宠物这一项。设置分区可以声明自己在非桌面端需要的宿主操作：`hostOperation`（snake_case 操作 id，由模块门禁校验）让 `settingsSectionBlockReason` 在已配对主机未声明该操作的伴侣端返回 `capability`。宠物声明的是 `pet_get`，手机 `/me/pet` 入口使用同一判断（`hostAdvertisesOperation`）。
+  - 依赖反转，第一部分。原先有 30 个子系统 import `pet`，其中大多数用的并不是宠物自己的代码：每条启动路径都要问的窗口角色（`lib/platform/window-role.ts`，`getWindowRole`）、所有透明浮层共用的首帧揭示（`lib/tauri/overlay-reveal.ts`）及其底下的原生显示与揭示命令（`lib/tauri/overlay-windows.ts`）、`useDocumentHidden`（`hooks/use-document-hidden.ts`），以及远程宠物照料和文件写入共用的伴侣端幂等账本（`lib/companion/idempotency-ledger.ts`）。它们以中性的名字移到了基础层或内核，pet 的 `api` 不再列出。`/pet` 移入 manifest 的 `slashCommands`。pet 现在拥有 `lib/tauri/pet-window.ts` 和两个只有它使用的数据文件（`lib/db/pet-media-packs.ts`、`lib/db/pet-sprite-packs.ts`）。import pet 的子系统从 30 个降到 17 个（`scripts/gates/convergence/subsystem-deps.mjs`），偿还了 9 条基线中的方向边。剩下的引用都是读取宠物状态或链接到宠物：托盘与 glance 的切片、工作流节点与触发器、智能体工具、插件宠物 API 和提示词目录。它们随 M3 的贡献点和 §9 的插件宿主 API 一起迁移。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

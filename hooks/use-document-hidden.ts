@@ -1,7 +1,8 @@
 // Tracks whether this document is visible. The OS fires `visibilitychange`
 // when a Tauri window is hidden/minimized too, so one DOM signal covers the
-// overlay window, the main window, and the browser tab alike. Consumers pass
-// `hidden` down as the renderer `paused` prop and as a wander pause input.
+// overlay window, the main window, and the browser tab alike. The pet passes
+// `hidden` down as its renderer's `paused` prop and as a wander pause input;
+// the phone's glance pauses its refresh with it.
 
 "use client"
 

@@ -30,7 +30,7 @@ import { APP_VERSION } from "@/lib/app-version"
 import { isAutostartEnabled } from "@/lib/tauri/autostart"
 import { isTauri } from "@/lib/tauri"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { detectDesktopOsFamily } from "@/lib/platform/os"
 import type { PetProfile } from "@/types/pet"
 

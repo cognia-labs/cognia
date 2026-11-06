@@ -3,7 +3,7 @@
  *
  * Runs in the main window even though the button lives in the selection-toolbar
  * overlay. Two reasons: overlay windows are deliberately least-privilege
- * presentation shells (`lib/pet/window-role.ts`, and the pet does the same
+ * presentation shells (`lib/platform/window-role.ts`, and the pet does the same
  * thing — `hooks/pet/use-pet-speak.ts` is main-window-only with the overlay
  * replaying through a bridge), and `ttsOrchestrator` owns an `<Audio>` element
  * per webview, so speaking from the overlay would open a *second* player that

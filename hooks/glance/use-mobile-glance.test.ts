@@ -7,7 +7,7 @@ import type { GlanceMobileSettings } from "@/types/glance/layout"
 
 jest.mock("./use-glance-sources", () => ({ useGlanceSources: jest.fn() }))
 jest.mock("@/hooks/use-runtime-snapshot", () => ({ useRuntimeSnapshot: jest.fn() }))
-jest.mock("@/hooks/pet/use-document-visible", () => ({ useDocumentHidden: jest.fn() }))
+jest.mock("@/hooks/use-document-hidden", () => ({ useDocumentHidden: jest.fn() }))
 jest.mock("@/lib/pet/remote/client", () => ({ createPetRemoteClient: jest.fn() }))
 jest.mock("@/lib/tauri", () => ({ transport: { marker: "transport" } }))
 jest.mock("@/lib/glance/plugin-actions", () => ({ runGlancePluginAction: jest.fn() }))
@@ -57,7 +57,7 @@ jest.mock("@/lib/glance/remote/phone-store", () => {
   }
 })
 
-import { useDocumentHidden } from "@/hooks/pet/use-document-visible"
+import { useDocumentHidden } from "@/hooks/use-document-hidden"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { withEditedMobileEntries, withMobilePreset } from "@/lib/glance/layout-edit"
 import {

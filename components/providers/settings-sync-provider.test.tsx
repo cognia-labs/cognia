@@ -2,7 +2,7 @@ import { act, render, waitFor } from "@testing-library/react"
 import { useSettingsStore } from "@/stores/settings"
 import { SettingsSyncProvider } from "./settings-sync-provider"
 import { applyZoom } from "@/lib/tauri/webview-zoom"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { readAccountTheme } from "@/lib/appearance/lock-screen-preferences"
 
 let mockAccountId: string | null = "acct_alpha"
@@ -21,12 +21,12 @@ jest.mock("@/lib/tauri/webview-zoom", () => ({
   DEFAULT_ZOOM: 1,
 }))
 
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: jest.fn(() => "main"),
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: jest.fn(() => "main"),
 }))
 
 const applyZoomMock = applyZoom as jest.Mock
-const getPetWindowRoleMock = getPetWindowRole as jest.Mock
+const getWindowRoleMock = getWindowRole as jest.Mock
 
 function setLoadedSettings(over: Record<string, unknown> = {}): void {
   useSettingsStore.setState({
@@ -47,7 +47,7 @@ describe("SettingsSyncProvider", () => {
     jest.clearAllMocks()
     mockAccountId = "acct_alpha"
     window.localStorage.clear()
-    getPetWindowRoleMock.mockReturnValue("main")
+    getWindowRoleMock.mockReturnValue("main")
     useSettingsStore.setState({ settings: null, loaded: false })
     document.documentElement.style.fontSize = ""
     document.documentElement.removeAttribute("data-reduce-motion")
@@ -106,7 +106,7 @@ describe("SettingsSyncProvider", () => {
   ] as const)(
     "leaves the shared mode and the zoom to the main window in the %s window",
     async (role) => {
-      getPetWindowRoleMock.mockReturnValue(role)
+      getWindowRoleMock.mockReturnValue(role)
       setLoadedSettings({ theme: "system" })
       render(<SettingsSyncProvider>child</SettingsSyncProvider>)
       // Font still syncs (a cheap per-document DOM write).
@@ -122,7 +122,7 @@ describe("SettingsSyncProvider", () => {
   )
 
   it("applies the zoom sync in the web context", async () => {
-    getPetWindowRoleMock.mockReturnValue("web")
+    getWindowRoleMock.mockReturnValue("web")
     setLoadedSettings()
     render(<SettingsSyncProvider>child</SettingsSyncProvider>)
     await waitFor(() => expect(applyZoomMock).toHaveBeenCalledWith(1.5))

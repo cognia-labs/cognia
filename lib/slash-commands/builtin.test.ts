@@ -66,7 +66,7 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
     expect(typeof report?.handler).toBe("function")
   })
 
-  it("/pet is an Action command with the subcommand hint", () => {
+  it("/pet comes from the pet's manifest as an Action command with the subcommand hint", () => {
     const pet = BUILTIN_SLASH_COMMANDS.find((c) => c.name === "pet")
     expect(pet?.handler).toBeDefined()
     expect(pet?.template).toBeUndefined()

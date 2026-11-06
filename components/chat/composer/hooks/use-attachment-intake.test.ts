@@ -28,7 +28,7 @@ jest.mock("@/lib/chat/drop-entries", () => ({
   collectDroppedFiles: jest.fn(),
   MAX_DROPPED_DIR_FILES: 50,
 }))
-jest.mock("@/lib/tauri/pet-window", () => ({ showMainWindow: jest.fn() }))
+jest.mock("@/lib/tauri/overlay-windows", () => ({ showMainWindow: jest.fn() }))
 jest.mock("@/stores/chat", () => ({
   useChatStore: { getState: () => ({ activeSessionId: null }) },
 }))

@@ -12,6 +12,9 @@ describe("pet module manifest", () => {
       "app/pet-popup/",
       "components/settings/pet/",
       "lib/db/pet-conversation.ts",
+      "lib/db/pet-media-packs.ts",
+      "lib/db/pet-sprite-packs.ts",
+      "lib/tauri/pet-window.ts",
     ])
   })
 
@@ -34,5 +37,29 @@ describe("pet module manifest", () => {
 
   it("offers the console's href to the modules that open it", () => {
     expect(petModule.api).toContain("lib/pet/console-tabs.ts")
+  })
+
+  it("exports none of the window plumbing the platform owns now", () => {
+    // ADR-0250 M2 dependency inversion: the window role, the overlay reveal,
+    // the document-visibility hook and the idempotency ledger were generic
+    // helpers the shell and other modules had to reach into pet for.
+    for (const moved of [
+      "lib/pet/window-role.ts",
+      "lib/pet/reveal.ts",
+      "hooks/pet/use-document-visible.ts",
+      "lib/pet/remote/idempotency.ts",
+    ]) {
+      expect(petModule.api).not.toContain(moved)
+    }
+  })
+
+  it("lists /pet itself, loading the handler only when it runs", async () => {
+    const [command] = petModule.slashCommands ?? []
+    expect(command).toMatchObject({ name: "pet", category: "system" })
+    expect(command?.argumentOptions).toEqual(
+      expect.arrayContaining(["status", "feed", "play", "pet", "sleep", "clean", "treat"])
+    )
+    const handler = await command!.load()
+    expect(typeof handler.run).toBe("function")
   })
 })

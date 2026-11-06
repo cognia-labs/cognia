@@ -20,7 +20,7 @@ import { planTransition } from "@/lib/appearance/wallpaper-transition"
 import { prefersReducedMotion } from "@/lib/appearance/reduced-motion"
 import { DEFAULT_WALLPAPER_ROTATION } from "@/types/appearance/wallpaper-rotation"
 import { findActiveWallpaper, withBuiltinPresets } from "@/lib/appearance/presets"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import { useWallpaperRotation } from "@/hooks/appearance/use-wallpaper-rotation"
 import { writeLockScreenPreferences } from "@/lib/appearance/lock-screen-preferences"
 import { DEFAULT_LOCK_SCREEN } from "@/types/appearance/lock-screen"
@@ -217,7 +217,7 @@ async function applyBackground(args: ApplyArgs): Promise<void> {
   // window — via `body[data-bg-enabled]::before` AND the `#app[data-bg-target]`
   // layer for global/all scopes. Force wallpaper OFF in those windows: they own
   // no surface that should carry the app background.
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   if (isSecondaryOverlayRole(role)) {
     disableBackground(body)
     onApplied(null, null, null)

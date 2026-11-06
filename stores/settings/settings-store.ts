@@ -2,7 +2,7 @@
 
 import { create } from "zustand"
 import { readBootLocalePreference, resolveLocalePreference } from "@/lib/i18n/locale-preference"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import type {
   AppSettings,
   AppLanguage,
@@ -894,7 +894,7 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
           // imported-theme row locally should not delete it on the desktop).
           await saveSettings(patch, { mirrorToHost: false })
         }
-        const controlsNativeHost = !isSecondaryOverlayRole(getPetWindowRole())
+        const controlsNativeHost = !isSecondaryOverlayRole(getWindowRole())
         if (!controlsNativeHost && s.networkProxy) {
           // Overlays need presentation settings, not credential migration or
           // writes to the host's global network policy. Keep legacy secrets

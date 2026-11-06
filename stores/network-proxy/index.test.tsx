@@ -14,7 +14,7 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(),
 }))
 
-jest.mock("@/lib/pet/window-role", () => ({
+jest.mock("@/lib/platform/window-role", () => ({
   isMainAppWindow: jest.fn(),
 }))
 
@@ -32,7 +32,7 @@ const tauriCore = require("@tauri-apps/api/core") as { invoke: jest.Mock }
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const tauri = require("@/lib/tauri") as { isTauri: jest.Mock }
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const windowRole = require("@/lib/pet/window-role") as { isMainAppWindow: jest.Mock }
+const windowRole = require("@/lib/platform/window-role") as { isMainAppWindow: jest.Mock }
 
 const { useSettingsStore } =
   // eslint-disable-next-line @typescript-eslint/no-require-imports

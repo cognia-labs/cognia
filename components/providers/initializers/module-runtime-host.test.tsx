@@ -18,8 +18,8 @@ jest.mock("@/lib/modules/runtimes", () => ({
 }))
 
 let mockRole = "main"
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockRole,
   isSecondaryOverlayRole: (role: string) => role !== "main" && role !== "web",
 }))
 

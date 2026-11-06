@@ -20,7 +20,7 @@
  */
 
 import { nanoid } from "nanoid"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import { notifyRemoteHostPairingChanged } from "@/lib/platform/remote-host-pairing"

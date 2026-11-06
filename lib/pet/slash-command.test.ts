@@ -18,7 +18,7 @@ jest.mock("@/lib/platform/detect", () => ({
 import { getDb, __resetDbForTesting, whenSeeded } from "@/lib/db/schema"
 import { upsertPetProfile } from "@/lib/db/pet"
 import { createDefaultProfile } from "@/lib/pet/defaults"
-import { dispatchPetSubcommand, parsePetArgs, type PetCommandDeps } from "./pet"
+import { dispatchPetSubcommand, parsePetArgs, type PetCommandDeps } from "./slash-command"
 import type { PetAccessResult, PetInteractionKind } from "@/lib/pet/access/gate"
 import type { PetProfile } from "@/types/pet"
 

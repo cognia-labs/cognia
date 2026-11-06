@@ -61,7 +61,7 @@ import { useEffect, useRef } from "react"
 import { unlocksWithoutPrompt } from "@/lib/accounts/desktop-local-account"
 import { isAccountGateForced } from "@/lib/accounts/dev-auto-unlock"
 import { interruptSession } from "@/lib/claude/ipc"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import { useAccountStore } from "@/stores/account/account-store"
 import { useChatStore } from "@/stores/chat/chat-store"
 import { useSettingsStore } from "@/stores/settings"
@@ -99,7 +99,7 @@ export function useAutoLockOnIdle(): void {
     if (typeof window === "undefined") return
     if (!autoLockAppliesInThisBuild()) return
     if (minutes <= 0 || !unlockedAccountId || opensWithoutPrompt) return
-    if (isSecondaryOverlayRole(getPetWindowRole())) return
+    if (isSecondaryOverlayRole(getWindowRole())) return
 
     const windowMs = minutes * 60_000
     let disposed = false

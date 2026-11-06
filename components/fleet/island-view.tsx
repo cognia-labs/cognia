@@ -5,18 +5,18 @@
  * transparent, always-on-top "island" Tauri window. Mirrors PetOverlayView's
  * contract: mark `<html data-island-overlay>` so the page paints transparent
  * (globals.css), then reveal the hidden window after the first painted frame
- * (`schedulePetWindowReveal` — shared scheduling with the pet windows; on macOS
+ * (`scheduleOverlayWindowReveal` — shared scheduling with the pet windows; on macOS
  * it routes to the island-specific NSPanel reveal command).
  */
 
 import { useEffect } from "react"
 import { IslandShell } from "./island-shell"
-import { schedulePetWindowReveal } from "@/lib/pet/reveal"
+import { scheduleOverlayWindowReveal } from "@/lib/tauri/overlay-reveal"
 
 export function IslandView() {
   useEffect(() => {
     document.documentElement.setAttribute("data-island-overlay", "true")
-    const cancelReveal = schedulePetWindowReveal()
+    const cancelReveal = scheduleOverlayWindowReveal()
     return () => {
       document.documentElement.removeAttribute("data-island-overlay")
       cancelReveal()

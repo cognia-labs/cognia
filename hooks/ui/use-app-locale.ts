@@ -15,7 +15,7 @@ import {
 } from "@/lib/i18n/locale-preference"
 import { getPref, setPref } from "@/lib/tauri/store"
 import { useSettingsStore } from "@/stores/settings"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 
 /** Shared by the full shell and least-privilege overlays, including before unlock. */
 export function useAppLocaleState(): { locale: Locale; ready: boolean } {
@@ -23,7 +23,7 @@ export function useAppLocaleState(): { locale: Locale; ready: boolean } {
   const languageMode = useSettingsStore((s) => s.settings?.languageMode)
   const loaded = useSettingsStore((s) => s.loaded)
   const refreshSystemLanguage = useSettingsStore((s) => s.refreshSystemLanguage)
-  const mirrorNativePrefs = !isSecondaryOverlayRole(getPetWindowRole())
+  const mirrorNativePrefs = !isSecondaryOverlayRole(getWindowRole())
   // Match the static export on the initial client render; resolve browser-only
   // preferences immediately after hydration instead of making SSR nondeterministic.
   const [boot, setBoot] = useState<LocalePreference | null>(null)

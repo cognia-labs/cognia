@@ -1,4 +1,6 @@
-// Action handler for the `/pet` slash command.
+// Action handler for the `/pet` slash command. The pet's manifest
+// (`lib/pet/module.ts`) lists the command, so the composer's picker shows it
+// without loading this file (ADR-0250 §14).
 //
 // Surface (7 subcommands):
 //   /pet | /pet status   — push a status card (name, stage, level, needs, care)
@@ -13,6 +15,7 @@
 // listening) it reported "Fed your pet." while nothing happened. Output is
 // chat-facing markdown (English, like the sibling /goal and /status commands).
 
+import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
 import { getPetProfile } from "@/lib/db/pet"
 import type { PetAccessResult, PetInteractionKind, PetRefusal } from "@/lib/pet/access/gate"
 import type { PetAvailability, PetUnavailableReason } from "@/lib/pet/access/availability"
@@ -201,4 +204,14 @@ export async function dispatchPetSubcommand(
   const result = await (deps.interact ?? liveInteract)(kind)
   if (!result.ok) return { system: refusalMessage(result.refusal) }
   return { system: INTERACTION_CONFIRMATION[parsed.sub]! }
+}
+
+/**
+ * The `/pet` handler. Desktop-app only, like the pet itself (ADR-0058 D9): it
+ * stays listed on every host, following `/record-skill`, and answers honestly
+ * where the pet cannot run instead of confirming care nothing received.
+ */
+export async function run(ctx: SlashContext): Promise<void> {
+  const result = await dispatchPetSubcommand(ctx.args)
+  ctx.pushSystemMessage(result.system)
 }

@@ -18,8 +18,8 @@ jest.mock("@/lib/appearance/wallpaper-storage", () => ({
 // The transparent pet windows must never paint a wallpaper. Default "main" so
 // the ordinary applier tests are unaffected; the pet tests flip it.
 let mockPetRole: "main" | "web" | "overlay" | "popup" = "main"
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockPetRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockPetRole,
   isSecondaryOverlayRole: (role: string) =>
     role === "overlay" || role === "popup" || role === "island",
 }))

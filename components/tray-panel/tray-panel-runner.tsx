@@ -18,7 +18,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 
-import { showMainWindow } from "@/lib/tauri/pet-window"
+import { showMainWindow } from "@/lib/tauri/overlay-windows"
 import { closeTrayPanel, runNativeTrayAction, sendTrayPanelRequest } from "@/lib/tauri/tray-panel"
 import { resolveLabel } from "@/lib/tray-panel/defaults"
 import { resolveAction, type TrayPanelValidationError } from "@/lib/tray-panel/resolve"

@@ -3,7 +3,7 @@
  */
 import {
   CHAT_COPILOT_WINDOW_LABEL,
-  getPetWindowRole,
+  getWindowRole,
   ISLAND_WINDOW_LABEL,
   isMainAppWindow,
   isSecondaryOverlayRole,
@@ -23,65 +23,65 @@ function setTauri(on: boolean, internals?: unknown) {
   }
 }
 
-describe("getPetWindowRole", () => {
+describe("getWindowRole", () => {
   afterEach(() => setTauri(false))
 
   it("returns 'web' outside Tauri (and never reads the label)", () => {
     setTauri(false)
     const getLabel = jest.fn<string | undefined, []>().mockReturnValue("pet")
-    expect(getPetWindowRole(getLabel)).toBe("web")
+    expect(getWindowRole(getLabel)).toBe("web")
     expect(getLabel).not.toHaveBeenCalled()
   })
 
   it("returns 'overlay' when the Tauri label is 'pet'", () => {
     setTauri(true)
-    expect(getPetWindowRole(() => PET_WINDOW_LABEL)).toBe("overlay")
+    expect(getWindowRole(() => PET_WINDOW_LABEL)).toBe("overlay")
   })
 
   it("returns 'popup' when the Tauri label is 'pet-popup'", () => {
     setTauri(true)
-    expect(getPetWindowRole(() => PET_POPUP_WINDOW_LABEL)).toBe("popup")
+    expect(getWindowRole(() => PET_POPUP_WINDOW_LABEL)).toBe("popup")
   })
 
   it("returns 'main' for any other Tauri label", () => {
     setTauri(true)
-    expect(getPetWindowRole(() => "main")).toBe("main")
-    expect(getPetWindowRole(() => "settings")).toBe("main")
+    expect(getWindowRole(() => "main")).toBe("main")
+    expect(getWindowRole(() => "settings")).toBe("main")
   })
 
   it("returns 'main' when the Tauri label is missing", () => {
     setTauri(true)
-    expect(getPetWindowRole(() => undefined)).toBe("main")
+    expect(getWindowRole(() => undefined)).toBe("main")
   })
 
   it("reads the webview label from __TAURI_INTERNALS__.metadata.currentWebview by default", () => {
     setTauri(true, { metadata: { currentWebview: { label: "pet" } } })
-    expect(getPetWindowRole()).toBe("overlay")
+    expect(getWindowRole()).toBe("overlay")
   })
 
   it("falls back to the window label when the webview label is absent", () => {
     setTauri(true, { metadata: { currentWindow: { label: "pet" } } })
-    expect(getPetWindowRole()).toBe("overlay")
+    expect(getWindowRole()).toBe("overlay")
   })
 
   it("falls back to the window label when currentWebview exists but has no label", () => {
     setTauri(true, { metadata: { currentWebview: {}, currentWindow: { label: "pet" } } })
-    expect(getPetWindowRole()).toBe("overlay")
+    expect(getWindowRole()).toBe("overlay")
   })
 
   it("defaults to 'main' when the internals metadata is entirely missing", () => {
     setTauri(true, {})
-    expect(getPetWindowRole()).toBe("main")
+    expect(getWindowRole()).toBe("main")
   })
 
   it("returns 'island' when the Tauri label is 'island'", () => {
     setTauri(true)
-    expect(getPetWindowRole(() => ISLAND_WINDOW_LABEL)).toBe("island")
+    expect(getWindowRole(() => ISLAND_WINDOW_LABEL)).toBe("island")
   })
 
   it("returns 'selection-toolbar' for the selection overlay label", () => {
     setTauri(true)
-    expect(getPetWindowRole(() => SELECTION_TOOLBAR_WINDOW_LABEL)).toBe("selection-toolbar")
+    expect(getWindowRole(() => SELECTION_TOOLBAR_WINDOW_LABEL)).toBe("selection-toolbar")
   })
 
   it("exposes the canonical pet window labels", () => {
@@ -143,7 +143,7 @@ describe("the Capacity Dock window (ADR-0165)", () => {
   afterEach(() => setTauri(false))
 
   it("resolves its own role from the window label", () => {
-    expect(getPetWindowRole(() => USAGE_DOCK_WINDOW_LABEL)).toBe("usage-dock")
+    expect(getWindowRole(() => USAGE_DOCK_WINDOW_LABEL)).toBe("usage-dock")
   })
 
   it("is a secondary overlay, so no controller or initializer mounts in it", () => {
@@ -162,7 +162,7 @@ describe("the desktop chat copilot overlay (ADR-0194)", () => {
   afterEach(() => setTauri(false))
 
   it("is a secondary overlay with its own role, never the main window", () => {
-    expect(getPetWindowRole(() => CHAT_COPILOT_WINDOW_LABEL)).toBe("chat-copilot")
+    expect(getWindowRole(() => CHAT_COPILOT_WINDOW_LABEL)).toBe("chat-copilot")
     expect(isSecondaryOverlayRole("chat-copilot")).toBe(true)
     // The copilot controller and its capture command must mount only in main.
     expect(isMainAppWindow(() => CHAT_COPILOT_WINDOW_LABEL)).toBe(false)
@@ -174,8 +174,8 @@ describe("the recorder controller window", () => {
 
   it("hydrates as a secondary window without owning main-window initializers", () => {
     setTauri(true)
-    expect(getPetWindowRole(() => "recorder-controller")).toBe("recorder-controller")
-    expect(isSecondaryOverlayRole(getPetWindowRole(() => "recorder-controller"))).toBe(true)
+    expect(getWindowRole(() => "recorder-controller")).toBe("recorder-controller")
+    expect(isSecondaryOverlayRole(getWindowRole(() => "recorder-controller"))).toBe(true)
     expect(isMainAppWindow(() => "recorder-controller")).toBe(false)
   })
 })

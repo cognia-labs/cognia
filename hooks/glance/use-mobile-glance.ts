@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react"
 
 import type { GlanceContextValue } from "@/components/glance/glance-context"
-import { useDocumentHidden } from "@/hooks/pet/use-document-visible"
+import { useDocumentHidden } from "@/hooks/use-document-hidden"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { pinEntryHome, withEditedMobileEntries, withMobilePreset } from "@/lib/glance/layout-edit"
 import { runGlancePluginAction } from "@/lib/glance/plugin-actions"
@@ -47,7 +47,7 @@ import {
   type GlancePluginCatalogEntry,
   type GlanceSnapshotV1,
 } from "@/lib/glance/snapshot"
-import type { PetInteractionKind } from "@/lib/pet/access/limits"
+import type { PetInteractionKind } from "@cognia/plugin-contract/lib/pet/access/limits"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useSettingsStore } from "@/stores/settings"
 import type { GlanceEntryId, GlanceMobileSettings } from "@/types/glance/layout"

@@ -32,7 +32,7 @@ jest.mock("@/lib/island/projection-store", () => ({
   getIslandProjection: () => island(),
   getIslandProjectionServerSnapshot: () => null,
 }))
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: () => mainWindow }))
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: () => mainWindow }))
 jest.mock("@/lib/tauri", () => ({ isTauri: () => tauri }))
 
 import { fleetTitleCounts, useTrayTitle } from "./title"

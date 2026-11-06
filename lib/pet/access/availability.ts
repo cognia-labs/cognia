@@ -12,7 +12,7 @@
 
 import type { Platform } from "@/lib/platform/detect"
 import { detectPlatform } from "@/lib/platform/detect"
-import { getPetWindowRole, isSecondaryOverlayRole, type PetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole, type WindowRole } from "@/lib/platform/window-role"
 
 /**
  * Why the pet may not act here.
@@ -34,7 +34,7 @@ export interface PetAvailabilityInput {
   /** `PetSettings.enabled`. */
   enabled: boolean
   /** Which window this webview is. */
-  role: PetWindowRole
+  role: WindowRole
   /** Runtime platform of this webview. */
   platform: Platform
 }
@@ -69,11 +69,11 @@ export function isPetAvailable(input: PetAvailabilityInput): boolean {
  */
 export function resolveLivePetAvailability(
   enabled: boolean,
-  deps: { role?: PetWindowRole; platform?: Platform } = {}
+  deps: { role?: WindowRole; platform?: Platform } = {}
 ): PetAvailability {
   return resolvePetAvailability({
     enabled,
-    role: deps.role ?? getPetWindowRole(),
+    role: deps.role ?? getWindowRole(),
     platform: deps.platform ?? detectPlatform(),
   })
 }

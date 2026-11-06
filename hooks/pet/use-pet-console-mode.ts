@@ -16,7 +16,7 @@ import {
   type PetConsoleModeResolution,
 } from "@/lib/pet/console/console-mode"
 import { isPetMirrorShell } from "@/lib/pet/remote/mirror"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import {
   useActiveHostSupportsFeature,
   useRemoteHostStore,
@@ -41,7 +41,7 @@ export function usePetConsoleMode(): PetConsoleModeResolution {
         // where the pet's record lives and is worth reading either way.
         localAvailability: resolvePetAvailability({
           enabled: true,
-          role: getPetWindowRole(),
+          role: getWindowRole(),
           platform,
         }),
         mirror: isPetMirrorShell({ platform, remoteHostActive: () => remoteHostActive }),

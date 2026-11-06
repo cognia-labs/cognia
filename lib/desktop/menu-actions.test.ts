@@ -40,7 +40,7 @@ jest.mock("@/lib/chat/start-session", () => ({
 }))
 
 const isMainAppWindowMock = jest.fn(() => true)
-jest.mock("@/lib/pet/window-role", () => ({
+jest.mock("@/lib/platform/window-role", () => ({
   isMainAppWindow: () => isMainAppWindowMock(),
 }))
 

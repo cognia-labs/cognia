@@ -33,8 +33,8 @@ jest.mock("@/lib/boot/capabilities", () => ({
 }))
 
 let mockPetRole: "main" | "web" | "overlay" | "popup" = "main"
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockPetRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockPetRole,
   isSecondaryOverlayRole: (role: string) =>
     role === "overlay" || role === "popup" || role === "island",
 }))

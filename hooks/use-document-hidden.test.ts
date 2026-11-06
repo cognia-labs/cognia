@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react"
-import { useDocumentHidden } from "./use-document-visible"
+import { useDocumentHidden } from "./use-document-hidden"
 
 function setVisibility(state: DocumentVisibilityState) {
   Object.defineProperty(document, "visibilityState", {

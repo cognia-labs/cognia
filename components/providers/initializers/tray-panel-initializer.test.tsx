@@ -16,7 +16,7 @@ jest.mock("@/lib/plugin/commands/registry", () => ({
   executeCommand: jest.fn(),
   getCommand: jest.fn(),
 }))
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: jest.fn(() => true) }))
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: jest.fn(() => true) }))
 jest.mock("@/lib/tauri/tray-panel", () => ({
   onTrayPanelRequest: jest.fn(),
   sendTrayPanelResult: jest.fn().mockResolvedValue(true),
@@ -72,7 +72,7 @@ import { toast } from "sonner"
 import { startNewSession } from "@/lib/chat/start-session"
 import { executeCommand, getCommand } from "@/lib/plugin/commands/registry"
 import { dispatchSlashCommand } from "@/lib/slash-commands/registry"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { isTauri } from "@/lib/tauri"
 import { deletePref, getPref } from "@/lib/tauri/store"
 import { onTrayPanelRequest, sendTrayPanelResult } from "@/lib/tauri/tray-panel"

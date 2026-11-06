@@ -22,7 +22,7 @@ import { useSyncShortcutsToRust } from "@/lib/shortcuts/sync"
 import { rasterizeAndRegisterTrayIcons } from "@/lib/tray/icon-builder"
 import { pushCrashContext } from "@/lib/native/crash-context"
 import { installNotificationBridges } from "@/lib/notifications/install"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 
 /**
  * Single mount point for desktop-runtime concerns:

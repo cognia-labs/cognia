@@ -46,7 +46,7 @@ export default defineUiModule({
   ],
   // The pet's controller: settings gate, event bus, profile, and the desktop
   // window's lifecycle. Mounted in every window by `ModuleEffectsHost`; it
-  // runs only in the main one (`getPetWindowRole`). It replaced the app
+  // runs only in the main one (`getWindowRole`). It replaced the app
   // runtime's hand-mounted `<PetMount />`.
   effects: [{ name: "pet-mount", load: () => import("./pet-mount") }],
 })

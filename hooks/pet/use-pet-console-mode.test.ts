@@ -14,9 +14,9 @@ let mockRole = "main"
 
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: () => mockPlatform }))
 jest.mock("@/hooks/use-runtime-snapshot", () => ({ useRuntimeSnapshot: () => mockSnapshot }))
-jest.mock("@/lib/pet/window-role", () => ({
-  ...jest.requireActual("@/lib/pet/window-role"),
-  getPetWindowRole: () => mockRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  ...jest.requireActual("@/lib/platform/window-role"),
+  getWindowRole: () => mockRole,
 }))
 jest.mock("@/stores/remote-host/remote-host-store", () => ({
   useActiveHostSupportsFeature: (feature: string, operation: string) => {

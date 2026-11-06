@@ -9,10 +9,10 @@ description: A Shimeji-style companion living in transparent overlay windows —
 
 <TLDR>
   The pet is not a widget inside the app window — it lives in its own transparent, always-on-top Tauri
-  windows, and `PetWindowRole` (`lib/pet/window-role.ts:18`) determines which of five roles
+  windows, and `WindowRole` (`lib/platform/window-role.ts`) determines which of five roles
   the bundle uses at startup. Rust creates those windows `visible(false)` and never shows them on the create path:
   on Windows a `transparent(true)` window shown before its WebView commits a first paint renders as an
-  opaque black rectangle. The renderer calls the shared reveal (`lib/pet/reveal.ts`) after mount, waiting
+  opaque black rectangle. The renderer calls the shared reveal (`lib/tauri/overlay-reveal.ts`) after mount, waiting
   **two rAFs** — layout, then post-commit — so the transparent frame is on screen before the window
   appears. The pet simulation includes: needs decay, care condition, coins and a shop, XP and
   levelling, achievements, and a locomotion FSM with ballistics.
@@ -32,10 +32,10 @@ own schema bump.
 ## Five window roles, one bundle
 
 ```ts
-type PetWindowRole = "main" | "overlay" | "popup" | "island" | "web"
+type WindowRole = "main" | "overlay" | "popup" | "island" | "web"
 ```
 
-The same static export boots into every role; `getPetWindowRole()` (`lib/pet/window-role.ts:70`) resolves
+The same static export boots into every role; `getWindowRole()` (`lib/platform/window-role.ts`) resolves
 which one from the Tauri webview label — `PET_WINDOW_LABEL` (`"pet"`), `PET_POPUP_WINDOW_LABEL`
 (`"pet-popup"`), `ISLAND_WINDOW_LABEL` (`"island"`). `isSecondaryOverlayRole()` and `isMainAppWindow()`
 are the guards that keep main-window-only work — bootstrapping, migrations, singletons — from running
@@ -46,7 +46,7 @@ three extra times in the overlay windows.
 Transparent overlay windows are created hidden and revealed by the renderer, not by Rust. Showing a
 `transparent(true)` window before its WebView has committed a first paint produces an opaque black
 rectangle on Windows until something forces a recomposite — the "invisible / black until I click it"
-bug. `lib/pet/reveal.ts` waits two animation frames (layout, then post-commit) before calling
+bug. `lib/tauri/overlay-reveal.ts` waits two animation frames (layout, then post-commit) before calling
 `revealPetWindow()` / `revealIslandWindow()`, mirroring the main window's `WindowShowInitializer`
 contract. The renderer's reveal goes through Rust on every platform (a panel generation check lets a close
 that lands between the open and the first frame win over the reveal), then nudges the size by one pixel to force a recomposite. An existing window is never
@@ -103,7 +103,7 @@ lib/pet/
   bones/generate.ts  palettes.ts  prng.ts  account-id.ts   # deterministic procedural look
   state/reducer.ts             # the state machine
   runtime/pet-controller.ts  pet-view.ts  init-pet.ts  apply-event.ts
-  overlay-geometry.ts  popup-geometry.ts  window-role.ts  reveal.ts
+  overlay-geometry.ts  popup-geometry.ts
 ```
 
 `bones/prng.ts` seeded from `account-id.ts` is what makes a pet's generated appearance stable for a given

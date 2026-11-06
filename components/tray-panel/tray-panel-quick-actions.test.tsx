@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 
-jest.mock("@/lib/tauri/pet-window", () => ({ showMainWindow: jest.fn() }))
+jest.mock("@/lib/tauri/overlay-windows", () => ({ showMainWindow: jest.fn() }))
 jest.mock("@/lib/tauri/tray-panel", () => ({
   closeTrayPanel: jest.fn().mockResolvedValue(true),
   runNativeTrayAction: jest.fn().mockResolvedValue(true),

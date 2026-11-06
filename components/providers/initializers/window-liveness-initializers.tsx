@@ -4,7 +4,7 @@ import dynamic from "next/dynamic"
 import { useSyncExternalStore } from "react"
 
 import { isTauri } from "@/lib/native/utils"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import { WindowControls } from "@/components/desktop/window-controls"
 import { WindowShowInitializer } from "./window-show-initializer"
 
@@ -88,7 +88,7 @@ export function WindowLivenessInitializers() {
   // main-window concerns. `app/layout.tsx` already routes those windows to the
   // lightweight route tree (so this component isn't mounted there); this guard
   // keeps the behaviour correct even if the mount point ever changes.
-  if (isSecondaryOverlayRole(getPetWindowRole())) return null
+  if (isSecondaryOverlayRole(getWindowRole())) return null
 
   return (
     <>

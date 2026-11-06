@@ -268,59 +268,6 @@ export async function resizePetPopup(width: number, height: number): Promise<boo
   }
 }
 
-/** Window labels allowed to request a native pet-panel reveal. */
-export type PetRevealTarget = "pet" | "pet-popup"
-
-/**
- * Reveal a pet overlay after its first paint, on every platform. Rust checks
- * the window's open generation first, so a close that landed between the open
- * and the first frame wins over the reveal, and it records the sprite's first
- * paint. The target is explicit because an overlay can be hosted by a plain
- * Webview rather than a Tauri `WebviewWindow`; Rust resolves this label to its
- * native window.
- */
-export async function revealPetWindow(
-  focus = false,
-  targetLabel: PetRevealTarget = "pet"
-): Promise<boolean> {
-  if (!isTauri()) return false
-  try {
-    await invoke("reveal_pet_window", { focus, targetLabel })
-    return true
-  } catch (err) {
-    console.warn("revealPetWindow failed", err)
-    return false
-  }
-}
-
-/**
- * Reveal the fleet island overlay after its first paint. Mirrors
- * `revealPetWindow` but for the `"island"` window; on macOS it orders the
- * island NSPanel front without activating Cognia.
- */
-export async function revealIslandWindow(focus = false): Promise<boolean> {
-  if (!isTauri()) return false
-  try {
-    await invoke("reveal_island_window", { focus })
-    return true
-  } catch (err) {
-    console.warn("revealIslandWindow failed", err)
-    return false
-  }
-}
-
-/** Bring the main app window back to the foreground (overlay "show main"). */
-export async function showMainWindow(): Promise<boolean> {
-  if (!isTauri()) return false
-  try {
-    await invoke("show_main_window")
-    return true
-  } catch (err) {
-    console.warn("showMainWindow failed", err)
-    return false
-  }
-}
-
 // ── Native pet-window events ─────────────────────────────────────────────────
 // The Rust side broadcasts window-state changes it initiates itself (tray
 // toggle, click-through recovery, blur-hide, suspend/resume, monitor change)

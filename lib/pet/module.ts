@@ -19,6 +19,12 @@ export default defineHostModule({
     "app/pet-popup/",
     "components/settings/pet/",
     "lib/db/pet-conversation.ts",
+    // Single-user data files: only the pet reads them (ADR-0250 M2).
+    "lib/db/pet-media-packs.ts",
+    "lib/db/pet-sprite-packs.ts",
+    // The pet windows' native commands; the shared show and reveal commands
+    // are the platform's (`lib/tauri/overlay-windows.ts`).
+    "lib/tauri/pet-window.ts",
   ],
   // The event sources the pet reacts to (attention, background tasks,
   // capture, connectors, git, terminal), what it speaks and remembers with
@@ -43,16 +49,12 @@ export default defineHostModule({
   // files library), the event bus workflows trigger on, and the console's
   // href (glance, ⌘K, the phone's Me tab).
   api: [
-    "hooks/pet/use-document-visible.ts",
     "lib/pet/access/limits.ts",
     "lib/pet/care/condition.ts",
     "lib/pet/console-tabs.ts",
     "lib/pet/events/pet-event-bus.ts",
     "lib/pet/remote/client.ts",
-    "lib/pet/remote/idempotency.ts",
-    "lib/pet/reveal.ts",
     "lib/pet/runtime/pet-view.ts",
-    "lib/pet/window-role.ts",
   ],
   // Every live `pet*` table. Another module that reads one directly is a
   // `tableAccess` entry in the module baseline (ADR-0250 §14, G4).
@@ -67,6 +69,19 @@ export default defineHostModule({
     "petModels",
     "petProfile",
     "petSpritePacks",
+  ],
+  slashCommands: [
+    {
+      // Desktop-app only, like the pet itself (ADR-0058 D9). It stays listed
+      // on every host and answers honestly where the pet cannot run: the
+      // handler goes through the pet's access gate.
+      name: "pet",
+      description: "Check on or care for your desktop pet (feed, play, clean, …).",
+      category: "system",
+      argumentHint: "<status | feed | play | pet | sleep | clean | treat>",
+      argumentOptions: ["status", "feed", "play", "pet", "sleep", "clean", "treat"],
+      load: () => import("./slash-command"),
+    },
   ],
   messages: "pet",
 })

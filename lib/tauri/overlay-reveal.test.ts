@@ -17,7 +17,7 @@ jest.mock("@/lib/tauri/os", () => ({ isMacPlatform: () => mockIsMac }))
 
 const revealPetWindowMock = jest.fn().mockResolvedValue(true)
 const revealIslandWindowMock = jest.fn().mockResolvedValue(true)
-jest.mock("@/lib/tauri/pet-window", () => ({
+jest.mock("@/lib/tauri/overlay-windows", () => ({
   revealPetWindow: (focus: boolean, label: string) => revealPetWindowMock(focus, label),
   revealIslandWindow: (focus: boolean) => revealIslandWindowMock(focus),
 }))
@@ -30,9 +30,10 @@ jest.mock("@/lib/tauri/tray-panel", () => ({
   revealTrayPanel: (focus: boolean) => revealTrayPanelMock(focus),
 }))
 
-let mockWindowRole: ReturnType<typeof import("@/lib/pet/window-role").getPetWindowRole> = "overlay"
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockWindowRole,
+let mockWindowRole: ReturnType<typeof import("@/lib/platform/window-role").getWindowRole> =
+  "overlay"
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockWindowRole,
   PET_WINDOW_LABEL: "pet",
   PET_POPUP_WINDOW_LABEL: "pet-popup",
   ISLAND_WINDOW_LABEL: "island",
@@ -64,7 +65,7 @@ jest.mock("@tauri-apps/api/dpi", () => ({
   },
 }))
 
-import { schedulePetWindowReveal } from "./reveal"
+import { scheduleOverlayWindowReveal } from "./overlay-reveal"
 
 const rafCallbacks: FrameRequestCallback[] = []
 let rafSpy: jest.SpyInstance
@@ -109,9 +110,9 @@ afterEach(() => {
   cancelRafSpy.mockRestore()
 })
 
-describe("schedulePetWindowReveal", () => {
+describe("scheduleOverlayWindowReveal", () => {
   it("is a no-op off Tauri (web / tests never open pet windows)", () => {
-    const cancel = schedulePetWindowReveal()
+    const cancel = scheduleOverlayWindowReveal()
     expect(rafSpy).not.toHaveBeenCalled()
     cancel() // must be safe to call
     expect(cancelRafSpy).not.toHaveBeenCalled()
@@ -119,7 +120,7 @@ describe("schedulePetWindowReveal", () => {
 
   it("reveals through the native owner only after two rAFs, then forces a resize recomposite", async () => {
     mockIsTauri = true
-    schedulePetWindowReveal()
+    scheduleOverlayWindowReveal()
 
     // Not shown until BOTH rAFs (layout + post-commit) have run.
     expect(revealPetWindowMock).not.toHaveBeenCalled()
@@ -145,7 +146,7 @@ describe("schedulePetWindowReveal", () => {
   it("skips the resize nudge on macOS (protects the NSPanel style mask)", async () => {
     mockIsTauri = true
     mockIsMac = true
-    schedulePetWindowReveal()
+    scheduleOverlayWindowReveal()
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -163,7 +164,7 @@ describe("schedulePetWindowReveal", () => {
     mockIsMac = true
     mockWindowRole = "island"
 
-    schedulePetWindowReveal()
+    scheduleOverlayWindowReveal()
     await flushAsync()
 
     expect(rafSpy).not.toHaveBeenCalled()
@@ -174,7 +175,7 @@ describe("schedulePetWindowReveal", () => {
     mockIsTauri = true
     mockIsMac = true
     mockWindowRole = "popup"
-    schedulePetWindowReveal({ focus: true })
+    scheduleOverlayWindowReveal({ focus: true })
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -189,7 +190,7 @@ describe("schedulePetWindowReveal", () => {
     mockIsTauri = true
     mockIsMac = true
     mockWindowRole = "island"
-    schedulePetWindowReveal({ focus: true })
+    scheduleOverlayWindowReveal({ focus: true })
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -204,7 +205,7 @@ describe("schedulePetWindowReveal", () => {
     mockIsTauri = true
     mockIsMac = true
     mockWindowRole = "tray-panel"
-    schedulePetWindowReveal({ focus: true })
+    scheduleOverlayWindowReveal({ focus: true })
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -221,7 +222,7 @@ describe("schedulePetWindowReveal", () => {
     mockIsTauri = true
     mockIsMac = false
     mockWindowRole = "tray-panel"
-    schedulePetWindowReveal({ focus: true })
+    scheduleOverlayWindowReveal({ focus: true })
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -233,7 +234,7 @@ describe("schedulePetWindowReveal", () => {
   it("asks the native owner to focus the popup off macOS (blur-to-close)", async () => {
     mockIsTauri = true
     mockWindowRole = "popup"
-    schedulePetWindowReveal({ focus: true })
+    scheduleOverlayWindowReveal({ focus: true })
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -247,7 +248,7 @@ describe("schedulePetWindowReveal", () => {
     mockIsTauri = true
     // The generation check suppressed the show: the window stayed hidden.
     isVisibleMock.mockResolvedValue(false)
-    schedulePetWindowReveal()
+    scheduleOverlayWindowReveal()
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -260,7 +261,7 @@ describe("schedulePetWindowReveal", () => {
   it("skips the nudge when the native reveal command failed", async () => {
     mockIsTauri = true
     revealPetWindowMock.mockResolvedValue(false)
-    schedulePetWindowReveal()
+    scheduleOverlayWindowReveal()
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -271,7 +272,7 @@ describe("schedulePetWindowReveal", () => {
   it("focuses after showing for non-pet windows on the generic path", async () => {
     mockIsTauri = true
     mockWindowRole = "tray-panel"
-    schedulePetWindowReveal({ focus: true })
+    scheduleOverlayWindowReveal({ focus: true })
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -286,7 +287,7 @@ describe("schedulePetWindowReveal", () => {
 
   it("cancel before the rAFs fire prevents the reveal entirely", async () => {
     mockIsTauri = true
-    const cancel = schedulePetWindowReveal()
+    const cancel = scheduleOverlayWindowReveal()
     cancel()
     expect(cancelRafSpy).toHaveBeenCalled()
     flushRaf()
@@ -297,7 +298,7 @@ describe("schedulePetWindowReveal", () => {
 
   it("cancel while the dynamic import is in flight aborts before showing", async () => {
     mockIsTauri = true
-    const cancel = schedulePetWindowReveal()
+    const cancel = scheduleOverlayWindowReveal()
     flushRaf()
     flushRaf() // reveal kicked off; imports are pending microtasks
     cancel()
@@ -312,7 +313,7 @@ describe("schedulePetWindowReveal", () => {
       cancel() // flips the cancelled flag before the post-innerSize check
       return { width: 200, height: 240 }
     })
-    cancel = schedulePetWindowReveal()
+    cancel = scheduleOverlayWindowReveal()
     flushRaf()
     flushRaf()
     await flushAsync()
@@ -325,7 +326,7 @@ describe("schedulePetWindowReveal", () => {
     mockIsTauri = true
     mockWindowRole = "tray-panel"
     showMock.mockRejectedValueOnce(new Error("denied"))
-    schedulePetWindowReveal()
+    scheduleOverlayWindowReveal()
     flushRaf()
     flushRaf()
     await flushAsync()

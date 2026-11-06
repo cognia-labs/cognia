@@ -25,7 +25,7 @@ import {
   requestPetInteraction,
   type PetAccessDeps,
 } from "@/lib/pet/access/gate"
-import type { PetWindowRole } from "@/lib/pet/window-role"
+import type { WindowRole } from "@/lib/platform/window-role"
 import { emitPetEvent } from "@/lib/pet/events/pet-event-bus"
 import {
   INTERACTION_COOLDOWN_MS,
@@ -90,7 +90,7 @@ export interface PetHostDispatchDeps {
   now?: () => number
   platform?: Platform
   /** Which window this is; defaults to the live webview label. */
-  role?: PetWindowRole
+  role?: WindowRole
   /** Extra access-gate collaborators (the burst limiter, in tests). */
   accessDeps?: Pick<PetAccessDeps, "rateLimiter" | "decrementInventory">
   ledger?: PetIdempotencyLedger
@@ -171,7 +171,7 @@ async function withinWindow<T>(work: Promise<T>, ms: number): Promise<Window<T>>
 interface Resolved {
   now: () => number
   platform: Platform
-  role: PetWindowRole | undefined
+  role: WindowRole | undefined
   accessDeps: Pick<PetAccessDeps, "rateLimiter" | "decrementInventory">
   ledger: PetIdempotencyLedger
   getProfile: () => Promise<PetProfile | undefined>

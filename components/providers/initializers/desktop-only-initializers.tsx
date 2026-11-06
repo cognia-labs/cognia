@@ -10,7 +10,7 @@ import {
   subscribeBootCapabilities,
 } from "@/lib/boot/capabilities"
 import { isTauri } from "@/lib/native/utils"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 
 /**
  * Client-mount probe via `useSyncExternalStore` (not `useState` + effect, which
@@ -220,7 +220,7 @@ export function DesktopOnlyInitializers() {
   )
   const requested = isBootCapabilityRequested("desktop-tools")
   const tauri = isClient && isTauri()
-  const role = isClient ? getPetWindowRole() : "web"
+  const role = isClient ? getWindowRole() : "web"
   const secondary = isSecondaryOverlayRole(role)
 
   useEffect(() => {

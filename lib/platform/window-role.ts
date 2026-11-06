@@ -1,8 +1,11 @@
-// Resolves which window "role" the current webview is playing. The pet
-// subsystem mounts its controller (event bus + XP awards) exactly once, in the
-// main window; the transparent desktop-pet overlay (`/pet-overlay`, window
-// label "pet") must render presentation only. Getting this wrong double-awards
-// XP because the shared root layout mounts `PetMount` in every window.
+// Resolves which window "role" the current webview is playing. The desktop
+// app opens one main window and several least-privilege secondary windows
+// (the pet's overlay and popup, the fleet island, the selection toolbar, the
+// tray panel, the usage dock, the chat copilot, the recorder strip). They all
+// load the shared root layout, so anything that must run once (a controller,
+// boot initializers, the account gate, the wallpaper) gates on the role. The
+// pet is the reason it began: its controller mounted in every window awarded
+// XP twice.
 //
 // On the web there is a single browsing context → always "web". Under Tauri we
 // read the current webview's label synchronously. `@tauri-apps/api` exposes the
@@ -12,10 +15,14 @@
 // node_modules/@tauri-apps/api/webview.js:28; the window variant lives at
 // metadata.currentWindow.label, window.js:85). We replicate that read here so
 // callers can gate render output without awaiting.
+//
+// A platform fact, so it lives in the foundation layer: every shell, kernel
+// member and module may ask it (ADR-0250 §14). The window labels are kept in
+// lockstep with the Rust code that opens each window.
 
 import { isTauri } from "@/lib/platform/detect"
 
-export type PetWindowRole =
+export type WindowRole =
   | "main"
   | "overlay"
   | "popup"
@@ -88,7 +95,7 @@ function readWebviewLabel(): string | undefined {
 }
 
 /**
- * Resolve the pet window role.
+ * Resolve the current window's role.
  *
  * - Non-Tauri runtime → "web".
  * - Tauri, label "pet" → "overlay".
@@ -102,9 +109,7 @@ function readWebviewLabel(): string | undefined {
  * @param getLabel Optional DI seam for tests; defaults to the synchronous
  *   Tauri internals read.
  */
-export function getPetWindowRole(
-  getLabel: () => string | undefined = readWebviewLabel
-): PetWindowRole {
+export function getWindowRole(getLabel: () => string | undefined = readWebviewLabel): WindowRole {
   if (!isTauri()) return "web"
   const label = getLabel()
   if (label === PET_WINDOW_LABEL) return "overlay"
@@ -126,7 +131,7 @@ export function getPetWindowRole(
  * capabilities would otherwise log spurious warnings (and the pet controller
  * would double-award XP).
  */
-export function isSecondaryOverlayRole(role: PetWindowRole): boolean {
+export function isSecondaryOverlayRole(role: WindowRole): boolean {
   return (
     role === "overlay" ||
     role === "popup" ||
@@ -151,9 +156,9 @@ export function isSecondaryOverlayRole(role: PetWindowRole): boolean {
  * denied-capability warning. Mirrors the `role === "main" || "web"` gate
  * already used by `SettingsSyncProvider`.
  *
- * @param getLabel Optional DI seam for tests; forwarded to {@link getPetWindowRole}.
+ * @param getLabel Optional DI seam for tests; forwarded to {@link getWindowRole}.
  */
 export function isMainAppWindow(getLabel: () => string | undefined = readWebviewLabel): boolean {
-  const role = getPetWindowRole(getLabel)
+  const role = getWindowRole(getLabel)
   return role === "main" || role === "web"
 }

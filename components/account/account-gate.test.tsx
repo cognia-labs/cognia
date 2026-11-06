@@ -44,8 +44,8 @@ jest.mock("@/lib/tauri", () => ({
 // through there so the transparent sprite window never shows a lock form.
 // Default to "main" so the ordinary gate tests are unaffected.
 let mockPetRole: "main" | "web" | "overlay" | "popup" = "main"
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockPetRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockPetRole,
   isSecondaryOverlayRole: (role: string) =>
     role === "overlay" || role === "popup" || role === "island",
 }))

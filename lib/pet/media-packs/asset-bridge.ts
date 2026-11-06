@@ -1,6 +1,6 @@
 import { getPetMediaPack } from "@/lib/db/pet-media-packs"
 import { getPetSkinRuntime } from "@/lib/pet/skin-runtime"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { validateMediaAsset, type MediaPackAsset } from "./manifest"
 
 export interface MediaChannel {
@@ -219,7 +219,7 @@ function client(): MediaAssetClient {
   return root[CLIENT_KEY]!
 }
 export function loadMediaSkinAsset(id: string): Promise<MediaPackAsset | undefined> {
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   return getPetSkinRuntime().loadAsset(`media:${id}`, async () => {
     const asset =
       role === "overlay" || role === "popup"

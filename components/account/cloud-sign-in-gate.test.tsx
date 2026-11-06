@@ -17,8 +17,8 @@ jest.mock("@/lib/accounts/active-account-id", () => ({
   ...jest.requireActual("@/lib/accounts/active-account-id"),
   captureAccountScope: jest.fn(() => () => {}),
 }))
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => "main",
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => "main",
   isSecondaryOverlayRole: () => false,
 }))
 const abandonPopup = jest.fn()

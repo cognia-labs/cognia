@@ -25,7 +25,7 @@ const openPathAsWorkspaceMock = jest.fn()
 const ensureNotificationPermissionMock = jest.fn(async () => "granted")
 
 jest.mock("@/lib/tauri", () => ({ isTauri: () => isTauriMock() }))
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: () => isMainAppWindowMock() }))
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: () => isMainAppWindowMock() }))
 jest.mock("@/lib/tauri/cli", () => ({ getLaunchCli: () => getLaunchCliMock() }))
 jest.mock("@/lib/tauri/deep-link", () => ({ getLaunchDeepLink: () => getLaunchDeepLinkMock() }))
 const publishLogtoDeepLinkCallbackMock = jest.fn()

@@ -29,12 +29,9 @@ import {
   getPetWorkArea,
   getPetSurfaces,
   isPetWindowOpen,
-  showMainWindow,
   openPetPopup,
   closePetPopup,
   resizePetPopup,
-  revealPetWindow,
-  revealIslandWindow,
   onPetNativeStateChanged,
   onPetSuspend,
   onPetResume,
@@ -130,12 +127,6 @@ describe("lib/tauri/pet-window — happy path command mapping", () => {
     expect(mockInvoke).toHaveBeenCalledWith("is_pet_window_open")
   })
 
-  it("showMainWindow invokes show_main_window", async () => {
-    mockInvoke.mockResolvedValue(undefined)
-    await expect(showMainWindow()).resolves.toBe(true)
-    expect(mockInvoke).toHaveBeenCalledWith("show_main_window")
-  })
-
   it("openPetPopup forwards the popup opts", async () => {
     mockInvoke.mockResolvedValue(undefined)
     const opts = {
@@ -168,36 +159,6 @@ describe("lib/tauri/pet-window — happy path command mapping", () => {
     await expect(resizePetPopup(316, 416)).resolves.toBe(true)
     expect(mockInvoke).toHaveBeenCalledWith("pet_popup_resize", { width: 316, height: 416 })
   })
-
-  it("revealPetWindow identifies the popup target to the native window owner", async () => {
-    mockInvoke.mockResolvedValue(undefined)
-    await expect(revealPetWindow(true, "pet-popup")).resolves.toBe(true)
-    expect(mockInvoke).toHaveBeenCalledWith("reveal_pet_window", {
-      focus: true,
-      targetLabel: "pet-popup",
-    })
-  })
-
-  it("revealPetWindow defaults to a non-activating reveal", async () => {
-    mockInvoke.mockResolvedValue(undefined)
-    await expect(revealPetWindow()).resolves.toBe(true)
-    expect(mockInvoke).toHaveBeenCalledWith("reveal_pet_window", {
-      focus: false,
-      targetLabel: "pet",
-    })
-  })
-
-  it("revealIslandWindow delegates first-paint reveal to the island window owner", async () => {
-    mockInvoke.mockResolvedValue(undefined)
-    await expect(revealIslandWindow(true)).resolves.toBe(true)
-    expect(mockInvoke).toHaveBeenCalledWith("reveal_island_window", { focus: true })
-  })
-
-  it("revealIslandWindow defaults to a non-activating reveal", async () => {
-    mockInvoke.mockResolvedValue(undefined)
-    await expect(revealIslandWindow()).resolves.toBe(true)
-    expect(mockInvoke).toHaveBeenCalledWith("reveal_island_window", { focus: false })
-  })
 })
 
 describe("lib/tauri/pet-window — off Tauri", () => {
@@ -217,14 +178,11 @@ describe("lib/tauri/pet-window — off Tauri", () => {
     await expect(getPetWorkArea()).resolves.toBeNull()
     await expect(getPetSurfaces()).resolves.toEqual([])
     await expect(isPetWindowOpen()).resolves.toBe(false)
-    await expect(showMainWindow()).resolves.toBe(false)
     await expect(
       openPetPopup({ width: 1, height: 1, anchor: { x: 0, y: 0, width: 1, height: 1 } })
     ).resolves.toBe(false)
     await expect(closePetPopup()).resolves.toBe(false)
     await expect(resizePetPopup(1, 1)).resolves.toBe(false)
-    await expect(revealPetWindow(false)).resolves.toBe(false)
-    await expect(revealIslandWindow(false)).resolves.toBe(false)
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 })
@@ -372,13 +330,11 @@ describe("lib/tauri/pet-window — command rejection is swallowed", () => {
     await expect(getPetWorkArea()).resolves.toBeNull()
     await expect(getPetSurfaces()).resolves.toEqual([])
     await expect(isPetWindowOpen()).resolves.toBe(false)
-    await expect(showMainWindow()).resolves.toBe(false)
     await expect(
       openPetPopup({ width: 1, height: 1, anchor: { x: 0, y: 0, width: 1, height: 1 } })
     ).resolves.toBe(false)
     await expect(closePetPopup()).resolves.toBe(false)
     await expect(resizePetPopup(1, 1)).resolves.toBe(false)
-    await expect(revealPetWindow()).resolves.toBe(false)
-    expect(warnSpy).toHaveBeenCalledTimes(15)
+    expect(warnSpy).toHaveBeenCalledTimes(13)
   })
 })

@@ -11,7 +11,7 @@ import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
 import { isTauri } from "@/lib/tauri"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { startNewSession } from "@/lib/chat/start-session"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { useUIStore } from "@/stores/ui"
 import { dispatchTrayClick, dispatchShortcut } from "@/lib/tray/dispatcher"
 import {

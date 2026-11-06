@@ -36,14 +36,14 @@ import { usePet } from "@/hooks/pet/use-pet"
 import { usePetAnimationState } from "@/hooks/pet/use-pet-animation-state"
 import { useActiveLive2dModel } from "@/hooks/pet/use-active-live2d-model"
 import { useActiveSpritePack } from "@/hooks/pet/use-active-sprite-pack"
-import { useDocumentHidden } from "@/hooks/pet/use-document-visible"
+import { useDocumentHidden } from "@/hooks/use-document-hidden"
 import { usePetLookTarget } from "@/hooks/pet/use-pet-look-target"
 import { usePetLocomotion } from "@/hooks/pet/use-pet-locomotion"
 import { usePetDragGesture } from "@/hooks/pet/use-pet-drag-gesture"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { startOverlayPetBridge } from "@/lib/pet/events/cross-window-bridge"
 import { startPetSettingsFollower, updateDesktopPetSettings } from "@/lib/pet/settings-sync"
-import { schedulePetWindowReveal } from "@/lib/pet/reveal"
+import { scheduleOverlayWindowReveal } from "@/lib/tauri/overlay-reveal"
 import {
   getPetWindowPosition,
   getPetWorkArea,
@@ -51,8 +51,8 @@ import {
   onPetSuspend,
   openPetPopup,
   setPetWindowPosition,
-  showMainWindow,
 } from "@/lib/tauri/pet-window"
+import { showMainWindow } from "@/lib/tauri/overlay-windows"
 import type { PetConsoleTab } from "@/lib/pet/console-tabs"
 import {
   MIN_THROW_SPEED,
@@ -192,9 +192,9 @@ export function PetOverlayView() {
 
   // Reveal the sprite window only AFTER the first painted frame. Rust creates
   // it `visible(false)` and no longer shows it on open — see
-  // `lib/pet/reveal.ts` for the full Windows transparency rationale (shared
+  // `lib/tauri/overlay-reveal.ts` for the full Windows transparency rationale (shared
   // with the click popup). No focus: the sprite must never steal it.
-  useEffect(() => schedulePetWindowReveal(), [])
+  useEffect(() => scheduleOverlayWindowReveal(), [])
 
   // Single cross-window bridge: subscribes the per-window store to inbound
   // messages (requesting the current snapshot on connect) and exposes

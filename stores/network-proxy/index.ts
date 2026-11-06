@@ -22,7 +22,7 @@
 import { invoke } from "@tauri-apps/api/core"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { isTauri } from "@/lib/tauri"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { buildProxyUrl, isProxyActive } from "@/lib/network/proxy-config"
 import { notifyNetworkProxyApplied } from "@/lib/network/proxy-events"
 import {

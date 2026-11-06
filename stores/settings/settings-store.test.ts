@@ -42,11 +42,11 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(),
 }))
 
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: jest.fn(() => "main"),
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: jest.fn(() => "main"),
   isSecondaryOverlayRole: (role: string) => role === "overlay",
 }))
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 
 const dispatchDiagnosticMock = jest.fn()
 jest.mock("@/lib/diagnostics/bus", () => ({
@@ -132,7 +132,7 @@ const RESET = {
 
 beforeEach(() => {
   jest.clearAllMocks()
-  jest.mocked(getPetWindowRole).mockReturnValue("main")
+  jest.mocked(getWindowRole).mockReturnValue("main")
   jest.spyOn(console, "warn").mockImplementation(() => {})
   jest.spyOn(console, "error").mockImplementation(() => {})
   dispatchDiagnosticMock.mockClear()
@@ -302,7 +302,7 @@ async function waitForSaveStart() {
 
 describe("load", () => {
   it("loads overlay presentation settings without migrating secrets or controlling the host", async () => {
-    jest.mocked(getPetWindowRole).mockReturnValue("overlay")
+    jest.mocked(getWindowRole).mockReturnValue("overlay")
     tauri.isTauri.mockReturnValue(true)
     dbSettings.getSettings.mockResolvedValue(
       baseSettings({

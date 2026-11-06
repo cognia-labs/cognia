@@ -11,8 +11,8 @@ jest.mock("./island-shell", () => ({
 
 const cancelReveal = jest.fn()
 const revealMock = jest.fn(() => cancelReveal)
-jest.mock("@/lib/pet/reveal", () => ({
-  schedulePetWindowReveal: () => revealMock(),
+jest.mock("@/lib/tauri/overlay-reveal", () => ({
+  scheduleOverlayWindowReveal: () => revealMock(),
 }))
 
 describe("IslandView", () => {

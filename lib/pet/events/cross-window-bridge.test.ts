@@ -8,14 +8,14 @@ import { createDefaultProfile } from "@/lib/pet/defaults"
 import { generateBones } from "@/lib/pet/bones/generate"
 import type { PetBubble } from "@/stores/pet/pet-store"
 import type { PetLookTarget, PetOneShot, PetSkinSelection, PetVisualState } from "@/types/pet"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { startMainLive2dAssets } from "@/lib/pet/live2d/asset-bridge"
 import { startMainMediaAssets } from "@/lib/pet/media-packs/asset-bridge"
 jest.mock("@/lib/pet/media-packs/asset-bridge", () => ({
   startMainMediaAssets: jest.fn(() => ({ sync: jest.fn(), dispose: jest.fn() })),
 }))
 
-jest.mock("@/lib/pet/window-role", () => ({ getPetWindowRole: jest.fn(() => "web") }))
+jest.mock("@/lib/platform/window-role", () => ({ getWindowRole: jest.fn(() => "web") }))
 jest.mock("@/lib/pet/live2d/asset-bridge", () => ({
   startMainLive2dAssets: jest.fn(() => ({ sync: jest.fn(), dispose: jest.fn() })),
   isLive2dAssetMirror: () => false,
@@ -106,7 +106,7 @@ function makeStore() {
 
 describe("startMainPetBridge", () => {
   it("authorizes selected media only while main owns an unlocked profile", () => {
-    jest.mocked(getPetWindowRole).mockReturnValue("main")
+    jest.mocked(getWindowRole).mockReturnValue("main")
     const store = makeStore()
     store.__state.appearanceSelection = { skinId: "media", packId: "mp_whale" }
     const stop = startMainPetBridge({ channel: new FakeChannel(), store: store as never })
@@ -132,11 +132,11 @@ describe("startMainPetBridge", () => {
       expect(bridge.dispose).toHaveBeenCalledTimes(1)
     } finally {
       stop()
-      jest.mocked(getPetWindowRole).mockReturnValue("web")
+      jest.mocked(getWindowRole).mockReturnValue("web")
     }
   })
   it("owns the asset projection and revokes authorization when the account profile is absent", () => {
-    jest.mocked(getPetWindowRole).mockReturnValue("main")
+    jest.mocked(getWindowRole).mockReturnValue("main")
     const channel = new FakeChannel(),
       store = makeStore()
     store.__state.appearanceSelection = { skinId: "live2d", modelId: "m1" }
@@ -163,7 +163,7 @@ describe("startMainPetBridge", () => {
       expect(bridge.dispose).toHaveBeenCalledTimes(1)
     } finally {
       stop()
-      jest.mocked(getPetWindowRole).mockReturnValue("web")
+      jest.mocked(getWindowRole).mockReturnValue("web")
     }
   })
   it("catches up an overlay that requested its profile before main started", () => {

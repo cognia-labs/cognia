@@ -7,8 +7,8 @@ import { act, renderHook } from "@testing-library/react"
 import { useAutoLockOnIdle } from "./use-auto-lock-on-idle"
 
 let mockPetRole: string | null = null
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockPetRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockPetRole,
   isSecondaryOverlayRole: (role: string | null) => role === "overlay" || role === "popup",
 }))
 

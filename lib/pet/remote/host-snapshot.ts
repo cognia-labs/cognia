@@ -15,7 +15,7 @@ import type { PetProfile, PetSettings } from "@/types/pet"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS, normalizeStreak } from "@/types/pet"
 import type { Platform } from "@/lib/platform/detect"
 import { detectPlatform } from "@/lib/platform/detect"
-import type { PetWindowRole } from "@/lib/pet/window-role"
+import type { WindowRole } from "@/lib/platform/window-role"
 import { resolveLivePetAvailability } from "@/lib/pet/access/availability"
 import { PET_INTERACTION_KINDS } from "@/lib/pet/access/limits"
 import { projectPetSummary } from "@/lib/pet/access/summary"
@@ -34,7 +34,7 @@ import type {
 export interface PetHostSnapshotDeps {
   now?: () => number
   platform?: Platform
-  role?: PetWindowRole
+  role?: WindowRole
   getProfile?: () => Promise<PetProfile | undefined>
   getPetSettings?: () => PetSettings
   isControllerPresent?: () => boolean

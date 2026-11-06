@@ -53,7 +53,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
  * usage-dock" on a host that has one window, so the import is dynamic and sits
  * behind the `isTauri()` guard every caller already has, which also keeps
  * `@tauri-apps/api/event` out of the browser and mobile bundles.
- * `lib/pet/reveal.ts` reaches the window API the same way, for the same reason.
+ * `lib/tauri/overlay-reveal.ts` reaches the window API the same way, for the same reason.
  */
 async function emitToWindow(label: string, event: string, payload: unknown): Promise<void> {
   const { emitTo } = await import("@tauri-apps/api/event")

@@ -37,8 +37,8 @@ let mockPetRole:
   | "selection-toolbar"
   | "tray-panel"
   | "chat-copilot" = "main"
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockPetRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockPetRole,
   isSecondaryOverlayRole: (role: string) =>
     role === "overlay" ||
     role === "popup" ||

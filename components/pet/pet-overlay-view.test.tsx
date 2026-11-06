@@ -93,12 +93,14 @@ jest.mock("@/lib/tauri/pet-window", () => ({
   setPetWindowPosition: (x: number, y: number) => setPetWindowPosition(x, y),
   getPetWorkArea: () => Promise.resolve(workAreaValue),
   openPetPopup: (opts: unknown) => openPetPopup(opts),
-  showMainWindow: () => showMainWindow(),
-  revealPetWindow: (focus: boolean, label: string) => revealPetWindowMock(focus, label),
   // Native event subscriptions — inert disposers in jsdom.
   onPetSuspend: () => () => {},
   onPetResume: () => () => {},
   onPetWorkAreaChanged: () => () => {},
+}))
+jest.mock("@/lib/tauri/overlay-windows", () => ({
+  showMainWindow: () => showMainWindow(),
+  revealPetWindow: (focus: boolean, label: string) => revealPetWindowMock(focus, label),
 }))
 
 // Platform probe — the post-paint window reveal is Tauri-only. Default false so

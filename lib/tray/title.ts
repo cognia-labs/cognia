@@ -28,7 +28,7 @@ import {
   getIslandProjectionServerSnapshot,
   subscribeIslandProjection,
 } from "@/lib/island/projection-store"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { isTauri } from "@/lib/tauri"
 import type { UsageGlanceQuery } from "@/lib/usage/usage-glance"
 

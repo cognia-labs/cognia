@@ -32,7 +32,7 @@ import { useActiveSpritePack } from "@/hooks/pet/use-active-sprite-pack"
 import { startOverlayPetBridge, type OverlayPetBridge } from "@/lib/pet/events/cross-window-bridge"
 import type { PetBridgeInteractionKind } from "@/lib/pet/events/cross-window-protocol"
 import type { PetConsoleTab } from "@/lib/pet/console-tabs"
-import { schedulePetWindowReveal } from "@/lib/pet/reveal"
+import { scheduleOverlayWindowReveal } from "@/lib/tauri/overlay-reveal"
 import { hideDesktopPetWindow } from "@/lib/pet/commands"
 import {
   closePetPopup,
@@ -40,8 +40,8 @@ import {
   onPetPopupShown,
   resizePetPopup,
   setPetClickThrough,
-  showMainWindow,
 } from "@/lib/tauri/pet-window"
+import { showMainWindow } from "@/lib/tauri/overlay-windows"
 import { resolveEffectiveSkin, selectionFromEffectiveSkin } from "./skins/resolve-effective-skin"
 import { resolveCharacterSkinSelection } from "@/lib/pet/binding/resolve-skin"
 import { PetInteractionPanel } from "./pet-interaction-panel"
@@ -102,9 +102,9 @@ export function PetPopupView() {
   // Reveal the popup only AFTER the first painted frame. Rust creates it
   // `visible(false)` and no longer shows it on the create path, so the user
   // never sees the pre-hydration opaque page background flash inside what must
-  // be a transparent window (see `lib/pet/reveal.ts`). Focus after showing so
+  // be a transparent window (see `lib/tauri/overlay-reveal.ts`). Focus after showing so
   // the native blur-to-close behaves exactly like a system context menu.
-  useEffect(() => schedulePetWindowReveal({ focus: true }), [])
+  useEffect(() => scheduleOverlayWindowReveal({ focus: true }), [])
 
   // Cross-window bridge: post interactions back to the main window. Held in a
   // ref so the panel callbacks don't re-bind every render.

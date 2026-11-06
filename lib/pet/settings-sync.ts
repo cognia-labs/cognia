@@ -29,7 +29,7 @@ import { getSettings, saveSettings } from "@/lib/db/settings"
 import { useSettingsStore } from "@/stores/settings"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS, type PetSettings } from "@/types/pet"
 import { z } from "zod"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { getDb } from "@/lib/db/schema"
 
 // Secondary windows have no account cipher. Project the display preferences;
@@ -224,7 +224,7 @@ export async function updatePetSettings(
   updater: PetSettingsUpdater,
   deps?: Partial<PetSettingsSyncDeps>
 ): Promise<PetSettings> {
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   if (!deps && (role === "overlay" || role === "popup"))
     throw new Error("Pet preferences must be saved by the main window")
   const base = resolveDeps(deps)
@@ -268,7 +268,7 @@ export function updateDesktopPetSettings(
   defaults: NonNullable<PetSettings["desktopPet"]>,
   deps?: Partial<PetSettingsSyncDeps>
 ): Promise<PetSettings> {
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   if (!deps && (role === "overlay" || role === "popup")) {
     const current = secondaryPresentation
     if (!current) return Promise.reject(new Error("Pet presentation is not ready"))
@@ -358,7 +358,7 @@ export function startPetSettingsFollower(deps?: Partial<PetSettingsSyncDeps>): (
   const channel = d.openChannel(PET_SETTINGS_CHANNEL)
   if (!channel) return () => {}
   let disposed = false
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   const secondary = role === "overlay" || role === "popup"
   let mainRealm: string | undefined,
     latestRevision = 0

@@ -46,7 +46,7 @@ import { useTranslations } from "next-intl"
 
 import { extractCallback } from "@/lib/logto/extract-callback"
 import { isDevLocalAccountEnabled } from "@/lib/accounts/dev-auto-unlock"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import { detectHostProfile, type HostProfile } from "@/lib/platform/capabilities"
 import { platformSignInDrivers } from "@/lib/logto/platform-drivers"
 import { LogtoSignInCancelled } from "@/lib/logto/capacitor-drivers"
@@ -208,7 +208,7 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     // which comes back without the link's `#k=` key.
     isShareViewerRoute(pathname) ||
     (pathname ? UNGATED_PATHS.some((prefix) => pathname.startsWith(prefix)) : false) ||
-    isSecondaryOverlayRole(getPetWindowRole())
+    isSecondaryOverlayRole(getWindowRole())
 
   const explain = useCallback(
     (cause: unknown): string => {

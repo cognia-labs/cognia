@@ -3,7 +3,7 @@
 import { NavBadgeProbes } from "@/components/shell/nav-badge-probes"
 import { useAppAttentionCount, useAppBadge } from "@/hooks/desktop/use-app-badge"
 import { useWindowTitle } from "@/hooks/desktop/use-window-title"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 
 /**
  * Headless initializer that keeps the OS / document window title in sync with

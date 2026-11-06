@@ -58,8 +58,8 @@ function renderLiveness() {
 }
 
 let mockPetRole: "main" | "web" | "overlay" | "popup" | "island" | "selection-toolbar" = "main"
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => mockPetRole,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => mockPetRole,
   isSecondaryOverlayRole: (role: string) =>
     role === "overlay" || role === "popup" || role === "island" || role === "selection-toolbar",
 }))

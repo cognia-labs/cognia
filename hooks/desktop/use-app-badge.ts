@@ -44,7 +44,7 @@ import { detectDesktopOsFamily } from "@/lib/platform/os"
 import { badgeIconSize, readBadgeColors, renderTaskbarBadge } from "@/lib/shell/taskbar-badge"
 import type { NavBadgeCounts } from "@/lib/shell/nav-badges"
 import { isTauri } from "@/lib/tauri"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { useSettingsStore } from "@/stores/settings"
 
 const log = loggers.ui

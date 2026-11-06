@@ -17,7 +17,7 @@ jest.mock("@/components/shell/nav-badge-probes", () => ({
 }))
 
 const isMainMock = jest.fn(() => true)
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: () => isMainMock() }))
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: () => isMainMock() }))
 
 beforeEach(() => {
   useWindowTitleMock.mockClear()

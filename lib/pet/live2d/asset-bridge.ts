@@ -4,7 +4,7 @@ import { z } from "zod"
 import type { PetModelRow } from "@/lib/db/pet-models"
 import type { Live2dSkinAsset } from "@/lib/pet/skin-assets"
 import { getPetSkinRuntime } from "@/lib/pet/skin-runtime"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { MAX_MODEL_BYTES } from "./constants"
 
 const CHANNEL = "cognia:pet:live2d-assets:v1"
@@ -95,7 +95,7 @@ function decodeEntries(value: unknown): Live2dSkinAsset["entries"] | undefined {
 }
 
 export function isLive2dAssetMirror(): boolean {
-  const role = getPetWindowRole()
+  const role = getWindowRole()
   return role === "overlay" || role === "popup"
 }
 

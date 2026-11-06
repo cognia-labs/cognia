@@ -2392,6 +2392,17 @@
       ]
     },
     {
+      "key": "lib/pet/slash-command.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
       "key": "lib/placement/authority-host.ts",
       "owner": "lib/placement",
       "note": "",
@@ -3873,17 +3884,6 @@
       "note": "",
       "imports": [
         "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
-      "key": "lib/slash-commands/actions/pet.ts",
-      "owner": "lib/slash-commands",
-      "note": "",
-      "imports": [
-        "dynamic"
       ],
       "stores": [
         "stores/settings/index.ts"

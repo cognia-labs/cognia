@@ -110,7 +110,7 @@ jest.mock("@/lib/chat/start-session", () => ({
   startNewSession: (...args: unknown[]) => startNewSessionMock(...args),
 }))
 const isMainAppWindowMock = jest.fn(() => true)
-jest.mock("@/lib/pet/window-role", () => ({
+jest.mock("@/lib/platform/window-role", () => ({
   isMainAppWindow: () => isMainAppWindowMock(),
 }))
 const requestOpenSettings = jest.fn()

@@ -39,7 +39,7 @@ import { spliceToken } from "@/components/chat/composer-trigger"
 import { useRemoteDocStaging, type RemoteDocStagingItem } from "@/hooks/chat/use-remote-doc-staging"
 import type { AttachmentCitations } from "@/lib/chat/mentions/attachment-citations"
 import type { ContextRef } from "@/lib/chat/mentions/types"
-import { showMainWindow } from "@/lib/tauri/pet-window"
+import { showMainWindow } from "@/lib/tauri/overlay-windows"
 import {
   attachmentToFiles,
   type ComposerAttachment,

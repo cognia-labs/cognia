@@ -18,7 +18,7 @@
 
 import type { PetEventKind } from "@/types/pet"
 import type { Platform } from "@/lib/platform/detect"
-import type { PetWindowRole } from "@/lib/pet/window-role"
+import type { WindowRole } from "@/lib/platform/window-role"
 import type { PetProfile } from "@/types/pet"
 import { emitPetEvent } from "@/lib/pet/events/pet-event-bus"
 import { getPetItem } from "@/lib/pet/economy/item-catalog"
@@ -130,7 +130,7 @@ export interface PetAccessDeps {
   now?: () => number
   /** `PetSettings.enabled`. Defaults to the live settings store. */
   isEnabled?: () => boolean
-  role?: PetWindowRole
+  role?: WindowRole
   platform?: Platform
   rateLimiter?: { check: (subjectKey: string, operation: string) => void }
   emit?: typeof emitPetEvent

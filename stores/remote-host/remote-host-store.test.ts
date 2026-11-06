@@ -2,8 +2,8 @@
  * @jest-environment jsdom
  */
 
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: jest.fn(() => true) }))
-import { isMainAppWindow } from "@/lib/pet/window-role"
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: jest.fn(() => true) }))
+import { isMainAppWindow } from "@/lib/platform/window-role"
 
 const mockSaveRemoteHostCredential = jest.fn(async (..._args: unknown[]) => undefined)
 const mockLoadRemoteHostCredential = jest.fn(async (..._args: unknown[]) => null)

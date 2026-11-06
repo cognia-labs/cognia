@@ -44,7 +44,7 @@ jest.mock("@/lib/island/client", () => ({ sendIslandFocusRow: jest.fn() }))
 jest.mock("@/lib/island/focus-request", () => ({ requestIslandFocus: jest.fn() }))
 jest.mock("@/lib/island/projection-store", () => ({ getIslandProjection: jest.fn() }))
 jest.mock("@/lib/notifications/center-request", () => ({ requestNotificationCenter: jest.fn() }))
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: jest.fn() }))
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: jest.fn() }))
 jest.mock("@/lib/plugin/commands/registry", () => ({
   executeCommand: jest.fn(),
   getCommand: jest.fn(),
@@ -92,7 +92,7 @@ import { sendIslandFocusRow } from "@/lib/island/client"
 import { requestIslandFocus } from "@/lib/island/focus-request"
 import { getIslandProjection } from "@/lib/island/projection-store"
 import { requestNotificationCenter } from "@/lib/notifications/center-request"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { executeCommand, getCommand } from "@/lib/plugin/commands/registry"
 import { runGlancePluginAction } from "@/lib/glance/plugin-actions"
 import { isTauri } from "@/lib/tauri"
@@ -353,7 +353,7 @@ describe("executeGlanceRequest", () => {
       ["scheduler", "app:t 1", "/scheduler?item=app%3At%201"],
       ["connectivity", undefined, "/settings?section=connectivity"],
       ["conversations", undefined, "/conversations"],
-      ["pet", undefined, "/pet"],
+      ["pet", undefined, "/settings?section=pet"],
       ["tray-actions", undefined, "/settings?section=desktop"],
       ["fleet", undefined, "/agent-runs"],
     ] as const)(
@@ -383,14 +383,14 @@ describe("executeGlanceRequest", () => {
     it("still navigates when focusing the window throws", async () => {
       windowShow.mockRejectedValue(new Error("no window"))
       await expect(run(request({ kind: "open-owner", owner: "pet" }))).resolves.toBeNull()
-      expect(navigate).toHaveBeenCalledWith("/pet")
+      expect(navigate).toHaveBeenCalledWith("/settings?section=pet")
     })
 
     it("does not touch the window outside Tauri", async () => {
       isTauriMock.mockReturnValue(false)
       await run(request({ kind: "open-owner", owner: "pet" }))
       expect(getCurrentWindowMock).not.toHaveBeenCalled()
-      expect(navigate).toHaveBeenCalledWith("/pet")
+      expect(navigate).toHaveBeenCalledWith("/settings?section=pet")
     })
   })
 

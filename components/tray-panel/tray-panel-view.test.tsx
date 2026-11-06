@@ -17,8 +17,10 @@ jest.mock("next-intl", () => {
   }
 })
 
-jest.mock("@/lib/pet/reveal", () => ({ schedulePetWindowReveal: jest.fn(() => () => {}) }))
-jest.mock("@/lib/tauri/pet-window", () => ({ showMainWindow: jest.fn() }))
+jest.mock("@/lib/tauri/overlay-reveal", () => ({
+  scheduleOverlayWindowReveal: jest.fn(() => () => {}),
+}))
+jest.mock("@/lib/tauri/overlay-windows", () => ({ showMainWindow: jest.fn() }))
 jest.mock("@/lib/tauri/tray-panel", () => ({
   closeTrayPanel: jest.fn().mockResolvedValue(true),
   onTrayPanelResult: jest.fn(),
@@ -33,7 +35,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { useGlanceConsumer } from "@/hooks/glance/use-glance-consumer"
 import { DEFAULT_GLANCE_PANEL_SETTINGS } from "@/lib/glance/presets"
 import type { GlanceFleetSlice, GlanceSnapshotV1 } from "@/lib/glance/snapshot"
-import { showMainWindow } from "@/lib/tauri/pet-window"
+import { showMainWindow } from "@/lib/tauri/overlay-windows"
 import {
   closeTrayPanel,
   onTrayPanelResult,

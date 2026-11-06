@@ -35,8 +35,8 @@ jest.mock("@/lib/platform/detect", () => ({
   isTauri: () => true,
   isCapacitor: () => false,
 }))
-jest.mock("@/lib/pet/window-role", () => ({
-  getPetWindowRole: () => null,
+jest.mock("@/lib/platform/window-role", () => ({
+  getWindowRole: () => null,
   isSecondaryOverlayRole: () => false,
 }))
 jest.mock("@/stores/settings", () => ({

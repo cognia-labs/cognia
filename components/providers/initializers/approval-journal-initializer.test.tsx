@@ -23,7 +23,7 @@ jest.mock("@/stores/agent/approval-journal-store", () => ({
 jest.mock("@/lib/notifications/runtime", () => ({
   notify: (...args: unknown[]) => notify(...(args as [NotificationInput])),
 }))
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: () => mainWindow }))
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: () => mainWindow }))
 
 import { ApprovalJournalInitializer } from "./approval-journal-initializer"
 

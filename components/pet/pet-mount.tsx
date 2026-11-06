@@ -20,7 +20,7 @@ import { ensurePetAccountId } from "@/lib/pet/bones/account-id"
 import { ensurePetProfile } from "@/lib/pet/runtime/init-pet"
 import { registerPetCommands } from "@/lib/pet/commands"
 import { notifyPetInteractionUnavailable } from "@/lib/pet/access/notify-unavailable"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { isPetAvailable } from "@/lib/pet/access/availability"
 import { overlayWindowSize } from "@/lib/pet/overlay-geometry"
 import {
@@ -54,7 +54,7 @@ export function PetMount() {
   // and the user's setting) belongs to `resolvePetAvailability`, so the command
   // registry, the agent tools, and the access gate answer it exactly the way
   // this mount does. Getting it wrong in a secondary window double-awards XP.
-  const role = useMemo(() => getPetWindowRole(), [])
+  const role = useMemo(() => getWindowRole(), [])
   const platform = usePlatform()
 
   const petEnabled = isPetAvailable({ enabled, role, platform })

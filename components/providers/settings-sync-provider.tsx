@@ -7,7 +7,7 @@ import { useAccountStore } from "@/stores/account/account-store"
 import { writeAccountTheme } from "@/lib/appearance/lock-screen-preferences"
 import type { AppFontScale, AppTheme } from "@cognia/agent-config-types"
 import { applyZoom, DEFAULT_ZOOM } from "@/lib/tauri/webview-zoom"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 
 const FONT_SIZE_PX: Record<AppFontScale, number> = {
   xs: 14,
@@ -71,7 +71,7 @@ export function SettingsSyncProvider({ children }: { children: React.ReactNode }
     // so their `setTheme("system")` flipped the main window from the
     // account's dark mode to light a few seconds after every launch. Those
     // windows already track the main window's mode through that same key.
-    const role = getPetWindowRole()
+    const role = getWindowRole()
     const ownsWindowTheme = role === "main" || role === "web"
 
     // next-themes' shared key may describe a different account. Keep this

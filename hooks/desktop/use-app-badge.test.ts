@@ -15,7 +15,7 @@ jest.mock("@/lib/tauri", () => ({
   ...jest.requireActual<typeof import("@/lib/tauri")>("@/lib/tauri"),
   isTauri: jest.fn(() => false),
 }))
-jest.mock("@/lib/pet/window-role", () => ({ isMainAppWindow: jest.fn(() => true) }))
+jest.mock("@/lib/platform/window-role", () => ({ isMainAppWindow: jest.fn(() => true) }))
 
 const warnMock = jest.fn()
 jest.mock("@cognia/logging", () => ({
@@ -87,7 +87,7 @@ import {
 import { __resetNavBadgesForTests, setNavBadgeSourceCount } from "@/lib/shell/nav-badges"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { isTauri } from "@/lib/tauri"
-import { isMainAppWindow } from "@/lib/pet/window-role"
+import { isMainAppWindow } from "@/lib/platform/window-role"
 import { detectDesktopOsFamily } from "@/lib/platform/os"
 
 const isTauriMock = isTauri as jest.Mock

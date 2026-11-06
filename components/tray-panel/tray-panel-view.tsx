@@ -57,7 +57,7 @@ import { withEditedEntries, withPreset } from "@/lib/glance/layout-edit"
 import { DEFAULT_GLANCE_PANEL_SETTINGS } from "@/lib/glance/presets"
 import type { GlanceRequestBody } from "@/lib/glance/requests"
 import { GLANCE_SNAPSHOT_VERSION, type GlanceSnapshotV1 } from "@/lib/glance/snapshot"
-import { schedulePetWindowReveal } from "@/lib/pet/reveal"
+import { scheduleOverlayWindowReveal } from "@/lib/tauri/overlay-reveal"
 import {
   closeTrayPanel,
   onTrayPanelResult,
@@ -210,7 +210,7 @@ export function TrayPanelView() {
   // Reveal only AFTER the first painted frame: Rust creates the window hidden
   // so the user never sees the pre-hydration opaque background. Focus so the
   // native blur-to-close arms and the keyboard works immediately.
-  useEffect(() => schedulePetWindowReveal({ focus: true }), [])
+  useEffect(() => scheduleOverlayWindowReveal({ focus: true }), [])
 
   // A native re-show reuses this webview, so the reset hangs off the event.
   useEffect(() => {

@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageLoading } from "@/components/ui/loading-states"
 import { isCapacitor } from "@/lib/tauri"
-import { getPetWindowRole, isSecondaryOverlayRole } from "@/lib/pet/window-role"
+import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import { downloadFile } from "@/lib/files/download"
 import { readLockScreenPreferences } from "@/lib/appearance/lock-screen-preferences"
 import { PASSWORD_MIN_LENGTH } from "@/lib/accounts/password-policy"
@@ -255,7 +255,7 @@ export function AccountGate({ children, guestView }: AccountGateProps) {
   // and pointless. Pass through so the sprite always paints. Placed after the
   // `loaded` gate for the same server/first-client hydration agreement as the
   // `isTauri()` passthrough above (role reads Tauri internals post-hydration).
-  const petRole = getPetWindowRole()
+  const petRole = getWindowRole()
   if (isSecondaryOverlayRole(petRole)) {
     return <>{children}</>
   }

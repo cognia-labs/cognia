@@ -39,7 +39,7 @@ import type {
  * `Transport` has `call` and `subscribe` and deliberately no emit, because
  * every other caller is talking to a runtime rather than a window. The import
  * is dynamic so `@tauri-apps/api/event` stays out of the browser and mobile
- * bundles, exactly as `lib/usage-dock/client.ts` and `lib/pet/reveal.ts` do.
+ * bundles, exactly as `lib/usage-dock/client.ts` and `lib/tauri/overlay-reveal.ts` do.
  */
 async function emitToWindow(label: string, event: string, payload: unknown): Promise<boolean> {
   if (!isTauri()) return false

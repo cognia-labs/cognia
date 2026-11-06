@@ -40,7 +40,7 @@ import {
   hostAdvertisesPetRemoteCare,
 } from "@/lib/pet/console/console-mode"
 import { useActiveHostSupportsFeature } from "@/stores/remote-host/remote-host-store"
-import { getPetWindowRole } from "@/lib/pet/window-role"
+import { getWindowRole } from "@/lib/platform/window-role"
 import { navItemForPath } from "@/lib/shell/sidebar-nav"
 import { isTauri } from "@/lib/tauri"
 import { useChatStore } from "@/stores/chat"
@@ -86,7 +86,7 @@ export function useGlobalSearchContext({
   // The structural question only (host + window role): summoning the pet from
   // the palette switches it on, so its current setting must not hide the way.
   const petHostAvailable = useMemo(
-    () => isPetAvailable({ enabled: true, role: getPetWindowRole(), platform }),
+    () => isPetAvailable({ enabled: true, role: getWindowRole(), platform }),
     [platform]
   )
   // The console also opens where it can care for a paired desktop's pet
