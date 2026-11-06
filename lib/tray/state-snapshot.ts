@@ -17,7 +17,7 @@
 
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { listen } from "@tauri-apps/api/event"
 import { useLiveQuery } from "dexie-react-hooks"
 import { useChatStore } from "@/stores/chat"
@@ -29,7 +29,7 @@ import { isTauri } from "@/lib/tauri"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { isMainAppWindow } from "@/lib/platform/window-role"
 import { detectDesktopOsFamily } from "@/lib/platform/os"
-import { useTopic } from "@/hooks/use-topic"
+import { readTopic, subscribeTopic } from "@/lib/runtime/topics"
 import type { PetStatusTopic } from "@/types/pet/events"
 
 import { onAutostartChanged } from "./autostart-control"
@@ -43,6 +43,9 @@ const ACTIVITY_WINDOW_MS = 8_000
 function detectOs(): TrayStateSnapshot["platform"]["os"] {
   return detectDesktopOsFamily()
 }
+
+const subscribePetStatus = (onChange: () => void) => subscribeTopic("pet.status", onChange)
+const readPetStatus = () => readTopic("pet.status")
 
 /**
  * The pet's quick-glance stats from its `pet.status` topic (ADR-0250 §14),
@@ -114,7 +117,8 @@ export function useTrayStateSnapshot(): TrayStateSnapshot {
   // Desktop-pet quick-glance stats, from the pet's `pet.status` topic: the
   // pet decays its needs with the same `computePetView` its console shows, so
   // the tray never disagrees, and gates them on `PetSettings.enabled` itself.
-  const petStatus = useTopic("pet.status")
+  // Read straight off the topic bus: a `lib/` hook does not import `hooks/`.
+  const petStatus = useSyncExternalStore(subscribePetStatus, readPetStatus, readPetStatus)
   const pet = useMemo(() => snapshotPetStats(petStatus), [petStatus])
 
   // OS launch-at-login state. Read once on mount, then kept fresh by the
