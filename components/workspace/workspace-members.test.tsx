@@ -178,7 +178,11 @@ describe("WorkspaceMembers", () => {
       localAccountId: getActiveAccountId(),
       orgId: ORG,
       userId: "usr_ada",
-      client: client as unknown as CurrentCollabContext["client"],
+      // The ownerless-conversations section reads on mount for an org admin.
+      client: {
+        listOwnerlessSessions: jest.fn(async () => []),
+        ...client,
+      } as unknown as CurrentCollabContext["client"],
     }
     return {
       resolveContext: async () => context,

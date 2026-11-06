@@ -11,7 +11,7 @@ use crate::chat::{
     authorize_session_action, SessionAction, SessionEvent, SessionMembership, SessionRole,
     SessionStatus, SharedSession, ToolDetail,
 };
-use crate::store::{PgStore, StoreError};
+use crate::store::{AuthorizationAuditEvent, AuthorizationContext, PgStore, StoreError};
 
 #[derive(Debug, Clone)]
 pub struct NewSharedSession {
@@ -73,6 +73,40 @@ pub struct NewChatRunLease {
     pub heartbeat_expires_at: i64,
     pub now: i64,
     pub operation_id: String,
+}
+
+/// A session no current member owns, as an org owner or admin sees it
+/// (plan §7, F4): metadata only, never its title or content.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerlessSession {
+    pub session_id: String,
+    pub workspace_id: String,
+    pub status: SessionStatus,
+    pub created_by_user_id: String,
+    pub member_count: usize,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl OwnerlessSession {
+    fn of(session: &SharedSession, member_count: usize) -> Self {
+        Self {
+            session_id: session.id.clone(),
+            workspace_id: session.workspace_id.clone(),
+            status: session.status,
+            created_by_user_id: session.created_by_user_id.clone(),
+            member_count,
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+        }
+    }
+}
+
+/// Most recently changed first, so a session vacated by today's offboarding
+/// leads the list.
+fn sort_ownerless(sessions: &mut [OwnerlessSession]) {
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.session_id.cmp(&b.session_id)));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -475,6 +509,19 @@ pub trait ChatStore: Send + Sync {
         &self,
         input: NewBreakGlassGrant,
     ) -> Result<BreakGlassGrant, StoreError>;
+    /// Sessions in the org that no member currently owns; deleting ones are
+    /// skipped.
+    async fn list_ownerless_sessions(&self, org_id: &str) -> Result<Vec<OwnerlessSession>, StoreError>;
+    /// Make `user_id` the owner of a session nobody owns, under the session
+    /// lock. `Conflict` when a member owns it again, `Policy` when the caller's
+    /// standing may not be granted Owner.
+    async fn reclaim_session_ownership(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        user_id: &str,
+        now: i64,
+    ) -> Result<SessionMembership, StoreError>;
     async fn valid_break_glass_grant(
         &self,
         org_id: &str,
@@ -634,6 +681,7 @@ impl InMemoryChatStore {
         let mut keys: Vec<_> = self.tables.read().chat.memberships.keys().cloned().collect();
         keys.sort();
         let mut report = crate::standing_audit::StandingAudit::default();
+        let context = crate::standing_audit::operator_context(now);
         for batch in keys.chunks(batch_size) {
             let mut tables = self.tables.write();
             for (session_id, user_id) in batch {
@@ -641,7 +689,7 @@ impl InMemoryChatStore {
                 let org = tables.chat.sessions.get(session_id).ok_or(StoreError::NotFound)?.org_id.clone();
                 let effective = memory_member(&tables, &org, session_id, user_id);
                 if report.record(&org, &member, effective.as_ref()) && apply
-                    && memory_cleanup_member(&mut tables, &org, session_id, user_id, false, false, now) {
+                    && memory_cleanup_member(&mut tables, &org, session_id, user_id, false, false, &context) {
                     report.applied += 1;
                 }
             }
@@ -871,7 +919,7 @@ pub(crate) async fn pg_lock_invite_standing(tx: &tokio_postgres::Transaction<'_>
 
 pub(crate) fn memory_cleanup_standing(
     tables: &mut crate::store::Tables, org_id: &str, workspace_id: Option<&str>,
-    user_id: &str, remove: bool, now: i64,
+    user_id: &str, remove: bool, context: &AuthorizationContext,
 ) -> Vec<String> {
     // Only org offboarding uses remove=true and includes session-only Guests.
     // Workspace changes and legacy audits preserve Guest memberships.
@@ -882,18 +930,20 @@ pub(crate) fn memory_cleanup_standing(
     ids.sort();
     // Untouched when the standing still yields the same membership: no revision
     // bump and no ticket revocation for someone who lost nothing.
-    ids.into_iter().filter(|id| memory_cleanup_member(tables, org_id, id, user_id, remove, false, now)).collect()
+    ids.into_iter().filter(|id| memory_cleanup_member(tables, org_id, id, user_id, remove, false, context)).collect()
 }
 
 fn memory_cleanup_member(
     tables: &mut crate::store::Tables, org_id: &str, session_id: &str,
-    user_id: &str, remove: bool, touch_unchanged: bool, now: i64,
+    user_id: &str, remove: bool, touch_unchanged: bool, context: &AuthorizationContext,
 ) -> bool {
+    let now = context.now;
     let key = (session_id.to_owned(), user_id.to_owned());
     let Some(current) = tables.chat.memberships.get(&key).filter(|m| remove || !m.guest).cloned() else { return false };
     let effective = if remove { None } else { memory_member(tables, org_id, session_id, user_id) };
     if !touch_unchanged && effective.as_ref() == Some(&current) { return false; }
     let removed = effective.is_none();
+    let lost = lost_ownership(&current, effective.as_ref());
     match effective {
         Some(mut member) => {
             member.updated_at = now;
@@ -913,12 +963,123 @@ fn memory_cleanup_member(
             }
         }
     }
+    if lost {
+        memory_keep_session_owner(tables, org_id, session_id, user_id, context);
+    }
     true
+}
+
+/// True when a standing change took ownership away from this member.
+fn lost_ownership(stored: &SessionMembership, effective: Option<&SessionMembership>) -> bool {
+    stored.role == SessionRole::Owner && effective.is_none_or(|member| member.role != SessionRole::Owner)
+}
+
+/// What a session that lost its last effective owner does next (plan §7, F4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OwnerPlan {
+    /// Another member still owns it; nothing changes.
+    Owned,
+    /// Ownership passes to this member, who held `previous` until now.
+    Heir { user_id: String, previous: SessionRole },
+    /// Nobody may be granted Owner: the session waits for an org owner or
+    /// admin to reclaim it.
+    Vacant,
+}
+
+/// Decide who keeps a session owned once a standing change has removed or
+/// capped an owner. `members` are the stored rows with each holder's current
+/// workspace standing. The heir is a non-guest whose standing may be granted
+/// Owner (a workspace maintainer, or an org owner or admin), so succession
+/// never grants more than a manager could: highest session role first, then
+/// the longest-standing member, then user id.
+pub(crate) fn owner_plan(
+    members: &[(SessionMembership, Option<cognia_tenant_auth::membership::EffectiveWorkspaceAccess>)],
+) -> OwnerPlan {
+    let effective: Vec<_> = members.iter()
+        .filter_map(|(member, standing)| crate::chat::cap_session_member(member.clone(), *standing).map(|capped| (capped, *standing)))
+        .collect();
+    if effective.iter().any(|(member, _)| member.role == SessionRole::Owner) {
+        return OwnerPlan::Owned;
+    }
+    effective.iter()
+        .filter(|(member, standing)| !member.guest && grant_role_allowed(*standing, SessionRole::Owner, false))
+        .max_by(|(a, _), (b, _)| crate::chat::session_role_rank(a.role).cmp(&crate::chat::session_role_rank(b.role))
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| b.user_id.cmp(&a.user_id)))
+        .map_or(OwnerPlan::Vacant, |(member, _)| OwnerPlan::Heir { user_id: member.user_id.clone(), previous: member.role })
+}
+
+/// The audit row for a succession or a vacancy, in the standing change's own
+/// context (actor, reason, request).
+pub(crate) fn owner_plan_audit(
+    org_id: &str, workspace_id: &str, session_id: &str, departed_user_id: &str,
+    plan: &OwnerPlan, context: &AuthorizationContext,
+) -> Option<AuthorizationAuditEvent> {
+    let (action, target, old_role, new_role) = match plan {
+        OwnerPlan::Owned => return None,
+        OwnerPlan::Heir { user_id, previous } => ("session.ownership.succeeded", user_id.as_str(), previous.as_str(), Some("owner".to_owned())),
+        OwnerPlan::Vacant => ("session.ownership.vacated", departed_user_id, "owner", None),
+    };
+    Some(AuthorizationAuditEvent {
+        id: format!("aud_{}", uuid::Uuid::new_v4().simple()),
+        org_id: org_id.to_owned(),
+        workspace_id: Some(workspace_id.to_owned()),
+        actor_user_id: context.actor_user_id.clone(),
+        target_user_id: Some(target.to_owned()),
+        invitation_id: None,
+        action: action.to_owned(),
+        old_role: Some(old_role.to_owned()),
+        new_role,
+        reason: context.reason.clone(),
+        request_id: context.request_id.clone(),
+        grant_id: context.grant_id.clone(),
+        source: serde_json::json!({
+            "resourceType": "chat_session",
+            "resourceId": session_id,
+            "departedUserId": departed_user_id,
+            "allowed": true,
+        }),
+        created_at: context.now,
+    })
+}
+
+fn memory_members_with_standing(
+    tables: &crate::store::Tables, org_id: &str, session: &SharedSession,
+) -> Vec<(SessionMembership, Option<cognia_tenant_auth::membership::EffectiveWorkspaceAccess>)> {
+    let mut members: Vec<_> = tables.chat.memberships.values()
+        .filter(|member| member.session_id == session.id)
+        .map(|member| (member.clone(), memory_standing(tables, org_id, &session.workspace_id, &member.user_id)))
+        .collect();
+    members.sort_by(|(a, _), (b, _)| a.user_id.cmp(&b.user_id));
+    members
+}
+
+fn memory_keep_session_owner(
+    tables: &mut crate::store::Tables, org_id: &str, session_id: &str, departed_user_id: &str,
+    context: &AuthorizationContext,
+) {
+    let Some(session) = tables.chat.sessions.get(session_id).cloned() else { return };
+    let workspace_id = session.workspace_id.clone();
+    let plan = owner_plan(&memory_members_with_standing(tables, org_id, &session));
+    if let OwnerPlan::Heir { user_id, .. } = &plan {
+        if let Some(member) = tables.chat.memberships.get_mut(&(session_id.to_owned(), user_id.clone())) {
+            member.role = SessionRole::Owner;
+            member.approver = true;
+            member.updated_at = context.now;
+        }
+        if let Some(session) = tables.chat.sessions.get_mut(session_id) {
+            session.policy_revision += 1;
+            session.updated_at = context.now;
+        }
+    }
+    if let Some(event) = owner_plan_audit(org_id, &workspace_id, session_id, departed_user_id, &plan, context) {
+        tables.authorization_audit.push(event);
+    }
 }
 
 pub(crate) async fn pg_cleanup_standing(
     tx: &tokio_postgres::Transaction<'_>, org_id: &str, workspace_id: Option<&str>,
-    user_id: &str, remove: bool, now: i64,
+    user_id: &str, remove: bool, context: &AuthorizationContext,
 ) -> Result<Vec<String>, StoreError> {
     // Lock the entire affected set before deleting any membership, always in
     // session-id order, matching invite acceptance and queue claim.
@@ -928,7 +1089,7 @@ pub(crate) async fn pg_cleanup_standing(
         let id: String = row.get(0);
         // Untouched when the standing still yields the same membership: no
         // revision bump and no ticket revocation for someone who lost nothing.
-        if pg_cleanup_member(tx, org_id, &id, user_id, remove, false, now).await? {
+        if pg_cleanup_member(tx, org_id, &id, user_id, remove, false, context).await? {
             affected.push(id);
         }
     }
@@ -937,8 +1098,9 @@ pub(crate) async fn pg_cleanup_standing(
 
 pub(crate) async fn pg_cleanup_member(
     tx: &tokio_postgres::Transaction<'_>, org_id: &str, session_id: &str,
-    user_id: &str, remove: bool, touch_unchanged: bool, now: i64,
+    user_id: &str, remove: bool, touch_unchanged: bool, context: &AuthorizationContext,
 ) -> Result<bool, StoreError> {
+    let now = context.now;
     let row = tx.query_opt(&format!("SELECT {MEMBER_COLUMNS}, om.role AS org_role, wm.role AS workspace_role {MEMBER_JOINS} WHERE m.org_id=$1 AND m.session_id=$2 AND m.user_id=$3 AND ($4 OR NOT m.guest)"), &[&org_id,&session_id,&user_id,&remove]).await.map_err(|e| StoreError::Database(e.to_string()))?;
     let Some(row) = row else { return Ok(false) };
     let current = member_from_row(&row)?;
@@ -957,7 +1119,39 @@ pub(crate) async fn pg_cleanup_member(
     if effective.is_none() {
         tx.execute("UPDATE chat_session_invites SET status='revoked' WHERE org_id=$1 AND session_id=$2 AND created_by_user_id=$3 AND status='pending'", &[&org_id,&session_id,&user_id]).await.map_err(|e| StoreError::Database(e.to_string()))?;
     }
+    if lost_ownership(&current, effective.as_ref()) {
+        pg_keep_session_owner(tx, org_id, session_id, user_id, context).await?;
+    }
     Ok(true)
+}
+
+/// Every member of a session with their current standing. The caller holds
+/// the session row lock.
+async fn pg_members_with_standing(
+    tx: &tokio_postgres::Transaction<'_>, org_id: &str, session_id: &str,
+) -> Result<Vec<(SessionMembership, Option<cognia_tenant_auth::membership::EffectiveWorkspaceAccess>)>, StoreError> {
+    let rows = tx.query(&format!("SELECT {MEMBER_COLUMNS}, om.role AS org_role, wm.role AS workspace_role {MEMBER_JOINS} WHERE m.org_id=$1 AND m.session_id=$2 ORDER BY m.user_id"), &[&org_id, &session_id])
+        .await.map_err(|e| StoreError::Database(e.to_string()))?;
+    rows.iter().map(|row| Ok((member_from_row(row)?, standing_from_row(row)?))).collect()
+}
+
+async fn pg_keep_session_owner(
+    tx: &tokio_postgres::Transaction<'_>, org_id: &str, session_id: &str, departed_user_id: &str,
+    context: &AuthorizationContext,
+) -> Result<(), StoreError> {
+    let workspace_id: String = tx.query_one("SELECT workspace_id FROM chat_sessions WHERE org_id=$1 AND id=$2", &[&org_id, &session_id])
+        .await.map_err(|e| StoreError::Database(e.to_string()))?.get(0);
+    let plan = owner_plan(&pg_members_with_standing(tx, org_id, session_id).await?);
+    if let OwnerPlan::Heir { user_id, .. } = &plan {
+        tx.execute("UPDATE chat_session_memberships SET role='owner',approver=true,updated_at=$4 WHERE org_id=$1 AND session_id=$2 AND user_id=$3", &[&org_id, &session_id, user_id, &context.now])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?;
+        tx.execute("UPDATE chat_sessions SET policy_revision=policy_revision+1,updated_at=$3 WHERE org_id=$1 AND id=$2", &[&org_id, &session_id, &context.now])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?;
+    }
+    if let Some(event) = owner_plan_audit(org_id, &workspace_id, session_id, departed_user_id, &plan, context) {
+        crate::store::insert_authorization_audit(tx, &event).await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn pg_revoke_member_work(
@@ -2218,6 +2412,58 @@ impl ChatStore for InMemoryChatStore {
         Ok(grant)
     }
 
+    async fn list_ownerless_sessions(&self, org_id: &str) -> Result<Vec<OwnerlessSession>, StoreError> {
+        let tables = self.tables.read();
+        let mut ownerless: Vec<_> = tables.chat.sessions.values()
+            .filter(|session| session.org_id == org_id && session.status != SessionStatus::Deleting)
+            .filter_map(|session| {
+                let members = memory_members_with_standing(&tables, org_id, session);
+                (owner_plan(&members) != OwnerPlan::Owned).then(|| OwnerlessSession::of(session, members.len()))
+            })
+            .collect();
+        sort_ownerless(&mut ownerless);
+        Ok(ownerless)
+    }
+
+    async fn reclaim_session_ownership(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        user_id: &str,
+        now: i64,
+    ) -> Result<SessionMembership, StoreError> {
+        let mut tables = self.tables.write();
+        let session = tables.chat.sessions.get(session_id)
+            .filter(|session| session.org_id == org_id && session.status != SessionStatus::Deleting)
+            .cloned()
+            .ok_or(StoreError::NotFound)?;
+        admission::memory_chat(&tables, org_id, session_id, FeatureKey::SharedChat, Requirement::Write)?;
+        if owner_plan(&memory_members_with_standing(&tables, org_id, &session)) == OwnerPlan::Owned {
+            return Err(StoreError::Conflict(serde_json::json!({"reason": "session_has_owner"})));
+        }
+        if !grant_role_allowed(memory_standing(&tables, org_id, &session.workspace_id, user_id), SessionRole::Owner, false) {
+            return Err(StoreError::Policy("session role exceeds grant ceiling".into()));
+        }
+        let key = (session_id.to_owned(), user_id.to_owned());
+        let existing = tables.chat.memberships.get(&key).cloned();
+        let member = SessionMembership {
+            session_id: session_id.to_owned(),
+            user_id: user_id.to_owned(),
+            role: SessionRole::Owner,
+            approver: true,
+            guest: false,
+            display_name: existing.as_ref().and_then(|member| member.display_name.clone()),
+            created_at: existing.as_ref().map_or(now, |member| member.created_at),
+            updated_at: now,
+        };
+        tables.chat.memberships.insert(key, member.clone());
+        if let Some(session) = tables.chat.sessions.get_mut(session_id) {
+            session.policy_revision += 1;
+            session.updated_at = now;
+        }
+        Ok(member)
+    }
+
     async fn valid_break_glass_grant(
         &self,
         org_id: &str,
@@ -2583,10 +2829,15 @@ const SESSION_COLUMNS: &str = "id, org_id, workspace_id, title, status, created_
 pub(crate) const MEMBER_JOINS: &str = "FROM chat_session_memberships m JOIN chat_sessions s ON s.org_id=m.org_id AND s.id=m.session_id LEFT JOIN users u ON u.id=m.user_id LEFT JOIN org_memberships om ON om.org_id=s.org_id AND om.user_id=m.user_id LEFT JOIN workspace_memberships wm ON wm.org_id=s.org_id AND wm.workspace_id=s.workspace_id AND wm.user_id=m.user_id";
 
 pub(crate) fn effective_member_from_row(row: &Row) -> Result<Option<SessionMembership>, StoreError> {
+    Ok(crate::chat::cap_session_member(member_from_row(row)?, standing_from_row(row)?))
+}
+
+/// The holder's current workspace standing from a `MEMBER_JOINS` row.
+pub(crate) fn standing_from_row(row: &Row) -> Result<Option<cognia_tenant_auth::membership::EffectiveWorkspaceAccess>, StoreError> {
     use cognia_tenant_auth::{OrgRole, WorkspaceRole};
     let org = row.get::<_, Option<String>>("org_role").map(|s| OrgRole::parse(&s).map_err(|e| StoreError::Corrupt(e.to_string()))).transpose()?;
     let workspace = row.get::<_, Option<String>>("workspace_role").map(|s| WorkspaceRole::parse(&s).map_err(|e| StoreError::Corrupt(e.to_string()))).transpose()?;
-    Ok(crate::chat::cap_session_member(member_from_row(row)?, cognia_tenant_auth::membership::resolve_workspace_access(org, workspace)))
+    Ok(cognia_tenant_auth::membership::resolve_workspace_access(org, workspace))
 }
 
 pub(crate) const MEMBER_COLUMNS: &str = "m.session_id, m.user_id, m.role, m.approver, m.guest, u.display_name, m.created_at, m.updated_at";
@@ -3638,6 +3889,61 @@ impl ChatStore for PgStore {
         Ok(break_glass_from_row(&row))
     }
 
+    async fn list_ownerless_sessions(&self, org_id: &str) -> Result<Vec<OwnerlessSession>, StoreError> {
+        let mut client = self.client().await?;
+        let tx = self.scoped(&mut client, org_id).await?;
+        let sessions = tx.query(&format!("SELECT {SESSION_COLUMNS} FROM chat_sessions WHERE org_id=$1 AND status<>'deleting'"), &[&org_id])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?;
+        let rows = tx.query(&format!("SELECT {MEMBER_COLUMNS}, om.role AS org_role, wm.role AS workspace_role {MEMBER_JOINS} WHERE m.org_id=$1 ORDER BY m.session_id, m.user_id"), &[&org_id])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?;
+        let mut members: HashMap<String, Vec<_>> = HashMap::new();
+        for row in &rows {
+            let member = member_from_row(row)?;
+            members.entry(member.session_id.clone()).or_default().push((member, standing_from_row(row)?));
+        }
+        let mut ownerless = Vec::new();
+        for row in &sessions {
+            let session = session_from_row(row)?;
+            let held = members.remove(&session.id).unwrap_or_default();
+            if owner_plan(&held) != OwnerPlan::Owned {
+                ownerless.push(OwnerlessSession::of(&session, held.len()));
+            }
+        }
+        sort_ownerless(&mut ownerless);
+        Ok(ownerless)
+    }
+
+    async fn reclaim_session_ownership(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        user_id: &str,
+        now: i64,
+    ) -> Result<SessionMembership, StoreError> {
+        let mut client = self.client().await?;
+        let tx = self.scoped(&mut client, org_id).await?;
+        let workspace_id: String = tx.query_opt("SELECT workspace_id FROM chat_sessions WHERE org_id=$1 AND id=$2 AND status<>'deleting' FOR UPDATE", &[&org_id, &session_id])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?
+            .ok_or(StoreError::NotFound)?
+            .get(0);
+        self.admit_chat(&tx, org_id, session_id, FeatureKey::SharedChat, Requirement::Write).await?;
+        if owner_plan(&pg_members_with_standing(&tx, org_id, session_id).await?) == OwnerPlan::Owned {
+            return Err(StoreError::Conflict(serde_json::json!({"reason": "session_has_owner"})));
+        }
+        if !pg_grant_allowed(&tx, org_id, session_id, user_id, SessionRole::Owner, false).await? {
+            return Err(StoreError::Policy("session role exceeds grant ceiling".into()));
+        }
+        tx.execute("INSERT INTO chat_session_memberships (org_id,workspace_id,session_id,user_id,role,approver,guest,created_at,updated_at) VALUES ($1,$2,$3,$4,'owner',true,false,$5,$5) ON CONFLICT (session_id,user_id) DO UPDATE SET role='owner',approver=true,guest=false,updated_at=EXCLUDED.updated_at", &[&org_id, &workspace_id, &session_id, &user_id, &now])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?;
+        tx.execute("UPDATE chat_sessions SET policy_revision=policy_revision+1,updated_at=$3 WHERE org_id=$1 AND id=$2", &[&org_id, &session_id, &now])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?;
+        let row = tx.query_one(&format!("SELECT {MEMBER_COLUMNS} FROM chat_session_memberships m LEFT JOIN users u ON u.id=m.user_id WHERE m.org_id=$1 AND m.session_id=$2 AND m.user_id=$3"), &[&org_id, &session_id, &user_id])
+            .await.map_err(|e| StoreError::Database(e.to_string()))?;
+        let member = member_from_row(&row)?;
+        tx.commit().await.map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(member)
+    }
+
     async fn valid_break_glass_grant(
         &self,
         org_id: &str,
@@ -4259,6 +4565,122 @@ mod tests {
             assert_eq!(chat.tables.read().chat.queue["guest-queue"].0.status, "cancelled");
             assert!(chat.visible_session("org_1", "ses_1", "guest").await.unwrap().is_none());
         }
+    }
+
+    fn plan_member(user: &str, role: SessionRole, guest: bool, created_at: i64) -> SessionMembership {
+        SessionMembership {
+            session_id: "ses_1".into(), user_id: user.into(), role, approver: false, guest,
+            display_name: None, created_at, updated_at: created_at,
+        }
+    }
+
+    #[test]
+    fn f4_the_heir_may_be_granted_owner_and_ranks_by_role_then_tenure() {
+        use cognia_tenant_auth::{membership::resolve_workspace_access, OrgRole, WorkspaceRole};
+        let maintainer = resolve_workspace_access(Some(OrgRole::Member), Some(WorkspaceRole::Maintainer));
+        let writer = resolve_workspace_access(Some(OrgRole::Member), Some(WorkspaceRole::Member));
+        let admin = resolve_workspace_access(Some(OrgRole::Admin), None);
+        // An owner row whose holder lost standing does not keep the session owned.
+        let stale_owner = (plan_member("stale", SessionRole::Owner, false, 0), None);
+        assert_eq!(owner_plan(&[stale_owner.clone()]), OwnerPlan::Vacant);
+        assert_eq!(owner_plan(&[(plan_member("owner", SessionRole::Owner, false, 0), writer)]), OwnerPlan::Owned);
+        // A plain workspace writer may own a session they created, but nobody
+        // may grant them Owner, so succession skips them; guests never inherit.
+        assert_eq!(owner_plan(&[
+            stale_owner.clone(),
+            (plan_member("writer", SessionRole::Member, false, 1), writer),
+            (plan_member("guest", SessionRole::Member, true, 1), maintainer),
+        ]), OwnerPlan::Vacant);
+        // Session role first, then the longest-standing member, then user id.
+        assert_eq!(owner_plan(&[
+            stale_owner.clone(),
+            (plan_member("early", SessionRole::Member, false, 1), maintainer),
+            (plan_member("senior", SessionRole::Maintainer, false, 9), maintainer),
+        ]), OwnerPlan::Heir { user_id: "senior".into(), previous: SessionRole::Maintainer });
+        assert_eq!(owner_plan(&[
+            (plan_member("late", SessionRole::Member, false, 3), maintainer),
+            (plan_member("early", SessionRole::Member, false, 2), admin),
+        ]), OwnerPlan::Heir { user_id: "early".into(), previous: SessionRole::Member });
+        assert_eq!(owner_plan(&[
+            (plan_member("b", SessionRole::Member, false, 2), maintainer),
+            (plan_member("a", SessionRole::Member, false, 2), maintainer),
+        ]), OwnerPlan::Heir { user_id: "a".into(), previous: SessionRole::Member });
+    }
+
+    #[tokio::test]
+    async fn f4_offboarding_the_last_owner_hands_the_session_on_or_leaves_it_to_reclaim() {
+        use crate::store::Store;
+        use cognia_tenant_auth::{OrgRole, WorkspaceRole};
+        let (store, chat) = standing_fixture();
+        for (user, workspace_role) in [("creator", WorkspaceRole::Member), ("writer", WorkspaceRole::Member), ("senior", WorkspaceRole::Maintainer)] {
+            store.add_user(user, user);
+            store.add_org_member("org_1", user, OrgRole::Member);
+            store.add_workspace_member("org_1", "ws_1", user, workspace_role);
+        }
+        for (id, op) in [("ses_1", "create-1"), ("ses_2", "create-2")] {
+            let mut input = session(op);
+            input.id = id.into();
+            input.created_by_user_id = "creator".into();
+            chat.create_session(input).await.unwrap();
+            chat.put_member("org_1", id, "ws_1", "writer", SessionRole::Member, false, false, "creator", 2).await.unwrap();
+        }
+        chat.put_member("org_1", "ses_1", "ws_1", "senior", SessionRole::Member, false, false, "creator", 3).await.unwrap();
+        chat.put_member("org_1", "ses_1", "ws_1", "guest", SessionRole::Member, false, true, "creator", 3).await.unwrap();
+
+        let affected = store.offboard_org_member("org_1", "creator", standing_context()).await.unwrap();
+        assert_eq!(affected, ["ses_1", "ses_2"]);
+        let members = chat.list_members("org_1", "ses_1").await.unwrap();
+        let senior = members.iter().find(|member| member.user_id == "senior").unwrap();
+        assert_eq!((senior.role, senior.approver), (SessionRole::Owner, true));
+        assert_eq!(members.iter().find(|member| member.user_id == "writer").unwrap().role, SessionRole::Member);
+        assert!(chat.list_members("org_1", "ses_2").await.unwrap().iter().all(|member| member.role != SessionRole::Owner));
+
+        let audit = store.list_authorization_audit("org_1", 50).await.unwrap();
+        let succeeded = audit.iter().find(|event| event.action == "session.ownership.succeeded").unwrap();
+        assert_eq!((succeeded.target_user_id.as_deref(), succeeded.old_role.as_deref(), succeeded.new_role.as_deref()), (Some("senior"), Some("member"), Some("owner")));
+        assert_eq!(succeeded.source["resourceId"], "ses_1");
+        assert_eq!(succeeded.source["departedUserId"], "creator");
+        assert_eq!(succeeded.actor_user_id, "usr_owner");
+        let vacated = audit.iter().find(|event| event.action == "session.ownership.vacated").unwrap();
+        assert_eq!((vacated.target_user_id.as_deref(), vacated.source["resourceId"].as_str()), (Some("creator"), Some("ses_2")));
+
+        let ownerless = chat.list_ownerless_sessions("org_1").await.unwrap();
+        assert_eq!(ownerless.iter().map(|s| (s.session_id.as_str(), s.member_count, s.created_by_user_id.as_str())).collect::<Vec<_>>(), [("ses_2", 1, "creator")]);
+        // A plain workspace writer may not be granted Owner, even of a vacant session.
+        assert!(matches!(chat.reclaim_session_ownership("org_1", "ses_2", "writer", 7).await, Err(StoreError::Policy(_))));
+        assert!(matches!(chat.reclaim_session_ownership("org_1", "ses_1", "usr_owner", 7).await, Err(StoreError::Conflict(_))));
+        let revision = chat.admin_session("org_1", "ses_2").await.unwrap().policy_revision;
+        let reclaimed = chat.reclaim_session_ownership("org_1", "ses_2", "usr_owner", 7).await.unwrap();
+        assert_eq!((reclaimed.role, reclaimed.approver, reclaimed.guest), (SessionRole::Owner, true, false));
+        assert_eq!(chat.admin_session("org_1", "ses_2").await.unwrap().policy_revision, revision + 1);
+        assert!(chat.visible_session("org_1", "ses_2", "usr_owner").await.unwrap().is_some());
+        assert!(chat.list_ownerless_sessions("org_1").await.unwrap().is_empty());
+        assert!(matches!(chat.reclaim_session_ownership("org_1", "ses_2", "usr_owner", 8).await, Err(StoreError::Conflict(_))));
+        assert!(matches!(chat.reclaim_session_ownership("org_1", "missing", "usr_owner", 8).await, Err(StoreError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn f4_a_workspace_demotion_also_keeps_the_session_owned() {
+        use crate::store::Store;
+        use cognia_tenant_auth::{OrgRole, WorkspaceRole};
+        let (store, chat) = standing_fixture();
+        for (user, workspace_role) in [("creator", WorkspaceRole::Member), ("senior", WorkspaceRole::Maintainer)] {
+            store.add_user(user, user);
+            store.add_org_member("org_1", user, OrgRole::Member);
+            store.add_workspace_member("org_1", "ws_1", user, workspace_role);
+        }
+        let mut input = session("create");
+        input.created_by_user_id = "creator".into();
+        chat.create_session(input).await.unwrap();
+        chat.put_member("org_1", "ses_1", "ws_1", "senior", SessionRole::Member, false, false, "creator", 2).await.unwrap();
+        store.set_workspace_member("org_1", "ws_1", "creator", WorkspaceRole::Viewer, standing_context()).await.unwrap();
+        let members = chat.list_members("org_1", "ses_1").await.unwrap();
+        assert_eq!(members.iter().find(|m| m.user_id == "creator").unwrap().role, SessionRole::Viewer);
+        assert_eq!(members.iter().find(|m| m.user_id == "senior").unwrap().role, SessionRole::Owner);
+        // Nothing to hand on when another owner remains.
+        store.set_workspace_member("org_1", "ws_1", "creator", WorkspaceRole::Maintainer, standing_context()).await.unwrap();
+        assert_eq!(store.list_authorization_audit("org_1", 50).await.unwrap().iter()
+            .filter(|event| event.action.starts_with("session.ownership.")).count(), 1);
     }
 
     #[tokio::test]

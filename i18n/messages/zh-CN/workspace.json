@@ -495,8 +495,32 @@
         "orgMemberChanged": "已设置组织角色",
         "orgMemberOffboarded": "已移出组织",
         "workspaceMemberChanged": "已设置工作区角色",
-        "workspaceMemberRemoved": "已移出工作区"
+        "workspaceMemberRemoved": "已移出工作区",
+        "sessionOwnershipSucceeded": "会话所有权已移交",
+        "sessionOwnershipVacated": "会话失去所有者",
+        "sessionOwnershipReclaimed": "会话所有权已被接管"
       }
+    },
+    "ownerless": {
+      "title": "{count, plural, other {# 个会话没有所有者}}",
+      "description": "这些会话的所有者已离开，剩余成员中没有人可被设为所有者，因此无法管理其成员。接管后你将成为所有者，可以阅读并管理该会话；你填写的原因会记入审计日志。",
+      "startedBy": "由 {who} 发起",
+      "members": "{count, plural, =0 {无成员} other {# 名成员}}",
+      "changed": "更新于 {when}",
+      "reclaim": "接管所有权",
+      "reasonLabel": "接管原因",
+      "reasonPlaceholder": "说明接管原因（至少 8 个字符）",
+      "confirm": "接管所有权",
+      "cancel": "取消",
+      "reclaimed": "你已成为该会话的所有者。",
+      "alreadyOwned": "该会话已有成员担任所有者。",
+      "failed": "无法加载没有所有者的会话。{message}"
+    },
+    "sessionRole": {
+      "owner": "所有者",
+      "maintainer": "维护者",
+      "member": "成员",
+      "viewer": "只读者"
     }
   },
   "activity": {

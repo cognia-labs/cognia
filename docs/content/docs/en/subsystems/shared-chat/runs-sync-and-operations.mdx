@@ -71,6 +71,21 @@ incident, an org admin with workspace-manage capability must provide a reason an
 one minute to one hour. The resulting grant is bound to that admin and session. Each raw event read
 validates expiry and writes a metadata-only `session.breakGlassRead` audit with `rawContentAccessed=true`.
 
+## A session keeps an owner
+
+When offboarding, a workspace removal or a demotion takes away a session's last owner, the same
+transaction hands ownership to a remaining member who could have been granted Owner: a workspace
+maintainer, or an org owner or admin. It prefers the highest session role, then the longest-standing
+member. Guests and plain workspace members never inherit. The change is audited as
+`session.ownership.succeeded`.
+
+When nobody may inherit, the session stays without an owner (`session.ownership.vacated`). Its members
+keep their roles, but nobody can manage them. Org owners and admins see these sessions on the workspace
+members page. The list shows who started each one, how many members it has and when it last changed,
+never its title or messages. **Take ownership** asks for a reason of at least eight characters and makes
+the admin an ordinary owner, audited as `session.ownership.reclaimed`. Once a member owns the session
+again, the server refuses with `409`.
+
 ## Operating and rolling back
 
 1. Apply additive migrations with both flags disabled.

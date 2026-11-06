@@ -2017,7 +2017,7 @@ impl Store for InMemoryStore {
             tables.standing.record(org_id, Some(user_id), None, crate::standing::StandingChangeKind::RoleChanged, context.now);
         }
         let affected = if old.is_some_and(OrgRole::can_traverse_workspaces) && role == OrgRole::Member {
-            crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, user_id, false, context.now)
+            crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, user_id, false, &context)
         } else { Vec::new() };
         tables.authorization_audit.push(membership_audit_event(
             org_id,
@@ -2052,7 +2052,7 @@ impl Store for InMemoryStore {
             tables.standing.record(org_id, Some(user), None, crate::standing::StandingChangeKind::RoleChanged, context.now);
         }
         let affected = if previous_owner_role == OrgRole::Member {
-            crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, &actor, false, context.now)
+            crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, &actor, false, &context)
         } else { Vec::new() };
         tables.authorization_audit.push(membership_audit_event(
             org_id, None, to_user_id, "org.ownership.transferred",
@@ -2100,7 +2100,7 @@ impl Store for InMemoryStore {
         }
         crate::chat_store::memory_revoke_offboarded_invites(&mut tables, org_id, user_id);
         tables.standing.record(org_id, Some(user_id), None, crate::standing::StandingChangeKind::Offboarded, context.now);
-        let affected = crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, user_id, true, context.now);
+        let affected = crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, user_id, true, &context);
         tables.authorization_audit.push(membership_audit_event(
             org_id,
             None,
@@ -2144,7 +2144,7 @@ impl Store for InMemoryStore {
             tables.standing.record(org_id, Some(user_id), Some(workspace_id), crate::standing::StandingChangeKind::WorkspaceRemoved, context.now);
         }
         let affected = if lowered {
-            crate::chat_store::memory_cleanup_standing(&mut tables, org_id, Some(workspace_id), user_id, false, context.now)
+            crate::chat_store::memory_cleanup_standing(&mut tables, org_id, Some(workspace_id), user_id, false, &context)
         } else { Vec::new() };
         tables.authorization_audit.push(membership_audit_event(
             org_id,
@@ -2181,7 +2181,7 @@ impl Store for InMemoryStore {
         tables.standing.record(org_id, Some(user_id), Some(workspace_id), crate::standing::StandingChangeKind::WorkspaceRemoved, context.now);
         // Recomputed, not forced: the seat is already gone, and an org owner or
         // admin keeps the standing their org role gives them.
-        let affected = crate::chat_store::memory_cleanup_standing(&mut tables, org_id, Some(workspace_id), user_id, false, context.now);
+        let affected = crate::chat_store::memory_cleanup_standing(&mut tables, org_id, Some(workspace_id), user_id, false, &context);
         tables.authorization_audit.push(membership_audit_event(
             org_id,
             Some(workspace_id.to_owned()),
@@ -3535,8 +3535,8 @@ fn authorization_audit_from_row(
     })
 }
 
-async fn insert_authorization_audit(
-    transaction: &deadpool_postgres::Transaction<'_>,
+pub(crate) async fn insert_authorization_audit(
+    transaction: &tokio_postgres::Transaction<'_>,
     event: &AuthorizationAuditEvent,
 ) -> Result<(), StoreError> {
     // A caller that knows what it acted on says so in `source` (a chat
@@ -4633,7 +4633,7 @@ impl Store for PgStore {
             crate::standing::pg_record(&transaction, org_id, Some(user_id), None, crate::standing::StandingChangeKind::RoleChanged, context.now).await?;
         }
         let affected = if old.as_deref().and_then(|r| OrgRole::parse(r).ok()).is_some_and(OrgRole::can_traverse_workspaces) && role == OrgRole::Member {
-            crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, user_id, false, context.now).await?
+            crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, user_id, false, &context).await?
         } else { Vec::new() };
         let event = membership_audit_event(
             org_id,
@@ -4675,7 +4675,7 @@ impl Store for PgStore {
             crate::standing::pg_record(&transaction, org_id, Some(user), None, crate::standing::StandingChangeKind::RoleChanged, context.now).await?;
         }
         let affected = if previous_owner_role == OrgRole::Member {
-            crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, &actor, false, context.now).await?
+            crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, &actor, false, &context).await?
         } else { Vec::new() };
         let event = membership_audit_event(org_id, None, to_user_id, "org.ownership.transferred", Some(old), Some("owner".into()), context);
         insert_authorization_audit(&transaction, &event).await?;
@@ -4726,7 +4726,7 @@ impl Store for PgStore {
             .await
             .map_err(|error| StoreError::Database(error.to_string()))?;
         crate::standing::pg_record(&transaction, org_id, Some(user_id), None, crate::standing::StandingChangeKind::Offboarded, context.now).await?;
-        let affected = crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, user_id, true, context.now).await?;
+        let affected = crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, user_id, true, &context).await?;
         transaction.execute("UPDATE chat_session_invites SET status='revoked' WHERE org_id=$1 AND status='pending' AND (target_user_id=$2 OR created_by_user_id=$2)", &[&org_id, &user_id]).await.map_err(|e| StoreError::Database(e.to_string()))?;
         let event = membership_audit_event(
             org_id,
@@ -4779,7 +4779,7 @@ impl Store for PgStore {
             crate::standing::pg_record(&transaction, org_id, Some(user_id), Some(workspace_id), crate::standing::StandingChangeKind::WorkspaceRemoved, context.now).await?;
         }
         let affected = if lowered {
-            crate::chat_store::pg_cleanup_standing(&transaction, org_id, Some(workspace_id), user_id, false, context.now).await?
+            crate::chat_store::pg_cleanup_standing(&transaction, org_id, Some(workspace_id), user_id, false, &context).await?
         } else { Vec::new() };
         let event = membership_audit_event(
             org_id,
@@ -4821,7 +4821,7 @@ impl Store for PgStore {
         // Recomputed, not forced: the seat is already deleted in this
         // transaction, and an org owner or admin keeps the standing their org
         // role gives them.
-        let affected = crate::chat_store::pg_cleanup_standing(&transaction, org_id, Some(workspace_id), user_id, false, context.now).await?;
+        let affected = crate::chat_store::pg_cleanup_standing(&transaction, org_id, Some(workspace_id), user_id, false, &context).await?;
         let event = membership_audit_event(
             org_id,
             Some(workspace_id.to_owned()),

@@ -160,6 +160,25 @@ describe("auditActionKey", () => {
     expect(auditActionKey("account.bootstrapped")).toBe("accountBootstrapped")
   })
 
+  it("labels a conversation's ownership change with session roles", async () => {
+    const list = jest.fn(async () => [
+      event({ action: "session.ownership.succeeded", oldRole: "member", newRole: "owner" }),
+    ])
+    render(<WorkspaceMembershipAudit admin={adminWith(list)} />)
+    fireEvent.click(screen.getByTestId("workspace-membership-audit-toggle"))
+    const row = await screen.findByTestId("workspace-membership-audit-aud_1")
+    expect(row).toHaveTextContent("audit.actions.sessionOwnershipSucceeded")
+    expect(row).toHaveTextContent("audit.roleChange(sessionRole.member,sessionRole.owner)")
+    for (const role of ["owner", "maintainer", "member", "viewer"]) {
+      expect(
+        enWorkspace.members.sessionRole[role as keyof typeof enWorkspace.members.sessionRole]
+      ).toBeTruthy()
+      expect(
+        zhWorkspace.members.sessionRole[role as keyof typeof zhWorkspace.members.sessionRole]
+      ).toBeTruthy()
+    }
+  })
+
   /**
    * `lint:i18n` only sees literal keys, so a dynamic `audit.actions.*` lookup
    * needs a test that walks the list. Without it an action the server writes

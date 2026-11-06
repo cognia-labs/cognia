@@ -495,8 +495,32 @@
         "orgMemberChanged": "Organization role set",
         "orgMemberOffboarded": "Removed from organization",
         "workspaceMemberChanged": "Workspace role set",
-        "workspaceMemberRemoved": "Removed from workspace"
+        "workspaceMemberRemoved": "Removed from workspace",
+        "sessionOwnershipSucceeded": "Conversation ownership passed on",
+        "sessionOwnershipVacated": "Conversation left without an owner",
+        "sessionOwnershipReclaimed": "Conversation ownership taken over"
       }
+    },
+    "ownerless": {
+      "title": "{count, plural, one {# conversation has no owner} other {# conversations have no owner}}",
+      "description": "Their owner left, and nobody still in them may be made owner, so their members cannot be managed. Taking ownership makes you an owner who can read and manage the conversation; your reason is recorded in the audit log.",
+      "startedBy": "Started by {who}",
+      "members": "{count, plural, =0 {no members} one {# member} other {# members}}",
+      "changed": "changed {when}",
+      "reclaim": "Take ownership",
+      "reasonLabel": "Reason for taking ownership",
+      "reasonPlaceholder": "Why you are taking it over (at least 8 characters)",
+      "confirm": "Take ownership",
+      "cancel": "Cancel",
+      "reclaimed": "You now own the conversation.",
+      "alreadyOwned": "A member already owns that conversation.",
+      "failed": "Could not load conversations without an owner. {message}"
+    },
+    "sessionRole": {
+      "owner": "Owner",
+      "maintainer": "Maintainer",
+      "member": "Member",
+      "viewer": "Viewer"
     }
   },
   "activity": {

@@ -4,7 +4,7 @@
 
 use crate::chat::SessionMembership;
 use crate::chat_store::{effective_member_from_row, member_from_row, pg_cleanup_member, MEMBER_COLUMNS, MEMBER_JOINS};
-use crate::store::{PgStore, StoreError};
+use crate::store::{AuthorizationContext, PgStore, StoreError};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,7 +46,21 @@ impl StandingAudit {
     }
 }
 
+/// The context `audit-standing --apply` writes its own audit rows under: the
+/// operator ran it, not an organization role.
+pub(crate) fn operator_context(now: i64) -> AuthorizationContext {
+    AuthorizationContext {
+        actor_user_id: "operator".into(),
+        reason: "audit-standing --apply".into(),
+        request_id: format!("audit-standing-{now}"),
+        grant_id: None,
+        source: serde_json::json!({}),
+        now,
+    }
+}
+
 pub async fn audit_standing(store: &PgStore, apply: bool, batch_size: usize, now: i64) -> Result<StandingAudit, StoreError> {
+    let context = operator_context(now);
     if batch_size == 0 || batch_size > 10_000 {
         return Err(StoreError::Policy("batch-size must be between 1 and 10000".into()));
     }
@@ -67,7 +81,7 @@ pub async fn audit_standing(store: &PgStore, apply: bool, batch_size: usize, now
             cursor = (member.session_id.clone(), member.user_id.clone());
             let effective = effective_member_from_row(&row)?;
             if report.record(&org_id, &member, effective.as_ref()) && apply
-                && pg_cleanup_member(&tx, &org_id, &member.session_id, &member.user_id, false, false, now).await? {
+                && pg_cleanup_member(&tx, &org_id, &member.session_id, &member.user_id, false, false, &context).await? {
                 report.applied += 1;
             }
         }

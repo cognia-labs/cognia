@@ -1314,6 +1314,18 @@ describe("membership administration (grant routes)", () => {
     })
   })
 
+  it("lists ownerless conversations and reclaims one with its reason", async () => {
+    const { calls, fetchImpl } = harness()
+    const c = client(fetchImpl)
+    await c.listOwnerlessSessions(ORG)
+    await c.reclaimSessionOwnership(ORG, "ses/1", "Ada left the team")
+    const [list, reclaim] = calls.slice(1)
+    expect(list!.url).toMatch(/\/v1\/orgs\/[^/]+\/ownerless-chat-sessions$/)
+    expect(reclaim!.url).toMatch(/\/chat-sessions\/ses%2F1\/ownership\/reclaim$/)
+    expect(reclaim!.init?.method).toBe("POST")
+    expect(JSON.parse(String(reclaim!.init?.body))).toEqual({ reason: "Ada left the team" })
+  })
+
   it("clamps the audit limit to what the server accepts", async () => {
     const { calls, fetchImpl } = harness()
     const c = client(fetchImpl)

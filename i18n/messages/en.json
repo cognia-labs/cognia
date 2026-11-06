@@ -73833,6 +73833,9 @@
           "invitationRevoked": "Invitation revoked",
           "orgMemberChanged": "Organization role set",
           "orgMemberOffboarded": "Removed from organization",
+          "sessionOwnershipReclaimed": "Conversation ownership taken over",
+          "sessionOwnershipSucceeded": "Conversation ownership passed on",
+          "sessionOwnershipVacated": "Conversation left without an owner",
           "workspaceMemberChanged": "Workspace role set",
           "workspaceMemberRemoved": "Removed from workspace"
         },
@@ -73924,6 +73927,21 @@
         "owner": "Org owner"
       },
       "orgRoleAria": "Organization role",
+      "ownerless": {
+        "alreadyOwned": "A member already owns that conversation.",
+        "cancel": "Cancel",
+        "changed": "changed {when}",
+        "confirm": "Take ownership",
+        "description": "Their owner left, and nobody still in them may be made owner, so their members cannot be managed. Taking ownership makes you an owner who can read and manage the conversation; your reason is recorded in the audit log.",
+        "failed": "Could not load conversations without an owner. {message}",
+        "members": "{count, plural, =0 {no members} one {# member} other {# members}}",
+        "reasonLabel": "Reason for taking ownership",
+        "reasonPlaceholder": "Why you are taking it over (at least 8 characters)",
+        "reclaim": "Take ownership",
+        "reclaimed": "You now own the conversation.",
+        "startedBy": "Started by {who}",
+        "title": "{count, plural, one {# conversation has no owner} other {# conversations have no owner}}"
+      },
       "reason": {
         "invitationRevoked": "Revoked from the workspace roster",
         "offboarded": "Removed from the organization in the workspace roster",
@@ -73940,6 +73958,12 @@
       },
       "roleAria": "Workspace role",
       "roleFilterAria": "Filter members by role",
+      "sessionRole": {
+        "maintainer": "Maintainer",
+        "member": "Member",
+        "owner": "Owner",
+        "viewer": "Viewer"
+      },
       "signIn": "Sign in",
       "standingAria": "Workspace standing",
       "title": "Members",

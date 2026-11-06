@@ -38,6 +38,9 @@ export const MEMBERSHIP_AUDIT_ACTIONS = [
   "invitation.revoked",
   "org.member.changed",
   "org.member.offboarded",
+  "session.ownership.reclaimed",
+  "session.ownership.succeeded",
+  "session.ownership.vacated",
   "workspace.member.changed",
   "workspace.member.removed",
 ] as const
@@ -100,11 +103,16 @@ export function WorkspaceMembershipAudit({ admin, reloadKey = 0 }: WorkspaceMemb
     const key = `audit.actions.${auditActionKey(action)}`
     return t.has(key) ? t(key) : action
   }
-  // A workspace-scoped event carries workspace seats; everything else, an
-  // org invitation, an org role change, the bootstrap claim, carries org roles.
-  const roleLabel = (role: string | undefined, workspaceScoped: boolean): string => {
+  // A conversation's ownership events carry session roles, a workspace-scoped
+  // event carries workspace seats, and everything else (an org invitation, an
+  // org role change, the bootstrap claim) carries org roles.
+  const roleLabel = (role: string | undefined, event: CollabMembershipAuditEvent): string => {
     if (!role) return ""
-    const key = workspaceScoped ? `role.${role}` : `orgRole.${role}`
+    const key = event.action.startsWith("session.")
+      ? `sessionRole.${role}`
+      : event.workspaceId
+        ? `role.${role}`
+        : `orgRole.${role}`
     return t.has(key) ? t(key) : role
   }
 
@@ -173,10 +181,10 @@ export function WorkspaceMembershipAudit({ admin, reloadKey = 0 }: WorkspaceMemb
                     <span className="text-muted-foreground">
                       {event.oldRole && event.newRole
                         ? t("audit.roleChange", {
-                            from: roleLabel(event.oldRole, Boolean(event.workspaceId)),
-                            to: roleLabel(event.newRole, Boolean(event.workspaceId)),
+                            from: roleLabel(event.oldRole, event),
+                            to: roleLabel(event.newRole, event),
                           })
-                        : roleLabel(event.oldRole || event.newRole, Boolean(event.workspaceId))}
+                        : roleLabel(event.oldRole || event.newRole, event)}
                     </span>
                   ) : null}
                   <span className="ml-auto whitespace-nowrap text-muted-foreground">

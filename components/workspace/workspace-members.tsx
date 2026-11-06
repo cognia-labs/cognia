@@ -87,6 +87,7 @@ import {
 import { WorkspaceInviteDialog } from "./workspace-invite-dialog"
 import { WorkspaceInvitations } from "./workspace-invitations"
 import { WorkspaceMembershipAudit } from "./workspace-membership-audit"
+import { WorkspaceOwnerlessSessions } from "./workspace-ownerless-sessions"
 
 /** Above this the flat list stops being scannable and the role filter appears. */
 const FILTER_THRESHOLD = 8
@@ -541,6 +542,12 @@ export function WorkspaceMembers({ workspaceId, adminDeps }: WorkspaceMembersPro
           )}
         </div>
         <WorkspaceInvitations admin={admin} reloadKey={writes} />
+        <WorkspaceOwnerlessSessions
+          admin={admin}
+          workspaceId={workspaceId}
+          reloadKey={writes}
+          onReclaimed={() => setWrites((count) => count + 1)}
+        />
         <WorkspaceMembershipAudit admin={admin} reloadKey={writes} />
       </div>
       <TransferOwnershipDialog

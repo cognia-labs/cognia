@@ -625,6 +625,22 @@ export interface CollabMembershipAuditEvent {
   createdAt: number
 }
 
+/**
+ * A shared conversation that no current member owns, as an org owner or admin
+ * sees it. Offboarding or a workspace change took its last owner and nobody
+ * left may be granted Owner. Metadata only: the title and messages stay
+ * private until an admin reclaims ownership.
+ */
+export interface CollabOwnerlessSession {
+  sessionId: string
+  workspaceId: string
+  status: SharedSession["status"]
+  createdByUserId: string
+  memberCount: number
+  createdAt: number
+  updatedAt: number
+}
+
 export interface SetCollabOrgMemberRoleInput {
   role: OrgRole
   reason: string
@@ -1605,6 +1621,30 @@ export class CollabClient {
       orgId,
       `/v1/orgs/${encodeURIComponent(orgId)}/chat-sessions/${encodeURIComponent(sessionId)}/break-glass`,
       { method: "POST", body: JSON.stringify(input) }
+    )
+  }
+
+  /** Org owners and admins: the conversations no member owns. */
+  async listOwnerlessSessions(orgId: string): Promise<CollabOwnerlessSession[]> {
+    return this.json<CollabOwnerlessSession[]>(
+      orgId,
+      `/v1/orgs/${encodeURIComponent(orgId)}/ownerless-chat-sessions`
+    )
+  }
+
+  /**
+   * Make the caller the owner of a conversation nobody owns. Audited with the
+   * reason; refused with 409 once a member owns it again.
+   */
+  async reclaimSessionOwnership(
+    orgId: string,
+    sessionId: string,
+    reason: string
+  ): Promise<SessionMembership> {
+    return this.json<SessionMembership>(
+      orgId,
+      `/v1/orgs/${encodeURIComponent(orgId)}/chat-sessions/${encodeURIComponent(sessionId)}/ownership/reclaim`,
+      { method: "POST", body: JSON.stringify({ reason }) }
     )
   }
 

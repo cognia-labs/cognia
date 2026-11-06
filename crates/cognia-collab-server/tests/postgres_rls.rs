@@ -1681,6 +1681,65 @@ async fn standing_fixture() -> (TestDatabase, PgStore, OperatorBootstrap, Operat
     (database, store, owner, member, guest)
 }
 
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL instance and COLLAB_RLS_ADMIN_DATABASE_URL / COLLAB_RLS_APP_DATABASE_URL"]
+async fn f4_offboarding_the_last_owner_hands_the_session_on_or_leaves_it_to_reclaim_in_postgres() {
+    use cognia_collab_server::{chat::{SessionRole, SessionStatus}, chat_store::{ChatStore, NewSharedSession}, store::StoreError, Store};
+    use cognia_tenant_auth::{OrgRole, WorkspaceRole};
+    let (database, store, owner, member, _) = standing_fixture().await;
+    let org = &owner.org_id;
+    let mut joined = Vec::new();
+    for name in ["f4_creator", "f4_writer"] {
+        let mut participant = bootstrap(name);
+        participant.org_id = owner.org_id.clone();
+        participant.logto_organization_id = owner.logto_organization_id.clone();
+        participant.workspace_id = owner.workspace_id.clone();
+        store.bootstrap_operator(&participant).await.unwrap();
+        store.set_org_member(org, &participant.user_id, OrgRole::Member, standing_context(&owner.user_id)).await.unwrap();
+        store.set_workspace_member(org, &owner.workspace_id, &participant.user_id, WorkspaceRole::Member, standing_context(&owner.user_id)).await.unwrap();
+        joined.push(participant);
+    }
+    let (creator, writer) = (&joined[0], &joined[1]);
+    for id in ["f4_heir", "f4_vacant"] {
+        store.create_session(NewSharedSession {
+            id: id.into(), org_id: org.clone(), workspace_id: owner.workspace_id.clone(), title: "Private".into(),
+            status: SessionStatus::Active, created_by_user_id: creator.user_id.clone(), now: 1, operation_id: format!("{id}-create"),
+        }).await.unwrap();
+        store.put_member(org, id, &owner.workspace_id, &writer.user_id, SessionRole::Member, false, false, &creator.user_id, 2).await.unwrap();
+    }
+    // The fixture's member is a workspace maintainer: Owner may be granted to them.
+    store.put_member(org, "f4_heir", &owner.workspace_id, &member.user_id, SessionRole::Member, false, false, &creator.user_id, 3).await.unwrap();
+
+    let affected = store.offboard_org_member(org, &creator.user_id, standing_context(&owner.user_id)).await.unwrap();
+    assert_eq!(affected, ["f4_heir", "f4_vacant"]);
+    let heir = store.list_members(org, "f4_heir").await.unwrap().into_iter().find(|m| m.user_id == member.user_id).unwrap();
+    assert_eq!((heir.role, heir.approver), (SessionRole::Owner, true));
+    assert!(store.list_members(org, "f4_vacant").await.unwrap().iter().all(|m| m.role != SessionRole::Owner));
+    let ownerless = store.list_ownerless_sessions(org).await.unwrap();
+    assert_eq!(ownerless.iter().map(|s| (s.session_id.as_str(), s.member_count)).collect::<Vec<_>>(), [("f4_vacant", 1)]);
+
+    assert!(matches!(store.reclaim_session_ownership(org, "f4_vacant", &writer.user_id, 11).await, Err(StoreError::Policy(_))));
+    assert!(matches!(store.reclaim_session_ownership(org, "f4_heir", &owner.user_id, 11).await, Err(StoreError::Conflict(_))));
+    let reclaimed = store.reclaim_session_ownership(org, "f4_vacant", &owner.user_id, 11).await.unwrap();
+    assert_eq!((reclaimed.role, reclaimed.approver, reclaimed.guest), (SessionRole::Owner, true, false));
+    assert!(store.visible_session(org, "f4_vacant", &owner.user_id).await.unwrap().is_some());
+    assert!(store.list_ownerless_sessions(org).await.unwrap().is_empty());
+    assert!(matches!(store.reclaim_session_ownership(org, "f4_vacant", &owner.user_id, 12).await, Err(StoreError::Conflict(_))));
+
+    let (admin, connection) = tokio_postgres::connect(&database.url, NoTls).await.unwrap();
+    let admin_task = tokio::spawn(async move { connection.await.unwrap() });
+    let rows = admin.query("SELECT session_id, action, target_user_id, old_role, new_role, actor_user_id FROM authorization_audit_events WHERE action LIKE 'session.ownership.%' ORDER BY session_id", &[]).await.unwrap();
+    let audit: Vec<(String, String, String, String, Option<String>, String)> = rows.iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4), row.get(5))).collect();
+    assert_eq!(audit, [
+        ("f4_heir".into(), "session.ownership.succeeded".into(), member.user_id.clone(), "member".into(), Some("owner".into()), owner.user_id.clone()),
+        ("f4_vacant".into(), "session.ownership.vacated".into(), creator.user_id.clone(), "owner".into(), None, owner.user_id.clone()),
+    ]);
+    drop((admin, store));
+    admin_task.await.unwrap();
+    database.cleanup().await;
+}
+
 fn standing_lease(scope: &OperatorBootstrap, user_id: &str) -> cognia_collab_server::chat_store::NewChatRunLease {
     cognia_collab_server::chat_store::NewChatRunLease {
         id: "standing_lease".into(), org_id: scope.org_id.clone(), workspace_id: scope.workspace_id.clone(), session_id: "standing_session".into(),

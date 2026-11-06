@@ -308,6 +308,14 @@ pub fn routes() -> Router<AppState> {
             get(list_break_glass_events),
         )
         .route(
+            "/v1/orgs/{org_id}/ownerless-chat-sessions",
+            get(list_ownerless_sessions),
+        )
+        .route(
+            "/v1/orgs/{org_id}/chat-sessions/{session_id}/ownership/reclaim",
+            post(reclaim_session_ownership),
+        )
+        .route(
             "/v1/orgs/{org_id}/chat-sessions/{session_id}/stream-tickets",
             post(create_stream_ticket),
         )
@@ -1644,6 +1652,95 @@ async fn list_break_glass_events(
             .await
             .map_err(ChatFailure::Store)?,
     ))
+}
+
+/// Org owners and admins find sessions nobody owns (plan §7, F4). The list
+/// carries metadata only: reclaiming, not listing, is what grants content.
+async fn list_ownerless_sessions(
+    State(state): State<AppState>,
+    Path(org_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::chat_store::OwnerlessSession>>, ChatFailure> {
+    let grant = claims(&state, &headers, &org_id).await?;
+    let membership = state
+        .store
+        .membership(&org_id, grant.user_id.as_str(), None)
+        .await
+        .map_err(ChatFailure::Store)?;
+    if !matches!(membership.org_role, Some(OrgRole::Owner | OrgRole::Admin)) {
+        return Err(ChatFailure::Hidden);
+    }
+    Ok(Json(
+        state
+            .chat_store
+            .list_ownerless_sessions(&org_id)
+            .await
+            .map_err(ChatFailure::Store)?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReclaimOwnershipBody {
+    reason: String,
+}
+
+/// An org owner or admin takes over a session nobody owns. Like break-glass
+/// it needs a stated reason and is audited, but it makes the caller an
+/// ordinary owner rather than a time-boxed reader.
+async fn reclaim_session_ownership(
+    State(state): State<AppState>,
+    Path((org_id, session_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<ReclaimOwnershipBody>,
+) -> Result<Json<crate::chat::SessionMembership>, ChatFailure> {
+    let (session, actor) =
+        require_break_glass_admin(&state, &headers, &org_id, &session_id).await?;
+    let reason = body.reason.trim();
+    if reason.len() < 8 {
+        return Err(ChatFailure::BadRequest(
+            "reclaiming a session requires a reason".into(),
+        ));
+    }
+    let now = (state.now)();
+    let member = state
+        .chat_store
+        .reclaim_session_ownership(&org_id, &session_id, actor.user_id.as_str(), now)
+        .await
+        .map_err(ChatFailure::Store)?;
+    state
+        .store
+        .append_authorization_audit(AuthorizationAuditEvent {
+            id: format!("aud_{}", Uuid::new_v4().simple()),
+            org_id,
+            workspace_id: Some(session.workspace_id),
+            actor_user_id: actor.user_id.to_string(),
+            target_user_id: Some(actor.user_id.to_string()),
+            invitation_id: None,
+            action: "session.ownership.reclaimed".to_owned(),
+            old_role: None,
+            new_role: Some(SessionRole::Owner.as_str().to_owned()),
+            reason: reason.to_owned(),
+            request_id: headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("reclaim-ownership")
+                .to_owned(),
+            grant_id: Some(actor.grant_id.to_string()),
+            source: serde_json::json!({
+                "resourceType":"chat_session",
+                "resourceId":session_id,
+                "allowed":true,
+            }),
+            created_at: now,
+        })
+        .await
+        .map_err(ChatFailure::Store)?;
+    let _ = state
+        .chat_hub
+        .sender(&session_id)
+        .send(policy_event(&session_id, actor.user_id.as_str(), now));
+    Ok(Json(member))
 }
 
 #[derive(Deserialize)]
@@ -3945,6 +4042,57 @@ mod tests {
             actor_user_id: "usr_authorization_admin".into(), reason: "offboard".into(), request_id: "request".into(),
             grant_id: None, source: serde_json::json!({}), now: 10,
         }
+    }
+
+    #[tokio::test]
+    async fn f4_org_admins_list_ownerless_sessions_without_content_and_reclaim_with_a_reason() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let (state, grant) = notification_fixture().await;
+        state.chat_store.put_member(NOTICE_ORG, "session", "workspace", BOB, SessionRole::Member, false, false, ADA, 2).await.unwrap();
+        state.store.set_org_member(NOTICE_ORG, CY, OrgRole::Admin, revocation_context()).await.unwrap();
+        // Bob is a plain workspace writer, so nobody inherits Ada's session.
+        state.store.offboard_org_member(NOTICE_ORG, ADA, revocation_context()).await.unwrap();
+        let app = routes().with_state(state.clone());
+        let send = |method: &str, path: String, user: &str, body: serde_json::Value| {
+            Request::builder().method(method).uri(path).header("authorization", grant(user))
+                .header("content-type", "application/json")
+                .header("x-cognia-collab-protocol", SHARED_CHAT_PROTOCOL_VERSION.to_string())
+                .header("x-request-id", "reclaim-request")
+                .body(Body::from(body.to_string())).unwrap()
+        };
+        let list = format!("/v1/orgs/{NOTICE_ORG}/ownerless-chat-sessions");
+        let reclaim = format!("/v1/orgs/{NOTICE_ORG}/chat-sessions/session/ownership/reclaim");
+
+        let response = app.clone().oneshot(send("GET", list.clone(), BOB, serde_json::Value::Null)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let response = app.clone().oneshot(send("GET", list.clone(), CY, serde_json::Value::Null)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let listed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(listed[0]["sessionId"], "session");
+        assert_eq!(listed[0]["memberCount"], 1);
+        assert_eq!(listed[0]["createdByUserId"], ADA);
+        assert!(!String::from_utf8_lossy(&body).contains("Shared"), "the list never carries the title");
+
+        let response = app.clone().oneshot(send("POST", reclaim.clone(), BOB, serde_json::json!({"reason":"I want to run it"}))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let response = app.clone().oneshot(send("POST", reclaim.clone(), CY, serde_json::json!({"reason":"short"}))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let response = app.clone().oneshot(send("POST", reclaim.clone(), CY, serde_json::json!({"reason":"Ada left; Bob needs a manager"}))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let member: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!((member["userId"].as_str(), member["role"].as_str()), (Some(CY), Some("owner")));
+        let audit = state.store.list_authorization_audit(NOTICE_ORG, 50).await.unwrap();
+        let event = audit.iter().find(|event| event.action == "session.ownership.reclaimed").unwrap();
+        assert_eq!((event.actor_user_id.as_str(), event.reason.as_str(), event.request_id.as_str()), (CY, "Ada left; Bob needs a manager", "reclaim-request"));
+        assert_eq!(event.source["resourceId"], "session");
+        assert!(audit.iter().any(|event| event.action == "session.ownership.vacated"));
+
+        let response = app.clone().oneshot(send("POST", reclaim, CY, serde_json::json!({"reason":"Ada left; Bob needs a manager"}))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let response = app.oneshot(send("GET", list, CY, serde_json::Value::Null)).await.unwrap();
+        assert_eq!(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().as_ref(), b"[]");
     }
 
     #[tokio::test]
