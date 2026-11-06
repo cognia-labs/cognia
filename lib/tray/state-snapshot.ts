@@ -22,17 +22,15 @@ import { listen } from "@tauri-apps/api/event"
 import { useLiveQuery } from "dexie-react-hooks"
 import { useChatStore } from "@/stores/chat"
 import { aggregateRunState } from "@/lib/chat/aggregate-run-state"
-import { useSettingsStore } from "@/stores/settings"
 import { getOpenGoalForSession } from "@/lib/db/goals"
-import { getPetProfile } from "@/lib/db/pet"
-import { computePetView } from "@/lib/pet/runtime/pet-view"
 import { APP_VERSION } from "@/lib/app-version"
 import { isAutostartEnabled } from "@/lib/tauri/autostart"
 import { isTauri } from "@/lib/tauri"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { isMainAppWindow } from "@/lib/platform/window-role"
 import { detectDesktopOsFamily } from "@/lib/platform/os"
-import type { PetProfile } from "@/types/pet"
+import { useTopic } from "@/hooks/use-topic"
+import type { PetStatusTopic } from "@/types/pet/events"
 
 import { onAutostartChanged } from "./autostart-control"
 import { useTrayStore } from "./store"
@@ -46,14 +44,20 @@ function detectOs(): TrayStateSnapshot["platform"]["os"] {
   return detectDesktopOsFamily()
 }
 
-/** Lazily decay the profile's needs against the current wall clock. */
-function snapshotPetStats(profile: PetProfile): NonNullable<TrayStateSnapshot["pet"]> {
-  const view = computePetView(profile, null, Date.now())
+/**
+ * The pet's quick-glance stats from its `pet.status` topic (ADR-0250 §14),
+ * decayed to the current wall clock. `null` while the pet is off, has not
+ * hatched a profile yet, or does not publish in this window.
+ */
+function snapshotPetStats(status: PetStatusTopic | undefined): TrayStateSnapshot["pet"] {
+  const view = status?.enabled ? status.at(Date.now()) : null
+  if (!view) return null
   return {
     enabled: true,
     energy: view.needs.energy,
     mood: view.needs.mood,
     bond: view.needs.bond,
+    band: view.band,
   }
 }
 
@@ -107,15 +111,11 @@ export function useTrayStateSnapshot(): TrayStateSnapshot {
     [openGoal?.status, openGoal?.safeObjective]
   )
 
-  // Desktop-pet quick-glance stats, gated on `PetSettings.enabled` the same
-  // way the widget itself is. `computePetView` lazily decays needs — same
-  // values `hooks/pet/use-pet.ts` shows — so the tray never disagrees.
-  const petEnabled = useSettingsStore((s) => s.settings?.petSettings?.enabled ?? false)
-  const petProfile = useLiveQuery(() => getPetProfile(), [])
-  const pet = useMemo(
-    () => (petEnabled && petProfile ? snapshotPetStats(petProfile) : null),
-    [petEnabled, petProfile]
-  )
+  // Desktop-pet quick-glance stats, from the pet's `pet.status` topic: the
+  // pet decays its needs with the same `computePetView` its console shows, so
+  // the tray never disagrees, and gates them on `PetSettings.enabled` itself.
+  const petStatus = useTopic("pet.status")
+  const pet = useMemo(() => snapshotPetStats(petStatus), [petStatus])
 
   // OS launch-at-login state. Read once on mount, then kept fresh by the
   // native wrapper's broadcasts, including settings and host-mode writes.

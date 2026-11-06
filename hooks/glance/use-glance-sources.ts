@@ -21,10 +21,10 @@ import { useLiveQuery } from "dexie-react-hooks"
 import { useLocale, useTranslations } from "next-intl"
 
 import { useCostBudgetStatus } from "@/hooks/usage/use-cost-budget-status"
+import { useTopic } from "@/hooks/use-topic"
 import { useUsageGlance } from "@/hooks/usage/use-usage-glance"
 import { filterExposedSessions } from "@/lib/chat/session-exposure"
 import { getDb } from "@/lib/db/schema"
-import { getPetProfile } from "@/lib/db/pet"
 import { listWorkspaceSessionIds, listWorkspaceSessions } from "@/lib/db/sessions"
 import {
   buildFleetSlice,
@@ -221,14 +221,10 @@ export function useGlanceSources(
     []
   )
 
-  // Pet.
+  // Pet: read from its `pet.status` topic (ADR-0250 §14), which the pet's
+  // publisher keeps current from the stored profile while it is switched on.
   const petOn = on("pet")
-  const petEnabled = useSettingsStore((s) => s.settings?.petSettings?.enabled ?? false)
-  const petProfile = useLiveQuery(
-    async () => (petOn && petEnabled ? ((await getPetProfile()) ?? null) : null),
-    [petOn, petEnabled],
-    null
-  )
+  const petStatus = useTopic("pet.status")
 
   // Plugin modules: the catalogue always (an editor needs it before anything
   // is shown), data for the visible ones while a consumer looks. This build
@@ -293,7 +289,7 @@ export function useGlanceSources(
       agenda,
       activity,
       recents: recentsOn ? buildRecentsSlice(recentRows, activeSessionId, now) : null,
-      pet: petOn ? buildPetSlice(petEnabled, petProfile, now) : null,
+      pet: petOn ? buildPetSlice(petStatus, now) : null,
       plugins,
     }),
     [
@@ -316,8 +312,7 @@ export function useGlanceSources(
       recentRows,
       activeSessionId,
       petOn,
-      petEnabled,
-      petProfile,
+      petStatus,
       plugins,
     ]
   )

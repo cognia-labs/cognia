@@ -1,19 +1,17 @@
 /**
- * Pet slice: mood and needs, decayed to now (ADR-0225 §2). Uses the same
- * `computePetView` the pet widget and the tray menu use, so all three agree.
+ * Pet slice: mood and needs, decayed to now (ADR-0225 §2). Read from the
+ * pet's `pet.status` topic (ADR-0250 §14), which decays the pet with the same
+ * `computePetView` its console and the tray menu use, so all three agree and
+ * the glance never imports the pet.
  */
 
-import { computePetView } from "@/lib/pet/runtime/pet-view"
-import type { PetProfile } from "@/types/pet"
+import type { PetStatusTopic } from "@/types/pet/events"
 
 import type { GlancePetSlice } from "./snapshot"
 
-export function buildPetSlice(
-  enabled: boolean,
-  profile: PetProfile | null | undefined,
-  now: number
-): GlancePetSlice {
-  if (!enabled || !profile) {
+export function buildPetSlice(status: PetStatusTopic | undefined, now: number): GlancePetSlice {
+  const view = status?.enabled ? status.at(now) : null
+  if (!view) {
     return {
       updatedAt: now,
       enabled: false,
@@ -24,7 +22,6 @@ export function buildPetSlice(
       bond: 0,
     }
   }
-  const view = computePetView(profile, null, now)
   return {
     updatedAt: now,
     enabled: true,

@@ -14,26 +14,17 @@ const focusedOnly = (status: ChatStatus, id = "s1") => ({
   activeSessionId: id,
 })
 let liveGoal: { status?: string; safeObjective?: string } | null = null
-// `useLiveQuery` is mocked once for both call sites in `useTrayStateSnapshot`
-// (the goal query and the pet-profile query); they're told apart by `deps`
-// length (goal passes `[activeSessionId]`, pet profile passes `[]`).
-let livePetProfile: unknown = undefined
 let autostartValue = false
 const readAutostart = jest.fn<Promise<boolean>, []>()
-let petSettingsEnabled = false
 const listenHandlers: Record<string, (e: { payload?: unknown }) => void> = {}
 
 jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
 jest.mock("@/stores/chat", () => ({
   useChatStore: <T>(selector: (s: typeof chatState) => T) => selector(chatState),
 }))
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: <T>(selector: (s: { settings: unknown }) => T) =>
-    selector({ settings: { petSettings: { enabled: petSettingsEnabled } } }),
-}))
+// The goal is the snapshot's one live query; the pet arrives on its topic.
 jest.mock("dexie-react-hooks", () => ({
-  useLiveQuery: (_fn: unknown, deps: unknown[] = []) =>
-    deps.length === 0 ? livePetProfile : liveGoal,
+  useLiveQuery: () => liveGoal,
 }))
 jest.mock("@/lib/db/goals", () => ({
   getOpenGoalForSession: jest.fn().mockResolvedValue(undefined),
@@ -61,17 +52,17 @@ import { useTrayStateSnapshot } from "./state-snapshot"
 import { broadcastAutostartChanged } from "./autostart-control"
 import { useTrayUsage } from "./usage"
 import { useTrayStore, __resetTrayStoreForTesting } from "./store"
-import { createDefaultProfile } from "@/lib/pet/defaults"
+import { __resetTopicsForTesting, publishTopic } from "@/lib/runtime/topics"
+import type { PetStatusTopic, PetStatusView } from "@/types/pet/events"
 
 const useTrayUsageMock = useTrayUsage as jest.Mock
 
 beforeEach(() => {
   chatState = { sessions: {}, activeSessionId: null }
   liveGoal = null
-  livePetProfile = undefined
   autostartValue = false
   readAutostart.mockReset().mockImplementation(async () => autostartValue)
-  petSettingsEnabled = false
+  __resetTopicsForTesting()
   for (const k of Object.keys(listenHandlers)) delete listenHandlers[k]
   // `isMainAppWindow` reads the real Tauri internals; clear any pet label.
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
@@ -216,41 +207,64 @@ describe("useTrayStateSnapshot", () => {
     }
   })
 
-  it("reports pet=null when the pet subsystem is disabled, even with a profile present", () => {
-    petSettingsEnabled = false
-    livePetProfile = createDefaultProfile("acct-1", 0)
+  const view: PetStatusView = {
+    mood: "content",
+    condition: "well",
+    needs: { energy: 70, mood: 65, bond: 40 },
+    band: "high",
+  }
+  const status = (enabled: boolean, at: PetStatusTopic["at"] = () => view): PetStatusTopic => ({
+    enabled,
+    at,
+  })
+
+  it("reports pet=null while nothing publishes pet.status in this window", () => {
     const { result } = renderHook(() => useTrayStateSnapshot())
     expect(result.current.pet).toBeNull()
+  })
+
+  it("reports pet=null when the pet subsystem is disabled", () => {
+    const at = jest.fn(() => view)
+    publishTopic("pet.status", status(false, at))
+    const { result } = renderHook(() => useTrayStateSnapshot())
+    expect(result.current.pet).toBeNull()
+    expect(at).not.toHaveBeenCalled()
   })
 
   it("reports pet=null when enabled but the profile hasn't hatched yet", () => {
-    petSettingsEnabled = true
-    livePetProfile = undefined
+    publishTopic(
+      "pet.status",
+      status(true, () => null)
+    )
     const { result } = renderHook(() => useTrayStateSnapshot())
     expect(result.current.pet).toBeNull()
   })
 
-  it("reports decayed needs when the pet subsystem is enabled with a profile", () => {
-    // Pin wall clock so `lastTickAt` and the `Date.now()` inside `computePetView`
-    // are the same instant → zero elapsed → zero decay. Without this the tiny
-    // real-time gap between the two occasionally floors a need down by a point,
-    // making the assertion flaky. This asserts the wiring reaches
-    // `computePetView`, not the decay-rate math (covered by that module's tests).
+  it("reports the pet's needs and band, decayed to the current wall clock", () => {
     const fixedNow = Date.parse("2026-01-01T00:00:00.000Z")
     const nowSpy = jest.spyOn(Date, "now").mockReturnValue(fixedNow)
     try {
-      petSettingsEnabled = true
-      livePetProfile = {
-        ...createDefaultProfile("acct-1", 0),
-        soul: { name: "Boba", personality: "x", hatchDate: "" },
-        stage: "baby",
-        needs: { energy: 70, mood: 65, bond: 40, lastTickAt: new Date(fixedNow).toISOString() },
-      }
+      const at = jest.fn(() => view)
+      publishTopic("pet.status", status(true, at))
       const { result } = renderHook(() => useTrayStateSnapshot())
-      expect(result.current.pet).toEqual({ enabled: true, energy: 70, mood: 65, bond: 40 })
+      expect(at).toHaveBeenCalledWith(fixedNow)
+      expect(result.current.pet).toEqual({
+        enabled: true,
+        energy: 70,
+        mood: 65,
+        bond: 40,
+        band: "high",
+      })
     } finally {
       nowSpy.mockRestore()
     }
+  })
+
+  it("follows each new pet.status the pet publishes", () => {
+    const { result } = renderHook(() => useTrayStateSnapshot())
+    expect(result.current.pet).toBeNull()
+    act(() => publishTopic("pet.status", status(true)))
+    expect(result.current.pet?.band).toBe("high")
   })
 
   it("keeps the same snapshot identity across a re-render with unchanged inputs", async () => {

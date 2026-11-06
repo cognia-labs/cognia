@@ -93,7 +93,7 @@ describe("deriveStatusKey", () => {
   })
 
   it("reports the pet needing attention only when nothing else outranks it", () => {
-    const needy = { enabled: true, energy: 10, mood: 80, bond: 50 }
+    const needy = { enabled: true, energy: 10, mood: 80, bond: 50, band: "low" as const }
     expect(deriveStatusKey(snap({ pet: needy }))).toBe("tray.status.petNeedsAttention")
     // Streaming still outranks it.
     expect(
@@ -102,23 +102,41 @@ describe("deriveStatusKey", () => {
   })
 
   it("ignores a needy pet when the subsystem is disabled", () => {
-    expect(deriveStatusKey(snap({ pet: { enabled: false, energy: 5, mood: 5, bond: 5 } }))).toBe(
-      "tray.status.idle"
-    )
+    expect(
+      deriveStatusKey(snap({ pet: { enabled: false, energy: 5, mood: 5, bond: 5, band: "low" } }))
+    ).toBe("tray.status.idle")
   })
 
   it("stays idle when the pet is enabled but doing fine", () => {
-    expect(deriveStatusKey(snap({ pet: { enabled: true, energy: 80, mood: 80, bond: 80 } }))).toBe(
-      "tray.status.idle"
-    )
+    expect(
+      deriveStatusKey(
+        snap({ pet: { enabled: true, energy: 80, mood: 80, bond: 80, band: "high" } })
+      )
+    ).toBe("tray.status.idle")
   })
 })
 
 describe("petMoodEmoji", () => {
-  it("bands by the worse of energy/mood", () => {
-    expect(petMoodEmoji({ enabled: true, energy: 10, mood: 90, bond: 50 })).toBe("😟")
-    expect(petMoodEmoji({ enabled: true, energy: 40, mood: 90, bond: 50 })).toBe("😐")
-    expect(petMoodEmoji({ enabled: true, energy: 80, mood: 90, bond: 50 })).toBe("😊")
+  it("draws the pet's own band of the worse of energy/mood", () => {
+    const pet = { enabled: true, energy: 50, mood: 50, bond: 50 }
+    expect(petMoodEmoji({ ...pet, band: "low" })).toBe("😟")
+    expect(petMoodEmoji({ ...pet, band: "neutral" })).toBe("😐")
+    expect(petMoodEmoji({ ...pet, band: "high" })).toBe("😊")
+  })
+})
+
+describe("deriveStatusKey and the pet's band", () => {
+  it("reads attention from the band, not from the numbers", () => {
+    // The pet decides what "low" means (its care thresholds); the tray does
+    // not re-derive it from energy and mood.
+    expect(
+      deriveStatusKey(snap({ pet: { enabled: true, energy: 90, mood: 90, bond: 90, band: "low" } }))
+    ).toBe("tray.status.petNeedsAttention")
+    expect(
+      deriveStatusKey(
+        snap({ pet: { enabled: true, energy: 5, mood: 5, bond: 5, band: "neutral" } })
+      )
+    ).toBe("tray.status.idle")
   })
 })
 
@@ -181,7 +199,7 @@ describe("buildStatusSection", () => {
 
   it("appends a mood row when the pet subsystem is enabled", () => {
     const rows = buildStatusSection(
-      snap({ pet: { enabled: true, energy: 80, mood: 80, bond: 80 } })
+      snap({ pet: { enabled: true, energy: 80, mood: 80, bond: 80, band: "high" } })
     )
     expect(rows).toHaveLength(2)
     expect(rows[1]).toMatchObject({ id: "tray.status.pet", label: "😊", disabled: true })
@@ -189,7 +207,9 @@ describe("buildStatusSection", () => {
 
   it("omits the mood row when the pet subsystem is disabled or absent", () => {
     expect(
-      buildStatusSection(snap({ pet: { enabled: false, energy: 0, mood: 0, bond: 0 } }))
+      buildStatusSection(
+        snap({ pet: { enabled: false, energy: 0, mood: 0, bond: 0, band: "low" } })
+      )
     ).toHaveLength(1)
     expect(buildStatusSection(snap())).toHaveLength(1)
   })

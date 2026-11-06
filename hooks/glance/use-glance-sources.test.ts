@@ -67,6 +67,8 @@ import { filterExposedSessions } from "@/lib/chat/session-exposure"
 import { getDb } from "@/lib/db/schema"
 import { listWorkspaceSessionIds, listWorkspaceSessions } from "@/lib/db/sessions"
 import { buildPetSlice } from "@/lib/glance/build-pet"
+import { __resetTopicsForTesting, publishTopic } from "@/lib/runtime/topics"
+import type { PetStatusTopic } from "@/types/pet/events"
 import { getIslandProjection } from "@/lib/island/projection-store"
 import { useTrayStateSnapshot } from "@/lib/tray/state-snapshot"
 import { useChatStore } from "@/stores/chat"
@@ -113,19 +115,19 @@ const settingsState = (
   useSettingsStore as unknown as { getState: () => { settings: Record<string, unknown> | null } }
 ).getState()
 
-type LiveKind = "ids" | "workflows" | "recents" | "pet"
+type LiveKind = "ids" | "workflows" | "recents"
 
 /**
  * Which of the hook's live queries a `useLiveQuery(fn, deps, fallback)` call
  * is, from its shape: recents fall back to an array, the running workflows to
- * the empty summary, the pet profile has two deps, the workspace's session
- * ids three.
+ * the empty summary, the workspace's session ids to null. The pet is not a
+ * live query here: it arrives on its `pet.status` topic.
  */
 function liveKind(args: readonly unknown[]): LiveKind {
-  const [, deps, fallback] = args
+  const [, , fallback] = args
   if (Array.isArray(fallback)) return "recents"
   if (fallback !== null && typeof fallback === "object") return "workflows"
-  return (deps as unknown[]).length === 2 ? "pet" : "ids"
+  return "ids"
 }
 
 const NOW = new Date(2026, 9, 10, 12, 0, 0).getTime()
@@ -153,7 +155,6 @@ describe("useGlanceSources", () => {
   const refreshUsage = jest.fn()
   let liveSessionIds: string[] | null
   let liveRecentRows: unknown[]
-  let livePetProfile: unknown
   let liveWorkflows: GlanceFleetWorkflows
   let usageGlanceValue: unknown
 
@@ -163,7 +164,7 @@ describe("useGlanceSources", () => {
     jest.clearAllMocks()
     liveSessionIds = null
     liveRecentRows = []
-    livePetProfile = null
+    __resetTopicsForTesting()
     usageGlanceValue = null
     liveWorkflows = NO_RUNNING_WORKFLOWS
     // Answer each live query by what it is, not by call order.
@@ -171,8 +172,7 @@ describe("useGlanceSources", () => {
       const kind = liveKind(args)
       if (kind === "ids") return liveSessionIds
       if (kind === "workflows") return liveWorkflows
-      if (kind === "recents") return liveRecentRows
-      return livePetProfile
+      return liveRecentRows
     })
     budgetMock.mockReturnValue({ worst: null })
     usageGlanceMock.mockImplementation(() => ({
@@ -217,7 +217,6 @@ describe("useGlanceSources", () => {
       ids: last("ids"),
       workflows: last("workflows"),
       recents: last("recents"),
-      pet: last("pet"),
     }
   }
 
@@ -267,7 +266,6 @@ describe("useGlanceSources", () => {
       const live = lastLive()
       await expect(live.ids.run()).resolves.toBeNull()
       await expect(live.recents.run()).resolves.toEqual([])
-      await expect(live.pet.run()).resolves.toBeNull()
       expect(workspaceIdsMock).not.toHaveBeenCalled()
       expect(workspaceSessionsMock).not.toHaveBeenCalled()
       expect(getDbMock).not.toHaveBeenCalled()
@@ -650,56 +648,33 @@ describe("useGlanceSources", () => {
   })
 
   describe("pet", () => {
-    it("reads the global pet profile only when the module and the pet are enabled", async () => {
-      settingsState.settings = {
-        trayPanelLayout: layoutWith(["pet"]),
-        petSettings: { enabled: true },
-      }
-      const get = jest.fn().mockResolvedValue({ marker: "profile" })
-      getDbMock.mockReturnValue({ petProfile: { get } })
+    const status: PetStatusTopic = { enabled: true, at: () => null }
+
+    it("builds the pet slice from the pet's pet.status topic and the clock", () => {
+      settingsState.settings = { trayPanelLayout: layoutWith(["pet"]) }
+      publishTopic("pet.status", status)
       render(true)
-      const { pet } = lastLive()
-      expect(pet.deps).toEqual([true, true])
-      await expect(pet.run()).resolves.toEqual({ marker: "profile" })
-      expect(get).toHaveBeenCalledWith("global")
+      expect(petSliceMock).toHaveBeenLastCalledWith(status, NOW)
     })
 
-    it("resolves null for a missing profile", async () => {
-      settingsState.settings = {
-        trayPanelLayout: layoutWith(["pet"]),
-        petSettings: { enabled: true },
-      }
-      getDbMock.mockReturnValue({ petProfile: { get: jest.fn().mockResolvedValue(undefined) } })
-      render(true)
-      await expect(lastLive().pet.run()).resolves.toBeNull()
-    })
-
-    it("does not read the profile when the pet is disabled", async () => {
-      settingsState.settings = {
-        trayPanelLayout: layoutWith(["pet"]),
-        petSettings: { enabled: false },
-      }
-      render(true)
-      const { pet } = lastLive()
-      expect(pet.deps).toEqual([true, false])
-      await expect(pet.run()).resolves.toBeNull()
-      expect(getDbMock).not.toHaveBeenCalled()
-    })
-
-    it("builds the pet slice from the enabled flag, the profile and the clock", () => {
-      settingsState.settings = {
-        trayPanelLayout: layoutWith(["pet"]),
-        petSettings: { enabled: true },
-      }
-      livePetProfile = { marker: "profile" }
-      render(true)
-      expect(petSliceMock).toHaveBeenLastCalledWith(true, { marker: "profile" }, NOW)
-    })
-
-    it("builds a disabled pet slice when the pet setting is off", () => {
+    it("builds it from no status while the pet publishes nothing here", () => {
       settingsState.settings = { trayPanelLayout: layoutWith(["pet"]) }
       render(true)
-      expect(petSliceMock).toHaveBeenLastCalledWith(false, null, NOW)
+      expect(petSliceMock).toHaveBeenLastCalledWith(undefined, NOW)
+    })
+
+    it("follows a new pet.status", () => {
+      settingsState.settings = { trayPanelLayout: layoutWith(["pet"]) }
+      render(true)
+      const next: PetStatusTopic = { enabled: false, at: () => null }
+      act(() => publishTopic("pet.status", next))
+      expect(petSliceMock).toHaveBeenLastCalledWith(next, NOW)
+    })
+
+    it("does not read the pet's table itself", () => {
+      settingsState.settings = { trayPanelLayout: layoutWith(["pet"]) }
+      render(true)
+      expect(getDbMock).not.toHaveBeenCalled()
     })
   })
 

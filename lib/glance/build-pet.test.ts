@@ -1,14 +1,8 @@
-import { computePetView } from "@/lib/pet/runtime/pet-view"
-import type { PetProfile } from "@/types/pet"
+import type { PetStatusTopic, PetStatusView } from "@/types/pet/events"
 
 import { buildPetSlice } from "./build-pet"
 
-jest.mock("@/lib/pet/runtime/pet-view", () => ({ computePetView: jest.fn() }))
-
-const computePetViewMock = computePetView as jest.Mock
-
 const NOW = 1_800_000_000_000
-const profile = { id: "global" } as unknown as PetProfile
 
 const DISABLED = {
   updatedAt: NOW,
@@ -20,28 +14,36 @@ const DISABLED = {
   bond: 0,
 }
 
-beforeEach(() => {
-  computePetViewMock.mockReset()
+function status(enabled: boolean, view: PetStatusView | null): PetStatusTopic & { at: jest.Mock } {
+  return { enabled, at: jest.fn(() => view) }
+}
+
+const view = (over: Partial<PetStatusView> = {}): PetStatusView => ({
+  mood: "happy",
+  condition: "well",
+  needs: { energy: 61.4, mood: 72.5, bond: 10.49 },
+  band: "high",
+  ...over,
 })
 
 describe("buildPetSlice", () => {
-  it("is disabled with zeros when the pet is off", () => {
-    expect(buildPetSlice(false, profile, NOW)).toEqual(DISABLED)
-    expect(computePetViewMock).not.toHaveBeenCalled()
+  it("is disabled with zeros while nothing publishes pet.status here", () => {
+    expect(buildPetSlice(undefined, NOW)).toEqual(DISABLED)
   })
 
-  it.each([[null], [undefined]])("is disabled with zeros when the profile is %j", (p) => {
-    expect(buildPetSlice(true, p, NOW)).toEqual(DISABLED)
-    expect(computePetViewMock).not.toHaveBeenCalled()
+  it("is disabled with zeros when the pet is off, without asking it", () => {
+    const off = status(false, view())
+    expect(buildPetSlice(off, NOW)).toEqual(DISABLED)
+    expect(off.at).not.toHaveBeenCalled()
   })
 
-  it("reads mood, condition and rounded needs from computePetView", () => {
-    computePetViewMock.mockReturnValue({
-      mood: "happy",
-      condition: "well",
-      needs: { energy: 61.4, mood: 72.5, bond: 10.49 },
-    })
-    expect(buildPetSlice(true, profile, NOW)).toEqual({
+  it("is disabled with zeros when the pet has no profile yet", () => {
+    expect(buildPetSlice(status(true, null), NOW)).toEqual(DISABLED)
+  })
+
+  it("reads mood, condition and rounded needs, decayed to the build's now", () => {
+    const on = status(true, view())
+    expect(buildPetSlice(on, NOW)).toEqual({
       updatedAt: NOW,
       enabled: true,
       mood: "happy",
@@ -50,25 +52,20 @@ describe("buildPetSlice", () => {
       moodLevel: 73,
       bond: 10,
     })
-  })
-
-  it("passes the profile, no binding and now to computePetView", () => {
-    computePetViewMock.mockReturnValue({
-      mood: "tired",
-      condition: "unwell",
-      needs: { energy: 0, mood: 0, bond: 0 },
-    })
-    buildPetSlice(true, profile, NOW)
-    expect(computePetViewMock).toHaveBeenCalledWith(profile, null, NOW)
+    expect(on.at).toHaveBeenCalledWith(NOW)
   })
 
   it("keeps an unwell, lonely pet's state", () => {
-    computePetViewMock.mockReturnValue({
-      mood: "lonely",
-      condition: "unwell",
-      needs: { energy: 3.2, mood: 0.4, bond: 99.6 },
-    })
-    expect(buildPetSlice(true, profile, NOW)).toMatchObject({
+    const lonely = status(
+      true,
+      view({
+        mood: "lonely",
+        condition: "unwell",
+        needs: { energy: 3.2, mood: 0.4, bond: 99.6 },
+        band: "low",
+      })
+    )
+    expect(buildPetSlice(lonely, NOW)).toMatchObject({
       mood: "lonely",
       condition: "unwell",
       energy: 3,

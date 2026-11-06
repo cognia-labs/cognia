@@ -48,5 +48,11 @@ export default defineUiModule({
   // window's lifecycle. Mounted in every window by `ModuleEffectsHost`; it
   // runs only in the main one (`getWindowRole`). It replaced the app
   // runtime's hand-mounted `<PetMount />`.
-  effects: [{ name: "pet-mount", load: () => import("./pet-mount") }],
+  effects: [
+    { name: "pet-mount", load: () => import("./pet-mount") },
+    // Publishes `pet.status` for the tray and the glance, which read the pet
+    // through the topic instead of importing it (ADR-0250 §14). Every window
+    // and every host: the readers are spread across them.
+    { name: "pet-status", load: () => import("./pet-status-publisher") },
+  ],
 })

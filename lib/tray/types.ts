@@ -2,6 +2,7 @@
 // `src-tauri/src/tray/dto.rs`; keep the two in lockstep when extending the
 // menu schema.
 
+import type { PetNeedsBand } from "@/types/pet/events"
 import type { LimitsMeterKind, LimitsMeterStatus } from "@/types/subscription"
 import type {
   UsageGlanceMetric,
@@ -121,9 +122,17 @@ export interface TrayStateSnapshot {
    * updating; absent/`null` when the pet subsystem is disabled
    * (`PetSettings.enabled === false`) or its profile hasn't hatched yet, so
    * tray items gated on `pet.enabled` (see `evaluateWhen`) hide cleanly.
-   * Needs are already lazily-decayed (same values the widget shows).
+   * Needs are already lazily-decayed (same values the widget shows), and
+   * `band` is the pet's own coarse reading of the lower of energy and mood,
+   * read from its `pet.status` topic (ADR-0250 §14).
    */
-  pet?: { enabled: boolean; energy: number; mood: number; bond: number } | null
+  pet?: {
+    enabled: boolean
+    energy: number
+    mood: number
+    bond: number
+    band: PetNeedsBand
+  } | null
   /**
    * Subscription-quota glance data (ADR-0025 unified limits), populated by
    * `lib/tray/usage.ts:useTrayUsage` only while at least one tray usage

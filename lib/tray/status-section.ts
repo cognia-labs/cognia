@@ -9,7 +9,6 @@
 // PII-redacted `safeObjective` only — never the raw objective — because the
 // OS tray is a screenshot-able surface.
 
-import { NEUTRAL_MOOD_CEILING, UNWELL_NEED_THRESHOLD } from "@/lib/pet/care/condition"
 import type { TrayMenuItem, TrayStateSnapshot } from "./types"
 
 /**
@@ -23,14 +22,18 @@ export const GOAL_TITLE_MAX = 48
 
 /**
  * Coarse 3-band mood indicator for the tray (a screenshot-able OS surface —
- * exact percentages are more precision than useful at a glance, mirroring
- * the widget's own needs→mood banding in `lib/pet/state/reducer.ts`).
+ * exact percentages are more precision than useful at a glance). The band is
+ * the pet's own (`pet.status`, on its care thresholds), so the tray never
+ * re-derives them.
  */
+const PET_BAND_EMOJI: Record<NonNullable<TrayStateSnapshot["pet"]>["band"], string> = {
+  low: "😟",
+  neutral: "😐",
+  high: "😊",
+}
+
 export function petMoodEmoji(pet: NonNullable<TrayStateSnapshot["pet"]>): string {
-  const worst = Math.min(pet.energy, pet.mood)
-  if (worst < UNWELL_NEED_THRESHOLD) return "😟"
-  if (worst < NEUTRAL_MOOD_CEILING) return "😐"
-  return "😊"
+  return PET_BAND_EMOJI[pet.band]
 }
 
 /**
@@ -49,10 +52,7 @@ export function deriveStatusKey(snapshot: TrayStateSnapshot): string {
   // is the worst thing for an OS-level surface to hide.
   if (snapshot.chat.awaitingApproval) return "tray.status.awaitingApproval"
   if (snapshot.chat.streaming) return "tray.status.streaming"
-  if (
-    snapshot.pet?.enabled &&
-    Math.min(snapshot.pet.energy, snapshot.pet.mood) < UNWELL_NEED_THRESHOLD
-  ) {
+  if (snapshot.pet?.enabled && snapshot.pet.band === "low") {
     return "tray.status.petNeedsAttention"
   }
   return "tray.status.idle"

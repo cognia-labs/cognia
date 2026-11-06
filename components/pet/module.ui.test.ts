@@ -35,10 +35,12 @@ describe("pet UI manifest", () => {
     expect("profiles" in section).toBe(false)
   })
 
-  it("mounts the pet controller as its one effect", async () => {
-    expect(petUi.effects.map((effect) => effect.name)).toEqual(["pet-mount"])
-    const loaded = await petUi.effects[0].load()
-    expect(typeof loaded.default).toBe("function")
+  it("mounts the pet controller and the pet.status publisher", async () => {
+    expect(petUi.effects.map((effect) => effect.name)).toEqual(["pet-mount", "pet-status"])
+    for (const effect of petUi.effects) {
+      const loaded = await effect.load()
+      expect(typeof loaded.default).toBe("function")
+    }
   })
 
   it("loads the settings section lazily, as a default export", async () => {

@@ -63,14 +63,17 @@ describe("deriveTrayTooltip", () => {
   })
 
   it("surfaces the pet needing attention as the lowest-priority status", () => {
-    const out = deriveTrayTooltip(snap({ pet: { enabled: true, energy: 5, mood: 5, bond: 50 } }), t)
+    const out = deriveTrayTooltip(
+      snap({ pet: { enabled: true, energy: 5, mood: 5, bond: 50, band: "low" } }),
+      t
+    )
     expect(out).toBe("Cognia — Pet needs attention")
   })
 
   it("still lets streaming outrank a needy pet", () => {
     const out = deriveTrayTooltip(
       snap({
-        pet: { enabled: true, energy: 5, mood: 5, bond: 50 },
+        pet: { enabled: true, energy: 5, mood: 5, bond: 50, band: "low" },
         chat: { streaming: true, hasActiveSession: true },
       }),
       t
