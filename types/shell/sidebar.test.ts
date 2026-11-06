@@ -72,9 +72,13 @@ describe("sidebar nav meta", () => {
   it("leaves the remaining features to the More popover", () => {
     // Pinning every `feature` (the old default) put 11 icons on a 64px rail.
     // These configure-once destinations are one More click away instead.
-    const featureIds = SIDEBAR_NAV_META.filter((m) => m.group === "feature").map((m) => m.id)
+    // Over the catalog, so a module's destination (the pet's) counts too.
+    const featureIds = navCatalog()
+      .filter((m) => m.group === "feature")
+      .map((m) => m.id)
     const unpinnedFeatures = featureIds.filter((id) => !DEFAULT_SIDEBAR_LAYOUT.pinned.includes(id))
     expect(unpinnedFeatures.sort()).toEqual([
+      "agents",
       "browser",
       "discover",
       "goals",
@@ -115,7 +119,8 @@ describe("sidebar nav meta", () => {
     const desktopOnly = SIDEBAR_NAV_META.filter((m) => m.desktopOnly).map((m) => m.id)
     // `browser` is a feature-group entry rather than an auxiliary one, but the
     // embedded webview only exists in the Tauri shell, so it is desktop-only too.
-    // `pet` is the desktop shell's own subsystem (ADR-0058 D9).
-    expect(desktopOnly.sort()).toEqual(["browser", "pet"])
+    // The pet's destination lives in its module (`lib/pet/module.ts`), gated on
+    // the paired host's operation instead (ADR-0219).
+    expect(desktopOnly.sort()).toEqual(["browser"])
   })
 })

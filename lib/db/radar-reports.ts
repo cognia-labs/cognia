@@ -29,6 +29,15 @@ export async function listRadarReports(limit = 20): Promise<RadarReport[]> {
   return getDb().radarReports.orderBy("generatedAt").reverse().limit(limit).toArray()
 }
 
+/**
+ * Every report, newest first: the panel's history picker. Uncapped by leaving
+ * the limit off, never by a huge one: IndexedDB's `getAll` count is an
+ * unsigned long, so `limit(Number.MAX_SAFE_INTEGER)` throws in a real browser.
+ */
+export async function listAllRadarReports(): Promise<RadarReport[]> {
+  return getDb().radarReports.orderBy("generatedAt").reverse().toArray()
+}
+
 /** Trim to the newest `keep` reports (called after each write). */
 export async function pruneRadarReports(keep = 20): Promise<number> {
   const db = getDb()

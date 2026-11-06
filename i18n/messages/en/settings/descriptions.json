@@ -38,7 +38,6 @@
   "network": "HTTP / HTTPS / SOCKS5 proxy for all outbound network traffic. Auto-detect Clash Verge, Mihomo, V2Ray and other local proxy tools.",
   "notifications": "Notification center channels, quiet hours, per-source mute, and retention.",
   "ocr": "OCR providers (Mistral OCR, Google Vision, AWS Textract, Azure DI, Claude / GPT / Gemini vision, Mathpix, OCR.space, ABBYY, Nanonets, Lark) plus on-device engines (Tesseract WASM/native, Windows.Media.Ocr, Apple Vision, Android ML Kit, ocrs, PaddleOCR) and the self-hosted HTTP adapter. Includes auto-router, PDF fast-path, and result cache.",
-  "pet": "Your animated desktop companion.",
   "plugins": "Browse, install, configure, and govern plugins. Review permissions, scheduled jobs, devtools, and contract audits.",
   "presets": "Reusable session configurations — system prompt plus model, tool, MCP, and skill overrides.",
   "proIde": "Embedded VS Code install and disk usage",

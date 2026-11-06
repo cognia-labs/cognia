@@ -6,9 +6,15 @@
 // every plugin that registered a component for that point gets rendered in
 // `priority` order. Each plugin is wrapped in its own ErrorBoundary so a
 // throwing extension can't take down the host UI.
+//
+// Built-in feature modules fill the same points from their UI manifests
+// (`slots`, ADR-0250 §14). Their contributions render first, in module id
+// order, each behind its own boundary (`components/modules/slots.tsx`); a
+// `limit` counts them too.
 
 import { useEffect, useSyncExternalStore, type ReactNode } from "react"
 import { PluginSurface } from "@/components/plugins/plugin-surface"
+import { ModuleSlotContributions, moduleSlotEntries } from "@/components/modules/slots"
 import { useSurfaceProjections } from "./use-surface-projections"
 import { getExtensionRevision, subscribeExtensionChanges } from "@/lib/plugin/api/extension-api"
 import {
@@ -95,9 +101,12 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
   }, [point, runtimeRequested])
 
   const ordered = useSurfaceProjections(point, context)
-  const visible = typeof limit === "number" ? ordered.slice(0, limit) : ordered
+  const modules = moduleSlotEntries(point)
+  const shownModules = typeof limit === "number" ? modules.slice(0, limit) : modules
+  const visible =
+    typeof limit === "number" ? ordered.slice(0, Math.max(0, limit - shownModules.length)) : ordered
 
-  if (visible.length === 0) {
+  if (visible.length === 0 && shownModules.length === 0) {
     return fallback ? <>{fallback}</> : null
   }
 
@@ -107,7 +116,7 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
     <div
       className={className}
       data-plugin-extension-slot={point}
-      data-extension-count={visible.length}
+      data-extension-count={shownModules.length + visible.length}
       data-form-factor={formFactor}
       // Makes this wrapper a query container, so a plugin's scoped stylesheet
       // can respond to how wide its slot actually is (`@container (min-width:
@@ -116,6 +125,7 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
       // slots whose height is driven by their content.
       style={INLINE_SIZE_CONTAINER}
     >
+      <ModuleSlotContributions entries={shownModules} formFactor={formFactor} context={context} />
       {visible.map((ext) => {
         const Cmp = ext.component as unknown as React.ComponentType<{
           pluginId: string
@@ -148,7 +158,7 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
 
 /**
  * Reactive check for whether a UI extension point currently has at least one
- * visible (context-key gated) contribution. Hosts use this to decide whether
+ * visible (context-key gated) contribution, from a plugin or a module. Hosts use this to decide whether
  * to render surrounding chrome (a toolbar row, a bordered panel) that would
  * otherwise show empty when only a plugin — and no native content — occupies
  * the surface. Subscribes to the same registry + context-key revisions as
@@ -161,5 +171,6 @@ export function usePluginSlotHasExtensions(
 ): boolean {
   useSyncExternalStore(subscribeExtensionChanges, getExtensionRevision, () => 0)
   useSyncExternalStore(subscribeContextKeys, getContextKeyRevision, () => 0)
-  return useSurfaceProjections(point, context).length > 0
+  const plugins = useSurfaceProjections(point, context)
+  return plugins.length > 0 || moduleSlotEntries(point).length > 0
 }

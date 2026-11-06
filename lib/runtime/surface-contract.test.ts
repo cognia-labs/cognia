@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 
-import { navCatalog } from "@/lib/shell/nav-catalog"
+import { navCatalog, navCatalogEntry } from "@/lib/shell/nav-catalog"
 import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
 import type { RuntimeSnapshot } from "./operation-availability"
 import { resolveRuntimeRecovery } from "./recovery-resolver"
@@ -171,7 +171,9 @@ describe("/pet (runtime on desktop, console remote, ADR-0058 D9 / ADR-0219)", ()
   })
 
   it("is no longer a desktop-only rail entry; the rail gates it on the host instead", () => {
-    const meta = SIDEBAR_NAV_META.find((m) => m.id === "pet")
+    // The destination comes from the pet's manifest (`lib/pet/module.ts`).
+    const meta = navCatalogEntry("pet")
+    expect(meta?.module).toBe("pet")
     expect(meta?.desktopOnly).toBeUndefined()
     expect(meta?.hostOperationGated).toBe(true)
   })

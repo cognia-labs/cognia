@@ -22,6 +22,7 @@
   },
   "panel": {
     "empty": "No report yet. Run the radar to analyze your recent info diet.",
+    "loading": "Loading the radar report…",
     "meta": "{count} items analyzed · {days}-day window",
     "run": "Run now",
     "runAria": "Generate a new radar report",

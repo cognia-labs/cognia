@@ -24,7 +24,7 @@ describe("PetConsoleSkeleton", () => {
 })
 
 describe("PetTabSkeleton", () => {
-  it.each(["list", "grid", "report"] as const)("draws the %s shape", (variant) => {
+  it.each(["list", "grid"] as const)("draws the %s shape", (variant) => {
     render(<PetTabSkeleton variant={variant} count={3} testId="tab-loading" />)
     const region = screen.getByTestId("tab-loading")
     expect(region).toHaveAttribute("data-skeleton", variant)
@@ -35,7 +35,6 @@ describe("PetTabSkeleton", () => {
   it.each([
     ["list", 4],
     ["grid", 7],
-    ["report", 3],
   ] as const)("draws one %s placeholder per requested item (%i)", (variant, count) => {
     render(<PetTabSkeleton variant={variant} count={count} testId="tab-loading" />)
     expect(screen.getByTestId("tab-loading").querySelectorAll("[data-skeleton-item]")).toHaveLength(

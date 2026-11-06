@@ -116,17 +116,6 @@ export const SIDEBAR_NAV_META: readonly SidebarNavMeta[] = [
     category: "agents",
   },
   { id: "goals", route: "/goals", i18nKey: "goals", group: "feature", category: "agents" },
-  // The pet runs on the desktop (ADR-0058 D9); a paired phone or browser
-  // cares for it remotely (ADR-0219), so off desktop the entry appears only
-  // while the paired host advertises remote pet care.
-  {
-    id: "pet",
-    route: "/pet",
-    i18nKey: "pet",
-    group: "feature",
-    category: "agents",
-    hostOperationGated: true,
-  },
   {
     id: "browser",
     route: "/browser",

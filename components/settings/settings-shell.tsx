@@ -258,10 +258,6 @@ const HarnessEvolutionSection = dynamic(
     import("./harness-evolution/harness-evolution-section").then((m) => m.HarnessEvolutionSection),
   { ssr: false, loading: () => <SectionLoading /> }
 )
-const PetSection = dynamic(() => import("./pet/pet-section").then((m) => m.PetSection), {
-  ssr: false,
-  loading: () => <SectionLoading />,
-})
 const ConversationSection = dynamic(
   () => import("./conversation/conversation-section").then((m) => m.ConversationSection),
   { ssr: false, loading: () => <SectionLoading /> }
@@ -734,8 +730,6 @@ function SectionContent({
       return <ScheduledTasksSection />
     case "goals":
       return <GoalsSection />
-    case "pet":
-      return <PetSection />
     case "webhooks":
       return <WebhooksSection />
     case "gateway":

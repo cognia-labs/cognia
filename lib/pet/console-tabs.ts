@@ -4,8 +4,8 @@
 // cross-window bridge's "open-console" message validation. Pure and
 // dependency-free so the wire protocol can import it.
 //
-// The console has five places plus a plugins tab that exists only while a
-// plugin fills it. Two of them hold segments: Collection (dex, achievements)
+// The console has five places plus an Extensions tab (id `plugins`) that
+// exists only while a module or a plugin fills it. Two of them hold segments: Collection (dex, achievements)
 // and Activity (journal, insights). Appearance & settings is not a tab: it is
 // a sub-page the header opens, so it has a destination id but no section.
 //

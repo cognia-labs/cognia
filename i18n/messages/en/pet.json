@@ -278,7 +278,7 @@
       "journal": "Journal",
       "insights": "Insights",
       "appearance": "Appearance & settings",
-      "plugins": "Plugins"
+      "plugins": "Extensions"
     },
     "title": "Your Pet",
     "unavailable": {
@@ -302,7 +302,7 @@
     "hatchFailed": "Couldn't hatch the egg. Try again.",
     "hatching": "Hatching… this can take a few seconds.",
     "insights": {
-      "captureDescription": "Pages and notes you capture are part of what the radar reads. Choose what gets captured here.",
+      "captureDescription": "Pages and notes you capture are part of what the Attention Radar in the Extensions tab reads. Choose what gets captured here.",
       "captureTitle": "Capture sources"
     },
     "renameFailed": "Couldn't rename your pet. Try again.",
@@ -321,12 +321,12 @@
       "remedy": {
         "appearance": "Open Cognia on your desktop and go to Pet → Appearance & settings.",
         "insights": "Open Cognia on your desktop and go to Pet → Activity → Insights.",
-        "plugins": "Open Cognia on your desktop and go to Pet → Plugins."
+        "plugins": "Open Cognia on your desktop and go to Pet → Extensions."
       },
       "what": {
         "appearance": "Change your pet's species, colors, skin, size and behavior.",
-        "insights": "See what the radar noticed from your activity, and choose what gets captured.",
-        "plugins": "Panels that your desktop's plugins add to the pet console."
+        "insights": "Choose what gets captured from your activity.",
+        "plugins": "Panels that Cognia's modules and your desktop's plugins add to the pet console, such as the Attention Radar."
       }
     },
     "chat": {
@@ -784,5 +784,12 @@
       "unreachable": "Couldn't reach your desktop. Check the connection and try again.",
       "desktopOnly": "That's only available in the desktop app."
     }
+  },
+  "nav": {
+    "label": "Pet"
+  },
+  "settingsSection": {
+    "description": "Your animated desktop companion.",
+    "label": "Pet"
   }
 }

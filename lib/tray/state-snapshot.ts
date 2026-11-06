@@ -24,7 +24,7 @@ import { useChatStore } from "@/stores/chat"
 import { aggregateRunState } from "@/lib/chat/aggregate-run-state"
 import { useSettingsStore } from "@/stores/settings"
 import { getOpenGoalForSession } from "@/lib/db/goals"
-import { getDb } from "@/lib/db/schema"
+import { getPetProfile } from "@/lib/db/pet"
 import { computePetView } from "@/lib/pet/runtime/pet-view"
 import { APP_VERSION } from "@/lib/app-version"
 import { isAutostartEnabled } from "@/lib/tauri/autostart"
@@ -111,7 +111,7 @@ export function useTrayStateSnapshot(): TrayStateSnapshot {
   // way the widget itself is. `computePetView` lazily decays needs — same
   // values `hooks/pet/use-pet.ts` shows — so the tray never disagrees.
   const petEnabled = useSettingsStore((s) => s.settings?.petSettings?.enabled ?? false)
-  const petProfile = useLiveQuery(() => getDb().petProfile.get("global"), [])
+  const petProfile = useLiveQuery(() => getPetProfile(), [])
   const pet = useMemo(
     () => (petEnabled && petProfile ? snapshotPetStats(petProfile) : null),
     [petEnabled, petProfile]

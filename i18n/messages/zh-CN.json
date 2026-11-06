@@ -14611,7 +14611,6 @@
       "navigation": "导航",
       "openSettings": "打开设置",
       "performance": "性能",
-      "pet": "宠物",
       "plugins": "插件",
       "scheduler": "调度器",
       "servers": "服务器",
@@ -33555,13 +33554,13 @@
         "remedy": {
           "appearance": "请在桌面端打开 Cognia，进入 宠物 → 外观与设置。",
           "insights": "请在桌面端打开 Cognia，进入 宠物 → 动态 → 洞察。",
-          "plugins": "请在桌面端打开 Cognia，进入 宠物 → 插件。"
+          "plugins": "请在桌面端打开 Cognia，进入 宠物 → 扩展。"
         },
         "title": "「{tab}」在桌面端使用",
         "what": {
           "appearance": "修改宠物的物种、配色、皮肤、大小和行为。",
-          "insights": "查看雷达从你的活动中发现的内容，并选择要捕获的来源。",
-          "plugins": "桌面端插件为宠物控制台添加的面板。"
+          "insights": "选择要从你的活动中采集哪些内容。",
+          "plugins": "Cognia 的模块和桌面端插件为宠物控制台添加的面板，例如注意力雷达。"
         },
         "why": "它依赖保存在桌面端的皮肤、模型和插件，因此无法在此设备上运行。"
       },
@@ -33589,7 +33588,7 @@
         "talkInChat": "和宠物的对话会记录在「对话」中。"
       },
       "insights": {
-        "captureDescription": "你采集的网页和笔记会成为雷达分析的素材，可以在这里选择采集哪些内容。",
+        "captureDescription": "你采集的网页和笔记会成为「扩展」页中注意力雷达分析的素材，可以在这里选择采集哪些内容。",
         "captureTitle": "采集来源"
       },
       "live2dFallback": "Live2D 暂时不可用，正在显示内置形象。",
@@ -33657,7 +33656,7 @@
         "home": "首页",
         "insights": "洞察",
         "journal": "日记",
-        "plugins": "插件",
+        "plugins": "扩展",
         "shop": "商店"
       },
       "title": "你的宠物",
@@ -33827,6 +33826,9 @@
       "lonely": "孤单",
       "tired": "疲惫"
     },
+    "nav": {
+      "label": "宠物"
+    },
     "needs": {
       "bond": "亲密",
       "energy": "精力",
@@ -33905,6 +33907,10 @@
       "edit": "重命名",
       "label": "宠物名字",
       "save": "保存名字"
+    },
+    "settingsSection": {
+      "description": "你的桌面动画伙伴。",
+      "label": "宠物"
     },
     "shop": {
       "apply": "装扮",
@@ -40982,6 +40988,7 @@
     },
     "panel": {
       "empty": "还没有报告。运行雷达以分析你近期的信息饮食。",
+      "loading": "正在加载雷达报告…",
       "meta": "已分析 {count} 项 · {days} 天窗口",
       "run": "立即运行",
       "runAria": "生成新的雷达报告",
@@ -51939,7 +51946,6 @@
       "network": "为所有出站请求配置 HTTP / HTTPS / SOCKS5 代理，并支持自动检测 Clash Verge、Mihomo、V2Ray 等本地代理工具。",
       "notifications": "通知中心的渠道、安静时段、按来源静音与保留策略。",
       "ocr": "OCR 服务提供商（Mistral OCR、Google Vision、AWS Textract、Azure DI、Claude / GPT / Gemini 视觉、Mathpix、OCR.space、ABBYY、Nanonets、飞书）以及本地引擎（Tesseract WASM/原生、Windows.Media.Ocr、Apple Vision、Android ML Kit、ocrs、PaddleOCR）和自托管 HTTP 适配器。含自动路由、PDF 文本层快速路径与结果缓存。",
-      "pet": "你的桌面动画伙伴。",
       "plugins": "浏览、安装、配置并治理插件。查看权限、定时任务、devtools 与契约审计。",
       "presets": "可复用的会话配置 — 系统提示词加上模型、工具、MCP 与技能覆盖。",
       "proIde": "内嵌 VS Code 的安装与磁盘占用",
@@ -58459,7 +58465,6 @@
       "network": "网络代理",
       "notifications": "通知",
       "ocr": "OCR 文字识别",
-      "pet": "宠物",
       "plugins": "插件",
       "presets": "预设",
       "proIde": "Pro IDE",

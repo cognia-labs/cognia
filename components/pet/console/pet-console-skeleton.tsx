@@ -86,7 +86,7 @@ function PetHomeSkeleton() {
 
 export interface PetTabSkeletonProps {
   /** Which list shape to stand in for. */
-  variant?: "list" | "grid" | "report"
+  variant?: "list" | "grid"
   /** Placeholder rows (list) or tiles (grid). */
   count?: number
   testId?: string
@@ -95,8 +95,9 @@ export interface PetTabSkeletonProps {
 
 /**
  * One console tab's own loading state, shaped like its rows or tiles. Each
- * row, tile or report section carries `data-skeleton-item`, so `count` can be
- * checked without leaning on the classes that draw it.
+ * row or tile carries `data-skeleton-item`, so `count` can be checked without
+ * leaning on the classes that draw it. The radar report, which the console's
+ * Extensions tab shows, draws its own (`components/radar/radar-report-skeleton.tsx`).
  */
 export function PetTabSkeleton({
   variant = "list",
@@ -120,17 +121,6 @@ export function PetTabSkeleton({
             <div key={i} data-skeleton-item className="flex flex-col items-center gap-1.5 p-2">
               <Skeleton className="size-14" />
               <Skeleton className="h-2.5 w-12" />
-            </div>
-          ))}
-        </div>
-      ) : variant === "report" ? (
-        <div className="flex flex-col gap-3">
-          <Skeleton className="h-10 w-full" />
-          {Array.from({ length: count }, (_, i) => (
-            <div key={i} data-skeleton-item className="flex flex-col gap-1.5">
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="h-3.5 w-full" />
-              <Skeleton className="h-3.5 w-4/5" />
             </div>
           ))}
         </div>

@@ -44,3 +44,5 @@ export function PetSection() {
     </SettingsStack>
   )
 }
+
+export default PetSection

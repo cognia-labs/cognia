@@ -14611,7 +14611,6 @@
       "navigation": "Navigation",
       "openSettings": "Open settings",
       "performance": "Performance",
-      "pet": "Pet",
       "plugins": "Plugins",
       "scheduler": "Scheduler",
       "servers": "Servers",
@@ -33555,13 +33554,13 @@
         "remedy": {
           "appearance": "Open Cognia on your desktop and go to Pet → Appearance & settings.",
           "insights": "Open Cognia on your desktop and go to Pet → Activity → Insights.",
-          "plugins": "Open Cognia on your desktop and go to Pet → Plugins."
+          "plugins": "Open Cognia on your desktop and go to Pet → Extensions."
         },
         "title": "{tab} is on your desktop",
         "what": {
           "appearance": "Change your pet's species, colors, skin, size and behavior.",
-          "insights": "See what the radar noticed from your activity, and choose what gets captured.",
-          "plugins": "Panels that your desktop's plugins add to the pet console."
+          "insights": "Choose what gets captured from your activity.",
+          "plugins": "Panels that Cognia's modules and your desktop's plugins add to the pet console, such as the Attention Radar."
         },
         "why": "It works with skins, models and plugins stored on your desktop, so it can't run on this device."
       },
@@ -33589,7 +33588,7 @@
         "talkInChat": "Conversations with your pet are recorded in Chat."
       },
       "insights": {
-        "captureDescription": "Pages and notes you capture are part of what the radar reads. Choose what gets captured here.",
+        "captureDescription": "Pages and notes you capture are part of what the Attention Radar in the Extensions tab reads. Choose what gets captured here.",
         "captureTitle": "Capture sources"
       },
       "live2dFallback": "Live2D is unavailable right now — showing the built-in mascot.",
@@ -33657,7 +33656,7 @@
         "home": "Home",
         "insights": "Insights",
         "journal": "Journal",
-        "plugins": "Plugins",
+        "plugins": "Extensions",
         "shop": "Shop"
       },
       "title": "Your Pet",
@@ -33827,6 +33826,9 @@
       "lonely": "Lonely",
       "tired": "Tired"
     },
+    "nav": {
+      "label": "Pet"
+    },
     "needs": {
       "bond": "Bond",
       "energy": "Energy",
@@ -33905,6 +33907,10 @@
       "edit": "Rename",
       "label": "Pet name",
       "save": "Save name"
+    },
+    "settingsSection": {
+      "description": "Your animated desktop companion.",
+      "label": "Pet"
     },
     "shop": {
       "apply": "Apply",
@@ -40982,6 +40988,7 @@
     },
     "panel": {
       "empty": "No report yet. Run the radar to analyze your recent info diet.",
+      "loading": "Loading the radar report…",
       "meta": "{count} items analyzed · {days}-day window",
       "run": "Run now",
       "runAria": "Generate a new radar report",
@@ -51939,7 +51946,6 @@
       "network": "HTTP / HTTPS / SOCKS5 proxy for all outbound network traffic. Auto-detect Clash Verge, Mihomo, V2Ray and other local proxy tools.",
       "notifications": "Notification center channels, quiet hours, per-source mute, and retention.",
       "ocr": "OCR providers (Mistral OCR, Google Vision, AWS Textract, Azure DI, Claude / GPT / Gemini vision, Mathpix, OCR.space, ABBYY, Nanonets, Lark) plus on-device engines (Tesseract WASM/native, Windows.Media.Ocr, Apple Vision, Android ML Kit, ocrs, PaddleOCR) and the self-hosted HTTP adapter. Includes auto-router, PDF fast-path, and result cache.",
-      "pet": "Your animated desktop companion.",
       "plugins": "Browse, install, configure, and govern plugins. Review permissions, scheduled jobs, devtools, and contract audits.",
       "presets": "Reusable session configurations — system prompt plus model, tool, MCP, and skill overrides.",
       "proIde": "Embedded VS Code install and disk usage",
@@ -58459,7 +58465,6 @@
       "network": "Network Proxy",
       "notifications": "Notifications",
       "ocr": "OCR",
-      "pet": "Pet",
       "plugins": "Plugins",
       "presets": "Presets",
       "proIde": "Pro IDE",

@@ -271,7 +271,7 @@
       "journal": "日记",
       "insights": "洞察",
       "appearance": "外观与设置",
-      "plugins": "插件"
+      "plugins": "扩展"
     },
     "title": "你的宠物",
     "unavailable": {
@@ -295,7 +295,7 @@
     "hatchFailed": "孵化失败，请重试。",
     "hatching": "正在孵化…可能需要几秒钟。",
     "insights": {
-      "captureDescription": "你采集的网页和笔记会成为雷达分析的素材，可以在这里选择采集哪些内容。",
+      "captureDescription": "你采集的网页和笔记会成为「扩展」页中注意力雷达分析的素材，可以在这里选择采集哪些内容。",
       "captureTitle": "采集来源"
     },
     "renameFailed": "改名失败，请重试。",
@@ -314,12 +314,12 @@
       "remedy": {
         "appearance": "请在桌面端打开 Cognia，进入 宠物 → 外观与设置。",
         "insights": "请在桌面端打开 Cognia，进入 宠物 → 动态 → 洞察。",
-        "plugins": "请在桌面端打开 Cognia，进入 宠物 → 插件。"
+        "plugins": "请在桌面端打开 Cognia，进入 宠物 → 扩展。"
       },
       "what": {
         "appearance": "修改宠物的物种、配色、皮肤、大小和行为。",
-        "insights": "查看雷达从你的活动中发现的内容，并选择要捕获的来源。",
-        "plugins": "桌面端插件为宠物控制台添加的面板。"
+        "insights": "选择要从你的活动中采集哪些内容。",
+        "plugins": "Cognia 的模块和桌面端插件为宠物控制台添加的面板，例如注意力雷达。"
       }
     },
     "chat": {
@@ -774,5 +774,12 @@
       "unreachable": "无法连接到桌面端，请检查连接后重试。",
       "desktopOnly": "该功能仅在桌面客户端可用。"
     }
+  },
+  "nav": {
+    "label": "宠物"
+  },
+  "settingsSection": {
+    "description": "你的桌面动画伙伴。",
+    "label": "宠物"
   }
 }

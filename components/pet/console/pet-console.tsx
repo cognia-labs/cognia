@@ -6,7 +6,8 @@
 //
 // Five places, in the order a visit goes: Home (how the pet is and what it
 // needs next), Chat, Shop, Collection (dex, achievements) and Activity
-// (journal, insights), plus a plugins tab while a plugin fills it. Appearance
+// (journal, insights), plus an Extensions tab (id `plugins`) while a module or
+// a plugin fills `pet.console.tab` (the radar does, ADR-0250 §14). Appearance
 // & settings is a sub-page the header opens, with a breadcrumb back. Where a
 // link lands is `lib/pet/console-tabs.ts`.
 //
@@ -296,8 +297,9 @@ function PetConsoleBody({
   const effectiveSkin = selection.skinId
   const lowPower = remote ? true : pet.lowPower
 
-  // The "Plugins" tab is host-owned and appears only while ≥1 plugin has
-  // registered a `pet.console.tab` extension.
+  // The Extensions tab (id `plugins`, kept so links already written still
+  // land) is host-owned and appears only while a module's slot (the radar's)
+  // or a plugin's extension fills `pet.console.tab`.
   const hasPluginTabs = usePluginSlotHasExtensions("pet.console.tab")
   const sections = hasPluginTabs
     ? PET_CONSOLE_SECTIONS

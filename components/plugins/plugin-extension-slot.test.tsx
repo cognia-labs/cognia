@@ -60,11 +60,21 @@ jest.mock("@/lib/plugin/utils/analytics", () => ({
   trackPluginEvent: jest.fn(),
 }))
 
+// Module contributions (ADR-0250 §14) come from the UI registry; none by
+// default, so the plugin-only cases below see the slot as before.
+let mockUiModules: object[] = []
+jest.mock("@/components/modules/registry", () => ({
+  activeUiModules: () => mockUiModules,
+}))
+
 import { PluginExtensionSlot, usePluginSlotHasExtensions } from "./plugin-extension-slot"
+import { __resetModuleSlotsForTests } from "@/components/modules/slots"
 import type { CanonicalExtensionPoint } from "@/lib/plugin/contracts/plugin-points"
 
 beforeEach(() => {
   mockRegistrations = []
+  mockUiModules = []
+  __resetModuleSlotsForTests()
   revision++
 })
 
@@ -275,6 +285,64 @@ describe("usePluginSlotHasExtensions", () => {
       subscribers.forEach((notify) => notify())
     })
     rerender(<Probe point="chat.input.above" />)
+    expect(screen.getByTestId("probe")).toHaveTextContent("true")
+  })
+})
+
+describe("module contributions", () => {
+  function moduleFilling(id: string, text: string) {
+    return {
+      id,
+      slots: {
+        "chat.input.above": async () => ({
+          default: ({ formFactor, context }: { formFactor: string; context?: object }) => (
+            <span>
+              {text} {formFactor} {JSON.stringify(context ?? {})}
+            </span>
+          ),
+        }),
+      },
+    }
+  }
+
+  it("renders a module's contribution ahead of the plugins', with the host context", async () => {
+    mockUiModules = [moduleFilling("radar", "module-ext")]
+    mockRegistrations = [makeReg("acme", () => <span>plugin-ext</span>)]
+    const { container } = render(
+      <PluginExtensionSlot point="chat.input.above" context={{ level: 2 }} />
+    )
+    await screen.findByText(/module-ext/)
+    const text = container.textContent ?? ""
+    expect(text).toContain('module-ext block {"level":2}')
+    expect(text.indexOf("module-ext")).toBeLessThan(text.indexOf("plugin-ext"))
+    const wrapper = container.querySelector("[data-plugin-extension-slot]")
+    expect(wrapper?.getAttribute("data-extension-count")).toBe("2")
+  })
+
+  it("renders a module's contribution when no plugin fills the point", async () => {
+    mockUiModules = [moduleFilling("radar", "module-only")]
+    render(<PluginExtensionSlot point="chat.input.above" fallback={<span>fallback-here</span>} />)
+    expect(await screen.findByText(/module-only/)).toBeInTheDocument()
+    expect(screen.queryByText("fallback-here")).not.toBeInTheDocument()
+  })
+
+  it("counts module contributions against the limit before plugins", async () => {
+    mockUiModules = [moduleFilling("radar", "module-ext")]
+    mockRegistrations = [makeReg("a", () => <span>A</span>), makeReg("b", () => <span>B</span>)]
+    render(<PluginExtensionSlot point="chat.input.above" limit={2} />)
+    await screen.findByText(/module-ext/)
+    expect(screen.getByText("A")).toBeInTheDocument()
+    expect(screen.queryByText("B")).not.toBeInTheDocument()
+  })
+
+  it("reports the point as filled when only a module fills it", () => {
+    mockUiModules = [moduleFilling("radar", "module-ext")]
+    function Probe() {
+      return (
+        <span data-testid="probe">{String(usePluginSlotHasExtensions("chat.input.above"))}</span>
+      )
+    }
+    render(<Probe />)
     expect(screen.getByTestId("probe")).toHaveTextContent("true")
   })
 })

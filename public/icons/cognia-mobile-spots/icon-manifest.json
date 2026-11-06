@@ -563,7 +563,6 @@
       "plugins": "plugins",
       "scheduler": "scheduler",
       "goals": "goals",
-      "pet": "pet",
       "browser": "browser",
       "source-control": "source-control",
       "agent-runs": "agent-runs",

@@ -456,7 +456,7 @@ function runtimeErrors(runtimes) {
   return errors
 }
 
-/** `effects`: named once each, loaded lazily. Nothing mounts them yet (see `ModuleEffect`). */
+/** `effects`: named once each, loaded lazily. `ModuleEffectsHost` mounts them (see `ModuleEffect`). */
 function effectErrors(effects) {
   if (!Array.isArray(effects)) return ["effects is a list of effects"]
   const errors = []

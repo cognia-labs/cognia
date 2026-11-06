@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react"
 
-import { PetSection } from "./pet-section"
+import DefaultPetSection, { PetSection } from "./pet-section"
 
 describe("PetSection", () => {
   it("points to the pet page's Appearance & settings instead of a second copy", () => {
@@ -13,5 +13,10 @@ describe("PetSection", () => {
   it("says what lives there", () => {
     render(<PetSection />)
     expect(screen.getByTestId("settings-pet-pointer")).toHaveTextContent(/desktop window/i)
+  })
+
+  it("is the default export too, which the pet's settings section loads", () => {
+    // `components/pet/module.ui.ts` (ADR-0250 §14).
+    expect(DefaultPetSection).toBe(PetSection)
   })
 })

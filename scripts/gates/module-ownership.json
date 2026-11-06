@@ -92,7 +92,8 @@
       "class": "module"
     },
     "attention": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/attention/attention-store.ts", "lib/attention/types.ts"]
     },
     "audio": {
       "class": "module"
@@ -104,7 +105,11 @@
       "class": "module"
     },
     "background-tasks": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/background-tasks/registry-core.ts",
+        "lib/background-tasks/renderer-subagent-registry.ts"
+      ]
     },
     "best-of-n": {
       "class": "module"
@@ -140,7 +145,12 @@
       "class": "foundation"
     },
     "capture": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "components/capture/capture-settings-panel.tsx",
+        "lib/capture/capture-manager.ts",
+        "stores/capture/capture-store.ts"
+      ]
     },
     "ccswitch": {
       "class": "module"
@@ -188,7 +198,8 @@
       "class": "kernel"
     },
     "connectors": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/connectors/bus.ts", "lib/connectors/outbound-runner.ts"]
     },
     "constants": {
       "class": "foundation"
@@ -305,7 +316,8 @@
       "class": "kernel"
     },
     "git": {
-      "class": "module"
+      "class": "module",
+      "api": ["stores/git/git-store.ts"]
     },
     "github": {
       "class": "module"
@@ -438,7 +450,12 @@
       "class": "module"
     },
     "memory": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/memory/retrieve/retriever.ts",
+        "lib/memory/runtime/apply-memory-context.ts",
+        "lib/memory/runtime/build-deps.ts"
+      ]
     },
     "mobile": {
       "class": "shell",
@@ -497,9 +514,6 @@
       "note": "The timing interface other code calls; the dashboard is `performance`."
     },
     "performance": {
-      "class": "module"
-    },
-    "pet": {
       "class": "module"
     },
     "pi-packages": {
@@ -572,9 +586,6 @@
     "queue": {
       "class": "kernel"
     },
-    "radar": {
-      "class": "module"
-    },
     "rag": {
       "class": "module"
     },
@@ -609,7 +620,8 @@
       "class": "kernel"
     },
     "scheduler": {
-      "class": "kernel"
+      "class": "kernel",
+      "api": ["components/scheduler/run-artifact-links.tsx"]
     },
     "scm": {
       "class": "module"
@@ -668,7 +680,7 @@
     },
     "share": {
       "class": "module",
-      "api": ["components/share/template-definition-share-button.tsx"]
+      "api": ["components/share/template-definition-share-button.tsx", "lib/share/hash.ts"]
     },
     "shared": {
       "class": "foundation"
@@ -772,7 +784,8 @@
       ]
     },
     "terminal": {
-      "class": "module"
+      "class": "module",
+      "api": ["stores/terminal/terminal-store.ts"]
     },
     "test": {
       "class": "foundation"
@@ -796,11 +809,12 @@
       "class": "module"
     },
     "tts": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/tts/speak-pet.ts"]
     },
     "twin": {
       "class": "module",
-      "api": ["lib/twin/runtime/build-deps.ts"]
+      "api": ["lib/twin/distill/llm.ts", "lib/twin/runtime/build-deps.ts"]
     },
     "types-root": {
       "class": "foundation"
@@ -891,16 +905,6 @@
       "prefix": "app/(mobile-onboard)/",
       "owner": "onboarding",
       "why": "Route shell owned by onboarding (analysis §11.3 C)."
-    },
-    {
-      "prefix": "app/pet-overlay/",
-      "owner": "pet",
-      "why": "Route shell owned by its module (analysis §11.3 C)."
-    },
-    {
-      "prefix": "app/pet-popup/",
-      "owner": "pet",
-      "why": "Route shell owned by its module (analysis §11.3 C)."
     },
     {
       "prefix": "app/portal/",

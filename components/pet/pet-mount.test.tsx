@@ -85,7 +85,7 @@ jest.mock("@/stores/settings", () => {
   return { useSettingsStore }
 })
 
-import { PetMount } from "./pet-mount"
+import DefaultPetMount, { PetMount } from "./pet-mount"
 
 beforeEach(() => {
   usePetEventBus.mockClear()
@@ -142,6 +142,11 @@ const ENABLED_SETTINGS = {
 }
 
 describe("PetMount", () => {
+  it("is the default export too, which the pet's effect entry loads", () => {
+    // `components/pet/module.ui.ts` mounts it through `ModuleEffectsHost`.
+    expect(DefaultPetMount).toBe(PetMount)
+  })
+
   it("renders nothing and stays disabled when pet is off", () => {
     settingsValue = {
       petSettings: {

@@ -41,7 +41,6 @@ import {
   WorkflowIcon,
   MousePointerClickIcon,
   TargetIcon,
-  PawPrintIcon,
   MessagesSquareIcon,
   BellIcon,
   PanelsTopLeftIcon,
@@ -515,21 +514,6 @@ const BUILTIN_SETTINGS_NAV: NavItem[] = [
     icon: CompassIcon,
     // Pure preferences for the Discover surface, which every shell renders;
     // the old desktop pin was an unmigrated UI assumption.
-  },
-  {
-    id: "pet",
-    labelKey: "pet",
-    descriptionKey: "pet",
-    group: "appearance",
-    icon: PawPrintIcon,
-    // The pet runs only in the desktop shell (ADR-0058 D9). Off desktop every
-    // control here would configure a pet that never mounts, so the section is
-    // unreachable there and a deep link renders the desktop-only notice. A
-    // paired phone cares for the desktop pet through the /pet console instead
-    // (ADR-0219), whose customization tab is desktop-only for the same reason
-    // (`lib/pet/console/action-capabilities.ts`): skins, models and these
-    // settings are the desktop's.
-    profiles: ["desktop"],
   },
   {
     id: "notifications",
@@ -1412,7 +1396,6 @@ export const SETTINGS_SEARCH_KEYWORDS: Partial<Record<SettingsSectionId, string[
     "持续",
     "判官",
   ],
-  pet: ["pet", "mascot", "companion", "buddy", "宠物", "桌宠", "伙伴"],
   logs: [
     "log",
     "logs",

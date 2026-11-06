@@ -4,6 +4,7 @@ import {
   saveRadarReport,
   getRadarReport,
   getLatestRadarReport,
+  listAllRadarReports,
   listRadarReports,
   pruneRadarReports,
 } from "./radar-reports"
@@ -58,5 +59,16 @@ describe("radar-reports CRUD", () => {
     const pruned = await pruneRadarReports(2)
     expect(pruned).toBeGreaterThanOrEqual(1)
     expect((await listRadarReports(50)).length).toBe(2)
+  })
+
+  it("lists every report newest-first, past the capped list's default", async () => {
+    // The panel's history picker. It used to pass `Number.MAX_SAFE_INTEGER`
+    // as a limit, which a real browser's IndexedDB refuses (`getAll` takes an
+    // unsigned long count), so the panel threw before rendering.
+    for (let i = 0; i < 25; i++) await saveRadarReport(report(`a${i}`, i * 1000))
+    const all = await listAllRadarReports()
+    expect(all).toHaveLength(25)
+    expect(all[0]!.id).toBe("a24")
+    expect(all.at(-1)!.id).toBe("a0")
   })
 })

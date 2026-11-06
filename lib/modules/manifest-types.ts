@@ -28,9 +28,9 @@
  *
  * The registries generated from these fields arrive registry by registry
  * (§13). `searchProviders`, `slashCommands` and `settingsSections` (M1), and
- * `nav` and `runtimes` (M2) are generated (`scripts/build/gen-module-registry.mjs`)
- * and read by their shells and hosts; every other field is shape-checked by the
- * gate and read by nothing yet.
+ * `nav`, `runtimes`, `slots` and `effects` (M2) are generated
+ * (`scripts/build/gen-module-registry.mjs`) and read by their shells and hosts;
+ * every other field is shape-checked by the gate and read by nothing yet.
  */
 
 import type { ComponentType } from "react"
@@ -40,7 +40,10 @@ import type { BootCapability } from "@/lib/boot/capabilities"
 import type { HeadlessHost, HeadlessRuntime } from "@/lib/headless/types"
 import type { GlobalSearchProvider } from "@/lib/global-search/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
-import type { CanonicalExtensionPoint } from "@/lib/plugin/contracts/plugin-points"
+import type {
+  CanonicalExtensionPoint,
+  PluginPointFormFactor,
+} from "@/lib/plugin/contracts/plugin-points"
 import type { SidebarNavCategory, SidebarNavMeta } from "@/types/shell/sidebar"
 
 /** A lazy entry. The only kind of code a manifest may hold. */
@@ -327,27 +330,44 @@ export interface ModuleNavEntry {
   }
 }
 
+/** What a lazily loaded module component resolves to: its default export. */
+export interface ModuleComponentModule<P = Record<string, never>> {
+  default: ComponentType<P>
+}
+
+/**
+ * The props a module's slot component receives: the slot's form factor and
+ * the context bag its host passes, the same two a plugin contribution gets.
+ */
+export interface ModuleSlotProps {
+  formFactor: PluginPointFormFactor
+  context?: Readonly<Record<string, unknown>>
+}
+
 /**
  * A side effect that needs React context, the router, i18n or toasts. Not a
- * runtime. The gate checks each is named once and lazy; no module declares
- * one yet, so no shell mounts them until the first contributor brings the
- * host that renders them (ADR-0250 §14, M2: the `pet` pilot).
+ * runtime. `ModuleEffectsHost` (`components/providers/initializers/
+ * module-effects-host.tsx`) renders every active module's effects in every
+ * window, inside the app's providers; an effect decides for itself which
+ * window it acts in. Its component renders the effect, usually `null`.
  */
 export interface ModuleEffect {
+  /** Lower-case kebab, unique within the module. */
   name: string
-  load: LazyModule
+  load: LazyModule<ModuleComponentModule>
 }
 
 export interface UiModuleManifest {
   /** Equals the directory name: `components/<id>/module.ui.ts`. */
   id: string
   /**
-   * Host components filling canonical extension points. The gate checks each
-   * point is canonical and each entry lazy; no module fills one yet, so no
-   * shell reads this field until the first contributor brings the render path
-   * (ADR-0250 §14, M2).
+   * Components filling canonical extension points (ADR-0250 §14). The point's
+   * host renders them through `PluginExtensionSlot`, ahead of plugin
+   * contributions and in module id order (`components/modules/slots.tsx`).
    */
-  slots?: Partial<Record<CanonicalExtensionPoint, LazyModule>>
+  slots?: Partial<
+    Record<CanonicalExtensionPoint, LazyModule<ModuleComponentModule<ModuleSlotProps>>>
+  >
   settingsSections?: readonly ModuleSettingsSection[]
   effects?: readonly ModuleEffect[]
 }

@@ -5,3 +5,5 @@
 export function PetMount() {
   return null
 }
+
+export default PetMount

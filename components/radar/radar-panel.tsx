@@ -1,7 +1,8 @@
 "use client"
 
 /**
- * Attention Radar panel — the pet console's "Insights" tab. Shows the latest
+ * Attention Radar panel, which the radar module puts in the pet console's
+ * Extensions tab (`pet.console.tab`, through `./pet-console-tab`). Shows the latest
  * 7-dimension info-diet report, a "Run now" trigger, and a folded-in config /
  * schedule section (so radar setup lives with the feature rather than needing a
  * separate Settings-nav entry).
@@ -42,9 +43,9 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { getLatestRadarReport, getRadarReport, listRadarReports } from "@/lib/db/radar-reports"
+import { getLatestRadarReport, getRadarReport, listAllRadarReports } from "@/lib/db/radar-reports"
 import { RadarSource, RadarSuggestions } from "./radar-suggestions"
-import { PetTabSkeleton } from "./pet-console-skeleton"
+import { RadarReportSkeleton } from "./radar-report-skeleton"
 import { runRadarReport, NoRadarModelError } from "@/lib/radar/radar-runner"
 import { resolveRadarCron, syncRadarCronToScheduler } from "@/lib/radar/radar-cron-bridge"
 import { getSettings, saveSettings } from "@/lib/db/settings"
@@ -70,7 +71,7 @@ export function RadarPanel() {
   const [saving, setSaving] = useState(false)
 
   const [reportId, setReportId] = useState("")
-  const reports = useLiveQuery(() => listRadarReports(Number.MAX_SAFE_INTEGER), [])
+  const reports = useLiveQuery(() => listAllRadarReports(), [])
   const report = useLiveQuery<RadarReport | null>(
     async () =>
       (reportId ? await getRadarReport(reportId) : await getLatestRadarReport("self")) ?? null,
@@ -195,7 +196,7 @@ export function RadarPanel() {
             </Select>
           </div>
           {report === undefined ? (
-            <PetTabSkeleton testId="radar-report-loading" variant="report" count={3} />
+            <RadarReportSkeleton testId="radar-report-loading" count={3} />
           ) : report ? (
             <RadarReportView report={report} t={t} />
           ) : (

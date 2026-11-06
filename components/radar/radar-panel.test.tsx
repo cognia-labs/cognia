@@ -8,7 +8,7 @@ import "fake-indexeddb/auto"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { RadarPanel } from "./radar-panel"
-import { getLatestRadarReport, listRadarReports } from "@/lib/db/radar-reports"
+import { getLatestRadarReport, listAllRadarReports } from "@/lib/db/radar-reports"
 import { runRadarReport, NoRadarModelError } from "@/lib/radar/radar-runner"
 import { syncRadarCronToScheduler } from "@/lib/radar/radar-cron-bridge"
 import { getSettings, saveSettings } from "@/lib/db/settings"
@@ -18,7 +18,7 @@ import type { RadarReport } from "@/types/radar"
 jest.mock("@/lib/db/radar-reports", () => ({
   getLatestRadarReport: jest.fn(),
   getRadarReport: jest.fn(),
-  listRadarReports: jest.fn(async () => []),
+  listAllRadarReports: jest.fn(async () => []),
 }))
 jest.mock("@/lib/radar/radar-runner", () => {
   class NoRadarModelError extends Error {}
@@ -132,7 +132,7 @@ describe("RadarPanel", () => {
 
   it("picks a past report from the shared Select, dated in the app locale", async () => {
     const past = { ...report(), id: "r0", generatedAt: Date.UTC(2026, 6, 1, 9, 30) }
-    ;(listRadarReports as jest.Mock).mockResolvedValue([past])
+    ;(listAllRadarReports as jest.Mock).mockResolvedValue([past])
     render(<RadarPanel />)
     const user = userEvent.setup()
     const trigger = await screen.findByRole("combobox", { name: /history|decisions\.history/i })

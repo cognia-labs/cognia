@@ -24,6 +24,7 @@ import { useCostBudgetStatus } from "@/hooks/usage/use-cost-budget-status"
 import { useUsageGlance } from "@/hooks/usage/use-usage-glance"
 import { filterExposedSessions } from "@/lib/chat/session-exposure"
 import { getDb } from "@/lib/db/schema"
+import { getPetProfile } from "@/lib/db/pet"
 import { listWorkspaceSessionIds, listWorkspaceSessions } from "@/lib/db/sessions"
 import {
   buildFleetSlice,
@@ -224,7 +225,7 @@ export function useGlanceSources(
   const petOn = on("pet")
   const petEnabled = useSettingsStore((s) => s.settings?.petSettings?.enabled ?? false)
   const petProfile = useLiveQuery(
-    async () => (petOn && petEnabled ? ((await getDb().petProfile.get("global")) ?? null) : null),
+    async () => (petOn && petEnabled ? ((await getPetProfile()) ?? null) : null),
     [petOn, petEnabled],
     null
   )

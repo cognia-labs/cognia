@@ -284,3 +284,5 @@ export function PetMount() {
   if (!petEnabled) return null
   return <PetMainRuntime settings={pet} activeCharacterId={activeCharacterId} />
 }
+
+export default PetMount
