@@ -11,14 +11,36 @@ export default defineUiModule({
       label: "pet.settingsSection.label",
       description: "pet.settingsSection.description",
       after: "discover",
-      // The pet runs only in the desktop shell (ADR-0058 D9). Off desktop
-      // every control here would configure a pet that never mounts, so the
-      // section is unreachable there and a deep link renders the desktop-only
-      // notice. A paired phone cares for the desktop pet through the /pet
-      // console instead (ADR-0219), whose appearance page is desktop-only for
-      // the same reason (`lib/pet/console/action-capabilities.ts`).
-      profiles: ["desktop"],
-      keywords: ["pet", "mascot", "companion", "buddy", "宠物", "桌宠", "伙伴"],
+      // The section is the pet's whole console (ADR-0058 D16): there is no
+      // `/pet` page. It owns its scroll, a header band over a scrolling pane.
+      layout: "fill",
+      // The pet runs only in the desktop shell (ADR-0058 D9). A paired phone
+      // or browser cares for the desktop's pet from this same section
+      // (ADR-0219), so off the desktop it is offered only while the paired
+      // host advertises `pet_get`; the desktop-only parts (appearance,
+      // insights, extensions) say so inside the console
+      // (`lib/pet/console/action-capabilities.ts`).
+      hostOperation: "pet_get",
+      keywords: [
+        "pet",
+        "mascot",
+        "companion",
+        "buddy",
+        "feed",
+        "nurture",
+        "shop",
+        "dex",
+        "achievements",
+        "journal",
+        "宠物",
+        "桌宠",
+        "伙伴",
+        "喂养",
+        "商店",
+        "图鉴",
+        "成就",
+        "日记",
+      ],
       load: () => import("@/components/settings/pet/pet-section"),
     },
   ],

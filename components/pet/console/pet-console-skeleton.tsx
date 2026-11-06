@@ -1,8 +1,8 @@
-// Loading placeholders for the /pet console, drawn in the shape of what they
+// Loading placeholders for the pet console, drawn in the shape of what they
 // stand for.
 //
 // The console used to say "Waking up your pet…" in the top-left corner and
-// then jump into a header, a rail and a two-column pane; tabs with their own
+// then jump into its rail and detail card; places with their own
 // live queries rendered their empty state first ("No characters yet",
 // greyed-out achievements) and then the real rows. Each placeholder here
 // keeps the final layout's geometry, so nothing moves when the data lands,
@@ -19,7 +19,13 @@ function LoadingStatus({ label }: { label: string }) {
   return <span className="sr-only">{label}</span>
 }
 
-/** The whole console while the profile loads: header band, nav row, Home. */
+/**
+ * The whole console while the profile loads, in the shape of Settings → Pet's
+ * list-and-detail frame (`SettingsMasterDetail` at the console's 240px rail):
+ * the rail's rows, or the sheet trigger on a phone, beside a detail card with
+ * the pet's identity header over Home. The tiers follow the same pane widths
+ * as the frame, so nothing jumps when the console replaces this.
+ */
 export function PetConsoleSkeleton() {
   const t = useTranslations("pet")
   return (
@@ -27,31 +33,43 @@ export function PetConsoleSkeleton() {
       data-testid="pet-console-loading"
       role="status"
       aria-busy="true"
-      className="flex h-full min-h-0 flex-col"
+      className="@container/settings-pane flex h-full min-h-0 flex-1 flex-col"
     >
       <LoadingStatus label={t("console.loading")} />
-      <div className="shrink-0 border-b border-border/70">
-        <div className="flex min-h-[var(--chrome-h-tall)] items-center gap-2.5 px-3 py-2 md:px-4">
-          <Skeleton className="size-9 rounded-xl" />
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-3 w-44" />
-          </div>
-          <Skeleton className="size-8 md:w-40" />
-          <Skeleton className="size-8 md:w-36" />
-        </div>
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-4",
+          "@[440px]/settings-pane:grid-cols-[52px_minmax(0,1fr)] @[440px]/settings-pane:grid-rows-1",
+          "@[620px]/settings-pane:grid-cols-[200px_minmax(0,1fr)]",
+          "@[860px]/settings-pane:grid-cols-[240px_minmax(0,1fr)]"
+        )}
+      >
         <div
           data-testid="pet-console-loading-nav"
-          className="flex min-h-[var(--chrome-h)] items-center gap-1.5 border-t border-border/55 px-3 py-1.5 md:px-4"
+          className="hidden min-h-0 flex-col gap-1 rounded-lg bg-muted/50 p-1 @[440px]/settings-pane:flex"
         >
-          {/* One per place: Home, Chat, Shop, Collection, Activity. */}
-          {Array.from({ length: 5 }, (_, i) => (
-            <Skeleton key={i} data-skeleton-tab className="h-7 w-20 shrink-0" />
+          {/* One per row: the five places, then Appearance & settings. */}
+          {Array.from({ length: 6 }, (_, i) => (
+            <Skeleton key={i} data-skeleton-tab className="h-9 w-full shrink-0" />
           ))}
         </div>
-      </div>
-      <div className="@container/pet-pane min-w-0 px-4 py-5 md:px-6 md:py-6">
-        <PetHomeSkeleton />
+        <div className="flex items-center gap-2 @[440px]/settings-pane:hidden">
+          <Skeleton className="h-8 w-24" />
+          <Skeleton className="h-4 w-16" />
+        </div>
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden @[440px]/settings-pane:rounded-lg @[440px]/settings-pane:border">
+          <div className="flex min-h-[var(--chrome-h-tall)] shrink-0 items-center gap-2.5 px-3 py-2 md:px-4">
+            <Skeleton className="size-9 rounded-xl" />
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-3 w-44" />
+            </div>
+            <Skeleton className="size-8 md:w-36" />
+          </div>
+          <div className="@container/pet-pane min-w-0 px-4 py-5 md:px-6 md:py-6">
+            <PetHomeSkeleton />
+          </div>
+        </div>
       </div>
     </div>
   )

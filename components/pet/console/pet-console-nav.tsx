@@ -1,19 +1,18 @@
-// The /pet console's navigation: five places (Home, Chat, Shop, Collection,
-// Activity) plus the plugins tab while a plugin fills it, drawn by the page
-// header's shared view tabs in its second row, like every other page.
+// The pet console's rail: the left list of Settings → Pet's master/detail
+// frame, the same `SettingsPanelNav` AI Connections, Terminal and Memory draw.
 //
-// It replaced a ten-tab grouped rail (a strip on a phone, an icon rail on a
-// tablet, a labelled rail on a desktop). Five places fit one row at every
-// width, so the shape no longer changes with the viewport and the content
-// pane gets the full width back.
+// Two groups. "Your pet" holds the five places (Home, Chat, Shop, Collection,
+// Activity) plus Extensions (id `plugins`) while a module or a plugin fills
+// `pet.console.tab`. "Setup" holds Appearance & settings, which is a rail
+// item like the rest, not a sub-page behind a header button.
 //
-// The console's `<Tabs>` root owns the value and the panels, so the header
-// draws only the list (`inOuterRoot`): each trigger still controls its panel
-// (`aria-controls`) and the arrow keys move along the row.
+// The frame (`SettingsMasterDetail`) shrinks the rail to icons on a narrow
+// pane and turns it into a sheet on a phone, so this file only says what the
+// rows are.
 //
-// On a paired phone (remote care, ADR-0219) a tab that only runs on the
+// On a paired phone (remote care, ADR-0219) a place that only runs on the
 // desktop stays in the list with a small "Desktop" badge, so the reader learns
-// it exists and where, instead of the nav quietly shrinking.
+// it exists and where, instead of the list quietly shrinking.
 
 "use client"
 
@@ -26,12 +25,22 @@ import {
   MessageCircleIcon,
   PlugIcon,
   ShoppingBagIcon,
+  SlidersHorizontalIcon,
 } from "lucide-react"
-import type { FeatureHeaderTabs } from "@/components/feature-shell/feature-page-header"
+import {
+  SettingsPanelNav,
+  type SettingsNavBadge,
+  type SettingsNavGroup,
+} from "@/components/settings/common/settings-panel-nav"
 import type { PetConsoleSection } from "@/lib/pet/console-tabs"
 
-export const PET_CONSOLE_SECTION_ICONS: Record<
-  PetConsoleSection,
+/** A row of the rail: one of the console's sections, or Appearance & settings. */
+export type PetConsolePlace = PetConsoleSection | "appearance"
+
+export type PetConsoleNavGroupId = "pet" | "setup"
+
+export const PET_CONSOLE_PLACE_ICONS: Record<
+  PetConsolePlace,
   ComponentType<{ className?: string }>
 > = {
   home: HomeIcon,
@@ -40,33 +49,64 @@ export const PET_CONSOLE_SECTION_ICONS: Record<
   collection: LibraryIcon,
   activity: ActivityIcon,
   plugins: PlugIcon,
+  appearance: SlidersHorizontalIcon,
 }
 
-/** The places as the header's view tabs, inside the console's own Tabs root. */
-export function usePetConsoleTabs({
-  sections,
-  desktopOnlySections,
-  value,
-}: {
-  /** Sections this console offers (the plugins tab only while a plugin fills it). */
+/** The rail's groups for the sections this console offers, in display order. */
+export function petConsoleNavGroups(
   sections: readonly PetConsoleSection[]
-  /** Sections a paired phone can only look at: badged, still selectable. */
-  desktopOnlySections?: ReadonlySet<PetConsoleSection>
-  /** The console root's current section. */
-  value: PetConsoleSection
-}): FeatureHeaderTabs {
-  const t = useTranslations("pet")
-  const badge = t("console.desktopOnly.badge")
-  return {
-    ariaLabel: t("console.navigation"),
-    value,
-    inOuterRoot: true,
-    testId: "pet-console-nav",
-    items: sections.map((id) => ({
-      value: id,
-      label: t(`console.tabs.${id}`),
-      icon: PET_CONSOLE_SECTION_ICONS[id] as FeatureHeaderTabs["items"][number]["icon"],
-      ...(desktopOnlySections?.has(id) ? { badge } : {}),
-    })),
+): SettingsNavGroup<PetConsolePlace, PetConsoleNavGroupId>[] {
+  return [
+    {
+      id: "pet",
+      items: sections.map((id) => ({ id, icon: PET_CONSOLE_PLACE_ICONS[id] })),
+    },
+    { id: "setup", items: [{ id: "appearance", icon: PET_CONSOLE_PLACE_ICONS.appearance }] },
+  ]
+}
+
+export interface PetConsoleNavProps {
+  /** Sections this console offers (Extensions only while something fills it). */
+  sections: readonly PetConsoleSection[]
+  activeId: PetConsolePlace
+  onSelect: (id: PetConsolePlace) => void
+  /** Places a paired phone can only look at: badged, still selectable. */
+  desktopOnly?: ReadonlySet<PetConsolePlace>
+  /** Test id and shared-layout prefix; the rail and the sheet each pass their own. */
+  idPrefix?: string
+}
+
+export function PetConsoleNav({
+  sections,
+  activeId,
+  onSelect,
+  desktopOnly,
+  idPrefix = "pet-console",
+}: PetConsoleNavProps) {
+  const t = useTranslations("pet.console")
+  const badge: SettingsNavBadge = {
+    text: t("desktopOnly.badge"),
+    variant: "outline",
+    ariaLabel: t("desktopOnly.badgeAria"),
   }
+  const badges: Partial<Record<PetConsolePlace, SettingsNavBadge>> = {}
+  for (const id of desktopOnly ?? []) badges[id] = badge
+
+  return (
+    <SettingsPanelNav<PetConsolePlace, PetConsoleNavGroupId>
+      groups={petConsoleNavGroups(sections)}
+      activeId={activeId}
+      onSelect={onSelect}
+      badges={badges}
+      idPrefix={idPrefix}
+      labels={{
+        title: t("navigation"),
+        group: (groupId) => t(`rail.groups.${groupId}`),
+        item: (id) => ({
+          label: t(`tabs.${id}`),
+          description: t(`rail.descriptions.${id}`),
+        }),
+      }}
+    />
+  )
 }

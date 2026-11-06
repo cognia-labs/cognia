@@ -132,7 +132,7 @@ async function commandStatus(now: number, switchedOff: boolean): Promise<PetComm
   }
   if (!profile.soul) {
     return {
-      system: "🥚 Your pet is still an egg — open the `/pet` console to hatch it.",
+      system: "🥚 Your pet is still an egg — open Settings → Pet to hatch it.",
     }
   }
   const view = computePetView(profile, null, now)
@@ -188,7 +188,7 @@ export async function dispatchPetSubcommand(
 
   const profile = await getPetProfile()
   if (!profile?.soul) {
-    return { system: "🥚 Your pet hasn't hatched yet — open the `/pet` console to hatch it first." }
+    return { system: "🥚 Your pet hasn't hatched yet — open Settings → Pet to hatch it first." }
   }
   const kind = INTERACTION_EVENT_BY_SUB[parsed.sub]!
   const waitMs = remainingCooldownMs(normalizeInteractionGate(profile.interactionGate), kind, now)

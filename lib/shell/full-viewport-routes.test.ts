@@ -119,11 +119,13 @@ describe("needsFullViewport", () => {
     expect(needsFullViewport("/inboxes")).toBe(false)
   })
 
-  // `PetConsole` is an `h-full` column with its own scrolling tab pane, and a
-  // paired phone now reaches it (ADR-0219). `/pet-overlay` and `/pet-popup` are
-  // desktop windows, not routes the compact shell ever wraps.
-  it("gives the pet console a definite height without catching its sibling windows", () => {
-    expect(needsFullViewport("/pet")).toBe(true)
+  // `PetConsole` is an `h-full` column with its own scrolling tab pane. A
+  // paired phone reaches it at `/me/pet` (ADR-0058 D16, ADR-0219), which the
+  // `/me/` prefix covers. `/pet-overlay` and `/pet-popup` are desktop windows,
+  // not routes the compact shell ever wraps.
+  it("gives the phone's pet console a definite height without catching its sibling windows", () => {
+    expect(needsFullViewport("/me/pet")).toBe(true)
+    expect(needsFullViewport("/pet")).toBe(false)
     expect(needsFullViewport("/pet-overlay")).toBe(false)
     expect(needsFullViewport("/pet-popup")).toBe(false)
   })

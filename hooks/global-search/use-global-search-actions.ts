@@ -41,6 +41,7 @@ import { requestWorkspaceDialog } from "@/lib/workspace/workspace-dialog-request
 import { useUIStore } from "@/stores/ui"
 import { requestComposerReference } from "@/lib/chat/composer-reference-request"
 import { DEFAULT_SIDEBAR_SIDE, type SidebarSide } from "@/types/shell/sidebar"
+import { petConsoleHref } from "@/lib/pet/console-tabs"
 
 const log = loggers.ui
 
@@ -333,8 +334,9 @@ export function useGlobalSearchActions({
         case "open-pet-console":
           // A route push rather than the pet's console request: that listener
           // only runs while the pet is on, and the console is worth opening
-          // (to switch it on, or to read its record) either way.
-          router.push("/pet")
+          // (to switch it on, or to read its record) either way. The console is
+          // Settings → Pet (ADR-0058 D16), on a phone its Me sub-page.
+          router.push(petConsoleHref(undefined, { phone: detectPlatform() === "mobile" }))
           return
         case "check-updates": {
           if (!isTauri()) {

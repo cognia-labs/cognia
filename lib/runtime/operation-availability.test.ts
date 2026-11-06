@@ -1,5 +1,9 @@
 import type { RuntimeSnapshot } from "./operation-availability"
-import { hostGrantGate, resolveOperationAvailability } from "./operation-availability"
+import {
+  hostAdvertisesOperation,
+  hostGrantGate,
+  resolveOperationAvailability,
+} from "./operation-availability"
 import type { RuntimeTarget } from "./runtime-target"
 
 const standalone: RuntimeTarget = {
@@ -185,5 +189,24 @@ describe("hostGrantGate", () => {
     expect(hostGrantGate(snapshot({ target: standalone, host: undefined }), "host.admin")).toBe(
       "ask"
     )
+  })
+})
+
+describe("hostAdvertisesOperation", () => {
+  it("is true only for a compatible companion host whose manifest lists the operation", () => {
+    expect(hostAdvertisesOperation(snapshot(), "claude_send")).toBe(true)
+    expect(hostAdvertisesOperation(snapshot(), "pet_get")).toBe(false)
+  })
+
+  it("does not count an incompatible host, a missing manifest or a standalone client", () => {
+    const listing = { compatible: false, operations: ["pet_get"] }
+    expect(hostAdvertisesOperation(snapshot({ host: listing }), "pet_get")).toBe(false)
+    expect(hostAdvertisesOperation(snapshot({ host: undefined }), "pet_get")).toBe(false)
+    expect(
+      hostAdvertisesOperation(
+        snapshot({ target: standalone, host: { compatible: true, operations: ["pet_get"] } }),
+        "pet_get"
+      )
+    ).toBe(false)
   })
 })

@@ -53,7 +53,7 @@ describe("glanceOwnerHref", () => {
 
   it("routes page-owned surfaces to their pages", () => {
     expect(glanceOwnerHref("conversations")).toBe("/conversations")
-    expect(glanceOwnerHref("pet")).toBe("/pet")
+    expect(glanceOwnerHref("pet")).toBe("/settings?section=pet")
     expect(glanceOwnerHref("fleet")).toBe("/agent-runs")
   })
 
@@ -63,7 +63,7 @@ describe("glanceOwnerHref", () => {
   })
 
   it("ignores an item id for owners that do not take one", () => {
-    expect(glanceOwnerHref("pet", "x")).toBe("/pet")
+    expect(glanceOwnerHref("pet", "x")).toBe("/settings?section=pet")
     expect(glanceOwnerHref("usage", "x")).toBe(glanceOwnerHref("usage"))
   })
 })
@@ -119,7 +119,7 @@ describe("glanceMobileOwnerHref", () => {
     expect(glanceMobileOwnerHref("connectivity")).toBe("/devices")
     expect(glanceMobileOwnerHref("scheduler", "task:1")).toBe(schedulerHref("task:1"))
     expect(glanceMobileOwnerHref("workflows", "wf")).toBe(workflowRunsHref("wf"))
-    expect(glanceMobileOwnerHref("pet")).toBe("/pet")
+    expect(glanceMobileOwnerHref("pet")).toBe("/me/pet")
     expect(glanceMobileOwnerHref("conversations")).toBe("/conversations")
   })
 })

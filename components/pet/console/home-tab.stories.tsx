@@ -6,7 +6,7 @@ import { resetStore } from "@/lib/storybook/seed-stores"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { makePetProfile, makePetView, makePetNeeds } from "@/lib/storybook/fixtures/pet-core"
 
-// The `/pet` console's Home: the pet on the console's one accent surface with
+// The pet console's Home: the pet on the console's one accent surface with
 // its needs, then "Most needed now" with the care that answers it, every care
 // action, the backpack and coins, a quick-talk field and the stats.
 const meta = {

@@ -27,19 +27,12 @@ describe("pet module manifest", () => {
     expect(petModule.dependsOn).toContain("plugin")
   })
 
-  it("puts the Pet destination after Goals, gated on the host operation", () => {
-    expect(petModule.nav).toEqual([
-      {
-        id: "pet",
-        route: "/pet",
-        label: "pet.nav.label",
-        icon: "PawPrint",
-        spotIcon: "pet",
-        group: "feature",
-        category: "agents",
-        after: "goals",
-        hostOperationGated: true,
-      },
-    ])
+  it("has no page or rail destination: the console is its settings section", () => {
+    // ADR-0058 D16: Settings → Pet (`components/pet/module.ui.ts`).
+    expect("nav" in petModule).toBe(false)
+  })
+
+  it("offers the console's href to the modules that open it", () => {
+    expect(petModule.api).toContain("lib/pet/console-tabs.ts")
   })
 })

@@ -1,4 +1,4 @@
-// The /pet console "Chat" tab: a real multi-turn conversation with the pet.
+// The pet console "Chat" tab: a real multi-turn conversation with the pet.
 // Composes the transcript with the shared talk composer and two escape
 // hatches: a one-click enable CTA when the opt-in LLM speak is off, and an
 // "Open full chat" button that hands the thread to the main streaming agent

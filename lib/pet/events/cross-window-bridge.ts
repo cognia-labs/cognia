@@ -67,7 +67,7 @@ export interface MainPetBridgeDeps {
   store?: PetStoreApi
   /** DI seam for the user-event replay (defaults to the real pet event bus). */
   emit?: typeof emitPetEvent
-  /** Popup asked to open the /pet console at a tab (main window routes). */
+  /** Popup asked to open the pet console at a tab (main window routes). */
   onOpenConsole?: (tab: PetConsoleTab) => void
 }
 
@@ -196,7 +196,7 @@ export interface OverlayPetBridge {
   dispose: () => void
   /** Post an interaction to the main window; talk may carry typed text. */
   sendInteraction: (kind: PetBridgeInteractionKind, text?: string) => void
-  /** Ask the main window to open the /pet console at `tab`. */
+  /** Ask the main window to open the pet console at `tab`. */
   sendOpenConsole: (tab: PetConsoleTab) => void
 }
 

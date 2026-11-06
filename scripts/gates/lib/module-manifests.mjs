@@ -68,6 +68,7 @@ export const SETTINGS_SECTION_FIELDS = [
   "after",
   "requires",
   "profiles",
+  "hostOperation",
   "layout",
   "keywords",
   "load",
@@ -85,7 +86,6 @@ export const NAV_ENTRY_FIELDS = [
   "after",
   "goMenuAfter",
   "desktopOnly",
-  "hostOperationGated",
   "fullViewport",
   "mobileShortcut",
 ]
@@ -294,6 +294,9 @@ function slashCommandErrors(commands) {
   return errors
 }
 
+/** A host operation a paired host advertises in its manifest: `pet_get`. */
+const HOST_OPERATION = /^[a-z][a-z0-9_]*$/
+
 function settingsSectionErrors(sections, iconNames) {
   if (!Array.isArray(sections)) return ["settingsSections is a list of sections"]
   const errors = []
@@ -319,6 +322,8 @@ function settingsSectionErrors(sections, iconNames) {
     for (const field of ["requires", "profiles", "keywords"])
       if (section[field] !== undefined && !isStringArray(section[field]))
         errors.push(`${at}.${field} is a list of strings`)
+    if (section.hostOperation !== undefined && !HOST_OPERATION.test(section.hostOperation))
+      errors.push(`${at}.hostOperation is a host operation name (e.g. "pet_get")`)
     if (section.layout !== undefined && section.layout !== "fill")
       errors.push(`${at}.layout is "fill" or absent`)
     if (!isLazy(section.load)) errors.push(`${at}.load is a lazy entry \`() => import("…")\``)
@@ -362,7 +367,7 @@ function navErrors(entries, vocabulary) {
       errors.push(`${at}.category is one of ${NAV_CATEGORIES.join(", ")}`)
     for (const field of ["after", "goMenuAfter"])
       if (entry[field] !== undefined && !isText(entry[field])) errors.push(`${at}.${field} is text`)
-    for (const field of ["desktopOnly", "hostOperationGated", "fullViewport"])
+    for (const field of ["desktopOnly", "fullViewport"])
       if (entry[field] !== undefined && typeof entry[field] !== "boolean")
         errors.push(`${at}.${field} is true or false`)
     const shortcut = entry.mobileShortcut

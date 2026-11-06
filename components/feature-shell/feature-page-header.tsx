@@ -160,7 +160,7 @@ export interface FeaturePageHeaderProps {
   icon?: React.ReactNode
   /**
    * A picture that stands in for the icon tile: the page's subject drawn as
-   * itself (the pet on `/pet`). Same tile, without the icon sizing that would
+   * itself (the pet in its console). Same tile, without the icon sizing that would
    * shrink a rendered picture to a 16px glyph. Wins over `icon`.
    */
   avatar?: React.ReactNode

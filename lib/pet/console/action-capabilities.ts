@@ -1,4 +1,4 @@
-// What the /pet console can do in each of its two modes (ADR-0219).
+// What the pet console can do in each of its two modes (ADR-0219).
 //
 // The pet lives on the desktop. The console runs `local` in the desktop app's
 // main window, where it drives the pet controller directly, and `remote` on a
@@ -11,7 +11,7 @@
 //
 //   - Appearance & settings: skins, Live2D models and sprite packs are
 //     device-local blobs, and the size sliders shape a desktop window. The
-//     sub-page still opens remotely, for the read-only character binding.
+//     place still opens remotely, for the read-only character binding.
 //   - Insights (Activity's second segment): the radar reads the desktop's
 //     capture sources and activity.
 //   - Plugins: `pet.console.tab` extensions are the desktop's plugins.
@@ -55,7 +55,7 @@ export const PET_CONSOLE_CAPABILITY_IDS = [
   "tab.insights",
   "tab.appearance",
   "tab.plugins",
-  /** The appearance sub-page's customization workspace (not its binding). */
+  /** The appearance place's customization workspace (not its binding). */
   "appearance.customize",
   // Actions.
   "care",
@@ -91,7 +91,7 @@ export const PET_CONSOLE_CAPABILITIES: Readonly<
   "tab.activity": "available",
   "tab.journal": "available",
   "tab.insights": "desktop-only",
-  // The sub-page opens for the read-only binding; its customization workspace
+  // The place opens for the read-only binding; its customization workspace
   // is `appearance.customize` and its binding edits are `binding.edit`.
   "tab.appearance": "available",
   "appearance.customize": "desktop-only",

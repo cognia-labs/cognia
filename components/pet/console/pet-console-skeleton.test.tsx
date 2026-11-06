@@ -15,11 +15,18 @@ describe("PetConsoleSkeleton", () => {
     ).toBeGreaterThan(5)
   })
 
-  it("draws one tab placeholder per place the console has", () => {
+  it("draws one rail row per place, plus Appearance & settings", () => {
     render(<PetConsoleSkeleton />)
     expect(
       screen.getByTestId("pet-console-loading-nav").querySelectorAll("[data-skeleton-tab]")
-    ).toHaveLength(5)
+    ).toHaveLength(6)
+  })
+
+  it("takes the settings frame's pane container, so its tiers match the console's", () => {
+    render(<PetConsoleSkeleton />)
+    expect(screen.getByTestId("pet-console-loading").className).toContain(
+      "@container/settings-pane"
+    )
   })
 })
 

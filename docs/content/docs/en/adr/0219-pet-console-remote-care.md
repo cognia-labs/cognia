@@ -5,7 +5,7 @@ description: "Amends ADR-0058 D9. The pet runtime (controller, overlay, tray, ag
 
 # ADR 0219 — Pet console remote care from a paired phone
 
-**Status:** Accepted
+**Status:** Accepted; updated 2026-11-06 (the console is Settings → Pet, ADR-0058 D16)
 **Date:** 2026-10-09
 **Amends:** [ADR-0058](./0058-desktop-pet-subsystem) (D9: "desktop-shell only end to end" now applies to the pet runtime, not to the console)
 **Related:** [ADR-0027](./0027-mobile-offline-and-discovery) (companion sync), [ADR-0021](./0021-webrtc-datachannel-wan-transport) (pairing transport)
@@ -81,6 +81,14 @@ desktop's files, windows or settings owner. `PET_CONSOLE_CAPABILITIES` declares 
 `desktop-only`; in remote mode their tabs stay visible with a "Desktop" badge and explain why,
 bindings render read-only, and the desktop toggle becomes a status chip. The type, the UI and the
 tests pin all three (CLAUDE.md rule 7). Settings → Pet stays `profiles: ["desktop"]`.
+
+**Update (2026-11-06, [ADR-0058](./0058-desktop-pet-subsystem) D16).** There is no `/pet` route any
+more: the console is the Settings → Pet section (on a phone, the `/me/pet` sub-page), so the
+operation binding above moved from the `/pet` surface row to the section itself.
+`ModuleSettingsSection.hostOperation: "pet_get"` replaces `profiles: ["desktop"]`, and off the
+desktop the section is offered only while the paired host advertises `pet_get`; the console still
+explains an unpaired device or an outdated host itself. The desktop-only places carry their
+"Desktop" badge on the console's rail, Appearance & settings included.
 
 ## Consequences
 

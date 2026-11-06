@@ -5,7 +5,7 @@ description: "修订 ADR-0058 D9。宠物运行时（控制器、悬浮窗、托
 
 # ADR 0219 — 在已配对的手机上远程照看宠物
 
-**状态：** 已接受
+**状态：** 已接受；2026-11-06 更新（控制台即「设置 → 宠物」，ADR-0058 D16）
 **日期：** 2026-10-09
 **修订：** [ADR-0058](./0058-desktop-pet-subsystem)（D9：“端到端仅限桌面壳”现在只约束宠物运行时，不再约束控制台）
 **相关：** [ADR-0027](./0027-mobile-offline-and-discovery)（伴侣同步）、[ADR-0021](./0021-webrtc-datachannel-wan-transport)（配对传输）
@@ -71,6 +71,12 @@ Live2D 与精灵资源只存在于本机，因此手机绘制 SVG 皮肤并加�
 `PET_CONSOLE_CAPABILITIES` 将它们声明为 `desktop-only`；远程模式下这些标签页仍然可见并带“桌面”徽标，
 面板说明原因；绑定以只读方式显示；桌面开关变为状态标签。类型、界面和测试三者共同固定这一点
 （CLAUDE.md 规则 7）。设置 → 宠物仍为 `profiles: ["desktop"]`。
+
+**更新（2026-11-06，[ADR-0058](./0058-desktop-pet-subsystem) D16）。** 已不再有 `/pet` 路由：控制台就是
+「设置 → 宠物」分区（手机上是 `/me/pet` 子页），因此上文的操作绑定从 `/pet` 表面条目移到了分区本身。
+`ModuleSettingsSection.hostOperation: "pet_get"` 取代 `profiles: ["desktop"]`，非桌面端只在已配对主机
+声明 `pet_get` 时提供该分区；未配对设备和过旧主机仍由控制台自己说明。仅桌面可用的位置（包括「外观与设置」）
+在控制台左栏上带「桌面端」标记。
 
 ## 影响
 

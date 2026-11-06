@@ -99,7 +99,7 @@ export function PetMount() {
 
   // Main window owns the cross-window bridge: it broadcasts the controller's
   // visual-state/bubble/one-shots and replays overlay interactions (including
-  // the popup's "open the /pet console at a tab" request — routed here because
+  // the popup's "open the pet console at a tab" request — routed here because
   // only this window has the app router). Pointless on the web (single
   // browsing context), so gate on Tauri.
   const router = useRouter()

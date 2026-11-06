@@ -58,6 +58,7 @@ export function moduleSettingsSections(
           icon,
           ...(section.requires ? { requires: [...section.requires] } : {}),
           ...(section.profiles ? { profiles: [...section.profiles] } : {}),
+          ...(section.hostOperation ? { hostOperation: section.hostOperation } : {}),
         },
         ...(section.after ? { after: section.after as SettingsSectionId } : {}),
         fill: section.layout === "fill",

@@ -74,7 +74,6 @@ export function moduleNavEntry(module: string, entry: ModuleNavEntry): NavCatalo
     labelKey: entry.label,
     ...(entry.aliases ? { aliasesKey: entry.aliases } : {}),
     ...(entry.desktopOnly ? { desktopOnly: true } : {}),
-    ...(entry.hostOperationGated ? { hostOperationGated: true } : {}),
     module,
     iconName: entry.icon,
     spotIcon: entry.spotIcon,

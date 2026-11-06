@@ -143,7 +143,7 @@ export type PetBridgeMessage =
   | { v: 1; t: "bubble"; bubble: PetBridgeBubble | null }
   | { v: 1; t: "interaction"; kind: PetBridgeInteractionKind; text?: string }
   | { v: 1; t: "request-state" }
-  // Popup → main: open the /pet console at a tab. The main window owns the
+  // Popup → main: open the pet console at a tab. The main window owns the
   // router; the popup only shows/raises the main window before sending.
   | { v: 1; t: "open-console"; tab: PetConsoleTab }
   // Throttled main-window user-activity ping (Smart-Moving). `at` is epoch ms

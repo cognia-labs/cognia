@@ -497,7 +497,7 @@ describe("useGlobalSearchActions", () => {
   it("opens the pet console by route, so it works while the pet is switched off", async () => {
     const { result } = setup()
     await act(() => result.current.runCommand("open-pet-console"))
-    expect(push).toHaveBeenCalledWith("/pet")
+    expect(push).toHaveBeenCalledWith("/settings?section=pet")
   })
 
   it("delegates new-chat to the host when it owns it", async () => {

@@ -14,7 +14,7 @@ jest.mock("./pet-mount", () => ({
 }))
 
 describe("pet UI manifest", () => {
-  it("puts the Pet section after Discover in Appearance, on the desktop only", () => {
+  it("puts the Pet section, which is the whole console, after Discover in Appearance", () => {
     const [section] = petUi.settingsSections
     expect(section).toMatchObject({
       id: "pet",
@@ -23,9 +23,16 @@ describe("pet UI manifest", () => {
       label: "pet.settingsSection.label",
       description: "pet.settingsSection.description",
       after: "discover",
-      profiles: ["desktop"],
+      layout: "fill",
     })
-    expect(section.keywords).toEqual(expect.arrayContaining(["mascot", "桌宠"]))
+    expect(section.keywords).toEqual(expect.arrayContaining(["mascot", "桌宠", "shop", "图鉴"]))
+  })
+
+  it("offers it off the desktop only through a paired host that serves the pet", () => {
+    // ADR-0219: a phone or browser cares for the desktop's pet from here.
+    const [section] = petUi.settingsSections
+    expect(section.hostOperation).toBe("pet_get")
+    expect("profiles" in section).toBe(false)
   })
 
   it("mounts the pet controller as its one effect", async () => {

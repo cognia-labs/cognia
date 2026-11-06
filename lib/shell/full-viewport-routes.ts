@@ -84,10 +84,6 @@ export const FULL_VIEWPORT_ROUTE_PATTERNS: readonly string[] = [
   // `/agent-runs` never reaches `FeaturePageShell` at all, so no sweep saw it,
   // and its own root is `flex h-full min-h-0 w-full flex-1`.
   "/agent-runs",
-  // The pet console (ADR-0219: a paired phone cares for the desktop pet) is a
-  // `flex h-full min-h-0 flex-col` column whose tab pane scrolls on its own
-  // under a sticky tab strip, so it needs a definite box like a feature shell.
-  "/pet",
   // `DiagnosticsWorkspace` is `flex h-full min-h-0 min-w-0 flex-1`, and
   // `SourceControlMobileBody` is the same shape. Both are the collapse this
   // list exists to stop.

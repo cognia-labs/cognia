@@ -338,7 +338,7 @@ const DEFAULT_HANDLERS: RegisteredHandler[] = [
   // never cross, so a mirrored device resolves those from its own plugin state
   // or reads the installation as an orphan, which the console already renders.
   { table: "botDefinitions", stage: "background", run: syncBotDefinitions },
-  // Remote pet care (ADR-0219). `/pet` is a page the user opens, not the first
+  // Remote pet care (ADR-0219). Settings → Pet is a page the user opens, not the first
   // screen, and its console reads the live `pet_get` snapshot first; the mirror
   // is what paints offline. The profile leads: the ledger's reset rule reads
   // the profile's birth time, and everything else is a row about that pet.

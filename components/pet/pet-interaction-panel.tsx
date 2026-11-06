@@ -1,4 +1,4 @@
-// The desktop popup's pet panel: a mini version of the /pet console's Home,
+// The desktop popup's pet panel: a mini version of the pet console's Home,
 // read in the same order. Who the pet is (stat card, level and needs), what
 // it needs most right now with the care that answers it, every care action,
 // and a quick line to talk. The window actions (click-through, put away, open

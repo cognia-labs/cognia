@@ -33531,12 +33531,9 @@
     },
     "console": {
       "appearance": {
-        "back": "返回{name}",
         "binding": "角色外观",
         "bindingDescription": "为某个角色指定专属的物种或皮肤。与该角色对话时会显示它的外观，而不是全局外观。",
-        "description": "宠物的样子和行为，包括桌面上的表现。",
-        "index": "外观与设置分区",
-        "title": "外观与设置"
+        "index": "外观与设置分区"
       },
       "chat": {
         "clear": "清空对话",
@@ -33551,10 +33548,11 @@
       },
       "desktopOnly": {
         "badge": "桌面端",
+        "badgeAria": "仅在桌面端运行",
         "remedy": {
-          "appearance": "请在桌面端打开 Cognia，进入 宠物 → 外观与设置。",
-          "insights": "请在桌面端打开 Cognia，进入 宠物 → 动态 → 洞察。",
-          "plugins": "请在桌面端打开 Cognia，进入 宠物 → 扩展。"
+          "appearance": "请在桌面端打开 Cognia，进入 设置 → 宠物 → 外观与设置。",
+          "insights": "请在桌面端打开 Cognia，进入 设置 → 宠物 → 动态 → 洞察。",
+          "plugins": "请在桌面端打开 Cognia，进入 设置 → 宠物 → 扩展。"
         },
         "title": "「{tab}」在桌面端使用",
         "what": {
@@ -33594,6 +33592,22 @@
       "live2dFallback": "Live2D 暂时不可用，正在显示内置形象。",
       "loading": "正在唤醒你的宠物…",
       "navigation": "宠物导航",
+      "rail": {
+        "descriptions": {
+          "activity": "日记与洞察",
+          "appearance": "外观、行为与桌面窗口",
+          "chat": "和宠物聊天",
+          "collection": "图鉴与成就",
+          "home": "状态与下一步需要",
+          "plugins": "模块与插件添加的面板",
+          "shop": "用金币买食物和玩具"
+        },
+        "groups": {
+          "pet": "你的宠物",
+          "setup": "设置"
+        },
+        "mobileTrigger": "位置"
+      },
       "remote": {
         "band": {
           "connected": "正在照顾桌面端的宠物",
@@ -33826,9 +33840,6 @@
       "lonely": "孤单",
       "tired": "疲惫"
     },
-    "nav": {
-      "label": "宠物"
-    },
     "needs": {
       "bond": "亲密",
       "energy": "精力",
@@ -33888,10 +33899,10 @@
     },
     "quickMenu": {
       "clickThrough": "鼠标穿透",
-      "clickThroughDescription": "点击会穿过宠物落到后面的窗口。可在托盘菜单或 宠物 → 外观与设置 中关闭。",
+      "clickThroughDescription": "点击会穿过宠物落到后面的窗口。可在托盘菜单或 设置 → 宠物 → 外观与设置 中关闭。",
       "hideDesktopPet": "隐藏桌宠",
       "openAppearance": "外观与设置",
-      "openConsole": "打开宠物页",
+      "openConsole": "打开宠物设置",
       "showDesktopPet": "显示桌宠",
       "windowActions": "桌宠窗口"
     },
@@ -55082,17 +55093,6 @@
       "mutedBubbles": {
         "description": "让宠物保持安静（仍会动画）。",
         "label": "静音气泡"
-      },
-      "pointer": {
-        "action": "打开外观与设置",
-        "covers": {
-          "behavior": "说话、声音、照顾提醒和分身感知",
-          "characters": "各角色的专属外观",
-          "desktop": "桌面窗口：大小、漫游、点击穿透",
-          "look": "外观、皮肤、Live2D 模型和动画包"
-        },
-        "description": "宠物相关的一切都集中在一处：打开 宠物 → 外观与设置。",
-        "title": "宠物设置在宠物页中"
       },
       "proactive": {
         "description": "宠物会自己开口——庆祝里程碑、空闲时闲聊、按时间问候。始终遵守勿扰时段。",

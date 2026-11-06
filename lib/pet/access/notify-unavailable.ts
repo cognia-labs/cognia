@@ -14,6 +14,8 @@
 // applies DND / quiet hours itself, and the `dedupeKey` folds repeated presses
 // into one row rather than a stack.
 
+import { petConsoleHref } from "@/lib/pet/console-tabs"
+
 /** Already-localized notification copy supplied by the caller. */
 export interface PetUnavailableNotifyStrings {
   title: string
@@ -38,8 +40,8 @@ export interface PetUnavailableNotifyDeps {
 /** One row however many times the shortcut is pressed. */
 export const PET_UNAVAILABLE_DEDUPE_KEY = "pet-interaction-unavailable"
 
-/** Where the pet is switched back on: the console's Appearance & settings. */
-export const PET_UNAVAILABLE_HREF = "/pet?view=appearance"
+/** Where the pet is switched back on: Settings → Pet → Appearance & settings. */
+export const PET_UNAVAILABLE_HREF = petConsoleHref("appearance")
 
 /** Long enough to notice, short enough not to linger after the fact. */
 export const PET_UNAVAILABLE_TTL_MS = 5 * 60_000

@@ -246,7 +246,6 @@ pub const MENU_IDS: &[&str] = &[
     "go-issues",
     "go-templates",
     "go-goals",
-    "go-pet",
     "go-browser",
     "go-a2ui",
     "go-dms",

@@ -1,4 +1,4 @@
-// Which /pet console this device can show (ADR-0219).
+// Which pet console this device can show (ADR-0219).
 //
 // ADR-0058 D9 keeps the pet RUNTIME on the desktop: the controller, the
 // overlay, the tray and the agent's pet tools never run anywhere else. The

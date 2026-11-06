@@ -4,7 +4,7 @@
  * Title-bar quick-actions cluster — one-click access to the desktop pet,
  * screen OCR, and content capture. Each control reuses an existing entry
  * point: the pet toggle is the same "show / put away the desktop pet" as the
- * /pet console header and the popup (`toggleDesktopPetWindow`, which persists
+ * pet console header and the popup (`toggleDesktopPetWindow`, which persists
  * `PetSettings.desktopPet.enabled`); OCR opens its settings section via the
  * shared `requestOpenSettings` request; capture opens the pet console's
  * Insights (Activity), which is the only place `CaptureSettingsPanel` is

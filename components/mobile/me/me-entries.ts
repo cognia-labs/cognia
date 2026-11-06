@@ -15,8 +15,11 @@ import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
 import type { LucideIcon } from "lucide-react"
 import type { MobileSpotIconName } from "@/components/mobile/mobile-spot-icon"
 import type { Platform } from "@/lib/platform/detect"
-import type { RuntimeSnapshot } from "@/lib/runtime/operation-availability"
-import { getSurfaceContractForRoute } from "@/lib/runtime/surface-contract"
+import {
+  hostAdvertisesOperation,
+  type RuntimeSnapshot,
+} from "@/lib/runtime/operation-availability"
+import { petConsoleHref } from "@/lib/pet/console-tabs"
 import {
   ActivityIcon,
   AppWindowIcon,
@@ -101,13 +104,13 @@ export interface MeEntry {
    */
   pairedOnly?: boolean
   /**
-   * Off the desktop shell, offered only while the paired host advertises the
-   * `operation` of this row's surface contract: the Me-tab twin of the rail's
-   * `SidebarNavMeta.hostOperationGated` (ADR-0219). For a page that is a
-   * remote control of something only a host runs, "Requires desktop" is not
-   * enough: a paired desktop too old to serve it would still be a dead end.
+   * Off the desktop shell, offered only while the paired host advertises this
+   * operation: the Me-tab twin of a settings section's `hostOperation`
+   * (ADR-0219). For a page that is a remote control of something only a host
+   * runs, "Requires desktop" is not enough: a paired desktop too old to serve
+   * it would still be a dead end.
    */
-  hostOperationGated?: boolean
+  hostOperation?: string
 }
 
 /** Display order of the grouped sections. */
@@ -400,15 +403,15 @@ export const ME_ENTRIES: MeEntry[] = [
   },
   // Remote care of the desktop pet (ADR-0219). The pet lives on the desktop;
   // a paired phone feeds, plays with and chats to it through the desktop's
-  // controller, so the row appears exactly when the rail and ⌘K offer the
-  // console: while the paired host advertises `pet_get`.
+  // controller, so the row appears exactly when Settings → Pet (the console,
+  // ADR-0058 D16) and ⌘K offer it: while the paired host advertises `pet_get`.
   {
     id: "pet",
     spotIcon: "pet",
-    hostOperationGated: true,
+    hostOperation: "pet_get",
     icon: PawPrintIcon,
     labelKey: "petRow",
-    href: "/pet",
+    href: petConsoleHref(undefined, { phone: true }),
     section: "connection",
     keywords: ["pet", "mascot", "companion", "feed", "宠物", "桌宠", "喂养"],
   },
@@ -782,26 +785,20 @@ export const ME_ENTRIES: MeEntry[] = [
 
 /**
  * Whether `/me` should list `entry` here. Everything is offered on the desktop
- * shell, which runs every surface itself (the rail's `getSidebarCatalog` makes
- * the same call). Elsewhere a `hostOperationGated` row needs a compatible
- * companion host whose manifest lists its contract's operation, the rule
- * `lib/shell/sidebar-nav.ts` applies to the rail and
- * `hooks/global-search/use-global-search-context.ts` to ⌘K. Cached reads do not
- * count: the row is only worth showing when the host can act on it.
+ * shell, which runs every surface itself. Elsewhere a `hostOperation` row
+ * needs a compatible companion host whose manifest lists that operation
+ * (`hostAdvertisesOperation`), the rule the settings nav applies to a
+ * section's `hostOperation` and `hooks/global-search/use-global-search-context.ts`
+ * to ⌘K. Cached reads do not count: the row is only worth showing when the
+ * host can act on it.
  */
 export function isMeEntryOffered(
   entry: MeEntry,
   platform: Platform,
   snapshot: RuntimeSnapshot
 ): boolean {
-  if (!entry.hostOperationGated || platform === "tauri") return true
-  const operation = getSurfaceContractForRoute(entry.href)?.operation
-  return (
-    operation !== undefined &&
-    snapshot.target?.kind === "companion" &&
-    snapshot.host?.compatible === true &&
-    snapshot.host.operations.includes(operation)
-  )
+  if (!entry.hostOperation || platform === "tauri") return true
+  return hostAdvertisesOperation(snapshot, entry.hostOperation)
 }
 
 /**

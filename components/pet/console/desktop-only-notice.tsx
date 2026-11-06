@@ -1,4 +1,4 @@
-// What a desktop-only place in the /pet console shows on a paired phone or
+// What a desktop-only place in the pet console shows on a paired phone or
 // browser (ADR-0219): what it is, why it does not run here, and where to do it.
 //
 // The UI axis of the console's intentional dormancy (CLAUDE.md rule 7). The

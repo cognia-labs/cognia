@@ -61,21 +61,16 @@ describe("me-entries registry", () => {
     })
   })
 
-  // ADR-0219: the phone cares for the DESKTOP's pet, so the row follows the
-  // rail and ⌘K: offered off the desktop only while the paired host advertises
-  // the contract's `pet_get`, and its contract is `explain` standalone.
+  // ADR-0219: the phone cares for the DESKTOP's pet, so the row follows
+  // Settings → Pet (the console, ADR-0058 D16) and ⌘K: offered off the desktop
+  // only while the paired host advertises `pet_get`.
   it("offers remote care of the desktop pet only through a host that serves it", () => {
     const pet = ME_ENTRIES.find((entry) => entry.id === "pet")
     expect(pet).toMatchObject({
-      href: "/pet",
+      href: "/me/pet",
       labelKey: "petRow",
       spotIcon: "pet",
-      hostOperationGated: true,
-    })
-    expect(getSurfaceContractForRoute("/pet")).toMatchObject({
-      standalone: "explain",
-      companion: "remote",
-      operation: "pet_get",
+      hostOperation: "pet_get",
     })
     expect(matchMeEntry(pet!, "宠物", echo)).toBe(true)
   })

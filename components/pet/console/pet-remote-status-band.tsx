@@ -1,4 +1,4 @@
-// The remote /pet console's one line of connection chrome (ADR-0219): whether
+// The remote pet console's one line of connection chrome (ADR-0219): whether
 // the desktop that owns the pet is reachable, whether it would accept care
 // right now, how fresh this picture is, and a retry.
 //

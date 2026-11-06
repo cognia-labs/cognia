@@ -2,7 +2,7 @@
 // `petConversation` history read via `useLiveQuery` (read-only — no cold-Dexie
 // ReadOnlyError). `send` orchestrates one turn through the pure
 // `respondAsPet` and surfaces WHY a turn degraded (the bubble path is silent).
-// Main window only — the panel lives on the `/pet` console route.
+// Main window only — the panel lives on the pet console route.
 //
 // Optimistic echo: the user's text shows as `pending` while in flight; on a
 // successful reply it clears (the recorded turn arrives via the live query); on

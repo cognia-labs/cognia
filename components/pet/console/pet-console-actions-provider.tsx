@@ -1,4 +1,4 @@
-// Chooses what the /pet console's actions run (ADR-0219).
+// Chooses what the pet console's actions run (ADR-0219).
 //
 // `local`: the desktop app's main window, driving its own pet controller
 // (`useLocalPetActions`). `remote`: a paired phone or browser, sending every

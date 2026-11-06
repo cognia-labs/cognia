@@ -264,6 +264,29 @@ describe("settings-nav-config", () => {
       expect(settingsSectionBlockReason({ profiles: ["desktop"] }, desktop)).toBeNull()
     })
 
+    it("opens a host-operation section off the desktop only while the paired host advertises it", () => {
+      const item = { hostOperation: "pet_get" }
+      const advertising = { ...cloudCompanion, hostAdvertises: (op: string) => op === "pet_get" }
+      const silent = { ...cloudCompanion, hostAdvertises: () => false }
+      // The desktop runs it itself.
+      expect(settingsSectionBlockReason(item, desktop)).toBeNull()
+      // Pairing a current desktop closes the gap, so it reads as a capability.
+      expect(settingsSectionBlockReason(item, cloudCompanion)).toBe("capability")
+      expect(settingsSectionBlockReason(item, silent)).toBe("capability")
+      expect(settingsSectionBlockReason(item, webStandalone)).toBe("capability")
+      expect(settingsSectionBlockReason(item, advertising)).toBeNull()
+    })
+
+    it("makes Settings → Pet, the pet's console, a remote control gated on pet_get (ADR-0219)", () => {
+      const pet = SETTINGS_NAV.find((n) => n.id === "pet")
+      expect(pet).toMatchObject({ hostOperation: "pet_get" })
+      expect(pet?.profiles).toBeUndefined()
+      expect(reachableSettingsSections(desktop).has("pet")).toBe(true)
+      expect(
+        reachableSettingsSections({ ...cloudCompanion, hostAdvertises: () => true }).has("pet")
+      ).toBe(true)
+    })
+
     it("agrees with isSettingsSectionReachable on every nav item and profile", () => {
       for (const ctx of [desktop, cloudCompanion, webStandalone]) {
         for (const item of SETTINGS_NAV) {
@@ -336,7 +359,7 @@ describe("settings-nav-config", () => {
         expect(reachable.has(id)).toBe(true)
       }
       // Recorded physical boundaries and local-shell surfaces stay desktop-only.
-      // The pet is the desktop shell's own subsystem (ADR-0058 D9).
+      // The pet's console needs a paired host that advertises it (ADR-0219).
       for (const id of ["automation", "desktop", "sidebar", "pet"] as const) {
         expect(reachable.has(id)).toBe(false)
       }

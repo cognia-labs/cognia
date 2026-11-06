@@ -1,6 +1,6 @@
 // A single pet "need" meter (energy / mood / bond): a labelled progress bar that
 // turns amber then destructive as the value drops. Shared by the compact
-// interaction panel (widget/popup) and the wide `/pet` nurture layout so both
+// interaction panel (widget/popup) and the wide console Home so both
 // render needs identically.
 
 "use client"

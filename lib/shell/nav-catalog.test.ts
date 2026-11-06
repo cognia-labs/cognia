@@ -82,7 +82,6 @@ describe("moduleNavEntry", () => {
           after: "agents",
           goMenuAfter: "plugins",
           fullViewport: true,
-          hostOperationGated: true,
           mobileShortcut: { after: "twin" },
         })
       )
@@ -93,7 +92,6 @@ describe("moduleNavEntry", () => {
       category: "agents",
       labelKey: "squads.nav.label",
       aliasesKey: "squads.nav.aliases",
-      hostOperationGated: true,
       module: "squads",
       iconName: "Users",
       spotIcon: "agent-teams",

@@ -269,6 +269,12 @@ export interface ModuleSettingsSection {
   requires?: readonly CapabilityId[]
   /** As `NavItem.profiles`: host profiles the section is bound to. */
   profiles?: readonly HostProfile[]
+  /**
+   * As `NavItem.hostOperation`: off the desktop, reachable only while the
+   * paired host advertises this operation (a remote control of something
+   * only the desktop runs, such as the pet's console).
+   */
+  hostOperation?: string
   /** `"fill"`: the section owns its scroll (a rail plus a detail pane). */
   layout?: "fill"
   /** Extra words the settings finder matches, in both languages. */
@@ -316,8 +322,6 @@ export interface ModuleNavEntry {
   goMenuAfter?: string
   /** As `SidebarNavMeta.desktopOnly`. */
   desktopOnly?: boolean
-  /** As `SidebarNavMeta.hostOperationGated`. */
-  hostOperationGated?: boolean
   /** The route owns the viewport (`lib/shell/full-viewport-routes.ts`). */
   fullViewport?: boolean
   /**

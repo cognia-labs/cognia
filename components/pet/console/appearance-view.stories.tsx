@@ -4,7 +4,7 @@ import { AppearanceView } from "./appearance-view"
 import { resetStore } from "@/lib/storybook/seed-stores"
 import { useSettingsStore } from "@/stores/settings"
 
-// The `/pet` console's "Appearance & settings" sub-page: the shared pet
+// The pet console's "Appearance & settings" place: the shared pet
 // customization workspace (the same one Settings → Pet points to) plus the
 // per-character binding, with a section index on a wide pane. On a paired
 // phone the workspace is replaced by the desktop-only notice and the binding

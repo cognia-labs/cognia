@@ -1,4 +1,4 @@
-// The /pet console on a paired phone, caring for the DESKTOP's pet (ADR-0219).
+// The pet console on a paired phone, caring for the DESKTOP's pet (ADR-0219).
 //
 // Pins the two properties remote care rests on:
 //   1. every action goes to the desktop as a `pet_*` call, and nothing on this
@@ -205,8 +205,7 @@ function snapshot(over: Partial<PetRemoteSnapshot> = {}): PetRemoteSnapshot {
   }
 }
 
-const clickTab = (id: string) =>
-  fireEvent.mouseDown(document.querySelector(`[data-tab="${id}"]`) as Element)
+const clickTab = (id: string) => fireEvent.click(screen.getByTestId(`pet-console-nav-item-${id}`))
 const clickSegment = (id: string) =>
   fireEvent.mouseDown(document.querySelector(`[data-segment="${id}"]`) as Element)
 const gridAction = (kind: string) =>
@@ -338,14 +337,16 @@ describe("PetConsole remote care", () => {
   })
 
   describe("what stays on the desktop (CLAUDE.md rule 7)", () => {
-    it("keeps every place in the nav, with only the desktop-only parts badged", async () => {
+    it("keeps every place on the rail, with only the desktop-only parts badged", async () => {
       await renderRemote()
-      const nav = screen.getByTestId("pet-console-nav")
       for (const tab of ["home", "chat", "shop", "collection", "activity"]) {
-        expect(nav.querySelector(`[data-tab="${tab}"]`)).not.toHaveAttribute("data-badged")
+        expect(screen.getByTestId(`pet-console-nav-item-${tab}`)).toBeInTheDocument()
+        expect(screen.queryByTestId(`pet-console-nav-badge-${tab}`)).toBeNull()
       }
-      const appearance = screen.getByTestId("pet-console-open-appearance")
-      expect(appearance).toHaveAttribute("data-desktop-only", "true")
+      expect(screen.getByTestId("pet-console-nav-badge-appearance")).toHaveAttribute(
+        "aria-label",
+        "Runs only on your desktop"
+      )
       clickTab("activity")
       const insights = document.querySelector('[data-segment="insights"]') as HTMLElement
       expect(insights).toHaveAttribute("data-desktop-only", "true")
@@ -365,7 +366,7 @@ describe("PetConsole remote care", () => {
 
     it("opens Appearance & settings with the notice in place of the workspace", async () => {
       await renderRemote()
-      fireEvent.click(screen.getByTestId("pet-console-open-appearance"))
+      clickTab("appearance")
       expect(screen.getByTestId("pet-desktop-only-notice")).toHaveAttribute(
         "data-tab",
         "appearance"

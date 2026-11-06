@@ -370,10 +370,10 @@ describe("PetMount", () => {
     }
     expect(deps.onOpenConsole).toBeDefined()
     deps.onOpenConsole?.("shop")
-    expect(routerPush).toHaveBeenCalledWith("/pet?tab=shop")
+    expect(routerPush).toHaveBeenCalledWith("/settings?section=pet&petTab=shop")
     // The earlier layout's ids still land, on the place they now mean.
     deps.onOpenConsole?.("customize")
-    expect(routerPush).toHaveBeenLastCalledWith("/pet?view=appearance")
+    expect(routerPush).toHaveBeenLastCalledWith("/settings?section=pet&petView=appearance")
   })
 
   it("registers the window + interaction commands while enabled on the main desktop window, disposing on unmount", () => {

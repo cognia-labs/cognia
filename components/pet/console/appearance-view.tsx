@@ -1,12 +1,12 @@
-// The /pet console's "Appearance & settings" sub-page: everything that shapes
-// how the pet looks and behaves, in one place. The header opens it (with a
-// breadcrumb back to the main view); it is not one of the console's tabs.
+// The pet console's "Appearance & settings" place: everything that shapes how
+// the pet looks and behaves, in one place. It is the last row of the
+// console's rail (the "Setup" group), beside the five places.
 //
 // Two parts:
 //
 //   - The customization workspace (`PetCustomizationWorkspace`): the pet's
 //     master switch, look, appearance, interaction, sound, care, twin
-//     awareness, desktop window and reset. Settings → Pet points here.
+//     awareness, desktop window and reset.
 //   - Character binding (`BindingTab`): the per-character look overrides.
 //
 // A section index sits beside them on a wide pane and scrolls to a section by

@@ -67,7 +67,6 @@ describe("manifest-types", () => {
           category: "agents",
           after: "goals",
           goMenuAfter: "goals",
-          hostOperationGated: true,
           fullViewport: true,
           mobileShortcut: { after: "twin" },
         },
@@ -94,11 +93,12 @@ describe("manifest-types", () => {
           requires: ["keyring"],
           profiles: ["desktop"],
           layout: "fill",
+          hostOperation: "pet_get",
           keywords: ["pet", "宠物"],
           load: async () => ({ default: () => null }),
         },
       ],
-      effects: [{ name: "pet-window-title", load: () => import("./define") }],
+      effects: [{ name: "pet-window-title", load: async () => ({ default: () => null }) }],
     }
     expect(manifest.settingsSections).toHaveLength(1)
   })

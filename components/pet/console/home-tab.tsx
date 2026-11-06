@@ -1,4 +1,4 @@
-// The `/pet` console's Home: where the pet is now and what to do about it.
+// The pet console's Home: where the pet is now and what to do about it.
 //
 // Two columns once the pane is wide enough. The left one is the pet as it is
 // (the hero on the console's one accent surface, mood, condition with how to

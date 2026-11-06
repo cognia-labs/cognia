@@ -52,6 +52,21 @@ export interface RuntimeSnapshot {
   host?: HostRuntimeSnapshot
 }
 
+/**
+ * Whether the paired host advertises `operation` right now: a compatible
+ * companion host whose manifest lists it. Cached reads do not count; a surface
+ * gated on this is only worth offering when the host can act on it. The
+ * settings nav (`NavItem.hostOperation`) and the phone's Me tab
+ * (`MeEntry.hostOperation`) ask this one question.
+ */
+export function hostAdvertisesOperation(snapshot: RuntimeSnapshot, operation: string): boolean {
+  return (
+    snapshot.target?.kind === "companion" &&
+    snapshot.host?.compatible === true &&
+    snapshot.host.operations.includes(operation)
+  )
+}
+
 export type OperationAvailabilityState =
   | "available"
   | "read-only"

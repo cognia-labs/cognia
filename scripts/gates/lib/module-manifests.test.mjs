@@ -113,11 +113,12 @@ test("a settings section names its group, a catalog icon, full keys and a lazy l
     after: "subagents",
     requires: ["keyring"],
     profiles: ["desktop"],
+    hostOperation: "crew_get",
     layout: "fill",
     keywords: ["crew"],
     load: lazy("./section"),
   }
-  const icons = new Set(["Users"])
+  const icons = { iconNames: new Set(["Users"]) }
   assert.deepEqual(
     validateUiManifest({ id: "crew", settingsSections: [section] }, "crew", icons),
     []
@@ -126,7 +127,14 @@ test("a settings section names its group, a catalog icon, full keys and a lazy l
     {
       id: "crew",
       settingsSections: [
-        { ...section, icon: "Nope", label: "plain", layout: "wide", keywords: "crew" },
+        {
+          ...section,
+          icon: "Nope",
+          label: "plain",
+          layout: "wide",
+          keywords: "crew",
+          hostOperation: "Crew Get",
+        },
         { ...section, group: "" },
         section,
       ],
@@ -139,6 +147,7 @@ test("a settings section names its group, a catalog icon, full keys and a lazy l
     "settingsSections[0].label is a full i18n key",
     'settingsSections[0].layout is "fill" or absent',
     "settingsSections[0].keywords is a list of strings",
+    "settingsSections[0].hostOperation is a host operation name",
     "settingsSections[1].group is required",
     'settingsSections[1].id "crew" is listed twice',
   ])

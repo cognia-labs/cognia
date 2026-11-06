@@ -1,6 +1,6 @@
 // The shared care-action grid (feed/play/pet/sleep/clean/treat + the talk
 // toggle) used by both the compact interaction panel (widget/popup) and the
-// wide `/pet` nurture tab — one source for the action set, its cooldowns, and
+// wide console Home — one source for the action set, its cooldowns, and
 // its visible labels. Owns `useActionCooldown` so the 250ms cooldown ticker
 // re-renders only this grid, never the surrounding panel (stat card, pet
 // renderer, need bars).

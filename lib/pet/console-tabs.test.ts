@@ -3,6 +3,9 @@ import {
   PET_CONSOLE_LEGACY_TABS,
   PET_CONSOLE_SECTIONS,
   PET_CONSOLE_TABS,
+  PET_SETTINGS_SECTION,
+  PET_TAB_PARAM,
+  PET_VIEW_PARAM,
   isPetConsoleSection,
   isPetConsoleTab,
   petConsoleHref,
@@ -10,6 +13,7 @@ import {
   petConsoleTargetFromParams,
   resolvePetConsoleTarget,
 } from "./console-tabs"
+import { settingsHref } from "@/lib/settings/deep-link"
 
 describe("console-tabs", () => {
   it("accepts every destination and every legacy id", () => {
@@ -89,18 +93,39 @@ describe("console-tabs", () => {
     expect(petConsoleTargetFromParams(null, null)).toBeUndefined()
   })
 
-  it("writes canonical hrefs that read back to the same place", () => {
-    expect(petConsoleHref()).toBe("/pet")
-    expect(petConsoleHref("nurture")).toBe("/pet")
-    expect(petConsoleHref("customize")).toBe("/pet?view=appearance")
-    expect(petConsoleHref("binding")).toBe("/pet?view=appearance&tab=binding")
-    expect(petConsoleHref("insights")).toBe("/pet?tab=insights")
+  it("writes canonical Settings → Pet hrefs that read back to the same place", () => {
+    expect(petConsoleHref()).toBe("/settings?section=pet")
+    expect(petConsoleHref("nurture")).toBe("/settings?section=pet")
+    expect(petConsoleHref("customize")).toBe("/settings?section=pet&petView=appearance")
+    expect(petConsoleHref("binding")).toBe(
+      "/settings?section=pet&petView=appearance&petTab=binding"
+    )
+    expect(petConsoleHref("insights")).toBe("/settings?section=pet&petTab=insights")
     for (const tab of PET_CONSOLE_TABS) {
       const url = new URL(petConsoleHref(tab), "https://app.test")
+      expect(url.pathname).toBe("/settings")
       const target =
-        petConsoleTargetFromParams(url.searchParams.get("tab"), url.searchParams.get("view")) ??
-        resolvePetConsoleTarget("home")
+        petConsoleTargetFromParams(
+          url.searchParams.get(PET_TAB_PARAM),
+          url.searchParams.get(PET_VIEW_PARAM)
+        ) ?? resolvePetConsoleTarget("home")
       expect(target).toEqual(resolvePetConsoleTarget(tab))
     }
+  })
+
+  it("writes the phone's Me sub-page with the same params", () => {
+    expect(petConsoleHref(undefined, { phone: true })).toBe("/me/pet")
+    expect(petConsoleHref("nurture", { phone: true })).toBe("/me/pet")
+    expect(petConsoleHref("shop", { phone: true })).toBe("/me/pet?petTab=shop")
+    expect(petConsoleHref("binding", { phone: true })).toBe(
+      "/me/pet?petView=appearance&petTab=binding"
+    )
+  })
+
+  it("agrees with the settings deep-link builder", () => {
+    expect(petConsoleHref("shop")).toBe(
+      settingsHref(PET_SETTINGS_SECTION, { params: { [PET_TAB_PARAM]: "shop" } })
+    )
+    expect(petConsoleHref()).toBe(settingsHref(PET_SETTINGS_SECTION))
   })
 })

@@ -1,4 +1,4 @@
-// The /pet console's actions on the desktop that runs the pet (ADR-0219,
+// The pet console's actions on the desktop that runs the pet (ADR-0219,
 // `local` mode).
 //
 // These are the functions the console called directly before it learned to

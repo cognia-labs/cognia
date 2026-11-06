@@ -1,99 +1,106 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
-import { Tabs, TabsContent } from "@/components/ui/tabs"
-import { PET_CONSOLE_SECTIONS, type PetConsoleSection } from "@/lib/pet/console-tabs"
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
-import { PET_CONSOLE_SECTION_ICONS, usePetConsoleTabs } from "./pet-console-nav"
+
+jest.mock("@/components/chat/motion/motion-reveal", () => ({
+  useFlowMotion: () => ({ reduce: true, durationScale: 1 }),
+}))
+
+import { PET_CONSOLE_SECTIONS } from "@/lib/pet/console-tabs"
+import {
+  PET_CONSOLE_PLACE_ICONS,
+  PetConsoleNav,
+  petConsoleNavGroups,
+  type PetConsolePlace,
+} from "./pet-console-nav"
 
 const WITHOUT_PLUGINS = PET_CONSOLE_SECTIONS.filter((id) => id !== "plugins")
 
-function Places({
-  sections,
-  desktopOnlySections,
-  value,
-}: {
-  sections: readonly PetConsoleSection[]
-  desktopOnlySections?: ReadonlySet<PetConsoleSection>
-  value: PetConsoleSection
-}) {
-  const tabs = usePetConsoleTabs({ sections, desktopOnlySections, value })
-  return <FeaturePageHeader title="Boba" description="A pet" icon={<span />} tabs={tabs} />
-}
+const rowIds = () =>
+  within(screen.getByRole("list", { name: "Pet navigation" }))
+    .getAllByRole("button")
+    .map((row) => row.dataset.testid?.replace("pet-console-nav-item-", ""))
 
-function Harness({
-  sections = WITHOUT_PLUGINS,
-  desktopOnlySections,
-  onValueChange = () => {},
-}: {
-  sections?: readonly PetConsoleSection[]
-  desktopOnlySections?: ReadonlySet<PetConsoleSection>
-  onValueChange?: (value: string) => void
-}) {
-  // The console owns the root and the panels; the header draws the list.
-  return (
-    <Tabs defaultValue="home" onValueChange={onValueChange}>
-      <Places sections={sections} desktopOnlySections={desktopOnlySections} value="home" />
-      {sections.map((id) => (
-        <TabsContent key={id} value={id}>
-          {id}
-        </TabsContent>
-      ))}
-    </Tabs>
-  )
-}
+describe("petConsoleNavGroups", () => {
+  it("puts the places under Your pet and Appearance & settings under Setup", () => {
+    const groups = petConsoleNavGroups(WITHOUT_PLUGINS)
+    expect(groups.map((group) => group.id)).toEqual(["pet", "setup"])
+    expect(groups[0].items.map((item) => item.id)).toEqual(WITHOUT_PLUGINS)
+    expect(groups[1].items.map((item) => item.id)).toEqual(["appearance"])
+  })
 
-describe("usePetConsoleTabs", () => {
-  it("lists the five places in order, as the header's one underline tablist", () => {
-    render(<Harness />)
-    const nav = screen.getByTestId("pet-console-nav")
-    expect(nav).toHaveAttribute("role", "tablist")
-    expect(nav).toHaveAttribute("data-variant", "line")
-    const tabs = within(nav).getAllByRole("tab")
-    expect(tabs.map((tab) => tab.getAttribute("data-tab"))).toEqual([
+  it("gives every place its own glyph", () => {
+    const places = Object.keys(PET_CONSOLE_PLACE_ICONS) as PetConsolePlace[]
+    expect(new Set(places.map((id) => PET_CONSOLE_PLACE_ICONS[id])).size).toBe(places.length)
+  })
+})
+
+describe("PetConsoleNav", () => {
+  it("lists the five places, then Appearance & settings, with labels and descriptions", () => {
+    render(<PetConsoleNav sections={WITHOUT_PLUGINS} activeId="home" onSelect={jest.fn()} />)
+    expect(rowIds()).toEqual(["home", "chat", "shop", "collection", "activity", "appearance"])
+    expect(screen.getByTestId("pet-console-nav-group-pet")).toHaveTextContent("Your pet")
+    expect(screen.getByTestId("pet-console-nav-group-setup")).toHaveTextContent("Setup")
+    const shop = screen.getByTestId("pet-console-nav-item-shop")
+    expect(shop).toHaveTextContent("Shop")
+    expect(shop).toHaveTextContent("Spend coins on food and toys")
+    expect(screen.getByTestId("pet-console-nav-item-appearance")).toHaveTextContent(
+      "Appearance & settings"
+    )
+  })
+
+  it("adds Extensions after the places while something fills it", () => {
+    render(<PetConsoleNav sections={PET_CONSOLE_SECTIONS} activeId="home" onSelect={jest.fn()} />)
+    expect(rowIds()).toEqual([
       "home",
       "chat",
       "shop",
       "collection",
       "activity",
-    ])
-    expect(tabs.map((tab) => tab.textContent)).toEqual([
-      "Home",
-      "Chat",
-      "Shop",
-      "Collection",
-      "Activity",
+      "plugins",
+      "appearance",
     ])
   })
 
-  it("has an icon for every section", () => {
-    for (const id of PET_CONSOLE_SECTIONS) expect(PET_CONSOLE_SECTION_ICONS[id]).toBeDefined()
+  it("marks the open place and reports a pick", () => {
+    const onSelect = jest.fn()
+    render(<PetConsoleNav sections={WITHOUT_PLUGINS} activeId="chat" onSelect={onSelect} />)
+    expect(screen.getByTestId("pet-console-nav-item-chat")).toHaveAttribute("aria-current", "true")
+    expect(screen.getByTestId("pet-console-nav-item-home")).not.toHaveAttribute("aria-current")
+    fireEvent.click(screen.getByTestId("pet-console-nav-item-appearance"))
+    expect(onSelect).toHaveBeenCalledWith("appearance")
   })
 
-  it("adds the plugins tab only when offered", () => {
-    render(<Harness sections={PET_CONSOLE_SECTIONS} />)
-    expect(document.querySelector('[data-tab="plugins"]')).not.toBeNull()
-  })
-
-  it("selects a tab and points it at its panel", () => {
-    const onValueChange = jest.fn()
-    render(<Harness onValueChange={onValueChange} />)
-    const shop = screen.getByRole("tab", { name: "Shop" })
-    // Radix tabs activate on mousedown.
-    fireEvent.mouseDown(shop)
-    expect(onValueChange).toHaveBeenCalledWith("shop")
-    expect(shop).toHaveAttribute("aria-controls", screen.getByRole("tabpanel").id)
-  })
-
-  it("badges the desktop-only tabs and keeps them selectable", () => {
+  it("badges only the places that run on the desktop, still selectable", () => {
+    const onSelect = jest.fn()
     render(
-      <Harness
+      <PetConsoleNav
         sections={PET_CONSOLE_SECTIONS}
-        desktopOnlySections={new Set<PetConsoleSection>(["plugins"])}
+        activeId="home"
+        onSelect={onSelect}
+        desktopOnly={new Set<PetConsolePlace>(["plugins", "appearance"])}
       />
     )
-    const plugins = document.querySelector('[data-tab="plugins"]') as HTMLElement
-    expect(plugins).toHaveAttribute("data-badged", "true")
-    expect(within(plugins).getByTestId("feature-header-tab-badge")).toHaveTextContent("Desktop")
-    expect(plugins).not.toBeDisabled()
-    expect(screen.getAllByTestId("feature-header-tab-badge")).toHaveLength(1)
+    for (const id of ["plugins", "appearance"]) {
+      const badge = screen.getByTestId(`pet-console-nav-badge-${id}`)
+      expect(badge).toHaveTextContent("Desktop")
+      expect(badge).toHaveAttribute("aria-label", "Runs only on your desktop")
+    }
+    for (const id of WITHOUT_PLUGINS) {
+      expect(screen.queryByTestId(`pet-console-nav-badge-${id}`)).toBeNull()
+    }
+    fireEvent.click(screen.getByTestId("pet-console-nav-item-plugins"))
+    expect(onSelect).toHaveBeenCalledWith("plugins")
+  })
+
+  it("keeps the rail's and the sheet's test ids apart", () => {
+    render(
+      <PetConsoleNav
+        sections={WITHOUT_PLUGINS}
+        activeId="home"
+        onSelect={jest.fn()}
+        idPrefix="pet-console-sheet"
+      />
+    )
+    expect(screen.getByTestId("pet-console-sheet-nav-item-home")).toBeInTheDocument()
+    expect(screen.queryByTestId("pet-console-nav-item-home")).toBeNull()
   })
 })

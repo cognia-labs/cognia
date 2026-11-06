@@ -1,18 +1,19 @@
-// The /pet console: a full-page home for the pet. Built on the shared
-// `FeaturePageShell` + `FeaturePageHeader`, like `/memory` and
-// `/conversations`: the header carries the pet's identity, the actions and the
-// navigation row; the center pane scrolls and is measured as
-// `@container/pet-pane`.
+// The pet's console: Settings → Pet (ADR-0058 D16), and on a phone its Me
+// sub-page `/me/pet`. There is no `/pet` page. The section owns its scroll
+// (`layout: "fill"`) and has the shape of every list-and-detail settings
+// section (AI Connections, Terminal, Memory): `SettingsMasterDetail` with the
+// console's rail on the left and a detail card on the right, headed by the
+// pet's identity (avatar, name, level · stage · coins, the desktop toggle)
+// over a pane measured as `@container/pet-pane`.
 //
-// Five places, in the order a visit goes: Home (how the pet is and what it
-// needs next), Chat, Shop, Collection (dex, achievements) and Activity
-// (journal, insights), plus an Extensions tab (id `plugins`) while a module or
-// a plugin fills `pet.console.tab` (the radar does, ADR-0250 §14). Appearance
-// & settings is a sub-page the header opens, with a breadcrumb back. Where a
-// link lands is `lib/pet/console-tabs.ts`.
+// The rail lists five places in the order a visit goes: Home (how the pet is
+// and what it needs next), Chat, Shop, Collection (dex, achievements) and
+// Activity (journal, insights), plus Extensions (id `plugins`) while a module
+// or a plugin fills `pet.console.tab` (the radar does, ADR-0250 §14), and
+// then Appearance & settings. Where a link lands is `lib/pet/console-tabs.ts`.
 //
-// This file composes; the pieces live beside it: `PetConsoleHeader`,
-// `usePetConsoleTabs`, `HomeTab`, `PetConsoleSegments`, `AppearanceView`,
+// This file composes; the pieces live beside it: `PetConsoleNav`,
+// `PetConsoleHeader`, `HomeTab`, `PetConsoleSegments`, `AppearanceView`,
 // `HatchPanel`, `PetConsoleSkeleton`, and for remote care the status band and
 // the desktop-only notice.
 //
@@ -21,13 +22,13 @@
 // paired to a desktop that advertises `pet.remote-care`, it cares for the
 // DESKTOP's pet: it paints from a mirror of the pet tables and every action
 // is an RPC the desktop's controller applies. Which one runs is decided once,
-// by `PetConsoleActionsProvider`, and every tab reads `usePetConsoleActions()`
+// by `PetConsoleActionsProvider`, and every place reads `usePetConsoleActions()`
 // instead of reaching into the pet runtime. What only the desktop can do is
 // classified in `lib/pet/console/action-capabilities.ts` and labelled here.
 
 "use client"
 
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { MonitorIcon, MonitorSmartphoneIcon, PawPrintIcon } from "lucide-react"
@@ -40,8 +41,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Tabs, TabsContent } from "@/components/ui/tabs"
-import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { usePet, type UsePetResult } from "@/hooks/pet/use-pet"
 import { useActiveCharacterId } from "@/hooks/pet/use-active-character-id"
 import { usePetConsoleMode } from "@/hooks/pet/use-pet-console-mode"
@@ -49,6 +48,11 @@ import { claimConnectionNotice } from "@/lib/runtime/connection-notice-claim"
 import { useSettingsStore } from "@/stores/settings"
 import { useActiveLive2dModel } from "@/hooks/pet/use-active-live2d-model"
 import { useActiveSpritePack } from "@/hooks/pet/use-active-sprite-pack"
+import { PanelTransition } from "@/components/settings/common/panel-transition"
+import {
+  SETTINGS_DETAIL_PANE_CLASS,
+  SettingsMasterDetail,
+} from "@/components/settings/common/settings-master-detail"
 import {
   PluginExtensionSlot,
   usePluginSlotHasExtensions,
@@ -58,7 +62,6 @@ import type { PetAssetDiagnostic, PetSkinSelection } from "@/types/pet"
 import {
   PET_CONSOLE_DEFAULT_TARGET,
   PET_CONSOLE_SECTIONS,
-  isPetConsoleSection,
   type PetActivitySegment,
   type PetCollectionSegment,
   type PetConsoleSection,
@@ -80,7 +83,7 @@ import { InsightsTab } from "./insights-tab"
 import { AppearanceView } from "./appearance-view"
 import { PetConsoleSegments } from "./pet-console-segments"
 import { PetConsoleHeader } from "./pet-console-header"
-import { usePetConsoleTabs } from "./pet-console-nav"
+import { PetConsoleNav, type PetConsolePlace } from "./pet-console-nav"
 import { HatchPanel } from "./hatch-panel"
 import { PetConsoleSkeleton } from "./pet-console-skeleton"
 import { PetConsoleActionsProvider } from "./pet-console-actions-provider"
@@ -222,15 +225,13 @@ function PetConsoleBody({
       ? ((initialTarget.segment as PetCollectionSegment | undefined) ?? "dex")
       : "dex"
   )
-  // Where "back" from the appearance sub-page returns to.
-  const [returnSection, setReturnSection] = useState<PetConsoleSection>("home")
   const [activitySegment, setActivitySegment] = useState<PetActivitySegment>(
     initialTarget?.view === "main" && initialTarget.section === "activity"
       ? ((initialTarget.segment as PetActivitySegment | undefined) ?? "journal")
       : "journal"
   )
 
-  // Follow later deep links too: navigating /pet?tab=shop while the console is
+  // Follow later deep links too: navigating to petTab=shop while the console is
   // already mounted only changes the prop, not the mounted state. Adjusted
   // during render (not in an effect) per the React "derive from prop change"
   // pattern.
@@ -305,7 +306,6 @@ function PetConsoleBody({
     ? PET_CONSOLE_SECTIONS
     : PET_CONSOLE_SECTIONS.filter((id) => id !== "plugins")
   const desktopOnly = petConsoleDesktopOnlyTabs(actions.mode, [...sections, "insights"] as const)
-  const desktopOnlySections = new Set(sections.filter((id) => desktopOnly.has(id)))
   // A `?tab=plugins` deep link can arrive before (or after the last of) the
   // plugins that fill it; the pane falls back to Home until one registers,
   // without forgetting that plugins is what was asked for.
@@ -313,7 +313,7 @@ function PetConsoleBody({
     target.view === "main" && !(target.section === "plugins" && !hasPluginTabs)
       ? target.section
       : "home"
-  const placeTabs = usePetConsoleTabs({ sections, desktopOnlySections, value: activeSection })
+  const activePlace: PetConsolePlace = target.view === "appearance" ? "appearance" : activeSection
   const statusBand = remote ? <PetRemoteStatusBand remote={remote} /> : null
 
   if (!profile || !view) {
@@ -349,14 +349,9 @@ function PetConsoleBody({
     actions.capability(id) === "available"
 
   const openSection = (section: PetConsoleSection) => setTarget({ view: "main", section })
-  const openAppearance = () => {
-    if (target.view === "main") setReturnSection(activeSection)
-    setTarget({ view: "appearance" })
-  }
-
-  const selectSection = (value: string) => {
-    if (isPetConsoleSection(value)) openSection(value)
-  }
+  const openAppearance = () => setTarget({ view: "appearance" })
+  const selectPlace = (place: PetConsolePlace) =>
+    place === "appearance" ? openAppearance() : openSection(place)
 
   const desktopToggle =
     profile.soul && can("desktop.toggle")
@@ -405,171 +400,164 @@ function PetConsoleBody({
       />
     )
 
-  const pane = (children: ReactNode) => (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {statusBand}
-      <main
-        data-testid="pet-console-pane"
-        className="@container/pet-pane min-h-0 min-w-0 flex-1 overflow-auto px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] md:px-6 md:py-6"
-      >
-        {children}
-      </main>
-    </div>
-  )
+  const panel = (() => {
+    switch (activePlace) {
+      case "home":
+        return profile.soul ? (
+          <HomeTab
+            profile={profile}
+            view={view}
+            skinId={effectiveSkin}
+            selection={selection}
+            lowPower={lowPower}
+            onCare={(kind) => void actions.care(kind)}
+            onTalk={(text) => void actions.care("talked", text ? { text } : {})}
+            onOpenShop={() => openSection("shop")}
+            onOpenChat={() => openSection("chat")}
+            cooldownRemaining={actions.cooldownRemaining}
+            talkMode={actions.mode === "remote" ? "direct" : "composer"}
+            showPluginActions={actions.mode === "local"}
+            notice={skinNotice}
+          />
+        ) : (
+          <HatchPanel
+            bones={view.effectiveBones}
+            skinId={effectiveSkin}
+            selection={selection}
+            lowPower={lowPower}
+            onHatch={actions.hatch}
+          />
+        )
+      case "chat":
+        return <ChatTab petName={profile.soul?.name} />
+      case "shop":
+        return <ShopTab />
+      case "collection":
+        return (
+          <PetConsoleSegments
+            testId="pet-collection"
+            label={t("console.tabs.collection")}
+            value={collectionSegment}
+            onValueChange={setCollectionSegment}
+            segments={[
+              {
+                id: "dex",
+                label: t("console.tabs.dex"),
+                content: () => <DexTab bones={view.bones} />,
+              },
+              {
+                id: "achievements",
+                label: t("console.tabs.achievements"),
+                content: () => <AchievementsTab />,
+              },
+            ]}
+          />
+        )
+      case "activity":
+        return (
+          <PetConsoleSegments
+            testId="pet-activity"
+            label={t("console.tabs.activity")}
+            value={activitySegment}
+            onValueChange={setActivitySegment}
+            segments={[
+              {
+                id: "journal",
+                label: t("console.tabs.journal"),
+                content: () => <JournalTab />,
+              },
+              {
+                id: "insights",
+                label: t("console.tabs.insights"),
+                desktopOnly: desktopOnly.has("insights"),
+                content: () =>
+                  desktopOnly.has("insights") ? (
+                    <DesktopOnlyNotice tab="insights" />
+                  ) : (
+                    <InsightsTab />
+                  ),
+              },
+            ]}
+          />
+        )
+      case "plugins":
+        return desktopOnly.has("plugins") ? (
+          <DesktopOnlyNotice tab="plugins" />
+        ) : (
+          <PluginExtensionSlot
+            point="pet.console.tab"
+            className="mx-auto flex w-full max-w-3xl flex-col gap-4"
+            context={{
+              level: profile.level,
+              stage: profile.stage,
+              mood: view.mood,
+              condition: view.condition,
+            }}
+          />
+        )
+      case "appearance":
+        return (
+          <AppearanceView
+            canCustomize={can("appearance.customize")}
+            canEditBinding={can("binding.edit")}
+            focus={target.view === "appearance" ? target.focus : undefined}
+          />
+        )
+    }
+  })()
 
-  if (target.view === "appearance") {
-    return (
-      <div
-        data-testid="pet-console"
-        data-mode={actions.mode}
-        data-view="appearance"
-        className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col"
-      >
-        <FeaturePageShell
-          storageId="pet-appearance"
-          header={
-            <PetConsoleHeader
-              mode="appearance"
-              {...headerProps}
-              onBack={() => openSection(returnSection)}
-            />
-          }
-        >
-          {pane(
-            <AppearanceView
-              canCustomize={can("appearance.customize")}
-              canEditBinding={can("binding.edit")}
-              focus={target.focus}
-            />
-          )}
-        </FeaturePageShell>
-      </div>
-    )
-  }
+  // The places a paired phone can only look at, badged on the rail. The
+  // appearance workspace is the desktop's (only the character binding reads
+  // remotely), so its row carries the badge too.
+  const desktopOnlyPlaces = new Set<PetConsolePlace>(sections.filter((id) => desktopOnly.has(id)))
+  if (!can("appearance.customize")) desktopOnlyPlaces.add("appearance")
 
   return (
-    <Tabs
-      value={activeSection}
-      onValueChange={selectSection}
+    <div
       data-testid="pet-console"
       data-mode={actions.mode}
-      data-view="main"
-      className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-0"
+      data-view={target.view}
+      data-place={activePlace}
+      className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col"
     >
-      <FeaturePageShell
-        storageId="pet"
-        header={
-          <PetConsoleHeader
-            mode="main"
-            {...headerProps}
-            tabs={placeTabs}
-            onOpenAppearance={openAppearance}
-            appearanceDesktopOnly={!can("appearance.customize")}
+      <SettingsMasterDetail
+        nav={(slot) => (
+          <PetConsoleNav
+            sections={sections}
+            activeId={activePlace}
+            onSelect={selectPlace}
+            desktopOnly={desktopOnlyPlaces}
+            idPrefix={slot === "rail" ? "pet-console" : "pet-console-sheet"}
           />
-        }
-      >
-        {pane(
-          <>
-            <TabsContent value="home">
-              {profile.soul ? (
-                <HomeTab
-                  profile={profile}
-                  view={view}
-                  skinId={effectiveSkin}
-                  selection={selection}
-                  lowPower={lowPower}
-                  onCare={(kind) => void actions.care(kind)}
-                  onTalk={(text) => void actions.care("talked", text ? { text } : {})}
-                  onOpenShop={() => openSection("shop")}
-                  onOpenChat={() => openSection("chat")}
-                  cooldownRemaining={actions.cooldownRemaining}
-                  talkMode={actions.mode === "remote" ? "direct" : "composer"}
-                  showPluginActions={actions.mode === "local"}
-                  notice={skinNotice}
-                />
-              ) : (
-                <HatchPanel
-                  bones={view.effectiveBones}
-                  skinId={effectiveSkin}
-                  selection={selection}
-                  lowPower={lowPower}
-                  onHatch={actions.hatch}
-                />
-              )}
-            </TabsContent>
-            <TabsContent value="chat" className="h-full">
-              <ChatTab petName={profile.soul?.name} />
-            </TabsContent>
-            <TabsContent value="shop">
-              <ShopTab />
-            </TabsContent>
-            <TabsContent value="collection">
-              <PetConsoleSegments
-                testId="pet-collection"
-                label={t("console.tabs.collection")}
-                value={collectionSegment}
-                onValueChange={setCollectionSegment}
-                segments={[
-                  {
-                    id: "dex",
-                    label: t("console.tabs.dex"),
-                    content: () => <DexTab bones={view.bones} />,
-                  },
-                  {
-                    id: "achievements",
-                    label: t("console.tabs.achievements"),
-                    content: () => <AchievementsTab />,
-                  },
-                ]}
-              />
-            </TabsContent>
-            <TabsContent value="activity">
-              <PetConsoleSegments
-                testId="pet-activity"
-                label={t("console.tabs.activity")}
-                value={activitySegment}
-                onValueChange={setActivitySegment}
-                segments={[
-                  {
-                    id: "journal",
-                    label: t("console.tabs.journal"),
-                    content: () => <JournalTab />,
-                  },
-                  {
-                    id: "insights",
-                    label: t("console.tabs.insights"),
-                    desktopOnly: desktopOnly.has("insights"),
-                    content: () =>
-                      desktopOnly.has("insights") ? (
-                        <DesktopOnlyNotice tab="insights" />
-                      ) : (
-                        <InsightsTab />
-                      ),
-                  },
-                ]}
-              />
-            </TabsContent>
-            {hasPluginTabs ? (
-              <TabsContent value="plugins">
-                {desktopOnly.has("plugins") ? (
-                  <DesktopOnlyNotice tab="plugins" />
-                ) : (
-                  <PluginExtensionSlot
-                    point="pet.console.tab"
-                    className="mx-auto flex w-full max-w-3xl flex-col gap-4"
-                    context={{
-                      level: profile.level,
-                      stage: profile.stage,
-                      mood: view.mood,
-                      condition: view.condition,
-                    }}
-                  />
-                )}
-              </TabsContent>
-            ) : null}
-          </>
         )}
-      </FeaturePageShell>
-    </Tabs>
+        navTitle={t("console.navigation")}
+        mobileTriggerLabel={t("console.rail.mobileTrigger")}
+        activeKey={activePlace}
+        activeLabel={t(`console.tabs.${activePlace}`)}
+        navWidth={240}
+        triggerTestId="pet-console-nav-trigger"
+      >
+        <div className={SETTINGS_DETAIL_PANE_CLASS} data-testid="pet-console-detail">
+          <PetConsoleHeader {...headerProps} />
+          {statusBand}
+          <main
+            data-testid="pet-console-pane"
+            aria-label={t(`console.tabs.${activePlace}`)}
+            // At the phone tier the card loses its frame, so the pane's inset
+            // shrinks to line up with the header's.
+            className="@container/pet-pane min-h-0 min-w-0 flex-1 overflow-auto px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] md:px-6 md:py-6 @max-[440px]/settings-pane:px-3 @max-[440px]/settings-pane:pt-4"
+          >
+            <PanelTransition
+              activeKey={activePlace}
+              // The chat place is a column with its composer pinned at the
+              // bottom, so it fills the pane instead of growing with content.
+              className={activePlace === "chat" ? "h-full" : undefined}
+            >
+              {panel}
+            </PanelTransition>
+          </main>
+        </div>
+      </SettingsMasterDetail>
+    </div>
   )
 }

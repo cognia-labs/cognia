@@ -8,6 +8,7 @@
  * lands somewhere real.
  */
 
+import { petConsoleHref } from "@/lib/pet/console-tabs"
 import { settingsHref } from "@/lib/settings/deep-link"
 
 import type { GlanceOwnerSurface } from "./registry"
@@ -40,7 +41,8 @@ export function glanceOwnerHref(owner: GlanceOwnerSurface, itemId?: string): str
     case "conversations":
       return "/conversations"
     case "pet":
-      return "/pet"
+      // Settings → Pet is the console (ADR-0058 D16).
+      return petConsoleHref()
     case "tray-actions":
       return settingsHref("desktop")
     case "fleet":
@@ -79,7 +81,8 @@ export function glanceMobileOwnerHref(owner: GlanceOwnerSurface, itemId?: string
     case "conversations":
       return "/conversations"
     case "pet":
-      return "/pet"
+      // The phone's home for Settings → Pet (ADR-0058 D16).
+      return petConsoleHref(undefined, { phone: true })
     case "tray-actions":
       return null
   }

@@ -7,7 +7,7 @@
 // per item and action (no double purchase while a write is in flight), one
 // toast per outcome, worded by `lib/pet/console/outcome-messages.ts`.
 //
-// Inside the /pet console the item actions are the console's own
+// Inside the pet console the item actions are the console's own
 // (`PetConsoleActions`), so a paired phone buys and uses items on the DESKTOP
 // pet (ADR-0219). Outside it (the desktop popup's inventory strip) they are
 // this device's shop, as before.

@@ -319,15 +319,16 @@
       "title": "{tab} is on your desktop",
       "why": "It works with skins, models and plugins stored on your desktop, so it can't run on this device.",
       "remedy": {
-        "appearance": "Open Cognia on your desktop and go to Pet → Appearance & settings.",
-        "insights": "Open Cognia on your desktop and go to Pet → Activity → Insights.",
-        "plugins": "Open Cognia on your desktop and go to Pet → Extensions."
+        "appearance": "Open Cognia on your desktop and go to Settings → Pet → Appearance & settings.",
+        "insights": "Open Cognia on your desktop and go to Settings → Pet → Activity → Insights.",
+        "plugins": "Open Cognia on your desktop and go to Settings → Pet → Extensions."
       },
       "what": {
         "appearance": "Change your pet's species, colors, skin, size and behavior.",
         "insights": "Choose what gets captured from your activity.",
         "plugins": "Panels that Cognia's modules and your desktop's plugins add to the pet console, such as the Attention Radar."
-      }
+      },
+      "badgeAria": "Runs only on your desktop"
     },
     "chat": {
       "clear": "Clear conversation",
@@ -398,12 +399,25 @@
       "talkInChat": "Conversations with your pet are recorded in Chat."
     },
     "appearance": {
-      "title": "Appearance & settings",
-      "back": "Back to {name}",
-      "description": "How your pet looks and behaves, on screen and on the desktop.",
       "index": "Appearance & settings sections",
       "binding": "Character looks",
       "bindingDescription": "Give a character its own species or skin. A conversation with that character shows its look instead of the global one."
+    },
+    "rail": {
+      "mobileTrigger": "Places",
+      "groups": {
+        "pet": "Your pet",
+        "setup": "Setup"
+      },
+      "descriptions": {
+        "home": "How it is and what it needs",
+        "chat": "Talk with your pet",
+        "shop": "Spend coins on food and toys",
+        "collection": "Dex and achievements",
+        "activity": "Journal and insights",
+        "plugins": "Panels modules and plugins add",
+        "appearance": "Look, behavior and the desktop window"
+      }
     }
   },
   "customize": {
@@ -581,9 +595,9 @@
   },
   "quickMenu": {
     "clickThrough": "Click-through",
-    "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Pet → Appearance & settings.",
+    "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Settings → Pet → Appearance & settings.",
     "hideDesktopPet": "Hide desktop pet",
-    "openConsole": "Open pet page",
+    "openConsole": "Open pet settings",
     "showDesktopPet": "Show desktop pet",
     "windowActions": "Desktop pet window",
     "openAppearance": "Appearance & settings"
@@ -784,9 +798,6 @@
       "unreachable": "Couldn't reach your desktop. Check the connection and try again.",
       "desktopOnly": "That's only available in the desktop app."
     }
-  },
-  "nav": {
-    "label": "Pet"
   },
   "settingsSection": {
     "description": "Your animated desktop companion.",

@@ -108,20 +108,8 @@ it("shows a host surface only when the Companion advertises the operation", () =
   ).toBe(false)
 })
 
-describe("/pet (runtime on desktop, console remote, ADR-0058 D9 / ADR-0219)", () => {
-  const pet = getSurfaceContract("pet")!
-  const companion = (operations: string[]): Partial<RuntimeSnapshot> => ({
-    target: { id: "desktop", kind: "companion", hostKind: "desktop", platform: "mobile" },
-    host: { compatible: true, operations, grants: ["client.read", "client.write"] },
-  })
-
-  it("is remote control of the desktop pet, bound to the snapshot read", () => {
-    expect(pet).toMatchObject({
-      operation: "pet_get",
-      standalone: "explain",
-      companion: "remote",
-      offline: "cached-read",
-    })
+describe("the pet (runtime on desktop, console remote, ADR-0058 D9 / D16, ADR-0219)", () => {
+  it("documents why the runtime stays on the desktop and the console needs a paired host", () => {
     expect(petRuntimeRequiresDesktopShell).toEqual({
       surfaceId: "pet",
       reason: "desktop-shell-only",
@@ -134,48 +122,10 @@ describe("/pet (runtime on desktop, console remote, ADR-0058 D9 / ADR-0219)", ()
     })
   })
 
-  it("runs on the desktop, which is the host itself", () => {
-    expect(resolveSurfaceAvailability(pet, snapshot({ target: null })).state).toBe("available")
-  })
-
-  // `SurfaceAvailabilityBoundary` answers `unsupported` with its `/pair`
-  // remedy (pinned in its own suite).
-  it("sends a standalone browser to pair", () => {
-    const availability = resolveSurfaceAvailability(pet, snapshot())
-    expect(availability).toEqual({ state: "unsupported", reason: "requires-companion" })
-    // The surface stays deep-linkable there; the rail hides it separately
-    // (`hostOperationGated`, pinned in `lib/shell/sidebar-nav.test.ts`).
-    expect(shouldShowSurface(pet, snapshot())).toBe(true)
-  })
-
-  it("is available on a phone paired to a desktop that advertises remote pet care", () => {
-    expect(resolveSurfaceAvailability(pet, snapshot(companion(["pet_get"]))).state).toBe(
-      "available"
-    )
-  })
-
-  it("reads the mirror when the paired desktop is offline", () => {
-    expect(
-      resolveSurfaceAvailability(
-        pet,
-        snapshot({ ...companion(["pet_get"]), connectionState: "offline" })
-      )
-    ).toEqual({ state: "read-only", reason: "offline-cache" })
-  })
-
-  it("stays readable on an older desktop, where the console explains the update", () => {
-    expect(resolveSurfaceAvailability(pet, snapshot(companion(["git_status"])))).toEqual({
-      state: "read-only",
-      reason: "operation-unavailable",
-    })
-  })
-
-  it("is no longer a desktop-only rail entry; the rail gates it on the host instead", () => {
-    // The destination comes from the pet's manifest (`lib/pet/module.ts`).
-    const meta = navCatalogEntry("pet")
-    expect(meta?.module).toBe("pet")
-    expect(meta?.desktopOnly).toBeUndefined()
-    expect(meta?.hostOperationGated).toBe(true)
+  it("has no route of its own: the console is Settings → Pet", () => {
+    expect(getSurfaceContract("pet")).toBeNull()
+    expect(getSurfaceContractForRoute("/pet")).toBeNull()
+    expect(navCatalogEntry("pet")).toBeUndefined()
   })
 })
 
@@ -249,7 +199,6 @@ describe("/files (its own library standalone, the host's when paired, ADR-0200 /
     const meta = SIDEBAR_NAV_META.find((m) => m.id === "files")
     expect(meta?.route).toBe("/files")
     expect(meta?.desktopOnly).toBeUndefined()
-    expect(meta?.hostOperationGated).toBeUndefined()
     expect(
       resolveSurfaceAvailability(
         files,

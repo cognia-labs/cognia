@@ -59,15 +59,6 @@ export interface SidebarNavMeta {
    * appears off desktop.
    */
   desktopOnly?: boolean
-  /**
-   * Off the desktop shell (mobile AND web), shown only while the paired host
-   * advertises the surface contract's `operation`. For a surface that is
-   * remote control of something only a host runs: the pet console
-   * (ADR-0219) cares for the DESKTOP's pet, so a phone or browser paired to a
-   * host without `pet_get`, or not paired at all, has nothing to open. Unlike
-   * `desktopOnly` this does not drop the entry on mobile.
-   */
-  hostOperationGated?: boolean
 }
 
 /**

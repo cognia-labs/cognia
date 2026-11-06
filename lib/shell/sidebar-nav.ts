@@ -117,9 +117,7 @@ export function navEntryIcon(entry: Pick<NavCatalogEntry, "id" | "iconName">): L
  * F5), `desktopOnly` items are dropped so they never surface in the rail or
  * the customizer as dead ends. On the web a paired host can bring one back,
  * but only a surface with a host `operation` it can advertise; one without is
- * a shell constraint and stays dropped. A `hostOperationGated` item (the pet
- * console, ADR-0219) appears on mobile and web exactly while the paired host
- * advertises its operation. Falls back to a
+ * a shell constraint and stays dropped. Falls back to a
  * question-mark-free no-op icon only if a mapping is missing (shouldn't
  * happen — covered by tests).
  */
@@ -131,18 +129,6 @@ export function getSidebarCatalog(
   return catalog
     .filter((meta) => {
       if (platform === "tauri") return true
-      // Remote control of something only a host runs: shown only while the
-      // paired host advertises it. Checked first, so neither the mobile
-      // `desktopOnly` rule nor the contract's `standalone` column (the pet's is
-      // `explain`, which `shouldShowSurface` would let through) can override it.
-      if (meta.hostOperationGated) {
-        const operation = getSurfaceContract(meta.id)?.operation
-        return (
-          operation !== undefined &&
-          runtimeSnapshot !== undefined &&
-          hostAdvertisesOperation(runtimeSnapshot, operation)
-        )
-      }
       // `desktopOnly` is a shell constraint, not a runtime capability. A paired
       // desktop may advertise the underlying operation to a phone, but the
       // mobile drawer must still not expose destinations designed only for the
@@ -172,19 +158,6 @@ export function getSidebarCatalog(
       ...m,
       Icon: navEntryIcon(m),
     }))
-}
-
-/**
- * Whether the paired host advertises `operation` right now: a compatible
- * companion host whose manifest lists it. Cached reads do not count; an entry
- * gated on this is only worth a slot when the host can act on it.
- */
-function hostAdvertisesOperation(snapshot: RuntimeSnapshot, operation: string): boolean {
-  return (
-    snapshot.target?.kind === "companion" &&
-    snapshot.host?.compatible === true &&
-    snapshot.host.operations.includes(operation)
-  )
 }
 
 /** Resolved partition of the catalog into the three rail buckets. */

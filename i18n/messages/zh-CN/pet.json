@@ -312,15 +312,16 @@
       "title": "「{tab}」在桌面端使用",
       "why": "它依赖保存在桌面端的皮肤、模型和插件，因此无法在此设备上运行。",
       "remedy": {
-        "appearance": "请在桌面端打开 Cognia，进入 宠物 → 外观与设置。",
-        "insights": "请在桌面端打开 Cognia，进入 宠物 → 动态 → 洞察。",
-        "plugins": "请在桌面端打开 Cognia，进入 宠物 → 扩展。"
+        "appearance": "请在桌面端打开 Cognia，进入 设置 → 宠物 → 外观与设置。",
+        "insights": "请在桌面端打开 Cognia，进入 设置 → 宠物 → 动态 → 洞察。",
+        "plugins": "请在桌面端打开 Cognia，进入 设置 → 宠物 → 扩展。"
       },
       "what": {
         "appearance": "修改宠物的物种、配色、皮肤、大小和行为。",
         "insights": "选择要从你的活动中采集哪些内容。",
         "plugins": "Cognia 的模块和桌面端插件为宠物控制台添加的面板，例如注意力雷达。"
-      }
+      },
+      "badgeAria": "仅在桌面端运行"
     },
     "chat": {
       "clear": "清空对话",
@@ -391,12 +392,25 @@
       "talkInChat": "和宠物的对话会记录在「对话」中。"
     },
     "appearance": {
-      "title": "外观与设置",
-      "back": "返回{name}",
-      "description": "宠物的样子和行为，包括桌面上的表现。",
       "index": "外观与设置分区",
       "binding": "角色外观",
       "bindingDescription": "为某个角色指定专属的物种或皮肤。与该角色对话时会显示它的外观，而不是全局外观。"
+    },
+    "rail": {
+      "mobileTrigger": "位置",
+      "groups": {
+        "pet": "你的宠物",
+        "setup": "设置"
+      },
+      "descriptions": {
+        "home": "状态与下一步需要",
+        "chat": "和宠物聊天",
+        "shop": "用金币买食物和玩具",
+        "collection": "图鉴与成就",
+        "activity": "日记与洞察",
+        "plugins": "模块与插件添加的面板",
+        "appearance": "外观、行为与桌面窗口"
+      }
     }
   },
   "customize": {
@@ -571,9 +585,9 @@
   },
   "quickMenu": {
     "clickThrough": "鼠标穿透",
-    "clickThroughDescription": "点击会穿过宠物落到后面的窗口。可在托盘菜单或 宠物 → 外观与设置 中关闭。",
+    "clickThroughDescription": "点击会穿过宠物落到后面的窗口。可在托盘菜单或 设置 → 宠物 → 外观与设置 中关闭。",
     "hideDesktopPet": "隐藏桌宠",
-    "openConsole": "打开宠物页",
+    "openConsole": "打开宠物设置",
     "showDesktopPet": "显示桌宠",
     "windowActions": "桌宠窗口",
     "openAppearance": "外观与设置"
@@ -774,9 +788,6 @@
       "unreachable": "无法连接到桌面端，请检查连接后重试。",
       "desktopOnly": "该功能仅在桌面客户端可用。"
     }
-  },
-  "nav": {
-    "label": "宠物"
   },
   "settingsSection": {
     "description": "你的桌面动画伙伴。",

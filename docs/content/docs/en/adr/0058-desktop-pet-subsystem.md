@@ -1,11 +1,11 @@
 ---
 title: ADR-0058 — Desktop Pet Subsystem
-description: "Backfills the architecture record for the pet subsystem (components/pet/, lib/pet/, hooks/pet/, stores/pet/, types/pet/, src-tauri/src/pet_window/) against its actual, current shape — a three-window-role model (main/overlay/popup), a Dexie-vs-Zustand state split, a subsystem-agnostic event bus, and a three-skin (SVG/Live2D/sprite-v2) renderer — none of which is recorded anywhere else. Also records this wave's additions: unified drag/throw physics between the browser widget and the Tauri overlay, an opt-in ambient Twin-awareness signal, a global hotkey + persisted custom-shortcut fix, macOS window-climbing, tray quick actions/mood display, and Codex-compatible sprite-pet imports. Amended 2026-09-25 (D9–D11): the pet is desktop-shell only end to end, a summon switches it on through one owner, radar reports reach it with an Open Insights action, and ⌘K and bindable shortcuts reach it. Amended 2026-10-04 (D12–D13): the overlay and popup are correct across DPI, monitors, focus and the window lifecycle, pet settings writes are serialized across windows, only one pet shows at a time, and the plugin pet API is complete, permission-gated and honest about what it granted."
+description: "Backfills the architecture record for the pet subsystem (components/pet/, lib/pet/, hooks/pet/, stores/pet/, types/pet/, src-tauri/src/pet_window/) against its actual, current shape — a three-window-role model (main/overlay/popup), a Dexie-vs-Zustand state split, a subsystem-agnostic event bus, and a three-skin (SVG/Live2D/sprite-v2) renderer — none of which is recorded anywhere else. Also records this wave's additions: unified drag/throw physics between the browser widget and the Tauri overlay, an opt-in ambient Twin-awareness signal, a global hotkey + persisted custom-shortcut fix, macOS window-climbing, tray quick actions/mood display, and Codex-compatible sprite-pet imports. Amended 2026-09-25 (D9–D11): the pet is desktop-shell only end to end, a summon switches it on through one owner, radar reports reach it with an Open Insights action, and ⌘K and bindable shortcuts reach it. Amended 2026-10-04 (D12–D13): the overlay and popup are correct across DPI, monitors, focus and the window lifecycle, pet settings writes are serialized across windows, only one pet shows at a time, and the plugin pet API is complete, permission-gated and honest about what it granted. Amended 2026-11-06 (D16): there is no /pet page; the console is the Settings → Pet section, a list-and-detail pane with Appearance & settings as a rail item."
 ---
 
 # ADR-0058 — Desktop Pet Subsystem
 
-**Status**: Accepted (2026-07-01); amended 2026-09-25 (D9–D11), 2026-10-04 (D12–D13)
+**Status**: Accepted (2026-07-01); amended 2026-09-25 (D9–D11), 2026-10-04 (D12–D13), 2026-11-06 (D16)
 **Authors**: Max Qian + Claude
 **Supersedes**: `docs/superpowers/specs/2026-06-02-pet-system-design.md`, `docs/superpowers/specs/2026-06-05-pet-llm-deepening-design.md`
 
@@ -241,6 +241,46 @@ remained, and "hide the desktop pet" had three different effects.
   `toggleDesktopPetWindow`. `PetWidget`, `PetQuickMenu`, `PetQuickNav`,
   `usePetWidgetThrow` and the store's persisted `minimized` / `position` are
   deleted.
+
+No `PetSettings`, `PetProfile`, Dexie or wire-shape change.
+
+### D16 — The console is Settings → Pet (2026-11-06)
+
+D15 gave the console its own route, `/pet`, and left Settings → Pet as a
+pointer to the page's Appearance & settings sub-page. That meant two homes for
+one thing: a rail entry, a Go-menu row, a native menu item, a ⌘K page and a
+settings section, with a link from one to the other. ADR-0250 M2 then moved
+the pet's navigation and settings section into its module manifest, which made
+the duplication explicit.
+
+**Decision**:
+
+- There is no `/pet` page and no redirect. The whole console is the Settings →
+  Pet section (`components/settings/pet/pet-section.tsx`, `layout: "fill"`),
+  and on a phone the `/me/pet` sub-page, which embeds the same section. The
+  pet manifest declares no `nav` entry; the rail, Go menu, native menu
+  (`go-pet`), ⌘K navigation and full-viewport route list carry no pet row.
+- The section has the shape of every list-and-detail settings section (AI
+  Connections, Terminal, Memory): `SettingsMasterDetail` with the console's
+  rail (`PetConsoleNav`) on the left and a detail card on the right, headed by
+  the pet's identity (avatar, editable name, level · stage · coins, the
+  desktop toggle or, remotely, its status chip). The rail's "Your pet" group
+  lists Home, Chat, Shop, Collection, Activity and, while something fills
+  `pet.console.tab`, Extensions; its "Setup" group holds Appearance & settings,
+  now a rail item rather than a sub-page with a back button. Below 440px the
+  rail becomes the frame's sheet.
+- Links name the place in the section's own params: `petTab` (any console
+  destination, legacy ids included) and `petView=appearance`.
+  `petConsoleHref(tab, { phone })` builds `/settings?section=pet…` or
+  `/me/pet…` and is still the one way to write such a link (popup, bubbles,
+  `pet_show`, title bar, ⌘K action, glance, the "pet is off" notification).
+- Off the desktop the section is reachable while the paired host advertises
+  `pet_get`: `ModuleSettingsSection.hostOperation` (validated by the module
+  gate) makes `settingsSectionBlockReason` answer `capability` otherwise, and
+  the Me row uses the same `hostAdvertisesOperation` check. The desktop-only
+  places keep their "Desktop" badge on the rail (ADR-0219).
+- The radar stays in the console's Extensions place through the
+  `pet.console.tab` module slot (ADR-0250 §14).
 
 No `PetSettings`, `PetProfile`, Dexie or wire-shape change.
 

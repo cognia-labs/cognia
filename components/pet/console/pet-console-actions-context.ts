@@ -1,4 +1,4 @@
-// The /pet console's actions, as one object every tab reads (ADR-0219).
+// The pet console's actions, as one object every tab reads (ADR-0219).
 //
 // The console runs in two modes. `local`, in the desktop app's main window,
 // drives the pet controller directly. `remote`, on a paired phone or browser,

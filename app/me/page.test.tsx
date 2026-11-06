@@ -309,7 +309,7 @@ describe("MePage pet console row", () => {
     companionConfigState.current = { paired: true, shortDeviceId: "ABCDEFGH" }
     runtimeSnapshotState.current = petHostSnapshot(["pet_get"])
     render(<MePage />)
-    expect(hrefOf("me-row-pet")).toBe("/pet")
+    expect(hrefOf("me-row-pet")).toBe("/me/pet")
     // Served by the host, so no "Requires desktop" annotation.
     expect(screen.getByTestId("me-row-pet")).not.toHaveTextContent("requiresDesktop")
   })

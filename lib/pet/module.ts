@@ -3,8 +3,8 @@ import { defineHostModule } from "@/lib/modules/define"
 // The desktop pet (ADR-0058). The M2 pilot for slots and effects (ADR-0250
 // §14): its controller mounts from `components/pet/module.ui.ts` (`effects`),
 // its console's Extensions tab is a slot other modules fill (radar does), and
-// its destination and settings section come from the manifests instead of
-// the hand-written tables.
+// the console itself is the Pet settings section that manifest declares
+// (ADR-0058 D16): the pet has no page or rail destination of its own.
 export default defineHostModule({
   id: "pet",
   kind: "module",
@@ -40,11 +40,13 @@ export default defineHostModule({
   // What other modules use: which window this is (account gates, appearance,
   // the tray), revealing the pet (island, tray panel), the pet's view and care
   // condition (tray, glance), its paired-phone client and request ids (glance,
-  // files library) and the event bus workflows trigger on.
+  // files library), the event bus workflows trigger on, and the console's
+  // href (glance, ⌘K, the phone's Me tab).
   api: [
     "hooks/pet/use-document-visible.ts",
     "lib/pet/access/limits.ts",
     "lib/pet/care/condition.ts",
+    "lib/pet/console-tabs.ts",
     "lib/pet/events/pet-event-bus.ts",
     "lib/pet/remote/client.ts",
     "lib/pet/remote/idempotency.ts",
@@ -65,21 +67,6 @@ export default defineHostModule({
     "petModels",
     "petProfile",
     "petSpritePacks",
-  ],
-  // Gated on the host operation like every route that runs pet work
-  // (ADR-0219); a phone opens the paired desktop's pet.
-  nav: [
-    {
-      id: "pet",
-      route: "/pet",
-      label: "pet.nav.label",
-      icon: "PawPrint",
-      spotIcon: "pet",
-      group: "feature",
-      category: "agents",
-      after: "goals",
-      hostOperationGated: true,
-    },
   ],
   messages: "pet",
 })

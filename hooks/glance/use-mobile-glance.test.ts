@@ -563,7 +563,7 @@ describe("useMobileGlance", () => {
           })
         )
         act(() => result.current.glance.route({ kind: "open-owner", owner: "pet" }))
-        expect(navigate).toHaveBeenCalledWith("/pet")
+        expect(navigate).toHaveBeenCalledWith("/me/pet")
       })
     })
 

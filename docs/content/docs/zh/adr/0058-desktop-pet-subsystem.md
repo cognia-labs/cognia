@@ -1,11 +1,11 @@
 ---
 title: "ADR-0058 — 桌面宠物子系统"
-description: "将宠物子系统（components/pet/、lib/pet/、hooks/pet/、stores/pet/、types/pet/、src-tauri/src/pet_window/）的架构记录回填其实际当前形状——三窗口角色模型（main/overlay/popup）、Dexie-vs-Zustand状态分割、子系统无关事件总线和三皮肤（SVG/Live2D/sprite-v2）渲染器——这些都未在其他地方记录。还记录了本波的新增内容：浏览器小部件与Tauri叠加层之间的统一drag/throw物理、可选的数字孪生环境感知信号、全局快捷键+持久自定义快捷方式修复、macOS窗口攀爬、托盘快速actions/mood显示，以及兼容 Codex 的精灵宠物导入。2026-09-25 修订（D9–D11）：宠物端到端仅限桌面壳，召唤经唯一入口并同时启用宠物，雷达报告以带「打开 Insights」操作的事件抵达宠物，⌘K 与可绑定快捷键均可触达宠物。2026-10-04 修订（D12–D13）：悬浮窗与弹出窗口在 DPI、多显示器、焦点与窗口生命周期上都正确，宠物设置写入跨窗口串行化，屏幕上只显示一只宠物，插件宠物 API 完整、受权限门控并如实反馈发放结果。"
+description: "将宠物子系统（components/pet/、lib/pet/、hooks/pet/、stores/pet/、types/pet/、src-tauri/src/pet_window/）的架构记录回填其实际当前形状——三窗口角色模型（main/overlay/popup）、Dexie-vs-Zustand状态分割、子系统无关事件总线和三皮肤（SVG/Live2D/sprite-v2）渲染器——这些都未在其他地方记录。还记录了本波的新增内容：浏览器小部件与Tauri叠加层之间的统一drag/throw物理、可选的数字孪生环境感知信号、全局快捷键+持久自定义快捷方式修复、macOS窗口攀爬、托盘快速actions/mood显示，以及兼容 Codex 的精灵宠物导入。2026-09-25 修订（D9–D11）：宠物端到端仅限桌面壳，召唤经唯一入口并同时启用宠物，雷达报告以带「打开 Insights」操作的事件抵达宠物，⌘K 与可绑定快捷键均可触达宠物。2026-10-04 修订（D12–D13）：悬浮窗与弹出窗口在 DPI、多显示器、焦点与窗口生命周期上都正确，宠物设置写入跨窗口串行化，屏幕上只显示一只宠物，插件宠物 API 完整、受权限门控并如实反馈发放结果。2026-11-06 修订（D16）：不再有 /pet 页面，控制台就是「设置 → 宠物」分区，为列表 + 详情形态，「外观与设置」是左栏的一项。"
 ---
 
 # ADR-0058 — 桌面宠物子系统
 
-**状态**：已接受（2026-07-01）；2026-09-25 修订（D9–D11），2026-10-04 修订（D12–D13）**作者**：Max Qian + Claude **Supersedes**：`docs/superpowers/specs/2026-06-02-pet-system-design.md`，`docs/superpowers/specs/2026-06-05-pet-llm-deepening-design.md`
+**状态**：已接受（2026-07-01）；2026-09-25 修订（D9–D11），2026-10-04 修订（D12–D13），2026-11-06 修订（D16）**作者**：Max Qian + Claude **Supersedes**：`docs/superpowers/specs/2026-06-02-pet-system-design.md`，`docs/superpowers/specs/2026-06-05-pet-llm-deepening-design.md`
 
 ## 背景
 
@@ -218,6 +218,33 @@ D8 的十个分组 Tab 仍然让用户在养成、商店、自定义、角色、
 - 所有「收回」都走 `hideDesktopPetWindow`（关闭窗口并持久化 `desktopPet.enabled = false`）；
   标题栏宠物按钮改用 `toggleDesktopPetWindow`。删除 `PetWidget`、`PetQuickMenu`、
   `PetQuickNav`、`usePetWidgetThrow` 以及 store 中持久化的 `minimized` / `position`。
+
+`PetSettings`、`PetProfile`、Dexie 与 wire shape 均不变。
+
+### D16 — 控制台就是「设置 → 宠物」（2026-11-06）
+
+D15 给控制台单独开了 `/pet` 路由，并把「设置 → 宠物」留作指向页面「外观与设置」子页的入口。
+于是同一件事有两个家：侧栏入口、Go 菜单项、原生菜单项、⌘K 页面和一个设置分区，彼此之间再
+互相跳转。ADR-0250 M2 把宠物的导航和设置分区搬进模块 manifest 后，这种重复变得一目了然。
+
+**决策**：
+
+- 不再有 `/pet` 页面，也不做重定向。整个控制台就是「设置 → 宠物」分区
+  （`components/settings/pet/pet-section.tsx`，`layout: "fill"`）；手机上是嵌入同一分区的
+  `/me/pet` 子页。宠物 manifest 不声明 `nav`；侧栏、Go 菜单、原生菜单（`go-pet`）、⌘K 导航
+  和全视口路由表都不再有宠物这一项。
+- 分区采用和其他「列表 + 详情」设置分区（AI 连接、终端、记忆）相同的形态：
+  `SettingsMasterDetail`，左侧是控制台的左栏（`PetConsoleNav`），右侧是详情卡片，卡片顶部是
+  宠物身份（头像、可编辑的名字、等级 · 阶段 · 金币、桌宠开关；远程时为状态标签）。左栏「你的宠物」
+  一组列出首页、对话、商店、收藏、动态，以及有内容填充 `pet.console.tab` 时的扩展；「设置」一组
+  放「外观与设置」，它现在是左栏的一项，而不是带返回按钮的子页面。窄于 440px 时左栏变为框架的抽屉。
+- 链接用分区自己的参数指明位置：`petTab`（任意控制台目的地，含旧 id）和 `petView=appearance`。
+  `petConsoleHref(tab, { phone })` 生成 `/settings?section=pet…` 或 `/me/pet…`，仍是写这类链接的
+  唯一方式（弹窗、气泡、`pet_show`、标题栏、⌘K 动作、glance、「宠物已关闭」通知）。
+- 非桌面端只在已配对主机声明 `pet_get` 时可进入该分区：`ModuleSettingsSection.hostOperation`
+  （由模块门禁校验）让 `settingsSectionBlockReason` 在其他情况下返回 `capability`，「我的」页的
+  入口用同一个 `hostAdvertisesOperation` 判断。仅桌面可用的位置在左栏上保留「桌面端」标记（ADR-0219）。
+- 雷达通过 `pet.console.tab` 模块插槽留在控制台的「扩展」里（ADR-0250 §14）。
 
 `PetSettings`、`PetProfile`、Dexie 与 wire shape 均不变。
 

@@ -50,7 +50,6 @@ const GO_MENU_SECTIONS: &[&[GoMenuItem]] = &[
         ("go-issues", "Issues"),
         ("go-templates", "Templates"),
         ("go-goals", "Goals"),
-        ("go-pet", "Pet"),
         ("go-browser", "Browser"),
     ],
     &[

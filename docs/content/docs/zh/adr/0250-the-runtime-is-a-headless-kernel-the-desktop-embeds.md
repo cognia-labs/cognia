@@ -268,11 +268,11 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - `stage` 记录实际发布的状态。分析 §11.2 把 `eval` 列为 experimental，但它现在正常发布，而 experimental 模块不贡献任何东西，所以在单独决定关闭它之前保持 `stable`。
 - **M2 为导航和插槽定下的规则。**
   - `nav` 是宿主层字段。它只是数据，而读导航目录的代码都在 `lib/` 下：侧栏及其"更多"菜单和自定义面板、Go 菜单和原生菜单的路由、⌘K、标题栏和窗口标题、界面可用性边界、全视口路由、手机快捷方式。若从 UI 注册表读取，就会新增 `lib`→`components` 的边。
-  - 一个条目装着共享表原先为一个目的地记录的全部信息：布局里存的 id、路由、模块自己命名空间下的标签与别名 key、Lucide 图标和插画、分组与类别、`after` 锚点（Go 菜单位置不同时另给 `goMenuAfter`）、仅桌面和按宿主能力显示两个标志、`fullViewport`，以及可选的手机快捷方式。
+  - 一个条目装着共享表原先为一个目的地记录的全部信息：布局里存的 id、路由、模块自己命名空间下的标签与别名 key、Lucide 图标和插画、分组与类别、`after` 锚点（Go 菜单位置不同时另给 `goMenuAfter`）、仅桌面标志、`fullViewport`，以及可选的手机快捷方式。（按宿主能力显示的标志原本为宠物页面而设，已随页面一起移除：按操作门控现在属于设置分区，见下文。）
   - `lib/shell/nav-catalog.ts` 是唯一的合并目录：`SIDEBAR_NAV_META` 加上各个启用模块的条目，按锚点插入。锚点不存在、id 或路由重复时直接抛错。所有读取方都按完整 key 查标签，内置条目的 key 是 `desktop.guildRail.<key>`。
   - 布局默认值和持久化的 id 是针对 id 的布局，不是贡献。`DEFAULT_PINNED_IDS`、手机默认网格和旧 id 映射继续写 `squads`。暂时关闭的模块，其已存储的 id 会保留，不会丢弃（`knownNavIds`）。
   - 原生 Go 菜单（`src-tauri/src/menu.rs`）读不到注册表，所以仍是一份镜像，由 `menu-actions.test.ts` 对照合并目录检查。
-  - `slots` 的键必须是 `CANONICAL_EXTENSION_POINTS` 中的条目，值必须是懒加载入口。目前还没有模块填充插槽，所以没有外壳读取这个字段。渲染路径（模块组件与插件贡献一起进入 `PluginExtensionSlot`）随第一个贡献者落地，即 `pet` 试点的 `pet.console.tab` 和 `pet.panel.actions`。
+  - `slots` 的键必须是 `CANONICAL_EXTENSION_POINTS` 中的条目，值必须是懒加载入口。切片 A 时还没有模块填充插槽；渲染路径随 `pet` 试点落地（见下文）。
   - `squads` 和 `eval` 把自己的目的地从侧栏目录、图标表、Go 菜单布局、全视口列表、手机目录、插画覆盖表和侧栏标签中移了出来。侧栏目录位于 `packages/plugin-contract`，所以这次迁移使插件开发套件的固定版本失效，重新固定是单独的一步。
 - **M2 为表归属定下的规则。**
   - 模块在 manifest 的 `tables` 里认领自己的表，数据目录（`lib/data-governance/table-catalog.ts`）的 `owner` 就是认领者。目录直接读取生成的宿主注册表：它是位于 `lib/modules/registry.ts` 之下的数据层代码，而注册表只含数据和懒加载入口。没有 manifest 认领的表沿用原来按前缀推断的归属，G7 的 `unclaimedTables` 只降不升。
@@ -290,7 +290,13 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 试点：
     - `squads` 接管了小队引导这一对：`SquadBootstrapInitializer` 和 brain 自己注册的 `agent-team-runtime`。现在它是一个与宿主无关的适配器，在三个宿主上运行，并保留 brain 运维人员重启它时用的名称。
     - `eval` 接管了在线评测的消费循环，只在渲染端宿主上运行。manifest 写明了 brain 为什么没有适配器，它在 `runtime-initializers` 清单里的那一项已偿还。
-  - `effects` 只做形状校验：每项一个名称，加一个懒加载入口。目前没有模块声明副作用，所以渲染它们的宿主和插槽一样，随第一个使用者（`pet` 试点）落地。
+  - `effects` 只做形状校验：每项一个名称，加一个懒加载入口。渲染它们的宿主随 `pet` 试点落地（见下文）。
+- **M2 在插槽、副作用和 pet 试点上定下的规则。**
+  - 模块在 UI manifest 中用 `slots` 填充规范扩展点。扩展点的宿主通过 `PluginExtensionSlot`（`components/modules/slots.tsx`）绘制这些条目：排在插件贡献之前，按模块 id 排序，每项都是懒加载组件，各自包在 `ModuleBoundary` 里，因此一个模块出错既不会拖垮插槽，也不会拖垮插件。`usePluginSlotHasExtensions` 也计入模块条目，所以只有被填充时才出现的宿主位置（宠物控制台的「扩展」）对模块和插件一视同仁。
+  - `effects` 是需要 React 上下文、路由、i18n 或 toast 的副作用。`ModuleEffectsHost` 在应用的 provider 内、每个窗口中挂载一次，每项包在 `ModuleBoundary` 里；由副作用自己决定在哪个窗口生效。它们取代了在应用运行时里手动挂载的初始化器。
+  - 休眠：`experimental` 模块不填充插槽，也不挂载副作用。`slots.test.tsx` 和副作用宿主的测试固定了这一点。
+  - `pet` 是试点。它的 manifest 拥有自己的表、悬浮窗与弹窗路由、设置分区，以及 `pet-mount` 副作用（`PetMount`，另有 Capacitor 版本），后者原先是手动挂载的。雷达是独立模块，从自己的 UI manifest 填充 `pet.console.tab`，不再由控制台直接导入。
+  - 宠物没有页面。它的控制台就是「设置 → 宠物」分区（ADR-0058 D16），所以 manifest 不声明 `nav`，侧栏、Go 菜单、原生菜单和 ⌘K 都没有宠物这一项。设置分区可以声明自己在非桌面端需要的宿主操作：`hostOperation`（snake_case 操作 id，由模块门禁校验）让 `settingsSectionBlockReason` 在已配对主机未声明该操作的伴侣端返回 `capability`。宠物声明的是 `pet_get`，手机 `/me/pet` 入口使用同一判断（`hostAdvertisesOperation`）。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

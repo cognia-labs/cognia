@@ -33,6 +33,8 @@ import {
   type SettingsSectionId,
 } from "@/components/settings/settings-nav-config"
 import { useCapabilityChecker, useHostProfile } from "@/hooks/use-host-profile"
+import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
+import { hostAdvertisesOperation } from "@/lib/runtime/operation-availability"
 
 export interface SettingsSectionReachability {
   /**
@@ -55,8 +57,13 @@ export interface SettingsSectionReachability {
 export function useSettingsSectionReachability(): SettingsSectionReachability {
   const profile = useHostProfile()
   const hasCapability = useCapabilityChecker()
+  const runtimeSnapshot = useRuntimeSnapshot()
   return useMemo(() => {
-    const context: SettingsReachabilityContext = { profile, hasCapability }
+    const context: SettingsReachabilityContext = {
+      profile,
+      hasCapability,
+      hostAdvertises: (operation) => hostAdvertisesOperation(runtimeSnapshot, operation),
+    }
     const sections = reachableSettingsSections(context)
     const byId = new Map(SETTINGS_NAV.map((item) => [item.id, item] as const))
     return {
@@ -69,5 +76,5 @@ export function useSettingsSectionReachability(): SettingsSectionReachability {
       navItems: SETTINGS_NAV.filter((item) => isSettingsSectionReachable(item, context)),
       sections,
     }
-  }, [profile, hasCapability])
+  }, [profile, hasCapability, runtimeSnapshot])
 }

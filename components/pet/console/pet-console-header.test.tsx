@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
-import { Tabs } from "@/components/ui/tabs"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
 const rendererProps = jest.fn()
@@ -24,7 +23,6 @@ function props(over: Partial<PetConsoleHeaderProps> = {}, soul = true): PetConso
     coins: 42,
   }
   return {
-    mode: "main",
     profile,
     view: computePetView(profile, null, 0),
     effectiveSkinId: "svg" as const,
@@ -61,10 +59,11 @@ describe("PetConsoleHeader", () => {
     expect(meta).toHaveTextContent("42 coins")
   })
 
-  it("renames through the provided action, from the page heading", () => {
+  it("renames through the provided action, from the detail card's heading", () => {
     const onRename = jest.fn()
     renderHeader(props({ onRename }))
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Boba")
+    // Settings' own header is the page's h1; the pet heads the detail card.
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Boba")
     fireEvent.click(screen.getByLabelText(/rename/i))
     const input = screen.getByLabelText(/pet name/i)
     fireEvent.change(input, { target: { value: "Mochi" } })
@@ -79,43 +78,12 @@ describe("PetConsoleHeader", () => {
     expect(screen.queryByLabelText(/rename/i)).toBeNull()
   })
 
-  it("renders the places as the header's view tabs in its second row", () => {
-    render(
-      <TooltipProvider>
-        <Tabs value="home">
-          <PetConsoleHeader
-            {...props({
-              tabs: {
-                ariaLabel: "Places",
-                value: "home",
-                inOuterRoot: true,
-                testId: "places",
-                items: [{ value: "home", label: "Home" }],
-              },
-            })}
-          />
-        </Tabs>
-      </TooltipProvider>
-    )
-    const row = document.querySelector('[data-slot="feature-header-view-navigation"]')
-    expect(row).toContainElement(screen.getByTestId("places"))
-  })
-
-  it("opens Appearance & settings from the header", () => {
-    const onOpenAppearance = jest.fn()
-    renderHeader(props({ onOpenAppearance }))
-    const entry = screen.getByTestId("pet-console-open-appearance")
-    expect(entry).toHaveAccessibleName("Appearance & settings")
-    expect(within(entry).queryByTestId("pet-console-desktop-badge")).toBeNull()
-    fireEvent.click(entry)
-    expect(onOpenAppearance).toHaveBeenCalledTimes(1)
-  })
-
-  it("badges the appearance entry when its workspace is the desktop's", () => {
-    renderHeader(props({ onOpenAppearance: jest.fn(), appearanceDesktopOnly: true }))
-    const entry = screen.getByTestId("pet-console-open-appearance")
-    expect(entry).toHaveAttribute("data-desktop-only", "true")
-    expect(within(entry).getByTestId("pet-console-desktop-badge")).toHaveTextContent("Desktop")
+  it("carries no navigation and no appearance entry: the rail beside the card does", () => {
+    renderHeader(props({ desktop: { onDesktop: false, pending: false, onToggle: jest.fn() } }))
+    expect(document.querySelector('[data-slot="feature-header-view-navigation"]')).toBeNull()
+    expect(screen.queryByRole("tablist")).toBeNull()
+    expect(screen.queryByTestId("pet-console-open-appearance")).toBeNull()
+    expect(screen.queryByTestId("pet-console-back")).toBeNull()
   })
 
   it("offers the desktop toggle only when given, reflecting state and progress", () => {
@@ -141,33 +109,6 @@ describe("PetConsoleHeader", () => {
     expect(within(button).getAllByText(/hide desktop pet/i)).toHaveLength(2)
   })
 
-  describe("on the appearance sub-page", () => {
-    it("titles the sub-page and leads back to the pet", () => {
-      const onBack = jest.fn()
-      renderHeader(
-        props({
-          mode: "appearance",
-          onBack,
-          tabs: {
-            ariaLabel: "Places",
-            value: "home",
-            testId: "nav",
-            items: [{ value: "home", label: "Home" }],
-          },
-        })
-      )
-      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Appearance & settings")
-      // No navigation row and no second appearance entry on the sub-page.
-      expect(screen.queryByTestId("nav")).toBeNull()
-      expect(screen.queryByTestId("pet-console-open-appearance")).toBeNull()
-      const back = screen.getByTestId("pet-console-back")
-      expect(back).toHaveAccessibleName("Back to Boba")
-      expect(back).toHaveAttribute("data-slot", "feature-header-back")
-      fireEvent.click(back)
-      expect(onBack).toHaveBeenCalledTimes(1)
-    })
-  })
-
   // Remote care (ADR-0219): only the desktop sends the pet out.
   describe("caring from a paired device", () => {
     it("shows whether the pet is out on the desktop as a read-only chip", () => {
@@ -185,11 +126,6 @@ describe("PetConsoleHeader", () => {
       const chip = screen.getByTestId("pet-console-desktop-status")
       expect(chip).toHaveTextContent("Hidden")
       expect(chip).toHaveAttribute("data-tone", "neutral")
-    })
-
-    it("keeps the chip on the appearance sub-page", () => {
-      renderHeader(props({ mode: "appearance", desktopStatus: { visible: true } }))
-      expect(screen.getByTestId("pet-console-desktop-status")).toHaveTextContent("On your desktop")
     })
   })
 })

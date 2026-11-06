@@ -33531,12 +33531,9 @@
     },
     "console": {
       "appearance": {
-        "back": "Back to {name}",
         "binding": "Character looks",
         "bindingDescription": "Give a character its own species or skin. A conversation with that character shows its look instead of the global one.",
-        "description": "How your pet looks and behaves, on screen and on the desktop.",
-        "index": "Appearance & settings sections",
-        "title": "Appearance & settings"
+        "index": "Appearance & settings sections"
       },
       "chat": {
         "clear": "Clear conversation",
@@ -33551,10 +33548,11 @@
       },
       "desktopOnly": {
         "badge": "Desktop",
+        "badgeAria": "Runs only on your desktop",
         "remedy": {
-          "appearance": "Open Cognia on your desktop and go to Pet → Appearance & settings.",
-          "insights": "Open Cognia on your desktop and go to Pet → Activity → Insights.",
-          "plugins": "Open Cognia on your desktop and go to Pet → Extensions."
+          "appearance": "Open Cognia on your desktop and go to Settings → Pet → Appearance & settings.",
+          "insights": "Open Cognia on your desktop and go to Settings → Pet → Activity → Insights.",
+          "plugins": "Open Cognia on your desktop and go to Settings → Pet → Extensions."
         },
         "title": "{tab} is on your desktop",
         "what": {
@@ -33594,6 +33592,22 @@
       "live2dFallback": "Live2D is unavailable right now — showing the built-in mascot.",
       "loading": "Waking up your pet…",
       "navigation": "Pet navigation",
+      "rail": {
+        "descriptions": {
+          "activity": "Journal and insights",
+          "appearance": "Look, behavior and the desktop window",
+          "chat": "Talk with your pet",
+          "collection": "Dex and achievements",
+          "home": "How it is and what it needs",
+          "plugins": "Panels modules and plugins add",
+          "shop": "Spend coins on food and toys"
+        },
+        "groups": {
+          "pet": "Your pet",
+          "setup": "Setup"
+        },
+        "mobileTrigger": "Places"
+      },
       "remote": {
         "band": {
           "connected": "Caring for your desktop pet",
@@ -33826,9 +33840,6 @@
       "lonely": "Lonely",
       "tired": "Tired"
     },
-    "nav": {
-      "label": "Pet"
-    },
     "needs": {
       "bond": "Bond",
       "energy": "Energy",
@@ -33888,10 +33899,10 @@
     },
     "quickMenu": {
       "clickThrough": "Click-through",
-      "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Pet → Appearance & settings.",
+      "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Settings → Pet → Appearance & settings.",
       "hideDesktopPet": "Hide desktop pet",
       "openAppearance": "Appearance & settings",
-      "openConsole": "Open pet page",
+      "openConsole": "Open pet settings",
       "showDesktopPet": "Show desktop pet",
       "windowActions": "Desktop pet window"
     },
@@ -55082,17 +55093,6 @@
       "mutedBubbles": {
         "description": "Keep the pet quiet (it still animates).",
         "label": "Mute bubbles"
-      },
-      "pointer": {
-        "action": "Open Appearance & settings",
-        "covers": {
-          "behavior": "Speech, sound, care alerts and twin awareness",
-          "characters": "Per-character looks",
-          "desktop": "The desktop window: size, wandering, click-through",
-          "look": "Look, skins, Live2D models and animation packs"
-        },
-        "description": "Everything about your pet is in one place now: open Pet → Appearance & settings.",
-        "title": "Pet settings live on the pet page"
       },
       "proactive": {
         "description": "The pet speaks up on its own — celebrating milestones, chatting when idle, greeting by time of day. Quiet hours are always respected.",

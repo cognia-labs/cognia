@@ -128,6 +128,14 @@ export interface NavItem {
    * Combined with `requires`, BOTH must pass.
    */
   profiles?: readonly HostProfile[]
+  /**
+   * A remote control of something only the desktop runs (the pet's console,
+   * ADR-0219): off the desktop profile the section is reachable only while
+   * the paired host advertises this operation (`hostAdvertisesOperation`).
+   * Unmet, it reads as a capability gap, which pairing a current desktop
+   * closes. Combined with `requires` and `profiles`, all must pass.
+   */
+  hostOperation?: string
 }
 
 /** The full i18n key of a section's label, for a root `useTranslations()`. */
@@ -149,6 +157,12 @@ export function settingsSectionDescriptionKey(
 export interface SettingsReachabilityContext {
   profile: HostProfile
   hasCapability: (cap: CapabilityId) => boolean
+  /**
+   * Whether the paired host advertises a host operation right now. Absent
+   * means no paired host to ask, so every `hostOperation` section is out of
+   * reach off the desktop.
+   */
+  hostAdvertises?: (operation: string) => boolean
 }
 
 /**
@@ -170,11 +184,17 @@ export type SettingsSectionBlockReason = "capability" | "profile"
  * holds even where every required capability is present.
  */
 export function settingsSectionBlockReason(
-  item: Pick<NavItem, "requires" | "profiles">,
+  item: Pick<NavItem, "requires" | "profiles" | "hostOperation">,
   ctx: SettingsReachabilityContext
 ): SettingsSectionBlockReason | null {
   if (item.profiles && !item.profiles.includes(ctx.profile)) return "profile"
   if ((item.requires ?? []).some((cap) => !ctx.hasCapability(cap))) return "capability"
+  if (
+    item.hostOperation &&
+    ctx.profile !== "desktop" &&
+    !(ctx.hostAdvertises?.(item.hostOperation) ?? false)
+  )
+    return "capability"
   return null
 }
 
@@ -187,7 +207,7 @@ export function settingsSectionBlockReason(
  * shell renders can never disagree about which sections are out.
  */
 export function isSettingsSectionReachable(
-  item: Pick<NavItem, "requires" | "profiles">,
+  item: Pick<NavItem, "requires" | "profiles" | "hostOperation">,
   ctx: SettingsReachabilityContext
 ): boolean {
   return settingsSectionBlockReason(item, ctx) === null

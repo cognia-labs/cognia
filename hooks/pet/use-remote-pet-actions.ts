@@ -1,4 +1,4 @@
-// The /pet console's actions on a paired phone or browser (ADR-0219,
+// The pet console's actions on a paired phone or browser (ADR-0219,
 // `remote` mode).
 //
 // The pet lives on the desktop. Every action here is a live `pet_*` RPC to it,
