@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { MicIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsBlock } from "@/components/settings/common/settings-block"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -57,71 +57,70 @@ export function SttCard() {
   }, [t])
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <MicIcon className="size-4 text-muted-foreground" />
-          {t("title")}
-          {supported === false && (
-            <Badge variant="destructive" className="text-[10px]">
-              {t("notSupported")}
-            </Badge>
-          )}
-        </CardTitle>
-        <CardDescription className="text-xs">{t("description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <Label className="text-sm">{t("language")}</Label>
-          <Select
-            value={sttLanguage}
-            onValueChange={(value) => {
-              loggers.tts.info("settings.sttLanguageChanged", { language: value })
-              void save({ sttLanguage: value as SpeechLanguageCode })
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SPEECH_LANGUAGES.map((lang) => (
-                <SelectItem key={lang.code} value={lang.code}>
-                  <span className="mr-2">{lang.flag}</span>
-                  {lang.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+    <SettingsBlock
+      icon={<MicIcon />}
+      title={t("title")}
+      description={t("description")}
+      badge={
+        supported === false ? (
+          <Badge variant="destructive" className="text-[10px]">
+            {t("notSupported")}
+          </Badge>
+        ) : undefined
+      }
+      headingLevel={2}
+      contentClassName="space-y-4"
+    >
+      <div className="space-y-2">
+        <Label className="text-sm">{t("language")}</Label>
+        <Select
+          value={sttLanguage}
+          onValueChange={(value) => {
+            loggers.tts.info("settings.sttLanguageChanged", { language: value })
+            void save({ sttLanguage: value as SpeechLanguageCode })
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SPEECH_LANGUAGES.map((lang) => (
+              <SelectItem key={lang.code} value={lang.code}>
+                <span className="mr-2">{lang.flag}</span>
+                {lang.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
-        <div className="space-y-2">
-          <Label className="text-sm">{t("microphone")}</Label>
-          <Select
-            value={selectedMicId ?? "default"}
-            onValueChange={(value) => {
-              loggers.tts.info("settings.micChanged", { micId: value === "default" ? null : value })
-              void save({
-                selectedMicId: value === "default" ? undefined : value,
-              })
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder={t("systemDefault")} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="default">{t("systemDefault")}</SelectItem>
-              {mics.map((m) => (
-                <SelectItem key={m.deviceId} value={m.deviceId}>
-                  {m.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {mics.length === 0 && (
-            <p className="text-xs text-muted-foreground">{t("micPermissionHint")}</p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+      <div className="space-y-2">
+        <Label className="text-sm">{t("microphone")}</Label>
+        <Select
+          value={selectedMicId ?? "default"}
+          onValueChange={(value) => {
+            loggers.tts.info("settings.micChanged", { micId: value === "default" ? null : value })
+            void save({
+              selectedMicId: value === "default" ? undefined : value,
+            })
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder={t("systemDefault")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default">{t("systemDefault")}</SelectItem>
+            {mics.map((m) => (
+              <SelectItem key={m.deviceId} value={m.deviceId}>
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {mics.length === 0 && (
+          <p className="text-xs text-muted-foreground">{t("micPermissionHint")}</p>
+        )}
+      </div>
+    </SettingsBlock>
   )
 }

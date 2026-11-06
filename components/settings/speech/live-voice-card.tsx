@@ -3,7 +3,7 @@
 import { useCallback, useMemo } from "react"
 import { AudioWaveformIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsBlock } from "@/components/settings/common/settings-block"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -105,187 +105,182 @@ export function LiveVoiceCard() {
   const enabledDeployments = available.filter((provider) => deploymentFor(provider)?.enabled)
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <AudioWaveformIcon className="size-4 text-primary" />
-          {t("title")}
-        </CardTitle>
-        <CardDescription className="text-xs">{t("description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-1">
-            <Label htmlFor="live-voice-enabled">{t("enabled")}</Label>
-            <p className="text-xs text-muted-foreground">{t("enabledHint")}</p>
-          </div>
-          <Switch
-            aria-label={t("enabled")}
-            checked={liveVoice.enabled}
-            id="live-voice-enabled"
-            onCheckedChange={(checked) => patch({ enabled: checked })}
-          />
+    <SettingsBlock
+      icon={<AudioWaveformIcon />}
+      title={t("title")}
+      description={t("description")}
+      headingLevel={2}
+      contentClassName="space-y-4"
+    >
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="live-voice-enabled">{t("enabled")}</Label>
+          <p className="text-xs text-muted-foreground">{t("enabledHint")}</p>
         </div>
+        <Switch
+          aria-label={t("enabled")}
+          checked={liveVoice.enabled}
+          id="live-voice-enabled"
+          onCheckedChange={(checked) => patch({ enabled: checked })}
+        />
+      </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label>{t("region")}</Label>
-            <Select
-              value={liveVoice.region}
-              onValueChange={(value) => patch({ region: value as LiveVoiceRegion })}
-            >
-              <SelectTrigger aria-label={t("region")}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="global">{t("regionGlobal")}</SelectItem>
-                {isTauri() && <SelectItem value="cn">{t("regionCn")}</SelectItem>}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">{t("regionHint")}</p>
-          </div>
-
-          <div className="space-y-2">
-            <Label>{t("preferred")}</Label>
-            <Select
-              disabled={enabledDeployments.length === 0}
-              value={liveVoice.preferredDeploymentId ?? ""}
-              onValueChange={(value) => patch({ preferredDeploymentId: value })}
-            >
-              <SelectTrigger aria-label={t("preferred")}>
-                <SelectValue placeholder={t("preferredPlaceholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                {enabledDeployments.map((provider) => (
-                  <SelectItem key={provider} value={deploymentId(provider, liveVoice.region)}>
-                    {t(`providers.${provider}`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">{t("preferredHint")}</p>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <Label>{t("providersTitle")}</Label>
-          {available.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t("noProviders")}</p>
-          ) : (
-            available.map((provider) => {
-              const deployment = deploymentFor(provider)
-              const descriptor = LIVE_VOICE_PROVIDER_DESCRIPTORS[provider]
-              return (
-                <div
-                  className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
-                  key={provider}
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <Label htmlFor={`live-voice-${provider}`}>{t(`providers.${provider}`)}</Label>
-                    <Switch
-                      aria-label={t(`providers.${provider}`)}
-                      checked={deployment?.enabled ?? false}
-                      id={`live-voice-${provider}`}
-                      onCheckedChange={(checked) =>
-                        upsertDeployment(provider, { enabled: checked })
-                      }
-                    />
-                  </div>
-
-                  {deployment?.enabled && (
-                    <div className="space-y-3">
-                      <ApiKeyInput
-                        label={t(`credential.${descriptor.credential.kind}`)}
-                        provider={descriptor.credential.keyringId}
-                      />
-                      {descriptor.fields.includes("workspaceId") && (
-                        <div className="space-y-2">
-                          <Label htmlFor={`live-voice-${provider}-workspace-id`}>
-                            {t("workspaceId")}
-                          </Label>
-                          <Input
-                            id={`live-voice-${provider}-workspace-id`}
-                            onChange={(event) =>
-                              upsertDeployment(provider, { workspaceId: event.target.value })
-                            }
-                            placeholder={t("workspaceIdPlaceholder")}
-                            value={deployment.workspaceId ?? ""}
-                          />
-                        </div>
-                      )}
-                      {descriptor.fields.includes("appId") && (
-                        <div className="space-y-2">
-                          <Label htmlFor={`live-voice-${provider}-app-id`}>{t("appId")}</Label>
-                          <Input
-                            id={`live-voice-${provider}-app-id`}
-                            onChange={(event) =>
-                              upsertDeployment(provider, { appId: event.target.value })
-                            }
-                            placeholder={t("appIdPlaceholder")}
-                            value={deployment.appId ?? ""}
-                          />
-                        </div>
-                      )}
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {descriptor.fields.includes("model") && (
-                          <div className="space-y-2">
-                            <Label htmlFor={`live-voice-${provider}-model`}>{t("model")}</Label>
-                            <Input
-                              id={`live-voice-${provider}-model`}
-                              onChange={(event) =>
-                                upsertDeployment(provider, { model: event.target.value })
-                              }
-                              placeholder={LIVE_VOICE_DEFAULT_MODELS[provider] ?? ""}
-                              value={deployment.model ?? ""}
-                            />
-                          </div>
-                        )}
-                        {descriptor.fields.includes("voice") && (
-                          <div className="space-y-2">
-                            <Label htmlFor={`live-voice-${provider}-voice`}>{t("voice")}</Label>
-                            <Input
-                              id={`live-voice-${provider}-voice`}
-                              onChange={(event) =>
-                                upsertDeployment(provider, { voice: event.target.value })
-                              }
-                              placeholder={LIVE_VOICE_DEFAULT_VOICES[provider] ?? t("voiceDefault")}
-                              value={deployment.voice ?? ""}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })
-          )}
-        </div>
-
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-1">
-            <Label htmlFor="live-voice-fallback">{t("fallback")}</Label>
-            <p className="text-xs text-muted-foreground">{t("fallbackHint")}</p>
-          </div>
-          <Switch
-            aria-label={t("fallback")}
-            checked={liveVoice.fallbackEnabled}
-            id="live-voice-fallback"
-            onCheckedChange={(checked) => patch({ fallbackEnabled: checked })}
-          />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label>{t("region")}</Label>
+          <Select
+            value={liveVoice.region}
+            onValueChange={(value) => patch({ region: value as LiveVoiceRegion })}
+          >
+            <SelectTrigger aria-label={t("region")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">{t("regionGlobal")}</SelectItem>
+              {isTauri() && <SelectItem value="cn">{t("regionCn")}</SelectItem>}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{t("regionHint")}</p>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="live-voice-instructions">{t("instructions")}</Label>
-          <Textarea
-            id="live-voice-instructions"
-            onChange={(event) => patch({ instructions: event.target.value })}
-            placeholder={t("instructionsPlaceholder")}
-            value={liveVoice.instructions ?? ""}
-          />
-          <p className="text-xs text-muted-foreground">{t("privacy")}</p>
+          <Label>{t("preferred")}</Label>
+          <Select
+            disabled={enabledDeployments.length === 0}
+            value={liveVoice.preferredDeploymentId ?? ""}
+            onValueChange={(value) => patch({ preferredDeploymentId: value })}
+          >
+            <SelectTrigger aria-label={t("preferred")}>
+              <SelectValue placeholder={t("preferredPlaceholder")} />
+            </SelectTrigger>
+            <SelectContent>
+              {enabledDeployments.map((provider) => (
+                <SelectItem key={provider} value={deploymentId(provider, liveVoice.region)}>
+                  {t(`providers.${provider}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{t("preferredHint")}</p>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+
+      <div className="space-y-3">
+        <Label>{t("providersTitle")}</Label>
+        {available.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t("noProviders")}</p>
+        ) : (
+          available.map((provider) => {
+            const deployment = deploymentFor(provider)
+            const descriptor = LIVE_VOICE_PROVIDER_DESCRIPTORS[provider]
+            return (
+              <div
+                className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+                key={provider}
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor={`live-voice-${provider}`}>{t(`providers.${provider}`)}</Label>
+                  <Switch
+                    aria-label={t(`providers.${provider}`)}
+                    checked={deployment?.enabled ?? false}
+                    id={`live-voice-${provider}`}
+                    onCheckedChange={(checked) => upsertDeployment(provider, { enabled: checked })}
+                  />
+                </div>
+
+                {deployment?.enabled && (
+                  <div className="space-y-3">
+                    <ApiKeyInput
+                      label={t(`credential.${descriptor.credential.kind}`)}
+                      provider={descriptor.credential.keyringId}
+                    />
+                    {descriptor.fields.includes("workspaceId") && (
+                      <div className="space-y-2">
+                        <Label htmlFor={`live-voice-${provider}-workspace-id`}>
+                          {t("workspaceId")}
+                        </Label>
+                        <Input
+                          id={`live-voice-${provider}-workspace-id`}
+                          onChange={(event) =>
+                            upsertDeployment(provider, { workspaceId: event.target.value })
+                          }
+                          placeholder={t("workspaceIdPlaceholder")}
+                          value={deployment.workspaceId ?? ""}
+                        />
+                      </div>
+                    )}
+                    {descriptor.fields.includes("appId") && (
+                      <div className="space-y-2">
+                        <Label htmlFor={`live-voice-${provider}-app-id`}>{t("appId")}</Label>
+                        <Input
+                          id={`live-voice-${provider}-app-id`}
+                          onChange={(event) =>
+                            upsertDeployment(provider, { appId: event.target.value })
+                          }
+                          placeholder={t("appIdPlaceholder")}
+                          value={deployment.appId ?? ""}
+                        />
+                      </div>
+                    )}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {descriptor.fields.includes("model") && (
+                        <div className="space-y-2">
+                          <Label htmlFor={`live-voice-${provider}-model`}>{t("model")}</Label>
+                          <Input
+                            id={`live-voice-${provider}-model`}
+                            onChange={(event) =>
+                              upsertDeployment(provider, { model: event.target.value })
+                            }
+                            placeholder={LIVE_VOICE_DEFAULT_MODELS[provider] ?? ""}
+                            value={deployment.model ?? ""}
+                          />
+                        </div>
+                      )}
+                      {descriptor.fields.includes("voice") && (
+                        <div className="space-y-2">
+                          <Label htmlFor={`live-voice-${provider}-voice`}>{t("voice")}</Label>
+                          <Input
+                            id={`live-voice-${provider}-voice`}
+                            onChange={(event) =>
+                              upsertDeployment(provider, { voice: event.target.value })
+                            }
+                            placeholder={LIVE_VOICE_DEFAULT_VOICES[provider] ?? t("voiceDefault")}
+                            value={deployment.voice ?? ""}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="live-voice-fallback">{t("fallback")}</Label>
+          <p className="text-xs text-muted-foreground">{t("fallbackHint")}</p>
+        </div>
+        <Switch
+          aria-label={t("fallback")}
+          checked={liveVoice.fallbackEnabled}
+          id="live-voice-fallback"
+          onCheckedChange={(checked) => patch({ fallbackEnabled: checked })}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="live-voice-instructions">{t("instructions")}</Label>
+        <Textarea
+          id="live-voice-instructions"
+          onChange={(event) => patch({ instructions: event.target.value })}
+          placeholder={t("instructionsPlaceholder")}
+          value={liveVoice.instructions ?? ""}
+        />
+        <p className="text-xs text-muted-foreground">{t("privacy")}</p>
+      </div>
+    </SettingsBlock>
   )
 }

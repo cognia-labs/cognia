@@ -5,7 +5,7 @@ import { Volume2Icon } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsBlock } from "@/components/settings/common/settings-block"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -211,215 +211,212 @@ export function TtsCard() {
   const platform = detectPlatform()
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Volume2Icon className="size-4 text-muted-foreground" />
-          {t("title")}
-        </CardTitle>
-        <CardDescription className="text-xs">{t("description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        {/* Master toggle */}
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <Label className="text-sm">{t("enable")}</Label>
-            <p className="text-xs text-muted-foreground">{t("enableHint")}</p>
-          </div>
-          <Switch
-            checked={ttsEnabled}
-            onCheckedChange={(v) => {
-              loggers.tts.info("settings.ttsEnabledChanged", { enabled: v })
-              void setTtsEnabled(v)
-            }}
-          />
+    <SettingsBlock
+      icon={<Volume2Icon />}
+      title={t("title")}
+      description={t("description")}
+      headingLevel={2}
+      contentClassName="space-y-5"
+    >
+      {/* Master toggle */}
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <Label className="text-sm">{t("enable")}</Label>
+          <p className="text-xs text-muted-foreground">{t("enableHint")}</p>
         </div>
+        <Switch
+          checked={ttsEnabled}
+          onCheckedChange={(v) => {
+            loggers.tts.info("settings.ttsEnabledChanged", { enabled: v })
+            void setTtsEnabled(v)
+          }}
+        />
+      </div>
 
-        {ttsEnabled && (
-          <>
-            <Separator />
+      {ttsEnabled && (
+        <>
+          <Separator />
 
-            {/* Provider switch */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-sm">{t("provider")}</Label>
-                <TestTtsButton />
-              </div>
-              <Select
-                value={provider}
-                onValueChange={(v) => {
-                  loggers.tts.info("settings.ttsProviderChanged", { provider: v })
-                  void setTtsProvider(v as SelectableTTSProvider)
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ORDERED_TTS_PROVIDERS.map((id) => (
-                    <SelectItem key={id} value={id}>
-                      {TTS_PROVIDERS[id].name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">{info.description}</p>
-              {platform === "mobile" ? (
-                <p className="text-xs text-muted-foreground" role="status">
-                  {t("mobileSystemPlayback")}
-                </p>
-              ) : platform === "web" && provider !== "system" ? (
-                <p className="text-xs text-amber-700 dark:text-amber-400" role="status">
-                  {t("webCloudWarning")}
-                </p>
-              ) : null}
+          {/* Provider switch */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm">{t("provider")}</Label>
+              <TestTtsButton />
             </div>
+            <Select
+              value={provider}
+              onValueChange={(v) => {
+                loggers.tts.info("settings.ttsProviderChanged", { provider: v })
+                void setTtsProvider(v as SelectableTTSProvider)
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ORDERED_TTS_PROVIDERS.map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {TTS_PROVIDERS[id].name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{info.description}</p>
+            {platform === "mobile" ? (
+              <p className="text-xs text-muted-foreground" role="status">
+                {t("mobileSystemPlayback")}
+              </p>
+            ) : platform === "web" && provider !== "system" ? (
+              <p className="text-xs text-amber-700 dark:text-amber-400" role="status">
+                {t("webCloudWarning")}
+              </p>
+            ) : null}
+          </div>
 
-            <Separator />
+          <Separator />
 
-            {/* Provider-specific config */}
-            <div className="space-y-2">
-              <ProviderConfig />
-            </div>
+          {/* Provider-specific config */}
+          <div className="space-y-2">
+            <ProviderConfig />
+          </div>
 
-            <Separator />
+          <Separator />
 
-            {/* Global controls */}
-            <div className="space-y-3">
-              {/* Rate + pitch only drive the system (Web Speech) voice; cloud
+          {/* Global controls */}
+          <div className="space-y-3">
+            {/* Rate + pitch only drive the system (Web Speech) voice; cloud
                   providers use their own speed field in ProviderConfig, so
                   showing these here for them was a dead control (W13). Volume is
                   the only truly universal control. */}
-              {provider === "system" && (
-                <>
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs">{t("rate")}</Label>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {rate.value.toFixed(2)}x
-                      </span>
-                    </div>
-                    <Slider
-                      value={[rate.value]}
-                      min={0.5}
-                      max={2.0}
-                      step={0.05}
-                      aria-label={t("rate")}
-                      onValueChange={([v]) => rate.set(v)}
-                      onValueCommit={([v]) => rate.commitValue(v)}
-                    />
+            {provider === "system" && (
+              <>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">{t("rate")}</Label>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {rate.value.toFixed(2)}x
+                    </span>
                   </div>
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs">{t("pitch")}</Label>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {pitch.value.toFixed(2)}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[pitch.value]}
-                      min={0}
-                      max={2}
-                      step={0.05}
-                      aria-label={t("pitch")}
-                      onValueChange={([v]) => pitch.set(v)}
-                      onValueCommit={([v]) => pitch.commitValue(v)}
-                    />
-                  </div>
-                </>
-              )}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs">{t("volume")}</Label>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {Math.round(volume.value * 100)}%
-                  </span>
+                  <Slider
+                    value={[rate.value]}
+                    min={0.5}
+                    max={2.0}
+                    step={0.05}
+                    aria-label={t("rate")}
+                    onValueChange={([v]) => rate.set(v)}
+                    onValueCommit={([v]) => rate.commitValue(v)}
+                  />
                 </div>
-                <Slider
-                  value={[volume.value]}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  aria-label={t("volume")}
-                  onValueChange={([v]) => volume.set(v)}
-                  onValueCommit={([v]) => volume.commitValue(v)}
-                />
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">{t("pitch")}</Label>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {pitch.value.toFixed(2)}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[pitch.value]}
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    aria-label={t("pitch")}
+                    onValueChange={([v]) => pitch.set(v)}
+                    onValueCommit={([v]) => pitch.commitValue(v)}
+                  />
+                </div>
+              </>
+            )}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">{t("volume")}</Label>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {Math.round(volume.value * 100)}%
+                </span>
               </div>
+              <Slider
+                value={[volume.value]}
+                min={0}
+                max={1}
+                step={0.05}
+                aria-label={t("volume")}
+                onValueChange={([v]) => volume.set(v)}
+                onValueCommit={([v]) => volume.commitValue(v)}
+              />
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Toggles */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">{t("autoPlay")}</Label>
+                <p className="text-xs text-muted-foreground">{t("autoPlayHint")}</p>
+              </div>
+              <Switch
+                checked={ttsAutoPlay}
+                onCheckedChange={(v) => {
+                  loggers.tts.info("settings.ttsAutoPlayChanged", { enabled: v })
+                  void setTtsAutoPlay(v)
+                }}
+              />
             </div>
 
-            <Separator />
-
-            {/* Toggles */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-sm">{t("autoPlay")}</Label>
-                  <p className="text-xs text-muted-foreground">{t("autoPlayHint")}</p>
-                </div>
-                <Switch
-                  checked={ttsAutoPlay}
-                  onCheckedChange={(v) => {
-                    loggers.tts.info("settings.ttsAutoPlayChanged", { enabled: v })
-                    void setTtsAutoPlay(v)
-                  }}
-                />
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">{t("cache")}</Label>
+                <p className="text-xs text-muted-foreground">{t("cacheHint")}</p>
               </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-sm">{t("cache")}</Label>
-                  <p className="text-xs text-muted-foreground">{t("cacheHint")}</p>
-                </div>
-                <Switch
-                  checked={ttsCacheEnabled}
-                  onCheckedChange={(v) => {
-                    loggers.tts.info("settings.ttsCacheChanged", { enabled: v })
-                    void save({ ttsCacheEnabled: v })
-                  }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-sm">{t("streaming")}</Label>
-                  <p className="text-xs text-muted-foreground">{t("streamingHint")}</p>
-                </div>
-                <Switch
-                  checked={ttsStreamingEnabled}
-                  onCheckedChange={(v) => {
-                    loggers.tts.info("settings.ttsStreamingChanged", { enabled: v })
-                    void save({ ttsStreamingEnabled: v })
-                  }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-sm">{t("fallback")}</Label>
-                  <p className="text-xs text-muted-foreground">{t("fallbackHint")}</p>
-                </div>
-                <Switch
-                  checked={ttsFallbackEnabled}
-                  onCheckedChange={(v) => {
-                    loggers.tts.info("settings.ttsFallbackChanged", { enabled: v })
-                    void save({ ttsFallbackEnabled: v })
-                  }}
-                />
-              </div>
+              <Switch
+                checked={ttsCacheEnabled}
+                onCheckedChange={(v) => {
+                  loggers.tts.info("settings.ttsCacheChanged", { enabled: v })
+                  void save({ ttsCacheEnabled: v })
+                }}
+              />
             </div>
 
-            <Separator />
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">{t("streaming")}</Label>
+                <p className="text-xs text-muted-foreground">{t("streamingHint")}</p>
+              </div>
+              <Switch
+                checked={ttsStreamingEnabled}
+                onCheckedChange={(v) => {
+                  loggers.tts.info("settings.ttsStreamingChanged", { enabled: v })
+                  void save({ ttsStreamingEnabled: v })
+                }}
+              />
+            </div>
 
-            {/* SSML preview (system speech synthesis) */}
-            {provider === "system" && <SSMLPreviewSection />}
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="text-sm">{t("fallback")}</Label>
+                <p className="text-xs text-muted-foreground">{t("fallbackHint")}</p>
+              </div>
+              <Switch
+                checked={ttsFallbackEnabled}
+                onCheckedChange={(v) => {
+                  loggers.tts.info("settings.ttsFallbackChanged", { enabled: v })
+                  void save({ ttsFallbackEnabled: v })
+                }}
+              />
+            </div>
+          </div>
 
-            <Separator />
+          <Separator />
 
-            {/* Pronunciation dictionary */}
-            <PronunciationDictionarySection />
-          </>
-        )}
-      </CardContent>
-    </Card>
+          {/* SSML preview (system speech synthesis) */}
+          {provider === "system" && <SSMLPreviewSection />}
+
+          <Separator />
+
+          {/* Pronunciation dictionary */}
+          <PronunciationDictionarySection />
+        </>
+      )}
+    </SettingsBlock>
   )
 }

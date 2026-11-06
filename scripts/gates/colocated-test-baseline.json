@@ -40,7 +40,6 @@
     "components/settings/presets/preset-editor.tsx",
     "components/settings/provider/routing/difficulty-routing-section.tsx",
     "components/settings/sections/sidecar-restart-card.tsx",
-    "components/settings/speech/stt-card.tsx",
     "components/settings/workflows/tabs/audit-tab.tsx",
     "components/settings/workflows/tabs/defaults-tab.tsx",
     "components/settings/workflows/tabs/library-tab.tsx",
