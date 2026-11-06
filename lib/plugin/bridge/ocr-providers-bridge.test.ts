@@ -2,7 +2,7 @@ import {
   registerOcrProvidersForPlugin,
   unregisterOcrProvidersForPlugin,
 } from "./ocr-providers-bridge"
-import { __resetSharedOcrRegistry, getSharedOcrRegistry } from "@/lib/ocr/registry"
+import { __resetSharedOcrRegistry, getSharedOcrRegistry } from "@cognia/ocr/registry"
 import { __resetOcrApiForTesting } from "@/lib/plugin/api/ocr-api"
 import type { PluginManifest } from "@/types/plugin/plugin"
 import type { OcrProvider } from "@/types/ocr"

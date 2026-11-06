@@ -1,6 +1,6 @@
 import type { UIMessage } from "ai"
 
-import { decodeDataUrl } from "@/lib/ocr/image-prep"
+import { decodeDataUrl } from "@/lib/utils/image-bytes"
 import { renderSafeInlineMarkdown } from "@/lib/export/html/safe-inline-markdown"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
 

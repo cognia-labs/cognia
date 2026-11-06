@@ -3,8 +3,8 @@
  *
  * Wires every provider in `lib/ocr/providers/*` into the shared registry and
  * connects the platform-native providers to their respective Tauri / Capacitor
- * invokers. Called once at app boot — see
- * `components/providers/initializers/ocr-runtime-initializer.tsx`.
+ * invokers. Called once at boot by the OCR module's `ocr-runtime`
+ * (`lib/ocr/module.ts`: `runtime-brain.ts`, `runtime-renderer.ts`).
  *
  * Provider files self-register through their factory exports rather than via
  * `import './providers/foo'` side effects so the static export's tree-shaker

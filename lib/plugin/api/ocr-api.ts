@@ -2,7 +2,7 @@
  * Plugin OCR Provider API.
  *
  * Lets a plugin contribute a custom `OcrProvider` to the shared OCR
- * registry (`lib/ocr/registry.ts:registerOcrProvider`). Plugins call
+ * registry (`@cognia/ocr/registry:registerOcrProvider`). Plugins call
  * `ctx.ocr.registerProvider(provider)` from `activate()`, or declare
  * `manifest.ocrProviders[]` and let `lib/plugin/bridge/ocr-providers-bridge.ts`
  * register on enable.
@@ -15,17 +15,22 @@
  * collisions with built-ins and across plugins. The registry's internal
  * duplicate check fires if the same plugin tries to register twice.
  *
+ * Registration goes straight to the `@cognia/ocr` registry the OCR module
+ * dispatches from, because it is synchronous and holds no host resource.
+ * Extraction goes through the `ocr` port (ADR-0250 §14), which supplies the
+ * person's settings, credentials, caches and metering.
+ *
  * See ADR-0026 §2 §A.
  */
 
 import { createPluginSystemLogger } from "../core/logger"
 import { createGuardedAPI } from "@/lib/plugin/security/permission-guard"
-import { registerOcrProvider, getSharedOcrRegistry } from "@/lib/ocr/registry"
+import { registerOcrProvider, getSharedOcrRegistry } from "@cognia/ocr/registry"
+import { OcrError } from "@cognia/ocr/errors"
+import { loadPort } from "@/lib/modules/ports"
+import type { OcrDepsOptions, OcrPort } from "@/types/modules/ports/ocr"
 import type { OcrProvider } from "@/types/ocr"
 import type { OcrInput, OcrResult } from "@/types/ocr"
-import { extract } from "@/lib/ocr"
-import { buildOcrDeps } from "@/lib/ocr/deps"
-import { loadUserOcrSettings } from "@/lib/ocr/user-settings"
 import { ocrScreen } from "@/lib/automation/ocr-screen"
 import { handleOcrSlashCommand, type SlashOcrResult } from "@/lib/slash-commands/actions/ocr"
 import { detectPlatform } from "@/lib/platform/detect"
@@ -119,9 +124,19 @@ export function createOcrAPI(
   )
 }
 
-async function hostDeps() {
-  const settings = await loadUserOcrSettings()
-  return buildOcrDeps({ settings })
+/** The `ocr` port; a host without OCR fails with a typed error. */
+async function ocrPort(): Promise<OcrPort> {
+  const ocr = await loadPort("ocr")
+  if (!ocr) throw new OcrError("unsupported_shell", "ocr", "OCR is not available on this host")
+  return ocr
+}
+
+/** The port and its deps at the person's settings. */
+async function hostOcr(
+  options: Omit<OcrDepsOptions, "settings"> = {}
+): Promise<{ ocr: OcrPort; deps: ReturnType<OcrPort["deps"]> }> {
+  const ocr = await ocrPort()
+  return { ocr, deps: ocr.deps({ ...options, settings: await ocr.loadSettings() }) }
 }
 
 async function resolveFilePath(path: string): Promise<{
@@ -161,18 +176,19 @@ const defaultOcrRuntime: PluginOcrRuntime = {
     getSharedOcrRegistry()
       .list()
       .map((provider) => provider.id),
-  extract: async (input) => extract(input, await hostDeps()),
-  extractFile: async (path, options = {}) =>
-    extract(
-      { ...options, source: { kind: "file-path", path } },
-      { ...(await hostDeps()), filePathResolver: resolveFilePath }
-    ),
+  extract: async (input) => {
+    const { ocr, deps } = await hostOcr()
+    return ocr.extract(input, deps)
+  },
+  extractFile: async (path, options = {}) => {
+    const { ocr, deps } = await hostOcr({ filePathResolver: resolveFilePath })
+    return ocr.extract({ ...options, source: { kind: "file-path", path } }, deps)
+  },
   extractScreen: (options) => ocrScreen(options),
-  runSlashCommand: async (argv) =>
-    handleOcrSlashCommand({
-      argv,
-      deps: { ...(await hostDeps()), filePathResolver: resolveFilePath },
-    }),
+  runSlashCommand: async (argv) => {
+    const { ocr, deps } = await hostOcr({ filePathResolver: resolveFilePath })
+    return handleOcrSlashCommand({ argv, deps, extract: ocr.extract })
+  },
 }
 
 /**

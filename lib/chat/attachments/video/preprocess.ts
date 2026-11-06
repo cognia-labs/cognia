@@ -15,7 +15,7 @@
 import type { SendContentBlock } from "@cognia/agent-config-types"
 import { encodePixelBuffer } from "@/lib/images/codec"
 import type { PixelBuffer } from "@/lib/images/pixel-buffer"
-import { bytesToBase64 } from "@/lib/ocr/image-prep"
+import { bytesToBase64 } from "@/lib/utils/image-bytes"
 import { COMPOSER_MAX_ATTACHMENT_BYTES, COMPOSER_VIDEO_SOURCE_MAX_BYTES } from "../prepare"
 import { openBrowserVideoSource } from "./browser-source"
 import { isGifDescriptor, videoMediaTypeOf } from "./classify"

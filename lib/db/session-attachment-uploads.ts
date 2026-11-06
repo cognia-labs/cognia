@@ -37,7 +37,7 @@
  * cleanup path to forget to call.
  */
 
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import {
   UploadContentInspectionError,
   inspectUploadContent,

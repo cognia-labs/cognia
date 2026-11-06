@@ -8,7 +8,6 @@ import { TwinWorkerInitializer } from "@/components/twin/twin-worker-initializer
 import { ExternalAgentInitializer } from "./external-agent-initializer"
 import { MemoryJobWorkerInitializer } from "./memory-job-worker-initializer"
 import { ModuleRuntimeHost } from "./module-runtime-host"
-import { OcrRuntimeInitializer } from "./ocr-runtime-initializer"
 import { CloudIdentityInitializer } from "./cloud-identity-initializer"
 import { SftpTransferInitializer } from "./sftp-transfer-initializer"
 import { TemplatePlatformInitializer } from "./template-platform-initializer"
@@ -22,10 +21,10 @@ export function KnowledgeAgentBootInitializers() {
       <ExternalAgentInitializer />
       {/* Module runtimes that wait for this group (ADR-0250 §14), among them
           the ordered Squad bootstrap that owns the Squad mirror, runtime and
-          recovery (ADR-0169, `lib/squads/module.ts`). */}
+          recovery (ADR-0169, `lib/squads/module.ts`), and the OCR provider
+          install (`lib/ocr/module.ts`). */}
       <ModuleRuntimeHost boot="knowledge-agents" />
       <MemoryJobWorkerInitializer />
-      <OcrRuntimeInitializer />
       <TwinWorkerInitializer />
       <ProjectKnowledgeWorkerInitializer />
       <VectorCredentialMigrationInitializer />

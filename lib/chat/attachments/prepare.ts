@@ -1,6 +1,6 @@
 /** Pre-stage validation and oversized-image rescue for composer attachments. */
 
-import { downscaleImage } from "@/lib/ocr/image-prep"
+import { downscaleImage } from "@/lib/utils/image-bytes"
 import { isAnimatedGif } from "@/lib/images/gif"
 import { detectDocumentTypeFromFilename } from "@cognia/document/support-matrix"
 import { isGifDescriptor, videoMediaTypeOf } from "./video/classify"

@@ -4,7 +4,7 @@ import type {
   ThreadHandoffTicket,
 } from "@cognia/agent-config-types/thread-handoff"
 import { readBlobAsArrayBuffer } from "@cognia/ocr/blob-utils"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { getMessageMedia, parseMediaRef, putMessageMedia } from "@/lib/db/message-media"
 import { resolveAttachmentRef } from "@/lib/db/session-attachment-uploads"
 import { getDb } from "@/lib/db/schema"

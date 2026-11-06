@@ -1,5 +1,5 @@
 import diff from "fast-diff"
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import { lineRangeFromOffsets } from "@/lib/canvas/collaboration/relative-anchor"
 import type { ContextCommentAnchor } from "@/types/context-comment"
 import type { LineRange } from "@/types/canvas/collaboration"

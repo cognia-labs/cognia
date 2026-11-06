@@ -27,7 +27,7 @@ import {
 } from "@/lib/chat/attachments/video/preprocess"
 import { VideoPreprocessError } from "@/lib/chat/attachments/video/frame-source"
 import { DEFAULT_VIDEO_SETTINGS } from "@/lib/chat/attachments/video/settings"
-import { sha256Blob } from "@/lib/ocr/hash"
+import { sha256Blob } from "@/lib/utils/hash"
 import { prepareComposerAttachments } from "@/lib/chat/attachments/prepare"
 import {
   StagedAttachmentsProvider,

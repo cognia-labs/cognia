@@ -13,9 +13,7 @@ import { setChatMiddlewareExecutionEnabled } from "@/lib/claude/chat-middleware/
  * seeded from `AppSettings.developer.chatMiddlewareExecution` at startup and
  * kept in sync on every settings change. The settings store hydrates
  * asynchronously, so this applies the current snapshot then subscribes — the
- * setter is idempotent, so re-applying the same value is cheap. Mirrors the
- * `OcrRuntimeInitializer` shape so the desktop initializer block stays
- * homogeneous.
+ * setter is idempotent, so re-applying the same value is cheap.
  */
 export function ChatMiddlewareFlagInitializer() {
   useEffect(() => {

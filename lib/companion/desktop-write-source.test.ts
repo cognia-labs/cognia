@@ -1235,7 +1235,7 @@ describe("dispatchCommand: workflow Human Input", () => {
 
   it("promotes quarantined file refs into encrypted request-scoped files", async () => {
     const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
-    const { sha256Bytes } = await import("@/lib/ocr/hash")
+    const { sha256Bytes } = await import("@/lib/utils/hash")
     const hash = await sha256Bytes(png)
     await registerDeviceRequest("hir_file", "device:dev-9", {
       fields: [{ id: "evidence", type: "file", label: "Evidence", required: true }],
@@ -2969,7 +2969,7 @@ describe("dispatchCommand: session attachment upload", () => {
     Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64")
 
   async function hashOf(bytes: Uint8Array): Promise<string> {
-    const { sha256Bytes } = await import("@/lib/ocr/hash")
+    const { sha256Bytes } = await import("@/lib/utils/hash")
     return sha256Bytes(bytes)
   }
 

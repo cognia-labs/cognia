@@ -18,10 +18,9 @@
  * single/primary-monitor caveat shared with `browser_embed_capture`.
  */
 
+import { OcrError } from "@cognia/ocr/errors"
 import { desktop, type CallContext } from "./client"
-import { extract as defaultExtract, type ExtractDeps } from "@/lib/ocr"
-import { buildOcrDeps } from "@/lib/ocr/deps"
-import { OcrError } from "@/lib/ocr/errors"
+import { extractWithOcrPort } from "./ocr-screen"
 import type { Point, Screenshot, ScreenshotOpts } from "./types"
 import type { OcrInput, OcrResult } from "@/types/ocr"
 import {
@@ -42,9 +41,8 @@ export type {
 
 export interface OcrClickDeps {
   screenshot: (opts: ScreenshotOpts, ctx: CallContext) => Promise<Screenshot>
-  extract: (input: OcrInput, deps: ExtractDeps) => Promise<OcrResult>
+  extract: (input: OcrInput) => Promise<OcrResult>
   click: (point: Point, ctx: CallContext) => Promise<void>
-  ocrDeps: ExtractDeps
   zoom?: typeof desktop.zoom
   performAction?: typeof desktop.performAction
 }
@@ -195,13 +193,10 @@ export async function findScreenTextWith(
     shot = await deps.screenshot(args.opts ?? {}, ctx)
   }
   const mimeType = mimeForFormat(shot.format)
-  const result = await deps.extract(
-    {
-      source: { kind: "data-url", dataUrl: `data:${mimeType};base64,${shot.bytes}`, mimeType },
-      languages: args.languages,
-    },
-    deps.ocrDeps
-  )
+  const result = await deps.extract({
+    source: { kind: "data-url", dataUrl: `data:${mimeType};base64,${shot.bytes}`, mimeType },
+    languages: args.languages,
+  })
   const all = blocksToScreenMatches(result, shot).map((match) => {
     if (!frame?.surface) return match
     const surface = frame.surface
@@ -320,9 +315,8 @@ export async function clickScreenTextWith(
 
 const productionDeps = (): OcrClickDeps => ({
   screenshot: (opts, ctx) => desktop.screenshot(opts, ctx),
-  extract: defaultExtract,
+  extract: extractWithOcrPort,
   click: (point, ctx) => desktop.click({ kind: "point", x: point.x, y: point.y }, {}, ctx),
-  ocrDeps: buildOcrDeps(),
   zoom: (state, region, ctx) => desktop.zoom(state, region, ctx),
   performAction: (request, ctx) => desktop.performAction(request, ctx),
 })

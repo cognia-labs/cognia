@@ -15,7 +15,7 @@
  * agent transcripts re-send byte-identical screenshots constantly.
  */
 
-import { downscaleImage, measureImage, decodeDataUrl } from "@/lib/ocr/image-prep"
+import { downscaleImage, measureImage, decodeDataUrl } from "@/lib/utils/image-bytes"
 import { getDb } from "@/lib/db/schema"
 import { mediaRef, putMessageMedia, hasMessageMedia } from "@/lib/db/message-media"
 

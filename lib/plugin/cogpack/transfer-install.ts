@@ -29,7 +29,7 @@
 
 import { z } from "zod"
 
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { verifyEd25519PackageSignature } from "@/lib/packaging/signed-zip"
 import { canonicalJsonBytes } from "@/lib/plugin/character-pack/canonical-json"
 import type { CogpackManifestV1, CogpackProvenance } from "@/types/plugin/plugin-cogset"

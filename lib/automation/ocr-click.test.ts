@@ -1,8 +1,11 @@
 jest.mock("./client", () => ({
   desktop: { screenshot: jest.fn(), click: jest.fn(async () => {}) },
 }))
-jest.mock("@/lib/ocr", () => ({ extract: jest.fn() }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: jest.fn(() => ({})) }))
+const mockExtract = jest.fn()
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) =>
+    id === "ocr" ? { extract: (...a: unknown[]) => mockExtract(...a) } : null,
+}))
 
 import {
   blocksToScreenMatches,
@@ -15,8 +18,7 @@ import {
   type ScreenTextMatch,
 } from "./ocr-click"
 import { desktop } from "./client"
-import { extract } from "@/lib/ocr"
-import { OcrError } from "@/lib/ocr/errors"
+import { OcrError } from "@cognia/ocr/errors"
 import {
   clearComputerUsePipState,
   getComputerUsePipSnapshot,
@@ -28,7 +30,7 @@ import type { OcrResult } from "@/types/ocr"
 
 const mockedScreenshot = desktop.screenshot as jest.Mock
 const mockedClick = desktop.click as jest.Mock
-const mockedExtract = extract as unknown as jest.Mock
+const mockedExtract = mockExtract
 
 function shot(over: Partial<Screenshot> = {}): Screenshot {
   return { bytes: "AAAA", width: 1920, height: 1080, capturedAt: 0, format: "png", ...over }
@@ -108,7 +110,6 @@ function deps(over: Partial<OcrClickDeps> = {}): OcrClickDeps {
       ocrResult([{ text: "Submit", bbox: { x: 10, y: 20, width: 40, height: 10 } }])
     ),
     click: jest.fn(async () => {}),
-    ocrDeps: {} as never,
     ...over,
   }
 }

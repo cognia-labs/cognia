@@ -2,11 +2,14 @@
 
 /**
  * React hook that wraps `lib/ocr/extract()` with streaming state. Used by
- * the composer menu and the slash-command UI.
+ * the composer menu and the OCR settings' try-it and compare panels. It is
+ * the OCR module's public hook (`lib/ocr/module.ts`): without `deps` it
+ * extracts with the host's deps at the default settings.
  */
 
 import { useCallback, useRef, useState } from "react"
 import { OcrError } from "@/lib/ocr/errors"
+import { buildOcrDeps } from "@/lib/ocr/deps"
 import { extract, type ExtractDeps } from "@/lib/ocr/index"
 import { type OcrErrorCode, type OcrInput, type OcrResult } from "@/types/ocr"
 
@@ -19,7 +22,9 @@ export interface UseOcrState {
   reset: () => void
 }
 
-export function useOcr(deps: ExtractDeps | (() => ExtractDeps | null)): UseOcrState {
+const hostDeps = (): ExtractDeps => buildOcrDeps()
+
+export function useOcr(deps: ExtractDeps | (() => ExtractDeps | null) = hostDeps): UseOcrState {
   const [status, setStatus] = useState<UseOcrState["status"]>("idle")
   const [result, setResult] = useState<OcrResult | null>(null)
   const [error, setError] = useState<UseOcrState["error"]>(null)

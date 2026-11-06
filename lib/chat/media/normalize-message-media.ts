@@ -2,7 +2,7 @@ import type { UIMessage } from "ai"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { isMediaRef, parseMediaRef, getMessageMedia } from "@/lib/db/message-media"
 import { readBlobAsArrayBuffer } from "@cognia/ocr/blob-utils"
-import { bytesToBase64 } from "@/lib/ocr/image-prep"
+import { bytesToBase64 } from "@/lib/utils/image-bytes"
 import { ingestImageDataUrl } from "./ingest-media"
 
 interface FileLikePart {

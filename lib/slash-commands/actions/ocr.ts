@@ -12,9 +12,9 @@
  * back into the composer textarea via `dispatchPrompt`.
  */
 
-import { extract, type ExtractDeps } from "@/lib/ocr/index"
-import { OcrError } from "@/lib/ocr/errors"
-import { documentConfidence } from "@/lib/ocr/confidence"
+import type { ExtractDeps } from "@cognia/ocr"
+import { documentConfidence } from "@cognia/ocr/confidence"
+import { OcrError } from "@cognia/ocr/errors"
 import { type OcrInput, type OcrOutputFormat, type OcrResult } from "@/types/ocr"
 import type {
   OcrSourceRef,
@@ -69,10 +69,10 @@ export interface SlashOcrInput {
   /** File-path resolver — required when callers pass a `/path/to/file` arg. */
   filePathResolver?: ExtractDeps["filePathResolver"]
   /**
-   * Override the `extract` entry point. Tests inject a stub here so they
-   * don't have to wire up an entire registry.
+   * The extraction entry: the `ocr` port's `extract` (ADR-0250 §14), which
+   * meters what the provider billed. Tests inject a stub.
    */
-  extractImpl?: typeof extract
+  extract: (input: OcrInput, deps: ExtractDeps) => Promise<OcrResult>
 }
 
 interface ParsedArgs {
@@ -152,7 +152,6 @@ export async function handleOcrSlashCommand(input: SlashOcrInput): Promise<Slash
       errorCode: "invalid_input",
     }
   }
-  const extractFn = input.extractImpl ?? extract
   const deps: ExtractDeps = {
     ...input.deps,
     attachmentResolver: input.attachmentResolver ?? input.deps.attachmentResolver,
@@ -166,7 +165,7 @@ export async function handleOcrSlashCommand(input: SlashOcrInput): Promise<Slash
     format: parsed.format,
   }
   try {
-    const result = await extractFn(ocrInput, deps)
+    const result = await input.extract(ocrInput, deps)
     const body = renderResultMarkdown(result)
     const sourceRef: OcrSourceRef =
       parsed.source.kind === "attachment-id"

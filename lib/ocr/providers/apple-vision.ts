@@ -15,7 +15,7 @@
 
 import { withPlugin } from "@/lib/capacitor/_shared"
 import { OcrError } from "@/lib/ocr/errors"
-import { bytesToBase64, normalizeImage } from "../image-prep"
+import { bytesToBase64, normalizeImage } from "@/lib/utils/image-bytes"
 import {
   type OcrBlock,
   type OcrInput,

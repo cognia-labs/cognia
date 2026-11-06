@@ -18,7 +18,7 @@ import {
   decodeDataUrl,
   isPortableImageType,
   toPortableImage,
-} from "@/lib/ocr/image-prep"
+} from "@/lib/utils/image-bytes"
 import type {
   ExternalAgentImageContent,
   ExternalAgentImageWithheldReason,

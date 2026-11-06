@@ -16,7 +16,7 @@
  */
 
 import { APP_VERSION } from "@/lib/app-version"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { encodeBase64 } from "@/lib/share/encoding"
 import type { CogpackSigner, EmbeddedPluginFile } from "@/lib/plugin/cogpack/package"
 import type { TransferInstallResult } from "@/lib/plugin/cogpack/transfer-install"

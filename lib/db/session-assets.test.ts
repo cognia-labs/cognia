@@ -1,6 +1,6 @@
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { AttachmentExtractedContent } from "@cognia/agent-config-types/attachment"
-import { sha256Blob } from "@/lib/ocr/hash"
+import { sha256Blob } from "@/lib/utils/hash"
 import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 import { clearMessages, persistMessages, commitMessageDelta } from "./messages"

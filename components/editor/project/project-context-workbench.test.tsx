@@ -34,7 +34,7 @@ import {
   getProjectFileResourceKey,
   proposeProjectFileUpdate,
 } from "@/lib/context-workbench/project-file-proposals"
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import { PROJECT_EDITOR_GOTO_EVENT } from "./editor-events"
 import { createProjectFileAnchor } from "@/lib/context-workbench/project-file-comment-anchors"
 import { EDITOR_TITLE_ROW_CLASS } from "./editor-chrome"

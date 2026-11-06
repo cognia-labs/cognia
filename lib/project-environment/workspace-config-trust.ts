@@ -47,7 +47,7 @@
  */
 
 import type { TrustedWorkspace } from "@/lib/db/trusted-workspaces"
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import type { Project } from "@/types"
 
 import type { DeclarationProblem } from "./environment-declaration"

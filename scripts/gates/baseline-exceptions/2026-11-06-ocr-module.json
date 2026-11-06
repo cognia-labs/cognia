@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:modules",
+  "allowGrowth": 1,
+  "owner": "lib/ocr",
+  "repaymentPhase": "2",
+  "reason": "ADR-0250 §14 M3 turns OCR from a kernel row into a module (lib/ocr/module.ts) that provides the `ocr` capability port; the kernel keeps only the port's contract (types/modules/ports/ocr.ts). The module count rises by one because a kernel subsystem became a module, which is the direction §14 asks for, not debt: the transitional table loses its `ocr` row in the same change. Nothing is owed back; phase 2 is named because it re-baselines the size measures once the transitional table is empty."
+}

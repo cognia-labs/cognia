@@ -5,7 +5,7 @@
  * content block(s) we hand to the model. It deliberately reuses the existing,
  * production-wired subsystems rather than reimplementing any of them:
  *
- *   - image classification + downscale + base64 → `lib/ocr/image-prep`
+ *   - image classification + downscale + base64 → `lib/utils/image-bytes`
  *   - PDF / docx / xlsx / pptx / csv / epub / md / code / html text extraction
  *     → `lib/document` (`processDocumentAsync`, browser-safe lazy parsers)
  *   - data-URL byte sizing → `lib/chat/draft-attachments`
@@ -36,7 +36,12 @@ import {
   parseRemoteDocumentProvenance,
   type RemoteDocumentProvenanceV1,
 } from "@/lib/docs-providers/document-provenance"
-import { decodeDataUrl, downscaleImage, bytesToBase64, isImageMimeType } from "@/lib/ocr/image-prep"
+import {
+  decodeDataUrl,
+  downscaleImage,
+  bytesToBase64,
+  isImageMimeType,
+} from "@/lib/utils/image-bytes"
 // Import the specific submodules (not the `@cognia/document` barrel) so the heavy
 // pdfjs/mammoth/xlsx parsers stay lazily loaded — the same pattern the Twin
 // uploader uses. `processDocumentAsync` dynamic-imports those internally.
@@ -53,7 +58,7 @@ import { authorizePluginAttachment } from "@/lib/plugin/api/files-api"
 import { videoMediaTypeOf } from "./video/classify"
 import type { VideoAttachmentInfo } from "./video/attachment-info"
 import type { VideoPreprocessResult } from "./video/preprocess"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import type {
   AttachmentExtractedContent,
   AttachmentSegment,

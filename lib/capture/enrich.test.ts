@@ -1,7 +1,7 @@
 const mockFetchUrlAsRawSource = jest.fn()
 const mockProxyFetch = jest.fn()
 const mockExtract = jest.fn()
-const mockBuildOcrDeps = jest.fn(() => ({ runtime: "test" }))
+let mockOcrPort: { extract: (...args: unknown[]) => unknown } | null = null
 
 jest.mock("@/lib/twin/ingest/url-fetcher", () => ({
   fetchUrlAsRawSource: (...args: unknown[]) => mockFetchUrlAsRawSource(...args),
@@ -10,8 +10,9 @@ jest.mock("@/lib/network/proxy-fetch", () => ({
   createProxyFetch: () => mockProxyFetch,
 }))
 jest.mock("@/lib/native/utils", () => ({ isTauri: () => true }))
-jest.mock("@/lib/ocr", () => ({ extract: (...args: unknown[]) => mockExtract(...args) }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: () => mockBuildOcrDeps() }))
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
+}))
 
 import { buildEnrichDeps, enrichCandidate, type EnrichDeps } from "./enrich"
 import type { CaptureCandidate } from "@/types/capture"
@@ -66,7 +67,6 @@ describe("buildEnrichDeps", () => {
     mockFetchUrlAsRawSource.mockReset()
     mockFetchUrlAsRawSource.mockResolvedValue({ text: "page", title: "Page" })
     mockExtract.mockReset()
-    mockBuildOcrDeps.mockClear()
   })
 
   it("lets privacy-sensitive callers disable the Jina fallback", async () => {
@@ -90,15 +90,26 @@ describe("buildEnrichDeps", () => {
   })
 
   it("normalizes OCR markdown, text fallback, and empty output", async () => {
+    mockOcrPort = { extract: (...args: unknown[]) => mockExtract(...args) }
     const ocrImage = buildEnrichDeps().ocrImage!
-    mockExtract.mockResolvedValueOnce({ markdown: "  # Scan  ", text: "ignored" })
+    mockExtract.mockResolvedValueOnce({ combinedMarkdown: "  # Scan  ", combinedText: "ignored" })
     await expect(ocrImage("data:image/png;base64,AAAA")).resolves.toEqual({ text: "# Scan" })
 
-    mockExtract.mockResolvedValueOnce({ text: "  plain scan  " })
+    mockExtract.mockResolvedValueOnce({ combinedMarkdown: " ", combinedText: "  plain scan  " })
     await expect(ocrImage("data:;base64,AAAA")).resolves.toEqual({ text: "plain scan" })
 
-    mockExtract.mockResolvedValueOnce({ text: "   " })
+    mockExtract.mockResolvedValueOnce({ combinedMarkdown: "", combinedText: "   " })
     await expect(ocrImage("data:image/png;base64,AAAA")).resolves.toBeNull()
-    expect(mockBuildOcrDeps).toHaveBeenCalledTimes(3)
+    expect(mockExtract).toHaveBeenCalledTimes(3)
+    expect(mockExtract).toHaveBeenLastCalledWith({
+      source: { kind: "data-url", dataUrl: "data:image/png;base64,AAAA", mimeType: "image/png" },
+    })
+  })
+
+  it("captures an image without text where no module provides OCR", async () => {
+    mockOcrPort = null
+    mockExtract.mockClear()
+    await expect(buildEnrichDeps().ocrImage!("data:image/png;base64,AAAA")).resolves.toBeNull()
+    expect(mockExtract).not.toHaveBeenCalled()
   })
 })

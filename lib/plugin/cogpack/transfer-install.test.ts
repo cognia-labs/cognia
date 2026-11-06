@@ -1,4 +1,4 @@
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { loadJSZip } from "@/lib/packaging/signed-zip"
 import { encodeBase64 } from "@/lib/share/encoding"
 

@@ -9,7 +9,7 @@ afterAll(() => {
   globalThis.Blob = originalBlob
 })
 import { getDb } from "@/lib/db/schema"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { mediaRef, putMessageMedia, type MessageMediaRow } from "@/lib/db/message-media"
 import type { CanonicalTurn } from "@cognia/agent-config-types/canonical-session"
 import type { ThreadHandoffTicket } from "@cognia/agent-config-types/thread-handoff"

@@ -29,7 +29,7 @@ import {
 } from "@/lib/chat/prompt-preamble"
 import { readReplyTo } from "@/lib/chat/reply-to"
 import { stripSteerPrefix } from "@/lib/claude/steer"
-import { decodeDataUrl } from "@/lib/ocr/image-prep"
+import { decodeDataUrl } from "@/lib/utils/image-bytes"
 import { getSessionAsset } from "@/lib/db/session-assets"
 import { VIDEO_ATTACHMENT_PART_KEY } from "@/lib/chat/attachments/video/attachment-info"
 

@@ -1,11 +1,15 @@
 const extractPdfMock = jest.fn()
-const getSettingsMock = jest.fn()
-jest.mock("@/lib/ocr/pdf-router", () => ({
+let mockOcrPort: Record<string, unknown> | null = null
+const pdfDepsMock = jest.fn((options: unknown) => ({ loadPdf: jest.fn(), built: options }))
+const loadSettingsMock = jest.fn()
+const providingOcrPort = {
   extractPdf: (...args: unknown[]) => extractPdfMock(...args),
+  pdfDeps: (options: unknown) => pdfDepsMock(options),
+  loadSettings: () => loadSettingsMock(),
+}
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
 }))
-jest.mock("@/lib/ocr/pdf-loader", () => ({ createPdfLoader: () => jest.fn() }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: () => ({ settings: {} }) }))
-jest.mock("@/lib/db/settings", () => ({ getSettings: () => getSettingsMock() }))
 
 import {
   extractAttachmentPdf,
@@ -15,7 +19,7 @@ import {
   type AttachmentPdfOcrDeps,
 } from "./pdf-ocr-fallback"
 import type { OcrPage, OcrResult } from "@/types/ocr"
-import type { PdfRouterDeps } from "@/lib/ocr/pdf-router"
+import type { PdfRouterDeps } from "@cognia/ocr/pdf-router"
 
 const bytes = new Uint8Array([1, 2, 3])
 const page = (
@@ -152,22 +156,31 @@ describe("complete PDF attachment extraction", () => {
 describe("production wrappers", () => {
   beforeEach(() => {
     extractPdfMock.mockReset().mockResolvedValue(result([page(1, "Full attachment text", false)]))
-    getSettingsMock.mockReset().mockResolvedValue({})
+    loadSettingsMock.mockReset().mockResolvedValue({ defaultProviderId: "auto" })
+    pdfDepsMock.mockClear()
+    mockOcrPort = providingOcrPort
   })
   it("returns structured extraction through the production OCR settings", async () => {
     expect(await runAttachmentPdfExtraction(bytes)).toMatchObject({
       status: "complete",
       ocrPages: 1,
     })
+    expect(pdfDepsMock).toHaveBeenCalledWith({ settings: { defaultProviderId: "auto" } })
   })
   it("keeps the legacy string facade with page locators", async () => {
     expect(await runAttachmentPdfOcr(bytes, "rich cover".repeat(20))).toBe(
       "[Page 1]\nFull attachment text"
     )
   })
-  it("uses defaults when settings are unavailable", async () => {
-    getSettingsMock.mockRejectedValue(new Error("offline"))
-    expect(await runAttachmentPdfExtraction(bytes)).toMatchObject({ status: "complete" })
+  it("reports a failed extraction where no module provides OCR", async () => {
+    mockOcrPort = null
+    expect(await runAttachmentPdfExtraction(bytes)).toMatchObject({
+      status: "failed",
+      pages: [],
+      errors: [{ message: "OCR is not available on this host" }],
+    })
+    expect(extractPdfMock).not.toHaveBeenCalled()
+    expect(await runAttachmentPdfOcr(bytes, "")).toBeNull()
   })
   it("adds an explicit notice for legacy callers receiving a partial result", async () => {
     extractPdfMock.mockImplementation(async (_input, router) => {

@@ -1,9 +1,15 @@
 const extractMock = jest.fn()
-const getSettingsMock = jest.fn()
+const loadSettingsMock = jest.fn()
 const appendAuditMock = jest.fn()
-jest.mock("@/lib/ocr", () => ({ extract: (...a: unknown[]) => extractMock(...a) }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: () => ({}) }))
-jest.mock("@/lib/db/settings", () => ({ getSettings: () => getSettingsMock() }))
+const mockOcr = {
+  extract: (...a: unknown[]) => extractMock(...a),
+  loadSettings: () => loadSettingsMock(),
+  deps: (options: unknown) => ({ built: options }),
+}
+let mockOcrPort: typeof mockOcr | null = mockOcr
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
+}))
 jest.mock("./audit", () => ({
   __esModule: true,
   appendAudit: (...a: unknown[]) => appendAuditMock(...a),
@@ -16,7 +22,7 @@ import {
   type InboundOcrDeps,
 } from "./inbound-ocr"
 import type { MessageSegment } from "@/types/connectors/segment"
-import type { OcrResult } from "@/types/ocr"
+import { DEFAULT_OCR_SETTINGS, type OcrResult } from "@/types/ocr"
 
 function ocrResult(text: string): OcrResult {
   return {
@@ -117,32 +123,43 @@ describe("maybeOcrInboundSegments", () => {
 describe("runInboundOcr (production wrapper)", () => {
   beforeEach(() => {
     extractMock.mockReset().mockResolvedValue(ocrResult("FROM SETTINGS"))
-    getSettingsMock.mockReset()
+    loadSettingsMock.mockReset()
+    mockOcrPort = mockOcr
   })
 
   it("runs OCR when settings enable inbound images", async () => {
-    getSettingsMock.mockResolvedValue({ ocrSettings: { ocrInboundImages: true } })
+    const settings = { ...DEFAULT_OCR_SETTINGS, ocrInboundImages: true }
+    loadSettingsMock.mockResolvedValue(settings)
     const event = { segments: [imageSeg({ dataBase64: "AAAA" })] }
     await runInboundOcr(event)
     expect((event.segments[0] as { ocrText?: string }).ocrText).toBe("FROM SETTINGS")
+    expect(extractMock.mock.calls[0][1]).toEqual({ built: { settings } })
   })
 
   it("skips OCR when inbound images are disabled in settings", async () => {
-    getSettingsMock.mockResolvedValue({ ocrSettings: { ocrInboundImages: false } })
+    loadSettingsMock.mockResolvedValue({ ...DEFAULT_OCR_SETTINGS, ocrInboundImages: false })
     const event = { segments: [imageSeg({ dataBase64: "AAAA" })] }
     await runInboundOcr(event)
     expect(extractMock).not.toHaveBeenCalled()
   })
 
-  it("defaults to enabled when settings can't be read", async () => {
-    getSettingsMock.mockRejectedValue(new Error("no dexie"))
+  it("runs OCR at the default settings (inbound images on)", async () => {
+    loadSettingsMock.mockResolvedValue(DEFAULT_OCR_SETTINGS)
     const event = { segments: [imageSeg({ dataBase64: "AAAA" })] }
     await runInboundOcr(event)
     expect(extractMock).toHaveBeenCalledTimes(1)
   })
 
+  it("leaves the images alone where no module provides OCR", async () => {
+    mockOcrPort = null
+    const event = { segments: [imageSeg({ dataBase64: "AAAA" })] }
+    await runInboundOcr(event)
+    expect(extractMock).not.toHaveBeenCalled()
+    expect((event.segments[0] as { ocrText?: string }).ocrText).toBeUndefined()
+  })
+
   it("audits inbound.ocr_failed when extraction throws and adapterId is present", async () => {
-    getSettingsMock.mockResolvedValue({ ocrSettings: { ocrInboundImages: true } })
+    loadSettingsMock.mockResolvedValue({ ...DEFAULT_OCR_SETTINGS, ocrInboundImages: true })
     extractMock.mockReset().mockRejectedValue(new Error("provider down"))
     appendAuditMock.mockClear()
     const event = {
@@ -158,7 +175,7 @@ describe("runInboundOcr (production wrapper)", () => {
   })
 
   it("does not audit when no adapterId is present (legacy narrow event)", async () => {
-    getSettingsMock.mockResolvedValue({ ocrSettings: { ocrInboundImages: true } })
+    loadSettingsMock.mockResolvedValue({ ...DEFAULT_OCR_SETTINGS, ocrInboundImages: true })
     extractMock.mockReset().mockRejectedValue(new Error("provider down"))
     appendAuditMock.mockClear()
     await runInboundOcr({ segments: [imageSeg({ dataBase64: "AAAA" })] })

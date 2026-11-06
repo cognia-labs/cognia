@@ -50,7 +50,7 @@ import {
   type DraftAttachmentMeta,
 } from "@/lib/db/chat-drafts"
 import { readStoredBytes } from "@/lib/db/stored-bytes"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import {
   COMPOSER_MAX_ATTACHMENTS,
   COMPOSER_MAX_ATTACHMENT_BYTES,

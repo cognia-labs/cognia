@@ -249,7 +249,7 @@ async function resolveOutboundAttachments(
   const [{ resolveAttachmentRef }, { buildSendContent }, { bytesToDataUrl }] = await Promise.all([
     import("@/lib/db/session-attachment-uploads"),
     import("@/lib/chat/attachments/dispatch"),
-    import("@/lib/ocr/image-prep"),
+    import("@/lib/utils/image-bytes"),
   ])
   const files: SubmittedFile[] = []
   for (const attachment of refs) {

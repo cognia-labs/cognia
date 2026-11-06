@@ -323,7 +323,6 @@ import { DraftRestoredAttachments } from "./composer/draft-restored-attachments"
 import { OcrResultBubble } from "./composer/ocr-result-bubble"
 import { applyComposerOcr } from "./composer/ocr-attachment-action"
 import { useOcr } from "@/hooks/use-ocr"
-import { buildOcrDeps } from "@/lib/ocr/deps"
 import type { OcrResult } from "@/types/ocr"
 import { mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { BestOfNStartDialog } from "./composer/best-of-n-start-dialog"
@@ -680,7 +679,7 @@ function ComposerInner(props: InnerProps) {
   useEffect(() => {
     attachmentCitations.observe(attachments.files)
   }, [attachmentCitations, attachments.files])
-  const ocr = useOcr(() => buildOcrDeps())
+  const ocr = useOcr()
   const [ocrBubbleOpen, setOcrBubbleOpen] = useState(false)
   const [ocrBubbleResult, setOcrBubbleResult] = useState<OcrResult | null>(null)
   const [ocrBubbleImageSrc, setOcrBubbleImageSrc] = useState<string | null>(null)

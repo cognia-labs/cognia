@@ -31,7 +31,7 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const { sha256Bytes } = await import("@/lib/ocr/hash")
+  const { sha256Bytes } = await import("@/lib/utils/hash")
   return sha256Bytes(bytes)
 }
 

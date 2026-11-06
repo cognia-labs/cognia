@@ -2,7 +2,7 @@
  * Capture kind detection + candidate building. Pure (crypto via Web Crypto).
  */
 
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import type { CaptureCandidate, CaptureKind } from "@/types/capture"
 
 const URL_RE = /^https?:\/\/[^\s]+$/i

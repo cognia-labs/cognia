@@ -7,8 +7,8 @@ import {
 } from "./turn-images"
 
 const toPortableImage = jest.fn()
-jest.mock("@/lib/ocr/image-prep", () => {
-  const actual = jest.requireActual("@/lib/ocr/image-prep")
+jest.mock("@/lib/utils/image-bytes", () => {
+  const actual = jest.requireActual("@/lib/utils/image-bytes")
   return {
     ...actual,
     toPortableImage: (...args: unknown[]) => toPortableImage(...args),

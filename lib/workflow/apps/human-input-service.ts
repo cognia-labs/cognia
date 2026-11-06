@@ -7,7 +7,7 @@ import {
   submitHumanInput,
 } from "@/lib/db/workflow-human-input"
 import { promoteHumanInputFile } from "@/lib/db/workflow-human-input-files"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import {
   inspectUploadContent,
   UploadContentInspectionError,

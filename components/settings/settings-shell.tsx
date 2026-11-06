@@ -53,13 +53,6 @@ const SearchSettings = dynamic(
   () => import("./search/search-settings").then((m) => m.SearchSettings),
   { ssr: false, loading: () => <SectionLoading /> }
 )
-const OcrSection = dynamic(
-  () => import("./ocr/ocr-section-persisted").then((m) => m.OcrSectionPersisted),
-  {
-    ssr: false,
-    loading: () => <SectionLoading />,
-  }
-)
 const AppearanceSection = dynamic(() => import("./appearance").then((m) => m.AppearanceSection), {
   ssr: false,
   loading: () => <SectionLoading />,
@@ -346,7 +339,6 @@ const DEFAULT_SECTION: SettingsSectionId = "ai-connections"
 const FILL_HEIGHT_SECTIONS = new Set<SettingsSectionId>([
   "ai-connections",
   "model-catalog",
-  "ocr",
   "diagnostics",
   "connections",
   "skills",
@@ -666,8 +658,6 @@ function SectionContent({
       return <ToolSettingsSection />
     case "search":
       return <SearchSettings />
-    case "ocr":
-      return <OcrSection />
     case "appearance":
       return <AppearanceSection />
     case "sidebar":

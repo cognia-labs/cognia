@@ -37,7 +37,7 @@ import {
   commitAttachmentUpload,
   consumeAttachmentRefs,
 } from "@/lib/db/session-attachment-uploads"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 
 /** Stage a small PNG into `sessionId` the way a member's device does. */
 async function stagePng(sessionId: string, name = "shot.png"): Promise<string> {

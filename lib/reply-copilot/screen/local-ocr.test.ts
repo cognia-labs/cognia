@@ -1,9 +1,10 @@
-jest.mock("@/lib/ocr", () => ({ extract: jest.fn() }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: jest.fn() }))
-jest.mock("@/lib/ocr/user-settings", () => ({ loadUserOcrSettings: jest.fn() }))
+let mockOcrPort: Record<string, jest.Mock> | null = null
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
+}))
 
+import type { ExtractDeps } from "@cognia/ocr"
 import type { Screenshot } from "@/lib/automation/types"
-import type { ExtractDeps } from "@/lib/ocr"
 import type { OcrInput, OcrProvider, OcrResult } from "@/types/ocr"
 import { LocalOcrUnavailableError, readWindowText, type LocalOcrDeps } from "./local-ocr"
 
@@ -89,5 +90,31 @@ describe("readWindowText", () => {
     controller.abort()
     await expect(readWindowText(shot, controller.signal, d)).rejects.toThrow()
     expect(extract).not.toHaveBeenCalled()
+  })
+})
+
+describe("readWindowText through the ocr port", () => {
+  it("reads the person's settings and lists candidates with cloud fallback off", async () => {
+    const settings = { defaultProviderId: "auto" }
+    const hostDeps = { marker: "host" }
+    mockOcrPort = {
+      loadSettings: jest.fn(async () => settings),
+      deps: jest.fn(() => hostDeps),
+      candidates: jest.fn(async () => [provider("paddle-ocr", "local")]),
+      extract: jest.fn(async () => result),
+    }
+    const text = await readWindowText(shot)
+    expect(mockOcrPort.deps).toHaveBeenCalledWith({ settings })
+    expect(mockOcrPort.candidates).toHaveBeenCalledWith(hostDeps, { cloudFallback: false })
+    expect(mockOcrPort.extract).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "paddle-ocr", useCache: false }),
+      hostDeps
+    )
+    expect(text.providerId).toBe("apple-vision")
+  })
+
+  it("has no local engine where no module provides OCR", async () => {
+    mockOcrPort = null
+    await expect(readWindowText(shot)).rejects.toBeInstanceOf(LocalOcrUnavailableError)
   })
 })

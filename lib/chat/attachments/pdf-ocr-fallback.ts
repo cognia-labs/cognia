@@ -1,10 +1,8 @@
 /** Complete attachment PDF extraction over the shared page-wise OCR router. */
-import { extractPdf as defaultExtractPdf, type PdfRouterDeps } from "@/lib/ocr/pdf-router"
-import { createPdfLoader } from "@/lib/ocr/pdf-loader"
-import { buildOcrDeps } from "@/lib/ocr/deps"
-import { getSettings } from "@/lib/db/settings"
-import { DEFAULT_OCR_SETTINGS, type OcrPage, type OcrResult } from "@/types/ocr"
-import type { PdfRouterInput } from "@/lib/ocr/pdf-router"
+import { OcrError } from "@cognia/ocr/errors"
+import type { PdfRouterDeps, PdfRouterInput } from "@cognia/ocr/pdf-router"
+import { loadPort } from "@/lib/modules/ports"
+import type { OcrPage, OcrResult } from "@/types/ocr"
 
 export const ATTACHMENT_OCR_MIN_TEXT_CHARS = 16
 
@@ -143,19 +141,23 @@ export async function runAttachmentPdfExtraction(
   bytes: Uint8Array,
   options: AttachmentPdfExtractionOptions = {}
 ): Promise<AttachmentPdfOcrOutcome> {
-  let settings = DEFAULT_OCR_SETTINGS
-  try {
-    settings = (await getSettings()).ocrSettings ?? DEFAULT_OCR_SETTINGS
-  } catch {
-    // Offline or locked settings use the existing local OCR defaults.
+  // The router and its OCR come through the `ocr` port (ADR-0250 §14). A host
+  // without OCR reports the extraction as failed instead of reading nothing.
+  const ocr = await loadPort("ocr")
+  if (!ocr) {
+    const unavailable = (): never => {
+      throw new OcrError("unsupported_shell", "ocr", "OCR is not available on this host")
+    }
+    return extractAttachmentPdf(bytes, options, {
+      extractPdf: unavailable,
+      buildPdfRouterDeps: unavailable,
+    })
   }
+  // Offline or locked settings read as the defaults (local OCR).
+  const settings = await ocr.loadSettings()
   return extractAttachmentPdf(bytes, options, {
-    extractPdf: defaultExtractPdf,
-    buildPdfRouterDeps: () => ({
-      loadPdf: createPdfLoader(),
-      extractDeps: buildOcrDeps({ settings }),
-      settings,
-    }),
+    extractPdf: ocr.extractPdf,
+    buildPdfRouterDeps: () => ocr.pdfDeps({ settings }),
   })
 }
 

@@ -27,8 +27,8 @@
  * quietly handed.
  */
 
-import { bytesToBase64 } from "@/lib/ocr/image-prep"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { bytesToBase64 } from "@/lib/utils/image-bytes"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { transport } from "@/lib/tauri"
 
 /** A staged file, in the only form the uploader needs. */

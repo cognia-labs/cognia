@@ -1962,7 +1962,7 @@ describe("HostStateService", () => {
 
     async function stageAttachment(sessionId: string, deviceId: string): Promise<string> {
       const store = await import("@/lib/db/session-attachment-uploads")
-      const { sha256Bytes } = await import("@/lib/ocr/hash")
+      const { sha256Bytes } = await import("@/lib/utils/hash")
       const init = await store.beginAttachmentUpload({
         sessionId,
         deviceId,
@@ -4433,7 +4433,7 @@ describe("HostState Agent RPC dispatcher", () => {
     try {
       const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
       const store = await import("@/lib/db/session-attachment-uploads")
-      const { sha256Bytes } = await import("@/lib/ocr/hash")
+      const { sha256Bytes } = await import("@/lib/utils/hash")
       const init = await store.beginAttachmentUpload({
         sessionId: "session-1",
         deviceId: "dev-1",
@@ -5060,7 +5060,7 @@ async function stageTestPng(
 ): Promise<{ uploadId: string; ref: string }> {
   const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, seed, 2, 3, 4])
   const store = await import("@/lib/db/session-attachment-uploads")
-  const { sha256Bytes } = await import("@/lib/ocr/hash")
+  const { sha256Bytes } = await import("@/lib/utils/hash")
   const init = await store.beginAttachmentUpload({
     sessionId,
     deviceId: "dev-1",

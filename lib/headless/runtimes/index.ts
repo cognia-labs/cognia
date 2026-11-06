@@ -24,13 +24,12 @@
  *   `workflow-exit-lease-release`,
  *   `automation-policy`, `audit-retention`, `storage-retention`,
  *   `desktop-network-runtime`, `provider-core-runtime`, `routing-runtime`,
- *   `ocr-runtime`,
  *   `template-trust-reconciliation`, `background-task`,
  *   `provider-cost-mirror` — the boot-initializer batch (T-A7..A9; see
  *   ./initializers.ts for what is deliberately excluded and why).
  * - module runtimes (./modules.ts) — every module manifest's brain adapter
  *   (ADR-0250 §14, M2), right after the initializer batch: `agent-team-runtime`
- *   from `squads`.
+ *   from `squads` and `ocr-runtime` from `ocr`.
  * - `connector-runtime` — the shared connector bootstrap with the Tauri
  *   command/event seams mapped onto the R12 `connectors_*` RPC arms and
  *   `/ws/events`, including webhook, polling, reverse/forward WS, gateway,

@@ -3,15 +3,13 @@ import { render } from "@testing-library/react"
 // The real one renders null. It starts this group's module runtimes, among
 // them the Squad bootstrap, the only thing that hydrates definitions, installs
 // the runtime and recovers live runs: a group that dropped it would boot with
-// no Squads and no way to start one.
+// no Squads and no way to start one. The OCR providers install there too
+// (`lib/ocr/module.ts`).
 jest.mock("./module-runtime-host", () => ({
   ModuleRuntimeHost: ({ boot }: { boot?: string }) => <span data-boot={`modules:${boot}`} />,
 }))
 jest.mock("./external-agent-initializer", () => ({
   ExternalAgentInitializer: () => <span data-boot="external-agent" />,
-}))
-jest.mock("./ocr-runtime-initializer", () => ({
-  OcrRuntimeInitializer: () => <span data-boot="ocr" />,
 }))
 jest.mock("@/components/twin/twin-worker-initializer", () => ({
   TwinWorkerInitializer: () => <span data-boot="twin" />,
@@ -58,7 +56,6 @@ it("mounts knowledge and agent workers and reports readiness", () => {
     "external-agent",
     "modules:knowledge-agents",
     "memory",
-    "ocr",
     "twin",
     "project-kb",
     "vector-credentials",

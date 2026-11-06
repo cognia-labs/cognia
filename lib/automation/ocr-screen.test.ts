@@ -3,11 +3,13 @@ const extractMock = jest.fn()
 jest.mock("./client", () => ({
   desktop: { screenshot: (...a: unknown[]) => screenshotMock(...a) },
 }))
-jest.mock("@/lib/ocr", () => ({ extract: (...a: unknown[]) => extractMock(...a) }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: () => ({ marker: "deps" }) }))
+let mockOcrPort: { extract: (...a: unknown[]) => unknown } | null = null
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
+}))
 
-import { ocrScreen, ocrScreenWith, type OcrScreenDeps } from "./ocr-screen"
-import { OcrError } from "@/lib/ocr/errors"
+import { OcrError } from "@cognia/ocr/errors"
+import { extractWithOcrPort, ocrScreen, ocrScreenWith, type OcrScreenDeps } from "./ocr-screen"
 import type { OcrResult } from "@/types/ocr"
 
 function ocrResult(text: string): OcrResult {
@@ -26,7 +28,6 @@ function deps(over: Partial<OcrScreenDeps> = {}): OcrScreenDeps {
   return {
     screenshot: jest.fn(async () => ({ bytes: "QUJD", format: "png" as const })),
     extract: jest.fn(async () => ocrResult("SCREEN TEXT")),
-    ocrDeps: {} as OcrScreenDeps["ocrDeps"],
     ...over,
   }
 }
@@ -38,13 +39,10 @@ describe("ocrScreenWith", () => {
     const out = await ocrScreenWith(deps({ extract, screenshot }), { languages: ["en", "zh"] })
     expect(out.combinedText).toBe("HELLO SCREEN")
     expect(screenshot).toHaveBeenCalledWith({}, { surface: "computerUse" })
-    expect(extract).toHaveBeenCalledWith(
-      {
-        source: { kind: "data-url", dataUrl: "data:image/png;base64,QUJD", mimeType: "image/png" },
-        languages: ["en", "zh"],
-      },
-      expect.anything()
-    )
+    expect(extract).toHaveBeenCalledWith({
+      source: { kind: "data-url", dataUrl: "data:image/png;base64,QUJD", mimeType: "image/png" },
+      languages: ["en", "zh"],
+    })
   })
 
   it("maps the jpeg screenshot format to image/jpeg", async () => {
@@ -55,8 +53,7 @@ describe("ocrScreenWith", () => {
     expect(extract).toHaveBeenCalledWith(
       expect.objectContaining({
         source: expect.objectContaining({ mimeType: "image/jpeg" }),
-      }),
-      expect.anything()
+      })
     )
   })
 
@@ -106,6 +103,7 @@ describe("ocrScreenWith", () => {
 
 describe("ocrScreen (production entry)", () => {
   beforeEach(() => {
+    mockOcrPort = { extract: (...a: unknown[]) => extractMock(...a) }
     screenshotMock.mockReset().mockResolvedValue({ bytes: "QUJD", format: "png" })
     extractMock.mockReset().mockResolvedValue(ocrResult("PROD SCREEN"))
   })
@@ -115,5 +113,28 @@ describe("ocrScreen (production entry)", () => {
     expect(out.combinedText).toBe("PROD SCREEN")
     expect(screenshotMock).toHaveBeenCalledWith({}, { surface: "computerUse" })
     expect(extractMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("extractWithOcrPort", () => {
+  it("extracts through the ocr port with the host's default deps", async () => {
+    extractMock.mockReset().mockResolvedValue(ocrResult("PORT"))
+    mockOcrPort = { extract: (...a: unknown[]) => extractMock(...a) }
+    const input = {
+      source: { kind: "data-url" as const, dataUrl: "data:,", mimeType: "image/png" },
+    }
+    await expect(extractWithOcrPort(input)).resolves.toMatchObject({ combinedText: "PORT" })
+    expect(extractMock).toHaveBeenCalledWith(input)
+  })
+
+  it("fails with a typed unsupported_shell error where no module provides OCR", async () => {
+    mockOcrPort = null
+    const input = {
+      source: { kind: "data-url" as const, dataUrl: "data:,", mimeType: "image/png" },
+    }
+    await expect(extractWithOcrPort(input)).rejects.toMatchObject({
+      name: "OcrError",
+      code: "unsupported_shell",
+    })
   })
 })

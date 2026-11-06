@@ -18,11 +18,9 @@
  * injected `ocrText` — before any auto-reply leaves the device.
  */
 
-import { extract as defaultExtract } from "@/lib/ocr"
-import type { ExtractDeps } from "@/lib/ocr"
-import { buildOcrDeps } from "@/lib/ocr/deps"
-import { getSettings } from "@/lib/db/settings"
-import { DEFAULT_OCR_SETTINGS, type OcrInput, type OcrResult } from "@/types/ocr"
+import type { ExtractDeps } from "@cognia/ocr"
+import { loadPort } from "@/lib/modules/ports"
+import type { OcrInput, OcrResult } from "@/types/ocr"
 import type { MessageSegment } from "@/types/connectors/segment"
 import { appendAudit } from "./audit"
 
@@ -112,28 +110,27 @@ export async function maybeOcrInboundSegments(
 
 /**
  * Production wrapper: load OCR settings, build real deps, and run the inbound
- * OCR pass over the event's segments. Best-effort — callers should ignore
- * rejections so OCR never blocks the inbound pipeline. Extraction failures
- * are audited as `inbound.ocr_failed` (instead of swallowed silently) when
- * the event carries the audit context.
+ * OCR pass over the event's segments, through the `ocr` port (ADR-0250 §14).
+ * A host without OCR leaves the images as `[image]`. Best-effort — callers
+ * should ignore rejections so OCR never blocks the inbound pipeline.
+ * Extraction failures are audited as `inbound.ocr_failed` (instead of
+ * swallowed silently) when the event carries the audit context.
  */
 export async function runInboundOcr(event: {
   segments: MessageSegment[]
   adapterId?: string
   conversationKey?: string
 }): Promise<void> {
-  let settings = DEFAULT_OCR_SETTINGS
-  try {
-    settings = (await getSettings()).ocrSettings ?? DEFAULT_OCR_SETTINGS
-  } catch {
-    // Dexie unavailable — fall back to defaults (inbound OCR on).
-  }
+  const ocr = await loadPort("ocr")
+  if (!ocr) return
+  // An unreadable settings row reads as the defaults: inbound OCR on.
+  const settings = await ocr.loadSettings()
   const adapterId = event.adapterId
   const conversationKey = event.conversationKey
   await maybeOcrInboundSegments(event.segments, {
     enabled: settings.ocrInboundImages !== false,
-    extract: defaultExtract,
-    ocrDeps: buildOcrDeps({ settings }),
+    extract: ocr.extract,
+    ocrDeps: ocr.deps({ settings }),
     onError:
       adapterId != null
         ? ({ error }) => {

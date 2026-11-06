@@ -430,7 +430,7 @@ const defaultDeps: RemoteRunDeps = {
   loadAttachments: async (runId, attachments, callerDeviceId) => {
     const [{ resolveAttachmentRef }, { bytesToBase64, isPortableImageType }] = await Promise.all([
       import("@/lib/db/session-attachment-uploads"),
-      import("@/lib/ocr/image-prep"),
+      import("@/lib/utils/image-bytes"),
     ])
     const images: ExternalAgentImageContent[] = []
     for (const [index, attachment] of attachments.entries()) {

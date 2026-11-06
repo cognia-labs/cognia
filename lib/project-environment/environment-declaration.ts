@@ -23,7 +23,7 @@
  * file into a loop of one error per save.
  */
 
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import { canonicalizeJson } from "@/lib/plugin/character-pack/canonical-json"
 import {
   ENVIRONMENT_SPEC_LIMITS,

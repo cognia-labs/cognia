@@ -1,6 +1,11 @@
+let mockOcrPort: Record<string, jest.Mock> | null = null
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
+}))
+
+import { __resetSharedOcrRegistry, getSharedOcrRegistry } from "@cognia/ocr/registry"
 import { __resetOcrApiForTesting, clearOcrProvidersForPlugin, createOcrAPI } from "./ocr-api"
 import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security/permission-guard"
-import { __resetSharedOcrRegistry, getSharedOcrRegistry } from "@/lib/ocr/registry"
 import type { OcrProvider, OcrInput, OcrProviderContext, OcrResult } from "@/types/ocr"
 
 function makeProvider(id: string): OcrProvider {
@@ -130,5 +135,59 @@ describe("createOcrAPI", () => {
     expect(() => api.extractScreen()).toThrow(/Permission denied/i)
     // Registration stays open — it only touches this plugin's own registry slice.
     expect(() => api.listRegistered()).not.toThrow()
+  })
+
+  describe("the host runtime, through the ocr port", () => {
+    const portResult = {
+      pages: [],
+      providerId: "host",
+      combinedMarkdown: "**port**",
+      combinedText: "port",
+      languages: ["en"],
+      durationMs: 1,
+      cached: false,
+    } as OcrResult
+    const settings = { defaultProviderId: "auto" }
+    const input = {
+      source: { kind: "data-url", dataUrl: "data:image/png;base64,AA==" },
+    } as OcrInput
+
+    beforeEach(() => {
+      mockOcrPort = {
+        loadSettings: jest.fn(async () => settings),
+        deps: jest.fn((options: Record<string, unknown>) => ({ built: options })),
+        extract: jest.fn(async () => portResult),
+      }
+    })
+
+    it("extracts with the person's settings", async () => {
+      await expect(createOcrAPI("p").extract(input)).resolves.toBe(portResult)
+      expect(mockOcrPort!.deps).toHaveBeenCalledWith({ settings })
+      expect(mockOcrPort!.extract).toHaveBeenCalledWith(input, { built: { settings } })
+    })
+
+    it("reads a file path through the desktop file resolver", async () => {
+      await createOcrAPI("p").extractFile("/tmp/a.png", { languages: ["en"] })
+      const [request, deps] = mockOcrPort!.extract.mock.calls[0]
+      expect(request).toEqual({
+        languages: ["en"],
+        source: { kind: "file-path", path: "/tmp/a.png" },
+      })
+      expect(deps.built).toEqual({ settings, filePathResolver: expect.any(Function) })
+    })
+
+    it("runs /ocr with the port's extract", async () => {
+      const out = await createOcrAPI("p").runSlashCommand('"/tmp/a.png"')
+      expect(out.result).toBe(portResult)
+      expect(mockOcrPort!.extract).toHaveBeenCalledTimes(1)
+    })
+
+    it("fails with a typed error where no module provides OCR", async () => {
+      mockOcrPort = null
+      await expect(createOcrAPI("p").extract(input)).rejects.toMatchObject({
+        name: "OcrError",
+        code: "unsupported_shell",
+      })
+    })
   })
 })

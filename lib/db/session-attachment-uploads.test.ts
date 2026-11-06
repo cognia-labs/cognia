@@ -31,7 +31,7 @@ function pngBytes(size: number): Uint8Array {
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const { sha256Bytes } = await import("@/lib/ocr/hash")
+  const { sha256Bytes } = await import("@/lib/utils/hash")
   return sha256Bytes(bytes)
 }
 

@@ -1,9 +1,9 @@
-import { createNullOcrCache, createNullOcrPageCache } from "@/lib/ocr/cache-contract"
+import { createNullOcrCache, createNullOcrPageCache } from "@cognia/ocr/cache-contract"
 import { buildOcrResultPart, handleOcrSlashCommand, parseOcrArgs } from "./ocr"
-import { createOcrRegistry } from "@/lib/ocr/registry"
+import { createOcrRegistry } from "@cognia/ocr/registry"
 import { DEFAULT_OCR_SETTINGS, type OcrResult } from "@/types/ocr"
-import { OcrError } from "@/lib/ocr/errors"
-import type { ExtractDeps } from "@/lib/ocr/index"
+import { OcrError } from "@cognia/ocr/errors"
+import type { ExtractDeps } from "@cognia/ocr"
 
 function makeDeps(): ExtractDeps {
   return {
@@ -87,7 +87,7 @@ describe("handleOcrSlashCommand", () => {
     const out = await handleOcrSlashCommand({
       argv: "att_1",
       deps: makeDeps(),
-      extractImpl: async () => sampleResult,
+      extract: async () => sampleResult,
     })
     expect(out.errorCode).toBeUndefined()
     expect(out.system).toContain("# Hello")
@@ -99,7 +99,7 @@ describe("handleOcrSlashCommand", () => {
     const out = await handleOcrSlashCommand({
       argv: "",
       deps: makeDeps(),
-      extractImpl: async () => sampleResult,
+      extract: async () => sampleResult,
     })
     expect(out.errorCode).toBe("invalid_input")
     expect(out.system).toMatch(/Missing argument/)
@@ -109,7 +109,7 @@ describe("handleOcrSlashCommand", () => {
     const out = await handleOcrSlashCommand({
       argv: "att_1 --into system",
       deps: makeDeps(),
-      extractImpl: async () => sampleResult,
+      extract: async () => sampleResult,
     })
     expect(out.composerText).toBeUndefined()
   })
@@ -118,7 +118,7 @@ describe("handleOcrSlashCommand", () => {
     const out = await handleOcrSlashCommand({
       argv: "att_9",
       deps: makeDeps(),
-      extractImpl: async () => sampleResult,
+      extract: async () => sampleResult,
     })
     expect(out.sourceRef).toEqual({ kind: "attachment-id", value: "att_9" })
   })
@@ -127,7 +127,7 @@ describe("handleOcrSlashCommand", () => {
     const out = await handleOcrSlashCommand({
       argv: "/tmp/scan.png",
       deps: makeDeps(),
-      extractImpl: async () => sampleResult,
+      extract: async () => sampleResult,
     })
     expect(out.sourceRef).toEqual({ kind: "file-path", value: "/tmp/scan.png" })
   })
@@ -136,7 +136,7 @@ describe("handleOcrSlashCommand", () => {
     const out = await handleOcrSlashCommand({
       argv: "att_1",
       deps: makeDeps(),
-      extractImpl: async () => {
+      extract: async () => {
         throw new OcrError("rate_limited", "mock", "slow")
       },
     })
@@ -148,7 +148,7 @@ describe("handleOcrSlashCommand", () => {
     const out = await handleOcrSlashCommand({
       argv: "att_1",
       deps: makeDeps(),
-      extractImpl: async () => {
+      extract: async () => {
         throw new Error("network down")
       },
     })
@@ -166,7 +166,7 @@ describe("handleOcrSlashCommand", () => {
       argv: "att_1",
       deps: makeDeps(),
       attachmentResolver,
-      extractImpl: async (_input, deps) => {
+      extract: async (_input, deps) => {
         captured.push(deps)
         return sampleResult
       },

@@ -191,7 +191,7 @@ describe("installCompanionEventBridge", () => {
     const handler = handlers.get("companion://device-lifecycle")!
 
     const store = await import("@/lib/db/session-attachment-uploads")
-    const { sha256Bytes } = await import("@/lib/ocr/hash")
+    const { sha256Bytes } = await import("@/lib/utils/hash")
     const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
     const open = async (deviceId: string) =>
       store.beginAttachmentUpload({

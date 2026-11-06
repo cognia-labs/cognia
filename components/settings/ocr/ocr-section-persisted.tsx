@@ -212,3 +212,5 @@ export function OcrSectionPersisted(): React.ReactElement | null {
     />
   )
 }
+
+export default OcrSectionPersisted

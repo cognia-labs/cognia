@@ -15,8 +15,7 @@
  *     automation permission layer)
  */
 
-import { extract } from "@/lib/ocr"
-import { buildOcrDeps } from "@/lib/ocr/deps"
+import { loadPort } from "@/lib/modules/ports"
 import { registerNodeExecutor } from "../registry"
 import { proxyFetch } from "@/lib/network/proxy-fetch"
 import type { StepExecutionContext } from "@/types/workflow/visual"
@@ -78,17 +77,17 @@ registerNodeExecutor({
       const { ocrScreen } = await import("@/lib/automation/ocr-screen")
       result = await ocrScreen({ languages })
     } else {
+      // OCR is the `ocr` port's (ADR-0250 §14), at the host's default deps.
+      const ocr = await loadPort("ocr")
+      if (!ocr) throw new Error("ocr.extract: OCR is not available on this host")
       const source = await resolveOcrNodeSource(params)
-      result = await extract(
-        {
-          source,
-          languages,
-          format,
-          pageRange,
-          providerId: provider && provider !== "auto" ? provider : undefined,
-        },
-        buildOcrDeps()
-      )
+      result = await ocr.extract({
+        source,
+        languages,
+        format,
+        pageRange,
+        providerId: provider && provider !== "auto" ? provider : undefined,
+      })
     }
 
     return {

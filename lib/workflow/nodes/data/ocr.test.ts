@@ -1,7 +1,10 @@
 const extractMock = jest.fn()
 const ocrScreenMock = jest.fn()
-jest.mock("@/lib/ocr", () => ({ extract: (...a: unknown[]) => extractMock(...a) }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: () => ({ marker: "deps" }) }))
+const providingOcrPort = { extract: (...a: unknown[]) => extractMock(...a) }
+let mockOcrPort: typeof providingOcrPort | null = providingOcrPort
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
+}))
 jest.mock("@/lib/automation/ocr-screen", () => ({
   ocrScreen: (...a: unknown[]) => ocrScreenMock(...a),
 }))
@@ -29,6 +32,7 @@ function ctx(params: Record<string, unknown>): StepExecutionContext {
 }
 
 beforeEach(() => {
+  mockOcrPort = providingOcrPort
   extractMock.mockReset().mockResolvedValue(result("EXTRACTED"))
   ocrScreenMock.mockReset().mockResolvedValue(result("SCREEN"))
 })
@@ -120,17 +124,22 @@ describe("ocr.extract node executor", () => {
       })
     )
     expect(extractMock).toHaveBeenCalledWith(
-      expect.objectContaining({ providerId: undefined, format: "text", languages: undefined }),
-      expect.anything()
+      expect.objectContaining({ providerId: undefined, format: "text", languages: undefined })
     )
   })
 
   it("passes an explicit provider through", async () => {
     const exec = getExecutor("ocr.extract", 1)!
     await exec.execute(ctx({ imageBase64: "QUJD", provider: "mistral-ocr" }))
-    expect(extractMock).toHaveBeenCalledWith(
-      expect.objectContaining({ providerId: "mistral-ocr" }),
-      expect.anything()
+    expect(extractMock).toHaveBeenCalledWith(expect.objectContaining({ providerId: "mistral-ocr" }))
+  })
+
+  it("fails where no module provides OCR", async () => {
+    mockOcrPort = null
+    const exec = getExecutor("ocr.extract", 1)!
+    await expect(exec.execute(ctx({ imageBase64: "QUJD" }))).rejects.toThrow(
+      "ocr.extract: OCR is not available on this host"
     )
+    expect(extractMock).not.toHaveBeenCalled()
   })
 })

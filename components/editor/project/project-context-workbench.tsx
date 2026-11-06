@@ -46,7 +46,7 @@ import {
   resolveContextCapabilities,
 } from "@/lib/context-workbench/capabilities"
 import { useContextCommentBadge } from "@/hooks/context-workbench/use-context-comment-badge"
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import {
   createProjectFileAnchor,
   resolveProjectFileAnchor,

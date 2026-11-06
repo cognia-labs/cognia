@@ -4,7 +4,7 @@
  * `lib/document/parsers/pdf-parser.ts` extracts only a PDF's text layer, so a
  * scanned / image-only PDF yields (near-)empty text and silently produces no
  * embeddings. When the parsed text is below a small threshold we re-run the
- * document through `lib/ocr/pdf-router.ts:extractPdf`, whose own per-page
+ * document through the `ocr` port's `extractPdf` (the PDF router), whose own per-page
  * text-layer fast-path keeps digital PDFs free and only OCRs the empty pages.
  *
  * The OCR'd text then flows through the unchanged redact → chunk → embed →
@@ -12,12 +12,9 @@
  * Best-effort: any failure falls back to whatever the text layer produced.
  */
 
-import { extractPdf as defaultExtractPdf, type PdfRouterDeps } from "@/lib/ocr/pdf-router"
-import { createPdfLoader } from "@/lib/ocr/pdf-loader"
-import { buildOcrDeps } from "@/lib/ocr/deps"
-import { getSettings } from "@/lib/db/settings"
-import { DEFAULT_OCR_SETTINGS, type OcrResult } from "@/types/ocr"
-import type { PdfRouterInput } from "@/lib/ocr/pdf-router"
+import type { PdfRouterDeps, PdfRouterInput } from "@cognia/ocr/pdf-router"
+import { loadPort } from "@/lib/modules/ports"
+import type { OcrResult } from "@/types/ocr"
 import { buildDocumentStructure } from "@cognia/document/document-structure"
 import type { DocumentPageRange } from "@cognia/document/types"
 import type { ParsedSource, RawSource } from "./parse"
@@ -117,22 +114,21 @@ export async function maybeTwinPdfOcrWithProvenance(
 
 /**
  * Production wrapper: load OCR settings, build the real router deps (pdfjs
- * loader + keyring-backed extract deps), and run the PDF OCR fallback.
+ * loader + keyring-backed extract deps), and run the PDF OCR fallback, all
+ * through the `ocr` port (ADR-0250 §14). A host without OCR keeps the text
+ * layer.
  */
 export async function runTwinPdfOcrWithProvenance(
   raw: RawSource,
   parsed: ParsedSource
 ): ReturnType<typeof maybeTwinPdfOcrWithProvenance> {
-  let settings = DEFAULT_OCR_SETTINGS
-  try {
-    settings = (await getSettings()).ocrSettings ?? DEFAULT_OCR_SETTINGS
-  } catch {
-    // Dexie unavailable — fall back to defaults.
-  }
-  const extractDeps = buildOcrDeps({ settings })
+  const ocr = await loadPort("ocr")
+  if (!ocr) return null
+  // Dexie unavailable reads as the defaults.
+  const settings = await ocr.loadSettings()
   return maybeTwinPdfOcrWithProvenance(raw, parsed, {
-    extractPdf: defaultExtractPdf,
-    buildPdfRouterDeps: () => ({ loadPdf: createPdfLoader(), extractDeps, settings }),
+    extractPdf: ocr.extractPdf,
+    buildPdfRouterDeps: () => ocr.pdfDeps({ settings }),
   })
 }
 

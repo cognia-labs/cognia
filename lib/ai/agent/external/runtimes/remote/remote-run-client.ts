@@ -228,7 +228,7 @@ export async function stageRemoteRunAttachments(
 ): Promise<RemoteRunAttachment[]> {
   const [{ uploadSessionAttachment }, { decodeDataUrl }] = await Promise.all([
     import("@/lib/companion/attachment-upload-client"),
-    import("@/lib/ocr/image-prep"),
+    import("@/lib/utils/image-bytes"),
   ])
   if (images.length > REMOTE_RUN_MAX_ATTACHMENTS) {
     throw new Error(`A remote turn takes at most ${REMOTE_RUN_MAX_ATTACHMENTS} images`)

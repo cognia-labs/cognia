@@ -13,10 +13,9 @@
  * model.
  */
 
+import { OcrError } from "@cognia/ocr/errors"
+import { loadPort } from "@/lib/modules/ports"
 import { desktop, type CallContext } from "./client"
-import { extract as defaultExtract, type ExtractDeps } from "@/lib/ocr"
-import { buildOcrDeps } from "@/lib/ocr/deps"
-import { OcrError } from "@/lib/ocr/errors"
 import type { ImageFormat, Screenshot, ScreenshotOpts } from "./types"
 import type { OcrInput, OcrResult } from "@/types/ocr"
 
@@ -46,8 +45,18 @@ export interface OcrScreenDeps {
     opts: ScreenshotOpts,
     ctx: CallContext
   ) => Promise<Pick<Screenshot, "bytes" | "format">>
-  extract: (input: OcrInput, deps: ExtractDeps) => Promise<OcrResult>
-  ocrDeps: ExtractDeps
+  extract: (input: OcrInput) => Promise<OcrResult>
+}
+
+/**
+ * Read an image through the `ocr` port (ADR-0250 §14) with the host's deps at
+ * the default settings. A host without OCR fails with a typed
+ * `unsupported_shell` error.
+ */
+export async function extractWithOcrPort(input: OcrInput): Promise<OcrResult> {
+  const ocr = await loadPort("ocr")
+  if (!ocr) throw new OcrError("unsupported_shell", "ocr", "OCR is not available on this host")
+  return ocr.extract(input)
 }
 
 /** DI core — capture then OCR. */
@@ -63,13 +72,10 @@ export async function ocrScreenWith(
   }
   const mimeType = mimeForFormat(shot.format)
   try {
-    return await deps.extract(
-      {
-        source: { kind: "data-url", dataUrl: `data:${mimeType};base64,${shot.bytes}`, mimeType },
-        languages: args.languages,
-      },
-      deps.ocrDeps
-    )
+    return await deps.extract({
+      source: { kind: "data-url", dataUrl: `data:${mimeType};base64,${shot.bytes}`, mimeType },
+      languages: args.languages,
+    })
   } catch (err) {
     rethrowPhase("extract", err)
   }
@@ -86,8 +92,7 @@ export async function ocrScreen(
   return ocrScreenWith(
     {
       screenshot: (opts, ctx) => desktop.screenshot(opts, ctx),
-      extract: defaultExtract,
-      ocrDeps: buildOcrDeps(),
+      extract: extractWithOcrPort,
     },
     args
   )

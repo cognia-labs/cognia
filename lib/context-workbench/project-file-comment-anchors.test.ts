@@ -1,4 +1,4 @@
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import {
   createProjectFileAnchor,
   resolveProjectFileAnchor,

@@ -6,6 +6,9 @@ import { DEFAULT_OCR_SETTINGS, type OcrInput, type OcrProvider, type OcrResult }
 import { OcrError } from "@/lib/ocr/errors"
 import type { ExtractDeps } from "@/lib/ocr/index"
 
+const mockBuildOcrDeps = jest.fn()
+jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: () => mockBuildOcrDeps() }))
+
 function makeProvider(
   overrides: Partial<OcrProvider> & {
     impl?: () => Promise<OcrResult>
@@ -104,6 +107,17 @@ describe("useOcr", () => {
     })
     await waitFor(() => expect(result.current.status).toBe("error"))
     expect(result.current.error?.code).toBe("provider_failed")
+  })
+
+  it("extracts with the host's deps when none are given", async () => {
+    mockBuildOcrDeps.mockReturnValue(makeDeps(makeProvider({ id: "host" })))
+    const { result } = renderHook(() => useOcr())
+    await act(async () => {
+      await result.current.run(input)
+    })
+    await waitFor(() => expect(result.current.status).toBe("success"))
+    expect(result.current.result?.providerId).toBe("host")
+    expect(mockBuildOcrDeps).toHaveBeenCalledTimes(1)
   })
 
   it("reset returns the hook to idle", async () => {

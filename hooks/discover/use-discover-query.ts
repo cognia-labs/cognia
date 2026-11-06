@@ -53,7 +53,7 @@ import {
   listRegisteredIntegrationEntries,
   subscribeIntegrationRegistry,
 } from "@/lib/integrations/registry"
-import { getSharedOcrRegistry } from "@/lib/ocr/registry"
+import { usePort } from "@/hooks/modules/use-port"
 import { listCopilotTemplates } from "@/lib/workflow/copilot-templates"
 import type { McpPreset } from "@/lib/claude/mcp-presets"
 import { listMcpPresetCatalog } from "@/lib/mcp/preset-catalog"
@@ -390,6 +390,10 @@ export function useDiscoverQuery(
     [category]
   )
 
+  // The OCR providers come from the `ocr` port (ADR-0250 §14): `undefined`
+  // while it loads, `null` where no module provides OCR.
+  const ocrPort = usePort("ocr")
+
   const items = useMemo<DiscoverItem[]>(() => {
     // Not dead code: `listSlashCommands()` below reads a mutable registry, so
     // this version counter must participate in the memo to force
@@ -514,9 +518,9 @@ export function useDiscoverQuery(
           return arr.map<DiscoverItem>((data) => ({ kind: "integration", id: data.id, data }))
         }
         case "ocrProviders": {
-          let arr = getSharedOcrRegistry()
-            .list()
-            .filter((p) => matchesQuery(p.label, trimmed) || matchesQuery(p.category, trimmed))
+          let arr = (ocrPort?.providers() ?? []).filter(
+            (p) => matchesQuery(p.label, trimmed) || matchesQuery(p.category, trimmed)
+          )
           if (filter === "builtin") arr = arr.filter((p) => p.category === "local")
           arr.sort((a, b) => a.label.localeCompare(b.label))
           return arr.map<DiscoverItem>((data) => ({ kind: "ocrProvider", id: data.id, data }))
@@ -663,9 +667,11 @@ export function useDiscoverQuery(
               id: data.id,
               data,
             })),
-            ...getSharedOcrRegistry()
-              .list()
-              .map<DiscoverItem>((data) => ({ kind: "ocrProvider", id: data.id, data })),
+            ...(ocrPort?.providers() ?? []).map<DiscoverItem>((data) => ({
+              kind: "ocrProvider",
+              id: data.id,
+              data,
+            })),
             ...listCopilotTemplates().map<DiscoverItem>((data) => ({
               kind: "workflowTemplate",
               id: data.id,
@@ -741,6 +747,7 @@ export function useDiscoverQuery(
     filter,
     favoriteKeys,
     catalogTeamTemplates,
+    ocrPort,
   ])
 
   // `useLiveQuery` returns `undefined` until its first read resolves. Treat
@@ -758,6 +765,8 @@ export function useDiscoverQuery(
         return pluginsRaw === undefined
       case "mcpTools":
         return mcpServersRaw === undefined
+      case "ocrProviders":
+        return ocrPort === undefined
       case "externalServices":
         return serviceConnectionsRaw === undefined
       case "twinIngest":
@@ -775,13 +784,13 @@ export function useDiscoverQuery(
           mcpServersRaw === undefined ||
           serviceConnectionsRaw === undefined ||
           twinSourcesRaw === undefined ||
-          twinDraftsRaw === undefined
+          twinDraftsRaw === undefined ||
+          ocrPort === undefined
         )
       // Synchronous in-memory registries.
       case "connectors":
       case "docsProviders":
       case "integrations":
-      case "ocrProviders":
       case "workflowTemplates":
       default:
         return false

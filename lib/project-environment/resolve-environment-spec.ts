@@ -30,7 +30,7 @@
  * refuses instead of running an image the repository did not ask for.
  */
 
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import type { ApprovedEnvironmentDeclaration } from "@/lib/db/trusted-workspaces"
 import type { ProjectEnvironmentPolicy, ProjectRuntimeSelection } from "@/types/project-environment"
 import type {

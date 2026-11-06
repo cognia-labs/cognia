@@ -23,7 +23,7 @@ import type {
 } from "@/lib/db/files-library-types"
 import { isLibraryItemKept } from "@/lib/db/files-library-types"
 import { LIBRARY_REF_SESSION_ID } from "@/lib/db/message-media-refs"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import type {
   Transport,
   TransportBinaryResource,

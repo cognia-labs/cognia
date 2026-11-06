@@ -80,8 +80,11 @@ jest.mock("@/lib/integrations/registry", () => ({
   subscribeIntegrationRegistry: () => () => {},
   getIntegrationRegistryRevision: () => 0,
 }))
-jest.mock("@/lib/ocr/registry", () => ({
-  getSharedOcrRegistry: jest.fn(() => ({ list: () => [] })),
+const ocrProvidersMock = jest.fn((): unknown[] => [])
+const providingOcrPort = { providers: () => ocrProvidersMock() }
+let mockOcrPort: typeof providingOcrPort | null | undefined = providingOcrPort
+jest.mock("@/hooks/modules/use-port", () => ({
+  usePort: (id: string) => (id === "ocr" ? mockOcrPort : null),
 }))
 jest.mock("@/lib/workflow/copilot-templates", () => ({
   listCopilotTemplates: jest.fn(() => []),
@@ -262,6 +265,8 @@ const flush = async () => {
 }
 
 beforeEach(() => {
+  mockOcrPort = providingOcrPort
+  ocrProvidersMock.mockReset().mockReturnValue([])
   listCharactersMock.mockReset()
   listTeamsMock.mockReset()
   listSkillsMock.mockReset()
@@ -413,24 +418,30 @@ describe("useDiscoverQuery", () => {
     expect(result.current.loading).toBe(false)
   })
 
-  it("ocrProvider category reads from getSharedOcrRegistry().list()", async () => {
-    const registryMock = jest.requireMock("@/lib/ocr/registry") as {
-      getSharedOcrRegistry: jest.Mock
-    }
-    registryMock.getSharedOcrRegistry.mockReturnValueOnce({
-      list: () => [
-        { id: "tesseract", label: "Tesseract", category: "local", credentialKeys: [] },
-        {
-          id: "anthropic-vision",
-          label: "Claude Vision",
-          category: "llm-vision",
-          credentialKeys: ["anthropicApiKey"],
-        },
-      ],
-    })
+  it("ocrProvider category reads the providers off the ocr port", async () => {
+    ocrProvidersMock.mockReturnValue([
+      { id: "tesseract", label: "Tesseract", category: "local", credentialKeys: [] },
+      {
+        id: "anthropic-vision",
+        label: "Claude Vision",
+        category: "llm-vision",
+        credentialKeys: ["anthropicApiKey"],
+      },
+    ])
     const { result } = renderHook(() => useDiscoverQuery("ocrProviders", ""))
     expect(result.current.items.map((i) => i.id)).toEqual(["anthropic-vision", "tesseract"])
     expect(result.current.loading).toBe(false)
+  })
+
+  it("ocrProvider category is loading while the ocr port loads, and empty without one", () => {
+    mockOcrPort = undefined
+    const loadingView = renderHook(() => useDiscoverQuery("ocrProviders", ""))
+    expect(loadingView.result.current.items).toEqual([])
+    expect(loadingView.result.current.loading).toBe(true)
+    mockOcrPort = null
+    const absentView = renderHook(() => useDiscoverQuery("ocrProviders", ""))
+    expect(absentView.result.current.items).toEqual([])
+    expect(absentView.result.current.loading).toBe(false)
   })
 
   it("workflowTemplates category reads from listCopilotTemplates()", async () => {

@@ -11,12 +11,11 @@
  * persisting there.
  */
 
+import type { ExtractDeps } from "@cognia/ocr"
 import { blocksToScreenMatches } from "@/lib/automation/ocr-click"
 import type { Screenshot } from "@/lib/automation/types"
-import { extract as defaultExtract, type ExtractDeps } from "@/lib/ocr"
-import { listProviderCandidates } from "@/lib/ocr/auto-router"
-import { buildOcrDeps } from "@/lib/ocr/deps"
-import { loadUserOcrSettings } from "@/lib/ocr/user-settings"
+import { loadPort } from "@/lib/modules/ports"
+import type { OcrPort } from "@/types/modules/ports/ocr"
 import type { OcrInput, OcrProvider, OcrResult } from "@/types/ocr"
 import type { ScreenLine } from "./bubble-grouper"
 
@@ -33,20 +32,20 @@ export interface LocalOcrDeps {
   extract: (input: OcrInput, deps: ExtractDeps) => Promise<OcrResult>
 }
 
+/** The `ocr` port (ADR-0250 §14); a host without OCR has no local engine either. */
+async function ocrPort(): Promise<OcrPort> {
+  const ocr = await loadPort("ocr")
+  if (!ocr) throw new LocalOcrUnavailableError()
+  return ocr
+}
+
 const defaultDeps: LocalOcrDeps = {
-  ocrDeps: async () => buildOcrDeps({ settings: await loadUserOcrSettings() }),
-  candidates: (deps) =>
-    listProviderCandidates({
-      registry: deps.registry,
-      settings: { ...deps.settings, cloudFallbackEnabled: false },
-      platform: deps.platform,
-      osTag: deps.osTag,
-      localPreference: deps.settings.platformOverrides,
-      runtimeStatus: deps.runtimeStatus,
-      localReadiness: deps.localReadiness,
-      hasCredentials: deps.hasCredentials,
-    }),
-  extract: defaultExtract,
+  ocrDeps: async () => {
+    const ocr = await ocrPort()
+    return ocr.deps({ settings: await ocr.loadSettings() })
+  },
+  candidates: async (deps) => (await ocrPort()).candidates(deps, { cloudFallback: false }),
+  extract: async (input, deps) => (await ocrPort()).extract(input, deps),
 }
 
 export interface WindowText {

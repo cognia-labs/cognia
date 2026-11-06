@@ -2,10 +2,10 @@
   "version": 1,
   "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
   "cycles": {
-    "largestLibComponent": 167
+    "largestLibComponent": 166
   },
   "size": {
-    "modules": 135,
+    "modules": 136,
     "experimental": 0,
     "tables": 401,
     "unclaimedTables": 370,
@@ -598,9 +598,7 @@
     "lib/db/seed.ts -> workflow",
     "lib/db/session-assets.ts -> chat",
     "lib/db/session-assets.ts -> memory",
-    "lib/db/session-assets.ts -> ocr",
     "lib/db/session-attachment-uploads.ts -> chat",
-    "lib/db/session-attachment-uploads.ts -> ocr",
     "lib/db/session-folders.ts -> chat",
     "lib/db/session-list.ts -> account-sync",
     "lib/db/session-state.ts -> sync",

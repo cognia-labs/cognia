@@ -373,7 +373,8 @@
       "class": "foundation"
     },
     "icons": {
-      "class": "module"
+      "class": "module",
+      "api": ["components/icons/brand-icon.tsx"]
     },
     "identity": {
       "class": "kernel"
@@ -496,10 +497,6 @@
     },
     "observability": {
       "class": "foundation"
-    },
-    "ocr": {
-      "class": "kernel",
-      "note": "The registry and auto-routing are the `ocr` port; local engines split out as a module, cloud adapters as plugins."
     },
     "onboarding": {
       "class": "shell"
@@ -668,7 +665,8 @@
         "components/settings/common/settings-master-detail.tsx",
         "components/settings/common/settings-panel-nav.tsx",
         "components/settings/common/settings-section.tsx",
-        "components/settings/common/unsaved-bar.tsx"
+        "components/settings/common/unsaved-bar.tsx",
+        "components/settings/provider/dynamic-parameter-form.tsx"
       ],
       "note": "`api` is the section kit a module's settings section is built with (ADR-0250 §14)."
     },

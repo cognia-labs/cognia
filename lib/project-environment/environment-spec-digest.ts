@@ -10,7 +10,7 @@
  * `protocol/environment-spec-fixtures.json` pins agreement on both sides.
  */
 
-import { sha256String } from "@/lib/ocr/hash"
+import { sha256String } from "@/lib/utils/hash"
 import { canonicalizeJson } from "@/lib/plugin/character-pack/canonical-json"
 import type { EnvironmentSpec } from "@/types/sandbox/environment-spec"
 

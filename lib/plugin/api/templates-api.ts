@@ -9,7 +9,7 @@ import {
   type TemplateDefinitionEnvelope,
 } from "@/lib/templates/contracts"
 import { validateTemplatePackageManifest } from "@/lib/templates/package"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { sha256Hex } from "@/lib/share/hash"
 import type { TemplateService } from "@/lib/templates/service"
 import type { PluginAgentTeamTemplateDef } from "@/types/plugin/plugin-agent-team-template"

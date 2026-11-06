@@ -16,7 +16,7 @@ import {
   queueSiteOperation,
 } from "@/lib/db/sites"
 import { exists, readBinaryFile, readTextFile } from "@/lib/file/file-operations"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { sha256Hex } from "@/lib/share/hash"
 import { packageSiteArtifact, type SiteArtifactFile } from "./artifact-package"
 import { buildLogRowFrom, buildPhaseMessage } from "./build-log"

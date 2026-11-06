@@ -1238,15 +1238,6 @@
       "evidence": "1855f0e62067dfc6"
     },
     {
-      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#loadPort@lib/modules/ports.ts",
-      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
-      "symbol": "loadPort",
-      "module": "lib/modules/ports.ts",
-      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
-      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:387 (lib/modules/ports.ts): loadPort resolves the speech port on demand to read a selection aloud or stop it when the toolbar asks (ADR-0250 M3); it starts no runtime and owns no unregistered runtime effect.",
-      "evidence": "97ea6881d8146fb5"
-    },
-    {
       "key": "components/providers/initializers/tray-panel-initializer.tsx#getCommand@lib/plugin/commands/registry.ts",
       "initializer": "components/providers/initializers/tray-panel-initializer.tsx",
       "symbol": "getCommand",

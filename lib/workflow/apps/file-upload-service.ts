@@ -7,7 +7,7 @@ import {
   resolveAttachmentRef,
   uploadRef,
 } from "@/lib/db/session-attachment-uploads"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 
 const WORKFLOW_APP_MAX_FILE_BYTES = 10 * 1024 * 1024
 const WORKFLOW_APP_MAX_STAGED_FILES = 20

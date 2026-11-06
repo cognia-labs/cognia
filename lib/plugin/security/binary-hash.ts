@@ -12,7 +12,7 @@
  *   • `readBinaryFile` (`lib/file/file-operations.ts`) — `plugin-fs` under
  *     Tauri; the plugin install root is covered by the appdata-read-recursive
  *     capability.
- *   • `sha256Bytes` (`lib/ocr/hash.ts`) — Web Crypto `subtle.digest`, already
+ *   • `sha256Bytes` (`lib/utils/hash.ts`) — Web Crypto `subtle.digest`, already
  *     polyfilled under Jest.
  */
 
@@ -28,7 +28,7 @@ export async function hashBinaryFile(path: string): Promise<string | null> {
   try {
     const [{ readBinaryFile }, { sha256Bytes }] = await Promise.all([
       import("@/lib/file/file-operations"),
-      import("@/lib/ocr/hash"),
+      import("@/lib/utils/hash"),
     ])
     const bytes: unknown = await readBinaryFile(path)
     // A read that resolves with something other than bytes (an undefined

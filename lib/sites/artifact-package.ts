@@ -1,7 +1,7 @@
 import JSZip from "jszip"
 
 import { createDir, writeBinaryFile } from "@/lib/file/file-operations"
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 
 const ARTIFACT_MANIFEST = ".cognia-artifact.json"
 

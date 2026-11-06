@@ -1,4 +1,4 @@
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { decodeBase64, encodeBase64 } from "@/lib/share/encoding"
 import { __resetManagementChannelsForTests } from "@/lib/remote-host/management-channel"
 import type { CogpackSigner } from "@/lib/plugin/cogpack/package"

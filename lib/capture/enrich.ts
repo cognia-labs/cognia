@@ -1,6 +1,6 @@
 /**
  * Capture enrichment — URL → clean markdown (Phase-1 web reader), image → OCR
- * text (`lib/ocr`). Deps are injected so it unit-tests without network/OCR.
+ * text (the `ocr` port). Deps are injected so it unit-tests without network/OCR.
  */
 
 import type { CaptureCandidate, CaptureEnrichment } from "@/types/capture"
@@ -52,14 +52,13 @@ export function buildEnrichDeps(options: BuildEnrichDepsOptions = {}): EnrichDep
       return { markdown: r.text, ...(r.title ? { title: r.title } : {}) }
     },
     ocrImage: async (dataUrl) => {
-      const { extract } = await import("@/lib/ocr")
-      const { buildOcrDeps } = await import("@/lib/ocr/deps")
+      // A host without OCR captures the image without its text.
+      const { loadPort } = await import("@/lib/modules/ports")
+      const ocr = await loadPort("ocr")
+      if (!ocr) return null
       const mimeType = dataUrl.slice(5, dataUrl.indexOf(";")) || "image/png"
-      const res = (await extract(
-        { source: { kind: "data-url", dataUrl, mimeType } },
-        buildOcrDeps()
-      )) as { text?: string; markdown?: string }
-      const text = res.markdown?.trim() || res.text?.trim() || ""
+      const res = await ocr.extract({ source: { kind: "data-url", dataUrl, mimeType } })
+      const text = res.combinedMarkdown.trim() || res.combinedText.trim()
       return text ? { text } : null
     },
   }

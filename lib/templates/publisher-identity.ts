@@ -34,7 +34,7 @@
  * a user TRUSTS (`lib/db/trusted-publishers.ts`) is a different, public thing.
  */
 
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { decodeBase64, encodeBase64 } from "@/lib/share/encoding"
 import { createKeyringStore, type KeyringStore } from "@/lib/credentials/keyring-store"
 import type { TemplatePackageSigner } from "./package"

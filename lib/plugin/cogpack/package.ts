@@ -9,7 +9,7 @@
  * `lib/packaging/signed-zip.ts`.
  */
 
-import { sha256Bytes } from "@/lib/ocr/hash"
+import { sha256Bytes } from "@/lib/utils/hash"
 import { PackageFormatError } from "@/lib/packaging/archive-path"
 import { encodeBase64 } from "@/lib/share/encoding"
 import {

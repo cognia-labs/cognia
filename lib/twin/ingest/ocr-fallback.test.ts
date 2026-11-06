@@ -1,11 +1,15 @@
 const extractPdfMock = jest.fn()
-const getSettingsMock = jest.fn()
-jest.mock("@/lib/ocr/pdf-router", () => ({
-  extractPdf: (...a: unknown[]) => extractPdfMock(...a),
+let mockOcrPort: Record<string, unknown> | null = null
+const pdfDepsMock = jest.fn((options: unknown) => ({ loadPdf: jest.fn(), built: options }))
+const loadSettingsMock = jest.fn()
+const providingOcrPort = {
+  extractPdf: (...args: unknown[]) => extractPdfMock(...args),
+  pdfDeps: (options: unknown) => pdfDepsMock(options),
+  loadSettings: () => loadSettingsMock(),
+}
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: async (id: string) => (id === "ocr" ? mockOcrPort : null),
 }))
-jest.mock("@/lib/ocr/pdf-loader", () => ({ createPdfLoader: () => "fake-loader" }))
-jest.mock("@/lib/ocr/deps", () => ({ buildOcrDeps: () => ({ settings: {} }) }))
-jest.mock("@/lib/db/settings", () => ({ getSettings: () => getSettingsMock() }))
 
 import {
   maybeTwinPdfOcr,
@@ -102,19 +106,23 @@ describe("maybeTwinPdfOcr", () => {
 describe("runTwinPdfOcr (production wrapper)", () => {
   beforeEach(() => {
     extractPdfMock.mockReset().mockResolvedValue(ocrResult("FROM SETTINGS"))
-    getSettingsMock.mockReset().mockResolvedValue({ ocrSettings: undefined })
+    loadSettingsMock.mockReset().mockResolvedValue({ defaultProviderId: "auto" })
+    pdfDepsMock.mockClear()
+    mockOcrPort = providingOcrPort
   })
 
   it("runs the OCR fallback for a low-text PDF", async () => {
     const out = await runTwinPdfOcr(raw(), parsed(""))
     expect(out).toBe("FROM SETTINGS")
     expect(extractPdfMock).toHaveBeenCalledTimes(1)
+    expect(pdfDepsMock).toHaveBeenCalledWith({ settings: { defaultProviderId: "auto" } })
   })
 
-  it("defaults gracefully when settings can't be read", async () => {
-    getSettingsMock.mockRejectedValue(new Error("no dexie"))
+  it("keeps the text layer where no module provides OCR", async () => {
+    mockOcrPort = null
     const out = await runTwinPdfOcr(raw(), parsed(""))
-    expect(out).toBe("FROM SETTINGS")
+    expect(out).toBeNull()
+    expect(extractPdfMock).not.toHaveBeenCalled()
   })
 })
 
