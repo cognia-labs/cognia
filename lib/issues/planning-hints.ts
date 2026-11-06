@@ -186,13 +186,3 @@ export function buildPlanningHints(
   }
   return hints
 }
-
-/** Does the hint carry anything a badge would print? */
-export function hasPlanningBadges(hint: IssuePlanningHint | undefined): boolean {
-  if (!hint) return false
-  return (
-    hint.blocked ||
-    hint.subIssues !== undefined ||
-    (hint.due !== "none" && hint.due !== "met" && hint.due !== "later")
-  )
-}

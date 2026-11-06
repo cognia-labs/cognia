@@ -7,7 +7,12 @@ import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
 import { appendIssueEvent, listIssueEvents } from "@/lib/db/issue-events"
 import { syncActorFor, type IssueActor } from "@/types/issues"
-import { listOpenSyncConflicts, listWorkspaceSyncConflicts, resolveSyncConflict } from "./conflicts"
+import { listWorkspaceSyncConflicts, resolveSyncConflict } from "./conflicts"
+
+/** One issue's open conflicts, through the workspace read the panel uses. */
+async function listOpenSyncConflicts(issueId: string) {
+  return (await listWorkspaceSyncConflicts("w1")).filter((conflict) => conflict.issueId === issueId)
+}
 
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
@@ -39,7 +44,7 @@ async function issueWithConflict(title = "Local") {
   return { issue, event }
 }
 
-describe("listOpenSyncConflicts", () => {
+describe("listWorkspaceSyncConflicts", () => {
   it("lists a conflict until a resolution names it", async () => {
     const { issue, event } = await issueWithConflict()
     expect(await listOpenSyncConflicts(issue.id)).toEqual([

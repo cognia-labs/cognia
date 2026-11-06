@@ -18,7 +18,6 @@ import type {
   IssuePullRequestCheckResult,
   IssueRun,
   IssueStatus,
-  IssueWakeupCondition,
   IssueWakeupEventKind,
   IssueWakeupEvidence,
   IssueWakeupMatch,
@@ -789,11 +788,6 @@ type UnlistedWakeupKind = Exclude<
 >
 const assertEveryKindListed: [UnlistedWakeupKind] extends [never] ? true : never = true
 void assertEveryKindListed
-
-/** Narrow a condition for display. */
-export function conditionTargetId(condition: IssueWakeupCondition | undefined): string | undefined {
-  return condition?.kind === "issue-finished" ? condition.issueId : undefined
-}
 
 /** What the board shows on a card about its wakeups. */
 export interface IssueWakeupCue {

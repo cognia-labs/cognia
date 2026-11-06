@@ -12,7 +12,7 @@ import { tombstoneAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-c
 import { captureIssueSyncSource, resolveIssueResourceSource } from "./sync/kept-copy-source"
 import {
   deleteGithubIssues,
-  getGithubIssue,
+  githubMirrorId,
   upsertGithubIssues,
 } from "@/lib/db/github-issue-mirror"
 import { toMirrorRow } from "@/lib/github/issues"
@@ -70,7 +70,6 @@ function setup(over: Partial<GithubEventRefreshDeps> = {}) {
     })),
     runRegistered: jest.fn(async () => undefined),
     requestSync: jest.fn(),
-    pendingKeys: () => [],
     removeFromMirror: jest.fn(deleteGithubIssues),
     departImport: jest.fn(tombstoneIssueSyncRefs),
     onError: jest.fn(),
@@ -118,21 +117,20 @@ it("two refresher instances share one runtime debounce for a webhook burst", asy
   const deps = {
     reconcileRegistrations: () => reconcileIssueSyncRegistrations(runtimeDeps),
     requestSync: requestExternalSync,
-    pendingKeys: pendingExternalSyncKeys,
   }
   const one = setup(deps).refresher
   const two = setup(deps).refresher
   await one.handle(event())
   await two.handle(event({ id: "d2", eventType: "issues.labeled" }))
   await one.handle(event({ id: "d3" }))
-  expect(one.pending()).toEqual(["acme/app"])
+  expect(pendingExternalSyncKeys()).toEqual(["github-mirror:ip1:acme/app"])
   expect(request).not.toHaveBeenCalled()
   await new Promise<void>((resolve) => setTimeout(resolve, 2100))
   for (let i = 0; i < 200 && pendingExternalSyncKeys().length; i++) {
     await new Promise<void>((resolve) => setTimeout(resolve, 1))
   }
   expect(request).toHaveBeenCalledTimes(1)
-  expect(one.pending()).toEqual([])
+  expect(pendingExternalSyncKeys()).toEqual([])
 })
 
 it.each(["issues.transferred", "issues.deleted"])(
@@ -159,7 +157,7 @@ it.each(["issues.transferred", "issues.deleted"])(
     })
     await refresher.handle(event({ eventType }))
     expect(deps.removeFromMirror).toHaveBeenCalledWith("Acme/App", [7])
-    expect(await getGithubIssue("Acme/App", 7)).toBeUndefined()
+    expect(await getDb().githubIssueMirror.get(githubMirrorId("Acme/App", 7))).toBeUndefined()
     expect(deps.requestSync).toHaveBeenCalledWith("github-mirror:ip1:acme/app", "push")
   }
 )
@@ -475,13 +473,6 @@ it("reports account, registration and departure failures without throwing", asyn
     await expect(refresher.handle(event({ eventType: "issues.deleted" }))).resolves.toBeUndefined()
     expect(deps.onError).toHaveBeenCalledWith("acme/app", expect.any(Error))
   }
-})
-
-it("keeps the pending repository list", () => {
-  const { refresher } = setup({
-    pendingKeys: () => ["github-mirror:p1:acme/app", "issues:p2:acme/app", "unrelated"],
-  })
-  expect(refresher.pending()).toEqual(["acme/app"])
 })
 
 describe("refreshAfterWrite", () => {

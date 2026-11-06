@@ -1162,23 +1162,6 @@ export async function listIssuesByExternalKey(key: string): Promise<Issue[]> {
   return getDb().issues.where("externalKeys").equals(key).toArray()
 }
 
-/** Every local issue carrying a ref from `provider`, keyed by `externalId`. */
-export async function mapIssuesByExternalProvider(
-  provider: string,
-  projectId?: string
-): Promise<Map<string, Issue>> {
-  const db = getDb()
-  const rows = await db.issues.where("externalKeys").startsWith(`${provider}:`).distinct().toArray()
-  const out = new Map<string, Issue>()
-  for (const row of rows) {
-    if (projectId !== undefined && row.projectId !== projectId) continue
-    for (const ref of row.externalRefs ?? []) {
-      if (ref.provider === provider) out.set(ref.externalId, row)
-    }
-  }
-  return out
-}
-
 /**
  * Runtime-owned status write, used ONLY by the run bridge
  * (`lib/issues/run/registry.ts` and the boot repair beside it).

@@ -9,7 +9,6 @@ import {
   childIssues,
   dueState,
   DUE_SOON_WINDOW_MS,
-  hasPlanningBadges,
   openBlockers,
   wouldCreateParentLoop,
 } from "./planning-hints"
@@ -104,29 +103,6 @@ describe("buildPlanningHints", () => {
     const hint = buildPlanningHints([github], new Map(), NOW).get("github:gh")!
     expect(hint.blocked).toBe(false)
     expect(hint.due).toBe("none")
-  })
-})
-
-describe("hasPlanningBadges", () => {
-  it("is false for a quiet hint and for no hint", () => {
-    expect(hasPlanningBadges(undefined)).toBe(false)
-    expect(hasPlanningBadges({ blocked: false, blockerIdentifiers: [], due: "later" })).toBe(false)
-    expect(hasPlanningBadges({ blocked: false, blockerIdentifiers: [], due: "met" })).toBe(false)
-  })
-
-  it("is true when blocked, due soon, or a parent", () => {
-    expect(hasPlanningBadges({ blocked: true, blockerIdentifiers: ["A-1"], due: "none" })).toBe(
-      true
-    )
-    expect(hasPlanningBadges({ blocked: false, blockerIdentifiers: [], due: "soon" })).toBe(true)
-    expect(
-      hasPlanningBadges({
-        blocked: false,
-        blockerIdentifiers: [],
-        due: "none",
-        subIssues: { total: 2, done: 0 },
-      })
-    ).toBe(true)
   })
 })
 

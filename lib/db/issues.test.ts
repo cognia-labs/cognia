@@ -19,7 +19,6 @@ import {
   addIssueLabel,
   getIssueByExternalKey,
   linkIssueExternal,
-  mapIssuesByExternalProvider,
   removeIssueBlocker,
   setIssueCycle,
   setIssueDueDate,
@@ -922,9 +921,6 @@ describe("external refs (v223)", () => {
     expect(row.externalKeys).toEqual(["lark-task:g1"])
     expect((await getIssueByExternalKey("lark-task", "g1"))!.id).toBe(issue.id)
     expect((await kindsOf(issue.id)).filter((k) => k === "external_linked")).toHaveLength(1)
-    const byProvider = await mapIssuesByExternalProvider("lark-task", "w1")
-    expect([...byProvider.keys()]).toEqual(["g1"])
-    expect((await mapIssuesByExternalProvider("lark-task", "w9")).size).toBe(0)
   })
 
   it("keeps githubRef as the denormalised github entry, both ways", async () => {

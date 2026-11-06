@@ -1,6 +1,5 @@
 import {
   deriveProjectKey,
-  extractIssueIdentifiers,
   isCanonicalIssueIdentifier,
   formatIssueIdentifier,
   isValidProjectKey,
@@ -115,21 +114,6 @@ describe("formatIssueIdentifier / parseIssueIdentifier", () => {
     ["MERCURY-2", "key too long"],
   ])("rejects %s (%s)", (input) => {
     expect(parseIssueIdentifier(input)).toBeUndefined()
-  })
-})
-
-describe("extractIssueIdentifiers", () => {
-  it("finds every distinct identifier in order of appearance", () => {
-    const text = "fix MERC-2 then COG-11; MERC-2 again"
-    expect(extractIssueIdentifiers(text)).toEqual(["MERC-2", "COG-11"])
-  })
-
-  it("returns an empty list when there is nothing to find", () => {
-    expect(extractIssueIdentifiers("no identifiers here")).toEqual([])
-  })
-
-  it("does not match GitHub refs", () => {
-    expect(extractIssueIdentifiers("see owner/repo#123")).toEqual([])
   })
 })
 

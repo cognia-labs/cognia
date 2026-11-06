@@ -1157,6 +1157,15 @@
       "evidence": "545138c58c3546c4"
     },
     {
+      "key": "components/providers/initializers/issue-tracker-initializer.tsx#installIssueInlineLinks@lib/issues/inline-links.ts",
+      "initializer": "components/providers/initializers/issue-tracker-initializer.tsx",
+      "symbol": "installIssueInlineLinks",
+      "module": "lib/issues/inline-links.ts",
+      "owner": "components/providers/initializers/issue-tracker-initializer.tsx",
+      "reason": "components/providers/initializers/issue-tracker-initializer.tsx:85 (lib/issues/inline-links.ts): registers the issue-identifier kind with the chat renderer's inline-link registry for the workspace on screen; it only changes how rendered text links, so a headless brain that renders nothing needs no equivalent, and the issue tracker's data runtime (lib/headless/runtimes/issue-tracker.ts) is unaffected.",
+      "evidence": "4209be192bd92509"
+    },
+    {
       "key": "components/providers/initializers/knowledge-agent-boot-initializers.tsx#markBootCapabilityReady@lib/boot/capabilities.ts",
       "initializer": "components/providers/initializers/knowledge-agent-boot-initializers.tsx",
       "symbol": "markBootCapabilityReady",

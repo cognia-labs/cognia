@@ -120,17 +120,6 @@ export async function listIssueCycles(query: ListIssueCyclesQuery = {}): Promise
     .sort(compareIssueCycles)
 }
 
-/** Find a cycle by one of its external refs (`provider:externalId`). */
-export async function getIssueCycleByExternalKey(
-  provider: string,
-  externalId: string
-): Promise<IssueCycle | undefined> {
-  return getDb()
-    .issueCycles.where("externalKeys")
-    .equals(externalKeyOf({ provider, externalId }))
-    .first()
-}
-
 export interface IssueCycleUpdatePatch {
   name?: string
   /** `null` clears. */

@@ -26,11 +26,6 @@ const EVENT_FIELD: Partial<Record<IssueEventKind, IssueSyncField>> = {
   cycle_changed: "cycle",
 }
 
-/** The synced field an event kind edits, if any. */
-export function syncFieldOfEvent(kind: IssueEventKind): IssueSyncField | undefined {
-  return EVENT_FIELD[kind]
-}
-
 /**
  * Latest LOCAL change per field strictly after `since`. A `created` event is
  * not a field change: a fresh local issue has nothing to argue with yet.

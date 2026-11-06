@@ -125,23 +125,6 @@ export async function appendIssueEvent(input: AppendIssueEventInput): Promise<Is
   return event
 }
 
-/** Append several entries in one write (a multi-field edit produces several). */
-export async function appendIssueEvents(
-  inputs: readonly AppendIssueEventInput[]
-): Promise<IssueEvent[]> {
-  if (inputs.length === 0) return []
-  const events = inputs.map((input) => ({
-    id: crypto.randomUUID(),
-    issueId: input.issueId,
-    kind: input.payload.kind,
-    ts: nextEventTs(input.ts),
-    payload: input.payload,
-  }))
-  await getDb().issueEvents.bulkAdd(events)
-  publishAfterCommit(events)
-  return events
-}
-
 export interface ListIssueEventsQuery {
   issueId: string
   /** Newest first when true (the detail panel's default). */

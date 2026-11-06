@@ -25,6 +25,7 @@ import type { SeededWorkflowKind } from "./workflow-fixtures"
 import type { ChatPerfMediaOptions } from "./chat-perf-fixtures"
 import type { StagedConversation, StagedConversationScript } from "./demo-stage-seed"
 import type { ExecutionRun, RunEvent } from "@/types/execution/run"
+import type { E2EIssueFixtures } from "./issue-fixtures"
 
 export type MockBaseUrls = {
   anthropic?: string
@@ -188,6 +189,11 @@ declare global {
      * flow without depending on cloud keys or native binaries.
      */
     __cogniaE2EOcrMock?: (input: unknown) => unknown
+    /**
+     * Issue state-flow fixtures (`./issue-fixtures.ts`): a fake engine behind
+     * the agent-task run adapter, and agent tasks for the federated board.
+     */
+    __cogniaE2EIssues?: E2EIssueFixtures
     __cogniaSaveCompanionConfig?: (config: {
       baseUrl: string
       devicePrivateKeyJwk: JsonWebKey
@@ -603,6 +609,11 @@ export function ExposeTestGlobals(): null {
           })
           return c.id
         }
+
+        const { useProjectStore } = await import("@/stores/project/project-store")
+        window.__cogniaE2EIssues = (await import("./issue-fixtures")).createE2EIssueFixtures({
+          activeWorkspaceId: () => useProjectStore.getState().activeProjectId,
+        })
 
         window.__cogniaSeedConversation = async (draft) => {
           const { createSession } = await import("@/lib/db/sessions")
@@ -1188,6 +1199,7 @@ export function ExposeTestGlobals(): null {
         delete window.__cogniaResetSubscriptionState
         delete window.__cogniaE2ECodexDiscovery
         delete window.__cogniaE2EOcrMock
+        delete window.__cogniaE2EIssues
         window.__cogniaE2EWebRtc?.close()
         delete window.__cogniaE2EWebRtc
         delete window.__cogniaE2EWebRtcEvents

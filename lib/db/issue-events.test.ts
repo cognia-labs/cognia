@@ -9,7 +9,6 @@ import { getDb } from "./schema"
 import {
   __resetIssueEventClockForTesting,
   appendIssueEvent,
-  appendIssueEvents,
   deleteIssueEvents,
   deleteIssueEventsForIssues,
   listIssueComments,
@@ -52,11 +51,14 @@ describe("appendIssueEvent", () => {
   })
 })
 
-describe("appendIssueEvents", () => {
-  it("writes nothing for an empty batch", async () => {
-    expect(await appendIssueEvents([])).toEqual([])
-  })
+/** Sequential appends, the way a multi-field edit writes them. */
+async function appendIssueEvents(inputs: Parameters<typeof appendIssueEvent>[0][]) {
+  const events: IssueEvent[] = []
+  for (const input of inputs) events.push(await appendIssueEvent(input))
+  return events
+}
 
+describe("appendIssueEvent timestamps", () => {
   it("assigns strictly increasing timestamps so one logical edit keeps a stable order", async () => {
     // Millisecond wall-clock resolution is not enough: equal `ts` values make
     // the [issueId+ts] index fall back to random-UUID primary-key order, which

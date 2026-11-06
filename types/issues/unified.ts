@@ -192,6 +192,10 @@ export interface IssueSourceAdapter {
   readonly label: string
   list(query: IssueSourceQuery): Promise<UnifiedIssueItem[]>
   subscribe(query: IssueSourceQuery, observer: IssueSourceObserver): () => void
+  /**
+   * Write to a federated source's own backend. Absent on read-only sources
+   * and on the local source, whose writes go through `lib/issues/service.ts`.
+   */
   mutate?(sourceId: string, action: IssueSourceMutation, by: IssueActor): Promise<void>
 }
 

@@ -175,7 +175,8 @@ describe("IssueFilterBar", () => {
       const props = baseProps()
       render(<IssueFilterBar {...props} />)
       await user.click(screen.getByTestId("issue-toolbar-display"))
-      await user.click(await screen.findByText("groupBy.priority"))
+      // Group-by and sort both offer "Priority"; the test id names the group-by one.
+      await user.click(await screen.findByTestId("issue-group-by-priority"))
       expect(props.onGroupByChange).toHaveBeenCalledWith("priority")
     })
 

@@ -10,7 +10,7 @@
  */
 
 import { getDb } from "@/lib/db/schema"
-import { appendIssueEvent, listIssueEvents } from "@/lib/db/issue-events"
+import { appendIssueEvent } from "@/lib/db/issue-events"
 import type { Issue, IssueActor, IssueEvent, IssueSyncField } from "@/types/issues"
 import { applyRemoteField, type RemoteFieldValue } from "./apply"
 
@@ -37,12 +37,6 @@ function toOpenConflict(event: IssueEvent): OpenSyncConflict | null {
     localValue: event.payload.localValue,
     remoteValue: event.payload.remoteValue,
   }
-}
-
-/** Open conflicts of one issue, oldest first. */
-export async function listOpenSyncConflicts(issueId: string): Promise<OpenSyncConflict[]> {
-  const events = await listIssueEvents({ issueId })
-  return openFrom(events)
 }
 
 /** Open conflicts across every issue of a workspace, oldest first. */

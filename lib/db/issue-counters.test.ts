@@ -4,12 +4,7 @@
 
 import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
-import {
-  allocateIssueNumber,
-  deleteIssueCounter,
-  ensureIssueNumberAbove,
-  peekIssueNumber,
-} from "./issue-counters"
+import { allocateIssueNumber, deleteIssueCounter, ensureIssueNumberAbove } from "./issue-counters"
 
 const dbFixture = createDbTestFixture()
 
@@ -49,19 +44,6 @@ describe("allocateIssueNumber", () => {
   it("persists the watermark", async () => {
     await allocateIssueNumber("p1")
     expect(await getDb().issueCounters.get("p1")).toEqual({ scopeId: "p1", next: 2 })
-  })
-})
-
-describe("peekIssueNumber", () => {
-  it("reports 1 for an untouched project without consuming it", async () => {
-    expect(await peekIssueNumber("fresh")).toBe(1)
-    expect(await peekIssueNumber("fresh")).toBe(1)
-    expect(await allocateIssueNumber("fresh")).toBe(1)
-  })
-
-  it("reports the next number after allocations", async () => {
-    await allocateIssueNumber("p1")
-    expect(await peekIssueNumber("p1")).toBe(2)
   })
 })
 

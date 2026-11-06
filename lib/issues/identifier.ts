@@ -133,15 +133,3 @@ export function isCanonicalIssueIdentifier(text: string): boolean {
     parsed !== undefined && formatIssueIdentifier(parsed.projectKey, parsed.issueNumber) === text
   )
 }
-
-/**
- * Find every local identifier mentioned in free text. Returns unique matches
- * in the order they appear.
- */
-export function extractIssueIdentifiers(text: string): string[] {
-  const seen = new Set<string>()
-  for (const match of text.matchAll(ISSUE_IDENTIFIER_TEXT_PATTERN)) {
-    seen.add(match[0])
-  }
-  return [...seen]
-}

@@ -4,7 +4,7 @@ import { getIntegrationAccount } from "@/lib/db/integrations"
 import { deleteGithubIssues } from "@/lib/db/github-issue-mirror"
 import { GITHUB_DOT_COM, parseGithubHost } from "@/lib/github/host"
 import { integrationApiBaseUrl } from "@/lib/integrations/action-runner"
-import { pendingExternalSyncKeys, requestExternalSync } from "@/lib/external-services/sync/runtime"
+import { requestExternalSync } from "@/lib/external-services/sync/runtime"
 import { GITHUB_DELIVERY_PLUGIN_ID } from "./github-writeback"
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { githubMirrorSyncTarget, GithubMirrorSyncOutcomeError } from "./github-sync"
@@ -20,7 +20,6 @@ export interface GithubEventRefreshDeps {
   reconcileRegistrations: typeof reconcileIssueSyncRegistrations
   runRegistered: typeof runRegisteredIssueSync
   requestSync: typeof requestExternalSync
-  pendingKeys: typeof pendingExternalSyncKeys
   removeFromMirror: (repoFullName: string, numbers: number[]) => Promise<unknown>
   departImport: typeof tombstoneIssueSyncRefs
   onError: (repoFullName: string, error: unknown) => void
@@ -43,7 +42,6 @@ function defaultDeps(): GithubEventRefreshDeps {
     reconcileRegistrations: reconcileIssueSyncRegistrations,
     runRegistered: runRegisteredIssueSync,
     requestSync: requestExternalSync,
-    pendingKeys: pendingExternalSyncKeys,
     removeFromMirror: deleteGithubIssues,
     departImport: tombstoneIssueSyncRefs,
     onError: (repoFullName, error) =>
@@ -130,18 +128,6 @@ export class GithubEventIssueRefresher {
     }
   }
 
-  /** Repository names of pending shared targets (the legacy caller-facing API). */
-  pending(): string[] {
-    return [
-      ...new Set(
-        this.deps.pendingKeys().flatMap((key) => {
-          const match = /^(?:github-mirror|issues):[^:]+:(.+)$/.exec(key)
-          return match && /^[^/:]+\/[^/:]+$/.test(match[1]) ? [match[1].toLowerCase()] : []
-        })
-      ),
-    ]
-  }
-
   /**
    * Read back the person's own write to one repository (D20). It takes the
    * webhook's targets, so each binding reads only what changed since its
@@ -189,8 +175,4 @@ let singleton: GithubEventIssueRefresher | undefined
 export function getGithubEventIssueRefresher(): GithubEventIssueRefresher {
   if (!singleton) singleton = new GithubEventIssueRefresher()
   return singleton
-}
-
-export function resetGithubEventIssueRefresherForTesting(): void {
-  singleton = undefined
 }

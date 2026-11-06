@@ -14,7 +14,7 @@ import {
 } from "./runtime"
 import { IssueSyncRegistry } from "./registry"
 import type { IssueSyncBinding, IssueSyncProvider } from "./types"
-import { getGithubIssue } from "@/lib/db/github-issue-mirror"
+import { githubMirrorId } from "@/lib/db/github-issue-mirror"
 import type { OctokitLike } from "@/lib/github/issues"
 
 const fixture = createDbTestFixture({ seeded: false })
@@ -116,7 +116,9 @@ it("resolves the mirror binding freshly instead of retaining its old repo spelli
     expect.any(String),
     expect.objectContaining({ owner: "O", repo: "R" })
   )
-  expect(await getGithubIssue("O/R", 7)).toMatchObject({ issueProjectId: "p2" })
+  expect(await getDb().githubIssueMirror.get(githubMirrorId("O/R", 7))).toMatchObject({
+    issueProjectId: "p2",
+  })
 })
 
 it("resolves the import binding freshly and runs the existing import engine driver", async () => {

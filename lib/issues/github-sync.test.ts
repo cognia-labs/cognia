@@ -1,11 +1,7 @@
 /** @jest-environment jsdom */
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
-import {
-  latestMirroredUpdate,
-  listGithubIssues,
-  upsertGithubIssues,
-} from "@/lib/db/github-issue-mirror"
+import { listGithubIssues, upsertGithubIssues } from "@/lib/db/github-issue-mirror"
 import { toMirrorRow, type OctokitLike } from "@/lib/github/issues"
 import { claimSyncLease } from "@/lib/db/sync-leases"
 import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
@@ -206,9 +202,9 @@ it.each(["fetch", "credential"] as const)(
   }
 )
 
-it("heals old gaps with a first full scan instead of seeding from latestMirroredUpdate", async () => {
+it("heals old gaps with a first full scan instead of seeding from the newest cached row", async () => {
   await cache(99, { updated_at: "2026-10-01T00:00:00Z" })
-  expect(await latestMirroredUpdate("o/r")).toBe(Date.parse("2026-10-01T00:00:00Z"))
+  expect((await listGithubIssues())[0]?.updatedAt).toBe(Date.parse("2026-10-01T00:00:00Z"))
   const { client, calls } = octokit([{ data: [rawIssue(1)] }])
   expect(await syncRepoIssues(INPUT, deps(client))).toMatchObject({
     status: "completed",
@@ -244,7 +240,7 @@ it("resumes the stored page after truncation, committing no cursor or tombstones
   expect((await cursor())?.cursor).toBe(String(Date.parse("2026-01-03T00:00:00Z")))
 })
 
-it("resumes a failed later page even after page one moved latestMirroredUpdate", async () => {
+it("resumes a failed later page even after page one moved the newest cached row", async () => {
   const { client, calls } = octokit([
     { data: [rawIssue(1)], headers: { link: '<x>; rel="next"' } },
     { status: 500 },
@@ -255,7 +251,7 @@ it("resumes a failed later page even after page one moved latestMirroredUpdate",
     written: 1,
     errorCode: "sync-failed",
   })
-  expect(await latestMirroredUpdate("o/r")).toBe(Date.parse("2026-01-02T00:00:00Z"))
+  expect((await listGithubIssues())[0]?.updatedAt).toBe(Date.parse("2026-01-02T00:00:00Z"))
   expect((await cursor())?.cursor).toBeUndefined()
   expect(await syncRepoIssues(INPUT, deps(client, { now: () => NOW + 60_000 }))).toMatchObject({
     status: "completed",

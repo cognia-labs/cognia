@@ -9,7 +9,6 @@ import {
   bitableFieldsFromPatch,
   bitableRecordToRemote,
   createLarkBitableSyncProvider,
-  mappedFields,
 } from "./lark-bitable"
 
 it("describes its built-in resource without migrating its account binding", () => {
@@ -99,19 +98,6 @@ function binding(): IssueSyncBinding {
 }
 
 describe("pure transforms", () => {
-  it("lists the fields the map covers", () => {
-    expect(mappedFields({ title: "Name" })).toEqual(["title"])
-    expect(mappedFields(fieldMap)).toEqual([
-      "title",
-      "description",
-      "status",
-      "priority",
-      "assignee",
-      "dueDate",
-      "estimate",
-    ])
-  })
-
   it("maps a record through the field map, tolerating option casing and missing cells", () => {
     const remote = bitableRecordToRemote(
       {

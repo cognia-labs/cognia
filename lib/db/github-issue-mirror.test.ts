@@ -6,21 +6,19 @@ import { createDbTestFixture } from "./test-fixture"
 import { getDb } from "./schema"
 import type { GithubIssueMirrorRow } from "./github-issue-mirror-types"
 import {
-  bindRepoToIssueProject,
-  clearRepoMirror,
-  countMirroredIssues,
   deleteGithubIssues,
-  getGithubIssue,
   githubMirrorId,
   parseGithubMirrorId,
-  latestMirroredUpdate,
   listGithubIssues,
-  pruneRepoMirror,
-  repoMirrorEtag,
   upsertGithubIssues,
 } from "./github-issue-mirror"
 
 const dbFixture = createDbTestFixture()
+
+const getGithubIssue = (repoFullName: string, number: number) =>
+  getDb().githubIssueMirror.get(githubMirrorId(repoFullName, number))
+const countMirroredIssues = (repoFullName: string) =>
+  getDb().githubIssueMirror.where("repoFullName").equals(repoFullName).count()
 
 beforeAll(dbFixture.initialize)
 beforeEach(dbFixture.restore)
@@ -50,7 +48,7 @@ it("cache timestamps do not advance the durable mirror cursor", async () => {
   const key = "github-mirror:p1:o/r"
   await getDb().externalSyncCursors.put({ key, owner: "host", failures: 0, cursor: "10" })
   await upsertGithubIssues([row({ updatedAt: 99_999 })])
-  expect(await latestMirroredUpdate("o/r")).toBe(99_999)
+  expect((await getGithubIssue("o/r", 1))?.updatedAt).toBe(99_999)
   expect((await getDb().externalSyncCursors.get(key))?.cursor).toBe("10")
 })
 
@@ -140,78 +138,11 @@ describe("listGithubIssues", () => {
   })
 })
 
-describe("bindRepoToIssueProject", () => {
-  it("binds every mirrored row for a repo", async () => {
-    await upsertGithubIssues([row({ number: 1 }), row({ number: 2 })])
-    await bindRepoToIssueProject("o/r", "p1")
-    expect((await listGithubIssues({ issueProjectId: "p1" })).map((r) => r.number)).toEqual([2, 1])
-  })
-
-  it("unbinds without deleting the cache", async () => {
-    await upsertGithubIssues([row({ number: 1, issueProjectId: "p1" })])
-    await bindRepoToIssueProject("o/r", null)
-    expect(await listGithubIssues({ issueProjectId: "p1" })).toEqual([])
-    expect(await countMirroredIssues("o/r")).toBe(1)
-  })
-
-  it("leaves another repo's rows alone", async () => {
-    await upsertGithubIssues([
-      row({ number: 1 }),
-      row({ number: 2, repoFullName: "o/other", issueProjectId: "p9" }),
-    ])
-    await bindRepoToIssueProject("o/r", "p1")
-    expect((await getGithubIssue("o/other", 2))?.issueProjectId).toBe("p9")
-  })
-})
-
-describe("clearRepoMirror", () => {
-  it("drops one repo's cache and keeps the rest", async () => {
-    await upsertGithubIssues([row({ number: 1 }), row({ number: 2, repoFullName: "o/other" })])
-    await clearRepoMirror("o/r")
-    expect(await countMirroredIssues("o/r")).toBe(0)
-    expect(await countMirroredIssues("o/other")).toBe(1)
-  })
-})
-
-describe("watermarks", () => {
-  it("reports the newest updatedAt for the next `since`", async () => {
-    await upsertGithubIssues([row({ number: 1, updatedAt: 10 }), row({ number: 2, updatedAt: 50 })])
-    expect(await latestMirroredUpdate("o/r")).toBe(50)
-  })
-
-  it("is undefined for a repo that was never synced", async () => {
-    expect(await latestMirroredUpdate("o/never")).toBeUndefined()
-  })
-
-  it("returns the most recently written page's ETag", async () => {
-    await upsertGithubIssues([row({ number: 1, syncedAt: 10, etag: 'W/"old"' })])
-    await upsertGithubIssues([row({ number: 2, syncedAt: 99, etag: 'W/"new"' })])
-    expect(await repoMirrorEtag("o/r")).toBe('W/"new"')
-  })
-
-  it("has no ETag before the first sync", async () => {
-    expect(await repoMirrorEtag("o/never")).toBeUndefined()
-  })
-})
-
 describe("removing issues that left the repository", () => {
   it("deletes single issues and counts only the ones that were there", async () => {
     await upsertGithubIssues([row({ number: 1 }), row({ number: 2 }), row({ number: 3 })])
     expect(await deleteGithubIssues("o/r", [2, 99])).toBe(1)
     expect((await listGithubIssues({ repoFullName: "o/r" })).map((r) => r.number)).toEqual([3, 1])
     expect(await deleteGithubIssues("o/r", [])).toBe(0)
-  })
-
-  it("prunes a repo down to the issues a full read returned, leaving other repos alone", async () => {
-    await upsertGithubIssues([
-      row({ number: 1 }),
-      row({ number: 2 }),
-      row({ number: 3 }),
-      row({ repoFullName: "o/other", number: 2 }),
-    ])
-    expect(await pruneRepoMirror("o/r", new Set([1, 3]))).toBe(1)
-    expect(await getGithubIssue("o/r", 2)).toBeUndefined()
-    expect(await getGithubIssue("o/other", 2)).toBeDefined()
-    expect(await countMirroredIssues("o/r")).toBe(2)
   })
 })

@@ -25,6 +25,7 @@ const cleanWindowKeys: Array<keyof Window> = [
   "__cogniaReadSessions",
   "__cogniaReadExecutionRuns",
   "__cogniaE2EOutbound",
+  "__cogniaE2EIssues",
   "__cogniaE2EAutomation",
   "__cogniaE2ERestartLocalTransport",
   "__consentListenerGate",
@@ -90,6 +91,7 @@ describe("ExposeTestGlobals", () => {
     expect(window.__cogniaReadSessions).toBeUndefined()
     expect(window.__cogniaReadExecutionRuns).toBeUndefined()
     expect(window.__cogniaE2EOutbound).toBeUndefined()
+    expect(window.__cogniaE2EIssues).toBeUndefined()
     expect(window.__cogniaE2EAutomation).toBeUndefined()
     expect(window.__cogniaE2ERestartLocalTransport).toBeUndefined()
     expect(window.__cogniaSeedWorkflow).toBeUndefined()
@@ -122,6 +124,8 @@ describe("ExposeTestGlobals", () => {
     expect(typeof window.__cogniaE2ERestartLocalTransport).toBe("function")
     expect(typeof window.__cogniaE2EOutbound?.seed).toBe("function")
     expect(typeof window.__cogniaE2EOutbound?.read).toBe("function")
+    expect(typeof window.__cogniaE2EIssues?.installFakeRunEngine).toBe("function")
+    expect(typeof window.__cogniaE2EIssues?.finishActiveRun).toBe("function")
     expect(typeof window.__cogniaSeedCharacter).toBe("function")
     expect(typeof window.__cogniaSeedTeam).toBe("function")
     expect(typeof window.__cogniaSeedSkill).toBe("function")

@@ -22,7 +22,6 @@ import type {
   IssuePriority,
   IssueProject,
   IssueStatus,
-  IssueSyncField,
   LarkBitableFieldMap,
 } from "@/types/issues"
 import { ISSUE_PRIORITIES, ISSUE_STATUSES } from "@/types/issues"
@@ -61,18 +60,6 @@ export interface LarkBitableProviderDeps {
   /** Pin all calls in a prepared pass to this authorization. */
   expectedAuthorizationEpoch?: string
   now?: () => number
-}
-
-/** Which sync fields the map covers, in the engine's order. */
-export function mappedFields(map: LarkBitableFieldMap): IssueSyncField[] {
-  const out: IssueSyncField[] = ["title"]
-  if (map.description) out.push("description")
-  if (map.status) out.push("status")
-  if (map.priority) out.push("priority")
-  if (map.assignee) out.push("assignee")
-  if (map.dueDate) out.push("dueDate")
-  if (map.estimate) out.push("estimate")
-  return out
 }
 
 function statusFromOption(map: LarkBitableFieldMap, text: string | null): IssueStatus | undefined {

@@ -51,13 +51,6 @@ export async function upsertGithubIssues(rows: readonly GithubIssueMirrorRow[]):
   await getDb().githubIssueMirror.bulkPut([...rows])
 }
 
-export async function getGithubIssue(
-  repoFullName: string,
-  number: number
-): Promise<GithubIssueMirrorRow | undefined> {
-  return getDb().githubIssueMirror.get(githubMirrorId(repoFullName, number))
-}
-
 export interface ListGithubIssuesQuery {
   repoFullName?: string
   /** Narrow to the issues bound to one delivery container. */
@@ -92,32 +85,6 @@ export async function listGithubIssues(
 }
 
 /**
- * Bind (or rebind) a repo's mirrored rows to a delivery container. Called when
- * a project gains or loses a `github-repo` resource, so the board can scope
- * federated rows the same way it scopes local ones.
- */
-export async function bindRepoToIssueProject(
-  repoFullName: string,
-  issueProjectId: string | null
-): Promise<void> {
-  const db = getDb()
-  await db.transaction("rw", db.githubIssueMirror, async () => {
-    const rows = await db.githubIssueMirror.where("repoFullName").equals(repoFullName).toArray()
-    for (const row of rows) {
-      const next = { ...row }
-      if (issueProjectId === null) delete next.issueProjectId
-      else next.issueProjectId = issueProjectId
-      await db.githubIssueMirror.put(next)
-    }
-  })
-}
-
-/** Drop a repo's cache — on unbinding, or to force a clean re-fetch. */
-export async function clearRepoMirror(repoFullName: string): Promise<void> {
-  await getDb().githubIssueMirror.where("repoFullName").equals(repoFullName).delete()
-}
-
-/**
  * Drop single issues from the cache — ones GitHub no longer lists under this
  * repo: transferred to another repository, or deleted. Without this a
  * transferred issue lingers on the board for good, because an incremental
@@ -133,37 +100,4 @@ export async function deleteGithubIssues(
   const present = (await table.bulkGet(ids)).filter(Boolean).length
   await table.bulkDelete(ids)
   return present
-}
-
-/**
- * Remove every mirrored row of a repo that is not in `keepNumbers`. Only valid
- * after a COMPLETE, untruncated read of the repository (`state: "all"`, no
- * `since`): anything missing from that is gone from the repo, not merely
- * unchanged.
- */
-export async function pruneRepoMirror(
-  repoFullName: string,
-  keepNumbers: ReadonlySet<number>
-): Promise<number> {
-  const rows = await getDb().githubIssueMirror.where("repoFullName").equals(repoFullName).toArray()
-  const stale = rows.filter((row) => !keepNumbers.has(row.number)).map((row) => row.number)
-  return deleteGithubIssues(repoFullName, stale)
-}
-
-/** Cache observation only; sync checkpoints belong to externalSyncCursors. */
-export async function latestMirroredUpdate(repoFullName: string): Promise<number | undefined> {
-  const rows = await getDb().githubIssueMirror.where("repoFullName").equals(repoFullName).toArray()
-  if (rows.length === 0) return undefined
-  return rows.reduce((max, row) => Math.max(max, row.updatedAt), 0)
-}
-
-/** The ETag to send on the next conditional fetch for a repo, if any. */
-export async function repoMirrorEtag(repoFullName: string): Promise<string | undefined> {
-  const rows = await getDb().githubIssueMirror.where("repoFullName").equals(repoFullName).toArray()
-  // Every row in a page carries the page's ETag; the newest write wins.
-  return rows.sort((a, b) => b.syncedAt - a.syncedAt)[0]?.etag
-}
-
-export async function countMirroredIssues(repoFullName: string): Promise<number> {
-  return getDb().githubIssueMirror.where("repoFullName").equals(repoFullName).count()
 }

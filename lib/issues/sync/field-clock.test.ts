@@ -1,6 +1,6 @@
 import type { IssueEvent } from "@/types/issues"
 import { syncActorFor } from "@/types/issues"
-import { lastLocalChangeAt, localEditorOf, syncFieldOfEvent } from "./field-clock"
+import { lastLocalChangeAt, localEditorOf } from "./field-clock"
 
 const HUMAN = { kind: "human" as const }
 
@@ -17,18 +17,6 @@ function event(
     payload: { kind, by } as unknown as IssueEvent["payload"],
   }
 }
-
-describe("syncFieldOfEvent", () => {
-  it("maps every editing event kind to its field and nothing else", () => {
-    expect(syncFieldOfEvent("title_changed")).toBe("title")
-    expect(syncFieldOfEvent("reassigned")).toBe("assignee")
-    expect(syncFieldOfEvent("label_removed")).toBe("labels")
-    expect(syncFieldOfEvent("cycle_changed")).toBe("cycle")
-    expect(syncFieldOfEvent("created")).toBeUndefined()
-    expect(syncFieldOfEvent("commented")).toBeUndefined()
-    expect(syncFieldOfEvent("synced_in")).toBeUndefined()
-  })
-})
 
 describe("lastLocalChangeAt", () => {
   it("keeps the newest change per field after the watermark", () => {

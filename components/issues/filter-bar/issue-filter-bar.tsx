@@ -270,7 +270,11 @@ export function IssueFilterBar({
               onValueChange={(value) => onGroupByChange(value as IssueGroupBy)}
             >
               {ISSUE_GROUP_BY_OPTIONS.map((option) => (
-                <DropdownMenuRadioItem key={option} value={option}>
+                <DropdownMenuRadioItem
+                  key={option}
+                  value={option}
+                  data-testid={`issue-group-by-${option}`}
+                >
                   {t(`groupBy.${option}`)}
                 </DropdownMenuRadioItem>
               ))}

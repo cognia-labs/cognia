@@ -36,12 +36,6 @@ export async function allocateIssueNumber(issueProjectId: string): Promise<numbe
   })
 }
 
-/** Current watermark without consuming it — for "next issue will be KEY-N" hints. */
-export async function peekIssueNumber(issueProjectId: string): Promise<number> {
-  const existing = await getDb().issueCounters.get(issueProjectId)
-  return existing?.next ?? 1
-}
-
 /**
  * Raise the watermark so it sits above `observed`. Used when importing issues
  * that already carry numbers (a restored backup, or a future GitHub adoption

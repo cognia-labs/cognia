@@ -1,10 +1,11 @@
 /**
  * IssueSourceRegistry
  *
- * Holds one `IssueSourceAdapter` per `IssueSourceKind`. The local source
- * registers itself at module init; GitHub (slice ②) and the agent sources
- * (slice ③) register from their own runtime installers, so a build that omits
- * them still renders a working local-only board.
+ * Holds one `IssueSourceAdapter` per `IssueSourceKind`. Every source
+ * (local, GitHub, collaboration, agent task, Agent Team) registers from
+ * `bootIssueTracker` (`lib/issues/boot.ts`); a source registered late, or
+ * replaced, reaches open boards through `onSourcesChanged`, so `subscribeAll`
+ * never needs a reload to see it.
  *
  * Deliberately mirrors `lib/scheduler/sources/registry.ts` — that registry
  * already solved "six independent backends, one page" and the two should be

@@ -16,7 +16,6 @@ import {
   deleteIssueCycle,
   deleteIssueCyclesForWorkspace,
   getIssueCycle,
-  getIssueCycleByExternalKey,
   listIssueCycles,
   updateIssueCycle,
 } from "./issue-cycles"
@@ -44,7 +43,10 @@ describe("createIssueCycle", () => {
     expect(cycle.name).toBe("v1.0")
     expect(cycle.status).toBe("planned")
     expect(cycle.externalKeys).toEqual(["github:o/r#milestone/3"])
-    expect(await getIssueCycleByExternalKey("github", "o/r#milestone/3")).toMatchObject({
+    // The multi-entry index finds the cycle by its external key.
+    expect(
+      await getDb().issueCycles.where("externalKeys").equals("github:o/r#milestone/3").first()
+    ).toMatchObject({
       id: cycle.id,
     })
   })
