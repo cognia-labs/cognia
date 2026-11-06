@@ -4,7 +4,9 @@ jest.mock("@/lib/auth-providers/google/host-auth", () => ({
   resolveGoogleConnection: jest.fn(),
 }))
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({ getConnectionManager: jest.fn() }))
-jest.mock("./state", () => ({ subscribeGoogleStateChanged: jest.fn(() => jest.fn()) }))
+jest.mock("@/lib/auth-providers/google/state", () => ({
+  subscribeGoogleStateChanged: jest.fn(() => jest.fn()),
+}))
 import {
   listGoogleConnections,
   resolveGoogleConnection,
@@ -15,7 +17,7 @@ import { resolveDocsAccountBinding } from "@/lib/docs-providers/account-binding"
 import type { GoogleHttpFn } from "./http"
 import { MAX_DOC_CHARS } from "@/lib/docs-providers/limits"
 import { GOOGLE_DOCS_SCOPES } from "./config"
-import { __setGoogleProviderDepsForTests, googleDocsProvider } from "./index"
+import { __setGoogleProviderDepsForTests, googleDocsProvider } from "./provider"
 import * as oauthRegistry from "@/lib/docs-providers/oauth-deep-link"
 
 const ID = "1AbC_dEfGhIjKlMnOpQrStUvWxYz012345"
@@ -68,7 +70,7 @@ it("re-evaluates the Google provider without registering its OAuth completion tw
   try {
     jest.doMock("@/lib/docs-providers/oauth-deep-link", () => oauthRegistry)
     expect(() => {
-      jest.isolateModules(() => jest.requireActual("./index"))
+      jest.isolateModules(() => jest.requireActual("./provider"))
     }).not.toThrow()
     expect(oauthRegistry.getDocsOAuthCompletion("google")).toBe(completion)
   } finally {

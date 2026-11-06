@@ -43,8 +43,8 @@ import {
 import { openUrl } from "@/lib/native/opener"
 import { connectionsHref } from "@/lib/settings/deep-link"
 import { DocsProviderError } from "@/lib/docs-providers"
-import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
-import { googleDocsProvider } from "@/lib/docs-providers/providers/google"
+import { larkDocsProvider } from "@/lib/lark-docs/provider"
+import { googleDocsProvider } from "@/lib/google-docs/provider"
 import { listDocsProviders } from "@/lib/docs-providers/registry"
 import type { DocsProvider, DocsProviderAccount } from "@/lib/docs-providers/types"
 import {
@@ -54,16 +54,13 @@ import {
   saveGoogleClientSecret,
   clearGoogleClientSecret,
   updateGoogleDocsSettings,
-} from "@/lib/docs-providers/providers/google/config"
-import {
-  beginGoogleDocsAuth,
-  disconnectGoogleDocs,
-} from "@/lib/docs-providers/providers/google/auth"
+} from "@/lib/google-docs/config"
+import { beginGoogleDocsAuth, disconnectGoogleDocs } from "@/lib/google-docs/auth"
 import {
   googleState,
   subscribeGoogleStateChanged,
   type GoogleStateReply,
-} from "@/lib/docs-providers/providers/google/state"
+} from "@/lib/auth-providers/google/state"
 import { listGoogleConnections } from "@/lib/auth-providers/google/host-auth"
 import {
   getHostConnectionDriver,

@@ -4,8 +4,11 @@ import {
   __setPortForTesting,
   __setPortModulesForTesting,
   loadPort,
+  loadPortCollection,
+  portCollectionProviders,
   portProvider,
   readPort,
+  readPortCollection,
   subscribePorts,
 } from "./ports"
 
@@ -17,6 +20,9 @@ declare module "./ports" {
   interface PortMap {
     "test.echo": EchoPort
     "test.missing": EchoPort
+  }
+  interface PortCollectionMap {
+    "test.voices": EchoPort
   }
 }
 
@@ -128,5 +134,88 @@ describe("capability ports", () => {
     expect(await loadPort("test.echo")).toBe(echo)
     __setPortForTesting("test.echo", null)
     expect(await loadPort("test.echo")).toBeNull()
+  })
+})
+
+describe("collection ports", () => {
+  function member(
+    id: string,
+    load: () => Promise<unknown>,
+    stage: HostModuleManifest["stage"] = "stable"
+  ): HostModuleManifest {
+    return {
+      id,
+      kind: "module",
+      stage,
+      provides: [{ port: "test.voices", load: load as () => Promise<{ port: unknown }> }],
+    }
+  }
+  const loud: EchoPort = { echo: (text) => text.toUpperCase() }
+
+  it("loads every provider's member once, in registry order", async () => {
+    const quietLoad = jest.fn(async () => ({ port: echo }))
+    const loudLoad = jest.fn(async () => ({ port: loud }))
+    __setPortModulesForTesting([member("quiet", quietLoad), member("loud", loudLoad)])
+    expect(portCollectionProviders("test.voices").map((p) => p.module)).toEqual(["quiet", "loud"])
+    expect(readPortCollection("test.voices")).toEqual([])
+    const [first] = await Promise.all([
+      loadPortCollection("test.voices"),
+      loadPortCollection("test.voices"),
+    ])
+    expect(first).toEqual({
+      members: [
+        { module: "quiet", port: echo },
+        { module: "loud", port: loud },
+      ],
+      failures: [],
+    })
+    await loadPortCollection("test.voices")
+    expect(quietLoad).toHaveBeenCalledTimes(1)
+    expect(loudLoad).toHaveBeenCalledTimes(1)
+    expect(readPortCollection("test.voices").map((m) => m.module)).toEqual(["quiet", "loud"])
+  })
+
+  it("keeps the other members when one fails, and retries the failed one next time", async () => {
+    const broken = jest
+      .fn<Promise<unknown>, []>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ port: loud })
+    __setPortModulesForTesting([
+      member("quiet", async () => ({ port: echo })),
+      member("loud", broken),
+    ])
+    const first = await loadPortCollection("test.voices")
+    expect(first.members).toEqual([{ module: "quiet", port: echo }])
+    expect(first.failures).toEqual([{ module: "loud", error: new Error("offline") }])
+    const second = await loadPortCollection("test.voices")
+    expect(second.members.map((m) => m.module)).toEqual(["quiet", "loud"])
+    expect(second.failures).toEqual([])
+  })
+
+  it("reports a provider file that exports no port as a failure", async () => {
+    __setPortModulesForTesting([member("empty", async () => ({}))])
+    const { members, failures } = await loadPortCollection("test.voices")
+    expect(members).toEqual([])
+    expect(String(failures[0].error)).toMatch(/exports no port/)
+  })
+
+  it("is empty when no module provides it", async () => {
+    __setPortModulesForTesting([])
+    expect(await loadPortCollection("test.voices")).toEqual({ members: [], failures: [] })
+  })
+
+  it("tells subscribers as each member arrives", async () => {
+    __setPortModulesForTesting([member("quiet", async () => ({ port: echo }))])
+    const listener = jest.fn()
+    subscribePorts(listener)
+    await loadPortCollection("test.voices")
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it("forgets loaded members on reset", async () => {
+    __setPortModulesForTesting([member("quiet", async () => ({ port: echo }))])
+    await loadPortCollection("test.voices")
+    __resetPortsForTesting()
+    expect(readPortCollection("test.voices")).toEqual([])
   })
 })

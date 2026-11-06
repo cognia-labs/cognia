@@ -5,7 +5,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import { __resetAuthRegistryForTesting } from "@/lib/plugin/auth/auth-provider-registry"
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
-import { __setGoogleStatePortForTests } from "@/lib/docs-providers/providers/google/state"
+import { __setGoogleStatePortForTests } from "@/lib/auth-providers/google/state"
 import { listGoogleConnections } from "@/lib/auth-providers/google/host-auth"
 import {
   bindGoogleDriveConnection,

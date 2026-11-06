@@ -8,7 +8,7 @@ import type { PersonalCredentialContext } from "@/lib/execution/personal-credent
 
 import type { GoogleDocsProviderSettings } from "@cognia/agent-config-types"
 import { getSettings, saveSettings } from "@/lib/db/settings"
-import { googleState, subscribeGoogleStateChanged } from "./state"
+import { googleState, subscribeGoogleStateChanged } from "@/lib/auth-providers/google/state"
 
 /**
  * Read scopes. `drive.readonly` alone cannot read a Doc's body (Drive only

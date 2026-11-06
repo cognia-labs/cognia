@@ -131,7 +131,7 @@ UNSAFE_FILENAME_CHARS 匹配空格、路径分隔符，以及 Windows 保留的 
 
 两个 scheme 的 state 校验方式不同，且不能共用：连接器路由检查 `sessionStorage`，而每个文档 provider 检查自己的持久化 pending 记录。解析与兑换放在 React 之外的 `lib/docs-providers/oauth-deep-link.ts`，因此整个兑换过程可单测，且 `completeDocsOAuthDeepLink` 从不抛错 —— 失败的 OAuth 是一个可上报的结局，而不是崩溃。
 
-provider 在模块加载时注册自己的兑换函数，因此路由永远不需要知道存在哪些 provider。
+provider 在自己的模块加载时注册兑换函数，因此路由永远不需要知道存在哪些 provider；`completeDocsOAuthDeepLink` 会先等待内置项加载完，因为 OAuth 回调本身就可能是唤起应用的那个链接。
 
 ## 测试
 

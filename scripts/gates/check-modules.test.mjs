@@ -744,10 +744,24 @@ test("declaredPorts reads one port per contract file under types/modules/ports/"
         "types/modules/ports/speech.test.ts",
         "types/modules/ports/nested/x.ts",
         "types/modules/other.ts",
-      ]),
+      ]).keys(),
     ].sort(),
     ["ocr", "speech"]
   )
+})
+
+test("declaredPorts tells a collection port (PortCollectionMap) from a one-provider port", () => {
+  const sources = {
+    "types/modules/ports/speech.ts":
+      'declare module "@/lib/modules/ports" {\n  interface PortMap { speech: S }\n}\n',
+    "types/modules/ports/docs-provider.ts":
+      'declare module "@/lib/modules/ports" {\n  interface PortCollectionMap { "docs-provider": D }\n}\n',
+  }
+  const ports = declaredPorts(Object.keys(sources), (file) => sources[file])
+  assert.equal(ports.get("speech"), "one")
+  assert.equal(ports.get("docs-provider"), "many")
+  // Without a reader every port counts as one-provider.
+  assert.equal(declaredPorts(Object.keys(sources)).get("docs-provider"), "one")
 })
 
 test("validateHostManifest checks provides and requires against the declared ports", () => {
@@ -830,6 +844,39 @@ export const see = () => loadPort("vision")
   ])
     assert.ok(errors.includes(expected), `missing: ${expected}\n${errors.join("\n")}`)
   assert.equal(errors.length, 6, errors.join("\n"))
+})
+
+test("ports: a collection port takes a member from every module, and its framework asks without requires", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel", docs: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/modules/ports.ts": "export async function loadPortCollection(id) { return id }\n",
+    "types/modules/ports/docs-provider.ts":
+      'declare module "@/lib/modules/ports" {\n  interface PortCollectionMap { "docs-provider": D }\n}\n',
+    "lib/gdocs/module.ts": hostManifest(
+      "gdocs",
+      'provides: [{ port: "docs-provider", load: () => import("./port") }]'
+    ),
+    "lib/gdocs/port.ts": "export const port = {}\n",
+    "lib/ldocs/module.ts": hostManifest(
+      "ldocs",
+      'provides: [{ port: "docs-provider", load: () => import("./port") }]'
+    ),
+    "lib/ldocs/port.ts": "export const port = {}\n",
+    // The kernel framework collects the members; it has no manifest to name them in.
+    "lib/docs/registry.ts": `import { loadPortCollection } from "@/lib/modules/ports"
+export const load = () => loadPortCollection("docs-provider")
+`,
+    // A module asking for the collection names it in requires like any port.
+    "lib/pet/module.ts": hostManifest("pet"),
+    "lib/pet/read.ts": `import { readPortCollection } from "@/lib/modules/ports"
+export const read = () => readPortCollection("docs-provider")
+`,
+  })
+  const errors = result.errors.filter((error) => /port/.test(error))
+  assert.deepEqual(errors, [
+    'G4 lib/pet/module.ts: lib/pet/read.ts asks for port "docs-provider" but "pet"\'s requires does not name it',
+  ])
 })
 
 test("runtime adapters resolve from their manifest and export start; names are unique across modules", () => {

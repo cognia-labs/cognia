@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en.json"
 import type { AuthConnectionRow } from "@/lib/db/auth-connections"
-import type { GoogleLineage } from "@/lib/docs-providers/providers/google/state"
+import type { GoogleLineage } from "@/lib/auth-providers/google/state"
 
 jest.mock("sonner", () => ({
   toast: { error: jest.fn(), success: jest.fn(), warning: jest.fn() },
@@ -13,7 +13,7 @@ jest.mock("sonner", () => ({
 jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn(async () => undefined) }))
 jest.mock("@/lib/db/adapter-instances", () => ({ listAdapterInstancesByType: jest.fn() }))
 jest.mock("@/lib/docs-providers", () => jest.requireActual("@/lib/docs-providers/types"))
-jest.mock("@/lib/docs-providers/providers/lark", () => ({
+jest.mock("@/lib/lark-docs/provider", () => ({
   larkDocsProvider: {
     id: "lark",
     mentionPrefix: "lark:",
@@ -29,14 +29,14 @@ jest.mock("@/lib/docs-providers/providers/lark", () => ({
     subscribeAccounts: jest.fn(() => jest.fn()),
   },
 }))
-jest.mock("@/lib/docs-providers/providers/google", () => ({
+jest.mock("@/lib/google-docs/provider", () => ({
   googleDocsProvider: { id: "google", mentionPrefix: "gdoc:", hosts: ["tauri"] },
 }))
 // The card asks `docsProviderReach`, which asks the host profile. Driving the
 // profile (rather than a `hostSupported` boolean) is what lets these tests
 // tell a standalone browser apart from a paired companion.
 jest.mock("@/hooks/use-host-profile", () => ({ useHostProfile: jest.fn(() => "desktop") }))
-jest.mock("@/lib/docs-providers/providers/google/config", () => ({
+jest.mock("@/lib/google-docs/config", () => ({
   GOOGLE_DOCS_SCOPES: ["https://www.googleapis.com/auth/drive.readonly"],
   getGoogleDocsSettings: jest.fn(async () => ({})),
   saveGoogleClientSecret: jest.fn(async () => undefined),
@@ -45,7 +45,7 @@ jest.mock("@/lib/docs-providers/providers/google/config", () => ({
   clearGoogleConnection: jest.fn(async () => undefined),
   subscribeGoogleDocsSettings: jest.fn(() => () => undefined),
 }))
-jest.mock("@/lib/docs-providers/providers/google/state", () => ({
+jest.mock("@/lib/auth-providers/google/state", () => ({
   googleState: jest.fn(),
   subscribeGoogleStateChanged: jest.fn(() => () => undefined),
 }))
@@ -64,7 +64,7 @@ jest.mock("@/lib/plugin/auth/connection-manager", () => ({
         ),
   }),
 }))
-jest.mock("@/lib/docs-providers/providers/google/auth", () => ({
+jest.mock("@/lib/google-docs/auth", () => ({
   beginGoogleDocsAuth: jest.fn(async () => ({
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
     redirectUri: "http://127.0.0.1:7842/oauth/docs/google/callback",
@@ -76,7 +76,7 @@ import { toast } from "sonner"
 import { openUrl } from "@/lib/native/opener"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { DocsProviderError } from "@/lib/docs-providers"
-import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
+import { larkDocsProvider } from "@/lib/lark-docs/provider"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import {
   getGoogleDocsSettings,
@@ -84,15 +84,9 @@ import {
   saveGoogleClientSecret,
   clearGoogleClientSecret,
   updateGoogleDocsSettings,
-} from "@/lib/docs-providers/providers/google/config"
-import {
-  beginGoogleDocsAuth,
-  disconnectGoogleDocs,
-} from "@/lib/docs-providers/providers/google/auth"
-import {
-  googleState,
-  subscribeGoogleStateChanged,
-} from "@/lib/docs-providers/providers/google/state"
+} from "@/lib/google-docs/config"
+import { beginGoogleDocsAuth, disconnectGoogleDocs } from "@/lib/google-docs/auth"
+import { googleState, subscribeGoogleStateChanged } from "@/lib/auth-providers/google/state"
 import {
   listGoogleConnections,
   authorizeGoogleConnection,

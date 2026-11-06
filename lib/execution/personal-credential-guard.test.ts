@@ -88,7 +88,7 @@ const HOST_DISPATCH_BINDINGS: Record<string, string[]> = {
     "admission",
     "credentialContext",
   ],
-  "lib/docs-providers/providers/google/index.ts": ["credentialContext"],
+  "lib/google-docs/provider.ts": ["credentialContext"],
   "lib/plugin/auth/connect.ts": [
     "withPluginExecutionContext",
     "request.credentialContext",
@@ -380,21 +380,16 @@ const REVIEWED: Record<string, string[]> = {
     "connectorsLarkUserAuth",
   ],
   "lib/skills/built-in/lark/auth-bridge.ts": ["connectorsLarkUserAuth", "getCredentials"],
-  "lib/docs-providers/providers/google/index.ts": ["getCredentials", "listGoogleConnections"],
+  "lib/google-docs/provider.ts": ["getCredentials", "listGoogleConnections"],
   "lib/auth-providers/google/host-auth.ts": [
     "createGoogleDeviceAuthorization",
     ...Array<string>(8).fill("googleState"),
     "registerHostAuthProviderService",
   ],
-  "lib/docs-providers/providers/google/auth.ts": [
-    "googleState",
-    "googleState",
-    "googleState",
-    "googleState",
-  ],
-  "lib/docs-providers/providers/google/config.ts": ["googleState", "googleState", "googleState"],
-  "lib/docs-providers/providers/google/oauth-pending.ts": ["googleState", "googleState"],
-  "lib/docs-providers/providers/google/state.ts": ["native-google-user-auth"],
+  "lib/google-docs/auth.ts": ["googleState", "googleState", "googleState", "googleState"],
+  "lib/google-docs/config.ts": ["googleState", "googleState", "googleState"],
+  "lib/google-docs/oauth-pending.ts": ["googleState", "googleState"],
+  "lib/auth-providers/google/state.ts": ["native-google-user-auth"],
   "components/settings/connections/docs-providers/docs-providers-card.tsx": [
     "googleState",
     "listGoogleConnections",
@@ -441,7 +436,7 @@ const REVIEWED: Record<string, string[]> = {
     "listGoogleConnections",
     "listLarkConnections",
   ],
-  "lib/docs-providers/providers/lark/index.ts": ["listLarkConnections"],
+  "lib/lark-docs/provider.ts": ["listLarkConnections"],
   "lib/integrations/github-issue-loop.ts": ["auth-provider-sessions", "resolveRequestCredential"],
   // Settings is the person's Host UI. VS Code's raw session surface inherits
   // the Host-managed adapter's default refusal; plugin-held legacy sessions

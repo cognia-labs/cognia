@@ -35,7 +35,7 @@ const driveAuthState = { bound: false, secret: false }
 jest.mock("./google-oauth", () => ({
   resolveGoogleDriveConnection: async () => (driveAuthState.bound ? { id: "connection" } : null),
 }))
-jest.mock("@/lib/docs-providers/providers/google/state", () => ({
+jest.mock("@/lib/auth-providers/google/state", () => ({
   googleState: async () => ({
     clients: [{ clientId: "cid", hasClientSecret: driveAuthState.secret }],
   }),

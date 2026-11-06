@@ -43,8 +43,8 @@ flowchart TD
 
   subgraph registry["lib/docs-providers"]
     R["registry.ts<br/>module-level Map"]
-    L["providers/lark"]
-    O["providers/google"]
+    L["lark-docs module<br/>docs-provider port"]
+    O["google-docs module<br/>docs-provider port"]
   end
 
   subgraph transport["Host transport (Tauri only)"]
@@ -143,8 +143,8 @@ the UI explains it (the picker renders `picker.hostUnsupported`, the settings ca
 | Caps + truncation markers | `lib/docs-providers/limits.ts` |
 | Grid to CSV rendering | `lib/docs-providers/csv.ts` |
 | OAuth deep link | `lib/docs-providers/oauth-deep-link.ts` |
-| Feishu provider | `lib/docs-providers/providers/lark/` |
-| Google provider | `lib/docs-providers/providers/google/` |
+| Feishu provider | `lib/lark-docs/` |
+| Google provider | `lib/google-docs/` |
 | Shared Lark auth harness | `lib/auth-providers/feishu/authed-api.ts` |
 | Composer panel state | `hooks/chat/use-remote-doc-search.ts` |
 | Attachment staging | `hooks/chat/use-remote-doc-staging.ts` |

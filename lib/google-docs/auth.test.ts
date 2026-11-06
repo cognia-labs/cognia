@@ -6,7 +6,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsEnsureServer: je
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getGoogleDocsSettings } from "./config"
-import { __setGoogleStatePortForTests } from "./state"
+import { __setGoogleStatePortForTests } from "@/lib/auth-providers/google/state"
 import {
   beginGoogleDocsAuth,
   completeGoogleDocsAuth,

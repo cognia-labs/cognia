@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
+  __clearDocsProvidersForTests,
   registerDocsProvider,
   getDocsProvider as lookupDocsProvider,
 } from "@/lib/docs-providers/registry"
@@ -76,6 +77,8 @@ const content = (text = "fresh", extra = {}): RemoteDocContent => ({
   ...extra,
 })
 beforeEach(async () => {
+  // The stub below claims the built-in Lark id.
+  __clearDocsProvidersForTests()
   await fixture.restore()
   jest.mocked(useKeptCopySource).mockReturnValue({ status: "unknown", canReopen: true })
   jest.mocked(resolveKeptCopyConnection).mockReset()

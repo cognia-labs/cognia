@@ -85,7 +85,7 @@
       "note": "Non-Tauri leg only. The desktop path is connectors_http_request, which applies the proxy policy in Rust."
     },
     {
-      "file": "lib/docs-providers/providers/google/http.ts",
+      "file": "lib/google-docs/http.ts",
       "kind": "fetch",
       "reason": "browser-fallback",
       "note": "Non-Tauri leg only. The desktop path is connectors_http_request; the provider needs the Rust OAuth loopback anyway."

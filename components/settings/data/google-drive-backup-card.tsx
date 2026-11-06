@@ -40,7 +40,7 @@ import {
   googleState,
   subscribeGoogleStateChanged,
   type GoogleStateReply,
-} from "@/lib/docs-providers/providers/google/state"
+} from "@/lib/auth-providers/google/state"
 import {
   getConnectionManager,
   getHostConnectionDriver,

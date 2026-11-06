@@ -23,7 +23,7 @@ import {
 } from "@/lib/docs-providers/limits"
 import { renderCsvSections, type CsvSection } from "@/lib/docs-providers/csv"
 import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
-import { sheetRange } from "./a1"
+import { sheetRange } from "@/lib/docs-providers/a1"
 
 interface SheetMetaResponse {
   spreadsheet?: { title?: string; url?: string }

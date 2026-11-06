@@ -20,7 +20,7 @@ import { localTransport } from "@/lib/tauri/transport-instance"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { fetchLarkDocAsRawSource, resolveLarkWikiNode } from "@/lib/twin/ingest/lark-doc-fetcher"
-import { parseLarkResourceUrl } from "@/lib/docs-providers/providers/lark/url"
+import { parseLarkResourceUrl } from "@cognia/feishu-protocol"
 import { clampDocText, MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 import { assertRemoteDocBinding } from "@/lib/docs-providers/account-binding"
 import {

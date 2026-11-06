@@ -35,14 +35,14 @@ import {
 } from "@/lib/docs-providers/oauth-deep-link"
 import { completeGoogleDocsAuth } from "./auth"
 import { GOOGLE_DOCS_SCOPES } from "./config"
-import { subscribeGoogleStateChanged } from "./state"
+import { subscribeGoogleStateChanged } from "@/lib/auth-providers/google/state"
 import {
   googleHttp,
   throwIfGoogleRequestAborted,
   withGoogleRequestAbort,
   type GoogleHttpFn,
 } from "./http"
-import { parseGoogleDocUrl, googleDocUrl } from "./url"
+import { parseGoogleDocUrl, googleDocUrl } from "@/lib/docs-providers/providers/google/url"
 import {
   exportGoogleDoc,
   getGoogleFileName,

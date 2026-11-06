@@ -14,7 +14,8 @@ export interface CloudDocumentTarget {
   sourceType?: "doc" | "docx"
 }
 
-function builtinScheme(providerId: string): DocumentUrlScheme | undefined {
+/** The built-in provider's URL scheme, known before its module loads. */
+export function builtinDocumentUrlScheme(providerId: string): DocumentUrlScheme | undefined {
   return BUILTIN_DOCUMENT_URLS.find((scheme) => scheme.providerId === providerId)
 }
 
@@ -71,7 +72,7 @@ export function cloudDocumentTargetFromRef(
   providerId: string,
   ref: RemoteDocRef
 ): CloudDocumentTarget | null {
-  const scheme = builtinScheme(providerId)
+  const scheme = builtinDocumentUrlScheme(providerId)
   if ((!scheme && !isPluginDocsProviderId(providerId)) || ref.providerId !== providerId || !ref.id)
     return null
   if (scheme?.kinds && !scheme.kinds.includes(ref.kind)) return null

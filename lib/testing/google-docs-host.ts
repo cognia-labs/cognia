@@ -3,7 +3,7 @@ import type {
   GoogleStateInput,
   GoogleStatePort,
   GoogleStateReply,
-} from "@/lib/docs-providers/providers/google/state"
+} from "@/lib/auth-providers/google/state"
 
 export function createGoogleDocsTestHost(initial: Partial<GoogleStateReply> = {}) {
   const snapshot: GoogleStateReply = {

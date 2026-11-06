@@ -1,6 +1,8 @@
 jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   listLarkConnections: jest.fn(),
   larkConnectionAdapter: jest.fn(),
+  // The real fetcher binds what it read to the connection it read through.
+  resolveLarkConnection: jest.fn(async (id: string) => ({ id, revision: 1 })),
 }))
 jest.mock("@/lib/tauri/transport-instance", () => ({
   localTransport: { subscribe: jest.fn(() => jest.fn()) },
@@ -31,7 +33,7 @@ import {
 import { LarkIngestError, fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { MAX_DOC_CHARS } from "@/lib/docs-providers/limits"
 import { DocsProviderError } from "@/lib/docs-providers/types"
-import { larkDocsProvider } from "./index"
+import { larkDocsProvider } from "./provider"
 import { localTransport, transport } from "@/lib/tauri/transport-instance"
 
 const listConnectionsMock = listLarkConnections as jest.Mock

@@ -53,10 +53,10 @@ jest.mock("./config", () => ({
   getBackupDestinationsSettings: jest.fn(),
 }))
 jest.mock("./google-oauth", () => ({ resolveGoogleDriveConnection: jest.fn() }))
-jest.mock("@/lib/docs-providers/providers/google/state", () => ({ googleState: jest.fn() }))
+jest.mock("@/lib/auth-providers/google/state", () => ({ googleState: jest.fn() }))
 import { getBackupDestinationsSettings } from "./config"
 import { resolveGoogleDriveConnection } from "./google-oauth"
-import { googleState } from "@/lib/docs-providers/providers/google/state"
+import { googleState } from "@/lib/auth-providers/google/state"
 
 it.each([
   [undefined, false, false, "needs-setup"],

@@ -8,12 +8,13 @@
  *
  * State validation is deliberately NOT done here: each provider validates
  * `state` against its own durable pending record (Google:
- * `providers/google/oauth-pending.ts`), which is the check that survives an app
+ * `lib/google-docs/oauth-pending.ts`), which is the check that survives an app
  * restart. The connector router's `sessionStorage` state store is a different
  * mechanism for a different subsystem and must not be shared.
  */
 
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { whenDocsProvidersReady } from "./registry"
 
 export const DOCS_OAUTH_PATH_RE = /^cognia:\/\/docs-provider\/oauth\/([^?#/]+)/
 
@@ -31,6 +32,8 @@ export type DocsOAuthCompletion = (
   credentialContext?: PersonalCredentialContext
 ) => Promise<void>
 
+// A provider registers its completion when its module loads, so the deep link
+// waits for the built-ins before it looks one up.
 const completions = new Map<string, DocsOAuthCompletion>()
 
 export function registerDocsOAuthCompletion(
@@ -97,6 +100,7 @@ export async function completeDocsOAuthDeepLink(
 ): Promise<DocsOAuthOutcome> {
   const parsed = parseDocsOAuthDeepLink(raw)
   if (!parsed) return { status: "ignored" }
+  await whenDocsProvidersReady()
   const completion = completions.get(parsed.providerId)
   if (!completion) return { status: "unknown-provider", providerId: parsed.providerId }
   try {

@@ -50,8 +50,8 @@ import {
 } from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken, getUserAccessToken, refreshUserToken } from "./auth"
 import { LARK_API_BASE, LarkAccessError, withLarkAuthedApi } from "./authed-api"
-import { readLarkSpreadsheet } from "@/lib/docs-providers/providers/lark/sheets"
-import { readLarkBitable } from "@/lib/docs-providers/providers/lark/bitable"
+import { readLarkSpreadsheet } from "@/lib/lark-docs/sheets"
+import { readLarkBitable } from "@/lib/lark-docs/bitable"
 import { inspect } from "node:util"
 
 const isTauriMock = isTauri as jest.Mock

@@ -11,7 +11,7 @@ import { getSettings, saveSettings } from "@/lib/db/settings"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import { __resetAuthRegistryForTesting } from "@/lib/plugin/auth/auth-provider-registry"
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
-import { __setGoogleStatePortForTests } from "@/lib/docs-providers/providers/google/state"
+import { __setGoogleStatePortForTests } from "@/lib/auth-providers/google/state"
 import { listGoogleConnections } from "@/lib/auth-providers/google/host-auth"
 import {
   GOOGLE_DRIVE_SCOPE,

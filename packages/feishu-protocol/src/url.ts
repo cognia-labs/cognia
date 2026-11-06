@@ -1,6 +1,8 @@
 /**
- * Feishu/Lark doc URL & token recognition, shared by the remote-document
- * provider (`./document-url.ts`, `./index.ts`) and the twin ingest pipeline.
+ * Feishu/Lark doc URL & token recognition, shared by the cloud-document URL
+ * scheme (`lib/docs-providers/providers/lark/document-url.ts`), the Lark Docs
+ * provider (`lib/lark-docs/provider.ts`), issue resources and the twin ingest
+ * pipeline.
  *
  * Pure parsing only — no network, no credentials. The uploader runs this
  * against user input to decide whether a URL should route to the Lark doc

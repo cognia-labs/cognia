@@ -166,7 +166,9 @@ export interface ModulePortModule {
  * An implementation of a kernel capability port (`ocr`, `speech`, `forge`, …):
  * `port` is the id a contract in `types/modules/ports/<id>.ts` declares, and
  * `load` brings the file that exports the implementation as `port`. Users ask
- * `lib/modules/ports.ts` for it by id; one active module provides each port.
+ * `lib/modules/ports.ts` for it by id; one active module provides each port,
+ * except a collection port (`PortCollectionMap`, such as `docs-provider`),
+ * where every providing module adds one member.
  */
 export interface ModulePortProvision {
   port: string

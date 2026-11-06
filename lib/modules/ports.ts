@@ -21,6 +21,13 @@
 // port no active module provides resolves to `null`, which every user treats
 // as "this capability is not available here": an `experimental` provider
 // contributes nothing (Rule 7), as for every other registry.
+//
+// A collection port has many providers instead of one: each vendor that
+// implements the capability is its own module (cloud documents: Google Docs,
+// Lark Docs). Its contract augments `PortCollectionMap`, every active module
+// providing it adds one member, and its framework loads them all with
+// `loadPortCollection`. One member that fails to load does not hide the
+// others.
 
 import type { HostModuleManifest, ModulePortModule } from "./manifest-types"
 import { activeHostModules } from "./registry"
@@ -31,12 +38,33 @@ export interface PortMap {}
 
 export type PortId = keyof PortMap
 
+/** Every collection port's id and the contract of one member. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- augmented by port contracts
+export interface PortCollectionMap {}
+
+export type PortCollectionId = keyof PortCollectionMap
+
+/** One loaded member of a collection port, and the module that provides it. */
+export interface PortCollectionMember<K extends PortCollectionId> {
+  module: string
+  port: PortCollectionMap[K]
+}
+
+/** A collection port's members, and the providers whose file failed to load. */
+export interface PortCollectionLoad<K extends PortCollectionId> {
+  members: readonly PortCollectionMember<K>[]
+  failures: readonly { module: string; error: unknown }[]
+}
+
 let moduleSource: () => readonly HostModuleManifest[] = () => activeHostModules()
 
 /** Resolved implementations: a value, or `null` when no module provides the port. */
 const resolved = new Map<string, unknown>()
 const pending = new Map<string, Promise<unknown>>()
 const listeners = new Set<() => void>()
+/** Loaded collection members, keyed by port and then by providing module. */
+const members = new Map<string, Map<string, unknown>>()
+const memberLoads = new Map<string, Promise<unknown>>()
 
 function notify(): void {
   for (const listener of [...listeners]) {
@@ -108,7 +136,84 @@ export function readPort<K extends PortId>(id: K): PortMap[K] | null | undefined
   return resolved.get(id) as PortMap[K] | null | undefined
 }
 
-/** Hear every port that finishes resolving. Returns the unsubscribe function. */
+/** Every active module that provides the collection port `id`, in registry order. */
+export function portCollectionProviders(
+  id: string
+): { module: string; load: () => Promise<unknown> }[] {
+  const found: { module: string; load: () => Promise<unknown> }[] = []
+  for (const manifest of moduleSource())
+    for (const provision of manifest.provides ?? [])
+      if (provision.port === id) found.push({ module: manifest.id, load: provision.load })
+  return found
+}
+
+function loadMember(id: string, provider: { module: string; load: () => Promise<unknown> }) {
+  const key = `${id}\u0000${provider.module}`
+  const inFlight = memberLoads.get(key)
+  if (inFlight) return inFlight
+  const promise = provider
+    .load()
+    .then((loaded) => {
+      const port = (loaded as Partial<ModulePortModule> | undefined)?.port
+      if (port === undefined || port === null)
+        throw new Error(
+          `[ports] "${provider.module}" provides "${id}" but its file exports no port`
+        )
+      if (!members.has(id)) members.set(id, new Map())
+      members.get(id)!.set(provider.module, port)
+      memberLoads.delete(key)
+      notify()
+      return port
+    })
+    .catch((error: unknown) => {
+      memberLoads.delete(key)
+      throw error
+    })
+  memberLoads.set(key, promise)
+  return promise
+}
+
+/**
+ * Every member of a collection port, loading the ones not loaded yet. A
+ * provider whose file fails to load is reported in `failures` and tried again
+ * on the next call; the other members still arrive.
+ */
+export async function loadPortCollection<K extends PortCollectionId>(
+  id: K
+): Promise<PortCollectionLoad<K>> {
+  const providers = portCollectionProviders(id)
+  const settled = await Promise.allSettled(
+    providers.map((provider) => {
+      const known = members.get(id)?.get(provider.module)
+      return known === undefined ? loadMember(id, provider) : Promise.resolve(known)
+    })
+  )
+  const loaded: PortCollectionMember<K>[] = []
+  const failures: { module: string; error: unknown }[] = []
+  settled.forEach((outcome, index) => {
+    const provider = providers[index].module
+    if (outcome.status === "fulfilled")
+      loaded.push({ module: provider, port: outcome.value as PortCollectionMap[K] })
+    else failures.push({ module: provider, error: outcome.reason })
+  })
+  return { members: loaded, failures }
+}
+
+/** The members of a collection port loaded so far in this realm, in registry order. */
+export function readPortCollection<K extends PortCollectionId>(
+  id: K
+): readonly PortCollectionMember<K>[] {
+  const loaded = members.get(id)
+  if (!loaded) return []
+  return portCollectionProviders(id)
+    .filter((provider) => loaded.has(provider.module))
+    .map((provider) => ({
+      module: provider.module,
+      port: loaded.get(provider.module) as PortCollectionMap[K],
+    }))
+}
+
+/** Hear every port and collection member that finishes resolving. Returns the unsubscribe function. */
 export function subscribePorts(listener: () => void): () => void {
   listeners.add(listener)
   return () => {
@@ -132,6 +237,8 @@ export function __setPortModulesForTesting(modules: readonly HostModuleManifest[
 export function __resetPortsForTesting(): void {
   resolved.clear()
   pending.clear()
+  members.clear()
+  memberLoads.clear()
   listeners.clear()
   moduleSource = () => activeHostModules()
 }

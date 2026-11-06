@@ -51,7 +51,7 @@ import {
   type FetchLarkDocOptions,
   type LarkIngestErrorCode,
 } from "@/lib/twin/ingest/lark-doc-fetcher"
-import { parseLarkDocUrl } from "@/lib/docs-providers/providers/lark/url"
+import { parseLarkDocUrl } from "@cognia/feishu-protocol"
 import { safeHostname } from "@/lib/web/reader/types"
 import type { RawSource } from "@/lib/twin/ingest"
 import type { TwinSourceFormat, TwinSourceKind } from "@/types/twin"

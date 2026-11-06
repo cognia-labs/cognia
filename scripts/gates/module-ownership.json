@@ -813,7 +813,11 @@
     },
     "twin": {
       "class": "module",
-      "api": ["lib/twin/distill/llm.ts", "lib/twin/runtime/build-deps.ts"]
+      "api": [
+        "lib/twin/distill/llm.ts",
+        "lib/twin/ingest/lark-doc-fetcher.ts",
+        "lib/twin/runtime/build-deps.ts"
+      ]
     },
     "types-root": {
       "class": "foundation"

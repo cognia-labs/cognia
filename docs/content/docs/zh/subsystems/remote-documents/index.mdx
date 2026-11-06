@@ -38,8 +38,8 @@ flowchart TD
 
   subgraph registry["lib/docs-providers"]
     R["registry.ts<br/>module-level Map"]
-    L["providers/lark"]
-    O["providers/google"]
+    L["lark-docs module<br/>docs-provider port"]
+    O["google-docs module<br/>docs-provider port"]
   end
 
   subgraph transport["宿主传输（仅 Tauri）"]
@@ -125,8 +125,8 @@ prepareComposerAttachments → staged-attachment-store → lib/chat/attachments/
 | 上限与截断标记 | `lib/docs-providers/limits.ts` |
 | 网格转 CSV | `lib/docs-providers/csv.ts` |
 | OAuth deep link | `lib/docs-providers/oauth-deep-link.ts` |
-| 飞书 provider | `lib/docs-providers/providers/lark/` |
-| Google provider | `lib/docs-providers/providers/google/` |
+| 飞书 provider | `lib/lark-docs/` |
+| Google provider | `lib/google-docs/` |
 | 共享飞书鉴权 harness | `lib/auth-providers/feishu/authed-api.ts` |
 | 面板状态 | `hooks/chat/use-remote-doc-search.ts` |
 | 附件暂存 | `hooks/chat/use-remote-doc-staging.ts` |

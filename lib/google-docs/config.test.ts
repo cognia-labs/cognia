@@ -2,7 +2,7 @@ import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/settings", () => ({ getSettings: jest.fn(), saveSettings: jest.fn() }))
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
-import { __setGoogleStatePortForTests } from "./state"
+import { __setGoogleStatePortForTests } from "@/lib/auth-providers/google/state"
 import {
   GOOGLE_DOCS_SCOPES,
   GOOGLE_DOCS_SCOPE_STRING,

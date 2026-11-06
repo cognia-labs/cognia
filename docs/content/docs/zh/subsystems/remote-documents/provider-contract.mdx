@@ -111,11 +111,11 @@ isDocsProviderHostSupported(provider)
 docsProviderPrefixes()                // [{ prefix, providerId }]
 ```
 
-风格沿用 `lib/chat/mentions/pick-registry.ts` 与 `lib/plugin/registries/*`：模块级 `Map`、重复注册抛错、内置项在 `lib/docs-providers/index.ts` 模块加载时播种，而非首次渲染时。
+风格沿用 `lib/chat/mentions/pick-registry.ts` 与 `lib/plugin/registries/*`：模块级 `Map`、重复注册抛错。内置项是 `docs-provider` 集合端口（`types/modules/ports/docs-provider.ts`，ADR-0250 §14）的成员：Google Docs 与 Lark Docs 各是一个模块（`lib/google-docs/`、`lib/lark-docs/`），框架从不导入它们。注册表第一次被读取时开始加载，每个成员到达即注册，所以 `subscribeDocsProviders` 的监听者能听到。必须先看到它们才能行动的调用方（OAuth 深链、留存副本的来源检查）先等待 `whenDocsProvidersReady()` 或 `resolveDocsProvider(id)`。每个内置项的 URL 规则留在同步目录 `lib/docs-providers/providers/_document-urls.ts`，所以链接在其模块加载之前就能被识别。
 
 两处行为是刻意的：
 
 - **`docsProviderPrefixes()` 返回全部 provider，包括宿主不支持的。** `@lark:` 触发器在 web 上仍必须触发，面板才有机会解释自己为什么是空的。只有 `listAvailableDocsProviders()` 做过滤。
 - **前缀冲突检查与 id 检查分开。** 两个 id 不同但都声称 `@doc:` 的 provider 会让 `getDocsProviderByPrefix` 变得不确定，因此注册在模块加载时就大声失败。
 
-`__resetDocsProvidersForTests()`（从 `index.ts` 而非 `registry.ts` 导出）清空 map 并重新播种内置项，因此测试不会给下一个文件留下一个空注册表。
+`__resetDocsProvidersForTests()` 清空 map，并在内置项重新注册后才 resolve，因此测试不会给下一个文件留下一个空注册表。`__clearDocsProvidersForTests()` 则在那之前把它们挡在外面，供只注册桩的测试套件使用。

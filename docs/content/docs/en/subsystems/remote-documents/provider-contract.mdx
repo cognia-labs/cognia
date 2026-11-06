@@ -124,8 +124,13 @@ docsProviderPrefixes()                // [{ prefix, providerId }]
 ```
 
 Style follows `lib/chat/mentions/pick-registry.ts` and `lib/plugin/registries/*`: a module-level `Map`,
-duplicate registration throws, and built-ins are seeded at module load in `lib/docs-providers/index.ts` rather
-than on first render.
+duplicate registration throws. The built-ins are the members of the `docs-provider` collection port
+(`types/modules/ports/docs-provider.ts`, ADR-0250 §14): Google Docs and Lark Docs are modules of their own
+(`lib/google-docs/`, `lib/lark-docs/`) that the framework never imports. The first read of the registry starts
+loading them and each registers as it arrives, so a `subscribeDocsProviders` listener hears them. A caller that
+must see them before acting (the OAuth deep link, a kept copy's source check) awaits `whenDocsProvidersReady()`
+or `resolveDocsProvider(id)`. Each built-in's URL scheme stays in the synchronous catalog
+`lib/docs-providers/providers/_document-urls.ts`, so a link is recognised before its module loads.
 
 Two behaviours are deliberate:
 
@@ -136,5 +141,6 @@ Two behaviours are deliberate:
   `@doc:` would make `getDocsProviderByPrefix` non-deterministic, so registration fails loudly at module load
   instead.
 
-`__resetDocsProvidersForTests()` (exported from `index.ts`, not `registry.ts`) clears the map and re-seeds the
-built-ins, so a test never leaves the registry empty for the next file.
+`__resetDocsProvidersForTests()` clears the map and resolves once the built-ins are registered again, so a test
+never leaves the registry empty for the next file. `__clearDocsProvidersForTests()` keeps them out until then,
+for suites that register only stubs.

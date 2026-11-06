@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:modules",
+  "allowGrowth": 2,
+  "owner": "lib/google-docs",
+  "repaymentPhase": "2",
+  "reason": "ADR-0250 §14 M3 turns the two built-in cloud document providers into modules (lib/google-docs/module.ts, lib/lark-docs/module.ts), each adding one member to the `docs-provider` collection port; the kernel keeps the framework in lib/docs-providers/ and the port's contract (types/modules/ports/docs-provider.ts). The module count rises by two because vendor implementations left a kernel subsystem, which is the direction §14 asks for, not debt. Nothing is owed back; phase 2 is named because it re-baselines the size measures once the transitional table is empty."
+}

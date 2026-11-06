@@ -72,7 +72,7 @@ import {
   type BitableTableSummary,
   type LarkTasklistSummary,
 } from "@/lib/issues/sync/providers/lark-api"
-import { parseLarkResourceUrl } from "@/lib/docs-providers/providers/lark/url"
+import { parseLarkResourceUrl } from "@cognia/feishu-protocol"
 import type { IssueProjectResource, IssueStatus, LarkBitableFieldMap } from "@/types/issues"
 import { ISSUE_STATUSES } from "@/types/issues"
 import type { WorkspaceRoot } from "@/types/workspace"

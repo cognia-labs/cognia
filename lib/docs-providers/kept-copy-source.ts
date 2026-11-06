@@ -12,7 +12,7 @@ import {
   remoteDocumentProvenance,
   type RemoteDocumentProvenanceV1,
 } from "./document-provenance"
-import { getDocsProvider } from "./registry"
+import { getDocsProvider, resolveDocsProvider } from "./registry"
 import { resolveDocsAccountBinding } from "./account-binding"
 import {
   DocsProviderError,
@@ -116,7 +116,11 @@ export async function resolveKeptCopyConnection(provenance: KeptCopySourceRefere
     !source ||
     source.providerId !== provenance.providerId ||
     source.sourceDeletedAt !== undefined ||
-    (source.sourceKind !== "issue-sync" && !getDocsProvider(provenance.providerId))
+    // A built-in provider may still be loading when a kept copy first renders.
+    (source.sourceKind !== "issue-sync" &&
+      !(
+        getDocsProvider(provenance.providerId) ?? (await resolveDocsProvider(provenance.providerId))
+      ))
   )
     return undefined
   const original = await getAuthConnection(source.connectionRef)

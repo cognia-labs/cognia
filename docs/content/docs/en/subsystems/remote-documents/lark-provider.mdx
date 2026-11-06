@@ -5,7 +5,7 @@ description: "Docs, wiki nodes, spreadsheets and Bitable through a bound Lark co
 
 # Feishu provider
 
-`lib/docs-providers/providers/lark/` · prefix `@lark:` · kinds `doc`, `wiki`, `sheet`, `bitable`
+`lib/lark-docs/` (module `lark-docs`) · prefix `@lark:` · kinds `doc`, `wiki`, `sheet`, `bitable`
 
 ## Credentials are borrowed, never new
 
@@ -62,7 +62,7 @@ never a shortcut.
 
 ## URL and token recognition
 
-`matchRef` delegates to `parseLarkResourceUrl` in `lib/docs-providers/providers/lark/url.ts`, which was widened from the
+`matchRef` delegates to `parseLarkResourceUrl` in `packages/feishu-protocol/src/url.ts`, which was widened from the
 twin pipeline's `parseLarkDocUrl` to cover the two grid kinds.
 
 | Path | Kind | Bare token prefix |
@@ -91,7 +91,7 @@ host resolves) and the bare token otherwise, which is why the bare-token branch 
 
 ### Spreadsheets
 
-`lib/docs-providers/providers/lark/sheets.ts`, three calls:
+`lib/lark-docs/sheets.ts`, three calls:
 
 ```
 GET /open-apis/sheets/v3/spreadsheets/{token}                → title
@@ -100,12 +100,12 @@ GET /open-apis/sheets/v2/spreadsheets/{token}/values/{range} → cells, per work
 ```
 
 The values endpoint is still v2 — v3 has no bulk range read — and takes an A1 range, which
-`lib/docs-providers/providers/lark/a1.ts` builds. `columnLetters` implements bijective base-26 (there is no
+`lib/docs-providers/a1.ts` builds. `columnLetters` implements bijective base-26 (there is no
 zero digit, so a plain modulo renders column 26 wrongly).
 
 ### Bitable
 
-`lib/docs-providers/providers/lark/bitable.ts`, three calls:
+`lib/lark-docs/bitable.ts`, three calls:
 
 ```
 GET  /open-apis/bitable/v1/apps/{app}                            → name
@@ -141,7 +141,7 @@ always fails at fetch time.
 
 ## Error mapping
 
-`lib/docs-providers/providers/lark/errors.ts` reuses `mapLarkError` from the twin fetcher rather than
+`lib/lark-docs/errors.ts` reuses `mapLarkError` from the twin fetcher rather than
 restating the Lark business-code tables (`LARK_FORBIDDEN_CODES`, `LARK_NOT_FOUND_CODES`,
 `LARK_RATE_LIMIT_CODES`). One code table, two consumers; the only thing added is the last hop from the ingest
 taxonomy to the provider taxonomy.

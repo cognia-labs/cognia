@@ -5,7 +5,7 @@ description: "用已绑定 Lark 连接器的凭证读取文档、知识库节点
 
 # 飞书 provider
 
-`lib/docs-providers/providers/lark/` · 前缀 `@lark:` · 类型 `doc`、`wiki`、`sheet`、`bitable`
+`lib/lark-docs/`（模块 `lark-docs`）· 前缀 `@lark:` · 类型 `doc`、`wiki`、`sheet`、`bitable`
 
 ## 凭证是借用的，从不新建
 
@@ -53,7 +53,7 @@ harness 的顺序：
 
 ## URL 与 token 识别
 
-`matchRef` 委托给 `lib/docs-providers/providers/lark/url.ts` 里的 `parseLarkResourceUrl`，它是在数字分身管线的 `parseLarkDocUrl` 基础上加宽而来，覆盖两种网格类型。
+`matchRef` 委托给 `packages/feishu-protocol/src/url.ts` 里的 `parseLarkResourceUrl`，它是在数字分身管线的 `parseLarkDocUrl` 基础上加宽而来，覆盖两种网格类型。
 
 | 路径 | 类型 | 裸 token 前缀 |
 | --- | --- | --- |
@@ -75,7 +75,7 @@ harness 的顺序：
 
 ### 电子表格
 
-`lib/docs-providers/providers/lark/sheets.ts`，三次调用：
+`lib/lark-docs/sheets.ts`，三次调用：
 
 ```
 GET /open-apis/sheets/v3/spreadsheets/{token}                → 标题
@@ -83,11 +83,11 @@ GET /open-apis/sheets/v3/spreadsheets/{token}/sheets/query   → 工作表
 GET /open-apis/sheets/v2/spreadsheets/{token}/values/{range} → 单元格，逐工作表
 ```
 
-取值端点仍是 v2 —— v3 没有批量区间读 —— 且接受 A1 区间，由 `lib/docs-providers/providers/lark/a1.ts` 构造。`columnLetters` 实现双射 26 进制（没有零位，直接取模会把第 26 列渲染错）。
+取值端点仍是 v2 —— v3 没有批量区间读 —— 且接受 A1 区间，由 `lib/docs-providers/a1.ts` 构造。`columnLetters` 实现双射 26 进制（没有零位，直接取模会把第 26 列渲染错）。
 
 ### 多维表格
 
-`lib/docs-providers/providers/lark/bitable.ts`，三次调用：
+`lib/lark-docs/bitable.ts`，三次调用：
 
 ```
 GET  /open-apis/bitable/v1/apps/{app}                            → 名称
@@ -115,7 +115,7 @@ POST /open-apis/suite/docs-api/search/object
 
 ## 错误映射
 
-`lib/docs-providers/providers/lark/errors.ts` 复用数字分身 fetcher 的 `mapLarkError`，而不是重述飞书业务错误码表（`LARK_FORBIDDEN_CODES`、`LARK_NOT_FOUND_CODES`、`LARK_RATE_LIMIT_CODES`）。一张码表，两个消费者；新增的只有从 ingest 分类法到 provider 分类法的最后一跳。
+`lib/lark-docs/errors.ts` 复用数字分身 fetcher 的 `mapLarkError`，而不是重述飞书业务错误码表（`LARK_FORBIDDEN_CODES`、`LARK_NOT_FOUND_CODES`、`LARK_RATE_LIMIT_CODES`）。一张码表，两个消费者；新增的只有从 ingest 分类法到 provider 分类法的最后一跳。
 
 | Ingest code | Provider code |
 | --- | --- |

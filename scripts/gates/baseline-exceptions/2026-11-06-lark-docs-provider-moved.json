@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/identity-vocabulary-baseline.json",
+  "measure": "entries:lib/docs-providers/providers/lark/index.ts.bareAccountId",
+  "allowRemoval": true,
+  "owner": "lib/lark-docs",
+  "repaymentPhase": "1",
+  "reason": "The Lark Docs provider moved to lib/lark-docs/provider.ts when it became a module providing the `docs-provider` collection port (ADR-0250 §14 M3). The same three findings are counted under the new path; nothing new is admitted."
+}

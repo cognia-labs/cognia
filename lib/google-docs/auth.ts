@@ -4,7 +4,11 @@ import { CONNECTORS_SERVER_PORT } from "@/lib/connectors/server-transport"
 import { DocsProviderError } from "@/lib/docs-providers/types"
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { GOOGLE_DOCS_SCOPES, getGoogleDocsSettings } from "./config"
-import { googleState, type GoogleDisconnectOutcome, type GoogleStateReply } from "./state"
+import {
+  googleState,
+  type GoogleDisconnectOutcome,
+  type GoogleStateReply,
+} from "@/lib/auth-providers/google/state"
 
 export const GOOGLE_CALLBACK_PATH = "/oauth/docs/google/callback"
 export interface GoogleAuthDeps {

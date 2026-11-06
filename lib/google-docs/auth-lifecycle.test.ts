@@ -1,6 +1,6 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
-import { __setGoogleStatePortForTests, googleState } from "./state"
+import { __setGoogleStatePortForTests, googleState } from "@/lib/auth-providers/google/state"
 import { completeGoogleDocsAuth, disconnectGoogleDocs } from "./auth"
 
 afterEach(() => __setGoogleStatePortForTests(null))

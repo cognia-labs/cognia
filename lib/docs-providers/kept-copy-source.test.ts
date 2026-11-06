@@ -14,10 +14,14 @@ import {
 } from "./kept-copy-source"
 import type { RemoteDocumentProvenanceV1 } from "./document-provenance"
 
-jest.mock("./registry", () => ({
-  getDocsProvider: jest.fn(),
-  listDocsProviders: jest.fn(() => []),
-}))
+jest.mock("./registry", () => {
+  const getDocsProvider = jest.fn()
+  return {
+    getDocsProvider,
+    resolveDocsProvider: async (id: string) => getDocsProvider(id),
+    listDocsProviders: jest.fn(() => []),
+  }
+})
 const fixture = createDbTestFixture()
 beforeAll(fixture.initialize)
 beforeEach(async () => {

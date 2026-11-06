@@ -1,6 +1,6 @@
 /** Feishu/Lark document addresses for dock tabs (`lib/docs-providers/document-url.ts`). */
 import type { DocumentUrlScheme } from "@/lib/docs-providers/types"
-import { LARK_HOST_SUFFIXES, parseLarkResourceUrl } from "./url"
+import { LARK_HOST_SUFFIXES, parseLarkResourceUrl } from "@cognia/feishu-protocol"
 
 export const larkDocumentUrls: DocumentUrlScheme = {
   providerId: "lark",

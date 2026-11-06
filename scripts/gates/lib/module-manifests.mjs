@@ -486,13 +486,20 @@ function effectErrors(effects) {
   return errors
 }
 
-/** The port ids a module's contracts declare: `types/modules/ports/<id>.ts`, tests aside. */
-export function declaredPorts(files) {
-  const ports = new Set()
+/**
+ * The ports the kernel's contracts declare (`types/modules/ports/<id>.ts`,
+ * tests aside), each `"one"` (`PortMap`: one provider) or `"many"`
+ * (`PortCollectionMap`: every providing module adds a member). Without `read`
+ * every port counts as `"one"`.
+ */
+export function declaredPorts(files, read) {
+  const ports = new Map()
   for (const file of files) {
     if (!file.startsWith(PORTS_DIR)) continue
     const name = file.slice(PORTS_DIR.length)
-    if (/^[^/]+\.ts$/.test(name) && !/\.(?:test|d)\.ts$/.test(name)) ports.add(name.slice(0, -3))
+    if (!/^[^/]+\.ts$/.test(name) || /\.(?:test|d)\.ts$/.test(name)) continue
+    const collection = read ? /\binterface\s+PortCollectionMap\b/.test(read(file)) : false
+    ports.set(name.slice(0, -3), collection ? "many" : "one")
   }
   return ports
 }

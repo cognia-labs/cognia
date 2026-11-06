@@ -88,7 +88,7 @@ import { DataAdapterProvider } from "@/lib/data-hooks/context"
 import type { DataAdapter } from "@/lib/data-hooks/types"
 import { useChatStore } from "@/stores/chat"
 import { DocsProviderError } from "@/lib/docs-providers"
-import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
+import { larkDocsProvider } from "@/lib/lark-docs/provider"
 import type { ChatSession } from "@cognia/agent-config-types"
 
 searchState.provider = larkDocsProvider

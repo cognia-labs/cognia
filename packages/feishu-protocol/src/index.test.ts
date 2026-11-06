@@ -11,6 +11,8 @@ describe("@cognia/feishu-protocol root export", () => {
       "computeCodeChallenge",
       "mergeLarkScopes",
       "FEISHU_JSON_HEADERS",
+      "parseLarkResourceUrl",
+      "LARK_HOST_SUFFIXES",
     ])
       expect(protocol).toHaveProperty(name)
   })

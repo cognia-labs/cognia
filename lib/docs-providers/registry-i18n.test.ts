@@ -9,12 +9,15 @@
  */
 import en from "@/i18n/messages/en/docsProviders.json"
 import zh from "@/i18n/messages/zh-CN/docsProviders.json"
-import { listDocsProviders } from "./registry"
+import { listDocsProviders, whenDocsProvidersReady } from "./registry"
 import { DOCS_PROVIDER_BLOCKS } from "./reach"
-import "./index"
 
 describe("docs provider name catalogue", () => {
-  const ids = listDocsProviders().map((p) => p.id)
+  let ids: string[] = []
+  beforeAll(async () => {
+    await whenDocsProvidersReady()
+    ids = listDocsProviders().map((p) => p.id)
+  })
 
   it("registers at least the built-ins", () => {
     expect(ids.length).toBeGreaterThan(0)

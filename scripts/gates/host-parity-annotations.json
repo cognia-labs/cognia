@@ -383,7 +383,7 @@
     },
     "lib/docs-providers": {
       "classification": "seam-infrastructure",
-      "note": "This IS the host-support declaration for the cloud-document providers. `listAvailableDocsProviders` and `isDocsProviderHostSupported` filter a registry by each provider's own `hosts` list, which is the registry's job and the reason a mobile user sees WHY a provider is missing instead of an empty picker. The one `isTauri()` outside that, in `providers/google/http.ts`, picks the Tauri transport over `fetch` and is the same seam question."
+      "note": "This IS the host-support declaration for the cloud-document providers. `listAvailableDocsProviders` and `isDocsProviderHostSupported` filter a registry by each provider's own `hosts` list, which is the registry's job and the reason a mobile user sees WHY a provider is missing instead of an empty picker."
     },
     "lib/external-bridge": {
       "classification": "unmigrated"
@@ -419,6 +419,10 @@
     },
     "lib/goal": {
       "classification": "unmigrated"
+    },
+    "lib/google-docs": {
+      "classification": "seam-infrastructure",
+      "note": "The one `isTauri()`, in `http.ts`, picks the Tauri transport (`connectors_http_request`, proxy policy in Rust) over `fetch`. Where the provider runs at all is its own `hosts` list, which the docs-providers registry filters."
     },
     "lib/host-secrets": {
       "classification": "seam-infrastructure",

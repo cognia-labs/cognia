@@ -59,7 +59,7 @@ jest.mock("@/components/chat/message-parts/file-part-preview", () => ({
   ),
 }))
 jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => undefined }))
-jest.mock("@/lib/docs-providers/providers/lark", () => ({
+jest.mock("@/lib/lark-docs/provider", () => ({
   larkDocsProvider: {
     id: "lark",
     mentionPrefix: "lark:",
@@ -70,7 +70,7 @@ jest.mock("@/lib/docs-providers/providers/lark", () => ({
     fetch: jest.fn(),
   },
 }))
-jest.mock("@/lib/docs-providers/providers/google", () => ({
+jest.mock("@/lib/google-docs/provider", () => ({
   googleDocsProvider: {
     id: "google",
     mentionPrefix: "gdoc:",
@@ -81,14 +81,14 @@ jest.mock("@/lib/docs-providers/providers/google", () => ({
     fetch: jest.fn(),
   },
 }))
-jest.mock("@/lib/docs-providers/providers/google/config", () => ({
+jest.mock("@/lib/google-docs/config", () => ({
   GOOGLE_DOCS_SCOPES: [],
   getGoogleDocsSettings: async () => ({}),
   subscribeGoogleDocsSettings: () => () => {},
   saveGoogleClientSecret: jest.fn(),
   updateGoogleDocsSettings: jest.fn(),
 }))
-jest.mock("@/lib/docs-providers/providers/google/auth", () => ({
+jest.mock("@/lib/google-docs/auth", () => ({
   beginGoogleDocsAuth: jest.fn(),
   disconnectGoogleDocs: jest.fn(),
 }))

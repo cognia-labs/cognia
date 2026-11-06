@@ -95,10 +95,6 @@
       "uses": [],
       "references": 3
     },
-    "lib/docs-providers/providers/lark/index.ts": {
-      "uses": ["subscribe:lark-user-authorization-changed"],
-      "references": 0
-    },
     "lib/filespace/grants-client.ts": {
       "uses": [],
       "references": 1
@@ -113,6 +109,10 @@
     },
     "lib/identity/deployment-discovery.ts": {
       "uses": ["call:companion_local_auth_config", "call:companion_server_status"],
+      "references": 0
+    },
+    "lib/lark-docs/provider.ts": {
+      "uses": ["subscribe:lark-user-authorization-changed"],
       "references": 0
     },
     "lib/magpie/client.ts": {

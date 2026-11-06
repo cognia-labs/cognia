@@ -18,7 +18,7 @@ import {
   googleState,
   subscribeGoogleStateChanged,
   type GoogleStateReply,
-} from "@/lib/docs-providers/providers/google/state"
+} from "@/lib/auth-providers/google/state"
 import {
   registerIntegrationDefinitions,
   __resetIntegrationRegistryForTesting,
@@ -43,7 +43,7 @@ import {
   createGoogleDeviceAuthorization,
 } from "./host-auth"
 
-jest.mock("@/lib/docs-providers/providers/google/state", () => ({
+jest.mock("@/lib/auth-providers/google/state", () => ({
   googleState: jest.fn(),
   subscribeGoogleStateChanged: jest.fn(() => jest.fn()),
 }))

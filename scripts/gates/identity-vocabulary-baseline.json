@@ -399,9 +399,6 @@
     "lib/diagnostic-service/installation-identity.ts": {
       "bareAccountId": 3
     },
-    "lib/docs-providers/providers/lark/index.ts": {
-      "bareAccountId": 3
-    },
     "lib/docs-providers/types.ts": {
       "bareAccountId": 1
     },
@@ -464,6 +461,9 @@
     },
     "lib/issues/run/github-loop-adapter.ts": {
       "bareAccountId": 1
+    },
+    "lib/lark-docs/provider.ts": {
+      "bareAccountId": 3
     },
     "lib/perf/budget-service.ts": {
       "bareAccountId": 15

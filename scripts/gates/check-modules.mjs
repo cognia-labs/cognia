@@ -142,7 +142,6 @@ export const VENDOR_FRAMEWORKS = [
     path: "lib/docs-providers/",
     implementations: ["lib/docs-providers/providers/"],
     catalogs: [
-      { file: "lib/docs-providers/providers/_builtin.ts", entry: "index.ts" },
       { file: "lib/docs-providers/providers/_document-urls.ts", entry: "document-url.ts" },
     ],
   },
@@ -203,7 +202,7 @@ function collectManifests(ctx, files) {
       : undefined,
     spotIconNames: constStringList(ctx, SPOT_ICON_FILE, "MOBILE_SPOT_ICON_NAMES"),
     extensionPoints: constStringList(ctx, EXTENSION_POINTS_FILE, "CANONICAL_EXTENSION_POINTS"),
-    ports: declaredPorts(files),
+    ports: declaredPorts(files, (file) => ctx.read(file)),
   }
   for (const file of files) {
     const kind = manifestKind(file)
@@ -257,8 +256,19 @@ function collectManifests(ctx, files) {
     ),
     ...duplicateContributions(host, (manifest) => manifest.nav, "id", "navigation entry "),
     ...duplicateContributions(host, (manifest) => manifest.runtimes, "name", "runtime "),
-    // One provider per port: `lib/modules/ports.ts` refuses two at runtime.
-    ...duplicateContributions(host, (manifest) => manifest.provides, "port", "port ")
+    // One provider per port: `lib/modules/ports.ts` refuses two at runtime. A
+    // collection port takes one member from every providing module.
+    ...duplicateContributions(
+      host,
+      (manifest) =>
+        Array.isArray(manifest.provides)
+          ? manifest.provides.filter(
+              (provision) => vocabulary.ports.get(provision?.port) !== "many"
+            )
+          : manifest.provides,
+      "port",
+      "port "
+    )
   )
   return { host, ui, errors, warnings }
 }
@@ -346,7 +356,10 @@ function provisionExportErrors(ctx, file, manifest) {
   return errors
 }
 
-/** The port ids a file asks for: `loadPort("…")`, `readPort("…")` or `usePort("…")`. */
+/**
+ * The port ids a file asks for: `loadPort("…")`, `readPort("…")`, `usePort("…")`,
+ * and for a collection port `loadPortCollection("…")` or `readPortCollection("…")`.
+ */
 export function portsAskedFor(sourceFile) {
   const asked = new Set()
   const visit = (node) => {
@@ -364,7 +377,13 @@ export function portsAskedFor(sourceFile) {
   return asked
 }
 
-const PORT_READERS = new Set(["loadPort", "readPort", "usePort"])
+const PORT_READERS = new Set([
+  "loadPort",
+  "readPort",
+  "usePort",
+  "loadPortCollection",
+  "readPortCollection",
+])
 
 /**
  * Ports (G4, G5). A manifest module's `requires` names exactly the ports its

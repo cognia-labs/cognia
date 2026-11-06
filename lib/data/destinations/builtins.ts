@@ -11,7 +11,7 @@ import {
   resolveGithubBackupConfig,
   resolveGoogleDriveBackupConfig,
 } from "./config"
-import { googleState } from "@/lib/docs-providers/providers/google/state"
+import { googleState } from "@/lib/auth-providers/google/state"
 import { resolveGoogleDriveConnection } from "./google-oauth"
 import { saveSettings } from "@/lib/db/settings"
 import { getDb } from "@/lib/db/schema"

@@ -20,8 +20,8 @@ import {
 } from "@/lib/docs-providers/limits"
 import { renderCsvSections, type CsvSection } from "@/lib/docs-providers/csv"
 import { DocsProviderError, type RemoteDocRef } from "@/lib/docs-providers/types"
-import { columnLetters } from "@/lib/docs-providers/providers/lark/a1"
-import { googleDocUrl } from "./url"
+import { columnLetters } from "@/lib/docs-providers/a1"
+import { googleDocUrl } from "@/lib/docs-providers/providers/google/url"
 import {
   parseJson,
   throwIfGoogleRequestAborted,

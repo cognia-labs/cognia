@@ -20,7 +20,11 @@
  * untrusted host into the dock.
  */
 
-import { classifyCloudDocumentUrl, cloudDocumentTargetFromRef } from "./document-url"
+import {
+  builtinDocumentUrlScheme,
+  classifyCloudDocumentUrl,
+  cloudDocumentTargetFromRef,
+} from "./document-url"
 import { isPluginDocsProviderId } from "./types"
 import type {
   RemoteDocCompleteness,
@@ -52,7 +56,6 @@ export interface RemoteDocumentProvenanceV1 {
   sourceType?: "doc" | "docx"
 }
 
-const PROVIDERS = new Set(["lark", "google"])
 const KINDS = new Set<RemoteDocKind>(["doc", "wiki", "sheet", "bitable", "resource"])
 const REASONS = new Set<RemoteDocIncompleteReason>([
   "upstream-truncated",
@@ -104,7 +107,7 @@ export function parseRemoteDocumentProvenance(value: unknown): RemoteDocumentPro
   const { providerId, resourceKind, resourceId, title, fetchedAt } = value
   if (
     typeof providerId !== "string" ||
-    (!PROVIDERS.has(providerId) && !isPluginDocsProviderId(providerId))
+    (!builtinDocumentUrlScheme(providerId) && !isPluginDocsProviderId(providerId))
   )
     return null
   if (typeof resourceKind !== "string" || !KINDS.has(resourceKind as RemoteDocKind)) return null
@@ -129,7 +132,7 @@ export function parseRemoteDocumentProvenance(value: unknown): RemoteDocumentPro
     fetchedAt,
     completeness,
     ...(value.truncated === true ? { truncated: true } : {}),
-    ...(providerId === "lark" &&
+    ...(builtinDocumentUrlScheme(providerId)?.keepsSourceType &&
     kind === "doc" &&
     (value.sourceType === "doc" || value.sourceType === "docx")
       ? { sourceType: value.sourceType }

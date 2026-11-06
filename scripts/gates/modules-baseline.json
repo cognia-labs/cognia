@@ -5,7 +5,7 @@
     "largestLibComponent": 166
   },
   "size": {
-    "modules": 136,
+    "modules": 138,
     "experimental": 0,
     "tables": 401,
     "unclaimedTables": 370,
@@ -656,8 +656,6 @@
     "lib/diagnostics/notification-commands.ts -> logging",
     "lib/diagnostics/notification-commands.ts -> notifications",
     "lib/diagnostics/notification-commands.ts -> support-report",
-    "lib/docs-providers/providers/lark/errors.ts -> twin",
-    "lib/docs-providers/providers/lark/index.ts -> twin",
     "lib/execution/acting-authority.ts -> connectors",
     "lib/execution/cockpit-model.ts -> agent-runs",
     "lib/execution/control-handlers.ts -> agent-team",
@@ -1175,7 +1173,6 @@
     "lib/data/backup-scheduler.ts :: imports lib/data/destinations/sync-now.ts",
     "lib/data/backup-scheduler.ts :: imports lib/data/destinations/webdav.ts",
     "lib/docs-providers/created-document.ts :: compares \"lark\"",
-    "lib/docs-providers/document-provenance.ts :: compares \"lark\"",
     "lib/issues/sync/bindings.ts :: compares \"github-repo\"",
     "lib/issues/sync/bindings.ts :: compares \"lark-bitable\"",
     "lib/issues/sync/bindings.ts :: compares \"lark-tasklist\"",

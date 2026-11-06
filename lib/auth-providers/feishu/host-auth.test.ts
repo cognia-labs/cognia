@@ -36,7 +36,7 @@ jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
 jest.mock("@/lib/connectors/events", () => ({ connectorListen: jest.fn(async () => jest.fn()) }))
 import { refreshUserToken } from "./auth"
 import { withAuthLock } from "@/lib/plugin/auth/connection-credentials"
-import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
+import { larkDocsProvider } from "@/lib/lark-docs/provider"
 import {
   captureKeptCopyProvenance,
   resolveKeptCopySource,
@@ -67,7 +67,14 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
 }))
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
-jest.mock("@/lib/docs-providers/registry", () => ({ getDocsProvider: jest.fn() }))
+jest.mock("@/lib/docs-providers/registry", () => {
+  const getDocsProvider = jest.fn()
+  return {
+    getDocsProvider,
+    resolveDocsProvider: async (id: string) => getDocsProvider(id),
+    whenDocsProvidersReady: async () => {},
+  }
+})
 jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
 const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
 const fixture = createDbTestFixture()

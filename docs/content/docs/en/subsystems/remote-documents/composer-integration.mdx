@@ -164,7 +164,9 @@ The two schemes validate state differently and must not share it: the connector 
 live outside React in `lib/docs-providers/oauth-deep-link.ts`, so the whole exchange is unit-testable and
 `completeDocsOAuthDeepLink` never throws — a failed OAuth becomes a reportable outcome, not a crash.
 
-Providers register their own completion at module load, so the router never has to know which providers exist.
+Providers register their own completion when their module loads, so the router never has to know which providers
+exist; `completeDocsOAuthDeepLink` waits for the built-ins first, because an OAuth callback can be the very thing
+that launched the app.
 
 ## Tests
 
