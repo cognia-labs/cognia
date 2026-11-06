@@ -279,6 +279,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 直接访问指 `db.<table>`、`getDb().<table>`（或 `rawDb()`）和 `.table("<table>")`。只评判其他模块：一个模块的文件读取另一个模块认领的表，就是一条 `tableAccess` 记录，这份列表只减不增（G4，自 M2 起阻断）。数据层、内核和外壳不受评判，因为备份、同步和数据治理本来就要读所有表。
   - 共享的访问器留在 `lib/db/`。模块通过它 import 的 `lib/db/` 文件访问到的表算作已访问，所以认领一张表不会逼着访问器搬家。
   - 只有一个 manifest 模块 import 的 `lib/db/` 文件归这个模块所有，由它在 `owns` 里认领（G4）。只被其他数据文件 import 的文件原地不动。G7 的 `singleUserDataModules` 统计剩下的单一使用者文件，它们的模块还没有 manifest（本切片时为 37）。
+  - 随后这些文件随属主一起搬走：G7 的 `singleUserDataModules` 为 0。没有 manifest 的模块无法认领文件，所以这 36 个文件各自在 `scripts/gates/module-ownership.json` 里得到一条 `paths` 记录，交给它唯一的使用者。归属表的棘轮只统计 `subsystems` 行，所以这些记录不需要例外；属主有了 manifest 后由 `owns` 认领，这些记录随之删除。文件路径不变：按分析文档对共享工作区的建议，移到 `lib/<id>/` 下的工作在模块下次修改时完成。有两类不跟随 import 方：设置壳不拥有数据，所以只有「设置 → A2UI」调试器使用的 `a2ui-event-history.ts` 归 `a2ui`；只有 `lib/storage/retention.ts` 使用的两个保留期辅助文件归 `storage`，它和数据层一样属于基础层。这次搬迁偿还了 8 条数据层的方向边。
   - `eval` 认领了它的 20 张 `eval*` 表和 `lib/db/eval-dataset-versions.ts`。harness 采纳和工作流部署门禁中的三处直接读取已记入基线，偿还方式是改走 eval 的 `api`。
 - **M2 为运行时和副作用定下的规则。**
   - 适配器写成模块路径，不写懒加载入口：manifest 旁边的 `./runtime/<name>`，或 `@/…`。brain 会打包 `host.ts`（数据目录要读它），如果在那里写懒加载 import，桌面适配器就会进入 brain 的模块图，`check-headless-registry` 也会把桌面专属的副作用当成 brain 已调用。所以生成器把每个宿主的懒加载 import 分别写进 `lib/modules/generated/{brain,desktop,mobile}.ts`，每个宿主只 import 自己那一份。

@@ -1135,6 +1135,186 @@
       "prefix": "lib/remote-host/github-runner/",
       "owner": "github",
       "why": "The GitHub runner belongs to the GitHub module (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "lib/db/a2ui-apps.ts",
+      "owner": "a2ui",
+      "why": "Single-user data file (ADR-0250 M2): only `a2ui` imports it."
+    },
+    {
+      "prefix": "lib/db/a2ui-event-history.ts",
+      "owner": "a2ui",
+      "why": "Single-user data file (ADR-0250 M2). Only the Settings A2UI debugger reads and writes it; a shell does not own data, so it goes to the table's module."
+    },
+    {
+      "prefix": "lib/db/a2ui-surfaces.ts",
+      "owner": "a2ui",
+      "why": "Single-user data file (ADR-0250 M2): only `a2ui` imports it."
+    },
+    {
+      "prefix": "lib/db/agent-activity.ts",
+      "owner": "agent",
+      "why": "Single-user data file (ADR-0250 M2): only `agent` imports it."
+    },
+    {
+      "prefix": "lib/db/boot.ts",
+      "owner": "account",
+      "why": "Single-user data file (ADR-0250 M2): only `account` imports it."
+    },
+    {
+      "prefix": "lib/db/browser-cdp.ts",
+      "owner": "browser",
+      "why": "Single-user data file (ADR-0250 M2): only `browser` imports it."
+    },
+    {
+      "prefix": "lib/db/cogpack-installs.ts",
+      "owner": "cogsets",
+      "why": "Single-user data file (ADR-0250 M2): only `cogsets` imports it."
+    },
+    {
+      "prefix": "lib/db/collab-chat-mirror.ts",
+      "owner": "collab",
+      "why": "Single-user data file (ADR-0250 M2): only `collab` imports it."
+    },
+    {
+      "prefix": "lib/db/connector-cleanup-jobs.ts",
+      "owner": "connectors",
+      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
+    },
+    {
+      "prefix": "lib/db/conversation-labels.ts",
+      "owner": "connectors",
+      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
+    },
+    {
+      "prefix": "lib/db/external-agent-configs.ts",
+      "owner": "ai",
+      "why": "Single-user data file (ADR-0250 M2): only `ai` imports it."
+    },
+    {
+      "prefix": "lib/db/feishu-principals.ts",
+      "owner": "connectors",
+      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
+    },
+    {
+      "prefix": "lib/db/files-library-folders.ts",
+      "owner": "files-library",
+      "why": "Single-user data file (ADR-0250 M2): only `files-library` imports it."
+    },
+    {
+      "prefix": "lib/db/harness-evolution.ts",
+      "owner": "harness",
+      "why": "Single-user data file (ADR-0250 M2): only `harness` imports it."
+    },
+    {
+      "prefix": "lib/db/lark-chat-surfaces.ts",
+      "owner": "connectors",
+      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
+    },
+    {
+      "prefix": "lib/db/lark-message-imports.ts",
+      "owner": "connectors",
+      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
+    },
+    {
+      "prefix": "lib/db/memory-operations.ts",
+      "owner": "memory",
+      "why": "Single-user data file (ADR-0250 M2): only `memory` imports it."
+    },
+    {
+      "prefix": "lib/db/notification-aggregates.ts",
+      "owner": "notifications",
+      "why": "Single-user data file (ADR-0250 M2): only `notifications` imports it."
+    },
+    {
+      "prefix": "lib/db/notification-delivery-retention.ts",
+      "owner": "storage",
+      "why": "Single-user data file (ADR-0250 M2): only the retention sweep (`lib/storage/retention.ts`) imports it."
+    },
+    {
+      "prefix": "lib/db/notification-delivery.ts",
+      "owner": "notifications",
+      "why": "Single-user data file (ADR-0250 M2): only `notifications` imports it."
+    },
+    {
+      "prefix": "lib/db/notification-policy-state.ts",
+      "owner": "notifications",
+      "why": "Single-user data file (ADR-0250 M2): only `notifications` imports it."
+    },
+    {
+      "prefix": "lib/db/notification-publications.ts",
+      "owner": "notifications",
+      "why": "Single-user data file (ADR-0250 M2): only `notifications` imports it."
+    },
+    {
+      "prefix": "lib/db/notification-subscriptions.ts",
+      "owner": "notifications",
+      "why": "Single-user data file (ADR-0250 M2): only `notifications` imports it."
+    },
+    {
+      "prefix": "lib/db/notification-timers.ts",
+      "owner": "notifications",
+      "why": "Single-user data file (ADR-0250 M2): only `notifications` imports it."
+    },
+    {
+      "prefix": "lib/db/plugin-analytics.ts",
+      "owner": "plugin",
+      "why": "Single-user data file (ADR-0250 M2): only `plugin` imports it."
+    },
+    {
+      "prefix": "lib/db/plugin-marketplace-sources.ts",
+      "owner": "plugin",
+      "why": "Single-user data file (ADR-0250 M2): only `plugin` imports it."
+    },
+    {
+      "prefix": "lib/db/plugin-permissions.ts",
+      "owner": "plugin",
+      "why": "Single-user data file (ADR-0250 M2): only `plugin` imports it."
+    },
+    {
+      "prefix": "lib/db/project-chunks.ts",
+      "owner": "project-knowledge",
+      "why": "Single-user data file (ADR-0250 M2): only `project-knowledge` imports it."
+    },
+    {
+      "prefix": "lib/db/run-result-summaries.ts",
+      "owner": "notifications",
+      "why": "Single-user data file (ADR-0250 M2): only `notifications` imports it."
+    },
+    {
+      "prefix": "lib/db/session-aside-orphans.ts",
+      "owner": "storage",
+      "why": "Single-user data file (ADR-0250 M2): only the retention sweep (`lib/storage/retention.ts`) imports it."
+    },
+    {
+      "prefix": "lib/db/skill-workspace.ts",
+      "owner": "skills",
+      "why": "Single-user data file (ADR-0250 M2): only `skills` imports it."
+    },
+    {
+      "prefix": "lib/db/test-fixture.ts",
+      "owner": "plugin",
+      "why": "Single-user data file (ADR-0250 M2): the plugin test harness (`lib/plugin/api/testing.ts`) is its only non-test user."
+    },
+    {
+      "prefix": "lib/db/thread-handoff-tickets.ts",
+      "owner": "thread-handoff",
+      "why": "Single-user data file (ADR-0250 M2): only `thread-handoff` imports it."
+    },
+    {
+      "prefix": "lib/db/workflow-apps.ts",
+      "owner": "workflow",
+      "why": "Single-user data file (ADR-0250 M2): only `workflow` imports it."
+    },
+    {
+      "prefix": "lib/db/workflow-conversations.ts",
+      "owner": "workflow",
+      "why": "Single-user data file (ADR-0250 M2): only `workflow` imports it."
+    },
+    {
+      "prefix": "lib/db/workflow-stats.ts",
+      "owner": "workflow",
+      "why": "Single-user data file (ADR-0250 M2): only `workflow` imports it."
     }
   ]
 }
