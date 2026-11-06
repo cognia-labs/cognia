@@ -19,8 +19,11 @@
  * - `runtimes` carry one adapter per host — ADR-0250 §2's adapter matrix as
  *   data. The brain adapter keeps `HeadlessRuntime.start`'s signature and
  *   names the brain profiles (`HeadlessHost`) it starts on.
- * - `settings.keys` only declare which flat `AppSettings` keys the module
- *   owns; the wire stays `packages/agent-config-types/src/settings-sync.ts`.
+ * - `settings.keys` declare which flat `AppSettings` keys the module owns;
+ *   the wire stays `packages/agent-config-types/src/settings-sync.ts`. The
+ *   module reads and writes them through `defineSettingsView(keys)`
+ *   (`stores/settings/view.ts`), and the settings page's per-section reset
+ *   and changed-settings review take them from here.
  * - `capabilityContributions` produce `AgentCapabilityGrantV1` only
  *   (ADR-0198), applied stage by stage by the resolver chain. There is no
  *   ordering number and no `SendOptions` patching.
@@ -36,6 +39,7 @@
  */
 
 import type { ComponentType } from "react"
+import type { AppSettings } from "@cognia/agent-config-types"
 
 import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
 import type { BootCapability } from "@/lib/boot/capabilities"
@@ -237,8 +241,17 @@ export interface HostModuleManifest {
   requires?: readonly string[]
 
   runtimes?: readonly ModuleRuntime[]
-  /** `SettingsState` keys this module owns; its files read each, and no other module claims one (G4). */
-  settings?: { keys: readonly string[]; load?: LazyModule }
+  /**
+   * Flat `AppSettings` keys this module owns: its files read each, no other
+   * module claims one, and only its settings view writes them (G4). They
+   * belong to its settings section `section` (the module id when omitted),
+   * which resets and reviews them.
+   */
+  settings?: {
+    keys: readonly Exclude<keyof AppSettings, "id">[]
+    section?: string
+    load?: LazyModule
+  }
   /** `CORE_TABLE_NAMES` tables this module owns; its files access each, and no other module claims one (G4). */
   tables?: readonly string[]
   /** Built-in tools together with their permission rules. */

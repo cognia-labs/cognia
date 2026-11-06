@@ -112,9 +112,9 @@ const saveMock = jest.fn().mockResolvedValue(undefined)
 let settingsValue: unknown = {
   petSettings: { enabled: true, desktopPet: { enabled: true, clickThrough: false, size: 160 } },
 }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (s: { settings: unknown; save: unknown }) => unknown) =>
-    selector({ settings: settingsValue, save: saveMock }),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (select: (s: unknown) => unknown) => select(settingsValue),
+  petSettingsView: { get: () => settingsValue, update: (patch: unknown) => saveMock(patch) },
 }))
 
 // The cross-window pet-settings writer, reduced to its contract: merge into

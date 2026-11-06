@@ -14,10 +14,10 @@ import type {
 const saveMock = jest.fn()
 let currentLiveVoice: Partial<LiveVoiceSettings> | undefined
 
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (
-    selector: (state: { settings: Record<string, unknown>; save: jest.Mock }) => unknown
-  ) => selector({ settings: { liveVoice: currentLiveVoice }, save: saveMock }),
+jest.mock("@/lib/speech/settings", () => ({
+  useSpeechSettingsView: (selector: (settings: Record<string, unknown>) => unknown) =>
+    selector({ liveVoice: currentLiveVoice }),
+  speechSettingsView: { update: (patch: unknown) => saveMock(patch) },
 }))
 
 jest.mock("next-intl", () => ({

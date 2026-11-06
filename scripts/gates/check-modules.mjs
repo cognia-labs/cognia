@@ -35,12 +35,18 @@
  *      = actual    import (types/** aside), its `tables` exist and are
  *                  accessed by its files (or the data modules they import)
  *                  and claimed by no other module, and its `settings.keys`
- *                  are `SettingsState` members its files read and no other
- *                  module claims. A `lib/db/` data module only one manifest
- *                  module uses must be claimed by it. Blocking, 0 mismatches.
- *                  Since M2, another module accessing a claimed table
- *                  directly is a violation, baselined (`tableAccess`,
- *                  fingerprint `file -> table`); a new one fails. The runtime
+ *                  are `AppSettings` keys its files read, no other module
+ *                  claims, and its settings section exists. A `lib/db/` data
+ *                  module only one manifest module uses must be claimed by
+ *                  it. Blocking, 0 mismatches. Since M2, another module
+ *                  accessing a claimed table directly is a violation,
+ *                  baselined (`tableAccess`, fingerprint `file -> table`); a
+ *                  new one fails. Since M3, only a manifest module defines a
+ *                  settings view, over its own manifest's `settings.keys`
+ *                  (blocking), and any other file that reaches the settings
+ *                  (the store, a view, `lib/db/settings.ts`) and names a
+ *                  claimed key is a violation, baselined (`settingsAccess`,
+ *                  fingerprint `file -> key`); a new one fails. The runtime
  *                  clauses (brain adapters, runtime-initializers) apply once
  *                  manifests carry `runtimes` and `effects`.
  *   G5 generation  manifests are data only, their lazy entries resolve, and
@@ -105,6 +111,17 @@ export const BASELINE_FILE = "scripts/gates/modules-baseline.json"
 export const CODEOWNERS_FILE = ".github/CODEOWNERS"
 export const SETTINGS_STORE_FILE = "stores/settings/settings-store.ts"
 export const SETTINGS_STORE_ENTRIES = ["stores/settings/index.ts", SETTINGS_STORE_FILE]
+/** A module's door onto the settings (`defineSettingsView`). */
+export const SETTINGS_VIEW_FILE = "stores/settings/view.ts"
+export const SETTINGS_DATA_FILE = "lib/db/settings.ts"
+/** What a file imports to reach the settings directly. */
+export const SETTINGS_ACCESS_ENTRIES = [
+  ...SETTINGS_STORE_ENTRIES,
+  SETTINGS_VIEW_FILE,
+  SETTINGS_DATA_FILE,
+]
+/** Where `AppSettings`, the flat settings a module claims keys of, is declared. */
+export const APP_SETTINGS_FILE = "packages/plugin-contract/src/types/agent-config/index.ts"
 export const TABLE_CATALOG_FILE = "lib/data-governance/table-catalog.ts"
 /** The Lucide catalog's names, which a settings section's `icon` must be one of. */
 export const LUCIDE_NAMES_FILE =
@@ -691,13 +708,93 @@ function settingsStateMembers(ctx) {
   return settingsStateMemberList(ctx).length
 }
 
-function settingsStateKeys(ctx) {
+/** The flat `AppSettings` keys a module may claim; the row id is the store's. */
+function appSettingsKeys(ctx) {
   const keys = new Set()
-  for (const member of settingsStateMemberList(ctx)) {
-    const name = member.name
-    if (name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name))) keys.add(name.text)
-  }
+  if (!ctx.exists(APP_SETTINGS_FILE)) return keys
+  for (const statement of ctx.ast(APP_SETTINGS_FILE).statements)
+    if (ts.isInterfaceDeclaration(statement) && statement.name.text === "AppSettings")
+      for (const member of statement.members) {
+        const name = member.name
+        if (name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) && name.text !== "id")
+          keys.add(name.text)
+      }
   return keys
+}
+
+/** Every settings key a manifest claims, with its claimant (the first, when two claim one). */
+function settingsClaims(manifests) {
+  const claims = new Map()
+  for (const [id, { manifest }] of manifests.host)
+    for (const key of manifest.settings?.keys ?? []) if (!claims.has(key)) claims.set(key, id)
+  return claims
+}
+
+/**
+ * The names a file uses as settings keys: property reads (`s.ttsRate`),
+ * destructuring, object literal keys (`save({ ttsRate })`) and string element
+ * access (`settings["ttsRate"]`). Narrower than {@link namesRead}, which also
+ * counts every string literal: `settingsAccess` judges files, so a key name in
+ * a message or a log line must not read as a use.
+ */
+export function settingsKeyUses(sourceFile) {
+  const names = new Set()
+  const visit = (node) => {
+    if (ts.isPropertyAccessExpression(node)) names.add(node.name.text)
+    else if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression))
+      names.add(node.argumentExpression.text)
+    else if (ts.isBindingElement(node)) {
+      const name = node.propertyName ?? node.name
+      if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) names.add(name.text)
+    } else if (
+      (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
+      (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name))
+    )
+      names.add(node.name.text)
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return names
+}
+
+/**
+ * Every `defineSettingsView(...)` call in a file, with how its argument names
+ * the keys: `{ manifest: spec }` for `<x>.settings.keys` where `<x>` is the
+ * default import from `spec`, `{ other: true }` for anything else.
+ */
+export function settingsViewCalls(sourceFile) {
+  const defaults = new Map()
+  for (const statement of sourceFile.statements)
+    if (
+      ts.isImportDeclaration(statement) &&
+      statement.importClause?.name &&
+      ts.isStringLiteralLike(statement.moduleSpecifier)
+    )
+      defaults.set(statement.importClause.name.text, statement.moduleSpecifier.text)
+  const calls = []
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "defineSettingsView"
+    ) {
+      const arg = node.arguments[0] && unwrap(node.arguments[0])
+      const isKeys =
+        arg &&
+        ts.isPropertyAccessExpression(arg) &&
+        arg.name.text === "keys" &&
+        ts.isPropertyAccessExpression(arg.expression) &&
+        arg.expression.name.text === "settings" &&
+        ts.isIdentifier(arg.expression.expression) &&
+        defaults.has(arg.expression.expression.text)
+      calls.push(
+        isKeys ? { manifest: defaults.get(arg.expression.expression.text) } : { other: true }
+      )
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return calls
 }
 
 function coreTableNames(ctx) {
@@ -804,7 +901,7 @@ export function declaredErrors(
     filesOf.get(owner).push(file)
   }
   const tables = new Set(coreTableNames(ctx))
-  const keys = settingsStateKeys(ctx)
+  const keys = appSettingsKeys(ctx)
   const claims = { table: new Map(), "settings key": new Map() }
   for (const [id, { file, manifest }] of manifests.host) {
     const declared = new Set(manifest.dependsOn ?? [])
@@ -829,26 +926,68 @@ export function declaredErrors(
     if (!declaredTables.length && !declaredKeys.length) continue
     // The manifests name every table and key they declare, so they do not count.
     const read = new Set()
+    const packages = new Set()
     for (const owned of filesOf.get(id) ?? [])
-      if (!manifestKind(owned)) for (const name of namesRead(ctx.ast(owned))) read.add(name)
+      if (!manifestKind(owned)) {
+        for (const name of namesRead(ctx.ast(owned))) read.add(name)
+        if (declaredKeys.length)
+          for (const record of importsIn(ctx, owned)) {
+            const match = /^@cognia\/([^/]+)/.exec(record.spec)
+            if (match) packages.add(match[1])
+          }
+      }
+    // A key the module's engine package reads for it (`@cognia/tts` reading
+    // the voice of a provider the settings page lists generically) is
+    // touched too. Packages hold no tables, so tables are not looked up there.
+    const keysRead = new Set(read)
+    for (const name of packages)
+      for (const source of ctx.files([`packages/${name}/src`]))
+        for (const used of namesRead(ctx.ast(source))) keysRead.add(used)
     // A table the module reaches through a shared data module it imports is
     // touched too: the accessor stays in the data layer while others use it.
     for (const dataModule of data.imports.get(id) ?? [])
       for (const name of tableAccesses(ctx.ast(dataModule))) read.add(name)
-    const check = (kind, name, known, catalog) => {
+    const check = (kind, name, known, catalog, touched = read) => {
       if (known.size && !known.has(name))
         errors.push(`G4 ${file}: ${kind} "${name}" is not in ${catalog}`)
       const first = claims[kind].get(name)
       if (first && first !== id)
         errors.push(`G4 ${file}: ${kind} "${name}" is also claimed by "${first}"`)
       else claims[kind].set(name, id)
-      if (!read.has(name))
+      if (!touched.has(name))
         errors.push(`G4 ${file}: declares ${kind} "${name}", which no file of "${id}" touches`)
     }
     for (const table of declaredTables)
       check("table", table, tables, `CORE_TABLE_NAMES (${TABLE_CATALOG_FILE})`)
     for (const key of declaredKeys)
-      check("settings key", key, keys, `SettingsState (${SETTINGS_STORE_FILE})`)
+      check("settings key", key, keys, `AppSettings (${APP_SETTINGS_FILE})`, keysRead)
+    if (manifest.settings) {
+      const section = manifest.settings.section ?? id
+      const sections = manifests.ui.get(id)?.manifest.settingsSections ?? []
+      if (!sections.some((entry) => entry.id === section))
+        errors.push(
+          `G4 ${file}: settings keys belong to section "${section}", which components/${id}/module.ui.ts does not declare in \`settingsSections\``
+        )
+    }
+  }
+  // A settings view writes its module's own keys: only a manifest module
+  // defines one, over its own manifest's `settings.keys`.
+  for (const [owned, { owner }] of owners) {
+    if (owned === SETTINGS_VIEW_FILE || manifestKind(owned)) continue
+    const calls = settingsViewCalls(ctx.ast(owned))
+    if (!calls.length) continue
+    const own = manifests.host.get(owner)
+    for (const call of calls) {
+      const target = call.manifest && resolveModule(ctx, call.manifest, owned)
+      if (!own?.manifest.settings)
+        errors.push(
+          `G4 ${owned}: defines a settings view, but "${owner}" declares no \`settings.keys\` in a manifest`
+        )
+      else if (target !== own.file)
+        errors.push(
+          `G4 ${owned}: defineSettingsView takes its own manifest's keys, \`defineSettingsView(<module>.settings.keys)\` with <module> imported from ${own.file}`
+        )
+    }
   }
   // A data module only one manifest module uses moves with its owner.
   for (const [dataModule, users] of data.users) {
@@ -951,6 +1090,8 @@ export function computeModules(ctx) {
   const libGraph = new Map()
   const vendorNeutral = []
   const settingsImporters = new Set()
+  // Files that reach the settings directly: the store, a view or the data module.
+  const settingsReaders = new Set()
   // Direct table access per file, and who imports each data-layer module.
   const accessByFile = new Map()
   const dataUsers = new Map()
@@ -970,6 +1111,12 @@ export function computeModules(ctx) {
       if (!target) continue
       if (SETTINGS_STORE_ENTRIES.includes(target) && !file.startsWith("stores/settings/"))
         settingsImporters.add(file)
+      if (
+        SETTINGS_ACCESS_ENTRIES.includes(target) &&
+        !file.startsWith("stores/settings/") &&
+        file !== SETTINGS_DATA_FILE
+      )
+        settingsReaders.add(file)
       if (framework) {
         const outside = !target.startsWith(framework.path)
         // `_shared/` beside the implementations is common adapter plumbing, not a vendor.
@@ -1040,6 +1187,19 @@ export function computeModules(ctx) {
       if (claimant && claimant !== source.owner) tableAccess.push(`${file} -> ${table}`)
     }
   }
+  // G4: a claimed settings key is named only by its own module among the
+  // files that reach the settings directly. Everyone else is judged, kernel
+  // and shells included: the key belongs behind the owner's api.
+  const keyClaims = settingsClaims(manifests)
+  const settingsAccess = []
+  if (keyClaims.size)
+    for (const file of settingsReaders) {
+      const owner = owners.get(file)?.owner
+      for (const key of settingsKeyUses(ctx.ast(file))) {
+        const claimant = keyClaims.get(key)
+        if (claimant && claimant !== owner) settingsAccess.push(`${file} -> ${key}`)
+      }
+    }
   const coreTables = coreTableNames(ctx)
 
   const classCount = (cls) => [...registry.values()].filter((entry) => entry.class === cls).length
@@ -1052,6 +1212,7 @@ export function computeModules(ctx) {
       direction: sorted(direction),
       publicApi: sorted([...new Set(publicApi)]),
       tableAccess: sorted(tableAccess),
+      settingsAccess: sorted(settingsAccess),
       cycles: { largestLibComponent: largestComponent(libGraph).largest },
       size: {
         modules: classCount("module"),
@@ -1075,7 +1236,7 @@ export function computeModules(ctx) {
 }
 
 const BASELINE_NOTE =
-  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
+  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `settingsAccess` (G4, blocking since M3), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
 
 /** Compare the computed measures with the baseline. */
 export function compare(measures, baseline) {
@@ -1111,6 +1272,17 @@ export function compare(measures, baseline) {
         .map((item) => `  ${item}`)
         .join("\n")}`
     )
+  const settingsAccess = listDelta(
+    "settingsAccess",
+    measures.settingsAccess ?? [],
+    baseline.settingsAccess
+  )
+  if (settingsAccess.added.length)
+    failures.push(
+      `G4 settings access: ${settingsAccess.added.length} new use(s) of a settings key another module claims — read it through that module's api (its settings view), or claim the key where it belongs\n${settingsAccess.added
+        .map((item) => `  ${item}`)
+        .join("\n")}`
+    )
   const vendor = listDelta("vendorNeutral", measures.vendorNeutral, baseline.vendorNeutral)
   if (vendor.added.length)
     failures.push(
@@ -1118,7 +1290,7 @@ export function compare(measures, baseline) {
         .map((item) => `  ${item}`)
         .join("\n")}`
     )
-  for (const delta of [direction, publicApi, tableAccess, vendor])
+  for (const delta of [direction, publicApi, tableAccess, settingsAccess, vendor])
     if (delta.repaid.length)
       hints.push(`${delta.name}: ${delta.repaid.length} baselined item(s) repaid`)
   const numbers = [
@@ -1145,6 +1317,7 @@ export function baselineDocument(measures) {
     direction: measures.direction,
     publicApi: measures.publicApi,
     tableAccess: measures.tableAccess,
+    settingsAccess: measures.settingsAccess,
     vendorNeutral: measures.vendorNeutral,
   }
 }

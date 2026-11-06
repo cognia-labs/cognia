@@ -1,5 +1,6 @@
 /**
- * The authoritative "settings section → owned AppSettings keys" map.
+ * The authoritative "settings section → owned AppSettings keys" map: the
+ * built-in sections' here, a module's from its manifest's `settings.keys`.
  *
  * This is the shared backbone for three settings meta-features:
  *  - per-section reset (`resetKeysForSection` → `buildResetPatch`),
@@ -20,6 +21,7 @@
 import type { AppSettings } from "@cognia/agent-config-types"
 import type { SettingsSectionId } from "@/components/settings/settings-nav-config"
 import { DEFAULTS } from "@/lib/db/settings"
+import { hostModules } from "@/lib/modules/registry"
 import { SECRET_KEYS, NON_TRANSFERABLE_KEYS } from "./profile-transfer"
 
 /**
@@ -43,12 +45,14 @@ export const NON_PREFERENCE_KEYS = [
 ] as const satisfies readonly (keyof AppSettings)[]
 
 /**
- * Section → the AppSettings keys it owns. Entries may include keys that have no
- * `DEFAULTS` entry (optional overrides like `colorTheme`, `subagentNesting`,
- * `terminal`); resetting those clears the override (→ `DEFAULTS[k]` is
- * `undefined`), which is the correct "back to default" behavior.
+ * Built-in section → the AppSettings keys it owns. Entries may include keys
+ * that have no `DEFAULTS` entry (optional overrides like `colorTheme`,
+ * `subagentNesting`, `terminal`); resetting those clears the override (→
+ * `DEFAULTS[k]` is `undefined`), which is the correct "back to default"
+ * behavior. A module's section is not listed here: its keys come from the
+ * module's manifest (`MODULE_SECTION_KEYS`).
  */
-export const SECTION_OWNED_KEYS: Partial<Record<SettingsSectionId, (keyof AppSettings)[]>> = {
+const BUILTIN_SECTION_OWNED_KEYS: Partial<Record<SettingsSectionId, (keyof AppSettings)[]>> = {
   // `updates` is the Update Center's channel and per-asset snapshots. The
   // desktop updater's own scheduling stays under `about`, where its card is.
   updates: ["updateCenter"],
@@ -160,60 +164,6 @@ export const SECTION_OWNED_KEYS: Partial<Record<SettingsSectionId, (keyof AppSet
     "usageDisplayMode",
     "activeThemePackId",
   ],
-  speech: [
-    "sttLanguage",
-    "selectedMicId",
-    "ttsProvider",
-    "systemVoice",
-    "openaiVoice",
-    "openaiModel",
-    "openaiSpeed",
-    "openaiInstructions",
-    "openaiResponseFormat",
-    "localOpenaiBaseUrl",
-    "localOpenaiModel",
-    "localOpenaiVoice",
-    "localOpenaiSpeed",
-    "localOpenaiResponseFormat",
-    "localOpenaiTimeoutMs",
-    "geminiVoice",
-    "geminiModel",
-    "edgeVoice",
-    "edgeRate",
-    "edgePitch",
-    "elevenlabsVoice",
-    "elevenlabsModel",
-    "elevenlabsStability",
-    "elevenlabsSimilarityBoost",
-    "lmntVoice",
-    "lmntSpeed",
-    "humeVoice",
-    "cartesiaVoice",
-    "cartesiaModel",
-    "cartesiaLanguage",
-    "cartesiaSpeed",
-    "cartesiaEmotion",
-    "deepgramVoice",
-    "xiaomiVoice",
-    "xiaomiModel",
-    "xiaomiStyle",
-    "xiaomiDialect",
-    "mistralVoiceId",
-    "mistralModel",
-    "mistralResponseFormat",
-    "realtimeVoice",
-    "realtimeModel",
-    "realtimeInstructions",
-    "liveVoice",
-    "ttsEnabled",
-    "ttsRate",
-    "ttsPitch",
-    "ttsVolume",
-    "ttsAutoPlay",
-    "ttsCacheEnabled",
-    "ttsStreamingEnabled",
-    "ttsFallbackEnabled",
-  ],
   "media-generation": ["videoGeneration"],
   search: [
     "webReader",
@@ -252,7 +202,6 @@ export const SECTION_OWNED_KEYS: Partial<Record<SettingsSectionId, (keyof AppSet
     "claudeCodeRuntime",
   ],
   lsp: ["lsp"],
-  ocr: ["ocrSettings"],
   "source-control": ["gitSettings"],
   account: ["profile"],
   conversation: [
@@ -277,8 +226,6 @@ export const SECTION_OWNED_KEYS: Partial<Record<SettingsSectionId, (keyof AppSet
   terminal: ["terminal"],
   memory: ["memory", "memoryView"],
   artifacts: ["artifacts"],
-  pet: ["petSettings"],
-  eval: ["evalSettings"],
   // `workbenchRailPersistent` belongs here with `workbenchRail`: the workbench
   // customizer writes both, so leaving it out made "reset this section" skip
   // it and the changed-settings review never list it.
@@ -294,6 +241,24 @@ export const SECTION_OWNED_KEYS: Partial<Record<SettingsSectionId, (keyof AppSet
     "statusBarLayout",
   ],
   workflows: ["workflowEditorPerformanceTier"],
+}
+
+/**
+ * A module's section → the keys its manifest claims (`settings.keys`, ADR-0250
+ * §14), for every module, whatever its stage: an experimental module's section
+ * is off, but its keys are still its own.
+ */
+export const MODULE_SECTION_KEYS: Partial<Record<SettingsSectionId, (keyof AppSettings)[]>> =
+  Object.fromEntries(
+    hostModules()
+      .filter((module) => module.settings)
+      .map((module) => [module.settings!.section ?? module.id, [...module.settings!.keys]])
+  )
+
+/** Section → the AppSettings keys it owns: the built-in sections' and the modules'. */
+export const SECTION_OWNED_KEYS: Partial<Record<SettingsSectionId, (keyof AppSettings)[]>> = {
+  ...BUILTIN_SECTION_OWNED_KEYS,
+  ...MODULE_SECTION_KEYS,
 }
 
 /** Reverse index: AppSettings key → the section that owns it (first match). */

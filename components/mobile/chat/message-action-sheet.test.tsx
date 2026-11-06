@@ -101,9 +101,10 @@ jest.mock("@/stores/chat", () => ({
 }))
 
 const settingsState = { settings: { ttsEnabled: true } }
-jest.mock("@/stores/settings", () => ({
+jest.mock("@/lib/speech/settings", () => ({
   __esModule: true,
-  useSettingsStore: (selector: (s: typeof settingsState) => unknown) => selector(settingsState),
+  useSpeechSettingsView: (selector: (s: typeof settingsState.settings) => unknown) =>
+    selector(settingsState.settings),
 }))
 
 const readAloudStatus = { available: true, isActive: false, isLoading: false }

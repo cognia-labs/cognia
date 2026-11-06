@@ -10,7 +10,7 @@
 
 import { useCallback, useMemo } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
-import { useSettingsStore } from "@/stores/settings/settings-store"
+import { useEvalSettingsView } from "@/lib/eval/settings"
 import { buildConfiguredRunDeps } from "@/lib/ai/eval/browser-deps"
 import { runEvalService, type RunEvalServiceInput } from "@/lib/ai/eval/service"
 import { resolveEvalSettings } from "@/lib/ai/eval/settings"
@@ -35,8 +35,8 @@ export interface RunConfigOptions {
 const EMPTY: { id: string; name: string }[] = []
 
 export function useRunConfigOptions(): RunConfigOptions {
-  const providerSettings = useSettingsStore((s) => s.settings?.providerSettings)
-  const customProviders = useSettingsStore((s) => s.settings?.customProviders)
+  const providerSettings = useEvalSettingsView((s) => s?.providerSettings)
+  const customProviders = useEvalSettingsView((s) => s?.customProviders)
   const squads = useAgentTeamStore((state) => state.teams)
   const models = useMemo(
     () => [
@@ -71,7 +71,7 @@ export function useRunConfigOptions(): RunConfigOptions {
 
 /** Keep host credentials and execution wiring out of the run configuration UI. */
 export function useEvalRunConfiguration() {
-  const appSettings = useSettingsStore((state) => state.settings)
+  const appSettings = useEvalSettingsView((s) => s)
   const evalSettings = useMemo(() => resolveEvalSettings(appSettings), [appSettings])
   const executionOptions = useMemo(
     () => ({

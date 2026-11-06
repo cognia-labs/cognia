@@ -39,6 +39,11 @@ describe("pet module manifest", () => {
     expect(petModule.api).toContain("lib/pet/console-tabs.ts")
   })
 
+  it("claims its settings key and offers the view other modules read it through", () => {
+    expect(petModule.settings).toEqual({ keys: ["petSettings"] })
+    expect(petModule.api).toContain("lib/pet/settings.ts")
+  })
+
   it("exports none of the window plumbing the platform owns now", () => {
     // ADR-0250 M2 dependency inversion: the window role, the overlay reveal,
     // the document-visibility hook and the idempotency ledger were generic

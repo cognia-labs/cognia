@@ -30,7 +30,7 @@ import { FeaturePageHeader } from "@/components/feature-shell/feature-page-heade
 import { RoutingExperimentPanel } from "@/components/router-fusion/eval/routing-experiment-panel"
 import { routingExperimentAvailable } from "@/lib/ai/eval/routing-experiment"
 import { useEvalRunStore } from "@/stores/eval/eval-run-store"
-import { useSettingsStore } from "@/stores/settings"
+import { useEvalSettingsView } from "@/lib/eval/settings"
 import { EvalDashboard } from "./eval-dashboard"
 import { RunsComparePanel } from "./runs-compare-panel"
 import { TraceAnnotationPanel } from "./trace-annotation-panel"
@@ -53,7 +53,7 @@ export function EvalWorkspace({ initialDatasetId }: { initialDatasetId?: string 
   const cancelRun = useEvalRunStore((s) => s.cancel)
   // The routing experiment (ADR-0188 B6) only has something to work with while
   // Router + Fusion routes at least one surface, so the tab appears with it.
-  const routingAvailable = useSettingsStore((s) => routingExperimentAvailable(s.settings))
+  const routingAvailable = useEvalSettingsView((s) => routingExperimentAvailable(s))
 
   const TABS: { key: EvalView; label: string; icon: LucideIcon }[] = [
     { key: "datasets", label: t("tabs.datasets"), icon: DatabaseIcon },

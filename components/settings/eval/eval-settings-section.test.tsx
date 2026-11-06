@@ -27,9 +27,9 @@ beforeAll(() => {
 
 let mockSettings: Record<string, unknown> | null
 const mockSave = jest.fn()
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (s: unknown) => unknown) =>
-    selector({ settings: mockSettings, save: mockSave }),
+jest.mock("@/lib/eval/settings", () => ({
+  useEvalSettingsView: (selector: (s: unknown) => unknown) => selector(mockSettings),
+  evalSettingsView: { update: (patch: unknown) => mockSave(patch) },
 }))
 
 import { DEFAULT_EVAL_SETTINGS, MAX_STORED_OUTPUT_CHARS } from "@/types/eval/settings"

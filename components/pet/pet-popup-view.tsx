@@ -22,7 +22,7 @@ import { useEffect, useRef, useState, type ComponentType } from "react"
 import { useTranslations } from "next-intl"
 import { EyeOffIcon, HomeIcon, MousePointerClickIcon, SlidersHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS } from "@/types/pet"
 import { startPetSettingsFollower, updateDesktopPetSettings } from "@/lib/pet/settings-sync"
@@ -62,7 +62,7 @@ interface PopupWindowAction {
 export function PetPopupView() {
   const t = useTranslations("pet.quickMenu")
   const { profile, view } = usePet(undefined)
-  const pet = useSettingsStore((s) => s.settings?.petSettings) ?? DEFAULT_PET_SETTINGS
+  const pet = usePetSettingsView((s) => s?.petSettings) ?? DEFAULT_PET_SETTINGS
   const cardRef = useRef<HTMLDivElement>(null)
 
   // Resolve the effective skin so the popup's stat-card avatar matches the

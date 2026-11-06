@@ -14,7 +14,7 @@
 
 import Dexie from "dexie"
 import { getLatestRadarReport } from "@/lib/db/radar-reports"
-import { useSettingsStore } from "@/stores/settings"
+import { petSettingsView } from "@/lib/pet/settings"
 import type { PetEmit } from "../pet-event-bus"
 
 /** The only two facts about a report this source may know. */
@@ -41,7 +41,7 @@ const defaultObserve: RadarObserver = (onLatest) => {
 
 /** The radar is opt-in; with it switched off a report should not reach the pet. */
 function defaultIsEnabled(): boolean {
-  return useSettingsStore.getState().settings?.attentionRadar?.enabled === true
+  return petSettingsView.get()?.attentionRadar?.enabled === true
 }
 
 export interface RadarSourceDeps {

@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { cn } from "@/lib/utils"
-import { useSettingsStore } from "@/stores/settings/settings-store"
+import { useEvalSettingsView } from "@/lib/eval/settings"
 import {
   useCalibrationSets,
   useCalibrationItems,
@@ -423,7 +423,7 @@ function HistoryStrip({ runs }: { runs: CalibrationRunRow[] }) {
 
 export function CalibrationPanel() {
   const t = useTranslations("eval")
-  const appSettings = useSettingsStore((s) => s.settings)
+  const appSettings = useEvalSettingsView((s) => s)
   const sets = useCalibrationSets()
   const [activeSetId, setActiveSetId] = useState<string | undefined>(undefined)
   const [pendingSet, setPendingSet] = useState<{

@@ -21,6 +21,8 @@ export default defineHostModule({
   // What the phone's Me tab shows, and the composer's OCR action state.
   api: ["components/settings/ocr/ocr-section-persisted.tsx", "hooks/use-ocr.ts"],
   provides: [{ port: "ocr", load: () => import("./port") }],
+  // The person's OCR preferences, which the OCR section resets and reviews.
+  settings: { keys: ["ocrSettings"] },
   // Every built-in provider into the shared registry before a surface
   // extracts, on every host. The brain's adapter empties the registry on a
   // restart; a window's keeps it, so plugin providers outlive an account

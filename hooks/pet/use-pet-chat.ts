@@ -17,7 +17,7 @@ import { useLiveQuery } from "dexie-react-hooks"
 import { listRecentPetTurns } from "@/lib/db/pet-conversation"
 import { respondAsPet, type PetChatDegradeReason } from "@/lib/pet/chat/respond"
 import { usePetStore } from "@/stores/pet/pet-store"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import type { PetConversationRow, PetProfile } from "@/types/pet"
 import type { PetView } from "@/lib/pet/runtime/pet-view"
 
@@ -49,7 +49,7 @@ export function usePetChat(
   deps: UsePetChatDeps = {}
 ): UsePetChat {
   const locale = useLocale()
-  const appSettings = useSettingsStore((s) => s.settings)
+  const appSettings = usePetSettingsView((s) => s)
   const turns = useLiveQuery(() => listRecentPetTurns(CHAT_TRANSCRIPT_LIMIT), [], [])
 
   const [pending, setPending] = useState<string | null>(null)

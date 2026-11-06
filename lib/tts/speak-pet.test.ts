@@ -8,8 +8,12 @@ let storeState: {
   providerKeys: Record<string, string>
   ensureProviderKeys: jest.Mock
 }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: { getState: () => storeState },
+jest.mock("@/lib/speech/settings", () => ({
+  speechSettingsView: { get: () => storeState.settings },
+}))
+jest.mock("@/lib/speech/provider-keys", () => ({
+  ensureSpeechProviderKeys: () => storeState.ensureProviderKeys(),
+  speechProviderKeys: () => storeState.providerKeys,
 }))
 
 import { speakPetText } from "./speak-pet"

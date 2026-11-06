@@ -26,7 +26,7 @@
 // `petSettings`) are unaffected: a patch without the key never replaces it.
 
 import { getSettings, saveSettings } from "@/lib/db/settings"
-import { useSettingsStore } from "@/stores/settings"
+import { petSettingsView } from "./settings"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS, type PetSettings } from "@/types/pet"
 import { z } from "zod"
 import { getWindowRole } from "@/lib/platform/window-role"
@@ -173,20 +173,14 @@ function defaultOpenChannel(name: string): BroadcastChannel | null {
 
 const DEFAULT_DEPS: PetSettingsSyncDeps = {
   accountScope: () => getDb().name,
-  watchLocalSettings: (listener) => useSettingsStore.subscribe(listener),
+  watchLocalSettings: (listener) => petSettingsView.subscribe(() => listener()),
   readPersisted: async () => (await getSettings()).petSettings ?? DEFAULT_PET_SETTINGS,
   write: async (next) => {
-    await useSettingsStore.getState().save({ petSettings: next })
+    await petSettingsView.update({ petSettings: next })
   },
   withLock: defaultWithLock,
   openChannel: defaultOpenChannel,
-  applyLocal: (next) => {
-    useSettingsStore.setState((state) =>
-      state.settings && state.settings.petSettings !== next
-        ? { settings: { ...state.settings, petSettings: next } }
-        : state
-    )
-  },
+  applyLocal: (next) => petSettingsView.applyLocal({ petSettings: next }),
 }
 
 function resolveDeps(deps: Partial<PetSettingsSyncDeps> | undefined): PetSettingsSyncDeps {

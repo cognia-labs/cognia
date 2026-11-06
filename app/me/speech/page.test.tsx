@@ -10,20 +10,15 @@ const settingsRef: { current: Record<string, unknown> | undefined } = {
   current: { ttsEnabled: false, ttsProvider: "system" },
 }
 
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (
-    selector: (s: {
-      settings: Record<string, unknown> | undefined
-      save: (patch: Record<string, unknown>) => Promise<void>
-    }) => unknown
-  ) =>
-    selector({
-      settings: settingsRef.current,
-      save: async (patch: Record<string, unknown>) => {
-        if (settingsRef.current) settingsRef.current = { ...settingsRef.current, ...patch }
-        await saveMock(patch)
-      },
-    }),
+jest.mock("@/lib/speech/settings", () => ({
+  useSpeechSettingsView: (selector: (s: Record<string, unknown> | undefined) => unknown) =>
+    selector(settingsRef.current),
+  speechSettingsView: {
+    update: async (patch: Record<string, unknown>) => {
+      if (settingsRef.current) settingsRef.current = { ...settingsRef.current, ...patch }
+      await saveMock(patch)
+    },
+  },
 }))
 
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({

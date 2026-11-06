@@ -21,7 +21,7 @@ import {
 } from "@/components/ai-elements/voice-selector"
 import { Button } from "@/components/ui/button"
 import { useTTS } from "@/hooks/media"
-import { useSettingsStore } from "@/stores/settings"
+import { useSpeechSettingsView } from "@/lib/speech/settings"
 import type { SpeechSettings } from "@cognia/tts/types"
 import { resolveSttLanguage } from "@cognia/tts/speech"
 
@@ -57,8 +57,8 @@ export function TtsVoiceSelector({
 }: TtsVoiceSelectorProps) {
   const t = useTranslations("settings.speech.provider")
   const tTts = useTranslations("settings.speech.tts")
-  const sttLanguage = useSettingsStore((state) =>
-    resolveSttLanguage(state.settings?.sttLanguage, state.settings?.language)
+  const sttLanguage = useSpeechSettingsView((settings) =>
+    resolveSttLanguage(settings?.sttLanguage, settings?.language)
   )
   const [open, setOpen] = useState(false)
   const [previewRequest, setPreviewRequest] = useState<{ id: string; nonce: number } | null>(null)

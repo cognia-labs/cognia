@@ -544,6 +544,11 @@
           "path": "tableAccess"
         },
         {
+          "id": "settings-access",
+          "kind": "length",
+          "path": "settingsAccess"
+        },
+        {
           "id": "cycles",
           "kind": "eachValue",
           "path": "cycles"

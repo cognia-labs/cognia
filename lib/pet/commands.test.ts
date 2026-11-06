@@ -26,8 +26,8 @@ jest.mock("@/lib/platform/detect", () => ({
 
 const save = jest.fn()
 let settingsValue: unknown = {}
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: { getState: () => ({ settings: settingsValue, save }) },
+jest.mock("@/lib/pet/settings", () => ({
+  petSettingsView: { get: () => settingsValue, update: (patch: unknown) => save(patch) },
 }))
 
 // The cross-window writer, reduced to its contract: apply the updater to the

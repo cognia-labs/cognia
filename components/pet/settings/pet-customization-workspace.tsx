@@ -39,7 +39,7 @@ import { usePet } from "@/hooks/pet/use-pet"
 import { resetPet } from "@/lib/db/pet"
 import { toPetAssetDiagnostics } from "@/lib/pet/live2d/compatibility-diagnostics"
 import { getPetSkinRuntime } from "@/lib/pet/skin-runtime"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import { destroyPetWindow } from "@/lib/tauri/pet-window"
 import { openDesktopPetWindow } from "@/lib/pet/commands"
 import {
@@ -70,7 +70,7 @@ import { PetTwinAwarenessControls } from "./pet-twin-awareness-controls"
 export function PetCustomizationWorkspace() {
   const t = useTranslations("settings.pet")
   const tc = useTranslations("pet.customize")
-  const settings = useSettingsStore((state) => state.settings)
+  const settings = usePetSettingsView((s) => s)
   const pet: PetSettings = settings?.petSettings ?? DEFAULT_PET_SETTINGS
   // Merged into the PERSISTED record under the cross-window lock, never into
   // this render's copy: the desktop overlay writes its resting position from

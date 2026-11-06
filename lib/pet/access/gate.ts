@@ -31,7 +31,7 @@ import {
 import { XP_AWARD } from "@/lib/pet/xp/award-table"
 import { COIN_AWARD } from "@/lib/pet/economy/coin-table"
 import { getPluginRateLimiter } from "@/lib/plugin/security/rate-limiter"
-import { useSettingsStore } from "@/stores/settings"
+import { petSettingsView } from "@/lib/pet/settings"
 import { DEFAULT_PET_SETTINGS } from "@/types/pet"
 import {
   resolveLivePetAvailability,
@@ -159,7 +159,7 @@ export function petSubjectKey(subject: PetAccessSubject): string {
 
 function readEnabled(deps: PetAccessDeps): boolean {
   if (deps.isEnabled) return deps.isEnabled()
-  const settings = useSettingsStore.getState().settings
+  const settings = petSettingsView.get()
   return (settings?.petSettings ?? DEFAULT_PET_SETTINGS).enabled
 }
 

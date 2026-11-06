@@ -12,9 +12,8 @@ export default defineHostModule({
   acceptance: { realSmoke: "pending" },
   // The read-aloud engine binding and live voice, their React glue, the
   // settings section, the live voice dialog the composer opens, and live
-  // voice's native bridge. The provider-key keyring under `lib/tts/` is the
-  // settings store's (`scripts/gates/module-ownership.json`); the phone's
-  // speech page is the Me tab's, which edits the same settings.
+  // voice's native bridge, and the provider keys with their keyring. The
+  // phone's speech page is the Me tab's, which edits the same settings.
   owns: [
     "components/chat/composer/live-voice-dialog",
     "components/settings/speech-section",
@@ -27,13 +26,77 @@ export default defineHostModule({
     "lib/voice/",
   ],
   // Live voice tool approvals wait in the connectors' HITL registry; the
-  // settings section's drafts and the provider keys are the settings store's.
+  // settings section's drafts and the settings view are the settings store's.
   dependsOn: ["connectors", "settings-store"],
-  // What the composer opens (live voice) and what the character editor tries
-  // a voice with.
+  // What the composer opens (live voice), what the character editor tries a
+  // voice with, and the speech preferences and provider keys others read.
   api: [
     "components/chat/composer/live-voice-dialog.tsx",
     "components/settings/speech/test-tts-button.tsx",
+    "lib/speech/provider-keys.ts",
+    "lib/speech/settings.ts",
   ],
   provides: [{ port: "speech", load: () => import("./port") }],
+  // Every read-aloud, voice input and live voice preference: the Speech
+  // section resets and reviews them, and only `lib/speech/settings.ts` writes
+  // them.
+  settings: {
+    keys: [
+      "sttLanguage",
+      "selectedMicId",
+      "ttsProvider",
+      "systemVoice",
+      "openaiVoice",
+      "openaiModel",
+      "openaiSpeed",
+      "openaiInstructions",
+      "openaiResponseFormat",
+      "localOpenaiBaseUrl",
+      "localOpenaiModel",
+      "localOpenaiVoice",
+      "localOpenaiSpeed",
+      "localOpenaiResponseFormat",
+      "localOpenaiTimeoutMs",
+      "geminiVoice",
+      "geminiModel",
+      "edgeVoice",
+      "edgeRate",
+      "edgePitch",
+      "elevenlabsVoice",
+      "elevenlabsModel",
+      "elevenlabsStability",
+      "elevenlabsSimilarityBoost",
+      "lmntVoice",
+      "lmntSpeed",
+      "humeVoice",
+      "cartesiaVoice",
+      "cartesiaModel",
+      "cartesiaLanguage",
+      "cartesiaSpeed",
+      "cartesiaEmotion",
+      "deepgramVoice",
+      "xiaomiVoice",
+      "xiaomiModel",
+      "xiaomiStyle",
+      "xiaomiDialect",
+      "mistralVoiceId",
+      "mistralModel",
+      "mistralResponseFormat",
+      "realtimeVoice",
+      "realtimeModel",
+      "realtimeInstructions",
+      "liveVoice",
+      "ttsEnabled",
+      "ttsRate",
+      "ttsPitch",
+      "ttsVolume",
+      "ttsAutoPlay",
+      "ttsCacheEnabled",
+      "ttsStreamingEnabled",
+      "ttsFallbackEnabled",
+      "ttsCustomSSMLEnabled",
+      "ttsCustomSSML",
+      "ttsPronunciationDictionary",
+    ],
+  },
 })

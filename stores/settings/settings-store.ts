@@ -90,13 +90,6 @@ import {
 } from "@cognia/web-search/types"
 import { getProviderHealth } from "@cognia/web-search/provider-health"
 import {
-  clearProviderKey,
-  HOST_KEY_PRESENT,
-  loadAllProviderKeys,
-  setProviderKey,
-  type KeyringProviderId,
-} from "@/lib/tts/keyring"
-import {
   DEFAULT_ROUTING_CONFIG,
   type ModelMapping,
   type RoutingConfig,
@@ -134,18 +127,6 @@ interface SettingsState {
   loadError: string | null
   /** Clear `loadFailed` and re-run `load()`. Resolves once the retry settles. */
   retryLoad: () => Promise<void>
-  /**
-   * In-memory mirror of the OS keyring (Tauri) or web-fallback Dexie store
-   * for TTS provider API keys. Populated lazily on first TTS use (or when the
-   * speech settings UI mounts) via `ensureProviderKeys`, then updated via
-   * `setProviderApiKey` / `clearProviderApiKey`. Kept out of `load()` so the
-   * `1 + N` keyring round-trips don't run during app boot — most sessions
-   * never touch TTS. The orchestrator reads keys from here so playback paths
-   * don't pay an IPC round-trip per chunk.
-   */
-  providerKeys: Partial<Record<KeyringProviderId, string>>
-  /** Whether `ensureProviderKeys` has completed a successful load. */
-  providerKeysLoaded: boolean
   load: () => Promise<void>
   save: (patch: Partial<Omit<AppSettings, "id">>) => Promise<void>
   /** Serialize partial updater preference writes so rapid controls cannot overwrite each other. */
@@ -191,25 +172,6 @@ interface SettingsState {
    * `ANTHROPIC_API_KEY` on next spawn.
    */
   setApiKey: (key: string | null) => Promise<void>
-
-  // ---- TTS provider keys + per-field shortcuts ----
-  setProviderApiKey: (provider: KeyringProviderId, key: string) => Promise<void>
-  clearProviderApiKey: (provider: KeyringProviderId) => Promise<void>
-  /** Force a reload of all provider keys from the keyring/Dexie. */
-  refreshProviderKeys: () => Promise<void>
-  /**
-   * Lazily load provider keys on first TTS use. Idempotent: returns
-   * immediately once a load has succeeded. Triggered from the TTS `speak`
-   * path and the speech settings UI — never on the boot path.
-   */
-  ensureProviderKeys: () => Promise<void>
-
-  setTtsEnabled: (enabled: boolean) => Promise<void>
-  setTtsProvider: (provider: NonNullable<AppSettings["ttsProvider"]>) => Promise<void>
-  setTtsAutoPlay: (enabled: boolean) => Promise<void>
-  setTtsRate: (rate: number) => Promise<void>
-  setTtsPitch: (pitch: number) => Promise<void>
-  setTtsVolume: (volume: number) => Promise<void>
 
   // ---- Built-in agent runtime actions ----
   /**
@@ -863,8 +825,6 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
     loaded: false,
     loadFailed: false,
     loadError: null,
-    providerKeys: {},
-    providerKeysLoaded: false,
     ...initialFlat,
 
     load: async () => {
@@ -950,8 +910,6 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
           // the policy. Surface the failure so the user can repair settings.
           reportProxyFailure(err)
         }
-        // TTS provider keys are loaded lazily (see `ensureProviderKeys`), NOT
-        // here — keeping the `1 + N` keyring round-trips off the boot path.
       } catch (err) {
         // Falling back to DEFAULTS keeps the app usable, but running the whole
         // session on defaults without telling anyone is how a user loses an
@@ -1426,76 +1384,6 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
     },
     setDefaultSearchSources: async (defaultSearchSources) => {
       const next = await saveSettings({ defaultSearchSources })
-      set({ settings: next })
-    },
-
-    // ---- TTS ----
-    setProviderApiKey: async (provider, key) => {
-      const trimmed = key.trim()
-      await setProviderKey(provider, trimmed)
-      set((state) => ({
-        providerKeys: {
-          ...state.providerKeys,
-          [provider]: trimmed.length > 0 ? (isTauri() ? HOST_KEY_PRESENT : trimmed) : undefined,
-        },
-      }))
-    },
-
-    clearProviderApiKey: async (provider) => {
-      await clearProviderKey(provider)
-      set((state) => {
-        const next = { ...state.providerKeys }
-        delete next[provider]
-        return { providerKeys: next }
-      })
-    },
-
-    refreshProviderKeys: async () => {
-      try {
-        const keys = await loadAllProviderKeys()
-        set({ providerKeys: keys, providerKeysLoaded: true })
-      } catch (err) {
-        console.warn("refreshProviderKeys failed", err)
-      }
-    },
-
-    ensureProviderKeys: async () => {
-      if (get().providerKeysLoaded) return
-      try {
-        const keys = await loadAllProviderKeys()
-        set({ providerKeys: keys, providerKeysLoaded: true })
-      } catch (err) {
-        // Non-fatal: missing keys are surfaced in the UI. Leave the flag false
-        // so a later call retries.
-        console.warn("ensureProviderKeys failed", err)
-      }
-    },
-
-    setTtsEnabled: async (enabled) => {
-      const next = await saveSettings({ ttsEnabled: enabled })
-      set({ settings: next })
-    },
-    setTtsProvider: async (provider) => {
-      const next = await saveSettings({ ttsProvider: provider })
-      set({ settings: next })
-    },
-    setTtsAutoPlay: async (enabled) => {
-      const next = await saveSettings({ ttsAutoPlay: enabled })
-      set({ settings: next })
-    },
-    setTtsRate: async (rate) => {
-      const clamped = Math.min(10, Math.max(0.1, rate))
-      const next = await saveSettings({ ttsRate: clamped })
-      set({ settings: next })
-    },
-    setTtsPitch: async (pitch) => {
-      const clamped = Math.min(2, Math.max(0, pitch))
-      const next = await saveSettings({ ttsPitch: clamped })
-      set({ settings: next })
-    },
-    setTtsVolume: async (volume) => {
-      const clamped = Math.min(1, Math.max(0, volume))
-      const next = await saveSettings({ ttsVolume: clamped })
       set({ settings: next })
     },
 

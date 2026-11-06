@@ -58,7 +58,8 @@ import {
 } from "@/lib/voice/live/reducer"
 import { DEFAULT_LIVE_VOICE_SETTINGS } from "@cognia/agent-config-types"
 import { useChatStore } from "@/stores/chat/chat-store"
-import { useSettingsStore } from "@/stores/settings"
+import { ensureSpeechProviderKeys, useSpeechProviderKeys } from "@/lib/speech/provider-keys"
+import { speechSettingsView, useSpeechSettingsView } from "@/lib/speech/settings"
 import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
 import { cn } from "@/lib/utils"
 import type { LiveVoiceState } from "@/lib/voice/live/reducer"
@@ -109,10 +110,9 @@ const LIVE_VOICE_START_CANCELLED = Symbol("live-voice-start-cancelled")
 
 export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogProps) {
   const t = useTranslations("chat.composer.voice.live")
-  const settings = useSettingsStore((store) => store.settings)
-  const providerKeys = useSettingsStore((store) => store.providerKeys)
-  const ensureProviderKeys = useSettingsStore((store) => store.ensureProviderKeys)
-  const saveSettings = useSettingsStore((store) => store.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const providerKeys = useSpeechProviderKeys((keys) => keys)
+  const saveSettings = speechSettingsView.update
   const sessionId = useChatStore((store) => store.activeSessionId)
   const chatStatus = useChatStore((store) => store.status)
   const [open, setOpen] = useState(false)
@@ -172,8 +172,8 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
   )
 
   useEffect(() => {
-    void ensureProviderKeys()
-  }, [ensureProviderKeys])
+    void ensureSpeechProviderKeys()
+  }, [])
 
   const liveVoiceCandidates = useMemo(
     () => selectLiveVoiceCandidates(liveVoiceSettings),

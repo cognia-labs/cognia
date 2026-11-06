@@ -49,7 +49,7 @@ import { resolveUserTimeZone } from "@/lib/profile/timezone"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { usePetStore } from "@/stores/pet/pet-store"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import type { PetEvent, PetProfile } from "@/types/pet"
 import type { PetView } from "@/lib/pet/runtime/pet-view"
 import type { ApplyMemoryContextDeps } from "@/lib/memory/runtime/apply-memory-context"
@@ -71,7 +71,7 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
   const locale = useLocale()
   const setBubble = usePetStore((s) => s.setBubble)
   const enqueueOneShot = usePetStore((s) => s.enqueueOneShot)
-  const appSettings = useSettingsStore((s) => s.settings)
+  const appSettings = usePetSettingsView((s) => s)
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef(false)

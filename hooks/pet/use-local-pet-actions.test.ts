@@ -11,9 +11,8 @@ jest.mock("@/lib/pet/settings-sync", () => ({ updatePetSettings: jest.fn() }))
 jest.mock("@/lib/db/pet-conversation", () => ({ clearPetConversation: jest.fn() }))
 jest.mock("@/lib/pet/economy/shop", () => ({ purchaseItem: jest.fn(), consumeItem: jest.fn() }))
 let mockSettings: unknown = { petSettings: { desktopPet: { enabled: false } } }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (select: (s: { settings: unknown }) => unknown) =>
-    select({ settings: mockSettings }),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (select: (s: unknown) => unknown) => select(mockSettings),
 }))
 
 import { act, renderHook } from "@testing-library/react"

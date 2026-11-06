@@ -16,10 +16,10 @@ import { useLiveQuery } from "dexie-react-hooks"
 import { getPetProfile } from "@/lib/db/pet"
 import { petStatusTopic } from "@/lib/pet/status"
 import { clearTopic, publishTopic } from "@/lib/runtime/topics"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 
 export function PetStatusPublisher(): null {
-  const enabled = useSettingsStore((s) => s.settings?.petSettings?.enabled ?? false)
+  const enabled = usePetSettingsView((s) => s?.petSettings?.enabled ?? false)
   // `null` (not `undefined`) once read, so "no profile yet" is a value and
   // not "still loading"; off, the table is not read at all.
   const profile = useLiveQuery(

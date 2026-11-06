@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
+  "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `settingsAccess` (G4, blocking since M3), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
   "cycles": {
     "largestLibComponent": 166
   },
@@ -10,8 +10,8 @@
     "tables": 401,
     "unclaimedTables": 370,
     "singleUserDataModules": 0,
-    "settingsStateMembers": 151,
-    "settingsStoreImporters": 573,
+    "settingsStateMembers": 139,
+    "settingsStoreImporters": 531,
     "registryEagerFiles": 1
   },
   "direction": [
@@ -1073,6 +1073,18 @@
     "lib/harness/runtime/adoption.ts -> evalConfigurationApplies",
     "lib/workflow/quality/deployment-gate.ts -> evalDatasets",
     "lib/workflow/quality/deployment-gate.ts -> evalRuns"
+  ],
+  "settingsAccess": [
+    "components/chat/composer/voice-controls.tsx -> liveVoice",
+    "components/chat/composer/voice-controls.tsx -> selectedMicId",
+    "components/chat/composer/voice-controls.tsx -> sttLanguage",
+    "components/chat/message-renderer.tsx -> ttsEnabled",
+    "hooks/chat/use-chat-auto-play-tts.ts -> ttsAutoPlay",
+    "hooks/chat/use-chat-auto-play-tts.ts -> ttsEnabled",
+    "hooks/onboarding/use-machine-scan.ts -> ocrSettings",
+    "lib/claude/pet-builtin-tools.ts -> petSettings",
+    "lib/plugin/api/pet-api.ts -> petSettings",
+    "lib/storage/retention.ts -> ocrSettings"
   ],
   "vendorNeutral": [
     "lib/connectors/adapter-context.ts :: compares \"wechat-oa\"",

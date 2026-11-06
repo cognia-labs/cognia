@@ -61,15 +61,17 @@ jest.mock("@cognia/tts/types", () => ({
 const settingsState = {
   settings: { ttsProvider: "openai" },
   providerKeys: { openai: "k" },
-  // `speak` lazily loads provider keys via getState().ensureProviderKeys().
-  ensureProviderKeys: jest.fn(async () => undefined),
 }
 
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: Object.assign(
-    <T>(selector: (s: typeof settingsState) => T): T => selector(settingsState),
-    { getState: () => settingsState }
-  ),
+jest.mock("@/lib/speech/settings", () => ({
+  useSpeechSettingsView: <T>(selector: (s: typeof settingsState.settings) => T): T =>
+    selector(settingsState.settings),
+}))
+
+// `speak` lazily loads the provider keys before it reads them.
+jest.mock("@/lib/speech/provider-keys", () => ({
+  ensureSpeechProviderKeys: jest.fn(async () => undefined),
+  speechProviderKeys: () => settingsState.providerKeys,
 }))
 
 import { useTTS } from "./use-tts"

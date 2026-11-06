@@ -56,8 +56,9 @@ jest.mock("@/lib/db/characters", () => ({
 const stateRef: { current: { settings: Partial<AppSettings> | null } } = {
   current: { settings: null },
 }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) => selector(stateRef.current),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (selector: (settings: unknown) => unknown) =>
+    selector(stateRef.current.settings),
 }))
 
 const profile = {

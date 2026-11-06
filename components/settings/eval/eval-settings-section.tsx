@@ -38,7 +38,7 @@ import {
   InfoIcon,
   AlertTriangleIcon,
 } from "lucide-react"
-import { useSettingsStore } from "@/stores/settings"
+import { evalSettingsView, useEvalSettingsView } from "@/lib/eval/settings"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
@@ -94,8 +94,8 @@ function JudgeModelPicker({
   disabled?: boolean
 }) {
   const t = useTranslations("eval.settings")
-  const providerSettings = useSettingsStore((s) => s.settings?.providerSettings)
-  const customProviders = useSettingsStore((s) => s.settings?.customProviders)
+  const providerSettings = useEvalSettingsView((s) => s?.providerSettings)
+  const customProviders = useEvalSettingsView((s) => s?.customProviders)
   const [open, setOpen] = useState(false)
 
   const groups = useMemo(
@@ -179,8 +179,8 @@ function JudgeModelPicker({
 export function EvalSettingsSection() {
   const t = useTranslations("eval.settings")
   const router = useRouter()
-  const appSettings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const appSettings = useEvalSettingsView((s) => s)
+  const save = evalSettingsView.update
 
   const resolved = useMemo(() => resolveEvalSettings(appSettings), [appSettings])
 

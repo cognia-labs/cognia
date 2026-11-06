@@ -20,6 +20,8 @@ import {
   largestComponent,
   main,
   readManifest,
+  settingsKeyUses,
+  settingsViewCalls,
   tableAccesses,
   validateHostManifest,
   validateUiManifest,
@@ -280,7 +282,7 @@ test("api files: owned by the row, never foundation's, and a kernel member lists
 
 // ------------------------------------------------------------ public API and declarations
 
-const DEFINE = "export const defineHostModule = (m) => m\n"
+const DEFINE = "export const defineHostModule = (m) => m\nexport const defineUiModule = (m) => m\n"
 // These fixtures carry no generated registries (G5), so only G3/G4 errors are read.
 const declarationErrors = (result) => result.errors.filter((error) => /^G[34] /.test(error))
 const hostManifest = (id, fields = "") => `import { defineHostModule } from "@/lib/modules/define"
@@ -358,6 +360,10 @@ test("G4: dependsOn names exactly the modules a manifest's files import", () => 
   ])
 })
 
+const APP_SETTINGS = `export interface AppSettings {\n  id: "singleton"\n  crewMode?: string\n  petName?: string\n  voice?: string\n}\n`
+const uiWithSection = (id, section = id) =>
+  `import { defineUiModule } from "@/lib/modules/define"\nexport default defineUiModule({ id: "${id}", settingsSections: [{ id: "${section}" }] })\n`
+
 test("G4: declared tables and settings keys exist, are touched, and have one owner", () => {
   const result = run({
     [OWNERSHIP_FILE]: ownership({
@@ -367,23 +373,138 @@ test("G4: declared tables and settings keys exist, are touched, and have one own
     }),
     "lib/modules/define.ts": DEFINE,
     "lib/data-governance/table-catalog.ts": `export const CORE_TABLE_NAMES = ["crews", "notes", "pets"] as const\n`,
-    "stores/settings/settings-store.ts": `interface SettingsState { crewMode: string; petName: string }\nexport const s = 1\n`,
+    "packages/plugin-contract/src/types/agent-config/index.ts": APP_SETTINGS,
     "lib/crew/module.ts": hostManifest(
       "crew",
-      'tables: ["crews", "notes", "ghosts"], settings: { keys: ["crewMode", "petName", "nope"] }'
+      'tables: ["crews", "notes", "ghosts"], settings: { keys: ["crewMode", "petName", "nope", "id"] }'
     ),
-    "lib/crew/run.ts": `export const run = (db, settings) => [db.crews.toArray(), db.table("notes"), settings.crewMode]\n`,
-    "lib/pet/module.ts": hostManifest("pet", 'tables: ["crews"], settings: { keys: ["petName"] }'),
+    "components/crew/module.ui.ts": uiWithSection("crew"),
+    "lib/crew/run.ts": `export const run = (db, settings) => [db.crews.toArray(), db.table("notes"), settings.crewMode, settings.id]\n`,
+    "lib/pet/module.ts": hostManifest(
+      "pet",
+      'tables: ["crews"], settings: { keys: ["petName"], section: "den" }'
+    ),
+    "components/pet/module.ui.ts": uiWithSection("pet"),
     "lib/pet/run.ts": `export const run = (db, { petName }) => [db.crews, petName]\n`,
   })
   assert.deepEqual(declarationErrors(result).sort(), [
     'G4 lib/crew/module.ts: declares settings key "nope", which no file of "crew" touches',
     'G4 lib/crew/module.ts: declares settings key "petName", which no file of "crew" touches',
     'G4 lib/crew/module.ts: declares table "ghosts", which no file of "crew" touches',
-    'G4 lib/crew/module.ts: settings key "nope" is not in SettingsState (stores/settings/settings-store.ts)',
+    'G4 lib/crew/module.ts: settings key "id" is not in AppSettings (packages/plugin-contract/src/types/agent-config/index.ts)',
+    'G4 lib/crew/module.ts: settings key "nope" is not in AppSettings (packages/plugin-contract/src/types/agent-config/index.ts)',
     'G4 lib/crew/module.ts: table "ghosts" is not in CORE_TABLE_NAMES (lib/data-governance/table-catalog.ts)',
     'G4 lib/pet/module.ts: settings key "petName" is also claimed by "crew"',
+    'G4 lib/pet/module.ts: settings keys belong to section "den", which components/pet/module.ui.ts does not declare in `settingsSections`',
     'G4 lib/pet/module.ts: table "crews" is also claimed by "crew"',
+  ])
+})
+
+test("G4: a key the module's engine package reads counts as touched", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "packages/plugin-contract/src/types/agent-config/index.ts": APP_SETTINGS,
+    "lib/voice/module.ts": hostManifest("voice", 'settings: { keys: ["voice", "crewMode"] }'),
+    "components/voice/module.ui.ts": uiWithSection("voice"),
+    "lib/voice/play.ts": `import { speak } from "@cognia/speaker/engine"\nexport const play = speak\n`,
+    "packages/speaker/src/engine.ts": `export const speak = (settings) => settings.voice\n`,
+  })
+  assert.deepEqual(declarationErrors(result), [
+    'G4 lib/voice/module.ts: declares settings key "crewMode", which no file of "voice" touches',
+  ])
+})
+
+test("G4: only a manifest module defines a settings view, over its own manifest's keys", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel", "settings-store": "kernel", chat: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "packages/plugin-contract/src/types/agent-config/index.ts": APP_SETTINGS,
+    "stores/settings/view.ts": "export const defineSettingsView = (keys) => keys\n",
+    "lib/crew/module.ts": hostManifest("crew", 'settings: { keys: ["crewMode"] }'),
+    "components/crew/module.ui.ts": uiWithSection("crew"),
+    "lib/crew/settings.ts": `import { defineSettingsView } from "@/stores/settings/view"
+import crewModule from "./module"
+export const crewSettingsView = defineSettingsView(crewModule.settings.keys)
+export const mode = (s) => s.crewMode
+`,
+    "lib/crew/other.ts": `import { defineSettingsView } from "@/stores/settings/view"
+export const view = defineSettingsView(["crewMode"])
+`,
+    "lib/pet/module.ts": hostManifest("pet"),
+    "lib/pet/settings.ts": `import { defineSettingsView } from "@/stores/settings/view"
+import crewModule from "@/lib/crew/module"
+export const view = defineSettingsView(crewModule.settings.keys)
+`,
+    "lib/chat/settings.ts": `import { defineSettingsView } from "@/stores/settings/view"
+export const view = defineSettingsView(["petName"])
+`,
+  })
+  assert.deepEqual(
+    declarationErrors(result)
+      .filter((e) => e.includes("settings view") || e.includes("defineSettingsView"))
+      .sort(),
+    [
+      'G4 lib/chat/settings.ts: defines a settings view, but "chat" declares no `settings.keys` in a manifest',
+      "G4 lib/crew/other.ts: defineSettingsView takes its own manifest's keys, `defineSettingsView(<module>.settings.keys)` with <module> imported from lib/crew/module.ts",
+      'G4 lib/pet/settings.ts: defines a settings view, but "pet" declares no `settings.keys` in a manifest',
+    ]
+  )
+})
+
+test("G4: another file that reaches the settings and names a claimed key is a settingsAccess entry", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({
+      modules: "kernel",
+      "settings-store": "kernel",
+      chat: "kernel",
+      db: "kernel",
+    }),
+    "lib/modules/define.ts": DEFINE,
+    "packages/plugin-contract/src/types/agent-config/index.ts": APP_SETTINGS,
+    "stores/settings/index.ts": "export const useSettingsStore = 1\n",
+    "stores/settings/view.ts": "export const defineSettingsView = (keys) => keys\n",
+    "lib/db/settings.ts": "export const getSettings = () => ({ crewMode: 1 })\n",
+    "lib/crew/module.ts": hostManifest("crew", 'settings: { keys: ["crewMode"] }'),
+    "components/crew/module.ui.ts": uiWithSection("crew"),
+    "lib/crew/run.ts": `import { useSettingsStore } from "@/stores/settings"\nexport const run = () => useSettingsStore.settings.crewMode\n`,
+    "lib/chat/read.ts": `import { useSettingsStore } from "@/stores/settings"\nexport const read = (s) => [s.crewMode, s.petName]\n`,
+    "lib/chat/write.ts": `import { getSettings } from "@/lib/db/settings"\nexport const write = (save) => save({ crewMode: getSettings()["crewMode"] })\n`,
+    "lib/chat/unrelated.ts": `export const other = (s) => s.crewMode\n`,
+    "lib/chat/message.ts": `import { useSettingsStore } from "@/stores/settings"\nexport const m = "crewMode"\n`,
+  })
+  assert.deepEqual(result.measures.settingsAccess, [
+    "lib/chat/read.ts -> crewMode",
+    "lib/chat/write.ts -> crewMode",
+  ])
+})
+
+test("settingsKeyUses reads property, destructuring, object-literal and element keys, not strings", () => {
+  const source = `
+const { ttsRate, voice: v } = settings
+save({ ttsEnabled: true, ttsPitch })
+const x = settings.ttsVolume + settings["ttsAutoPlay"]
+log("ttsProvider")
+`
+  assert.deepEqual(
+    [...settingsKeyUses(astOf(source))].filter((n) => n.startsWith("tts") || n === "voice").sort(),
+    ["ttsAutoPlay", "ttsEnabled", "ttsPitch", "ttsRate", "ttsVolume", "voice"]
+  )
+})
+
+test("settingsViewCalls tells its own manifest's keys from anything else", () => {
+  const source = `import speechModule from "./module"
+import other from "./other"
+export const a = defineSettingsView(speechModule.settings.keys)
+export const b = defineSettingsView(["ttsRate"])
+export const c = defineSettingsView(other.keys)
+export const d = defineSettingsView(unknown.settings.keys)
+`
+  assert.deepEqual(settingsViewCalls(astOf(source)), [
+    { manifest: "./module" },
+    { other: true },
+    { other: true },
+    { other: true },
   ])
 })
 
@@ -1126,6 +1247,20 @@ test("G3 fails on an import the baseline does not have and hints when one is rep
   const paid = compare({ ...MEASURES, publicApi: [] }, MEASURES)
   assert.deepEqual(paid.failures, [])
   assert.ok(paid.hints.includes("publicApi: 1 baselined item(s) repaid"))
+})
+
+test("G4 fails on a settings access the baseline does not have and hints when one is repaid", () => {
+  const known = { ...MEASURES, settingsAccess: ["lib/a/x.ts -> ttsRate"] }
+  const grown = compare(
+    { ...known, settingsAccess: [...known.settingsAccess, "lib/c/z.ts -> petSettings"] },
+    known
+  )
+  assert.equal(grown.failures.length, 1)
+  assert.ok(grown.failures[0].startsWith("G4 settings access: 1 new use(s)"))
+  assert.ok(grown.failures[0].endsWith("\n  lib/c/z.ts -> petSettings"))
+  const paid = compare({ ...known, settingsAccess: [] }, known)
+  assert.deepEqual(paid.failures, [])
+  assert.ok(paid.hints.includes("settingsAccess: 1 baselined item(s) repaid"))
 })
 
 test("G4 fails on a table access the baseline does not have and hints when one is repaid", () => {

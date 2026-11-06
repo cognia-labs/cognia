@@ -6,19 +6,13 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 const saveMock = jest.fn()
 jest.mock("@/lib/tauri", () => ({ isTauri: () => false }))
 
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: <T,>(
-    selector: (s: {
-      settings: Record<string, unknown>
-      providerKeys: Record<string, string>
-      save: typeof saveMock
-    }) => T
-  ): T =>
-    selector({
-      settings: { realtimeVoice: "marin", realtimeModel: "gpt-realtime" },
-      providerKeys: {},
-      save: saveMock,
-    }),
+jest.mock("@/lib/speech/settings", () => ({
+  useSpeechSettingsView: <T,>(selector: (settings: Record<string, unknown>) => T): T =>
+    selector({ realtimeVoice: "marin", realtimeModel: "gpt-realtime" }),
+  speechSettingsView: { update: (patch: unknown) => saveMock(patch) },
+}))
+jest.mock("@/lib/speech/provider-keys", () => ({
+  useSpeechProviderKeys: <T,>(selector: (keys: Record<string, string>) => T): T => selector({}),
 }))
 
 jest.mock("next-intl", () => ({

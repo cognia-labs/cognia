@@ -14,7 +14,8 @@ import {
   resolveCharacterVoice,
   type CharacterVoiceSource,
 } from "@/lib/plugin/character-pack/character-voice"
-import { useSettingsStore } from "@/stores/settings"
+import { ensureSpeechProviderKeys, speechProviderKeys } from "@/lib/speech/provider-keys"
+import { speechSettingsView } from "@/lib/speech/settings"
 import { hasNoLeakingPii } from "@cognia/redact"
 
 /**
@@ -37,13 +38,12 @@ export async function speakPetText(
   if (!text.trim()) return
   if (!hasNoLeakingPii(text)) return
 
-  await useSettingsStore.getState().ensureProviderKeys()
-  const store = useSettingsStore.getState()
+  await ensureSpeechProviderKeys()
 
-  const base = selectSpeechSettings(store.settings)
+  const base = selectSpeechSettings(speechSettingsView.get())
   const overlay = character ? resolveCharacterVoice(character) : undefined
   const speechSettings = overlay ? { ...base, ...overlay } : base
-  const providerSettings = providerKeyMapToSettingsMap(store.providerKeys)
+  const providerSettings = providerKeyMapToSettingsMap(speechProviderKeys())
 
   await ttsOrchestrator.speak(text, {
     source: "pet",

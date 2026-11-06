@@ -42,6 +42,9 @@ export default defineHostModule({
     "lib/ai/eval/service.ts",
     "lib/ai/eval/twin-benchmark.ts",
   ],
+  // Eval's preferences; only `lib/eval/settings.ts` writes them, and the
+  // Eval section resets and reviews them.
+  settings: { keys: ["evalSettings"] },
   // Every `eval*` table. Another module that reads one directly is a
   // `tableAccess` entry in the module baseline (ADR-0250 §14, G4).
   tables: [

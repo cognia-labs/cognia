@@ -4,14 +4,15 @@
  * useTTS — React hook over the singleton TTS orchestrator.
  *
  * Ported from `D:\Project\Cognia\hooks\media\use-tts.ts`. The cognia-next
- * version reads `speechSettings` and `providerSettings` from
- * `useSettingsStore` instead of Cognia's monolithic Zustand store, but the
- * external API is identical.
+ * version reads `speechSettings` from the speech module's settings view and
+ * `providerSettings` from its provider keys instead of Cognia's monolithic
+ * Zustand store, but the external API is identical.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 
-import { useSettingsStore } from "@/stores/settings"
+import { ensureSpeechProviderKeys, speechProviderKeys } from "@/lib/speech/provider-keys"
+import { useSpeechSettingsView } from "@/lib/speech/settings"
 import { selectSpeechSettings } from "@/lib/tts/speech-settings"
 import {
   ttsOrchestrator,
@@ -85,7 +86,7 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSReturn {
     onProgress,
   } = options
 
-  const settings = useSettingsStore((s) => s.settings)
+  const settings = useSpeechSettingsView((s) => s)
 
   const baseSpeech = useMemo(
     () => (useSettings ? selectSpeechSettings(settings) : DEFAULT_SPEECH_SETTINGS),
@@ -116,8 +117,8 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSReturn {
       // longer fetched during app boot. Read the freshest keys straight from
       // the store after the (idempotent) load so even the very first `speak`
       // sees them, regardless of render timing.
-      await useSettingsStore.getState().ensureProviderKeys()
-      const providerSettings = providerKeyMapToSettingsMap(useSettingsStore.getState().providerKeys)
+      await ensureSpeechProviderKeys()
+      const providerSettings = providerKeyMapToSettingsMap(speechProviderKeys())
       await ttsOrchestrator.speak(text, {
         provider: active,
         source,

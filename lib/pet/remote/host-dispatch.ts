@@ -44,7 +44,7 @@ import { getPetBinding, getPetProfile } from "@/lib/db/pet"
 import { clearPetConversation } from "@/lib/db/pet-conversation"
 import { getDb } from "@/lib/db/schema"
 import { usePetStore } from "@/stores/pet/pet-store"
-import { useSettingsStore } from "@/stores/settings"
+import { petSettingsView } from "@/lib/pet/settings"
 import { PET_REMOTE_COMMANDS, isPetRemoteCommand } from "./commands"
 import { getPetIdempotencyLedger, type PetIdempotencyLedger } from "./idempotency"
 import {
@@ -119,7 +119,7 @@ export interface PetHostDispatchDeps {
 }
 
 function readAppSettings(): AppSettings | null | undefined {
-  return useSettingsStore.getState().settings
+  return petSettingsView.get()
 }
 
 async function findActivityAt(kind: string, ts: number): Promise<PetActivityRow | undefined> {

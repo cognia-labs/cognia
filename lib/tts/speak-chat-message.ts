@@ -19,7 +19,8 @@ import {
   resolveCharacterVoice,
   type CharacterVoiceSource,
 } from "@/lib/plugin/character-pack/character-voice"
-import { useSettingsStore } from "@/stores/settings"
+import { ensureSpeechProviderKeys, speechProviderKeys } from "@/lib/speech/provider-keys"
+import { speechSettingsView } from "@/lib/speech/settings"
 
 export interface SpeakChatMessageArgs {
   /** The owning surface id (chat message id) — surfaced as `activeSourceId`. */
@@ -47,13 +48,12 @@ export async function speakChatMessage({
   if (!text.trim()) return
 
   // Lazily load provider keys on first playback (same contract as useTTS).
-  await useSettingsStore.getState().ensureProviderKeys()
-  const store = useSettingsStore.getState()
+  await ensureSpeechProviderKeys()
 
-  const base = selectSpeechSettings(store.settings)
+  const base = selectSpeechSettings(speechSettingsView.get())
   const overlay = character ? resolveCharacterVoice(character) : undefined
   const speechSettings = overlay ? { ...base, ...overlay } : base
-  const providerSettings = providerKeyMapToSettingsMap(store.providerKeys)
+  const providerSettings = providerKeyMapToSettingsMap(speechProviderKeys())
 
   await ttsOrchestrator.speak(text, {
     source: "chat",
@@ -80,13 +80,12 @@ export async function speakChatMessageStream(
   tokens: AsyncIterable<string>,
   { messageId, character }: SpeakChatMessageStreamArgs
 ): Promise<void> {
-  await useSettingsStore.getState().ensureProviderKeys()
-  const store = useSettingsStore.getState()
+  await ensureSpeechProviderKeys()
 
-  const base = selectSpeechSettings(store.settings)
+  const base = selectSpeechSettings(speechSettingsView.get())
   const overlay = character ? resolveCharacterVoice(character) : undefined
   const speechSettings = overlay ? { ...base, ...overlay } : base
-  const providerSettings = providerKeyMapToSettingsMap(store.providerKeys)
+  const providerSettings = providerKeyMapToSettingsMap(speechProviderKeys())
 
   await ttsOrchestrator.speakStream(tokens, {
     source: "chat",

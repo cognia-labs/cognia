@@ -45,7 +45,7 @@ import { usePet, type UsePetResult } from "@/hooks/pet/use-pet"
 import { useActiveCharacterId } from "@/hooks/pet/use-active-character-id"
 import { usePetConsoleMode } from "@/hooks/pet/use-pet-console-mode"
 import { claimConnectionNotice } from "@/lib/runtime/connection-notice-claim"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import { useActiveLive2dModel } from "@/hooks/pet/use-active-live2d-model"
 import { useActiveSpritePack } from "@/hooks/pet/use-active-sprite-pack"
 import { PanelTransition } from "@/components/settings/common/panel-transition"
@@ -213,7 +213,7 @@ function PetConsoleBody({
   const t = useTranslations("pet")
   const actions = usePetConsoleActions()
   const remote = actions.remote
-  const appSettings = useSettingsStore((s) => s.settings)
+  const appSettings = usePetSettingsView((s) => s)
   const { profile, view } = petState
   const [target, setTarget] = useState<PetConsoleTarget>(
     initialTarget ?? PET_CONSOLE_DEFAULT_TARGET

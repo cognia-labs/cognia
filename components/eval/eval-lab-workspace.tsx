@@ -109,7 +109,7 @@ import {
 } from "@/lib/db/eval-lab"
 import { listDatasetSummaries, type EvalDatasetSummary } from "@/lib/ai/eval/service"
 import { cn } from "@/lib/utils"
-import { useSettingsStore } from "@/stores/settings"
+import { useEvalSettingsView } from "@/lib/eval/settings"
 import { CalibrationPanel } from "./calibration-panel"
 import { BlindReviewPanel } from "./blind-review-panel"
 import { EvalDashboard } from "./eval-dashboard"
@@ -294,7 +294,7 @@ function EvalLabWorkspaceContent({
   const t = useTranslations("eval")
   const format = useFormatter()
   const router = useRouter()
-  const appSettings = useSettingsStore((state) => state.settings)
+  const appSettings = useEvalSettingsView((s) => s)
   const runOptions = useRunConfigOptions()
   const [step, setStep] = useState<EvalLabStep>("goal")
   const [mode, setMode] = useState<EvalMode>("model")

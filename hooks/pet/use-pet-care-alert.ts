@@ -7,7 +7,7 @@
 
 import { useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { notifyBecameUnwell } from "@/lib/pet/care/notify-care"
 
@@ -18,7 +18,7 @@ import { notifyBecameUnwell } from "@/lib/pet/care/notify-care"
  */
 export function usePetCareAlert(enabled: boolean): void {
   const t = useTranslations("pet")
-  const careAlertsSetting = useSettingsStore((s) => s.settings?.petSettings?.careAlerts)
+  const careAlertsSetting = usePetSettingsView((s) => s?.petSettings?.careAlerts)
   const careAlert = usePetStore((s) => s.careAlert)
   const setCareAlert = usePetStore((s) => s.setCareAlert)
   const handledAtRef = useRef<number | null>(null)

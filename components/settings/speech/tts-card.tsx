@@ -21,7 +21,16 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { useSettingDraft } from "@/hooks/settings/use-setting-draft"
-import { useSettingsStore } from "@/stores/settings"
+import {
+  setTtsAutoPlay,
+  setTtsEnabled,
+  setTtsPitch,
+  setTtsProvider,
+  setTtsRate,
+  setTtsVolume,
+  speechSettingsView,
+  useSpeechSettingsView,
+} from "@/lib/speech/settings"
 import {
   ORDERED_TTS_PROVIDERS,
   TTS_PROVIDERS,
@@ -38,8 +47,8 @@ import { detectPlatform } from "@/lib/platform/detect"
 
 function SSMLPreviewSection() {
   const t = useTranslations("settings.speech.tts")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const [open, setOpen] = useState(false)
 
   const customEnabled = settings?.ttsCustomSSMLEnabled ?? false
@@ -97,8 +106,8 @@ function SSMLPreviewSection() {
 
 function PronunciationDictionarySection() {
   const t = useTranslations("settings.speech.tts")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const [open, setOpen] = useState(false)
   const [newWord, setNewWord] = useState("")
   const [newReplacement, setNewReplacement] = useState("")
@@ -179,15 +188,8 @@ function PronunciationDictionarySection() {
  */
 export function TtsCard() {
   const t = useTranslations("settings.speech.tts")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
-
-  const setTtsEnabled = useSettingsStore((s) => s.setTtsEnabled)
-  const setTtsProvider = useSettingsStore((s) => s.setTtsProvider)
-  const setTtsAutoPlay = useSettingsStore((s) => s.setTtsAutoPlay)
-  const setTtsRate = useSettingsStore((s) => s.setTtsRate)
-  const setTtsPitch = useSettingsStore((s) => s.setTtsPitch)
-  const setTtsVolume = useSettingsStore((s) => s.setTtsVolume)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
 
   const ttsEnabled = settings?.ttsEnabled ?? false
   const provider = normalizeTTSProvider(settings?.ttsProvider)

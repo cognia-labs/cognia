@@ -9,8 +9,9 @@ jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => mockModels }))
 
 const save = jest.fn()
 let settingsValue: unknown = { petSettings: { skinId: "svg" } }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (sel: (s: unknown) => unknown) => sel({ settings: settingsValue, save }),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (select: (s: unknown) => unknown) => select(settingsValue),
+  petSettingsView: { get: () => settingsValue, update: (patch: unknown) => save(patch) },
 }))
 
 const useActiveLive2dModel = jest.fn(() => ({

@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { useSettingsStore } from "@/stores/settings"
+import { speechSettingsView, useSpeechSettingsView } from "@/lib/speech/settings"
 import { DEFAULT_LIVE_VOICE_SETTINGS, type LiveVoiceSettings } from "@cognia/agent-config-types"
 import {
   IMPLEMENTED_LIVE_VOICE_PROVIDERS,
@@ -47,8 +47,8 @@ function deploymentId(provider: LiveVoiceProviderId, region: LiveVoiceRegion): s
 
 export function LiveVoiceCard() {
   const t = useTranslations("settings.speech.live")
-  const settings = useSettingsStore((store) => store.settings)
-  const save = useSettingsStore((store) => store.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
 
   const liveVoice: LiveVoiceSettings = useMemo(
     () => ({ ...DEFAULT_LIVE_VOICE_SETTINGS, ...(settings?.liveVoice ?? {}) }),

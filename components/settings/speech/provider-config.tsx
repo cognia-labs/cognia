@@ -26,7 +26,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { DeferredTextInput } from "@/components/settings/common/deferred-text-input"
 import { isTauri } from "@/lib/tauri"
 import { HOST_KEY_PRESENT } from "@/lib/tts/keyring"
-import { useSettingsStore } from "@/stores/settings"
+import { speechSettingsView, useSpeechSettingsView } from "@/lib/speech/settings"
+import { useSpeechProviderKeys } from "@/lib/speech/provider-keys"
 import {
   CARTESIA_TTS_MODELS,
   CARTESIA_TTS_VOICES,
@@ -83,8 +84,8 @@ function NumberSlider(props: {
 
 export function SystemConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
 
@@ -135,8 +136,8 @@ const OPENAI_RESPONSE_FORMATS = [
 
 export function OpenAiConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.openaiVoice ?? "alloy"
   const model = settings?.openaiModel ?? "gpt-4o-mini-tts"
   const speed = settings?.openaiSpeed ?? 1.0
@@ -223,8 +224,8 @@ export function OpenAiConfig() {
 
 export function LocalOpenAiCompatibleConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const baseUrl = settings?.localOpenaiBaseUrl ?? ""
   const model = settings?.localOpenaiModel ?? ""
   const voice = settings?.localOpenaiVoice ?? ""
@@ -319,8 +320,8 @@ export function LocalOpenAiCompatibleConfig() {
 
 export function GeminiConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.geminiVoice ?? "Kore"
   const model = settings?.geminiModel ?? "gemini-3.1-flash-tts-preview"
 
@@ -366,8 +367,8 @@ export function GeminiConfig() {
 
 export function MistralConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voiceId = settings?.mistralVoiceId ?? ""
   const model = settings?.mistralModel ?? "voxtral-mini-tts-2603"
   const responseFormat = settings?.mistralResponseFormat ?? "mp3"
@@ -429,13 +430,13 @@ export function MistralConfig() {
 
 export function ElevenLabsConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.elevenlabsVoice ?? "rachel"
   const model = settings?.elevenlabsModel ?? "eleven_multilingual_v2"
   const stability = settings?.elevenlabsStability ?? 0.5
   const similarityBoost = settings?.elevenlabsSimilarityBoost ?? 0.75
-  const storedKey = useSettingsStore((s) => s.providerKeys.elevenlabs ?? "")
+  const storedKey = useSpeechProviderKeys((keys) => keys.elevenlabs ?? "")
   const [accountVoices, setAccountVoices] = useState<ElevenLabsVoice[]>([])
 
   useEffect(() => {
@@ -524,8 +525,8 @@ export function ElevenLabsConfig() {
 
 export function LmntConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.lmntVoice ?? "lily"
   const speed = settings?.lmntSpeed ?? 1.0
 
@@ -561,8 +562,8 @@ export function LmntConfig() {
 
 export function HumeConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.humeVoice ?? "kora"
 
   return (
@@ -599,8 +600,8 @@ const CARTESIA_EMOTION_PRESETS = [
 
 export function CartesiaConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.cartesiaVoice ?? "a0e99841-438c-4a64-b679-ae501e7d6091"
   const model = settings?.cartesiaModel ?? "sonic-3"
   const language = settings?.cartesiaLanguage ?? "en"
@@ -682,8 +683,8 @@ export function CartesiaConfig() {
 
 export function DeepgramConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.deepgramVoice ?? "aura-2-asteria-en"
 
   return (
@@ -709,8 +710,8 @@ export function DeepgramConfig() {
 
 export function XiaomiConfig() {
   const t = useTranslations("settings.speech.provider")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = useSpeechSettingsView((s) => s)
+  const save = speechSettingsView.update
   const voice = settings?.xiaomiVoice ?? "mimo_default"
   const model = settings?.xiaomiModel ?? "mimo-v2-tts"
   const style = settings?.xiaomiStyle ?? ""

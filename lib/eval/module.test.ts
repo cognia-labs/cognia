@@ -21,6 +21,10 @@ describe("eval module manifest", () => {
     for (const table of evalModule.tables ?? []) expect(table).toMatch(/^eval[A-Z]/)
   })
 
+  it("claims its settings key for the eval section", () => {
+    expect(evalModule.settings).toEqual({ keys: ["evalSettings"] })
+  })
+
   it("contributes no search provider or slash command", () => {
     expect("searchProviders" in evalModule).toBe(false)
     expect("slashCommands" in evalModule).toBe(false)

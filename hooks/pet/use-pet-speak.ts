@@ -41,7 +41,7 @@ import { loadPort } from "@/lib/modules/ports"
 import { resolveCharacterById } from "@/lib/db/characters"
 import type { CharacterVoiceSource } from "@/lib/plugin/character-pack/character-voice"
 import { usePetStore, type PetBubble } from "@/stores/pet/pet-store"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import type { PetProfile } from "@/types/pet"
 import type { PetView } from "@/lib/pet/runtime/pet-view"
 import type { ApplyMemoryContextDeps } from "@/lib/memory/runtime/apply-memory-context"
@@ -95,7 +95,7 @@ export function usePetSpeak({ profile, view, enabled, activeCharacterId }: UsePe
   const locale = useLocale()
   const setBubble = usePetStore((s) => s.setBubble)
   const enqueueOneShot = usePetStore((s) => s.enqueueOneShot)
-  const appSettings = useSettingsStore((s) => s.settings)
+  const appSettings = usePetSettingsView((s) => s)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef(false)
   /** Lazily-built memory retriever deps, cached after the first talk. */

@@ -12,16 +12,16 @@ const setters = {
   setTtsPitch: jest.fn(async (_v: number) => undefined),
   setTtsVolume: jest.fn(async (_v: number) => undefined),
 }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({
-      settings: testSettings,
-      save: jest.fn(),
-      setTtsEnabled: jest.fn(),
-      setTtsProvider: jest.fn(),
-      setTtsAutoPlay: jest.fn(),
-      ...setters,
-    }),
+jest.mock("@/lib/speech/settings", () => ({
+  useSpeechSettingsView: (selector: (settings: Record<string, unknown>) => unknown) =>
+    selector(testSettings),
+  speechSettingsView: { update: jest.fn() },
+  setTtsEnabled: jest.fn(),
+  setTtsProvider: jest.fn(),
+  setTtsAutoPlay: jest.fn(),
+  setTtsRate: (v: number) => setters.setTtsRate(v),
+  setTtsPitch: (v: number) => setters.setTtsPitch(v),
+  setTtsVolume: (v: number) => setters.setTtsVolume(v),
 }))
 
 // Range input standing in for the Radix slider: `change` is one drag frame

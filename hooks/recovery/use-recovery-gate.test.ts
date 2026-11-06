@@ -35,6 +35,9 @@ jest.mock("@/stores/settings/settings-store", () => ({
     subscribe: jest.fn(),
   },
 }))
+jest.mock("@/lib/speech/provider-keys", () => ({
+  ensureSpeechProviderKeys: jest.fn(async () => undefined),
+}))
 
 const { isTauri } = jest.requireMock("@/lib/tauri")
 const recovery = jest.requireMock("@/lib/tauri/recovery")
@@ -100,10 +103,7 @@ describe("useRecoveryGate", () => {
       ...(await recovery.getRecoveryState()),
       rendererAlive: true,
     }))
-    useSettingsStore.getState.mockReset().mockReturnValue({
-      loaded: true,
-      ensureProviderKeys: jest.fn(async () => undefined),
-    })
+    useSettingsStore.getState.mockReset().mockReturnValue({ loaded: true })
     useSettingsStore.subscribe.mockReset().mockReturnValue(jest.fn())
     applyProxyToRust.mockResolvedValue(undefined)
     ensureSidecarReady.mockResolvedValue({ ready: true })
@@ -726,8 +726,11 @@ describe("useRecoveryGate", () => {
       previousSessionUnhealthy: false,
       secretStore: "locked",
     })
-    const ensureProviderKeys = jest.fn(async () => undefined)
-    useSettingsStore.getState.mockReturnValue({ loaded: true, ensureProviderKeys })
+    const { ensureSpeechProviderKeys: ensureProviderKeys } = jest.requireMock(
+      "@/lib/speech/provider-keys"
+    ) as { ensureSpeechProviderKeys: jest.Mock }
+    ensureProviderKeys.mockClear()
+    useSettingsStore.getState.mockReturnValue({ loaded: true })
     recovery.unlockSecretStore.mockResolvedValue(state())
     const deferred = jest.fn()
     const { result } = renderHook(() =>

@@ -23,7 +23,7 @@ import { coinMultiplier } from "@/lib/pet/economy/streak"
 import { normalizeInteractionGate, remainingCooldownMs } from "@/lib/pet/interaction/gate"
 import { isPetControllerPresent } from "@/lib/pet/runtime/controller-presence"
 import { getPetProfile } from "@/lib/db/pet"
-import { useSettingsStore } from "@/stores/settings"
+import { petSettingsView } from "@/lib/pet/settings"
 import type {
   PetRemotePresentation,
   PetRemoteSnapshot,
@@ -42,7 +42,7 @@ export interface PetHostSnapshotDeps {
 
 /** The host's pet settings, from the live store the renderer already holds. */
 export function readHostPetSettings(): PetSettings {
-  return useSettingsStore.getState().settings?.petSettings ?? DEFAULT_PET_SETTINGS
+  return petSettingsView.get()?.petSettings ?? DEFAULT_PET_SETTINGS
 }
 
 /**

@@ -12,10 +12,10 @@ jest.mock("@/lib/db/schema", () => {
 })
 import { getDb } from "@/lib/db/schema"
 import { getSettings, saveSettings } from "@/lib/db/settings"
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: {
-    getState: jest.fn(),
-    setState: jest.fn(),
+jest.mock("./settings", () => ({
+  petSettingsView: {
+    update: jest.fn(),
+    applyLocal: jest.fn(),
     subscribe: jest.fn(() => () => {}),
   },
 }))
@@ -436,9 +436,11 @@ describe("startPetSettingsFollower", () => {
 })
 
 describe("default deps", () => {
-  it("replaces only the petSettings slice of a loaded store", async () => {
-    const { useSettingsStore } = jest.requireMock("@/stores/settings") as {
-      useSettingsStore: { setState: jest.Mock; getState: jest.Mock }
+  // The view itself leaves a store that never loaded alone and refuses any
+  // other key (`stores/settings/view.test.ts`).
+  it("applies another window's pet settings through the pet's settings view", async () => {
+    const { petSettingsView } = jest.requireMock("./settings") as {
+      petSettingsView: { applyLocal: jest.Mock }
     }
     const { getSettings } = jest.requireMock("@/lib/db/settings") as { getSettings: jest.Mock }
     const fresh = { ...DEFAULT_PET_SETTINGS, size: 222 }
@@ -447,23 +449,16 @@ describe("default deps", () => {
     const dispose = startPetSettingsFollower({ openChannel: bus.open })
     bus.deliver(PET_SETTINGS_CHANNEL, { v: 1, kind: "pet-settings-changed", from: "other" })
     await flush()
-    const updater = useSettingsStore.setState.mock.calls[0][0] as (s: unknown) => unknown
-    expect(updater({ settings: { theme: "dark", petSettings: DEFAULT_PET_SETTINGS } })).toEqual({
-      settings: { theme: "dark", petSettings: fresh },
-    })
-    // A store that never loaded is left alone rather than half-populated.
-    const unloaded = { settings: null }
-    expect(updater(unloaded)).toBe(unloaded)
+    expect(petSettingsView.applyLocal).toHaveBeenCalledWith({ petSettings: fresh })
     dispose()
   })
 
-  it("writes through the settings store's save", async () => {
-    const { useSettingsStore } = jest.requireMock("@/stores/settings") as {
-      useSettingsStore: { getState: jest.Mock }
+  it("writes through the pet's settings view", async () => {
+    const { petSettingsView } = jest.requireMock("./settings") as {
+      petSettingsView: { update: jest.Mock }
     }
     const { getSettings } = jest.requireMock("@/lib/db/settings") as { getSettings: jest.Mock }
-    const save = jest.fn().mockResolvedValue(undefined)
-    useSettingsStore.getState.mockReturnValue({ save })
+    const save = petSettingsView.update.mockResolvedValue(undefined)
     getSettings.mockResolvedValue({ petSettings: undefined })
     const next = await updatePetSettings((l) => ({ ...l, size: 111 }), {
       withLock: (task) => task(),

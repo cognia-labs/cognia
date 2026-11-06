@@ -97,6 +97,8 @@ export const BRAIN_ADAPTER_FIELDS = ["module", "hosts"]
 export const EFFECT_FIELDS = ["name", "load"]
 /** Fields of `ModulePortProvision`. */
 export const PORT_PROVISION_FIELDS = ["port", "load"]
+
+export const SETTINGS_FIELDS = ["keys", "section", "load"]
 /** Where the kernel declares each port's contract: `types/modules/ports/<id>.ts`. */
 export const PORTS_DIR = "types/modules/ports/"
 /** `ModuleHost`, `HeadlessHost` and `ModuleRuntimeBoot` (`lib/modules/manifest-types.ts`). */
@@ -579,8 +581,20 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
   for (const field of ["owns", "dependsOn", "api", "requires", "tables"])
     if (manifest[field] !== undefined && !isStringArray(manifest[field]))
       errors.push(`${field} is a list of strings`)
-  if (manifest.settings !== undefined && !isStringArray(manifest.settings?.keys))
-    errors.push("settings.keys is a list of strings")
+  if (manifest.settings !== undefined) {
+    const settings = manifest.settings
+    if (!settings || typeof settings !== "object" || Array.isArray(settings))
+      errors.push("settings is an object")
+    else {
+      for (const key of Object.keys(settings))
+        if (!SETTINGS_FIELDS.includes(key)) errors.push(`settings: unknown field "${key}"`)
+      if (!isStringArray(settings.keys)) errors.push("settings.keys is a list of strings")
+      if (settings.section !== undefined && !isText(settings.section))
+        errors.push("settings.section is a settings section id")
+      if (settings.load !== undefined && !isLazy(settings.load))
+        errors.push('settings.load is a lazy entry `() => import("…")`')
+    }
+  }
   const smoke = manifest.acceptance?.realSmoke
   if (smoke !== undefined && smoke !== "pending" && !/^passed:\d{4}-\d{2}-\d{2}$/.test(smoke))
     errors.push(`acceptance.realSmoke is "pending" or "passed:<YYYY-MM-DD>"`)

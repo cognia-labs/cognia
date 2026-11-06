@@ -9,7 +9,8 @@
  *
  * Same plumbing as `app/me/preferences/page.tsx`: optimistic `save()` into the
  * local Dexie settings row + an enqueued `app_settings_update` command so the
- * desktop reconciles on the next sync. Cloud-provider API keys are NOT writable
+ * desktop reconciles on the next sync. The writes go through the speech
+ * module's settings view (`lib/speech/settings.ts`), which owns every key here. Cloud-provider API keys are NOT writable
  * from mobile (not allowlisted) — they stay configured on desktop and the
  * provider + voice choice merely selects which configured voice to use.
  *
@@ -39,9 +40,8 @@ import { Switch } from "@/components/ui/switch"
 import { Input } from "@/components/ui/input"
 import { DeferredTextInput } from "@/components/settings/common/deferred-text-input"
 import { useSettingDraft } from "@/hooks/settings/use-setting-draft"
-import { useSettingsPatch } from "@/hooks/use-settings-patch"
 import type { AppSettings } from "@cognia/agent-config-types"
-import { useSettingsStore } from "@/stores/settings"
+import { speechSettingsView, useSpeechSettingsView } from "@/lib/speech/settings"
 import {
   ORDERED_TTS_PROVIDERS,
   TTS_PROVIDER_SETTINGS,
@@ -123,9 +123,8 @@ const STT_LANGUAGES = ["auto", ...SPEECH_LANGUAGES.map((l) => l.code)] as const
 export default function MobileSpeechPage() {
   const t = useTranslations("mobile.speech")
 
-  const settings = useSettingsStore((s) => s.settings)
-  const saveLocalSettings = useSettingsStore((s) => s.save)
-  const update = useSettingsPatch()
+  const settings = useSpeechSettingsView((s) => s)
+  const update = speechSettingsView.update
 
   const ttsEnabled = settings?.ttsEnabled ?? false
   const ttsProvider = (settings?.ttsProvider ?? "system") as SelectableTTSProvider
@@ -208,7 +207,7 @@ export default function MobileSpeechPage() {
                   onChange={(v) =>
                     void update({
                       [voiceCfg.voiceSettingKey]: v,
-                    } as Partial<AppSettings>)
+                    } as never)
                   }
                   disabled={!ttsEnabled}
                   ariaLabel={t("voice")}
@@ -231,9 +230,7 @@ export default function MobileSpeechPage() {
                   aria-label={t("voice")}
                   disabled={!ttsEnabled}
                   value={currentVoice}
-                  onCommit={(voice) =>
-                    void update({ [voiceCfg.voiceSettingKey]: voice } as Partial<AppSettings>)
-                  }
+                  onCommit={(voice) => void update({ [voiceCfg.voiceSettingKey]: voice } as never)}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
@@ -251,18 +248,14 @@ export default function MobileSpeechPage() {
                 <Input
                   aria-label={t("localEndpoint")}
                   disabled={!ttsEnabled}
-                  onChange={(event) =>
-                    void saveLocalSettings({ localOpenaiBaseUrl: event.target.value })
-                  }
+                  onChange={(event) => void update({ localOpenaiBaseUrl: event.target.value })}
                   value={settings?.localOpenaiBaseUrl ?? ""}
                 />
                 <Input
                   aria-label={t("model")}
                   className="mt-2"
                   disabled={!ttsEnabled}
-                  onChange={(event) =>
-                    void saveLocalSettings({ localOpenaiModel: event.target.value })
-                  }
+                  onChange={(event) => void update({ localOpenaiModel: event.target.value })}
                   value={settings?.localOpenaiModel ?? ""}
                 />
               </ItemContent>

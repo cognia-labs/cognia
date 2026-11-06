@@ -30,8 +30,9 @@ jest.mock("@/lib/memory/runtime/build-deps", () => ({
 const stateRef: { current: { settings: Partial<AppSettings> | null } } = {
   current: { settings: null },
 }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) => selector(stateRef.current),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (selector: (settings: unknown) => unknown) =>
+    selector(stateRef.current.settings),
 }))
 
 function profileWith(proactiveState?: ProactiveState): PetProfile {

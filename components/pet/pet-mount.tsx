@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { useSettingsStore } from "@/stores/settings"
+import { petSettingsView, usePetSettingsView } from "@/lib/pet/settings"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS } from "@/types/pet"
 import { usePetEventBus } from "@/hooks/pet/use-pet-event-bus"
 import { useActiveCharacterId } from "@/hooks/pet/use-active-character-id"
@@ -42,8 +42,8 @@ import { PetMainRuntime } from "./pet-main-runtime"
 
 export function PetMount() {
   const t = useTranslations("pet")
-  const settings = useSettingsStore((s) => s.settings)
-  const save = useSettingsStore((s) => s.save)
+  const settings = usePetSettingsView((s) => s)
+  const save = petSettingsView.update
   const pet = settings?.petSettings ?? DEFAULT_PET_SETTINGS
   const enabled = pet.enabled
   const activeCharacterId = useActiveCharacterId()
@@ -271,7 +271,7 @@ export function PetMount() {
   useEffect(() => {
     if (!isMainDesktopWindow) return
     return onPetNativeStateChanged((native) => {
-      if (!useSettingsStore.getState().settings?.petSettings) return
+      if (!petSettingsView.get()?.petSettings) return
       void updatePetSettings((latest) => {
         const desktop = latest.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY
         const clickThrough = native.open ? native.clickThrough : desktop.clickThrough

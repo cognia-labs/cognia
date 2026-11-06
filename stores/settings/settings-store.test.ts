@@ -64,13 +64,6 @@ jest.mock("@/lib/network/proxy-credentials", () => ({
   migrateLegacyProxyPassword: (...args: unknown[]) => migrateLegacyProxyPasswordMock(...args),
 }))
 
-jest.mock("@/lib/tts/keyring", () => ({
-  HOST_KEY_PRESENT: "__cognia_host_key_present__",
-  setProviderKey: jest.fn(),
-  clearProviderKey: jest.fn(),
-  loadAllProviderKeys: jest.fn(),
-}))
-
 jest.mock("@/lib/plugin/messaging/message-bus", () => {
   const actual = jest.requireActual("@/lib/plugin/messaging/message-bus")
   return { ...actual, emitSystemBusEvent: jest.fn() }
@@ -91,12 +84,6 @@ const ipc = require("@/lib/claude/ipc") as {
 }
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const tauri = require("@/lib/tauri") as { isTauri: jest.Mock }
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const keyring = require("@/lib/tts/keyring") as {
-  setProviderKey: jest.Mock
-  clearProviderKey: jest.Mock
-  loadAllProviderKeys: jest.Mock
-}
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { useSettingsStore } = require("./settings-store") as typeof import("./settings-store")
@@ -126,8 +113,6 @@ const RESET = {
   loaded: false,
   loadFailed: false,
   loadError: null,
-  providerKeys: {},
-  providerKeysLoaded: false,
 }
 
 beforeEach(() => {
@@ -388,9 +373,8 @@ describe("load", () => {
     expect(dispatchDiagnosticMock).toHaveBeenCalled()
   })
 
-  it("fetches settings and pushes the api key, but does NOT pull keyring keys at boot", async () => {
+  it("fetches settings and pushes the api key", async () => {
     dbSettings.getSettings.mockResolvedValue(baseSettings({ apiKey: "sk-x" }))
-    keyring.loadAllProviderKeys.mockResolvedValue({ openai: "sk-openai" })
     tauri.isTauri.mockReturnValue(true)
     ipc.setApiKey.mockResolvedValue(undefined)
 
@@ -402,11 +386,6 @@ describe("load", () => {
     expect(s.loaded).toBe(true)
     expect(s.settings?.apiKey).toBe("sk-x")
     expect(ipc.setApiKey).toHaveBeenCalledWith("sk-x")
-    // TTS keys are loaded lazily via `ensureProviderKeys`, never during boot
-    // `load()` — keeps the `1 + N` keyring round-trips off the startup path.
-    expect(s.providerKeys).toEqual({})
-    expect(s.providerKeysLoaded).toBe(false)
-    expect(keyring.loadAllProviderKeys).not.toHaveBeenCalled()
   })
 
   it("short-circuits if already loaded", async () => {
@@ -479,7 +458,6 @@ describe("load", () => {
 
   it("does not push apiKey down to Tauri when not in Tauri", async () => {
     dbSettings.getSettings.mockResolvedValue(baseSettings({ apiKey: "sk-y" }))
-    keyring.loadAllProviderKeys.mockResolvedValue({})
     tauri.isTauri.mockReturnValue(false)
     await act(async () => {
       await useSettingsStore.getState().load()
@@ -489,7 +467,6 @@ describe("load", () => {
 
   it("warns when ipc.setApiKey throws during load", async () => {
     dbSettings.getSettings.mockResolvedValue(baseSettings({ apiKey: "sk-x" }))
-    keyring.loadAllProviderKeys.mockResolvedValue({})
     tauri.isTauri.mockReturnValue(true)
     ipc.setApiKey.mockRejectedValue(new Error("ipc dead"))
     await act(async () => {
@@ -508,7 +485,6 @@ describe("load", () => {
         } as unknown as AppSettings["providerSettings"],
       })
     )
-    keyring.loadAllProviderKeys.mockResolvedValue({})
     tauri.isTauri.mockReturnValue(false)
     dbSettings.saveSettings.mockImplementation(async (p) => baseSettings(p))
 
@@ -538,7 +514,6 @@ describe("load", () => {
         ],
       })
     )
-    keyring.loadAllProviderKeys.mockResolvedValue({})
     tauri.isTauri.mockReturnValue(false)
     dbSettings.saveSettings.mockImplementation(async (p) => baseSettings(p))
 
@@ -578,7 +553,6 @@ describe("load", () => {
         ],
       })
     )
-    keyring.loadAllProviderKeys.mockResolvedValue({})
     tauri.isTauri.mockReturnValue(false)
     dbSettings.saveSettings.mockImplementation(async (p) => baseSettings(p))
 
@@ -2270,165 +2244,6 @@ describe("custom search sources", () => {
       await useSettingsStore.getState().removeCustomSearchSource("anything")
     })
     expect(dbSettings.saveSettings).toHaveBeenCalledWith({ customSearchSources: [] })
-  })
-})
-
-// ---- TTS provider keys ----
-
-describe("provider keys (TTS keyring)", () => {
-  it("setProviderApiKey trims, writes, and mirrors into providerKeys", async () => {
-    keyring.setProviderKey.mockResolvedValue(undefined)
-    await act(async () => {
-      await useSettingsStore.getState().setProviderApiKey("openai", "  sk-trim  ")
-    })
-    expect(keyring.setProviderKey).toHaveBeenCalledWith("openai", "sk-trim")
-    expect(useSettingsStore.getState().providerKeys.openai).toBe("sk-trim")
-  })
-
-  it("setProviderApiKey stores undefined when the trimmed string is empty", async () => {
-    keyring.setProviderKey.mockResolvedValue(undefined)
-    await act(async () => {
-      await useSettingsStore.getState().setProviderApiKey("openai", "    ")
-    })
-    expect(useSettingsStore.getState().providerKeys.openai).toBeUndefined()
-  })
-
-  it("keeps only a presence marker after saving a desktop key", async () => {
-    tauri.isTauri.mockReturnValue(true)
-    keyring.setProviderKey.mockResolvedValue(undefined)
-    await act(async () => {
-      await useSettingsStore.getState().setProviderApiKey("openai", "sk-desktop")
-    })
-    expect(useSettingsStore.getState().providerKeys.openai).toBe("__cognia_host_key_present__")
-  })
-
-  it("clearProviderApiKey removes the slot", async () => {
-    useSettingsStore.setState({ providerKeys: { openai: "sk-x" } })
-    keyring.clearProviderKey.mockResolvedValue(undefined)
-    await act(async () => {
-      await useSettingsStore.getState().clearProviderApiKey("openai")
-    })
-    expect(keyring.clearProviderKey).toHaveBeenCalledWith("openai")
-    expect(useSettingsStore.getState().providerKeys.openai).toBeUndefined()
-  })
-
-  it("refreshProviderKeys overwrites on success", async () => {
-    keyring.loadAllProviderKeys.mockResolvedValue({ openai: "fresh" })
-    await act(async () => {
-      await useSettingsStore.getState().refreshProviderKeys()
-    })
-    expect(useSettingsStore.getState().providerKeys.openai).toBe("fresh")
-  })
-
-  it("refreshProviderKeys warns and keeps existing keys on failure", async () => {
-    useSettingsStore.setState({ providerKeys: { openai: "stale" } })
-    keyring.loadAllProviderKeys.mockRejectedValue(new Error("offline"))
-    await act(async () => {
-      await useSettingsStore.getState().refreshProviderKeys()
-    })
-    expect(useSettingsStore.getState().providerKeys.openai).toBe("stale")
-    expect(console.warn).toHaveBeenCalled()
-  })
-
-  it("ensureProviderKeys loads once and marks loaded", async () => {
-    keyring.loadAllProviderKeys.mockResolvedValue({ openai: "sk-lazy" })
-    await act(async () => {
-      await useSettingsStore.getState().ensureProviderKeys()
-    })
-    const s = useSettingsStore.getState()
-    expect(s.providerKeys).toEqual({ openai: "sk-lazy" })
-    expect(s.providerKeysLoaded).toBe(true)
-    expect(keyring.loadAllProviderKeys).toHaveBeenCalledTimes(1)
-  })
-
-  it("ensureProviderKeys is idempotent — a second call does not reload", async () => {
-    keyring.loadAllProviderKeys.mockResolvedValue({ openai: "sk-lazy" })
-    await act(async () => {
-      await useSettingsStore.getState().ensureProviderKeys()
-      await useSettingsStore.getState().ensureProviderKeys()
-    })
-    expect(keyring.loadAllProviderKeys).toHaveBeenCalledTimes(1)
-  })
-
-  it("ensureProviderKeys warns and stays unloaded on failure, then retries later", async () => {
-    keyring.loadAllProviderKeys.mockRejectedValueOnce(new Error("keyring err"))
-    await act(async () => {
-      await useSettingsStore.getState().ensureProviderKeys()
-    })
-    expect(useSettingsStore.getState().providerKeys).toEqual({})
-    expect(useSettingsStore.getState().providerKeysLoaded).toBe(false)
-    expect(console.warn).toHaveBeenCalled()
-
-    // A later call retries because the flag stayed false.
-    keyring.loadAllProviderKeys.mockResolvedValue({ openai: "ok" })
-    await act(async () => {
-      await useSettingsStore.getState().ensureProviderKeys()
-    })
-    expect(useSettingsStore.getState().providerKeys).toEqual({ openai: "ok" })
-    expect(useSettingsStore.getState().providerKeysLoaded).toBe(true)
-  })
-})
-
-// ---- TTS settings ----
-
-describe("TTS feature toggles and clamps", () => {
-  beforeEach(() => {
-    dbSettings.saveSettings.mockResolvedValue(baseSettings())
-  })
-
-  const passthroughCases: Array<[string, unknown, string]> = [
-    ["setTtsEnabled", true, "ttsEnabled"],
-    ["setTtsProvider", "openai", "ttsProvider"],
-    ["setTtsAutoPlay", true, "ttsAutoPlay"],
-  ]
-
-  it.each(passthroughCases)("%s passes value through verbatim", async (action, value, field) => {
-    await act(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (useSettingsStore.getState() as any)[action](value)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenCalledWith({ [field]: value })
-  })
-
-  it("setTtsRate clamps to [0.1, 10]", async () => {
-    await act(async () => {
-      await useSettingsStore.getState().setTtsRate(20)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenLastCalledWith({ ttsRate: 10 })
-
-    await act(async () => {
-      await useSettingsStore.getState().setTtsRate(-5)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenLastCalledWith({ ttsRate: 0.1 })
-
-    await act(async () => {
-      await useSettingsStore.getState().setTtsRate(1.5)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenLastCalledWith({ ttsRate: 1.5 })
-  })
-
-  it("setTtsPitch clamps to [0, 2]", async () => {
-    await act(async () => {
-      await useSettingsStore.getState().setTtsPitch(5)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenLastCalledWith({ ttsPitch: 2 })
-
-    await act(async () => {
-      await useSettingsStore.getState().setTtsPitch(-1)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenLastCalledWith({ ttsPitch: 0 })
-  })
-
-  it("setTtsVolume clamps to [0, 1]", async () => {
-    await act(async () => {
-      await useSettingsStore.getState().setTtsVolume(2)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenLastCalledWith({ ttsVolume: 1 })
-
-    await act(async () => {
-      await useSettingsStore.getState().setTtsVolume(-3)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenLastCalledWith({ ttsVolume: 0 })
   })
 })
 

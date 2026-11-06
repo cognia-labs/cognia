@@ -32,7 +32,7 @@ import { isValidPetName, renamePet } from "@/lib/pet/runtime/rename-pet"
 import { toggleDesktopPetWindow } from "@/lib/pet/commands"
 import { updatePetSettings } from "@/lib/pet/settings-sync"
 import { clearPetConversation } from "@/lib/db/pet-conversation"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS } from "@/types/pet"
 import { createLocalPetItemOps, toastPetFailure, type PetTranslate } from "./pet-item-ops"
 
@@ -53,7 +53,7 @@ export function useLocalPetActions({
 }: UseLocalPetActionsInput): PetConsoleActions {
   const t = useTranslations("pet") as unknown as PetTranslate
   const locale = useLocale()
-  const appSettings = useSettingsStore((s) => s.settings)
+  const appSettings = usePetSettingsView((s) => s)
   const petSettings = appSettings?.petSettings ?? DEFAULT_PET_SETTINGS
   // `desktopPet.enabled` tracks the native window (PetMount syncs every
   // native open/close into it), so the toggle can label itself without

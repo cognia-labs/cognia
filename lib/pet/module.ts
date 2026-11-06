@@ -56,7 +56,11 @@ export default defineHostModule({
     "lib/pet/events/pet-event-bus.ts",
     "lib/pet/remote/client.ts",
     "lib/pet/runtime/pet-view.ts",
+    "lib/pet/settings.ts",
   ],
+  // The pet's preferences; only `lib/pet/settings.ts` writes them, and the
+  // Pet section resets and reviews them.
+  settings: { keys: ["petSettings"] },
   // Every live `pet*` table. Another module that reads one directly is a
   // `tableAccess` entry in the module baseline (ADR-0250 §14, G4).
   tables: [

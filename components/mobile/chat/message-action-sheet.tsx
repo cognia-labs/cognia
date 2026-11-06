@@ -73,7 +73,7 @@ import { UsageBreakdown } from "@/components/chat/usage-breakdown"
 import { dispatchComposerAppend } from "@/components/chat/composer"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import { useChatStore } from "@/stores/chat"
-import { useSettingsStore } from "@/stores/settings"
+import { useSpeechSettingsView } from "@/lib/speech/settings"
 import type { CharacterVoiceSource } from "@/lib/plugin/character-pack/character-voice"
 import { resolveMessageActionCommands } from "@/lib/chat/message-action-commands"
 import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
@@ -158,7 +158,7 @@ export function MessageActionSheet({
   // Touch path for the hover-only footer controls in `message-renderer`
   // (bookmark toggle, read-aloud, branch prev/next) — all unreachable on
   // mobile without these rows.
-  const ttsEnabled = useSettingsStore((s) => s.settings?.ttsEnabled ?? false)
+  const ttsEnabled = useSpeechSettingsView((s) => s?.ttsEnabled ?? false)
   const isBookmarked = useChatStore((s) =>
     message ? s.bookmarkedIds.includes(message.id) : false
   )

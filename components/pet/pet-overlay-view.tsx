@@ -25,7 +25,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useReducedMotion } from "motion/react"
 import { useTranslations } from "next-intl"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import {
   DEFAULT_PET_DESKTOP_OVERLAY,
   DEFAULT_PET_SETTINGS,
@@ -71,7 +71,7 @@ import { PetBubbleView } from "./pet-bubble"
 
 export function PetOverlayView() {
   const t = useTranslations("pet.overlay")
-  const settings = useSettingsStore((s) => s.settings)
+  const settings = usePetSettingsView((s) => s)
   const pet: PetSettings = settings?.petSettings ?? DEFAULT_PET_SETTINGS
   const desktopPet = pet.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY
   const size = desktopPet.size ?? DEFAULT_PET_DESKTOP_OVERLAY.size

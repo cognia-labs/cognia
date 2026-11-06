@@ -30,7 +30,7 @@ import { usePlatform } from "@/hooks/use-platform"
 import { cn } from "@/lib/utils"
 import { toggleDesktopPetWindow } from "@/lib/pet/commands"
 import { petConsoleHref } from "@/lib/pet/console-tabs"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import { useUIStore } from "@/stores/ui/ui-store"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS } from "@/types/pet"
 
@@ -73,7 +73,7 @@ function QuickButton({
 export function TitleBarQuickActions({ className }: { className?: string }) {
   const t = useTranslations("desktop.titleBar.quickActions")
   const requestOpenSettings = useUIStore((s) => s.requestOpenSettings)
-  const petSettings = useSettingsStore((s) => s.settings?.petSettings ?? DEFAULT_PET_SETTINGS)
+  const petSettings = usePetSettingsView((s) => s?.petSettings ?? DEFAULT_PET_SETTINGS)
   const petEnabled = petSettings.enabled
   const onDesktop = (petSettings.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY).enabled
   const [toggling, setToggling] = useState(false)

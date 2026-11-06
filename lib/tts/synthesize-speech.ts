@@ -12,7 +12,8 @@ import { ttsOrchestrator, type TTSSynthesisResult } from "@/lib/tts/tts-orchestr
 import { selectSpeechSettings } from "@/lib/tts/speech-settings"
 import { providerKeyMapToSettingsMap } from "@/lib/tts/keyring"
 import { resolveCharacterVoice } from "@/lib/plugin/character-pack/character-voice"
-import { useSettingsStore } from "@/stores/settings"
+import { ensureSpeechProviderKeys, speechProviderKeys } from "@/lib/speech/provider-keys"
+import { speechSettingsView } from "@/lib/speech/settings"
 import type { SpeechSynthesisRequest } from "@/types/modules/ports/speech"
 
 export async function synthesizeSpeech({
@@ -21,14 +22,13 @@ export async function synthesizeSpeech({
   signal,
   approveText,
 }: SpeechSynthesisRequest): Promise<TTSSynthesisResult> {
-  await useSettingsStore.getState().ensureProviderKeys()
+  await ensureSpeechProviderKeys()
   signal?.throwIfAborted()
-  const store = useSettingsStore.getState()
-  const base = selectSpeechSettings(store.settings)
+  const base = selectSpeechSettings(speechSettingsView.get())
   const overlay = character ? resolveCharacterVoice(character) : undefined
   return ttsOrchestrator.synthesize(text, {
     speechSettings: { ...base, ...overlay },
-    providerSettings: providerKeyMapToSettingsMap(store.providerKeys),
+    providerSettings: providerKeyMapToSettingsMap(speechProviderKeys()),
     signal,
     approveText,
   })

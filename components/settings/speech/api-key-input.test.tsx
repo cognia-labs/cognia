@@ -16,8 +16,13 @@ const storeState = {
   ensureProviderKeys,
 }
 
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: <T,>(selector: (s: typeof storeState) => T): T => selector(storeState),
+jest.mock("@/lib/speech/provider-keys", () => ({
+  useSpeechProviderKeys: <T,>(selector: (keys: Record<string, string>) => T): T =>
+    selector(storeState.providerKeys),
+  ensureSpeechProviderKeys: () => storeState.ensureProviderKeys(),
+  setSpeechProviderKey: (provider: string, key: string) =>
+    storeState.setProviderApiKey(provider, key),
+  clearSpeechProviderKey: (provider: string) => storeState.clearProviderApiKey(provider),
 }))
 
 jest.mock("next-intl", () => ({

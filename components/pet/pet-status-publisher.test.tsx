@@ -4,9 +4,8 @@ import { __resetTopicsForTesting, readTopic } from "@/lib/runtime/topics"
 import type { PetProfile } from "@/types/pet"
 
 let enabled = true
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (select: (s: unknown) => unknown) =>
-    select({ settings: { petSettings: { enabled } } }),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (select: (s: unknown) => unknown) => select({ petSettings: { enabled } }),
 }))
 
 // The query result the hook answers with, and whether the query ran.

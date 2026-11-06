@@ -19,7 +19,7 @@ import {
 import { closePetWindow, isPetWindowOpen, openPetWindow } from "@/lib/tauri/pet-window"
 import { overlayWindowSize } from "@/lib/pet/overlay-geometry"
 import { isTauri } from "@/lib/platform/detect"
-import { useSettingsStore } from "@/stores/settings"
+import { petSettingsView } from "@/lib/pet/settings"
 import { updatePetSettings } from "@/lib/pet/settings-sync"
 import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS } from "@/types/pet"
 
@@ -100,7 +100,7 @@ export async function hideDesktopPetWindow(): Promise<void> {
  */
 export async function openDesktopPetWindow(): Promise<boolean> {
   if (!isTauri()) return false
-  const initial = useSettingsStore.getState().settings?.petSettings ?? DEFAULT_PET_SETTINGS
+  const initial = petSettingsView.get()?.petSettings ?? DEFAULT_PET_SETTINGS
   const desktop = initial.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY
   const alreadyOpen = await isPetWindowOpen()
 

@@ -78,12 +78,10 @@ const routerPush = jest.fn()
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush }) }))
 
 let settingsValue: unknown = {}
-jest.mock("@/stores/settings", () => {
-  const useSettingsStore = (selector: (s: unknown) => unknown) =>
-    selector({ settings: settingsValue, save: jest.fn() })
-  useSettingsStore.getState = () => ({ settings: settingsValue })
-  return { useSettingsStore }
-})
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (selector: (s: unknown) => unknown) => selector(settingsValue),
+  petSettingsView: { get: () => settingsValue, update: jest.fn() },
+}))
 
 import DefaultPetMount, { PetMount } from "./pet-mount"
 

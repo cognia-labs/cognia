@@ -7,6 +7,7 @@ import { ensureSidecarReady } from "@/lib/claude/ipc"
 import { isTauri } from "@/lib/tauri"
 import { applyProxyToRust } from "@/stores/network-proxy"
 import { useSettingsStore } from "@/stores/settings/settings-store"
+import { ensureSpeechProviderKeys } from "@/lib/speech/provider-keys"
 import {
   getRecoveryBoot,
   getRecoveryState,
@@ -129,7 +130,7 @@ async function reapplyProxyAfterUnlock(): Promise<void> {
 }
 
 async function reloadSpeechKeysAfterUnlock(): Promise<void> {
-  await useSettingsStore.getState().ensureProviderKeys()
+  await ensureSpeechProviderKeys()
 }
 
 /**

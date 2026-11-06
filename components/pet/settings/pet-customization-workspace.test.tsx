@@ -21,9 +21,9 @@ let settingsValue: unknown = {
   },
 }
 
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({ settings: settingsValue, save }),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (select: (s: unknown) => unknown) => select(settingsValue),
+  petSettingsView: { get: () => settingsValue, update: (patch: unknown) => save(patch) },
 }))
 
 const destroyPetWindow = jest.fn().mockResolvedValue(true)

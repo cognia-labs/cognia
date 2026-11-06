@@ -37,8 +37,9 @@ jest.mock("@/hooks/use-platform", () => ({
 
 jest.mock("@/hooks/pet/use-pet")
 let settingsValue: unknown = {}
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (s: (x: unknown) => unknown) => s({ settings: settingsValue }),
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (select: (s: unknown) => unknown) => select(settingsValue),
+  petSettingsView: { get: () => settingsValue, update: (patch: unknown) => jest.fn()(patch) },
 }))
 
 // Live2D model probe — default: no model, core not ready → effective skin "svg".

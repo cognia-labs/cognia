@@ -30,12 +30,10 @@ jest.mock("@/hooks/use-platform", () => ({ usePlatform: () => mockPlatform }))
 
 let mockPetEnabled = true
 let mockOnDesktop = true
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (s: unknown) => unknown) =>
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (selector: (s: unknown) => unknown) =>
     selector({
-      settings: {
-        petSettings: { enabled: mockPetEnabled, desktopPet: { enabled: mockOnDesktop } },
-      },
+      petSettings: { enabled: mockPetEnabled, desktopPet: { enabled: mockOnDesktop } },
     }),
 }))
 
@@ -110,7 +108,7 @@ describe("TitleBarQuickActions", () => {
     // only in the console's Insights (inside Activity).
     render(<TitleBarQuickActions />)
     fireEvent.click(screen.getByTestId("quick-action-capture"))
-    expect(routerPush).toHaveBeenCalledWith("/pet?tab=insights")
+    expect(routerPush).toHaveBeenCalledWith("/settings?section=pet&petTab=insights")
     expect(requestOpenSettings).not.toHaveBeenCalled()
   })
 

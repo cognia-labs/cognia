@@ -188,12 +188,10 @@ jest.mock("@/stores/pet/pet-store", () => ({
 // snapshot (used by the settle-persist path).
 const saveMock = jest.fn().mockResolvedValue(undefined)
 let settingsValue: unknown = {}
-jest.mock("@/stores/settings", () => {
-  const useSettingsStore = (selector: (s: { settings: unknown; save: unknown }) => unknown) =>
-    selector({ settings: settingsValue, save: saveMock })
-  useSettingsStore.getState = () => ({ settings: settingsValue, save: saveMock })
-  return { useSettingsStore }
-})
+jest.mock("@/lib/pet/settings", () => ({
+  usePetSettingsView: (select: (s: unknown) => unknown) => select(settingsValue),
+  petSettingsView: { get: () => settingsValue, update: (patch: unknown) => saveMock(patch) },
+}))
 
 // The cross-window pet-settings writer, reduced to its contract: merge into
 // the latest persisted record (`settingsValue` stands in for Dexie) and write

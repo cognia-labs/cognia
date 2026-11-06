@@ -59,15 +59,15 @@ export interface PetCommandDeps {
 // Reached lazily: the gate pulls the settings store and the plugin rate
 // limiter, which the parse-only paths of this module never need.
 async function liveAvailability(): Promise<PetAvailability> {
-  const [{ resolveLivePetAvailability }, { useSettingsStore }, { DEFAULT_PET_SETTINGS }] =
+  const [{ resolveLivePetAvailability }, { petSettingsView }, { DEFAULT_PET_SETTINGS }] =
     await Promise.all([
       import("@/lib/pet/access/availability"),
-      import("@/stores/settings"),
+      import("@/lib/pet/settings"),
       import("@/types/pet"),
     ])
   // Read exactly the way the gate's `readEnabled` does, so the two never
   // disagree about an unset setting.
-  const pet = useSettingsStore.getState().settings?.petSettings ?? DEFAULT_PET_SETTINGS
+  const pet = petSettingsView.get()?.petSettings ?? DEFAULT_PET_SETTINGS
   return resolveLivePetAvailability(pet.enabled)
 }
 

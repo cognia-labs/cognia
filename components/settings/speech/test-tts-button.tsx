@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
 import { useTTS } from "@/hooks/media"
-import { useSettingsStore } from "@/stores/settings"
+import { useSpeechSettingsView } from "@/lib/speech/settings"
 import { loggers } from "@cognia/logging"
 import type { SpeechSettings } from "@cognia/tts/types"
 import { resolveSttLanguage } from "@cognia/tts/speech"
@@ -29,8 +29,8 @@ interface TestTtsButtonProps {
  */
 export function TestTtsButton({ voiceOverlay, sampleText }: TestTtsButtonProps = {}) {
   const t = useTranslations("settings.speech.tts")
-  const sttLanguage = useSettingsStore((s) =>
-    resolveSttLanguage(s.settings?.sttLanguage, s.settings?.language)
+  const sttLanguage = useSpeechSettingsView((settings) =>
+    resolveSttLanguage(settings?.sttLanguage, settings?.language)
   )
   const { speak, stop, isPlaying, isLoading } = useTTS({
     source: "settings",

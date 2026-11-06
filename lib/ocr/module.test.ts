@@ -36,4 +36,8 @@ describe("OCR module manifest", () => {
       "hooks/use-ocr.ts",
     ])
   })
+
+  it("claims its settings key for the OCR section", () => {
+    expect(ocrModule.settings).toEqual({ keys: ["ocrSettings"] })
+  })
 })

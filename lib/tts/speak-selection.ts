@@ -16,7 +16,8 @@
 import { ttsOrchestrator } from "@/lib/tts/tts-orchestrator"
 import { selectSpeechSettings } from "@/lib/tts/speech-settings"
 import { providerKeyMapToSettingsMap } from "@/lib/tts/keyring"
-import { useSettingsStore } from "@/stores/settings"
+import { ensureSpeechProviderKeys, speechProviderKeys } from "@/lib/speech/provider-keys"
+import { speechSettingsView } from "@/lib/speech/settings"
 
 export interface SpeakSelectionArgs {
   /** Candidate id — becomes the orchestrator's `activeSourceId`. */
@@ -32,14 +33,13 @@ export interface SpeakSelectionArgs {
 export async function speakSelection({ candidateId, text }: SpeakSelectionArgs): Promise<void> {
   if (!text.trim()) return
 
-  await useSettingsStore.getState().ensureProviderKeys()
-  const store = useSettingsStore.getState()
+  await ensureSpeechProviderKeys()
 
   await ttsOrchestrator.speak(text, {
     source: "selection",
     sourceId: candidateId,
-    speechSettings: selectSpeechSettings(store.settings),
-    providerSettings: providerKeyMapToSettingsMap(store.providerKeys),
+    speechSettings: selectSpeechSettings(speechSettingsView.get()),
+    providerSettings: providerKeyMapToSettingsMap(speechProviderKeys()),
   })
 }
 

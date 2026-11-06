@@ -81,12 +81,8 @@ jest.mock("@/components/ai-elements/mic-selector", () => ({
 let mockSettings: Record<string, unknown> | undefined = undefined
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: (
-    selector: (s: {
-      settings?: Record<string, unknown>
-      save: jest.Mock
-      ensureProviderKeys: jest.Mock
-    }) => unknown
-  ) => selector({ settings: mockSettings, save: jest.fn(), ensureProviderKeys: jest.fn() }),
+    selector: (s: { settings?: Record<string, unknown>; save: jest.Mock }) => unknown
+  ) => selector({ settings: mockSettings, save: jest.fn() }),
 }))
 
 // Live voice is its own surface with its own suite; here it only has to exist.

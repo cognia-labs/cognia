@@ -17,7 +17,7 @@ import { Empty, EmptyDescription } from "@/components/ui/empty"
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item"
 import { ALL_PET_SPECIES } from "@/lib/pet/skins/species-traits"
 import { listPetModels } from "@/lib/db/pet-models"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 import { useActiveLive2dModel } from "@/hooks/pet/use-active-live2d-model"
 import { DEFAULT_PET_SETTINGS, type PetBones } from "@/types/pet"
 import { updatePetSettings } from "@/lib/pet/settings-sync"
@@ -26,7 +26,7 @@ import { PetTabSkeleton } from "./pet-console-skeleton"
 
 export function DexTab({ bones }: { bones: PetBones }) {
   const t = useTranslations("pet")
-  const settings = useSettingsStore((s) => s.settings)
+  const settings = usePetSettingsView((s) => s)
   const pet = settings?.petSettings ?? DEFAULT_PET_SETTINGS
   const models = useLiveQuery(() => listPetModels(), [])
   const { modelId: activeModelId, coreReady } = useActiveLive2dModel(pet)

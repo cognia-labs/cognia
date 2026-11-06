@@ -6,8 +6,8 @@
     "date": "2026-11-01"
   },
   "metrics": {
-    "static": 294,
-    "all": 410
+    "static": 285,
+    "all": 400
   },
   "members": [
     {
@@ -2213,17 +2213,6 @@
       ]
     },
     {
-      "key": "lib/pet/access/gate.ts",
-      "owner": "lib/pet",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
       "key": "lib/pet/bubbles/say.ts",
       "owner": "lib/pet",
       "note": "",
@@ -2243,17 +2232,6 @@
       ],
       "stores": [
         "stores/chat/session-store.ts"
-      ]
-    },
-    {
-      "key": "lib/pet/commands.ts",
-      "owner": "lib/pet",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
       ]
     },
     {
@@ -2312,17 +2290,6 @@
       ]
     },
     {
-      "key": "lib/pet/events/sources/radar-source.ts",
-      "owner": "lib/pet",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
       "key": "lib/pet/events/sources/terminal-source.ts",
       "owner": "lib/pet",
       "note": "",
@@ -2348,17 +2315,6 @@
       ]
     },
     {
-      "key": "lib/pet/remote/host-snapshot.ts",
-      "owner": "lib/pet",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
       "key": "lib/pet/runtime/pet-controller.ts",
       "owner": "lib/pet",
       "note": "",
@@ -2367,28 +2323,6 @@
       ],
       "stores": [
         "stores/pet/pet-store.ts"
-      ]
-    },
-    {
-      "key": "lib/pet/settings-sync.ts",
-      "owner": "lib/pet",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
-      "key": "lib/pet/slash-command.ts",
-      "owner": "lib/pet",
-      "note": "",
-      "imports": [
-        "dynamic"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
       ]
     },
     {
@@ -4396,50 +4330,6 @@
       ],
       "stores": [
         "stores/ui/index.ts"
-      ]
-    },
-    {
-      "key": "lib/tts/speak-chat-message.ts",
-      "owner": "lib/tts",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
-      "key": "lib/tts/speak-pet.ts",
-      "owner": "lib/tts",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
-      "key": "lib/tts/speak-selection.ts",
-      "owner": "lib/tts",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
-      ]
-    },
-    {
-      "key": "lib/tts/synthesize-speech.ts",
-      "owner": "lib/tts",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
       ]
     },
     {

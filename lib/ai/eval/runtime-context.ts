@@ -20,8 +20,8 @@ import type { AppSettings } from "@cognia/agent-config-types"
 
 /** The resolved host settings, or `null` when the store has none yet. */
 export async function loadEvalAppSettings(): Promise<AppSettings | null> {
-  const { useSettingsStore } = await import("@/stores/settings/settings-store")
-  return useSettingsStore.getState().settings ?? null
+  const { evalSettingsView } = await import("@/lib/eval/settings")
+  return evalSettingsView.get() ?? null
 }
 
 export interface EvalRuntimeContext {
@@ -37,11 +37,11 @@ export interface EvalRuntimeContext {
  * trace.
  */
 export async function loadEvalRuntimeContext(): Promise<EvalRuntimeContext | null> {
-  const [{ useSettingsStore }, { useAccountStore }] = await Promise.all([
-    import("@/stores/settings/settings-store"),
+  const [{ evalSettingsView }, { useAccountStore }] = await Promise.all([
+    import("@/lib/eval/settings"),
     import("@/stores/account/account-store"),
   ])
-  const settings = useSettingsStore.getState().settings
+  const settings = evalSettingsView.get()
   const localAccountId = useAccountStore.getState().unlockedAccountId
   if (!settings || !localAccountId) return null
   return { settings, localAccountId }

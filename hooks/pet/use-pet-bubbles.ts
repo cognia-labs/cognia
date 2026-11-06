@@ -11,14 +11,14 @@ import { getPetEventBus } from "@/lib/pet/events/pet-event-bus"
 import { pickBubbleKey, pickCustomBubble } from "@/lib/pet/bubbles/templates"
 import { isClaimed } from "@/lib/pet/llm/proactive/claim-registry"
 import { usePetStore } from "@/stores/pet/pet-store"
-import { useSettingsStore } from "@/stores/settings"
+import { usePetSettingsView } from "@/lib/pet/settings"
 
 const BUBBLE_VISIBLE_MS = 4000
 
 export function usePetBubbles(enabled: boolean, snark = 0): void {
   const t = useTranslations("pet")
   const setBubble = usePetStore((s) => s.setBubble)
-  const customBubbles = useSettingsStore((s) => s.settings?.petSettings?.customBubbles)
+  const customBubbles = usePetSettingsView((s) => s?.petSettings?.customBubbles)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Read through a ref so a slowly-growing snark stat never re-binds the bus
   // subscription.

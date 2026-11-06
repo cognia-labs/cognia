@@ -145,36 +145,31 @@ jest.mock("@/lib/voice/live/persist-turns", () => ({
   }),
 }))
 
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (
-    selector: (state: {
-      settings: Record<string, unknown>
-      providerKeys: Record<string, string>
-      ensureProviderKeys: typeof ensureProviderKeysMock
-      save: typeof saveSettingsMock
-    }) => unknown
-  ) =>
+jest.mock("@/lib/speech/settings", () => ({
+  useSpeechSettingsView: (selector: (settings: Record<string, unknown>) => unknown) =>
     selector({
-      settings: {
-        selectedMicId: currentSelectedMicId,
-        agentPermissions: { toolRules: { search_notes: "allow" } },
-        alwaysAllowTools: ["web_search"],
-        liveVoice: {
-          enabled: currentLiveVoiceEnabled,
-          region: "global",
-          fallbackEnabled: true,
-          maxCandidates: 3,
-          connectTimeoutMs: 10_000,
-          historyTurnLimit: 12,
-          historyCharacterLimit: 16_000,
-          instructions: "be brief",
-          deployments: currentDeployments,
-        },
+      selectedMicId: currentSelectedMicId,
+      agentPermissions: { toolRules: { search_notes: "allow" } },
+      alwaysAllowTools: ["web_search"],
+      liveVoice: {
+        enabled: currentLiveVoiceEnabled,
+        region: "global",
+        fallbackEnabled: true,
+        maxCandidates: 3,
+        connectTimeoutMs: 10_000,
+        historyTurnLimit: 12,
+        historyCharacterLimit: 16_000,
+        instructions: "be brief",
+        deployments: currentDeployments,
       },
-      providerKeys: currentProviderKeys,
-      ensureProviderKeys: ensureProviderKeysMock,
-      save: saveSettingsMock,
     }),
+  speechSettingsView: { update: (patch: unknown) => saveSettingsMock(patch) },
+}))
+
+jest.mock("@/lib/speech/provider-keys", () => ({
+  useSpeechProviderKeys: (selector: (keys: Record<string, string>) => unknown) =>
+    selector(currentProviderKeys),
+  ensureSpeechProviderKeys: () => ensureProviderKeysMock(),
 }))
 
 jest.mock("next-intl", () => ({

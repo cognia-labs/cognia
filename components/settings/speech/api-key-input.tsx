@@ -9,7 +9,12 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useSettingsStore } from "@/stores/settings"
+import {
+  clearSpeechProviderKey,
+  ensureSpeechProviderKeys,
+  setSpeechProviderKey,
+  useSpeechProviderKeys,
+} from "@/lib/speech/provider-keys"
 import { HOST_KEY_PRESENT, type KeyringProviderId } from "@/lib/tts/keyring"
 import { loggers } from "@cognia/logging"
 import { useSecretReveal } from "@/hooks/use-secret-reveal"
@@ -22,17 +27,15 @@ interface Props {
 
 /**
  * Masked input for a TTS provider API key. Reads/writes the key via the
- * Tauri keyring (or web fallback). The current value is read from
- * `useSettingsStore.providerKeys` so it survives reloads.
+ * Tauri keyring (or web fallback). The current value is read from the
+ * speech module's provider keys (`lib/speech/provider-keys.ts`) so it survives
+ * reloads.
  */
 export function ApiKeyInput({ provider, label, placeholder }: Props) {
   const t = useTranslations("settings.speech.apiKey")
-  const storedValue = useSettingsStore((s) => s.providerKeys[provider] ?? "")
+  const storedValue = useSpeechProviderKeys((keys) => keys[provider] ?? "")
   const stored = storedValue === HOST_KEY_PRESENT ? "" : storedValue
   const configured = Boolean(storedValue)
-  const setProviderApiKey = useSettingsStore((s) => s.setProviderApiKey)
-  const clearProviderApiKey = useSettingsStore((s) => s.clearProviderApiKey)
-  const ensureProviderKeys = useSettingsStore((s) => s.ensureProviderKeys)
 
   const [draft, setDraft] = useState(stored)
   const [show, setShow] = useState(false)
@@ -44,8 +47,8 @@ export function ApiKeyInput({ provider, label, placeholder }: Props) {
   // is user-navigated, so trigger the (idempotent) load on mount to surface
   // the stored key.
   useEffect(() => {
-    void ensureProviderKeys()
-  }, [ensureProviderKeys])
+    void ensureSpeechProviderKeys()
+  }, [])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -57,7 +60,7 @@ export function ApiKeyInput({ provider, label, placeholder }: Props) {
   const handleSave = async () => {
     setBusy(true)
     try {
-      await setProviderApiKey(provider, draft)
+      await setSpeechProviderKey(provider, draft)
       loggers.tts.info("settings.providerKey.saved", { provider, keySet: Boolean(draft) })
       toast.success(t("savedToast", { label }))
     } catch (err) {
@@ -71,7 +74,7 @@ export function ApiKeyInput({ provider, label, placeholder }: Props) {
   const handleClear = async () => {
     setBusy(true)
     try {
-      await clearProviderApiKey(provider)
+      await clearSpeechProviderKey(provider)
       setDraft("")
       loggers.tts.info("settings.providerKey.cleared", { provider })
       toast.success(t("clearedToast", { label }))

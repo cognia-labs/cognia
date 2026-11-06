@@ -1315,11 +1315,6 @@
       "prefix": "lib/db/workflow-stats.ts",
       "owner": "workflow",
       "why": "Single-user data file (ADR-0250 M2): only `workflow` imports it."
-    },
-    {
-      "prefix": "lib/tts/keyring.ts",
-      "owner": "settings-store",
-      "why": "The speech provider keys the settings store loads, saves and clears (`providerKeys`); the rest of `lib/tts/` is the speech module's (ADR-0250 M3). It moves with the provider-key settings when settings keys get owners."
     }
   ]
 }
