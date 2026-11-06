@@ -11,15 +11,18 @@ jest.mock("@/components/ui/select", () => ({
   Select: ({
     value,
     onValueChange,
+    onOpenChange,
     children,
     disabled,
   }: {
     value?: string
     onValueChange?: (v: string) => void
+    onOpenChange?: (open: boolean) => void
     children: React.ReactNode
     disabled?: boolean
   }) => {
     lastOnValueChange = onValueChange
+    lastOnOpenChange = onOpenChange
     return (
       <div data-testid="select" data-value={value} data-disabled={disabled ? "true" : "false"}>
         {children}
@@ -43,6 +46,7 @@ jest.mock("@/components/ui/select", () => ({
 }))
 
 let characters: Array<{ id: string; name: string }> = []
+let lastOnOpenChange: ((open: boolean) => void) | undefined
 jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => characters }))
 jest.mock("@/lib/db/characters", () => ({ listCharacters: jest.fn() }))
 
@@ -62,6 +66,7 @@ import {
   UNASSIGNED_VALUE,
   actorForValue,
   buildAssigneeOptions,
+  memberAssigneeOptions,
 } from "./assignee-picker"
 
 beforeEach(() => {
@@ -73,6 +78,7 @@ beforeEach(() => {
   }
   activeProjectId = "w1"
   lastOnValueChange = undefined
+  lastOnOpenChange = undefined
 })
 
 describe("buildAssigneeOptions / actorForValue", () => {
@@ -90,6 +96,28 @@ describe("buildAssigneeOptions / actorForValue", () => {
     expect(actorForValue(UNASSIGNED_VALUE, options)).toBeNull()
     expect(actorForValue("agent:c1", options)).toEqual({ kind: "agent", id: "c1", label: "Ada" })
     expect(actorForValue("agent:ghost", options)).toBeUndefined()
+  })
+})
+
+describe("memberAssigneeOptions", () => {
+  it("names each member by id, labelled with their name, in the member group", () => {
+    expect(
+      memberAssigneeOptions([
+        { userId: "usr_bob", displayName: "Bob" },
+        { userId: "usr_cat", displayName: "Cat" },
+      ])
+    ).toEqual([
+      {
+        key: "human:usr_bob",
+        actor: { kind: "human", id: "usr_bob", label: "Bob" },
+        group: "member",
+      },
+      {
+        key: "human:usr_cat",
+        actor: { kind: "human", id: "usr_cat", label: "Cat" },
+        group: "member",
+      },
+    ])
   })
 })
 
@@ -163,6 +191,62 @@ describe("AssigneePicker", () => {
       expect(screen.getByTestId("select")).toHaveAttribute("data-value", "human:self")
       expect(screen.queryByTestId("picker-stale")).toBeNull()
       expect(screen.getByTestId("picker-human:self")).not.toHaveAttribute("disabled")
+    })
+
+    const bob = memberAssigneeOptions([{ userId: "usr_bob", displayName: "Bob" }])
+
+    it("offers the workspace's members under their own group, and picks one by id", () => {
+      const onChange = jest.fn()
+      render(
+        <AssigneePicker
+          value={null}
+          onChange={onChange}
+          shared={{ selfUserId: ADA }}
+          members={bob}
+          data-testid="picker"
+        />
+      )
+      expect(screen.getAllByTestId("select-group-label").map((node) => node.textContent)).toContain(
+        "assignee.members"
+      )
+      expect(screen.getByTestId("picker-human:usr_bob")).not.toHaveAttribute("disabled")
+      lastOnValueChange!("human:usr_bob")
+      expect(onChange).toHaveBeenCalledWith({ kind: "human", id: "usr_bob", label: "Bob" })
+    })
+
+    it("shows a member already assigned as that member, not as missing", () => {
+      render(
+        <AssigneePicker
+          value={{ kind: "human", id: "usr_bob", label: "Bob" }}
+          onChange={jest.fn()}
+          shared={{ selfUserId: ADA }}
+          members={bob}
+          data-testid="picker"
+        />
+      )
+      expect(screen.getByTestId("select")).toHaveAttribute("data-value", "human:usr_bob")
+      expect(screen.queryByTestId("picker-stale")).toBeNull()
+    })
+
+    it("never offers members to a local issue", () => {
+      render(
+        <AssigneePicker value={null} onChange={jest.fn()} members={bob} data-testid="picker" />
+      )
+      expect(screen.queryByTestId("picker-human:usr_bob")).toBeNull()
+    })
+
+    it("reports the list opening, so the board can refresh its roster", () => {
+      const onOpenChange = jest.fn()
+      render(
+        <AssigneePicker
+          value={null}
+          onChange={jest.fn()}
+          shared={{ selfUserId: ADA }}
+          onOpenChange={onOpenChange}
+        />
+      )
+      lastOnOpenChange!(true)
+      expect(onOpenChange).toHaveBeenCalledWith(true)
     })
 
     it("leaves a local issue's options alone", () => {

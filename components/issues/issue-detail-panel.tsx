@@ -53,7 +53,11 @@ import { getIssue } from "@/lib/db/issues"
 import { listPublishTargets } from "@/lib/issues/publish"
 import { actorKey } from "@/lib/issues/board-model"
 import type { IssueBulkAction } from "@/lib/issues/bulk-actions"
-import { buildIssueMenuSections, canDeleteIssue } from "@/lib/issues/menu-model"
+import {
+  assigneeOptionsForItems,
+  buildIssueMenuSections,
+  canDeleteIssue,
+} from "@/lib/issues/menu-model"
 import { cancelIssueRun } from "@/lib/issues/run/registry"
 import {
   type IssueCycle,
@@ -66,7 +70,7 @@ import { parseUnifiedIssueId } from "@/types/issues/unified"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
 import type { AssigneeOption } from "./assignee-picker"
-import { AssigneePicker } from "./assignee-picker"
+import { AssigneePicker, memberAssigneeOptions } from "./assignee-picker"
 import { IssueCommentComposer } from "./issue-comment-composer"
 import { useMenuEntryPresentation } from "./editors/menu-entry-presentation"
 import { IssuePropertyMenu } from "./editors/issue-property-menu"
@@ -169,6 +173,13 @@ export function IssueDetailPanel({
   // Empty when collaboration is unconfigured, offline or refused: the
   // composer then offers no picker, and commenting still works.
   const mentionCandidates = useCollabMentionCandidates(mentionScope)
+  // The same roster is who a shared issue can be assigned to: the server
+  // accepts only a current member of the workspace (ADR-0149 §10).
+  const memberOptions = useMemo(() => memberAssigneeOptions(mentionCandidates), [mentionCandidates])
+  const itemAssigneeOptions = useMemo(
+    () => assigneeOptionsForItems([item], assigneeOptions, memberOptions),
+    [item, assigneeOptions, memberOptions]
+  )
   const events = useClientLiveQuery(
     () =>
       localId
@@ -232,16 +243,16 @@ export function IssueDetailPanel({
         running,
         labels: writableLabels,
         projects,
-        assigneeOptions,
+        assigneeOptions: itemAssigneeOptions,
         cycles,
         ...(collabSelfUserId !== undefined ? { collabSelfUserId } : {}),
       }),
-    [item, running, writableLabels, projects, assigneeOptions, cycles, collabSelfUserId]
+    [item, running, writableLabels, projects, itemAssigneeOptions, cycles, collabSelfUserId]
   )
   const presentation = useMenuEntryPresentation({
     labels: writableLabels,
     projects,
-    assigneeOptions,
+    assigneeOptions: itemAssigneeOptions,
     cycles,
   })
   const sectionsById = useMemo(
@@ -377,6 +388,22 @@ export function IssueDetailPanel({
                 onChange={handleAssign}
                 data-testid="issue-detail-assignee-picker"
               />
+            ) : parsed?.kind === "collab" && sectionsById.get("assignee") && onAction ? (
+              // A shared issue goes through the same model as its context
+              // menu, so "Me", members and refusals read the same here.
+              <IssuePropertyMenu
+                section={sectionsById.get("assignee")!}
+                presentation={presentation}
+                onAction={onAction}
+                disabled={allRefused("assignee")}
+                testId="issue-detail-assignee-menu"
+              >
+                <span className={!item.assignee ? "italic opacity-70" : undefined}>
+                  {item.assignee
+                    ? (item.assignee.label ?? t(`actor.${item.assignee.kind}`))
+                    : t("actor.unassigned")}
+                </span>
+              </IssuePropertyMenu>
             ) : (
               <span
                 className={!item.assignee ? "italic opacity-70" : undefined}

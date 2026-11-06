@@ -124,6 +124,7 @@ jest.mock("sonner", () => ({
 // The picker and the run dialog have their own suites; stubs expose their props.
 let pickerProps: { value: unknown; onChange: (actor: unknown) => void } | null = null
 jest.mock("./assignee-picker", () => ({
+  ...jest.requireActual("./assignee-picker"),
   AssigneePicker: (props: { value: unknown; onChange: (actor: unknown) => void }) => {
     pickerProps = props
     return <div data-testid="assignee-picker-stub" />
@@ -823,6 +824,48 @@ describe("editing", () => {
         body: "ping @Bob",
         mentions: ["usr_bob"],
       })
+    })
+
+    it("lets a shared issue be assigned to a workspace member, through the caller's gate", async () => {
+      collabIssueValue = { orgId: "org-1", workspaceId: "ws-shared" }
+      mockMentionCandidates.mockReturnValue([{ userId: "usr_bob", displayName: "Bob" }])
+      const user = userEvent.setup()
+      const onAction = jest.fn()
+      render(
+        <IssueDetailPanel
+          item={item({
+            kind: "collab",
+            unifiedId: "collab:issue-1",
+            capabilities: FULL_ISSUE_CAPABILITIES,
+          })}
+          assigneeOptions={[]}
+          collabSelfUserId="usr_ada"
+          onAction={onAction}
+        />
+      )
+      // The shared row goes through the menu model, not the local picker.
+      expect(screen.queryByTestId("assignee-picker-stub")).not.toBeInTheDocument()
+      await user.click(screen.getByTestId("issue-detail-assignee-menu"))
+      await user.click(await screen.findByTestId("issue-detail-assignee-menu-human:usr_bob"))
+      expect(onAction).toHaveBeenCalledWith({
+        kind: "assignee",
+        to: { kind: "human", id: "usr_bob", label: "Bob" },
+      })
+    })
+
+    it("keeps a read-only shared issue's assignee as text", () => {
+      render(
+        <IssueDetailPanel
+          item={item({
+            kind: "collab",
+            unifiedId: "collab:issue-1",
+            assignee: { kind: "human", id: "usr_bob", label: "Bob" },
+            capabilities: READ_ONLY_ISSUE_CAPABILITIES,
+          })}
+          onAction={jest.fn()}
+        />
+      )
+      expect(screen.getByTestId("issue-detail-assignee-menu-static")).toHaveTextContent("Bob")
     })
 
     it("offers no picker while the mirrored row is not loaded", () => {

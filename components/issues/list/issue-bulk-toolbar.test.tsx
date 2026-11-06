@@ -212,6 +212,37 @@ describe("IssueBulkToolbar", () => {
       )
     })
 
+    it("offers workspace members only when every ticked row is shared", async () => {
+      const user = userEvent.setup()
+      const bob = {
+        key: "human:usr_bob",
+        actor: { kind: "human" as const, id: "usr_bob", label: "Bob" },
+        group: "member" as const,
+      }
+      const shared = () => item({ kind: "collab", capabilities: FULL_ISSUE_CAPABILITIES })
+      const { unmount } = renderToolbar({ items: [shared(), shared()], memberOptions: [bob] })
+      await user.click(screen.getByTestId("issue-bulk-assignee"))
+      expect(await screen.findByTestId("issue-bulk-assignee-human:usr_bob")).toHaveTextContent(
+        "Bob"
+      )
+      await user.keyboard("{Escape}")
+      unmount()
+
+      renderToolbar({ items: [shared(), item()], memberOptions: [bob] })
+      await user.click(screen.getByTestId("issue-bulk-assignee"))
+      await screen.findByTestId("issue-bulk-assignee-none")
+      expect(screen.queryByTestId("issue-bulk-assignee-human:usr_bob")).toBeNull()
+    })
+
+    it("tells the board when the assignee menu opens", async () => {
+      const user = userEvent.setup()
+      const onAssigneeMenuOpen = jest.fn()
+      renderToolbar({ onAssigneeMenuOpen })
+      await user.click(screen.getByTestId("issue-bulk-assignee"))
+      await screen.findByTestId("issue-bulk-assignee-none")
+      expect(onAssigneeMenuOpen).toHaveBeenCalledTimes(1)
+    })
+
     it("accounts for the run guard in the status counts", async () => {
       const user = userEvent.setup()
       const running = item()

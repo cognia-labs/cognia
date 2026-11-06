@@ -58,6 +58,23 @@ export interface IssueMenuInput {
   collabSelfUserId?: string | null
 }
 
+/**
+ * The assignees `items` can be offered. A shared workspace's members
+ * (`memberOptions`) join only when every item is a shared row: a local issue
+ * is invisible to them, and a mixed selection would count a member against
+ * rows that can never take one.
+ */
+export function assigneeOptionsForItems(
+  items: readonly UnifiedIssueItem[],
+  assigneeOptions: readonly AssigneeOption[],
+  memberOptions: readonly AssigneeOption[] = []
+): readonly AssigneeOption[] {
+  if (memberOptions.length === 0 || items.length === 0) return assigneeOptions
+  return items.every((item) => item.kind === "collab")
+    ? [...assigneeOptions, ...memberOptions]
+    : assigneeOptions
+}
+
 function entry(
   id: string,
   action: IssueBulkAction,

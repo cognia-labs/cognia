@@ -4,7 +4,12 @@ import type { IssueProject } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import { FULL_ISSUE_CAPABILITIES, READ_ONLY_ISSUE_CAPABILITIES } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
-import { buildIssueMenuSections, canDeleteIssue, type IssueMenuSection } from "./menu-model"
+import {
+  assigneeOptionsForItems,
+  buildIssueMenuSections,
+  canDeleteIssue,
+  type IssueMenuSection,
+} from "./menu-model"
 
 function item(over: Partial<UnifiedIssueItem> = {}): UnifiedIssueItem {
   const kind = over.kind ?? "local"
@@ -276,5 +281,60 @@ describe("buildIssueMenuSections on a shared row (ADR-0149 §10)", () => {
         (entry) => entry.id === "human:self"
       )
     ).toMatchObject({ disabled: false })
+  })
+})
+
+describe("assigneeOptionsForItems", () => {
+  const BOB = "usr_bbbbbbbbbbbbbbbbbbbbbbbb"
+  const bob: AssigneeOption = {
+    key: `human:${BOB}`,
+    actor: { kind: "human", id: BOB, label: "Bob" },
+    group: "member",
+  }
+  const shared = (id: string) =>
+    item({
+      kind: "collab",
+      sourceId: id,
+      unifiedId: `collab:${id}`,
+      capabilities: FULL_ISSUE_CAPABILITIES,
+    })
+
+  it("adds the workspace's members when every item is shared", () => {
+    expect(assigneeOptionsForItems([shared("a"), shared("b")], [scout], [bob])).toEqual([
+      scout,
+      bob,
+    ])
+  })
+
+  it("keeps members away from a local issue and from a mixed selection", () => {
+    expect(assigneeOptionsForItems([item()], [scout], [bob])).toEqual([scout])
+    expect(assigneeOptionsForItems([shared("a"), item()], [scout], [bob])).toEqual([scout])
+    expect(assigneeOptionsForItems([], [scout], [bob])).toEqual([scout])
+  })
+
+  it("hands back the base list itself when there is nobody to add", () => {
+    const base = [scout]
+    expect(assigneeOptionsForItems([shared("a")], base)).toBe(base)
+  })
+
+  it("lets a shared row take a member and ticks the current one", () => {
+    const entries = section(
+      build({
+        item: shared("a"),
+        assigneeOptions: assigneeOptionsForItems([shared("a")], [scout], [bob]),
+        collabSelfUserId: null,
+      }),
+      "assignee"
+    )!.entries
+    expect(entries.find((entry) => entry.id === bob.key)).toMatchObject({ disabled: false })
+    const assigned = section(
+      build({
+        item: { ...shared("a"), assignee: bob.actor },
+        assigneeOptions: [scout, bob],
+        collabSelfUserId: null,
+      }),
+      "assignee"
+    )!.entries
+    expect(assigned.find((entry) => entry.id === bob.key)).toMatchObject({ checked: true })
   })
 })

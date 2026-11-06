@@ -30,6 +30,7 @@ import {
   type BulkActionContext,
   type IssueBulkAction,
 } from "@/lib/issues/bulk-actions"
+import { assigneeOptionsForItems } from "@/lib/issues/menu-model"
 import { ISSUE_PRIORITIES, ISSUE_STATUSES } from "@/types/issues"
 import type { IssueCycle, IssueProject } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
@@ -43,6 +44,10 @@ export interface IssueBulkToolbarProps {
   labels: readonly LabelRow[]
   projects: readonly IssueProject[]
   assigneeOptions: readonly AssigneeOption[]
+  /** The shared workspace's members; offered only when every ticked row is shared. */
+  memberOptions?: readonly AssigneeOption[]
+  /** The assignee menu opened; a shared board refreshes its member roster here. */
+  onAssigneeMenuOpen?: () => void
   cycles?: readonly IssueCycle[]
   /** What the gate knows beyond each row: who "Me" is on a shared board. */
   bulkContext?: BulkActionContext
@@ -60,7 +65,9 @@ export function IssueBulkToolbar({
   runningIds,
   labels,
   projects,
-  assigneeOptions,
+  assigneeOptions: baseAssigneeOptions,
+  memberOptions,
+  onAssigneeMenuOpen,
   cycles = [],
   bulkContext,
   onAction,
@@ -72,6 +79,8 @@ export function IssueBulkToolbar({
   const t = useTranslations("issues")
 
   if (items.length === 0) return null
+
+  const assigneeOptions = assigneeOptionsForItems(items, baseAssigneeOptions, memberOptions)
 
   /**
    * How many of the selection an action would touch. Rendered next to each
@@ -161,7 +170,15 @@ export function IssueBulkToolbar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <DropdownMenu>
+      <DropdownMenu
+        {...(onAssigneeMenuOpen
+          ? {
+              onOpenChange: (open: boolean) => {
+                if (open) onAssigneeMenuOpen()
+              },
+            }
+          : {})}
+      >
         <DropdownMenuTrigger asChild>
           <Button size="sm" variant="outline" data-testid="issue-bulk-assignee">
             <UserIcon className="size-4" />

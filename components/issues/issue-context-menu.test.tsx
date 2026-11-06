@@ -242,4 +242,45 @@ describe("IssueContextMenu", () => {
     )
     expect(screen.queryByTestId("issue-context-assignee-agent:a1-hint")).toBeNull()
   })
+
+  describe("workspace members (ADR-0149 §10)", () => {
+    const bob = {
+      key: "human:usr_bob",
+      actor: { kind: "human" as const, id: "usr_bob", label: "Bob" },
+      group: "member" as const,
+    }
+
+    it("offers a shared row its workspace's members, named", async () => {
+      const user = userEvent.setup()
+      renderMenu({
+        item: item({ kind: "collab", capabilities: FULL_ISSUE_CAPABILITIES }),
+        memberOptions: [bob],
+        collabSelfUserId: "usr_ada",
+      })
+      await openSub(user, "issue-context-assignee")
+      expect(await screen.findByTestId("issue-context-assignee-human:usr_bob")).toHaveTextContent(
+        "Bob"
+      )
+      expect(screen.getByTestId("issue-context-assignee-human:usr_bob")).not.toHaveAttribute(
+        "data-disabled"
+      )
+    })
+
+    it("never offers them on a local row", async () => {
+      const user = userEvent.setup()
+      renderMenu({ memberOptions: [bob] })
+      await openSub(user, "issue-context-assignee")
+      await screen.findByTestId("issue-context-assignee-agent:a1")
+      expect(screen.queryByTestId("issue-context-assignee-human:usr_bob")).toBeNull()
+    })
+
+    it("tells the board when it opens, so the roster is asked again", async () => {
+      const user = userEvent.setup()
+      const onMenuOpen = jest.fn()
+      renderMenu({ onMenuOpen })
+      await user.pointer({ keys: "[MouseRight]", target: screen.getByTestId("anchor") })
+      await screen.findByTestId("issue-context-status")
+      expect(onMenuOpen).toHaveBeenCalledTimes(1)
+    })
+  })
 })

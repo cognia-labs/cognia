@@ -521,6 +521,7 @@
   },
   "assignee": {
     "agents": "Agents",
+    "members": "Workspace members",
     "teams": "Squads",
     "missing": "no longer exists",
     "sharedRefusal": {

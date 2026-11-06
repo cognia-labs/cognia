@@ -37,7 +37,11 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import type { IssueBulkAction } from "@/lib/issues/bulk-actions"
-import { buildIssueMenuSections, canDeleteIssue } from "@/lib/issues/menu-model"
+import {
+  assigneeOptionsForItems,
+  buildIssueMenuSections,
+  canDeleteIssue,
+} from "@/lib/issues/menu-model"
 import type { IssueCycle, IssueProject } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
@@ -51,11 +55,15 @@ export interface IssueContextMenuProps {
   labels: readonly LabelRow[]
   projects: readonly IssueProject[]
   assigneeOptions: readonly AssigneeOption[]
+  /** The shared workspace's members; offered only when `item` is a shared row. */
+  memberOptions?: readonly AssigneeOption[]
   cycles?: readonly IssueCycle[]
   /** Who "Me" is on a shared board (`null`: nobody signed in). See `IssueMenuInput`. */
   collabSelfUserId?: string | null
   onAction: (action: IssueBulkAction) => void
   onOpen?: () => void
+  /** The menu opened; a shared board refreshes its member roster here. */
+  onMenuOpen?: () => void
   /** Opens the confirmation dialog; deletion never happens from the menu itself. */
   onRequestDelete?: () => void
   children: ReactNode
@@ -66,16 +74,22 @@ export function IssueContextMenu({
   running = false,
   labels,
   projects,
-  assigneeOptions,
+  assigneeOptions: baseAssigneeOptions,
+  memberOptions,
   cycles,
   collabSelfUserId,
   onAction,
   onOpen,
+  onMenuOpen,
   onRequestDelete,
   children,
 }: IssueContextMenuProps) {
   const t = useTranslations("issues")
 
+  const assigneeOptions = useMemo(
+    () => assigneeOptionsForItems([item], baseAssigneeOptions, memberOptions),
+    [item, baseAssigneeOptions, memberOptions]
+  )
   const sections = useMemo(
     () =>
       buildIssueMenuSections({
@@ -92,7 +106,15 @@ export function IssueContextMenu({
   const presentation = useMenuEntryPresentation({ labels, projects, assigneeOptions, cycles })
 
   return (
-    <ContextMenu>
+    <ContextMenu
+      {...(onMenuOpen
+        ? {
+            onOpenChange: (open: boolean) => {
+              if (open) onMenuOpen()
+            },
+          }
+        : {})}
+    >
       <ContextMenuTrigger asChild data-testid={`issue-context-trigger-${item.unifiedId}`}>
         {children}
       </ContextMenuTrigger>

@@ -37,6 +37,13 @@ export interface CollabMentionScope {
 
 export interface UseCollabMentionCandidatesDeps {
   resolveContext?: () => Promise<CurrentCollabContext | null>
+  /**
+   * Bump to ask the server again for the same scope. The current list stays on
+   * screen until the new one arrives. The issue board bumps it each time an
+   * assignee menu opens on a shared row, for the same reason the composer
+   * asks on open: the server refuses anybody who is no longer a member.
+   */
+  reloadToken?: number
 }
 
 const NONE: readonly CollabMentionCandidate[] = Object.freeze([])
@@ -68,6 +75,7 @@ export function useCollabMentionCandidates(
   deps: UseCollabMentionCandidatesDeps = {}
 ): readonly CollabMentionCandidate[] {
   const resolveContext = deps.resolveContext ?? resolveCurrentCollabContext
+  const reloadToken = deps.reloadToken ?? 0
   const key = scopeKey(scope)
   const orgId = scope?.orgId ?? ""
   const workspaceId = scope?.workspaceId ?? ""
@@ -100,7 +108,7 @@ export function useCollabMentionCandidates(
     return () => {
       cancelled = true
     }
-  }, [key, orgId, workspaceId, resolveContext])
+  }, [key, orgId, workspaceId, resolveContext, reloadToken])
 
   return key && loaded?.key === key ? loaded.candidates : NONE
 }

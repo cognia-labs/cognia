@@ -84,10 +84,12 @@ import { enqueueCollabMutation } from "@/lib/db/mobile-outbound-queue"
 import {
   CollabActorRefusedError,
   collabActorRefusal,
+  namesCollabMember,
   narrowCollabActor,
   readCollabSelf,
 } from "@/lib/issues/collab-actor"
 import { collabSelfUserIdOf, useCollabSelf } from "@/hooks/issues/use-collab-self"
+import { useCollabAssigneeMembers } from "@/hooks/issues/use-collab-assignee-members"
 import { buildHeadlessTurnLlmClient } from "@/lib/ai/headless-turn-llm-client"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import {
@@ -210,7 +212,7 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
   const [identity, setIdentity] = useState<ProjectIdentityState>(EMPTY_PROJECT_IDENTITY)
   const [takenKeys, setTakenKeys] = useState<ReadonlySet<string>>(new Set())
   const [sharedOrgId, setSharedOrgId] = useState<string | null>(null)
-  const [destination, setDestination] = useState<"local" | "shared">("local")
+  const [destination, setDestinationState] = useState<"local" | "shared">("local")
   const [createAnother, setCreateAnother] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -221,6 +223,21 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
     destination === "shared" && collabSelfUserId !== undefined
       ? { selfUserId: collabSelfUserId }
       : undefined
+  // Who else a shared create can be assigned to: the workspace's current
+  // members, asked of the server only while the sheet is open on "shared".
+  const { options: sharedMembers, reload: reloadSharedMembers } = useCollabAssigneeMembers(
+    props.open && destination === "shared" ? props.projectId : null
+  )
+  // A member only exists on the shared board, so leaving it drops a member
+  // assignee rather than filing a local issue for somebody who never sees it.
+  const setDestination = useCallback((next: "local" | "shared") => {
+    setDestinationState(next)
+    if (next === "local") {
+      setForm((current) =>
+        namesCollabMember(current.assignee) ? { ...current, assignee: null } : current
+      )
+    }
+  }, [])
 
   const needsProject = props.projects.length === 0 || creatingProject
   const patch = useCallback((next: Partial<FormState>) => {
@@ -387,6 +404,8 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
     setIdentity,
     sharedOrgId,
     sharedAssignee,
+    sharedMembers,
+    reloadSharedMembers,
     destination,
     setDestination,
     createAnother,
@@ -1724,7 +1743,15 @@ export function CreateIssuePage(props: CreateIssuePageProps) {
                 <AssigneePicker
                   value={form.form.assignee}
                   onChange={(actor) => form.patch({ assignee: actor })}
-                  {...(form.sharedAssignee ? { shared: form.sharedAssignee } : {})}
+                  {...(form.sharedAssignee
+                    ? {
+                        shared: form.sharedAssignee,
+                        members: form.sharedMembers,
+                        onOpenChange: (open: boolean) => {
+                          if (open) form.reloadSharedMembers()
+                        },
+                      }
+                    : {})}
                   data-testid="create-issue-assignee"
                 />
               </div>

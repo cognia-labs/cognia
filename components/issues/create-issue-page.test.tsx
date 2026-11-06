@@ -32,8 +32,21 @@ jest.mock("@/lib/issues/collab-actor", () => ({
   ...jest.requireActual("@/lib/issues/collab-actor"),
   readCollabSelf: async () => mockCollabSelf ?? null,
 }))
+let mockPickerProps: Record<string, unknown> = {}
 jest.mock("./assignee-picker", () => ({
-  AssigneePicker: () => <div data-testid="assignee-picker-stub" />,
+  ...jest.requireActual("./assignee-picker"),
+  AssigneePicker: (props: Record<string, unknown>) => {
+    mockPickerProps = props
+    return <div data-testid="assignee-picker-stub" />
+  },
+}))
+const mockReloadMembers = jest.fn()
+const mockMembersFor = jest.fn((_workspaceId: string | null | undefined) => ({
+  options: [] as unknown[],
+  reload: mockReloadMembers,
+}))
+jest.mock("@/hooks/issues/use-collab-assignee-members", () => ({
+  useCollabAssigneeMembers: (workspaceId: string | null | undefined) => mockMembersFor(workspaceId),
 }))
 // The real renderer pulls in Shiki/mermaid — far heavier than this suite needs.
 jest.mock("@/components/chat/markdown-renderer", () => ({
@@ -272,6 +285,7 @@ describe("CreateIssuePage", () => {
   describe("a shared create names its assignee on the plane (ADR-0149 §10)", () => {
     afterEach(() => {
       mockCollabSelf = undefined
+      mockMembersFor.mockImplementation(() => ({ options: [], reload: mockReloadMembers }))
     })
 
     async function openShared() {
@@ -314,6 +328,53 @@ describe("CreateIssuePage", () => {
       )
       expect(mockEnqueueCollabMutation).not.toHaveBeenCalled()
       expect(props.onSharedQueued).not.toHaveBeenCalled()
+    })
+
+    const BOB = "usr_bbbbbbbbbbbbbbbbbbbbbbbb"
+    const bob = {
+      key: `human:${BOB}`,
+      actor: { kind: "human", id: BOB, label: "Bob" },
+      group: "member",
+    }
+
+    it("offers the workspace's members once the destination is shared, and asks again on open", async () => {
+      mockCollabSelf = { userId: ADA, label: "Ada" }
+      mockMembersFor.mockImplementation((workspaceId) => ({
+        options: workspaceId ? [bob] : [],
+        reload: mockReloadMembers,
+      }))
+      const { user, props } = await openShared()
+      expect(mockPickerProps.members).toBeUndefined()
+      await user.click(await screen.findByTestId("create-issue-destination"))
+      await user.click(await screen.findByRole("option", { name: "create.destinationShared" }))
+      expect(mockMembersFor).toHaveBeenLastCalledWith("w1")
+      expect(mockPickerProps).toMatchObject({ shared: { selfUserId: ADA }, members: [bob] })
+      act(() => (mockPickerProps.onOpenChange as (open: boolean) => void)(true))
+      expect(mockReloadMembers).toHaveBeenCalledTimes(1)
+
+      act(() => (mockPickerProps.onChange as (actor: unknown) => void)(bob.actor))
+      await user.type(screen.getByTestId("create-issue-title"), "Shared work")
+      await user.click(screen.getByTestId("create-issue-submit"))
+      await waitFor(() => expect(props.onSharedQueued).toHaveBeenCalledWith("op_1"))
+      expect(mockEnqueueCollabMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({ assignee: bob.actor }),
+        })
+      )
+    })
+
+    it("drops a member assignee when the destination goes back to local", async () => {
+      mockCollabSelf = { userId: ADA, label: "Ada" }
+      const { user } = await openShared()
+      await user.click(await screen.findByTestId("create-issue-destination"))
+      await user.click(await screen.findByRole("option", { name: "create.destinationShared" }))
+      act(() => (mockPickerProps.onChange as (actor: unknown) => void)(bob.actor))
+      expect(mockPickerProps.value).toEqual(bob.actor)
+
+      await user.click(await screen.findByTestId("create-issue-destination"))
+      await user.click(await screen.findByRole("option", { name: "create.destinationLocal" }))
+      expect(mockPickerProps.value).toBeNull()
+      expect(mockPickerProps.shared).toBeUndefined()
     })
 
     it("disables the Assign me shortcut on a shared create with nobody signed in", async () => {

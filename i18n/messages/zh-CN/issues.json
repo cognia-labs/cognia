@@ -521,6 +521,7 @@
   },
   "assignee": {
     "agents": "Agent",
+    "members": "工作区成员",
     "teams": "小队",
     "missing": "已不存在",
     "sharedRefusal": {

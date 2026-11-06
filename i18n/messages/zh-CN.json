@@ -24017,6 +24017,7 @@
     },
     "assignee": {
       "agents": "Agent",
+      "members": "工作区成员",
       "missing": "已不存在",
       "sharedRefusal": {
         "anonymous-human": "登录后才能在共享看板上把议题指派给自己。",

@@ -125,4 +125,26 @@ describe("useCollabMentionCandidates", () => {
     await waitFor(() => expect(result.current).toEqual([{ userId: "usr_bob", displayName: "Bob" }]))
     expect(list).toHaveBeenLastCalledWith("org_1", "ws_2")
   })
+
+  it("asks again on a reload, keeping the current list until the answer lands", async () => {
+    let release: (value: typeof ROSTER) => void = () => {}
+    const list = jest
+      .fn()
+      .mockResolvedValueOnce(ROSTER)
+      .mockReturnValueOnce(new Promise((resolve) => (release = resolve)))
+    const resolveContext = jest.fn(async () => context(list))
+    const { result, rerender } = renderHook(
+      ({ reloadToken }: { reloadToken: number }) =>
+        useCollabMentionCandidates(SCOPE, { resolveContext, reloadToken }),
+      { initialProps: { reloadToken: 0 } }
+    )
+    await waitFor(() => expect(result.current).toHaveLength(2))
+
+    rerender({ reloadToken: 1 })
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    expect(result.current).toHaveLength(2)
+
+    release([{ userId: "usr_ada", displayName: "Ada", role: "member", orgMember: true }])
+    await waitFor(() => expect(result.current).toEqual([{ userId: "usr_ada", displayName: "Ada" }]))
+  })
 })

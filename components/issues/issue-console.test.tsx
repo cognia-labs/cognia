@@ -159,6 +159,16 @@ jest.mock("@/lib/issues/bulk-actions", () => ({
   canApplyBulkAction: (...a: unknown[]) => mockCanApplyBulk(...a),
 }))
 
+const mockReloadMembers = jest.fn()
+let mockMemberOptions: unknown[] = []
+const mockMembersFor = jest.fn((_workspaceId: string | null | undefined) => ({
+  options: mockMemberOptions,
+  reload: mockReloadMembers,
+}))
+jest.mock("@/hooks/issues/use-collab-assignee-members", () => ({
+  useCollabAssigneeMembers: (workspaceId: string | null | undefined) => mockMembersFor(workspaceId),
+}))
+
 let mockCollabSelf: { userId: string; label?: string } | null | undefined = undefined
 jest.mock("@/hooks/issues/use-collab-self", () => ({
   ...jest.requireActual("@/hooks/issues/use-collab-self"),
@@ -362,6 +372,7 @@ function callProp<T extends unknown[]>(
 beforeEach(() => {
   jest.clearAllMocks()
   mockCollabSelf = undefined
+  mockMemberOptions = []
   mockSyncAvailability.mockReturnValue({ canSync: true })
   window.localStorage.clear()
   useIssueViewStore.getState().reset()
@@ -969,6 +980,34 @@ describe("IssueConsole", () => {
       expect(toastCalls).toContainEqual(["error", "assignee.sharedRefusal.anonymous-human"])
     })
 
+    it("hands the toolbar the members, re-asking only for an all-shared selection", async () => {
+      const bob = {
+        key: "human:usr_bob",
+        actor: { kind: "human", id: "usr_bob", label: "Bob" },
+        group: "member",
+      }
+      mockMemberOptions = [bob]
+      await selectOne()
+      expect(bulkProps.memberOptions).toEqual([bob])
+      // The ticked row is local: nothing to refresh the roster for.
+      expect(bulkProps.onAssigneeMenuOpen).toBeUndefined()
+    })
+
+    it("re-asks for the roster when an all-shared selection opens its assignee menu", async () => {
+      mockListAll.mockResolvedValue({
+        items: [item({ kind: "collab", sourceId: "iss_1" })],
+        errors: [],
+      })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      callProp(filterBarProps, "onLayoutChange", "list")
+      await screen.findByTestId("list-stub")
+      callProp(listProps, "onToggleCheck", "collab:iss_1", { shiftKey: false })
+      await screen.findByTestId("bulk-stub")
+      ;(bulkProps.onAssigneeMenuOpen as () => void)()
+      expect(mockReloadMembers).toHaveBeenCalledTimes(1)
+    })
+
     it("reports a failure as a failure", async () => {
       mockApplyBulk.mockResolvedValueOnce({ applied: 0, skipped: 0, failed: 2 })
       await selectOne()
@@ -1090,6 +1129,26 @@ describe("IssueConsole", () => {
       // label is legitimate.
       const railLabels = (railProps.labels as Array<{ id: string }>).map((label) => label.id)
       expect(railLabels).toEqual(expect.arrayContaining(["lbl_local", "github:remote"]))
+    })
+
+    it("hands every menu the workspace's members, and re-asks only when a shared row's menu opens", async () => {
+      const bob = {
+        key: "human:usr_bob",
+        actor: { kind: "human", id: "usr_bob", label: "Bob" },
+        group: "member",
+      }
+      mockMemberOptions = [bob]
+      const local = item()
+      const shared = item({ kind: "collab", sourceId: "iss_1" })
+      mockListAll.mockResolvedValue({ items: [local, shared], errors: [] })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+
+      expect(mockMembersFor).toHaveBeenCalledWith("w1")
+      expect(invokeMenu(boardProps, shared).memberOptions).toEqual([bob])
+      expect(invokeMenu(boardProps, local).onMenuOpen).toBeUndefined()
+      ;(invokeMenu(boardProps, shared).onMenuOpen as () => void)()
+      expect(mockReloadMembers).toHaveBeenCalledTimes(1)
     })
 
     it("routes a single-issue action through the same reporting path as a bulk one", async () => {

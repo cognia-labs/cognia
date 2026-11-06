@@ -11,6 +11,7 @@ import {
   CollabActorRefusedError,
   collabActorRefusal,
   collabAssigneeKey,
+  namesCollabMember,
   narrowCollabActor,
   readCollabSelf,
 } from "./collab-actor"
@@ -31,6 +32,17 @@ describe("collabActorRefusal", () => {
     expect(collabActorRefusal({ kind: "human", label: "Me" }, undefined)).toBe("anonymous-human")
     expect(collabActorRefusal({ kind: "human", id: "local" }, ADA)).toBe("not-a-user-id")
     expect(collabActorRefusal({ kind: "team" }, ADA)).toBe("missing-id")
+  })
+})
+
+describe("namesCollabMember", () => {
+  it("is true only for a human named by id", () => {
+    expect(namesCollabMember({ kind: "human", id: BOB, label: "Bob" })).toBe(true)
+    expect(namesCollabMember({ kind: "human", label: "Me" })).toBe(false)
+    expect(namesCollabMember({ kind: "human", id: " " })).toBe(false)
+    expect(namesCollabMember({ kind: "agent", id: "char_7" })).toBe(false)
+    expect(namesCollabMember(null)).toBe(false)
+    expect(namesCollabMember(undefined)).toBe(false)
   })
 })
 

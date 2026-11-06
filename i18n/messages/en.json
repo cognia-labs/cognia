@@ -24017,6 +24017,7 @@
     },
     "assignee": {
       "agents": "Agents",
+      "members": "Workspace members",
       "missing": "no longer exists",
       "sharedRefusal": {
         "anonymous-human": "Sign in to assign yourself on a shared board.",

@@ -9,6 +9,10 @@
  * adapters cannot dispatch to them, and an assignee that cannot be run is a
  * dead affordance (`types/issues/index.ts`, `IssueActor`).
  *
+ * On a shared board the picker also offers the workspace's current members
+ * (`human:<usr_…>`, ADR-0149 §10), read from the server roster: a local issue
+ * never sees them, since nobody else can see a local issue.
+ *
  * The value is the `actorKey` string (`human:self`, `agent:<id>`, `team:<id>`)
  * so it round-trips through a `Select` without a second encoding, and the
  * chosen actor carries a `label` snapshot so the board renders it without a
@@ -42,7 +46,7 @@ export const UNASSIGNED_VALUE = "none"
 export interface AssigneeOption {
   key: string
   actor: IssueActor
-  group: "human" | "agent" | "team"
+  group: "human" | "member" | "agent" | "team"
 }
 
 /** Build the picker's option list from Characters and AgentTeams. */
@@ -65,6 +69,20 @@ export function buildAssigneeOptions(
   return options
 }
 
+/**
+ * A shared workspace's members as assignee options. The signed-in person is
+ * expected to be left out already (they are "Me"); the label is the name every
+ * member's board shows.
+ */
+export function memberAssigneeOptions(
+  members: ReadonlyArray<{ userId: string; displayName: string }>
+): AssigneeOption[] {
+  return members.map((member) => {
+    const actor: IssueActor = { kind: "human", id: member.userId, label: member.displayName }
+    return { key: actorKey(actor)!, actor, group: "member" }
+  })
+}
+
 /** Resolve a picker value back to an actor (or `null` for unassigned). */
 export function actorForValue(
   value: string,
@@ -85,6 +103,10 @@ export interface AssigneePickerProps {
    * plane cannot name is shown disabled with the reason, never offered.
    */
   shared?: { selfUserId: string | null }
+  /** The shared workspace's members (`memberAssigneeOptions`); used only with `shared`. */
+  members?: readonly AssigneeOption[]
+  /** The option list opened or closed; a shared board refreshes its roster on open. */
+  onOpenChange?: (open: boolean) => void
   "data-testid"?: string
 }
 
@@ -94,6 +116,8 @@ export function AssigneePicker({
   onChange,
   disabled,
   shared,
+  members,
+  onOpenChange,
   "data-testid": testId = "issue-assignee-picker",
 }: AssigneePickerProps) {
   const t = useTranslations("issues")
@@ -107,12 +131,13 @@ export function AssigneePicker({
       // dispatched from this board.
       .filter((team) => !workspaceId || !team.projectId || team.projectId === workspaceId)
       .map((team) => ({ id: team.id, name: team.name }))
-    return buildAssigneeOptions(
+    const base = buildAssigneeOptions(
       (characters ?? []).map((character) => ({ id: character.id, name: character.name })),
       teams,
       t("actor.human")
     )
-  }, [characters, teamsById, workspaceId, t])
+    return shared && members?.length ? [...base, ...members] : base
+  }, [characters, teamsById, workspaceId, t, shared, members])
 
   const currentKey =
     (shared
@@ -123,6 +148,7 @@ export function AssigneePicker({
   const known = options.some((option) => option.key === currentKey)
   const groups: Array<{ group: AssigneeOption["group"]; label: string }> = [
     { group: "human", label: t("actor.human") },
+    { group: "member", label: t("assignee.members") },
     { group: "agent", label: t("assignee.agents") },
     { group: "team", label: t("assignee.teams") },
   ]
@@ -131,6 +157,7 @@ export function AssigneePicker({
     <Select
       value={currentKey}
       disabled={disabled}
+      {...(onOpenChange ? { onOpenChange } : {})}
       onValueChange={(next) => {
         const actor = actorForValue(next, options)
         if (actor === undefined) return

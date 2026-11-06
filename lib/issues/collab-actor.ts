@@ -47,6 +47,14 @@ function isAnonymousHuman(actor: IssueActor): boolean {
 }
 
 /**
+ * True for a human that names a person by id: a shared workspace's member.
+ * Only a shared issue can carry one; the local "Me" has no id.
+ */
+export function namesCollabMember(actor: IssueActor | null | undefined): boolean {
+  return actor?.kind === "human" && Boolean(actor.id?.trim())
+}
+
+/**
  * Why `actor` cannot be written to a shared issue, or `null` when it can.
  * `null` (unassign) always can. Pure, so a picker or menu can grey the option
  * out before anyone clicks it.

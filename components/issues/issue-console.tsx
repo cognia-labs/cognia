@@ -55,6 +55,7 @@ import { useClientLiveQuery } from "@/hooks/data"
 import { useBreakpoint } from "@/hooks/ui"
 import { useIssueSyncAvailability } from "./kept-copy-source-state"
 import { useAssigneeOptions } from "@/hooks/issues/use-assignee-options"
+import { useCollabAssigneeMembers } from "@/hooks/issues/use-collab-assignee-members"
 import { collabSelfUserIdOf, useCollabSelf } from "@/hooks/issues/use-collab-self"
 import { useIssueSelection } from "@/hooks/issues/use-issue-selection"
 import { useIssueShortcuts } from "@/hooks/issues/use-issue-shortcuts"
@@ -525,15 +526,18 @@ export function IssueConsole({
   )
   const selection = useIssueSelection(orderedIds)
   const assigneeOptions = useAssigneeOptions()
+  // A shared workspace's members, for its shared rows (ADR-0149 §10). Empty
+  // for a workspace that is not shared.
+  const { options: memberOptions, reload: reloadMembers } = useCollabAssigneeMembers(projectId)
   const knownAssigneeLabels = useMemo(
     () =>
       new Map(
-        assigneeOptions.map((option) => [
+        [...assigneeOptions, ...memberOptions].map((option) => [
           option.key,
           option.actor.label ?? t(`actor.${option.actor.kind}`),
         ])
       ),
-    [assigneeOptions, t]
+    [assigneeOptions, memberOptions, t]
   )
   const itemsById = useMemo(() => new Map(sorted.map((item) => [item.unifiedId, item])), [sorted])
   const checkedItems = useMemo(
@@ -695,10 +699,12 @@ export function IssueConsole({
         labels={writableLabels}
         projects={projects ?? []}
         assigneeOptions={assigneeOptions}
+        memberOptions={memberOptions}
         cycles={cycles ?? []}
         collabSelfUserId={collabSelfUserId}
         onAction={(action) => void runBulk([item], action)}
         onOpen={() => setSelectedId(item.unifiedId)}
+        {...(item.kind === "collab" ? { onMenuOpen: reloadMembers } : {})}
         onRequestDelete={() => setDeleteTargets([item])}
       >
         {children}
@@ -709,6 +715,8 @@ export function IssueConsole({
       writableLabels,
       projects,
       assigneeOptions,
+      memberOptions,
+      reloadMembers,
       cycles,
       collabSelfUserId,
       runBulk,
@@ -966,6 +974,10 @@ export function IssueConsole({
         labels={writableLabels}
         projects={projects ?? []}
         assigneeOptions={assigneeOptions}
+        memberOptions={memberOptions}
+        {...(checkedItems.length > 0 && checkedItems.every((item) => item.kind === "collab")
+          ? { onAssigneeMenuOpen: reloadMembers }
+          : {})}
         cycles={cycles ?? []}
         bulkContext={bulkContext}
         onAction={(action) => void runBulk(checkedItems, action)}
