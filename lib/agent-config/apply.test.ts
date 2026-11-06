@@ -22,6 +22,7 @@ jest.mock("@/lib/prompts/service", () => ({
 const DEF = { id: "chat.title", scopes: ["account", "workspace"] }
 jest.mock("@/lib/prompts/catalog", () => ({
   getPromptDefinition: (id: string) => (id === "chat.title" ? DEF : undefined),
+  loadPromptCatalog: async () => ({ failures: [] }),
 }))
 
 const adapters: Record<string, Record<string, jest.Mock | undefined>> = {}

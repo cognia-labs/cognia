@@ -20,7 +20,7 @@
 import { clearInstructionCache } from "@/lib/claude/instructions/load"
 import { writeWorkspaceFileChecked } from "@/lib/files/workspace-fs"
 import { ownerAdapterFor } from "@/lib/prompts/adapters"
-import { getPromptDefinition } from "@/lib/prompts/catalog"
+import { getPromptDefinition, loadPromptCatalog } from "@/lib/prompts/catalog"
 import { parseResourceKey } from "@/lib/prompts/resources"
 import { publishPromptBody } from "@/lib/prompts/service"
 import { codeSlotVersion, parseAgentFileKey, parseCodeSlotVersion } from "./surfaces"
@@ -58,6 +58,7 @@ async function applyAgentFile(edit: AgentConfigEdit): Promise<AgentConfigApplyRe
 }
 
 async function applyCodeSlot(edit: AgentConfigEdit): Promise<AgentConfigApplyResult> {
+  await loadPromptCatalog()
   const def = getPromptDefinition(parseResourceKey(edit.key).id)
   if (!def) throw new AgentConfigEditError("agent_config_not_found", `unknown prompt: ${edit.key}`)
   if (!edit.version) {

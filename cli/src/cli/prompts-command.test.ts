@@ -3,6 +3,7 @@
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { BRIEF_MODE_PROMPT } from "@/lib/agent/prompts/brief-mode"
 import { DIFFICULTY_JUDGE_PROMPT } from "@/lib/ai/routing/difficulty-judge"
+import { RADAR_SYSTEM_PROMPT } from "@/lib/radar/prompts"
 import { resolvePrompt } from "@/lib/prompts/resolve"
 import { readPromptSlot } from "@/lib/prompts/service"
 import { invalidatePromptOverrideSnapshot } from "@/lib/prompts/snapshot"
@@ -89,6 +90,16 @@ it("publishes from stdin, shows it, lists it as modified and resets it", async (
   expect(await run(`reset ${BRIEF_MODE_PROMPT.id}`)).toBe(0)
   expect(resolvePrompt(BRIEF_MODE_PROMPT).text).toBe(BRIEF_MODE_PROMPT.defaultBody)
   expect(db.dispose).toHaveBeenCalled()
+})
+
+it("lists and shows a prompt a module contributes, loaded on demand", async () => {
+  const { run, io } = harness()
+  expect(await run(`show ${RADAR_SYSTEM_PROMPT.id}`)).toBe(0)
+  expect(io.stdout()).toContain("--- shipped ---")
+  expect(await run("list --group knowledge --json")).toBe(0)
+  expect(io.json.at(-1)).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: RADAR_SYSTEM_PROMPT.id })])
+  )
 })
 
 it("targets the workspace mounting the cwd for --scope workspace", async () => {

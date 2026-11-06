@@ -1,4 +1,5 @@
-import { RADAR_SYSTEM_PROMPT, buildRadarUserMessage } from "./prompts"
+import radarModule from "./module"
+import { RADAR_SYSTEM_PROMPT, buildRadarUserMessage, prompts } from "./prompts"
 import type { RadarDataItem } from "@/types/radar"
 
 describe("RADAR_SYSTEM_PROMPT", () => {
@@ -22,5 +23,12 @@ describe("buildRadarUserMessage", () => {
     expect(msg).toContain("[1] (capture, 1970-01-01) second thing")
     expect(msg).toContain("UI locale: en")
     expect(msg).toContain("2 recent items")
+  })
+})
+
+describe("radar's prompt contribution", () => {
+  it("lists the report prompt, as the manifest contributes it", async () => {
+    expect(prompts).toEqual([RADAR_SYSTEM_PROMPT])
+    expect((await radarModule.prompts()).prompts).toBe(prompts)
   })
 })

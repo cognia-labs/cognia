@@ -30,6 +30,7 @@ import {
   BRAIN_PROFILES,
   EFFECT_FIELDS,
   GENERATED_HOST,
+  GENERATED_PROMPTS,
   GENERATED_UI,
   MODULE_HOSTS,
   PORT_PROVISION_FIELDS,
@@ -965,6 +966,83 @@ export const see = () => loadPort("vision")
   ])
     assert.ok(errors.includes(expected), `missing: ${expected}\n${errors.join("\n")}`)
   assert.equal(errors.length, 6, errors.join("\n"))
+})
+
+test("prompts: a module that defines a prompt contributes it, from a file exporting `prompts`", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel", prompts: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/prompts/types.ts": "export const definePrompt = (d) => d\n",
+    // Contributes prompts, but its file exports them under another name.
+    "lib/pet/module.ts": hostManifest("pet", 'prompts: () => import("./prompts")'),
+    "lib/pet/prompts.ts": `import { definePrompt } from "@/lib/prompts/types"
+export const notPrompts = [definePrompt({ id: "pet.x" })]
+`,
+    // Defines a prompt and contributes none.
+    "lib/radar/module.ts": hostManifest("radar"),
+    "lib/radar/report.ts": `import { definePrompt } from "@/lib/prompts/types"
+export const REPORT = definePrompt({ id: "knowledge.radar" })
+`,
+    // Only its test defines one: nothing to contribute.
+    "lib/crew/module.ts": hostManifest("crew"),
+    "lib/crew/x.test.ts": `import { definePrompt } from "@/lib/prompts/types"
+definePrompt({ id: "crew.x" })
+`,
+    // Defines and contributes.
+    "lib/eval/module.ts": hostManifest("eval", 'prompts: () => import("./prompts")'),
+    "lib/eval/prompts.ts": `import { definePrompt } from "@/lib/prompts/types"
+const JUDGE = definePrompt({ id: "eval.judge" })
+export const prompts = [JUDGE]
+`,
+  })
+  // The fixture has no generated registries; those errors are another test's.
+  const errors = result.errors.filter(
+    (error) => /prompt/.test(error) && !error.startsWith("lib/modules/generated/")
+  )
+  assert.deepEqual(errors.sort(), [
+    'G4 lib/radar/module.ts: lib/radar/report.ts defines a prompt but "radar" contributes none — list its prompts in a `prompts` file',
+    "lib/pet/module.ts: prompts: lib/pet/prompts.ts exports no `prompts`",
+  ])
+})
+
+test("validateHostManifest wants prompts as a lazy entry", () => {
+  assert.ok(
+    validateHostManifest(
+      { id: "pet", kind: "module", stage: "beta", prompts: "./prompts" },
+      "pet"
+    ).includes('prompts is a lazy entry `() => import("…")`')
+  )
+})
+
+test("the prompt registry lazily imports each contributing module's prompts file, by module id", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "radar",
+        file: "lib/radar/module.ts",
+        value: { stage: "stable", prompts: { $lazy: "./prompts" } },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "pet",
+        file: "lib/pet/module.ts",
+        value: { stage: "experimental", prompts: { $lazy: "@/lib/pet/prompts" } },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_PROMPTS]
+  assert.match(
+    registry,
+    /import type \{ ModulePromptsEntry \} from "@\/lib\/modules\/manifest-types"/
+  )
+  assert.ok(registry.indexOf('module: "pet"') < registry.indexOf('module: "radar"'))
+  assert.ok(
+    registry.includes('    stage: "experimental",\n    load: () => import("@/lib/pet/prompts"),')
+  )
+  assert.ok(registry.includes('load: () => import("@/lib/radar/prompts")'))
+  assert.ok(!registry.includes("crew"))
+  assert.ok(!files[GENERATED_HOST].includes("generated/prompts"))
 })
 
 test("ports: a collection port takes a member from every module, and its framework asks without requires", () => {

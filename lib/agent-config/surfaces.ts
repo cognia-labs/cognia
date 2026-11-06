@@ -24,7 +24,7 @@ import {
   ABSENT_FILE_VERSION,
   parseInstructionFileKey,
 } from "@/lib/prompts/adapters/instruction-files"
-import { getPromptDefinition } from "@/lib/prompts/catalog"
+import { getPromptDefinition, loadPromptCatalog } from "@/lib/prompts/catalog"
 import { parseResourceKey, type PromptResourceSummary } from "@/lib/prompts/resources"
 import { readPromptSlot } from "@/lib/prompts/service"
 import type { PromptTargetRef } from "@/lib/prompts/types"
@@ -185,6 +185,7 @@ async function readCodeSlot(
   workspace: AgentConfigWorkspace
 ): Promise<AgentConfigSurfaceDocument | undefined> {
   const promptId = parseResourceKey(key).id
+  await loadPromptCatalog()
   const def = getPromptDefinition(promptId)
   if (!def) return undefined
   const target = codeSlotTarget(def.scopes, workspace)

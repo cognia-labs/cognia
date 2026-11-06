@@ -5,7 +5,7 @@
  */
 
 import { listPromptOverrideBindings } from "@/lib/db/prompt-overrides"
-import { listPromptDefinitions } from "../catalog"
+import { listPromptDefinitions, loadPromptCatalog } from "../catalog"
 import {
   parseResourceKey,
   resourceKey,
@@ -53,7 +53,7 @@ export function ownerAdapterFor(key: string): OwnerPromptAdapter | undefined {
  * no definition here, as unavailable.
  */
 export async function listCodePromptResources(): Promise<PromptResourceSummary[]> {
-  const bindings = await listPromptOverrideBindings()
+  const [bindings] = await Promise.all([listPromptOverrideBindings(), loadPromptCatalog()])
   const overridden = new Set(
     bindings.filter((binding) => binding.activeRevisionId).map((binding) => binding.promptId)
   )

@@ -19,7 +19,11 @@
 import fs from "node:fs"
 import path from "node:path"
 
-import { listPromptDefinitions, getPromptDefinition } from "@/lib/prompts/catalog"
+import {
+  getPromptDefinition,
+  listPromptDefinitions,
+  loadPromptCatalog,
+} from "@/lib/prompts/catalog"
 import {
   applyPromptProfileImport,
   exportPromptProfile,
@@ -138,6 +142,8 @@ async function runSubcommand(
   deps: PromptsCommandDeps,
   out: OutputSink
 ): Promise<number> {
+  // The modules' prompts join the catalog lazily; every verb reads it.
+  await loadPromptCatalog()
   switch (sub) {
     case "list":
       return listCommand(args, out)

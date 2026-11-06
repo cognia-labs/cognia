@@ -25,6 +25,7 @@ jest.mock("@/lib/prompts/service", () => ({
 const mockGetDefinition = jest.fn()
 jest.mock("@/lib/prompts/catalog", () => ({
   getPromptDefinition: (id: string) => mockGetDefinition(id),
+  loadPromptCatalog: async () => ({ failures: [] }),
 }))
 
 const mockAdapterRead = jest.fn()

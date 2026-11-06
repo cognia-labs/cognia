@@ -238,7 +238,11 @@ function collectManifests(ctx, files) {
       .map(({ at, spec }) => `${at}: lazy entry "${spec}" does not resolve`)
     const adapterErrors =
       hostMatch && !shapeErrors.length
-        ? [...runtimeAdapterErrors(ctx, file, value), ...provisionExportErrors(ctx, file, value)]
+        ? [
+            ...runtimeAdapterErrors(ctx, file, value),
+            ...provisionExportErrors(ctx, file, value),
+            ...promptsExportErrors(ctx, file, value),
+          ]
         : []
     for (const message of [...readErrors, ...shapeErrors, ...lazyErrors, ...adapterErrors])
       errors.push(`${file}: ${message}`)
@@ -370,6 +374,56 @@ function provisionExportErrors(ctx, file, manifest) {
     if (target && !exportsName(ctx.ast(target), "port"))
       errors.push(`provides[${index}]: ${target} exports no \`port\``)
   })
+  return errors
+}
+
+/** A module's `prompts` file exports its definitions as `prompts`. */
+function promptsExportErrors(ctx, file, manifest) {
+  const spec = manifest.prompts?.$lazy
+  if (typeof spec !== "string") return []
+  const target = resolveModule(ctx, spec, file)
+  // An unresolved lazy entry is already reported with the other lazy entries.
+  return target && !exportsName(ctx.ast(target), "prompts")
+    ? [`prompts: ${target} exports no \`prompts\``]
+    : []
+}
+
+/** Whether a file defines a code-owned prompt: it calls `definePrompt(…)`. */
+export function definesPrompt(sourceFile) {
+  let found = false
+  const visit = (node) => {
+    if (found) return
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "definePrompt"
+    )
+      found = true
+    else ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return found
+}
+
+/**
+ * Prompts (G4). A manifest module that defines a code-owned prompt
+ * contributes its prompts through `prompts`, the prompt catalog's only route
+ * to a module: the catalog (kernel) may not import it. Test files do not count.
+ */
+export function promptContributionErrors(ctx, manifests, owners) {
+  const definers = new Map()
+  for (const [file, { owner }] of owners) {
+    if (!manifests.host.has(owner) || manifestKind(file) || /\.test\.tsx?$/.test(file)) continue
+    if (!definers.has(owner) && definesPrompt(ctx.ast(file))) definers.set(owner, file)
+  }
+  const errors = []
+  for (const [id, definer] of [...definers].sort()) {
+    const { file, manifest } = manifests.host.get(id)
+    if (manifest.prompts === undefined)
+      errors.push(
+        `G4 ${file}: ${definer} defines a prompt but "${id}" contributes none — list its prompts in a \`prompts\` file`
+      )
+  }
   return errors
 }
 
@@ -1075,6 +1129,7 @@ export function computeModules(ctx) {
     ...dependsOnErrors(manifests, registry),
     ...registryErrors(ctx, manifests),
     ...portErrors(ctx, manifests, owners),
+    ...promptContributionErrors(ctx, manifests, owners),
   ]
 
   for (const [id, files] of moduleApi)

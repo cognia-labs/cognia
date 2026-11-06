@@ -14,5 +14,7 @@ export default defineHostModule({
   // (scheduler); the twin's model call writes it.
   dependsOn: ["scheduler", "twin"],
   tables: ["radarReports"],
+  // The report's system prompt, for the Prompt Center.
+  prompts: () => import("./prompts"),
   messages: "radar",
 })

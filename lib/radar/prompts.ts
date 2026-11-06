@@ -3,6 +3,7 @@
  * unit-testable and the generator stays a thin wrapper.
  */
 
+import type { ModulePromptsModule } from "@/lib/modules/manifest-types"
 import { definePrompt } from "@/lib/prompts/types"
 import type { RadarDataItem } from "@/types/radar"
 
@@ -59,3 +60,6 @@ export function buildRadarUserMessage(items: readonly RadarDataItem[], locale?: 
     "Analyze the user's information diet and return the JSON object described in the system prompt."
   )
 }
+
+/** What radar's manifest contributes to the prompt catalog (ADR-0250 §14, M3). */
+export const prompts: ModulePromptsModule["prompts"] = [RADAR_SYSTEM_PROMPT]

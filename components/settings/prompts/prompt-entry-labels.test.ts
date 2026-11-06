@@ -6,12 +6,17 @@
 
 import en from "@/i18n/messages/en/settings/promptEntries.json"
 import zh from "@/i18n/messages/zh-CN/settings/promptEntries.json"
-import { listPromptDefinitions } from "@/lib/prompts/catalog"
+import { listPromptDefinitions, loadPromptCatalog } from "@/lib/prompts/catalog"
 import { promptEntryKey } from "./use-prompt-labels"
 
-const expected = listPromptDefinitions()
-  .map((def) => promptEntryKey(def.id))
-  .sort()
+// Shipped entries and those the modules contribute, once loaded.
+let expected: string[] = []
+beforeAll(async () => {
+  await loadPromptCatalog()
+  expected = listPromptDefinitions()
+    .map((def) => promptEntryKey(def.id))
+    .sort()
+})
 
 describe.each([
   ["en", en as Record<string, { title?: unknown; description?: unknown }>],

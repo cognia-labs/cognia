@@ -126,7 +126,14 @@ export const GENERATED_RUNTIMES = {
   desktop: "lib/modules/generated/desktop.ts",
   mobile: "lib/modules/generated/mobile.ts",
 }
-export const GENERATED_FILES = [GENERATED_HOST, ...Object.values(GENERATED_RUNTIMES), GENERATED_UI]
+/** Every module's `prompts` file, lazily: the prompt catalog's only route to a module. */
+export const GENERATED_PROMPTS = "lib/modules/generated/prompts.ts"
+export const GENERATED_FILES = [
+  GENERATED_HOST,
+  ...Object.values(GENERATED_RUNTIMES),
+  GENERATED_PROMPTS,
+  GENERATED_UI,
+]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
 
 const HOST_MANIFEST = /^lib\/([^/]+)\/module\.ts$/
@@ -600,6 +607,8 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
     errors.push(`acceptance.realSmoke is "pending" or "passed:<YYYY-MM-DD>"`)
   if (manifest.searchProviders !== undefined && !isLazy(manifest.searchProviders))
     errors.push('searchProviders is a lazy entry `() => import("…")`')
+  if (manifest.prompts !== undefined && !isLazy(manifest.prompts))
+    errors.push('prompts is a lazy entry `() => import("…")`')
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
   if (manifest.nav !== undefined) errors.push(...navErrors(manifest.nav, vocabulary))
@@ -740,6 +749,48 @@ function renderRuntimes(host, modules) {
   ].join("\n")
 }
 
+/** The modules that contribute prompts, in module id order. */
+export function promptEntries(modules) {
+  return [...modules]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .filter(({ value }) => typeof value?.prompts?.$lazy === "string")
+    .map(({ id, file, value }) => ({
+      module: id,
+      stage: value.stage,
+      load: adapterImport(file, value.prompts.$lazy),
+    }))
+}
+
+/**
+ * The prompt catalog's registry: one lazy import per module's `prompts` file
+ * and nothing else, so the catalog (and the CLI, which bundles it) loads no
+ * manifest and no other feature code.
+ */
+function renderPrompts(modules) {
+  const rows = promptEntries(modules).map((entry) =>
+    [
+      "  {",
+      `    module: ${JSON.stringify(entry.module)},`,
+      `    stage: ${JSON.stringify(entry.stage)},`,
+      `    load: () => import(${JSON.stringify(entry.load)}),`,
+      "  },",
+    ].join("\n")
+  )
+  return [
+    `${HEADER("lib/<id>/module.ts")}`,
+    "//",
+    "// Every module's `prompts` contribution, read by the prompt catalog",
+    "// (`lib/prompts/catalog.ts`).",
+    "",
+    'import type { ModulePromptsEntry } from "@/lib/modules/manifest-types"',
+    "",
+    rows.length
+      ? `export const MODULE_PROMPTS: readonly ModulePromptsEntry[] = [\n${rows.join("\n")}\n]`
+      : "export const MODULE_PROMPTS: readonly ModulePromptsEntry[] = []",
+    "",
+  ].join("\n")
+}
+
 /**
  * The generated registries for a set of manifests, keyed by path. `host.ts`
  * and `ui.ts` hold the manifests themselves — data plus lazy entries — so
@@ -751,7 +802,8 @@ function renderRuntimes(host, modules) {
  * `{brain,desktop,mobile}.ts`, which is where a lazy import of one is written.
  *
  * `host` entries carry the manifest's `value` (as `readManifest` returns it)
- * for the runtime registries; without one a module contributes no runtime.
+ * for the runtime and prompt registries; without one a module contributes
+ * neither.
  */
 export function renderRegistries({ host, ui }) {
   return {
@@ -759,6 +811,7 @@ export function renderRegistries({ host, ui }) {
     ...Object.fromEntries(
       Object.entries(GENERATED_RUNTIMES).map(([name, file]) => [file, renderRuntimes(name, host)])
     ),
+    [GENERATED_PROMPTS]: renderPrompts(host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

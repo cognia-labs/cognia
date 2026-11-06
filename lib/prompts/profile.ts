@@ -13,7 +13,7 @@
 
 import { z } from "zod"
 import { listPromptOverrideBindings, getPromptOverrideRevisions } from "@/lib/db/prompt-overrides"
-import { getPromptDefinition } from "./catalog"
+import { getPromptDefinition, loadPromptCatalog } from "./catalog"
 import { publishPromptBody, readPromptSlot, shippedBodyDigest } from "./service"
 import { validatePromptBody, type PromptValidationIssue } from "./template"
 import type { PromptDefinitionV1, PromptScope, PromptTargetRef } from "./types"
@@ -160,6 +160,7 @@ export async function previewPromptProfileImport(
   profile: PromptProfileV1,
   targetMap: PromptImportTargetMap = {}
 ): Promise<PromptImportPreviewEntry[]> {
+  await loadPromptCatalog()
   const preview: PromptImportPreviewEntry[] = []
   for (const [index, entry] of profile.entries.entries()) {
     const def = getPromptDefinition(entry.promptId)
@@ -222,6 +223,7 @@ export async function applyPromptProfileImport(
   preview: readonly PromptImportPreviewEntry[],
   selected: ReadonlySet<number>
 ): Promise<PromptImportResult> {
+  await loadPromptCatalog()
   let applied = 0
   const conflicted: PromptImportPreviewEntry[] = []
   for (const item of preview) {

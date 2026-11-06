@@ -88,5 +88,7 @@ export default defineHostModule({
       load: () => import("./slash-command"),
     },
   ],
+  // Its persona, soul and sprite-hatch prompts, for the Prompt Center.
+  prompts: () => import("./prompts"),
   messages: "pet",
 })

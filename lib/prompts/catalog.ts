@@ -10,6 +10,12 @@
  * Imported by the Prompt Center and the CLI `prompts` command only, never on
  * a send path: consumers import their own definition directly. Slots that
  * enabled plugins register (`plugin-prompts.ts`) are merged into the lookups.
+ *
+ * A feature module's prompts are not imported here: its manifest contributes
+ * them (`prompts`, ADR-0250 §14 M3) and they arrive through the generated
+ * registry `lib/modules/generated/prompts.ts`, lazily. `loadPromptCatalog()`
+ * loads them; the lookups list them once it has resolved, so every entry
+ * point that reads the catalog awaits it first.
  */
 
 import { builtinAgents } from "@/lib/agent/builtin-catalog/catalog"
@@ -52,7 +58,6 @@ import {
   ISSUE_RELATIONS_PROMPT,
   ISSUE_TITLE_PROMPT,
 } from "@/lib/issues/ai-issue-assist"
-import { RADAR_SYSTEM_PROMPT } from "@/lib/radar/prompts"
 import { TERMINAL_COMPLETION_PROMPT } from "@/lib/terminal/completion/prompt"
 import { AI_SHELL_PLAN_PROMPT } from "@/lib/terminal/ai-shell/plan-generator"
 import { AI_SHELL_ERROR_ADVISOR_PROMPT } from "@/lib/terminal/ai-shell/error-advisor"
@@ -152,13 +157,10 @@ import {
   PLAN_APPROVED_EDITED_PROMPT,
   PLAN_APPROVED_PROMPT,
 } from "@/lib/agent/plan/approval-prompts"
-import { HATCH_PET_SPRITE_PROMPT } from "@/lib/pet/hatch-prompt"
 import {
   EPISODIC_DISTILL_REQUEST_PROMPT,
   EPISODIC_DISTILL_SYSTEM_PROMPT,
 } from "@/lib/memory/write/run-episodic-distill"
-import { PET_PROMPTS } from "@/lib/pet/llm/persona"
-import { PET_SOUL_REQUEST_PROMPT, PET_SOUL_SYSTEM_PROMPT } from "@/lib/pet/soul/generate-soul"
 import {
   REPLY_COPILOT_DRAFT_PROMPT,
   REPLY_COPILOT_DRAFT_REQUEST_PROMPT,
@@ -203,6 +205,8 @@ import {
 } from "@/lib/memory/write/run-memory-extraction"
 import { MEMORY_PROJECT_EXTRACT_PROMPT } from "@/lib/memory/write/run-project-mining"
 import { STANDALONE_SEARCH_ANSWER_PROMPT } from "@/lib/search/standalone-answer-prompt"
+import { MODULE_PROMPTS } from "@/lib/modules/generated/prompts"
+import type { ModulePromptsEntry } from "@/lib/modules/manifest-types"
 import { getPluginPromptEntry, listPluginPromptEntries } from "./plugin-prompts"
 import type { PromptDefinitionV1 } from "./types"
 
@@ -220,9 +224,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   SELECTION_TRANSLATE_PROMPT,
   SESSION_PEER_FRAME_PROMPT,
   A2UI_PROTOCOL_PROMPT,
-  ...Object.values(PET_PROMPTS),
-  PET_SOUL_SYSTEM_PROMPT,
-  PET_SOUL_REQUEST_PROMPT,
   REPLY_COPILOT_DRAFT_PROMPT,
   REPLY_COPILOT_UNATTRIBUTED_NOTE_PROMPT,
   REPLY_COPILOT_DRAFT_REQUEST_PROMPT,
@@ -271,7 +272,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   A2UI_CREATE_APP_PROMPT,
   A2UI_EDIT_APP_PROMPT,
   EXECUTION_ENHANCE_PROMPT,
-  HATCH_PET_SPRITE_PROMPT,
   // completion
   GHOST_TEXT_PROMPT,
   STARTER_SUGGESTIONS_PROMPT,
@@ -298,7 +298,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   ...Object.values(TWIN_SYSTEM_TEMPLATE_PROMPTS),
   // knowledge
   WIKI_SYSTEM_VOICE_PROMPT,
-  RADAR_SYSTEM_PROMPT,
   EPISODIC_DISTILL_SYSTEM_PROMPT,
   EPISODIC_DISTILL_REQUEST_PROMPT,
   MEMORY_EXTRACT_PROMPT,
@@ -386,15 +385,88 @@ for (const def of PROMPT_DEFINITIONS) {
   BY_ID.set(def.id, def)
 }
 
-/** A shipped definition, or the slot an enabled plugin registered under `plugin:<id>/…`. */
-export function getPromptDefinition(id: string): PromptDefinitionV1 | undefined {
-  return BY_ID.get(id) ?? getPluginPromptEntry(id)?.def
+/** Each module's contributed definitions, once its `prompts` file has loaded. */
+const MODULE_DEFINITIONS = new Map<string, readonly PromptDefinitionV1[]>()
+const MODULE_BY_ID = new Map<string, PromptDefinitionV1>()
+const moduleLoads = new Map<string, Promise<void>>()
+
+/** A module whose prompts did not join the catalog, and why. */
+export interface PromptCatalogFailure {
+  module: string
+  error: unknown
 }
 
-/** Shipped definitions, then those of the plugins enabled right now. */
+async function loadModulePrompts(entry: ModulePromptsEntry): Promise<void> {
+  const { prompts } = await entry.load()
+  const ids = new Set<string>()
+  for (const def of prompts) {
+    const taken = BY_ID.has(def.id) || MODULE_BY_ID.has(def.id) || ids.has(def.id)
+    if (taken) throw new Error(`duplicate prompt definition id: ${def.id}`)
+    ids.add(def.id)
+  }
+  MODULE_DEFINITIONS.set(entry.module, prompts)
+  for (const def of prompts) MODULE_BY_ID.set(def.id, def)
+}
+
+/**
+ * Load the prompts every active module contributes (an `experimental` one
+ * contributes none), in module id order. A module already loaded is not
+ * loaded again, and concurrent calls share one load. A module whose file does
+ * not load, or that repeats a taken id, is reported (and warned about) and
+ * contributes nothing; the others still join, and the next call retries it.
+ */
+export async function loadPromptCatalog(
+  entries: readonly ModulePromptsEntry[] = MODULE_PROMPTS
+): Promise<{ failures: PromptCatalogFailure[] }> {
+  const active = entries.filter((entry) => entry.stage !== "experimental")
+  const settled = await Promise.allSettled(
+    active.map((entry) => {
+      if (MODULE_DEFINITIONS.has(entry.module)) return Promise.resolve()
+      let load = moduleLoads.get(entry.module)
+      if (!load) {
+        load = loadModulePrompts(entry).finally(() => moduleLoads.delete(entry.module))
+        moduleLoads.set(entry.module, load)
+      }
+      return load
+    })
+  )
+  const failures: PromptCatalogFailure[] = []
+  settled.forEach((outcome, index) => {
+    if (outcome.status === "fulfilled") return
+    const failure = { module: active[index].module, error: outcome.reason }
+    console.warn(`prompt catalog: module "${failure.module}" contributed no prompts`, failure.error)
+    failures.push(failure)
+  })
+  return { failures }
+}
+
+/** Test helper: forget every module's contributed prompts. */
+export function __resetModulePromptsForTests(): void {
+  MODULE_DEFINITIONS.clear()
+  MODULE_BY_ID.clear()
+  moduleLoads.clear()
+}
+
+/** Module definitions loaded so far, in module id order. */
+function moduleDefinitions(): PromptDefinitionV1[] {
+  return [...MODULE_DEFINITIONS.keys()]
+    .sort((a, b) => a.localeCompare(b))
+    .flatMap((module) => MODULE_DEFINITIONS.get(module) ?? [])
+}
+
+/**
+ * A shipped definition, one a module contributed (once `loadPromptCatalog()`
+ * has loaded it), or the slot an enabled plugin registered under `plugin:<id>/…`.
+ */
+export function getPromptDefinition(id: string): PromptDefinitionV1 | undefined {
+  return BY_ID.get(id) ?? MODULE_BY_ID.get(id) ?? getPluginPromptEntry(id)?.def
+}
+
+/** Shipped definitions, those modules contributed, then those of the plugins enabled right now. */
 export function listPromptDefinitions(): readonly PromptDefinitionV1[] {
+  const modules = moduleDefinitions()
   const plugin = listPluginPromptEntries()
-  return plugin.length === 0
+  return modules.length === 0 && plugin.length === 0
     ? PROMPT_DEFINITIONS
-    : [...PROMPT_DEFINITIONS, ...plugin.map((entry) => entry.def)]
+    : [...PROMPT_DEFINITIONS, ...modules, ...plugin.map((entry) => entry.def)]
 }

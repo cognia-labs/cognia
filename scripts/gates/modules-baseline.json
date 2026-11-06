@@ -894,8 +894,6 @@
     "lib/prompts/catalog.ts -> issues",
     "lib/prompts/catalog.ts -> loop",
     "lib/prompts/catalog.ts -> memory",
-    "lib/prompts/catalog.ts -> pet",
-    "lib/prompts/catalog.ts -> radar",
     "lib/prompts/catalog.ts -> reply-copilot",
     "lib/prompts/catalog.ts -> skill-recorder",
     "lib/prompts/catalog.ts -> slash-commands",

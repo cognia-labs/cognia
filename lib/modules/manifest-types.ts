@@ -34,7 +34,8 @@
  * `nav`, `runtimes`, `slots` and `effects` (M2) are generated
  * (`scripts/build/gen-module-registry.mjs`) and read by their shells and hosts;
  * `provides` and `requires` (M3) are read by `lib/modules/ports.ts` from the
- * host registry. Every other field is shape-checked by the gate and read by
+ * host registry, and `prompts` (M3) by the prompt catalog from its own
+ * generated registry. Every other field is shape-checked by the gate and read by
  * nothing yet.
  */
 
@@ -45,6 +46,7 @@ import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/bu
 import type { BootCapability } from "@/lib/boot/capabilities"
 import type { HeadlessHost, HeadlessRuntime } from "@/lib/headless/types"
 import type { GlobalSearchProvider } from "@/lib/global-search/types"
+import type { PromptDefinitionV1 } from "@/lib/prompts/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type {
   CanonicalExtensionPoint,
@@ -161,6 +163,23 @@ export interface RendererRuntimeEntry extends ModuleRuntimeEntryBase {
   load: LazyModule<RendererRuntimeAdapter>
 }
 
+/**
+ * What a module's `prompts` entry resolves to: the module's code-owned prompt
+ * definitions (ADR-0236), which the prompt catalog lists beside the kernel's.
+ * Each definition still lives with its consumer; this file only lists them.
+ */
+export interface ModulePromptsModule {
+  prompts: readonly PromptDefinitionV1[]
+}
+
+/** One module's prompts as `lib/modules/generated/prompts.ts` lists them. */
+export interface ModulePromptsEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  load: LazyModule<ModulePromptsModule>
+}
+
 /** What a port provision's `load` resolves to: the implementation, as `port`. */
 export interface ModulePortModule {
   port: unknown
@@ -269,7 +288,8 @@ export interface HostModuleManifest {
   slashCommands?: readonly ModuleSlashCommand[]
   /** Navigation catalog destinations, placed among the built-ins by `after`. */
   nav?: readonly ModuleNavEntry[]
-  prompts?: LazyModule
+  /** Code-owned prompt definitions the Prompt Center lists (ADR-0236). */
+  prompts?: LazyModule<ModulePromptsModule>
   flags?: Readonly<Record<string, ModuleFlag>>
   /** i18n namespace under `i18n/messages/<locale>/`. */
   messages?: string
