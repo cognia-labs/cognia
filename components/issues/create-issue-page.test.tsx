@@ -276,10 +276,33 @@ describe("CreateIssuePage", () => {
     await user.click(screen.getByTestId("create-issue-submit"))
     await waitFor(() => expect(props.onSharedQueued).toHaveBeenCalledWith("op_1"))
     expect(mockEnqueueCollabMutation).toHaveBeenCalledWith(
-      expect.objectContaining({ command: "collab_issue_create", orgId: "org-1" })
+      expect.objectContaining({
+        command: "collab_issue_create",
+        orgId: "org-1",
+        payload: expect.objectContaining({ priority: "none" }),
+      })
     )
     expect(props.onCreated).not.toHaveBeenCalled()
     expect(mockCreateIssue).not.toHaveBeenCalled()
+  })
+
+  it("carries the chosen priority onto a shared create instead of dropping it", async () => {
+    mockGetCollabWorkspace.mockResolvedValue({ orgId: "org-1" })
+    const user = userEvent.setup()
+    const props = renderPage({ onSharedQueued: jest.fn() })
+    await user.click(await screen.findByTestId("create-issue-destination"))
+    await user.click(await screen.findByRole("option", { name: "create.destinationShared" }))
+    await user.click(screen.getByTestId("create-field-priority"))
+    await user.click(await screen.findByRole("option", { name: "priority.high" }))
+    await user.type(screen.getByTestId("create-issue-title"), "Shared work")
+    await user.click(screen.getByTestId("create-issue-submit"))
+    await waitFor(() => expect(props.onSharedQueued).toHaveBeenCalledWith("op_1"))
+    expect(mockEnqueueCollabMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "collab_issue_create",
+        payload: expect.objectContaining({ title: "Shared work", priority: "high" }),
+      })
+    )
   })
 
   describe("a shared create names its assignee on the plane (ADR-0149 §10)", () => {

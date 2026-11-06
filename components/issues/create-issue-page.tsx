@@ -324,6 +324,9 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
             ...(form.description.trim() ? { body: form.description.trim() } : {}),
             ...(assignee ? { assignee } : {}),
             status: form.status,
+            // The sidebar shows priority on both destinations, so the shared
+            // create must carry it; the server's create body accepts it.
+            priority: form.priority,
           },
           label: form.title,
         })
