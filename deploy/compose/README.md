@@ -623,6 +623,40 @@ audited), stops their brain and closes their devices' sockets; their partition
 data is kept. Whether or not the stream is up, the Host re-checks everyone it
 is running something for every 30 seconds.
 
+### Shared-chat metrics
+
+`GET /internal/shared-chat-metrics` is an operator endpoint. It returns six
+counters, counted by this collaboration server process since it started:
+
+| Field                 | Counts                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------- |
+| `authorizationDenied` | shared-chat requests the feature policy refused                                                         |
+| `eventAppendFailed`   | transcript events that failed to append                                                                 |
+| `streamConnections`   | event streams opened                                                                                    |
+| `leaseConflicts`      | run lease claims that lost to another claimant                                                          |
+| `approvalExpired`     | approval answers that arrived after the approval expired                                                |
+| `attachmentFailed`    | uploads not matching their declared size or hash, and attachment bytes that could not be stored or read |
+
+The counters name no organization, workspace, person or session. They reset
+when the process restarts, and each replica counts only its own traffic.
+
+The endpoint takes the internal service credential, the same bearer the Hosts
+use:
+
+```sh
+curl -H "Authorization: Bearer $COLLAB_SERVICE_CREDENTIAL" \
+  https://cognia.example/collab/internal/shared-chat-metrics
+```
+
+Caddy strips `/collab`, so inside the Compose network the path is
+`http://collab-server:8080/internal/shared-chat-metrics`. A request without a
+credential, or with one whose SHA-256 is not in
+`COLLAB_INTERNAL_SERVICE_CREDENTIAL_SHA256`, gets `401`. The counters cover the
+whole deployment. So when `COLLAB_INTERNAL_SERVICE_CREDENTIAL_SCOPES` is set,
+only a credential scoped to `"*"` may read them; a credential scoped to named
+organizations gets `403 credential_scope`. Give a Host an organization-scoped
+credential and keep a separate `"*"` credential for monitoring.
+
 ## Multi-tenant Host
 
 Set `COGNIA_DEPLOYMENT_MODE=multi-tenant`. Before serving, the Host requires a

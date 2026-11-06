@@ -5,7 +5,7 @@ description: "On a multi-tenant Host a member's brain, turns, sandboxed runs, so
 
 # ADR 0253 — A member's standing reaches the Host, and every partition effect answers to it
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-06); implemented through plan §9c WP1–WP7
 **Date:** 2026-11-05
 
 **Related:**
@@ -168,3 +168,20 @@ A frame is still never over 200 KiB. When even the patch is too large, the reply
 ## Dormancy
 
 None of this ADR is dormant. `resumeAfterRestart` defaults to off. That is a setting, not dormant code: both branches are live and tested.
+
+## Implementation status
+
+Every gap (G01–G25), duplication (D01–D12), deletion (X01–X08) and old-Host fallback (O01–O07) in plan §9c is closed. Each package landed with crate tests and co-located Jest suites; the plan's §11 records an audit of every acceptance criterion against them.
+
+| Package | Commits | Sections |
+| --- | --- | --- |
+| Decision | b1eb5ef0b5 | this ADR, plan §9c |
+| WP1 security | c35a325bb8 | 1 (shared deployment-mode parser), 5, 6 |
+| WP2 correctness | 8a3f22cbad, cdc10f6dfa, f2874b3d15, 67b02e4245, 215a6ede90, 0008397627, b25bde6e8e (G14 earlier in a489bf56dc) | 8, 9, 10, 11 |
+| WP3 standing | 9765a9c6d1 (collaboration server), 45929773f5 (Host) | 1, 2, 3, 4 |
+| WP4 restart | 781e5467ba | 7 |
+| WP5 attachments | 08f2f98c69 | 9 |
+| WP6 convergence and cleanup | aaa3dd741b | 1 (role helpers), plan §9c.2–§9c.4 |
+| WP7 documents | this revision | glossary in `CONTEXT.md`, acceptance audit, deploy docs |
+
+Not yet run: the two-person rig against a real model for WP1, WP3, WP4, WP5 and WP6 (restart-and-claim, interrupted purge, departure and suspension mid-turn, Host kill with resumption off and on, an image attachment), and a member browser check. Until then the behaviour is proven by crate tests with fake streams and fake brains, and by Jest.

@@ -55,6 +55,44 @@ automation / data / about). Some sub-pages embed the shared desktop section comp
   tests. BYOK provider keys on mobile are device-local (`/me/providers`), never
   synced, never remotely writable.
 
+### Multi-user Host _(ADR-0149, ADR-0253)_
+
+**Host**:
+The process that runs chats, agents and sync for the devices paired with it: the desktop app or a headless `cognia-server`. In multi-tenant mode (`COGNIA_DEPLOYMENT_MODE`) one Host serves several members, each in their own partition.
+_Avoid_: server (for the Host; the collaboration server is a separate service), desktop (when any Host is meant)
+
+**Person**:
+A human being: a `User` with a `usr_` id. A person has many devices and may belong to several organizations.
+_Avoid_: account (ADR-0149 froze its four meanings), user (for a device or a local profile), device (for the person behind it)
+
+**Member**:
+A person who holds a role in an organization (owner, admin or member) or in a workspace (maintainer, member or viewer). On a multi-tenant Host, a member is a person whose devices reach the Host through their partition, not as the operator. "Member" is also the lowest organization role; say "org member role" when the role is meant.
+_Avoid_: tenant (for the person), guest (for someone with only a session or workspace role and no organization membership)
+
+**Standing**:
+What the collaboration server says a person currently is in an organization: a member with a role, not a member, in a suspended organization, or unresolved (the server could not be asked). A Host learns it from one authority, cached or fresh, and from the standing-change stream; every partition effect answers to it.
+_Avoid_: permission (standing is the input; actions are derived from it)
+
+**Partition**:
+Everything a multi-tenant Host keeps for one person: a data root encrypted under that person's key, a brain process, a personal sandbox workspace, usage ledger rows and the sessions that person owns. A purge removes all of it.
+_Avoid_: tenant (for the partition), account (for its data root)
+
+**Principal**:
+Who an authenticated request acts as. On a Host: a paired device, which acts for the person it is bound to (ES256 + DPoP); a person brain, which acts for one partition (a `person-brain` token); or the service plane (the internal service credential). Each check names the principals it accepts; a person brain never passes a check that accepts the service.
+_Avoid_: user (for the principal), "the principal is the device" (a device acts for its person)
+
+**Tenant**:
+The unit a deployment isolates and accounts for: an organization. A multi-tenant Host is one where several members, possibly of several organizations, share the Host; a tenant principal is any principal that is not the operator.
+_Avoid_: tenant (for a person or a partition), `tnt_` (the legacy Logto id; organizations are `org_`)
+
+**Grant**:
+A permission held by a named holder. A device grant (control, agent control, terminal, SSH files) is given by the Host owner to one paired device. A collaboration grant is a short-lived HMAC-signed bearer that the collaboration server mints and verifies itself; for a few minutes it proves which person, with which role, the bearer is in one organization. Org and workspace actions (`execution.request`, `host.global-surfaces`) are derived from roles and never stored. On a client, an absent grant list means unknown and an empty one means the device holds none.
+_Avoid_: role (roles are ladders; actions and grants come from them)
+
+**Operator**:
+Whoever runs the deployment. The operator installs and configures the Host and the collaboration server, sets rollout policy, sets organization credentials, suspends organizations and purges persons. The operator acts through operator subcommands (`cognia-server persons`, `org-credentials`, `devices`; `cognia-collab-server rollout`, `org`), the operator database role or the service plane, never through an organization role or a browser. On a single-user Host, the Host owner is the operator.
+_Avoid_: admin and owner (organization roles), user (for the operator)
+
 ## Decisions
 
 - **D1 — Parity target: both modes equal, standalone (BYOK) is the main line.**

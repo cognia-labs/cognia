@@ -82,6 +82,12 @@ validates expiry and writes a metadata-only `session.breakGlassRead` audit with 
 4. Stop rollout on any cross-tenant allow, stale access after removal, event gap that cannot recover, or duplicate tool execution.
 5. Roll back by disabling either flag. Do not down-migrate or delete shared data.
 
+During a canary, watch `GET /internal/shared-chat-metrics` on the collaboration server. It returns six
+per-process counters (refused requests, failed event appends, streams opened, lease conflicts, expired
+approvals, failed attachments) and names no organization or person. It takes the internal service
+credential; when credential scopes are configured, only a credential scoped to `"*"` may read it. The
+Compose guide (`deploy/compose/README.md`, "Shared-chat metrics") lists the fields and the call.
+
 The collaboration service must never log bodies, tokens, emails, prompts, tool input, or attachment URLs.
 Operational dimensions are limited to action/event/risk/stage/reason classes. Private local chat remains
 available during service outage or rollback.
