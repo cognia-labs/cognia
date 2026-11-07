@@ -1,4 +1,5 @@
 import type { ChatSession } from "@cognia/agent-config-types"
+import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import {
   MAX_PROPOSED_THREADS,
   PROJECT_COORDINATOR_TOOL_NAMES as T,
@@ -7,8 +8,10 @@ import {
   buildProjectThreadManifestEntries,
   isProjectCoordinatorBuiltinTool,
   runProjectCoordinatorBuiltinTool,
+  toolFamily,
+  __setProjectCoordinatorToolDepsForTesting,
   type ProjectCoordinatorToolDeps,
-} from "./project-coordinator-builtin-tools"
+} from "./agent-tools"
 
 const brief = {
   title: "Fix login",
@@ -310,5 +313,67 @@ describe("report_to_coordinator", () => {
     await expect(
       run(PROJECT_THREAD_TOOL_NAMES.reportToCoordinator, { state: "landing" }, d, "coord")
     ).resolves.toMatchObject({ ok: false })
+  })
+})
+
+describe("toolFamily", () => {
+  const on = { coordinator: { enabled: true } } as ToolSurfaceContext["activeProject"]
+  const surfaceFor = (
+    session: Partial<ChatSession> | null,
+    activeProject: ToolSurfaceContext["activeProject"] = on
+  ) =>
+    Promise.resolve(
+      toolFamily.surface({
+        session: session as ChatSession | null,
+        agent: null,
+        settings: null,
+        activeGoal: null,
+        prompts: { snapshot: null, context: {} },
+        host: "desktop",
+        activeProject,
+      })
+    )
+
+  it("offers a coordinator its tools and protocol", async () => {
+    const surface = await surfaceFor({ id: "c", projectRole: "coordinator" })
+    expect(surface?.tools.map((t) => t.name).sort()).toEqual(Object.values(T).sort())
+    expect(surface?.instructions).toContain("## Project coordinator")
+  })
+
+  it("offers a thread only its report tool and protocol", async () => {
+    const surface = await surfaceFor({ id: "t", projectRole: "thread" })
+    expect(surface?.tools.map((t) => t.name)).toEqual([
+      PROJECT_THREAD_TOOL_NAMES.reportToCoordinator,
+    ])
+    expect(surface?.instructions).toContain("## Project thread")
+    expect(surface?.instructions).not.toContain("## Project coordinator")
+  })
+
+  it("offers nothing without a role, a session, a project or coordination switched on", async () => {
+    await expect(surfaceFor({ id: "s" })).resolves.toBeNull()
+    await expect(surfaceFor(null)).resolves.toBeNull()
+    await expect(surfaceFor({ id: "c", projectRole: "coordinator" }, null)).resolves.toBeNull()
+    await expect(
+      surfaceFor({ id: "c", projectRole: "coordinator" }, {
+        coordinator: { enabled: false },
+      } as ToolSurfaceContext["activeProject"])
+    ).resolves.toBeNull()
+  })
+
+  it("runs a call against the calling session with the injected deps", async () => {
+    __setProjectCoordinatorToolDepsForTesting(() => deps())
+    const call: ToolCallContext = {
+      sessionId: "t1",
+      toolUseId: "u1",
+      executionRunId: "run-1",
+      outboundAuthorization: { kind: "tool-call", sessionId: "t1", toolUseId: "u1" },
+    }
+    try {
+      await expect(
+        toolFamily.run(PROJECT_THREAD_TOOL_NAMES.reportToCoordinator, { state: "blocked" }, call)
+      ).resolves.toEqual({ ok: true, state: "blocked" })
+    } finally {
+      __setProjectCoordinatorToolDepsForTesting(null)
+    }
   })
 })

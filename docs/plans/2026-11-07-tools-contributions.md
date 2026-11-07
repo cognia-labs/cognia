@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0、T1 已实施（2026-11-07），T2 待做。评审结论见 §6，实施记录见 §7、§8。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1、T2 已实施（2026-11-07）。评审结论见 §6，实施记录见 §7、§8、§9。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -217,3 +217,13 @@ interface ToolSurface {
 - 删除：`lib/claude/permissions/filespace-tool-rules.ts`（及测试）、`build-options` 的同意档和条目两段、`plugin-tool-ipc` 的分支、`HOST_TOOL_CLASSES` / `RISK_EXTERNAL_SEND_TOOL_IDS` / 探针拒绝名单里的手写 filespace 名字。保留：sidecar 的逐次名单（门禁要求）、外发目标抽取 `PUBLIC_TOOL_IDS`。
 - 还清方向边 4 条：`build-options -> filespace`、`plugin-tool-ipc -> filespace`、`filespace-builtin-tools -> filespace`、`-> share`。
 - 行为对照：`build-options` 现有的 filespace 用例（同意档、条目、`requiresApproval`、无会话不提供）全部改走模块后通过；条目在 `pluginTools` 里的位置从 acceptance 之后移到协调者块之前（已有的顺序断言里两者之间没有别的工具，结果不变）。
+
+## 9. T2 实施记录（2026-11-07）
+
+- `project-coordinator` 成为 manifest 模块（`lib/project-coordinator/module.ts`），归属表的行删除。`dependsOn`：chat、data、fleet、git、github、issues、memory、settings-store、squads、stack、tasks、usage。`api` 列出其他模块要用的 10 个文件（暂停横幅、线程行、`use-project-threads`、建议线程卡的启动动作、工作区概览的入口 / 看板 / 用量面板 / config、聊天控制器读的 project-access、结果卡读的 agent-tools）。反方向，chat、issues、usage、memory、tasks、fleet、stack 的行补了协调者要用的 `api` 文件；三处对 `hooks/data` 桶文件的导入改为具体文件。
+- 工具族：`lib/claude/project-coordinator-builtin-tools.ts` → `lib/project-coordinator/agent-tools.ts`，导出 `toolFamily`。`surface`：没有会话、没有项目、会话没有角色或协调未开启时返回 `null`；线程得到 `report_to_coordinator` + `PROJECT_THREAD_PROTOCOL`，协调者得到十个协调工具 + `PROJECT_COORDINATOR_PROTOCOL`。条目不再带 `pluginId`（线上仍是 `cognia-project-coordinator-builtin`）。宿主依赖的测试接缝从 `plugin-tool-ipc` 移到 `agent-tools`。
+- 声明：list_threads、read_thread_report `allow`/`read`；set_project_preference `ask`/`write`；其余八个 `allow`/`write`；十一个都 `cancellable: false`。与旧同意档和旧探针拒绝名单一致。
+- `send-extras.ts` 只剩协调者每轮的项目状态段（含一次性的设置建议），入口改名 `resolveCoordinatorTurnSection`；`build-options` 只把它放进动态尾部。目标段不动。
+- 删除：`lib/claude/permissions/project-coordinator-tool-rules.ts`（及测试）、`build-options` 的同意档参数和工具 / 协议拼接、`plugin-tool-ipc` 的分支和接缝、探针拒绝名单与实时语音不可取消名单里的手写协调者名字（现在由声明派生）。
+- 还清方向边 3 条：`plugin-tool-ipc -> project-coordinator`、`project-coordinator-builtin-tools -> project-coordinator`、`-> tasks`。`build-options -> project-coordinator` 保留到上下文贡献。
+- 行为对照：`build-options` 现有的协调者用例（工具、协议段、目标段、项目状态、线程只拿汇报工具、协调关闭不提供）改走模块后全部通过。有一处细微差别：旧代码里项目状态段读取失败会连同工具和协议段一起丢掉，现在工具和协议段不受状态段失败影响。旧同意档在有角色时给全部十一个工具写规则，现在只给本次提供的工具写。

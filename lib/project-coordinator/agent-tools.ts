@@ -7,26 +7,34 @@ import {
   SPAWN_TASK_JSON_SCHEMA,
   type SpawnedTaskBrief,
 } from "@/lib/tasks/spawn-task-core"
-import type { ThreadRefusal } from "@/lib/project-coordinator/admission"
-import type { CreateThreadInput } from "@/lib/project-coordinator/thread-session"
-import type { StartThreadResult } from "@/lib/project-coordinator/thread-runtime"
-import type { ParsedPreference } from "@/lib/project-coordinator/preferences"
-import { PROJECT_PREFERENCE_KEYS } from "@/lib/project-coordinator/preferences"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
+import type { ThreadRefusal } from "./admission"
+import { projectRoleToolsApply } from "./config"
+import type { CreateThreadInput } from "./thread-session"
+import type { StartThreadResult } from "./thread-runtime"
+import type { ParsedPreference } from "./preferences"
+import { PROJECT_PREFERENCE_KEYS } from "./preferences"
+import { PROJECT_COORDINATOR_PROTOCOL, PROJECT_THREAD_PROTOCOL } from "./protocol"
 
 /**
- * Builtin tools for project coordination (ADR-0204). Same family shape as the
- * session-peer / team tools: a name map, manifest entries with hand-written
- * JSON Schema, a predicate, and a runner that never throws. Every host effect
- * goes through {@link ProjectCoordinatorToolDeps}, wired in
- * `lib/project-coordinator/tool-deps.ts`.
+ * The project coordination agent tools (ADR-0204), contributed through the
+ * module manifest (ADR-0250 §14): a name map, manifest entries with
+ * hand-written JSON Schema, and a runner that never throws. The manifest
+ * declares each tool's consent and effect; {@link toolFamily} decides what a
+ * run is offered and runs a call. Every host effect goes through
+ * {@link ProjectCoordinatorToolDeps}, wired in `./tool-deps.ts`.
  *
- * The coordinator family is gated on `projectRole === "coordinator"`, the
- * thread family on `projectRole === "thread"` (see `resolveSendOptions`); the
+ * A coordinator of an enabled project is offered the coordinator tools and
+ * {@link PROJECT_COORDINATOR_PROTOCOL}; a thread is offered
+ * `report_to_coordinator` and {@link PROJECT_THREAD_PROTOCOL}. The per-turn
+ * project status stays with `resolveSendOptions` (`./send-extras.ts`). The
  * runner re-checks the caller's role, so a tool reaching the wrong session is
  * refused rather than trusted.
  */
-
-export const PROJECT_COORDINATOR_BUILTIN_PLUGIN_ID = "cognia-project-coordinator-builtin"
 
 export const PROJECT_COORDINATOR_TOOL_NAMES = {
   spawnThread: "spawn_thread",
@@ -53,13 +61,6 @@ const MESSAGE_MAX_CHARS = 20_000
 const NOTE_MAX_CHARS = 2_000
 const FULL_REPORT_MESSAGES = 3
 
-export interface ProjectCoordinatorManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-}
-
 const briefProperties = (() => {
   const { mode: _mode, ...rest } = SPAWN_TASK_JSON_SCHEMA.properties as Record<string, unknown>
   return rest
@@ -77,11 +78,11 @@ function entry(
   name: string,
   description: string,
   jsonSchema: Record<string, unknown>
-): ProjectCoordinatorManifestEntry {
-  return { name, description, jsonSchema, pluginId: PROJECT_COORDINATOR_BUILTIN_PLUGIN_ID }
+): ModuleToolEntry {
+  return { name, description, jsonSchema }
 }
 
-export function buildProjectCoordinatorManifestEntries(): ProjectCoordinatorManifestEntry[] {
+export function buildProjectCoordinatorManifestEntries(): ModuleToolEntry[] {
   const T = PROJECT_COORDINATOR_TOOL_NAMES
   return [
     entry(
@@ -191,7 +192,7 @@ export function buildProjectCoordinatorManifestEntries(): ProjectCoordinatorMani
   ]
 }
 
-export function buildProjectThreadManifestEntries(): ProjectCoordinatorManifestEntry[] {
+export function buildProjectThreadManifestEntries(): ModuleToolEntry[] {
   return [
     entry(
       PROJECT_THREAD_TOOL_NAMES.reportToCoordinator,
@@ -495,4 +496,39 @@ async function runCoordinatorTool(
     default:
       return fail(`unknown project tool: ${name}`)
   }
+}
+
+let depsOverride: (() => ProjectCoordinatorToolDeps) | null = null
+
+/** Inject the host dependencies (tests). Pass `null` to restore the default. */
+export function __setProjectCoordinatorToolDepsForTesting(
+  fn: (() => ProjectCoordinatorToolDeps) | null
+): void {
+  depsOverride = fn
+}
+
+async function resolveDeps(): Promise<ProjectCoordinatorToolDeps> {
+  if (depsOverride) return depsOverride()
+  const { resolveProjectCoordinatorToolDeps } = await import("./tool-deps")
+  return resolveProjectCoordinatorToolDeps()
+}
+
+/** What a coordinator or thread run is offered, and the call runner. */
+export const toolFamily: ModuleToolFamily = {
+  surface(ctx: ToolSurfaceContext) {
+    const { session, activeProject } = ctx
+    if (!session || !activeProject || !projectRoleToolsApply(session, activeProject)) return null
+    if (session.projectRole === "thread") {
+      return { tools: buildProjectThreadManifestEntries(), instructions: PROJECT_THREAD_PROTOCOL }
+    }
+    return {
+      tools: buildProjectCoordinatorManifestEntries(),
+      instructions: PROJECT_COORDINATOR_PROTOCOL,
+    }
+  },
+  async run(name, args, call) {
+    return runProjectCoordinatorBuiltinTool(name, args, await resolveDeps(), {
+      sessionId: call.sessionId,
+    })
+  },
 }

@@ -6,7 +6,7 @@ import type { SessionUsageRow } from "@/lib/db/session-usage"
 const liveResult: { value: unknown } = { value: undefined }
 const queries: Array<() => Promise<unknown>> = []
 
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (query: () => Promise<unknown>) => {
     queries.push(query)
     return liveResult.value

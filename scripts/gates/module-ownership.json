@@ -147,7 +147,13 @@
       "class": "kernel",
       "api": [
         "components/chat/markdown-renderer.tsx",
+        "components/chat/session-run-indicator.tsx",
+        "hooks/chat/chat-control-bridge.ts",
+        "hooks/chat/chat-send-bridge.ts",
+        "hooks/chat/claude-chat-turn-tasks.ts",
+        "hooks/chat/steer-runtime.ts",
         "hooks/chat/use-effective-cwd.ts",
+        "hooks/chat/use-session-run-status-map.ts",
         "hooks/chat/use-sessions.ts"
       ]
     },
@@ -319,6 +325,7 @@
       "class": "module",
       "api": [
         "hooks/fleet/use-fleet-snapshot.ts",
+        "lib/fleet/format.ts",
         "lib/fleet/managed-session-projection.ts",
         "lib/fleet/types.ts"
       ]
@@ -419,7 +426,11 @@
     },
     "issues": {
       "class": "module",
-      "api": ["lib/issues/hrefs.ts", "lib/issues/service.ts"]
+      "api": [
+        "lib/issues/hrefs.ts",
+        "lib/issues/run/agent-task-adapter.ts",
+        "lib/issues/service.ts"
+      ]
     },
     "jobs": {
       "class": "module"
@@ -481,7 +492,8 @@
       "api": [
         "lib/memory/retrieve/retriever.ts",
         "lib/memory/runtime/apply-memory-context.ts",
-        "lib/memory/runtime/build-deps.ts"
+        "lib/memory/runtime/build-deps.ts",
+        "lib/memory/write/remember-fact.ts"
       ]
     },
     "mobile": {
@@ -578,9 +590,6 @@
     },
     "project": {
       "class": "kernel"
-    },
-    "project-coordinator": {
-      "class": "module"
     },
     "project-environment": {
       "class": "kernel"
@@ -767,6 +776,7 @@
     "stack": {
       "class": "module",
       "api": [
+        "lib/stack/forge/github.ts",
         "lib/stack/forge/remote.ts",
         "lib/stack/model.ts",
         "lib/stack/team-policy.ts",
@@ -811,7 +821,8 @@
       "class": "kernel"
     },
     "tasks": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/tasks/spawn-task-core.ts"]
     },
     "tauri": {
       "class": "foundation"
@@ -890,7 +901,11 @@
     },
     "usage": {
       "class": "kernel",
-      "api": ["components/usage/run-estimate-hint.tsx"]
+      "api": [
+        "components/usage/run-estimate-hint.tsx",
+        "components/usage/usage-budget-meters.tsx",
+        "components/usage/usage-heatmap.tsx"
+      ]
     },
     "usage-dock": {
       "class": "module"

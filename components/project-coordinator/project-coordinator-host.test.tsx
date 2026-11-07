@@ -6,7 +6,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { Project } from "@/types"
 
 let threads: Array<[string, ChatSession[]]> = []
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => threads }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => threads }))
 jest.mock("@/lib/project-coordinator/thread-runtime", () => ({
   listProjectThreads: jest.fn(),
   resolveThread: jest.fn(async () => true),

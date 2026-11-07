@@ -1,5 +1,5 @@
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
-import type { ProjectCoordinatorToolDeps } from "@/lib/claude/project-coordinator-builtin-tools"
+import type { ProjectCoordinatorToolDeps } from "./agent-tools"
 import { getSession, updateSession } from "@/lib/db/sessions"
 import { listMessages } from "@/lib/db/messages"
 import { rememberFact } from "@/lib/memory/write/remember-fact"

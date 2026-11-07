@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import type { ChatSession } from "@cognia/agent-config-types"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { listLocalUsageForProjectSince, type SessionUsageRow } from "@/lib/db/session-usage"
 import { getSessionsByIds } from "@/lib/db/sessions"
 import {

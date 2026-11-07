@@ -8,6 +8,7 @@ import { MODULE_TOOLS } from "@/lib/modules/generated/tools"
 import type { ModuleToolsEntry } from "@/lib/modules/manifest-types"
 import { __resetContributedToolsForTests } from "./tool-contributions"
 import { __setFilespaceToolDepsForTesting } from "@/lib/filespace/agent-tools"
+import { __setProjectCoordinatorToolDepsForTesting } from "@/lib/project-coordinator/agent-tools"
 import {
   __setPluginToolResolverForTesting,
   __setWebToolDepsForTesting,
@@ -16,7 +17,6 @@ import {
   __setVectorToolDepsForTesting,
   __setProjectHistoryToolDepsForTesting,
   __setSpawnTaskToolDepsForTesting,
-  __setProjectCoordinatorToolDepsForTesting,
   __setSessionPeerToolDepsForTesting,
   __setTemplateToolDepsForTesting,
   handlePluginToolExec,
@@ -297,7 +297,16 @@ describe("handlePluginToolExec", () => {
     }
   })
 
-  it("routes project-coordinator tools to the host runner before the plugin registry", async () => {
+  it("routes project-coordinator tools to their module before the plugin registry", async () => {
+    // The real registry's entry (ADR-0250 §14 amendment), in the registry
+    // this suite otherwise keeps empty.
+    const actual = jest.requireActual("@/lib/modules/generated/tools") as {
+      MODULE_TOOLS: ModuleToolsEntry[]
+    }
+    const coordination = actual.MODULE_TOOLS.find(
+      (entry) => entry.module === "project-coordinator"
+    )!
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).push(coordination)
     const execute = jest.fn().mockResolvedValue({ from: "plugin" })
     __setPluginToolResolverForTesting({
       getTool: () => ({ pluginId: "some-plugin", execute }),
@@ -311,10 +320,14 @@ describe("handlePluginToolExec", () => {
           statusOf: () => "idle",
         }) as never
     )
-    const response = await handlePluginToolExec(makeRequest({ name: "list_threads", args: {} }))
-    expect(execute).not.toHaveBeenCalled()
-    expect(response.error).toBeUndefined()
-    expect(response.result).toEqual({ ok: true, threads: [] })
+    try {
+      const response = await handlePluginToolExec(makeRequest({ name: "list_threads", args: {} }))
+      expect(execute).not.toHaveBeenCalled()
+      expect(response.error).toBeUndefined()
+      expect(response.result).toEqual({ ok: true, threads: [] })
+    } finally {
+      ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
+    }
   })
 
   it("routes the filespace tools to their module, bound to the calling session", async () => {

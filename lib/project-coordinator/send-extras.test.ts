@@ -1,5 +1,5 @@
 import type { ChatSession } from "@cognia/agent-config-types"
-import { resolveProjectRoleSendExtras, type SendExtrasDeps } from "./send-extras"
+import { resolveCoordinatorTurnSection, type SendExtrasDeps } from "./send-extras"
 import { projectRoleToolsApply } from "./config"
 
 const deps: SendExtrasDeps = {
@@ -25,29 +25,26 @@ describe("projectRoleToolsApply", () => {
   })
 })
 
-describe("resolveProjectRoleSendExtras", () => {
-  it("gives the coordinator its tools, protocol and live project status", async () => {
-    const extras = await resolveProjectRoleSendExtras(
+describe("resolveCoordinatorTurnSection", () => {
+  it("gives the coordinator the live project status", async () => {
+    const section = await resolveCoordinatorTurnSection(
       { id: "c", projectRole: "coordinator" },
       on,
       deps
     )
-    expect(extras?.pluginTools.map((t) => t.name)).toContain("spawn_thread")
-    expect(extras?.protocol).toContain("## Project coordinator")
-    expect(extras?.dynamicSection).toContain("- Fix login (t1) — working")
+    expect(section).toContain("## Project status")
+    expect(section).toContain("- Fix login (t1) — working")
+    expect(section).not.toContain("## Project coordinator")
     expect(deps.listThreads).toHaveBeenCalledWith("c")
   })
 
-  it("gives a thread only its report tool and protocol", async () => {
-    const extras = await resolveProjectRoleSendExtras({ id: "t", projectRole: "thread" }, on, deps)
-    expect(extras?.pluginTools.map((t) => t.name)).toEqual(["report_to_coordinator"])
-    expect(extras?.dynamicSection).toBeUndefined()
-  })
-
-  it("adds nothing to an ordinary session or with coordination off", async () => {
-    await expect(resolveProjectRoleSendExtras({ id: "s" }, on, deps)).resolves.toBeUndefined()
+  it("adds nothing to a thread, an ordinary session or with coordination off", async () => {
     await expect(
-      resolveProjectRoleSendExtras({ id: "c", projectRole: "coordinator" }, {}, deps)
+      resolveCoordinatorTurnSection({ id: "t", projectRole: "thread" }, on, deps)
+    ).resolves.toBeUndefined()
+    await expect(resolveCoordinatorTurnSection({ id: "s" }, on, deps)).resolves.toBeUndefined()
+    await expect(
+      resolveCoordinatorTurnSection({ id: "c", projectRole: "coordinator" }, {}, deps)
     ).resolves.toBeUndefined()
   })
 
@@ -64,28 +61,28 @@ describe("resolveProjectRoleSendExtras", () => {
       ]) as unknown as SendExtrasDeps["listSchedules"],
       markSetupOffered: jest.fn(),
     }
-    const extras = await resolveProjectRoleSendExtras(
+    const section = await resolveCoordinatorTurnSection(
       { id: "c", projectRole: "coordinator", projectId: "p1" },
       fresh,
       empty
     )
-    expect(extras?.dynamicSection).toContain("## Project status")
-    expect(extras?.dynamicSection).toContain("## Project setup (first turn only)")
-    expect(extras?.dynamicSection).toContain("- Nightly deps (active)")
+    expect(section).toContain("## Project status")
+    expect(section).toContain("## Project setup (first turn only)")
+    expect(section).toContain("- Nightly deps (active)")
     expect(empty.markSetupOffered).toHaveBeenCalledWith("p1", 5)
   })
 
   it("does not offer setup once threads exist, or when schedules cannot be read", async () => {
     const markSetupOffered = jest.fn()
-    const extras = await resolveProjectRoleSendExtras(
+    const section = await resolveCoordinatorTurnSection(
       { id: "c", projectRole: "coordinator", projectId: "p1" },
       { coordinator: { enabled: true } },
       { ...deps, markSetupOffered }
     )
-    expect(extras?.dynamicSection).not.toContain("Project setup")
+    expect(section).not.toContain("Project setup")
     expect(markSetupOffered).not.toHaveBeenCalled()
 
-    const failing = await resolveProjectRoleSendExtras(
+    const failing = await resolveCoordinatorTurnSection(
       { id: "c", projectRole: "coordinator", projectId: "p1" },
       { coordinator: { enabled: true } },
       {
@@ -97,7 +94,7 @@ describe("resolveProjectRoleSendExtras", () => {
         markSetupOffered,
       }
     )
-    expect(failing?.dynamicSection).toContain("Project setup")
+    expect(failing).toContain("Project setup")
     expect(markSetupOffered).toHaveBeenCalled()
   })
 })

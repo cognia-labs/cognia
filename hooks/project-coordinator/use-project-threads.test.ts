@@ -4,7 +4,7 @@
 import { renderHook } from "@testing-library/react"
 import type { ChatSession } from "@cognia/agent-config-types"
 
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (_fn: () => unknown, deps: unknown[], initial: unknown) =>
     deps[0] ? [{ id: "t1" }] : initial,
 }))

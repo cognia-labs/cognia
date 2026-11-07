@@ -2,7 +2,7 @@
  * The Agent Builder's tools (ADR-0220): read the draft, list what it may
  * reference, write fields, and — with the user's approval — create the agent.
  *
- * Same shape as every built-in family (`project-coordinator-builtin-tools.ts`):
+ * Same shape as the other built-in families (`session-peer-builtin-tools.ts`):
  * manifest entries the send path appends to `pluginTools`, a predicate the IPC
  * dispatcher routes on, and a runner over injected deps that executes in the
  * renderer. Offered only on an `"agent-builder"` session, and each call

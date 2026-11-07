@@ -1,15 +1,9 @@
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { Project } from "@/types"
-import {
-  buildProjectCoordinatorManifestEntries,
-  buildProjectThreadManifestEntries,
-  type ProjectCoordinatorManifestEntry,
-} from "@/lib/claude/project-coordinator-builtin-tools"
 import { useChatStore } from "@/stores/chat"
 import { sessionStatusOf } from "@/hooks/chat/steer-runtime"
 import { projectRoleToolsApply, resolveCoordinatorConfig } from "./config"
 import { buildCoordinatorContextSection, type DigestThreadInput } from "./digest"
-import { PROJECT_COORDINATOR_PROTOCOL, PROJECT_THREAD_PROTOCOL } from "./protocol"
 import { listProjectThreads } from "./thread-runtime"
 import { updateCoordinator } from "./project-access"
 import { buildSetupRecommendationsSection, shouldOfferSetup } from "./setup-recommendations"
@@ -19,19 +13,11 @@ import { listSessionPrObservationsByProject } from "@/lib/db/session-pr-observat
 import type { PrDerivedStatus } from "@/lib/github/pr-observe/types"
 
 /**
- * What a coordinator or thread turn adds to its send options (ADR-0204) —
- * tools, a session-stable protocol, and (coordinator only) the per-turn
- * project status. One entry point so `resolveSendOptions` carries a single
- * gated block instead of the feature's details.
+ * The per-turn project status a coordinator turn adds to its send options
+ * (ADR-0204): the thread digest and, once, the setup offer. It changes every
+ * turn, so it belongs in the dynamic tail. The tools and the session-stable
+ * protocols are the module's tool contribution (`./agent-tools.ts`).
  */
-
-export interface ProjectRoleSendExtras {
-  pluginTools: ProjectCoordinatorManifestEntry[]
-  /** Session-stable: safe in the cached prompt prefix. */
-  protocol: string
-  /** Changes every turn: belongs in the dynamic tail. */
-  dynamicSection?: string
-}
 
 export interface SendExtrasDeps {
   listThreads: (coordinatorSessionId: string) => Promise<ChatSession[]>
@@ -64,15 +50,13 @@ function defaultDeps(): SendExtrasDeps {
   }
 }
 
-export async function resolveProjectRoleSendExtras(
+export async function resolveCoordinatorTurnSection(
   session: Pick<ChatSession, "id" | "projectRole" | "projectId">,
   project: Pick<Project, "coordinator"> & Partial<Pick<Project, "roots">>,
   deps: SendExtrasDeps = defaultDeps()
-): Promise<ProjectRoleSendExtras | undefined> {
-  if (!projectRoleToolsApply(session, project)) return undefined
-  if (session.projectRole === "thread") {
-    return { pluginTools: buildProjectThreadManifestEntries(), protocol: PROJECT_THREAD_PROTOCOL }
-  }
+): Promise<string | undefined> {
+  if (session.projectRole !== "coordinator" || !projectRoleToolsApply(session, project))
+    return undefined
   const [threads, prStatuses] = await Promise.all([
     deps.listThreads(session.id),
     session.projectId ? deps.prStatuses(session.projectId) : new Map<string, PrDerivedStatus>(),
@@ -83,11 +67,7 @@ export async function resolveProjectRoleSendExtras(
     deps.now()
   )
   const setup = await setupSection(session.projectId, project, threads.length, deps)
-  return {
-    pluginTools: buildProjectCoordinatorManifestEntries(),
-    protocol: PROJECT_COORDINATOR_PROTOCOL,
-    dynamicSection: setup ? `${status}\n\n${setup}` : status,
-  }
+  return setup ? `${status}\n\n${setup}` : status
 }
 
 /** The one-off setup offer, recorded as offered the moment it is included. */

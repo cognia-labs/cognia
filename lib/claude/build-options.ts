@@ -3220,8 +3220,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const { buildTemplateToolRuleset } = await import("@/lib/claude/permissions/template-tool-rules")
   const { buildPetToolRuleset } = await import("@/lib/claude/permissions/pet-tool-rules")
   const { buildMediaToolRuleset } = await import("@/lib/claude/permissions/media-tool-rules")
-  const { buildProjectCoordinatorToolRuleset } =
-    await import("@/lib/claude/permissions/project-coordinator-tool-rules")
   const { buildAgentBuilderToolRuleset } =
     await import("@/lib/claude/permissions/agent-builder-tool-rules")
   const { buildAcceptanceProposalToolRuleset, buildAcceptanceToolRuleset } =
@@ -3246,7 +3244,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     templateToolsEnabled ? buildTemplateToolRuleset() : undefined,
     petToolsSurfaced ? buildPetToolRuleset() : undefined,
     videoToolsSurfaced ? buildMediaToolRuleset() : undefined,
-    projectRoleToolsSurfaced ? buildProjectCoordinatorToolRuleset() : undefined,
     agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
     acceptanceToolsSurfaced ? buildAcceptanceToolRuleset() : undefined,
     acceptanceProposalSurfaced ? buildAcceptanceProposalToolRuleset() : undefined,
@@ -4474,20 +4471,16 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         .filter(Boolean)
         .join("\n\n")
   }
-  // Project coordination (ADR-0204): the coordinator's routing tools + per-turn
-  // project status, or a thread's report tool. Same gate as the ruleset above.
+  // Project coordination (ADR-0204): the coordinator's per-turn project
+  // status. Its tools and protocols are the module's tool contribution above.
   if (projectRoleToolsSurfaced && session && ctx.activeProject) {
     try {
-      const { resolveProjectRoleSendExtras } = await import("@/lib/project-coordinator/send-extras")
-      const extras = await resolveProjectRoleSendExtras(session, ctx.activeProject)
-      if (extras) {
-        opts.pluginTools = [...(opts.pluginTools ?? []), ...extras.pluginTools]
-        const existing = opts.appendSystemPrompt?.trim() ?? ""
-        opts.appendSystemPrompt = existing ? `${existing}\n\n${extras.protocol}` : extras.protocol
-        if (extras.dynamicSection) dynamicTailSections.push(extras.dynamicSection)
-      }
+      const { resolveCoordinatorTurnSection } =
+        await import("@/lib/project-coordinator/send-extras")
+      const section = await resolveCoordinatorTurnSection(session, ctx.activeProject)
+      if (section) dynamicTailSections.push(section)
     } catch (err) {
-      loggers.app.warn("failed to append project-coordinator built-in tools", {
+      loggers.app.warn("failed to append the project coordinator's status", {
         error: String(err),
       })
     }

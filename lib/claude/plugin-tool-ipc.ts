@@ -109,11 +109,6 @@ import {
   type SessionPeerToolRunDeps,
 } from "./session-peer-builtin-tools"
 import {
-  isProjectCoordinatorBuiltinTool,
-  runProjectCoordinatorBuiltinTool,
-  type ProjectCoordinatorToolDeps,
-} from "./project-coordinator-builtin-tools"
-import {
   isAgentBuilderBuiltinTool,
   runAgentBuilderBuiltinTool,
   type AgentBuilderToolDeps,
@@ -251,14 +246,6 @@ async function resolveSessionPeerToolDeps(): Promise<SessionPeerToolRunDeps> {
   }
 }
 
-let projectCoordinatorDepsOverride: (() => ProjectCoordinatorToolDeps) | null = null
-
-export function __setProjectCoordinatorToolDepsForTesting(
-  fn: (() => ProjectCoordinatorToolDeps) | null
-): void {
-  projectCoordinatorDepsOverride = fn
-}
-
 /** Resolver for the Agent Builder tools' host-side deps (ADR-0220). Swappable for tests. */
 let agentBuilderDepsOverride: (() => Promise<AgentBuilderToolDeps> | AgentBuilderToolDeps) | null =
   null
@@ -274,12 +261,6 @@ async function resolveAgentBuilderDeps(): Promise<AgentBuilderToolDeps> {
   if (agentBuilderDepsOverride) return agentBuilderDepsOverride()
   const { resolveAgentBuilderToolDeps } = await import("@/lib/agents/builder/tool-deps")
   return resolveAgentBuilderToolDeps()
-}
-
-async function resolveProjectCoordinatorDeps(): Promise<ProjectCoordinatorToolDeps> {
-  if (projectCoordinatorDepsOverride) return projectCoordinatorDepsOverride()
-  const { resolveProjectCoordinatorToolDeps } = await import("@/lib/project-coordinator/tool-deps")
-  return resolveProjectCoordinatorToolDeps()
 }
 
 /** Inject web-tool deps (tests / CLI host). Pass `null` to restore default. */
@@ -808,15 +789,6 @@ async function runPluginToolExec(
         request.name,
         request.args,
         await resolveSessionPeerToolDeps(),
-        { sessionId: request.sessionId }
-      )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    if (isProjectCoordinatorBuiltinTool(request.name)) {
-      const result = await runProjectCoordinatorBuiltinTool(
-        request.name,
-        request.args,
-        await resolveProjectCoordinatorDeps(),
         { sessionId: request.sessionId }
       )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
