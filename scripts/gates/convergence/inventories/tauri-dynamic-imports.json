@@ -88,8 +88,8 @@
       "staticAlsoInClassA": false
     },
     {
-      "key": "lib/ai/agent/team/workers/wake-worker.ts",
-      "file": "lib/ai/agent/team/workers/wake-worker.ts",
+      "key": "lib/squads/workers/wake-worker.ts",
+      "file": "lib/squads/workers/wake-worker.ts",
       "owner": "lib/ai",
       "note": "",
       "staticAlsoInClassA": false

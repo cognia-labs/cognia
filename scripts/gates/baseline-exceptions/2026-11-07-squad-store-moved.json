@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/identity-vocabulary-baseline.json",
+  "measure": "entries:stores/agent/agent-team-store/store.ts.bareAccountId",
+  "allowRemoval": true,
+  "owner": "stores/squads",
+  "repaymentPhase": "1",
+  "reason": "The Squad store moved to stores/squads/agent-team-store/store.ts (ADR-0252 P1, move-only). The same six findings are counted under the new path; nothing new is admitted."
+}

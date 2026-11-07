@@ -921,7 +921,7 @@
     "stores/account/account-store.ts": {
       "bareAccountId": 82
     },
-    "stores/agent/agent-team-store/store.ts": {
+    "stores/squads/agent-team-store/store.ts": {
       "bareAccountId": 6
     },
     "stores/artifact/artifact-store.ts": {

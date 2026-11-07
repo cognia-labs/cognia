@@ -65,10 +65,10 @@ import {
   SettingsField,
   SettingsStack,
 } from "@/components/settings/common/settings-block"
-import { AgentTeamSettings } from "@/components/agent/workspace/settings"
-import { AgentTeamMembers } from "@/components/agent/workspace/members"
+import { AgentTeamSettings } from "@/components/squads/settings"
+import { AgentTeamMembers } from "@/components/squads/members"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 export interface SquadDetailPanelProps {
   squadId: string

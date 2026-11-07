@@ -97,7 +97,7 @@ describe("workflow-fixtures", () => {
     //     Plan Execution Hub (ADR-0045); covered by the plan-runtime specs.
     //   • the six `pattern.*` kinds — emitted by `synthesize-ultracode.ts`
     //     (ADR-0022 addendum); each is covered by its co-located executor spec
-    //     under `lib/ai/agent/team/patterns/`.)
+    //     under `lib/squads/patterns/`.)
     const skip = new Set<string>([
       "action.plan.step.dispatch",
       "pattern.multi-modal-sweep",

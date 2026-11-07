@@ -35,7 +35,7 @@ jest.mock("@/components/ui/select", () => ({
 }))
 
 const mockTeams: Record<string, { id: string; name: string }> = {}
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: { teams: typeof mockTeams }) => unknown) =>
     selector({ teams: mockTeams }),
 }))

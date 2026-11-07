@@ -1,11 +1,11 @@
 /** @jest-environment jsdom */
 import { createSquadStartAttempt } from "./squad-start-dispatch"
 import { HostConsentRequiredError, issueHostAdminLease } from "@/lib/tauri/admin-lease"
-import { startSquadRun } from "@/lib/ai/agent/team/squad/start-squad-run"
+import { startSquadRun } from "@/lib/squads/squad/start-squad-run"
 import type { HostProfile } from "@/lib/platform/capabilities"
 import type { Transport } from "@/lib/tauri/transport-types"
 
-jest.mock("@/lib/ai/agent/team/squad/start-squad-run", () => ({ startSquadRun: jest.fn() }))
+jest.mock("@/lib/squads/squad/start-squad-run", () => ({ startSquadRun: jest.fn() }))
 jest.mock("@/lib/tauri/admin-lease", () => ({
   ...jest.requireActual("@/lib/tauri/admin-lease"),
   issueHostAdminLease: jest.fn(),

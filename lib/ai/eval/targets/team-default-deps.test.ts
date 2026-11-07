@@ -9,7 +9,7 @@ jest.mock("@/lib/ai/eval/team-execution", () => ({
     costKnown: false,
   })),
 }))
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: jest.fn() },
 }))
 jest.mock("@/lib/db/agent-traces", () => ({
@@ -21,7 +21,7 @@ jest.mock("./trace-persistence", () => ({
 
 import { defaultTeamTargetDeps, extractTeamText } from "./team-default-deps"
 import { runIsolatedTeamEval } from "@/lib/ai/eval/team-execution"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { queryByTrace } from "@/lib/db/agent-traces"
 import { waitForEvalTracePersistence } from "./trace-persistence"
 import type { EvalPersistenceScope } from "@/lib/db/eval-lab"

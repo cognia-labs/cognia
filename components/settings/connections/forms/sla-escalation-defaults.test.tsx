@@ -30,7 +30,7 @@ const mockUpdateAdapterConfigSection = jest.fn()
 jest.mock("@/lib/db/adapter-instances", () => ({
   updateAdapterConfigSection: (...args: unknown[]) => mockUpdateAdapterConfigSection(...args),
 }))
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: { teams: Record<string, never> }) => unknown) =>
     selector({ teams: {} }),
 }))

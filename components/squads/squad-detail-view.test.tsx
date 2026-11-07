@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event"
 import type { PendingSquadReview } from "@/hooks/squads/use-pending-squad-reviews"
 import type { SquadRouteState } from "@/hooks/squads/use-squad-route-state"
 import type { SquadRunControl } from "@/hooks/squads/use-squad-run-control"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam, AgentTeamTask, AgentTeammate } from "@/types/agent/agent-team"
 
 let mockReviews: PendingSquadReview[] = []
@@ -84,12 +84,12 @@ jest.mock("@/components/agent-runs/agent-runs-panel", () => ({
     />
   ),
 }))
-jest.mock("@/components/agent/workspace/tasks", () => ({
+jest.mock("@/components/squads/tasks", () => ({
   AgentTeamTasks: ({ teamId, tasks }: { teamId: string; tasks: unknown[] }) => (
     <div data-testid="task-board" data-team={teamId} data-tasks={tasks.length} />
   ),
 }))
-jest.mock("@/components/agent/workspace/team-run-controls", () => ({
+jest.mock("@/components/squads/team-run-controls", () => ({
   TeamRunControls: () => <div data-testid="run-controls" />,
 }))
 jest.mock("@/components/usage/run-estimate-hint", () => ({ RunEstimateHint: jest.fn(() => null) }))

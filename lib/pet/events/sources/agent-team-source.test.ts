@@ -1,5 +1,5 @@
 import { anyTeamActive, wireAgentTeamSource } from "./agent-team-source"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store/store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { PetEvent } from "@/types/pet"
 
 function team(status: string) {

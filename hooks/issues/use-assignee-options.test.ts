@@ -11,7 +11,7 @@ jest.mock("@/hooks/data", () => ({
 jest.mock("@/lib/db/characters", () => ({ listCharacters: jest.fn() }))
 
 let teamsForTest: Record<string, { id: string; name: string; projectId?: string }> = {}
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: { teams: unknown }) => unknown) =>
     selector({ teams: teamsForTest }),
 }))

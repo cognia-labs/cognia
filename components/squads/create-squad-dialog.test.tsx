@@ -19,7 +19,7 @@ jest.mock("@/hooks/squads/use-squad-templates", () => ({
   useApplySquadTemplate: () => applyTemplate,
 }))
 
-jest.mock("@/components/agent/workspace/auto-compose-dialog", () => ({
+jest.mock("@/components/squads/auto-compose-dialog", () => ({
   AutoComposeDialog: ({
     open,
     onComposed,

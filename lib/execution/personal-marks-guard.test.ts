@@ -18,7 +18,7 @@ const REVIEWED_WRITES: Record<string, number> = {
   "hooks/chat/use-claude-chat-controller.ts": 17,
   "hooks/chat/use-sessions.ts": 2,
   "lib/agent/composition/verified-fresh-agent.ts": 2,
-  "lib/ai/agent/team/gates/record-gate-answer.ts": 1,
+  "lib/squads/gates/record-gate-answer.ts": 1,
   "lib/best-of-n/entry.ts": 1,
   "lib/chat/branch-session.ts": 2,
   "lib/chat/import-handoff-session.ts": 2,

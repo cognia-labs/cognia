@@ -15,7 +15,7 @@
     "components/a2ui/workspace/a2ui-toolbar.tsx",
     "components/agent/external-agent/plan.tsx",
     "components/agent/mode/custom-mode-editor/index.tsx",
-    "components/agent/workspace/auto-compose-dialog.tsx",
+    "components/squads/auto-compose-dialog.tsx",
     "components/artifacts/artifact-list.tsx",
     "components/artifacts/artifact-preview.tsx",
     "components/artifacts/artifact-renderers.tsx",

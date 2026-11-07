@@ -35,8 +35,8 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
-import { AutoComposeDialog } from "@/components/agent/workspace/auto-compose-dialog"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
+import { AutoComposeDialog } from "@/components/squads/auto-compose-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {

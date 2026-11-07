@@ -24,11 +24,6 @@ import { BRIEF_MODE_PROMPT } from "@/lib/agent/prompts/brief-mode"
 import { CLI_BASE_IDENTITY_PROMPT } from "@/lib/agent/prompts/cli-base"
 import { PLAN_MODE_PROMPT, PLAN_MODE_STRUCTURED_STEPS_PROMPT } from "@/lib/agent/prompts/plan-mode"
 import { ASIDE_READ_ONLY_PROMPT, ASIDE_SYSTEM_PROMPT } from "@/lib/agent/prompts/side-chat"
-import { ASSESS_ROUTING_PROMPT } from "@/lib/ai/agent/team/auto/assess-routing"
-import { CLARIFY_OBJECTIVE_PROMPT } from "@/lib/ai/agent/team/auto/clarify-objective"
-import { COMPOSE_ROSTER_PROMPT } from "@/lib/ai/agent/team/auto/compose-roster"
-import { DECOMPOSE_TASKS_PROMPT } from "@/lib/ai/agent/team/auto/decompose-tasks"
-import { LEAD_REVIEW_PROMPT } from "@/lib/ai/agent/team/squad/lead-review"
 import { CANVAS_ACTION_PROMPTS } from "@/lib/ai/generation/canvas-actions"
 import { SELECTION_SUMMARY_PROMPT } from "@/lib/ai/generation/summarize-material"
 import { CONVERSATION_SUMMARY_PROMPT } from "@/lib/ai/generation/summarizer"
@@ -99,27 +94,6 @@ import {
   CREATOR_SURVEY_PROMPT,
 } from "@/lib/creator/agent-ports"
 import { CONNECTOR_CAPABILITY_PROMPTS } from "@/lib/connectors/a2ui-bridge/capability-evaluator"
-import { DEFAULT_TEAMMATE_IDENTITY_PROMPT } from "@/lib/ai/agent/team/teammate/teammate-character"
-import {
-  REVIEWER_SYSTEM_PROMPT,
-  REVIEWER_TASK_PROMPT,
-} from "@/lib/ai/agent/team/pr-feedback/reviewer"
-import { NUDGE_CONTINUE_PROMPT } from "@/lib/ai/agent/team/durable/rate-limit-resume"
-import { PATTERN_PROMPTS } from "@/lib/ai/agent/team/patterns/pattern-prompts"
-import {
-  LEAD_PLANNING_PROMPT,
-  LEAD_PLANNING_SYSTEM_PROMPT,
-  PROGRESS_LEDGER_JUDGE_PROMPT,
-  PROGRESS_LEDGER_SCHEMA_HINT_PROMPT,
-  REPLAN_LEAD_PROMPT,
-  REVIEW_REVISION_REQUEST_PROMPT,
-  STRUCTURED_JSON_INSTRUCTION_PROMPT,
-  STRUCTURED_RETRY_NOTE_PROMPT,
-  TEAMMATE_TASK_PROMPT,
-  TEAMMATE_UPSTREAM_RESULTS_PROMPT,
-  ULTRACODE_PLAN_HINT_PROMPT,
-  ULTRACODE_PLANNER_PROMPT,
-} from "@/lib/ai/agent/team/team-prompts"
 import {
   SELECTION_EXPLAIN_PROMPT,
   SELECTION_TRANSLATE_PROMPT,
@@ -326,29 +300,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   CLI_BASH_ANALYSIS_PROMPT,
   CLI_REVIEW_PROMPT,
   ...Object.values(BOOTSTRAP_SYSTEM_PROMPTS),
-  // team
-  CLARIFY_OBJECTIVE_PROMPT,
-  ASSESS_ROUTING_PROMPT,
-  COMPOSE_ROSTER_PROMPT,
-  DECOMPOSE_TASKS_PROMPT,
-  LEAD_REVIEW_PROMPT,
-  LEAD_PLANNING_SYSTEM_PROMPT,
-  LEAD_PLANNING_PROMPT,
-  TEAMMATE_TASK_PROMPT,
-  TEAMMATE_UPSTREAM_RESULTS_PROMPT,
-  REVIEW_REVISION_REQUEST_PROMPT,
-  STRUCTURED_JSON_INSTRUCTION_PROMPT,
-  STRUCTURED_RETRY_NOTE_PROMPT,
-  PROGRESS_LEDGER_JUDGE_PROMPT,
-  PROGRESS_LEDGER_SCHEMA_HINT_PROMPT,
-  REPLAN_LEAD_PROMPT,
-  ULTRACODE_PLANNER_PROMPT,
-  ULTRACODE_PLAN_HINT_PROMPT,
-  DEFAULT_TEAMMATE_IDENTITY_PROMPT,
-  REVIEWER_SYSTEM_PROMPT,
-  REVIEWER_TASK_PROMPT,
-  NUDGE_CONTINUE_PROMPT,
-  ...PATTERN_PROMPTS,
   // permissions
   COMMAND_JUDGE_PROMPT,
   // routing

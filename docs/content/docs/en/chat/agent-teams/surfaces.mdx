@@ -53,7 +53,7 @@ The list is workspace-scoped: a Squad is shown when it has no `projectId` or its
 `squad-detail-panel.tsx` renders one `SettingsStack` of titled `SettingsBlock`s split by hairlines, with no card or bordered box around any of them, in the order of use:
 
 1. **General**: **Name** and **Description**, deferred inputs committing on blur through `updateTeam`. An empty name is rejected.
-2. **Members**, which mounts `AgentTeamMembers` from `components/agent/workspace/members` whole. This is the real roster editor, not a read-only list: one hairline-divided list, lead first, whose rows reflow off the roster's own width (`@container/roster`) rather than the window's. Any teammate can be made lead from its menu (`setSquadLead`, which swaps `leadId` and both roles together); the action is locked, with the reason printed in the item, while the Squad is planning, executing or paused, because a durable run snapshots `leadId` when it starts. The block carries `data-setting-id="squad-roster"`, so `?focus=squad-roster` lands on it.
+2. **Members**, which mounts `AgentTeamMembers` from `components/squads/members` whole. This is the real roster editor, not a read-only list: one hairline-divided list, lead first, whose rows reflow off the roster's own width (`@container/roster`) rather than the window's. Any teammate can be made lead from its menu (`setSquadLead`, which swaps `leadId` and both roles together); the action is locked, with the reason printed in the item, while the Squad is planning, executing or paused, because a durable run snapshots `leadId` when it starts. The block carries `data-setting-id="squad-roster"`, so `?focus=squad-roster` lands on it.
 3. **Readiness**, the `SquadReadinessCard`. Its "Add a teammate" opens the roster's add dialog in place here (`onAddTeammate`), because a link to Settings from Settings only reloaded the pane.
 4. A **plugin slot** at the `agent.team.panel` extension point. Its declared host used to be the workspace overview, which nothing rendered, so registrations silently never appeared. It takes no place in the stack when no plugin contributes.
 5. **Made from a template**, the provenance block described below.
@@ -102,7 +102,7 @@ Publish, Export and Fork are offered only for templates the user owns, and are r
 
 ### The lineage path behind Use
 
-Clicking Use runs `applySquadTemplate` (`lib/agent-team/apply-squad-template.ts:90`).
+Clicking Use runs `applySquadTemplate` (`lib/squads/apply-squad-template.ts:90`).
 
 ```mermaid
 flowchart TD
@@ -196,7 +196,7 @@ The same funnel serves the IM lane, the `/squad` slash command, and `ctx.team.st
 None of them is in navigation. The rail entry is `squads`, pinned by default, and a saved layout holding the old `agent-teams` id is rewritten on read. Without that alias a stale pin would silently become an unpinned entry sitting in More.
 
 <Callout title="The @mention dispatch chain is gone">
-  The workspace Chat tab had its own pipeline under `lib/agent-team/`: a mention parser, a
+  The workspace Chat tab had its own pipeline under `lib/squads/`: a mention parser, a
   composite streamer, a conversation-context builder and a runtime-availability hook. All four
   were deleted with the tab. `runtime-targets.ts` survives as the shared @mention target
   vocabulary for the chat composer and the mention picker, not as a dispatch chain.

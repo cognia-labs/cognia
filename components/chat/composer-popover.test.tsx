@@ -12,7 +12,7 @@ import type { RemoteDocSearchState } from "@/hooks/chat/use-remote-doc-search"
 import { isWorkspaceSearchReachable, searchWorkspace } from "@/lib/files/workspace-search"
 import type { WorkspaceEntry } from "@/lib/files/types"
 import { useEntityMentionSearch } from "@/hooks/chat/use-entity-mention-search"
-import { buildRouteTargets } from "@/lib/agent-team/runtime-targets"
+import { buildRouteTargets } from "@/lib/squads/runtime-targets"
 import type { RouteOption } from "@/hooks/chat/use-route-targets"
 import { resolveComposerPopoverBoundary } from "./composer/composer-popover-boundary"
 

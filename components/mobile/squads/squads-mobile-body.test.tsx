@@ -8,7 +8,7 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { SquadsMobileBody } from "./squads-mobile-body"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam, TeamStatus } from "@/types/agent/agent-team"
@@ -56,10 +56,10 @@ jest.mock("@/components/agent-runs/agent-runs-panel", () => ({
     </div>
   ),
 }))
-jest.mock("@/components/agent/workspace/tasks", () => ({
+jest.mock("@/components/squads/tasks", () => ({
   AgentTeamTasks: ({ teamId }: { teamId: string }) => <div data-testid="task-board">{teamId}</div>,
 }))
-jest.mock("@/components/agent/workspace/team-run-controls", () => ({
+jest.mock("@/components/squads/team-run-controls", () => ({
   TeamRunControls: ({ status }: { status: string }) => (
     <div data-testid="run-controls">{status}</div>
   ),

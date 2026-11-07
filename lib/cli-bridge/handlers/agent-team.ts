@@ -29,7 +29,7 @@ export interface AgentTeamListResult {
 export async function agentTeamList(): Promise<AgentTeamListResult> {
   try {
     const [{ useAgentTeamStore }, { redactText }] = await Promise.all([
-      import("@/stores/agent/agent-team-store"),
+      import("@/stores/squads/agent-team-store/store"),
       import("@cognia/redact"),
     ])
     const teams = Object.values(useAgentTeamStore.getState().teams).map((team) => ({
@@ -57,7 +57,7 @@ export async function agentTeamRun(payload: Record<string, unknown>): Promise<Ag
   const teamId = typeof payload.teamId === "string" ? payload.teamId : ""
   if (!teamId) return { ok: false, error: "agent_team_run requires a teamId" }
   try {
-    const { agentTeamManager } = await import("@/lib/ai/agent/team/agent-team")
+    const { agentTeamManager } = await import("@/lib/squads/agent-team")
     if (!agentTeamManager.get(teamId)) {
       return { ok: false, error: `team ${teamId} not found` }
     }
@@ -104,7 +104,7 @@ export async function agentTeamRunStatus(
   try {
     const [{ getDb }, { isSynthesizedTeamRunPayload }, { hasNoLeakingPii }] = await Promise.all([
       import("@/lib/db/schema"),
-      import("@/lib/ai/agent/team/team-workflow-id"),
+      import("@/lib/squads/team-workflow-id"),
       import("@cognia/redact"),
     ])
     const db = getDb()

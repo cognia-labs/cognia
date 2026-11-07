@@ -79,7 +79,7 @@ const DEFAULT_DEPS: StackForgeDeps = {
   // the application's, and a static import would drag the Agent Team graph
   // into every consumer of the stack engine — including its own tests.
   octokit: async (repository, host, credentialContext) => {
-    const { createResolveOctokit } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
+    const { createResolveOctokit } = await import("@/lib/squads/pr-feedback/resolvers")
     return createResolveOctokit(undefined, credentialContext)(repository, host)
   },
   adapter: (octokit) => createGithubStackAdapter({ octokit }),

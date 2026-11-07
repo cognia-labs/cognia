@@ -1,5 +1,5 @@
 import type { SendContent } from "@cognia/agent-config-types"
-import { buildRouteTargets } from "@/lib/agent-team/runtime-targets"
+import { buildRouteTargets } from "@/lib/squads/runtime-targets"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
 import type { AgentTeammate } from "@/types/agent/agent-team"
 import {

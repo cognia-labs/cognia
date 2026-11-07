@@ -53,7 +53,7 @@ import {
   runtimeFeatureValidationError,
 } from "@cognia/agent-contracts/session-operations"
 import { createSilenceWatchdog, type SilenceWatchdog } from "@/lib/chat/silence-watchdog"
-import { resolveTurnSquad } from "@/lib/ai/agent/team/squad/resolve-turn-squad"
+import { resolveTurnSquad } from "@/lib/squads/squad/resolve-turn-squad"
 import {
   assertExternalRuntimeFeatureSupport,
   externalAgentRouteKey,
@@ -3590,7 +3590,7 @@ export function useClaudeChat() {
         const squadId = squadDecision.squadId
         try {
           const [{ startSquadRun }, { agentTeamExecutionRunId }] = await Promise.all([
-            import("@/lib/ai/agent/team/squad/start-squad-run"),
+            import("@/lib/squads/squad/start-squad-run"),
             import("@/lib/execution/agent-team-bridge"),
           ])
           const result = await startSquadRun({
@@ -3697,8 +3697,7 @@ export function useClaudeChat() {
 
           // Release the hold when the run ends, however it ends. Without this
           // the conversation would queue follow-ups forever.
-          const { watchSquadRunSettlement } =
-            await import("@/lib/ai/agent/team/squad/watch-squad-run")
+          const { watchSquadRunSettlement } = await import("@/lib/squads/squad/watch-squad-run")
           const stopWatching = watchSquadRunSettlement({
             executionRunId: agentTeamExecutionRunId(result.runId),
             onSettled: (status) => {

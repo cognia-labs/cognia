@@ -30,12 +30,12 @@ import {
   presetFamilyOf,
 } from "@/lib/ai/agent/external/config/agent-binding"
 import { isSameRuntimeRef } from "@/lib/ai/agent/runtime-catalog/types"
-import { resolveTeammateCapabilities } from "@/lib/ai/agent/team/teammate/capability-resolver"
+import { resolveTeammateCapabilities } from "@/lib/squads/teammate/capability-resolver"
 import {
   resolveTeammatePinnedConfigId,
   resolveTeammatePresetId,
-} from "@/lib/ai/agent/team/teammate/resolve-external-backing"
-import { teammateToCharacter } from "@/lib/ai/agent/team/teammate/teammate-character"
+} from "@/lib/squads/teammate/resolve-external-backing"
+import { teammateToCharacter } from "@/lib/squads/teammate/teammate-character"
 import type { Character } from "@cognia/agent-config-types"
 import type { MessageRunRouteStamp } from "@/lib/chat/message-run-metadata"
 import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"

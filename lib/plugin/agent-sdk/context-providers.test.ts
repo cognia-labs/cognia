@@ -7,11 +7,11 @@ import {
 const getStateMock = jest.fn()
 const selectMock = jest.fn()
 
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   __esModule: true,
   useAgentTeamStore: { getState: () => getStateMock() },
 }))
-jest.mock("@/stores/agent/agent-team-store/selectors", () => ({
+jest.mock("@/stores/squads/agent-team-store/selectors", () => ({
   __esModule: true,
   OPERATOR_READER_ID: "operator",
   selectSharedMemoryEntriesForReader: (teamId: string, readerId: string) => (state: unknown) =>

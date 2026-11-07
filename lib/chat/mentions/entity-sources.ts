@@ -923,7 +923,7 @@ function registerBuiltinEntityMentionSources(): void {
       // The agent-team store, the same read `ctx.team` and the Squad surfaces
       // use, so there is no second notion of "every teammate". Persisted, so
       // this works on a phone and in a plain browser like the Dexie sources.
-      const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+      const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
       const state = useAgentTeamStore.getState()
       const squads = state.teams
       return Object.values(state.teammates)
@@ -950,7 +950,7 @@ function registerBuiltinEntityMentionSources(): void {
         })
     },
     async snapshot(candidate) {
-      const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+      const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
       const member = useAgentTeamStore.getState().teammates[candidate.id]
       if (!member) return null
       // What the teammate IS, in the order a reader needs it. The spawn prompt
@@ -964,7 +964,7 @@ function registerBuiltinEntityMentionSources(): void {
         .join("\n\n")
     },
     async fingerprint(candidate) {
-      const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+      const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
       const member = useAgentTeamStore.getState().teammates[candidate.id]
       if (!member) return null
       // A teammate row carries no `updatedAt`, so the fingerprint is the body

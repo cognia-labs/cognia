@@ -6,7 +6,7 @@ description: The Squad type inventory in types/agent/agent-team.ts, the persist-
 # Data Model & Store
 
 `types/agent/agent-team.ts` defines a Squad.
-One Zustand store under `stores/agent/agent-team-store/` manages it at runtime.
+One Zustand store under `stores/squads/agent-team-store/` manages it at runtime.
 Since **persist v8**, Dexie owns squads, teammates, and tasks.
 The `localStorage` blob contains only templates, the default config, and a few view preferences.
 
@@ -20,7 +20,7 @@ The `localStorage` blob contains only templates, the default config, and a few v
 <TLDR>
   `types/agent/agent-team.ts` is the authoritative schema: `AgentTeam` (`:1409`),
   `AgentTeamConfig` (`:410`), `AgentTeammate` (`:955`), `AgentTeamTask` (`:1018`). The store
-  (`stores/agent/agent-team-store/store.ts:83`) is `persist` **v8**, and its `partialize`
+  (`stores/squads/agent-team-store/store.ts:83`) is `persist` **v8**, and its `partialize`
   (`:263`) keeps only `templates`, `defaultConfig`, `tasksView`, `editorSession`,
   `lastAdapterSyncVersion` plus two fields kept inert on purpose. Squads, teammates and tasks
   are authoritative in Dexie (`agentTeams`, `agentTeammates`, `agentTeamTasks`, added at schema
@@ -110,7 +110,7 @@ The aggregate is identity plus config plus id lists plus a roll-up.
 
 ### State
 
-`AgentTeamState` (`stores/agent/agent-team-store/types.ts:32`) holds ten data fields (`teams`, `teammates`, `tasks`, `messages`, `templates`, `events`, `consensus`, `sharedMemory`, `delegations`, `lastAdapterSyncVersion`), five view fields, and `defaultConfig`.
+`AgentTeamState` (`stores/squads/agent-team-store/types.ts:32`) holds ten data fields (`teams`, `teammates`, `tasks`, `messages`, `templates`, `events`, `consensus`, `sharedMemory`, `delegations`, `lastAdapterSyncVersion`), five view fields, and `defaultConfig`.
 
 Three of the view fields are deliberate dormancy, labelled at the type, in the initial state, and pinned by `store.test.ts` and `selectors.test.ts`.
 
@@ -125,7 +125,7 @@ Three of the view fields are deliberate dormancy, labelled at the type, in the i
 ### Persistence
 
 ```ts
-// stores/agent/agent-team-store/store.ts:263-277
+// stores/squads/agent-team-store/store.ts:263-277
 export function partializeAgentTeamState(state: AgentTeamState) {
   return {
     templates: state.templates,
@@ -160,7 +160,7 @@ Dexie is authoritative for definitions from persist v8 on. `dexie-bridge.ts` sub
 1. **Never write to a database it was not built against.** Locking an account clears the Dexie selection *before* the store, so a live subscription would otherwise observe an empty store pointed at another account's database and delete every row in it.
 2. **A failed hydration disables the mirror entirely.** Deletes are derived from "in the mirror, absent from memory", and if hydration threw then memory is an unknown subset of the tables.
 
-Templates and `defaultConfig` are not mirrored. Squad templates are profile-shared by design and the unified template platform owns them. The bridge is started by the ordered Squad bootstrap (`lib/agent-team/bootstrap.ts`, started on every host as the `squads` module's `agent-team-runtime`, declared in `lib/squads/module.ts`), which awaits its hydration before it installs the runtime, imports legacy history and recovers live runs. A launch that arrives before the bootstrap flips ready is refused with `runtime_not_ready`, never raced.
+Templates and `defaultConfig` are not mirrored. Squad templates are profile-shared by design and the unified template platform owns them. The bridge is started by the ordered Squad bootstrap (`lib/squads/bootstrap.ts`, started on every host as the `squads` module's `agent-team-runtime`, declared in `lib/squads/module.ts`), which awaits its hydration before it installs the runtime, imports legacy history and recovers live runs. A launch that arrives before the bootstrap flips ready is refused with `runtime_not_ready`, never raced.
 
 ### Run records (ADR-0169)
 
@@ -251,7 +251,7 @@ The `/agent-teams/workspace` shell owned a cluster of store state and actions th
 
 ## Adjacent Modules
 
-- `lib/ai/agent/team/agent-team-compat.ts` is now two pure normalizers, `normalizeAgentTeamConfig` and `normalizeAgentTeamTask`, which the store calls on every create and update. They trim strings and clamp counts, and return the original reference when nothing changed.
+- `lib/squads/agent-team-compat.ts` is now two pure normalizers, `normalizeAgentTeamConfig` and `normalizeAgentTeamTask`, which the store calls on every create and update. They trim strings and clamp counts, and return the original reference when nothing changed.
 - `stores/agent/pending-gates-store.ts` is the HITL gate queue, shared by the ADR-0022 Squad gates and the ADR-0045 plan gates. Seven gate types: `budget`, `deadlock`, `plan`, `teammate_fix`, `replan`, `capability_audit`, `plan_step`. `gateTypeFromScope` maps approval-bus scopes onto them, and rehydration stamps every restored gate `interrupted`, because the approval-bus waiter died with the page. See [HITL Gates](./hitl-gates).
 
 ## Related

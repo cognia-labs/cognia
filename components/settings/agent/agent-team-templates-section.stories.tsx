@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { AgentTeamTemplatesSection } from "./agent-team-templates-section"
 import { resetStore } from "@/lib/storybook/seed-stores"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 // `AgentTeamTemplatesSection` subscribes to `useAgentTeamStore`, whose initial
 // state seeds the eight built-in agent-team templates. Resetting to the initial

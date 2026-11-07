@@ -39,6 +39,7 @@ export default defineHostModule({
     "memory",
     "plugin",
     "share",
+    "squads",
     "terminal",
     "twin",
   ],

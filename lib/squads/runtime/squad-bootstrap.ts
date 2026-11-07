@@ -15,7 +15,7 @@
 import type { RendererRuntimeContext } from "@/lib/modules/manifest-types"
 
 export async function start(ctx: Pick<RendererRuntimeContext, "log">): Promise<() => void> {
-  const { runSquadBootstrap } = await import("@/lib/agent-team/bootstrap")
+  const { runSquadBootstrap } = await import("@/lib/squads/bootstrap")
   const handle = runSquadBootstrap()
   let disposed = false
   void handle.done.then((outcome) => {

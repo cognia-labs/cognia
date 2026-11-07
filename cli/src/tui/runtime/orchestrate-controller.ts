@@ -15,14 +15,14 @@
 import {
   planAutoOrchestration,
   AutoOrchestrationPiiError,
-} from "@/lib/ai/agent/team/auto/auto-orchestrate"
-import type { ConsensusSignal } from "@/lib/ai/agent/team/auto/dispatch-executor"
+} from "@/lib/squads/auto/auto-orchestrate"
+import type { ConsensusSignal } from "@/lib/squads/auto/dispatch-executor"
 import {
   runCouncilFromProposal,
   runEnsembleFromProposal,
   type RunExecutorDeps,
-} from "@/lib/ai/agent/team/auto/run-executor"
-import { renderProposalDoc } from "@/lib/ai/agent/team/auto/preview-doc"
+} from "@/lib/squads/auto/run-executor"
+import { renderProposalDoc } from "@/lib/squads/auto/preview-doc"
 import { buildRendererLlmClient } from "@/lib/ai/renderer-llm-client"
 import { defaultCouncilRunPrompt } from "@/lib/ai/council/run-council"
 import type { AppSettings, ChatSession } from "@cognia/agent-config-types"

@@ -56,7 +56,7 @@ flowchart BT
   subgraph host["App host"]
     manager["ExternalAgentManager<br/>lib/ai/agent/external"]
     ports["Port implementations<br/>process host · file host · terminal host · PII gate · logger"]
-    team["Agent Team runtime<br/>lib/ai/agent/team"]
+    team["Agent Team runtime<br/>lib/squads"]
     dexie["dexieTeamRunStore<br/>lib/db/agent-team-runtime.ts"]
   end
   subgraph sidecar["Sidecar"]

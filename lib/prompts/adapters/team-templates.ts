@@ -20,10 +20,10 @@
  */
 
 import { nanoid } from "nanoid"
-import { projectPluginTemplate } from "@/lib/agent-team/project-plugin-template"
-import { publishSquadTemplateToPlatform } from "@/lib/agent-team/publish-template-to-platform"
+import { projectPluginTemplate } from "@/lib/squads/project-plugin-template"
+import { publishSquadTemplateToPlatform } from "@/lib/squads/publish-template-to-platform"
 import { listAgentTeamTemplateEntries } from "@/lib/plugin/registries/agent-team-template-registry"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 import {
   parseResourceKey,

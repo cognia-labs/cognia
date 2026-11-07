@@ -13,7 +13,7 @@
  * their own door (`applyRuntimeIssueStatus` / `handBackRuntimeIssueStatus`).
  *
  * Ownership model — deliberately identical to
- * `lib/ai/agent/team/gates/task-move-guard.ts`, so the two boards never disagree:
+ * `lib/squads/gates/task-move-guard.ts`, so the two boards never disagree:
  *   - Federated rows (GitHub mirrors, agent-team tasks) are read-only here;
  *     their own surface owns them. The board must grey them out, not fail on
  *     write.

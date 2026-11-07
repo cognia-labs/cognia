@@ -33,13 +33,13 @@ const resolve = jest.fn<Promise<SendOptions>, unknown[]>(async () => options)
 const capture = jest.fn()
 const run = jest.fn()
 const sessions = { get: jest.fn(), add: jest.fn() }
-jest.mock("@/lib/ai/agent/team/durable/durable-runtime", () => ({
+jest.mock("@/lib/squads/durable/durable-runtime", () => ({
   getDurableTeamCoordinator: () => ({ prepareRun, store }),
 }))
-jest.mock("@/lib/ai/agent/team/durable/durable-dispatch", () => ({
+jest.mock("@/lib/squads/durable/durable-dispatch", () => ({
   beginDurableDispatch: (...args: unknown[]) => begin(...args),
 }))
-jest.mock("@/lib/ai/agent/team/durable/durable-control", () => ({ controlDurableRun: jest.fn() }))
+jest.mock("@/lib/squads/durable/durable-control", () => ({ controlDurableRun: jest.fn() }))
 jest.mock("@/lib/task-workspace/client", () => ({
   acquireWorkspaceBundle: (...args: unknown[]) => acquire(...args),
   getWorkspaceBundle: async () => bundle,

@@ -35,8 +35,8 @@ import { bootstrapHeadlessRuntimes, type HeadlessRuntimeStatus } from "@/lib/hea
 import {
   installRemoteWorkerRuntime,
   type RemoteWorkerDescriptor,
-} from "@/lib/ai/agent/team/workers/remote-worker-runtime"
-import { WorkerRpcPool } from "@/lib/ai/agent/team/workers/worker-rpc-pool"
+} from "@/lib/squads/workers/remote-worker-runtime"
+import { WorkerRpcPool } from "@/lib/squads/workers/worker-rpc-pool"
 import { clearPartitionArtifactKeyBase } from "@/lib/accounts/partition-artifact-keys"
 import { loadMessageResolver } from "@/lib/headless/i18n"
 import { installFakeIndexedDb } from "@/lib/headless/node-indexeddb"

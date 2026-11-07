@@ -199,7 +199,7 @@ export async function teamRunCore(input: TeamRunInput): Promise<TeamRunOutput> {
     // LIVE claim; an expired claim lease on a still-idle team re-claims
     // (ADR 0061 P4 contention rule). A pickup addressed to a specific
     // executor (`targetId`) rejects other claimants.
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const store = useAgentTeamStore.getState()
     const team = store.teams[input.teamId]
     const claimant = input.claimant ?? { kind: "external-agent" as const, id: "external-bridge" }
@@ -278,7 +278,7 @@ export async function teamList(input: TeamListInput = {}): Promise<TeamListOutpu
  */
 export async function teamListCore(input: TeamListInput = {}): Promise<TeamListOutput> {
   try {
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const { redactText } = await import("@cognia/redact")
     const teams = Object.values(useAgentTeamStore.getState().teams)
     const rows = teams

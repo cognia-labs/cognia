@@ -1,10 +1,10 @@
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { OctokitLike, PrDerivedStatus } from "@/lib/github/pr-observe/types"
 import { createGithubStackAdapter } from "@/lib/stack/forge/github"
-import { publishTeammatePr, type PublishedPr } from "@/lib/ai/agent/team/pr-feedback/publish"
+import { publishTeammatePr, type PublishedPr } from "@/lib/squads/pr-feedback/publish"
 import { gitPush } from "@/lib/git/commands"
 import { getProjectPrWatch, type ProjectPrWatch } from "./pr-watch"
-import { createResolveTeamRepo } from "@/lib/ai/agent/team/pr-feedback/resolvers"
+import { createResolveTeamRepo } from "@/lib/squads/pr-feedback/resolvers"
 import { recordHumanGithubWrite } from "@/lib/policy/action-review/human-github-write"
 import { repositoryOnHost, repositoryTarget } from "@/lib/policy/action-review/outbound-targets"
 

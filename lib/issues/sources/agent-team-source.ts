@@ -1,6 +1,6 @@
 /**
  * Agent-team source — READ-ONLY federated adapter over Agent Team tasks
- * (`stores/agent/agent-team-store`; ADR-0132 slice ③, ADR-0066 for the board
+ * (`stores/squads/agent-team-store`; ADR-0132 slice ③, ADR-0066 for the board
  * it mirrors).
  *
  * Reads the zustand store, NOT the `agentTeamBoard` Dexie projection: the
@@ -10,7 +10,7 @@
  * carrying no `projectId` are backfilled by the store's persist migration).
  *
  * Every capability is off. The team runtime owns these rows
- * (`lib/ai/agent/team/gates/task-move-guard.ts`); moving them lives on the team
+ * (`lib/squads/gates/task-move-guard.ts`); moving them lives on the team
  * board, and the card deep-links there.
  */
 
@@ -111,7 +111,7 @@ export interface AgentTeamSourceDeps {
 }
 
 async function defaultReadTeams(projectId: string) {
-  const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+  const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
   const state = useAgentTeamStore.getState()
   const teams = Object.values(state.teams).filter((team) => team.projectId === projectId)
   return teams.map((team) => ({
@@ -125,7 +125,7 @@ async function defaultReadRoster(): Promise<Map<string, string>> {
   // the team as its assignee, which is what every task showed before. Never a
   // reason to drop the whole board.
   try {
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const teammates = useAgentTeamStore.getState().teammates ?? {}
     return new Map(Object.values(teammates).map((m) => [m.id, m.name]))
   } catch {
@@ -156,7 +156,7 @@ async function defaultReadLabelIds(): Promise<Map<string, string>> {
 function defaultWatchTeams(notify: () => void): () => void {
   let disposed = false
   let unsubscribe: (() => void) | undefined
-  void import("@/stores/agent/agent-team-store")
+  void import("@/stores/squads/agent-team-store/store")
     .then(({ useAgentTeamStore }) => {
       if (disposed) return
       let seen = useAgentTeamStore.getState()

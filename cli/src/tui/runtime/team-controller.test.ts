@@ -11,8 +11,8 @@ import type { Team } from "@cognia/agent-config-types"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import type { TuiAction } from "../state/types"
 import type { ResolvedConfig } from "../../config/schema"
-import type { AutoOrchestrationProposal } from "@/lib/ai/agent/team/auto/types"
-import { AutoOrchestrationPiiError } from "@/lib/ai/agent/team/auto/auto-orchestrate"
+import type { AutoOrchestrationProposal } from "@/lib/squads/auto/types"
+import { AutoOrchestrationPiiError } from "@/lib/squads/auto/auto-orchestrate"
 
 function recorder() {
   const actions: TuiAction[] = []

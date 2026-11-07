@@ -10,7 +10,7 @@ const teamState = {
   teams: {} as Record<string, unknown>,
   teammates: {} as Record<string, unknown>,
 }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: typeof teamState) => unknown) => selector(teamState),
 }))
 const projectState = { activeProjectId: null as string | null }

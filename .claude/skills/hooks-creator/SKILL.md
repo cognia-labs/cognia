@@ -144,7 +144,7 @@ If you're adding lifecycle hooks around an autonomous LLM call that runs
 event firing — reuse the firer seam:
 `lib/claude/hooks/lifecycle-firer.ts` (`firePreCallHooks` / `firePostCallHooks`,
 `defaultLifecycleFirer`). See how `lib/goal/judge.ts` and
-`lib/ai/agent/team/agent-team-runtime-deps.ts` bracket their calls. The CLI backs the
+`lib/squads/agent-team-runtime-deps.ts` bracket their calls. The CLI backs the
 same interface with `cli/src/tui/runtime/lifecycle-firer.ts`.
 
 ## Before you call it done

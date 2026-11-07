@@ -50,7 +50,7 @@ jest.mock("next-intl", () => ({
  * store, and what this file pins is that the group is mounted and collapsed,
  * not what is inside it. `settings.test.tsx` covers the contents.
  */
-jest.mock("@/components/agent/workspace/settings", () => ({
+jest.mock("@/components/squads/settings", () => ({
   AgentTeamSettings: ({ team }: { team: { id: string } }) => (
     <div data-testid="agent-team-settings">{team.id}</div>
   ),
@@ -60,7 +60,7 @@ jest.mock("@/components/agent/workspace/settings", () => ({
  * Stubbed for the same reason: what this file pins is that the ROSTER EDITOR is
  * mounted rather than a read-only list. `members.test.tsx` covers the editor.
  */
-jest.mock("@/components/agent/workspace/members", () => ({
+jest.mock("@/components/squads/members", () => ({
   AgentTeamMembers: ({
     team,
     leadId,
@@ -99,7 +99,7 @@ const store = {
   updateTeam: jest.fn(),
   deleteTeam: jest.fn(),
 }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (state: unknown) => unknown) => selector(store),
 }))
 

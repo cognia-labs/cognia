@@ -4,7 +4,7 @@
  *
  * All board decision logic lives here (testable without React/dnd-kit); the
  * components in `components/issues/board/` stay thin render shells. This is
- * the same split `lib/ai/agent/team/board-model.ts` uses, and it is the reason
+ * the same split `lib/squads/board-model.ts` uses, and it is the reason
  * that board's rules are exhaustively unit-tested while its React layer is
  * mostly markup. Do not leak decisions upward into the components.
  *

@@ -22,7 +22,7 @@ import {
   readSquadTemplatePlatformStatus,
   type SquadTemplateOrigin,
   type SquadTemplatePlatformStatus,
-} from "@/lib/agent-team/squad-template-platform"
+} from "@/lib/squads/squad-template-platform"
 import { getTemplateRuntime, type TemplateRuntime } from "@/lib/templates/runtime"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 

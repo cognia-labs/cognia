@@ -370,10 +370,10 @@
       "segment": "business"
     },
     {
-      "key": "lib/ai/agent/team/agent-team-runtime.ts#runTeamLifecycle::concurrency/maxConcurrentTeammates",
+      "key": "lib/squads/agent-team-runtime.ts#runTeamLifecycle::concurrency/maxConcurrentTeammates",
       "owner": "lib/ai",
-      "note": "runTeamLifecycle at lib/ai/agent/team/agent-team-runtime.ts:802 creates the per-team-run concurrency controller from maxConcurrentTeammates, default five. Teammate turns share this controller throughout that lifecycle; another team gets its own budget.",
-      "file": "lib/ai/agent/team/agent-team-runtime.ts",
+      "note": "runTeamLifecycle at lib/squads/agent-team-runtime.ts:802 creates the per-team-run concurrency controller from maxConcurrentTeammates, default five. Teammate turns share this controller throughout that lifecycle; another team gets its own budget.",
+      "file": "lib/squads/agent-team-runtime.ts",
       "symbol": "runTeamLifecycle::concurrency/maxConcurrentTeammates",
       "value": 5,
       "line": 802,
@@ -382,10 +382,10 @@
       "evidence": "4bce68df7fe07898"
     },
     {
-      "key": "lib/ai/agent/team/synthesize-workflow.ts#synthesizeTeamWorkflow::workflow::settings/concurrency",
+      "key": "lib/squads/synthesize-workflow.ts#synthesizeTeamWorkflow::workflow::settings/concurrency",
       "owner": "lib/ai",
-      "note": "lib/ai/agent/team/synthesize-workflow.ts:309 serializes executions of the generated squad workflow with settings.concurrency=1. The capacity check in lib/workflow/runtime/orchestrator.ts:271 limits whole runs; node fan-out uses the separate maxConcurrency setting.",
-      "file": "lib/ai/agent/team/synthesize-workflow.ts",
+      "note": "lib/squads/synthesize-workflow.ts:309 serializes executions of the generated squad workflow with settings.concurrency=1. The capacity check in lib/workflow/runtime/orchestrator.ts:271 limits whole runs; node fan-out uses the separate maxConcurrency setting.",
+      "file": "lib/squads/synthesize-workflow.ts",
       "symbol": "synthesizeTeamWorkflow::workflow::settings/concurrency",
       "value": 1,
       "line": 309,
@@ -394,10 +394,10 @@
       "evidence": "62fd57539010df81"
     },
     {
-      "key": "lib/ai/agent/team/synthesize-workflow.ts#synthesizeTeamWorkflow::workflow::settings/maxConcurrency",
+      "key": "lib/squads/synthesize-workflow.ts#synthesizeTeamWorkflow::workflow::settings/maxConcurrency",
       "owner": "lib/ai",
-      "note": "synthesizeTeamWorkflow sets input.initialConcurrency as the generated squad workflow node width at lib/ai/agent/team/synthesize-workflow.ts:310; runWorkflow creates its per-run node controller at lib/workflow/runtime/orchestrator.ts:436, independent of the whole-workflow concurrency=1 policy.",
-      "file": "lib/ai/agent/team/synthesize-workflow.ts",
+      "note": "synthesizeTeamWorkflow sets input.initialConcurrency as the generated squad workflow node width at lib/squads/synthesize-workflow.ts:310; runWorkflow creates its per-run node controller at lib/workflow/runtime/orchestrator.ts:436, independent of the whole-workflow concurrency=1 policy.",
+      "file": "lib/squads/synthesize-workflow.ts",
       "symbol": "synthesizeTeamWorkflow::workflow::settings/maxConcurrency",
       "value": null,
       "line": 310,
@@ -406,10 +406,10 @@
       "segment": "business"
     },
     {
-      "key": "lib/ai/agent/team/ultracode/synthesize-ultracode.ts#synthesizeUltracodeWorkflow::workflow::settings/concurrency",
+      "key": "lib/squads/ultracode/synthesize-ultracode.ts#synthesizeUltracodeWorkflow::workflow::settings/concurrency",
       "owner": "lib/ai",
-      "note": "lib/ai/agent/team/ultracode/synthesize-ultracode.ts:165 permits one active execution of a generated Ultracode workflow. assertWorkflowRunCapacity at lib/workflow/runtime/orchestrator.ts:271 enforces that per-workflow run policy independently of the within-run node width.",
-      "file": "lib/ai/agent/team/ultracode/synthesize-ultracode.ts",
+      "note": "lib/squads/ultracode/synthesize-ultracode.ts:165 permits one active execution of a generated Ultracode workflow. assertWorkflowRunCapacity at lib/workflow/runtime/orchestrator.ts:271 enforces that per-workflow run policy independently of the within-run node width.",
+      "file": "lib/squads/ultracode/synthesize-ultracode.ts",
       "symbol": "synthesizeUltracodeWorkflow::workflow::settings/concurrency",
       "value": 1,
       "line": 165,
@@ -418,10 +418,10 @@
       "evidence": "62fd57539010df81"
     },
     {
-      "key": "lib/ai/agent/team/ultracode/synthesize-ultracode.ts#synthesizeUltracodeWorkflow::workflow::settings/maxConcurrency",
+      "key": "lib/squads/ultracode/synthesize-ultracode.ts#synthesizeUltracodeWorkflow::workflow::settings/maxConcurrency",
       "owner": "lib/ai",
-      "note": "synthesizeUltracodeWorkflow floors the requested initial node width at one at lib/ai/agent/team/ultracode/synthesize-ultracode.ts:166; the generated ultracode run consumes this value through the node controller at lib/workflow/runtime/orchestrator.ts:436.",
-      "file": "lib/ai/agent/team/ultracode/synthesize-ultracode.ts",
+      "note": "synthesizeUltracodeWorkflow floors the requested initial node width at one at lib/squads/ultracode/synthesize-ultracode.ts:166; the generated ultracode run consumes this value through the node controller at lib/workflow/runtime/orchestrator.ts:436.",
+      "file": "lib/squads/ultracode/synthesize-ultracode.ts",
       "symbol": "synthesizeUltracodeWorkflow::workflow::settings/maxConcurrency",
       "value": null,
       "line": 166,
@@ -456,7 +456,7 @@
     {
       "key": "lib/ai/eval/multiagentbench.ts#buildResearchSquad::team::config/maxConcurrentTeammates",
       "owner": "lib/ai",
-      "note": "buildResearchSquad forces one teammate for serial-squad and at most five for the parallel variant at lib/ai/eval/multiagentbench.ts:386; this per-benchmark-team policy reaches the team-run controller at lib/ai/agent/team/agent-team-runtime.ts:802.",
+      "note": "buildResearchSquad forces one teammate for serial-squad and at most five for the parallel variant at lib/ai/eval/multiagentbench.ts:386; this per-benchmark-team policy reaches the team-run controller at lib/squads/agent-team-runtime.ts:802.",
       "file": "lib/ai/eval/multiagentbench.ts",
       "symbol": "buildResearchSquad::team::config/maxConcurrentTeammates",
       "value": null,
@@ -505,7 +505,7 @@
     {
       "key": "lib/best-of-n/runtime.ts#bestOfNTeam::config/maxConcurrentTeammates",
       "owner": "lib/best-of-n",
-      "note": "bestOfNTeam allows group.n competing teammates at lib/best-of-n/runtime.ts:46; the generated team uses the shared per-team-run controller at lib/ai/agent/team/agent-team-runtime.ts:802, so one contest can admit its full candidate count separately from global admission.",
+      "note": "bestOfNTeam allows group.n competing teammates at lib/best-of-n/runtime.ts:46; the generated team uses the shared per-team-run controller at lib/squads/agent-team-runtime.ts:802, so one contest can admit its full candidate count separately from global admission.",
       "file": "lib/best-of-n/runtime.ts",
       "symbol": "bestOfNTeam::config/maxConcurrentTeammates",
       "value": null,
@@ -1512,37 +1512,37 @@
       "reason": "LIVE_MANAGER_SLOT is the Symbol.for key used to keep the singleton manager on the global object at lib/ai/agent/external/manager.ts:481; a storage property name does not limit concurrent work."
     },
     {
-      "key": "lib/ai/agent/team/agent-team-runtime.ts#runTeamLifecycle/concurrency",
+      "key": "lib/squads/agent-team-runtime.ts#runTeamLifecycle/concurrency",
       "owner": "lib/ai",
-      "file": "lib/ai/agent/team/agent-team-runtime.ts",
+      "file": "lib/squads/agent-team-runtime.ts",
       "symbol": "runTeamLifecycle/concurrency",
       "value": null,
       "line": 802,
       "language": "typescript",
       "evidence": "04a06cc478cb7728",
-      "reason": "runTeamLifecycle binds the createConcurrencyController result at lib/ai/agent/team/agent-team-runtime.ts:802; the same expression is already kept as the maxConcurrentTeammates fallback candidate, so this binding is a duplicate of one per-team-run gate."
+      "reason": "runTeamLifecycle binds the createConcurrencyController result at lib/squads/agent-team-runtime.ts:802; the same expression is already kept as the maxConcurrentTeammates fallback candidate, so this binding is a duplicate of one per-team-run gate."
     },
     {
-      "key": "lib/ai/agent/team/durable/durable-runtime.ts#createDurableTeamCoordinator::coordinator/globalConcurrency",
+      "key": "lib/squads/durable/durable-runtime.ts#createDurableTeamCoordinator::coordinator/globalConcurrency",
       "owner": "lib/ai",
-      "file": "lib/ai/agent/team/durable/durable-runtime.ts",
+      "file": "lib/squads/durable/durable-runtime.ts",
       "symbol": "createDurableTeamCoordinator::coordinator/globalConcurrency",
       "value": null,
       "line": 163,
       "language": "typescript",
       "evidence": "8448420a72047b9f",
-      "reason": "createDurableTeamCoordinator forwards an optional globalConcurrency at lib/ai/agent/team/durable/durable-runtime.ts:163; the enforcing durable coordinator scheduler and its default are already listed at packages/agent-orchestration/src/coordinator.ts:246."
+      "reason": "createDurableTeamCoordinator forwards an optional globalConcurrency at lib/squads/durable/durable-runtime.ts:163; the enforcing durable coordinator scheduler and its default are already listed at packages/agent-orchestration/src/coordinator.ts:246."
     },
     {
-      "key": "lib/ai/agent/team/durable/durable-runtime.ts#durableTeamSpec/maxConcurrentTeammates",
+      "key": "lib/squads/durable/durable-runtime.ts#durableTeamSpec/maxConcurrentTeammates",
       "owner": "lib/ai",
-      "file": "lib/ai/agent/team/durable/durable-runtime.ts",
+      "file": "lib/squads/durable/durable-runtime.ts",
       "symbol": "durableTeamSpec/maxConcurrentTeammates",
       "value": null,
       "line": 139,
       "language": "typescript",
       "evidence": "36e3d0df4c277c49",
-      "reason": "durableTeamSpec serializes config.maxConcurrentTeammates at lib/ai/agent/team/durable/durable-runtime.ts:139; the actual per-team policy is admitted by the separately listed coordinator policy at packages/agent-orchestration/src/coordinator.ts:372."
+      "reason": "durableTeamSpec serializes config.maxConcurrentTeammates at lib/squads/durable/durable-runtime.ts:139; the actual per-team policy is admitted by the separately listed coordinator policy at packages/agent-orchestration/src/coordinator.ts:372."
     },
     {
       "key": "lib/ai/council/run-council.ts#DEFAULT_CONCURRENCY",

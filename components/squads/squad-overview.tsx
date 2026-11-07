@@ -38,8 +38,8 @@ import {
 } from "lucide-react"
 
 import { ExecutionStatusPill } from "@/components/agent-runs/agent-run-status-pill"
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
-import { RuntimeBadge } from "@/components/agent/workspace/runtime-badge"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
+import { RuntimeBadge } from "@/components/squads/runtime-badge"
 import { SquadReadinessCard } from "@/components/squads/squad-readiness-card"
 import { StatusBadge } from "@/components/status-badge"
 import { ConsoleSection } from "@/components/surface/console-section"

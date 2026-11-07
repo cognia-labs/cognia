@@ -71,7 +71,7 @@ export const resolvePayloadReference: PayloadReferenceResolver = async (ref, id)
       return session ? session.title || session.id : null
     }
     case "team": {
-      const { agentTeamManager } = await import("@/lib/ai/agent/team/agent-team")
+      const { agentTeamManager } = await import("@/lib/squads/agent-team")
       return agentTeamManager.get(id)?.name ?? null
     }
     case "externalAgent": {

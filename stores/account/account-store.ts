@@ -112,7 +112,7 @@ import {
   activateAgentTeamAccountStorage,
   clearAgentTeamAccountStorage,
   purgeAgentTeamAccountStorage,
-} from "@/stores/agent/agent-team-store/store"
+} from "@/stores/squads/agent-team-store/store"
 import {
   activateProjectEditorAccountStorage,
   clearProjectEditorAccountStorage,

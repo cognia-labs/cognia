@@ -20,7 +20,7 @@ jest.mock("@/lib/scheduler", () => ({ stopSchedulerSystem: () => mockStopSchedul
 jest.mock("@/lib/execution/event-bridge", () => ({
   installExecutionEventBridge: () => mockStopBridge,
 }))
-jest.mock("@/lib/ai/agent/team/workflow-nodes/install", () => ({
+jest.mock("@/lib/squads/workflow-nodes/install", () => ({
   installTeamWorkflowNodeRuntime: jest.fn(),
 }))
 jest.mock("@/lib/workflow/runtime/trigger-subscriptions", () => ({

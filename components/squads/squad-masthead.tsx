@@ -33,8 +33,8 @@
 import { useTranslations } from "next-intl"
 import { ArrowLeftIcon, InfoIcon, SettingsIcon } from "lucide-react"
 
-import { TeamRunControls } from "@/components/agent/workspace/team-run-controls"
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
+import { TeamRunControls } from "@/components/squads/team-run-controls"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
 import { StatusBadge } from "@/components/status-badge"
 import { RunEstimateHint } from "@/components/usage/run-estimate-hint"
 import { Badge } from "@/components/ui/badge"

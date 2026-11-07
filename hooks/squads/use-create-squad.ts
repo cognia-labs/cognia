@@ -17,8 +17,8 @@
 
 import { useCallback } from "react"
 
-import { createSquad } from "@/lib/agent-team/create-squad"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { createSquad } from "@/lib/squads/create-squad"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 

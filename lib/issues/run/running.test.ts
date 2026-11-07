@@ -4,7 +4,7 @@
 
 // The real store drags the whole agent-team runtime in and races the Dexie
 // fixture; the default-deps path only needs `getState().teams`.
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: () => ({ teams: { "team-x": {}, "team-y": {} } }) },
 }))
 

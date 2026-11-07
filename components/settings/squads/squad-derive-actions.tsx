@@ -51,14 +51,14 @@ import {
 import {
   platformIdForSquadTemplate,
   publishSquadTemplateToPlatform,
-} from "@/lib/agent-team/publish-template-to-platform"
+} from "@/lib/squads/publish-template-to-platform"
 import {
   PublishConfirmDialog,
   type PublishSuggestion,
 } from "@/components/templates/publish-confirm-dialog"
 import type { TemplateVersionBump } from "@/lib/templates/contracts"
 import { getTemplateRuntime, type TemplateRuntime } from "@/lib/templates/runtime"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 
 export interface SquadDeriveActionsProps {

@@ -8,7 +8,7 @@ description: The 4 AI primitive executors (ai.prompt / ai.classify / ai.extract 
 <Status variant="stable" />
 
 <TLDR>
-This page explains two AI node families in Visual Workflows. The four **AI primitives** live in `lib/workflow/nodes/built-ins.ts` (`ai.prompt` reg at `built-ins.ts:228`, `ai.classify` at `built-ins.ts:984`, `ai.extract` at `built-ins.ts:1049`, `ai.embed` at `built-ins.ts:1134`) and follow a strict **fall-open philosophy** — when credentials are missing they degrade to a stub or a deterministic hash rather than throwing (`built-ins.ts:280`). The six **Ultracode `pattern.*` nodes** live elsewhere, in `lib/ai/agent/team/patterns/` (ADR-0022 addendum), register themselves as a load-time side effect, are synthesizer-emitted only, and require a live `TeamRunContext` resolved via `getTeamCtxOrThrow` (`_shared.ts:20`). The registry, catalog and schema mechanics they share are documented on the sibling [node system](./node-system) page; this page covers node behavior rather than registry mechanics.
+This page explains two AI node families in Visual Workflows. The four **AI primitives** live in `lib/workflow/nodes/built-ins.ts` (`ai.prompt` reg at `built-ins.ts:228`, `ai.classify` at `built-ins.ts:984`, `ai.extract` at `built-ins.ts:1049`, `ai.embed` at `built-ins.ts:1134`) and follow a strict **fall-open philosophy** — when credentials are missing they degrade to a stub or a deterministic hash rather than throwing (`built-ins.ts:280`). The six **Ultracode `pattern.*` nodes** live elsewhere, in `lib/squads/patterns/` (ADR-0022 addendum), register themselves as a load-time side effect, are synthesizer-emitted only, and require a live `TeamRunContext` resolved via `getTeamCtxOrThrow` (`_shared.ts:20`). The registry, catalog and schema mechanics they share are documented on the sibling [node system](./node-system) page; this page covers node behavior rather than registry mechanics.
 </TLDR>
 
 <StatGrid>
@@ -98,7 +98,7 @@ Any failure path sets `degradedReason` and returns the base prompt — the node 
 
 ## Ultracode pattern.* nodes
 
-The six higher-order **Agent-Team** nodes are defined under `lib/ai/agent/team/patterns/` (NOT `lib/workflow/nodes/`) per the ADR-0022 addendum. They register via `registerNodeExecutor` as a **load-time side effect**; `index.ts` re-exports all six, and `runTeamLifecycle` imports that barrel before any Ultracode run so the orchestrator can resolve them. They carry no catalog entry (synthesizer-emitted only), use the permissive params schema at `params-schemas.ts:473-478`, are all `typeVersion: 1`, and are `retryable: false`.
+The six higher-order **Agent-Team** nodes are defined under `lib/squads/patterns/` (NOT `lib/workflow/nodes/`) per the ADR-0022 addendum. They register via `registerNodeExecutor` as a **load-time side effect**; `index.ts` re-exports all six, and `runTeamLifecycle` imports that barrel before any Ultracode run so the orchestrator can resolve them. They carry no catalog entry (synthesizer-emitted only), use the permissive params schema at `params-schemas.ts:473-478`, are all `typeVersion: 1`, and are `retryable: false`.
 
 | Kind | File | Executor / reg line |
 | --- | --- | --- |

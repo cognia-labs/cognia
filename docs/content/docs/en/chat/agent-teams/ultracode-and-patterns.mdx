@@ -12,14 +12,14 @@ Each node internally dispatches multiple tool-enabled `dispatchTeammate` calls w
 This adapts Claude Code's "ultracode" quality-orchestration model to Agent Teams.
 The pipeline combines parallel blind finders, adversarial refutation, judge panels, a completeness critic, and a final synthesizer into one cited report.
 
-The six pattern nodes are in `lib/ai/agent/team/patterns/`.
+The six pattern nodes are in `lib/squads/patterns/`.
 The planner (`ultracode-planner.ts`) chooses the patterns and their parallelism.
 The synthesizer (`synthesize-ultracode.ts`) connects them into a forward-only DAG.
 The trigger (`ultracode-trigger.ts`) determines whether a run uses ultracode.
 The types and Zod definitions are in `types/agent/ultracode.ts`.
 
 <TLDR>
-  `isUltracodeActive` (`lib/ai/agent/team/ultracode/ultracode-trigger.ts:15-31`) gates the run: override `force`/`off`
+  `isUltracodeActive` (`lib/squads/ultracode/ultracode-trigger.ts:15-31`) gates the run: override `force`/`off`
   &gt; `config.ultracode.enabled` &gt; `autoMode` always/never/auto (auto = `taskComplexity === "complex"`).
   `planUltracodeWorkflow` (`ultracode-planner.ts:34-62`) dispatches a structured plan with
   `preferToolEnabled: false`. `synthesizeUltracodeWorkflow` (`synthesize-ultracode.ts:89-172`) wires
@@ -34,7 +34,7 @@ The types and Zod definitions are in `types/agent/ultracode.ts`.
 `isUltracodeActive` mirrors Claude Code's effort toggle. An explicit operator override always wins; otherwise the team must have ultracode enabled, and `autoMode` decides. The `auto` default only orchestrates when the routing assessment judged the task complex.
 
 ```typescript
-// lib/ai/agent/team/ultracode/ultracode-trigger.ts:15-31
+// lib/squads/ultracode/ultracode-trigger.ts:15-31
 export function isUltracodeActive(
   team: Pick<AgentTeam, "config" | "routingAssessment">,
   override?: UltracodeOverride
@@ -61,7 +61,7 @@ export function isUltracodeActive(
 Before a run fans out, a planner teammate decides WHICH patterns to compose and how wide to fan each one. `planUltracodeWorkflow` dispatches a single structured call with `taskId: "ultracode-plan"` and `preferToolEnabled: false` — planning is pure reasoning over the objective, no repo tools needed. Team knobs (`skepticsPerFinding`, `judgesPerAttempt`, `maxFinderRounds`) are appended to the prompt as defaults. The result is validated by `ultracodePlanSchema`.
 
 ```typescript
-// lib/ai/agent/team/ultracode/ultracode-planner.ts:34-62
+// lib/squads/ultracode/ultracode-planner.ts:34-62
 export async function planUltracodeWorkflow(
   teamCtx: TeamRunContext,
   opts: PlanUltracodeOptions = {}
@@ -97,7 +97,7 @@ export async function planUltracodeWorkflow(
 `synthesizeUltracodeWorkflow` turns the plan's stage list into a `VisualWorkflow` of `pattern.*` nodes. The wiring is **forward-only** and stage-kind-driven. Each stage becomes a node with id `p${i}_${stage.pattern}` and type `pattern.${stage.pattern}`; a terminal `synthesize` stage is appended if the plan did not end with one.
 
 ```typescript
-// lib/ai/agent/team/ultracode/synthesize-ultracode.ts:122-145
+// lib/squads/ultracode/synthesize-ultracode.ts:122-145
     switch (stage.pattern) {
       case "multi-modal-sweep":
       case "loop-until-dry":
@@ -152,7 +152,7 @@ flowchart TD
 
 After `adversarial-verify` runs, `findingSources` is `[p2_adversarial-verify]` only — but `synthesize` fans in from all prior nodes regardless, so critic gaps and the judge winner still reach the report.
 
-## The six pattern nodes — `lib/ai/agent/team/patterns/`
+## The six pattern nodes — `lib/squads/patterns/`
 
 Each module registers its executor on import via `registerNodeExecutor`. All are `retryable: false`, `typeVersion: 1`. Every pattern resolves the per-run `TeamRunContext` (`getTeamCtxOrThrow`), fans out tool-enabled `dispatchStructured` calls bounded by `fanoutLimit(teamCtx)`, and exchanges data through the upstream output map.
 
@@ -161,7 +161,7 @@ Each module registers its executor on import via `registerNodeExecutor`. All are
 Parallel finders, each blind to the others, each running a **different** search modality (by-container, by-content, by-entity, …). Returns the deduped union. Params: `MultiModalSweepParams` (`objective`, `modalities: string[]`). Output: `{ findings, finderCount }`.
 
 ```typescript
-// lib/ai/agent/team/patterns/multi-modal-sweep.ts:41-65
+// lib/squads/patterns/multi-modal-sweep.ts:41-65
   const results = await mapSettled(
     modalities,
     fanoutLimit(teamCtx),
@@ -190,7 +190,7 @@ Parallel finders, each blind to the others, each running a **different** search 
 For unknown-size discovery: keep spawning finder rounds until `dryRoundsToStop` (default **2**) consecutive rounds add nothing new, bounded by `maxRounds` (default **4**). Each round's prompt embeds an "Already found (do NOT repeat these)" known-list; dedupe is via a `seen` Set of `findingKey`. Output: `{ findings, rounds, converged }`. The `converged` flag is the convergence signal; when `maxRounds` is hit first it logs that coverage may be incomplete (no-silent-caps).
 
 ```typescript
-// lib/ai/agent/team/patterns/loop-until-dry.ts:47-92
+// lib/squads/patterns/loop-until-dry.ts:47-92
   while (round < maxRounds && dryStreak < dryRoundsToStop) {
     round += 1
     const knownSummary =
@@ -208,7 +208,7 @@ For unknown-size discovery: keep spawning finder rounds until `dryRoundsToStop` 
 Spawns **N skeptics per finding**, each prompted to REFUTE it (default `real=false` when uncertain). When `lenses` is set, each skeptic gets a distinct angle — `correctness`/`security`/`perf`/`repro` — for perspective-diverse verification (`repro` runs tool-enabled to actually reproduce). `skepticsPerFinding` default **3** (or one per lens). Output: `{ findings (survivors), killed, verified }`. The tie-kills rule is conservative — a finding survives only with **strictly** more confirmations than refutals:
 
 ```typescript
-// lib/ai/agent/team/patterns/adversarial-verify.ts:116-124
+// lib/squads/patterns/adversarial-verify.ts:116-124
   const verified: VerifiedFinding[] = findings.map((finding, fi) => {
     const verdicts = byFinding.get(fi) ?? []
     const realVotes = verdicts.filter((v) => v.real).length
@@ -225,7 +225,7 @@ Spawns **N skeptics per finding**, each prompted to REFUTE it (default `real=fal
 Independent of findings. **Phase 1**: one attempt per angle, in parallel. **Phase 2**: every judge scores every attempt 0–10 under one concurrency bound; attempts are ranked by average score. `judgesPerAttempt` default **3**. Params: `JudgePanelParams` (`angles`, `judgesPerAttempt`). Output: `{ winner, ranked, attempts }`.
 
 ```typescript
-// lib/ai/agent/team/patterns/judge-panel.ts:74-119
+// lib/squads/patterns/judge-panel.ts:74-119
   // Phase 2 — every judge scores every attempt, all under one concurrency bound.
   const jobs = attempts.flatMap((attempt, ai) =>
     Array.from({ length: judgesPerAttempt }, (_, ji) => ({ attempt, ai, ji }))
@@ -242,7 +242,7 @@ Independent of findings. **Phase 1**: one attempt per angle, in parallel. **Phas
 A single critic over the upstream findings, asking what is MISSING — a search angle never run, a claim left unverified, a region or source not yet examined. The gaps it surfaces feed forward (the synthesizer calls them out as limitations). Output: `{ gaps: CritiqueGap[] }`.
 
 ```typescript
-// lib/ai/agent/team/patterns/completeness-critic.ts:42-53
+// lib/squads/patterns/completeness-critic.ts:42-53
       prompt:
         `Objective: ${objective}\n\n` +
         `The work so far produced these findings:\n${findingsBlock}\n\n` +
@@ -260,7 +260,7 @@ A single critic over the upstream findings, asking what is MISSING — a search 
 The terminal node. Folds the verified `findings`, the judge-panel `winner`, and any open `gaps` into one cited report, posts it to the team chat as a `result_share` message (truncated at 4000 chars), and returns it so the run can write it to `team.finalResult`. Output: `{ report, citations, findingCount }`.
 
 ```typescript
-// lib/ai/agent/team/patterns/synthesize.ts:74-92
+// lib/squads/patterns/synthesize.ts:74-92
   // Surface the report in the team chat.
   teamCtx.storeWriter.addMessage({
     teamId: teamCtx.teamId,
@@ -307,7 +307,7 @@ Companion Zod schemas — `findingsResultSchema`, `verdictSchema`, `attemptSchem
 The runtime branches on `ultracodeActive`: a side-effect import registers the `pattern.*` executors, the planner produces a plan, the synthesizer wires the DAG, and `runWorkflow` executes it. On success the terminal report is persisted via `storeWriter.setFinalResult`.
 
 ```typescript
-// lib/ai/agent/team/agent-team-runtime.ts:413-429
+// lib/squads/agent-team-runtime.ts:413-429
     // ── Synthesize the VisualWorkflow (ultracode patterns vs. flat task DAG) ──
     let workflow: VisualWorkflow
     if (ultracodeActive) {
@@ -329,7 +329,7 @@ The runtime branches on `ultracodeActive`: a side-effect import registers the `p
 ```
 
 ```typescript
-// lib/ai/agent/team/agent-team-runtime.ts:485-487 (ultracode only, on completion)
+// lib/squads/agent-team-runtime.ts:485-487 (ultracode only, on completion)
         const report = (result.output as { report?: string } | undefined)?.report
         if (report && deps.storeWriter.setFinalResult) {
           deps.storeWriter.setFinalResult(teamId, report)

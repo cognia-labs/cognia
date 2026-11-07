@@ -12,7 +12,7 @@
  */
 
 import { useTranslations } from "next-intl"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { EntityPicker } from "./entity-picker"
 
 export interface TeamPickerProps {

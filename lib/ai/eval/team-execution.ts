@@ -13,10 +13,10 @@ import type { AgentTeam, AgentTeammate, AgentTeamTask } from "@/types/agent/agen
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalSample } from "@/types/eval/eval"
 import type { EvalPersistenceScope } from "@/lib/db/eval-lab"
-import { startSquadRun } from "@/lib/ai/agent/team/squad/start-squad-run"
-import { runTeamWaves } from "@/lib/ai/agent/team/team-wave-runner"
-import type { TeamRunContext } from "@/lib/ai/agent/team/team-run-context"
-import { buildLeadExecutionConfig } from "@/lib/ai/agent/team/squad/lead-execution"
+import { startSquadRun } from "@/lib/squads/squad/start-squad-run"
+import { runTeamWaves } from "@/lib/squads/team-wave-runner"
+import type { TeamRunContext } from "@/lib/squads/team-run-context"
+import { buildLeadExecutionConfig } from "@/lib/squads/squad/lead-execution"
 import { createPureModelEvalTarget } from "./targets/model"
 import { applyPiiGate } from "@/lib/workflow/nodes/ai/pii-gate"
 
@@ -87,7 +87,7 @@ const defaults: TeamEvalExecutionDeps = {
   async loadDefinition(teamId, scope) {
     scope?.assertActive()
     const [{ useAgentTeamStore }, { getSettings }] = await Promise.all([
-      import("@/stores/agent/agent-team-store"),
+      import("@/stores/squads/agent-team-store/store"),
       import("@/lib/db/settings"),
     ])
     scope?.assertActive()

@@ -62,7 +62,7 @@ jest.mock("@/hooks/data/use-client-live-query", () => ({
   },
 }))
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 import { SquadReadinessCard } from "./squad-readiness-card"

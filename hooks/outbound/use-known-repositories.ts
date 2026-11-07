@@ -194,7 +194,7 @@ async function resolveTeamRepositories(
   paths: StoredSources["teamPaths"]
 ): Promise<KnownRepositorySources["teamRepositories"]> {
   if (paths.length === 0) return []
-  const { createResolveTeamRepo } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
+  const { createResolveTeamRepo } = await import("@/lib/squads/pr-feedback/resolvers")
   const resolve = createResolveTeamRepo()
   const resolved = await Promise.all(
     paths.map(async ({ path, updatedAt }) => {

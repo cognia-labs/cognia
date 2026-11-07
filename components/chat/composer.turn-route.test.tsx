@@ -74,7 +74,7 @@ import { DataAdapterProvider } from "@/lib/data-hooks/context"
 import type { DataAdapter } from "@/lib/data-hooks/types"
 import { useChatStore } from "@/stores/chat"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
-import type { MentionTarget } from "@/lib/agent-team/runtime-targets"
+import type { MentionTarget } from "@/lib/squads/runtime-targets"
 import type { ChatSession } from "@cognia/agent-config-types"
 
 const CODEX: MentionTarget = {

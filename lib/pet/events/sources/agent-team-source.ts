@@ -2,7 +2,7 @@
 // pet busy ("teamRun"); finishing celebrates a success worth more XP than a
 // single chat turn.
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store/store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { PetEmit } from "../pet-event-bus"
 import { wireActivitySource } from "./activity-source"
 

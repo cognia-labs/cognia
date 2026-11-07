@@ -7,16 +7,16 @@
 import { renderHook } from "@testing-library/react"
 
 import { useCreateSquad } from "./use-create-squad"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { Project } from "@/types"
 
 const createSquad = jest.fn(
-  async (..._args: Parameters<typeof import("@/lib/agent-team/create-squad").createSquad>) => ({
+  async (..._args: Parameters<typeof import("@/lib/squads/create-squad").createSquad>) => ({
     id: "new",
   })
 )
-jest.mock("@/lib/agent-team/create-squad", () => ({
+jest.mock("@/lib/squads/create-squad", () => ({
   createSquad: (...a: Parameters<typeof createSquad>) => createSquad(...a),
 }))
 

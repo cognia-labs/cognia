@@ -40,7 +40,7 @@ import {
   installRemoteWorkerRuntime,
   __resetRemoteWorkerRuntimeForTesting,
   type RemoteWorkerRuntime,
-} from "@/lib/ai/agent/team/workers/remote-worker-runtime"
+} from "@/lib/squads/workers/remote-worker-runtime"
 import { isAgentTeamRemoteDispatchEnabled } from "@/lib/ai/agent/execution/feature-flags"
 
 describe("ExecutionWorkersCard", () => {

@@ -25,7 +25,7 @@ import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 
 import { AgentRunsPanel } from "@/components/agent-runs/agent-runs-panel"
-import { AgentTeamTasks } from "@/components/agent/workspace/tasks"
+import { AgentTeamTasks } from "@/components/squads/tasks"
 import { SquadMasthead } from "@/components/squads/squad-masthead"
 import { SquadOverview } from "@/components/squads/squad-overview"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -38,7 +38,7 @@ import {
 } from "@/hooks/squads/use-squad-route-state"
 import { useSquadRunControl } from "@/hooks/squads/use-squad-run-control"
 import { cn } from "@/lib/utils"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 export interface SquadDetailViewProps {
   squadId: string

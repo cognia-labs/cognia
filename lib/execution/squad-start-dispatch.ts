@@ -1,7 +1,7 @@
 "use client"
 
 /** Client routing for a manual gesture; startSquadRun remains the only launch runtime. */
-import type { StartSquadRunResult } from "@/lib/ai/agent/team/squad/start-squad-run"
+import type { StartSquadRunResult } from "@/lib/squads/squad/start-squad-run"
 import type { HostProfile } from "@/lib/platform/capabilities"
 import { HostConsentRequiredError, issueHostAdminLease } from "@/lib/tauri/admin-lease"
 import { getCompanionConfigGeneration } from "@/lib/tauri/transport-companion"
@@ -53,7 +53,7 @@ export function createSquadStartAttempt(input: SquadStartDispatch) {
     try {
       if (!sameHost()) return { started: false, reason: "host_changed" }
       if (!remote) {
-        const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
+        const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
         return await startSquadRun({
           localAuthorization: LOCAL_PERSON_RUN,
           squadId: teamId,

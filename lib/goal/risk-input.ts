@@ -1,7 +1,7 @@
 /**
  * /goal adapter for the risk classifier — projects a goal's objective plus its
  * session posture onto the transport-agnostic `RiskInput` that `lib/policy/risk`
- * consumes. The /goal counterpart of `lib/ai/agent/team/risk-input.ts`.
+ * consumes. The /goal counterpart of `lib/squads/risk-input.ts`.
  *
  * **Honest limitation (ADR-0070 Phase 2).** A goal has no roster. The only
  * signals available at creation time are the redacted objective text and the

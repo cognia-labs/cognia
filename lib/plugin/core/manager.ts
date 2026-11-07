@@ -7219,8 +7219,7 @@ export class PluginManager {
     // dropped id surfaces a stale-capability warning. Fire-and-forget: the
     // disable flow must not block on the (async, Dexie-backed) sweep.
     try {
-      const { refreshAllInstanceCapabilityWarnings } =
-        await import("@/lib/ai/agent/team/capability-audit")
+      const { refreshAllInstanceCapabilityWarnings } = await import("@/lib/squads/capability-audit")
       void refreshAllInstanceCapabilityWarnings().catch((err) => {
         loggers.manager.warn(`[plugin:${pluginId}] capability-audit refresh failed:`, err)
       })

@@ -4,7 +4,7 @@
 
 import { renderHook } from "@testing-library/react"
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
 let mockStored: boolean | undefined = undefined

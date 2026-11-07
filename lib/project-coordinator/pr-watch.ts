@@ -2,19 +2,19 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { OctokitLike } from "@/lib/github/pr-observe/types"
 import { GITHUB_DOT_COM, type GithubHost } from "@/lib/github/host"
 import { fetchPrObservation } from "@/lib/github/pr-observe/fetch"
-import { bindingRef, type PrWatchTarget } from "@/lib/ai/agent/team/pr-feedback/binding"
+import { bindingRef, type PrWatchTarget } from "@/lib/squads/pr-feedback/binding"
 import {
   createRealPrFeedbackTimers,
   PrFeedbackController,
   type PrFeedbackDeps,
   type PrObservationRecord,
-} from "@/lib/ai/agent/team/pr-feedback/observer"
-import type { PrNudge } from "@/lib/ai/agent/team/pr-feedback/reactions"
+} from "@/lib/squads/pr-feedback/observer"
+import type { PrNudge } from "@/lib/squads/pr-feedback/reactions"
 import {
   createResolveOctokit,
   createResolveTeamRepo,
   type ResolvedTeamRepo,
-} from "@/lib/ai/agent/team/pr-feedback/resolvers"
+} from "@/lib/squads/pr-feedback/resolvers"
 import {
   getSessionPrObservation,
   recordSessionPrObservation,

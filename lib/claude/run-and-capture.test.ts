@@ -3143,9 +3143,8 @@ describe("durable local executor stop evidence", () => {
   it.each(["send-timeout", "capture-timeout", "sync-throw", "ended-before-timeout"] as const)(
     "keeps a dispatched send unconfirmed after %s unless its turn ends",
     async (mode) => {
-      const { createDurableTeamCoordinator } =
-        await import("@/lib/ai/agent/team/durable/durable-runtime")
-      const { beginDurableDispatch } = await import("@/lib/ai/agent/team/durable/durable-dispatch")
+      const { createDurableTeamCoordinator } = await import("@/lib/squads/durable/durable-runtime")
+      const { beginDurableDispatch } = await import("@/lib/squads/durable/durable-dispatch")
       const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
       const { transport } = await import("@/lib/tauri")
       const coordinator = createDurableTeamCoordinator()
@@ -3396,10 +3395,9 @@ describe("durable local executor stop evidence", () => {
   it.each(["transcript", "beforeSend", "PII", "sidecar-start", "sync"] as const)(
     "releases a never-started %s send and permits recovery without terminal events",
     async (phase) => {
-      const { createDurableTeamCoordinator } =
-        await import("@/lib/ai/agent/team/durable/durable-runtime")
-      const { beginDurableDispatch } = await import("@/lib/ai/agent/team/durable/durable-dispatch")
-      const { controlDurableRun } = await import("@/lib/ai/agent/team/durable/durable-control")
+      const { createDurableTeamCoordinator } = await import("@/lib/squads/durable/durable-runtime")
+      const { beginDurableDispatch } = await import("@/lib/squads/durable/durable-dispatch")
+      const { controlDurableRun } = await import("@/lib/squads/durable/durable-control")
       const { transport } = await import("@/lib/tauri")
       const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
       const coordinator = createDurableTeamCoordinator()
@@ -3483,8 +3481,7 @@ describe("durable local executor stop evidence", () => {
         })
         await expect(controlDurableRun(runId, "stop", { coordinator })).resolves.toBeUndefined()
         expect(await coordinator.store.getRun(runId)).toMatchObject({ status: "cancelled" })
-        const { createSquadRunRecords } =
-          await import("@/lib/ai/agent/team/squad/squad-run-records")
+        const { createSquadRunRecords } = await import("@/lib/squads/squad/squad-run-records")
         await expect(
           createSquadRunRecords({
             runId: `${runId}-replacement`,
@@ -3527,9 +3524,8 @@ describe("durable local executor stop evidence", () => {
   it.each(["timeout", "abort", "exit", "closed"] as const)(
     "keeps recovery blocked after capture %s until the executor ends",
     async (mode) => {
-      const { createDurableTeamCoordinator } =
-        await import("@/lib/ai/agent/team/durable/durable-runtime")
-      const { beginDurableDispatch } = await import("@/lib/ai/agent/team/durable/durable-dispatch")
+      const { createDurableTeamCoordinator } = await import("@/lib/squads/durable/durable-runtime")
+      const { beginDurableDispatch } = await import("@/lib/squads/durable/durable-dispatch")
       const coordinator = createDurableTeamCoordinator()
       const team = {
         id: "stop-evidence-team",

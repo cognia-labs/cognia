@@ -15,13 +15,19 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
 }))
 
 const rosterSeen: string[][] = []
-jest.mock("@/components/agent/workspace/activity-report", () => ({
+jest.mock("@/components/squads/activity-report/report-kpi-cards", () => ({
   ReportKpiCards: () => <div data-testid="report-kpi" />,
+}))
+jest.mock("@/components/squads/activity-report/report-token-burn", () => ({
   ReportTokenBurn: () => <div data-testid="report-burn" />,
+}))
+jest.mock("@/components/squads/activity-report/report-taskline", () => ({
   ReportTaskline: ({ teammates }: { teammates: Array<{ id: string }> }) => {
     rosterSeen.push(teammates.map((m) => m.id))
     return <div data-testid="report-taskline" />
   },
+}))
+jest.mock("@/components/squads/activity-report/report-plugin-slot", () => ({
   ReportPluginSlot: () => <div data-testid="report-plugin-slot" />,
 }))
 
@@ -29,7 +35,7 @@ const store = {
   teams: {} as Record<string, { executionReport?: unknown }>,
   teammates: {} as Record<string, { id: string; teamId: string }>,
 }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: unknown) => unknown) => selector(store),
 }))
 

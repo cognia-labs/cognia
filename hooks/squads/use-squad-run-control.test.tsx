@@ -5,7 +5,7 @@
 
 import { act, renderHook, waitFor } from "@testing-library/react"
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { DEFAULT_TEAM_CONFIG, type AgentTeam } from "@/types/agent/agent-team"
 import type { ExecutionRun, RunControlAction } from "@/types/execution/run"
 import type { HostProfile } from "@/lib/platform/capabilities"

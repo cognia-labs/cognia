@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { SquadsSection } from "./squads-section"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
 const replaceMock = jest.fn()

@@ -19,7 +19,7 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
 
 const mounted: Array<{ teamId: string; runId?: string }> = []
 let capturedProps: Record<string, (arg?: unknown) => void> = {}
-jest.mock("@/components/agent/workspace/durable-operations", () => ({
+jest.mock("@/components/squads/durable-operations", () => ({
   DurableOperations: (props: {
     team: { id: string }
     runId?: string
@@ -39,7 +39,7 @@ const store = {
   teams: { "squad-1": { id: "squad-1", config: {} } } as Record<string, unknown>,
   updateTeam,
 }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: unknown) => unknown) => selector(store),
 }))
 

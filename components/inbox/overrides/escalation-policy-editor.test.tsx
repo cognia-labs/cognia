@@ -4,7 +4,7 @@
 
 import { render, screen, fireEvent } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { EscalationPolicy } from "@/types/connectors/escalation"
 import { EscalationPolicyEditor } from "./escalation-policy-editor"
 

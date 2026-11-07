@@ -12,13 +12,13 @@ A team distributes work: the lead plans, and teammates execute tasks in parallel
 The team reports the results as one run.
 
 Since [ADR-0022](../adr/0022-agent-team-runtime-hardening), a team uses the shared workflow orchestrator.
-`runTeamLifecycle` (`lib/ai/agent/team/agent-team-runtime.ts:122-527`) is a synthesizer of approximately 400 lines.
+`runTeamLifecycle` (`lib/squads/agent-team-runtime.ts:122-527`) is a synthesizer of approximately 400 lines.
 It converts the team and tasks into a `VisualWorkflow`, then passes it to that orchestrator.
 There is no separate team engine to synchronize.
 Team runs persist like other workflow runs, as `workflowRuns` rows with `triggerKind: "team"`.
 
 <TLDR>
-  Clicking Run calls `agentTeamManager.start` (`lib/ai/agent/team/agent-team.ts:91`), which invokes
+  Clicking Run calls `agentTeamManager.start` (`lib/squads/agent-team.ts:91`), which invokes
   `runTeamLifecycle` (`agent-team-runtime.ts:122`). The synthesizer resolves team/teammates/tasks from
   the Zustand store, runs the capability-audit and plan-approval gates, builds per-run shared state
   (TeammatePool + BudgetGuard + TeamNotifier + ConcurrencyController, lines 251-263), registers a
@@ -46,7 +46,7 @@ Team runs persist like other workflow runs, as `workflowRuns` rows with `trigger
 A team is a thin synthesis layer over the workflow engine. The architecture is built around five commitments:
 
 1. **One orchestrator.** Per ADR-0022, the duplicate team executor was removed. `runWorkflow` is the only step scheduler; the team runtime only *produces* the workflow it runs. Concurrent scheduling, retries, crash recovery, and event logging come for free from the workflow layer.
-2. **Durable definitions, ephemeral run state.** From persist v8, squads, teammates and tasks are authoritative in Dexie (`agentTeams` / `agentTeammates` / `agentTeamTasks`), mirrored by `stores/agent/agent-team-store/dexie-bridge.ts`. The localStorage blob keeps only templates, the default config and a few view preferences. Messages, shared memory, consensus and delegations stay RAM-only, and run *history* persists as `agentTeamRuns` plus `workflowRuns` rows with `triggerKind: "team"`.
+2. **Durable definitions, ephemeral run state.** From persist v8, squads, teammates and tasks are authoritative in Dexie (`agentTeams` / `agentTeammates` / `agentTeamTasks`), mirrored by `stores/squads/agent-team-store/dexie-bridge.ts`. The localStorage blob keeps only templates, the default config and a few view preferences. Messages, shared memory, consensus and delegations stay RAM-only, and run *history* persists as `agentTeamRuns` plus `workflowRuns` rows with `triggerKind: "team"`.
 3. **Everything is a Character at dispatch time.** A teammate carries its own runtime, model, system prompt, and capability overlay. At dispatch, `teammateToCharacter` (`team/teammate-character.ts:56`) projects it into a synthetic `Character`, so each teammate's Claude turn goes through the same build-options pipeline (skills, MCP, computer-use, permissions) as the [built-in agent](./built-in-agent).
 4. **Two-layer capability scope.** A team capability bundle (7 keys) is overlaid per-teammate via add / remove / replace semantics, resolved at runtime by `resolveTeammateCapabilities` (`team/capability-resolver.ts:91`). Plugins contribute capabilities ([ADR-0032](../adr/0032-agent-team-plugin-integration)) through overlay registries.
 5. **Fail-visible HITL gates.** When the run cannot safely proceed — stale capability refs, a plan awaiting approval, budget critical, all teammates unavailable, a disqualified teammate — the run pauses, opens a gate modal, and waits for an operator decision on the approval bus rather than silently degrading.
@@ -57,7 +57,7 @@ Each box is annotated with the file and line where the work happens. The spine r
 
 ```mermaid
 flowchart TB
-  subgraph UI["Workspace UI — components/agent/workspace/"]
+  subgraph UI["Workspace UI — components/squads/"]
     RUN["team-run-controls.tsx<br/>Start / Start with ultracode / Pause / Resume / Stop"]
     GATES_UI["team/approval-gate-dialog.tsx<br/>4 gate-type modals"]
   end
@@ -124,7 +124,7 @@ flowchart TB
 | Principle | What it means | Where |
 | --- | --- | --- |
 | **Single orchestrator** | The team runtime synthesizes a `VisualWorkflow` and delegates; `runWorkflow` is the only step scheduler. No duplicate engine. | `agent-team-runtime.ts:122` → `lib/workflow/runtime/orchestrator.ts` |
-| **Durable definitions, ephemeral run state** | Squads live in Dexie from persist v8; run history persists as `workflowRuns` rows with `triggerKind` set to "team". | `stores/agent/agent-team-store/dexie-bridge.ts` · `lib/db/agent-team-definitions.ts` |
+| **Durable definitions, ephemeral run state** | Squads live in Dexie from persist v8; run history persists as `workflowRuns` rows with `triggerKind` set to "team". | `stores/squads/agent-team-store/dexie-bridge.ts` · `lib/db/agent-team-definitions.ts` |
 | **Everything is a Character** | A teammate is projected to a synthetic `Character` at dispatch time, so teammates ride the full `resolveSendOptions` pipeline. | `team/teammate-character.ts:56` · `team/dispatch-teammate.ts:107-113` |
 | **Two-layer capability scope** | A team bundle (7 keys) is overlaid per-teammate via add / remove / replace and resolved at runtime; plugins feed the registries. | `team/capability-resolver.ts:91` · ADR-0032 |
 | **Fail-visible HITL gates** | When a run cannot proceed safely it pauses, opens a gate, and awaits a human decision on the approval bus — never silent degradation. | `agent-team-runtime.ts:265-391` · `lib/runtime/approval-bus.ts` |

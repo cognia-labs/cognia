@@ -63,8 +63,8 @@ export async function readSharedMemory(
   options: PluginSharedMemoryReadOptions = {}
 ): Promise<PluginSharedMemoryReadEntry[]> {
   const [{ useAgentTeamStore }, selectors] = await Promise.all([
-    import("@/stores/agent/agent-team-store"),
-    import("@/stores/agent/agent-team-store/selectors"),
+    import("@/stores/squads/agent-team-store/store"),
+    import("@/stores/squads/agent-team-store/selectors"),
   ])
   const entries = selectors.selectSharedMemoryEntriesForReader(
     teamId,

@@ -22,8 +22,8 @@ import { useEffect, useState } from "react"
 
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { getDb } from "@/lib/db/schema"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
-import { whenAgentTeamDexieBridgeHydrated } from "@/stores/agent/agent-team-store/dexie-bridge"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
+import { whenAgentTeamDexieBridgeHydrated } from "@/stores/squads/agent-team-store/dexie-bridge"
 
 export function useSquadDefinitionsHydrating(): boolean {
   const storeHasTeams = useAgentTeamStore((s) => Object.keys(s.teams).length > 0)

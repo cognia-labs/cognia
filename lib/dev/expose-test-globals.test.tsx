@@ -532,7 +532,7 @@ describe("ExposeTestGlobals", () => {
     await provisionBrowserVault("acct_e2e_vault", "correct horse battery staple")
     activateAccountDatabase("acct_e2e_vault")
     const [{ useAgentTeamStore }, { AGENT_TEAM_SECURITY_CONFIG_KEYS }] = await Promise.all([
-      import("@/stores/agent/agent-team-store"),
+      import("@/stores/squads/agent-team-store/store"),
       import("@/types/agent/agent-team-runtime"),
     ])
     const team = useAgentTeamStore.getState().createTeam({

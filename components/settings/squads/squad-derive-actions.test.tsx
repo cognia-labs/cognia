@@ -6,7 +6,7 @@ import { NextIntlClientProvider } from "next-intl"
 
 import { SquadDeriveActions } from "./squad-derive-actions"
 import type { TemplateRuntime } from "@/lib/templates/runtime"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 
 const messages = {

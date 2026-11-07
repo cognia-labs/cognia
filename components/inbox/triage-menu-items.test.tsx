@@ -17,7 +17,7 @@ jest.mock("@/hooks/connectors/use-conversation-labels", () => ({
   useConversationLabels: () => mockLabels(),
 }))
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { MenuKit, MenuKitItemProps } from "@/components/shared/menu-kit"
 import {
   AssigneeMenuItems,

@@ -16,13 +16,13 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
 
 const consensusTeamIds: (string | undefined)[] = []
 const delegationTeamIds: (string | undefined)[] = []
-jest.mock("@/components/agent/workspace/consensus-panel", () => ({
+jest.mock("@/components/squads/consensus-panel", () => ({
   ConsensusPanel: ({ teamId }: { teamId?: string }) => {
     consensusTeamIds.push(teamId)
     return <div data-testid="consensus-panel" />
   },
 }))
-jest.mock("@/components/agent/workspace/delegations-panel", () => ({
+jest.mock("@/components/squads/delegations-panel", () => ({
   DelegationsPanel: ({ teamId }: { teamId?: string }) => {
     delegationTeamIds.push(teamId)
     return <div data-testid="delegations-panel" />

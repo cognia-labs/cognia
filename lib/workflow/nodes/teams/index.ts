@@ -215,7 +215,7 @@ registerNodeExecutor({
 // ADR-0022 (run, task dispatch), ADR-0071 (task review), the Registry
 // reconcile checkpoint, and the team surface nodes (compose / status /
 // delegate / message). The implementations belong to the Agent Team
-// (`lib/ai/agent/team/workflow-nodes`) and are reached through the installable
+// (`lib/squads/workflow-nodes`) and are reached through the installable
 // port, so the workflow engine never imports team code (ADR-0217).
 //
 // Task dispatch retries only after settlement and the task-level recovery gate;

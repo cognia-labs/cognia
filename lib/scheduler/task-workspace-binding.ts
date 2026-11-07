@@ -65,7 +65,7 @@ async function defaultSessionWorkspace(sessionId: string): Promise<string | null
 }
 
 async function defaultSquadWorkspace(squadId: string): Promise<string | null | undefined> {
-  const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+  const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
   return useAgentTeamStore.getState().teams[squadId]?.projectId
 }
 

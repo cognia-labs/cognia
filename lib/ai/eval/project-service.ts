@@ -122,7 +122,7 @@ export async function readEvalTargetDependency(
   )
   let definition: unknown
   if (variant.kind === "team") {
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const store = useAgentTeamStore.getState()
     definition = {
       team: store.getTeam(variant.targetId ?? ""),

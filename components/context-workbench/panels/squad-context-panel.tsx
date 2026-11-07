@@ -14,7 +14,7 @@
  */
 
 import { AgentTeamIcon, MobileSpotIcon } from "@/components/mobile/mobile-spot-icon"
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { ShieldAlertIcon } from "lucide-react"
@@ -25,7 +25,7 @@ import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/comp
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { StatusBadge } from "@/components/status-badge"
 import { useChatExecutor } from "@/components/agent/composition/use-chat-executor"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { usePendingSquadReviews } from "@/hooks/squads/use-pending-squad-reviews"
 import type { TeammateStatus } from "@/types/agent/agent-team"
 import { cn } from "@/lib/utils"

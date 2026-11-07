@@ -37,7 +37,7 @@
 
 import { useTranslations } from "next-intl"
 import { SearchIcon } from "lucide-react"
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
 
 import { ListSkeleton } from "@/components/mobile/discover/list-skeleton"
 import { StatusBadge } from "@/components/status-badge"

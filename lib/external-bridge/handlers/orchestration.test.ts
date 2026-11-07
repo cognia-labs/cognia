@@ -76,7 +76,7 @@ jest.mock("@cognia/redact", () => ({
 
 const updateTeamMock = jest.fn()
 let storeTeams: Record<string, unknown> = {}
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: {
     getState: () => ({ teams: storeTeams, updateTeam: updateTeamMock }),
   },

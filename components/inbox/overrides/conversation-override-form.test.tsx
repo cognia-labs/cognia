@@ -9,7 +9,7 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { ConversationOverrideForm } from "./conversation-override-form"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import { defaultTriggerPolicyFor } from "@/types/connectors/policy"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { __setInboxWriteRouteDepsForTests } from "@/lib/connectors/inbox-writes/route"
 
 // Every write in this form goes through the cross-shell inbox-write facade,

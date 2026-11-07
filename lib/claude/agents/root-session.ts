@@ -16,7 +16,7 @@
  * outbound policy engine (ADR-0239) scopes its fence and instruction grants to
  * it, so a subagent and a teammate of the same request share one fence.
  *
- * An Agent Team run (`lib/ai/agent/team/`) executes under its run id, which is
+ * An Agent Team run (`lib/squads/`) executes under its run id, which is
  * not a session id; its root is the team's `sessionId`, which the caller reads
  * from the team record.
  */

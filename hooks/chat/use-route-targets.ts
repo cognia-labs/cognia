@@ -17,7 +17,7 @@
 
 import { useMemo } from "react"
 
-import { buildRouteTargets, type MentionTarget } from "@/lib/agent-team/runtime-targets"
+import { buildRouteTargets, type MentionTarget } from "@/lib/squads/runtime-targets"
 import type { AgentRuntimeDescriptor } from "@/lib/ai/agent/runtime-catalog/types"
 import { runtimeRefKey } from "@/lib/ai/agent/runtime-catalog/types"
 import { descriptorForRef, resolveRouteLane } from "@/lib/chat/turn-route/resolve"
@@ -26,8 +26,8 @@ import { routeSquadsFor } from "@/lib/chat/turn-route/snapshot"
 import type { RouteLane } from "@/lib/chat/turn-route/types"
 import { useAgentRuntimeCatalog } from "@/hooks/agent/use-agent-runtime-catalog"
 import { useRuntimeRefForSession } from "@/stores/agent/agent-runtime-store"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
-import { selectTeammates, selectTeams } from "@/stores/agent/agent-team-store/selectors"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
+import { selectTeammates, selectTeams } from "@/stores/squads/agent-team-store/selectors"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { ChatSession } from "@cognia/agent-config-types"
 

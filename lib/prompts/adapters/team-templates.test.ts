@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 
 const mockPublish = jest.fn(async (_template: unknown) => undefined)
-jest.mock("@/lib/agent-team/publish-template-to-platform", () => ({
+jest.mock("@/lib/squads/publish-template-to-platform", () => ({
   publishSquadTemplateToPlatform: (template: unknown) => mockPublish(template),
 }))
 
@@ -9,7 +9,7 @@ import {
   __resetAgentTeamTemplatesForTesting,
   registerAgentTeamTemplate,
 } from "@/lib/plugin/registries/agent-team-template-registry"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 import { resourceKey } from "../resources"
 import { teamTemplatePromptAdapter } from "./team-templates"

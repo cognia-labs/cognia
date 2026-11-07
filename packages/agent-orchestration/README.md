@@ -17,7 +17,7 @@ import { createDurableTeamCoordinator } from "@cognia/agent-orchestration/coordi
 import { createMemoryTeamRunStore } from "@cognia/agent-orchestration/memory-store"
 ```
 
-The app binding is `lib/ai/agent/team/durable/durable-runtime.ts` (Dexie store
+The app binding is `lib/squads/durable/durable-runtime.ts` (Dexie store
 in `lib/db/agent-team-runtime.ts`). Checked by
 `node scripts/build/pack-test-agent-package.mjs agent-orchestration`. Details:
 `docs/content/docs/en/subsystems/agent-packages/orchestration.mdx`.

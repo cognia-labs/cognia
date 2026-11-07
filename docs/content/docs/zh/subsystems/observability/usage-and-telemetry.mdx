@@ -48,7 +48,7 @@ const MODEL_CONTEXT_WINDOWS: Array<{ pattern: RegExp; window: number }> = [
 
 `tokensInWindow(usage)`（`:103`）累加 input + output + cacheRead + cacheCreation；`contextLevel` 对占比进行分级（`crit ≥ 0.835`、`warn ≥ 0.6`，否则为 `ok`）；`computeContextWindowUsage` 将它们串联起来供指示器使用。`getLatestUsage(messages)` 从尾部向前遍历，因此一个正在流式输出的轮次不会重置读数。
 
-`components/chat/context-usage-indicator.tsx` 是唯一的编辑器/工作流环（整合了两个旧的 `<Context>` 块 + 一个已删除的 header `ContextGauge`）。它绘制填充条，并在 `AUTO_COMPACT_FRACTION` 处标出一个自动压缩阈值标记。`components/agent/workspace/token-usage-line.tsx` 是 Agent Team 聊天的紧凑入/出/总计读数。
+`components/chat/context-usage-indicator.tsx` 是唯一的编辑器/工作流环（整合了两个旧的 `<Context>` 块 + 一个已删除的 header `ContextGauge`）。它绘制填充条，并在 `AUTO_COMPACT_FRACTION` 处标出一个自动压缩阈值标记。`components/squads/token-usage-line.tsx` 是 Agent Team 聊天的紧凑入/出/总计读数。
 
 ## 按轮次的会话用量
 

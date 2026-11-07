@@ -177,7 +177,7 @@ import { requestRouteStores, snapshotRouteContext } from "@/lib/chat/turn-route/
 import { isRoutableSession, type TurnRoute } from "@/lib/chat/turn-route/types"
 import { isChatTurnQueued } from "@/lib/execution/chat-lease"
 import { sessionStatusOf } from "@/hooks/chat/steer-runtime"
-import { routeFailureText } from "@/components/agent/workspace/agent-mention-picker"
+import { routeFailureText } from "@/components/squads/agent-mention-picker"
 import type { RouteChipState } from "./composer-chip-overlay"
 import type { MentionSegment } from "@/lib/slash-commands/parse-segments"
 import { ContextChipBar } from "./composer/context-chip-bar"

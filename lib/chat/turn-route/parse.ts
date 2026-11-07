@@ -12,7 +12,7 @@
 
 import type { SendContent } from "@cognia/agent-config-types"
 import { splitPromptPreamble } from "@/lib/chat/prompt-preamble"
-import type { MentionTarget } from "@/lib/agent-team/runtime-targets"
+import type { MentionTarget } from "@/lib/squads/runtime-targets"
 import type { TurnRoute } from "./types"
 
 export interface MentionCandidate {

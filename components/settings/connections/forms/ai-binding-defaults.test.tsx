@@ -19,7 +19,7 @@ jest.mock("dexie-react-hooks", () => ({
     return workflows
   },
 }))
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (state: unknown) => unknown) =>
     selector({ teams: { team_1: { id: "team_1", name: "Agent Team One" } } }),
 }))

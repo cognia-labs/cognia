@@ -195,7 +195,7 @@ export async function expireRunInterruptFromSource(
   if (!interrupt || interrupt.runId !== runId || interrupt.status !== "pending") return
   await getDb().executionRunInterrupts.update(interruptId, { status: "expired", resolvedAt: now })
   if (interrupt.reviewKind) {
-    const { endSquadReviewSpan } = await import("@/lib/ai/agent/team/squad/squad-telemetry")
+    const { endSquadReviewSpan } = await import("@/lib/squads/squad/squad-telemetry")
     endSquadReviewSpan({ interruptId, outcome: "expired", source: "expiry" })
   }
   await runEventJournal.append(
@@ -374,8 +374,7 @@ async function executeRunControlCommandUnlocked(
   )
   if (existing) {
     if (run.kind === "team") {
-      const { recordSquadDuplicateControl } =
-        await import("@/lib/ai/agent/team/squad/squad-telemetry")
+      const { recordSquadDuplicateControl } = await import("@/lib/squads/squad/squad-telemetry")
       recordSquadDuplicateControl({ runId: run.sourceId, action: command.action })
     }
     return {

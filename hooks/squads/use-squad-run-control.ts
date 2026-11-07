@@ -31,7 +31,7 @@ import {
   type SquadStartOutcome,
 } from "@/lib/execution/squad-start-dispatch"
 import { dispatchRunControl } from "@/lib/execution/run-control-dispatch"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type { ExecutionRun } from "@/types/execution/run"

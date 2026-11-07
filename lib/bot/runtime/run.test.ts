@@ -40,7 +40,7 @@ jest.mock("@/lib/bot/sources/bot-run", () => ({ dispatchBotRunToBots: jest.fn() 
 jest.mock("@/lib/workflow/runtime/cancel-run", () => ({
   cancelWorkflowRun: jest.fn().mockResolvedValue({ cancelled: true }),
 }))
-jest.mock("@/lib/ai/agent/team/squad/squad-control", () => ({
+jest.mock("@/lib/squads/squad/squad-control", () => ({
   controlSquadRun: jest.fn().mockResolvedValue({ accepted: true }),
 }))
 
@@ -277,7 +277,7 @@ describe("runBotDelivery", () => {
     await completeBotRunStep(runId, "squad-start", { started: true, runId }, NOW)
     await cancelAcceptedBotDeliveries(delivery.installationId, undefined, "same-gesture")
     const workflow = await import("@/lib/workflow/runtime/cancel-run")
-    const squad = await import("@/lib/ai/agent/team/squad/squad-control")
+    const squad = await import("@/lib/squads/squad/squad-control")
     expect(workflow.cancelWorkflowRun).toHaveBeenCalledWith("workflow-child", "Bot cancelled")
     expect(squad.controlSquadRun).toHaveBeenCalledWith(runId, "stop")
     await enqueueBotDelivery({

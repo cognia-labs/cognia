@@ -74,7 +74,7 @@ import {
   type AutoRoundStop,
   type TeamReply,
 } from "@/lib/claude/team-router"
-import { canSendMessage, type RecentMessage } from "@/lib/ai/agent/team/gates/message-guard"
+import { canSendMessage, type RecentMessage } from "@/lib/squads/gates/message-guard"
 import {
   duplicateTeamResponseIds,
   resolveTeamResponseCap,

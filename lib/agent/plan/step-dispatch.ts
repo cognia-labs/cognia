@@ -326,7 +326,7 @@ async function runStepWork(
         throw nonRetryable("teammate_dispatch step requires params.teamId")
       }
       const { teamId, teammateId, spawnPrompt } = step.params
-      const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store/store")
+      const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
       const state = useAgentTeamStore.getState()
       const team = state.teams[teamId]
       if (!team) {
@@ -351,7 +351,7 @@ async function runStepWork(
       }
       const [{ createPlanTeammateRunContext }, { dispatchTeammate }] = await Promise.all([
         import("./plan-teammate-context"),
-        import("@/lib/ai/agent/team/teammate/dispatch-teammate"),
+        import("@/lib/squads/teammate/dispatch-teammate"),
       ])
       const teamCtx = createPlanTeammateRunContext({ runId: runCtx.runId, team, teammates })
       const result = await dispatchTeammate(teamCtx, {

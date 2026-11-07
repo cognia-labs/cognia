@@ -1247,7 +1247,7 @@ async function teamHasKnowledgeTwins(
     const { getTeamDispatchContext } = await import("@/lib/claude/agents/dispatch-context-registry")
     const teamId = getTeamDispatchContext(sessionId)?.teamId
     if (!teamId) return false
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const state = useAgentTeamStore.getState()
     if ((state.teams[teamId]?.config.knowledgeTwinIds?.length ?? 0) > 0) return true
     return Object.values(state.teammates).some(

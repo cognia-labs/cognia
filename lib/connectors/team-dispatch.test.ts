@@ -11,7 +11,7 @@ import {
   resolveTeamByNameOrId,
   type StartTeamRunFromIMDeps,
 } from "./team-dispatch"
-import type { SquadReadiness } from "@/lib/agent-team/squad-readiness"
+import type { SquadReadiness } from "@/lib/squads/squad-readiness"
 
 // Mocks for the modules the DEFAULT loaders dynamically import, so the
 // fallback loader paths (and resolveTeamByNameOrId) are covered.
@@ -19,7 +19,7 @@ const runSquadLifecycleMock = jest.fn(async (_input: Record<string, unknown>) =>
   runId: "r",
   status: "completed",
 }))
-jest.mock("@/lib/ai/agent/team/squad/squad-lifecycle-runner", () => ({
+jest.mock("@/lib/squads/squad/squad-lifecycle-runner", () => ({
   __esModule: true,
   runSquadLifecycle: (input: Record<string, unknown>) => runSquadLifecycleMock(input),
 }))
@@ -27,12 +27,12 @@ const createSquadRunRecordsMock = jest.fn(async (seed: { runId: string }) => ({
   executionRunId: `execution:team:${seed.runId}`,
   created: true,
 }))
-jest.mock("@/lib/ai/agent/team/squad/squad-run-records", () => ({
+jest.mock("@/lib/squads/squad/squad-run-records", () => ({
   __esModule: true,
   createSquadRunRecords: (seed: { runId: string }) => createSquadRunRecordsMock(seed),
   findLiveSquadRun: async () => undefined,
 }))
-jest.mock("@/lib/agent-team/squad-readiness", () => ({
+jest.mock("@/lib/squads/squad-readiness", () => ({
   __esModule: true,
   evaluateSquadReadiness: async () => ({ ready: true, blockers: [], evaluatedAt: 1 }),
 }))
@@ -45,7 +45,7 @@ jest.mock("@/lib/execution/agent-state-bridge", () => ({
 const getTeamMock = jest.fn((id: string) =>
   id === "team_real" ? { id, name: "Real", config: {} } : undefined
 )
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   __esModule: true,
   useAgentTeamStore: {
     getState: () => ({

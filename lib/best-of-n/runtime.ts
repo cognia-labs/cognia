@@ -2,9 +2,9 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { Project } from "@/types"
 import { DEFAULT_TEAM_CONFIG, type AgentTeam } from "@/types/agent/agent-team"
 import type { BestOfNGroup } from "@/types/best-of-n"
-import { getDurableTeamCoordinator } from "@/lib/ai/agent/team/durable/durable-runtime"
-import { beginDurableDispatch } from "@/lib/ai/agent/team/durable/durable-dispatch"
-import { controlDurableRun } from "@/lib/ai/agent/team/durable/durable-control"
+import { getDurableTeamCoordinator } from "@/lib/squads/durable/durable-runtime"
+import { beginDurableDispatch } from "@/lib/squads/durable/durable-dispatch"
+import { controlDurableRun } from "@/lib/squads/durable/durable-control"
 import {
   acquireWorkspaceBundle,
   getWorkspaceBundle,

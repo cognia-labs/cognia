@@ -31,7 +31,7 @@ import {
   LIVE_SQUAD_STATUSES,
   type SquadPresenceRow,
 } from "@/lib/agent/squad-presence"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { getDb } from "@/lib/db/schema"

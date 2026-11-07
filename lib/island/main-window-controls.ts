@@ -21,7 +21,7 @@
 import type { ApprovalKey } from "@/lib/runtime/approval-bus"
 import { answerChatApproval, stopChatTurn } from "@/hooks/chat/chat-control-bridge"
 import { sendChatMessage } from "@/hooks/chat/chat-send-bridge"
-import { decidePendingGate } from "@/lib/ai/agent/team/gates/decide-pending-gate"
+import { decidePendingGate } from "@/lib/squads/gates/decide-pending-gate"
 import {
   dispatchRunControl,
   type RunControlOutcomeReason,

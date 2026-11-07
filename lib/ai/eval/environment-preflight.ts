@@ -1,6 +1,6 @@
 import type { EvalEnvironmentCompatibility, EvalProject, EvalVariant } from "@cognia/eval-core"
 import { getWorkflow } from "@/lib/db/workflows"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 const MINIMUM_RESERVATION_BYTES = 64 * 1024 * 1024
 const ESTIMATED_BYTES_PER_TASK = 256 * 1024

@@ -9,7 +9,7 @@
  * `manager.execute` does not die on `Agent not found`.
  *
  * Shared by the Agent Team teammate backing
- * (`lib/ai/agent/team/teammate/resolve-external-backing.ts`) and the plugin/app
+ * (`lib/squads/teammate/resolve-external-backing.ts`) and the plugin/app
  * subagent dispatch (`lib/plugin/agent-sdk/dispatch.ts`). Neither spawns a
  * fresh config for a pin: a pin that cannot run throws
  * {@link ExternalAgentBindingError}. Spawning from the preset when a bare

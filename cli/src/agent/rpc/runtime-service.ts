@@ -109,7 +109,7 @@ import {
   remoteWorkerCeiling,
   resolveRemoteWorkerOptions,
   REMOTE_WORKER_POLICY_CAPABILITY,
-} from "@/lib/ai/agent/team/workers/remote-worker-policy"
+} from "@/lib/squads/workers/remote-worker-policy"
 import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { AgentSessionBinding, AgentWorkerManifestV1 } from "@/packages/agent/src/types"
 import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"

@@ -36,7 +36,7 @@ jest.mock("./sync/providers/github", () => ({
 }))
 
 const mockCreateResolveOctokit = jest.fn()
-jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
+jest.mock("@/lib/squads/pr-feedback/resolvers", () => ({
   createResolveOctokit: (...args: unknown[]) => mockCreateResolveOctokit(...args),
 }))
 

@@ -10,7 +10,7 @@
  * Table declared in `lib/db/schema.ts` v233.
  */
 
-import type { PrReactionSignature } from "@/lib/ai/agent/team/pr-feedback/reactions"
+import type { PrReactionSignature } from "@/lib/squads/pr-feedback/reactions"
 import type { PrDerivedStatus, PrObservation } from "@/lib/github/pr-observe/types"
 import { getDb } from "./schema"
 

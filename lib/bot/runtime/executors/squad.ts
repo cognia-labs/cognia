@@ -146,7 +146,7 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
     const start =
       deps.start ??
       (async (input) => {
-        const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
+        const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
         return startSquadRun(input)
       })
 
@@ -182,7 +182,7 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
     )
 
     if (ctx.signal.aborted) {
-      const { controlSquadRun } = await import("@/lib/ai/agent/team/squad/squad-control")
+      const { controlSquadRun } = await import("@/lib/squads/squad/squad-control")
       await controlSquadRun(result.runId ?? ctx.runId, "stop")
       throw new Error("Bot cancelled")
     }

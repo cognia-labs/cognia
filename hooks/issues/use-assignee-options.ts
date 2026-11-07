@@ -20,7 +20,7 @@ import { useTranslations } from "next-intl"
 import { buildAssigneeOptions, type AssigneeOption } from "@/components/issues/assignee-picker"
 import { useClientLiveQuery } from "@/hooks/data"
 import { listCharacters } from "@/lib/db/characters"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 
 export function useAssigneeOptions(): AssigneeOption[] {

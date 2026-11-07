@@ -16,7 +16,7 @@ jest.mock("@/lib/ai/council/run-council", () => ({
 
 import { orchestrateRun, parseOrchestrateArgs } from "./orchestrate-controller"
 import type { OrchestrateDeps } from "./orchestrate-controller"
-import type { AutoOrchestrationProposal } from "@/lib/ai/agent/team/auto/types"
+import type { AutoOrchestrationProposal } from "@/lib/squads/auto/types"
 import type { TeamExecutionPattern, TeamRoutingAssessment } from "@/types/agent/agent-team"
 import type { TuiAction } from "../state/types"
 import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"

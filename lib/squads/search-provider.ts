@@ -34,7 +34,7 @@
 import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
 import { PauseIcon, PlayIcon } from "lucide-react"
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
 
 import { createListProvider } from "@/lib/global-search/providers/list-provider"
@@ -191,7 +191,7 @@ function controlItem(
       type: "callback" as const,
       run: async () => {
         // Lazily, so ⌘K does not pull the orchestration graph on every open.
-        const { agentTeamManager } = await import("@/lib/ai/agent/team/agent-team")
+        const { agentTeamManager } = await import("@/lib/squads/agent-team")
         await agentTeamManager[MANAGER_VERB[verb]](row.id)
       },
     },

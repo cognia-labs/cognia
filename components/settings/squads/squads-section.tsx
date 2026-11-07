@@ -33,7 +33,7 @@ import {
   SettingsMasterDetail,
 } from "@/components/settings/common/settings-master-detail"
 import { AgentTeamTemplatesSection } from "@/components/settings/agent/agent-team-templates-section"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useCreateSquad } from "@/hooks/squads/use-create-squad"
 import { useUIStore } from "@/stores/ui/ui-store"
 import {
@@ -46,7 +46,7 @@ import {
 } from "./nav-config"
 import { SquadsNav } from "./squads-nav"
 import { SquadDetailPanel } from "./squad-detail-panel"
-import { AutoComposeDialog } from "@/components/agent/workspace/auto-compose-dialog"
+import { AutoComposeDialog } from "@/components/squads/auto-compose-dialog"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useSquadDefinitionsHydrating } from "@/hooks/squads/use-squad-definitions-hydrating"
 

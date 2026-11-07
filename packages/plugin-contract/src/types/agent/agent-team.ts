@@ -123,18 +123,18 @@ export type TeamExecutionPattern = (typeof TEAM_EXECUTION_PATTERNS)[number]
  *
  * DORMANT ON PURPOSE, and this comment is the type-level half of that label.
  * There is no live reader: the nav it named,
- * `components/agent/workspace/workspace-tab-nav.tsx`, is gone, and the live
+ * `components/squads/workspace-tab-nav.tsx`, is gone, and the live
  * Squads addressing is `SQUAD_TAB_PARAM` in
  * `components/settings/squads/nav-config.ts` plus the `?tab=` union in
  * `components/squads/squad-fleet-console.tsx`.
  *
  * The union survives because the VALUE does: `workspaceTab` is inside
- * `partializeAgentTeamState` (`stores/agent/agent-team-store/store.ts`) and
+ * `partializeAgentTeamState` (`stores/squads/agent-team-store/store.ts`) and
  * inside the `cognia-agent-teams` backup snapshot, so a stored preference from
  * before the dissolution still round-trips through both. Deleting the type
  * would force a persist-version decision on the busiest store in the repo to
  * remove a field nothing reads. Its behaviour is pinned by
- * `stores/agent/agent-team-store/selectors.test.ts`.
+ * `stores/squads/agent-team-store/selectors.test.ts`.
  */
 export type AgentTeamWorkspaceTab =
   | "overview"
@@ -188,7 +188,7 @@ export interface TeamRoutingAssessment {
  * Inferred ABOVE {@link TeamExecutionPattern} — council/ensemble are not team
  * shapes (no roster/DAG/store team) and the pattern union is woven through
  * exhaustive switches, so it must never be widened to carry these. The
- * mapping logic lives in `lib/ai/agent/team/auto/dispatch-executor.ts`; the
+ * mapping logic lives in `lib/squads/auto/dispatch-executor.ts`; the
  * types live here so `AgentTeam` can persist the decision without `types/`
  * importing from `lib/`.
  */
@@ -204,7 +204,7 @@ export type TeamExecutorKind =
 /**
  * Where a team run was triggered from. Anything not "interactive" is
  * headless — no operator is watching a modal, so the HITL gates resolve
- * through `lib/ai/agent/team/gates/gate-policy.ts` instead of blocking.
+ * through `lib/squads/gates/gate-policy.ts` instead of blocking.
  */
 export type TeamRunOrigin =
   "interactive" | "scheduler" | "remote" | "external" | "plugin" | "im" | "delegation"
@@ -420,7 +420,7 @@ export interface AgentTeamConfig {
    * Squad definition contract revision (ADR-0169). Every Squad executes on the
    * one durable coordinator; there is no runtime selector. A definition below
    * `SQUAD_DEFINITION_CONTRACT_VERSION` is upgraded in place by
-   * `lib/agent-team/definition-contract.ts` the first time it is read, and an
+   * `lib/squads/definition-contract.ts` the first time it is read, and an
    * inbound row that still carries the retired `runtimeVersion` key has it
    * dropped at the boundary.
    */
@@ -971,7 +971,7 @@ export interface TeammateConfig {
    * as a session-less child fusion run of the team run, booked on the
    * `agentsWorkflows` surface; `"delegate"` additionally needs the team to have
    * a project to work in. With Router + Fusion off, every value behaves like
-   * `"auto"`. See `lib/ai/agent/team/teammate/member-fusion-turn.ts`.
+   * `"auto"`. See `lib/squads/teammate/member-fusion-turn.ts`.
    */
   fusionAction?: import("../../lib/router-fusion/gate/explicit-run").FusionActionChoice
   /**
@@ -987,7 +987,7 @@ export interface TeammateConfig {
   /**
    * Per-teammate overlay on the team's default capability pool. Each entry
    * is a `CapabilityListOverlay` (add / remove / replace). Leave undefined
-   * to inherit the team default unchanged. See `lib/ai/agent/team/teammate/capability-resolver.ts`.
+   * to inherit the team default unchanged. See `lib/squads/teammate/capability-resolver.ts`.
    */
   capabilities?: TeammateCapabilityOverlay
   /**
@@ -996,7 +996,7 @@ export interface TeammateConfig {
    * `resolveSendOptions` twin runtime injects the twin's persona (voice /
    * playbooks / entities) plus per-task RAG knowledge — the teammate acts as
    * that digital employee. Undefined = a plain teammate with no twin.
-   * See `lib/ai/agent/team/teammate/teammate-character.ts` + `dispatch-teammate.ts`.
+   * See `lib/squads/teammate/teammate-character.ts` + `dispatch-teammate.ts`.
    */
   twinId?: string
   /**
@@ -1411,7 +1411,7 @@ export interface CastVoteInput {
  * `twin` (ADR-0003 integration) runs a background agent whose prompt is
  * pre-injected with an Employee Digital Twin's persona + knowledge — i.e. the
  * sub-problem is answered "as" that digital employee. See
- * `lib/ai/agent/team/delegation-orchestrator.ts:delegateToTwin`.
+ * `lib/squads/delegation-orchestrator.ts:delegateToTwin`.
  */
 export type AgentSystemType = "sub_agent" | "team" | "background" | "twin"
 

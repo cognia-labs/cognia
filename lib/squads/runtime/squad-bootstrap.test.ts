@@ -6,7 +6,7 @@ const mockRunSquadBootstrap = jest.fn(() => ({
   }),
   dispose: mockDispose,
 }))
-jest.mock("@/lib/agent-team/bootstrap", () => ({
+jest.mock("@/lib/squads/bootstrap", () => ({
   runSquadBootstrap: () => mockRunSquadBootstrap(),
 }))
 

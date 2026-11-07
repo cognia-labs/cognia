@@ -15,7 +15,7 @@ import { Snippet, SnippetCopyButton, SnippetInput } from "@/components/ai-elemen
 import {
   isRemoteWorkerDispatchAvailable,
   subscribeToRemoteWorkerRuntime,
-} from "@/lib/ai/agent/team/workers/remote-worker-runtime"
+} from "@/lib/squads/workers/remote-worker-runtime"
 import {
   createWorkerEnrollment,
   executionWorkersAccess,

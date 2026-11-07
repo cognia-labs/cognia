@@ -33,9 +33,9 @@ export const ACTION_REVIEW_CONTRACT_VERSION = 1 as const
 export type ActionReviewChannel =
   /** Sidecar `canUseTool` → the chat approval dialog. The largest producer. */
   | "chat-tool"
-  /** Squad plan approval (`lib/ai/agent/team/gates/squad-review-gate.ts`, kind `plan`). */
+  /** Squad plan approval (`lib/squads/gates/squad-review-gate.ts`, kind `plan`). */
   | "agent-team-plan"
-  /** Agent Team capability/risk gate (`lib/ai/agent/team/gates/squad-review-gate.ts`, kind `capability_audit`). */
+  /** Agent Team capability/risk gate (`lib/squads/gates/squad-review-gate.ts`, kind `capability_audit`). */
   | "agent-team-gate"
   /** Workflow `action.approval.request` node. */
   | "workflow-step"

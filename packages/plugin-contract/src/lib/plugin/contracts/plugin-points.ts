@@ -544,10 +544,10 @@ const IMPLEMENTED_EXTENSION_POINT_BINDINGS: Partial<Record<CanonicalExtensionPoi
   "perf.panel": "components/performance/performance-dashboard.tsx",
   "terminal.toolbar": "components/terminal/terminal-dock.tsx",
   "agent.team.panel": "components/settings/squads/squad-detail-panel.tsx",
-  "agent.team.report": "components/agent/workspace/activity-report/report-plugin-slot.tsx",
-  "agent.teammate.actions": "components/agent/workspace/members.tsx",
-  "agent.team.task.actions": "components/agent/workspace/board/task-card.tsx",
-  "agent.team.board.toolbar": "components/agent/workspace/board/board-toolbar.tsx",
+  "agent.team.report": "components/squads/activity-report/report-plugin-slot.tsx",
+  "agent.teammate.actions": "components/squads/members.tsx",
+  "agent.team.task.actions": "components/squads/board/task-card.tsx",
+  "agent.team.board.toolbar": "components/squads/board/board-toolbar.tsx",
   "agent.external-session.toolbar": "components/agent/external-agent/session-panel.tsx",
   "twin.panel.header": "components/twin/twin-plugin-slots.tsx",
   "twin.persona.panel": "components/twin/twin-plugin-slots.tsx",
@@ -782,7 +782,7 @@ export const CANONICAL_HOOK_POINTS = [
   "onTeamBudgetWarn",
   "onTeamComplete",
   // Consensus / shared-memory / delegation orchestrator hook points. Fired
-  // by the matching orchestrator in `lib/ai/agent/team/`.
+  // by the matching orchestrator in `lib/squads/`.
   "onConsensusOpened",
   "onConsensusVoted",
   "onConsensusResolved",

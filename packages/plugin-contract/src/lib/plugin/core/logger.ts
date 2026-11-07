@@ -26,7 +26,7 @@ type PluginLoggerExtended = PluginLogger & {
 //
 // `@/lib/plugin/core/logger` is pulled in early by the plugin manager,
 // validators, and a few stores. Several import chains in those packages
-// (notably `stores/agent/agent-team-store/slices/actions.slice` →
+// (notably `stores/squads/agent-team-store/slices/actions.slice` →
 // `agent-team-compat` → orchestrator → hooks-system → plugin store →
 // plugin index → validation → THIS file) re-enter the module graph
 // while `@/lib/logging` is still being evaluated under Jest's CJS loader.

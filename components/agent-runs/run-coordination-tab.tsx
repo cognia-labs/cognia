@@ -26,8 +26,8 @@
 
 import { useTranslations } from "next-intl"
 
-import { ConsensusPanel } from "@/components/agent/workspace/consensus-panel"
-import { DelegationsPanel } from "@/components/agent/workspace/delegations-panel"
+import { ConsensusPanel } from "@/components/squads/consensus-panel"
+import { DelegationsPanel } from "@/components/squads/delegations-panel"
 import { useClientLiveQuery } from "@/hooks/data"
 import { getAgentTeamRun } from "@/lib/db/agent-team-runtime"
 import type { UnifiedExecutionRow } from "@/lib/execution/monitor-model"

@@ -7,7 +7,7 @@
 import { renderHook } from "@testing-library/react"
 
 import { useSquadFleet } from "./use-squad-fleet"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam, AgentTeammate, TeamStatus } from "@/types/agent/agent-team"
 

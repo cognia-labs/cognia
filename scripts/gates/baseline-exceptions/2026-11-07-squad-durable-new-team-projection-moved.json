@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/workspace-attribution-baseline.json",
+  "measure": "violations:lib/ai/agent/team/durable-new-team.ts.projection",
+  "allowRemoval": true,
+  "owner": "lib/squads",
+  "repaymentPhase": "1",
+  "reason": "The Squad creation module moved to lib/squads/durable-new-team.ts (ADR-0252 P1, move-only). Its projection count (zero) is recorded under the new path; nothing new is admitted."
+}

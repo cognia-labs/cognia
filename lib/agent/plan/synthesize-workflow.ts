@@ -4,7 +4,7 @@
  * `step.dependencies` DAG. The synthesized workflow is fed to `runWorkflow`.
  * (ADR-0045 P2)
  *
- * Mirrors `lib/ai/agent/team/synthesize-workflow.ts`: the synthesizer is pure
+ * Mirrors `lib/squads/synthesize-workflow.ts`: the synthesizer is pure
  * (no Dexie / no executeAgent / no abort signal) — it only shapes types.
  * Validates non-empty input, dependency-id references, and absence of cycles
  * (Kahn's algorithm).

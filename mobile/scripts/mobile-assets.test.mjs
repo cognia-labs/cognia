@@ -72,7 +72,7 @@ test("every current mobile icon and agent avatar runtime asset remains available
     )
   }
   const cases = [
-    ["lib/agent-team/avatar.ts", "AGENT_TEAM_AVATAR_IDS", "icons/cognia-agent-team/webp", "webp"],
+    ["lib/squads/avatar.ts", "AGENT_TEAM_AVATAR_IDS", "icons/cognia-agent-team/webp", "webp"],
   ]
   for (const [sourceFile, constant, prefix, extension] of cases) {
     const source = await readFile(path.join(root, sourceFile), "utf8")

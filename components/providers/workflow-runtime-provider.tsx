@@ -38,7 +38,7 @@ import {
   initPluginTriggerLifecycle,
 } from "@/lib/workflow/triggers/lifecycle"
 import { resumeInFlightRuns } from "@/lib/workflow/runtime/resume-controller"
-import { installTeamWorkflowNodeRuntime } from "@/lib/ai/agent/team/workflow-nodes/install"
+import { installTeamWorkflowNodeRuntime } from "@/lib/squads/workflow-nodes/install"
 import { loggers } from "@cognia/logging"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { installHostDispatchRuntime } from "@/lib/placement/host-dispatch-runtime"

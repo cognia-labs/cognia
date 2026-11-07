@@ -13,11 +13,11 @@
 
 import { useCallback, useMemo } from "react"
 
-import { applySquadTemplate } from "@/lib/agent-team/apply-squad-template"
+import { applySquadTemplate } from "@/lib/squads/apply-squad-template"
 import {
   projectPluginTemplate,
   type PluginTemplateOverlayEntry,
-} from "@/lib/agent-team/project-plugin-template"
+} from "@/lib/squads/project-plugin-template"
 import {
   getTemplateWarnings,
   listAgentTeamTemplateEntries,
@@ -26,7 +26,7 @@ import {
 import { getTemplateRuntime, type TemplateRuntime } from "@/lib/templates/runtime"
 import type { TemplatePlatform } from "@/lib/templates/contracts"
 import { usePlatform } from "@/hooks/use-platform"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 
 /** Where a plugin-contributed template came from, keyed by its projected id. */

@@ -79,7 +79,7 @@
     "projection": 1,
     "cwd": 0
   },
-  "lib/ai/agent/team/durable-new-team.ts": {
+  "lib/squads/durable-new-team.ts": {
     "projection": 0,
     "cwd": 1
   },

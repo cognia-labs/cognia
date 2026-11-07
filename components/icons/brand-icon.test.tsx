@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import { BrandIcon, brandIconAsset, hasBrandIcon } from "./brand-icon"
-import { RUNTIME_OPTIONS } from "@/components/agent/workspace/runtime-options"
+import { RUNTIME_OPTIONS } from "@/components/squads/runtime-options"
 import { EXTERNAL_AGENT_PRESETS } from "@/lib/ai/agent/external/config/presets"
 
 describe("BrandIcon", () => {

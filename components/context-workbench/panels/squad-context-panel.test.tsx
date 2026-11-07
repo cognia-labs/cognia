@@ -5,7 +5,7 @@ import { render, screen } from "@testing-library/react"
 import { SquadContextPanel } from "./squad-context-panel"
 import type { ChatExecutor } from "@/components/agent/composition/use-chat-executor"
 import type { AgentTeammate } from "@/types/agent/agent-team"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 let pendingReviews: Array<{ teamId: string; status: "open" }> = []
 jest.mock("@/hooks/squads/use-pending-squad-reviews", () => ({

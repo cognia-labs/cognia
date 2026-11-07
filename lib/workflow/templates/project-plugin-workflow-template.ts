@@ -6,7 +6,7 @@
  * `lib/db/workflows.ts` create path as built-in templates, so a user's "Use
  * template" clone survives the plugin being disabled (the overlay entry does not).
  *
- * Mirrors `lib/agent-team/project-plugin-template.ts` for the team subsystem.
+ * Mirrors `lib/squads/project-plugin-template.ts` for the team subsystem.
  */
 
 import {

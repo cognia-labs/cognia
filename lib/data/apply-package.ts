@@ -1109,7 +1109,7 @@ export async function applyBackupPackage(
 
   if (env.agentTeams?.length || env.agentTeammates?.length || env.agentTeamTasks?.length) {
     const { withAgentTeamDefinitionRestore } =
-      await import("@/stores/agent/agent-team-store/dexie-bridge")
+      await import("@/stores/squads/agent-team-store/dexie-bridge")
     await withAgentTeamDefinitionRestore(restoreTransaction)
   } else await restoreTransaction()
 

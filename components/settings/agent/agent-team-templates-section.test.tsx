@@ -59,7 +59,7 @@ const addTemplateMock = jest.fn()
 const updateTemplateMock = jest.fn()
 const deleteTemplateMock = jest.fn()
 
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: unknown) => unknown) =>
     selector({
       templates: { [builtIn.id]: builtIn, [userTpl.id]: userTpl },
@@ -79,7 +79,7 @@ jest.mock("@/components/ui/sonner", () => ({
 }))
 
 // The mirror is a real module that would otherwise reach the production runtime.
-jest.mock("@/lib/agent-team/publish-template-to-platform", () => ({
+jest.mock("@/lib/squads/publish-template-to-platform", () => ({
   platformIdForSquadTemplate: (t: { id: string }) => `legacy.agentTeam.${t.id}`,
   publishSquadTemplateToPlatform: jest.fn(async () => undefined),
 }))

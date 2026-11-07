@@ -13,11 +13,11 @@ import "fake-indexeddb/auto"
 // executors.
 import "./built-ins"
 // Side-effect import: registers the six ultracode `pattern.*` host executors.
-// They live under `lib/ai/agent/team/patterns` (imported lazily by
+// They live under `lib/squads/patterns` (imported lazily by
 // `runTeamLifecycle` before an ultracode run) but register under
 // `BUILTIN_PLUGIN_ID` — i.e. they ARE host executors, just authored in a
 // sibling module. Import them here so the parity check sees the full host set.
-import "@/lib/ai/agent/team/patterns"
+import "@/lib/squads/patterns"
 import { listRegisteredKinds } from "./registry"
 import { WORKFLOW_NODE_KINDS, type WorkflowNodeKind } from "@/types/workflow/visual"
 

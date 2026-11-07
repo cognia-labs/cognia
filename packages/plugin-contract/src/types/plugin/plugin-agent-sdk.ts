@@ -360,7 +360,7 @@ export interface PluginRunTeamOptions {
   /** Force ("force") or disable ("off") ultracode orchestration for this run. */
   ultracode?: boolean
   /**
-   * Trigger origin for HITL gate policy (see lib/ai/agent/team/gates/gate-policy).
+   * Trigger origin for HITL gate policy (see lib/squads/gates/gate-policy).
    * Defaults to "plugin"; the external bridge passes "external".
    */
   origin?: import("../agent/agent-team").TeamRunOrigin

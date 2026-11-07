@@ -4,7 +4,7 @@ import { fn } from "storybook/test"
 import { SquadDetailPanel } from "./squad-detail-panel"
 import { seedDb } from "@/lib/storybook/seed-db"
 import { resetStore } from "@/lib/storybook/seed-stores"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 // One Squad's identity and roster in the settings library: name, description,
 // the real roster editor, plugin panels, template provenance, derive actions,

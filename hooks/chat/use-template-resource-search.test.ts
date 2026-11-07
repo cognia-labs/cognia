@@ -2,7 +2,7 @@
 import { renderHook } from "@testing-library/react"
 
 import { useTemplateResourceSearch } from "./use-template-resource-search"
-import { buildRouteTargets } from "@/lib/agent-team/runtime-targets"
+import { buildRouteTargets } from "@/lib/squads/runtime-targets"
 
 const searchWorkspace = jest.fn()
 jest.mock("@/lib/files/workspace-search", () => ({

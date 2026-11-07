@@ -223,8 +223,8 @@
         "lib/db/agent-team-runtime.ts#updateAgentTeamSteeringReceipt"
       ],
       "consumerFunctions": [
-        "components/agent/workspace/durable-operations.tsx#DurableOperations::data",
-        "lib/ai/agent/team/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
+        "components/squads/durable-operations.tsx#DurableOperations::data",
+        "lib/squads/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
         "lib/db/agent-team-runtime.ts#aggregateAgentTeamRunUsage",
         "lib/db/agent-team-runtime.ts#findLatestAgentTeamChildRun",
         "lib/db/agent-team-runtime.ts#getAgentTeamChildRun",
@@ -253,7 +253,7 @@
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/agentTeamRuns",
       "owner": "lib/db",
-      "note": "createSquadRunRecords adds the parent row and directly adds its canonical execution row at lib/ai/agent/team/squad/squad-run-records.ts:180 and lib/ai/agent/team/squad/squad-run-records.ts:217; backfillLegacyTeamRun also directly adds the canonical row at lib/agent-team/legacy-run-history.ts:150. Standalone createAgentTeamRun/updateAgentTeamRun writers do not reach that ledger, and these direct writes do not satisfy the import-bound referenceOverride policy. The table has no canonical reference field, so its conservative classification is none despite the linked squad-creation path.",
+      "note": "createSquadRunRecords adds the parent row and directly adds its canonical execution row at lib/squads/squad/squad-run-records.ts:180 and lib/squads/squad/squad-run-records.ts:217; backfillLegacyTeamRun also directly adds the canonical row at lib/squads/legacy-run-history.ts:150. Standalone createAgentTeamRun/updateAgentTeamRun writers do not reach that ledger, and these direct writes do not satisfy the import-bound referenceOverride policy. The table has no canonical reference field, so its conservative classification is none despite the linked squad-creation path.",
       "database": "CogniaDB@lib/db/schema.ts",
       "file": "lib/db/schema.ts",
       "table": "agentTeamRuns",
@@ -293,19 +293,19 @@
       "reference": "none",
       "referenceField": null,
       "writers": [
-        "lib/agent-team/legacy-run-history.ts",
-        "lib/ai/agent/team/squad/squad-run-records.ts",
+        "lib/squads/legacy-run-history.ts",
+        "lib/squads/squad/squad-run-records.ts",
         "lib/db/agent-team-runtime.ts",
         "lib/dev/expose-test-globals.tsx"
       ],
       "ledgerWriters": [
-        "lib/agent-team/legacy-run-history.ts",
-        "lib/ai/agent/team/squad/squad-run-records.ts"
+        "lib/squads/legacy-run-history.ts",
+        "lib/squads/squad/squad-run-records.ts"
       ],
       "writerFunctions": [
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRunHistory",
-        "lib/ai/agent/team/squad/squad-run-records.ts#createSquadRunRecords",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
+        "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/db/agent-team-runtime.ts#aggregateAgentTeamRunUsage",
         "lib/db/agent-team-runtime.ts#createAgentTeamRun",
         "lib/db/agent-team-runtime.ts#updateAgentTeamRun",
@@ -313,12 +313,12 @@
         "lib/dev/expose-test-globals.tsx#ExposeTestGlobals"
       ],
       "consumerFunctions": [
-        "components/agent/workspace/durable-operations.tsx#DurableOperations::data",
+        "components/squads/durable-operations.tsx#DurableOperations::data",
         "hooks/agent-runs/use-team-live-status.ts#useTeamLiveStatus::newestRunStatus",
         "hooks/squads/use-pending-squad-reviews.ts#listPendingSquadReviews",
         "hooks/squads/use-squad-latest-run.ts#readSquadLatestRun",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#teamIdForRun",
-        "lib/ai/agent/team/squad/squad-run-records.ts#findLiveSquadRun",
+        "lib/squads/gates/squad-review-gate.ts#teamIdForRun",
+        "lib/squads/squad/squad-run-records.ts#findLiveSquadRun",
         "lib/cli-bridge/handlers/agent-team.ts#agentTeamRunStatus",
         "lib/db/agent-team-runtime.ts#getAgentTeamRun",
         "lib/db/agent-team-runtime.ts#listAgentTeamRecoveryCandidates",
@@ -2397,7 +2397,7 @@
       "reference": "real",
       "referenceField": null,
       "writers": [
-        "lib/ai/agent/team/agent-team-runtime.ts",
+        "lib/squads/agent-team-runtime.ts",
         "lib/db/triggered-by-source-backfill.ts",
         "lib/db/workflows.ts",
         "lib/dev/expose-test-globals.tsx",
@@ -2412,7 +2412,7 @@
       "ledgerWriters": [],
       "referenceOverride": "real",
       "writerFunctions": [
-        "lib/ai/agent/team/agent-team-runtime.ts#runTeamLifecycle::runWaveReentrant",
+        "lib/squads/agent-team-runtime.ts#runTeamLifecycle::runWaveReentrant",
         "lib/db/triggered-by-source-backfill.ts#backfillTriggeredBySourceV91",
         "lib/db/workflows.ts#acknowledgeRun",
         "lib/db/workflows.ts#markReplayed",
@@ -2449,7 +2449,7 @@
         "hooks/workflow/use-latest-run-outputs.ts#getLatestRunOutputs",
         "hooks/workflow/use-step-stream.ts#getStepStream",
         "lib/a2ui/workflow-approval-handler.ts#dispatchAcceptedApproval",
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRunHistory",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/bot/runtime/run.ts#stopBotExecution",
         "lib/cli-bridge/handlers/agent-team.ts#agentTeamRunStatus",
         "lib/connectors/automation-control.ts#cancelConversationAutomations",
@@ -2500,7 +2500,7 @@
         "lib/workflow/versioning/version-workbench.ts#getWorkflowVersionDetails"
       ],
       "unlinkedWriters": [
-        "lib/ai/agent/team/agent-team-runtime.ts#runTeamLifecycle::runWaveReentrant",
+        "lib/squads/agent-team-runtime.ts#runTeamLifecycle::runWaveReentrant",
         "lib/db/triggered-by-source-backfill.ts#backfillTriggeredBySourceV91",
         "lib/db/workflows.ts#acknowledgeRun",
         "lib/db/workflows.ts#markReplayed",
@@ -3489,8 +3489,8 @@
       "reference": "none",
       "referenceField": null,
       "writers": [
-        "lib/agent-team/legacy-run-history.ts",
-        "lib/ai/agent/team/squad/squad-run-records.ts",
+        "lib/squads/legacy-run-history.ts",
+        "lib/squads/squad/squad-run-records.ts",
         "lib/bot/runtime/run.ts",
         "lib/db/execution-runs.ts",
         "lib/execution/acting-authority.ts",
@@ -3500,19 +3500,19 @@
         "lib/work-submission/service.ts"
       ],
       "ledgerWriters": [
-        "lib/agent-team/legacy-run-history.ts",
-        "lib/ai/agent/team/squad/squad-run-records.ts",
+        "lib/squads/legacy-run-history.ts",
+        "lib/squads/squad/squad-run-records.ts",
         "lib/bot/runtime/run.ts",
         "lib/execution/delegation.ts",
         "lib/execution/managed-desktop-results.ts",
         "lib/execution/run-control.ts",
         "lib/work-submission/service.ts"
       ],
-      "reason": "createSquadRunRecords writes the canonical ledger at lib/ai/agent/team/squad/squad-run-records.ts:217; this inventory measures extra run tables relative to that authority, so the canonical executionRuns table is excluded by definition.",
+      "reason": "createSquadRunRecords writes the canonical ledger at lib/squads/squad/squad-run-records.ts:217; this inventory measures extra run tables relative to that authority, so the canonical executionRuns table is excluded by definition.",
       "writerFunctions": [
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRunHistory",
-        "lib/ai/agent/team/squad/squad-run-records.ts#createSquadRunRecords",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
+        "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/bot/runtime/run.ts#cancelAcceptedBotDeliveries",
         "lib/bot/runtime/run.ts#cancelBotRun",
         "lib/bot/runtime/run.ts#runBotDelivery",
@@ -3535,7 +3535,7 @@
         "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
         "hooks/squads/use-squad-latest-run.ts#readSquadLatestRun",
         "lib/ai/agent/recovery/reconcile-crashed-runs.ts#reconcileCrashedAgentRuns",
-        "lib/ai/agent/team/squad/watch-squad-run.ts#watchSquadRunSettlement::subscription",
+        "lib/squads/squad/watch-squad-run.ts#watchSquadRunSettlement::subscription",
         "lib/automation/managed-desktop-result-deletion.ts#deleteAcceptanceProjections",
         "lib/automation/managed-desktop-result-deletion.ts#deleteManagedDesktopAcceptance",
         "lib/automation/managed-desktop-result-deletion.ts#deleteManagedDesktopRunProjections",
@@ -3747,7 +3747,7 @@
         "components/templates/template-studio.tsx#TemplateInspector",
         "components/templates/template-update-dialog.tsx#TemplateUpdateDialog",
         "lib/agents/agent-activity.ts#deriveAgentActivity",
-        "lib/ai/agent/team/teammate/structured-dispatch.ts#dispatchStructured",
+        "lib/squads/teammate/structured-dispatch.ts#dispatchStructured",
         "lib/ai/eval/project-service.ts#EvalProjectService::start",
         "lib/ai/providers/bedrock-connection.ts#testAndDiscoverBedrock",
         "lib/claude/filespace-builtin-tools.ts#shareSnapshot",

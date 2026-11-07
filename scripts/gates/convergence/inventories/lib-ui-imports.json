@@ -24,7 +24,7 @@
       "typeOnly": false
     },
     {
-      "key": "lib/ai/agent/team/squad/start-squad-run.ts",
+      "key": "lib/squads/squad/start-squad-run.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
@@ -36,7 +36,7 @@
       "typeOnly": false
     },
     {
-      "key": "lib/ai/agent/team/teammate/teammate-preset-adapter.ts",
+      "key": "lib/squads/teammate/teammate-preset-adapter.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [

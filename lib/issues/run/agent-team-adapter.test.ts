@@ -39,7 +39,7 @@ const mockStartSquadRun = jest.fn(
       reason?: string
     }
 )
-jest.mock("@/lib/ai/agent/team/squad/start-squad-run", () => ({
+jest.mock("@/lib/squads/squad/start-squad-run", () => ({
   startSquadRun: (...args: unknown[]) => mockStartSquadRun(...(args as [])),
   mintSquadRunId: () => "run_team_minted",
 }))
@@ -57,14 +57,14 @@ const mockMakeDelegate = jest.fn((_ctx: unknown) => async (request: unknown) => 
 jest.mock("@/lib/connectors/hitl/plan-approval", () => ({
   makeImPlanApprovalDelegate: (ctx: unknown) => mockMakeDelegate(ctx),
 }))
-jest.mock("@/lib/ai/agent/team/agent-team", () => ({
+jest.mock("@/lib/squads/agent-team", () => ({
   agentTeamManager: { start: (...args: unknown[]) => mockStart(...(args as [])) },
 }))
-jest.mock("@/lib/ai/agent/team/agent-team-runtime", () => ({
+jest.mock("@/lib/squads/agent-team-runtime", () => ({
   abortTeam: (...args: unknown[]) => mockAbort(...args),
 }))
 const mockControlDurableRun = jest.fn(async (..._args: unknown[]) => undefined)
-jest.mock("@/lib/ai/agent/team/durable/durable-control", () => ({
+jest.mock("@/lib/squads/durable/durable-control", () => ({
   controlDurableRun: (...args: unknown[]) => mockControlDurableRun(...args),
 }))
 const fakeStoreState = {
@@ -73,7 +73,7 @@ const fakeStoreState = {
   createTask: jest.fn((input: { title: string }) => ({ id: "tt-created", ...input })),
   deleteTask: jest.fn((_taskId: string) => {}),
 }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: () => fakeStoreState, subscribe: () => () => {} },
 }))
 import type { IssueRunTarget } from "./types"

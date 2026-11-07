@@ -4,7 +4,7 @@ import {
   resolveTargetAgentId,
 } from "./chat-mention-targets"
 import type { SubagentMentionTarget } from "./chat-mention-targets"
-import { buildRouteTargets } from "@/lib/agent-team/runtime-targets"
+import { buildRouteTargets } from "@/lib/squads/runtime-targets"
 
 // Mock only the subagent source; slugify + parseMentions run for real so the
 // handle derivation and the scanner reuse are exercised end-to-end.

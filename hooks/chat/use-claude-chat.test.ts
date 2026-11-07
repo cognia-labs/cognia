@@ -30,11 +30,8 @@ import {
 } from "@/lib/runtime/runtime-snapshot-store"
 
 import { useAgentRuntimeStore, useExternalAgentStore } from "@/stores/agent"
-import type {
-  StartSquadRunInput,
-  StartSquadRunResult,
-} from "@/lib/ai/agent/team/squad/start-squad-run"
-import type { WatchSquadRunInput } from "@/lib/ai/agent/team/squad/watch-squad-run"
+import type { StartSquadRunInput, StartSquadRunResult } from "@/lib/squads/squad/start-squad-run"
+import type { WatchSquadRunInput } from "@/lib/squads/squad/watch-squad-run"
 import type {
   ArmVerificationInput,
   ArmVerificationResult,
@@ -677,10 +674,10 @@ const stopSquadWatchMock = jest.fn()
 const watchSquadRunSettlementMock = jest.fn<() => void, [WatchSquadRunInput]>(
   () => stopSquadWatchMock
 )
-jest.mock("@/lib/ai/agent/team/squad/start-squad-run", () => ({
+jest.mock("@/lib/squads/squad/start-squad-run", () => ({
   startSquadRun: (input: StartSquadRunInput) => startSquadRunMock(input),
 }))
-jest.mock("@/lib/ai/agent/team/squad/watch-squad-run", () => ({
+jest.mock("@/lib/squads/squad/watch-squad-run", () => ({
   watchSquadRunSettlement: (input: WatchSquadRunInput) => watchSquadRunSettlementMock(input),
 }))
 const armVerifiedFreshAgentFollowupMock = jest.fn<
@@ -1123,7 +1120,7 @@ import {
 } from "@/lib/router-fusion/gate/faults"
 import { createElement, useState, type ReactNode } from "react"
 import type { CogniaDiagnostic } from "@cognia/diagnostics"
-import { buildRouteTargets } from "@/lib/agent-team/runtime-targets"
+import { buildRouteTargets } from "@/lib/squads/runtime-targets"
 import type { AgentRuntimeDescriptor } from "@/lib/ai/agent/runtime-catalog/types"
 import type { RouteContextSnapshot } from "@/lib/chat/turn-route/snapshot"
 import type { TurnRoute } from "@/lib/chat/turn-route/types"

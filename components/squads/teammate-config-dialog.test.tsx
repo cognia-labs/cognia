@@ -1,0 +1,634 @@
+/**
+ * @jest-environment jsdom
+ */
+
+import { fireEvent, render, screen, within, waitFor } from "@testing-library/react"
+
+jest.mock("next-intl", () => ({
+  useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
+    vars ? `${key}:${JSON.stringify(vars)}` : key,
+}))
+
+jest.mock("dexie-react-hooks", () => ({
+  useLiveQuery: (fn: () => unknown) => {
+    try {
+      return fn()
+    } catch {
+      return undefined
+    }
+  },
+}))
+
+jest.mock("@/lib/db/skills", () => ({ listSkills: jest.fn() }))
+jest.mock("@/lib/db/mcp-servers", () => ({ listMcpServers: jest.fn() }))
+jest.mock("@/lib/db/twins", () => ({ listTwins: jest.fn() }))
+
+jest.mock("@/lib/plugin/registries/native-anthropic-tool-registry", () => ({
+  listNativeAnthropicToolEntries: () => [],
+}))
+jest.mock("@/lib/plugin/registries/character-pack-registry", () => ({
+  listAllPackCharacters: () => [],
+}))
+jest.mock("@/lib/db/characters", () => ({
+  listCharacters: () => Promise.resolve([]),
+}))
+jest.mock("@/lib/claude/agents/subagents", () => ({
+  resolveAllSubagents: () => ({}),
+}))
+jest.mock("@/lib/ai/agent/external/config/presets", () => ({
+  getPresetConfig: jest.requireActual("@/lib/ai/agent/external/config/presets").getPresetConfig,
+  getAvailablePresets: () => [],
+  // `ExternalPresetSection` (inside the dialog) builds its picker from this.
+  // Omitting it made every render in this file throw "getRunnablePresets is
+  // not a function" the moment that section joined the tree.
+  getRunnablePresets: () => [],
+  getPresetDisplayInfo: () => null,
+  // The runtime Select derives its options from the real preset catalog (via
+  // `runtime-options`). Keep that export REAL — a hand-listed copy here would
+  // reintroduce exactly the drift `runtime-options` exists to prevent.
+  BUILTIN_EXECUTABLE_PRESET_IDS: jest.requireActual("@/lib/ai/agent/external/config/presets")
+    .BUILTIN_EXECUTABLE_PRESET_IDS,
+}))
+
+jest.mock("@/components/agent/external-agent/cognia-model-picker", () => ({
+  CogniaModelPicker: ({
+    value,
+    onChange,
+  }: {
+    value: unknown
+    onChange: (binding: unknown) => void
+  }) => (
+    <div>
+      <output>{JSON.stringify(value)}</output>
+      <button onClick={() => onChange({ providerId: "", modelId: "" })}>
+        Draft Cognia binding
+      </button>
+      <button
+        onClick={() => onChange({ providerId: "kimi", modelId: "coder", accountId: "account-a" })}
+      >
+        Select Cognia binding
+      </button>
+      <button onClick={() => onChange(null)}>Clear Cognia binding</button>
+    </div>
+  ),
+}))
+
+const updateTeammateMock = jest.fn()
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
+  useAgentTeamStore: (selector: (state: unknown) => unknown) =>
+    selector({ updateTeammate: updateTeammateMock }),
+}))
+
+const mockExternalAgents: Record<string, unknown> = {
+  strict: {
+    id: "strict",
+    name: "Codex strict",
+    enabled: true,
+    metadata: { preset: "codex" },
+    createdAt: "2025-01-01T00:00:00Z",
+  },
+  lenient: {
+    id: "lenient",
+    name: "Codex lenient",
+    enabled: true,
+    metadata: { preset: "codex-app-server" },
+    createdAt: "2026-01-01T00:00:00Z",
+  },
+}
+jest.mock("@/stores/agent/external-agent-store", () => ({
+  useExternalAgentStore: (selector: (state: unknown) => unknown) =>
+    selector({ agents: mockExternalAgents }),
+}))
+
+const mockSettings: { settings: unknown } = { settings: null }
+jest.mock("@/stores/settings", () => ({
+  useSettingsStore: (selector: (state: unknown) => unknown) => selector(mockSettings),
+}))
+
+import { TeammateConfigDialog } from "./teammate-config-dialog"
+import { getProviderDisplayName } from "@/lib/ai/icons"
+import { listTwins } from "@/lib/db/twins"
+import { DEFAULT_TEAM_CONFIG } from "@/types/agent/agent-team"
+import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
+
+const listTwinsMock = listTwins as jest.Mock
+
+const TWINS = [
+  { id: "tw1", name: "Alice", createdAt: 0, updatedAt: 0 },
+  { id: "tw2", name: "Bob", createdAt: 0, updatedAt: 0 },
+]
+
+/** Scope down to the twin `<Select>` via its label, since PresetEditor renders other selects too. */
+function getTwinSelectTrigger() {
+  const label = screen.getByText("rosterSection.twin")
+  const block = label.closest("div")!
+  return within(block).getByRole("combobox")
+}
+
+const team: AgentTeam = {
+  id: "team-1",
+  name: "Test Team",
+  description: "",
+  task: "task",
+  status: "idle",
+  config: { ...DEFAULT_TEAM_CONFIG },
+  leadId: "lead-1",
+  teammateIds: ["lead-1", "t1"],
+  taskIds: [],
+  messageIds: [],
+  progress: 0,
+  totalTokenUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+  createdAt: new Date(),
+}
+
+const teammate: AgentTeammate = {
+  id: "t1",
+  teamId: "team-1",
+  name: "Alice",
+  description: "Reviewer",
+  role: "teammate",
+  status: "idle",
+  config: {},
+  completedTaskIds: [],
+  tokenUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+  progress: 0,
+  createdAt: new Date(),
+}
+
+const lead: AgentTeammate = { ...teammate, id: "lead-1", name: "Lead", role: "lead" }
+
+describe("TeammateConfigDialog", () => {
+  beforeEach(() => {
+    updateTeammateMock.mockReset()
+    listTwinsMock.mockReset()
+    listTwinsMock.mockReturnValue(TWINS)
+    mockSettings.settings = {
+      defaultProvider: "anthropic",
+      providerSettings: {
+        anthropic: { enabled: true, apiKey: "k" },
+        openai: { enabled: true, apiKey: "k" },
+        disabled_one: { enabled: false, apiKey: "k" },
+      },
+      customProviders: [{ id: "my-gateway", name: "GW", baseURL: "https://x/v1" }],
+    }
+  })
+
+  describe("lead provider selector", () => {
+    // The lead is never dispatched through a runtime — it runs its planning and
+    // review turns on a resolved provider — so it is the one member for which
+    // picking a provider is meaningful.
+    function getProviderTrigger() {
+      return screen.getByTestId("lead-provider-select")
+    }
+
+    it("offers the configured providers to a lead", async () => {
+      render(
+        <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={lead} team={team} />
+      )
+
+      fireEvent.click(getProviderTrigger())
+
+      // Labelled by display name, not the raw id the user never typed.
+      expect(
+        await screen.findByRole("option", { name: getProviderDisplayName("anthropic") })
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole("option", { name: getProviderDisplayName("openai") })
+      ).toBeInTheDocument()
+      // A custom provider carries its own name; the catalog does not know it.
+      expect(screen.getByRole("option", { name: "GW" })).toBeInTheDocument()
+      // A provider the user turned off cannot run the lead.
+      expect(
+        screen.queryByRole("option", { name: getProviderDisplayName("disabled_one") })
+      ).not.toBeInTheDocument()
+    })
+
+    it("persists the picked provider onto the lead's config", async () => {
+      render(
+        <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={lead} team={team} />
+      )
+
+      fireEvent.click(getProviderTrigger())
+      fireEvent.click(await screen.findByRole("option", { name: getProviderDisplayName("openai") }))
+
+      expect(updateTeammateMock).toHaveBeenCalledWith(
+        "lead-1",
+        expect.objectContaining({ config: expect.objectContaining({ provider: "openai" }) })
+      )
+    })
+
+    it("clears the override back to the app default", async () => {
+      render(
+        <TeammateConfigDialog
+          open={true}
+          onOpenChange={() => {}}
+          teammate={{ ...lead, config: { provider: "openai" } }}
+          team={team}
+        />
+      )
+
+      fireEvent.click(getProviderTrigger())
+      fireEvent.click(await screen.findByRole("option", { name: "rosterSection.providerDefault" }))
+
+      expect(updateTeammateMock).toHaveBeenCalledWith(
+        "lead-1",
+        expect.objectContaining({ config: expect.objectContaining({ provider: undefined }) })
+      )
+    })
+
+    it("is not offered for a non-lead teammate", () => {
+      render(
+        <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={teammate} team={team} />
+      )
+      expect(screen.queryByTestId("lead-provider-select")).not.toBeInTheDocument()
+    })
+
+    it("renders for a lead even before settings have loaded", () => {
+      mockSettings.settings = null
+      render(
+        <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={lead} team={team} />
+      )
+      expect(screen.getByTestId("lead-provider-select")).toBeInTheDocument()
+    })
+  })
+
+  it("renders the dialog header keyed by teammate name", () => {
+    render(
+      <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={teammate} team={team} />
+    )
+    expect(screen.getByText(/title:/)).toBeInTheDocument()
+    expect(screen.getByText(/Alice/)).toBeInTheDocument()
+  })
+
+  it("explains that the chosen agent backs the teammate", () => {
+    render(
+      <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={teammate} team={team} />
+    )
+    expect(screen.getByTestId("teammate-character-hint")).toHaveTextContent("characterHint")
+  })
+
+  it("mounts without throwing when team has no capability default pool", () => {
+    expect(() =>
+      render(
+        <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={teammate} team={team} />
+      )
+    ).not.toThrow()
+  })
+
+  it("shows the inherited sandbox ceiling and clamps teammate overrides before saving", () => {
+    const confinedTeam: AgentTeam = {
+      ...team,
+      config: {
+        ...team.config,
+        sandboxEnabled: true,
+        sandboxPolicy: {
+          maxCpuSeconds: 30,
+          maxMemoryMb: 512,
+          network: "allowlist",
+          networkAllowlist: ["api.github.com"],
+          writableRoots: ["/workspace"],
+        },
+      },
+    }
+    render(
+      <TeammateConfigDialog
+        open={true}
+        onOpenChange={() => {}}
+        teammate={{
+          ...teammate,
+          config: {
+            sandboxPolicy: {
+              maxCpuSeconds: 10,
+              network: "off",
+              writableRoots: ["/workspace/pkg"],
+            },
+          },
+        }}
+        team={confinedTeam}
+      />
+    )
+
+    expect(screen.getByText(/sandboxSection\.inheritedCeiling/)).toHaveTextContent("30")
+    expect(screen.getByTestId("teammate-sandbox-policy-cpu")).toHaveValue(10)
+    fireEvent.change(screen.getByTestId("teammate-sandbox-policy-cpu"), {
+      target: { value: "90" },
+    })
+
+    expect(updateTeammateMock).toHaveBeenCalledWith(
+      "t1",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          sandboxPolicy: expect.objectContaining({
+            maxCpuSeconds: 30,
+            network: "off",
+            writableRoots: ["/workspace/pkg"],
+          }),
+        }),
+      })
+    )
+  })
+
+  describe("roster twin binding", () => {
+    it("offers a None option plus every live twin", () => {
+      render(
+        <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={teammate} team={team} />
+      )
+      fireEvent.click(getTwinSelectTrigger())
+      const listbox = screen.getByRole("listbox")
+      expect(within(listbox).getByText("rosterSection.twinNone")).toBeInTheDocument()
+      expect(within(listbox).getByText("Alice")).toBeInTheDocument()
+      expect(within(listbox).getByText("Bob")).toBeInTheDocument()
+    })
+
+    it("selecting a twin writes it onto config.twinId", () => {
+      render(
+        <TeammateConfigDialog open={true} onOpenChange={() => {}} teammate={teammate} team={team} />
+      )
+      fireEvent.click(getTwinSelectTrigger())
+      fireEvent.click(within(screen.getByRole("listbox")).getByText("Bob"))
+      expect(updateTeammateMock).toHaveBeenCalledWith("t1", { config: { twinId: "tw2" } })
+    })
+
+    it('selecting "None" clears an existing twinId', () => {
+      const boundTeammate: AgentTeammate = { ...teammate, config: { twinId: "tw1" } }
+      render(
+        <TeammateConfigDialog
+          open={true}
+          onOpenChange={() => {}}
+          teammate={boundTeammate}
+          team={team}
+        />
+      )
+      fireEvent.click(getTwinSelectTrigger())
+      fireEvent.click(within(screen.getByRole("listbox")).getByText("rosterSection.twinNone"))
+      expect(updateTeammateMock).toHaveBeenCalledWith("t1", { config: { twinId: undefined } })
+    })
+  })
+})
+
+describe("teammate exact external-agent config pin", () => {
+  beforeEach(() => updateTeammateMock.mockClear())
+  const pinTrigger = () => screen.getByTestId("teammate-config-pin")
+
+  it("pins an external teammate to one saved config of its runtime family", () => {
+    const member: AgentTeammate = { ...teammate, config: { runtime: "codex", model: "m" } }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(pinTrigger())
+    // Both surfaces of the Codex family are offered.
+    expect(screen.getByRole("option", { name: "Codex lenient" })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("option", { name: "Codex strict" }))
+    expect(updateTeammateMock).toHaveBeenCalledWith("t1", {
+      config: { runtime: "codex", model: "m", externalAgentConfigId: "strict" },
+    })
+  })
+
+  it("clears the pin back to any config of the preset", () => {
+    const member: AgentTeammate = {
+      ...teammate,
+      config: { runtime: "codex", externalAgentConfigId: "strict" },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(pinTrigger())
+    fireEvent.click(screen.getByRole("option", { name: 'any:{"preset":"codex"}' }))
+    const config = updateTeammateMock.mock.calls[0][1].config
+    expect(config).toEqual({ runtime: "codex" })
+  })
+
+  it("drops the pin when the runtime changes", () => {
+    const member: AgentTeammate = {
+      ...teammate,
+      config: { runtime: "codex", externalAgentConfigId: "strict" },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(
+      within(screen.getByText("rosterSection.runtime").parentElement!).getByRole("combobox")
+    )
+    fireEvent.click(screen.getByRole("option", { name: "geminiCli" }))
+    const config = updateTeammateMock.mock.calls[0][1].config
+    expect(config.runtime).toBe("gemini-cli")
+    expect(config).not.toHaveProperty("externalAgentConfigId")
+  })
+
+  it("is not offered on the claude runtime or to the lead", () => {
+    const { unmount } = render(
+      <TeammateConfigDialog open onOpenChange={() => {}} teammate={teammate} team={team} />
+    )
+    expect(screen.queryByTestId("teammate-config-pin")).not.toBeInTheDocument()
+    unmount()
+    render(
+      <TeammateConfigDialog
+        open
+        onOpenChange={() => {}}
+        teammate={{ ...lead, config: { runtime: "codex" } }}
+        team={team}
+      />
+    )
+    expect(screen.queryByTestId("teammate-config-pin")).not.toBeInTheDocument()
+  })
+
+  it("keeps the pin when the member is saved through the editor", async () => {
+    const member: AgentTeammate = {
+      ...teammate,
+      config: { runtime: "codex", externalAgentConfigId: "strict" },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(screen.getByRole("button", { name: "save" }))
+    await waitFor(() =>
+      expect(updateTeammateMock).toHaveBeenCalledWith(
+        "t1",
+        expect.objectContaining({
+          config: expect.objectContaining({ runtime: "codex", externalAgentConfigId: "strict" }),
+        })
+      )
+    )
+  })
+})
+
+describe("teammate Cognia model binding", () => {
+  beforeEach(() => updateTeammateMock.mockClear())
+  it("persists complete bindings without saving intermediate empty drafts", () => {
+    const member: AgentTeammate = {
+      ...teammate,
+      config: { runtime: "pi-rpc", specialization: "review" },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(screen.getByRole("button", { name: "Draft Cognia binding" }))
+    expect(updateTeammateMock).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "Select Cognia binding" }))
+    expect(updateTeammateMock).toHaveBeenCalledWith("t1", {
+      config: {
+        ...member.config,
+        cogniaModel: { providerId: "kimi", modelId: "coder", accountId: "account-a" },
+      },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cognia binding" }))
+    expect(updateTeammateMock).toHaveBeenLastCalledWith("t1", {
+      config: { ...member.config, cogniaModel: null },
+    })
+  })
+  it("does not offer external gateway configuration for the provider-backed lead", () => {
+    render(
+      <TeammateConfigDialog
+        open
+        onOpenChange={() => {}}
+        teammate={{ ...teammate, role: "lead", config: { runtime: "pi-rpc" } }}
+        team={team}
+      />
+    )
+    expect(screen.queryByRole("button", { name: "Select Cognia binding" })).not.toBeInTheDocument()
+  })
+
+  it("keeps an existing binding clearable when its external backing is no longer present", () => {
+    const member: AgentTeammate = {
+      ...teammate,
+      config: { runtime: "claude", cogniaModel: { providerId: "kimi", modelId: "coder" } },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cognia binding" }))
+    expect(updateTeammateMock).toHaveBeenLastCalledWith("t1", {
+      config: { ...member.config, cogniaModel: null },
+    })
+  })
+
+  it("clears the gateway binding when switching back to a builtin runtime without an external preset", () => {
+    const member: AgentTeammate = {
+      ...teammate,
+      config: { runtime: "pi-rpc", cogniaModel: { providerId: "kimi", modelId: "coder" } },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(
+      within(screen.getByText("rosterSection.runtime").parentElement!).getByRole("combobox")
+    )
+    fireEvent.click(screen.getByRole("option", { name: "claude" }))
+    expect(updateTeammateMock).toHaveBeenCalledWith("t1", {
+      config: { runtime: "claude", cogniaModel: null },
+    })
+  })
+
+  it("clears a stale builtin gateway binding when saving the member", async () => {
+    const member: AgentTeammate = {
+      ...teammate,
+      config: { runtime: "claude", cogniaModel: { providerId: "kimi", modelId: "coder" } },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={member} team={team} />)
+    fireEvent.click(screen.getByRole("button", { name: "save" }))
+    await waitFor(() =>
+      expect(updateTeammateMock).toHaveBeenCalledWith(
+        "t1",
+        expect.objectContaining({
+          config: expect.objectContaining({ runtime: "claude", cogniaModel: null }),
+        })
+      )
+    )
+  })
+})
+
+/**
+ * The Squad member's Router + Fusion action (ADR-0188 D3/D21). The picker is
+ * the third axis of the member surface: the type carries the field, the
+ * runtime reads it (`member-fusion-turn.ts`), and this is where a person sets
+ * it.
+ */
+describe("teammate Router + Fusion action", () => {
+  beforeEach(() => {
+    updateTeammateMock.mockReset()
+    listTwinsMock.mockReturnValue(TWINS)
+    mockSettings.settings = {
+      routerFusion: { enabled: true, surfaces: { agentsWorkflows: true } },
+    }
+  })
+
+  it("persists the member's chosen action onto its config", async () => {
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={teammate} team={team} />)
+
+    fireEvent.click(screen.getByTestId("fusion-action-trigger"))
+    fireEvent.click(await screen.findByRole("option", { name: /actions\.cascade/ }))
+
+    expect(updateTeammateMock).toHaveBeenCalledWith(
+      "t1",
+      expect.objectContaining({ config: expect.objectContaining({ fusionAction: "cascade" }) })
+    )
+  })
+
+  it("shows the member's stored action and disables delegate for a team with no project", async () => {
+    render(
+      <TeammateConfigDialog
+        open
+        onOpenChange={() => {}}
+        teammate={{ ...teammate, config: { fusionAction: "panel" } }}
+        team={team}
+      />
+    )
+    expect(screen.getByTestId("fusion-action-trigger")).toHaveTextContent("actions.panel")
+    fireEvent.click(screen.getByTestId("fusion-action-trigger"))
+    expect(await screen.findByRole("option", { name: /actions\.delegate/ })).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    )
+  })
+
+  it("asks the TEAM's project for a checkout, the one the runtime works in", async () => {
+    // One source on both sides: `member-fusion-turn.ts` refuses a delegate turn
+    // unless `team.projectId` has a primary root, and the picker asks the same.
+    const { useProjectStore } = await import("@/stores/project/project-store")
+    useProjectStore.setState({
+      activeProjectId: "someone-elses",
+      projects: [
+        { id: "team-project", roots: [{ path: "/repo/team", isPrimary: true }] },
+        { id: "someone-elses", roots: [{ path: "/repo/other", isPrimary: true }] },
+        { id: "no-folder", roots: [] },
+      ] as never,
+    })
+    const { rerender } = render(
+      <TeammateConfigDialog
+        open
+        onOpenChange={() => {}}
+        teammate={{ ...teammate, config: { fusionAction: "delegate" } }}
+        team={{ ...team, projectId: "team-project" }}
+      />
+    )
+    expect(screen.queryByRole("alert")).toBeNull()
+    rerender(
+      <TeammateConfigDialog
+        open
+        onOpenChange={() => {}}
+        teammate={{ ...teammate, config: { fusionAction: "delegate" } }}
+        team={{ ...team, projectId: "no-folder" }}
+      />
+    )
+    expect(screen.getByRole("alert")).toHaveTextContent("errors.workspaceRequired")
+  })
+
+  it("persists a delegate member's delivery onto its config", async () => {
+    render(
+      <TeammateConfigDialog
+        open
+        onOpenChange={() => {}}
+        teammate={{ ...teammate, config: { fusionAction: "delegate" } }}
+        team={team}
+      />
+    )
+    fireEvent.click(screen.getByTestId("fusion-delivery-trigger"))
+    fireEvent.click(
+      await screen.findByRole("option", { name: /delivery\.values\.workspace_updated/ })
+    )
+    expect(updateTeammateMock).toHaveBeenCalledWith(
+      "t1",
+      expect.objectContaining({
+        config: expect.objectContaining({ fusionDelegateDelivery: "workspace_updated" }),
+      })
+    )
+  })
+
+  it("[ACC:OFF-AGENTS] offers nothing but Auto while the surface is off", async () => {
+    mockSettings.settings = {
+      routerFusion: { enabled: true, surfaces: { agentsWorkflows: false } },
+    }
+    render(<TeammateConfigDialog open onOpenChange={() => {}} teammate={teammate} team={team} />)
+    fireEvent.click(screen.getByTestId("fusion-action-trigger"))
+    expect(await screen.findByRole("option", { name: /actions\.panel/ })).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    )
+  })
+})

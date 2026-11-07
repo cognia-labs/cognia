@@ -15,7 +15,7 @@ jest.mock("@/lib/boot/capabilities", () => ({
   ensureBootCapability: (capability: string) => boot.capability(capability),
 }))
 const bridge = { hydrated: jest.fn(() => Promise.resolve()) }
-jest.mock("@/stores/agent/agent-team-store/dexie-bridge", () => ({
+jest.mock("@/stores/squads/agent-team-store/dexie-bridge", () => ({
   whenAgentTeamDexieBridgeHydrated: () => bridge.hydrated(),
 }))
 
@@ -23,7 +23,7 @@ const teamState: { teams: Record<string, AgentTeam>; teammates: Record<string, A
   teams: {},
   teammates: {},
 }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: () => teamState },
 }))
 const projectState = { activeProjectId: null as string | null }

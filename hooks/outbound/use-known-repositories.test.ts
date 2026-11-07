@@ -23,7 +23,7 @@ jest.mock("@/lib/integrations/action-runner", () => ({
 const resolveTeamRepo = jest.fn(async (path: string) =>
   path === "/work/tools" ? { fullName: "acme/tools", host: { id: "github.com" } } : null
 )
-jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
+jest.mock("@/lib/squads/pr-feedback/resolvers", () => ({
   createResolveTeamRepo: () => resolveTeamRepo,
 }))
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react"
 import type { UIMessage } from "ai"
-import { extractAgentFileActivity } from "@/lib/agent-team/file-activity"
+import { extractAgentFileActivity } from "@/lib/squads/file-activity"
 import { openInProjectEditor, reflectEditInProjectEditor } from "@/lib/files/project-editor-bridge"
 import { resolveLinkPath } from "@/lib/terminal/terminal-links"
 

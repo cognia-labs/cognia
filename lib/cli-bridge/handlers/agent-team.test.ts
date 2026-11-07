@@ -6,7 +6,7 @@
  */
 
 const storeState: { teams: Record<string, unknown> } = { teams: {} }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: () => storeState },
 }))
 
@@ -19,7 +19,7 @@ jest.mock("@cognia/redact", () => ({
 
 const managerGetMock = jest.fn()
 const managerStartMock = jest.fn()
-jest.mock("@/lib/ai/agent/team/agent-team", () => ({
+jest.mock("@/lib/squads/agent-team", () => ({
   agentTeamManager: {
     get: (...args: unknown[]) => managerGetMock(...args),
     start: (...args: unknown[]) => managerStartMock(...args),
@@ -55,7 +55,7 @@ jest.mock("@/lib/db/schema", () => ({
   }),
 }))
 
-jest.mock("@/lib/ai/agent/team/team-workflow-id", () => ({
+jest.mock("@/lib/squads/team-workflow-id", () => ({
   isSynthesizedTeamRunPayload: (payload: unknown, teamId: string) => {
     const p = payload as { teamId?: string; event?: string } | undefined
     return p?.teamId === teamId && p?.event === undefined

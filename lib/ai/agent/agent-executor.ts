@@ -396,7 +396,7 @@ export { EXECUTOR_FALLBACK_PROMPT } from "@/lib/agent/prompts/executor"
 
 /**
  * Build a minimal in-memory `Character` from a config that has no
- * `characterId`. Mirrors `lib/ai/agent/team/teammate/teammate-character.ts` — the
+ * `characterId`. Mirrors `lib/squads/teammate/teammate-character.ts` — the
  * synthesised character is never persisted, it is handed straight to
  * `resolveSendOptions` as `BuildOptionsContext.character`. `fallbackSystemPrompt`
  * is the resolved {@link EXECUTOR_FALLBACK_PROMPT}, used only when the config

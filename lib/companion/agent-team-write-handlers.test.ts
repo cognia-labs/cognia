@@ -1,21 +1,21 @@
 /**
  * @jest-environment jsdom
  */
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import {
   handleTeamTaskComment,
   handleTeamTaskCreate,
   handleTeamTaskMove,
   handleTeamRunStart,
 } from "./agent-team-write-handlers"
-import { startSquadRun } from "@/lib/ai/agent/team/squad/start-squad-run"
-import { resolveGatePolicy } from "@/lib/ai/agent/team/gates/gate-policy"
+import { startSquadRun } from "@/lib/squads/squad/start-squad-run"
+import { resolveGatePolicy } from "@/lib/squads/gates/gate-policy"
 import {
   squadReviewInterruptIdFor,
   squadReviewRequestIdFromInterrupt,
-} from "@/lib/ai/agent/team/gates/squad-review-gate"
+} from "@/lib/squads/gates/squad-review-gate"
 
-jest.mock("@/lib/ai/agent/team/squad/start-squad-run", () => ({
+jest.mock("@/lib/squads/squad/start-squad-run", () => ({
   startSquadRun: jest.fn(),
 }))
 
@@ -28,7 +28,7 @@ jest.mock("@/lib/share/hash", () => ({
       .digest("hex"),
 }))
 
-jest.mock("@/lib/ai/agent/team/agent-team", () => ({
+jest.mock("@/lib/squads/agent-team", () => ({
   agentTeamManager: {
     pause: jest.fn(async () => {}),
     resume: jest.fn(async () => {}),

@@ -17,7 +17,7 @@ import {
   type TeamToolCaller,
   type TeamToolDeps,
 } from "./team-builtin-tools"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { ConsensusRequest, SharedMemoryEntry } from "@/types/agent/agent-team"
 
 // Keep the background-delegation path off the real LLM / background runtime so
@@ -38,7 +38,7 @@ jest.mock("@/lib/twin/runtime/build-deps", () => ({
   tryBuildTwinDeps: (...a: unknown[]) => tryBuildTwinDepsMock(...a),
 }))
 const runTwinSearchMock = jest.fn()
-jest.mock("@/lib/ai/agent/team/teammate/twin-context", () => ({
+jest.mock("@/lib/squads/teammate/twin-context", () => ({
   searchTwinKnowledge: (...a: unknown[]) => runTwinSearchMock(...a),
 }))
 // team_post_to_chat (W5) default-deps seams — all dynamic-imported by
@@ -940,12 +940,12 @@ describe("defaultTeamToolDeps — team_post_to_chat wiring", () => {
 
   it("resolveOriginConversation reads the run's triggeredFrom from TeamRunContext", async () => {
     const { registerTeamRunContext, unregisterTeamRunContext } =
-      await import("@/lib/ai/agent/team/team-run-context")
+      await import("@/lib/squads/team-run-context")
     registerTeamRunContext({
       runId: "run-w5",
       teamId: "team-1",
       triggeredFrom: { source: "im", adapterId: "bot-a", conversationKey: "lark:bot-a:chat-1" },
-    } as unknown as import("@/lib/ai/agent/team/team-run-context").TeamRunContext)
+    } as unknown as import("@/lib/squads/team-run-context").TeamRunContext)
     try {
       const deps = await defaultTeamToolDeps()
       expect(await deps.resolveOriginConversation({ ...caller, runId: "run-w5" })).toEqual({

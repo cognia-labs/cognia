@@ -5,7 +5,7 @@ jest.mock("@/hooks/chat/chat-control-bridge", () => ({
   stopChatTurn: jest.fn(async () => true),
 }))
 jest.mock("@/hooks/chat/chat-send-bridge", () => ({ sendChatMessage: jest.fn(() => true) }))
-jest.mock("@/lib/ai/agent/team/gates/decide-pending-gate", () => ({
+jest.mock("@/lib/squads/gates/decide-pending-gate", () => ({
   decidePendingGate: jest.fn(() => true),
 }))
 jest.mock("@/lib/execution/run-control-dispatch", () => ({
@@ -28,7 +28,7 @@ jest.mock("@/stores/agent/pending-gates-store", () => ({
 
 import { answerChatApproval, stopChatTurn } from "@/hooks/chat/chat-control-bridge"
 import { sendChatMessage } from "@/hooks/chat/chat-send-bridge"
-import { decidePendingGate } from "@/lib/ai/agent/team/gates/decide-pending-gate"
+import { decidePendingGate } from "@/lib/squads/gates/decide-pending-gate"
 import { expireRunInterruptFromSource } from "@/lib/execution/run-control"
 import { dispatchRunControl } from "@/lib/execution/run-control-dispatch"
 import {

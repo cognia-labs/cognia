@@ -26,7 +26,7 @@ import { useCharacters } from "@/lib/data-hooks/context"
 import type { ConversationAssignee, ConversationStatus } from "@/lib/db/conversation-overrides"
 import type { LabelCheckState } from "@/lib/inbox/bulk-triage"
 import { cn } from "@/lib/utils"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { SNOOZE_PRESETS, type SnoozePresetKey } from "@/lib/inbox/snooze-presets"
 
 /** Status dot colours, shared by the chip, the row and the menus. */

@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db/schema"
-import { stripLegacyRuntimeSelector } from "@/lib/agent-team/definition-contract"
+import { stripLegacyRuntimeSelector } from "@/lib/squads/definition-contract"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type {
   AgentTeamRow,

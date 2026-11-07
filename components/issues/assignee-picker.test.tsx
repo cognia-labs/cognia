@@ -51,7 +51,7 @@ jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => characters }))
 jest.mock("@/lib/db/characters", () => ({ listCharacters: jest.fn() }))
 
 let teams: Record<string, { id: string; name: string; projectId?: string }> = {}
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: { teams: typeof teams }) => unknown) => selector({ teams }),
 }))
 let activeProjectId: string | null = "w1"

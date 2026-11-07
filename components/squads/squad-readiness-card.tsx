@@ -38,8 +38,8 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { SQUAD_ROSTER_SETTING_ID, squadPanelId } from "@/components/settings/squads/nav-config"
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useSquadReadiness, type SquadReadinessState } from "@/hooks/squads/use-squad-readiness"
-import { projectRepositoryCandidate } from "@/lib/agent-team/binding-candidates"
-import type { SquadReadinessBlocker } from "@/lib/agent-team/squad-readiness"
+import { projectRepositoryCandidate } from "@/lib/squads/binding-candidates"
+import type { SquadReadinessBlocker } from "@/lib/squads/squad-readiness"
 import {
   createProjectEnvironmentVersion,
   listProjectEnvironmentVersions,
@@ -49,7 +49,7 @@ import {
 } from "@/lib/db/project-environments"
 import { settingsHref } from "@/lib/settings/deep-link"
 import { cn } from "@/lib/utils"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { ProjectEnvironment } from "@/types/project-environment"
 

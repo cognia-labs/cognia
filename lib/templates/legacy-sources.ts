@@ -1,4 +1,4 @@
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useCustomModeStore } from "@/stores/agent/custom-mode-store"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"

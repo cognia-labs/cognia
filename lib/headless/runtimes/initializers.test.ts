@@ -143,8 +143,7 @@ describe("initializer batch headless smoke", () => {
     }
     // The brain runs the full squad bootstrap (recovery included), not just the
     // runtime adapters, and installs the team's workflow nodes (ADR-0217).
-    const { awaitSquadRuntimeReady, getSquadRuntimeState } =
-      await import("@/lib/agent-team/bootstrap")
+    const { awaitSquadRuntimeReady, getSquadRuntimeState } = await import("@/lib/squads/bootstrap")
     await expect(awaitSquadRuntimeReady()).resolves.toBe(true)
     expect(getSquadRuntimeState()).toBe("ready")
     const { hasTeamWorkflowNodes } = await import("@/lib/workflow/nodes/teams/team-runtime-port")

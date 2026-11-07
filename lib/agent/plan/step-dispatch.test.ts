@@ -75,7 +75,7 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
 }))
 
 const dispatchTeammateMock = jest.fn()
-jest.mock("@/lib/ai/agent/team/teammate/dispatch-teammate", () => ({
+jest.mock("@/lib/squads/teammate/dispatch-teammate", () => ({
   dispatchTeammate: (...a: unknown[]) => dispatchTeammateMock(...a),
 }))
 
@@ -94,7 +94,7 @@ let storeStateMock: {
     { id: string; name: string; role: string; config: Record<string, unknown> }
   >
 }
-jest.mock("@/stores/agent/agent-team-store/store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: () => storeStateMock },
 }))
 

@@ -14,11 +14,11 @@
  * capability, approval lease, schema and idempotency before dispatch.
  */
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { loggers } from "@cognia/logging"
 import type { SubAgentPriority } from "@/types/agent/sub-agent"
 import type { TeamTaskStatus } from "@/types/agent/agent-team"
-import type { StartSquadRunResult } from "@/lib/ai/agent/team/squad/start-squad-run"
+import type { StartSquadRunResult } from "@/lib/squads/squad/start-squad-run"
 import { sha256Hex } from "@/lib/share/hash"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
@@ -54,7 +54,7 @@ export async function handleTeamRunStart(
     // Bound the identifier's size and namespace it by the authenticated device.
     // A refreshed consent lease changes the transport attempt, not the run.
     const runId = `squad-companion-${await sha256Hex(JSON.stringify([callerDeviceId, launchId.toLowerCase()]))}`
-    const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
+    const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
     return await startSquadRun({
       localAuthorization: LOCAL_PERSON_RUN,
       squadId: teamId,

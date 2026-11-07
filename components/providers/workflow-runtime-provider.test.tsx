@@ -61,7 +61,7 @@ jest.mock("@/lib/workflow/runtime/resume-controller", () => ({
 }))
 
 const installTeamWorkflowNodeRuntimeMock = jest.fn()
-jest.mock("@/lib/ai/agent/team/workflow-nodes/install", () => ({
+jest.mock("@/lib/squads/workflow-nodes/install", () => ({
   __esModule: true,
   installTeamWorkflowNodeRuntime: () => installTeamWorkflowNodeRuntimeMock(),
 }))

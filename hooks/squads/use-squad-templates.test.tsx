@@ -10,7 +10,7 @@ import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 import type { TemplateRuntime } from "@/lib/templates/runtime"
 
 const applySquadTemplate = jest.fn()
-jest.mock("@/lib/agent-team/apply-squad-template", () => ({
+jest.mock("@/lib/squads/apply-squad-template", () => ({
   applySquadTemplate: (...args: unknown[]) => applySquadTemplate(...args),
 }))
 
@@ -23,7 +23,7 @@ const storeState = {
   addTeammate: jest.fn(),
   createTask: jest.fn(),
 }
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (selector: (s: typeof storeState) => unknown) => selector(storeState),
 }))
 

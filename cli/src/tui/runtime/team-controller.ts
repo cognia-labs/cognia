@@ -13,8 +13,8 @@ import { getSession } from "@/lib/db/sessions"
 import {
   planAutoOrchestration,
   AutoOrchestrationPiiError,
-} from "@/lib/ai/agent/team/auto/auto-orchestrate"
-import { renderProposalDoc } from "@/lib/ai/agent/team/auto/preview-doc"
+} from "@/lib/squads/auto/auto-orchestrate"
+import { renderProposalDoc } from "@/lib/squads/auto/preview-doc"
 import { buildRendererLlmClient } from "@/lib/ai/renderer-llm-client"
 
 import { ensureCliDb } from "../../db/bootstrap"
@@ -251,7 +251,7 @@ export async function teamRun(teamId: string, deps: TeamRunDeps): Promise<void> 
  * `/team auto <objective>` — auto-compose a team from an objective and render
  * the proposal (routing assessment + roster + task DAG) as a preview document.
  *
- * The planning engine (`lib/ai/agent/team/auto`) is pure and headless-capable,
+ * The planning engine (`lib/squads/auto`) is pure and headless-capable,
  * so the full assess → compose → decompose pipeline runs in the CLI. EXECUTION
  * stays desktop-only (the renderer-bound `agentTeamManager` runtime), so the
  * doc is a preview — consistent with the `/team run` boundary.

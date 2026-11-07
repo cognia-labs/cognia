@@ -13,9 +13,9 @@ Teammates use the *same* build-options pipeline as direct chat.
 Plugins extend these layers through uniform overlay registries and access the team through `ctx.team`.
 
 <TLDR>
-- **Two layers plus a clamp.** `TeamCapabilityBundle` is the pool, `TeammateCapabilityOverlay` adjusts it per member, `resolveTeammateCapabilities` (`lib/ai/agent/team/teammate/capability-resolver.ts:91`) merges them, and `clampCapabilitiesToRuntime` (`:170`) can only remove.
+- **Two layers plus a clamp.** `TeamCapabilityBundle` is the pool, `TeammateCapabilityOverlay` adjusts it per member, `resolveTeammateCapabilities` (`lib/squads/teammate/capability-resolver.ts:91`) merges them, and `clampCapabilitiesToRuntime` (`:170`) can only remove.
 - **7 capability keys**, enumerated once as `CAPABILITY_KEYS` (`capability-resolver.ts:36-44`).
-- **Character bridge.** `teammateToCharacter` (`lib/ai/agent/team/teammate/teammate-character.ts:62`) is pure, never persisted, stable id `__teammate__:{id}`, consumed at `dispatch-teammate.ts:236`.
+- **Character bridge.** `teammateToCharacter` (`lib/squads/teammate/teammate-character.ts:62`) is pure, never persisted, stable id `__teammate__:{id}`, consumed at `dispatch-teammate.ts:236`.
 - **20 overlay capabilities** in `OVERLAY_REGISTRY_CAPABILITIES` (`lib/plugin/contracts/capability-bridge-map.ts:220`), dispatched by one loop in the plugin manager.
 - **Audit gate.** `buildKnownCapabilityIds` (`capability-audit.ts:109`) plus `validateInstanceCapabilitiesWith` (`:155`) feed a pre-run gate whose behaviour depends on the run's gate policy.
 - **`ctx.team`** exposes 30 methods behind five permission ids.
@@ -30,7 +30,7 @@ One pure function merges both layers into a flat `ResolvedCapabilities` record w
 Consumers can therefore iterate over it without null guards.
 
 ```typescript
-// lib/ai/agent/team/teammate/capability-resolver.ts:36-44
+// lib/squads/teammate/capability-resolver.ts:36-44
 const CAPABILITY_KEYS = [
   "mcpServerIds",
   "skillIds",
@@ -122,7 +122,7 @@ Because capabilities are stored as plain id lists, a disabled plugin can leave a
 
 `buildKnownCapabilityIds()` (`capability-audit.ts:109`) snapshots eight buckets, the seven capability lists plus `sharedMemoryAdapterIds`, by unioning the Dexie skill, MCP and A2UI tables, the overlay registries, and the built-in subagent ids. `validateInstanceCapabilitiesWith(known, team, teammate?)` (`:155`) diffs an instance against that snapshot into `CapabilityAuditWarning[]`. `refreshAllInstanceCapabilityWarnings()` (`:250`) maintains a derived, never-persisted sidecar map, and `getInstanceCapabilityWarnings` (`:257`) and `getTeammateCapabilityWarnings` (`:262`) feed the UI.
 
-The pre-run gate is in `lib/ai/agent/team/agent-team-runtime.ts:495`. Its behaviour depends on the run's gate policy, which is the headless split rather than a single hardcoded modal.
+The pre-run gate is in `lib/squads/agent-team-runtime.ts:495`. Its behaviour depends on the run's gate policy, which is the headless split rather than a single hardcoded modal.
 
 - `capabilityAudit === "block"` (interactive) raises a critical notification carrying `openApproval: { scope: "agent-team-capability-audit", id: runId }` and waits on the approval bus. Anything other than approve cancels the run. The notify is load-bearing: without it the gate used to wait on a scope no UI ever produced, hanging even on the desktop.
 - Otherwise the run emits a warning that it is proceeding with stale capabilities, and continues.
@@ -135,7 +135,7 @@ The pre-run gate is in `lib/ai/agent/team/agent-team-runtime.ts:495`. Its behavi
 
 ## Teammate editing reuses PresetEditor
 
-Teammate editing does not fork an editor. `teammateToPresetState(teammate, team)` (`lib/ai/agent/team/teammate/teammate-preset-adapter.ts:97`) maps a teammate into `PresetEditorState`, flattening each capability overlay against the Squad bundle, and `presetStateToTeammateConfig(state, previous, team)` (`:180`) is the inverse, rebuilding per-key overlays through `diffListToOverlay` (`:149`). `TeammateConfigDialog` wraps `PresetEditor` with extra sections and a roster section. Fields with no preset equivalent, such as specialization, runtime and temperature, ride along as metadata across the round trip.
+Teammate editing does not fork an editor. `teammateToPresetState(teammate, team)` (`lib/squads/teammate/teammate-preset-adapter.ts:97`) maps a teammate into `PresetEditorState`, flattening each capability overlay against the Squad bundle, and `presetStateToTeammateConfig(state, previous, team)` (`:180`) is the inverse, rebuilding per-key overlays through `diffListToOverlay` (`:149`). `TeammateConfigDialog` wraps `PresetEditor` with extra sections and a roster section. Fields with no preset equivalent, such as specialization, runtime and temperature, ride along as metadata across the round trip.
 
 ## Lifecycle hooks
 

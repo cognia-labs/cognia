@@ -81,7 +81,7 @@ flowchart TB
 
 `createDurableTeamCoordinator(options)`（`coordinator.ts:87`）：
 
-| 选项 | 契约 | 应用绑定（`lib/ai/agent/team/durable/durable-runtime.ts`） |
+| 选项 | 契约 | 应用绑定（`lib/squads/durable/durable-runtime.ts`） |
 | --- | --- | --- |
 | `store` | `TeamRunStore` | `dexieTeamRunStore` |
 | `journal` | `TeamRunJournal.runPrepared`——记录运行开始或恢复 | `executionRunTeamJournal`，以 `agentTeamExecutionRunId` 为键，使桥接层与协调器汇聚到同一执行行 |
@@ -96,7 +96,7 @@ flowchart TB
 ## 编排如何调用 agent
 
 协调器从不启动 agent。应用的 Agent Team 运行时挑选下一个任务，`beginDurableDispatch`
-（`lib/ai/agent/team/durable/durable-dispatch.ts:66`）包裹一次队友回合：
+（`lib/squads/durable/durable-dispatch.ts:66`）包裹一次队友回合：
 
 1. **登记。** 通过协调器的存储原子地写入准入与子运行行（尝试、租约、所有权）。
 2. **启动。** 启动后端：sidecar 中的内置引擎会话、经 `ExternalAgentManager` 的外部 agent
@@ -136,7 +136,7 @@ flowchart TB
 
 `lib/workflow` 注册团队节点类型，但通过一个可安装端口运行它们
 （`lib/workflow/nodes/teams/team-runtime-port.ts`）。实现位于
-`lib/ai/agent/team/workflow-nodes`，由桌面工作流 provider、headless brain 与团队生命周期安装。
+`lib/squads/workflow-nodes`，由桌面工作流 provider、headless brain 与团队生命周期安装。
 边界测试（`team-runtime-port.test.ts`）保证 `lib/workflow` 不导入 Agent Team，从而让
 Team↔Workflow 导入环保持断开。
 
@@ -145,7 +145,7 @@ Team↔Workflow 导入环保持断开。
 下列模块以应用的 `AgentTeam` 模型为类型（`types/agent/agent-team.ts`，2,165 行，导入了 twin、
 编辑器、外部预设与 PR 观察等类型）：
 
-- 团队闸门，含预算守卫（`lib/ai/agent/team/gates/`）；
+- 团队闸门，含预算守卫（`lib/squads/gates/`）；
 - 队友池；
 - 波次运行器；
 - 合成工作流。

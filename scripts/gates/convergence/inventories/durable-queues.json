@@ -2260,8 +2260,8 @@
         "lib/db/agent-team-runtime.ts#updateAgentTeamSteeringReceipt"
       ],
       "consumerFunctions": [
-        "components/agent/workspace/durable-operations.tsx#DurableOperations::data",
-        "lib/ai/agent/team/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
+        "components/squads/durable-operations.tsx#DurableOperations::data",
+        "lib/squads/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
         "lib/db/agent-team-runtime.ts#aggregateAgentTeamRunUsage",
         "lib/db/agent-team-runtime.ts#findLatestAgentTeamChildRun",
         "lib/db/agent-team-runtime.ts#getAgentTeamChildRun",
@@ -2299,18 +2299,18 @@
       "signals": [
         "name"
       ],
-      "reason": "createDeliveryGraphService.approve at lib/ai/agent/team/delivery/delivery-graph.ts:212 validates an existing run graph and performs the explicit approval path; graph definitions/status aggregate delivery nodes under agentTeamRuns rather than feeding an autonomous queue.",
+      "reason": "createDeliveryGraphService.approve at lib/squads/delivery/delivery-graph.ts:212 validates an existing run graph and performs the explicit approval path; graph definitions/status aggregate delivery nodes under agentTeamRuns rather than feeding an autonomous queue.",
       "writerFunctions": [
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::approve",
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::create",
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::merge",
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::publish",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::approve",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::create",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::merge",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::publish",
         "lib/db/agent-team-runtime.ts#putAgentTeamDeliveryGraph"
       ],
       "consumerFunctions": [
-        "components/agent/workspace/durable-operations.tsx#DurableOperations::data",
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::loadGraph",
-        "lib/ai/agent/team/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
+        "components/squads/durable-operations.tsx#DurableOperations::data",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::loadGraph",
+        "lib/squads/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
         "lib/db/agent-team-runtime.ts#getAgentTeamDeliveryGraph",
         "lib/db/agent-team-runtime.ts#purgeAgentTeamRunRows"
       ],
@@ -2358,17 +2358,17 @@
       "signals": [
         "name"
       ],
-      "reason": "The delivery graph service at lib/ai/agent/team/delivery/delivery-graph.ts:212 traverses graph nodes after explicit approval; repository branches/PR state and dependsOn describe steps under agentTeamRuns, not an independently claimed work queue.",
+      "reason": "The delivery graph service at lib/squads/delivery/delivery-graph.ts:212 traverses graph nodes after explicit approval; repository branches/PR state and dependsOn describe steps under agentTeamRuns, not an independently claimed work queue.",
       "writerFunctions": [
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::approve",
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::create",
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::merge",
-        "lib/ai/agent/team/delivery/delivery-graph.ts#createDeliveryGraphService::publish",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::approve",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::create",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::merge",
+        "lib/squads/delivery/delivery-graph.ts#createDeliveryGraphService::publish",
         "lib/db/agent-team-runtime.ts#putAgentTeamDeliveryNodes"
       ],
       "consumerFunctions": [
-        "components/agent/workspace/durable-operations.tsx#DurableOperations::data",
-        "lib/ai/agent/team/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
+        "components/squads/durable-operations.tsx#DurableOperations::data",
+        "lib/squads/delivery/github-delivery-adapter.ts#prepareAndPublishGithubStack",
         "lib/db/agent-team-runtime.ts#listAgentTeamDeliveryNodes",
         "lib/db/agent-team-runtime.ts#purgeAgentTeamRunRows"
       ],
@@ -2411,12 +2411,12 @@
         "lib/db/agent-team-runtime.ts#putAgentTeamEvidenceContent"
       ],
       "consumerFunctions": [
-        "components/agent/workspace/durable-operations.tsx#DurableOperations::data",
+        "components/squads/durable-operations.tsx#DurableOperations::data",
         "lib/db/agent-team-runtime.ts#getAgentTeamEvidence",
         "lib/db/agent-team-runtime.ts#purgeAgentTeamRunRows",
         "lib/db/project-scope.ts#deleteProjectCascade"
       ],
-      "evidence": "94adde2afe6d8b15"
+      "evidence": "6bd81b90e4797d61"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/agentTeamRuns",
@@ -2460,11 +2460,11 @@
       "signals": [
         "status"
       ],
-      "reason": "createSquadRunRecords at lib/ai/agent/team/squad/squad-run-records.ts:78 creates the parent run and canonical ledger together when a squad starts; this table records active/terminal execution state, which is kept in run-tables rather than claimed as a separate queue.",
+      "reason": "createSquadRunRecords at lib/squads/squad/squad-run-records.ts:78 creates the parent run and canonical ledger together when a squad starts; this table records active/terminal execution state, which is kept in run-tables rather than claimed as a separate queue.",
       "writerFunctions": [
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRunHistory",
-        "lib/ai/agent/team/squad/squad-run-records.ts#createSquadRunRecords",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
+        "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/db/agent-team-runtime.ts#aggregateAgentTeamRunUsage",
         "lib/db/agent-team-runtime.ts#createAgentTeamRun",
         "lib/db/agent-team-runtime.ts#updateAgentTeamRun",
@@ -2472,12 +2472,12 @@
         "lib/dev/expose-test-globals.tsx#ExposeTestGlobals"
       ],
       "consumerFunctions": [
-        "components/agent/workspace/durable-operations.tsx#DurableOperations::data",
+        "components/squads/durable-operations.tsx#DurableOperations::data",
         "hooks/agent-runs/use-team-live-status.ts#useTeamLiveStatus::newestRunStatus",
         "hooks/squads/use-pending-squad-reviews.ts#listPendingSquadReviews",
         "hooks/squads/use-squad-latest-run.ts#readSquadLatestRun",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#teamIdForRun",
-        "lib/ai/agent/team/squad/squad-run-records.ts#findLiveSquadRun",
+        "lib/squads/gates/squad-review-gate.ts#teamIdForRun",
+        "lib/squads/squad/squad-run-records.ts#findLiveSquadRun",
         "lib/cli-bridge/handlers/agent-team.ts#agentTeamRunStatus",
         "lib/db/agent-team-runtime.ts#getAgentTeamRun",
         "lib/db/agent-team-runtime.ts#listAgentTeamRecoveryCandidates",
@@ -3367,10 +3367,10 @@
       ],
       "reason": "createBotStepApi.waitForApproval at lib/bot/runtime/step.ts:211 creates a human/policy decision wait attached to a parent run; approval subject/digest/decision status suspends existing work rather than feeding an autonomous queue.",
       "writerFunctions": [
-        "lib/ai/agent/team/gates/squad-review-gate.ts#armSquadReview",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#openSquadReview",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#settleSquadReview",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#settleSquadReviewFromControl",
+        "lib/squads/gates/squad-review-gate.ts#armSquadReview",
+        "lib/squads/gates/squad-review-gate.ts#openSquadReview",
+        "lib/squads/gates/squad-review-gate.ts#settleSquadReview",
+        "lib/squads/gates/squad-review-gate.ts#settleSquadReviewFromControl",
         "lib/bot/runtime/run.ts#cancelAcceptedBotDeliveries",
         "lib/bot/runtime/run.ts#cancelBotRun",
         "lib/bot/runtime/run.ts#runBotDelivery",
@@ -3383,12 +3383,12 @@
       ],
       "consumerFunctions": [
         "hooks/squads/use-pending-squad-reviews.ts#listPendingSquadReviews",
-        "lib/ai/agent/team/durable/team-recovery.ts#applyTeamRecoveryFromControl",
-        "lib/ai/agent/team/durable/team-recovery.ts#listRecoveryInterrupts",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#defaultSubscribe::subscription",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#listPendingSquadReviews",
-        "lib/ai/agent/team/gates/squad-review-gate.ts#openSquadReview::poll",
-        "lib/ai/agent/team/squad/squad-control.ts#defaultDenyPendingInterrupts",
+        "lib/squads/durable/team-recovery.ts#applyTeamRecoveryFromControl",
+        "lib/squads/durable/team-recovery.ts#listRecoveryInterrupts",
+        "lib/squads/gates/squad-review-gate.ts#defaultSubscribe::subscription",
+        "lib/squads/gates/squad-review-gate.ts#listPendingSquadReviews",
+        "lib/squads/gates/squad-review-gate.ts#openSquadReview::poll",
+        "lib/squads/squad/squad-control.ts#defaultDenyPendingInterrupts",
         "lib/attention/attention-store.ts#subscribeRunInterrupts::subscription",
         "lib/automation/managed-desktop-result-deletion.ts#deleteAcceptanceProjections",
         "lib/bot/runtime/run.ts#stopBotExecution",
@@ -3462,11 +3462,11 @@
       "signals": [
         "status"
       ],
-      "reason": "createSquadRunRecords includes the canonical executionRuns ledger transaction at lib/ai/agent/team/squad/squad-run-records.ts:78; canonical lifecycle rows record execution truth and are not another implementation of queued work.",
+      "reason": "createSquadRunRecords includes the canonical executionRuns ledger transaction at lib/squads/squad/squad-run-records.ts:78; canonical lifecycle rows record execution truth and are not another implementation of queued work.",
       "writerFunctions": [
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRunHistory",
-        "lib/ai/agent/team/squad/squad-run-records.ts#createSquadRunRecords",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
+        "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/bot/runtime/run.ts#cancelAcceptedBotDeliveries",
         "lib/bot/runtime/run.ts#cancelBotRun",
         "lib/bot/runtime/run.ts#runBotDelivery",
@@ -3489,7 +3489,7 @@
         "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
         "hooks/squads/use-squad-latest-run.ts#readSquadLatestRun",
         "lib/ai/agent/recovery/reconcile-crashed-runs.ts#reconcileCrashedAgentRuns",
-        "lib/ai/agent/team/squad/watch-squad-run.ts#watchSquadRunSettlement::subscription",
+        "lib/squads/squad/watch-squad-run.ts#watchSquadRunSettlement::subscription",
         "lib/automation/managed-desktop-result-deletion.ts#deleteAcceptanceProjections",
         "lib/automation/managed-desktop-result-deletion.ts#deleteManagedDesktopAcceptance",
         "lib/automation/managed-desktop-result-deletion.ts#deleteManagedDesktopRunProjections",
@@ -5266,7 +5266,7 @@
       ],
       "reason": "runWorkflow owns the active workflow execution and startLeaseHeartbeat at lib/workflow/runtime/run-lease.ts:136 renews its lease; persisted status/replay fields describe that execution, not a second queue consumed independently of the workflow runtime.",
       "writerFunctions": [
-        "lib/ai/agent/team/agent-team-runtime.ts#runTeamLifecycle::runWaveReentrant",
+        "lib/squads/agent-team-runtime.ts#runTeamLifecycle::runWaveReentrant",
         "lib/db/triggered-by-source-backfill.ts#backfillTriggeredBySourceV91",
         "lib/db/workflows.ts#acknowledgeRun",
         "lib/db/workflows.ts#markReplayed",
@@ -5303,7 +5303,7 @@
         "hooks/workflow/use-latest-run-outputs.ts#getLatestRunOutputs",
         "hooks/workflow/use-step-stream.ts#getStepStream",
         "lib/a2ui/workflow-approval-handler.ts#dispatchAcceptedApproval",
-        "lib/agent-team/legacy-run-history.ts#backfillLegacyTeamRunHistory",
+        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/bot/runtime/run.ts#stopBotExecution",
         "lib/cli-bridge/handlers/agent-team.ts#agentTeamRunStatus",
         "lib/connectors/automation-control.ts#cancelConversationAutomations",

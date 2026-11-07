@@ -28,7 +28,7 @@ export default defineHostModule({
   ],
   // Eval targets run chats, Squads, workflows and the twin; the routing lab
   // embeds router-fusion's panel; harness adoption applies recommendations.
-  dependsOn: ["agent-team", "harness", "router-fusion", "twin", "workflow"],
+  dependsOn: ["harness", "router-fusion", "squads", "twin", "workflow"],
   // What other modules use: artifact encryption (workflow blobs, knowledge,
   // quality, human input, perf captures), the online policy cache (logging),
   // tabular import (issues), recommendation application (harness), the

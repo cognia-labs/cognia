@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
 import { SquadFleetConsole } from "./squad-fleet-console"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam, AgentTeammate, TeamStatus } from "@/types/agent/agent-team"
@@ -64,10 +64,10 @@ jest.mock("@/components/agent-runs/agent-runs-panel", () => ({
   ),
 }))
 // The board is `AgentTeamTasks`, its own surface with its own suite.
-jest.mock("@/components/agent/workspace/tasks", () => ({
+jest.mock("@/components/squads/tasks", () => ({
   AgentTeamTasks: ({ teamId }: { teamId: string }) => <div data-testid="task-board">{teamId}</div>,
 }))
-jest.mock("@/components/agent/workspace/team-run-controls", () => ({
+jest.mock("@/components/squads/team-run-controls", () => ({
   TeamRunControls: ({ status }: { status: string }) => (
     <div data-testid="run-controls">{status}</div>
   ),
@@ -149,7 +149,7 @@ let fleetSource: "tauri" | "companion" | "none" = "none"
 jest.mock("@/hooks/fleet/use-fleet-snapshot", () => ({
   useFleetSnapshot: () => ({ source: fleetSource, snapshot: { sessions: [] } }),
 }))
-jest.mock("@/lib/ai/agent/team/agent-team", () => ({
+jest.mock("@/lib/squads/agent-team", () => ({
   agentTeamManager: {
     start: jest.fn(async () => {}),
     pause: jest.fn(async () => {}),

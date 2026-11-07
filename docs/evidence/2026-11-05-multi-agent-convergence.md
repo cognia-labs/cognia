@@ -1,0 +1,90 @@
+# Evidence ledger: Multi-agent convergence (rooms, Squads, delegations)
+
+- Status: building
+- Lane: deep
+- Created: 2026-11-05
+- Updated: 2026-11-07
+- Related: [plan](../plans/2026-11-05-multi-agent-convergence.md); [ADR-0252](../content/docs/en/adr/0252-a-room-talks-a-squad-works-a-delegation-promises.md); P0 commit `c05a61cd5d`
+
+<!--
+Edit by hand; keep the table shapes, because `ledger.mjs check` parses them.
+Status: exploring | building | verifying | closed
+Lane:   standard | deep
+IDs are unique across the whole file. Depends-on / Risk / From cells take
+comma-separated IDs. Use "-" for an empty cell.
+-->
+
+## Original request
+
+> research the relationship between AgentTeam, delegation, and group chat to find gaps; optimize carefully without omission or simplification; clean up dead code and duplicate logic
+
+## Knowledge
+
+| ID  | Statement                                                                                                                                                                                                                                                                                                                                                                                                                       | State    | Basis                                                                                                                                                                     | Depends on |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| G1  | Keep rooms, Squads and delegations as three axes; one child-run tree, launcher, steer entry and control machine; finish ADR-0177 batches 4–5; adopt ADR-0247 and ADR-0249; settle the dormant exports; in phases P0–P10.                                                                                                                                                                                                        | Agreed   | Grill session 2026-11-05; ADR-0252; plan                                                                                                                                  | -          |
+| C1  | Shared working tree: commit only this task's paths.                                                                                                                                                                                                                                                                                                                                                                             | Verified | CLAUDE.md rule 8; `git diff --cached --name-only` before each commit                                                                                                      | -          |
+| O1  | The Squad code lived in two trees (`lib/agent-team/`, `lib/ai/agent/team/`) plus `stores/agent/agent-team-store/` and `components/agent/workspace/`; ADR-0250 M1 (`4333cfabc0`) had already created the `squads` manifest owning a handful of files.                                                                                                                                                                            | Verified | `git ls-files` at `c05a61cd5d`: 228 + 27 + 13 + 124 files                                                                                                                 | -          |
+| O2  | Moving those files into a manifest module turns imports that were unchecked (table row to table row, or into the `agent` kernel's store) into G3 public-API checks: 152 new violations on the first gate run.                                                                                                                                                                                                                   | Verified | `node scripts/gates/check-modules.mjs` after the move, 2026-11-07                                                                                                         | O1         |
+| O3  | Every importer of the Squad store barrel imports only `useAgentTeamStore`, so pointing them at `store.ts` keeps behaviour and removes the barrel from the public surface.                                                                                                                                                                                                                                                       | Verified | `rg` over all `from "@/stores/squads/agent-team-store"` imports: 127 named imports, all `useAgentTeamStore`                                                               | -          |
+| O4  | Eight affected suites fail identically at `HEAD` (`c05a61cd5d`): durable dispatch, workflow built-ins, legacy run history, squad review form, brand icon, conversation override form, use-claude-chat, personal-marks guard (61 tests).                                                                                                                                                                                         | Verified | The same suites run from a detached `HEAD` worktree with a temp Jest wrapper, 2026-11-07: 61 failed                                                                       | -          |
+| O5  | The root typecheck stops on a foreign scratch file (`tmp/ui-polish/picker-head.tsx`); with `tmp/` excluded, the ten files still erroring are untouched by this work (settings `providerKeys`, module-type tests, OCR port, sidecar BigInt target).                                                                                                                                                                              | Verified | `typecheck-root.mjs -p .cache/typecheck/tsconfig.p1.json`, intersected with the changed-file list: none shared; re-run on `d174d61941`: 43 errors, none in a changed file | -          |
+| O6  | Gates that key a baseline or inventory by path see the move as a removal plus an addition: `audit:baseline-growth` (eight renamed leaves), `audit:convergence` (`agentTeamEvidence` evidence fingerprint), `audit:host-parity` (`lib/squads` unclassified), `audit:unreachable-components` and knip (the activity-report barrel lost its one importer, D2). Every other failing gate fails the same way on a clean `HEAD` tree. | Verified | Each gate run on a `git archive HEAD` copy (private index for `git ls-files`) and on the working tree, outputs diffed, 2026-11-07                                         | O1         |
+
+## Problem frame
+
+The axes are right; what grew around them duplicates trackers, steer paths, control machines and dispatch, and leaves room members with tools that always fail. See ADR-0252 Context.
+
+## Complexity profile
+
+| Dimension    | Rating | Why / what would resolve it                                                                                |
+| ------------ | ------ | ---------------------------------------------------------------------------------------------------------- |
+| scale        | high   | About 390 files move and about 450 more change paths in P1; P2–P10 touch five hosts                        |
+| technical    | medium | Mostly known patterns (ledger, gates, launcher); ADR-0247 §7 waits on ADR-0243 2B–2D                       |
+| coupling     | high   | The run ledger, the module gates, the plugin contract, the CLI and the IM bridge all import Squad code     |
+| requirement  | low    | Every decision was settled in the grill and written into ADR-0252 and the plan                             |
+| verification | medium | Unit and gate coverage is broad; device and IM behaviour needs the final smokes                            |
+| risk         | medium | A move is reversible, but a shared working tree and path-keyed baselines make silent breakage easy (R1–R3) |
+
+## Risks
+
+| ID  | Risk (impact)                                                                                            | Severity | Source                          | Claim                                                     | Refuted by                                                                  |
+| --- | -------------------------------------------------------------------------------------------------------- | -------- | ------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------- |
+| R1  | The move breaks an import, a `jest.mock` path or a repo-root lookup that only a runtime path hits (high) | medium   | incident memory (earlier moves) | Every moved file resolves exactly what it resolved before | A typecheck error, a suite failing only after the move, or a shell crash    |
+| R2  | The move silently widens the squads module's public surface or adds direction edges (medium)             | medium   | ADR-0250 §14                    | No module-gate measure grows                              | `check-modules.mjs` or `audit:baseline-growth` reporting growth             |
+| R3  | A rewrite touches another session's uncommitted hunks (high)                                             | low      | CLAUDE.md rule 8                | The commit holds only this task's hunks                   | `verify-own` or `git show --stat HEAD` naming a file this task did not edit |
+
+## Verification obligations
+
+| ID  | Risk   | Method                                                                                                       | Independence | Evidence                                                                                                                                          | Coverage                               | Status |
+| --- | ------ | ------------------------------------------------------------------------------------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------ |
+| V1  | R1     | Every suite under the moved trees, plus the tests of every changed file and the CLI Squad controllers        | tool         | Jest 2026-11-07: 348 suites, 64 failures; after fixes the three moved-test failures pass and the other 61 are O4                                  | Unit and component level               | passed |
+| V2  | R1     | Root typecheck with `tmp/` excluded                                                                          | tool         | O5                                                                                                                                                | Root project; sidecar has its own gate | passed |
+| V3  | R2     | Module gate before and after; baseline rewritten only if no measure grows                                    | tool         | Direction 1050 → 1049 (30 renamed edges, the prompt catalog's edge repaid), modules 138 → 137, G1/G3/G4/G5/G6 clean                               | Gate's own resolver                    | passed |
+| V4  | R3     | Recompute the mechanical rewrite from `HEAD` for every changed file; review each file that differs           | tool         | 23 files differ, all hand edits of this phase or generated files; `lib/plugin/core/browser-builtin-assets.generated.json` is foreign and left out | All changed files                      | passed |
+| V5  | R1, R2 | Run the path-keyed gates on a clean `HEAD` copy and on the working tree; fix each difference the move causes | tool         | O6; after the fixes the outputs match except one i18n-dependent convergence line that is an artifact of the copy leaving `i18n/` out              | Gates in O6                            | passed |
+
+## Decisions
+
+| ID  | Date       | Decision                                                                                                                                                                                                                                                                                                                            | Action    | Based on | Reversal trigger                                           |
+| --- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | -------- | ---------------------------------------------------------- |
+| D1  | 2026-11-07 | Resolve O2 by listing each imported file as its owner's `api` (manifest or table row), never by baselining the imports, per CLAUDE.md's module rules                                                                                                                                                                                | implement | O2       | A gate rule change that makes `api` lists the wrong place  |
+| D2  | 2026-11-07 | Drop the Squad store re-export from the `@/stores/agent` barrel (no importer used it) and point every barrel importer at `store.ts`                                                                                                                                                                                                 | implement | O3       | An importer that needs more than `useAgentTeamStore`       |
+| D3  | 2026-11-07 | The Squad prompts become the module's `prompts` contribution (ADR-0250 M3), because the manifest module now calls `definePrompt`; the kernel catalog stops importing them                                                                                                                                                           | implement | O2       | The prompt catalog test missing a Squad prompt             |
+| D4  | 2026-11-07 | `/agent-teams` (a redirect) is claimed by the squads manifest until P9 deletes it, instead of a new table row                                                                                                                                                                                                                       | implement | O1       | P9 keeping the route                                       |
+| D5  | 2026-11-07 | Answer O6 with the gates' own mechanisms: one `allowRemoval` record per renamed leaf under `scripts/gates/baseline-exceptions/`, the fingerprint repinned for `agentTeamEvidence` (only its consumer path changed), a `lib/squads` host-parity classification (`unmigrated`, like `lib/ai`), and the activity-report barrel deleted | implement | O6       | A gate output that still differs from the clean `HEAD` run |
+
+## Residual risks
+
+| ID  | Residual                                                                                                                 | From | Why still open                                                       | Next action                 | Status |
+| --- | ------------------------------------------------------------------------------------------------------------------------ | ---- | -------------------------------------------------------------------- | --------------------------- | ------ |
+| X1  | The authoring-kit pin is stale: path comments and the extension-point consumer map in `packages/plugin-contract` changed | V4   | `HEAD` already mismatches the pin (other sessions' contract changes) | Repin with the next publish | open   |
+| X2  | The squads manifest's `api` and `dependsOn` lists are wide: they describe today's coupling, which P3–P5 reduce           | V3   | Narrowing them is the point of the later phases, not of a move       | Re-measure after P5         | open   |
+| X3  | No shell has run with the moved code                                                                                     | V1   | Move-only change; verified by tests and gates                        | Final smokes (plan §14)     | open   |
+
+## Outcome
+
+| ID  | Signal                                                                | How / when measured             | Result | Status  |
+| --- | --------------------------------------------------------------------- | ------------------------------- | ------ | ------- |
+| M1  | One child-run tree answers "what did this run start" on every host    | P3 tests; final smokes          | -      | pending |
+| M2  | A room member's hand-off to a Squad completes and returns to the room | P6 headless smoke; final smokes | -      | pending |

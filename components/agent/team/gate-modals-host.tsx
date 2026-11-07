@@ -21,7 +21,7 @@
  */
 
 import { useTranslations } from "next-intl"
-import { decidePendingGate } from "@/lib/ai/agent/team/gates/decide-pending-gate"
+import { decidePendingGate } from "@/lib/squads/gates/decide-pending-gate"
 import { usePendingGatesStore, type PendingGate } from "@/stores/agent/pending-gates-store"
 import { ApprovalGateDialog } from "./approval-gate-dialog"
 import { Button } from "@/components/ui/button"

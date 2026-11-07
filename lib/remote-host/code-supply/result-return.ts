@@ -363,7 +363,7 @@ export async function openResultPullRequest(
 async function recordResultPullRequest(root: string, deps: ResultPullRequestDeps): Promise<void> {
   const resolve =
     deps.resolveRepository ??
-    (await import("@/lib/ai/agent/team/pr-feedback/resolvers")).createResolveTeamRepo()
+    (await import("@/lib/squads/pr-feedback/resolvers")).createResolveTeamRepo()
   const repository = await resolve(root).catch(() => null)
   const record =
     deps.record ??

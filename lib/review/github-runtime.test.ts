@@ -1,6 +1,6 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
-jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
+jest.mock("@/lib/squads/pr-feedback/resolvers", () => ({
   createResolveOctokit: jest.fn(() => async () => null),
   createResolveTeamRepo: jest.fn(() => async () => null),
   resolveGithubReadTokenForRepo: jest.fn(async () => null),
@@ -75,7 +75,7 @@ it("authenticates GHES roots without requiring a github.com credential", async (
 it("does not turn a library caller into a Host-local person", async () => {
   const { isTauri } = await import("@/lib/tauri")
   const { resolveGithubReadTokenForRepo, createResolveOctokit } =
-    await import("@/lib/ai/agent/team/pr-feedback/resolvers")
+    await import("@/lib/squads/pr-feedback/resolvers")
   jest.mocked(isTauri).mockReturnValue(true)
   const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
   await createGitHubPullRequestProvider(undefined, credentialContext).getAuthenticationState()

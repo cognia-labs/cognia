@@ -7,7 +7,7 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { useChatExecutor } from "./use-chat-executor"
 import { getDb } from "@/lib/db/schema"
 import { getSession } from "@/lib/db/sessions"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 async function seedSession(id: string, extra: Record<string, unknown> = {}) {
   await getDb().sessions.put({

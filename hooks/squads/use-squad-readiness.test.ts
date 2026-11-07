@@ -2,7 +2,7 @@
 import { renderHook, waitFor } from "@testing-library/react"
 
 const evaluateSquadReadiness = jest.fn()
-jest.mock("@/lib/agent-team/squad-readiness", () => ({
+jest.mock("@/lib/squads/squad-readiness", () => ({
   evaluateSquadReadiness: (...args: unknown[]) => evaluateSquadReadiness(...args),
 }))
 // `useClientLiveQuery` is a thin wrapper over dexie's `useLiveQuery`. Running
@@ -25,7 +25,7 @@ jest.mock("@/hooks/data/use-client-live-query", () => ({
   },
 }))
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
 import { useSquadReadiness } from "./use-squad-readiness"
 

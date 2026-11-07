@@ -11,7 +11,7 @@
 import { createTeamAPI } from "./team-api"
 import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 jest.mock("@cognia/logging", () => {
   const child = {
@@ -42,14 +42,14 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
 }))
 
 const startSquadRun = jest.fn(async () => ({ started: true, runId: "run_team_1" }))
-jest.mock("@/lib/ai/agent/team/squad/start-squad-run", () => ({
+jest.mock("@/lib/squads/squad/start-squad-run", () => ({
   startSquadRun: (...args: unknown[]) => startSquadRun(...(args as [])),
 }))
 
 const managerPause = jest.fn(async () => {})
 const managerResume = jest.fn(async () => {})
 const managerShutdown = jest.fn(async () => {})
-jest.mock("@/lib/ai/agent/team/agent-team", () => ({
+jest.mock("@/lib/squads/agent-team", () => ({
   agentTeamManager: {
     pause: (...a: unknown[]) => managerPause(...(a as [])),
     resume: (...a: unknown[]) => managerResume(...(a as [])),
@@ -63,12 +63,12 @@ jest.mock("@/lib/plugin/registries/agent-team-template-registry", () => ({
 }))
 
 const resolveCandidates = jest.fn(async () => ({}) as Record<string, unknown>)
-jest.mock("@/lib/agent-team/binding-candidates", () => ({
+jest.mock("@/lib/squads/binding-candidates", () => ({
   resolveSquadBindingCandidates: (...a: unknown[]) => resolveCandidates(...(a as [])),
 }))
 
 const publishTemplate = jest.fn(async () => {})
-jest.mock("@/lib/agent-team/publish-template-to-platform", () => ({
+jest.mock("@/lib/squads/publish-template-to-platform", () => ({
   publishSquadTemplateToPlatform: (...a: unknown[]) => publishTemplate(...(a as [])),
   platformIdForSquadTemplate: (template: { id: string }) => `legacy.agentTeam.${template.id}`,
 }))

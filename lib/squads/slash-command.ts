@@ -31,7 +31,7 @@
 // `/goal` cards.
 
 import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam, AgentTeamTask, TeamStatus } from "@/types/agent/agent-team"
 
@@ -244,7 +244,7 @@ async function commandRun(ctx: SlashContext, rest: string): Promise<SquadCommand
   }
 
   const session = await loadSession(ctx.activeSessionId!)
-  const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
+  const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
   const result = await startSquadRun({
     localAuthorization: (await import("@/lib/execution/acting-authority")).LOCAL_PERSON_RUN,
     squadId: squad.id,
@@ -276,7 +276,7 @@ async function commandControl(
   if ("error" in resolved) return { system: resolved.error }
   const { squad } = resolved
   try {
-    const { agentTeamManager } = await import("@/lib/ai/agent/team/agent-team")
+    const { agentTeamManager } = await import("@/lib/squads/agent-team")
     await agentTeamManager[verb](squad.id)
   } catch (error) {
     const reason = error instanceof Error ? error.message : "dispatch_error"

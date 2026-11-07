@@ -32,7 +32,7 @@ jest.mock("@/lib/db/characters", () => ({
 jest.mock("@/lib/db/teams", () => ({
   listTeams: jest.fn(async () => [{ id: "chat-team", name: "Conversation room" }]),
 }))
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: jest.fn((selector: (state: unknown) => unknown) =>
     selector({ teams: { squad1: { id: "squad1", name: "Core Squad" } } })
   ),

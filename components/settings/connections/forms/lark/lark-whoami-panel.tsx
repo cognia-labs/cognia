@@ -30,8 +30,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { getDb } from "@/lib/db/schema"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import { LarkWhoamiError, probeBotIdentity } from "@/lib/connectors/adapters/lark/whoami"
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
-import { getAgentTeamAvatarPath, resolveAgentTeamAvatarId } from "@/lib/agent-team/avatar"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
+import { getAgentTeamAvatarPath, resolveAgentTeamAvatarId } from "@/lib/squads/avatar"
 import {
   ConnectorHostNotice,
   useConnectorControlReach,

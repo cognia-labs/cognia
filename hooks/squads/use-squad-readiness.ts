@@ -15,8 +15,8 @@
 import { useMemo } from "react"
 
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
-import { evaluateSquadReadiness, type SquadReadiness } from "@/lib/agent-team/squad-readiness"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { evaluateSquadReadiness, type SquadReadiness } from "@/lib/squads/squad-readiness"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 const PENDING: SquadReadiness = { ready: false, blockers: [], evaluatedAt: 0 }
 

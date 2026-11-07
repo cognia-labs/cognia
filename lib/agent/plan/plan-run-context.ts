@@ -2,7 +2,7 @@
  * Per-run shared state consulted by the `action.plan.step.dispatch` executor.
  * (ADR-0045 P2)
  *
- * Lifecycle mirrors `lib/ai/agent/team/team-run-context.ts`: `runPlan`
+ * Lifecycle mirrors `lib/squads/team-run-context.ts`: `runPlan`
  * `register`s before calling `runWorkflow` and `unregister`s in a `finally`.
  * The executor reads `getPlanRunContext(ctx.runId)`; if missing (a stale run),
  * it throws nonRetryable.

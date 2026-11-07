@@ -230,7 +230,7 @@ export interface PluginTeamAPI {
   /**
    * Create a Squad, roster lead included.
    *
-   * Goes through `createSquad` (`lib/agent-team/create-squad.ts`), not the
+   * Goes through `createSquad` (`lib/squads/create-squad.ts`), not the
    * store action directly. That wrapper is async precisely because resolving
    * the repository and environment bindings needs two Dexie reads and a host
    * preflight, and a plugin-created Squad deserves the same bindings a

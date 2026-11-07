@@ -557,6 +557,10 @@
     "lib/slash-commands": {
       "classification": "unmigrated"
     },
+    "lib/squads": {
+      "classification": "unmigrated",
+      "note": "One guard, moved here with the Squad code from `lib/ai/agent/team/` (classified with `lib/ai`). `appTeamPathPolicy.canonicalize` in `durable/durable-runtime.ts` resolves a worktree root through `task_workspace_canonical_root` only on `isTauri()` and otherwise just normalizes the path. The RPC is a host operation, so a paired client driving a Host-run Squad could ask the Host instead of skipping canonicalization."
+    },
     "lib/subscription": {
       "classification": "unmigrated"
     },

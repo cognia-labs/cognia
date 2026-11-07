@@ -30,7 +30,7 @@
  * every one of those, so it replaced it rather than joining it.
  */
 
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
 import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
 import { useMemo, useRef, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
@@ -80,15 +80,15 @@ import {
   TemplateExportDialog,
   type TemplateExportRequest,
 } from "@/components/templates/template-export-dialog"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 import { createLogger } from "@cognia/logging"
 import type { PluginAgentTeamTemplateWarning } from "@/lib/plugin/registries/agent-team-template-registry"
-import { publishSquadTemplateToPlatform } from "@/lib/agent-team/publish-template-to-platform"
+import { publishSquadTemplateToPlatform } from "@/lib/squads/publish-template-to-platform"
 import {
   squadTemplateShareDefinition,
   type SquadTemplatePlatformStatus,
-} from "@/lib/agent-team/squad-template-platform"
+} from "@/lib/squads/squad-template-platform"
 import { TemplateDefinitionShareButton } from "@/components/share/template-definition-share-button"
 import {
   useSquadTemplatePlatformStatuses,

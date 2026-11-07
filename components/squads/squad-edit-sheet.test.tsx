@@ -32,7 +32,7 @@ jest.mock("@/components/settings/squads/squad-detail-panel", () => ({
 
 import { SquadEditSheet } from "./squad-edit-sheet"
 import type { SquadEditFocus } from "@/hooks/squads/use-squad-route-state"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
 const onFocusChange = jest.fn()

@@ -398,7 +398,7 @@ export type WorkflowNodeKind =
   // Ultracode orchestration patterns (ADR-0022 addendum). Higher-order
   // Agent-Team nodes that fan out tool-enabled teammate dispatches and apply a
   // quality pattern. Synthesizer-emitted only — not placed by users in the
-  // editor. See `lib/ai/agent/team/patterns/`.
+  // editor. See `lib/squads/patterns/`.
   | "pattern.multi-modal-sweep"
   | "pattern.loop-until-dry"
   | "pattern.adversarial-verify"

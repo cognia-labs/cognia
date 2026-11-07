@@ -93,7 +93,7 @@ It never re-runs a step that may already have had a side effect.
 
 `createDurableTeamCoordinator(options)` (`coordinator.ts:87`):
 
-| Option | Contract | App binding (`lib/ai/agent/team/durable/durable-runtime.ts`) |
+| Option | Contract | App binding (`lib/squads/durable/durable-runtime.ts`) |
 | --- | --- | --- |
 | `store` | `TeamRunStore` | `dexieTeamRunStore` |
 | `journal` | `TeamRunJournal.runPrepared` — note a run's start or resumption | `executionRunTeamJournal`, keyed by `agentTeamExecutionRunId` so the bridge and the coordinator converge on one execution row |
@@ -110,7 +110,7 @@ to keep in sync.
 
 The coordinator never launches an agent. The app's Agent Team runtime picks
 the next task, and `beginDurableDispatch`
-(`lib/ai/agent/team/durable/durable-dispatch.ts:66`) wraps one teammate turn:
+(`lib/squads/durable/durable-dispatch.ts:66`) wraps one teammate turn:
 
 1. **Register.** Admission and the child row are written atomically (attempt,
    lease, ownership), through the coordinator's store.
@@ -160,7 +160,7 @@ pinned by a mixed built-in and external team test on one durable run
 
 `lib/workflow` registers the team node kinds but runs them through an
 installable port (`lib/workflow/nodes/teams/team-runtime-port.ts`). The
-implementations live in `lib/ai/agent/team/workflow-nodes`, installed by the
+implementations live in `lib/squads/workflow-nodes`, installed by the
 desktop workflow provider, the headless brain and the team lifecycle. A
 boundary test (`team-runtime-port.test.ts`) keeps `lib/workflow` free of
 Agent Team imports, so the Team↔Workflow import cycle stays broken.
@@ -171,7 +171,7 @@ These modules are typed against the app's `AgentTeam` model
 (`types/agent/agent-team.ts`, 2,165 lines, which imports twin, editor,
 external-preset and PR-observe types):
 
-- the team gates, budget guard included (`lib/ai/agent/team/gates/`);
+- the team gates, budget guard included (`lib/squads/gates/`);
 - the teammate pool;
 - the wave runner;
 - the synthesized workflow.

@@ -250,7 +250,7 @@ async function stopBotExecution(runId: string): Promise<void> {
   }
   const squad = await getBotRunStep(runId, "squad-start")
   if (squad) {
-    const { controlSquadRun } = await import("@/lib/ai/agent/team/squad/squad-control")
+    const { controlSquadRun } = await import("@/lib/squads/squad/squad-control")
     await controlSquadRun(runId, "stop")
   }
   const interrupts = await db.executionRunInterrupts.where("runId").equals(runId).toArray()

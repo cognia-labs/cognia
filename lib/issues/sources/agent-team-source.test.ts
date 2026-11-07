@@ -6,7 +6,7 @@
 // touches no table, and `subscribe` runs under it.
 import "fake-indexeddb/auto"
 
-jest.mock("@/stores/agent/agent-team-store", () => {
+jest.mock("@/stores/squads/agent-team-store/store", () => {
   const listeners = new Set<(state: unknown) => void>()
   const store = {
     listeners,
@@ -283,7 +283,7 @@ describe("list", () => {
   })
 
   it("follows the real store by default, ignoring writes that leave the projected slices alone", async () => {
-    const { useAgentTeamStore } = jest.requireMock("@/stores/agent/agent-team-store") as {
+    const { useAgentTeamStore } = jest.requireMock("@/stores/squads/agent-team-store/store") as {
       useAgentTeamStore: {
         state: Record<string, unknown>
         listeners: Set<unknown>

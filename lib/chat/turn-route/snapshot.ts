@@ -13,8 +13,8 @@
 
 import type { ChatSession } from "@cognia/agent-config-types"
 import { collectSquadPresence } from "@/lib/agent/squad-presence"
-import { buildRouteTargets, type MentionTarget } from "@/lib/agent-team/runtime-targets"
-import type { RouteTargetSquad } from "@/lib/agent-team/runtime-targets"
+import { buildRouteTargets, type MentionTarget } from "@/lib/squads/runtime-targets"
+import type { RouteTargetSquad } from "@/lib/squads/runtime-targets"
 import { listAgentRuntimes } from "@/lib/ai/agent/runtime-catalog/catalog"
 import {
   HOST_CONFIG_COMMANDS,
@@ -25,9 +25,9 @@ import { buildChatMentionTargets } from "@/lib/claude/agents/chat-mention-target
 import { getSession } from "@/lib/db/sessions"
 import { catalogInputFromState } from "@/hooks/agent/use-agent-runtime-catalog"
 import { ensureBootCapability } from "@/lib/boot/capabilities"
-import { whenAgentTeamDexieBridgeHydrated } from "@/stores/agent/agent-team-store/dexie-bridge"
+import { whenAgentTeamDexieBridgeHydrated } from "@/stores/squads/agent-team-store/dexie-bridge"
 import { runtimeRefForSession } from "@/stores/agent/agent-runtime-store"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useExternalAgentStore } from "@/stores/agent/external-agent-store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { ExternalAgentConfigRecord } from "@/types/agent/external-agent-config-store"

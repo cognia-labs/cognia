@@ -218,7 +218,7 @@ export async function applyRunLearningProposalEffect(
 ): Promise<ResourceRefV1> {
   if (proposal.targetKind === "team-config") {
     if (!proposal.targetId) throw new Error("Team config proposal requires targetId")
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const store = useAgentTeamStore.getState()
     const team = store.teams[proposal.targetId]
     if (!team) throw new Error(`Unknown AgentTeam: ${proposal.targetId}`)

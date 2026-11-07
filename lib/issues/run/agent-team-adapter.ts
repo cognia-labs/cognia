@@ -28,7 +28,7 @@ import { parseConversationKey } from "@/types/connectors/event"
 import type { IssueRun, IssueRunArtifact } from "@/types/issues"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
-import type { SquadPlanApprovalDelegate } from "@/lib/ai/agent/team/squad/start-squad-run"
+import type { SquadPlanApprovalDelegate } from "@/lib/squads/squad/start-squad-run"
 import {
   getAgentTeamDeliveryGraph,
   getAgentTeamRun,
@@ -190,7 +190,7 @@ export function squadRunOriginOf(origin: IssueRunOrigin): {
 }
 
 async function defaultGetTeamStore() {
-  const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+  const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
   return useAgentTeamStore
 }
 
@@ -224,8 +224,7 @@ export function createDefaultAgentTeamRunAdapterDeps(): AgentTeamRunAdapterDeps 
       // implies. An IM card press is the exception: it names the thread, so
       // the run is minted up front (the approval delegate closes over its id)
       // and the Squad gets somewhere to ask.
-      const { startSquadRun, mintSquadRunId } =
-        await import("@/lib/ai/agent/team/squad/start-squad-run")
+      const { startSquadRun, mintSquadRunId } = await import("@/lib/squads/squad/start-squad-run")
       const objective = goal ?? ""
       const runId = origin === "im" && conversation ? mintSquadRunId() : undefined
       const im =
@@ -250,13 +249,13 @@ export function createDefaultAgentTeamRunAdapterDeps(): AgentTeamRunAdapterDeps 
       loadedStore?.getState().deleteTask(taskId)
     },
     abortTeam: async (teamId, reason, squadRunId) => {
-      const { abortTeam } = await import("@/lib/ai/agent/team/agent-team-runtime")
+      const { abortTeam } = await import("@/lib/squads/agent-team-runtime")
       abortTeam(teamId, new Error(reason), squadRunId)
       if (!squadRunId) return
       // The same stop the Squad console sends (`startSquadRun`'s replaced-run
       // path): it reaches a run that is parked or recovering, which the
       // in-window abort above cannot.
-      const { controlDurableRun } = await import("@/lib/ai/agent/team/durable/durable-control")
+      const { controlDurableRun } = await import("@/lib/squads/durable/durable-control")
       await controlDurableRun(squadRunId, "stop")
     },
     getSquadRun: getAgentTeamRun,
@@ -457,8 +456,7 @@ export function createAgentTeamRunAdapter(
       if (!record) return { status: "failed", error: "squad run no longer exists" }
       // Lazy for the same reason as the store: the records module drags the
       // Squad runtime graph in.
-      const { isTerminalSquadRunStatus } =
-        await import("@/lib/ai/agent/team/squad/squad-run-records")
+      const { isTerminalSquadRunStatus } = await import("@/lib/squads/squad/squad-run-records")
       if (!isTerminalSquadRunStatus(record.status)) return null
       ended = { status: record.status }
     } else {

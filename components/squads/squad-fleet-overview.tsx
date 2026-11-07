@@ -25,7 +25,7 @@ import { useFormatter, useNow, useTranslations } from "next-intl"
 import { ActivityIcon, AlertCircleIcon, ChevronRightIcon, HistoryIcon } from "lucide-react"
 
 import { ExecutionStatusPill } from "@/components/agent-runs/agent-run-status-pill"
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
 import { StatusBadge } from "@/components/status-badge"
 import { ConsoleSection } from "@/components/surface/console-section"
 import { Badge } from "@/components/ui/badge"

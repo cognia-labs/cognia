@@ -120,7 +120,7 @@ export function priorityRank(priority: IssuePriority): number {
  *           `createAgentTask` requires; external-agent ids are NOT accepted
  *           here — the run adapters refuse an id they cannot resolve rather
  *           than guess which namespace it belongs to.
- *   team  → an `AgentTeam` id (`stores/agent/agent-team-store`)
+ *   team  → an `AgentTeam` id (`stores/squads/agent-team-store`)
  */
 export type IssueActorKind = "human" | "agent" | "team"
 

@@ -4,7 +4,7 @@ import path from "node:path"
 import { PassThrough, Writable } from "node:stream"
 
 import type { AgentWorkerManifestV1, HandoffEnvelope } from "@cognia/agent"
-import { REMOTE_WORKER_POLICY_CAPABILITY } from "@/lib/ai/agent/team/workers/remote-worker-policy"
+import { REMOTE_WORKER_POLICY_CAPABILITY } from "@/lib/squads/workers/remote-worker-policy"
 import type { CompanionConfig } from "@/lib/tauri/companion-storage"
 import { issueSocketTicket, registerCompanionWorker } from "@/lib/tauri/companion-auth"
 

@@ -737,10 +737,10 @@ export function ExposeTestGlobals(): null {
         }
 
         window.__cogniaSeedSquad = async (draft) => {
-          const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+          const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
           const [{ useAccountStore }, { getSquadRuntimeState }] = await Promise.all([
             import("@/stores/account/account-store"),
-            import("@/lib/agent-team/bootstrap"),
+            import("@/lib/squads/bootstrap"),
           ])
           // The bootstrap runs once the account is unlocked and the mirror is
           // written against the account database. Seeding before both would
@@ -783,9 +783,9 @@ export function ExposeTestGlobals(): null {
           }
           if (!mirrored) {
             const [{ getSquadRuntimeState }, { useAccountStore }, bridge] = await Promise.all([
-              import("@/lib/agent-team/bootstrap"),
+              import("@/lib/squads/bootstrap"),
               import("@/stores/account/account-store"),
-              import("@/stores/agent/agent-team-store/dexie-bridge"),
+              import("@/stores/squads/agent-team-store/dexie-bridge"),
             ])
             throw new Error(
               `seeded squad ${team.id} never reached Dexie (projectId=${String(team.projectId)}, runtime=${getSquadRuntimeState()}, unlocked=${String(useAccountStore.getState().unlockedAccountId)}, db=${getDb().name}, bridge=${JSON.stringify(bridge.getAgentTeamDexieBridgeDiagnostics())})`
@@ -803,10 +803,10 @@ export function ExposeTestGlobals(): null {
             { AGENT_TEAM_SECURITY_CONFIG_KEYS },
             { deriveExternalSessionPermission, teamPermissionCeiling },
           ] = await Promise.all([
-            import("@/lib/ai/agent/team/squad/squad-run-records"),
+            import("@/lib/squads/squad/squad-run-records"),
             import("@/lib/db/schema"),
             import("@/lib/db/execution-runs"),
-            import("@/stores/agent/agent-team-store"),
+            import("@/stores/squads/agent-team-store/store"),
             import("@/types/agent/agent-team-runtime"),
             import("@/lib/ai/agent/external/policy/permission-cascade"),
           ])
@@ -863,7 +863,7 @@ export function ExposeTestGlobals(): null {
             )
           }
           if (draft.review) {
-            const { armSquadReview } = await import("@/lib/ai/agent/team/gates/squad-review-gate")
+            const { armSquadReview } = await import("@/lib/squads/gates/squad-review-gate")
             await armSquadReview({
               runId,
               teamId: draft.teamId,

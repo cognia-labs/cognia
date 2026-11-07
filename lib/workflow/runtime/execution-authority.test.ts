@@ -451,9 +451,8 @@ describe("ExecutionAuthority", () => {
   )
 
   it("pins a static team's effective variant knowledge through its canonical host port", async () => {
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
-    const { installTeamWorkflowNodeRuntime } =
-      await import("@/lib/ai/agent/team/workflow-nodes/install")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
+    const { installTeamWorkflowNodeRuntime } = await import("@/lib/squads/workflow-nodes/install")
     const initialState = useAgentTeamStore.getState()
     try {
       installTeamWorkflowNodeRuntime()

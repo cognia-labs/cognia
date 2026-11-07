@@ -178,7 +178,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/store.ts",
+        "stores/squads/agent-team-store/store.ts",
         "stores/agent/pending-gates-store.ts"
       ]
     },
@@ -332,95 +332,95 @@
       ]
     },
     {
-      "key": "lib/ai/agent/team/agent-team-runtime-deps.ts",
+      "key": "lib/squads/agent-team-runtime-deps.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/agent-team.ts",
+      "key": "lib/squads/agent-team.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/auto/handoff.ts",
+      "key": "lib/squads/auto/handoff.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/auto/materialize.ts",
+      "key": "lib/squads/auto/materialize.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/capability-audit.ts",
+      "key": "lib/squads/capability-audit.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/consensus-orchestrator.ts",
+      "key": "lib/squads/consensus-orchestrator.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/delegation-orchestrator.ts",
+      "key": "lib/squads/delegation-orchestrator.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/delivery/github-delivery-adapter.ts",
+      "key": "lib/squads/delivery/github-delivery-adapter.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/gates/decide-pending-gate.ts",
+      "key": "lib/squads/gates/decide-pending-gate.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
@@ -431,7 +431,7 @@
       ]
     },
     {
-      "key": "lib/ai/agent/team/gates/record-gate-answer.ts",
+      "key": "lib/squads/gates/record-gate-answer.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
@@ -442,7 +442,7 @@
       ]
     },
     {
-      "key": "lib/ai/agent/team/memory/memory-context.ts",
+      "key": "lib/squads/memory/memory-context.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
@@ -453,19 +453,19 @@
       ]
     },
     {
-      "key": "lib/ai/agent/team/memory/shared-memory-orchestrator.ts",
+      "key": "lib/squads/memory/shared-memory-orchestrator.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
-        "stores/agent/agent-team-store/selectors.ts"
+        "stores/squads/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/selectors.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/squad/lead-execution.ts",
+      "key": "lib/squads/squad/lead-execution.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
@@ -476,40 +476,40 @@
       ]
     },
     {
-      "key": "lib/ai/agent/team/squad/squad-control.ts",
+      "key": "lib/squads/squad/squad-control.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/squad/squad-lifecycle-runner.ts",
+      "key": "lib/squads/squad/squad-lifecycle-runner.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/squad/start-squad-run.ts",
+      "key": "lib/squads/squad/start-squad-run.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/teammate/dispatch-teammate.ts",
+      "key": "lib/squads/teammate/dispatch-teammate.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
@@ -520,26 +520,26 @@
       ]
     },
     {
-      "key": "lib/ai/agent/team/workflow-nodes/index.ts",
+      "key": "lib/squads/workflow-nodes/index.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/settings/settings-store.ts"
       ]
     },
     {
-      "key": "lib/ai/agent/team/workflow-nodes/team-ops.ts",
+      "key": "lib/squads/workflow-nodes/team-ops.ts",
       "owner": "lib/ai",
       "note": "",
       "imports": [
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/settings/settings-store.ts"
       ]
     },
@@ -575,7 +575,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -597,7 +597,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -620,7 +620,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -972,7 +972,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/artifact/artifact-store.ts"
       ]
     },
@@ -1116,8 +1116,8 @@
       ],
       "stores": [
         "stores/agent/agent-runtime-store.ts",
-        "stores/agent/agent-team-store/dexie-bridge.ts",
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/dexie-bridge.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/agent/external-agent-store/index.ts",
         "stores/project/project-store.ts"
       ]
@@ -1200,7 +1200,7 @@
       ],
       "stores": [
         "stores/agent/agent-runtime-store.ts",
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/agent/custom-mode-store/helpers.ts",
         "stores/chat/fusion-mode-store.ts",
         "stores/plugin-runtime/index.ts"
@@ -1350,7 +1350,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -1361,7 +1361,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -1383,7 +1383,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -1464,7 +1464,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -1543,7 +1543,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -1576,7 +1576,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -1635,8 +1635,8 @@
       ],
       "stores": [
         "stores/account/account-store.ts",
-        "stores/agent/agent-team-store/dexie-bridge.ts",
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/dexie-bridge.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/artifact/artifact-store.ts",
         "stores/chat/chat-store.ts",
         "stores/project/project-store.ts",
@@ -1696,7 +1696,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -1718,7 +1718,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -2052,7 +2052,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -2063,7 +2063,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -2085,7 +2085,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -2253,7 +2253,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/store.ts"
+        "stores/squads/agent-team-store/store.ts"
       ]
     },
     {
@@ -2344,8 +2344,8 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
-        "stores/agent/agent-team-store/selectors.ts"
+        "stores/squads/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/selectors.ts"
       ]
     },
     {
@@ -2617,7 +2617,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/project/project-store.ts"
       ]
     },
@@ -3286,7 +3286,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -3541,7 +3541,7 @@
         "dynamic"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -3820,7 +3820,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/settings/index.ts"
       ]
     },
@@ -3879,7 +3879,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts"
+        "stores/squads/agent-team-store/index.ts"
       ]
     },
     {
@@ -3890,7 +3890,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/project/project-store.ts"
       ]
     },
@@ -4164,7 +4164,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/agent/custom-mode-store/index.ts",
         "stores/agent/subagent-runtime-store/index.ts"
       ]
@@ -4177,7 +4177,7 @@
         "static"
       ],
       "stores": [
-        "stores/agent/agent-team-store/index.ts",
+        "stores/squads/agent-team-store/index.ts",
         "stores/agent/custom-mode-store/index.ts",
         "stores/agent/subagent-runtime-store/index.ts"
       ]

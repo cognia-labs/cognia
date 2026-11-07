@@ -8,18 +8,20 @@
 // execution row, and the test would still look green.
 
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
-jest.mock("@/stores/agent/agent-team-store", () => ({ useAgentTeamStore: { getState: jest.fn() } }))
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
+  useAgentTeamStore: { getState: jest.fn() },
+}))
 jest.mock("@/stores/project/project-store", () => ({ useProjectStore: { getState: jest.fn() } }))
 
 const startSquadRun = jest.fn()
-jest.mock("@/lib/ai/agent/team/squad/start-squad-run", () => ({
+jest.mock("@/lib/squads/squad/start-squad-run", () => ({
   startSquadRun: (...a: unknown[]) => startSquadRun(...(a as [])),
 }))
 
 const managerPause = jest.fn()
 const managerResume = jest.fn()
 const managerShutdown = jest.fn()
-jest.mock("@/lib/ai/agent/team/agent-team", () => ({
+jest.mock("@/lib/squads/agent-team", () => ({
   agentTeamManager: {
     pause: (...a: unknown[]) => managerPause(...(a as [])),
     resume: (...a: unknown[]) => managerResume(...(a as [])),
@@ -28,7 +30,7 @@ jest.mock("@/lib/ai/agent/team/agent-team", () => ({
 }))
 
 import { getSession } from "@/lib/db/sessions"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import { dispatchSquadSubcommand, run } from "./slash-command"
 import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"

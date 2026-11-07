@@ -1,4 +1,4 @@
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: () => ({ teams: {}, teammates: {} }) },
 }))
 

@@ -275,7 +275,7 @@ export interface Team {
 
 `TeamMember` 携带 per-slot 覆盖（systemPromptOverride、modelOverride、allowedToolsOverride、mcpServerIdsOverride）。`resolveMemberConfig(team, member, character)` 是合成有效配置的纯函数。
 
-`lib/agent-team/` 是团队 runtime：mention 解析、conversation context、target 调度、streamer 复用。团队工作台在 `app/agent-teams/`、`components/agent/`。深度细节见 [agent-teams](./agent-teams)。
+`lib/squads/` 是团队 runtime：mention 解析、conversation context、target 调度、streamer 复用。团队工作台在 `app/agent-teams/`、`components/agent/`。深度细节见 [agent-teams](./agent-teams)。
 
 ## MCP 服务器
 

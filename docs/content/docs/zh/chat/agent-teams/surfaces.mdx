@@ -51,7 +51,7 @@ ADR-0140 移除了 `/agent-teams/workspace` 工作区。小队作为对话的执
 `squad-detail-panel.tsx` 渲染一个 `SettingsStack`，由发丝线分隔的若干带标题 `SettingsBlock` 组成，没有任何卡片或描边框，按使用顺序排列：
 
 1. **基本信息**：**名称** 与 **描述**，延迟输入，在失焦时经 `updateTeam` 提交。空名称会被拒绝。
-2. **成员**，整块挂载 `components/agent/workspace/members` 的 `AgentTeamMembers`。这是真正的花名册编辑器，不是只读列表：一条发丝线分隔的列表，队长在前，每行按花名册自身宽度（`@container/roster`）而不是窗口宽度重排。任何成员都可以从其菜单设为队长（`setSquadLead`，同时交换 `leadId` 与双方角色）；小队处于规划、执行或暂停状态时该操作锁定，并在菜单项里写明原因，因为持久运行会在启动时快照 `leadId`。该区块带有 `data-setting-id="squad-roster"`，`?focus=squad-roster` 会直接落到这里。
+2. **成员**，整块挂载 `components/squads/members` 的 `AgentTeamMembers`。这是真正的花名册编辑器，不是只读列表：一条发丝线分隔的列表，队长在前，每行按花名册自身宽度（`@container/roster`）而不是窗口宽度重排。任何成员都可以从其菜单设为队长（`setSquadLead`，同时交换 `leadId` 与双方角色）；小队处于规划、执行或暂停状态时该操作锁定，并在菜单项里写明原因，因为持久运行会在启动时快照 `leadId`。该区块带有 `data-setting-id="squad-roster"`，`?focus=squad-roster` 会直接落到这里。
 3. **就绪状态**，即 `SquadReadinessCard`。其中的「添加成员」在这里会就地打开花名册的添加对话框（`onAddTeammate`），因为从设置跳到设置只会重新加载这个窗格。
 4. 一个位于 `agent.team.panel` 扩展点的**插件槽位**。它声明的宿主以前是工作区 overview，而那个宿主没人渲染，于是注册进来的东西悄无声息地从来没有出现过。没有插件贡献时它不占位置。
 5. **Made from a template**，即下文的溯源区块。
@@ -100,7 +100,7 @@ Publish、Export 和 Fork 只对用户自己拥有的模板提供，并且在模
 
 ### Use 背后的血缘路径
 
-点击 Use 会运行 `applySquadTemplate`（`lib/agent-team/apply-squad-template.ts:90`）。
+点击 Use 会运行 `applySquadTemplate`（`lib/squads/apply-squad-template.ts:90`）。
 
 ```mermaid
 flowchart TD
@@ -194,7 +194,7 @@ Report 标签页会明说它展示的报告是该小队的最新一份，而不�
 它们都不在导航里。导航条上的条目是 `squads`，默认固定；而保存下来的布局里若还留着旧的 `agent-teams` id，会在读取时被改写。没有这条别名，一个陈旧的固定项会悄悄变成一个躺在 More 里的未固定条目。
 
 <Callout title="@提及 派发链已经没有了">
-  工作区的 Chat 标签页曾经在 `lib/agent-team/` 下有自己的一条流水线：一个提及解析器、一个复合
+  工作区的 Chat 标签页曾经在 `lib/squads/` 下有自己的一条流水线：一个提及解析器、一个复合
   流式器、一个对话上下文构建器和一个运行时可用性 hook。四者随那个标签页一起被删除。
   `runtime-targets.ts` 作为聊天组合器与提及选择器共用的 @提及 目标词表幸存了下来，而不是作为一条
   派发链。

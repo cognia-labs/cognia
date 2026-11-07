@@ -3,7 +3,7 @@ import {
   createResolveOctokit,
   createResolveTeamRepo,
   resolveGithubReadTokenForRepo,
-} from "@/lib/ai/agent/team/pr-feedback/resolvers"
+} from "@/lib/squads/pr-feedback/resolvers"
 import type { GithubHost } from "@/lib/github/host"
 import { GitHubPullRequestProvider, type GitHubRepositoryBinding } from "./github-provider"
 

@@ -14,7 +14,9 @@ jest.mock("@/lib/goal/runtime", () => ({ getGoalRuntime: jest.fn() }))
 jest.mock("@/lib/db/plans", () => ({ listPlanEvents: jest.fn() }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 jest.mock("@/stores/settings", () => ({ useSettingsStore: { getState: jest.fn() } }))
-jest.mock("@/stores/agent/agent-team-store", () => ({ useAgentTeamStore: { getState: jest.fn() } }))
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
+  useAgentTeamStore: { getState: jest.fn() },
+}))
 jest.mock("@/lib/db/workflows", () => ({
   getWorkflow: jest.fn(),
   listWorkflows: jest.fn(),
@@ -29,7 +31,7 @@ import { getGoalRuntime } from "@/lib/goal/runtime"
 import { listPlanEvents } from "@/lib/db/plans"
 import { getSession } from "@/lib/db/sessions"
 import { useSettingsStore } from "@/stores/settings"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { createWorkflow, getWorkflow, listWorkflows } from "@/lib/db/workflows"
 import { dispatchPlanSubcommand } from "./plan"
 import type { SlashContext } from "../builtin"

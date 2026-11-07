@@ -1,5 +1,5 @@
 import { createRunBudgetGovernor } from "./run-budget-governor"
-import type { TeamNotifier } from "@/lib/ai/agent/team/team-notifier"
+import type { TeamNotifier } from "@/lib/squads/team-notifier"
 
 function makeNotifier(): TeamNotifier {
   return { notify: jest.fn(), suspend: jest.fn(), resume: jest.fn() } as unknown as TeamNotifier

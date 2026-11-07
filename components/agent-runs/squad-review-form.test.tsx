@@ -10,7 +10,7 @@ jest.mock("next-intl", () => ({
 
 import { SquadReviewForm, isRenderableSquadReview } from "./squad-review-form"
 import type { SquadReviewKind } from "@/types/execution/run"
-import { RECOVERY_REASONS } from "@/lib/ai/agent/team/durable/team-recovery"
+import { RECOVERY_REASONS } from "@/lib/squads/durable/team-recovery"
 import en from "@/i18n/messages/en/agentRuns.json"
 import zh from "@/i18n/messages/zh-CN/agentRuns.json"
 

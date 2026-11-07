@@ -1174,7 +1174,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
       "registerSharedMemoryAdapter + shared-memory-adapter-registry overlay + syncSharedMemoryFromAdapter",
     hostBindings: [
       "lib/plugin/registries/shared-memory-adapter-registry.ts",
-      "lib/ai/agent/team/memory/shared-memory-orchestrator.ts",
+      "lib/squads/memory/shared-memory-orchestrator.ts",
     ],
     typescriptSdk: ["packages/plugin-sdk/src/define/define-shared-memory-adapter.ts"],
     pythonSdk: ["plugin-sdk/python/src/cognia/types.py"],

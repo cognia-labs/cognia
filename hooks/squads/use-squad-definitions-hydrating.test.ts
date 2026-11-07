@@ -5,14 +5,14 @@
 
 import { act, renderHook } from "@testing-library/react"
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 let mockCount: number | undefined = undefined
 jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => mockCount }))
 
 let settle!: () => void
 let fail!: (error: unknown) => void
-jest.mock("@/stores/agent/agent-team-store/dexie-bridge", () => ({
+jest.mock("@/stores/squads/agent-team-store/dexie-bridge", () => ({
   whenAgentTeamDexieBridgeHydrated: () =>
     new Promise<void>((resolve, reject) => {
       settle = resolve

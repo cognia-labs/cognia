@@ -22,10 +22,10 @@ import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
 import { createConcurrencyController } from "@/lib/workflow/runtime/concurrency-controller"
 import { createModelPreferenceController } from "@/lib/workflow/runtime/model-preference-controller"
 import { cheapModelHintFromSettings } from "@/lib/ai/routing/cheap-model-hint"
-import { createTeammatePool } from "@/lib/ai/agent/team/teammate/teammate-pool"
-import { createBudgetGuard } from "@/lib/ai/agent/team/gates/budget-guard"
-import { createTeamNotifier } from "@/lib/ai/agent/team/team-notifier"
-import type { TeamRunContext, TeamStoreWriter } from "@/lib/ai/agent/team/team-run-context"
+import { createTeammatePool } from "@/lib/squads/teammate/teammate-pool"
+import { createBudgetGuard } from "@/lib/squads/gates/budget-guard"
+import { createTeamNotifier } from "@/lib/squads/team-notifier"
+import type { TeamRunContext, TeamStoreWriter } from "@/lib/squads/team-run-context"
 
 /** A store-write surface that drops every call (plan dispatch never records). */
 const NO_OP_STORE_WRITER: TeamStoreWriter = {

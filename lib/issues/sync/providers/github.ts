@@ -40,7 +40,7 @@ import {
 } from "@/lib/issues/github-writeback"
 import { MissingGithubCredentialError } from "@/lib/issues/sync-runner"
 import { executeIntegrationAction } from "@/lib/integrations/action-runner"
-import { createResolveOctokit } from "@/lib/ai/agent/team/pr-feedback/resolvers"
+import { createResolveOctokit } from "@/lib/squads/pr-feedback/resolvers"
 import type {
   Issue,
   IssueExternalRef,
@@ -206,7 +206,7 @@ export async function resolveGithubSyncReadClient(
     }
   }
   if (connectionRef) throw new MissingGithubCredentialError(repoFullName)
-  const { ghCliToken } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
+  const { ghCliToken } = await import("@/lib/squads/pr-feedback/resolvers")
   const token = await ghCliToken(undefined, credentialContext)
   if (!token) throw new MissingGithubCredentialError(repoFullName)
   return {

@@ -17,7 +17,7 @@
  * scheduler and execution-run mappers, their status helpers, and the
  * `__team__:` id parser — whose "single source of truth" claim was untrue while
  * it stood here, since the producers never imported it. That format now has a
- * real owner next to its producers: `lib/ai/agent/team/team-workflow-id.ts`.
+ * real owner next to its producers: `lib/squads/team-workflow-id.ts`.
  *
  * Pure module — no React / Dexie imports — so the mappers stay unit-testable.
  */

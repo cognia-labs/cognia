@@ -6,7 +6,7 @@ import { observeActingAuthority } from "@/lib/execution/acting-authority"
 import { dispatchSubagent, resolveSubagentExternalTarget, runTeam } from "./dispatch"
 import { runCompletionRail } from "@/lib/ai/agent/agent-executor"
 import { getSubagent } from "@/lib/plugin/registries/subagent-registry"
-import { agentTeamManager } from "@/lib/ai/agent/team/agent-team"
+import { agentTeamManager } from "@/lib/squads/agent-team"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { PluginPiiError } from "@/lib/plugin/api/plugin-pii-gate"
 
@@ -50,7 +50,7 @@ jest.mock("@/lib/ai/agent/external/agent-hooks", () => ({
   __esModule: true,
   fireAgentHook: (...a: unknown[]) => mockFireAgentHook(...(a as [])),
 }))
-jest.mock("@/lib/ai/agent/team/agent-team", () => ({
+jest.mock("@/lib/squads/agent-team", () => ({
   __esModule: true,
   agentTeamManager: {
     get: jest.fn(),

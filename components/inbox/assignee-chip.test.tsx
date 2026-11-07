@@ -22,7 +22,7 @@ jest.mock("sonner", () => ({ toast: { error: jest.fn() } }))
 import { toast } from "sonner"
 import { AssigneeChip } from "./assignee-chip"
 import type { ConversationAssignee } from "@/lib/db/conversation-overrides"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 const mockToastError = toast.error as jest.Mock
 

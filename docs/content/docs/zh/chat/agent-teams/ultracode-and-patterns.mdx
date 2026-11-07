@@ -7,10 +7,10 @@ description: Ultracode 编排（ADR-0022 补遗）—— 由一名规划者队�
 
 普通团队运行会合成一张扁平的任务 DAG：每个 `AgentTeamTask` 对应一个工作流节点，节点之间通过 `dependencies` 连接。**Ultracode 模式**改由主规划者队友组合更高阶的 `pattern.*` 工作流节点。每个节点在本次运行的并发上限内，分发多个启用了工具的 `dispatchTeammate` 调用。这套实现将 Claude Code 的「ultracode」质量编排模型引入 Agent Team 子系统：并行执行独立查找、对抗式反驳、评审团评审和完备性检查，最后将结果综合为一份带引用的报告。
 
-这六个 pattern 节点位于 `lib/ai/agent/team/patterns/`。规划者（`ultracode-planner.ts`）决定组合哪些 pattern 以及扇出多宽；综合者（`synthesize-ultracode.ts`）把它们连成一张只向前推进的 DAG；触发器（`ultracode-trigger.ts`）决定一次运行是否启用 ultracode；类型与 Zod 面则位于 `types/agent/ultracode.ts`。
+这六个 pattern 节点位于 `lib/squads/patterns/`。规划者（`ultracode-planner.ts`）决定组合哪些 pattern 以及扇出多宽；综合者（`synthesize-ultracode.ts`）把它们连成一张只向前推进的 DAG；触发器（`ultracode-trigger.ts`）决定一次运行是否启用 ultracode；类型与 Zod 面则位于 `types/agent/ultracode.ts`。
 
 <TLDR>
-  `isUltracodeActive`（`lib/ai/agent/team/ultracode/ultracode-trigger.ts:15-31`）对运行进行门控：覆盖项 `force`/`off`
+  `isUltracodeActive`（`lib/squads/ultracode/ultracode-trigger.ts:15-31`）对运行进行门控：覆盖项 `force`/`off`
   &gt; `config.ultracode.enabled` &gt; `autoMode` always/never/auto（auto = `taskComplexity === "complex"`）。
   `planUltracodeWorkflow`（`ultracode-planner.ts:34-62`）以 `preferToolEnabled: false`
   分派一份结构化规划。`synthesizeUltracodeWorkflow`（`synthesize-ultracode.ts:89-172`）以只向前推进的方式连接
@@ -25,7 +25,7 @@ description: Ultracode 编排（ADR-0022 补遗）—— 由一名规划者队�
 `isUltracodeActive` 镜像了 Claude Code 的强度开关。显式的操作者覆盖项总是优先；否则团队必须启用了 ultracode，再由 `autoMode` 决定。`auto` 默认值仅在路由评估判定任务为复杂时才进行编排。
 
 ```typescript
-// lib/ai/agent/team/ultracode/ultracode-trigger.ts:15-31
+// lib/squads/ultracode/ultracode-trigger.ts:15-31
 export function isUltracodeActive(
   team: Pick<AgentTeam, "config" | "routingAssessment">,
   override?: UltracodeOverride
@@ -52,7 +52,7 @@ export function isUltracodeActive(
 在一次运行扇出之前，先由一名规划者队友决定组合哪些 pattern 以及每个 pattern 扇出多宽。`planUltracodeWorkflow` 以 `taskId: "ultracode-plan"` 和 `preferToolEnabled: false` 分派一次结构化调用——规划是针对目标的纯推理，不需要任何仓库工具。团队旋钮（`skepticsPerFinding`、`judgesPerAttempt`、`maxFinderRounds`）作为默认值追加到提示中。结果由 `ultracodePlanSchema` 校验。
 
 ```typescript
-// lib/ai/agent/team/ultracode/ultracode-planner.ts:34-62
+// lib/squads/ultracode/ultracode-planner.ts:34-62
 export async function planUltracodeWorkflow(
   teamCtx: TeamRunContext,
   opts: PlanUltracodeOptions = {}
@@ -88,7 +88,7 @@ export async function planUltracodeWorkflow(
 `synthesizeUltracodeWorkflow` 把规划的阶段列表转化为一张由 `pattern.*` 节点构成的 `VisualWorkflow`。连线是**只向前推进**的，且由阶段类型驱动。每个阶段成为一个 id 为 `p${i}_${stage.pattern}`、类型为 `pattern.${stage.pattern}` 的节点；如果规划未以 `synthesize` 阶段结尾，则会追加一个终端 `synthesize` 阶段。
 
 ```typescript
-// lib/ai/agent/team/ultracode/synthesize-ultracode.ts:122-145
+// lib/squads/ultracode/synthesize-ultracode.ts:122-145
     switch (stage.pattern) {
       case "multi-modal-sweep":
       case "loop-until-dry":
@@ -143,7 +143,7 @@ flowchart TD
 
 `adversarial-verify` 运行后，`findingSources` 仅为 `[p2_adversarial-verify]`——但 `synthesize` 无论如何都会从所有先前节点扇入，所以 critic 揭示的缺口与 judge 优胜者仍会到达报告。
 
-## 六个 pattern 节点 —— `lib/ai/agent/team/patterns/`
+## 六个 pattern 节点 —— `lib/squads/patterns/`
 
 每个模块在导入时通过 `registerNodeExecutor` 注册其执行器。所有节点均为 `retryable: false`、`typeVersion: 1`。每个 pattern 都解析出每次运行的 `TeamRunContext`（`getTeamCtxOrThrow`），向外扇出受 `fanoutLimit(teamCtx)` 限制的、启用了工具的 `dispatchStructured` 调用，并通过上游输出映射交换数据。
 
@@ -152,7 +152,7 @@ flowchart TD
 并行查找者，彼此互不知情，每个运行**不同的**搜索模态（by-container、by-content、by-entity、…）。返回去重后的并集。参数：`MultiModalSweepParams`（`objective`、`modalities: string[]`）。输出：`{ findings, finderCount }`。
 
 ```typescript
-// lib/ai/agent/team/patterns/multi-modal-sweep.ts:41-65
+// lib/squads/patterns/multi-modal-sweep.ts:41-65
   const results = await mapSettled(
     modalities,
     fanoutLimit(teamCtx),
@@ -181,7 +181,7 @@ flowchart TD
 用于规模未知的发现：持续生成查找者轮次，直到连续 `dryRoundsToStop`（默认 **2**）轮没有新增任何内容，受 `maxRounds`（默认 **4**）约束。每一轮的提示都嵌入一份 "Already found (do NOT repeat these)" 的已知列表；去重通过一个由 `findingKey` 组成的 `seen` Set 完成。输出：`{ findings, rounds, converged }`。`converged` 标志即收敛信号；当先触及 `maxRounds` 时，它会记录覆盖率可能不完整（不静默截断）。
 
 ```typescript
-// lib/ai/agent/team/patterns/loop-until-dry.ts:47-92
+// lib/squads/patterns/loop-until-dry.ts:47-92
   while (round < maxRounds && dryStreak < dryRoundsToStop) {
     round += 1
     const knownSummary =
@@ -199,7 +199,7 @@ flowchart TD
 为**每个 finding 生成 N 个怀疑者**，每个都被提示去 REFUTE（反驳）它（不确定时默认 `real=false`）。当设置了 `lenses` 时，每个怀疑者获得一个独特的视角——`correctness`/`security`/`perf`/`repro`——以进行视角多样的验证（`repro` 以启用工具的方式运行，以实际复现）。`skepticsPerFinding` 默认 **3**（或每个 lens 一个）。输出：`{ findings (survivors), killed, verified }`。平票即否的规则是保守的——一个 finding 只有在确认数**严格**多于反驳数时才幸存：
 
 ```typescript
-// lib/ai/agent/team/patterns/adversarial-verify.ts:116-124
+// lib/squads/patterns/adversarial-verify.ts:116-124
   const verified: VerifiedFinding[] = findings.map((finding, fi) => {
     const verdicts = byFinding.get(fi) ?? []
     const realVotes = verdicts.filter((v) => v.real).length
@@ -216,7 +216,7 @@ flowchart TD
 独立于 findings。**阶段 1**：每个角度一次尝试，并行进行。**阶段 2**：每个评委在一个并发上限内对每次尝试打 0–10 分；尝试按平均分排名。`judgesPerAttempt` 默认 **3**。参数：`JudgePanelParams`（`angles`、`judgesPerAttempt`）。输出：`{ winner, ranked, attempts }`。
 
 ```typescript
-// lib/ai/agent/team/patterns/judge-panel.ts:74-119
+// lib/squads/patterns/judge-panel.ts:74-119
   // Phase 2 — every judge scores every attempt, all under one concurrency bound.
   const jobs = attempts.flatMap((attempt, ai) =>
     Array.from({ length: judgesPerAttempt }, (_, ji) => ({ attempt, ai, ji }))
@@ -233,7 +233,7 @@ flowchart TD
 针对上游 findings 的单个批评者，追问还**遗漏**了什么——从未运行过的搜索角度、尚未验证的声明、尚未检查的区域或来源。它揭示的缺口向前传递（综合者会将其作为局限性指出）。输出：`{ gaps: CritiqueGap[] }`。
 
 ```typescript
-// lib/ai/agent/team/patterns/completeness-critic.ts:42-53
+// lib/squads/patterns/completeness-critic.ts:42-53
       prompt:
         `Objective: ${objective}\n\n` +
         `The work so far produced these findings:\n${findingsBlock}\n\n` +
@@ -251,7 +251,7 @@ flowchart TD
 终端节点。把已验证的 `findings`、judge-panel 的 `winner` 以及任何未解决的 `gaps` 折叠成一份带引用的报告，作为 `result_share` 消息发布到团队聊天（截断到 4000 字符），并将其返回，以便运行将其写入 `team.finalResult`。输出：`{ report, citations, findingCount }`。
 
 ```typescript
-// lib/ai/agent/team/patterns/synthesize.ts:74-92
+// lib/squads/patterns/synthesize.ts:74-92
   // Surface the report in the team chat.
   teamCtx.storeWriter.addMessage({
     teamId: teamCtx.teamId,
@@ -298,7 +298,7 @@ export interface UltracodePlan { summary: string; stages: UltracodeStage[] }    
 运行时根据 `ultracodeActive` 分支：副作用导入注册 `pattern.*` 执行器，规划者产出一份规划，综合者连接 DAG，`runWorkflow` 执行它。成功时终端报告经由 `storeWriter.setFinalResult` 持久化。
 
 ```typescript
-// lib/ai/agent/team/agent-team-runtime.ts:413-429
+// lib/squads/agent-team-runtime.ts:413-429
     // ── Synthesize the VisualWorkflow (ultracode patterns vs. flat task DAG) ──
     let workflow: VisualWorkflow
     if (ultracodeActive) {
@@ -320,7 +320,7 @@ export interface UltracodePlan { summary: string; stages: UltracodeStage[] }    
 ```
 
 ```typescript
-// lib/ai/agent/team/agent-team-runtime.ts:485-487 (ultracode only, on completion)
+// lib/squads/agent-team-runtime.ts:485-487 (ultracode only, on completion)
         const report = (result.output as { report?: string } | undefined)?.report
         if (report && deps.storeWriter.setFinalResult) {
           deps.storeWriter.setFinalResult(teamId, report)

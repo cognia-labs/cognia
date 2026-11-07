@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs-vite"
 
 import { SquadFleetConsole } from "./squad-fleet-console"
 import type { SquadRouteState } from "@/hooks/squads/use-squad-route-state"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 import type { AgentTeam, AgentTeammate, TeamStatus } from "@/types/agent/agent-team"
 

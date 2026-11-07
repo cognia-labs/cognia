@@ -31,12 +31,12 @@ import type {
 } from "@/types/agent/agent-team"
 import type { AuditKind } from "@/types/connectors/audit"
 import type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
-import type { TwinKnowledgeHit } from "@/lib/ai/agent/team/teammate/twin-context"
+import type { TwinKnowledgeHit } from "@/lib/squads/teammate/twin-context"
 import {
   canSendMessage,
   describeSuppressedMessage,
   type RecentMessage,
-} from "@/lib/ai/agent/team/gates/message-guard"
+} from "@/lib/squads/gates/message-guard"
 
 /**
  * System-prompt fragment appended for a team dispatch session (alongside the
@@ -487,10 +487,10 @@ export function buildTeamCollabManifestEntries(
 /** Lazy default deps wiring the real store-backed orchestrators. */
 export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
   const [{ useAgentTeamStore }, sharedMemory, consensus, delegation] = await Promise.all([
-    import("@/stores/agent/agent-team-store"),
-    import("@/lib/ai/agent/team/memory/shared-memory-orchestrator"),
-    import("@/lib/ai/agent/team/consensus-orchestrator"),
-    import("@/lib/ai/agent/team/delegation-orchestrator"),
+    import("@/stores/squads/agent-team-store/store"),
+    import("@/lib/squads/memory/shared-memory-orchestrator"),
+    import("@/lib/squads/consensus-orchestrator"),
+    import("@/lib/squads/delegation-orchestrator"),
   ])
   return {
     addMessage: (input) =>
@@ -600,7 +600,7 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
       if (!team) throw new Error(`Unknown Squad: ${input.teamId}`)
       const [{ createDecisionLedger }, { getDurableTeamCoordinator }] = await Promise.all([
         import("@cognia/agent-orchestration/decision-ledger"),
-        import("@/lib/ai/agent/team/durable/durable-runtime"),
+        import("@/lib/squads/durable/durable-runtime"),
       ])
       return createDecisionLedger({
         store: getDurableTeamCoordinator().store,
@@ -639,8 +639,7 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
           error: "the twin runtime is not configured (no embedding key / vector store)",
         }
       }
-      const { searchTwinKnowledge: runSearch } =
-        await import("@/lib/ai/agent/team/teammate/twin-context")
+      const { searchTwinKnowledge: runSearch } = await import("@/lib/squads/teammate/twin-context")
       const res = await runSearch({
         twinId: target,
         query: input.query,
@@ -652,7 +651,7 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
     // ── team_post_to_chat (W5) — origin/sibling resolution + delivery ────────
     resolveOriginConversation: async (c) => {
       if (!c.runId) return null
-      const { getTeamRunContext } = await import("@/lib/ai/agent/team/team-run-context")
+      const { getTeamRunContext } = await import("@/lib/squads/team-run-context")
       const tf = getTeamRunContext(c.runId)?.triggeredFrom
       return tf?.adapterId && tf?.conversationKey
         ? { adapterId: tf.adapterId, conversationKey: tf.conversationKey }

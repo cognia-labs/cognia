@@ -3,7 +3,7 @@
  */
 import "fake-indexeddb/auto"
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import {
   diffSnapshots,
   installAgentTeamProjection,

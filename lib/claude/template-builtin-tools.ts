@@ -279,7 +279,7 @@ export interface TemplateToolDeps {
   squads: TemplateToolSquadDeps
   /**
    * Create a squad from a template through the platform. Production binds
-   * `applySquadTemplate` from `lib/agent-team/apply-squad-template.ts`.
+   * `applySquadTemplate` from `lib/squads/apply-squad-template.ts`.
    */
   applySquadTemplate: (input: {
     template: AgentTeamTemplate
@@ -312,9 +312,9 @@ export async function resolveTemplateToolDeps(): Promise<TemplateToolDeps> {
     import("@/lib/platform/detect"),
     import("@/lib/plugin/security/consent-broker"),
     import("@/lib/db/chat-templates"),
-    import("@/stores/agent/agent-team-store"),
-    import("@/lib/agent-team/apply-squad-template"),
-    import("@/lib/agent-team/publish-template-to-platform"),
+    import("@/stores/squads/agent-team-store/store"),
+    import("@/lib/squads/apply-squad-template"),
+    import("@/lib/squads/publish-template-to-platform"),
   ])
   const platform = detectPlatform()
   const store = () => useAgentTeamStore.getState()

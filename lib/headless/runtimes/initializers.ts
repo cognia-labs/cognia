@@ -68,8 +68,7 @@ registerHeadlessRuntime({
     await pendingWorkflowCleanup?.()
     // Composition root for the brain: install the Agent Team's workflow node
     // implementations before any trigger or resumed run (ADR-0217).
-    const { installTeamWorkflowNodeRuntime } =
-      await import("@/lib/ai/agent/team/workflow-nodes/install")
+    const { installTeamWorkflowNodeRuntime } = await import("@/lib/squads/workflow-nodes/install")
     installTeamWorkflowNodeRuntime()
     const [
       { initTriggerSubscriptions, disposeTriggerSubscriptions },

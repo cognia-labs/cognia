@@ -9,7 +9,7 @@ import {
   resolveGithubAccountGitAccess,
 } from "@/lib/integrations/github-read-credential"
 import { getOctokitForRepo } from "@/lib/github/octokit-factory"
-import { ghCliToken } from "@/lib/ai/agent/team/pr-feedback/resolvers"
+import { ghCliToken } from "@/lib/squads/pr-feedback/resolvers"
 import {
   createGithubSyncProvider,
   resolveGithubSyncReadClient,
@@ -33,7 +33,7 @@ it("describes its built-in resource through the shared descriptor", () => {
   })
 })
 
-jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
+jest.mock("@/lib/squads/pr-feedback/resolvers", () => ({
   ghCliToken: jest.fn(async () => null),
   createResolveOctokit: jest.fn(() => async () => null),
 }))
@@ -1185,7 +1185,7 @@ beforeEach(fixture.restore)
 afterAll(fixture.dispose)
 
 it("uses a fresh credential resolver with the pull's Host admission", async () => {
-  const { createResolveOctokit } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
+  const { createResolveOctokit } = await import("@/lib/squads/pr-feedback/resolvers")
   const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
   await expect(createGithubSyncProvider().pull(binding(), { credentialContext })).rejects.toThrow()
   expect(createResolveOctokit).toHaveBeenLastCalledWith(undefined, credentialContext)

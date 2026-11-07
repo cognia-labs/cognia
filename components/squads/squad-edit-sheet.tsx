@@ -26,7 +26,7 @@ import { SQUAD_ROSTER_SETTING_ID } from "@/components/settings/squads/nav-config
 import { SquadDetailPanel } from "@/components/settings/squads/squad-detail-panel"
 import { ResponsiveDetailSheet } from "@/components/shared/responsive-detail-sheet"
 import type { SquadEditFocus } from "@/hooks/squads/use-squad-route-state"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 
 export interface SquadEditSheetProps {
   squadId: string

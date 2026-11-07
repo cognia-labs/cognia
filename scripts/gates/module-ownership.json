@@ -17,13 +17,9 @@
     "agent": {
       "class": "kernel",
       "api": [
-        "components/agent/workspace/agent-team-avatar.tsx",
-        "components/agent/workspace/auto-compose-dialog.tsx",
-        "components/agent/workspace/members.tsx",
-        "components/agent/workspace/runtime-badge.tsx",
-        "components/agent/workspace/settings.tsx",
-        "components/agent/workspace/tasks.tsx",
-        "components/agent/workspace/team-run-controls.tsx"
+        "components/agent/external-agent/cognia-model-picker.tsx",
+        "components/agent/external-agent/external-agent-config-pin-field.tsx",
+        "components/agent/team/teammate-execution-binding-field.tsx"
       ]
     },
     "agent-config": {
@@ -43,30 +39,14 @@
       "api": [
         "components/agent-runs/agent-run-status-pill.tsx",
         "components/agent-runs/agent-runs-panel.tsx",
-        "hooks/agent-runs/use-agent-runs.ts"
+        "hooks/agent-runs/use-agent-runs.ts",
+        "hooks/agent-runs/use-team-live-status.ts",
+        "hooks/agent-runs/use-team-pr-status.ts"
       ]
     },
     "agent-tasks": {
       "class": "module",
       "api": ["lib/agent-tasks/runtime.ts"]
-    },
-    "agent-team": {
-      "class": "module",
-      "api": [
-        "lib/agent-team/apply-squad-template.ts",
-        "lib/agent-team/binding-candidates.ts",
-        "lib/agent-team/bootstrap.ts",
-        "lib/agent-team/create-squad.ts",
-        "lib/agent-team/project-plugin-template.ts",
-        "lib/agent-team/publish-template-to-platform.ts",
-        "lib/agent-team/squad-readiness.ts",
-        "lib/agent-team/squad-template-platform.ts",
-        "lib/ai/agent/team/agent-team.ts",
-        "lib/ai/agent/team/squad/lead-execution.ts",
-        "lib/ai/agent/team/squad/start-squad-run.ts",
-        "lib/ai/agent/team/team-run-context.ts",
-        "lib/ai/agent/team/team-wave-runner.ts"
-      ]
     },
     "agent-trace": {
       "class": "module"
@@ -121,7 +101,8 @@
       "class": "foundation"
     },
     "board": {
-      "class": "module"
+      "class": "module",
+      "api": ["components/board/kanban-board.tsx"]
     },
     "boot": {
       "class": "shell"
@@ -158,7 +139,11 @@
     },
     "chat": {
       "class": "kernel",
-      "api": ["hooks/chat/use-sessions.ts"]
+      "api": [
+        "components/chat/markdown-renderer.tsx",
+        "hooks/chat/use-effective-cwd.ts",
+        "hooks/chat/use-sessions.ts"
+      ]
     },
     "chat-copilot": {
       "class": "module"
@@ -202,7 +187,9 @@
     "connectors": {
       "class": "module",
       "api": [
+        "lib/connectors/activity/turn-activity-tracker.ts",
         "lib/connectors/bus.ts",
+        "lib/connectors/circuit-breaker.ts",
         "lib/connectors/hitl/approval-registry.ts",
         "lib/connectors/outbound-runner.ts",
         "lib/connectors/permission-resolve.ts"
@@ -212,7 +199,8 @@
       "class": "foundation"
     },
     "context-workbench": {
-      "class": "module"
+      "class": "module",
+      "api": ["components/context-workbench/run-retrospective-view.tsx"]
     },
     "conversations": {
       "class": "shell"
@@ -318,17 +306,29 @@
     },
     "fleet": {
       "class": "module",
-      "api": ["hooks/fleet/use-fleet-snapshot.ts"]
+      "api": [
+        "hooks/fleet/use-fleet-snapshot.ts",
+        "lib/fleet/managed-session-projection.ts",
+        "lib/fleet/types.ts"
+      ]
     },
     "gateway": {
       "class": "kernel"
     },
     "git": {
       "class": "module",
-      "api": ["stores/git/git-store.ts"]
+      "api": ["lib/git/commands.ts", "stores/git/git-store.ts"]
     },
     "github": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/github/host.ts",
+        "lib/github/octokit-factory.ts",
+        "lib/github/pr-observe/discover.ts",
+        "lib/github/pr-observe/fetch.ts",
+        "lib/github/pr-observe/predicates.ts",
+        "lib/github/pr-observe/types.ts"
+      ]
     },
     "glance": {
       "class": "module"
@@ -393,7 +393,12 @@
       "class": "shell"
     },
     "integrations": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/integrations/github-auth.ts",
+        "lib/integrations/github-read-credential.ts",
+        "lib/integrations/outbound-hold.ts"
+      ]
     },
     "interactions": {
       "class": "foundation"
@@ -403,7 +408,7 @@
     },
     "issues": {
       "class": "module",
-      "api": ["lib/issues/service.ts"]
+      "api": ["lib/issues/hrefs.ts", "lib/issues/service.ts"]
     },
     "jobs": {
       "class": "module"
@@ -415,7 +420,11 @@
       "class": "foundation"
     },
     "knowledge-base": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/knowledge-base/runtime/progressive-reading.ts",
+        "lib/knowledge-base/runtime/session-reader.ts"
+      ]
     },
     "labels": {
       "class": "module"
@@ -609,12 +618,16 @@
     },
     "router-fusion": {
       "class": "kernel",
-      "api": ["components/router-fusion/eval/routing-experiment-panel.tsx"],
+      "api": [
+        "components/router-fusion/eval/routing-experiment-panel.tsx",
+        "components/router-fusion/fusion-action-field.tsx"
+      ],
       "note": "Provisional: the model-routing convergence analysis decides its split (ADR-0250 §14, not decided here)."
     },
     "routing": {
       "class": "module",
-      "note": "Provisional: folded into the model-routing convergence analysis."
+      "note": "Provisional: folded into the model-routing convergence analysis.",
+      "api": ["lib/routing/plan-trace-attributes.ts"]
     },
     "runtime": {
       "class": "foundation"
@@ -627,7 +640,15 @@
       "api": ["components/scheduler/run-artifact-links.tsx"]
     },
     "scm": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/scm/host.ts",
+        "lib/scm/integration/orchestrator.ts",
+        "lib/scm/review/pii-gate.ts",
+        "lib/scm/review/review-changeset.ts",
+        "lib/scm/runtime.ts",
+        "lib/scm/types.ts"
+      ]
     },
     "search": {
       "class": "kernel"
@@ -724,7 +745,14 @@
       "class": "module"
     },
     "stack": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/stack/forge/remote.ts",
+        "lib/stack/model.ts",
+        "lib/stack/team-policy.ts",
+        "lib/stack/topology.ts",
+        "lib/stack/validate.ts"
+      ]
     },
     "status": {
       "class": "module"
@@ -782,6 +810,8 @@
         "lib/templates/contracts.ts",
         "lib/templates/download-package.ts",
         "lib/templates/draft-id.ts",
+        "lib/templates/feature-flags.ts",
+        "lib/templates/legacy-sources.ts",
         "lib/templates/package.ts",
         "lib/templates/repository.ts",
         "lib/templates/runtime.ts",
@@ -790,7 +820,11 @@
     },
     "terminal": {
       "class": "module",
-      "api": ["stores/terminal/terminal-store.ts"]
+      "api": [
+        "lib/terminal/completion/tokenize.ts",
+        "lib/terminal/headless-exec.ts",
+        "stores/terminal/terminal-store.ts"
+      ]
     },
     "test": {
       "class": "foundation"
@@ -819,7 +853,9 @@
         "lib/twin/distill/llm.ts",
         "lib/twin/ingest/lark-doc-fetcher.ts",
         "lib/twin/ingest/redaction-key.ts",
-        "lib/twin/runtime/build-deps.ts"
+        "lib/twin/runtime/apply-twin-context.ts",
+        "lib/twin/runtime/build-deps.ts",
+        "lib/twin/runtime/inject-log.ts"
       ]
     },
     "types-root": {
@@ -869,11 +905,19 @@
     "workflow": {
       "class": "module",
       "api": [
+        "hooks/workflow/use-debounced-callback.ts",
         "lib/workflow/definition/migrate.ts",
+        "lib/workflow/knowledge/access.ts",
         "lib/workflow/nodes/ai/pii-gate.ts",
         "lib/workflow/nodes/ai/schema-validate.ts",
+        "lib/workflow/nodes/registry.ts",
+        "lib/workflow/nodes/shared/executor-support.ts",
+        "lib/workflow/nodes/teams/team-runtime-port.ts",
+        "lib/workflow/runtime/concurrency-controller.ts",
         "lib/workflow/runtime/execution-authority.ts",
-        "lib/workflow/runtime/orchestrator.ts"
+        "lib/workflow/runtime/model-preference-controller.ts",
+        "lib/workflow/runtime/orchestrator.ts",
+        "lib/workflow/runtime/resume-controller.ts"
       ]
     },
     "workspace": {
@@ -935,11 +979,6 @@
       "prefix": "components/extensions/",
       "owner": "vscode-compat",
       "why": "VS Code extension host UI (analysis §11.1 plugin)."
-    },
-    {
-      "prefix": "lib/ai/agent/team/",
-      "owner": "agent-team",
-      "why": "Split out of `ai` into agent orchestration (analysis §11.1 ai)."
     },
     {
       "prefix": "lib/ai/media/",

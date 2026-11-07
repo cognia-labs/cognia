@@ -11,7 +11,7 @@
  *
  * # Why it lives here
  *
- * It used to be the second half of `components/agent/workspace/worktrees-panel`,
+ * It used to be the second half of `components/squads/worktrees-panel`,
  * a tab of `/agent-teams/workspace`, which ADR-0140 retired and took out of
  * navigation. The branches pile up in the REPOSITORY, not in a squad, so the
  * reclaim view belongs to the workspace that owns the checkout. That is also

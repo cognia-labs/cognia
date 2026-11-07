@@ -1,7 +1,7 @@
 import { GITHUB_DOT_COM, parseGithubHost, type GithubHost } from "@/lib/github/host"
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { PrObservation } from "@/lib/github/pr-observe/types"
-import type { TimerHandle } from "@/lib/ai/agent/team/pr-feedback/observer"
+import type { TimerHandle } from "@/lib/squads/pr-feedback/observer"
 import {
   ProjectPrWatch,
   deliverThreadNudge,

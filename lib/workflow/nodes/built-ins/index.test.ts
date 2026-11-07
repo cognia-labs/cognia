@@ -8,7 +8,7 @@ import "."
 import { getExecutor } from "../registry"
 // Production hosts install the Agent Team node implementations from their
 // composition root (ADR-0217); this suite exercises them through the registry.
-import { installTeamWorkflowNodeRuntime } from "@/lib/ai/agent/team/workflow-nodes/install"
+import { installTeamWorkflowNodeRuntime } from "@/lib/squads/workflow-nodes/install"
 
 installTeamWorkflowNodeRuntime()
 import { registerSkill, __resetSkillsForTesting } from "@/lib/plugin/registries/skill-registry"
@@ -2859,10 +2859,10 @@ describe("action.team.task.dispatch", () => {
     workers: { id: string; name: string }[]
   }) => {
     const { registerTeamRunContext, __resetTeamRunContextForTesting } =
-      await import("@/lib/ai/agent/team/team-run-context")
-    const { createTeammatePool } = await import("@/lib/ai/agent/team/teammate/teammate-pool")
-    const { createBudgetGuard } = await import("@/lib/ai/agent/team/gates/budget-guard")
-    const { createTeamNotifier } = await import("@/lib/ai/agent/team/team-notifier")
+      await import("@/lib/squads/team-run-context")
+    const { createTeammatePool } = await import("@/lib/squads/teammate/teammate-pool")
+    const { createBudgetGuard } = await import("@/lib/squads/gates/budget-guard")
+    const { createTeamNotifier } = await import("@/lib/squads/team-notifier")
     const { createConcurrencyController } =
       await import("@/lib/workflow/runtime/concurrency-controller")
     const { createModelPreferenceController } =
@@ -3020,7 +3020,7 @@ describe("action.team.task.dispatch", () => {
   })
 
   it("throws nonRetryable when TeamRunContext is missing", async () => {
-    const { __resetTeamRunContextForTesting } = await import("@/lib/ai/agent/team/team-run-context")
+    const { __resetTeamRunContextForTesting } = await import("@/lib/squads/team-run-context")
     __resetTeamRunContextForTesting()
     const ctx = makeCtx("action.team.task.dispatch", {
       taskKind: "general",
@@ -3090,7 +3090,7 @@ describe("action.team.task.dispatch", () => {
   })
 
   it("publishes the task result to the shared-memory blackboard after success", async () => {
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     useAgentTeamStore.getState().reset()
     await setupTeamCtx({ runId: "run_bb_write", workers: [{ id: "w1", name: "W1" }] })
     const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
@@ -3113,10 +3113,9 @@ describe("action.team.task.dispatch", () => {
   })
 
   it("injects upstream dependency results into the teammate prompt (blackboard read)", async () => {
-    const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     useAgentTeamStore.getState().reset()
-    const { autoPublishTaskResult } =
-      await import("@/lib/ai/agent/team/memory/shared-memory-orchestrator")
+    const { autoPublishTaskResult } = await import("@/lib/squads/memory/shared-memory-orchestrator")
     autoPublishTaskResult({ id: "team-1" }, { id: "dep1", title: "Recon" }, "Recon found X.", {
       id: "w0",
       name: "Scout",
@@ -3157,10 +3156,10 @@ describe("action.team.task.review", () => {
     omitLead?: boolean
   }) => {
     const { registerTeamRunContext, __resetTeamRunContextForTesting } =
-      await import("@/lib/ai/agent/team/team-run-context")
-    const { createTeammatePool } = await import("@/lib/ai/agent/team/teammate/teammate-pool")
-    const { createBudgetGuard } = await import("@/lib/ai/agent/team/gates/budget-guard")
-    const { createTeamNotifier } = await import("@/lib/ai/agent/team/team-notifier")
+      await import("@/lib/squads/team-run-context")
+    const { createTeammatePool } = await import("@/lib/squads/teammate/teammate-pool")
+    const { createBudgetGuard } = await import("@/lib/squads/gates/budget-guard")
+    const { createTeamNotifier } = await import("@/lib/squads/team-notifier")
     const { createConcurrencyController } =
       await import("@/lib/workflow/runtime/concurrency-controller")
     const { createModelPreferenceController } =
@@ -3362,8 +3361,7 @@ describe("action.team.task.review", () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({ text: "revised notes" })
     // The shared coordinator is a plain object, so its method can be spied on
     // (a module export compiled by SWC cannot).
-    const { getDurableTeamCoordinator } =
-      await import("@/lib/ai/agent/team/durable/durable-runtime")
+    const { getDurableTeamCoordinator } = await import("@/lib/squads/durable/durable-runtime")
     const registerChild = jest.spyOn(getDurableTeamCoordinator(), "registerChild")
     try {
       const r = await exec("action.team.task.review", reviewCtx("rv_kind"))
@@ -3527,7 +3525,7 @@ describe("action.team.task.review", () => {
   })
 
   it("fails without a TeamRunContext", async () => {
-    const { __resetTeamRunContextForTesting } = await import("@/lib/ai/agent/team/team-run-context")
+    const { __resetTeamRunContextForTesting } = await import("@/lib/squads/team-run-context")
     __resetTeamRunContextForTesting()
     await expect(exec("action.team.task.review", reviewCtx("rv_missing"))).rejects.toThrow(
       /no TeamRunContext/
@@ -3545,11 +3543,11 @@ describe("action.team.task.dispatch output validation", () => {
   it("empty output triggers EMPTY_OUTPUT retry path", async () => {
     const { ctx: teamCtx } = await (async () => {
       const { registerTeamRunContext, __resetTeamRunContextForTesting } =
-        await import("@/lib/ai/agent/team/team-run-context")
+        await import("@/lib/squads/team-run-context")
       __resetTeamRunContextForTesting()
-      const { createTeammatePool } = await import("@/lib/ai/agent/team/teammate/teammate-pool")
-      const { createBudgetGuard } = await import("@/lib/ai/agent/team/gates/budget-guard")
-      const { createTeamNotifier } = await import("@/lib/ai/agent/team/team-notifier")
+      const { createTeammatePool } = await import("@/lib/squads/teammate/teammate-pool")
+      const { createBudgetGuard } = await import("@/lib/squads/gates/budget-guard")
+      const { createTeamNotifier } = await import("@/lib/squads/team-notifier")
       const { createConcurrencyController } =
         await import("@/lib/workflow/runtime/concurrency-controller")
       const { createModelPreferenceController } =

@@ -1,5 +1,5 @@
 /**
- * The plugin contract's share of `lib/ai/agent/team/gates/task-move-guard.ts`, which re-exports these.
+ * The plugin contract's share of `lib/squads/gates/task-move-guard.ts`, which re-exports these.
  */
 /** Why a move was denied — keyed for i18n at the UI layer. */
 export type TaskMoveDenial =

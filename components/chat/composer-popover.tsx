@@ -115,8 +115,8 @@ import {
   SubagentMentionRow,
   filterSubagents,
   filterTeamMembers,
-} from "@/components/agent/workspace/agent-mention-picker"
-import type { MentionTarget } from "@/lib/agent-team/runtime-targets"
+} from "@/components/squads/agent-mention-picker"
+import type { MentionTarget } from "@/lib/squads/runtime-targets"
 import type { AgentRuntimeDescriptor } from "@/lib/ai/agent/runtime-catalog/types"
 import type { RouteLane } from "@/lib/chat/turn-route/types"
 import type { RouteOption } from "@/hooks/chat/use-route-targets"

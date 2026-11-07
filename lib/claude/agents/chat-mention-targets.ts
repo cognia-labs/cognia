@@ -26,7 +26,7 @@ import { slugify } from "@/lib/claude/subagent-importers/_parse-helpers"
 import { parseMentions } from "@/lib/claude/team-router"
 import type { MentionResolvers } from "@/lib/chat/mentions/resolve-mentions"
 import { RESERVED_MENTION_NAMES } from "@/types/agent/agent-team"
-import { findTargetByHandle, type MentionTarget } from "@/lib/agent-team/runtime-targets"
+import { findTargetByHandle, type MentionTarget } from "@/lib/squads/runtime-targets"
 
 /**
  * `@claude` / `@codex` belong to the route targets (`lib/chat/turn-route/`),

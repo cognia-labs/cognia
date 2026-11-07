@@ -16,7 +16,7 @@
  * tombstone so removals reach the phone.
  */
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { recordTombstones } from "./tombstones"
 import { loggers } from "@cognia/logging"
 import type { AgentTeam, AgentTeammate, AgentTeamTask } from "@/types/agent/agent-team"

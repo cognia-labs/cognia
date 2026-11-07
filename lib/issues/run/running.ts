@@ -28,7 +28,7 @@ export interface ViewerAgentKeysDeps {
 }
 
 async function defaultListTeamIds(): Promise<string[]> {
-  const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+  const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
   return Object.keys(useAgentTeamStore.getState().teams)
 }
 
@@ -80,7 +80,7 @@ export interface SquadRunLookupDeps {
 }
 
 async function defaultTeamNameOf(teamId: string): Promise<string | undefined> {
-  const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+  const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
   return useAgentTeamStore.getState().teams[teamId]?.name
 }
 

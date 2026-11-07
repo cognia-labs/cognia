@@ -26,13 +26,11 @@
 
 import { useTranslations } from "next-intl"
 
-import {
-  ReportKpiCards,
-  ReportPluginSlot,
-  ReportTaskline,
-  ReportTokenBurn,
-} from "@/components/agent/workspace/activity-report"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { ReportKpiCards } from "@/components/squads/activity-report/report-kpi-cards"
+import { ReportPluginSlot } from "@/components/squads/activity-report/report-plugin-slot"
+import { ReportTaskline } from "@/components/squads/activity-report/report-taskline"
+import { ReportTokenBurn } from "@/components/squads/activity-report/report-token-burn"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useClientLiveQuery } from "@/hooks/data"
 import { getAgentTeamRun } from "@/lib/db/agent-team-runtime"
 import type { UnifiedExecutionRow } from "@/lib/execution/monitor-model"

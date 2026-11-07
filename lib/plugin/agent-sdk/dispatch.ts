@@ -18,7 +18,7 @@ import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution
 
 import { normalizeAgentModelRoleOverrides } from "@cognia/agent-contracts/external-agent"
 import { mergeModelRoleLayers } from "@/lib/ai/agent/external/config/model-plan"
-import type { AgentTeamConfig } from "@/lib/ai/agent/team/agent-team"
+import type { AgentTeamConfig } from "@/lib/squads/agent-team"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { normalizeCogniaModelBinding } from "@/types/agent/external-agent"
 import type {
@@ -629,7 +629,7 @@ export async function runTeam(
   teamOrConfig: string | AgentTeamConfig,
   options: PluginRunTeamOptions = {}
 ): Promise<PluginRunTeamResult> {
-  const { agentTeamManager } = await import("@/lib/ai/agent/team/agent-team")
+  const { agentTeamManager } = await import("@/lib/squads/agent-team")
 
   let teamId: string
   if (typeof teamOrConfig === "string") {

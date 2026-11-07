@@ -82,7 +82,7 @@ jest.mock("@/components/ui/switch", () => ({
   ),
 }))
 
-jest.mock("@/stores/agent/agent-team-store", () => ({
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: (
     selector: (s: { teams: Record<string, { id: string; name: string }> }) => unknown
   ) => selector({ teams: { team_a: { id: "team_a", name: "Team A" } } }),

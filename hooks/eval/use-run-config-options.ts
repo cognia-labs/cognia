@@ -16,7 +16,7 @@ import { runEvalService, type RunEvalServiceInput } from "@/lib/ai/eval/service"
 import { resolveEvalSettings } from "@/lib/ai/eval/settings"
 import { collectModelOptions } from "@/lib/ai/model-options"
 import { listCharacters } from "@/lib/db/characters"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { listWorkflowsByUpdated } from "@/lib/db/workflows"
 import { listTwins } from "@/lib/db/twins"
 

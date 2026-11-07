@@ -6,10 +6,11 @@ describe("squads module manifest", () => {
     expect(squads.acceptance).toEqual({ realSmoke: "pending" })
   })
 
-  it("owns the settings section where the agent.team.panel slot names it", () => {
+  it("owns the settings section where the agent.team.panel slot names it, and the /agent-teams redirect", () => {
     expect(squads.owns).toEqual([
-      "components/settings/squads/",
+      "app/agent-teams/",
       "components/settings/agent/agent-team-templates-section",
+      "components/settings/squads/",
     ])
   })
 

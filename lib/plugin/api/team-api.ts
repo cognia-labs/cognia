@@ -39,7 +39,7 @@
 
 import { loggers } from "@cognia/logging"
 
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { toPublicBestOfNRun } from "@/lib/best-of-n/public-run"
 import { createGuardedAPI } from "@/lib/plugin/security/permission-guard"
 import type {
@@ -81,7 +81,7 @@ async function runControl(
     return { ok: false, reason: "squad_not_found" }
   }
   try {
-    const { agentTeamManager } = await import("@/lib/ai/agent/team/agent-team")
+    const { agentTeamManager } = await import("@/lib/squads/agent-team")
     await agentTeamManager[verb](teamId)
     return { ok: true }
   } catch (error) {
@@ -309,7 +309,7 @@ export function createTeamAPI(pluginId: string): PluginTeamAPI {
       // instantiation helper into every plugin context that never asks.
       const [{ getAgentTeamTemplate }, { instantiateAgentTeamTemplate }] = await Promise.all([
         import("@/lib/plugin/registries/agent-team-template-registry"),
-        import("@/lib/agent-team/instantiate-template"),
+        import("@/lib/squads/instantiate-template"),
       ])
       const template = getAgentTeamTemplate(templateId)
       if (!template) return null
@@ -324,7 +324,7 @@ export function createTeamAPI(pluginId: string): PluginTeamAPI {
     // lifecycle
     createTeam: async (input) => {
       const [{ createSquad }, { useProjectStore }] = await Promise.all([
-        import("@/lib/agent-team/create-squad"),
+        import("@/lib/squads/create-squad"),
         import("@/stores/project/project-store"),
       ])
       const projectState = useProjectStore.getState()
@@ -369,7 +369,7 @@ export function createTeamAPI(pluginId: string): PluginTeamAPI {
       // instead of only after the next boot projection. Non-fatal: the legacy
       // store is still the read side.
       const { platformIdForSquadTemplate, publishSquadTemplateToPlatform } =
-        await import("@/lib/agent-team/publish-template-to-platform")
+        await import("@/lib/squads/publish-template-to-platform")
       await publishSquadTemplateToPlatform(template).catch(() => undefined)
       await stampMirroredTemplateAuthorship(pluginId, platformIdForSquadTemplate(template))
       return template
@@ -384,7 +384,7 @@ export function createTeamAPI(pluginId: string): PluginTeamAPI {
       // run gets the run id convention, the execution row and the workspace
       // stamp. No `session`: a plugin is not a conversation, so the run is
       // uncarded and says so on its row.
-      const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
+      const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
       const result = await startSquadRun({
         squadId: teamId,
         goal: options?.goal ?? "",

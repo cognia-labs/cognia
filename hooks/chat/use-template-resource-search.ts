@@ -28,8 +28,8 @@ import {
   filterMentionables,
   filterSubagents,
   filterTeamMembers,
-} from "@/components/agent/workspace/agent-mention-picker"
-import type { MentionTarget } from "@/lib/agent-team/runtime-targets"
+} from "@/components/squads/agent-mention-picker"
+import type { MentionTarget } from "@/lib/squads/runtime-targets"
 import type { SubagentMentionTarget } from "@/lib/claude/agents/chat-mention-targets"
 import type { Character } from "@cognia/agent-config-types"
 import { loggers } from "@cognia/logging"

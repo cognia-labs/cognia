@@ -332,7 +332,7 @@ const REVIEWED: Record<string, string[]> = {
   "lib/ai/agent/external/runtimes/acp/acp-dynamic-mcp-controller.ts": [
     "resolveMcpRuntimeCredential",
   ],
-  "lib/ai/agent/team/pr-feedback/resolvers.ts": [
+  "lib/squads/pr-feedback/resolvers.ts": [
     "gh-auth-token",
     "gh-auth-token",
     "ghCliToken",

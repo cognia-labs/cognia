@@ -9,7 +9,7 @@
 
 import { useTranslations } from "next-intl"
 
-import { ConfirmActionDialog } from "@/components/agent/workspace/settings/confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/squads/settings/confirm-action-dialog"
 
 export interface MemoryDeleteConfirmProps {
   /** Ids waiting for confirmation; `null` keeps the dialog closed. */

@@ -37,7 +37,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
-import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
+import { AgentTeamAvatar } from "@/components/squads/agent-team-avatar"
 import { cn } from "@/lib/utils"
 import type { ChatExecutor, ChatExecutorSquad } from "./use-chat-executor"
 

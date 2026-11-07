@@ -4,7 +4,7 @@ import {
   publishEntry,
   readDependencyResults,
   clearTeamMemory,
-} from "@/lib/ai/agent/team/memory/shared-memory-orchestrator"
+} from "@/lib/squads/memory/shared-memory-orchestrator"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import {

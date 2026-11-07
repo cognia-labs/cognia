@@ -36,7 +36,7 @@ import { listCharacters } from "@/lib/db/characters"
 import { actorKey } from "@/lib/issues/board-model"
 import { collabActorRefusal, collabAssigneeKey } from "@/lib/issues/collab-actor"
 import { SELF_ACTOR_KEY } from "@/lib/issues/run/running"
-import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { IssueActor } from "@/types/issues"
 

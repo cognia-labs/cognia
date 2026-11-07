@@ -3,7 +3,7 @@
 import { resolveImEffectiveConfig } from "@/lib/connectors/effective-config"
 import { deriveImPermissionCeiling } from "@/lib/connectors/im-permission-ceiling"
 import { startTeamRunFromIM, type StartTeamRunFromIMDeps } from "@/lib/connectors/team-dispatch"
-import type { SquadRunRecordsSeed } from "@/lib/ai/agent/team/squad/start-squad-run"
+import type { SquadRunRecordsSeed } from "@/lib/squads/squad/start-squad-run"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 
 const adapter: AdapterInstanceRow = {
