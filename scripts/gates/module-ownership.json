@@ -20,12 +20,17 @@
       "api": [
         "components/agent/external-agent/cognia-model-picker.tsx",
         "components/agent/external-agent/external-agent-config-pin-field.tsx",
+        "components/agent/mode/runtime-selector.tsx",
         "components/agent/plan/plan-approval-card.tsx",
         "components/agent/plan/plan-document.tsx",
         "components/agent/plan/plan-run-section.tsx",
         "components/agent/plan/write-plan-button.tsx",
         "components/agent/team/teammate-execution-binding-field.tsx",
-        "hooks/agent/use-session-plan.ts"
+        "components/agents/agent-visuals.tsx",
+        "components/agents/editor/character-editor.tsx",
+        "hooks/agent/use-agent-runtime-catalog.ts",
+        "hooks/agent/use-session-plan.ts",
+        "hooks/agents/use-agent-catalogs.ts"
       ]
     },
     "agent-config": {
@@ -178,6 +183,11 @@
     "chat": {
       "class": "kernel",
       "api": [
+        "components/chat/chat-scope-provider.tsx",
+        "components/chat/chat-view.tsx",
+        "components/chat/composer.tsx",
+        "components/chat/composer/model-picker.tsx",
+        "components/chat/empty-state.tsx",
         "components/chat/markdown-renderer.tsx",
         "components/chat/message-parts/file-part-preview.tsx",
         "components/chat/message-parts/kept-copy-source-badge.tsx",
@@ -193,6 +203,7 @@
         "hooks/chat/claude-chat-turn-tasks.ts",
         "hooks/chat/steer-runtime.ts",
         "hooks/chat/use-artifact-detection.ts",
+        "hooks/chat/use-claude-chat.ts",
         "hooks/chat/use-docs-providers.ts",
         "hooks/chat/use-effective-cwd.ts",
         "hooks/chat/use-remote-doc-kept-copy-source.ts",
@@ -871,7 +882,8 @@
       "api": ["lib/skills/recording/recorder-client.ts", "lib/skills/recording/types.ts"]
     },
     "skills": {
-      "class": "kernel"
+      "class": "kernel",
+      "api": ["hooks/skills/use-plugin-skills.ts"]
     },
     "slash-commands": {
       "class": "shell"

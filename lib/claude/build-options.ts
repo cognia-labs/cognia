@@ -2974,17 +2974,13 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // twin runtime already produced a personality-rich prompt (see above).
   const personaSection = twinReplacedBase ? "" : buildPersonaSection(character?.persona)
 
-  // "Build with AI" on /agents (ADR-0220): the live draft section. The
-  // builder tools and protocol are the agent-builder module's contribution.
-  const agentBuilderDraftSurfaced =
-    session?.kind === "agent-builder" && Boolean(session.agentBuilder)
   // ADR-0237: the agent's always-on harness sections (standing rules, domain
   // facts, tool guidance), right after who the agent is.
   const harnessSection = renderHarnessSections(character?.harness)
   // Sections feature modules contribute (ADR-0250 §14 `context` amendment),
   // already placed: slot sections join `systemPrompt` below at their slot,
   // turn sections join the dynamic tail here, after the kernel's own
-  // retrieval sections and before the per-turn sections added further down.
+  // retrieval sections.
   // The caller's host dependencies pass through by name: `twin`, `memory`,
   // `projectKnowledge` and `knowledgeAccess`.
   const { collectContextContributions } = await import("./context-contributions")
@@ -4246,21 +4242,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       opts.appendSystemPrompt = [opts.appendSystemPrompt?.trim(), ...contributedTools.instructions]
         .filter(Boolean)
         .join("\n\n")
-  }
-  // Agent Builder (ADR-0220): the live draft as a per-turn section. Its tools
-  // and protocol are the agent-builder module's tool contribution.
-  if (agentBuilderDraftSurfaced && session) {
-    try {
-      const { resolveAgentBuilderTurnSection } = await import("@/lib/agents/builder/send-extras")
-      const { resolveAgentBuilderToolDeps } = await import("@/lib/agents/builder/tool-deps")
-      const section = await resolveAgentBuilderTurnSection(
-        session,
-        resolveAgentBuilderToolDeps().catalogs
-      )
-      if (section) dynamicTailSections.push(section)
-    } catch (err) {
-      loggers.app.warn("failed to append the agent builder's draft", { error: String(err) })
-    }
   }
   // Team-collaboration tools — only on a team dispatch session, opt-in. Lets a
   // teammate message peers / publish-read the blackboard / open-vote consensus /

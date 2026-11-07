@@ -17,7 +17,7 @@ import { ChevronRightIcon, PencilLineIcon, SparklesIcon } from "lucide-react"
 import { MobileSpotIcon } from "@/components/mobile/mobile-spot-icon"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { AgentBuilderDrafts } from "../builder/agent-builder-drafts"
+import { AgentBuilderDrafts } from "@/components/agent-builder/agent-builder-drafts"
 
 export interface AgentCreateChooserProps {
   /**

@@ -2,7 +2,7 @@
  * The Agent Builder protocol (ADR-0220): what a builder conversation is told
  * about its job, appended to whatever runtime and model the person picked.
  * Session-stable, so it sits in the cached prompt prefix; the live draft is a
- * separate per-turn section (`lib/agents/builder/send-extras.ts`).
+ * separate per-turn section (`./context.ts`).
  *
  * Model-facing text, so English regardless of UI locale; the protocol asks
  * the model to answer in the person's language.

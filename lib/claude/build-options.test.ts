@@ -52,7 +52,7 @@ jest.mock("@/lib/modules/generated/context", () => {
 })
 
 // The Agent Builder's draft section reads the catalogs from Dexie.
-jest.mock("@/lib/agents/builder/tool-deps", () => ({
+jest.mock("@/lib/agent-builder/tool-deps", () => ({
   resolveAgentBuilderToolDeps: () => ({
     catalogs: async () => ({ skills: [], pluginSkills: [], mcpServers: [], knowledgeBases: [] }),
   }),

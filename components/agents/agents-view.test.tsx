@@ -16,7 +16,7 @@ jest.mock("@/components/mobile/mobile-spot-icon", () => ({
 }))
 
 let builderProps: { sessionId: string; onOpenAgent: (id: string) => void; onLeave: () => void }
-jest.mock("./builder/agent-builder-workspace", () => ({
+jest.mock("@/components/agent-builder/agent-builder-workspace", () => ({
   AgentBuilderWorkspace: (props: typeof builderProps) => {
     builderProps = props
     return <div data-testid="builder-workspace" data-session={props.sessionId} />
@@ -24,7 +24,7 @@ jest.mock("./builder/agent-builder-workspace", () => ({
 }))
 
 let setupProps: { onStart: (id: string) => void }
-jest.mock("./builder/agent-builder-setup", () => ({
+jest.mock("@/components/agent-builder/agent-builder-setup", () => ({
   AgentBuilderSetup: (props: typeof setupProps) => {
     setupProps = props
     return <div data-testid="builder-setup" />

@@ -317,7 +317,6 @@
     "lib/agent/plan/step-dispatch.ts -> squads",
     "lib/agent/plan/step-dispatch.ts -> workflow",
     "lib/agent/plan/synthesize-workflow.ts -> workflow",
-    "lib/agents/builder/tool-deps.ts -> skills:ui",
     "lib/ai/agent/agent-executor.ts -> knowledge-base",
     "lib/ai/agent/agent-executor.ts -> routing",
     "lib/ai/agent/agent-executor.ts -> twin",

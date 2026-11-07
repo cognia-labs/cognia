@@ -12,7 +12,7 @@ jest.mock("@/components/mobile/mobile-spot-icon", () => ({
   ),
 }))
 let draftsProps: { onResume: (id: string) => void; className?: string } | undefined
-jest.mock("../builder/agent-builder-drafts", () => ({
+jest.mock("@/components/agent-builder/agent-builder-drafts", () => ({
   AgentBuilderDrafts: (props: { onResume: (id: string) => void; className?: string }) => {
     draftsProps = props
     return <div data-testid="drafts" className={props.className} />

@@ -5,9 +5,9 @@ import {
   renderDraftForModel,
   type DraftCatalogs,
   type DraftPatch,
-} from "@/lib/agents/builder/draft-ops"
+} from "./draft-ops"
 import { AGENT_AVATAR_COLORS } from "@/lib/agents/editor-state"
-import type { AgentBuilderToolDeps } from "@/lib/agents/builder/tool-deps"
+import type { AgentBuilderToolDeps } from "./tool-deps"
 import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import {
   AGENT_BUILDER_TOOL_NAMES as T,

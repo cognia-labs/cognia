@@ -12,8 +12,8 @@
   },
   "members": [
     {
-      "key": "lib/agents/builder/tool-deps.ts",
-      "owner": "lib/agents",
+      "key": "lib/agent-builder/tool-deps.ts",
+      "owner": "lib/agent-builder",
       "note": "",
       "imports": [
         "static"
@@ -539,7 +539,7 @@
       "typeOnly": false
     },
     {
-      "key": "lib/project-coordinator/send-extras.ts",
+      "key": "lib/project-coordinator/context.ts",
       "owner": "lib/project-coordinator",
       "note": "",
       "imports": [

@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0、C1 已实施，记录见 §7–§8。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0、C1、C2 已实施，记录见 §7–§9。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -193,3 +193,17 @@ interface ContextSection {
 - 还清方向边 `lib/claude/build-options.ts -> project-coordinator`。
 - 行为差别：状态段现在过内核 PII 闸（线程标题等若含泄露信息，整段丢弃并上报）；以前不检查。目标段以前就检查。
 - 测试：`context.test.ts` 加 4 例（声明、目标段给谁、状态段给谁）；`build-options.test.ts` 的上下文注册表 mock 改为真实注册表 + 测试模块，新增 1 例：缓存优化开关两种情况下目标段就是整个 `systemPrompt`、状态段就是整个动态尾部。原有的协调者用例全部通过。
+
+## 9. C2 实施记录：Agent Builder（2026-11-07）
+
+- 草稿段：`lib/agents/builder/send-extras.ts` → `lib/agent-builder/context.ts`，导出 `contributions`：`draft`，`cache: "turn"`、无 slot（缓存优化开关都在尾部，与原来一致），`deadlineMs: 5_000`（渲染草稿要读技能、MCP 服务器、知识库三张表）。`build-options` 删掉 `agentBuilderDraftSurfaced` 和尾部分支。
+- 整体搬迁（发送路径不再导入 builder 后才可能）：
+  - `lib/agents/builder/{builder-session,draft-ops,runtime-tool-support,tool-deps}` → `lib/agent-builder/`（模块内改用相对导入）；
+  - `components/agents/builder/*` → `components/agent-builder/`（`../agent-visuals` 改成绝对路径）；
+  - `hooks/agents/use-builder-tool-support.ts` → `hooks/agent-builder/`。
+- 引用方：`components/agents/agents-view.tsx`、`components/agents/create/agent-create-chooser.tsx`（及测试）改从 `@/components/agent-builder/` 导入。它们属于 `agent:ui`，按门禁是模块类，导入模块的 `api` 文件允许。
+- manifest：`dependsOn` agent、chat、skills；`api` 加 setup、workspace、drafts 三个视图；`context` 指向 `./context`。chat 行补 `chat-scope-provider`、`chat-view`、`composer`、`empty-state`、`composer/model-picker`、`use-claude-chat`；agent 行补 `character-editor`、`use-agent-catalogs`、`agent-visuals`、`mode/runtime-selector`、`use-agent-runtime-catalog`；skills 行补 `use-plugin-skills`。
+- 还清方向边 `lib/agents/builder/tool-deps.ts -> skills:ui`（文件搬走后，模块导入内核 UI 走 `api`，不再是方向边）。收敛清单 `lib-ui-imports` 的成员随文件改键为 `lib/agent-builder/tool-deps.ts`；顺带补上 C1 漏改的两处键（`lib-ui-imports`、`lib-store-imperative` 里的 `lib/project-coordinator/send-extras.ts` → `context.ts`）。两份清单的「metrics 不等」报错在 HEAD 上就有，不是本次造成。
+- ADR-0243 的信任表里 setup 视图的路径同步改为新路径。
+- 行为差别：草稿段现在过内核 PII 闸；同一份草稿经 `agent_builder_get_draft` 读出时本来就过 `assertSafePluginToolResult` 的 PII 深检。
+- 测试：`context.test.ts` 加 3 例（声明、给 builder 对话、不给别的）；搬走的组件、hook、lib 测试照常通过；`build-options.test.ts` 的 builder 用例（工具、同意档、协议、草稿段）不改即通过。

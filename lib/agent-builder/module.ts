@@ -1,16 +1,23 @@
 import { defineHostModule } from "@/lib/modules/define"
 
-// The agent tools of "Build with AI" on /agents (ADR-0220): read the draft,
-// list what it may reference, write fields, create the agent. The builder's
-// session, draft and UI stay in the agent kernel, whose agents page mounts
-// them; this module reaches them through the kernel's api files.
+// "Build with AI" on /agents (ADR-0220): the builder conversation, its draft
+// and the agent tools that read and write it, the live draft the model reads
+// every turn, and the setup, workspace and drafts views the agents page
+// mounts.
 export default defineHostModule({
   id: "agent-builder",
   kind: "module",
   stage: "stable",
   acceptance: { realSmoke: "pending" },
-  dependsOn: [],
-  api: ["lib/agent-builder/agent-tools.ts"],
+  dependsOn: ["agent", "chat", "skills"],
+  // The setup and workspace views the agents page mounts, the drafts list
+  // its create chooser shows, and the tool names.
+  api: [
+    "components/agent-builder/agent-builder-drafts.tsx",
+    "components/agent-builder/agent-builder-setup.tsx",
+    "components/agent-builder/agent-builder-workspace.tsx",
+    "lib/agent-builder/agent-tools.ts",
+  ],
   // The user watches the draft change beside the conversation and can edit or
   // discard it, so reading, listing and writing it are allowed. Creating the
   // agent makes something that outlives the conversation, so it asks: the
@@ -24,4 +31,6 @@ export default defineHostModule({
     },
     load: () => import("./agent-tools"),
   },
+  // The live draft, a turn section in the dynamic tail.
+  context: { load: () => import("./context") },
 })

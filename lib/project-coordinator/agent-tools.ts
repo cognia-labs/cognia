@@ -30,8 +30,9 @@ import { PROJECT_COORDINATOR_PROTOCOL, PROJECT_THREAD_PROTOCOL } from "./protoco
  *
  * A coordinator of an enabled project is offered the coordinator tools and
  * {@link PROJECT_COORDINATOR_PROTOCOL}; a thread is offered
- * `report_to_coordinator` and {@link PROJECT_THREAD_PROTOCOL}. The per-turn
- * project status stays with `resolveSendOptions` (`./send-extras.ts`). The
+ * `report_to_coordinator` and {@link PROJECT_THREAD_PROTOCOL}. The project
+ * goal and the per-turn project status are the context contribution
+ * (`./context.ts`). The
  * runner re-checks the caller's role, so a tool reaching the wrong session is
  * refused rather than trusted.
  */

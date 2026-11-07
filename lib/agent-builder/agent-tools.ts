@@ -9,10 +9,8 @@
  * that the caller IS a builder session, so a tool name replayed into another
  * conversation cannot write anything. External runtimes reach these tools
  * through the renderer tool host like any other plugin-manifest tool.
- *
- * The builder's session, draft and UI stay in the agent kernel
- * (`lib/agents/builder/`, `components/agents/builder/`): the agents page that
- * mounts them is kernel, and the kernel imports no module.
+ * The live draft section is the module's context contribution
+ * (`./context.ts`).
  */
 
 import type {
@@ -27,9 +25,9 @@ import {
   DRAFT_STARTERS_MAX,
   renderDraftForModel,
   type DraftPatch,
-} from "@/lib/agents/builder/draft-ops"
+} from "./draft-ops"
 import { AGENT_AVATAR_COLORS } from "@/lib/agents/editor-state"
-import type { AgentBuilderToolDeps } from "@/lib/agents/builder/tool-deps"
+import type { AgentBuilderToolDeps } from "./tool-deps"
 import { AGENT_BUILDER_PROTOCOL } from "./builder-protocol"
 
 export const AGENT_BUILDER_TOOL_NAMES = {
@@ -307,7 +305,7 @@ export function __setAgentBuilderToolDepsForTesting(
 
 async function resolveDeps(): Promise<AgentBuilderToolDeps> {
   if (depsOverride) return depsOverride()
-  const { resolveAgentBuilderToolDeps } = await import("@/lib/agents/builder/tool-deps")
+  const { resolveAgentBuilderToolDeps } = await import("./tool-deps")
   return resolveAgentBuilderToolDeps()
 }
 

@@ -25,8 +25,8 @@ import { AgentListPane } from "./agent-list-pane"
 import { AgentDetailView } from "./detail/agent-detail-view"
 import { AgentCreateChooser } from "./create/agent-create-chooser"
 import { AgentBlankCreate } from "./create/agent-blank-create"
-import { AgentBuilderSetup } from "./builder/agent-builder-setup"
-import { AgentBuilderWorkspace } from "./builder/agent-builder-workspace"
+import { AgentBuilderSetup } from "@/components/agent-builder/agent-builder-setup"
+import { AgentBuilderWorkspace } from "@/components/agent-builder/agent-builder-workspace"
 
 export function AgentsView({
   route,
