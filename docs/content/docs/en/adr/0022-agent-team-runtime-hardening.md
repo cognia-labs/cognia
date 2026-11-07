@@ -9,6 +9,8 @@ description: Converge the agent-team runtime onto the workflow orchestrator via 
 
 > **Amended by ADR-0169 (2026-09-05).** The approval-bus HITL gates and the `workflowRuns`-backed run history described here are retired. Squad reviews ride the Action Review contract as `ExecutionRunInterrupt` rows, `durable-v2` is the only runtime, and `startSquadRun` is the only launch seam. The section on *why* each gate exists still holds.
 
+> **Amended by [ADR-0254](./0254-a-playbook-is-a-skill-that-compiles-to-a-workflow) (2026-11-07, proposed).** The Ultracode addendum's patterns move onto a core that no longer needs a Squad, so they can be placed in the workflow editor. A Squad template's composition comes from a playbook; the planner runs only when none is given. Lenses gain `architecture` and `tests`, and `repro` is refused where no tools exist.
+
 ## Context
 
 The agent-team subsystem (`lib/ai/agent/team/agent-team-runtime.ts:runTeamLifecycle`) advertises itself as a multi-agent orchestrator but only delivers ~30% of its declared capabilities. A read-through against the project's "production reliable" bar surfaced these gaps:

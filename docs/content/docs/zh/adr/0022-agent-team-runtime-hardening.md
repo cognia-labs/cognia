@@ -9,6 +9,8 @@ description: "通过并发预设调度、一个精简团队合成器产生Visual
 
 > **由 ADR-0169 修订（2026-09-05）。** 本文描述的 approval-bus HITL 闸门与基于 `workflowRuns` 的运行历史已退役。小队审批作为 `ExecutionRunInterrupt` 行骑在 Action Review 契约上，`durable-v2` 是唯一运行时，`startSquadRun` 是唯一启动入口。关于每道门*为什么*存在的部分仍然成立。
 
+> **由 [ADR-0254](./0254-a-playbook-is-a-skill-that-compiles-to-a-workflow) 修订（2026-11-07，提议中）。** Ultracode 附录中的模式移到一份不再依赖小队的核心上，因此可以在工作流编辑器中放置。小队模板的组合来自流程，只有没指定时才运行规划器。视角新增 `architecture` 和 `tests`；没有工具时拒绝 `repro`。
+
 ## 背景
 
 代理团队子系统（`lib/ai/agent/team/agent-team-runtime.ts:runTeamLifecycle`）自称是多代理编排器，但实际上只实现了其宣称能力的 ~30%。对项目的“生产可靠性”标准进行读取后，发现了以下空白：
