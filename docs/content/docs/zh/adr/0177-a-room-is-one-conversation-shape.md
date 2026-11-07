@@ -7,6 +7,8 @@ description: "角色团队房间、共享会话与 IM 群组统一为房间抽�
 
 **状态：** 已接受**日期：** 2026-09-10 **相关：** ADR-0140（AgentTeam 到 Squad）、ADR-0149（身份平面与协作）、ADR-0131（跨壳收件箱中继）、ADR-0136（跨设备放置）、ADR-0059（无头大脑）、ADR-0169（运行控制）、ADR-0175（RPC 门面）
 
+> **由 ADR-0252 修订（2026-11-05）。** 第 4、5 批按 ADR-0252 §6 补完：IM 群可绑定 `characterTeamId` 和 `squadId`，IM 群的普通回复走 `RoomRunner`，共享房间改为检测而不是开关。房间成员不再有 `team_*` 工具，改为通过经人确认的提议把工作交给小队。runner 检查 `isLocallyOrchestratedRoom`。
+
 ## 背景
 
 仓库中有四种都称为「群聊」的实现，彼此独立。

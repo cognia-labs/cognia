@@ -5,10 +5,12 @@ description: "Work that something outside started on an always-on host is a comm
 
 # ADR 0247 — Long-lived work carries a mandate and follows its threads
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-01
 **Revised:** 2026-11-01 after adversarial review
 **Related:** [ADR-0137](./0137-delegation-runtime) (delegation runs, T0/T1/T2), [ADR-0132](./0132-issue-tracker) (issues, issue runs, wakeups), [ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background) (coordinator threads), [ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings) (always-on host), [ADR-0243](./0243-a-run-acts-for-someone-and-says-who) (acting identity), [ADR-0244](./0244-a-remote-run-has-stopped-only-when-its-worker-says-so) (stop proof), [ADR-0239](./0239-an-outbound-action-is-authorized-by-the-request) (outbound authorization), [ADR-0198](./0198-a-runs-capabilities-are-granted-not-patched) (capability grants), [ADR-0131](./0131-cross-shell-inbox-relay) (rule-only inbound routing), [ADR-0194](./0194-a-judgment-is-a-provider-not-a-prompt) (decision runner), [ADR-0248](./0248-a-person-is-never-queued-behind-automated-work), [ADR-0249](./0249-a-background-jobs-completion-reaches-the-agent). Research: `docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`.
+
+> **Accepted through ADR-0252 (2026-11-05), with amendments.** Engine runs are ADR-0252 child runs started by `launchChildRun`. §6 delivery uses ADR-0252 §5's steer entry. Until ADR-0243's live authority check exists, §7 reports `live_authority_unavailable` (a would-park receipt in shadow), and `enforce` is refused for the workspace.
 
 ## Context
 

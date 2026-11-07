@@ -5,10 +5,12 @@ description: "在常驻 Host 上由外部发起的工作是一项承诺，而不
 
 # ADR 0247 — 长期工作携带授权凭据并跟随它的话题
 
-**状态：** 提议中
+**状态：** 已接受
 **日期：** 2026-11-01
 **修订：** 2026-11-01，对抗性审查之后
 **相关：** [ADR-0137](./0137-delegation-runtime)（delegation 运行，T0/T1/T2）、[ADR-0132](./0132-issue-tracker)（Issue、Issue 运行与 wakeup）、[ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background)（协调器线程）、[ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings)（常驻 Host）、[ADR-0243](./0243-a-run-acts-for-someone-and-says-who)（代理身份）、[ADR-0244](./0244-a-remote-run-has-stopped-only-when-its-worker-says-so)（停止证明）、[ADR-0239](./0239-an-outbound-action-is-authorized-by-the-request)（外发授权）、[ADR-0198](./0198-a-runs-capabilities-are-granted-not-patched)（能力授予）、[ADR-0131](./0131-cross-shell-inbox-relay)（入站只按规则路由）、[ADR-0194](./0194-a-judgment-is-a-provider-not-a-prompt)（决策执行器）、[ADR-0248](./0248-a-person-is-never-queued-behind-automated-work)、[ADR-0249](./0249-a-background-jobs-completion-reaches-the-agent)。调研：`docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`。
+
+> **经 ADR-0252 采纳（2026-11-05），附修订。** 引擎运行就是 ADR-0252 中由 `launchChildRun` 启动的子运行。§6 的投递使用 ADR-0252 §5 的 steer 入口。在 ADR-0243 的实时权限检查存在之前，§7 报告 `live_authority_unavailable`（影子模式下是一条 would-park 回执），并拒绝把工作区切到 `enforce`。
 
 ## 背景
 

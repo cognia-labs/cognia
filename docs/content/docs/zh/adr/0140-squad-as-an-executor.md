@@ -9,6 +9,8 @@ description: "会话可以将工作交给 Agent 团队执行。将九个 tab 的
 
 > **由 ADR-0169 修订（2026-09-05）。** 本文接线的 `agentTeamManager` 控制面、`/squads` 指挥中心与乐观的 `team.status` 已被取代：一个持久化运行时、一份审批契约、一台控制状态机，`/squads` 的运行页签就是 `/agent-runs` 面板。
 
+> **由 ADR-0252 修订（2026-11-05）。** 小队代码位于 `lib/squads/`。`agentTeamManager` 删除，`action.team.run` 改走 `startSquadRun`。本文延期的共用看板和删除 `/agent-teams` 已完成。房间通过经人确认的转交到达小队。
+
 ## 背景
 
 `/agent-teams` 与 `/agent-teams/workspace` 是六个界面共用一条路由：资产库、舰队命令中心、模板画廊、看板、对话 tab，以及十一个折叠面板的治理配置。这个界面没有明确的单一用途。其中与其他界面重复的部分已各自发生变化——四份看板、五处模板列表、两份计划审批面板、三套统计磁贴词汇。

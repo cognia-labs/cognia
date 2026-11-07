@@ -1,0 +1,327 @@
+# 多 agent 收敛实施计划：房间、小队、委派
+
+状态：计划已定稿，未开始实施。创建：2026-11-05（Asia/Shanghai）。
+
+上游：
+
+- 决策：[ADR-0252](../content/docs/en/adr/0252-a-room-talks-a-squad-works-a-delegation-promises.md)
+- 采纳并修订：[ADR-0247](../content/docs/en/adr/0247-long-lived-work-carries-a-mandate-and-follows-its-threads.md)、[ADR-0249](../content/docs/en/adr/0249-a-background-jobs-completion-reaches-the-agent.md)
+- 修订：ADR-0137、ADR-0140、ADR-0169、ADR-0177、ADR-0250
+- 证据：2026-11-05 的四路只读审计（Squad 运行时、委派路径、房间、跨区重复与死代码）和逐项休眠导出核对。下文路径取自 `dev` 的 `03d7e75b43`
+
+实施方式：
+
+- 全部由 Claude 编写，不交给 Codex。
+- 在共享工作区里改。每次提交只用 `git commit --only <paths>` 或显式 `git add <paths>`。提交前 `git diff --cached --name-only` 核对，只含本任务的文件。
+- 每个阶段单独提交（或一组提交），并在 `docs/evidence/2026-11-05-multi-agent-convergence.md` 记一条台账（evidence-driven-dev 格式）。
+- 面向用户的改动带 changeset（`cognia-next`）。纯内部的阶段（P1、P2 中的删除）不带。
+
+## 0. 不变式
+
+整个计划里任何时候都必须成立：
+
+1. **三条轴不混。** 房间是对话形态，小队是执行器，委派是承诺。房间 supervisor 协议和小队 lead 协议不合并。
+2. **编排只在持有运行的宿主上执行。** 其他端（手机、companion、TUI）只投影。五个宿主行为一致：桌面、headless 宿主、配对手机/companion、IM、CLI/TUI（CLI/TUI 只要求能发起和观察）。
+3. **人优先。** 人的消息和停止实时送达，不合并；派生输入在轮次边界排队；会话队列里人的轮次排在派生输入前面。
+4. **不简化。** 不留桩、不留 `// TODO`、不剥错误处理。做不到的写成阻塞项。
+5. **依赖方向（ADR-0250 §14）。** `lib/` 不导入 `hooks/` 或 `components/`；不新增 barrel。
+6. **休眠三轴（Rule 7）。** 任何仍处于关闭或影子状态的能力（`mandateEnforcement: "shadow"`、`workObservation: "off"`、`squadHandoff: "auto"` 以外的默认值等）同时在类型上写明、在 UI 上标注、由测试固定。
+
+## 1. 阶段与验收
+
+| 阶段 | 内容                                                                      | 结束时                                                               |
+| ---- | ------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| P0   | ADR-0252、相关 ADR 的修订注、本计划、`CONTEXT.md` 术语                    | `pnpm docs:build` 通过；文档提交                                     |
+| P1   | 小队代码搬到 `lib/squads/` 等默认路径                                     | 只搬迁、无行为变化；typecheck 和受影响单测通过                       |
+| P2   | 休眠导出处理（删除/改内部/合并的部分）、小重复、共享房间守卫缺陷          | 判定表中 P2 的行全部完成；守卫缺陷有由红转绿的测试                   |
+| P3   | 统一状态词汇、单一子运行树、`launchChildRun`、单一停止、单一嵌套规则      | 七套追踪器只剩 `executionRuns.parentRunId`；`job-bridge.ts` 删除     |
+| P4   | 单一 steer 入口与队列规则、控制状态机合并、ADR-0249                       | 一个 steer 入口；一台控制机；后台 job 完成能唤醒 agent               |
+| P5   | 绕过路径、删除 `agentTeamManager`、`startSquadRun` 输入 builder、聚合模块 | `action.team.run` 走 `startSquadRun`；外观删除；聚合只有一份         |
+| P6   | 房间→小队转交，删除房间里的 `team_*` 工具，`lib/chat/room` 分层           | 房间成员能提议、人确认后小队运行并回流到房间                         |
+| P7   | ADR-0177 第 4、5 批                                                       | IM 群绑定角色团队；共享房间改为检测；回复模式一个旋钮                |
+| P8   | ADR-0247 §1–§6、§8、§9（§7 的结构和影子部分）                             | T1 自动受理、T2 升级、follow、线程事件、续接会话、handback、观察日志 |
+| P9   | 看板共用、删除 `/agent-teams`、拆分 `agentTeamsWorkspace`、改名           | ADR-0140 的延期项关闭；命名按 ADR-0252 §1                            |
+| P10  | ADR-0247 §7 的实时权限检查                                                | 等 ADR-0243 2B–2D 落地后接入；`enforce` 才允许开启                   |
+| 收尾 | 真机冒烟                                                                  | 桌面 Tauri、手机、飞书真机冒烟全部通过并记入台账                     |
+
+顺序理由：先搬迁和清理，降低后续 diff 的噪音；子运行树先于 steer、ADR-0249 和 ADR-0247，因为它们都建在它之上。
+
+## 2. 验证规则（每个阶段）
+
+- 只跑受影响的单测：`pnpm test -- <paths> --runInBand`（经 `scripts/test/jest.mjs`，不要 `-t` 陷阱，不跑全量，不跑覆盖率）。sidecar 改动跑 `pnpm sidecar:test` 的相关文件。
+- `pnpm typecheck`（需要 16 GB 堆）。
+- 触及的门禁：`pnpm audit:colocated-tests`、`pnpm lint:i18n` + `pnpm i18n:build:check`、`pnpm audit:sidecar-architecture`（改 sidecar 时）、`pnpm audit:rust-architecture`（改 Rust 时）、`pnpm docs:build`（改文档时）。
+- 关键阶段（P4、P6、P7、P8）用 aiden 代理的真实模型（`http://127.0.0.1:8787/v1`，`ark-deepseek-v4.1-flash`）跑 headless 冒烟，记录到台账。
+- 提交前跑 `preflight` 技能的六个审计；新增模块必须过 `wiring-auditor`。
+- 不追 CI。
+
+## 3. P0：文档
+
+- `docs/content/docs/{en,zh}/adr/0252-a-room-talks-a-squad-works-a-delegation-promises.md`，两个 `meta.json` 登记。
+- ADR-0137、0140、0169、0177、0250 加 “Amended by ADR-0252” 注；ADR-0247、0249 改为 Accepted 并加修订注。双语。
+- `CONTEXT.md` 新增 “Multi-agent work” 术语：Room、Squad、Delegation、Child run。
+- 本计划。
+- 验收：`pnpm docs:build` 通过。
+
+## 4. P1：搬迁
+
+**范围：**
+
+| 现在                               | 搬到                                                                                                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lib/ai/agent/team/**`             | `lib/squads/**`（子目录结构保留：`squad/`、`durable/`、`teammate/`、`gates/`、`patterns/`、`workers/`、`ultracode/`、`auto/`、`delivery/`、`ledger/`、`memory/`、`pr-feedback/`、`workflow-nodes/`、`workspace/`） |
+| `lib/agent-team/**`                | `lib/squads/`（与上面的文件同名时先停下来比对，不覆盖）                                                                                                                                                            |
+| `stores/agent/agent-team-store/**` | `stores/squads/agent-team-store/**`（persist 的 storage key 不变）                                                                                                                                                 |
+| `components/agent/workspace/**`    | `components/squads/**`                                                                                                                                                                                             |
+| `hooks/squads/**`                  | 不动（已是默认路径）                                                                                                                                                                                               |
+
+**M1 已落地（`4333cfabc0`）：** `lib/squads/` 已有 `module.ts`、`search-provider.ts`（原 `lib/global-search/providers/squads.ts`）、`slash-command.ts`（原 `lib/slash-commands/actions/squad.ts`）及测试；`components/squads/` 已有 `module.ui.ts` 和一批组件。这些文件名保持不变，搬入的文件遇到同名先停下比对。
+
+**步骤：**
+
+1. `git status --short -- <上述路径>` 必须为空；有其他会话的未提交改动就暂停，告知用户。
+2. `git mv` 搬迁。用脚本改写所有 `@/lib/ai/agent/team/`、`@/lib/agent-team/`、`@/stores/agent/agent-team-store`、`@/components/agent/workspace/` 导入以及 `jest.mock` 路径和动态 `import()`。
+3. 模块门禁（ADR-0250 M1）：
+   - `scripts/gates/module-ownership.json`：清空后删除 `lib/ai/agent/team/` → `agent-team` 的路径覆盖和 `agent-team` 行（G1 不允许无文件的行）；`lib/squads`、`components/squads`、`hooks/squads`、`stores/squads` 由清单拥有。
+   - 搬迁后跑 `node scripts/gates/check-modules.mjs`；若新出现的 G2 边只是搬迁文件原有的边换了路径，用 `--write-baseline` 重写，`scripts/gates/modules-baseline.json` 的计数不得增长。
+   - 生成的注册表（`lib/modules/generated/host.ts`、`components/modules/generated/ui.ts`）被 gitignore，永不暂存。
+4. 同步更新：`CLAUDE.md` 子系统表的 Agent Team 行、`scripts/gates/` 里写死的路径（`colocated-test-baseline.json`、headless registry、host parity 等）、`lib/runtime/surface-contract.ts`、文档里的路径引用。
+5. 验收：`pnpm audit:modules` 通过；`rg "lib/ai/agent/team|lib/agent-team/|components/agent/workspace|stores/agent/agent-team-store"` 只剩 ADR 和历史计划里的引用；typecheck 通过；搬迁涉及的测试套件全部通过；`audit:colocated-tests` 通过。
+
+**陷阱：** `patterns/index.ts` 由 `agent-team-runtime.ts:1133` 动态加载，路径字符串要一起改；`packages/plugin-contract` 和 `cli/` 里若有相对路径或文档链接也要搜。
+
+## 5. P2：休眠导出与小重复
+
+### 5.1 休眠导出判定表
+
+判定已由用户确认。“阶段”列是落地的阶段。
+
+**接线（WIRE）：**
+
+| 符号                                                             | 接到哪里                                                                                                | 阶段 |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---- |
+| `initialRoomMemoryFields`（`lib/chat/room/settings.ts`）         | `createPlatformSession`（`lib/connectors/session-bindings.ts:246`）创建 IM 群房间时，以及共享会话导入时 | P7   |
+| `reviseDelegationPlan`（`lib/execution/delegation.ts`）          | `/delegate` 在 adopt 之后、自动受理和房间转交拿到规划结果时，发出 `plan.created`                        | P8   |
+| `listDelegationChildren`                                         | 成为委派子运行的唯一查询；`delegation-bridge.ts:77,128` 改用它                                          | P3   |
+| `steerSessionRun`（`lib/collab/client.ts:1648`）                 | steer 入口对共享会话的分派目标（服务端 `chat_api.rs:348` 已有）                                         | P4   |
+| `resolveMemberConfig`（`lib/claude/build-options.ts`）           | 替换 `build-options.ts` 约 `:1892`、`:2387` 处内联的同一合并逻辑（先核对 IM 覆盖行的形状）              | P2   |
+| `isLocallyOrchestratedRoom`（`lib/chat/room/kind.ts`）           | `RoomRunner` 入口和 `room_send` 分支的守卫（见 5.3）                                                    | P2   |
+| `isAgentTeamDispatchPart`、`isSquadRunPart`、`isSquadGatePart`   | `components/chat/message-renderer.tsx:2351,2357,2361` 用守卫代替字符串比较                              | P2   |
+| `listAllTeamSubagentIds`                                         | `workflow-template-registry.ts:50-56` 和 `capability-audit.ts:116-119` 共用它构造子 agent id 集合       | P2   |
+| `getInstanceCapabilityWarnings`、`getTeammateCapabilityWarnings` | 小队设置、队员行和运行前同意界面显示能力告警（`agent-team-runtime.ts` 约 L582 的注释承诺了这个读者）    | P2   |
+| `recordSquadDispatchLatency`                                     | 改为 `launchChildRun` 的通用派发延迟指标                                                                | P3   |
+
+**合并（MERGE）：**
+
+| 符号                       | 并入                                                                                   | 阶段 |
+| -------------------------- | -------------------------------------------------------------------------------------- | ---- |
+| `requestCancelSubagentRun` | `requestCancelSubagentRunAndWait`，再并入统一停止                                      | P3   |
+| `resolveTeamCapabilities`  | `resolveTeammateCapabilities` 的团队池步骤；同时修正 `capabilities-and-plugins.mdx:59` | P2   |
+| `migrateSquadTemplate`     | `stores/agent/agent-team-store/store.ts:263-270` 改为调用它                            | P2   |
+| `hasActiveDelegationChild` | 基于 `currentDelegationAttempts` 的单一辅助函数，`delegation-bridge.ts:128` 使用       | P3   |
+| `buildRunPrFeedback`       | `promoteDelegationToIssue`（ADR-0247 T2）                                              | P8   |
+| `useTeamChat().stopMember` | `stopRoomMember`（`lib/chat/room/stop-member.ts`）                                     | P2   |
+
+**删除（DELETE），连同测试：** `squadRunTraceId`、`isLiveSquadRunStatus`、`validateInstanceCapabilities`、`controlDurableRuns`、`completeExternalDelegation`（同时改 `consensus-delegation-memory.mdx:102`）、`planUserTurn`（同时改 `runner.ts:31`、`types.ts:29`、`room-target-picker.tsx:49` 的过时注释）、`liveSubagentRunCount`、`getInflightController`、`indeterminateSubagentProgress`（连同其头注释）、`listTeamMembers`（同时改 `build-options.mdx:26`）、`ensureTeamPrObservationsReady`、`carriesLegacyRuntimeSelector`、`isOnCurrentSquadContract`、`lib/chat/room/index.ts`（barrel）。持久化字段 `displayMode`、`workspaceTab` 在 P9 随 persist 版本删除。
+
+**只去掉 export（KEEP-INTERNAL）：**
+
+- 小队状态：`LIVE_SQUAD_RUN_STATUSES`、`TERMINAL_SQUAD_RUN_STATUSES`、`isSettledSquadRunStatus`（P3 统一状态词汇时会被替换）。
+- 生命周期：`ensureConfiguredSquadRuntimeDeps`、`bindSquadStoreReader`、`bindSquadStoreWriter`、`RESUME_SKIP_STATUSES`、`SQUAD_NOT_READY_REASON`。
+- 评审门：`settleSquadReview`、`sanitizeDecision`、`squadReviewRequestId`、`squadReviewInterruptIdFor`、`SQUAD_REVIEW_CHANNELS`。
+- 守卫：`looksLikeIdleAckOnlyText`、`stableJitterMs`、`replanNewTaskSchema`、`replanNewMemberSchema`、`isHeadlessOrigin`。
+- 委派策略：`assertTeamDelegationDepth`、`activeTeamDelegationDepth`、`wouldCreateTeamCycle`（P3 后作为 `launchChildRun` 前的守卫，仍是内部）。
+- 持久化运行时：`durableTeamSpec`、`appTeamPathPolicy`、`fleetTeamRemoteSessions`、`redactTeamTextForPersistence`。
+- 失败回退（设计如此）：`heuristicAssessment`、`heuristicRoster`、`heuristicTasks`。
+- 其他小队辅助函数：`auditAllAgentTeamsCapabilities`、`integrationBranchName`、`orderByDependencies`、`classifyTeamTaskAccess`、`expertiseMatchScore`、`teammateCharacterId`、`createGithubDeliveryAdapter`、`declineGithubStackPublish`、`decodeRemoteWorkerPolicy`、`progressLedgerVerdictSchema`、`compareTemplateVersions`、`catalogRowsFor`。
+- 子 agent：`resolveSubagentDispatchVerdict`、`resolveDispatchWidth`、`releaseDispatchBudgetForSession`、`loadNesting`、`frameSteerQueue`、`formatToolLine`。
+- 房间：`clampInstructions`、`speakerHandle`、`sanitizeSpeakerLabel`、`handoffParagraph`、`nonTextPartMarkers`。
+- 例外：被测试直接导入的符号（如 `tallyVotes`、`computeWinner`、`thresholdMet` 这类文档化的测试缝），改为通过公开函数测试；做不到时保留 export 并在注释中写明是测试缝。`__*ForTesting` 不动。
+
+**已接线（误报，不处理）：** `renderProposalDoc`、`toolDisplayName`、`listPendingAgentTeamSteering`、`backfillLegacyTeamRun`。
+
+**`agent-runtime-store` 的三个 `@deprecated` 镜像字段**（`runtime`、`externalAgentId`、`externalHostConfig`）：降级窗口已关闭，P9 随 persist 版本删除 `legacyMirrors` 与 `refFromLegacyFields`。
+
+### 5.2 小重复
+
+- workflow 小队节点参数：`lib/workflow/nodes/params-schemas.ts:387-425` 的 zod 是唯一来源，`workflow-nodes/team-ops.ts:21-56` 的手写接口改为 `z.infer`。
+- composer 的 `roomReplyHint`（`components/chat/composer/room-target-picker.tsx:49-63`）改为调用 `holdReasonFor`（`lib/claude/team-router.ts:204-212`）。
+- `use-team-chat.ts` 里写了三遍的 companion 错误处理（`:181-189`、`:363-373`、`:394-404`）合为一个函数；companion `stop` 复用 runner 的 steer 清理。
+- `MAX_AUTO_ROUNDS` 从 `team-primary-router.ts` 移到房间设置模块（`lib/db/teams.ts:8`、`teams-section.tsx:29` 改导入）。
+- `agent-team-compat.ts` 只剩 normalizer：按内容改名为 `agent-team-normalize.ts`。
+
+### 5.3 共享房间守卫缺陷
+
+1. 先写复现测试：构造一个带 `collaboration` 的会话，经 `getHostRoomRunner().sendRoomTurn` 和 `room_send` 分支提交一轮，断言当前会进入本地编排（红）。
+2. 在两个入口加 `isLocallyOrchestratedRoom` 守卫：共享房间返回明确的拒绝（错误码 + i18n 文案），不进入本地 runner。
+3. 测试转绿；带 changeset（patch）；单独提交。
+4. 如果复现测试证明当前已被别处拦住（例如会话转换处拒绝），在台账记下证据，守卫仍然加上，作为入口的显式约束。
+
+## 6. P3：一棵子运行树与一个启动器
+
+### 6.1 状态词汇
+
+- 新增 `lib/execution/run-status.ts`：基于 `ExecutionRunStatus` 和 `EXECUTION_TERMINAL_STATUSES` 的 `isTerminalRunStatus`、`isLiveRunStatus`，以及小队协调器状态（`AgentTeamRunStatus`）到 `ExecutionRunStatus` 的唯一映射。
+- 替换：`squad-run-records.ts:297 isTerminalSquadRunStatus`、`watch-squad-run.ts:28-33`、`lib/agent/squad-presence.ts:30`、`lib/agent-team/legacy-run-history.ts:56 mapLegacyRunStatus` 中与执行运行相关的部分、`lib/execution/monitor-model.ts:130 mapRunStatus` 中小队相关的分支。
+- 本区域之外的状态类型不动。
+
+### 6.2 `launchChildRun`
+
+新增 `lib/execution/launch-child-run.ts`：
+
+```ts
+interface LaunchChildRunInput {
+  parentRunId: string
+  delegationRunId?: string // 属于某个委派时
+  target:
+    | { kind: "agent"; agentId: string; prompt: string; background: boolean }
+    | { kind: "external"; integrationId: string; prompt: string }
+    | { kind: "twin"; twinId: string; question: string }
+    | { kind: "squad"; squadId: string; brief: string; origin: SquadRunOrigin }
+  grant: AgentCapabilityGrantV1 // ADR-0198
+  sessionId?: string
+  actingIdentity?: ActingIdentityV1 // ADR-0243，沿用父运行
+}
+```
+
+- 先写 `executionRuns` 行（kind 由目标决定：`job`、`team`），带 `parentRunId`，再启动引擎。写行与绑定同一 tick 内完成，沿用 ADR-0137 “先绑定再写 journal” 的顺序。
+- 引擎适配：`agent` → `executeAgent`；`external` → `ExternalAgentManager`；`twin` → `delegateToTwin`；`squad` → `startSquadRun`（P5 的 builder）。
+- 记录派发延迟（原 `recordSquadDispatchLatency`）。
+- 调用方迁移：`lib/claude/agents/dispatch-run.ts`（`startDispatchRun`）、`cli/src/agent/subagent-dispatch.ts`、`delegation-orchestrator.ts` 的 background/external/twin/team 分支、`lib/plugin/agent-sdk/dispatch.ts`（`dispatchSubagent` 与 `agentTeamManager` 分支）、`lib/best-of-n/runtime.ts` 与 `external.ts` 的候选。
+- `delegation-orchestrator.ts` 只留审批、深度、环检测，作为守卫调用。
+
+### 6.3 追踪器收敛
+
+- `lib/background-tasks/`：`BackgroundTaskKind` 的 run-backed 条目不再保存状态，读 `executionRuns`；条目只保留投递字段（父会话、批次身份、投递状态）。
+- 删除 `lib/execution/job-bridge.ts` 及测试；它的父运行解析逻辑（admission pin、`parentSubagentId`）移入 `launchChildRun`。
+- `stores/agent/subagent-runtime-store`：改为读模型，持久化部分只保留 `templates`（现状），运行记录从 `executionRuns` + 实时进度事件派生。
+- `TeamDelegationRecord`：改为子运行投影 + 小队策略字段，改名（见 P9 命名表）。`delegations-panel.tsx` 改读投影。
+- best-of-N：候选写子运行行，分组运行为父。
+
+### 6.4 单一嵌套规则与单一停止
+
+- 新增 `lib/execution/run-tree.ts`：`childrenOf`、`buildRunTree`，规则只有 `parentRunId`。`lib/claude/subagent-tree.ts`、`components/settings/subagents/runtime-tree.ts` 和 SDK 桥的嵌套都改用它（SDK 轮内 `Task` 仍按 owner 关联投影成消息 part，但子树形状共用同一模块）。
+- 停止：`cancel-subagent.ts`、`background-agent-manager.cancelAgent`、`cancelDelegation`、`control-handlers.ts` 的 `job` 分支合并为 run-control `stop` 按类型分派。SDK `stopTask` 是引擎实现，保留在分派目标里。
+
+### 6.5 验收
+
+- `rg "job-bridge|subagent-runtime-store.*persist|TeamDelegationRecord"` 只剩投影类型与文档；每个调用方都通过 `launchChildRun`。
+- 新增测试：每种目标的启动与父链接；在跑中刷新后能从引擎对账；停止一棵树会停止所有子节点；轮内 SDK `Task` 不产生运行行。
+- 升级时进行中的后台工作：能对账的对账，否则标记中断（测试固定）。
+
+## 7. P4：steer、控制机、ADR-0249
+
+### 7.1 单一 steer 入口
+
+- `lib/execution/run-control.ts` 的 `steer` 成为唯一入口，按类型分派：`agent-turn` → `steerSession`（`lib/claude/ipc.ts:693`，sidecar `routeSteer`）；`team` → `steerDurableRun`；issue 运行 → `steerIssueRun`；`delegation` → 转发给在跑子运行；共享会话 → `steerSessionRun`。
+- 迁移调用方：聊天里对运行中小队的追问（`use-claude-chat-controller.ts` 的小队保持分支）、`lib/connectors/live-steer.ts`、IM `steer:`/`调整：`（`follow-up-items.ts:52-55`）、卡片按钮、Issue 唤醒、P4.3 的完成通知。
+- 文本规则：`lib/claude/steer.ts` 的 `STEER_PREFIX` 是唯一来源，`cli/src/tui/runtime/driven-turns.ts:77` 改为导入；IM 前缀放在同一模块。
+- 队列规则：新增 `lib/execution/steer-queue.ts`（纯函数）：人的输入与停止立即送达；派生输入在流式期间排队、轮次边界合并成一份简报；会话队列中人的轮次排在派生输入之前。`hooks/chat/steer-runtime.ts` 的纯逻辑移到这里（同时解决 `lib/chat/room` 导入 hooks 的一处）。
+- `steer_degraded` 语义保留，测试固定。
+
+### 7.2 控制状态机
+
+- `lib/squads/durable/durable-control.ts` 是唯一的控制机；`squad-control.ts` 只留守卫：遗留运行、readiness、回放判定。
+- 回放判定只留 `packages/agent-orchestration/src/replay.ts` 的 `assessRecoveryEligibility` / `isChildReplaySafe`；`assessSquadRunReplay`、`isDurableChildReplaySafe` 删除，调用方改用包里的函数。
+- `controlSquadRun` 与 `controlSquadTeam` 合为一个入口，`control-handlers.ts:296` 和机器人运行时改用它。
+
+### 7.3 ADR-0249
+
+按 ADR-0249 的“实现面”表逐项实现，并按 ADR-0252 §9 修订：
+
+- `BackgroundTaskKind` 加 `shell-job`、`monitor`；以 job/monitor id 幂等 upsert，接受终态先到。
+- Rust：`crates/cognia-jobs` 的启动调用接收 session/run id，退出与触发事件携带它们；持久化 job 与 monitor 的查询供对账使用。
+- 设置：`hooks/system/use-tauri-events.ts` 在调度器转发旁边结算；headless brain 事件接线；TUI 消费者 `cli/src/tui/components/app/use-background-results.ts`。
+- 工具：`bash` 的 `run_in_background` 加 `notify: "on_exit" | "none"`（默认 `on_exit`）；`kill_shell` 停的不唤醒；`Monitor` 的描述与行为一致，阻塞调用已内联返回的不再投递。
+- 唤醒：宿主拥有或有后台保持的会话在空闲时唤醒；每会话每小时 6 次上限、10 秒合并窗口；计入运行预算，预算耗尽不唤醒；超出上限的排到下一次轮次并发一条通知。唤醒走 7.1 的队列规则。
+- 对账：每次消费者启动或重连时查询 supervisor 的持久化记录，补结算和补建条目；投递仍经批次身份保证一次。
+- 验收用例：job 在启动 ACK 之前退出；消费者在 job 中途重载；事件到达两次；同一个 monitor 内联与异步两条路径。
+- i18n：通知文案中英两份。
+
+### 7.4 验收
+
+- headless 冒烟（真实模型）：agent 后台跑一个 `sleep 5 && echo done`，结束后会话被唤醒并看到结果；人在唤醒排队期间发的消息先被处理。
+- `rg "STEER_PREFIX ="` 只有一处定义。
+
+## 8. P5：绕过路径、外观、聚合
+
+- **startSquadRun builder。** 新增 `lib/squads/squad/build-start-input.ts`，为连接器（`lib/connectors/team-dispatch.ts`）、客户端路由（`lib/execution/squad-start-dispatch.ts`）、机器人（`lib/bot/runtime/executors/squad.ts`）、Issues（`lib/issues/run/agent-team-adapter.ts`）、插件 API、斜杠命令、companion 写处理、重试、恢复、eval 构造输入。
+- **`action.team.run`。** `workflow-nodes/index.ts:150` 改为通过 `startSquadRun`（带 workflow 来源与 signal），等待运行结束后再把结果交给节点；保留节点现有输出形状，测试固定。
+- **删除 `agentTeamManager`。** 逐个迁移调用方：`lib/scheduler/executors/team-executor.ts`、`lib/plugin/agent-sdk/dispatch.ts`（走 `launchChildRun`）、`delegation-orchestrator.ts`、`components/agent/workspace/durable-operations.tsx`、`board/board-toolbar.tsx`、调度器两个编辑器、`lib/squads/search-provider.ts`、`lib/plugin/api/team-api.ts`、`lib/cli-bridge/handlers/agent-team.ts`、`workflow-nodes/team-ops.ts`、`lib/squads/slash-command.ts`。然后删 `agent-team.ts` 里的外观（保留其中仍被使用的类型与工具函数，挪到合适的模块）。
+- **best-of-N。** 保留直连协调器，候选已在 P3 成为子运行；这里只核对监控面板显示。
+- **聚合模块。** 新增 `packages/agent-orchestration/src/aggregate.ts`（无 `@/` 导入）。先写行为对照测试：对同一组输入分别跑 `consensus-orchestrator.ts`（`tallyVotes`/`computeWinner`/`thresholdMet`）、`lib/ai/ensemble/run-ensemble.ts`、`patterns/judge-panel.ts`、`lib/ai/council/run-council.ts` 的聚合部分，记录差异。一致的合并；不一致的逐项判断哪种正确，保留的在模块里写明原因。四个界面改为调用该模块。改完后 `pnpm build:packages`。
+
+## 9. P6：房间→小队
+
+- **删除房间里的协作工具。** `build-options.ts:4496` 的分支改为只在小队队员会话（有 team-dispatch 上下文）下添加 `team_*`；房间会话不再添加。`selfInvokeTools.teamCollaboration` 的设置说明同步更新。
+- **新工具 `room_handoff_to_squad({ squadId?, brief })`。** 定义在房间工具清单中，带权限规则；只在房间会话里提供。调用写一张提议卡（A2UI 或现有卡片部件），不启动任何东西。
+- **设置。** `roomSettings.squadHandoff: "confirm" | "auto"`，默认 `confirm`。在房间设置编辑器中可改；`auto` 需在 UI 上说明含义。
+- **确认。** 桌面、手机、IM、宿主渠道的确认都走同一个命令（`desktop-write-source.ts` 增加分支，headless 共用）。确认后：`acceptDelegation`（来源 = 房间这一轮），再经 `launchChildRun` 以 `squad` 目标启动；默认小队为房间绑定的小队（P7），卡上可改选。
+- **结果回流。** 小队结束后，一条折叠消息写入房间；经 ADR-0249 投递唤醒提议的成员（房间 runner 在下一轮次边界处理）。
+- **steer/停止。** 卡片上的按钮经 P4 入口作用于委派。
+- **分层。** `lib/chat/room` 不再导入 `hooks/`：`steer-runtime` 的纯逻辑已在 P4 移到 `lib/execution/steer-queue.ts`；`stream-coalescing` 和 `use-effective-cwd` 的纯部分移到 `lib/chat/` 下，hook 只留 React 外壳。
+- **验收。** headless 冒烟（真实模型）：角色团队房间里一个成员提议“让小队写一个 hello 脚本”，人确认，小队运行完成，房间里出现折叠结果，成员被唤醒并回应。桌面渲染与手机投影各验证一次卡片显示（手机在收尾阶段真机验证）。
+
+## 10. P7：ADR-0177 第 4、5 批
+
+- **IM 群绑定角色团队。** `ConversationOverrideRow` 新增 `characterTeamId`；`teamId` 改名为 `squadId`（非索引字段，不升 Dexie 版本；读取时兼容旧字段一次）。`lib/connectors/effective-config.ts` 与 inbox 覆盖 UI 同步。
+- **回复走 `RoomRunner`。** 绑定了角色团队的 IM 群，入站消息由连接器运行时交给宿主的 `RoomRunner`（`kind: "im"`），不再走 `runAndCapture`。每条角色回复以连接器的 bot 身份发出，带角色署名；平台支持富内容时带头像卡片头（共用 `lib/connectors/adapters/_shared/a2ui-mapper.ts`）。支持多 bot 的平台可选“角色→bot”映射。
+- **未绑定角色团队的 IM 群** 也作为 `im` 房间：普通回复同样经 `RoomRunner`，使房间说明、回复模式、静音、记忆默认值生效。
+- **默认值与完整度。** `initialRoomMemoryFields` 在 `createPlatformSession` 和共享会话导入时应用；`completenessFor` 在平台只给人数或管理员时返回 `partial`；收件箱区分群聊与私聊。
+- **一个回复模式旋钮。** 收件箱的激活策略（`triage-controls.tsx:86`）与 `roomSettings.replyMode` 合并为一个设置，双向映射写在一处；房间设置编辑器覆盖 IM 和共享房间。
+- **共享房间。** 删除 `NEXT_PUBLIC_SHARED_CHAT_ENABLED`（`lib/collab/shared-chat-feature.ts`）；以协作服务器已配置且 `/health` 报告受支持协议为可用条件；不可用时入口显示原因（三轴标注）；本机偏好保留。共享房间读取 `roomSettings`；静默判定写入审计；追赶卡片上线。
+- **验收。** 单测覆盖每种绑定组合（只角色团队、只小队、两者、都无）；headless 冒烟用 IM 测试适配器跑一个两角色群聊回合；飞书真机冒烟放到收尾。
+
+## 11. P8：ADR-0247
+
+按 ADR-0247 自己的 Rollout 顺序，跳过 §7 的实时部分与 enforce：
+
+1. **mandate。** `CommitmentMandateV1`、策略摘要（替换 `lib/governance/producers/connector.ts` 里写死的 `policyRef.version: "1"`）、`mandateRef`、影子检查与报告。`agentPermissions.mandateEnforcement: "shadow" | "enforce"` 默认 `shadow`；实时权限检查报告 `live_authority_unavailable`，此时拒绝切到 `enforce`。三轴标注。
+2. **follow 与线程事件。** `IssueExternalRef.follow`、`ExecutionRun.followRefs`、`im-thread`/`github-issue` 提供方；连接器总线在去重和准入之后把被 owner 关注的线程消息交给承诺投递，并写回执；GitHub 事件追加为 Issue 活动；轮询降为对账；系统唤醒规则与合并。
+3. **T1 自动受理与 T2 升级。** 首次写入 git 根时自动受理（常驻宿主、绑定 IM 的会话、GitHub 触发）；`delegation_accept` 工具；首次建分支或开 PR 时 `promoteDelegationToIssue`（并入 `buildRunPrFeedback`）；协调线程启动即升级；`reviseDelegationPlan` 接入。
+4. **续接会话。** `startIssueRun` 接受 `continueSessionId`，按 ADR-0247 §6 判定能否续接。
+5. **handback。** `commitment_handback` 工具；协调者同级报告或线程卡片（新 Issue / 扩大范围 / 忽略）。
+6. **观察日志。** `workObservation: "off" | "observe"` 默认 `off`；预过滤 + `runDecision`（PII 门在前）；新表 `workObservations`（按 `dexie-migration` 技能：改 `CURRENT_SCHEMA`、升版本、`CORE_TABLE_NAMES`、`pnpm db:governance:write`）；设置页评审。
+
+每一步都在 headless 宿主上验证（`lib/headless/runtimes/issue-tracker.ts` 已在 brain 启动），并在台账记录。T1/T2 用真实模型冒烟：IM 测试适配器发一条“修改 README”的请求 → 自动受理 → 建分支 → 升级为 Issue → 线程追问经 steer 到达。
+
+## 12. P9：看板、路由、i18n、命名
+
+- **看板共用。** 合并 `lib/squads/board-model.ts` 与 `lib/issues/board-model.ts` 的 `columnDropId`、`parseDndId`、`reorderColumn`/`reorderIssueColumn`；`components/squads/board/task-board.tsx` 与 `components/issues/board/issue-board.tsx` 共用一个看板组件（各自的卡片和守卫通过参数注入）。ADR-0066 的守卫、CQRS 投影、Companion RPC 和插件点不变。
+- **删除 `/agent-teams`。** 删 `app/agent-teams/**`，更新 `lib/runtime/surface-contract.ts:549-553`；导航 legacy alias 若仍存在保留只读映射。
+- **拆分 `agentTeamsWorkspace`。** 统计仍在使用的 key，按使用方拆进 `squads` 等命名空间；删除无引用的 key；更新 `pnpm lint:i18n:baseline`（只能下降）并 `pnpm i18n:build`。
+- **持久化字段。** `agent-team-store` 删除 `displayMode`、`workspaceTab`；`agent-runtime-store` 删除三个降级镜像与 `legacyMirrors`/`refFromLegacyFields`；两者都升 persist 版本，migrate 中剔除。
+- **命名。**
+
+  | 现在                                                              | 改为                                      |
+  | ----------------------------------------------------------------- | ----------------------------------------- |
+  | `TeamDelegationRecord`                                            | `SquadChildRunView`                       |
+  | `delegation-orchestrator.ts`                                      | `child-run-policy.ts`                     |
+  | `lib/ai/agent/external/delegation-router.ts`（`routeDelegation`） | `agent-routing.ts`（`routeAgentRequest`） |
+  | router-fusion 对外的 delegate 类型与 UI 文案                      | step                                      |
+  | `agent-team-compat.ts`                                            | `agent-team-normalize.ts`（若 P2 未完成） |
+
+  插件契约里的公开类型改名时保留一个 `@deprecated` 别名一个版本，并重建 `packages/plugin-contract` 与 SDK（`pnpm build:packages`）。按 `CLAUDE.md`，改 `types/plugin` 会使 authoring kit pin 失效，需要按 cognia-plugins 的流程重钉。
+
+## 13. P10：ADR-0247 §7 实时权限
+
+- 前提：ADR-0243 2B–2D 已在 `dev` 上（实时凭据授权 epoch、绑定与同意 revision 的解析器）。开工前先读那几次提交。
+- 把影子检查里的 `live_authority_unavailable` 替换为真实检查；ADR-0247 §7 的三条验收用例（revision 未变但凭据被撤销、revision 未变但绑定被撤回、人已停止后到达事件）。
+- 解除“拒绝切换 enforce”的限制；是否把任何工作区切到 `enforce` 由影子报告决定，不在本计划内。
+
+## 14. 收尾：真机冒烟
+
+- 桌面 Tauri（`tauri-smoke` 技能）：房间→小队全流程；后台 job 唤醒；委派卡片 steer/停止。
+- 配对手机：房间提议卡确认；委派卡片投影。
+- 飞书真机：IM 群绑定角色团队，多角色署名回复；`/delegate` 与自动受理；线程追问到达承诺。
+- 常驻宿主（ADR-0224 那台）：T1/T2 与 follow 的端到端。
+- 每项结果写入台账；未能完成的写成残余风险。
+
+## 15. 风险与陷阱
+
+- **共享工作区。** P1 搬迁影响面大，必须在相关路径没有他人未提交改动时进行；中途发现冲突立刻停下。提交只含自己的路径。
+- **ADR-0243 并行。** 另一个会话在做 2B–2D，会改 `lib/execution/acting-authority.ts` 一带。P8 只在 mandate 结构上依赖它的类型，不改它的文件；需要改时先协调。
+- **插件契约。** P3、P9 若触及 `packages/plugin-contract` 的公开类型，要重建包并处理 authoring kit pin。
+- **Dexie。** 只有 P8 的 `workObservations` 需要升版本。`ConversationOverrideRow` 字段改名是非索引字段，不升版本。
+- **jest。** 用 `--runInBand`，不跑全量；worktree 里跑 jest 需要临时包装配置（见记忆）。
+- **磁盘。** cargo 增量会占满磁盘；P4 的 Rust 改动只跑相关 crate 的测试。

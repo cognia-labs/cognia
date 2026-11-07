@@ -8,6 +8,8 @@ description: "Gives a delegated task its own run and card. Users can steer or st
 **Status:** Accepted
 **Date:** 2026-08-21
 
+> **Amended by ADR-0252 (2026-11-05).** Every asynchronous child is an `executionRuns` row started by `launchChildRun` and linked by `parentRunId`. A room hand-off, `delegation_accept` and ADR-0247's automatic acceptance mint delegations, not only `/delegate`. Steering goes through one run-control entry with a people-first queue rule. T2 promotion is ADR-0247's.
+
 ## Context
 
 "Delegate this" had no carrier. Every kind in the execution journal names the

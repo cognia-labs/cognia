@@ -5,10 +5,12 @@ description: "A shell job or a monitor the agent started reports its completion 
 
 # ADR 0249 — A background job's completion reaches the agent
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-01
 **Revised:** 2026-11-01 after adversarial review
 **Related:** [ADR-0247](./0247-long-lived-work-carries-a-mandate-and-follows-its-threads) (turn-boundary delivery), [ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background) (background holds), [ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings) (always-on host), [ADR-0248](./0248-a-person-is-never-queued-behind-automated-work) (wakes are derived). Research: `docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`.
+
+> **Accepted through ADR-0252 (2026-11-05), with amendments.** `backgroundTasks` is a delivery outbox only: run-backed entries read their status from `executionRuns`, and `shell-job` and `monitor` are its only kinds that are not runs. Wakes are derived inputs under ADR-0252 §5's people-first queue rule.
 
 ## Context
 

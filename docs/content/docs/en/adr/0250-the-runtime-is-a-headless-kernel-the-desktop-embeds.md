@@ -25,6 +25,8 @@ description: "Every long-running behaviour lives in one kernel, designed for an 
 
 **Evidence:** `docs/research/architecture-convergence-audit-2026-11-01.md`; for §14, `docs/research/feature-module-analysis-2026-11-04.md` (counter: `scripts/gates/convergence/subsystem-deps.mjs`). **Plan:** `docs/plans/2026-11-01-convergence-phase-0.md`.
 
+> **Amended by ADR-0252 (2026-11-05).** The multi-agent part of phase 3 (child runs in the ledger, one status vocabulary in that area, ADR-0247 commitments) is delivered ahead of order. The rest of the Squad code moves into the `squads` module that M1 created.
+
 ## Context
 
 The architecture audit (revised after a second, adversarial pass) found two root causes and several problems that cut across them.

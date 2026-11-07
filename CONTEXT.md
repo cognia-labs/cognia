@@ -55,6 +55,24 @@ automation / data / about). Some sub-pages embed the shared desktop section comp
   tests. BYOK provider keys on mobile are device-local (`/me/providers`), never
   synced, never remotely writable.
 
+### Multi-agent work _(ADR-0252)_
+
+**Room**:
+A conversation with more than two participants, whose members speak in the transcript.
+_Avoid_: group chat (for the shape), team (for the room itself)
+
+**Squad**:
+An executor with a lead, teammates, a task board and a review; a conversation hands work to it and sees one message.
+_Avoid_: Agent Team, team (for the executor)
+
+**Delegation**:
+The commitment behind asynchronous work: one card, one owner, outliving any single engine attempt.
+_Avoid_: using "delegation" for routing rules, fusion steps or a Squad's internal hand-offs
+
+**Child run**:
+A run started on behalf of another run, linked to it by `parentRunId`.
+_Avoid_: subagent run, background task (for the run itself), team delegation record
+
 ### Multi-user Host _(ADR-0149, ADR-0253)_
 
 **Host**:

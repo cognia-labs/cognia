@@ -9,6 +9,8 @@ description: "Unifies character-team rooms, shared sessions and IM groups as one
 **Date:** 2026-09-10
 **Related:** ADR-0140 (AgentTeam to Squad), ADR-0149 (identity plane and collaboration), ADR-0131 (cross-shell inbox relay), ADR-0136 (cross-device placement), ADR-0059 (headless brain), ADR-0169 (run control), ADR-0175 (the RPC face)
 
+> **Amended by ADR-0252 (2026-11-05).** Batches 4 and 5 are completed as ADR-0252 §6 states: IM groups bind `characterTeamId` and `squadId`, plain IM group replies run through `RoomRunner`, and shared rooms are detected rather than flagged. Room members lose the `team_*` tools and hand work to a Squad through a proposal a person confirms. The runner checks `isLocallyOrchestratedRoom`.
+
 ## Context
 
 The repository has four things called "group chat", and they do not know about

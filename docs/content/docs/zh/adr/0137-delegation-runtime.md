@@ -7,6 +7,8 @@ description: "交付出去的任务拥有独立的 run 和卡片。运行可以�
 
 **状态：** 已接受**日期：** 2026-08-21
 
+> **由 ADR-0252 修订（2026-11-05）。** 每个异步子任务都是由 `launchChildRun` 启动、用 `parentRunId` 关联的 `executionRuns` 行。房间转交、`delegation_accept` 和 ADR-0247 的自动受理都会铸委派，不只是 `/delegate`。steer 经由同一个 run-control 入口，遵循人优先的队列规则。T2 升级属于 ADR-0247。
+
 ## 背景
 
 "把这件事交出去"没有载体。执行日志里的每一个 kind 命名的都是**正在执行的引擎**—— `agent-turn`、`team`、`workflow`、`plan`、`goal`、`scheduled` —— 而它们都活不过一次尝试。一次失败的委派就只是一次失败的轮次：没有任何东西持有那份承诺，于是这份工作无法作为一个整体回报，无法交给人，也无法在不假装"已终结的 run 没有终结"的前提下重试。

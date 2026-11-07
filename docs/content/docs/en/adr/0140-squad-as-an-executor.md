@@ -10,6 +10,8 @@ description: "Lets a conversation delegate work to an agent team. Moves the nine
 
 > **Amended by ADR-0169 (2026-09-05).** The `agentTeamManager` control surface, the `/squads` command centre and the optimistic `team.status` this document wired are superseded: one durable runtime, one review contract, one control machine, and the `/squads` Runs tab is the `/agent-runs` panel.
 
+> **Amended by ADR-0252 (2026-11-05).** Squad code lives in `lib/squads/`. `agentTeamManager` is deleted and `action.team.run` goes through `startSquadRun`. The shared board and the `/agent-teams` deletion deferred here are done. A room reaches a Squad through a hand-off a person confirms.
+
 ## Context
 
 `/agent-teams` and `/agent-teams/workspace` were six surfaces wearing one

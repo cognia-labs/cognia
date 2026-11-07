@@ -5,10 +5,12 @@ description: "Agent 启动的 shell job 或 monitor 完成后，结果送回启�
 
 # ADR 0249 — 后台 job 的完成结果会送达 Agent
 
-**状态：** 提议中
+**状态：** 已接受
 **日期：** 2026-11-01
 **修订：** 2026-11-01，对抗性审查之后
 **相关：** [ADR-0247](./0247-long-lived-work-carries-a-mandate-and-follows-its-threads)（轮次边界送达）、[ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background)（后台保持）、[ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings)（常驻 Host）、[ADR-0248](./0248-a-person-is-never-queued-behind-automated-work)（唤醒属于派生启动）。调研：`docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`。
+
+> **经 ADR-0252 采纳（2026-11-05），附修订。** `backgroundTasks` 只做投递发件箱：有运行支撑的条目从 `executionRuns` 读取状态，`shell-job` 和 `monitor` 是其中仅有的非运行类型。唤醒是 ADR-0252 §5 人优先队列规则下的派生输入。
 
 ## 背景
 

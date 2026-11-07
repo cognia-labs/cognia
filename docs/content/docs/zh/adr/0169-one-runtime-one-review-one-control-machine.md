@@ -7,6 +7,8 @@ description: "统一小队执行：durable-v2 为唯一运行时，ExecutionRunI
 
 **状态：** 已接受**日期：** 2026-09-05 **修订：** ADR-0022（运行时加固）、ADR-0140（小队即执行者）
 
+> **由 ADR-0252 修订（2026-11-05）。** `durable-control` 是唯一的控制状态机。`squad-control` 只保留它之前的守卫，回放判定只在 `packages/agent-orchestration` 里保留一份。`agentTeamManager` 删除，`action.team.run` 不再绕过 `startSquadRun`。
+
 ## 背景
 
 一个小队可以跑在两套运行时上。旧路径（`runTeamLifecycle` 搭配内存里的 `approval-bus`，运行历史写在 `__team__:` 前缀的 `workflowRuns` 行里，控制句柄只有 `agentTeamManager`）和持久化路径（`agentTeamRuns` 及其子表、检查点、租约，以及一个能跨重启恢复的协调器）。`config.runtimeVersion` 逐个小队做选择，`DEFAULT_TEAM_CONFIG` 默认是旧的那套，运维页里还有一个「迁移到持久化」按钮将小队切换到持久化运行时。

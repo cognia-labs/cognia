@@ -25,6 +25,8 @@ description: "所有长期运行的行为都在同一个内核里，内核按无
 
 **证据：** `docs/research/architecture-convergence-audit-2026-11-01.md`；§14 的证据是 `docs/research/feature-module-analysis-2026-11-04.md`（计数脚本 `scripts/gates/convergence/subsystem-deps.mjs`）。**计划：** `docs/plans/2026-11-01-convergence-phase-0.md`。
 
+> **由 ADR-0252 修订（2026-11-05）。** 阶段 3 中多 agent 的部分（子运行进入账本、该区域的统一状态词汇、ADR-0247 承诺）提前交付。其余的小队代码并入 M1 建立的 `squads` 模块。
+
 ## 背景
 
 架构审计（第二轮对抗性审查后已修订）找到两个根因，以及几个跨越两者的问题。

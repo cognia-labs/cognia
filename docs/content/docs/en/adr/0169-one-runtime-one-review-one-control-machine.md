@@ -9,6 +9,8 @@ description: "Unifies Squad execution. durable-v2 is the only runtime. Execution
 **Date:** 2026-09-05
 **Amends:** ADR-0022 (runtime hardening), ADR-0140 (Squad as an executor)
 
+> **Amended by ADR-0252 (2026-11-05).** `durable-control` is the one control machine. `squad-control` keeps only the guards before it, and the replay check lives once in `packages/agent-orchestration`. `agentTeamManager` is deleted, and `action.team.run` no longer bypasses `startSquadRun`.
+
 ## Context
 
 A Squad could run on two runtimes. The legacy path (`runTeamLifecycle` with
