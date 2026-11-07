@@ -9,10 +9,9 @@ import {
 } from "@/lib/db/agent-team-runtime"
 import type { AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
 import { getDurableTeamCoordinator, type DurableTeamCoordinator } from "./durable-runtime"
+import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
 
 export type DurableRunControlAction = "pause" | "resume" | "sleep" | "wake" | "stop" | "terminate"
-
-const TERMINAL_CHILDREN = new Set(["completed", "failed", "cancelled", "terminated"])
 
 export interface DurableRunControlOptions {
   coordinator?: DurableTeamCoordinator
@@ -33,7 +32,7 @@ export async function controlDurableRun(
   const now = options.now ?? Date.now
   const run = await getAgentTeamRun(runId)
   if (!run) throw new Error(`Unknown durable AgentTeam run: ${runId}`)
-  if (["completed", "failed", "cancelled", "terminated"].includes(run.status)) return
+  if (isTerminalTeamStatus(run.status)) return
   const at = now()
   if (action === "stop" || action === "terminate") {
     const children = await listAgentTeamChildRuns(runId)
@@ -176,7 +175,7 @@ export async function steerDurableRun(
   const run = await getAgentTeamRun(runId)
   if (!run) throw new Error(`Unknown durable AgentTeam run: ${runId}`)
   const children = (await listAgentTeamChildRuns(runId)).filter(
-    (child) => !TERMINAL_CHILDREN.has(child.status)
+    (child) => !isTerminalTeamStatus(child.status)
   )
   if (children.length === 0) return { receiptIds: [], childCount: 0 }
 

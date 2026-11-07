@@ -10,6 +10,7 @@
 
 import type {
   AgentTeamChildRun,
+  AgentTeamChildStatus,
   AgentTeamCheckpoint,
   AgentTeamDecision,
   AgentTeamEvidence,
@@ -22,6 +23,56 @@ import type {
 
 /** Default lifetime of a dispatch lease. */
 export const DEFAULT_DISPATCH_LEASE_TTL_MS = 60_000
+
+/** A run and its children share one status vocabulary. */
+type TeamStatus = AgentTeamRunStatus | AgentTeamChildStatus
+
+/** The statuses in {@link TERMINAL_TEAM_STATUSES}. */
+export type TerminalTeamStatus = Extract<
+  TeamStatus,
+  "completed" | "failed" | "cancelled" | "terminated"
+>
+
+/**
+ * The statuses a run or a child never leaves. `terminated` is a stop the host
+ * forced (shutdown, a lost remote) rather than one an operator asked for; it
+ * ends the run all the same.
+ */
+export const TERMINAL_TEAM_STATUSES: ReadonlySet<TeamStatus> = new Set<TeamStatus>([
+  "completed",
+  "failed",
+  "cancelled",
+  "terminated",
+])
+
+export function isTerminalTeamStatus(status: TeamStatus): status is TerminalTeamStatus {
+  return TERMINAL_TEAM_STATUSES.has(status)
+}
+
+/**
+ * Deliberate holds: paused (or on its way there), asleep until a wake, or
+ * waiting for a person. Live, so a second run cannot start over it, but
+ * nothing dispatches until the hold is lifted.
+ */
+export const PARKED_TEAM_STATUSES: ReadonlySet<TeamStatus> = new Set<TeamStatus>([
+  "pausing",
+  "paused",
+  "sleeping",
+  "needs_input",
+])
+
+export function isParkedTeamStatus(status: TeamStatus): boolean {
+  return PARKED_TEAM_STATUSES.has(status)
+}
+
+/**
+ * The outcome a finished run reports to whoever started it: a forced stop
+ * reads as `cancelled`, because to the caller it is a run that did not finish
+ * its work, not a failure of that work.
+ */
+export function teamRunOutcome(status: TerminalTeamStatus): "completed" | "failed" | "cancelled" {
+  return status === "terminated" ? "cancelled" : status
+}
 
 /** Run statuses process loss can interrupt; only these need checkpoint recovery. */
 const INTERRUPTED_EXECUTION_STATUSES = new Set<AgentTeamRunStatus>([

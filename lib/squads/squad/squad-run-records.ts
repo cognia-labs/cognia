@@ -1,5 +1,9 @@
 import { isStoredChildStopped } from "@cognia/agent-orchestration/coordinator"
-import { matchesControlState } from "@cognia/agent-orchestration/rules"
+import {
+  isTerminalTeamStatus,
+  matchesControlState,
+  teamRunOutcome,
+} from "@cognia/agent-orchestration/rules"
 import {
   authorityFromPermissionCeiling,
   recordedRunMetadata,
@@ -28,20 +32,7 @@ import { getDb } from "@/lib/db/schema"
 import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeamRunRecord, AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
-import type { ExecutionRun } from "@/types/execution/run"
-
-/**
- * Run statuses that hold a live run open. A team with one cannot start another.
- *
- * @internal Test seam: exported for its unit tests, not for production callers.
- */
-export const LIVE_SQUAD_RUN_STATUSES: ReadonlySet<AgentTeamRunStatus> = new Set<AgentTeamRunStatus>(
-  ["queued", "running", "pausing", "paused", "sleeping", "recovering", "needs_input"]
-)
-
-/** @internal Test seam: exported for its unit tests, not for production callers. */
-export const TERMINAL_SQUAD_RUN_STATUSES: ReadonlySet<AgentTeamRunStatus> =
-  new Set<AgentTeamRunStatus>(["completed", "failed", "cancelled", "terminated"])
+import { isTerminalRunStatus, type ExecutionRun } from "@/types/execution/run"
 
 export interface SquadRunSeed {
   localAuthorization?: LocalPersonRun
@@ -146,7 +137,7 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
       let replacedRunId: string | undefined
       if (!existingRun && !existingExecution) {
         const live = (await db.agentTeamRuns.where("teamId").equals(seed.teamId).toArray()).filter(
-          (row) => LIVE_SQUAD_RUN_STATUSES.has(row.status)
+          (row) => !isTerminalTeamStatus(row.status)
         )
         const parentId = seed.parentRunId?.replace(/^execution:team:/, "")
         for (const row of live) {
@@ -161,10 +152,7 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
           })
           const parentExecutionId = agentTeamExecutionRunId(row.id)
           const parentExecution = await db.executionRuns.get(parentExecutionId)
-          if (
-            parentExecution &&
-            !["completed", "failed", "cancelled"].includes(parentExecution.status)
-          ) {
+          if (parentExecution && !isTerminalRunStatus(parentExecution.status)) {
             await appendRunEventInsideTransaction(db, parentExecutionId, {
               id: `execution-event:${row.id}:replaced:${seed.runId}`,
               ts: seed.startedAt,
@@ -184,7 +172,7 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
           ...(seed.projectId ? { projectId: seed.projectId } : {}),
           objective: seed.objective,
           status: existingExecution
-            ? ["completed", "failed", "cancelled"].includes(existingExecution.status)
+            ? isTerminalRunStatus(existingExecution.status)
               ? (existingExecution.status as AgentTeamRunStatus)
               : "needs_input"
             : "queued",
@@ -256,8 +244,8 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
           payload: { teamId: seed.teamId, origin: seed.origin },
           sourceEventId: `agent-team:${seed.runId}:started`,
         })
-        if (isTerminalSquadRunStatus(run.status)) {
-          const status = run.status === "terminated" ? "cancelled" : run.status
+        if (isTerminalTeamStatus(run.status)) {
+          const status = teamRunOutcome(run.status)
           await appendRunEventInsideTransaction(db, executionRunId, {
             id: `execution-event:${seed.runId}:restored-terminal`,
             ts: run.completedAt ?? run.updatedAt,
@@ -287,16 +275,15 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
   })
 }
 
-/** The team's live run, if one exists. Newest first when several somehow do. */
+/**
+ * The team's live run, if one exists: any run that has not reached a terminal
+ * status holds the team, parked ones included. Newest first when several do.
+ */
 export async function findLiveSquadRun(teamId: string): Promise<AgentTeamRunRecord | undefined> {
   const rows = await getDb().agentTeamRuns.where("teamId").equals(teamId).toArray()
   return rows
-    .filter((row) => LIVE_SQUAD_RUN_STATUSES.has(row.status))
+    .filter((row) => !isTerminalTeamStatus(row.status))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
-}
-
-export function isTerminalSquadRunStatus(status: AgentTeamRunStatus): boolean {
-  return TERMINAL_SQUAD_RUN_STATUSES.has(status)
 }
 
 /** A late failure cannot resurrect a run that an operator already stopped. */
@@ -313,8 +300,8 @@ export async function parkActiveSquadRun(
     if (
       !run ||
       (expected && (run.stop || !matchesControlState(run, expected))) ||
-      isTerminalSquadRunStatus(run.status) ||
-      (execution && ["completed", "failed", "cancelled"].includes(execution.status))
+      isTerminalTeamStatus(run.status) ||
+      (execution && isTerminalRunStatus(execution.status))
     )
       return false
     return (

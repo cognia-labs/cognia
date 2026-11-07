@@ -17,6 +17,7 @@ import type {
 import type { TeamWorkflowNodes } from "@/lib/workflow/nodes/teams/team-runtime-port"
 import { nonRetryable } from "@/lib/workflow/nodes/shared/executor-support"
 import { runTeamCompose, runTeamDelegate, runTeamMessage, runTeamStatus } from "./team-ops"
+import { isTerminalRunStatus } from "@/types/execution/run"
 
 /** Use the same roster, capability overlays and effective backing profiles as dispatch. */
 export async function resolveTeamKnowledgeBaseIds(teamId: string): Promise<readonly string[]> {
@@ -188,8 +189,10 @@ export async function assertTeamDispatchRetry(
     import("@cognia/agent-orchestration/coordinator"),
   ])
   const store = getDurableTeamCoordinator().store
-  const { isTerminalSquadRunStatus, parkActiveSquadRun } =
-    await import("../squad/squad-run-records")
+  const [{ parkActiveSquadRun }, { isTerminalTeamStatus }] = await Promise.all([
+    import("../squad/squad-run-records"),
+    import("@cognia/agent-orchestration/rules"),
+  ])
   const run = await store.getRun(team.runId)
   if (!run || run.stop?.state === "requested" || run.stop?.state === "unconfirmed")
     throw Object.assign(nonRetryable("stop_unconfirmed"), {
@@ -197,7 +200,7 @@ export async function assertTeamDispatchRetry(
       needsHuman: true,
     })
   const eligibility = await assessStoredTaskRecovery(store, team.runId, taskId, Date.now())
-  if (isTerminalSquadRunStatus(run.status) && eligibility.eligible) return
+  if (isTerminalTeamStatus(run.status) && eligibility.eligible) return
   if (eligibility.eligible && executionSettled) return
   const reason = eligibility.eligible ? "stop_unconfirmed" : eligibility.reason
   // A stop can finish while recovery reads children/checkpoints. Compare the
@@ -205,18 +208,13 @@ export async function assertTeamDispatchRetry(
   if (!(await parkActiveSquadRun(team.runId, reason, Date.now(), run))) {
     const latest = await store.getRun(team.runId)
     if (latest && latest.stop?.state !== "requested" && latest.stop?.state !== "unconfirmed") {
-      if (isTerminalSquadRunStatus(latest.status) && eligibility.eligible) return
+      if (isTerminalTeamStatus(latest.status) && eligibility.eligible) return
       const [{ getDb }, { agentTeamExecutionRunId }] = await Promise.all([
         import("@/lib/db/schema"),
         import("@/lib/execution/agent-team-bridge"),
       ])
       const execution = await getDb().executionRuns.get(agentTeamExecutionRunId(team.runId))
-      if (
-        execution &&
-        ["completed", "failed", "cancelled"].includes(execution.status) &&
-        eligibility.eligible
-      )
-        return
+      if (execution && isTerminalRunStatus(execution.status) && eligibility.eligible) return
     }
   }
   throw Object.assign(nonRetryable(reason), { name: "NeedsHumanError", needsHuman: true })

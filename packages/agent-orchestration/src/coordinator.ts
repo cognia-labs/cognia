@@ -33,6 +33,7 @@ import {
   isChildNeverStarted,
   hasRemoteDispatch,
 } from "./replay"
+import { isTerminalTeamStatus } from "./rules"
 import type { TeamRunStore } from "./store"
 
 export interface DurableChildControl {
@@ -164,7 +165,6 @@ interface ActiveOwnership {
   released: Promise<void>
 }
 
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "terminated"])
 /**
  * Whether a child may be replayed from its checkpoint (the rule:
  * `isChildReplaySafe`), reading the latest checkpoint and the run's
@@ -422,7 +422,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     signal?.throwIfAborted()
     const child = await store.getChild(childRunId)
     if (!child) throw new Error(`Unknown durable child: ${childRunId}`)
-    if (TERMINAL_STATUSES.has(child.status)) {
+    if (isTerminalTeamStatus(child.status)) {
       throw new Error(`Durable child ${childRunId} is terminal: ${child.status}`)
     }
     if (["pausing", "paused", "sleeping", "needs_input"].includes(child.status)) {
@@ -433,7 +433,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     const run = await store.getRun(child.runId)
     if (!run) throw new Error(`Unknown durable AgentTeam run: ${child.runId}`)
     if (
-      TERMINAL_STATUSES.has(run.status) ||
+      isTerminalTeamStatus(run.status) ||
       run.status === "needs_input" ||
       run.stop?.state === "requested" ||
       run.stop?.state === "unconfirmed"
@@ -470,7 +470,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
           updatedAt: at,
         }
       )
-      if (gated && child && !TERMINAL_STATUSES.has(child.status)) {
+      if (gated && child && !isTerminalTeamStatus(child.status)) {
         await store.updateChildIfCurrent(childRunId, child, {
           status: "needs_input",
           error: "Resource budget exhausted",
@@ -904,7 +904,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
           updatedAt: now(),
         })
       const run = await tx.getRun(child.runId)
-      if (run && !TERMINAL_STATUSES.has(run.status))
+      if (run && !isTerminalTeamStatus(run.status))
         await tx.updateRunIfCurrent(run.id, run, {
           status: "needs_input",
           recoveryReason: eligibility.reason,
@@ -1019,7 +1019,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     const run = await store.getRun(child.runId)
     if (!run) throw new Error(`Unknown durable AgentTeam run: ${child.runId}`)
 
-    if (TERMINAL_STATUSES.has(run.status)) {
+    if (isTerminalTeamStatus(run.status)) {
       throw new Error(`Durable AgentTeam run ${run.id} cannot be retried from ${run.status}`)
     }
 
@@ -1093,7 +1093,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
       const run = await store.getRun(child.runId)
       if (
         !run ||
-        TERMINAL_STATUSES.has(run.status) ||
+        isTerminalTeamStatus(run.status) ||
         run.stop?.state === "requested" ||
         run.stop?.state === "unconfirmed"
       )
@@ -1272,7 +1272,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
   const sleepChild = async (childRunId: string): Promise<void> => {
     const child = await store.getChild(childRunId)
     if (!child) throw new Error(`Unknown durable child: ${childRunId}`)
-    if (TERMINAL_STATUSES.has(child.status)) return
+    if (isTerminalTeamStatus(child.status)) return
     await store.updateChildIfCurrent(childRunId, child, { status: "sleeping", updatedAt: now() })
   }
 

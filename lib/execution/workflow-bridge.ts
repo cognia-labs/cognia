@@ -13,7 +13,12 @@ import { mapWorkflowRunEvent } from "@/lib/execution/sources/workflow"
 import type { WorkflowFanoutSubscriptionRow } from "@/lib/db/connector-types"
 import type { WorkflowRunEventRow, WorkflowRunRow } from "@/types/workflow/visual"
 import { getConnectorConversationState } from "@/lib/db/connector-conversation-state"
-import type { ExecutionRunKind, PrincipalRefV1, RunTriggerV1 } from "@/types/execution/run"
+import {
+  isTerminalRunStatus,
+  type ExecutionRunKind,
+  type PrincipalRefV1,
+  type RunTriggerV1,
+} from "@/types/execution/run"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { startAgentStateExecutionBridge } from "./agent-state-bridge"
 import {
@@ -248,7 +253,7 @@ export async function syncWorkflowExecutionRun(
   // A terminal shared journal is immutable. Normal redelivery is already
   // idempotent, but no newly discovered source event may be appended after the
   // terminal boundary. Bindings above still reconcile for late subscriptions.
-  if (["completed", "failed", "cancelled"].includes(run.status)) return
+  if (isTerminalRunStatus(run.status)) return
 
   const labels = new Map(sourceRun.workflowSnapshot.nodes.map((node) => [node.id, node.data.label]))
   const mapped = orderedSourceEvents

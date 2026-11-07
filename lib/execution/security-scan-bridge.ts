@@ -35,6 +35,7 @@ import {
   type SecurityScanRunRecord,
 } from "@cognia/plugin-sdk/api/security-findings"
 import { recordedRunMetadata } from "./acting-authority"
+import { isTerminalRunStatus } from "@/types/execution/run"
 
 export {
   securityScanExecutionRunId,
@@ -97,7 +98,7 @@ export async function syncSecurityScanExecutionRun(record: SecurityScanRunRecord
   // result of `onRun` firing again, not an error. `sourceEventId` makes the
   // append idempotent regardless.
   const current = existing ?? (await getExecutionRun(runId))
-  if (current && ["completed", "failed", "cancelled"].includes(current.status)) return
+  if (current && isTerminalRunStatus(current.status)) return
 
   await runEventJournal
     .append(

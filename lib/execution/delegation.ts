@@ -37,7 +37,11 @@ import {
   runEventJournal,
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
-import type { ExecutionRun, ExecutionRunInitiator } from "@/types/execution/run"
+import {
+  isTerminalRunStatus,
+  type ExecutionRun,
+  type ExecutionRunInitiator,
+} from "@/types/execution/run"
 import { reduceRunEvents } from "./run-reducer"
 
 import { ensureConnectorRunBinding } from "./agent-state-bridge"
@@ -328,7 +332,7 @@ export async function settleDelegation(input: {
   now?: number
 }): Promise<void> {
   const run = await getExecutionRun(input.runId)
-  if (!run || ["completed", "failed", "cancelled"].includes(run.status)) return
+  if (!run || isTerminalRunStatus(run.status)) return
   const now = input.now ?? Date.now()
   await runEventJournal.append(
     input.runId,

@@ -16,6 +16,7 @@ import { getDb } from "@/lib/db/schema"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import { canonicalJson } from "@cognia/agent"
 import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
+import { isTerminalRunStatus } from "@/types/execution/run"
 
 /** Missing automated provenance must never masquerade as a local person. */
 export function runTriggerFromOrigin(origin: { source: string } | undefined): RunTriggerV1 {
@@ -235,7 +236,7 @@ export async function finishToolExecutionRun(
   try {
     const run = await getExecutionRun(runId)
     if (!run) return
-    if (["completed", "failed", "cancelled"].includes(run.status)) return
+    if (isTerminalRunStatus(run.status)) return
     await runEventJournal.append(
       runId,
       semanticRunEvent(
@@ -287,7 +288,7 @@ export async function resolveExecutingRun(
     return undefined
   if (
     !["queued", "running", "waiting", "paused"].includes(run.status) &&
-    !(options?.delivery && runId && ["completed", "failed", "cancelled"].includes(run.status))
+    !(options?.delivery && runId && isTerminalRunStatus(run.status))
   )
     return undefined
   if (getDb() !== db) return undefined

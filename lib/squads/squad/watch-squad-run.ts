@@ -21,19 +21,7 @@ import Dexie from "dexie"
 
 import { getDb } from "@/lib/db/schema"
 import { getExecutionRun } from "@/lib/db/execution-runs"
-import type { ExecutionRunStatus } from "@/types/execution/run"
-
-/** Complement of the active set in `lib/execution/control-handlers.ts`. */
-const TERMINAL_STATUSES: ReadonlySet<ExecutionRunStatus> = new Set<ExecutionRunStatus>([
-  "completed",
-  "failed",
-  "cancelled",
-])
-
-/** @internal Test seam: exported for its unit tests, not for production callers. */
-export function isSettledSquadRunStatus(status: ExecutionRunStatus): boolean {
-  return TERMINAL_STATUSES.has(status)
-}
+import { isTerminalRunStatus, type ExecutionRunStatus } from "@/types/execution/run"
 
 /** Backstop poll, in case a Dexie change event is missed or unavailable. */
 const POLL_INTERVAL_MS = 5_000
@@ -68,7 +56,7 @@ export function watchSquadRunSettlement(input: WatchSquadRunInput): () => void {
     checking = getExecutionRun(input.executionRunId)
       .then((run) => {
         if (disposed || !run) return
-        if (!isSettledSquadRunStatus(run.status)) return
+        if (!isTerminalRunStatus(run.status)) return
         // Dispose FIRST: `onSettled` may start another turn, and a watcher
         // still armed would then be watching a run it no longer represents.
         const status = run.status

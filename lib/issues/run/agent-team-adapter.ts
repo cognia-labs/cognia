@@ -22,6 +22,7 @@
  */
 
 import type { ChatSession } from "@cognia/agent-config-types"
+import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
 import type { AgentTeam, AgentTeamTask, CreateTaskInput } from "@/types/agent/agent-team"
 import type { ConversationReference } from "@/types/connectors/event"
 import { parseConversationKey } from "@/types/connectors/event"
@@ -454,10 +455,7 @@ export function createAgentTeamRunAdapter(
     if (squadRunId) {
       const record = await deps.getSquadRun(squadRunId)
       if (!record) return { status: "failed", error: "squad run no longer exists" }
-      // Lazy for the same reason as the store: the records module drags the
-      // Squad runtime graph in.
-      const { isTerminalSquadRunStatus } = await import("@/lib/squads/squad/squad-run-records")
-      if (!isTerminalSquadRunStatus(record.status)) return null
+      if (!isTerminalTeamStatus(record.status)) return null
       ended = { status: record.status }
     } else {
       const team = deps.getTeam(run.targetId)

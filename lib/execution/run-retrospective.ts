@@ -9,7 +9,7 @@ import { getExecutionRun, listVisibleExecutionRunEvents } from "@/lib/db/executi
 import { resolvePrompt, resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
 import { sha256Hex } from "@/lib/share/hash"
-import type { ExecutionRun, RunEvent } from "@/types/execution/run"
+import { isTerminalRunStatus, type ExecutionRun, type RunEvent } from "@/types/execution/run"
 import {
   RUN_RETROSPECTIVE_ANALYSIS_VERSION,
   type RunLearningTargetKind,
@@ -276,7 +276,7 @@ export function createRunRetrospectiveService(options: RunRetrospectiveServiceOp
       if (existing) return existing
       const run = await getExecutionRun(runId)
       if (!run) throw new Error(`Unknown ExecutionRun: ${runId}`)
-      if (!(["completed", "failed", "cancelled"] as const).includes(run.status as never)) {
+      if (!isTerminalRunStatus(run.status)) {
         throw new Error("Run retrospective requires a terminal ExecutionRun")
       }
       const [events, adapterContext] = await Promise.all([

@@ -55,6 +55,13 @@ import {
 import { isUltracodeActive, type UltracodeOverride } from "./ultracode/ultracode-trigger"
 import { teamPromptContext } from "./team-prompts"
 import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
+import { isTerminalRunStatus } from "@/types/execution/run"
+import { isTerminalTeamStatus, teamRunOutcome } from "@cognia/agent-orchestration/rules"
+import {
+  executionEventForSettledTeamRun,
+  isSettledTeamRunStatus,
+  type SettledTeamRunStatus,
+} from "@/lib/execution/run-status"
 
 /** Planning result kept compatible with the legacy LeadPlanResult shape. */
 export interface LeadPlanResult {
@@ -238,7 +245,7 @@ export function __getInflightControllerForTesting(teamId: string): AbortControll
 /** Control-plane decisions win over a late executor result or setup error. */
 async function settleDurableRunStatus(
   runId: string,
-  status: AgentTeamRunStatus,
+  status: SettledTeamRunStatus,
   reason?: string
 ): Promise<AgentTeamRunStatus | undefined> {
   const { getAgentTeamRun, settleAgentTeamRunIfCurrent } =
@@ -246,20 +253,13 @@ async function settleDurableRunStatus(
   for (;;) {
     const current = await getAgentTeamRun(runId)
     if (!current) return undefined
-    if (
-      ["paused", "needs_input", "completed", "cancelled", "failed", "terminated"].includes(
-        current.status
-      )
-    ) {
-      return current.status
-    }
+    // Already settled (by a control decision, or a racing settle): keep it.
+    if (isSettledTeamRunStatus(current.status)) return current.status
     const now = Date.now()
     const updated = await settleAgentTeamRunIfCurrent(runId, current, {
       status,
       ...(reason ? { recoveryReason: reason } : {}),
-      ...(["completed", "cancelled", "failed", "terminated"].includes(status)
-        ? { completedAt: now }
-        : {}),
+      ...(isTerminalTeamStatus(status) ? { completedAt: now } : {}),
       updatedAt: now,
     })
     if (updated) return updated
@@ -527,26 +527,24 @@ export async function runTeamLifecycle(
         const reason = error instanceof Error ? error.message : String(error)
         const durableStatus = await settleDurableRunStatus(runId, "failed", reason)
         const status =
-          durableStatus === "cancelled" || durableStatus === "terminated"
-            ? "cancelled"
-            : durableStatus === "completed"
-              ? "completed"
-              : "failed"
+          durableStatus && isTerminalTeamStatus(durableStatus)
+            ? teamRunOutcome(durableStatus)
+            : "failed"
         const { getExecutionRun, runEventJournal } = await import("@/lib/db/execution-runs")
         const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
         const executionRunId = agentTeamExecutionRunId(runId)
         const executionRun = await getExecutionRun(executionRunId).catch(() => undefined)
         if (
           executionRun &&
-          !["completed", "cancelled", "failed"].includes(executionRun.status) &&
+          !isTerminalRunStatus(executionRun.status) &&
           durableStatus &&
-          ["completed", "cancelled", "failed", "terminated"].includes(durableStatus)
+          isTerminalTeamStatus(durableStatus)
         ) {
           await runEventJournal
             .append(executionRunId, {
               id: `execution-event:${runId}:team-terminal:${durableStatus}`,
               ts: Date.now(),
-              type: `run.${status}`,
+              type: executionEventForSettledTeamRun(durableStatus),
               visibility: "summary",
               payload: { summary: `Agent team run ${status} during durable admission` },
             })
@@ -1305,7 +1303,7 @@ export async function runTeamLifecycle(
           : String(ac.signal.reason ?? "")
       // `paused` and `needs_input` are deliberately NOT terminal: a paused
       // Squad is still the conversation's turn and can be steered.
-      let desiredStatus: AgentTeamRunStatus =
+      let desiredStatus: SettledTeamRunStatus =
         finalStatus === "cancelled" && abortMessage === "paused"
           ? "paused"
           : finalStatus === "cancelled" && abortMessage === "shutdown"
@@ -1331,35 +1329,21 @@ export async function runTeamLifecycle(
           return undefined
         }
       )
-      suppressCompletionFanout =
-        !teamRunStatus ||
-        !["completed", "cancelled", "failed", "terminated"].includes(teamRunStatus)
-      if (!suppressCompletionFanout) {
-        finalStatus =
-          teamRunStatus === "terminated"
-            ? "cancelled"
-            : (teamRunStatus as RunTeamLifecycleResult["status"])
+      suppressCompletionFanout = !teamRunStatus || !isTerminalTeamStatus(teamRunStatus)
+      if (teamRunStatus && isTerminalTeamStatus(teamRunStatus)) {
+        finalStatus = teamRunOutcome(teamRunStatus)
         if (lifecycleResult) lifecycleResult.status = finalStatus
       }
       const { getExecutionRun, runEventJournal } = await import("@/lib/db/execution-runs")
       const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
       const executionRunId = agentTeamExecutionRunId(runId)
       const executionRun = await getExecutionRun(executionRunId).catch(() => undefined)
-      if (
-        teamRunStatus &&
-        executionRun &&
-        !["completed", "failed", "cancelled"].includes(executionRun.status)
-      ) {
-        const eventType =
-          teamRunStatus === "completed"
-            ? "run.completed"
-            : teamRunStatus === "failed"
-              ? "run.failed"
-              : teamRunStatus === "cancelled" || teamRunStatus === "terminated"
-                ? "run.cancelled"
-                : teamRunStatus === "paused"
-                  ? "run.paused"
-                  : "run.waiting"
+      if (teamRunStatus && executionRun && !isTerminalRunStatus(executionRun.status)) {
+        // A settle only ever lands on a settled status; anything else the
+        // control plane left behind still needs a person, as before.
+        const eventType = isSettledTeamRunStatus(teamRunStatus)
+          ? executionEventForSettledTeamRun(teamRunStatus)
+          : "run.waiting"
         await runEventJournal
           .append(executionRunId, {
             id: `execution-event:${runId}:team-terminal:${teamRunStatus}`,

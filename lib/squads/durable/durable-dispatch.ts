@@ -7,7 +7,7 @@ import {
   planDispatchAttempt,
 } from "@cognia/agent-orchestration/replay"
 import { assessStoredTaskRecovery } from "@cognia/agent-orchestration/coordinator"
-import { rejectedEpochEvent } from "@cognia/agent-orchestration/rules"
+import { isTerminalTeamStatus, rejectedEpochEvent } from "@cognia/agent-orchestration/rules"
 import { recordRunUsage } from "@cognia/agent-orchestration/usage"
 import { reportTeamRunUsage } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeam } from "@/types/agent/agent-team"
@@ -392,7 +392,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
   const parkRun = async (reason: string, at: number): Promise<void> => {
     if (input.isolateFailure) return
     const run = await store.getRun(input.runId)
-    if (!run || ["completed", "failed", "cancelled", "terminated"].includes(run.status)) return
+    if (!run || isTerminalTeamStatus(run.status)) return
     await store.updateRunIfCurrent(input.runId, run, {
       status: "needs_input",
       recoveryReason: reason,

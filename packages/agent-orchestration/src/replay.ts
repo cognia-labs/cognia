@@ -13,6 +13,7 @@ import type {
   AgentTeamTrajectoryEvent,
   StopProof,
 } from "./records"
+import { isParkedTeamStatus, isTerminalTeamStatus } from "./rules"
 
 /** The waiting reason a child carries while the fair scheduler admits it. */
 export const CHILD_ADMISSION_WAITING_REASON = "scheduler_admission"
@@ -73,7 +74,7 @@ export function hasRemoteDispatch(child: AgentTeamChildRun): boolean {
 export function isChildSettled(child: AgentTeamChildRun): boolean {
   const epoch = child.dispatchEpoch ?? 0
   return (
-    ["completed", "failed", "cancelled", "terminated"].includes(child.status) &&
+    isTerminalTeamStatus(child.status) &&
     child.settledEpoch === epoch &&
     (child.status !== "completed" ||
       (child.stop?.state === "confirmed" &&
@@ -199,7 +200,7 @@ export function isChildReplaySafe(
   )
 }
 
-const PARKED_CHILD_STATUSES = new Set(["pausing", "paused", "sleeping", "needs_input"])
+/** Terminal minus `failed`: a failed child is resumed with its next attempt. */
 const FINISHED_CHILD_STATUSES = new Set(["completed", "cancelled", "terminated"])
 const DISPATCHABLE_RUN_STATUSES = new Set(["running", "queued", "recovering"])
 
@@ -225,7 +226,7 @@ export function planDispatchAttempt(
   previous: AgentTeamChildRun | undefined,
   run: AgentTeamRunRecord | undefined
 ): DispatchAttemptPlan {
-  if (previous && PARKED_CHILD_STATUSES.has(previous.status)) {
+  if (previous && isParkedTeamStatus(previous.status)) {
     return { kind: "conflict", reason: `Child is not accepting dispatch while ${previous.status}` }
   }
   if (

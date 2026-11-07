@@ -5,7 +5,7 @@ import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
 import { appendRunEventInsideTransaction, semanticRunEvent } from "@/lib/db/execution-runs"
 import { isManagedDesktopResultDeletionPending } from "@/lib/automation/managed-desktop-result-deletion"
 import type { ManagedDesktopAcceptanceResult } from "@/lib/automation/managed-desktop-results-client"
-import type { RunArtifactSnapshot } from "@/types/execution/run"
+import { isTerminalRunStatus, type RunArtifactSnapshot } from "@/types/execution/run"
 
 export function managedDesktopAcceptanceRunId(acceptanceId: string): string {
   return `execution:managed-desktop:${acceptanceId}`
@@ -91,7 +91,7 @@ export async function syncManagedDesktopAcceptanceResult(
         throw new Error("managed_desktop_result_binding_changed")
       // Approval revisions remain in the independent Host record. Event pruning
       // never causes a terminal child to be reopened or its result to be recreated.
-      if (existing && ["completed", "failed", "cancelled"].includes(existing.status)) return true
+      if (existing && isTerminalRunStatus(existing.status)) return true
       if (!existing) {
         const parent = await db.executionRuns.get(binding.parentRunId)
         await db.executionRuns.add({

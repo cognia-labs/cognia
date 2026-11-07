@@ -4,11 +4,14 @@ import {
   dispatchLeaseRenewPatch,
   dispatchLeaseSettlePatch,
   canAdvanceRemoteEvent,
+  isParkedTeamStatus,
+  isTerminalTeamStatus,
   matchesControlState,
   nextTrajectoryEvent,
   selectRecoveryCandidates,
   steeringReceiptPatch,
   steeringResolvedChildPatch,
+  teamRunOutcome,
 } from "./rules"
 
 describe("persistence rules", () => {
@@ -125,5 +128,40 @@ describe("persistence rules", () => {
       pendingSteeringCount: 0,
       updatedAt: 6,
     })
+  })
+})
+
+describe("team status vocabulary", () => {
+  const ALL = [
+    "queued",
+    "running",
+    "pausing",
+    "paused",
+    "sleeping",
+    "recovering",
+    "needs_input",
+    "completed",
+    "failed",
+    "cancelled",
+    "terminated",
+  ] as const
+
+  it("splits every status into exactly one of terminal, parked or moving", () => {
+    const terminal = ALL.filter(isTerminalTeamStatus)
+    const parked = ALL.filter(isParkedTeamStatus)
+    expect(terminal).toEqual(["completed", "failed", "cancelled", "terminated"])
+    expect(parked).toEqual(["pausing", "paused", "sleeping", "needs_input"])
+    expect(ALL.filter((s) => !isTerminalTeamStatus(s) && !isParkedTeamStatus(s))).toEqual([
+      "queued",
+      "running",
+      "recovering",
+    ])
+  })
+
+  it("reports a forced stop to the caller as cancelled", () => {
+    expect(teamRunOutcome("terminated")).toBe("cancelled")
+    expect(teamRunOutcome("cancelled")).toBe("cancelled")
+    expect(teamRunOutcome("completed")).toBe("completed")
+    expect(teamRunOutcome("failed")).toBe("failed")
   })
 })

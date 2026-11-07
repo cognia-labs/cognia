@@ -16,7 +16,7 @@
 
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { stackedDeliveryOn } from "@/lib/stack/team-policy"
-import { isTerminalSquadRunStatus, parkActiveSquadRun } from "./squad-run-records"
+import { parkActiveSquadRun } from "./squad-run-records"
 import type {
   AgentTeam,
   AgentTeammate,
@@ -34,6 +34,12 @@ import {
   type RunTeamLifecycleResult,
 } from "../agent-team-runtime"
 import type { TeamRunOrigin } from "../gates/gate-policy"
+import { isTerminalRunStatus } from "@/types/execution/run"
+import {
+  isParkedTeamStatus,
+  isTerminalTeamStatus,
+  teamRunOutcome,
+} from "@cognia/agent-orchestration/rules"
 
 /**
  * Pluggable runtime dependencies. Normally set at bootstrap via
@@ -189,7 +195,7 @@ export async function parkSquadRecovery(
   if (!(await parkActiveSquadRun(runId, reason, at))) return
   const executionRunId = agentTeamExecutionRunId(runId)
   const executionRun = await getExecutionRun(executionRunId).catch(() => undefined)
-  if (executionRun && !["completed", "failed", "cancelled"].includes(executionRun.status)) {
+  if (executionRun && !isTerminalRunStatus(executionRun.status)) {
     await runEventJournal
       .append(
         executionRunId,
@@ -300,14 +306,8 @@ export async function runSquadLifecycle(
   input.recovery?.signal?.throwIfAborted()
   if (persisted && persisted.teamId !== input.teamId)
     throw new Error("Squad run belongs to another team")
-  if (persisted && isTerminalSquadRunStatus(persisted.status)) {
-    return {
-      runId: input.runId,
-      status:
-        persisted.status === "terminated"
-          ? "cancelled"
-          : (persisted.status as RunTeamLifecycleResult["status"]),
-    }
+  if (persisted && isTerminalTeamStatus(persisted.status)) {
+    return { runId: input.runId, status: teamRunOutcome(persisted.status) }
   }
   if (
     persisted &&
@@ -345,14 +345,8 @@ export async function runSquadLifecycle(
   const { startSquadRunSpan } = await import("./squad-telemetry")
   const admitted = await getAgentTeamRun(runId)
   input.recovery?.signal?.throwIfAborted()
-  if (admitted && isTerminalSquadRunStatus(admitted.status)) {
-    return {
-      runId,
-      status:
-        admitted.status === "terminated"
-          ? "cancelled"
-          : (admitted.status as RunTeamLifecycleResult["status"]),
-    }
+  if (admitted && isTerminalTeamStatus(admitted.status)) {
+    return { runId, status: teamRunOutcome(admitted.status) }
   }
   if (persisted && !admitted) return { runId, status: "failed", reason: "run_not_found" }
   if (input.recovery && admitted?.status !== "recovering") {
@@ -435,7 +429,7 @@ async function closeSquadRunSpan(
 ): Promise<void> {
   const [{ endSquadRunSpan, squadDuplicateControlCount }, { aggregateAgentTeamRunUsage }] =
     await Promise.all([import("./squad-telemetry"), import("@/lib/db/agent-team-runtime")])
-  const parked = ["needs_input", "pausing", "paused", "sleeping"].includes(durableRun?.status ?? "")
+  const parked = durableRun !== undefined && isParkedTeamStatus(durableRun.status)
   // Suites stub the db module without the aggregate. No totals is a span
   // without usage, not a failed settle.
   const totals =
@@ -470,6 +464,15 @@ async function closeSquadRunSpan(
  * Publish while the real lifecycle still owns a live execution. A policy hold
  * is durable before that lifecycle chooses its terminal or waiting event.
  */
+/**
+ * A pause, a stop or a failure already decided this run's fate, so a late
+ * delivery result must not replace it. A completed run is the one terminal
+ * status delivery still acts on.
+ */
+function controlDecisionStands(status: AgentTeamRunStatus): boolean {
+  return isParkedTeamStatus(status) || (isTerminalTeamStatus(status) && status !== "completed")
+}
+
 async function publishSquadDelivery(
   teamId: string,
   runId: string,
@@ -483,9 +486,7 @@ async function publishSquadDelivery(
   if (
     team &&
     durableRun &&
-    !["pausing", "paused", "sleeping", "needs_input", "cancelled", "terminated", "failed"].includes(
-      durableRun.status
-    ) &&
+    !controlDecisionStands(durableRun.status) &&
     durableRun.stop?.state !== "requested" &&
     durableRun.stop?.state !== "unconfirmed" &&
     stackedDeliveryOn(team.config.githubDeliveryPolicy)
@@ -522,15 +523,7 @@ async function publishSquadDelivery(
         const current = await getAgentTeamRun(runId)
         if (
           !current ||
-          [
-            "pausing",
-            "paused",
-            "sleeping",
-            "needs_input",
-            "cancelled",
-            "terminated",
-            "failed",
-          ].includes(current.status) ||
+          controlDecisionStands(current.status) ||
           current.stop?.state === "requested" ||
           current.stop?.state === "unconfirmed"
         )
@@ -558,16 +551,8 @@ async function settleSquadRun(
   if (
     result.status === "cancelled" &&
     durableRun &&
-    ![
-      "completed",
-      "failed",
-      "cancelled",
-      "terminated",
-      "needs_input",
-      "pausing",
-      "paused",
-      "sleeping",
-    ].includes(durableRun.status)
+    !isTerminalTeamStatus(durableRun.status) &&
+    !isParkedTeamStatus(durableRun.status)
   ) {
     const { controlDurableRun } = await import("../durable/durable-control")
     try {
@@ -580,14 +565,9 @@ async function settleSquadRun(
   }
 
   const durableStatus: AgentTeamRunStatus | undefined = durableRun?.status
-  const parked = ["needs_input", "pausing", "paused", "sleeping"].includes(durableStatus ?? "")
-  if (
-    durableStatus === "completed" ||
-    durableStatus === "cancelled" ||
-    durableStatus === "terminated" ||
-    durableStatus === "failed"
-  ) {
-    result = { ...result, status: durableStatus === "terminated" ? "cancelled" : durableStatus }
+  const parked = durableStatus !== undefined && isParkedTeamStatus(durableStatus)
+  if (durableStatus !== undefined && isTerminalTeamStatus(durableStatus)) {
+    result = { ...result, status: teamRunOutcome(durableStatus) }
   }
 
   useAgentTeamStore.getState().setTeamStatus(teamId, parked ? "paused" : result.status)

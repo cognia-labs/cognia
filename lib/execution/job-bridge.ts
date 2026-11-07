@@ -31,7 +31,7 @@ import {
 } from "@/lib/db/execution-runs"
 import type { BackgroundTaskJournalRecord } from "@/lib/background-tasks/registry-core"
 import type { DispatchParentProvenance } from "@/lib/claude/agents/dispatch-run"
-import type { ExecutionRunStatus } from "@/types/execution/run"
+import { isTerminalRunStatus, type ExecutionRunStatus } from "@/types/execution/run"
 import {
   getDispatchContext,
   getResolvedPermissionCeiling,
@@ -136,7 +136,7 @@ export async function syncJobExecutionRun(
   // report — it is the ordinary result of the live query re-emitting a row that
   // has not changed. `sourceEventId` makes the append idempotent.
   const current = existing ?? (await getExecutionRun(runId))
-  if (current && ["completed", "failed", "cancelled"].includes(current.status)) return
+  if (current && isTerminalRunStatus(current.status)) return
 
   await runEventJournal
     .append(

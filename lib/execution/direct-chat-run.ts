@@ -18,6 +18,7 @@ import {
 } from "@/lib/chat/canonical-sink"
 import { finishSharedSessionRun } from "@/lib/collab/shared-run-coordinator"
 import { recordedRunMetadata, LOCAL_PERSON_RUN, type LocalPersonRun } from "./acting-authority"
+import { isTerminalRunStatus } from "@/types/execution/run"
 
 export interface StartDirectChatExecutionRunInput {
   sessionId: string
@@ -43,10 +44,6 @@ interface ActiveDirectChatRun {
 }
 
 const activeRuns = new Map<string, ActiveDirectChatRun>()
-
-function isTerminal(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled"
-}
 
 /**
  * Open the canonical execution journal for one direct-chat turn.
@@ -95,7 +92,7 @@ export async function startDirectChatExecutionRun(
       if (!run) throw new Error(`Unable to create execution run: ${input.runId}`)
     }
   }
-  if (isTerminal(run.status)) return
+  if (isTerminalRunStatus(run.status)) return
 
   const producer = new AgentRunEventProducer(input.runId, undefined, {
     workspaceRoot: input.workspaceRoot,
@@ -264,7 +261,7 @@ export async function finishDirectChatExecutionRun(
   // durable, and an early return below must not skip it.
   await closeChatCanonicalLog(sessionId, status === "cancelled" ? "interrupted" : "ended")
   const run = await getExecutionRun(active.runId)
-  if (!run || isTerminal(run.status)) return
+  if (!run || isTerminalRunStatus(run.status)) return
   await active.producer.finish(status, ts, summary)
 }
 

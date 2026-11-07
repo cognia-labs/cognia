@@ -31,14 +31,15 @@ import {
 } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
 import { sanitizeActivityLabel } from "@/lib/execution/run-activity"
-import type {
-  ExecutionRunInitiator,
-  ExecutionRunInterrupt,
-  ExecutionRunStatus,
-  RunActivitySnapshot,
-  RunArtifactSnapshot,
-  RunProgressSnapshot,
-  RunStepSnapshot,
+import {
+  isTerminalRunStatus,
+  type ExecutionRunInitiator,
+  type ExecutionRunInterrupt,
+  type ExecutionRunStatus,
+  type RunActivitySnapshot,
+  type RunArtifactSnapshot,
+  type RunProgressSnapshot,
+  type RunStepSnapshot,
 } from "@/types/execution/run"
 
 /** How long a handoff may sit before the surface starts calling it overdue. */
@@ -268,7 +269,7 @@ export async function handOffDelegationToHuman(
   const run = await getExecutionRun(input.runId)
   if (!run) return { handedOff: false, reason: "run_not_found" }
   if (run.kind !== "delegation") return { handedOff: false, reason: "not_a_delegation" }
-  if (["completed", "failed", "cancelled"].includes(run.status)) {
+  if (isTerminalRunStatus(run.status)) {
     return { handedOff: false, reason: "terminal" }
   }
 

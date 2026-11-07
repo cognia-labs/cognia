@@ -18,11 +18,12 @@
 import type { ExecutionLegSnapshot } from "./types"
 import type { WorkflowRunRow, RunStatus } from "@/types/workflow/visual"
 import type { TaskExecution, TaskExecutionStatus } from "@/types/scheduler"
-import type {
-  ExecutionRun,
-  ExecutionRunOrigin,
-  ExecutionRunStatus,
-  RunControlAction,
+import {
+  isTerminalRunStatus,
+  type ExecutionRun,
+  type ExecutionRunOrigin,
+  type ExecutionRunStatus,
+  type RunControlAction,
 } from "@/types/execution/run"
 
 export type UnifiedExecutionStatus =
@@ -186,10 +187,6 @@ function inProject(rowProjectId: string | undefined, filter: string | undefined)
   return rowProjectId == null || rowProjectId === filter
 }
 
-/** Journal statuses that mean the run is over. */
-export const SETTLED_EXECUTION_RUN_STATUSES: ReadonlySet<ExecutionRunStatus> =
-  new Set<ExecutionRunStatus>(["completed", "failed", "cancelled"])
-
 /**
  * True when a live broker leg is already projecting this run.
  *
@@ -210,7 +207,7 @@ export function hasLiveBrokerLeg(
   brokerLegs: readonly ExecutionLegSnapshot[]
 ): boolean {
   const brokerKind = brokerKindForRun(run)
-  const settled = SETTLED_EXECUTION_RUN_STATUSES.has(run.status)
+  const settled = isTerminalRunStatus(run.status)
   return brokerLegs.some(
     (leg) =>
       leg.runId === run.id ||
@@ -383,7 +380,7 @@ export function buildExecutionMonitorModel(input: BuildMonitorModelInput): Unifi
 
   const supersededTeamRuns = supersededTeamRunIds(input.executionRuns ?? [])
   for (const run of input.executionRuns ?? []) {
-    if (["completed", "failed", "cancelled"].includes(run.status)) continue
+    if (isTerminalRunStatus(run.status)) continue
     if (!inProject(run.projectId, input.projectId)) continue
     journalSourceKeys.add(journalSourceKey(run))
     if (supersededTeamRuns.has(run.id)) continue

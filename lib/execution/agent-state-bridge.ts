@@ -15,11 +15,12 @@ import { recordedRunMetadata } from "./acting-authority"
 import { getConnectorConversationState } from "@/lib/db/connector-conversation-state"
 import type { Goal } from "@/types/goal"
 import type { AgentPlan, PlanStepStatus } from "@/types/agent/plan"
-import type {
-  ExecutionRunKind,
-  ExecutionRunStatus,
-  RunEventType,
-  RunStepStatus,
+import {
+  isTerminalRunStatus,
+  type ExecutionRunKind,
+  type ExecutionRunStatus,
+  type RunEventType,
+  type RunStepStatus,
 } from "@/types/execution/run"
 
 type AgentStateKind = Extract<ExecutionRunKind, "goal" | "plan">
@@ -138,7 +139,7 @@ function lifecycleEvent(
   current: ExecutionRunStatus,
   desired: ExecutionRunStatus
 ): RunEventType | undefined {
-  if (current === desired || ["completed", "failed", "cancelled"].includes(current)) {
+  if (current === desired || isTerminalRunStatus(current)) {
     return undefined
   }
   switch (desired) {
@@ -179,7 +180,7 @@ async function syncRunProjection(
       async () => {
         const run = await db.executionRuns.get(runId)
         assertCurrent(isCurrent)
-        if (run && ["completed", "failed", "cancelled"].includes(run.status)) return
+        if (run && isTerminalRunStatus(run.status)) return
 
         await appendRunEventsInsideTransaction(db, runId, events)
         assertCurrent(isCurrent)

@@ -15,11 +15,8 @@ import {
   clearTeamDispatchContext,
 } from "@/lib/claude/agents/dispatch-context-registry"
 import {
-  LIVE_SQUAD_RUN_STATUSES,
-  TERMINAL_SQUAD_RUN_STATUSES,
   createSquadRunRecords,
   findLiveSquadRun,
-  isTerminalSquadRunStatus,
   parkActiveSquadRun,
   type SquadRunSeed,
 } from "./squad-run-records"
@@ -628,15 +625,5 @@ describe("findLiveSquadRun", () => {
     ])
     expect((await findLiveSquadRun("t"))?.id).toBe("live")
     expect(await findLiveSquadRun("other")).toBeUndefined()
-  })
-
-  it("partitions every status into live or terminal", () => {
-    for (const status of LIVE_SQUAD_RUN_STATUSES) {
-      expect(isTerminalSquadRunStatus(status)).toBe(false)
-    }
-    for (const status of TERMINAL_SQUAD_RUN_STATUSES) {
-      expect(isTerminalSquadRunStatus(status)).toBe(true)
-      expect(LIVE_SQUAD_RUN_STATUSES.has(status)).toBe(false)
-    }
   })
 })

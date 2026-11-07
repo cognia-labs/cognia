@@ -40,8 +40,10 @@ import type { AgentTeamRunRecord, AgentTeamRunStatus } from "@/types/agent/agent
 import { abortTeam } from "../agent-team-runtime"
 import { controlDurableRun } from "../durable/durable-control"
 import { assessStoredTaskRecovery } from "@cognia/agent-orchestration/coordinator"
-import { isTerminalSquadRunStatus, parkActiveSquadRun } from "./squad-run-records"
+import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
+import { parkActiveSquadRun } from "./squad-run-records"
 import { getTeamRunContext } from "../team-run-context"
+import { isTerminalRunStatus } from "@/types/execution/run"
 
 export type SquadControlAction = "pause" | "resume" | "stop"
 
@@ -94,7 +96,7 @@ async function journal(
   const executionRunId = agentTeamExecutionRunId(runId)
   const executionRun = await getExecutionRun(executionRunId).catch(() => undefined)
   if (!executionRun) return
-  if (["completed", "failed", "cancelled"].includes(executionRun.status)) return
+  if (isTerminalRunStatus(executionRun.status)) return
   await runEventJournal
     .append(
       executionRunId,
@@ -137,7 +139,7 @@ async function defaultReenter(input: { teamId: string; runId: string }): Promise
   if (remaining === 0) {
     const now = Date.now()
     const current = await getAgentTeamRun(input.runId)
-    if (!current || isTerminalSquadRunStatus(current.status)) return undefined
+    if (!current || isTerminalTeamStatus(current.status)) return undefined
     if (
       !(await updateAgentTeamRunIfCurrent(input.runId, current, {
         status: "completed",
@@ -203,7 +205,7 @@ export async function controlSquadRun(
   const isLive = deps.isLive ?? ((id: string) => getTeamRunContext(id) !== undefined)
   const run = await getAgentTeamRun(runId)
   if (!run) return { ok: false, reason: "run_not_found" }
-  if (isTerminalSquadRunStatus(run.status)) {
+  if (isTerminalTeamStatus(run.status)) {
     return { ok: false, reason: "already_terminal", status: run.status }
   }
 
@@ -262,9 +264,7 @@ export async function controlSquadRun(
       return {
         ok: false,
         reason:
-          current && isTerminalSquadRunStatus(current.status)
-            ? "already_terminal"
-            : "not_resumable",
+          current && isTerminalTeamStatus(current.status) ? "already_terminal" : "not_resumable",
         status: current?.status,
       }
     }
@@ -300,7 +300,7 @@ export async function controlSquadRun(
       ok: false,
       reason: !stopped
         ? "run_not_found"
-        : isTerminalSquadRunStatus(stopped.status)
+        : isTerminalTeamStatus(stopped.status)
           ? "already_terminal"
           : "not_resumable",
       status: stopped?.status,

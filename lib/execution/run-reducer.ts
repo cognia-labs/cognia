@@ -1,17 +1,18 @@
-import type {
-  ExecutionRun,
-  ExecutionRunStatus,
-  RunControlAction,
-  RunActivityCategory,
-  RunActivitySnapshot,
-  RunActivityStatus,
-  RunArtifactSnapshot,
-  RunEvent,
-  RunProjectionSnapshot,
-  RunStepSnapshot,
-  RunStepStatus,
-  RunUsageSnapshot,
-  RunVerificationSummary,
+import {
+  isTerminalRunStatus,
+  type ExecutionRun,
+  type ExecutionRunStatus,
+  type RunControlAction,
+  type RunActivityCategory,
+  type RunActivitySnapshot,
+  type RunActivityStatus,
+  type RunArtifactSnapshot,
+  type RunEvent,
+  type RunProjectionSnapshot,
+  type RunStepSnapshot,
+  type RunStepStatus,
+  type RunUsageSnapshot,
+  type RunVerificationSummary,
 } from "@/types/execution/run"
 import {
   safeActivityTarget,
@@ -26,7 +27,6 @@ import {
 } from "./run-activity"
 import { canRetryRunKind } from "./run-retry-registry"
 
-const TERMINAL = new Set<ExecutionRunStatus>(["completed", "failed", "cancelled"])
 const RECENT_STEP_LIMIT = 3
 const ACTIVITY_LIMIT = 12
 
@@ -102,7 +102,7 @@ function allowedActions(
   // fork off one settled run would leave the same commitment with two live
   // descendants. `completed` is deliberately excluded — re-doing work that
   // succeeded is a new request, not a retry of this one.
-  if (TERMINAL.has(status)) {
+  if (isTerminalRunStatus(status)) {
     const retryable = status !== "completed" && !retry.alreadyRetried && canRetryRunKind(kind)
     return retryable ? ["retry", "open_details"] : ["open_details"]
   }
@@ -542,9 +542,9 @@ export function reduceRunEvents(
     if (event.type === "usage.reported") usage = usageFrom(event.payload) ?? usage
     upsertActivity(activities, event)
     const nextStatus = eventStatus(event.type)
-    if (nextStatus && !TERMINAL.has(status)) {
+    if (nextStatus && !isTerminalRunStatus(status)) {
       status = nextStatus
-      if (TERMINAL.has(nextStatus)) endedAt = event.ts
+      if (isTerminalRunStatus(nextStatus)) endedAt = event.ts
     }
 
     if (event.type === "plan.created" || event.type === "plan.revised") {
@@ -665,10 +665,10 @@ export function reduceRunEvents(
       waitingReason = undefined
     }
     pendingInterrupt = [...pendingInterrupts.values()].at(-1)
-    if (pendingInterrupt && event.type.startsWith("interrupt.") && !TERMINAL.has(status)) {
+    if (pendingInterrupt && event.type.startsWith("interrupt.") && !isTerminalRunStatus(status)) {
       status = "waiting"
       waitingReason = "waiting_review"
-    } else if (event.type === "interrupt.requested" && !TERMINAL.has(status)) {
+    } else if (event.type === "interrupt.requested" && !isTerminalRunStatus(status)) {
       // An alias arriving after the decision must not park the run again.
       status = "running"
       waitingReason = undefined
@@ -692,7 +692,7 @@ export function reduceRunEvents(
     }
   }
 
-  if (TERMINAL.has(status)) {
+  if (isTerminalRunStatus(status)) {
     pendingInterrupt = undefined
     waitingReason = undefined
   }

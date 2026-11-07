@@ -161,9 +161,11 @@
 
 ### 6.1 状态词汇
 
-- 新增 `lib/execution/run-status.ts`：基于 `ExecutionRunStatus` 和 `EXECUTION_TERMINAL_STATUSES` 的 `isTerminalRunStatus`、`isLiveRunStatus`，以及小队协调器状态（`AgentTeamRunStatus`）到 `ExecutionRunStatus` 的唯一映射。
-- 替换：`squad-run-records.ts:297 isTerminalSquadRunStatus`、`watch-squad-run.ts:28-33`、`lib/agent/squad-presence.ts:30`、`lib/agent-team/legacy-run-history.ts:56 mapLegacyRunStatus` 中与执行运行相关的部分、`lib/execution/monitor-model.ts:130 mapRunStatus` 中小队相关的分支。
-- 本区域之外的状态类型不动。
+- 执行运行的终态判断沿用契约里已有的 `isTerminalRunStatus`（`@/types/execution/run`），不再另写一份。
+- 小队运行和子运行的词汇放在拥有 `AgentTeamRunStatus` 的包里：`@cognia/agent-orchestration/rules` 的 `isTerminalTeamStatus`、`isParkedTeamStatus`、`teamRunOutcome`（`terminated` 对调用方报 `cancelled`）。协调器和 replay 规则也用它。
+- 新增 `lib/execution/run-status.ts`：`isLiveRunStatus`（终态的补集）、`isSettledTeamRunStatus`，以及小队运行落定后写入执行日志的唯一事件映射 `executionEventForSettledTeamRun`。
+- 替换：`lib/execution`、`lib/squads`、`lib/issues/run/agent-team-adapter.ts` 里所有手写的终态列表和 `terminated → cancelled` 换算；删除 `isTerminalSquadRunStatus`、`LIVE_SQUAD_RUN_STATUSES`、`TERMINAL_SQUAD_RUN_STATUSES`、`isSettledSquadRunStatus`、`SETTLED_EXECUTION_RUN_STATUSES`。
+- 不动：`lib/agent/squad-presence.ts` 读的是小队定义的 `TeamStatus`（planning/executing），不是运行状态；`mapLegacyRunStatus` 和 `monitor-model.ts` 的 `mapRunStatus` 映射的是工作流的 `RunStatus`。三者都在本区域的状态类型之外。`subagent-runtime-store` 的子 agent 状态由 6.3 改成读模型时处理。
 
 ### 6.2 `launchChildRun`
 

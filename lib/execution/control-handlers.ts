@@ -27,6 +27,7 @@ import {
   type RunRetryHandler,
 } from "./run-retry-registry"
 import { currentDelegationAttempts, recordDelegationRetry } from "./delegation"
+import { isLiveRunStatus } from "./run-status"
 
 /**
  * The action exists in the vocabulary but this run kind cannot perform it.
@@ -60,14 +61,6 @@ export class SteerDegradedError extends Error {
     this.name = "SteerDegradedError"
   }
 }
-
-const ACTIVE_STATUSES: ReadonlySet<ExecutionRunStatus> = new Set<ExecutionRunStatus>([
-  "queued",
-  "running",
-  "waiting",
-  "paused",
-  "recovery_required",
-])
 
 const agentControllers = new Map<string, AbortController>()
 const securityScanControllers = new Map<string, AbortController>()
@@ -464,7 +457,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
         // steering gate, never into the journal.
         if (command.steerMessage?.trim()) {
           const live = (await listChildExecutionRuns(command.runId)).filter((child) =>
-            ACTIVE_STATUSES.has(child.status)
+            isLiveRunStatus(child.status)
           )
           for (const child of live) {
             await forwardToChild(child, { ...command, action: "steer" }).catch(() => undefined)
@@ -475,7 +468,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     }
 
     const children = (await listChildExecutionRuns(command.runId)).filter((child) =>
-      ACTIVE_STATUSES.has(child.status)
+      isLiveRunStatus(child.status)
     )
 
     if (command.action === "steer") {

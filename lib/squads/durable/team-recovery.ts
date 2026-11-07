@@ -36,7 +36,8 @@ import {
 import { getDb } from "@/lib/db/schema"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { getExecutionRun } from "@/lib/db/execution-runs"
-import { isTerminalSquadRunStatus, parkActiveSquadRun } from "../squad/squad-run-records"
+import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
+import { parkActiveSquadRun } from "../squad/squad-run-records"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type {
   ExecutionRunInterrupt,
@@ -201,7 +202,7 @@ export async function ensureTeamRecoveryInterrupt(
 ): Promise<{ interruptId: string; pending: boolean } | undefined> {
   const run = await getAgentTeamRun(runId)
   if (!run) return undefined
-  if (isTerminalSquadRunStatus(run.status)) return undefined
+  if (isTerminalTeamStatus(run.status)) return undefined
 
   const existing = await listRecoveryInterrupts(runId)
   const pending = existing.find((row) => row.status === "pending")
