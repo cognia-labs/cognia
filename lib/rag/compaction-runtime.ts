@@ -64,7 +64,8 @@ function reinjectionRefs(
       version: memory.evidenceState ?? "unknown",
     })
   }
-  for (const item of options?.twinContext?.retrievedChunks ?? []) {
+  for (const item of contextSourcesOf(options?.contextSources, "twin.identity")?.retrievedChunks ??
+    []) {
     refs.push({ kind: "rag", id: `twin:${item.chunk.id}`, version: item.chunk.vectorDocId })
   }
   for (const item of contextSourcesOf(options?.contextSources, "project-knowledge.retrieval")

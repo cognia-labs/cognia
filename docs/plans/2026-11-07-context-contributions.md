@@ -380,3 +380,13 @@ interface ContextSection {
 - CLI 桥的分身处理器改为导入 `lib/twin/runtime/apply-twin-context`（汇总导出不能做 `api`）。
 - `squads` 提供的 `twin-answer` 端口按其注释应在 twin 有 manifest 后迁来；它属于多 agent 那条线，这里不动。
 - 测试：`lib/twin/{module,prompts}.test.ts`、`lib/memory/namespaces-port.test.ts`、`lib/eval/benchmarks-port.test.ts` 新增；人设页测试改 mock `usePort`，加「没有 eval 时不显示按钮」一例。
+
+## 20. C6c 实施记录：分身的身份段（2026-11-07）
+
+- `lib/twin/context.ts`：`identity`，turn、`identity` slot、15 s。条件与原分支相同（agent 有 `twinId`、`hostDeps.twin`、非空的 `hostDeps.twinQuery`）。文字是 `applied.systemPrompt`，`cacheSplit` 是 `applied.cacheSegments`，`handoff` 是检索块的 `contentRedacted`，有块、有风格样例或降级时上报来源 `TwinIdentitySources`（`types/twin/context-sources.ts`）。
+- 闸与注入日志沿用原逻辑：对 `cacheSegments`（或整段）做 `hasNoLeakingPiiDeep`，泄露时返回 `null`、注入日志记 `prompt-pii-blocked`；运行时抛错交给内核上报，与原来「保留基础提示词」一致。新增：检索在 14 s 时放弃，注入日志记 `timeout`，内核的 15 s 截止作后备。
+- `hostDeps` 新增 `twinQuery`（`twinUserMessage`）和 `twinInjectSource`；`twin` 的类型改由 twin 模块声明。
+- `build-options`：删掉分身块及随之不再使用的 `hasNoLeakingPiiDeep`、`estimateFallbackTokens` 导入；`kernelRetrieval.identityTexts` 传空数组，由收集器从身份段填入；`twinReplacedBase` 改名 `identityReplacedBase`。
+- 删除 `SendOptions.twinContext`（插件契约，kit pin 再次过期）；聊天钩子、房间 runner、`chat-grounding`、`compaction-runtime` 改读 `contextSources["twin.identity"]`。还清 `lib/claude/build-options.ts -> twin`。
+- 测试：`lib/twin/context.test.ts` 9 例新增；`build-options-twin.test.ts` 走真实注册表和真实分身运行时，改读 `contextSources` 后断言不变，作为迁移前后的对照（「转发查询向量」一例原来在用例里 `jest.mock`、并没有生效，改为对运行时的透传 spy 断言实参）；`build-options.test.ts` 的分身 mock 改指运行时文件，身份段用例在运行时临时拿掉真实的 twin 条目。
+- 至此发送路径里没有检索段了；计划 §2.5 列的暂不覆盖项只剩内核自己的段（执行中计划）。

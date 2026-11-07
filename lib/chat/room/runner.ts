@@ -1862,7 +1862,10 @@ export class RoomRunner {
           if (duplicateIds.size > 0) {
             tagged = tagged.filter((message) => !duplicateIds.has(message.id))
           }
-          tagged = mergeTwinSourcesIntoLastAssistant(tagged, ctx?.options.twinContext)
+          tagged = mergeTwinSourcesIntoLastAssistant(
+            tagged,
+            contextSourcesOf(ctx?.options.contextSources, "twin.identity")
+          )
           tagged = mergeMemorySourcesIntoLastAssistant(
             tagged,
             contextSourcesOf(ctx?.options.contextSources, "memory.recall")

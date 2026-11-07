@@ -1359,10 +1359,11 @@ export async function handleEvent(
       }
 
       // Twin sources injection — runs once per turn at `turnComplete`. The
-      // `applyTwinContext` runtime data was stashed onto sendOptions.twinContext
-      // during `resolveSendOptions`; we read it back from the lastSend cache
-      // (the same place routing-fallback uses) and merge twin + style sources
-      // onto the last assistant message's SourcesPart.
+      // twin module's identity section reported its chunks and style samples
+      // under `contextSources["twin.identity"]` during `resolveSendOptions`;
+      // we read them back from the lastSend cache (the same place
+      // routing-fallback uses) and merge twin + style sources onto the last
+      // assistant message's SourcesPart.
       let routerFusionSummary: Awaited<ReturnType<typeof finishRouterFusionTurn>> = null
       if (turnComplete) {
         // Router + Fusion (ADR-0188): seal a ledgered turn at its result, not at
@@ -1383,7 +1384,7 @@ export async function handleEvent(
             nextMessages = withWebSearch
           }
         }
-        const twinCtx = last?.options.twinContext
+        const twinCtx = contextSourcesOf(last?.options.contextSources, "twin.identity")
         if (twinCtx) {
           const withTwin = mergeTwinSourcesIntoLastAssistant(nextMessages, twinCtx)
           if (withTwin !== nextMessages) {

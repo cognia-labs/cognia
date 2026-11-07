@@ -143,7 +143,6 @@ import type { AgentExecutionIdentity } from "@cognia/agent-config-types/agent-ex
 import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
 import type { Project } from "@/types"
 import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
-import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import type { ConnectorMode } from "@/types/connectors/policy"
 import { type AgentModeConfig } from "@/types/agent/agent-mode"
 import { buildAgentModeSessionUpdate } from "@/lib/agent/mode-session-update"
@@ -203,7 +202,6 @@ import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { estimateCJKTokenCount } from "@cognia/rag/cjk-tokenizer"
 import { withRemoteHostKeyedProviders } from "@/lib/host-secrets/remote-host-keys"
 import { DEFAULT_SKILL_CATALOG_TOKEN_BUDGET } from "@/lib/skills/prompt-budget"
-import { estimateFallbackTokens } from "@/lib/ai/tokens/fallback-estimator"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import { PLAN_MODE_PROMPT, PLAN_MODE_STRUCTURED_STEPS_PROMPT } from "@/lib/agent/prompts/plan-mode"
 import { BRIEF_MODE_PROMPT } from "@/lib/agent/prompts/brief-mode"
@@ -637,15 +635,15 @@ export interface BuildOptionsContext {
    */
   agentMode?: AgentModeConfig | null
   /**
-   * Optional twin runtime configuration. When BOTH this and `twinUserMessage`
-   * are supplied AND the resolving character carries a `twinId`,
-   * `resolveSendOptions` will invoke `applyTwinContext` and replace the base
-   * character system prompt with the four-segment twin prompt (character +
-   * identity + retrieved chunks + style few-shot). Mode / Skill sections still
-   * append below.
+   * Optional twin runtime configuration, passed to the twin module's identity
+   * section as `hostDeps.twin` (ADR-0250 §14 `context` amendment). When BOTH
+   * this and `twinUserMessage` are supplied AND the resolving character
+   * carries a `twinId`, that section replaces the base character system
+   * prompt with the four-segment twin prompt (character + identity +
+   * retrieved chunks + style few-shot). Mode / Skill sections still append
+   * below.
    *
-   * Importing the dep type lazily to avoid a hard cycle when build-options.ts
-   * is loaded outside the twin runtime — the field is structurally typed so
+   * Structurally typed so build-options.ts does not import the twin and
    * tests / non-twin callers can omit it cleanly.
    */
   twinDeps?: TwinRuntimeDepsForBuild
@@ -2330,10 +2328,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     appDefault: appSettings?.defaultSystemPrompt,
   }).text
 
-  // Tracks whether the twin runtime replaced `baseSystem` below. When it did,
-  // the twin prompt already encodes personality, so the v2 persona section
-  // (tone / personality) is suppressed to avoid contradictory guidance.
-  let twinReplacedBase = false
+  // Whether a module's identity section (the twin's) replaced `baseSystem`
+  // below. When it did, that prompt already encodes personality, so the v2
+  // persona section (tone / personality) is suppressed to avoid
+  // contradictory guidance.
+  let identityReplacedBase = false
 
   // --- Cache-friendly prompt assembly (experimental, default off) ----------
   // When enabled, per-turn dynamic sections (twin retrieved chunks + style
@@ -2349,89 +2348,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // Forward the flag so the sidecar's ai-sdk dispatcher can place an
   // explicit anthropic cacheControl breakpoint on the stable segment.
   if (cacheOptimizationEnabled) opts.cacheOptimizationEnabled = true
-
-  // --- Twin runtime injection (opt-in) -------------------------------------
-  // When the resolving character is twin-bound AND the caller supplied
-  // `twinDeps` + `twinUserMessage`, replace `baseSystem` with the four-segment
-  // twin prompt. The runtime never throws — failures degrade to a no-context
-  // prompt, matching the rest of the resolver's "best effort" semantics.
-  if (character?.twinId && ctx.twinDeps && ctx.twinUserMessage && ctx.twinUserMessage.trim()) {
-    try {
-      const { applyTwinContext, recordTwinInject } = await import("@/lib/twin/runtime")
-      const twinStartedAt = Date.now()
-      const result = await applyTwinContext({
-        character,
-        userMessage: ctx.twinUserMessage,
-        precomputedQueryEmbedding: ctx.precomputedQueryEmbedding,
-        deps: ctx.twinDeps as Parameters<typeof applyTwinContext>[0]["deps"],
-      })
-      const twinPromptBlocked = Boolean(
-        result.applied &&
-        !hasNoLeakingPiiDeep(
-          result.applied.cacheSegments ?? { systemPrompt: result.applied.systemPrompt }
-        )
-      )
-      if (result.applied && !twinPromptBlocked) {
-        if (cacheOptimizationEnabled && result.applied.cacheSegments?.dynamic) {
-          // Stable twin segments (character prompt + identity) stay in the
-          // prefix; per-turn RAG chunks + style few-shot move to the tail.
-          baseSystem = result.applied.cacheSegments.stable
-          dynamicTailSections.push(result.applied.cacheSegments.dynamic)
-        } else {
-          baseSystem = result.applied.systemPrompt
-        }
-        twinReplacedBase = true
-      }
-      // Stash the retrieved context for the chat hook so it can render a
-      // Twin SourcesPart on the assistant message. Always attached when the
-      // runtime ran (even if degraded) so the UI can show a "no context"
-      // indicator instead of staying silent.
-      if (
-        !twinPromptBlocked &&
-        (result.retrievedChunks.length > 0 ||
-          result.selectedStyleSamples.length > 0 ||
-          result.degraded)
-      ) {
-        opts.twinContext = {
-          twinId: character.twinId,
-          retrievedChunks: result.retrievedChunks,
-          selectedStyleSamples: result.selectedStyleSamples.map((s) => ({
-            id: s.id,
-            contextLabel: s.contextLabel,
-            summary: s.summary,
-            tone: s.tone,
-          })),
-          degraded: result.degraded,
-          ...(result.citations ? { citations: result.citations } : {}),
-        }
-      }
-      // Record the call in the M6 inject-log ring buffer so the Settings
-      // "Twin injection log" card can confirm this turn used the twin profile.
-      // Done last (after prompt assembly) so a logging slip can never undo the
-      // injected prompt; diagnostic-only and never blocks the send.
-      await recordTwinInject({
-        ts: Date.now(),
-        twinId: character.twinId,
-        source: ctx.twinInjectSource ?? "chat",
-        applied: Boolean(result.applied && !twinPromptBlocked),
-        degraded: twinPromptBlocked || (result.degraded ?? false),
-        degradedReason: twinPromptBlocked ? "prompt-pii-blocked" : (result.degradedReason ?? null),
-        chunkCount: result.retrievedChunks?.length ?? 0,
-        styleSampleCount: result.selectedStyleSamples?.length ?? 0,
-        tokensApprox:
-          result.applied && !twinPromptBlocked
-            ? estimateFallbackTokens(result.applied.systemPrompt ?? baseSystem)
-            : 0,
-        durationMs: Date.now() - twinStartedAt,
-        chunkIds: result.retrievedChunks.map(({ chunk }) => chunk.id),
-        chunkScores: result.retrievedChunks.map((chunk) => chunk.score),
-        styleSampleIds: result.selectedStyleSamples.map((sample) => sample.id),
-        ...(ctx.session?.id ? { sessionId: ctx.session.id } : {}),
-      })
-    } catch {
-      // Twin runtime failure is non-fatal — keep the original baseSystem.
-    }
-  }
 
   // The retrieval query the modules' context contributions read (the
   // workspace and agent knowledge bases): the caller's message, or the routing
@@ -2660,8 +2576,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // already placed: slot sections join `systemPrompt` below at their slot,
   // turn sections join the dynamic tail here, after the kernel's own
   // retrieval sections.
-  // The caller's host dependencies pass through by name: `twin`, `memory`,
-  // `projectKnowledge` and `knowledgeAccess`.
+  // The caller's host dependencies pass through by name: the twin's, memory's,
+  // the knowledge bases' and the knowledge ceiling.
   const { collectContextContributions } = await import("./context-contributions")
   const { toolSurfaceHost: contextHost } = await import("./tool-contributions")
   const contributedContext = await collectContextContributions(
@@ -2680,6 +2596,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       hostDeps: Object.fromEntries(
         Object.entries({
           twin: ctx.twinDeps,
+          twinQuery: ctx.twinUserMessage,
+          twinInjectSource: ctx.twinInjectSource,
           memory: ctx.memoryDeps,
           memoryQuery: ctx.memoryUserMessage,
           memoryScope: ctx.memoryDeps
@@ -2690,23 +2608,21 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         }).filter(([, value]) => value !== undefined)
       ) as ContextTurnContext["hostDeps"],
       grant: grant ?? null,
-      // The twin ran above; contributions may leave out what it retrieved.
-      kernelRetrieval: {
-        identityTexts: opts.twinContext?.retrievedChunks.map((c) => c.chunk.contentRedacted) ?? [],
-      },
+      // Filled by the collector from the identity section, which runs first.
+      kernelRetrieval: { identityTexts: [] },
     },
     { cacheOptimization: cacheOptimizationEnabled }
   )
   // A module's identity section stands in for the agent's base system prompt.
   if (contributedContext.identity !== undefined) {
     baseSystem = contributedContext.identity
-    twinReplacedBase = true
+    identityReplacedBase = true
   }
   // --- v2 persona (ADR-0030) ----------------------------------------------
   // Project the character's free-form `tone` / `personality` into a short
   // guidance block appended after the base system prompt. Suppressed when the
   // twin or an identity section already produced a personality-rich prompt.
-  const personaSection = twinReplacedBase ? "" : buildPersonaSection(character?.persona)
+  const personaSection = identityReplacedBase ? "" : buildPersonaSection(character?.persona)
   const contextSlot = (slot: ContextSlot) => contributedContext.slots[slot] ?? []
   dynamicTailSections.push(...contributedContext.tail)
   if (Object.keys(contributedContext.sources).length > 0)
@@ -5160,7 +5076,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     ...(computerUseAllowedForChat ? ["computer-use"] : []),
     ...(session?.kind === "workflow-editor" ? ["workflow-editor"] : []),
     ...(session?.kind === "team" ? ["agent-team"] : []),
-    ...(twinReplacedBase ? ["digital-twin"] : []),
+    ...(identityReplacedBase ? ["digital-twin"] : []),
     ...(ctx.activeGoal?.status === "active" || ctx.activeLoop === true ? ["goal-loop"] : []),
   ]
   const skillDelivery = resolveSkillDelivery({
@@ -5223,7 +5139,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         reason: "No permitted screen-capture route is available",
       },
       twinContext: {
-        available: twinReplacedBase,
+        available: identityReplacedBase,
         reason: "No Digital Twin context was injected into this turn",
       },
       webFetch: {

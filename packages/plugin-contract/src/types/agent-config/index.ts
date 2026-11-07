@@ -1137,42 +1137,6 @@ export type SendOptions = {
   suppressedReason?: "quiet_hours" | "muted" | "manual_mode_override"
 
   /**
-   * Twin runtime metadata: the chunks + style samples actually used when
-   * `applyTwinContext` ran during `resolveSendOptions`. The chat hook reads
-   * this and persists a Twin-RAG `SourcesPart` on the assistant message so
-   * the user can see what shaped the reply. Sidecar-protocol metadata —
-   * stripped before the SDK call (no behavioural impact).
-   */
-  twinContext?: {
-    twinId: string
-    retrievedChunks: Array<{
-      chunk: { id: string; vectorDocId: string; contentRedacted: string; sourceId: string }
-      score: number
-      sourceTitle?: string
-    }>
-    selectedStyleSamples: Array<{
-      id: string
-      contextLabel: string
-      summary: string
-      tone: string[]
-    }>
-    degraded: boolean
-    /**
-     * Optional formatted source citations for the retrieved chunks — metadata
-     * only, never part of the assembled prompt. Present when the character has
-     * `enableCitations` on. Structural mirror of `@cognia/rag` `Citation`.
-     */
-    citations?: Array<{
-      id: string
-      marker: string
-      fullCitation: string
-      source: string
-      title?: string
-      relevanceScore?: number
-    }>
-  }
-
-  /**
    * Provider search results injected before this turn. The chat event bridge
    * persists them on the completed assistant message as clickable sources.
    * Sidecar-protocol metadata only; the sidecar ignores this field.

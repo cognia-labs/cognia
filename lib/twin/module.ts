@@ -3,7 +3,8 @@ import { defineHostModule } from "@/lib/modules/define"
 // Employee Digital Twin (ADR-0003): a person's knowledge, style and
 // playbooks, distilled from their sources, retrieved per turn and spoken in
 // their voice. Its distillation, reranking and system-template prompts reach
-// the Prompt Center as its prompt contribution.
+// the Prompt Center as its prompt contribution, and its identity section is
+// its context contribution.
 export default defineHostModule({
   id: "twin",
   kind: "module",
@@ -35,4 +36,6 @@ export default defineHostModule({
     "lib/twin/runtime/reranker.ts",
   ],
   prompts: () => import("./prompts"),
+  // The twin's identity: it stands in for a twin-bound agent's base prompt.
+  context: { load: () => import("./context") },
 })

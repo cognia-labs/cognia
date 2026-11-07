@@ -227,8 +227,8 @@ jest.mock("@/lib/agent/agent-env-keyring", () => ({
     mockGetAgentEnvSecret(...args),
 }))
 
-// Twin runtime is dynamically imported by resolveSendOptions; the mock only
-// kicks in when a test supplies twinId + twinDeps + twinUserMessage.
+// The twin module's identity section imports the twin runtime lazily; the
+// mock only kicks in when a test supplies twinId + twinDeps + twinUserMessage.
 const mApplyTwinContext = jest.fn()
 const mResolveOpencodeVaultCredential = jest.fn()
 jest.mock("@/lib/subscription/opencode/chat-bridge", () => ({
@@ -252,7 +252,7 @@ jest.mock("@/lib/subscription/codex/chat-bridge", () => ({
     mResolveCodexVaultCredential(...a),
 }))
 
-jest.mock("@/lib/twin/runtime", () => ({
+jest.mock("@/lib/twin/runtime/apply-twin-context", () => ({
   applyTwinContext: (...args: Parameters<typeof mApplyTwinContext>) => mApplyTwinContext(...args),
 }))
 
@@ -7769,36 +7769,43 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     })
 
     it("lets an identity section replace the base prompt, drop the persona and lead the tail", async () => {
-      contribute([
-        {
-          id: "who",
-          cache: "turn",
-          slot: "identity",
-          produce: () => ({
-            text: "I am Ada.\n\n## Retrieved",
-            cacheSplit: { stable: "I am Ada.", dynamic: "## Retrieved" },
-          }),
-        },
-        { id: "status", cache: "turn", produce: () => ({ text: "## Crate status" }) },
-      ])
-      const character = makeChar({
-        id: "c1",
-        systemPrompt: "base",
-        persona: { tone: "warm", personality: "Former teacher." },
-      })
-      const opts = await resolveSendOptions({ character, session: makeSession({ id: "s1" }) })
-      expect(opts.systemPrompt?.startsWith("I am Ada.")).toBe(true)
-      expect(opts.systemPrompt).not.toContain("base")
-      expect(opts.systemPrompt).not.toContain("## Persona")
-      expect(opts.dynamicSystemPrompt?.indexOf("## Retrieved")).toBeLessThan(
-        opts.dynamicSystemPrompt?.indexOf("## Crate status") ?? -1
-      )
-      const whole = await resolveSendOptions({
-        character,
-        session: makeSession({ id: "s1" }),
-        appSettings: { cacheOptimizationEnabled: false } as never,
-      })
-      expect(whole.systemPrompt?.startsWith("I am Ada.\n\n## Retrieved")).toBe(true)
+      // One module at most declares the identity slot: stand in for the twin's.
+      const twinAt = mockContextEntries.findIndex((entry) => entry.module === "twin")
+      const [twin] = twinAt >= 0 ? mockContextEntries.splice(twinAt, 1) : []
+      try {
+        contribute([
+          {
+            id: "who",
+            cache: "turn",
+            slot: "identity",
+            produce: () => ({
+              text: "I am Ada.\n\n## Retrieved",
+              cacheSplit: { stable: "I am Ada.", dynamic: "## Retrieved" },
+            }),
+          },
+          { id: "status", cache: "turn", produce: () => ({ text: "## Crate status" }) },
+        ])
+        const character = makeChar({
+          id: "c1",
+          systemPrompt: "base",
+          persona: { tone: "warm", personality: "Former teacher." },
+        })
+        const opts = await resolveSendOptions({ character, session: makeSession({ id: "s1" }) })
+        expect(opts.systemPrompt?.startsWith("I am Ada.")).toBe(true)
+        expect(opts.systemPrompt).not.toContain("base")
+        expect(opts.systemPrompt).not.toContain("## Persona")
+        expect(opts.dynamicSystemPrompt?.indexOf("## Retrieved")).toBeLessThan(
+          opts.dynamicSystemPrompt?.indexOf("## Crate status") ?? -1
+        )
+        const whole = await resolveSendOptions({
+          character,
+          session: makeSession({ id: "s1" }),
+          appSettings: { cacheOptimizationEnabled: false } as never,
+        })
+        expect(whole.systemPrompt?.startsWith("I am Ada.\n\n## Retrieved")).toBe(true)
+      } finally {
+        if (twin) mockContextEntries.splice(twinAt, 0, twin)
+      }
     })
 
     it("puts a turn section in the dynamic tail and a session section in its slot", async () => {

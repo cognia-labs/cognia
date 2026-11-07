@@ -425,7 +425,6 @@
     "lib/claude/build-options.ts -> slash-commands",
     "lib/claude/build-options.ts -> squads",
     "lib/claude/build-options.ts -> support-agent",
-    "lib/claude/build-options.ts -> twin",
     "lib/claude/build-options.ts -> vscode-compat",
     "lib/claude/build-options.ts -> workflow",
     "lib/claude/builtin-mcp/resolve.ts -> a2ui",

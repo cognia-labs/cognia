@@ -18,7 +18,21 @@ jest.mock("@cognia/redact", () => ({
   hasNoLeakingPiiDeep: (value: unknown) => mockHasNoLeakingPiiDeep(value),
 }))
 
+// A pass-through spy on the twin runtime, so a test can see what it was given.
+const mockApplyTwinContext = jest.fn()
+jest.mock("@/lib/twin/runtime/apply-twin-context", () => {
+  const actual = jest.requireActual("@/lib/twin/runtime/apply-twin-context")
+  return {
+    ...actual,
+    applyTwinContext: (input: unknown) => {
+      mockApplyTwinContext(input)
+      return actual.applyTwinContext(input)
+    },
+  }
+})
+
 import { resolveSendOptions } from "./build-options"
+import { contextSourcesOf } from "./context-sources"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { readTwinInjectLog, __resetTwinInjectLog } from "@/lib/twin/runtime/inject-log"
 import type { Character } from "@cognia/agent-config-types"
@@ -31,6 +45,7 @@ beforeAll(dbFixture.initialize)
 beforeEach(async () => {
   await dbFixture.restore()
   __resetTwinInjectLog()
+  mockApplyTwinContext.mockClear()
   mockHasNoLeakingPiiDeep.mockReset()
   mockHasNoLeakingPiiDeep.mockReturnValue(true)
 })
@@ -73,6 +88,9 @@ const fakeDeps: TwinRuntimeDepsForBuild = {
 }
 
 afterAll(dbFixture.dispose)
+
+const twinSources = (opts: Awaited<ReturnType<typeof resolveSendOptions>>) =>
+  contextSourcesOf(opts.contextSources, "twin.identity")
 
 describe("resolveSendOptions twin injection", () => {
   it("does not invoke the twin runtime when ctx.twinDeps is absent", async () => {
@@ -169,7 +187,7 @@ describe("resolveSendOptions twin injection", () => {
     })
 
     expect(opts.systemPrompt).toBe("BASE_SYSTEM_PROMPT")
-    expect(opts.twinContext).toBeUndefined()
+    expect(twinSources(opts)).toBeUndefined()
     expect(readTwinInjectLog()[0]).toMatchObject({
       applied: false,
       degraded: true,
@@ -195,17 +213,17 @@ describe("resolveSendOptions twin injection", () => {
     expect(opts.systemPrompt).toContain("BASE_SYSTEM_PROMPT")
   })
 
-  it("does not set opts.twinContext when retrieval returns nothing and runtime did not degrade", async () => {
+  it("reports no twin sources when retrieval returns nothing and runtime did not degrade", async () => {
     const opts = await resolveSendOptions({
       character: baseCharacter,
       twinDeps: fakeDeps,
       twinUserMessage: "hi",
     })
-    // Empty retrieval + no degradation → no twinContext metadata to surface.
-    expect(opts.twinContext).toBeUndefined()
+    // Empty retrieval + no degradation → no twin sources to surface.
+    expect(twinSources(opts)).toBeUndefined()
   })
 
-  it("stamps opts.twinContext with degraded=true when the vector store throws", async () => {
+  it("reports the twin sources with degraded=true when the vector store throws", async () => {
     const explodingDeps: TwinRuntimeDepsForBuild = {
       ...fakeDeps,
       store: makeVectorStore(async () => {
@@ -219,30 +237,20 @@ describe("resolveSendOptions twin injection", () => {
     })
     // Vector retrieval failure degrades the runtime; chat hook surfaces this
     // to the user via the SourcesPart "degraded" indicator.
-    expect(opts.twinContext?.degraded).toBe(true)
-    expect(opts.twinContext?.twinId).toBe("twin_alice")
-    expect(opts.twinContext?.retrievedChunks).toEqual([])
+    expect(twinSources(opts)?.degraded).toBe(true)
+    expect(twinSources(opts)?.twinId).toBe("twin_alice")
+    expect(twinSources(opts)?.retrievedChunks).toEqual([])
   })
 
   it("forwards precomputedQueryEmbedding to applyTwinContext", async () => {
-    // Mock the applyTwinContext function to capture the arguments it receives
-    jest.mock("@/lib/twin/runtime", () => ({
-      applyTwinContext: jest.fn(async (_input) => ({
-        applied: {
-          systemPrompt: "TWIN_SYSTEM_PROMPT",
-        },
-      })),
-      recordTwinInject: jest.fn(),
-    }))
-
-    const opts = await resolveSendOptions({
+    await resolveSendOptions({
       character: baseCharacter,
       twinDeps: fakeDeps,
       twinUserMessage: "what would Alice do?",
       precomputedQueryEmbedding: [0.5, 0.5, 0.1],
     })
-
-    // The twin runtime should have been invoked and the system prompt replaced
-    expect(opts.systemPrompt).toContain("TWIN_SYSTEM_PROMPT")
+    expect(mockApplyTwinContext).toHaveBeenCalledWith(
+      expect.objectContaining({ precomputedQueryEmbedding: [0.5, 0.5, 0.1] })
+    )
   })
 })

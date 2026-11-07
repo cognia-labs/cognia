@@ -82,7 +82,7 @@ function preserveStepStartParts(preview: UIMessage | undefined, finalParts: Part
  * into a single SourcesPart appended at the tail. Twin-RAG / twin-style
  * sources are injected separately by the chat hook on `turnComplete` via
  * {@link mergeTwinSourcesIntoLastAssistant}, since they come from the
- * runtime context (`SendOptions.twinContext`) not the SDK event stream.
+ * twin's context sources (`contextSources["twin.identity"]`), not the SDK event stream.
  */
 function collectSourcesFromMessage(message: BetaMessage): SourcesPart | null {
   const anthropic = extractAnthropicCitations(message.content as unknown as BetaContentBlock[])
@@ -1534,8 +1534,8 @@ export function contentPreview(content: SendContent, max = 80): string {
 }
 
 /**
- * Twin-side surface for the chat hook: the runtime context emitted by
- * `applyTwinContext` and stashed on `SendOptions.twinContext`. The chat hook
+ * Twin-side surface for the chat hook: what the twin module's identity
+ * section reported under `contextSources["twin.identity"]`. The chat hook
  * passes this verbatim to {@link mergeTwinSourcesIntoLastAssistant} when a
  * turn completes so the user sees what shaped the reply.
  */

@@ -70,13 +70,15 @@ function toPart(result: GroundingResult): GroundingPart {
 
 function optionHits(options: SendOptions): RetrievalHit[] {
   const sources: SourcesPartItem[] = [
-    ...(options.twinContext?.retrievedChunks.map(({ chunk, score }) => ({
-      id: `twin-${chunk.id}`,
-      title: chunk.sourceId,
-      snippet: chunk.contentRedacted,
-      origin: "twin-rag" as const,
-      score,
-    })) ?? []),
+    ...(contextSourcesOf(options.contextSources, "twin.identity")?.retrievedChunks.map(
+      ({ chunk, score }) => ({
+        id: `twin-${chunk.id}`,
+        title: chunk.sourceId,
+        snippet: chunk.contentRedacted,
+        origin: "twin-rag" as const,
+        score,
+      })
+    ) ?? []),
     ...(contextSourcesOf(options.contextSources, "memory.recall")?.retrievedMemories.map(
       (memory) => ({
         id: `memory-${memory.id}`,
@@ -127,7 +129,7 @@ export function attachInteractiveGrounding(
   options: SendOptions | undefined
 ): UIMessage[] {
   if (
-    !options?.twinContext &&
+    !contextSourcesOf(options?.contextSources, "twin.identity") &&
     !contextSourcesOf(options?.contextSources, "memory.recall") &&
     !contextSourcesOf(options?.contextSources, "project-knowledge.retrieval") &&
     !contextSourcesOf(options?.contextSources, "knowledge-base.retrieval")
