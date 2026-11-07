@@ -352,7 +352,10 @@ describe("runDispatchAgentTool — call modes", () => {
     })
     const runId = started.match(/runId: ([\w-]+)/)?.[1]
     expect(runId).toBeTruthy()
-    const signal = mockDispatch.mock.calls[0][2]?.abortSignal
+    // The launcher claims the child before it starts it (X10), so the
+    // dispatch begins a few ticks after the tool answered.
+    const call = await waitFor(() => mockDispatch.mock.calls[0])
+    const signal = call[2]?.abortSignal
     expect(signal).toBeInstanceOf(AbortSignal)
     expect(signal?.aborted).toBe(false)
 
@@ -635,7 +638,8 @@ describe("runDispatchAgentTool, cancel / multi-collect / model / width", () => {
         })
     )
     const runId = await startBackground()
-    const signal = mockDispatch.mock.calls[0][2]?.abortSignal
+    const call = await waitFor(() => mockDispatch.mock.calls[0])
+    const signal = call[2]?.abortSignal
     expect(signal?.aborted).toBe(false)
     const out = await runDispatchAgentTool({ sessionId: "chat-1", args: { cancel: runId } })
     expect(out).toContain(`Cancelled run "${runId}"`)

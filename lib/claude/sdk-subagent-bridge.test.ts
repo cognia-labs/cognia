@@ -2,7 +2,10 @@
  * @jest-environment jsdom
  */
 
+import "fake-indexeddb/auto"
+
 import { applySdkSubagentBridge, __resetSdkSubagentBridge } from "./sdk-subagent-bridge"
+import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { requestCancelSubagentRun } from "./agents/subagent-cancel-registry"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { SDKTaskStartedMessage } from "@cognia/agent-config-types"
@@ -498,6 +501,36 @@ describe("applySdkSubagentBridge — nested task correlation", () => {
       SID
     )
     expect(node("T2")!.depth).toBe(1)
+  })
+})
+
+describe("applySdkSubagentBridge — no run row (ADR-0252 §6.5)", () => {
+  let disableDbRuntime: (() => void) | undefined
+  beforeEach(async () => {
+    disableDbRuntime = __enableDbRuntimeForTesting()
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+  afterEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    disableDbRuntime?.()
+  })
+
+  it("keeps an in-turn SDK Task in the turn: its lifecycle writes no execution run", async () => {
+    applySdkSubagentBridge(started(), SID, { stopTask: jest.fn() })
+    applySdkSubagentBridge(
+      { ...started(), subtype: "task_progress", last_tool_name: "Read" } as never,
+      SID
+    )
+    applySdkSubagentBridge(
+      { ...started(), subtype: "task_notification", status: "completed" } as never,
+      SID
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(node("T1")!.status).toBe("completed")
+    expect(await getDb().executionRuns.count()).toBe(0)
+    expect(await getDb().executionRunEvents.count()).toBe(0)
   })
 })
 

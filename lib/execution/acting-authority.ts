@@ -94,6 +94,12 @@ export async function startToolExecutionRun(
     /** Host-authorized confirmation, anchored to the run that issued the card. */
     confirmedSkill?: { originRunId?: string; requester: PrincipalRefV1; rootSessionId: string }
     title?: string
+    /**
+     * The writer of a child run's row, recorded on its opening event (ids and
+     * codes only) so boot reconciliation can tell the launcher's children from
+     * scheduled and Host jobs that share the `execution:job:` id space.
+     */
+    launchedBy?: "child-run"
   } = {}
 ): Promise<ExecutionRun> {
   const db = getDb()
@@ -195,7 +201,11 @@ export async function startToolExecutionRun(
       await appendRunEventInsideTransaction(
         db,
         id,
-        semanticRunEvent("run.started", {}, { ts: now, sourceEventId: `tool-entry:${id}` })
+        semanticRunEvent(
+          "run.started",
+          options.launchedBy ? { launchedBy: options.launchedBy } : {},
+          { ts: now, sourceEventId: `tool-entry:${id}` }
+        )
       )
       const admitted = await db.executionRuns.get(id)
       if (!admitted || getDb() !== db) throw new Error("Tool execution database changed")

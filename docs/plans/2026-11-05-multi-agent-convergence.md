@@ -218,7 +218,7 @@ interface LaunchChildRunInput {
 ### 6.3 追踪器收敛
 
 - `lib/background-tasks/` 已改为投递箱：渲染端条目不再保存 `status`，只保留投递字段（父会话、结果、批次身份、投递状态、重放凭据）和投递箱自己的两个事实：`settledAt`（结果已记录）、新增的 `interruptedAt`（结果到达前宿主已停止）。`listBackgroundTaskRecords` / `getBackgroundTaskRecord` 联接 `execution:job:<runId>` 得出 `status`：宿主停止为 `interrupted`；结果未记录或运行未结束为 `running`；运行完成为 `done`，否则 `error`；没有运行行（启动被拒）的按结果判断。租约围栏、重放、投递、清理只读投递箱事实。CLI 条目继续保存状态（D13）。不升 Dexie 版本：渲染端条目不再进入 `status` 索引，索引继续服务 CLI 条目；更新时清除旧行残留的状态。旧数据不迁移（X11）。
-- 已删除 `lib/execution/job-bridge.ts` 及测试。桥原来独占的两件事已迁走：插件 `ctx.agent.run` / `runStreamed`（`lib/plugin/agent-sdk/run.ts`）改为启动器的调用方引擎（独立行，标题为 label 或 agent id，Job Center 登记保留用于取消）；启动时被中断的渲染端任务，由启动对账（`interruptBackgroundTasksOnBoot` 的 `onInterrupted`）把对应 `execution:job:<runId>` 行落定为 `cancelled`，所有者未知的也算。父运行解析：admission pin 早已经 `dispatch_agent` 传给启动器；桥对非 subagent 行按会话推断父运行的逻辑从未生效（这些行都不带会话），不迁移。遗留：没有 `backgroundTasks` 条目的启动器行（调用方引擎、非后台 twin/external）在宿主重启后不会对账（X10，6.5）。
+- 已删除 `lib/execution/job-bridge.ts` 及测试。桥原来独占的两件事已迁走：插件 `ctx.agent.run` / `runStreamed`（`lib/plugin/agent-sdk/run.ts`）改为启动器的调用方引擎（独立行，标题为 label 或 agent id，Job Center 登记保留用于取消）；启动时被中断的渲染端任务，由启动对账（`interruptBackgroundTasksOnBoot` 的 `onInterrupted`）把对应 `execution:job:<runId>` 行落定为 `cancelled`，所有者未知的也算。父运行解析：admission pin 早已经 `dispatch_agent` 传给启动器；桥对非 subagent 行按会话推断父运行的逻辑从未生效（这些行都不带会话），不迁移。没有 `backgroundTasks` 条目的启动器行（调用方引擎、非后台 twin/external）在宿主重启后的对账见 6.5（X10，已修复）。
 - `stores/agent/subagent-runtime-store` 已改为读模型：持久化部分只保留 `templates`；条目的实时进度来自两个引擎的事件；有 `execution:job:<id>` 行的运行，状态取自该行（`runs`，由 `run-projection.ts` 维护：对跟踪中的 id 发一条 live query，store 有第一个条目时启动，没有 IndexedDB 时不启动），`upsert` / `setStatus` 不能把条目改离运行行的状态。只有没有运行行的条目（轮内 SDK `Task`、启动前被拒的派发）用引擎上报的状态；运行行为 `failed` 时保留引擎报的 `timeout`。聊天卡片没有实时条目时跟随运行行（刷新后不再永远显示运行中）。契约类型 `SubAgent` 不变。
 - `TeamDelegationRecord` 已改为子运行投影 + 小队策略字段：记录只保留小队知道的事（原因、目标、审批、准入时的深度 `metadata.delegationDepth` / `delegationChain`、子运行交回的文本），启动后通过 `metadata.executionRunId` 链接子运行行。`lib/squads/delegation-view.ts` 的 `projectDelegation` 把行状态映射到委派词汇：未结束为 `active`，并在 `queued`/`waiting`/`paused`/`recovery_required` 时给出 `runStatus`；结束取行的结果，截止时间超时仍记为 `timeout`（行只能记 `failed`）；运营者的取消和启动前的策略状态（等待审批、拒绝）以记录为准。失败原因统一显示为 `error`（原来面板只读从未写入的 `error`，失败原因从不显示）。`delegations-panel.tsx` 对已链接的子运行发 live query 并读投影。深度和环检测改走运行树（见 6.4 `run-tree.ts`）：子运行之上各 `team` 运行的小队（`squadIdForTeamRun`：运行记录，否则开场事件）加上来源小队，再沿运行树看不到的边（等待审批、仍在启动的委派）向上延伸；目标在链上或经这些边能到达链上的小队即为环；链长即子运行深度。仅凭 store 能判断的拒绝（自委派、未上树的边构成的环或超深）同步返回失败记录；运行树的检查在启动时进行（批准后也会重查），被推迟的委派在创建时也查一次，永远无法运行的直接失败。`HandoffEnvelope` 在启动时才附上，两端都是真实运行 id：`parentRunId` 为子运行挂靠的运行，`childRunId` 为子运行行，`parentChain` 为根到父的运行 id，`depth` 为链长；没有父运行的委派不附 envelope（X7 关闭）。改名留到 P9（见命名表）。
 - best-of-N：候选写子运行行，分组运行为父（已在 6.2 完成）。
@@ -234,6 +234,12 @@ interface LaunchChildRunInput {
 - `rg "job-bridge|subagent-runtime-store.*persist|TeamDelegationRecord"` 只剩投影类型与文档；每个调用方都通过 `launchChildRun`。
 - 新增测试：每种目标的启动与父链接；在跑中刷新后能从引擎对账；停止一棵树会停止所有子节点；轮内 SDK `Task` 不产生运行行。
 - 升级时进行中的后台工作：能对账的对账，否则标记中断（测试固定）。
+
+按实际实现（P3 完成）：
+
+- **刷新后的对账（X10）。** 新增 `lib/execution/child-run-ownership.ts`。启动器在写行之前为子运行取得所有权（Web Lock `cognia:child-run:<runId>`，同源的所有 webview 共享，进程死亡时由浏览器释放；没有浏览器窗口的单进程宿主用进程内集合），落定之后释放，并在开启事件上标记 `launchedBy: "child-run"`。恢复循环每一轮先读未结束的 job 行，再读仍被持有的所有权，把带标记、无人持有、没有 `backgroundTasks` 条目的行落定为 `run.cancelled`（`host_stopped`，用启动器自己的落定事件 id 去重）。没有 Web Locks 的浏览器跳过，不猜。`execution:job:` 也是出站投递和集成动作 job 的 id 空间，不带标记的行（包括标记之前写的行，X12）一律不碰。
+- **验收测试。** 每种目标（agent、external、twin、调用方引擎）写在父运行下；对账的选择、顺序与落定；停止一棵树（6.4）；轮内 SDK `Task` 不写运行行和事件行；升级用例由 background-tasks 的 “parks legacy rows without treating absence of a lease as proof of death” 固定。
+- **审计。** `job-bridge` 代码已无；`subagent-runtime-store` 只持久化模板；`TeamDelegationRecord` 只剩投影类型（P9 改名）。6.2 列出的子运行入口都经过 `launchChildRun`；其余 `executeAgent` 调用方（计划步骤的 `agent_turn`、工作流 ensemble 节点、GitHub issue 循环、小队队员、工作流候选挑选）做的是自身运行的工作，不是委派子运行。收敛清单仍引用已删的 `job-bridge.ts`，`audit:convergence` 在 `HEAD` 上同样失败（X13）。
 
 ## 7. P4：steer、控制机、ADR-0249
 

@@ -317,6 +317,12 @@ export function startBackgroundTaskRecovery(
       }
       const interrupted = await interruptRendererBackgroundTasksOnBoot()
       if (!isCurrent()) return
+      // A launched child with no outbox entry has no owner lease to expire:
+      // its row is settled once no live process claims it (ADR-0252 X10).
+      const { reconcileOrphanedChildRuns } = await import("@/lib/execution/child-run-ownership")
+      if (!isCurrent()) return
+      await reconcileOrphanedChildRuns().catch(() => undefined)
+      if (!isCurrent()) return
       if (boot) {
         await pruneBackgroundTaskRecords({ now: Date.now(), host: "renderer" }).catch(
           () => undefined

@@ -29,7 +29,9 @@
  * carries the result to deliver, never the run's identity or parent). The
  * launcher is the only writer of these rows: no bridge projects them back.
  * A run whose host stopped before it settled is settled `cancelled` by the
- * renderer's boot reconciliation (`interruptRendererBackgroundTasksOnBoot`).
+ * renderer's recovery: through its outbox entry when it has one
+ * (`interruptRendererBackgroundTasksOnBoot`), otherwise through the ownership
+ * claim held while it runs (`child-run-ownership.ts`).
  *
  * Capability grants (ADR-0198) customise the run. Each engine says which grant
  * fields it applies. A grant that sets a field the engine would ignore is
@@ -50,6 +52,7 @@ import { getExecutionRun } from "@/lib/db/execution-runs"
 import { loadPort } from "@/lib/modules/ports"
 import { finishToolExecutionRun, startToolExecutionRun } from "./acting-authority"
 import { registerRunStop, type RunStop } from "./run-stops"
+import { CHILD_RUN_LAUNCHER_MARK, holdChildRunOwnership } from "./child-run-ownership"
 
 /** Registers the child in the Job Center, where a person can see and cancel it. */
 export interface ChildRunBackgroundRegistration {
@@ -512,13 +515,18 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
   const target = input.target
   const childId = input.childId ?? crypto.randomUUID()
   const executionRunId = childJobExecutionRunId(childId)
+  // Claimed before the row exists and released after it is settled, so a
+  // reconciliation in any webview tells a live child from an orphan.
+  const releaseOwnership = await holdChildRunOwnership(executionRunId)
   try {
     await startToolExecutionRun(sessionId, {
       runId: executionRunId,
       ...(parent ? { parentRunId: parent.id } : {}),
       title: input.title,
+      launchedBy: CHILD_RUN_LAUNCHER_MARK,
     })
   } catch (error) {
+    releaseOwnership()
     return { started: false, reason: "journal_failed", detail: errorText(error) }
   }
 
@@ -596,6 +604,7 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
         executionRunId,
         settled.status === "completed" ? false : settled.status === "cancelled" ? "cancelled" : true
       ).catch(() => undefined)
+      releaseOwnership()
       emitDispatchSpan({
         target,
         executionRunId,

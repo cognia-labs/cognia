@@ -61,6 +61,10 @@ jest.mock("@/lib/background-tasks/renderer-subagent-registry", () => ({
 jest.mock("@/lib/execution/direct-chat-run", () => ({
   recoverStaleDirectChatExecutionRuns: () => mockRecoverDirect(),
 }))
+const mockReconcileOrphans = jest.fn(async (): Promise<string[]> => [])
+jest.mock("@/lib/execution/child-run-ownership", () => ({
+  reconcileOrphanedChildRuns: () => mockReconcileOrphans(),
+}))
 jest.mock("@/lib/db/background-tasks", () => ({
   BACKGROUND_TASK_LEASE_TTL_MS: 60_000,
   pruneBackgroundTaskRecords: () => mockPrune(),
@@ -384,6 +388,7 @@ describe("background owner recovery maintenance", () => {
     mockInterrupt.mockReset().mockResolvedValue([])
     mockPrune.mockReset().mockResolvedValue(0)
     mockRecoverDirect.mockReset().mockResolvedValue(0)
+    mockReconcileOrphans.mockReset().mockResolvedValue([])
     mockSettings.mockResolvedValue({
       subagentNesting: { tokenBudget: 0 },
       backgroundTasks: { autoResumeInterrupted: true },
@@ -417,6 +422,17 @@ describe("background owner recovery maintenance", () => {
     expect(onResumed).toHaveBeenCalledWith(1)
     expect(mockRecoverDirect).toHaveBeenCalledTimes(1)
     expect(mockPrune).toHaveBeenCalledTimes(1)
+    // Launched children with no outbox entry are reconciled on every tick
+    // (ADR-0252 X10): a closed window's claims lapse between boots.
+    expect(mockReconcileOrphans).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps recovering when the orphan reconciliation fails", async () => {
+    mockReconcileOrphans.mockRejectedValueOnce(new Error("locks unavailable"))
+    mockInterrupt.mockResolvedValueOnce([record({ recovery: await recoverable() })])
+    stop = startBackgroundTaskRecovery()
+    await flush()
+    expect(startDispatchRun).toHaveBeenCalledTimes(1)
   })
 
   it("does not overlap ticks and does not schedule after stopping an in-flight check", async () => {

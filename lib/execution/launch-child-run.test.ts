@@ -43,13 +43,18 @@ jest.mock("@/lib/modules/ports", () => ({
 }))
 
 import { hasRunStop, stopRegisteredRun } from "./run-stops"
+import { __resetChildRunOwnershipForTesting, inProcessOwnership } from "./child-run-ownership"
 import {
   __resetAgentTraceEmitterForTesting,
   setAgentTraceWriter,
 } from "@cognia/agent-trace/emitter"
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
-import { createExecutionRun, getExecutionRun } from "@/lib/db/execution-runs"
+import {
+  createExecutionRun,
+  getExecutionRun,
+  listExecutionRunEvents,
+} from "@/lib/db/execution-runs"
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { ChildRunOutcome, StartedChildEngine } from "@/types/execution/child-run"
 import type { ExecutionRun } from "@/types/execution/run"
@@ -755,6 +760,101 @@ describe("launchChildRun: run-control stop", () => {
     expect(cancelAgentMock).toHaveBeenCalledWith("bg_3")
     await expect(launched.outcome).resolves.toMatchObject({ status: "cancelled" })
     expect((await getExecutionRun(launched.executionRunId))?.status).toBe("cancelled")
+  })
+})
+
+describe("launchChildRun: every target links to its parent (ADR-0252 §6.5)", () => {
+  it.each(["agent", "external", "twin", "caller engine"] as const)(
+    "writes the %s child's row under the parent, settled from its outcome",
+    async (kind) => {
+      await seedParent()
+      executeAgentMock.mockResolvedValue({ text: "ok", channel: "sidecar", toolsAvailable: true })
+      externalExecuteMock.mockResolvedValue({ success: true, finalResponse: "ok" })
+      ports.set("twin-answer", {
+        start: (): StartedChildEngine => ({
+          outcome: Promise.resolve({ status: "completed", text: "ok" }),
+          stop: jest.fn(),
+        }),
+      })
+      const target =
+        kind === "agent"
+          ? { kind: "agent" as const, prompt: "p" }
+          : kind === "external"
+            ? { kind: "external" as const, agentId: "codex", prompt: "p" }
+            : kind === "twin"
+              ? { kind: "twin" as const, twinId: "tw", question: "q" }
+              : {
+                  kind: "agent" as const,
+                  label: "coder",
+                  engine: { run: async () => ({ status: "completed" as const }) },
+                }
+      const launched = started(
+        await launchChildRun({ parentRunId: PARENT_ID, target, title: kind, childId: `c-${kind}` })
+      )
+      await launched.outcome
+      expect(await getExecutionRun(launched.executionRunId)).toMatchObject({
+        kind: "job",
+        parentRunId: PARENT_ID,
+        status: "completed",
+      })
+    }
+  )
+})
+
+describe("launchChildRun: ownership (X10)", () => {
+  afterEach(() => __resetChildRunOwnershipForTesting())
+
+  it("claims the child before its row exists, marks the row, and releases after settling", async () => {
+    const claims = inProcessOwnership()
+    const order: string[] = []
+    __resetChildRunOwnershipForTesting({
+      hold: async (runId) => {
+        order.push(`hold ${(await getExecutionRun(runId)) ? "after" : "before"} row`)
+        return claims.hold(runId)
+      },
+      held: claims.held,
+    })
+    let finish!: (outcome: ChildRunOutcome) => void
+    const launched = started(
+      await launchChildRun({
+        target: {
+          kind: "agent",
+          label: "coder",
+          engine: { run: () => new Promise((resolve) => (finish = resolve)) },
+        },
+        title: "coder",
+        childId: "owned",
+      })
+    )
+    expect(order).toEqual(["hold before row"])
+    expect(await claims.held()).toEqual(new Set([launched.executionRunId]))
+    const opening = (await listExecutionRunEvents(launched.executionRunId))[0]
+    expect(opening).toMatchObject({ type: "run.started", payload: { launchedBy: "child-run" } })
+
+    finish({ status: "completed" })
+    await launched.outcome
+    expect((await getExecutionRun(launched.executionRunId))?.status).toBe("completed")
+    expect(await claims.held()).toEqual(new Set())
+  })
+
+  it("releases the claim when the row could not be written", async () => {
+    const claims = inProcessOwnership()
+    __resetChildRunOwnershipForTesting(claims)
+    const spy = jest
+      .spyOn(getDb().executionRuns, "add")
+      .mockRejectedValueOnce(new Error("disk full"))
+    const result = await launchChildRun({
+      target: {
+        kind: "agent",
+        label: "coder",
+        engine: { run: async () => ({ status: "completed" }) },
+      },
+      title: "coder",
+      childId: "unwritten",
+    })
+    spy.mockRestore()
+    expect(result).toMatchObject({ started: false, reason: "journal_failed" })
+    expect(await claims.held()).toEqual(new Set())
   })
 })
 
