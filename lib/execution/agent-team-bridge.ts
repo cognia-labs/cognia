@@ -286,7 +286,8 @@ export async function projectAgentTeamChildLifecycle(input: {
 
 export async function settleAgentTeamExecutionRun(
   sourceRun: AgentTeamRunRecord,
-  status: "completed" | "failed" | "cancelled",
+  // `recovery_required` leaves the row open for a person to decide.
+  status: "completed" | "failed" | "cancelled" | "recovery_required",
   ts = Date.now()
 ): Promise<void> {
   const runId = await ensureAgentTeamExecutionRun(sourceRun)

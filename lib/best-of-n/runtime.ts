@@ -6,6 +6,10 @@ import { getDurableTeamCoordinator } from "@/lib/squads/durable/durable-runtime"
 import { beginDurableDispatch } from "@/lib/squads/durable/durable-dispatch"
 import { controlDurableRun } from "@/lib/squads/durable/durable-control"
 import {
+  agentTeamExecutionRunId,
+  settleAgentTeamExecutionRun,
+} from "@/lib/execution/agent-team-bridge"
+import {
   acquireWorkspaceBundle,
   getWorkspaceBundle,
   ensureWorkspacePortLease,
@@ -22,7 +26,12 @@ import { externalTokenUsageToUsageInfo } from "@/lib/claude/usage"
 import { claimTurnUsage, trackCaptureUsage } from "@/lib/usage/claimed-turn-usage"
 import { describeBestOfNAgent } from "./agents"
 import { runExternalCandidate } from "./external"
-import { BestOfNAttemptError, type BestOfNExecution, type BestOfNInput } from "./core"
+import {
+  BestOfNAttemptError,
+  type BestOfNExecution,
+  type BestOfNInput,
+  type CandidateResult,
+} from "./core"
 
 export function bestOfNTeam(group: BestOfNGroup, request: BestOfNInput): AgentTeam {
   return {
@@ -212,195 +221,241 @@ export function createBestOfNExecution(): BestOfNExecution {
           },
           session.id
         )
-        return await dispatch.run(async () => {
-          signal.throwIfAborted()
-          turn.lease = await openWorkspaceBundleTurnLease(bundle, group.repositoryId, {
-            taskId: candidate.candidateId,
-            sessionId: session.id,
-            runId: candidate.candidateId,
-            parentRunId: group.teamRunId,
-            agentId: character.id,
-            agentKind: "teammate",
-            workspaceRoot: workspace.physicalRoot,
-            base: { kind: "gitRef", gitRef: group.baseSha },
-          })
-          if (!turn.lease) throw new Error("Candidate workspace turn could not be leased")
-          // Resolve against the candidate root, never the parent project's mounts.
-          // This supplies the normal workspace-confinement path even for a
-          // repository that has no saved Project row.
-          const candidateProject: Project = {
-            id: candidate.candidateId,
-            name: session.title,
-            roots: [{ id: group.repositoryId, path: workspace.physicalRoot, isPrimary: true }],
-            knowledgeBase: [],
-            sessionIds: [session.id],
-            sessionCount: 1,
-            messageCount: 0,
-            createdAt: new Date(group.createdAt),
-            updatedAt: new Date(group.createdAt),
-            lastAccessedAt: new Date(group.createdAt),
-          }
-          const remainingMs = Math.max(
-            1,
-            (group.budgetPolicy.maxDurationMs ?? 600_000) - (Date.now() - group.createdAt)
-          )
-          const declared = describeBestOfNAgent(candidate.agent)
-          const options =
-            declared.kind === "external"
-              ? null
-              : await resolveSendOptions({
-                  session,
-                  character,
-                  appSettings: await getSettings(),
-                  activeProject: candidateProject,
-                  agentKind: "teammate",
-                  capabilityGrants: [grant],
-                  routingSurface: "agent",
-                  routingContextHint: { promptText: request.prompt, category: "coding" },
-                })
-          // A Cognia agent whose own default runtime is external takes the same lane.
-          const externalConfigId =
-            declared.kind === "external"
-              ? declared.configId
-              : isExternalAgentProviderId(options?.provider)
-                ? externalAgentIdFromProviderId(options?.provider)
-                : undefined
-          let text: string
-          if (externalConfigId !== undefined) {
-            if (!externalConfigId)
-              throw new Error("Best-of-N candidate names an unscoped external agent")
-            // The external execute contract has no dollar cap and reports no cost.
-            if (group.budgetPolicy.maxCostUsd != null)
-              throw new Error("The selected runtime cannot enforce the best-of-N cost budget")
-            const externalModel =
-              (declared.kind === "external" ? candidate.agent.model : options?.model) ?? undefined
-            let reported: SurfaceUsageInput | undefined
-            try {
-              ;({ text } = await runExternalCandidate({
-                configId: externalConfigId,
-                prompt: request.prompt,
-                model: externalModel,
-                workingDirectory: workspace.physicalRoot,
-                signal: AbortSignal.any([signal, AbortSignal.timeout(remainingMs)]),
-                onCapture: dispatch.capture,
-                onUsage: (usage) => {
-                  // The agent's own figures. Its provider is not a Cognia price
-                  // list, so the row gets no provider bucket and no guessed price.
-                  reported = {
-                    ...usageLedger.externalAgentSurfaceUsage(externalTokenUsageToUsageInfo(usage)),
-                    ...(externalModel ? { model: externalModel } : {}),
-                  }
-                },
-              }))
-            } finally {
-              await bookUsage(reported)
-            }
-          } else {
-            const sendOptions = options!
-            // The frozen execution spec is the sidecar's runtime authority. The
-            // AI-SDK lane does not enforce SendOptions.maxBudgetUsd, so a dollar
-            // cap must fail closed there instead of silently becoming advisory.
-            const runtimeAdapter = sendOptions.execution?.runtimeAdapter
-            const costCap = group.budgetPolicy.maxCostUsd
-            if (
-              costCap != null &&
-              (runtimeAdapter !== "claude-agent-sdk" ||
-                sendOptions.maxBudgetUsd == null ||
-                !Number.isFinite(sendOptions.maxBudgetUsd) ||
-                sendOptions.maxBudgetUsd <= 0 ||
-                sendOptions.maxBudgetUsd > costCap / group.n)
-            ) {
-              throw new Error("The selected runtime cannot enforce the best-of-N cost budget")
-            }
-            // The desktop chat runtime ingests this child's stream too, and
-            // would book it as a `chat` row naming no provider. Claim the turn
-            // so the row below, with provider, model and run, is the only one.
-            const turnOptions = {
-              ...sendOptions,
-              turnId: sendOptions.turnId ?? crypto.randomUUID(),
-            }
-            claimTurnUsage(session.id, turnOptions.turnId)
-            const usageTracker = trackCaptureUsage()
-            let result: Awaited<ReturnType<typeof runner.runAndCaptureAssistantReply>> | undefined
-            try {
-              result = await runner.runAndCaptureAssistantReply(
-                session.id,
-                request.prompt,
-                turnOptions,
-                {
-                  signal,
-                  timeoutMs: remainingMs,
-                  onEvent: (event) => {
-                    usageTracker.observe(event)
-                    dispatch.capture(event)
-                  },
-                  execution: {
-                    kind: "team",
-                    runId: group.teamRunId,
-                    taskId: candidate.candidateId,
-                  },
-                }
-              )
-            } finally {
-              // Also for an attempt that was cancelled or failed: its calls were billed.
-              const usage = usageTracker.resolve(result?.usage)
-              await bookUsage(
-                usage && {
-                  ...usageLedger.surfaceUsageFromUsageInfo(usage, {
-                    costAuthority: runtimeAdapter === "claude-agent-sdk",
-                  }),
-                  ...(turnOptions.model ? { model: turnOptions.model } : {}),
-                  ...(turnOptions.provider ? { providerId: turnOptions.provider } : {}),
-                  turnId: turnOptions.turnId,
-                }
-              )
-            }
-            const reportedCost = result.usage?.totalCostUsd
-            // AI-SDK's result adapter emits zero when the provider supplies no
-            // cost. Preserve unknown instead of turning that wire default into
-            // a claim that the attempt was free.
-            costUsd =
-              reportedCost == null || (reportedCost === 0 && runtimeAdapter !== "claude-agent-sdk")
-                ? null
-                : reportedCost
-            if (result.resultSubtype?.startsWith("error"))
-              throw new BestOfNAttemptError(
-                `Candidate execution ended: ${result.resultSubtype}`,
-                costUsd
-              )
-            text = result.text
-          }
-          await turn.lease.settle("ready")
-          let changeset
-          try {
-            changeset = await scm.captureChangeset({
-              workspaceId: workspace.workspaceId,
-              targetRef: group.targetRef,
-              title: `Best-of-N ${candidate.index + 1}`,
-              requiredChecks: request.requiredChecks ?? [],
+        // The attempt is the candidate's engine; the child run is its record.
+        const attempt = () =>
+          dispatch.run(async (): Promise<CandidateResult> => {
+            signal.throwIfAborted()
+            turn.lease = await openWorkspaceBundleTurnLease(bundle, group.repositoryId, {
+              taskId: candidate.candidateId,
+              sessionId: session.id,
+              runId: candidate.candidateId,
+              parentRunId: group.teamRunId,
+              agentId: character.id,
+              agentKind: "teammate",
+              workspaceRoot: workspace.physicalRoot,
+              base: { kind: "gitRef", gitRef: group.baseSha },
             })
-          } catch (error) {
-            if (scmErrorCode(error) !== "nothing_to_capture") throw error
-          }
-          await dispatch.complete({
-            text,
-            ...(costUsd === null ? {} : { costUsd }),
-            ...(changeset
-              ? {
-                  commitSha: changeset.headSha,
-                  workspaceRevision: changeset.headSha,
-                  diffContent: JSON.stringify(changeset.files),
+            if (!turn.lease) throw new Error("Candidate workspace turn could not be leased")
+            // Resolve against the candidate root, never the parent project's mounts.
+            // This supplies the normal workspace-confinement path even for a
+            // repository that has no saved Project row.
+            const candidateProject: Project = {
+              id: candidate.candidateId,
+              name: session.title,
+              roots: [{ id: group.repositoryId, path: workspace.physicalRoot, isPrimary: true }],
+              knowledgeBase: [],
+              sessionIds: [session.id],
+              sessionCount: 1,
+              messageCount: 0,
+              createdAt: new Date(group.createdAt),
+              updatedAt: new Date(group.createdAt),
+              lastAccessedAt: new Date(group.createdAt),
+            }
+            const remainingMs = Math.max(
+              1,
+              (group.budgetPolicy.maxDurationMs ?? 600_000) - (Date.now() - group.createdAt)
+            )
+            const declared = describeBestOfNAgent(candidate.agent)
+            const options =
+              declared.kind === "external"
+                ? null
+                : await resolveSendOptions({
+                    session,
+                    character,
+                    appSettings: await getSettings(),
+                    activeProject: candidateProject,
+                    agentKind: "teammate",
+                    capabilityGrants: [grant],
+                    routingSurface: "agent",
+                    routingContextHint: { promptText: request.prompt, category: "coding" },
+                  })
+            // A Cognia agent whose own default runtime is external takes the same lane.
+            const externalConfigId =
+              declared.kind === "external"
+                ? declared.configId
+                : isExternalAgentProviderId(options?.provider)
+                  ? externalAgentIdFromProviderId(options?.provider)
+                  : undefined
+            let text: string
+            if (externalConfigId !== undefined) {
+              if (!externalConfigId)
+                throw new Error("Best-of-N candidate names an unscoped external agent")
+              // The external execute contract has no dollar cap and reports no cost.
+              if (group.budgetPolicy.maxCostUsd != null)
+                throw new Error("The selected runtime cannot enforce the best-of-N cost budget")
+              const externalModel =
+                (declared.kind === "external" ? candidate.agent.model : options?.model) ?? undefined
+              let reported: SurfaceUsageInput | undefined
+              try {
+                ;({ text } = await runExternalCandidate({
+                  configId: externalConfigId,
+                  prompt: request.prompt,
+                  model: externalModel,
+                  workingDirectory: workspace.physicalRoot,
+                  signal: AbortSignal.any([signal, AbortSignal.timeout(remainingMs)]),
+                  onCapture: dispatch.capture,
+                  onUsage: (usage) => {
+                    // The agent's own figures. Its provider is not a Cognia price
+                    // list, so the row gets no provider bucket and no guessed price.
+                    reported = {
+                      ...usageLedger.externalAgentSurfaceUsage(
+                        externalTokenUsageToUsageInfo(usage)
+                      ),
+                      ...(externalModel ? { model: externalModel } : {}),
+                    }
+                  },
+                }))
+              } finally {
+                await bookUsage(reported)
+              }
+            } else {
+              const sendOptions = options!
+              // The frozen execution spec is the sidecar's runtime authority. The
+              // AI-SDK lane does not enforce SendOptions.maxBudgetUsd, so a dollar
+              // cap must fail closed there instead of silently becoming advisory.
+              const runtimeAdapter = sendOptions.execution?.runtimeAdapter
+              const costCap = group.budgetPolicy.maxCostUsd
+              if (
+                costCap != null &&
+                (runtimeAdapter !== "claude-agent-sdk" ||
+                  sendOptions.maxBudgetUsd == null ||
+                  !Number.isFinite(sendOptions.maxBudgetUsd) ||
+                  sendOptions.maxBudgetUsd <= 0 ||
+                  sendOptions.maxBudgetUsd > costCap / group.n)
+              ) {
+                throw new Error("The selected runtime cannot enforce the best-of-N cost budget")
+              }
+              // The desktop chat runtime ingests this child's stream too, and
+              // would book it as a `chat` row naming no provider. Claim the turn
+              // so the row below, with provider, model and run, is the only one.
+              const turnOptions = {
+                ...sendOptions,
+                turnId: sendOptions.turnId ?? crypto.randomUUID(),
+              }
+              claimTurnUsage(session.id, turnOptions.turnId)
+              const usageTracker = trackCaptureUsage()
+              let result: Awaited<ReturnType<typeof runner.runAndCaptureAssistantReply>> | undefined
+              try {
+                result = await runner.runAndCaptureAssistantReply(
+                  session.id,
+                  request.prompt,
+                  turnOptions,
+                  {
+                    signal,
+                    timeoutMs: remainingMs,
+                    onEvent: (event) => {
+                      usageTracker.observe(event)
+                      dispatch.capture(event)
+                    },
+                    execution: {
+                      kind: "team",
+                      runId: group.teamRunId,
+                      taskId: candidate.candidateId,
+                    },
+                  }
+                )
+              } finally {
+                // Also for an attempt that was cancelled or failed: its calls were billed.
+                const usage = usageTracker.resolve(result?.usage)
+                await bookUsage(
+                  usage && {
+                    ...usageLedger.surfaceUsageFromUsageInfo(usage, {
+                      costAuthority: runtimeAdapter === "claude-agent-sdk",
+                    }),
+                    ...(turnOptions.model ? { model: turnOptions.model } : {}),
+                    ...(turnOptions.provider ? { providerId: turnOptions.provider } : {}),
+                    turnId: turnOptions.turnId,
+                  }
+                )
+              }
+              const reportedCost = result.usage?.totalCostUsd
+              // AI-SDK's result adapter emits zero when the provider supplies no
+              // cost. Preserve unknown instead of turning that wire default into
+              // a claim that the attempt was free.
+              costUsd =
+                reportedCost == null ||
+                (reportedCost === 0 && runtimeAdapter !== "claude-agent-sdk")
+                  ? null
+                  : reportedCost
+              if (result.resultSubtype?.startsWith("error"))
+                throw new BestOfNAttemptError(
+                  `Candidate execution ended: ${result.resultSubtype}`,
+                  costUsd
+                )
+              text = result.text
+            }
+            await turn.lease.settle("ready")
+            let changeset
+            try {
+              changeset = await scm.captureChangeset({
+                workspaceId: workspace.workspaceId,
+                targetRef: group.targetRef,
+                title: `Best-of-N ${candidate.index + 1}`,
+                requiredChecks: request.requiredChecks ?? [],
+              })
+            } catch (error) {
+              if (scmErrorCode(error) !== "nothing_to_capture") throw error
+            }
+            await dispatch.complete({
+              text,
+              ...(costUsd === null ? {} : { costUsd }),
+              ...(changeset
+                ? {
+                    commitSha: changeset.headSha,
+                    workspaceRevision: changeset.headSha,
+                    diffContent: JSON.stringify(changeset.files),
+                  }
+                : {}),
+            })
+            return {
+              hasChanges: changeset?.files.some((file) => !file.excluded) ?? false,
+              costUsd,
+              ...(changeset
+                ? { changesetId: changeset.changesetId, headSha: changeset.headSha }
+                : {}),
+            }
+          }, signal)
+        // Each candidate is a child run of the group's run (ADR-0252 §2), in
+        // its own conversation. The group's row is the durable team run's,
+        // written when the run was prepared. The launcher writes, links and
+        // settles the child's row; the attempt keeps its own result and error.
+        const { launchChildRun } = await import("@/lib/execution/launch-child-run")
+        let result: CandidateResult | undefined
+        let thrown: { error: unknown } | undefined
+        const launched = await launchChildRun({
+          parentRunId: agentTeamExecutionRunId(group.teamRunId),
+          sessionId: session.id,
+          title: session.title,
+          childId: candidate.candidateId,
+          surface: "agent-team",
+          signal,
+          target: {
+            kind: "agent",
+            label: candidate.agent.agentId,
+            engine: {
+              run: async () => {
+                try {
+                  result = await attempt()
+                } catch (error) {
+                  thrown = { error }
+                  throw error
                 }
-              : {}),
-          })
-          return {
-            hasChanges: changeset?.files.some((file) => !file.excluded) ?? false,
-            costUsd,
-            ...(changeset
-              ? { changesetId: changeset.changesetId, headSha: changeset.headSha }
-              : {}),
-          }
-        }, signal)
+                return { status: "completed" }
+              },
+            },
+          },
+        })
+        if (!launched.started) {
+          if (launched.reason === "cancelled")
+            throw signal.reason ?? new Error("Best-of-N candidate cancelled before it started")
+          throw new Error(
+            `Best-of-N candidate could not start (${launched.reason}${launched.detail ? `: ${launched.detail}` : ""})`
+          )
+        }
+        const settled = await launched.outcome
+        if (thrown) throw thrown.error
+        if (result) return result
+        throw new Error(settled.error ?? "Best-of-N candidate ended without a result")
       } catch (error) {
         const cleanup = await Promise.allSettled([
           dispatch.fail(error),
@@ -437,6 +492,7 @@ export function createBestOfNExecution(): BestOfNExecution {
     async finish(group) {
       const run = await coordinator.store.getRun(group.teamRunId)
       if (!run) return
+      const at = Date.now()
       await coordinator.store.updateRunIfCurrent(run.id, run, {
         status:
           group.phase === "cancelled"
@@ -444,9 +500,22 @@ export function createBestOfNExecution(): BestOfNExecution {
             : group.phase === "recoveryRequired"
               ? "needs_input"
               : "completed",
-        updatedAt: Date.now(),
-        completedAt: Date.now(),
+        updatedAt: at,
+        completedAt: at,
       })
+      // The group's execution row is the candidates' parent. Nothing else
+      // settles it: the durable record is not a Squad run, so no lifecycle
+      // writes its terminal event. Settled even when a stop already moved the
+      // durable record: that stop does not write the row either.
+      await settleAgentTeamExecutionRun(
+        run,
+        group.phase === "cancelled"
+          ? "cancelled"
+          : group.phase === "recoveryRequired"
+            ? "recovery_required"
+            : "completed",
+        at
+      ).catch(() => undefined)
     },
   }
 }

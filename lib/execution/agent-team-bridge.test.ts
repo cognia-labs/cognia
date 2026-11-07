@@ -118,6 +118,12 @@ describe("AgentTeam ExecutionRun bridge", () => {
     })
   })
 
+  it("leaves a run that needs a person reading as recovery required", async () => {
+    await settleAgentTeamExecutionRun(sourceRun, "recovery_required", 200)
+    const [row] = await getDb().executionRuns.toArray()
+    expect(row).toMatchObject({ id: "execution:team:team-run-1", status: "recovery_required" })
+  })
+
   // `ExecutionRun` has no column for the Squad, and a legacy run writes no
   // durable record, so the opening event is the only place a row carries it.
   // Without it the cockpit can stop a paused run but never resume it.

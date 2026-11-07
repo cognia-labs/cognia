@@ -79,6 +79,28 @@ const external = jest.fn()
 jest.mock("./external", () => ({
   runExternalCandidate: (...args: unknown[]) => external(...args),
 }))
+// The launcher as a passthrough: it runs the caller's engine and settles the
+// way the real one does, a throw being a failed outcome.
+interface LaunchInput {
+  childId: string
+  target: { engine: { run: (signal: AbortSignal) => Promise<unknown> } }
+}
+const launchChildRun = jest.fn(async (input: LaunchInput) => ({
+  started: true as const,
+  childId: input.childId,
+  executionRunId: `execution:job:${input.childId}`,
+  outcome: input.target.engine
+    .run(new AbortController().signal)
+    .catch((error: unknown) => ({ status: "failed", error: String(error) })),
+}))
+jest.mock("@/lib/execution/launch-child-run", () => ({
+  launchChildRun: (...args: unknown[]) => launchChildRun(...(args as [LaunchInput])),
+}))
+const settleTeamRow = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("@/lib/execution/agent-team-bridge", () => ({
+  agentTeamExecutionRunId: (id: string) => `execution:team:${id}`,
+  settleAgentTeamExecutionRun: (...args: unknown[]) => settleTeamRow(...args),
+}))
 import { bestOfNTeam, createBestOfNExecution } from "./runtime"
 import { candidateGrant } from "./core"
 import {
@@ -194,6 +216,95 @@ it("runs only the child through the resolver and ordinary capture gate, without 
     expect.objectContaining({ requiredChecks: ["approved-test"], targetRef: "refs/heads/result" })
   )
   expect(settle).toHaveBeenCalledWith("ready")
+})
+
+describe("candidates as child runs", () => {
+  it("runs each candidate as a child of the group's run, in its own conversation", async () => {
+    const signal = new AbortController().signal
+    await createBestOfNExecution().execute({
+      group,
+      candidate: group.candidates[0],
+      request,
+      workspace: { bundleId: "bundle", workspaceId: "workspace", physicalRoot: "/physical" },
+      grant: candidateGrant(group, group.candidates[0]),
+      signal,
+    })
+    expect(launchChildRun).toHaveBeenCalledTimes(1)
+    const [input] = launchChildRun.mock.calls[0] as unknown as [Record<string, unknown>]
+    expect(input).toMatchObject({
+      parentRunId: "execution:team:team",
+      sessionId: "session",
+      childId: "candidate",
+      title: "Best-of-N 1",
+      surface: "agent-team",
+      signal,
+      target: { kind: "agent", label: "agent" },
+    })
+    // The grant reaches the resolver; the caller's engine applies none.
+    expect(input).not.toHaveProperty("grants")
+    expect(input.title).not.toContain("Fix this")
+  })
+
+  it("starts no attempt when the child run is refused, and fails the dispatch", async () => {
+    launchChildRun.mockResolvedValueOnce({
+      started: false,
+      reason: "parent_not_found",
+      detail: "execution:team:team",
+    } as never)
+    await expect(execute()).rejects.toThrow("parent_not_found")
+    expect(dispatch.run).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    expect(dispatch.fail).toHaveBeenCalled()
+    expect(dispatch.dispose).toHaveBeenCalled()
+  })
+
+  it("reports a stop that came before the child run started as the stop", async () => {
+    launchChildRun.mockResolvedValueOnce({ started: false, reason: "cancelled" } as never)
+    await expect(execute()).rejects.toThrow("cancelled before it started")
+    expect(dispatch.run).not.toHaveBeenCalled()
+  })
+
+  it("rethrows the attempt's own error after the child run settles", async () => {
+    run.mockResolvedValueOnce({ text: "", resultSubtype: "error_max_turns" })
+    const failure = execute()
+    await expect(failure).rejects.toThrow("Candidate execution ended: error_max_turns")
+    expect(launchChildRun).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("finish", () => {
+  const record = { id: "team", status: "running", updatedAt: 1 }
+  it.each([
+    ["awaitingSelection", "completed", "completed"],
+    ["cancelled", "cancelled", "cancelled"],
+    ["recoveryRequired", "needs_input", "recovery_required"],
+  ] as const)(
+    "settles the group's row as well as its durable record (%s)",
+    async (phase, durable, row) => {
+      store.getRun.mockResolvedValue(record)
+      await createBestOfNExecution().finish({ ...group, phase })
+      expect(store.updateRunIfCurrent).toHaveBeenCalledWith(
+        "team",
+        record,
+        expect.objectContaining({ status: durable })
+      )
+      expect(settleTeamRow).toHaveBeenCalledWith(record, row, expect.any(Number))
+    }
+  )
+
+  it("settles nothing for a group whose durable run is gone", async () => {
+    store.getRun.mockResolvedValue(undefined)
+    await createBestOfNExecution().finish({ ...group, phase: "awaitingSelection" })
+    expect(settleTeamRow).not.toHaveBeenCalled()
+  })
+
+  it("never fails the group because its row could not be settled", async () => {
+    store.getRun.mockResolvedValue(record)
+    settleTeamRow.mockRejectedValueOnce(new Error("journal down"))
+    await expect(
+      createBestOfNExecution().finish({ ...group, phase: "awaitingSelection" })
+    ).resolves.toBeUndefined()
+  })
 })
 
 it("records a no-change success without inventing a cost", async () => {

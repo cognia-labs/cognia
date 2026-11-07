@@ -213,7 +213,7 @@ interface LaunchChildRunInput {
 - 本切片迁移：`delegation-orchestrator.ts` 的 background/external/twin/team 四个分支全部走 `launchChildRun`。编排器只留安静时段、审批、深度、环检测，以及记录和钩子。父运行：调用方给出且存在的运行（工作流节点传 `execution:workflow:<runId>`）优先，否则用来源小队的 live 运行行，否则无父。取消统一由 `AbortController` 交给启动器，不再分别调 `cancelAgent` / `abortTeam`。顺带修复：安静时段推迟的 team 委派在批准后会真正启动（原来批准后什么都不跑）。
 - `dispatch_agent`（`startDispatchRun`，Job Center 重跑和启动时自动恢复的 `background-tasks/redispatch.ts` 也经过它）已迁移：重试、子树预算、截止时间、审批路由和 Job Center 日志是调用方自己的策略，作为启动器的调用方引擎（`target: { kind: "agent", engine, label }`，不应用授权）。行的写入、父链接、落定和派发 span 由启动器负责。固定的父运行行已不存在时用 `missingParent: "unparented"` 无父启动，保持原来的语义。租约在启动前丢失时什么都不启动（原来会带着已中止的信号去派发）。
 - 插件 Agent SDK 已迁移：`dispatch_agent` 之外启动子 agent 的入口（插件 `ctx.agent.dispatchSubagent`、托管 IDE broker 的 `invokeAgent`、外部桥 `agent_dispatch`）改走新的 `dispatchSubagentAsChildRun`。它把 `dispatchSubagent` 作为调用方引擎交给启动器，结果和抛出的错误与原来完全一致；行默认无父，调用方可传父运行和会话。外部桥按 `characterId` 运行的分支同样作为调用方引擎，保留 channel、finishReason、usage。`dispatchSubagent` 本身仍是引擎（`dispatch_agent` 在调用它），不自己写行。`runTeam` 改为 `squad` 目标，经端口走 `startSquadRun`，返回运行的结果状态；`options.origin` 原来被忽略（一律 `plugin`），现在照传，外部桥的运行记为 `external`。CLI TUI 的 `dispatchSubagent` 调用不迁移（D13，X5）。
-- 其余调用方按切片迁移：`lib/best-of-n/runtime.ts` 与 `external.ts` 的候选。
+- best-of-N 已迁移：每个候选（Cognia 与外部 `runExternalCandidate` 两条通道）的一次尝试（`dispatch.run`）作为启动器的调用方引擎，预算检查、用量记账、变更集捕获和错误都留在尝试里。启动器在候选自己的会话里写 `execution:job:<candidateId>`，父运行是分组的持久团队行（`execution:team:<teamRunId>`，由协调器 `prepareRun` 写出），父行不存在时拒绝，候选在尝试前失败。候选授权仍交给 `resolveSendOptions`，引擎不应用授权。顺带修复：分组行原来停在 `queued` 永不落定，现在 `finish` 按分组结果落定（需要人处理的分组记为 `recovery_required`）。
 
 ### 6.3 追踪器收敛
 
@@ -221,7 +221,7 @@ interface LaunchChildRunInput {
 - 删除 `lib/execution/job-bridge.ts` 及测试；它的父运行解析逻辑（admission pin、`parentSubagentId`）移入 `launchChildRun`。
 - `stores/agent/subagent-runtime-store`：改为读模型，持久化部分只保留 `templates`（现状），运行记录从 `executionRuns` + 实时进度事件派生。
 - `TeamDelegationRecord`：改为子运行投影 + 小队策略字段，改名（见 P9 命名表）。`delegations-panel.tsx` 改读投影。
-- best-of-N：候选写子运行行，分组运行为父。
+- best-of-N：候选写子运行行，分组运行为父（已在 6.2 完成）。
 
 ### 6.4 单一嵌套规则与单一停止
 
