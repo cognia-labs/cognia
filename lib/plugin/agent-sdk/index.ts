@@ -14,6 +14,7 @@ export {
 } from "./guardrails"
 export {
   dispatchSubagent,
+  dispatchSubagentAsChildRun,
   runTeam,
   resolveSubagentExternalTarget,
   type SubagentExternalTarget,

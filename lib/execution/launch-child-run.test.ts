@@ -193,6 +193,28 @@ describe("launchChildRun: agent", () => {
     expect(executeAgentMock).not.toHaveBeenCalled()
   })
 
+  it("runs as the named profile, with its tools flag and directory", async () => {
+    executeAgentMock.mockResolvedValue({ text: "ok", channel: "text", toolsAvailable: false })
+    const launched = started(
+      await launchChildRun({
+        target: {
+          kind: "agent",
+          prompt: "p",
+          characterId: "char-1",
+          toolsEnabled: false,
+          cwd: "/repo",
+        },
+        title: "char-1",
+      })
+    )
+    await launched.outcome
+    expect(executeAgentMock).toHaveBeenCalledWith(
+      "p",
+      expect.objectContaining({ characterId: "char-1", toolsEnabled: false, cwd: "/repo" })
+    )
+    expect(spans[0]?.agentId).toBe("char-1")
+  })
+
   it("hands the grants to executeAgent, which applies every field", async () => {
     executeAgentMock.mockResolvedValue({ text: "ok", channel: "sidecar", toolsAvailable: true })
     const grants = [grant({ tools: { deny: ["Bash"] }, instructions: ["cite sources"] })]

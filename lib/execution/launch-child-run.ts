@@ -68,6 +68,12 @@ export type ChildRunTarget =
       kind: "agent"
       prompt: string
       systemPrompt?: string
+      /** Run as this agent profile (ADR-0199 variants apply). */
+      characterId?: string
+      /** `false` runs the tool-less channel. */
+      toolsEnabled?: boolean
+      /** The directory the agent works in. */
+      cwd?: string
       background?: ChildRunBackgroundRegistration
     }
   | {
@@ -207,7 +213,9 @@ const SPAN_PROVIDER: Record<ChildRunTargetKind, string> = {
 function targetRef(target: ChildRunTarget): string {
   switch (target.kind) {
     case "agent":
-      return "engine" in target ? target.label : (target.background?.label ?? "agent")
+      return "engine" in target
+        ? target.label
+        : (target.background?.label ?? target.characterId ?? "agent")
     case "external":
       return target.agentId
     case "twin":
@@ -229,6 +237,9 @@ function errorText(error: unknown): string {
 export function startAgentEngine(input: {
   prompt: string
   systemPrompt?: string
+  characterId?: string
+  toolsEnabled?: boolean
+  cwd?: string
   grants?: readonly AgentCapabilityGrantV1[]
 }): StartedChildEngine {
   const controller = new AbortController()
@@ -238,6 +249,9 @@ export function startAgentEngine(input: {
       if (controller.signal.aborted) return { status: "cancelled", error: "Cancelled." }
       const result = await executeAgent(input.prompt, {
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+        ...(input.characterId ? { characterId: input.characterId } : {}),
+        ...(input.toolsEnabled !== undefined ? { toolsEnabled: input.toolsEnabled } : {}),
+        ...(input.cwd ? { cwd: input.cwd } : {}),
         abortSignal: controller.signal,
         ...(input.grants && input.grants.length > 0 ? { capabilityGrants: input.grants } : {}),
       })
@@ -312,6 +326,9 @@ async function startJobEngine(
       return startAgentEngine({
         prompt: target.prompt,
         ...(target.systemPrompt ? { systemPrompt: target.systemPrompt } : {}),
+        ...(target.characterId ? { characterId: target.characterId } : {}),
+        ...(target.toolsEnabled !== undefined ? { toolsEnabled: target.toolsEnabled } : {}),
+        ...(target.cwd ? { cwd: target.cwd } : {}),
         grants,
       })
     case "external":

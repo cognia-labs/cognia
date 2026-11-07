@@ -2,8 +2,21 @@ jest.mock("@/lib/execution/acting-authority", () => ({
   snapshotActingAuthority: jest.fn(async () => undefined),
   observeActingAuthority: jest.fn(async () => ({ ok: true })),
 }))
+// The launcher is replaced by a fake that runs a caller engine at once (its
+// row writes are `launch-child-run.test.ts`'s), so these tests assert what
+// each entry asks it for.
+const mockLaunchChildRun = jest.fn()
+jest.mock("@/lib/execution/launch-child-run", () => ({
+  launchChildRun: (...args: unknown[]) => mockLaunchChildRun(...args),
+}))
 import { observeActingAuthority } from "@/lib/execution/acting-authority"
-import { dispatchSubagent, resolveSubagentExternalTarget, runTeam } from "./dispatch"
+import {
+  dispatchSubagent,
+  dispatchSubagentAsChildRun,
+  resolveSubagentExternalTarget,
+  runTeam,
+} from "./dispatch"
+import type { LaunchChildRunInput } from "@/lib/execution/launch-child-run"
 import { runCompletionRail } from "@/lib/ai/agent/agent-executor"
 import { getSubagent } from "@/lib/plugin/registries/subagent-registry"
 import { agentTeamManager } from "@/lib/squads/agent-team"
@@ -864,36 +877,150 @@ describe("dispatchSubagent — external backing (A2)", () => {
   })
 })
 
-describe("runTeam", () => {
-  it("starts an existing team by id and returns its terminal status", async () => {
-    mockTeam.get.mockReturnValueOnce({ id: "t1" }).mockReturnValueOnce({
-      id: "t1",
-      status: "completed",
+function runCallerEngine() {
+  mockLaunchChildRun.mockImplementation(async (input: LaunchChildRunInput) => {
+    if (!("engine" in input.target)) throw new Error("expected a caller engine")
+    const outcome = input.target.engine
+      .run(new AbortController().signal)
+      .catch((error: unknown) => ({ status: "failed", error: String(error) }))
+    return { started: true, childId: input.childId, executionRunId: "x", outcome }
+  })
+}
+
+describe("dispatchSubagentAsChildRun", () => {
+  beforeEach(() => mockLaunchChildRun.mockReset())
+
+  it("launches the dispatch as a child run under the run id it reports", async () => {
+    runCallerEngine()
+    mockExecute.mockResolvedValueOnce({ text: "reviewed", channel: "text" } as never)
+    const result = await dispatchSubagentAsChildRun(
+      subagent,
+      "review this",
+      { _runId: "run-1" },
+      {
+        surface: "plugin",
+      }
+    )
+    expect(result).toMatchObject({ text: "reviewed", runId: "run-1" })
+    expect(mockLaunchChildRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "reviewer",
+        childId: "run-1",
+        surface: "plugin",
+        target: expect.objectContaining({ kind: "agent", label: "reviewer" }),
+      })
+    )
+    expect(mockLaunchChildRun.mock.calls[0][0]).not.toHaveProperty("parentRunId")
+  })
+
+  it("names the parent and the conversation when the caller has them", async () => {
+    runCallerEngine()
+    mockExecute.mockResolvedValueOnce({ text: "ok", channel: "text" } as never)
+    await dispatchSubagentAsChildRun(
+      subagent,
+      "p",
+      {},
+      {
+        surface: "mcp",
+        parentRunId: "execution:tool:t1",
+        sessionId: "s1",
+      }
+    )
+    expect(mockLaunchChildRun).toHaveBeenCalledWith(
+      expect.objectContaining({ parentRunId: "execution:tool:t1", sessionId: "s1", surface: "mcp" })
+    )
+  })
+
+  it("throws what dispatchSubagent throws, after the run settles", async () => {
+    runCallerEngine()
+    await expect(
+      dispatchSubagentAsChildRun("ghost", "p", {}, { surface: "plugin" })
+    ).rejects.toThrow(/not registered/)
+  })
+
+  it("throws when the run cannot start, and when the caller's signal was aborted", async () => {
+    mockLaunchChildRun.mockResolvedValueOnce({
+      started: false,
+      reason: "journal_failed",
+      detail: "disk full",
     })
-    const res = await runTeam("t1", { ultracode: true, origin: "ui" as never })
-    expect(mockTeam.start).toHaveBeenCalledWith("t1", { origin: "plugin", ultracode: true })
+    await expect(
+      dispatchSubagentAsChildRun(subagent, "p", {}, { surface: "plugin" })
+    ).rejects.toThrow("dispatchSubagent: the run could not start (journal_failed: disk full)")
+
+    const controller = new AbortController()
+    controller.abort(new Error("caller stopped"))
+    mockLaunchChildRun.mockResolvedValueOnce({ started: false, reason: "cancelled" })
+    await expect(
+      dispatchSubagentAsChildRun(
+        subagent,
+        "p",
+        { abortSignal: controller.signal },
+        { surface: "plugin" }
+      )
+    ).rejects.toThrow("caller stopped")
+    expect(mockLaunchChildRun.mock.calls[1][0].signal).toBe(controller.signal)
+  })
+})
+
+describe("runTeam", () => {
+  beforeEach(() => mockLaunchChildRun.mockReset())
+
+  const squadLaunch = (outcome: { status: string }) =>
+    mockLaunchChildRun.mockResolvedValueOnce({
+      started: true,
+      childId: "run_team_1",
+      executionRunId: "execution:team:run_team_1",
+      outcome: Promise.resolve(outcome),
+    })
+
+  it("launches an existing team as a squad child run and returns its outcome", async () => {
+    mockTeam.get.mockReturnValueOnce({ id: "t1" })
+    squadLaunch({ status: "completed" })
+    const res = await runTeam("t1", { ultracode: true })
+    expect(mockLaunchChildRun).toHaveBeenCalledWith({
+      title: "t1",
+      surface: "plugin",
+      target: { kind: "squad", squadId: "t1", brief: "", origin: "plugin", ultracode: true },
+    })
+    expect(mockTeam.start).not.toHaveBeenCalled()
     expect(res).toEqual({ teamId: "t1", status: "completed" })
+  })
+
+  it("keeps the caller's origin for the gate policy", async () => {
+    mockTeam.get.mockReturnValueOnce({ id: "t1" })
+    squadLaunch({ status: "failed" })
+    const res = await runTeam("t1", { origin: "external" })
+    expect(mockLaunchChildRun.mock.calls[0][0]).toMatchObject({
+      surface: "mcp",
+      target: { origin: "external" },
+    })
+    expect(res.status).toBe("failed")
   })
 
   it("throws when the team id is not found", async () => {
     mockTeam.get.mockReturnValue(undefined)
     await expect(runTeam("nope")).rejects.toThrow(/not found/)
-    expect(mockTeam.start).not.toHaveBeenCalled()
+    expect(mockLaunchChildRun).not.toHaveBeenCalled()
   })
 
-  it("creates and starts an ad-hoc team config", async () => {
-    mockTeam.get.mockReturnValue({ id: "adhoc", status: "completed" })
+  it("creates and launches an ad-hoc team config", async () => {
+    squadLaunch({ status: "completed" })
     const config = { id: "adhoc", name: "Ad-hoc" } as never
     const res = await runTeam(config)
     expect(mockTeam.create).toHaveBeenCalledWith(config)
-    expect(mockTeam.start).toHaveBeenCalledWith("adhoc", { origin: "plugin" })
+    expect(mockLaunchChildRun.mock.calls[0][0].target).toMatchObject({ squadId: "adhoc" })
     expect(res.teamId).toBe("adhoc")
   })
 
-  it("reports unknown status when the team row vanished post-run", async () => {
-    mockTeam.get.mockReturnValueOnce({ id: "t1" }).mockReturnValueOnce(undefined)
-    const res = await runTeam("t1")
-    expect(res.status).toBe("unknown")
+  it("throws the Squad's refusal", async () => {
+    mockTeam.get.mockReturnValueOnce({ id: "t1" })
+    mockLaunchChildRun.mockResolvedValueOnce({
+      started: false,
+      reason: "engine_refused",
+      detail: "already_running",
+    })
+    await expect(runTeam("t1")).rejects.toThrow("Squad run refused: already_running")
   })
 })
 

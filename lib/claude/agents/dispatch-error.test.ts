@@ -1,4 +1,5 @@
 import {
+  dispatchResultOutcome,
   toDispatchErrorEnvelope,
   envelopeForRejection,
   envelopeForBudgetExhausted,
@@ -201,5 +202,45 @@ describe("renderDispatchOutcomeForModel", () => {
   it("falls back to plain formatting for envelope-less errors", () => {
     const r = { ...base, text: "legacy error text", finishReason: "error" }
     expect(renderDispatchOutcomeForModel("explore", r)).toBe("[explore]\nlegacy error text")
+  })
+})
+
+describe("dispatchResultOutcome", () => {
+  const base: PluginSubagentDispatchResult = {
+    text: "answer",
+    channel: "text",
+    toolsAvailable: false,
+  }
+
+  it("reads a clean finish as completed with its text", () => {
+    expect(dispatchResultOutcome(base)).toEqual({ status: "completed", text: "answer" })
+  })
+
+  it("reads a cancelled finish as cancelled", () => {
+    expect(dispatchResultOutcome({ ...base, text: "stopped", finishReason: "cancelled" })).toEqual({
+      status: "cancelled",
+      error: "stopped",
+    })
+  })
+
+  it("reads an envelope, a rejection or an error finish as failed", () => {
+    expect(
+      dispatchResultOutcome({
+        ...base,
+        errorEnvelope: { code: "rate-limit", retryable: true, message: "rate limited" },
+      })
+    ).toEqual({ status: "failed", error: "rate limited" })
+    expect(
+      dispatchResultOutcome({
+        ...base,
+        text: "refused",
+        finishReason: "rejected",
+        rejection: { reason: "policy", message: "refused" },
+      })
+    ).toEqual({ status: "failed", error: "refused" })
+    expect(dispatchResultOutcome({ ...base, text: "boom", finishReason: "error" })).toEqual({
+      status: "failed",
+      error: "boom",
+    })
   })
 })

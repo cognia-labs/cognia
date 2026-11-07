@@ -35,7 +35,6 @@ import {
 import { captureBackgroundDispatchRecovery } from "@/lib/background-tasks/redispatch"
 import { admitBackgroundDispatch } from "@/lib/db/background-tasks"
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
-import type { ChildRunOutcome } from "@/types/execution/child-run"
 import type {
   PluginDispatchErrorEnvelope,
   PluginSubagentDispatchResult,
@@ -64,6 +63,7 @@ import {
   unregisterSubagentRun,
 } from "./subagent-cancel-registry"
 import {
+  dispatchResultOutcome,
   toDispatchErrorEnvelope,
   renderDispatchOutcomeForModel,
   normalizeDispatchBudgetResult,
@@ -306,19 +306,6 @@ export interface DispatchRunHandle {
   runId: string
   /** Model-facing outcome text (or the started-in-background notice). */
   text: string
-}
-
-/**
- * A dispatch result as the child run's outcome: cancelled, failed (an error
- * envelope, a rejection or an error finish) or completed. The text stays with
- * the result; the run journal never sees it.
- */
-function dispatchOutcome(result: PluginSubagentDispatchResult): ChildRunOutcome {
-  if (result.finishReason === "cancelled") return { status: "cancelled", error: result.text }
-  if (result.errorEnvelope || result.rejection || result.finishReason === "error") {
-    return { status: "failed", error: result.errorEnvelope?.message ?? result.text }
-  }
-  return { status: "completed", text: result.text }
 }
 
 /**
@@ -615,7 +602,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
         engine: {
           run: async () => {
             result = await runWithRetriesCore()
-            return dispatchOutcome(result)
+            return dispatchResultOutcome(result)
           },
         },
       },

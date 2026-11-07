@@ -7,9 +7,14 @@ import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution
  *   direct-invoke entry point in the host (the model normally dispatches them
  *   via the Task tool), so this maps {prompt, model, tools, maxTurns} onto a
  *   one-shot tool-enabled run — faithful "run THIS subagent" semantics.
- * - `runTeam` runs an Agent Team headlessly by reusing `agentTeamManager`
- *   (live store binding + configured runtime deps + the existing per-team
- *   inflight guard). Accepts an existing team id or an ad-hoc team config.
+ * - `dispatchSubagentAsChildRun` is `dispatchSubagent` as a child run
+ *   (ADR-0252 §3): the plugin API, the managed IDE broker and the external
+ *   bridge start subagents through it, so each run has its `executionRuns`
+ *   row. `dispatch_agent` launches its own (`lib/claude/agents/dispatch-run.ts`)
+ *   and calls `dispatchSubagent` as its engine.
+ * - `runTeam` runs an Agent Team headlessly as a `squad` child run through
+ *   `launchChildRun`, which starts it through the one Squad launch seam.
+ *   Accepts an existing team id or an ad-hoc team config.
  *
  * Permission-agnostic (gating lives in `context.ts` behind `agent:dispatch`).
  * Lazy-imports the heavy team/executor runtimes so this module stays cheap to
@@ -33,10 +38,12 @@ import { fireAgentHook, type AgentHookContext } from "@/lib/ai/agent/external/ag
 import { getDispatchBudget, isDispatchBudgetExhausted } from "@/lib/claude/agents/dispatch-budget"
 import { composeSubagentSystemPrompt } from "@/lib/agent/prompts/subagent-frame"
 import {
+  dispatchResultOutcome,
   envelopeForBudgetExhausted,
   envelopeForRejection,
   normalizeDispatchBudgetResult,
 } from "@/lib/claude/agents/dispatch-error"
+import type { SpanSurface } from "@/types/agent-trace/span"
 
 /** Generate a run id (app code — Date.now/randomUUID are allowed here). */
 function newRunId(): string {
@@ -619,11 +626,82 @@ async function runExternalSubagent(
   }
 }
 
+/** Where a subagent started outside `dispatch_agent` sits in the run tree. */
+export interface SubagentChildRunPlacement {
+  /** Where the dispatch span is reported. */
+  surface: SpanSurface
+  /** The run that asked, when the caller has one. */
+  parentRunId?: string
+  /** The conversation the run belongs to, when the caller has one. */
+  sessionId?: string
+}
+
+/**
+ * `dispatchSubagent` as a child run (ADR-0252 §3). The launcher writes the
+ * run's `execution:job:<runId>` row (unparented unless the caller names a
+ * parent), settles it from the result and records the dispatch; the result and
+ * the thrown errors are exactly `dispatchSubagent`'s, so its callers keep
+ * their contract. A refused or failed dispatch settles the row as failed.
+ */
+export async function dispatchSubagentAsChildRun(
+  idOrDef: string | PluginSubagentDef,
+  prompt: string,
+  options: PluginDispatchSubagentOptions = {},
+  placement: SubagentChildRunPlacement
+): Promise<PluginSubagentDispatchResult> {
+  const runId = options._runId ?? newRunId()
+  const subagentId = typeof idOrDef === "string" ? idOrDef : idOrDef.id
+  const { launchChildRun } = await import("@/lib/execution/launch-child-run")
+  let result: PluginSubagentDispatchResult | undefined
+  let thrown: { error: unknown } | undefined
+  const launched = await launchChildRun({
+    ...(placement.parentRunId ? { parentRunId: placement.parentRunId } : {}),
+    ...(placement.sessionId ? { sessionId: placement.sessionId } : {}),
+    title: subagentId,
+    childId: runId,
+    surface: placement.surface,
+    ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+    target: {
+      kind: "agent",
+      label: subagentId,
+      engine: {
+        run: async (signal) => {
+          try {
+            result = await dispatchSubagent(idOrDef, prompt, {
+              ...options,
+              _runId: runId,
+              abortSignal: signal,
+            })
+          } catch (error) {
+            thrown = { error }
+            throw error
+          }
+          return dispatchResultOutcome(result)
+        },
+      },
+    },
+  })
+  if (!launched.started) {
+    if (launched.reason === "cancelled") {
+      throw options.abortSignal?.reason ?? new Error("dispatchSubagent: cancelled")
+    }
+    throw new Error(
+      `dispatchSubagent: the run could not start (${launched.reason}${launched.detail ? `: ${launched.detail}` : ""})`
+    )
+  }
+  const settled = await launched.outcome
+  if (thrown) throw thrown.error
+  if (result) return result
+  throw new Error(settled.error ?? "dispatchSubagent: the run ended without a result")
+}
+
 /**
  * Run an Agent Team headlessly. `teamOrConfig` is an existing team id or an
- * ad-hoc team config (created in the store, then started). Reuses
- * `agentTeamManager.start` so the run inherits the configured runtime deps and
- * the per-team inflight guard. Resolves with the terminal status.
+ * ad-hoc team config (created in the store, then started). The run is a
+ * `squad` child run (ADR-0252 §3): `launchChildRun` starts it through the one
+ * Squad launch seam (`startSquadRun`, readiness and the one-live-run rule
+ * included) and records the dispatch. Resolves with the run's outcome once it
+ * settles; a refused start throws.
  */
 export async function runTeam(
   teamOrConfig: string | AgentTeamConfig,
@@ -645,11 +723,22 @@ export async function runTeam(
     teamId = teamOrConfig.id
   }
 
-  await agentTeamManager.start(teamId, {
-    origin: "plugin",
-    ...(options.ultracode !== undefined ? { ultracode: options.ultracode } : {}),
+  const { launchChildRun } = await import("@/lib/execution/launch-child-run")
+  const launched = await launchChildRun({
+    title: teamId,
+    surface: options.origin === "external" ? "mcp" : "plugin",
+    target: {
+      kind: "squad",
+      squadId: teamId,
+      brief: "",
+      // Gate policy follows who asked: a plugin, or the external bridge.
+      origin: options.origin ?? "plugin",
+      ...(options.ultracode !== undefined ? { ultracode: options.ultracode } : {}),
+    },
   })
-
-  const team = agentTeamManager.get(teamId)
-  return { teamId, status: team?.status ?? "unknown" }
+  if (!launched.started) {
+    throw new Error(`Squad run refused: ${launched.detail ?? launched.reason}`)
+  }
+  const outcome = await launched.outcome
+  return { teamId, status: outcome.status }
 }

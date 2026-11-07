@@ -11,9 +11,32 @@ jest.mock("@/lib/tauri", () => ({ isTauri: () => isTauriMock() }))
 
 const dispatchSubagentMock = jest.fn()
 const runTeamMock = jest.fn()
+const dispatchPlacements: unknown[] = []
 jest.mock("@/lib/plugin/agent-sdk/dispatch", () => ({
-  dispatchSubagent: (...a: unknown[]) => dispatchSubagentMock(...a),
+  dispatchSubagentAsChildRun: (
+    id: unknown,
+    prompt: unknown,
+    options: unknown,
+    placement: unknown
+  ) => {
+    dispatchPlacements.push(placement)
+    return dispatchSubagentMock(id, prompt, options)
+  },
   runTeam: (...a: unknown[]) => runTeamMock(...a),
+}))
+
+// The launcher runs a caller engine at once; its row writes are its own suite's.
+const launchInputs: Array<Record<string, unknown>> = []
+jest.mock("@/lib/execution/launch-child-run", () => ({
+  launchChildRun: async (input: {
+    target: { engine: { run: (signal: AbortSignal) => Promise<unknown> } }
+  }) => {
+    launchInputs.push(input as never)
+    const outcome = input.target.engine
+      .run(new AbortController().signal)
+      .catch((error: unknown) => ({ status: "failed", error: String(error) }))
+    return { started: true, childId: "c", executionRunId: "execution:job:c", outcome }
+  },
 }))
 
 const executeAgentMock = jest.fn()
@@ -166,18 +189,47 @@ describe("agentDispatch", () => {
       "review",
       expect.objectContaining({ toolsEnabled: true, cwd: "/r" })
     )
+    // Its own run, reported on the bridge's surface.
+    expect(dispatchPlacements.at(-1)).toEqual({ surface: "mcp" })
     expect(out).toMatchObject({ ok: true, text: "done", channel: "sidecar" })
   })
 
-  it("runs a character through executeAgent", async () => {
-    executeAgentMock.mockResolvedValue({ text: "char out", channel: "sidecar" })
-    const out = await agentDispatch({ characterId: "c1", prompt: "go" })
+  it("runs a character through executeAgent as its own run", async () => {
+    executeAgentMock.mockResolvedValue({
+      text: "char out",
+      channel: "sidecar",
+      finishReason: "stop",
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+    })
+    const out = await agentDispatch({ characterId: "c1", prompt: "go", cwd: "/r" })
     expect(executeAgentMock).toHaveBeenCalledWith(
       "go",
-      expect.objectContaining({ characterId: "c1", toolsEnabled: true })
+      expect.objectContaining({
+        characterId: "c1",
+        toolsEnabled: true,
+        cwd: "/r",
+        abortSignal: expect.any(AbortSignal),
+      })
     )
-    expect(out.ok).toBe(true)
-    expect(out.text).toBe("char out")
+    expect(launchInputs.at(-1)).toMatchObject({
+      title: "c1",
+      surface: "mcp",
+      target: { kind: "agent", label: "c1" },
+    })
+    // The run's channel, finish reason and usage still reach the bridge.
+    expect(out).toMatchObject({
+      ok: true,
+      text: "char out",
+      channel: "sidecar",
+      finishReason: "stop",
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+    })
+  })
+
+  it("reports a character run that throws", async () => {
+    executeAgentMock.mockRejectedValue(new Error("no such character"))
+    const out = await agentDispatch({ characterId: "ghost", prompt: "go" })
+    expect(out).toEqual({ ok: false, error: "no such character" })
   })
 
   it("PII-redacts the returned text and flags it", async () => {

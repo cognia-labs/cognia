@@ -120,6 +120,20 @@ jest.mock("../api/workflow-author-api", () => {
 })
 
 // Keep the real sanitizer while exposing a mutable call-through spy seam.
+// The launcher runs a caller engine at once; its row writes are its own suite's.
+const mockLaunchChildRun = jest.fn(
+  async (input: { target: { engine: { run: (signal: AbortSignal) => Promise<unknown> } } }) => ({
+    started: true,
+    childId: "c",
+    executionRunId: "execution:job:c",
+    outcome: input.target.engine
+      .run(new AbortController().signal)
+      .catch((error: unknown) => ({ status: "failed", error: String(error) })),
+  })
+)
+jest.mock("@/lib/execution/launch-child-run", () => ({
+  launchChildRun: (input: never) => mockLaunchChildRun(input),
+}))
 jest.mock("@/lib/plugin/api/plugin-pii-gate", () => ({
   __esModule: true,
   ...jest.requireActual("@/lib/plugin/api/plugin-pii-gate"),
@@ -3416,6 +3430,10 @@ describe("agent imperative API", () => {
       expect(mockExecuteAgent).toHaveBeenCalledWith(
         "read",
         expect.not.objectContaining({ knowledgeAccess: expect.anything() })
+      )
+      // A plugin's dispatch is its own run, on the plugin surface.
+      expect(mockLaunchChildRun).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "local", surface: "plugin" })
       )
     })
     it("also requires agent:dispatch-external for an inline external def", async () => {

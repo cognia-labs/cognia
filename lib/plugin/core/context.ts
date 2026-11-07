@@ -236,7 +236,7 @@ import { pluginHasApiPermission } from "@/lib/plugin/api/permission-api"
 import {
   runPluginAgent,
   runPluginAgentStreamed,
-  dispatchSubagent,
+  dispatchSubagentAsChildRun,
   resolveSubagentExternalTarget,
   runTeam,
   createPluginAgentSession,
@@ -1219,7 +1219,10 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
       // Public plugin arguments cannot manufacture a trusted workflow identity.
       const { _knowledgeAccess: ignoredKnowledgeAccess, ...publicOptions } = options ?? {}
       void ignoredKnowledgeAccess
-      return dispatchSubagent(idOrDef, prompt, options ? publicOptions : undefined)
+      // A plugin's dispatch is its own run (ADR-0252 §3): it gets its row.
+      return dispatchSubagentAsChildRun(idOrDef, prompt, options ? publicOptions : undefined, {
+        surface: "plugin",
+      })
     },
 
     runTeam: async (teamOrConfig: string | AgentTeamConfig, options?: PluginRunTeamOptions) => {

@@ -47,7 +47,7 @@ jest.mock("@/stores/account/account-store", () => ({
   },
 }))
 jest.mock("@/lib/plugin/agent-sdk/dispatch", () => ({
-  dispatchSubagent: jest.fn(async () => ({ runId: "run-1" })),
+  dispatchSubagentAsChildRun: jest.fn(async () => ({ runId: "run-1" })),
 }))
 jest.mock("@/lib/platform/detect", () => ({ isTauri: () => true }))
 jest.mock("@tauri-apps/api/core", () => ({
@@ -68,7 +68,7 @@ jest.mock("./protocol-runtime", () => ({
 
 import { CODESERVER_EVENTS, codeServerClient } from "@/lib/codeserver/client"
 import { isWorkspaceTrusted } from "@/lib/db/trusted-workspaces"
-import { dispatchSubagent } from "@/lib/plugin/agent-sdk/dispatch"
+import { dispatchSubagentAsChildRun } from "@/lib/plugin/agent-sdk/dispatch"
 import { getPluginManager } from "@/lib/plugin/core/manager"
 import { invokePluginApi } from "@/lib/plugin/core/transport"
 import { getPluginConsentBroker } from "@/lib/plugin/security/consent-broker"
@@ -163,16 +163,18 @@ describe("managed IDE broker default dependencies", () => {
         requestApproval,
       })
     ).resolves.toEqual({ result: { metadata: { runId: "run-1" } } })
-    expect(dispatchSubagent).toHaveBeenCalledWith(
+    // An IDE agent request is its own run, on the plugin surface.
+    expect(dispatchSubagentAsChildRun).toHaveBeenCalledWith(
       "researcher",
       "inspect",
       expect.objectContaining({
         abortSignal: expect.any(AbortSignal),
         _onEvent: onEvent,
         _canUseTool: expect.any(Function),
-      })
+      }),
+      { surface: "plugin" }
     )
-    const agentOptions = jest.mocked(dispatchSubagent).mock.calls[0][2]
+    const agentOptions = jest.mocked(dispatchSubagentAsChildRun).mock.calls[0][2]
     if (!agentOptions?._canUseTool) throw new Error("permission callback was not forwarded")
     await expect(agentOptions._canUseTool("Bash", { command: "pwd" }, {})).resolves.toEqual({
       behavior: "allow",

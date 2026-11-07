@@ -19,6 +19,7 @@ import type {
   PluginSubagentDispatchRejection,
   PluginSubagentDispatchResult,
 } from "@/types/plugin/plugin-agent-sdk"
+import type { ChildRunOutcome } from "@/types/execution/child-run"
 
 /**
  * Duck-typed `RunAndCaptureError.code` — read structurally so this module never
@@ -129,4 +130,17 @@ export function renderDispatchOutcomeForModel(
     return `[${label}] Subagent terminated early due to ${envelope.message}`
   }
   return `[${label}]\n${r.text}`
+}
+
+/**
+ * A dispatch result as its child run's outcome (ADR-0252 §3): cancelled,
+ * failed (an error envelope, a rejection or an error finish) or completed.
+ * The text stays with the result; the run journal never sees it.
+ */
+export function dispatchResultOutcome(result: PluginSubagentDispatchResult): ChildRunOutcome {
+  if (result.finishReason === "cancelled") return { status: "cancelled", error: result.text }
+  if (result.errorEnvelope || result.rejection || result.finishReason === "error") {
+    return { status: "failed", error: result.errorEnvelope?.message ?? result.text }
+  }
+  return { status: "completed", text: result.text }
 }

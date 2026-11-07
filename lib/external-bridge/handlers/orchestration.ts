@@ -77,6 +77,58 @@ export async function agentDispatch(input: AgentDispatchInput): Promise<AgentDis
  * directly on the renderer path AND by the dispatch provider for the sidecar's
  * proxied request — so redaction fires on both paths.
  */
+/**
+ * One `executeAgent` run as this agent profile, launched as a child run so it
+ * has its row. The caller engine keeps the run's channel, finish reason and
+ * usage, which the bridge reports back.
+ */
+async function runCharacterAsChildRun(
+  characterId: string,
+  prompt: string,
+  toolsEnabled: boolean,
+  cwd: string | undefined
+): Promise<import("@/lib/ai/agent/agent-executor").ExecuteAgentResult> {
+  const [{ executeAgent }, { launchChildRun }] = await Promise.all([
+    import("@/lib/ai/agent/agent-executor"),
+    import("@/lib/execution/launch-child-run"),
+  ])
+  let result: import("@/lib/ai/agent/agent-executor").ExecuteAgentResult | undefined
+  let thrown: { error: unknown } | undefined
+  const launched = await launchChildRun({
+    title: characterId,
+    surface: "mcp",
+    target: {
+      kind: "agent",
+      label: characterId,
+      engine: {
+        run: async (signal) => {
+          try {
+            result = await executeAgent(prompt, {
+              characterId,
+              toolsEnabled,
+              ...(cwd ? { cwd } : {}),
+              abortSignal: signal,
+            })
+          } catch (error) {
+            thrown = { error }
+            throw error
+          }
+          return { status: "completed", text: result.text }
+        },
+      },
+    },
+  })
+  if (!launched.started) {
+    throw new Error(
+      `agent_dispatch could not start (${launched.reason}${launched.detail ? `: ${launched.detail}` : ""})`
+    )
+  }
+  const settled = await launched.outcome
+  if (thrown) throw thrown.error
+  if (result) return result
+  throw new Error(settled.error ?? "agent_dispatch ended without a result")
+}
+
 export async function agentDispatchCore(input: AgentDispatchInput): Promise<AgentDispatchOutput> {
   if (!input.prompt || !input.prompt.trim()) {
     return { ok: false, error: "agent_dispatch requires a non-empty prompt" }
@@ -96,23 +148,30 @@ export async function agentDispatchCore(input: AgentDispatchInput): Promise<Agen
     let finishReason: string | undefined
     let usage: AgentDispatchOutput["usage"]
 
+    // Each dispatch from the external bridge is its own run (ADR-0252 §3),
+    // with its `executionRuns` row.
     if (input.subagentId) {
-      const { dispatchSubagent } = await import("@/lib/plugin/agent-sdk/dispatch")
-      const result = await dispatchSubagent(input.subagentId, input.prompt, {
-        toolsEnabled: input.toolsEnabled ?? true,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-      })
+      const { dispatchSubagentAsChildRun } = await import("@/lib/plugin/agent-sdk/dispatch")
+      const result = await dispatchSubagentAsChildRun(
+        input.subagentId,
+        input.prompt,
+        {
+          toolsEnabled: input.toolsEnabled ?? true,
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+        },
+        { surface: "mcp" }
+      )
       text = result.text
       channel = result.channel
       finishReason = result.finishReason
       usage = result.usage
     } else {
-      const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-      const result = await executeAgent(input.prompt, {
-        characterId: input.characterId,
-        toolsEnabled: input.toolsEnabled ?? true,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-      })
+      const result = await runCharacterAsChildRun(
+        input.characterId!,
+        input.prompt,
+        input.toolsEnabled ?? true,
+        input.cwd
+      )
       text = result.text
       channel = result.channel
       finishReason = result.finishReason

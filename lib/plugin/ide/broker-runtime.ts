@@ -1489,12 +1489,18 @@ export function createManagedIdeBrokerDependencies(): ManagedIdeBrokerDependenci
         event as import("@/lib/plugin/core/manager").PluginActivationRuntimeEvent
       ),
     invokeAgent: async (agentId, prompt, context) => {
-      const { dispatchSubagent } = await import("@/lib/plugin/agent-sdk/dispatch")
-      const result = await dispatchSubagent(agentId, prompt, {
-        abortSignal: context.signal,
-        _onEvent: context.onEvent,
-        _canUseTool: (toolName, input) => context.requestApproval(toolName, input),
-      })
+      const { dispatchSubagentAsChildRun } = await import("@/lib/plugin/agent-sdk/dispatch")
+      // An IDE agent request is its own run (ADR-0252 §3): it gets its row.
+      const result = await dispatchSubagentAsChildRun(
+        agentId,
+        prompt,
+        {
+          abortSignal: context.signal,
+          _onEvent: context.onEvent,
+          _canUseTool: (toolName, input) => context.requestApproval(toolName, input),
+        },
+        { surface: "plugin" }
+      )
       return {
         result: { metadata: { runId: result.runId } },
       }
