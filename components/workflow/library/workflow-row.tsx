@@ -113,6 +113,15 @@ function WorkflowRowImpl({ workflow, runCount, lastStatus }: WorkflowRowProps) {
                 {t("builtin")}
               </Badge>
             ) : null}
+            {workflow.derivedFrom ? (
+              <Badge
+                variant="secondary"
+                className="hidden font-normal sm:inline-flex"
+                data-testid={`workflow-playbook-badge-${workflow.id}`}
+              >
+                {t("playbook")}
+              </Badge>
+            ) : null}
             {runCount && runCount > 0 ? (
               <Badge
                 variant="outline"

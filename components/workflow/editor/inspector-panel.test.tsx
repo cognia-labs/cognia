@@ -191,6 +191,27 @@ describe("InspectorPanel", () => {
     expect(screen.queryByTestId("workflow-inspector")).toBeNull()
   })
 
+  it("shows a playbook's node without letting it be edited or deleted (ADR-0254)", () => {
+    const store = createEditorStore({
+      ...buildWorkflow(),
+      readOnly: true,
+      derivedFrom: {
+        kind: "playbook",
+        skillId: "review",
+        contentHash: "h",
+        compilerVersion: 1,
+        compiledAt: 1,
+      },
+    })
+    act(() => {
+      store.getState().setSelectedNodes(["n_a"])
+    })
+    const { container } = mountInspector(store)
+    expect(screen.getByTestId("workflow-inspector-form")).toBeDisabled()
+    expect(container.querySelector("#ins-label")).toBeDisabled()
+    expect(screen.queryByText("Delete node")).toBeNull()
+  })
+
   it("renders the form for the selected node", () => {
     const store = createEditorStore(buildWorkflow())
     act(() => {

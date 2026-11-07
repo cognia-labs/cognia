@@ -1058,5 +1058,9 @@
   "twin__runtime__system-template__voice": {
     "title": "分身提示词：语气",
     "description": "把此人的说话风格和语气概述加入数字分身的系统提示词。"
+  },
+  "developer__workflow__quick-action__draft-from-skill": {
+    "title": "Copilot：从 skill 起草",
+    "description": "从没有 flow.yaml 的 skill 打开工作流时发给 Copilot 的第一条消息，请它按 skill 内容起草工作流图。"
   }
 }

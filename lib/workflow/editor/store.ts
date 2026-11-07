@@ -18,7 +18,7 @@
  *   • per-node config form state (react-hook-form owns that)
  */
 
-import { create, type StoreApi, type UseBoundStore } from "zustand"
+import { create, type StateCreator, type StoreApi, type UseBoundStore } from "zustand"
 import { temporal, type TemporalState } from "zundo"
 import { nanoid } from "nanoid"
 import type { Viewport } from "@xyflow/react"
@@ -56,6 +56,7 @@ import { validateConnection } from "./connection-validator"
 import { computeSplitEdges } from "./edge-insert"
 import type { ProposalOp } from "./proposal-types"
 import { workflowEditorRevision } from "./editor-revision"
+import { isWorkflowReadOnly } from "@/lib/workflow/definition/read-only"
 import type { PerformanceTier } from "./performance-tier"
 import type { LastRunSummary } from "@/lib/workflow/runtime/last-run-summary"
 import { runDiagnostics } from "@/lib/workflow/diagnostics/engine"
@@ -715,6 +716,27 @@ function applyNodeDataPatch(
   return next
 }
 
+/**
+ * Store middleware for a workflow compiled from a playbook, which opens as a
+ * view (ADR-0254 §2). Every action that edits the graph or its settings marks
+ * the editor dirty, so dropping exactly those updates keeps the graph as
+ * compiled while selection, viewport, panels and runs keep working. Saving is
+ * refused further down as well (`assertWorkflowWritable`).
+ */
+function dropEdits(creator: StateCreator<EditorState>): StateCreator<EditorState> {
+  return (set, get, api) => {
+    const guarded = ((partial: unknown, replace?: boolean) => {
+      const patch =
+        typeof partial === "function"
+          ? (partial as (state: EditorState) => Partial<EditorState>)(get())
+          : (partial as Partial<EditorState>)
+      if (patch?.dirty === true) return
+      ;(set as (patch: Partial<EditorState>, replace?: boolean) => void)(patch, replace)
+    }) as typeof set
+    return creator(guarded, get, api)
+  }
+}
+
 export function createEditorStore(initial: VisualWorkflow): EditorStore {
   const converted = workflowToReactFlow(initial)
   // Pre-drag snapshot held across begin/commit. A factory-closure ref (not
@@ -747,9 +769,12 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
   let revalidateTimer: ReturnType<typeof setTimeout> | null = null
   // Seq source for `requestFieldFocus`.
   let fieldFocusSeq = 0
+  const guard = isWorkflowReadOnly(initial)
+    ? dropEdits
+    : (creator: StateCreator<EditorState>) => creator
   const useStore = create<EditorState>()(
     temporal(
-      (set, get) => ({
+      guard((set, get) => ({
         baseWorkflow: initial,
         nodes: converted.nodes,
         edges: converted.edges,
@@ -1874,7 +1899,7 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
             get().recomputeDiagnostics()
           }, DIAGNOSTICS_DEBOUNCE_MS)
         },
-      }),
+      })),
       {
         // Track only nodes + edges in the temporal slice. Viewport and
         // selection should not be undoable: panning and clicking should not

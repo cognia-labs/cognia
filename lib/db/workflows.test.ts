@@ -27,6 +27,8 @@ import {
   listWorkflowRuns,
   moveWorkflowsToFolder,
   moveWorkflowToFolder,
+  putDerivedWorkflow,
+  setWorkflowTags,
   regenerateNodeIds,
   replaceWorkflow,
   seedBuiltInWorkflows,
@@ -496,6 +498,81 @@ describe("deleteWorkflow", () => {
     expect(await listForWorkflow(wf.id, { includeDisabled: true })).toHaveLength(1)
     await deleteWorkflow(wf.id)
     expect(await listForWorkflow(wf.id, { includeDisabled: true })).toHaveLength(0)
+  })
+})
+
+describe("putDerivedWorkflow", () => {
+  const derivedFrom = {
+    kind: "playbook" as const,
+    skillId: "review",
+    contentHash: "h1",
+    compilerVersion: 1,
+    compiledAt: 10,
+  }
+
+  function derived(overrides: Partial<VisualWorkflow> = {}): VisualWorkflow {
+    return {
+      id: "wf_playbook_review",
+      schemaVersion: 2,
+      name: "Review",
+      createdAt: 10,
+      updatedAt: 10,
+      nodes: [manualNode("pb__trigger")],
+      edges: [],
+      settings: DEFAULT_WORKFLOW_SETTINGS,
+      derivedFrom,
+      readOnly: true,
+      ...overrides,
+    }
+  }
+
+  it("writes the row", async () => {
+    const row = await putDerivedWorkflow(derived())
+    expect(row.folderId).toBe(ROOT_FOLDER_ID)
+    expect(await getWorkflow("wf_playbook_review")).toEqual(row)
+  })
+
+  it("keeps creation time and folder across a recompile", async () => {
+    await putDerivedWorkflow(derived())
+    await moveWorkflowToFolder("wf_playbook_review", "folder-a")
+    const recompiled = await putDerivedWorkflow(
+      derived({
+        name: "Review v2",
+        createdAt: 99,
+        updatedAt: 99,
+        derivedFrom: { ...derivedFrom, contentHash: "h2", compiledAt: 99 },
+      })
+    )
+    expect(recompiled).toMatchObject({
+      name: "Review v2",
+      createdAt: 10,
+      updatedAt: 99,
+      folderId: "folder-a",
+      derivedFrom: { contentHash: "h2" },
+    })
+  })
+
+  it("keeps the tags a person added, and lets them be changed", async () => {
+    await putDerivedWorkflow(derived({ tags: ["playbook"] }))
+    await setWorkflowTags("wf_playbook_review", ["playbook", "release"])
+    expect((await getWorkflow("wf_playbook_review"))?.tags).toEqual(["playbook", "release"])
+    const recompiled = await putDerivedWorkflow(derived({ tags: ["playbook"] }))
+    expect(recompiled.tags).toEqual(["playbook", "release"])
+  })
+
+  it("refuses a row that is not read-only and derived", async () => {
+    await expect(putDerivedWorkflow(derived({ readOnly: undefined }))).rejects.toThrow(
+      /not a read-only derived row/
+    )
+    await expect(putDerivedWorkflow(derived({ derivedFrom: undefined }))).rejects.toThrow(
+      /not a read-only derived row/
+    )
+  })
+
+  it("never overwrites an ordinary workflow that holds the id", async () => {
+    const own = await createWorkflow({ name: "Mine" })
+    await expect(putDerivedWorkflow(derived({ id: own.id }))).rejects.toThrow(/ordinary workflow/)
+    expect((await getWorkflow(own.id))?.name).toBe("Mine")
   })
 })
 

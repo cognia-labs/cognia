@@ -6,6 +6,8 @@ import {
   duplicateWorkflow,
   getWorkflow,
   replaceWorkflow,
+  updateWorkflow,
+  type WorkflowPatch,
 } from "@/lib/db/workflows"
 import { createSkill } from "@/lib/db/skills"
 import { createResource } from "@/lib/db/skill-resources"
@@ -15,6 +17,7 @@ import {
   reconcileWorkflowPublications,
   unpublishWorkflowLifecycle,
 } from "./publication-lifecycle"
+import { WorkflowReadOnlyError } from "@/lib/workflow/definition/read-only"
 import type { VisualWorkflow } from "@/types/workflow/visual"
 
 const dbFixture = createDbTestFixture()
@@ -385,5 +388,82 @@ describe("workflow publication lifecycle", () => {
       skillId: first.skillId,
       content: "keep me",
     })
+  })
+})
+
+describe("workflows derived from a playbook (ADR-0254)", () => {
+  const derivedFrom = {
+    kind: "playbook" as const,
+    skillId: "skill-review",
+    contentHash: "abc123",
+    compilerVersion: 1,
+    compiledAt: 100,
+  }
+
+  async function seedDerived(): Promise<VisualWorkflow> {
+    const workflow = await createWorkflow({
+      name: "Change review",
+      nodes: nodesWithInputSchema({ type: "object" }),
+      edges: [],
+    })
+    const derived: VisualWorkflow = { ...workflow, derivedFrom, readOnly: true }
+    await getDb().workflows.put(derived)
+    return derived
+  }
+
+  it("refuses an editor save and an update, leaving the row untouched", async () => {
+    const derived = await seedDerived()
+
+    await expect(replaceWorkflow({ ...derived, name: "Edited" })).rejects.toBeInstanceOf(
+      WorkflowReadOnlyError
+    )
+    await expect(updateWorkflow(derived.id, { name: "Edited" })).rejects.toBeInstanceOf(
+      WorkflowReadOnlyError
+    )
+    expect(await getWorkflow(derived.id)).toEqual(derived)
+  })
+
+  it("refuses to publish a derived workflow and mints no skill", async () => {
+    const derived = await seedDerived()
+
+    await expect(publishWorkflow(derived.id, 123)).rejects.toBeInstanceOf(WorkflowReadOnlyError)
+    expect(
+      (await getDb().skills.toArray()).some(
+        (skill) => skill.canonicalId === workflowSkillCanonicalId(derived.id)
+      )
+    ).toBe(false)
+    expect((await getWorkflow(derived.id))?.published).toBeUndefined()
+  })
+
+  it("never lets an ordinary save mark a row derived or read-only", async () => {
+    const workflow = await createWorkflow({
+      name: "Plain",
+      nodes: nodesWithInputSchema({ type: "object" }),
+      edges: [],
+    })
+
+    await updateWorkflow(workflow.id, {
+      derivedFrom,
+      readOnly: true,
+    } as unknown as WorkflowPatch)
+    await replaceWorkflow({ ...(await getWorkflow(workflow.id))!, derivedFrom, readOnly: true })
+
+    const stored = await getWorkflow(workflow.id)
+    expect(stored?.derivedFrom).toBeUndefined()
+    expect(stored?.readOnly).toBeUndefined()
+  })
+
+  it("detaches by duplicating into an ordinary, editable workflow", async () => {
+    const derived = await seedDerived()
+
+    const copy = await duplicateWorkflow(derived.id)
+
+    expect(copy.id).not.toBe(derived.id)
+    expect(copy.derivedFrom).toBeUndefined()
+    expect(copy.readOnly).toBeUndefined()
+    expect(copy.nodes).toEqual(derived.nodes)
+    const renamed = await updateWorkflow(copy.id, { name: "My review" })
+    expect(renamed?.name).toBe("My review")
+    expect(await getWorkflow(derived.id)).toEqual(derived)
   })
 })

@@ -67,6 +67,8 @@ import { useEffectiveWorkbenchRailPersistent as useWorkbenchRailPersistent } fro
 import type { NodeCatalogEntry } from "@/lib/workflow/nodes/catalog"
 import { useBreakpoint } from "@/hooks/ui/use-breakpoint"
 import { cn } from "@/lib/utils"
+import { takeCopilotRequest } from "@/lib/workflow/editor/copilot-handoff"
+import { DerivedWorkflowBanner } from "./derived-workflow-banner"
 
 /** The right rail's shipped width and floor, as percentages of the editor. */
 const WORKFLOW_RIGHT_DEFAULT_PERCENT = 28
@@ -89,6 +91,7 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
   const tValidation = useTranslations("workflows.validation")
   const tDiag = useTranslations("workflows.diagnostics")
   const tToolbar = useTranslations("workflows.toolbar")
+  const tPlaybook = useTranslations("workflows.playbook")
   // The editor route forks to `MobileWorkflowEditor` below `md`, so this
   // component only ever renders on tablet or desktop. Tablet is the branch it
   // never had: at 768px a 20%/56%/28% split leaves ~108px of palette and
@@ -114,12 +117,16 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
     setSelectedNodes,
     setName,
     toWorkflow,
+    readOnly,
+    derivedFrom,
   } = useStore(
     useShallow((s: EditorState) => ({
       dirty: s.dirty,
       viewport: s.viewport,
       workflowName: s.baseWorkflow.name,
       workflowId: s.baseWorkflow.id,
+      readOnly: s.baseWorkflow.readOnly === true,
+      derivedFrom: s.baseWorkflow.derivedFrom,
       nodeCount: s.nodes.length,
       setSelectedNodes: s.setSelectedNodes,
       setName: s.setName,
@@ -256,6 +263,12 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
    * Open the AI panel. `refine` carries the current selection so the request is
    * scoped to it (Coze's Reference); `create` opens it empty for a fresh graph.
    */
+  // A Copilot request prepared before this editor existed: the draft of a
+  // workflow opened from a skill without a flow (ADR-0254 §2).
+  useEffect(() => {
+    const pending = takeCopilotRequest(workflowId)
+    if (pending !== undefined) useStore.getState().requestCopilot(pending)
+  }, [useStore, workflowId])
   const handleAskCopilot = useCallback(
     (mode: "create" | "refine") => {
       const state = useStore.getState()
@@ -454,6 +467,12 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
 
   const handleSave = useCallback(async () => {
     if (saving) return
+    // A compiled playbook workflow is never saved (ADR-0254); say how to get
+    // an editable copy instead of surfacing the persistence refusal.
+    if (readOnly) {
+      toast.info(tPlaybook("readOnlySave"))
+      return
+    }
     setSaving(true)
     try {
       // Shared persist path (toWorkflow → replaceWorkflow → trigger sync →
@@ -474,7 +493,7 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
     } finally {
       setSaving(false)
     }
-  }, [saving, useStore, t, tValidation])
+  }, [saving, readOnly, useStore, t, tValidation, tPlaybook])
 
   const [running, setRunning] = useState(false)
   const handleRun = useCallback(
@@ -1126,7 +1145,9 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
         leftPanelCollapsed={leftCollapsed}
         onToggleRightPanel={toggleRightPanel}
         rightPanelCollapsed={rightCollapsed}
+        readOnly={readOnly}
       />
+      {derivedFrom ? <DerivedWorkflowBanner workflow={{ id: workflowId, derivedFrom }} /> : null}
       <ShareLinkDialog
         open={shareImageOpen}
         onOpenChange={setShareImageOpen}

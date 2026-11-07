@@ -3,6 +3,7 @@ import {
   WORKFLOW_QUICK_ACTION_PROMPTS,
   buildQuickActionPrompt,
   buildSelectionReferencePrompt,
+  buildSkillDraftPrompt,
 } from "./quick-action-prompts"
 import {
   __setPromptOverrideSnapshotForTests,
@@ -216,6 +217,24 @@ describe("quick-action Prompt Center entries (ADR-0236)", () => {
         "Read them, tell me in one or two sentences what this part of the graph does, then ask me what I want changed.",
         "Scope every proposal that follows to these nodes and their edges unless I say otherwise.",
       ].join("\n")
+    )
+  })
+})
+
+describe("buildSkillDraftPrompt", () => {
+  it("asks the Copilot to draft the graph from the skill's text", () => {
+    const prompt = buildSkillDraftPrompt({
+      name: "Release notes",
+      content: "1. Read the merged PRs.\n2. Group them by area.",
+    })
+    expect(prompt).toContain("Draft this workflow from the skill **Release notes** below.")
+    expect(prompt).toContain("`wf_*` tools")
+    expect(prompt.endsWith("1. Read the merged PRs.\n2. Group them by area.")).toBe(true)
+  })
+
+  it("is a registered Prompt Center entry", () => {
+    expect(WORKFLOW_QUICK_ACTION_PROMPTS.draftFromSkill.id).toBe(
+      "developer.workflow.quick-action.draft-from-skill"
     )
   })
 })

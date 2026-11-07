@@ -130,6 +130,7 @@ function InspectorPanelInner({
   // When more than one node is selected, hand off to the bulk inspector
   // (cross-kind-safe field edits across the whole selection).
   const isMultiSelect = useStore((s: EditorState) => s.selectedNodeIds.length > 1)
+  const readOnly = useStore((s: EditorState) => s.baseWorkflow.readOnly === true)
 
   const { node, validation } = useStore(
     useShallow((s: EditorState) => ({
@@ -195,7 +196,7 @@ function InspectorPanelInner({
   // `Field` stamps `data-invalid="true"` on each field with an error; the
   // lookup is scoped to THIS panel's form so the workbench's hidden
   // keep-alive copies can never be the target.
-  const formScrollRef = useRef<HTMLDivElement | null>(null)
+  const formScrollRef = useRef<HTMLFieldSetElement | null>(null)
   const jumpIndexRef = useRef(0)
   const jumpToNextError = useCallback(() => {
     const root = formScrollRef.current
@@ -338,7 +339,14 @@ function InspectorPanelInner({
       <ScrollArea className="flex-1">
         <div className="px-4 py-4">
           <DataTabs useStore={useStore} nodeId={node.id}>
-            <div className="space-y-4" ref={formScrollRef}>
+            {/* A workflow compiled from a playbook is shown, not edited
+                (ADR-0254): every control in the form is disabled. */}
+            <fieldset
+              disabled={readOnly}
+              className="min-w-0 space-y-4"
+              ref={formScrollRef}
+              data-testid="workflow-inspector-form"
+            >
               <Field label={t("label")} htmlFor="ins-label" required>
                 <Input
                   id="ins-label"
@@ -394,22 +402,24 @@ function InspectorPanelInner({
               }) ? (
                 <p className="text-[11px] text-muted-foreground">{t("noConfigYet")}</p>
               ) : null}
-            </div>
+            </fieldset>
           </DataTabs>
         </div>
       </ScrollArea>
-      <footer className="border-t px-4 py-3">
-        <Button
-          variant="outline"
-          className="w-full text-destructive hover:bg-destructive/10"
-          onClick={() => {
-            removeNodes([node.id])
-          }}
-        >
-          <Trash2Icon className="size-4 mr-1.5" />
-          {t("deleteNode")}
-        </Button>
-      </footer>
+      {readOnly ? null : (
+        <footer className="border-t px-4 py-3">
+          <Button
+            variant="outline"
+            className="w-full text-destructive hover:bg-destructive/10"
+            onClick={() => {
+              removeNodes([node.id])
+            }}
+          >
+            <Trash2Icon className="size-4 mr-1.5" />
+            {t("deleteNode")}
+          </Button>
+        </footer>
+      )}
     </aside>
   )
 }

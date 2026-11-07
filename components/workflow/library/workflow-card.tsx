@@ -187,6 +187,15 @@ function WorkflowCardImpl({ workflow, runCount, lastStatus }: WorkflowCardProps)
                   {t("builtin")}
                 </Badge>
               ) : null}
+              {workflow.derivedFrom ? (
+                <Badge
+                  variant="secondary"
+                  className="font-normal"
+                  data-testid={`workflow-playbook-badge-${workflow.id}`}
+                >
+                  {t("playbook")}
+                </Badge>
+              ) : null}
               {workflow.isTemplate ? (
                 <Badge variant="secondary" className="font-normal">
                   {t("template")}

@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
+import Link from "next/link"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,7 @@ import {
   PackageIcon,
   PencilIcon,
   Trash2Icon,
+  WorkflowIcon,
 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { Spinner } from "@/components/ui/spinner"
@@ -48,6 +50,7 @@ import { serializeSkill, skillFilename } from "@/lib/claude/skills-io"
 import { saveBinaryFileAs, saveFileAs } from "@/lib/files/file-bridge"
 import { serializeSkillBundle } from "@/lib/skills/bundle/serializer"
 import { deriveSkillSlug } from "@/lib/skills/slug"
+import { playbookWorkflowHref } from "@/lib/skills/playbook/open-href"
 import { toast } from "sonner"
 import type { Skill } from "@cognia/agent-config-types"
 import { SkillResourceManager } from "./skill-resource-manager"
@@ -235,6 +238,18 @@ export function SkillDetail({ skill }: Props) {
                       {t("card.duplicate")}
                     </DropdownMenuItem>
                   )}
+                  {/* A playbook opens its compiled, read-only workflow; any
+                      other skill opens a workflow the Copilot drafts from it
+                      (ADR-0254 §2). The editor route decides which. */}
+                  <DropdownMenuItem asChild>
+                    <Link
+                      href={playbookWorkflowHref(skill.id)}
+                      data-testid="skill-open-as-workflow"
+                    >
+                      <WorkflowIcon className="size-3.5" />
+                      {tDetail("openAsWorkflow")}
+                    </Link>
+                  </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void handleBundleExport()}>
                     <PackageIcon className="size-3.5" />
                     {tDetail("exportBundle")}

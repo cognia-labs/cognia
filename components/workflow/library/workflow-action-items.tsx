@@ -23,6 +23,7 @@ import {
   Trash2Icon,
 } from "lucide-react"
 import { duplicateWorkflow, saveWorkflowAsTemplate } from "@/lib/db/workflows"
+import { isWorkflowReadOnly } from "@/lib/workflow/definition/read-only"
 import type { WorkflowRow } from "@/types/workflow/visual"
 import { useWorkflowLibraryStore } from "@/stores/workflow"
 import { usePinnedWorkflows } from "./use-pinned-workflows"
@@ -61,6 +62,10 @@ export function WorkflowActionItems({
   const openMoveDialog = useWorkflowLibraryStore((s) => s.openMoveDialog)
   const { isPinned, togglePin } = usePinnedWorkflows()
   const pinned = isPinned(workflow.id)
+  // A workflow compiled from a playbook keeps the playbook's name (ADR-0254);
+  // Duplicate is how a person gets an editable copy. Tags and folders
+  // organise the library and still apply.
+  const readOnly = isWorkflowReadOnly(workflow)
 
   const handleDuplicate = async () => {
     try {
@@ -112,7 +117,11 @@ export function WorkflowActionItems({
       >
         <FolderInputIcon className="size-4 mr-2" /> {t("moveTo")}
       </Item>
-      <Item onClick={onRename} data-testid={`workflow-action-rename-${workflow.id}`}>
+      <Item
+        onClick={readOnly ? undefined : onRename}
+        disabled={readOnly}
+        data-testid={`workflow-action-rename-${workflow.id}`}
+      >
         <PencilIcon className="size-4 mr-2" /> {t("rename")}
       </Item>
       <Item onClick={onEditTags} data-testid={`workflow-action-tags-${workflow.id}`}>

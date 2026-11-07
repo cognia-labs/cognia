@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:modules",
+  "allowGrowth": 1,
+  "owner": "lib/playbooks",
+  "repaymentPhase": "2",
+  "reason": "ADR-0254 adds the playbooks module (lib/playbooks/module.ts), which keeps each playbook skill's read-only derived workflow compiled and current. It is a new subsystem born with a manifest, not a table row, so it adds to the module count rather than moving debt; the pure flow parser and compiler stay in the skills kernel. Nothing is owed back; phase 2 is named because it re-baselines the size measures once the transitional table is empty."
+}

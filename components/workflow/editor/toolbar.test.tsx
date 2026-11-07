@@ -77,3 +77,15 @@ describe("EditorToolbar revert", () => {
     expect(onRevert).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("EditorToolbar read-only", () => {
+  it("keeps the name of a playbook's workflow from being edited", () => {
+    renderToolbar({ readOnly: true })
+    expect(screen.getByDisplayValue("Flow")).toHaveAttribute("readonly")
+  })
+
+  it("leaves an ordinary workflow's name editable", () => {
+    renderToolbar()
+    expect(screen.getByDisplayValue("Flow")).not.toHaveAttribute("readonly")
+  })
+})

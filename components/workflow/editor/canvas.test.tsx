@@ -23,6 +23,8 @@ import {
   __resetContextKeysForTesting,
 } from "@/lib/plugin/context-keys/context-key-store"
 import { __resetAppKeybindingStoreForTesting } from "@/stores/shortcuts/app-keybinding-store"
+import { putDerivedWorkflow } from "@/lib/db/workflows"
+import { queueCopilotRequest, takeCopilotRequest } from "@/lib/workflow/editor/copilot-handoff"
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(<TooltipProvider>{ui}</TooltipProvider>)
@@ -99,6 +101,7 @@ jest.mock("sonner", () => ({
     error: jest.fn(),
     success: jest.fn(),
     warning: jest.fn(),
+    info: jest.fn(),
     loading: jest.fn(() => "toast-id"),
   }),
 }))
@@ -216,6 +219,68 @@ function buildSample(): VisualWorkflow {
     },
   }
 }
+
+describe("WorkflowEditorCanvas — a workflow compiled from a playbook (ADR-0254)", () => {
+  async function derived(): Promise<VisualWorkflow> {
+    return putDerivedWorkflow({
+      ...buildSample(),
+      id: "wf_playbook_review",
+      schemaVersion: 2,
+      readOnly: true,
+      derivedFrom: {
+        kind: "playbook",
+        skillId: "review",
+        contentHash: "h",
+        compilerVersion: 1,
+        compiledAt: 1,
+      },
+    })
+  }
+
+  it("shows where it comes from and keeps the graph from being moved, wired or deleted", async () => {
+    const wf = await derived()
+    renderWithProviders(<WorkflowEditorCanvas workflow={wf} />)
+    expect(screen.getByTestId("derived-workflow-banner")).toBeInTheDocument()
+    await screen.findByTestId("react-flow-mock")
+    const props = reactFlowPropsRef.current
+    expect(props?.nodesDraggable).toBe(false)
+    expect(props?.nodesConnectable).toBe(false)
+    expect(props?.deleteKeyCode).toBeNull()
+  })
+
+  it("answers a save with how to get an editable copy, and writes nothing", async () => {
+    const wf = await derived()
+    renderWithProviders(<WorkflowEditorCanvas workflow={wf} />)
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", metaKey: true, bubbles: true, cancelable: true })
+      )
+    })
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith(
+        "This workflow is read-only. Detach it to save changes."
+      )
+    )
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(await getWorkflow(wf.id)).toEqual(wf)
+  })
+
+  it("shows no banner for an ordinary workflow", async () => {
+    const wf = await createWorkflow({ name: "plain" })
+    renderWithProviders(<WorkflowEditorCanvas workflow={{ ...buildSample(), id: wf.id }} />)
+    expect(screen.queryByTestId("derived-workflow-banner")).not.toBeInTheDocument()
+  })
+})
+
+describe("WorkflowEditorCanvas — a Copilot draft handed over before it opened", () => {
+  it("takes the waiting request for its workflow", async () => {
+    const wf = await createWorkflow({ name: "Draft" })
+    queueCopilotRequest(wf.id, "Draft this workflow from the skill")
+    renderWithProviders(<WorkflowEditorCanvas workflow={{ ...buildSample(), id: wf.id }} />)
+    await screen.findByTestId("react-flow-mock")
+    expect(takeCopilotRequest(wf.id)).toBeUndefined()
+  })
+})
 
 describe("WorkflowEditorCanvas", () => {
   it("renders the toolbar and reaches the React Flow surface", async () => {

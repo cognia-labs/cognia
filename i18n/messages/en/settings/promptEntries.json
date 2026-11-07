@@ -1058,5 +1058,9 @@
   "twin__runtime__system-template__voice": {
     "title": "Twin prompt: voice",
     "description": "Adds the person's voice and tone summary to the digital twin's system prompt."
+  },
+  "developer__workflow__quick-action__draft-from-skill": {
+    "title": "Copilot: draft from a skill",
+    "description": "The first Copilot message of a workflow opened from a skill that has no flow.yaml, asking it to draft the graph from the skill."
   }
 }

@@ -43864,6 +43864,7 @@
     "webhookPath": "Webhook path",
     "workflow": "Workflow",
     "workflowNotFound": "Workflow not found",
+    "workflowReadOnly": "This workflow is compiled from a playbook and is read-only. Detach it in the workflow editor to add a trigger.",
     "workflowScriptReadOnlyDescription": "Script content is managed by workflow trigger sync and is read-only in this form.",
     "workflowScriptReadOnlyTitle": "Workflow-managed task",
     "workflowTriggerNotFound": "Workflow trigger not found.",
@@ -56378,6 +56379,10 @@
         "description": "Protocol text read by the parser: the JSON shape a JSON-mode node's reply must match.",
         "title": "JSON output shape"
       },
+      "developer__workflow__quick-action__draft-from-skill": {
+        "description": "The first Copilot message of a workflow opened from a skill that has no flow.yaml, asking it to draft the graph from the skill.",
+        "title": "Copilot: draft from a skill"
+      },
       "developer__workflow__quick-action__explain": {
         "description": "The /explain message asking the Copilot to explain the selected workflow nodes.",
         "title": "Copilot: explain selection"
@@ -60706,6 +60711,7 @@
       "metaUsageLabel": "Usage",
       "metaVersion": "Version",
       "noResources": "No resources bundled.",
+      "openAsWorkflow": "Open as workflow",
       "tabContent": "Content",
       "tabEdit": "Edit",
       "tabOverview": "Overview",
@@ -66455,6 +66461,7 @@
       "open": "Open",
       "pin": "Pin",
       "pinned": "Pinned",
+      "playbook": "Playbook",
       "rename": "Rename",
       "renameDialog": {
         "cancel": "Cancel",
@@ -73047,6 +73054,24 @@
     "notFoundBackToLibrary": "Back to library",
     "notFoundDescription": "The workflow you tried to open doesn't exist or has been deleted.",
     "notFoundTitle": "Workflow not found",
+    "playbook": {
+      "backToSkills": "Back to skills",
+      "badge": "Playbook",
+      "bannerBody": "This workflow follows the playbook {skillId} and is read-only: it is recompiled whenever the playbook changes. Detach it to edit a copy that no longer follows the playbook.",
+      "bannerTitle": "Compiled from a playbook",
+      "detach": "Detach",
+      "detachFailed": "Could not detach: {error}",
+      "detached": "Detached into “{name}”.",
+      "drafting": "{name} has no step list, so the Copilot is drafting a workflow from it. Review it before you save.",
+      "failedTitle": "Could not open this skill as a workflow",
+      "missingBody": "The skill {skillId} does not exist or was removed.",
+      "missingTitle": "Skill not found",
+      "opening": "Opening as a workflow…",
+      "problemsBody": "Fix these problems in its references/flow.yaml, then open it again.",
+      "problemsTitle": "This playbook cannot be opened as a workflow",
+      "readOnlySave": "This workflow is read-only. Detach it to save changes.",
+      "tooManyBody": "It calls more than {limit} playbooks. Reduce the playbooks it calls, then open it again."
+    },
     "runs": {
       "detail": {
         "backToRuns": "Back to runs",

@@ -3,6 +3,7 @@ import {
   toUnifiedTrigger,
   WorkflowSourceWriteNotSupportedError,
 } from "./workflow-source"
+import { WorkflowReadOnlyError } from "@/lib/workflow/definition/read-only"
 import type { VisualWorkflow, WorkflowTriggerRow } from "@/types/workflow/visual"
 
 function makeRow(overrides: Partial<WorkflowTriggerRow> = {}): WorkflowTriggerRow {
@@ -80,9 +81,12 @@ describe("toUnifiedTrigger", () => {
 })
 
 describe("createWorkflowSource", () => {
-  function makeStubs(initial: WorkflowTriggerRow[] = [makeRow()]) {
+  function makeStubs(
+    initial: WorkflowTriggerRow[] = [makeRow()],
+    workflowOverrides: Partial<VisualWorkflow> = {}
+  ) {
     let triggers: WorkflowTriggerRow[] = [...initial]
-    let workflow = makeWorkflow()
+    let workflow = makeWorkflow(workflowOverrides)
     const db = {
       workflowTriggers: {
         toArray: jest.fn(async () => triggers),
@@ -176,6 +180,15 @@ describe("createWorkflowSource", () => {
       expect.objectContaining({ cron: "*/5 * * * *" })
     )
     expect(stubs.getWorkflow().nodes[0].data.params).toEqual({ cron: "*/5 * * * *" })
+  })
+
+  it("refuses to pause a trigger on a read-only workflow and writes nothing", async () => {
+    const stubs = makeStubs([makeRow()], { readOnly: true })
+    const source = createWorkflowSource({ db: stubs.db, sync: stubs.sync, run: stubs.run })
+    await expect(source.pause("trigger-1")).rejects.toBeInstanceOf(WorkflowReadOnlyError)
+    expect(stubs.db.workflowTriggers.update).not.toHaveBeenCalled()
+    expect(stubs.db.workflows.put).not.toHaveBeenCalled()
+    expect(stubs.sync).not.toHaveBeenCalled()
   })
 
   it("update() is a no-op when no recognized fields are provided", async () => {

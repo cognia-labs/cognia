@@ -92,6 +92,29 @@ describe("WorkflowActionItems", () => {
     expect(onRename).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps a playbook's workflow from being renamed, but lets it be tagged", async () => {
+    const { onRename, onEditTags } = renderItems(
+      makeWorkflow({
+        readOnly: true,
+        derivedFrom: {
+          kind: "playbook",
+          skillId: "review",
+          contentHash: "h",
+          compilerVersion: 1,
+          compiledAt: 0,
+        },
+      })
+    )
+    const rename = await screen.findByTestId("workflow-action-rename-wf_a")
+    const tags = screen.getByTestId("workflow-action-tags-wf_a")
+    expect(rename).toHaveAttribute("data-disabled")
+    expect(tags).not.toHaveAttribute("data-disabled")
+    fireEvent.click(rename)
+    fireEvent.click(tags)
+    expect(onRename).not.toHaveBeenCalled()
+    expect(onEditTags).toHaveBeenCalledTimes(1)
+  })
+
   it("fires the edit-tags callback", async () => {
     const { onEditTags } = renderItems(makeWorkflow())
     fireEvent.click(await screen.findByTestId("workflow-action-tags-wf_a"))

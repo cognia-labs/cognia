@@ -145,6 +145,20 @@ export const WORKFLOW_QUICK_ACTION_PROMPTS = {
       SUGGEST_REQUEST,
     ].join("\n"),
   }),
+  draftFromSkill: quickActionPrompt({
+    slug: "draft-from-skill",
+    variables: ["name", "content"],
+    outputContract:
+      "Sent as the first Copilot turn of an empty workflow opened from a skill that has no flow.yaml (ADR-0254); {{name}} is the skill's name and {{content}} its SKILL.md body.",
+    defaultBody: [
+      "Draft this workflow from the skill **{{name}}** below. Read it, propose the steps as workflow nodes (a trigger, the work, any approval a person should give, and the output), then build the graph with the `wf_*` tools.",
+      "Keep each step the skill describes as its own node, and ask me before anything you are unsure about.",
+      "",
+      "---",
+      "",
+      "{{content}}",
+    ].join("\n"),
+  }),
 } as const
 
 function render(def: PromptDefinitionV1, values?: Record<string, string>): string {
@@ -254,5 +268,17 @@ function buildSuggestPrompt(state: EditorState): string {
   return render(WORKFLOW_QUICK_ACTION_PROMPTS.suggest, {
     ...counts,
     anchors: anchorLines.length > 0 ? `\n\n${anchorLines.join("\n")}` : "",
+  })
+}
+
+/**
+ * The first Copilot turn of an empty workflow opened from a skill without
+ * `references/flow.yaml`: draft the graph from the skill's text. The person
+ * reviews and saves it as an ordinary workflow (ADR-0254 §2).
+ */
+export function buildSkillDraftPrompt(skill: { name: string; content: string }): string {
+  return render(WORKFLOW_QUICK_ACTION_PROMPTS.draftFromSkill, {
+    name: skill.name,
+    content: skill.content,
   })
 }

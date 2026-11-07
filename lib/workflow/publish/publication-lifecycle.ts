@@ -5,6 +5,7 @@ import { upsertSkillByCanonicalId, workflowSkillBody } from "@/lib/db/skills"
 import { recordTombstones } from "@/lib/db/tombstones"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { migrateWorkflow } from "@/lib/workflow/definition/migrate"
+import { assertWorkflowWritable } from "@/lib/workflow/definition/read-only"
 import { validateWorkflow } from "@/lib/workflow/definition/validate"
 import {
   createWorkflowVersion,
@@ -169,6 +170,9 @@ export async function publishWorkflowLifecycle(
               .first(),
           ]).then(([stored, skills, versions, existingDeployment]) => {
             if (!stored) throw new Error(`publishWorkflow: workflow ${workflowId} not found`)
+            // A derived workflow is not its own definition: publishing it would
+            // mint a second skill for the playbook skill it came from.
+            assertWorkflowWritable(stored)
 
             const existing = migrateWorkflow(stored)
             const validation = validateWorkflow(existing)
@@ -428,6 +432,7 @@ export async function updateWorkflowWithPublication(
     const stored = await db.workflows.get(id)
     if (!stored) return undefined
 
+    assertWorkflowWritable(stored)
     const existing = migrateWorkflow(stored)
     const {
       id: _ignoredId,
@@ -436,6 +441,10 @@ export async function updateWorkflowWithPublication(
       schemaVersion: _ignoredSchemaVersion,
       interface: _ignoredInterface,
       published: _ignoredPublished,
+      // Only the compiler that owns a derived row sets these; an ordinary
+      // edit can neither mark a row derived nor lift its read-only flag.
+      derivedFrom: _ignoredDerivedFrom,
+      readOnly: _ignoredReadOnly,
       ...ordinaryPatch
     } = patch
     const workflow: VisualWorkflow = {

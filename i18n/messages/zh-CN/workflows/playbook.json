@@ -1,0 +1,18 @@
+{
+  "opening": "正在以工作流打开…",
+  "drafting": "{name} 没有步骤清单，Copilot 正在根据它起草工作流。保存前请先检查。",
+  "missingTitle": "未找到该 skill",
+  "missingBody": "skill {skillId} 不存在或已被删除。",
+  "failedTitle": "无法将该 skill 以工作流打开",
+  "problemsTitle": "该流程无法以工作流打开",
+  "problemsBody": "请修正其 references/flow.yaml 中的以下问题，然后重新打开。",
+  "tooManyBody": "它调用了超过 {limit} 个流程。请减少它调用的流程后重新打开。",
+  "backToSkills": "返回 skill 列表",
+  "badge": "流程",
+  "bannerTitle": "由流程编译而来",
+  "bannerBody": "该工作流跟随流程 {skillId}，为只读：流程每次变化都会重新编译。分离后可编辑一份不再跟随流程的副本。",
+  "detach": "分离",
+  "detached": "已分离为“{name}”。",
+  "detachFailed": "分离失败：{error}",
+  "readOnlySave": "该工作流为只读。分离后才能保存修改。"
+}

@@ -156,7 +156,15 @@ export async function createWorkflow(
 export type WorkflowPatch = Partial<
   Omit<
     VisualWorkflow,
-    "id" | "createdAt" | "updatedAt" | "isBuiltIn" | "schemaVersion" | "interface" | "published"
+    | "id"
+    | "createdAt"
+    | "updatedAt"
+    | "isBuiltIn"
+    | "schemaVersion"
+    | "interface"
+    | "published"
+    | "derivedFrom"
+    | "readOnly"
   >
 >
 
@@ -295,12 +303,45 @@ export async function duplicateWorkflow(id: string): Promise<WorkflowRow> {
     isBuiltIn: false,
     isTemplate: false,
     published: undefined,
+    // Duplicating a derived workflow is how it is detached (ADR-0254 §2):
+    // the copy is an ordinary, editable workflow that no longer follows it.
+    derivedFrom: undefined,
+    readOnly: undefined,
     createdAt: now,
     updatedAt: now,
   }
   await getDb().workflows.put(copy)
   await projectPersistedWorkflowTriggers(copy)
   return copy
+}
+
+/**
+ * Write a workflow compiled from a playbook (ADR-0254 §2). This is the one
+ * write a read-only row accepts: the compiler owns it. The row keeps its
+ * creation time, folder and the tags a person added across recompiles, so
+ * their filing survives.
+ * It refuses to overwrite an ordinary workflow that happens to hold the id.
+ */
+export async function putDerivedWorkflow(workflow: VisualWorkflow): Promise<WorkflowRow> {
+  if (!workflow.derivedFrom || workflow.readOnly !== true) {
+    throw new Error(`putDerivedWorkflow: workflow ${workflow.id} is not a read-only derived row`)
+  }
+  const db = getDb()
+  const stored = await db.workflows.get(workflow.id)
+  if (stored && !stored.derivedFrom) {
+    throw new Error(
+      `putDerivedWorkflow: workflow ${workflow.id} is an ordinary workflow; refusing to overwrite it`
+    )
+  }
+  const row: VisualWorkflow = {
+    ...workflow,
+    createdAt: stored?.createdAt ?? workflow.createdAt,
+    folderId: stored?.folderId ?? workflow.folderId ?? ROOT_FOLDER_ID,
+    tags: [...new Set([...(workflow.tags ?? []), ...(stored?.tags ?? [])])],
+  }
+  await db.workflows.put(row)
+  await projectPersistedWorkflowTriggers(row)
+  return row
 }
 
 /**
@@ -374,9 +415,13 @@ export async function listWorkflowsInFolder(folderId: string): Promise<WorkflowR
   return getDb().workflows.where("folderId").equals(folderId).toArray()
 }
 
-/** Move a single workflow into a folder (root = `ROOT_FOLDER_ID`). */
+/**
+ * Move a single workflow into a folder (root = `ROOT_FOLDER_ID`). Filing is
+ * library organisation, not an edit to the graph, so it goes through the same
+ * metadata write as the batch move and also files a read-only derived row.
+ */
 export async function moveWorkflowToFolder(id: string, folderId: string): Promise<void> {
-  await updateWorkflow(id, { folderId: folderId || ROOT_FOLDER_ID })
+  await moveWorkflowsToFolder([id], folderId)
 }
 
 /** Batch-move workflows into one folder. Single transaction so the library's
@@ -391,6 +436,15 @@ export async function moveWorkflowsToFolder(ids: string[], folderId: string): Pr
       await db.workflows.update(id, { folderId: target, updatedAt: now })
     }
   })
+}
+
+/**
+ * Replace a workflow's tags. Tags organise the library, they are not part of
+ * the graph, so this is a metadata write that also applies to a read-only
+ * derived row (ADR-0254); its compiled tags come back on the next compile.
+ */
+export async function setWorkflowTags(id: string, tags: string[]): Promise<void> {
+  await getDb().workflows.update(id, { tags, updatedAt: nowMs() })
 }
 
 /** Add a tag to every workflow in `ids` (idempotent per row). Read-modify-

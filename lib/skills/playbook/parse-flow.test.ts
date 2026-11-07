@@ -1,5 +1,10 @@
 import { PLAYBOOK_FLOW_LIMITS, PLAYBOOK_FLOW_PATH } from "./flow-schema"
-import { findPlaybookFlowText, parsePlaybookFlow, type PlaybookFlowProblem } from "./parse-flow"
+import {
+  decodePlaybookReference,
+  findPlaybookFlowText,
+  parsePlaybookFlow,
+  type PlaybookFlowProblem,
+} from "./parse-flow"
 
 const REVIEW_FLOW = `
 version: 1
@@ -167,13 +172,14 @@ steps:
     with:
       message:
         title: "{{inputs.missing}}"
-        lines: ["{{steps.ghost.output}}", "{{steps.a.output}}", "{{env.HOME}}"]
+        lines: ["{{steps.ghost.output}}", "{{steps.a.output}}", "{{env.HOME}}", "{{steps.a.status}}"]
 `)
     ).toEqual([
       "flow_reference_input_unknown /steps/1/with/message/title",
       "flow_reference_step_unknown /steps/1/with/message/lines/0",
       "flow_reference_step_not_ancestor /steps/1/with/message/lines/1",
       "flow_reference_invalid /steps/1/with/message/lines/2",
+      "flow_reference_invalid /steps/1/with/message/lines/3",
     ])
   })
 
@@ -227,6 +233,34 @@ steps:
     with: {"a/b~c": "{{nope}}"}
 `)
     ).toEqual(["flow_reference_invalid /steps/0/with/a~1b~0c"])
+  })
+})
+
+describe("decodePlaybookReference", () => {
+  it("decodes inputs, items and step outputs with their path", () => {
+    expect(decodePlaybookReference("inputs.target")).toEqual({ kind: "input", name: "target" })
+    expect(decodePlaybookReference("item")).toEqual({ kind: "item" })
+    expect(decodePlaybookReference("steps.sweep")).toEqual({
+      kind: "step",
+      stepId: "sweep",
+      path: [],
+    })
+    expect(decodePlaybookReference("steps.sweep.output")).toEqual({
+      kind: "step",
+      stepId: "sweep",
+      path: [],
+    })
+    expect(decodePlaybookReference("steps.sweep.output.findings.0")).toEqual({
+      kind: "step",
+      stepId: "sweep",
+      path: ["findings", "0"],
+    })
+  })
+
+  it("refuses anything else", () => {
+    for (const text of ["steps.a.status", "inputs.a.b", "env.HOME", "steps.A.output", ""]) {
+      expect(decodePlaybookReference(text)).toBeNull()
+    }
   })
 })
 

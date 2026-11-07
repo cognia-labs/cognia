@@ -299,6 +299,40 @@ describe("visualWorkflowSchema", () => {
       ).success
     ).toBe(false)
   })
+
+  it("keeps a positive maxCostUsd budget and rejects a zero or negative one", () => {
+    const settings = baseWorkflow().settings
+    const parsed = visualWorkflowSchema.safeParse(
+      baseWorkflow({ settings: { ...settings, maxCostUsd: 2.5 } })
+    )
+    expect(parsed.success && parsed.data.settings.maxCostUsd).toBe(2.5)
+    for (const maxCostUsd of [0, -1, Number.POSITIVE_INFINITY]) {
+      expect(
+        visualWorkflowSchema.safeParse(baseWorkflow({ settings: { ...settings, maxCostUsd } }))
+          .success
+      ).toBe(false)
+    }
+  })
+
+  it("keeps a playbook derivation and the read-only flag", () => {
+    const derivedFrom = {
+      kind: "playbook" as const,
+      skillId: "skill-review",
+      contentHash: "abc",
+      compilerVersion: 1,
+      compiledAt: 5,
+    }
+    const parsed = visualWorkflowSchema.safeParse(baseWorkflow({ derivedFrom, readOnly: true }))
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.derivedFrom).toEqual(derivedFrom)
+    expect(parsed.data.readOnly).toBe(true)
+    expect(
+      visualWorkflowSchema.safeParse(
+        baseWorkflow({ derivedFrom: { ...derivedFrom, compilerVersion: 0 } })
+      ).success
+    ).toBe(false)
+  })
 })
 
 describe("validateGraphIntegrity", () => {

@@ -164,6 +164,16 @@ describe("SkillDetail", () => {
     expect(screen.getByTestId("skill-detail-delete")).toHaveAttribute("data-variant", "destructive")
   })
 
+  it("opens the skill as a workflow, built-in or not (ADR-0254)", () => {
+    const { unmount } = render(<SkillDetail skill={skill} />)
+    const link = screen.getByTestId("skill-open-as-workflow")
+    expect(link).toHaveTextContent("openAsWorkflow")
+    expect(link).toHaveAttribute("href", "/workflows/editor?playbook=s1")
+    unmount()
+    render(<SkillDetail skill={{ ...skill, isBuiltIn: true } as Skill} />)
+    expect(screen.getByTestId("skill-open-as-workflow")).toBeInTheDocument()
+  })
+
   it("summarises usage in the overview", () => {
     render(<SkillDetail skill={{ ...skill, usageCount: 0 } as Skill} />)
     expect(screen.getByText("usageNever")).toBeInTheDocument()

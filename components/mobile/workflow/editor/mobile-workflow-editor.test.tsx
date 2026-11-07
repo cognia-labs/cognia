@@ -142,6 +142,11 @@ jest.mock("./mobile-node-inspector-drawer", () => ({
 }))
 
 jest.mock("next-intl", () => ({ useTranslations: () => (k: string) => k }))
+jest.mock("@/components/workflow/editor/derived-workflow-banner", () => ({
+  DerivedWorkflowBanner: ({ workflow }: { workflow: { id: string } }) => (
+    <div data-testid="derived-workflow-banner">{workflow.id}</div>
+  ),
+}))
 
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { MobileWorkflowEditor } from "./mobile-workflow-editor"
@@ -196,6 +201,32 @@ function renderEditor() {
     </TooltipProvider>
   )
 }
+
+describe("<MobileWorkflowEditor /> — a workflow compiled from a playbook (ADR-0254)", () => {
+  it("shows where it comes from, and only then", () => {
+    const { unmount } = render(
+      <TooltipProvider>
+        <MobileWorkflowEditor
+          workflow={{
+            ...buildWorkflow(),
+            readOnly: true,
+            derivedFrom: {
+              kind: "playbook",
+              skillId: "review",
+              contentHash: "h",
+              compilerVersion: 1,
+              compiledAt: 1,
+            },
+          }}
+        />
+      </TooltipProvider>
+    )
+    expect(screen.getByTestId("derived-workflow-banner")).toHaveTextContent("wf_edit")
+    unmount()
+    renderEditor()
+    expect(screen.queryByTestId("derived-workflow-banner")).toBeNull()
+  })
+})
 
 describe("<MobileWorkflowEditor />", () => {
   it("defaults to read mode with the FAB hidden", () => {

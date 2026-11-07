@@ -57,6 +57,28 @@ describe("WorkflowCard", () => {
     expect(screen.getByTestId("workflow-card-wf_a")).toHaveTextContent("Daily digest")
   })
 
+  it("marks a workflow compiled from a playbook", () => {
+    const { rerender } = render(
+      <WorkflowCard
+        workflow={makeWorkflow({
+          readOnly: true,
+          derivedFrom: {
+            kind: "playbook",
+            skillId: "review",
+            contentHash: "h",
+            compilerVersion: 1,
+            compiledAt: 0,
+          },
+        })}
+      />
+    )
+    expect(screen.getByTestId("workflow-playbook-badge-" + makeWorkflow().id)).toHaveTextContent(
+      "Playbook"
+    )
+    rerender(<WorkflowCard workflow={makeWorkflow()} />)
+    expect(screen.queryByTestId("workflow-playbook-badge-" + makeWorkflow().id)).toBeNull()
+  })
+
   it("shows the run-count badge and last-run status when provided", () => {
     render(<WorkflowCard workflow={makeWorkflow()} runCount={12} lastStatus="failed" />)
     expect(screen.getByTestId("workflow-runcount-wf_a")).toHaveTextContent("12")

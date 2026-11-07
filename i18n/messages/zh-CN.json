@@ -43864,6 +43864,7 @@
     "webhookPath": "Webhook 路径",
     "workflow": "工作流",
     "workflowNotFound": "未找到工作流",
+    "workflowReadOnly": "该工作流由流程编译而来，为只读。请在工作流编辑器中分离出副本后再添加触发器。",
     "workflowScriptReadOnlyDescription": "脚本内容由工作流触发同步托管，当前表单内为只读。",
     "workflowScriptReadOnlyTitle": "工作流托管任务",
     "workflowTriggerNotFound": "未找到该工作流触发器。",
@@ -56378,6 +56379,10 @@
         "description": "由解析器读取的协议文本：JSON 模式节点的回复必须符合的结构。",
         "title": "JSON 输出结构"
       },
+      "developer__workflow__quick-action__draft-from-skill": {
+        "description": "从没有 flow.yaml 的 skill 打开工作流时发给 Copilot 的第一条消息，请它按 skill 内容起草工作流图。",
+        "title": "Copilot：从 skill 起草"
+      },
       "developer__workflow__quick-action__explain": {
         "description": "请 Copilot 讲解所选工作流节点的 /explain 消息。",
         "title": "Copilot：讲解选中节点"
@@ -60706,6 +60711,7 @@
       "metaUsageLabel": "使用情况",
       "metaVersion": "版本",
       "noResources": "暂无打包资源。",
+      "openAsWorkflow": "以工作流打开",
       "tabContent": "内容",
       "tabEdit": "编辑",
       "tabOverview": "概览",
@@ -66455,6 +66461,7 @@
       "open": "打开",
       "pin": "收藏",
       "pinned": "已收藏",
+      "playbook": "流程",
       "rename": "重命名",
       "renameDialog": {
         "cancel": "取消",
@@ -73047,6 +73054,24 @@
     "notFoundBackToLibrary": "返回工作流库",
     "notFoundDescription": "你要打开的工作流不存在或已被删除。",
     "notFoundTitle": "未找到工作流",
+    "playbook": {
+      "backToSkills": "返回 skill 列表",
+      "badge": "流程",
+      "bannerBody": "该工作流跟随流程 {skillId}，为只读：流程每次变化都会重新编译。分离后可编辑一份不再跟随流程的副本。",
+      "bannerTitle": "由流程编译而来",
+      "detach": "分离",
+      "detachFailed": "分离失败：{error}",
+      "detached": "已分离为“{name}”。",
+      "drafting": "{name} 没有步骤清单，Copilot 正在根据它起草工作流。保存前请先检查。",
+      "failedTitle": "无法将该 skill 以工作流打开",
+      "missingBody": "skill {skillId} 不存在或已被删除。",
+      "missingTitle": "未找到该 skill",
+      "opening": "正在以工作流打开…",
+      "problemsBody": "请修正其 references/flow.yaml 中的以下问题，然后重新打开。",
+      "problemsTitle": "该流程无法以工作流打开",
+      "readOnlySave": "该工作流为只读。分离后才能保存修改。",
+      "tooManyBody": "它调用了超过 {limit} 个流程。请减少它调用的流程后重新打开。"
+    },
     "runs": {
       "detail": {
         "backToRuns": "返回运行列表",

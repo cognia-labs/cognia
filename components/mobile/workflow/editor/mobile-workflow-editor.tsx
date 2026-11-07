@@ -41,6 +41,7 @@ import {
 } from "@/lib/workflow/editor/clipboard"
 
 import { SelectionToolbar } from "@/components/workflow/editor/selection-toolbar"
+import { DerivedWorkflowBanner } from "@/components/workflow/editor/derived-workflow-banner"
 import { Surface } from "@/components/surface/surface"
 
 import { MobileCanvas, type MobileCanvasMode, type WorkflowFlowInstance } from "./mobile-canvas"
@@ -220,6 +221,9 @@ function MobileEditorInner({ store }: { store: EditorStore }) {
     [store]
   )
 
+  // A workflow compiled from a playbook (ADR-0254): the store drops edits, and
+  // the banner says why and offers the editable copy.
+  const derivedWorkflow = store((s) => s.baseWorkflow)
   return (
     <div className="flex h-full w-full flex-col" data-testid="mobile-workflow-editor">
       <MobileEditorTopbar
@@ -234,6 +238,7 @@ function MobileEditorInner({ store }: { store: EditorStore }) {
         onToggleOrientationLock={() => setOrientationLocked((v) => !v)}
         onOpenWorkbench={() => setWorkbenchOpen(true)}
       />
+      {derivedWorkflow.derivedFrom ? <DerivedWorkflowBanner workflow={derivedWorkflow} /> : null}
       <div ref={canvasAreaRef} className="relative min-h-0 flex-1">
         <MobileCanvas
           store={store}

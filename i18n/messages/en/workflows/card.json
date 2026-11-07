@@ -1,6 +1,7 @@
 {
   "action": "{count, plural, one {# action} other {# actions}}",
   "builtin": "Built-in",
+  "playbook": "Playbook",
   "delete": "Delete",
   "deleteConfirm": {
     "cancel": "Cancel",

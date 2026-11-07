@@ -133,6 +133,9 @@ const settingsSchema = z.object({
     .int()
     .min(1)
     .max(24 * 60 * 60_000),
+  // ADR-0254 §6. Declared so zod keeps it: the orchestrator reads the
+  // validated snapshot, and a stripped ceiling would be no ceiling.
+  maxCostUsd: z.number().positive().finite().optional(),
   concurrency: z.number().int().min(1).max(100),
   /**
    * Per ADR-0022 §3.7. Max in-flight nodes WITHIN a single run for the
@@ -179,6 +182,14 @@ const workflowPublicationSchema = z.object({
   toolName: z.string().min(1),
 })
 
+const workflowDerivationSchema = z.object({
+  kind: z.literal("playbook"),
+  skillId: z.string().min(1),
+  contentHash: z.string().min(1),
+  compilerVersion: z.number().int().min(1),
+  compiledAt: z.number().int().min(0),
+})
+
 /**
  * Top-level workflow envelope. Note: `nodes` and `edges` integrity (edge
  * endpoints reference real node ids; no cycles — iteration lives inside
@@ -209,6 +220,8 @@ export const visualWorkflowSchema = z.object({
   viewport: viewportSchema.optional(),
   interface: workflowInterfaceSchema.optional(),
   published: workflowPublicationSchema.optional(),
+  derivedFrom: workflowDerivationSchema.optional(),
+  readOnly: z.boolean().optional(),
 })
 
 export type ValidatedVisualWorkflow = z.infer<typeof visualWorkflowSchema>

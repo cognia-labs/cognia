@@ -744,6 +744,33 @@ export interface VisualWorkflow {
   interface?: WorkflowInterface
   /** Set when the workflow has been published as a callable unit. */
   published?: WorkflowPublication
+  /**
+   * Set on a workflow compiled from another definition (ADR-0254 §2). The
+   * source stays the definition: the row is regenerated whenever the source's
+   * content hash changes, so it is stored {@link readOnly}. Duplicating it
+   * ("detach") yields an ordinary workflow without this field.
+   */
+  derivedFrom?: WorkflowDerivation
+  /**
+   * Ordinary writes (editor save, patch, trigger edits, publish) are refused.
+   * Only the compiler that owns {@link derivedFrom} rewrites the row. Folder
+   * and tag changes still apply: they organise the library, not the graph.
+   */
+  readOnly?: boolean
+}
+
+/** Where a derived workflow came from (ADR-0254 §2). */
+export interface WorkflowDerivation {
+  /** A playbook skill whose `references/flow.yaml` was compiled. */
+  kind: "playbook"
+  skillId: string
+  /**
+   * Hash over everything the compiled graph depends on: the compiler version,
+   * the playbook's flow text and name, and every inlined playbook's hash.
+   */
+  contentHash: string
+  compilerVersion: number
+  compiledAt: number
 }
 
 /** Typed input/output contract a published workflow exposes to callers. */
@@ -895,6 +922,16 @@ export interface WorkflowSettings {
   riskGating?: boolean
   /** Hard ceiling on a single run's wall-clock time. */
   timeoutMs: number
+  /**
+   * Spend ceiling for one run, in USD, counted from the usage its steps report
+   * (ADR-0254 §6). A budget, not an estimate: ADR-0232 estimates stay advisory.
+   *
+   * NOT ENFORCED YET. The playbook compiler records a playbook's
+   * `limits.maxBudgetUsd` here, but no run reads it until the run budget lands
+   * (playbooks plan WP5, which first settles how a step with unknown cost
+   * counts). No editor field exposes it meanwhile.
+   */
+  maxCostUsd?: number
   /** How many runs of THIS workflow may execute concurrently. */
   concurrency: number
   /**

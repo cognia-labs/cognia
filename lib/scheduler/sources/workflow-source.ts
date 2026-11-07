@@ -22,6 +22,7 @@ import Dexie from "dexie"
 import { getDb } from "@/lib/db/schema"
 import { syncWorkflowTriggers } from "@/lib/workflow/runtime/webhook-bridge"
 import { executeDeployedWorkflow } from "@/lib/workflow/runtime/execution-authority"
+import { assertWorkflowWritable } from "@/lib/workflow/definition/read-only"
 import type {
   VisualWorkflow,
   WorkflowNode,
@@ -156,6 +157,10 @@ export function createWorkflowSource(
       if (typeof input.enabled === "boolean") changes.enabled = input.enabled
       if (typeof input.cron === "string") changes.cron = input.cron
       if (Object.keys(changes).length === 0) return
+      // A workflow compiled from a playbook is read-only (ADR-0254). Refuse
+      // before the row write so a refused edit leaves row and node agreeing.
+      const workflow = await db.workflows.get(row.workflowId)
+      if (workflow) assertWorkflowWritable(workflow)
       changes.updatedAt = Date.now()
       await db.workflowTriggers.update(sourceId, changes)
 

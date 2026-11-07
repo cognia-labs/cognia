@@ -111,6 +111,7 @@
     "duplicateToEdit": "复制后编辑",
     "exportBundle": "导出标准 Bundle（.zip）",
     "exportMarkdownCompatibility": "导出 Markdown（兼容模式）",
+    "openAsWorkflow": "以工作流打开",
     "metaAuthor": "作者",
     "metaCategory": "类别",
     "metaCreated": "创建时间",

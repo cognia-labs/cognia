@@ -1,0 +1,18 @@
+{
+  "opening": "Opening as a workflow…",
+  "drafting": "{name} has no step list, so the Copilot is drafting a workflow from it. Review it before you save.",
+  "missingTitle": "Skill not found",
+  "missingBody": "The skill {skillId} does not exist or was removed.",
+  "failedTitle": "Could not open this skill as a workflow",
+  "problemsTitle": "This playbook cannot be opened as a workflow",
+  "problemsBody": "Fix these problems in its references/flow.yaml, then open it again.",
+  "tooManyBody": "It calls more than {limit} playbooks. Reduce the playbooks it calls, then open it again.",
+  "backToSkills": "Back to skills",
+  "badge": "Playbook",
+  "bannerTitle": "Compiled from a playbook",
+  "bannerBody": "This workflow follows the playbook {skillId} and is read-only: it is recompiled whenever the playbook changes. Detach it to edit a copy that no longer follows the playbook.",
+  "detach": "Detach",
+  "detached": "Detached into “{name}”.",
+  "detachFailed": "Could not detach: {error}",
+  "readOnlySave": "This workflow is read-only. Detach it to save changes."
+}

@@ -47,6 +47,28 @@ describe("WorkflowRow", () => {
     expect(screen.getByTestId("workflow-select-wf_a")).toBeInTheDocument()
   })
 
+  it("marks a workflow compiled from a playbook", () => {
+    const { rerender } = render(
+      <WorkflowRow
+        workflow={makeWorkflow({
+          readOnly: true,
+          derivedFrom: {
+            kind: "playbook",
+            skillId: "review",
+            contentHash: "h",
+            compilerVersion: 1,
+            compiledAt: 0,
+          },
+        })}
+      />
+    )
+    expect(screen.getByTestId("workflow-playbook-badge-" + makeWorkflow().id)).toHaveTextContent(
+      "Playbook"
+    )
+    rerender(<WorkflowRow workflow={makeWorkflow()} />)
+    expect(screen.queryByTestId("workflow-playbook-badge-" + makeWorkflow().id)).toBeNull()
+  })
+
   it("shows the run-count badge and last-run status when provided", () => {
     render(<WorkflowRow workflow={makeWorkflow()} runCount={5} lastStatus="succeeded" />)
     expect(screen.getByTestId("workflow-runcount-wf_a")).toHaveTextContent("5")

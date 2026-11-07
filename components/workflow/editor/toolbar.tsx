@@ -61,6 +61,8 @@ export interface EditorToolbarProps {
   /** Collapse/expand the right sidebar. Ctrl/Cmd+J. */
   onToggleRightPanel?: () => void
   rightPanelCollapsed?: boolean
+  /** A workflow compiled from a playbook (ADR-0254): the name cannot be edited. */
+  readOnly?: boolean
 }
 
 export const EditorToolbar = memo(function EditorToolbar({
@@ -81,6 +83,7 @@ export const EditorToolbar = memo(function EditorToolbar({
   leftPanelCollapsed,
   onToggleRightPanel,
   rightPanelCollapsed,
+  readOnly = false,
 }: EditorToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [revertOpen, setRevertOpen] = useState(false)
@@ -152,6 +155,7 @@ export const EditorToolbar = memo(function EditorToolbar({
       <Input
         value={workflowName}
         onChange={(e) => onRename(e.target.value)}
+        readOnly={readOnly}
         className="max-w-xs h-8"
         aria-label={t("namePlaceholder")}
       />

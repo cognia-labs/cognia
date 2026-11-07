@@ -90,7 +90,12 @@ export async function builtInCatalogResources(skillId: string): Promise<SkillRes
   return (await loadBuiltInResourceOverlay(skillId, { includeCompliance: false })) ?? []
 }
 
-async function listRuntimeResources(skillId: string): Promise<SkillResource[]> {
+/**
+ * A skill's resources as a run reads them: its stored rows, or the built-in
+ * catalog's when it has none. Exported so a playbook compiles from the same
+ * `references/flow.yaml` its skill run would load.
+ */
+export async function listRuntimeResources(skillId: string): Promise<SkillResource[]> {
   const stored = await listResourcesForSkill(skillId)
   if (stored.length > 0) return modelReadableResources(skillId, stored)
   return await builtInCatalogResources(skillId)

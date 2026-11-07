@@ -21,6 +21,7 @@ jest.mock("next-intl", () => ({
 
 // Top-level import (replaces require() — eslint forbids require-style).
 import * as mod from "./quick-workflow-trigger-dialog"
+import type { VisualWorkflow } from "@/types/workflow/visual"
 
 describe("QuickWorkflowTriggerDialog module", () => {
   it("exports a function component named QuickWorkflowTriggerDialog", () => {
@@ -46,5 +47,12 @@ describe("QuickWorkflowTriggerDialog module", () => {
       createdAt: 123,
       updatedAt: 123,
     })
+  })
+
+  it("leaves read-only workflows compiled from a playbook out of the picker", () => {
+    const base = { nodes: [], edges: [] } as unknown as VisualWorkflow
+    const editable = { ...base, id: "wf-a" }
+    const derived = { ...base, id: "wf-b", readOnly: true }
+    expect(mod.selectableWorkflows([editable, derived]).map((wf) => wf.id)).toEqual(["wf-a"])
   })
 })

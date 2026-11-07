@@ -111,6 +111,7 @@
     "duplicateToEdit": "Duplicate to edit",
     "exportBundle": "Export standard bundle (.zip)",
     "exportMarkdownCompatibility": "Export Markdown (compatibility)",
+    "openAsWorkflow": "Open as workflow",
     "metaAuthor": "Author",
     "metaCategory": "Category",
     "metaCreated": "Created",

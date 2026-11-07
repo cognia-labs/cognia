@@ -4,6 +4,8 @@ import RouteBody from "./route-body"
 
 /**
  * /workflows/editor?id=… — full-screen visual workflow editor.
+ * /workflows/editor?playbook=<skillId> — open a skill as a workflow first
+ * (ADR-0254 §2); the opener then replaces the URL with the workflow's `?id=`.
  *
  * Static route (no dynamic segment) so Next's `output: "export"` always emits
  * a physical HTML file; the runtime workflow id arrives via the query string.
@@ -16,6 +18,7 @@ import { Suspense, useEffect, useState } from "react"
 import { notFound, useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
+import { PlaybookWorkflowOpener } from "@/components/workflow/editor/playbook-workflow-opener"
 import { getWorkflow } from "@/lib/db/workflows"
 import type { WorkflowRow } from "@/types/workflow/visual"
 
@@ -52,6 +55,11 @@ function WorkflowEditorInner() {
       cancelled = true
     }
   }, [id])
+
+  const playbookSkillId = searchParams.get("playbook")
+  if (!id && playbookSkillId) {
+    return <PlaybookWorkflowOpener skillId={playbookSkillId} />
+  }
 
   // No `?id=` → treat as not-found synchronously (no Dexie round-trip). Kept in
   // the render path rather than the effect to avoid a setState-in-effect.

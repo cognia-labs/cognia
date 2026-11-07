@@ -155,13 +155,16 @@ export function FlowCanvas({
   // references on every drag tick; isolating the subscription here keeps the
   // churn out of `CanvasInner` and the chrome. (`viewport` only changes once
   // per pan/zoom gesture — see the uncontrolled-camera note below.)
-  const { nodes, edges, viewport, isDraggingAny, snapToGrid } = useStore(
+  const { nodes, edges, viewport, isDraggingAny, snapToGrid, readOnly } = useStore(
     useShallow((s: EditorState) => ({
       nodes: s.nodes,
       edges: s.edges,
       viewport: s.viewport,
       isDraggingAny: s.isDraggingAny,
       snapToGrid: s.snapToGrid,
+      // A workflow compiled from a playbook (ADR-0254): nodes can be selected
+      // and inspected, never moved, wired or deleted.
+      readOnly: s.baseWorkflow.readOnly === true,
     }))
   )
 
@@ -485,13 +488,13 @@ export function FlowCanvas({
           maxZoom={2}
           snapToGrid={snapToGrid}
           snapGrid={SNAP_GRID}
-          deleteKeyCode={DELETE_KEY_CODE}
+          deleteKeyCode={readOnly ? null : DELETE_KEY_CODE}
           multiSelectionKeyCode={MULTI_SELECTION_KEY_CODE}
           panOnScroll
           selectionOnDrag
           proOptions={PRO_OPTIONS}
-          nodesDraggable={interactive}
-          nodesConnectable={interactive}
+          nodesDraggable={interactive && !readOnly}
+          nodesConnectable={interactive && !readOnly}
           elementsSelectable={interactive}
           // (A1) Tier-aware viewport culling.
           onlyRenderVisibleElements={

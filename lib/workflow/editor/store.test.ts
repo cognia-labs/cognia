@@ -69,6 +69,59 @@ function nodeGroupDefinition(): WorkflowNodeGroupDefinition {
   }
 }
 
+describe("editor store — read-only workflows (ADR-0254)", () => {
+  function derivedWorkflow(): VisualWorkflow {
+    return {
+      ...emptyWorkflow(),
+      nodes: [
+        {
+          id: "pb__trigger",
+          type: "trigger.manual",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "Start", params: {} },
+        },
+      ],
+      readOnly: true,
+      derivedFrom: {
+        kind: "playbook",
+        skillId: "review",
+        contentHash: "h",
+        compilerVersion: 1,
+        compiledAt: 1,
+      },
+    }
+  }
+
+  it("drops every edit and never turns dirty", () => {
+    const useStore = createEditorStore(derivedWorkflow())
+    const before = useStore.getState()
+
+    useStore.getState().addNode("ai.prompt", { x: 200, y: 0 })
+    useStore.getState().updateNodeData("pb__trigger", { label: "Renamed" })
+    useStore.getState().removeNodes(["pb__trigger"])
+    useStore.getState().setName("Edited")
+
+    const after = useStore.getState()
+    expect(after.dirty).toBe(false)
+    expect(after.nodes).toBe(before.nodes)
+    expect(after.baseWorkflow.name).toBe("Empty")
+    expect(useStore.temporal.getState().pastStates).toHaveLength(0)
+  })
+
+  it("still selects nodes", () => {
+    const useStore = createEditorStore(derivedWorkflow())
+    useStore.getState().setSelectedNodes(["pb__trigger"])
+    expect(useStore.getState().selectedNodeIds).toEqual(["pb__trigger"])
+  })
+
+  it("leaves an ordinary workflow editable", () => {
+    const useStore = createEditorStore(emptyWorkflow())
+    useStore.getState().setName("Edited")
+    expect(useStore.getState()).toMatchObject({ dirty: true, baseWorkflow: { name: "Edited" } })
+  })
+})
+
 describe("editor store — graph mutations", () => {
   it("initializes and replaces the validation cache together with the graph", () => {
     const invalid = emptyWorkflow()

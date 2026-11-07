@@ -1124,6 +1124,7 @@
   "warnings": "警告",
   "webhookPath": "Webhook 路径",
   "workflow": "工作流",
+  "workflowReadOnly": "该工作流由流程编译而来，为只读。请在工作流编辑器中分离出副本后再添加触发器。",
   "workflowNotFound": "未找到工作流",
   "workflowScriptReadOnlyDescription": "脚本内容由工作流触发同步托管，当前表单内为只读。",
   "workflowScriptReadOnlyTitle": "工作流托管任务",

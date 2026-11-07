@@ -1124,6 +1124,7 @@
   "warnings": "Warnings",
   "webhookPath": "Webhook path",
   "workflow": "Workflow",
+  "workflowReadOnly": "This workflow is compiled from a playbook and is read-only. Detach it in the workflow editor to add a trigger.",
   "workflowNotFound": "Workflow not found",
   "workflowScriptReadOnlyDescription": "Script content is managed by workflow trigger sync and is read-only in this form.",
   "workflowScriptReadOnlyTitle": "Workflow-managed task",

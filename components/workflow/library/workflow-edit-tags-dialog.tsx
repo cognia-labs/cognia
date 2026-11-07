@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { updateWorkflow } from "@/lib/db/workflows"
+import { setWorkflowTags } from "@/lib/db/workflows"
 import type { WorkflowRow } from "@/types/workflow/visual"
 import { isImeComposing } from "@/lib/ui/ime"
 
@@ -66,7 +66,7 @@ function TagsBody({ workflow, onClose }: { workflow: WorkflowRow; onClose: () =>
     if (busy) return
     setBusy(true)
     try {
-      await updateWorkflow(workflow.id, { tags: parseTags(text) })
+      await setWorkflowTags(workflow.id, parseTags(text))
       toast.success(t("tagsSaved"))
       onClose()
     } catch {

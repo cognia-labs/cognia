@@ -1,6 +1,7 @@
 {
   "action": "{count, plural, other {# 个操作}}",
   "builtin": "内置",
+  "playbook": "流程",
   "delete": "删除",
   "deleteConfirm": {
     "cancel": "取消",

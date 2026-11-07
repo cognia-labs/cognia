@@ -34,6 +34,7 @@ import {
 import { TimezoneSelect } from "../timezone-select"
 import { getDb } from "@/lib/db/schema"
 import { syncWorkflowTriggers } from "@/lib/workflow/runtime/webhook-bridge"
+import { isWorkflowReadOnly } from "@/lib/workflow/definition/read-only"
 import type { VisualWorkflow, WorkflowNode, WorkflowTriggerRow } from "@/types/workflow/visual"
 
 // Cron presets that align with the scheduler's BackupScheduleDialog visual
@@ -57,6 +58,15 @@ export interface QuickWorkflowTriggerDialogProps {
   syncFn?: (workflow: VisualWorkflow) => Promise<void>
   /** Override for the unique id generator — tests inject a deterministic one. */
   newNodeId?: () => string
+}
+
+/**
+ * Workflows the dialog may add a trigger to. A workflow compiled from a
+ * playbook is read-only (ADR-0254): a trigger added here would be lost on the
+ * next compile, so it is left out.
+ */
+export function selectableWorkflows(workflows: VisualWorkflow[]): VisualWorkflow[] {
+  return workflows.filter((wf) => !isWorkflowReadOnly(wf))
 }
 
 export function createCronTriggerRow(input: {
@@ -95,7 +105,7 @@ export function QuickWorkflowTriggerDialog({
 
   const workflows = useLiveQuery(async () => {
     const realDb = db ?? getDb()
-    return realDb.workflows.toArray()
+    return selectableWorkflows(await realDb.workflows.toArray())
   }, [open])
 
   const [workflowId, setWorkflowId] = useState<string>("")
@@ -144,6 +154,10 @@ export function QuickWorkflowTriggerDialog({
       const workflow = await realDb.workflows.get(workflowId)
       if (!workflow) {
         setError(t("workflowNotFound") || "Workflow not found")
+        return
+      }
+      if (isWorkflowReadOnly(workflow)) {
+        setError(t("workflowReadOnly"))
         return
       }
       const triggerId = idGen()

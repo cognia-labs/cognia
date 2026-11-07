@@ -10,7 +10,7 @@
  * - `uses` names something this version knows;
  * - `needs` names existing steps and forms no cycle;
  * - every `{{…}}` reference resolves: `inputs.<name>` to a declared input,
- *   `steps.<id>…` inside a step to one of its ancestors (a step can only read
+ *   `steps.<id>.output…` inside a step to one of its ancestors (a step can only read
  *   output that exists when it runs), `item` only inside a `forEach` step;
  * - a `sensitive` input carries no default, so no secret is written into the
  *   skill.
@@ -308,9 +308,31 @@ interface ReferenceScope {
   stepId: string | null
 }
 
-const REFERENCE = /\{\{([^{}]*)\}\}/g
-const STEP_REFERENCE = /^steps\.([a-z][a-z0-9-]*)(?:\.[A-Za-z0-9_-]+)*$/
+/** Every `{{…}}` in a string. Exported so the compiler rewrites exactly what the parser checked. */
+export const PLAYBOOK_REFERENCE = /\{\{([^{}]*)\}\}/g
+const STEP_REFERENCE = /^steps\.([a-z][a-z0-9-]*)(?:\.output((?:\.[A-Za-z0-9_-]+)*))?$/
 const INPUT_REFERENCE = /^inputs\.([A-Za-z_][A-Za-z0-9_]*)$/
+
+/**
+ * What one `{{…}}` names. `steps.<id>` and `steps.<id>.output` both mean the
+ * step's output; `path` is what follows `.output`.
+ */
+export type PlaybookReference =
+  | { kind: "input"; name: string }
+  | { kind: "step"; stepId: string; path: string[] }
+  | { kind: "item" }
+
+/** Decode the trimmed text between `{{` and `}}`; `null` when it names nothing. */
+export function decodePlaybookReference(reference: string): PlaybookReference | null {
+  if (reference === "item") return { kind: "item" }
+  const input = INPUT_REFERENCE.exec(reference)
+  if (input) return { kind: "input", name: input[1] }
+  const step = STEP_REFERENCE.exec(reference)
+  if (step) {
+    return { kind: "step", stepId: step[1], path: step[2] ? step[2].slice(1).split(".") : [] }
+  }
+  return null
+}
 
 function checkReferences(
   value: string,
@@ -318,9 +340,16 @@ function checkReferences(
   scope: ReferenceScope,
   problems: PlaybookFlowProblem[]
 ): void {
-  for (const match of value.matchAll(REFERENCE)) {
-    const reference = match[1].trim()
-    if (reference === "item") {
+  for (const match of value.matchAll(PLAYBOOK_REFERENCE)) {
+    const text = match[1].trim()
+    const reference = decodePlaybookReference(text)
+    if (!reference) {
+      problems.push({
+        code: "flow_reference_invalid",
+        pointer,
+        message: `{{${text}}} is not inputs.<name>, steps.<id>.output… or item`,
+      })
+    } else if (reference.kind === "item") {
       if (!scope.allowItem) {
         problems.push({
           code: "flow_reference_item_outside_for_each",
@@ -328,42 +357,27 @@ function checkReferences(
           message: "{{item}} is only available in a step with forEach",
         })
       }
-      continue
-    }
-    const input = INPUT_REFERENCE.exec(reference)
-    if (input) {
-      if (!scope.inputs.has(input[1])) {
+    } else if (reference.kind === "input") {
+      if (!scope.inputs.has(reference.name)) {
         problems.push({
           code: "flow_reference_input_unknown",
           pointer,
-          message: `{{${reference}}} names an input that is not declared`,
+          message: `{{${text}}} names an input that is not declared`,
         })
       }
-      continue
+    } else if (!scope.steps.has(reference.stepId)) {
+      problems.push({
+        code: "flow_reference_step_unknown",
+        pointer,
+        message: `{{${text}}} names step "${reference.stepId}", which does not exist`,
+      })
+    } else if (scope.ancestors && !scope.ancestors.has(reference.stepId)) {
+      problems.push({
+        code: "flow_reference_step_not_ancestor",
+        pointer,
+        message: `step "${scope.stepId}" reads "${reference.stepId}" but does not need it, directly or through another step`,
+      })
     }
-    const step = STEP_REFERENCE.exec(reference)
-    if (step) {
-      const target = step[1]
-      if (!scope.steps.has(target)) {
-        problems.push({
-          code: "flow_reference_step_unknown",
-          pointer,
-          message: `{{${reference}}} names step "${target}", which does not exist`,
-        })
-      } else if (scope.ancestors && !scope.ancestors.has(target)) {
-        problems.push({
-          code: "flow_reference_step_not_ancestor",
-          pointer,
-          message: `step "${scope.stepId}" reads "${target}" but does not need it, directly or through another step`,
-        })
-      }
-      continue
-    }
-    problems.push({
-      code: "flow_reference_invalid",
-      pointer,
-      message: `{{${reference}}} is not inputs.<name>, steps.<id>… or item`,
-    })
   }
 }
 
