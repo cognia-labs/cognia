@@ -48,7 +48,7 @@ describe("manifest-types", () => {
       taskExecutors: { load: () => import("./define") },
       builtinSkills: { load: () => import("./define") },
       pluginApi: { namespaces: ["pet"], load: () => import("./define") },
-      workflowNodes: { load: () => import("./define") },
+      workflowNodes: { load: async () => ({ workflowNodeKinds: [] }) },
       searchProviders: async () => ({ searchProviders: [] }),
       slashCommands: [
         {

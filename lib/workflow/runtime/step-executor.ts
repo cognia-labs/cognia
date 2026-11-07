@@ -15,6 +15,7 @@ import type {
 } from "@/types/workflow/visual"
 import type { WorkflowExecutionBinding } from "@/types/workflow/deployment"
 import { getExecutor } from "@/lib/workflow/nodes/registry"
+import { loadModuleWorkflowNodes } from "@/lib/workflow/nodes/module-nodes"
 import { retiredNodeKind } from "@/lib/workflow/nodes/retired-kinds"
 import { resolveDeep } from "./expression"
 import { IdempotencyCache } from "./idempotency"
@@ -150,6 +151,9 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     return { output: pinned, fromCache: false }
   }
 
+  // Feature modules contribute their node families lazily (ADR-0250 §14
+  // `workflowNodes`); they are registered before any lookup.
+  await loadModuleWorkflowNodes()
   const reg = getExecutor(node.type, node.typeVersion)
   if (!reg) {
     // A retired kind cannot be fixed by installing a plugin from this app, so

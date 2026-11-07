@@ -56,6 +56,7 @@ import type { GlobalSearchProvider } from "@/lib/global-search/types"
 import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import type { PromptDefinitionV1, PromptResolutionContext } from "@/lib/prompts/types"
 import type { Goal } from "@/types/goal"
+import type { WorkflowNodeKind } from "@/types/workflow/visual"
 import type { Project } from "@/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type {
@@ -493,6 +494,24 @@ export interface ModuleContextModule {
   contributions: readonly ContextContribution[]
 }
 
+/**
+ * What a module's `workflowNodes.load` resolves to. Importing the file
+ * registers the module's node executors (`registerNodeExecutor`), as every
+ * node family does; `workflowNodeKinds` names the kinds it registers, which
+ * the loader checks once the import has run.
+ */
+export interface ModuleWorkflowNodesModule {
+  workflowNodeKinds: readonly WorkflowNodeKind[]
+}
+
+/** One module's node executors as `lib/modules/generated/workflow-nodes.ts` lists them. */
+export interface ModuleWorkflowNodesEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  load: LazyModule<ModuleWorkflowNodesModule>
+}
+
 /** One module's context contributions as `lib/modules/generated/context.ts` lists them. */
 export interface ModuleContextEntry {
   /** The contributing module, and its stage: an `experimental` one contributes nothing. */
@@ -625,7 +644,11 @@ export interface HostModuleManifest {
   builtinSkills?: ModuleContribution
   /** Plugin host API namespaces this module owns (ADR-0250 §9). */
   pluginApi?: { namespaces: readonly string[]; load: LazyModule }
-  workflowNodes?: ModuleContribution
+  /**
+   * The workflow node executors this module registers (ADR-0250 §14
+   * `workflowNodes`), loaded by the workflow engine before it looks one up.
+   */
+  workflowNodes?: { load: LazyModule<ModuleWorkflowNodesModule> }
   /** Global-search providers (ADR-0129), registered beside the built-ins. */
   searchProviders?: LazyModule<ModuleSearchProvidersModule>
   slashCommands?: readonly ModuleSlashCommand[]

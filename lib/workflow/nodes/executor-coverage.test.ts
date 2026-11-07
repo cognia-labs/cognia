@@ -19,6 +19,7 @@ import "./built-ins"
 // sibling module. Import them here so the parity check sees the full host set.
 import "@/lib/squads/patterns"
 import { listRegisteredKinds } from "./registry"
+import { loadModuleWorkflowNodes } from "./module-nodes"
 import { WORKFLOW_NODE_KINDS, type WorkflowNodeKind } from "@/types/workflow/visual"
 
 // Kinds that legitimately have NO host executor: annotations are pure canvas
@@ -30,6 +31,10 @@ const KINDS_WITHOUT_HOST_EXECUTOR: ReadonlySet<WorkflowNodeKind> = new Set<Workf
 ])
 
 describe("executor coverage parity", () => {
+  // Node families feature modules contribute register once their manifests'
+  // `workflowNodes` load; a contribution that is declared but not wired fails here.
+  beforeAll(() => loadModuleWorkflowNodes())
+
   it("registers a host executor for every executable kind", () => {
     const registered = new Set(listRegisteredKinds())
     const missing = WORKFLOW_NODE_KINDS.filter(

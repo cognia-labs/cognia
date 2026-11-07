@@ -140,6 +140,8 @@ export const GENERATED_CAPABILITIES = "lib/modules/generated/capabilities.ts"
 export const GENERATED_TOOLS = "lib/modules/generated/tools.ts"
 /** Every module's `context` file, lazily: the send resolver's only route to one. */
 export const GENERATED_CONTEXT = "lib/modules/generated/context.ts"
+/** Every module's `workflowNodes` file, lazily: the workflow engine's only route to one. */
+export const GENERATED_WORKFLOW_NODES = "lib/modules/generated/workflow-nodes.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
@@ -147,6 +149,7 @@ export const GENERATED_FILES = [
   GENERATED_CAPABILITIES,
   GENERATED_TOOLS,
   GENERATED_CONTEXT,
+  GENERATED_WORKFLOW_NODES,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -682,6 +685,14 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
       for (const key of Object.keys(context))
         if (key !== "load") errors.push(`context: unknown field "${key}"`)
   }
+  if (manifest.workflowNodes !== undefined) {
+    const nodes = manifest.workflowNodes
+    if (!nodes || typeof nodes !== "object" || !isLazy(nodes.load))
+      errors.push('workflowNodes.load is a lazy entry `() => import("…")`')
+    else
+      for (const key of Object.keys(nodes))
+        if (key !== "load") errors.push(`workflowNodes: unknown field "${key}"`)
+  }
   if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
@@ -862,6 +873,15 @@ const LAZY_REGISTRIES = {
       "// (`lib/claude/context-contributions.ts`, ADR-0250 §14 `context` amendment).",
     ],
   },
+  workflowNodes: {
+    spec: (value) => value?.workflowNodes?.load?.$lazy,
+    constName: "MODULE_WORKFLOW_NODES",
+    type: "ModuleWorkflowNodesEntry",
+    reader: [
+      "// Every module's `workflowNodes`: the node executors it registers, read by",
+      "// the workflow engine before it looks one up (`lib/workflow/nodes/module-nodes.ts`).",
+    ],
+  },
 }
 
 /** The modules that contribute to `registry`, in module id order. */
@@ -977,6 +997,7 @@ export function renderRegistries({ host, ui }) {
     [GENERATED_CAPABILITIES]: renderLazyRegistry("capabilities", host),
     [GENERATED_TOOLS]: renderTools(host),
     [GENERATED_CONTEXT]: renderLazyRegistry("context", host),
+    [GENERATED_WORKFLOW_NODES]: renderLazyRegistry("workflowNodes", host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

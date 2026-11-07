@@ -32,6 +32,7 @@ import {
   EFFECT_FIELDS,
   GENERATED_CAPABILITIES,
   GENERATED_CONTEXT,
+  GENERATED_WORKFLOW_NODES,
   GENERATED_HOST,
   GENERATED_PROMPTS,
   GENERATED_TOOLS,
@@ -1224,6 +1225,55 @@ test("the context registry lazily imports each contributing module's file, by mo
     )
   )
   assert.ok(registry.includes('load: () => import("@/lib/radar/context")'))
+  assert.ok(!registry.includes("crew"))
+})
+
+test("validateHostManifest wants workflowNodes as { load } with a lazy entry", () => {
+  const base = { id: "sites", kind: "module", stage: "beta" }
+  assert.ok(
+    validateHostManifest({ ...base, workflowNodes: "./workflow-nodes" }, "sites").includes(
+      'workflowNodes.load is a lazy entry `() => import("…")`'
+    )
+  )
+  assert.ok(
+    validateHostManifest(
+      { ...base, workflowNodes: { load: { $lazy: "./workflow-nodes" }, kinds: [] } },
+      "sites"
+    ).includes('workflowNodes: unknown field "kinds"')
+  )
+  assert.deepEqual(
+    validateHostManifest(
+      { ...base, workflowNodes: { load: { $lazy: "./workflow-nodes" } } },
+      "sites"
+    ),
+    []
+  )
+})
+
+test("the workflow-node registry lazily imports each contributing module's file, by module id", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "sites",
+        file: "lib/sites/module.ts",
+        value: { stage: "stable", workflowNodes: { load: { $lazy: "./workflow-nodes" } } },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "goal",
+        file: "lib/goal/module.ts",
+        value: { stage: "experimental", workflowNodes: { load: { $lazy: "./workflow-nodes" } } },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_WORKFLOW_NODES]
+  assert.match(
+    registry,
+    /export const MODULE_WORKFLOW_NODES: readonly ModuleWorkflowNodesEntry\[\]/
+  )
+  assert.ok(registry.indexOf('module: "goal"') < registry.indexOf('module: "sites"'))
+  assert.ok(registry.includes('load: () => import("@/lib/sites/workflow-nodes")'))
   assert.ok(!registry.includes("crew"))
 })
 

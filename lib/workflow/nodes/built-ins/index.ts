@@ -77,3 +77,9 @@ import "../sessions"
 // Notification-centre nodes. A registry nobody registers into is this repo's
 // most recurrent defect; `executor-coverage.test.ts` fails without this line.
 import "../notifications"
+// Node families feature modules own are their manifests' `workflowNodes`
+// contributions (ADR-0250 §14). Start loading them with the built-ins so they
+// register about as early; the step executor awaits the same load before any
+// lookup.
+import { loadModuleWorkflowNodes } from "../module-nodes"
+void loadModuleWorkflowNodes()
