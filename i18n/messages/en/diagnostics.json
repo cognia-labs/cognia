@@ -381,6 +381,10 @@
       "hint": "This team conversation couldn't be found — it may have been deleted.",
       "label": "Team conversation not found"
     },
+    "roomRunsOnServer": {
+      "hint": "This team conversation is shared, so its collaboration server runs the members. Send it from the shared conversation instead of a local room.",
+      "label": "Shared room runs on the server"
+    },
     "timeout": {
       "hint": "The request took too long — retry, or raise the timeout.",
       "label": "Request timed out"

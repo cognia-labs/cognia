@@ -10,6 +10,8 @@ jest.mock("@/lib/tauri/transport-routing", () => ({ isRemoteHostActive: () => fa
 jest.mock("@/lib/companion/room-send-client", () => ({
   sendRoomTurn: jest.fn(),
   stopRoomTurn: jest.fn(),
+  roomSendRefusalOf: (err: unknown) =>
+    jest.requireActual("@/lib/companion/room-send-client").roomSendRefusalOf(err),
 }))
 
 import { act, renderHook, waitFor } from "@testing-library/react"
@@ -3179,6 +3181,9 @@ describe("useTeamChat — content helpers", () => {
 describe("useTeamChat — direct-chat parity (steer / lease / per-session)", () => {
   it("send() while the team session is streaming enqueues a steer instead of a second turn", async () => {
     chatState.statusBySession = { "team-1": "streaming" }
+    // A steer goes through the same door as a turn: only a local team room
+    // may queue one (a shared room's "streaming" is the server's).
+    getSessionMock.mockResolvedValue({ id: "team-1", kind: "team", teamId: "t-1", title: "T" })
     const { result } = renderHook(() => useTeamChat())
     await flush()
     const webSearchContext = {
@@ -3192,10 +3197,13 @@ describe("useTeamChat — direct-chat parity (steer / lease / per-session)", () 
       "team-1",
       expect.objectContaining({ text: "follow-up while busy", webSearchContext })
     )
-    // No second orchestration loop: the session is never loaded and no turn
-    // runs. The one write is the optimistic bubble itself — store-only, it
-    // would not survive the restart the feature promises to survive.
-    expect(getSessionMock).not.toHaveBeenCalled()
+    // No second orchestration loop: the session is read once, to admit the
+    // steer, and no team is loaded and no member runs. The one write is the
+    // optimistic bubble itself — store-only, it would not survive the restart
+    // the feature promises to survive.
+    expect(getSessionMock).toHaveBeenCalledTimes(1)
+    expect(getTeamMock).not.toHaveBeenCalled()
+    expect(sendPromptMock).not.toHaveBeenCalled()
     expect(persistMessagesMock).toHaveBeenCalledTimes(1)
     expect(persistMessagesMock).toHaveBeenCalledWith("team-1", [
       expect.objectContaining({
@@ -3466,6 +3474,40 @@ describe("remote room mutation rejection", () => {
         })
         expect(chatState.setSessionStatus).toHaveBeenCalledWith("team-1", "idle")
         expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith("team-1", expect.anything())
+        unmount()
+      } finally {
+        pairing.mockReturnValue(false)
+      }
+    }
+  )
+
+  /**
+   * A shared room runs on the collaboration server (ADR-0252). When the host
+   * turns the companion's turn away for that, the room says so with its own
+   * code, not as an unclassified failure.
+   */
+  it.each(["send", "regenerate", "editAndResend"] as const)(
+    "shows the host's shared-room refusal of a %s as its own diagnostic",
+    async (action) => {
+      isTauriMock.mockReturnValue(false)
+      const pairing = jest.requireMock("@/lib/platform/web-companion")
+        .hasWebCompanionTarget as jest.Mock
+      pairing.mockReturnValue(true)
+      const sendRoomTurn = jest.requireMock("@/lib/companion/room-send-client")
+        .sendRoomTurn as jest.Mock
+      sendRoomTurn.mockRejectedValue(new Error("room_send refused: roomRunsOnServer"))
+      try {
+        const { result, unmount } = renderHook(() => useTeamChat())
+        await act(async () => {
+          if (action === "send") await result.current.send("hi", { sessionId: "team-1" })
+          else if (action === "regenerate") await result.current.regenerate("team-1")
+          else await result.current.editAndResend("u-1", "edit", "team-1")
+        })
+        expect(chatState.setSessionStatus).toHaveBeenCalledWith("team-1", "idle")
+        expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
+          "team-1",
+          expect.objectContaining({ code: "roomRunsOnServer" })
+        )
         unmount()
       } finally {
         pairing.mockReturnValue(false)

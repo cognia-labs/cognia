@@ -651,6 +651,14 @@ export const DIAGNOSTIC_CODES: Readonly<Record<DiagnosticCode, DiagnosticCodeSpe
     actions: [{ kind: "open-settings", section: "squads" }],
     icon: "alert",
   },
+  // Not a fault: the room is real, it just is not this runner's to drive.
+  roomRunsOnServer: {
+    severity: "warning",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "alert",
+  },
   teamMissing: {
     severity: "error",
     retryable: false,

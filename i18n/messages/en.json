@@ -16751,6 +16751,10 @@
         "hint": "Your membership or role in this organization changed while this was running, so the Host stopped it. What was already written is kept. Anything it had already done outside the Host was not undone.",
         "label": "Stopped because your access changed"
       },
+      "roomRunsOnServer": {
+        "hint": "This team conversation is shared, so its collaboration server runs the members. Send it from the shared conversation instead of a local room.",
+        "label": "Shared room runs on the server"
+      },
       "routerFusionBypassed": {
         "hint": "Router + Fusion could not reserve a background model call, so it ran on the original path and its cost is not in the ledger. Repeated failures pause the surface; check Settings → AI connections → Routing.",
         "label": "Model call not ledgered"

@@ -738,6 +738,72 @@ describe("a linear turn", () => {
     expect(w.calls.sendPrompt).toEqual([])
   })
 
+  describe("a shared room (ADR-0252 P2)", () => {
+    // A team room the collaboration server owns: its writes are
+    // server-authoritative, so this runner must neither orchestrate it nor
+    // rewrite its rows (`isLocallyOrchestratedRoom`).
+    const shared = {
+      collaboration: {
+        orgId: "org-1",
+        workspaceId: "ws-1",
+        sessionId: "remote-1",
+        policyRevision: 1,
+        syncCursor: 0,
+      },
+    }
+    const seeded = () => [
+      { id: "u-0", role: "user", parts: [{ type: "text", text: "first" }] } as Msg,
+      {
+        id: "r-0",
+        role: "assistant",
+        parts: [{ type: "text", text: "old" }],
+        metadata: { senderId: "a" },
+      } as Msg,
+    ]
+
+    it("refuses a send without starting a member", async () => {
+      const w = createWorld({ session: shared })
+      await w.runner.send("go", { sessionId: ROOM })
+      expect(w.calls.sendPrompt).toEqual([])
+      expect(w.diagnostics.map((d) => d.code)).toEqual(["roomRunsOnServer"])
+      expect(w.db.get(ROOM) ?? []).toEqual([])
+    })
+
+    it("refuses a steer while the room reads as streaming", async () => {
+      const w = createWorld({ session: shared })
+      w.status.set(ROOM, "streaming")
+      await w.runner.send("more", { sessionId: ROOM })
+      expect(w.steerQueues.get(ROOM) ?? []).toEqual([])
+      expect(w.diagnostics.map((d) => d.code)).toEqual(["roomRunsOnServer"])
+    })
+
+    it("refuses a regenerate before touching the transcript", async () => {
+      const w = createWorld({ session: shared })
+      w.seed(seeded())
+      await w.runner.regenerate(ROOM)
+      expect(w.calls.sendPrompt).toEqual([])
+      expect(w.db.get(ROOM)).toEqual(seeded())
+      expect(w.diagnostics.map((d) => d.code)).toEqual(["roomRunsOnServer"])
+    })
+
+    it("refuses an edit before touching the transcript", async () => {
+      const w = createWorld({ session: shared })
+      w.seed(seeded())
+      await w.runner.editAndResend(ROOM, "u-0", "fixed")
+      expect(w.calls.sendPrompt).toEqual([])
+      expect(w.db.get(ROOM)).toEqual(seeded())
+      expect(w.diagnostics.map((d) => d.code)).toEqual(["roomRunsOnServer"])
+    })
+  })
+
+  it("refuses a regenerate of a session that is not a team room before touching it", async () => {
+    const w = createWorld({ session: { kind: undefined, teamId: undefined } as never })
+    w.seed([{ id: "u-0", role: "user", parts: [{ type: "text", text: "first" }] } as Msg])
+    await w.runner.regenerate(ROOM)
+    expect(w.calls.sendPrompt).toEqual([])
+    expect(w.diagnostics.map((d) => d.code)).toEqual(["teamSessionMissing"])
+  })
+
   it("does nothing in manual mode until the user picks a member", async () => {
     const w = createWorld({ team: { orchestration: "manual" } })
     await w.runner.send("go", { sessionId: ROOM })

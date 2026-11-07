@@ -17,6 +17,7 @@ import type { MessageReplyTo, SendContent, SendOptions } from "@cognia/agent-con
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import type { ContextRef } from "@/lib/chat/mentions/types"
 import type { PromptPreambleSummary } from "@/lib/chat/prompt-preamble"
+import type { RoomTurnRefusal } from "@/lib/chat/room/types"
 
 export const ROOM_SEND_COMMAND = "room_send"
 export const ROOM_STOP_COMMAND = "room_stop"
@@ -57,6 +58,32 @@ export interface RoomSendResponse {
    * The host resends the rest; the companion names these to the user.
    */
   notResent?: string[]
+}
+
+/**
+ * A host turns a room turn away (ADR-0252) by failing the request with this
+ * prefix and the reason, because the bridge carries a failure's message
+ * alone. The reason is a diagnostic code the companion shows as such.
+ */
+const ROOM_SEND_REFUSED = "room_send refused: "
+const ROOM_TURN_REFUSALS: readonly RoomTurnRefusal[] = ["roomRunsOnServer", "teamSessionMissing"]
+
+export function roomSendRefusalMessage(reason: RoomTurnRefusal): string {
+  return `${ROOM_SEND_REFUSED}${reason}`
+}
+
+/** The refusal a failed `room_send` carries, or `null` for any other failure. */
+export function roomSendRefusalOf(err: unknown): RoomTurnRefusal | null {
+  const message =
+    typeof err === "string"
+      ? err
+      : err && typeof err === "object" && typeof (err as { message?: unknown }).message === "string"
+        ? (err as { message: string }).message
+        : ""
+  const at = message.indexOf(ROOM_SEND_REFUSED)
+  if (at < 0) return null
+  const reason = message.slice(at + ROOM_SEND_REFUSED.length).trim()
+  return ROOM_TURN_REFUSALS.find((known) => known === reason) ?? null
 }
 
 export async function sendRoomTurn(request: RoomSendRequest): Promise<RoomSendResponse> {

@@ -14,6 +14,13 @@
 /** Which membership source a room reads. `null` is a plain one-to-one chat. */
 export type RoomKind = "team" | "shared" | "im"
 
+/**
+ * Why the room runner turned a turn away at its door (ADR-0252): a shared
+ * room is the collaboration server's to run, and a session that is no team
+ * room has nothing to orchestrate. Each is also a diagnostic code.
+ */
+export type RoomTurnRefusal = "roomRunsOnServer" | "teamSessionMissing"
+
 import type { RoomReplyMode } from "@cognia/agent-config-types"
 
 /**

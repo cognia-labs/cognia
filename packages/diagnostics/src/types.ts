@@ -295,6 +295,12 @@ export type DiagnosticCode =
   | "deadlineExceeded"
   // --- Agent team ---
   | "teamSessionMissing"
+  /**
+   * A team room bound to a collaboration server (a shared session). Its writes
+   * are server-authoritative, so the local room runner refuses to orchestrate
+   * it or rewrite its rows (ADR-0252).
+   */
+  | "roomRunsOnServer"
   | "teamMissing"
   | "supervisorMissing"
   | "supervisorNotMember"

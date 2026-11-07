@@ -6,6 +6,8 @@ jest.mock("@/lib/tauri", () => ({
 import {
   ROOM_SEND_COMMAND,
   ROOM_STOP_COMMAND,
+  roomSendRefusalMessage,
+  roomSendRefusalOf,
   sendRoomTurn,
   stopRoomTurn,
 } from "./room-send-client"
@@ -97,6 +99,30 @@ describe("sendRoomTurn", () => {
   it("propagates a transport failure so the caller can roll back its optimistic row", async () => {
     callMock.mockRejectedValue(new Error("offline"))
     await expect(sendRoomTurn({ sessionId: "room-1", content: "x" })).rejects.toThrow("offline")
+  })
+})
+
+describe("roomSendRefusalOf", () => {
+  it("reads back the reason a host refused a room turn with", () => {
+    expect(roomSendRefusalOf(new Error(roomSendRefusalMessage("roomRunsOnServer")))).toBe(
+      "roomRunsOnServer"
+    )
+    // The bridge may prefix the message it relays.
+    expect(roomSendRefusalOf(`Error: ${roomSendRefusalMessage("teamSessionMissing")}`)).toBe(
+      "teamSessionMissing"
+    )
+  })
+
+  it("answers null for any other failure, including an unknown reason", () => {
+    expect(roomSendRefusalOf(new Error("socket closed"))).toBeNull()
+    expect(roomSendRefusalOf(new Error("room_send refused: somethingElse"))).toBeNull()
+    expect(roomSendRefusalOf(null)).toBeNull()
+  })
+
+  it("reads a rejection that is a plain object with a message", () => {
+    expect(roomSendRefusalOf({ message: roomSendRefusalMessage("roomRunsOnServer") })).toBe(
+      "roomRunsOnServer"
+    )
   })
 })
 

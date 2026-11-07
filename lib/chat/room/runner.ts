@@ -130,7 +130,8 @@ import { renderWorkingSetForCompaction } from "@/lib/chat/working-set"
 import { RoutingAttemptController } from "@cognia/provider-routing"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { resolveRoomSettings, buildRoomInstructionsSection } from "./settings"
-import type { ResolvedRoomSettings } from "./types"
+import { isLocallyOrchestratedRoom, roomKindOf } from "./kind"
+import type { ResolvedRoomSettings, RoomTurnRefusal } from "./types"
 import { RoomStreamRegistry } from "./runner-streaming"
 import { deriveMemberActivity } from "./member-activity"
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
@@ -152,6 +153,8 @@ export interface RoomSendOptions {
   continuationOf?: string
   /** Internal admission notification; never supplied by a remote payload. */
   onAccepted?: () => void
+  /** Internal refusal notification, the counterpart of `onAccepted`. */
+  onRefused?: (reason: RoomTurnRefusal) => void
   /** Attachment provenance for the optimistic user message. */
   attachmentManifest?: readonly AttachmentManifestEntry[]
   /** Template provenance retained only on the user transcript row. */
@@ -401,7 +404,34 @@ export class RoomRunner {
     }
   }
 
-  private async sendTurn(content: SendContent, opts: RoomSendOptions): Promise<void> {
+  /**
+   * The one door a turn takes into this runner (ADR-0252): only a room
+   * `isLocallyOrchestratedRoom` names is driven here. A shared room's writes
+   * are the collaboration server's, so it is refused before anything is
+   * queued, steered or rewritten, and so is a session that is no team room.
+   */
+  private async admitLocalRoom(
+    sessionId: string,
+    onRefused?: (reason: RoomTurnRefusal) => void
+  ): Promise<ChatSession | null> {
+    const session = await this.deps.db.getSession(sessionId)
+    if (isLocallyOrchestratedRoom(session)) return session ?? null
+    const reason: RoomTurnRefusal =
+      roomKindOf(session) === "shared" ? "roomRunsOnServer" : "teamSessionMissing"
+    this.sinks.diagnostic(
+      sessionId,
+      createDiagnostic(reason, { source: "agent-team", meta: { sessionId } })
+    )
+    onRefused?.(reason)
+    return null
+  }
+
+  /** `admitted`: the session a regenerate or an edit already let through the door. */
+  private async sendTurn(
+    content: SendContent,
+    opts: RoomSendOptions,
+    admitted?: ChatSession
+  ): Promise<void> {
     const { sessionId } = opts
     const { deps, sinks } = this
 
@@ -410,12 +440,18 @@ export class RoomRunner {
       return
     }
 
+    // Read before the admission read below: whether this turn steers is
+    // decided by the room's state when the turn arrived, not by what this
+    // turn's own start writes meanwhile.
+    const arrivedWhile = sinks.status.get(sessionId)
+    const session = admitted ?? (await this.admitLocalRoom(sessionId, opts.onRefused))
+    if (!session?.teamId) return
+
     // Steer instead of a concurrent orchestration loop: a fresh user turn
     // while THIS room is still streaming would start a second orchestrator
     // over half-written state. Queue it and replay once the turn settles.
     if (!skipsUserTurn(opts)) {
-      const st = sinks.status.get(sessionId)
-      if (st === "streaming" || st === "awaiting_approval") {
+      if (arrivedWhile === "streaming" || arrivedWhile === "awaiting_approval") {
         // Past the attachments, as direct chat queues a steer: an extracted
         // document is a text block too, and is not what the user typed.
         const attachmentCount = opts.attachmentManifest?.length ?? 0
@@ -461,14 +497,6 @@ export class RoomRunner {
       }
     }
 
-    const session = await deps.db.getSession(sessionId)
-    if (!session || session.kind !== "team" || !session.teamId) {
-      sinks.diagnostic(
-        sessionId,
-        createDiagnostic("teamSessionMissing", { source: "agent-team", meta: { sessionId } })
-      )
-      return
-    }
     if (opts.webSearchContext) this.pendingWebSearch.set(sessionId, opts.webSearchContext)
     else this.pendingWebSearch.delete(sessionId)
     const team = await deps.db.getTeam(session.teamId)
@@ -841,18 +869,22 @@ export class RoomRunner {
   async regenerate(
     sessionId: string,
     onAccepted?: () => void,
-    onNotResent?: (filenames: readonly string[]) => void
+    onNotResent?: (filenames: readonly string[]) => void,
+    onRefused?: (reason: RoomTurnRefusal) => void
   ): Promise<void> {
     return this.reserveTurn(sessionId, () =>
-      this.regenerateTurn(sessionId, onAccepted, onNotResent)
+      this.regenerateTurn(sessionId, onAccepted, onNotResent, onRefused)
     )
   }
 
   private async regenerateTurn(
     sessionId: string,
     onAccepted?: () => void,
-    onNotResent?: (filenames: readonly string[]) => void
+    onNotResent?: (filenames: readonly string[]) => void,
+    onRefused?: (reason: RoomTurnRefusal) => void
   ): Promise<void> {
+    const admitted = await this.admitLocalRoom(sessionId, onRefused)
+    if (!admitted) return
     const messages =
       this.sinks.messages.read(sessionId) ?? (await this.deps.db.listMessages(sessionId))
     let lastUserIdx = -1
@@ -901,12 +933,16 @@ export class RoomRunner {
       manifest = rebuilt.manifest
       if (rebuilt.unavailable.length > 0) onNotResent?.(rebuilt.unavailable)
     }
-    await this.sendTurn(content, {
-      sessionId,
-      skipPersistUserTurn: true,
-      ...(manifest?.length ? { attachmentManifest: manifest } : {}),
-      onAccepted,
-    })
+    await this.sendTurn(
+      content,
+      {
+        sessionId,
+        skipPersistUserTurn: true,
+        ...(manifest?.length ? { attachmentManifest: manifest } : {}),
+        onAccepted,
+      },
+      admitted
+    )
   }
 
   /**
@@ -935,6 +971,8 @@ export class RoomRunner {
     newContent: SendContent,
     { onNotResent, ...options }: RoomEditOptions
   ): Promise<void> {
+    const admitted = await this.admitLocalRoom(sessionId, options.onRefused)
+    if (!admitted) return
     const messages =
       this.sinks.messages.read(sessionId) ?? (await this.deps.db.listMessages(sessionId))
     const editedIdx = messages.findIndex((message) => message.id === messageId)
@@ -971,7 +1009,8 @@ export class RoomRunner {
         ...(citations.length > 0 ? { citations } : {}),
         sessionId,
         branchTag: { groupId, index: nextIndex },
-      }
+      },
+      admitted
     )
   }
 

@@ -53,7 +53,7 @@ import {
 } from "@/lib/chat/room/runner-host"
 import type { RoomRunner } from "@/lib/chat/room/runner"
 import { withMetadata } from "@/lib/chat/room/runner"
-import { sendRoomTurn, stopRoomTurn } from "@/lib/companion/room-send-client"
+import { roomSendRefusalOf, sendRoomTurn, stopRoomTurn } from "@/lib/companion/room-send-client"
 import { maybeDrainSteer, putBackPendingSteers, steerArmed } from "./steer-runtime"
 import { useChatStore } from "@/stores/chat"
 import { isCompanionShell } from "@/lib/chat/room/shell"
@@ -93,6 +93,24 @@ export interface TeamSendOptions {
 }
 
 type TeamSendFn = (content: SendContent, opts?: TeamSendOptions) => Promise<void>
+
+/**
+ * A companion's `room_send` (a send, a regenerate or an edit) failed: the room
+ * goes idle again and says why. A host's refusal (a shared room, a session
+ * that is no team room) keeps its own code instead of reading as a fault.
+ */
+function reportRoomSendFailure(sessionId: string, err: unknown): void {
+  const refusal = roomSendRefusalOf(err)
+  useChatStore.getState().setSessionStatus(sessionId, "idle")
+  useChatStore
+    .getState()
+    .setSessionDiagnostic(
+      sessionId,
+      refusal
+        ? createDiagnostic(refusal, { source: "agent-team", meta: { sessionId } })
+        : toDiagnostic(err, { source: "agent-team", meta: { sessionId } })
+    )
+}
 
 export function useTeamChat() {
   const tInlineErr = useTranslations("chat.inlineError")
@@ -179,13 +197,7 @@ export function useTeamChat() {
         if (!result.accepted) throw new Error("room_send was not accepted")
         return true
       } catch (err) {
-        useChatStore.getState().setSessionStatus(sessionId, "idle")
-        useChatStore
-          .getState()
-          .setSessionDiagnostic(
-            sessionId,
-            toDiagnostic(err, { source: "agent-team", meta: { sessionId } })
-          )
+        reportRoomSendFailure(sessionId, err)
         return false
       }
     },
@@ -363,13 +375,7 @@ export function useTeamChat() {
           if (!result.accepted) throw new Error("room_send was not accepted")
           warnNotResent(result.notResent)
         } catch (err) {
-          useChatStore.getState().setSessionStatus(sessionId, "idle")
-          useChatStore
-            .getState()
-            .setSessionDiagnostic(
-              sessionId,
-              toDiagnostic(err, { source: "agent-team", meta: { sessionId } })
-            )
+          reportRoomSendFailure(sessionId, err)
         }
         return
       }
@@ -394,13 +400,7 @@ export function useTeamChat() {
           if (!result.accepted) throw new Error("room_send was not accepted")
           warnNotResent(result.notResent)
         } catch (err) {
-          useChatStore.getState().setSessionStatus(sessionId, "idle")
-          useChatStore
-            .getState()
-            .setSessionDiagnostic(
-              sessionId,
-              toDiagnostic(err, { source: "agent-team", meta: { sessionId } })
-            )
+          reportRoomSendFailure(sessionId, err)
         }
         return
       }

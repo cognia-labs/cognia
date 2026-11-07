@@ -29,7 +29,8 @@ import type { ContextRef } from "@/lib/chat/mentions/types"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { getHostRoomRunner } from "@/lib/chat/room/runner-host"
 import type { RoomRunner, RoomSendOptions } from "@/lib/chat/room/runner"
-import type { RoomSendResponse } from "./room-send-client"
+import type { RoomTurnRefusal } from "@/lib/chat/room/types"
+import { roomSendRefusalMessage, type RoomSendResponse } from "./room-send-client"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { readHostPerson } from "@/lib/identity/host-person"
 import { getPairedDevice } from "@/lib/db/paired-devices"
@@ -100,7 +101,8 @@ export async function resolveRoomAuthor(
 function awaitRoomAdmission(
   start: (
     onAccepted: () => void,
-    onNotResent: (filenames: readonly string[]) => void
+    onNotResent: (filenames: readonly string[]) => void,
+    onRefused: (reason: RoomTurnRefusal) => void
   ) => Promise<void>
 ): Promise<RoomSendResponse> {
   return new Promise((resolve, reject) => {
@@ -113,7 +115,10 @@ function awaitRoomAdmission(
       },
       (filenames) => {
         notResent = [...filenames]
-      }
+      },
+      // The bridge carries a failure's message alone, so the refusal travels
+      // as one the companion can read back (`roomSendRefusalOf`).
+      (reason) => reject(new Error(roomSendRefusalMessage(reason)))
     )
     void completion.then(
       () => resolve({ accepted: false }),
@@ -135,8 +140,8 @@ export async function roomSend(
   const author = await resolveRoomAuthor(callerDeviceId, deps)
 
   if (payload.regenerate === true) {
-    return awaitRoomAdmission((onAccepted, onNotResent) =>
-      runner.regenerate(sessionId, onAccepted, onNotResent)
+    return awaitRoomAdmission((onAccepted, onNotResent, onRefused) =>
+      runner.regenerate(sessionId, onAccepted, onNotResent, onRefused)
     )
   }
 
@@ -147,8 +152,13 @@ export async function roomSend(
     throw new Error("room_send.editMessageId must be a string when present")
   }
   if (typeof editMessageId === "string") {
-    return awaitRoomAdmission((onAccepted, onNotResent) =>
-      runner.editAndResend(sessionId, editMessageId, content, { author, onAccepted, onNotResent })
+    return awaitRoomAdmission((onAccepted, onNotResent, onRefused) =>
+      runner.editAndResend(sessionId, editMessageId, content, {
+        author,
+        onAccepted,
+        onNotResent,
+        onRefused,
+      })
     )
   }
 
@@ -191,9 +201,10 @@ export async function roomSend(
     )
   }
 
-  return awaitRoomAdmission((onAccepted) =>
+  return awaitRoomAdmission((onAccepted, _onNotResent, onRefused) =>
     runner.send(content, {
       onAccepted,
+      onRefused,
       sessionId,
       attachmentManifest,
       webSearchContext,

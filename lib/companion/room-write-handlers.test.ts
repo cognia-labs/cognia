@@ -15,6 +15,7 @@ jest.mock("@/lib/db/paired-devices", () => ({
 }))
 
 import { resolveRoomAuthor, roomSend, roomStop } from "./room-write-handlers"
+import { roomSendRefusalOf } from "./room-send-client"
 import type { RoomRunner, RoomSendOptions } from "@/lib/chat/room/runner"
 
 function fakeRunner() {
@@ -124,6 +125,7 @@ describe("roomSend", () => {
     expect(calls.send).toHaveBeenCalledWith("hello team", {
       sessionId: "room-1",
       onAccepted: expect.any(Function),
+      onRefused: expect.any(Function),
       attachmentManifest: [{ id: "att-1" }],
       webSearchContext: { query: "q" },
       author: { kind: "human", id: "usr_host", displayName: "Pixel 9", source: "device:dev-1" },
@@ -200,6 +202,50 @@ describe("roomSend", () => {
     release()
   })
 
+  /**
+   * A shared room is the collaboration server's (ADR-0252): the runner turns
+   * the turn away at its door, and the companion must learn that reason, not
+   * a bare "not accepted". The bridge keeps a failure's message only, so the
+   * refusal rides the message.
+   */
+  it("fails a turn the runner refuses with the refusal the companion reads back", async () => {
+    const refusing = {
+      send: jest.fn(async (_content: unknown, opts: RoomSendOptions) => {
+        opts.onRefused?.("roomRunsOnServer")
+      }),
+      regenerate: jest.fn(
+        async (
+          _session: string,
+          _onAccepted?: () => void,
+          _onNotResent?: (names: readonly string[]) => void,
+          onRefused?: (reason: "roomRunsOnServer" | "teamSessionMissing") => void
+        ) => {
+          onRefused?.("roomRunsOnServer")
+        }
+      ),
+      editAndResend: jest.fn(
+        async (_session: string, _message: string, _content: unknown, opts: RoomSendOptions) => {
+          opts.onRefused?.("teamSessionMissing")
+        }
+      ),
+    } as unknown as RoomRunner
+    const sent = roomSend(
+      { sessionId: "room-1", callerDeviceId: "dev-1", content: "hi" },
+      deps(refusing)
+    )
+    await expect(sent).rejects.toThrow("room_send refused: roomRunsOnServer")
+    expect(roomSendRefusalOf(await sent.catch((error: unknown) => error))).toBe("roomRunsOnServer")
+    await expect(
+      roomSend({ sessionId: "room-1", callerDeviceId: "dev-1", regenerate: true }, deps(refusing))
+    ).rejects.toThrow("room_send refused: roomRunsOnServer")
+    await expect(
+      roomSend(
+        { sessionId: "room-1", callerDeviceId: "dev-1", content: "x", editMessageId: "u-1" },
+        deps(refusing)
+      )
+    ).rejects.toThrow("room_send refused: teamSessionMissing")
+  })
+
   it("routes regenerate and edit to their own runner actions", async () => {
     const { runner, calls, release } = fakeRunner()
     await expect(
@@ -207,6 +253,7 @@ describe("roomSend", () => {
     ).resolves.toEqual({ accepted: true })
     expect(calls.regenerate).toHaveBeenCalledWith(
       "room-1",
+      expect.any(Function),
       expect.any(Function),
       expect.any(Function)
     )
