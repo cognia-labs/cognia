@@ -684,10 +684,14 @@ P2 交付物已建立，但 §17–§26 记录的 P1 验收边界未变，P2 不
 
 上下文贡献迁移（ADR-0250 §14）两次改动了 authoring 输入：`9d699315d7` 从插件契约删除 `SendOptions.twinContext`，此前 C3、C4 又把 `ContextSourcesMap` 的模块扩充写进了 `types/knowledge-base.ts` 与 `types/project-knowledge/index.ts`。
 
-| 项目     | 结果                                                                                                                                                                                                                                                   |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| SDK 构建 | 在干净检出中，`plugin-sdk` 的声明构建拒绝发布：`types/knowledge-base.ts` 进入 SDK 声明，扩充把 `@/lib/modules/manifest-types` 带了进去。两处扩充移到各自的 `context-sources.ts`，由模块的贡献导入（`3c7f602b94`）                                      |
-| 构建前提 | `plugin-contract` 的声明构建需要先运行 `scripts/build/gen-module-registry.mjs`：生成的模块注册表被 gitignore，干净检出里没有                                                                                                                           |
-| Kit      | 在 `3c7f602b94` 的干净 worktree 中重建 Kit `01c67873c883`（`sdkSourceSha256` 由 `84065ee1…` 变为 `c7f22dbe…`）；`test-authoring-kit.mjs` 通过：76 个 frontend 包、346 个类型检查文件、19 组 helper suites（105 例）与 Python wheel 导入                |
-| Host pin | `2a190110b9`；按提交树计算的 ABI 与 pin 一致                                                                                                                                                                                                           |
-| 新仓库   | Kit 发布在 `authoring-kits` 提交 `831c22b`；`main` 的 lock 提交 `71dbae6`（`pnpm-lock.yaml` 只更新 SDK、UI 两个 tarball 的 integrity）；bootstrap、typecheck、build（76 个 frontend 包）通过。本轮没有运行 `sync-from-host.sh`，也没有比对两仓产物集合 |
+| 项目     | 结果                                                                                                                                                                                                                                    |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SDK 构建 | 在干净检出中，`plugin-sdk` 的声明构建拒绝发布：`types/knowledge-base.ts` 进入 SDK 声明，扩充把 `@/lib/modules/manifest-types` 带了进去。两处扩充移到各自的 `context-sources.ts`，由模块的贡献导入（`3c7f602b94`）                       |
+| 构建前提 | `plugin-contract` 的声明构建需要先运行 `scripts/build/gen-module-registry.mjs`：生成的模块注册表被 gitignore，干净检出里没有                                                                                                            |
+| Kit      | 在 `3c7f602b94` 的干净 worktree 中重建 Kit `01c67873c883`（`sdkSourceSha256` 由 `84065ee1…` 变为 `c7f22dbe…`）；`test-authoring-kit.mjs` 通过：76 个 frontend 包、346 个类型检查文件、19 组 helper suites（105 例）与 Python wheel 导入 |
+| Host pin | `2a190110b9`；按提交树计算的 ABI 与 pin 一致                                                                                                                                                                                            |
+| 新仓库   | Kit 发布在 `authoring-kits` 提交 `831c22b`；`main` 的 lock 提交 `71dbae6`（`pnpm-lock.yaml` 只更新 SDK、UI 两个 tarball 的 integrity）；bootstrap、typecheck、build（76 个 frontend 包）通过。见下方同步与比对                          |
+
+同步与比对（同日）：`sync-from-host.sh ~/Project/cognia-next dev`（Host `e731ec525d`）报告没有新的插件历史。自上次导入的 `22255f01c1` 以来，`host-sync-paths.txt` 所列路径在 Host 上没有提交，`host-sync.json` 不变。两仓用 Kit `01c67873c883` 各自产出集合：新仓库在 `71dbae6` 运行 `pnpm produce`；Host 在 `e731ec525d` 的干净 worktree 中，先构建 contract、SDK、UI（需要先生成模块注册表、安装 sidecar 依赖），再不带 `--kit` 运行 producer。带 `--kit` 时，Host 会因工作区里的 SDK 不是从 Kit 包安装的而拒绝。
+
+结果：1744 个文件的内容和 mode 全部一致；manifest 只有 `source.repository`、`source.revision`、`source.lockfileSha256` 三项不同，`sourceTree` 与 `toolchain` 相同。
