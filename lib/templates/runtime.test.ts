@@ -2,7 +2,8 @@ import { TemplateCatalog } from "./catalog"
 import { TEMPLATE_PACKAGE_SCHEMA_VERSION } from "./package"
 import { TEMPLATE_API_VERSION } from "./contracts"
 import { InMemoryTemplateRepository, type StoredTemplatePackage } from "./repository"
-import { createTemplateRuntime } from "./runtime"
+import { __resetPortsForTesting, __setPortForTesting } from "@/lib/modules/ports"
+import { createProductionTemplatePorts, createTemplateRuntime } from "./runtime"
 import type { FullDomainTemplatePorts } from "./adapters"
 
 function ports(): FullDomainTemplatePorts {
@@ -89,5 +90,41 @@ describe("template runtime", () => {
 
     expect(isPublisherTrusted).toHaveBeenCalledWith("publisher-public-key")
     expect((await repository.listPackages())[0].trust).toBe("verified-publisher")
+  })
+})
+
+describe("production agent-team port", () => {
+  afterEach(() => __resetPortsForTesting())
+
+  it("reaches the agent-team store through the squads module's squad-templates port", async () => {
+    const createTeam = jest.fn(async () => ({ id: "team-1", leadId: "lead-1" }))
+    const isActive = jest.fn(() => true)
+    __setPortForTesting("squad-templates", {
+      agentTeam: {
+        createTeam,
+        addTeammate: async () => ({ id: "mate" }),
+        createTask: async () => ({ id: "task" }),
+        deleteTeam: async () => undefined,
+        snapshot: async () => ({ team: { id: "team-1" } }),
+        isActive,
+      },
+      legacyTemplates: () => [],
+    })
+    const { agentTeam } = createProductionTemplatePorts()
+    expect(await agentTeam.createTeam({ name: "A" })).toEqual({ id: "team-1", leadId: "lead-1" })
+    expect(createTeam).toHaveBeenCalledWith({ name: "A" })
+    expect(await agentTeam.snapshot([{ domain: "agentTeam", id: "team-1" }])).toEqual({
+      team: { id: "team-1" },
+    })
+    expect(await agentTeam.isActive!([{ domain: "agentTeam", id: "team-1" }])).toBe(true)
+    // What the provider does not offer fails or reads as inactive, never silently succeeds.
+    await expect(agentTeam.update!([], {})).rejects.toThrow("cannot be updated")
+    await expect(agentTeam.updateTeammate!("mate", {})).rejects.toThrow("cannot be updated")
+  })
+
+  it("fails a squad template plainly when no module provides the port", async () => {
+    __setPortForTesting("squad-templates", null)
+    const { agentTeam } = createProductionTemplatePorts()
+    await expect(agentTeam.createTeam({})).rejects.toThrow("No module provides squad templates")
   })
 })

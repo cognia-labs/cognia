@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/convergence/inventories/lib-store-imperative.json",
+  "measure": "all",
+  "allowGrowth": 1,
+  "owner": "lib/squads",
+  "repaymentPhase": "3",
+  "reason": "The template platform's port onto the agent-team store moved from lib/templates/runtime.ts and lib/templates/legacy-sources.ts into the squads module's squad-templates port (lib/squads/ports/squad-templates.ts, ADR-0250 §14), which breaks the templates/squads dependency cycle. It reads and writes the same store those files did; they stay members for the custom-mode and subagent stores they still read, so the move counts one new file. Repaid when the agent-team store is reached through the squads module's own state interface instead of the zustand store."
+}

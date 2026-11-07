@@ -6,8 +6,8 @@
     "date": "2026-11-01"
   },
   "metrics": {
-    "static": 285,
-    "all": 401
+    "static": 286,
+    "all": 402
   },
   "members": [
     {
@@ -1341,11 +1341,22 @@
       ]
     },
     {
-      "key": "lib/claude/template-builtin-tools.ts",
-      "owner": "lib/claude",
+      "key": "lib/squads/agent-tools.ts",
+      "owner": "lib/squads",
       "note": "",
       "imports": [
         "dynamic"
+      ],
+      "stores": [
+        "stores/squads/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/squads/ports/squad-templates.ts",
+      "owner": "lib/squads",
+      "note": "",
+      "imports": [
+        "static"
       ],
       "stores": [
         "stores/squads/agent-team-store/index.ts"
@@ -4162,7 +4173,6 @@
         "static"
       ],
       "stores": [
-        "stores/squads/agent-team-store/index.ts",
         "stores/agent/custom-mode-store/index.ts",
         "stores/agent/subagent-runtime-store/index.ts"
       ]
@@ -4175,7 +4185,6 @@
         "static"
       ],
       "stores": [
-        "stores/squads/agent-team-store/index.ts",
         "stores/agent/custom-mode-store/index.ts",
         "stores/agent/subagent-runtime-store/index.ts"
       ]

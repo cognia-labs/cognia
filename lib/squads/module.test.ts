@@ -1,3 +1,4 @@
+import { SQUAD_TOOL_NAMES } from "./agent-tools"
 import squads from "./module"
 
 describe("squads module manifest", () => {
@@ -43,5 +44,25 @@ describe("squads module manifest", () => {
         },
       },
     ])
+  })
+
+  it("declares the Squad template tools, allowed because the writes ask the consent broker", async () => {
+    const declare = squads.tools!.declare
+    expect(Object.keys(declare).sort()).toEqual(Object.values(SQUAD_TOOL_NAMES).sort())
+    for (const [name, declaration] of Object.entries(declare)) {
+      expect(declaration).toEqual({
+        consent: "allow",
+        effect: name === SQUAD_TOOL_NAMES.list ? "read" : "write",
+        cancellable: false,
+      })
+    }
+    const { toolFamily } = await squads.tools!.load()
+    expect(typeof toolFamily.run).toBe("function")
+  })
+
+  it("provides the Squad side of the template platform", async () => {
+    const provided = squads.provides!.find((entry) => entry.port === "squad-templates")!
+    const { port } = (await provided.load()) as { port: { legacyTemplates: unknown } }
+    expect(typeof port.legacyTemplates).toBe("function")
   })
 })

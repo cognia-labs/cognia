@@ -11,7 +11,7 @@ let overlay: Record<string, Record<string, boolean>> | undefined
 jest.mock("@/hooks/use-template-catalog", () => ({
   useTemplateCatalog: () => ({ definitions, revision: 0 }),
 }))
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => owners }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => owners }))
 jest.mock("@/lib/db/template-platform", () => ({ listTemplateOwners: async () => owners }))
 jest.mock("@/stores/project/project-store", () => ({
   useProjectStore: (selector: (s: unknown) => unknown) =>

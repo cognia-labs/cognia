@@ -254,7 +254,7 @@ interface ToolSurface {
 
 ## 12. T5 实施记录：Sites 与 vector（2026-11-07）
 
-- 范围：Sites、vector 两族。templates 暂缓：它的 `squad_*` 三个工具会套用和保存 squad 模板（`lib/squads/apply-squad-template`、`publish-template-to-platform`、agent-team store），而 squads 的 `dependsOn` 已含 templates；templates 成为 manifest 后整族归它会形成环。要先把 `squad_*` 拆到 squads 模块的工具族（squads manifest 正由多智能体收敛那条线在改），`template_*`、`chat_template_*` 留给 templates。
+- 范围：Sites、vector 两族。templates 暂缓：它的 `squad_*` 三个工具会套用和保存 squad 模板（`lib/squads/apply-squad-template`、`publish-template-to-platform`、agent-team store），而 squads 的 `dependsOn` 已含 templates；templates 成为 manifest 后整族归它会形成环。要先把 `squad_*` 拆到 squads 模块的工具族（squads manifest 正由多智能体收敛那条线在改），`template_*`、`chat_template_*` 留给 templates。（已完成，见 §16。）
 - 两者成为 manifest 模块（归属表的 `sites`、`vector` 行删除）。
   - `sites`：`dependsOn` browser、cli-bridge、data、editor、logging、scheduler、share、terminal；`api` 为设备页用的 `components/sites/site-status.tsx`、工作流节点用的 5 个构建/发布文件和工具族。logging、scheduler、terminal、cli-bridge 的行各补一个 `api` 文件。
   - `vector`：`dependsOn` agent-trace（agent-trace 行补 `instrument.ts`）；`settings: { keys: [] }` 加 `lib/vector/settings.ts` 的视图，只用来读内核的 `providerSettings`（找嵌入提供方的密钥），避免工具族直接导入设置 store（`settingsStoreImporters` 不增）。
@@ -311,3 +311,14 @@ interface ToolSurface {
 - 门禁：模块数 +1，附例外记录 `2026-11-07-agent-builder-module.json`；没有方向边可还（原来的边是内核 → 内核）。
 - `build-options.test` 补两例：builder 对话拿到四个工具、同意档、协议和草稿段；普通对话都不拿。
 - 既有失败（未改，不属本次）：`colocated-tests` 报 `lib/workflow/runs/budget-summary.ts`、`lib/workflow/runtime/run-budget.ts` 缺测试，typecheck 报 `budget-summary.ts`，都是另一个会话未提交的工作流预算改动。
+
+## 16. T9 实施记录：模板与 Squad 模板工具（2026-11-07）
+
+- 拆族：`template_*`、`chat_template_*` 五个工具归 `templates`（`lib/templates/agent-tools.ts`），`squad_list`、`squad_apply_template`、`squad_save_as_template` 归 `squads`（`lib/squads/agent-tools.ts`）。两族共用的部分放在 `lib/templates/agent-tool-kit.ts`（templates 的 `api`）：门槛 `templateToolsOffered`、同意主体、平台换算、列表/读取上限、结构化失败。
+- 门槛不变：`selfInvokeTools.templates` 开启，且不是绑定 IM 的会话、不是 CLI（原来的 `artifactsChannelAvailable`）。同意代理的主体保留 `cognia-template-builtin`（`TEMPLATE_TOOL_CONSENT_SUBJECT`），已有授权继续有效；工具本身随模块以 `cognia-templates-builtin` / `cognia-squads-builtin` 发送。
+- 声明：八个工具都是 `allow`（与原同意档一致，写入在运行器里问同意代理），读为 `read`，`template_instantiate`、`squad_apply_template`、`squad_save_as_template` 为 `write`，全部不可取消。三个写入工具以前在探针拒绝名单里手写，现在由声明派生。
+- 拆环：只把 `squad_*` 拆走还不够。`lib/templates/runtime.ts` 的生产端口和 `legacy-sources.ts` 的旧 squad 模板读取直接用 agent-team store，`templates` 成为 manifest 后与 squads 形成 `dependsOn` 环。新增端口 `squad-templates`（`types/modules/ports/squad-templates.ts`，`{ agentTeam, legacyTemplates }`），由 squads 提供（`lib/squads/ports/squad-templates.ts`，代码从 runtime 搬来）。templates `requires: ["squad-templates?"]`：生产端口的 agentTeam 每次调用 `loadPort`，没有提供方时明确报错；旧模板读取没有提供方时读到空。
+- `templates` 成为 manifest 模块（归属表行删除）：`dependsOn` a2ui、data、document-templates、share、workflow；`api` 在原行基础上加 `adapters.ts`（端口契约用的类型）、`agent-tool-kit.ts`、`install-shared-definition.ts`、`package-manifest.ts`、`publisher-identity.ts`（cogpack、分享、远程迁移在用）。a2ui、document-templates、share、workflow 的行各补 templates 用到的 `api` 文件；`use-scoped-template-catalog` 的 `hooks/data` 桶导入改成具体文件（测试 mock 同步）。
+- 删除：`lib/claude/template-builtin-tools.ts`、`lib/claude/permissions/template-tool-rules.ts`（及测试）、`build-options` 的 `templateToolsEnabled`、同意档合并和追加段、`plugin-tool-ipc` 的分支和依赖注入（`__setTemplateToolDepsForTesting` 搬进模块，squads 一侧为 `__setSquadToolDepsForTesting`）、探针名单 3 个名字。
+- 还清方向边 2 条：`template-builtin-tools -> squads`、`template-builtin-tools -> templates`。收敛清单：`lib-store-imperative` 旧条目改到 `lib/squads/agent-tools.ts`，端口文件新增一个成员（templates 的两个文件去掉 agent-team store，仍是成员），附例外记录 `2026-11-07-squad-templates-port-stores-{static,all}.json`；`run-tables` 两个成员改到新路径。
+- 测试：旧运行器测试拆成两族各自的测试并加 `surface` 用例；`agent-tool-kit`、templates manifest、squads manifest（工具与端口）、端口实现的测试；runtime 和 legacy-sources 补端口转发与无提供方的用例；IPC 两例走模块注册表。`build-options.test` 的两例模板用例未改，经模块通过。

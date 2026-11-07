@@ -6,7 +6,8 @@
       "class": "foundation"
     },
     "a2ui": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/a2ui/templates/index.ts"]
     },
     "account": {
       "class": "kernel"
@@ -363,7 +364,8 @@
       "class": "module"
     },
     "document-templates": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/document-templates/builtin.ts"]
     },
     "durable": {
       "class": "module"
@@ -842,6 +844,7 @@
         "components/share/template-definition-share-button.tsx",
         "lib/share/client.ts",
         "lib/share/config.ts",
+        "lib/share/encoding.ts",
         "lib/share/file-selection.ts",
         "lib/share/hash.ts",
         "lib/share/payload.ts",
@@ -947,25 +950,6 @@
     "telemetry": {
       "class": "foundation"
     },
-    "templates": {
-      "class": "module",
-      "api": [
-        "components/templates/publish-confirm-dialog.tsx",
-        "components/templates/template-export-dialog.tsx",
-        "components/templates/template-instance-card.tsx",
-        "components/templates/template-update-dialog.tsx",
-        "lib/templates/catalog.ts",
-        "lib/templates/contracts.ts",
-        "lib/templates/download-package.ts",
-        "lib/templates/draft-id.ts",
-        "lib/templates/feature-flags.ts",
-        "lib/templates/legacy-sources.ts",
-        "lib/templates/package.ts",
-        "lib/templates/repository.ts",
-        "lib/templates/runtime.ts",
-        "lib/templates/service.ts"
-      ]
-    },
     "terminal": {
       "class": "module",
       "api": [
@@ -1047,9 +1031,12 @@
     "workflow": {
       "class": "module",
       "api": [
+        "components/workflow/editor/inspector/forms/shared/entity-picker.tsx",
+        "components/workflow/editor/inspector/forms/shared/multi-entity-picker.tsx",
         "hooks/workflow/use-debounced-callback.ts",
         "lib/workflow/definition/migrate.ts",
         "lib/workflow/knowledge/access.ts",
+        "lib/workflow/node-groups/materialize.ts",
         "lib/workflow/nodes/ai/pii-gate.ts",
         "lib/workflow/nodes/ai/schema-validate.ts",
         "lib/workflow/nodes/registry.ts",

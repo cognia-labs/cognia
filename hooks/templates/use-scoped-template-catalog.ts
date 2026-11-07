@@ -12,7 +12,7 @@
 
 import { useMemo } from "react"
 
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useTemplateCatalog } from "@/hooks/use-template-catalog"
 import { listTemplateOwners } from "@/lib/db/template-platform"
 import type { TemplateCatalogQuery } from "@/lib/templates/catalog"

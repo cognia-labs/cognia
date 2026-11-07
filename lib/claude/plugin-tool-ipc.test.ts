@@ -15,7 +15,6 @@ import {
   __setSkillToolDepsForTesting,
   __setSlashToolDepsForTesting,
   __setSessionPeerToolDepsForTesting,
-  __setTemplateToolDepsForTesting,
   handlePluginToolExec,
   resolveWebToolDeps,
   type PluginToolExecRequest,
@@ -36,6 +35,14 @@ import {
   toolFamily as vectorToolFamily,
   type VectorToolRunDeps,
 } from "@/lib/vector/agent-tools"
+import {
+  __setTemplateToolDepsForTesting,
+  toolFamily as templateToolFamily,
+} from "@/lib/templates/agent-tools"
+import {
+  __setSquadToolDepsForTesting,
+  toolFamily as squadToolFamily,
+} from "@/lib/squads/agent-tools"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import {
   recordCallbackBinding,
@@ -238,6 +245,7 @@ describe("handlePluginToolExec", () => {
     ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
     __setSessionPeerToolDepsForTesting(null)
     __setTemplateToolDepsForTesting(null)
+    __setSquadToolDepsForTesting(null)
     __setProjectCoordinatorToolDepsForTesting(null)
   })
 
@@ -375,7 +383,8 @@ describe("handlePluginToolExec", () => {
     }
   })
 
-  it("routes the template and squad tools to the host runner before the plugin registry", async () => {
+  it("routes the template tools to their module before the plugin registry", async () => {
+    useModuleTools("templates", templateToolFamily)
     const execute = jest.fn().mockResolvedValue({ from: "plugin" })
     __setPluginToolResolverForTesting({
       getTool: () => ({ pluginId: "some-plugin", execute }),
@@ -384,25 +393,10 @@ describe("handlePluginToolExec", () => {
     __setTemplateToolDepsForTesting(
       () =>
         ({
-          runtime: {
-            catalog: { query: () => [], get: () => undefined },
-            repository: {},
-            service: {},
-          },
+          runtime: { catalog: { query: () => [], get: () => undefined } },
           platform: "web",
           consent: async () => true,
           chatTemplates: { list, get: async () => undefined },
-          squads: {
-            teams: () => ({}),
-            teammates: () => [],
-            templates: () => ({}),
-            createTeam: jest.fn(),
-            addTeammate: jest.fn(),
-            createTask: jest.fn(),
-            saveAsTemplate: () => null,
-          },
-          applySquadTemplate: async () => ({ teamId: "t", via: "legacy" }),
-          publishSquadTemplate: async () => undefined,
         }) as never
     )
 
@@ -413,6 +407,31 @@ describe("handlePluginToolExec", () => {
     expect(list).toHaveBeenCalled()
     expect(response.error).toBeUndefined()
     expect(response.result).toEqual({ ok: true, templates: [], total: 0, truncated: false })
+  })
+
+  it("routes the Squad template tools to the squads module before the plugin registry", async () => {
+    useModuleTools("squads", squadToolFamily)
+    const execute = jest.fn().mockResolvedValue({ from: "plugin" })
+    __setPluginToolResolverForTesting({
+      getTool: () => ({ pluginId: "some-plugin", execute }),
+    })
+    __setSquadToolDepsForTesting(
+      () =>
+        ({
+          squads: { teams: () => ({}), teammates: () => [], templates: () => ({}) },
+        }) as never
+    )
+
+    const response = await handlePluginToolExec(makeRequest({ name: "squad_list", args: {} }))
+    expect(execute).not.toHaveBeenCalled()
+    expect(response.error).toBeUndefined()
+    expect(response.result).toEqual({
+      ok: true,
+      squads: [],
+      total: 0,
+      truncated: false,
+      templates: [],
+    })
   })
 
   it("resolves web_search before the plugin registry (supersedes the plugin)", async () => {

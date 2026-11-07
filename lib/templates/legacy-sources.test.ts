@@ -1,3 +1,4 @@
+import { __resetPortsForTesting, __setPortForTesting } from "@/lib/modules/ports"
 import { createLegacyTemplateSources } from "./legacy-sources"
 import type { FullDomainTemplatePorts } from "./adapters"
 
@@ -57,5 +58,36 @@ describe("legacy template sources", () => {
     expect(converted.inputs.map((slot) => slot.id)).toEqual(["team.knowledge.1", "teammate-1.twin"])
     expect(serialized).not.toContain("private-team-twin")
     expect(serialized).not.toContain("private-member-twin")
+  })
+
+  describe("the default squad reader", () => {
+    afterEach(() => __resetPortsForTesting())
+    const empty = {
+      subagents: () => [],
+      customModes: () => [],
+      workflows: () => [],
+      characters: () => [],
+      skills: () => [],
+    }
+
+    it("reads the user's squad templates through the squad-templates port", async () => {
+      const legacyTemplates = jest.fn(() => [
+        { id: "mine", name: "Mine", description: "", category: "general" as const, teammates: [] },
+      ])
+      __setPortForTesting("squad-templates", {
+        agentTeam: ports.agentTeam,
+        legacyTemplates,
+      })
+      const [source] = createLegacyTemplateSources({ ports, readers: empty })
+      expect(source.domain).toBe("agentTeam")
+      expect(await source.read()).toEqual([expect.objectContaining({ id: "mine" })])
+      expect(legacyTemplates).toHaveBeenCalled()
+    })
+
+    it("reads nothing when no module provides the port", async () => {
+      __setPortForTesting("squad-templates", null)
+      const [source] = createLegacyTemplateSources({ ports, readers: empty })
+      expect(await source.read()).toEqual([])
+    })
   })
 })

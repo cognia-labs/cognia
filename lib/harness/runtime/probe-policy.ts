@@ -201,9 +201,6 @@ const DENIED_BUILTIN_TOOLS = [
  */
 const DENIED_PLUGIN_TOOLS = [
   "ask_user",
-  "template_instantiate",
-  "squad_apply_template",
-  "squad_save_as_template",
   "working_set",
   "team_publish_memory",
   "team_request_consensus",

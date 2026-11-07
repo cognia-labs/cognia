@@ -2748,12 +2748,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
 
   const commandRules = appSettings?.agentPermissions?.commandRules
   const toolRules = appSettings?.agentPermissions?.toolRules
-  // Template / chat-template / squad tools (ADR-0164). Opt-in, and withheld
-  // for an IM-bound session for the same reason the artifact tools are: the
-  // consent overlay every write inside them asks has no screen to appear on.
-  const templateToolsEnabled =
-    artifactsChannelAvailable && appSettings?.selfInvokeTools?.templates === true
-  const { buildTemplateToolRuleset } = await import("@/lib/claude/permissions/template-tool-rules")
   // In-process tools feature modules contribute (ADR-0250 §14 amendment). One
   // answer per family gates both its manifest entries below and the tier
   // derived from their declarations here, so neither appears without the other.
@@ -2768,7 +2762,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     activeProject: ctx.activeProject ?? null,
   })
   const mergedRuleset = mergeRulesets(
-    templateToolsEnabled ? buildTemplateToolRuleset() : undefined,
     contributedTools.ruleset,
     commandRules && Object.keys(commandRules).length > 0 ? { Bash: commandRules } : undefined,
     toolRules
@@ -3796,21 +3789,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // Template / chat-template / squad tools (ADR-0164). Gated on the same
-  // condition as their consent tier above, so the tier is never surfaced
-  // apart from the tools it governs.
-  if (templateToolsEnabled) {
-    try {
-      const { buildTemplateManifestEntries } = await import("@/lib/claude/template-builtin-tools")
-      const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
-      opts.pluginTools = [
-        ...(opts.pluginTools ?? []),
-        ...buildTemplateManifestEntries().filter((entry) => !existing.has(entry.name)),
-      ]
-    } catch (err) {
-      loggers.app.warn("failed to append template built-in tools", { error: String(err) })
-    }
-  }
   if (appSettings?.selfInvokeTools?.slashCommand === true) {
     try {
       const { buildSlashCommandManifestEntries } = await import("@/lib/claude/slash-builtin-tools")

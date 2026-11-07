@@ -1,8 +1,8 @@
-import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useCustomModeStore } from "@/stores/agent/custom-mode-store"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 import { listCharacters } from "@/lib/db/characters"
+import { loadPort } from "@/lib/modules/ports"
 import { listSkills } from "@/lib/db/skills"
 import { listTemplateWorkflows } from "@/lib/db/workflows"
 import {
@@ -176,10 +176,9 @@ export function createLegacyTemplateSources(input: {
     createFullDomainAdapters(input.ports).map((adapter) => [adapter.domain, adapter])
   )
   const readers: LegacyTemplateReaders = {
-    agentTeams: () =>
-      Object.values(useAgentTeamStore.getState().templates).filter(
-        (template) => !template.isBuiltIn
-      ),
+    // Through the squads module's port: templates does not import the
+    // agent-team store (squads builds on templates).
+    agentTeams: async () => (await loadPort("squad-templates"))?.legacyTemplates() ?? [],
     subagents: () =>
       Object.values(useSubagentRuntimeStore.getState().templates).filter(
         (template) => !template.isBuiltIn

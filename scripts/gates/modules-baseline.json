@@ -443,8 +443,6 @@
     "lib/claude/team-builtin-tools.ts -> connectors",
     "lib/claude/team-builtin-tools.ts -> squads",
     "lib/claude/team-builtin-tools.ts -> twin",
-    "lib/claude/template-builtin-tools.ts -> squads",
-    "lib/claude/template-builtin-tools.ts -> templates",
     "lib/claude/unattended-park.ts -> connectors",
     "lib/commands-import/apply.ts -> slash-commands",
     "lib/companion/agent-task-write-handlers.ts -> agent-tasks",

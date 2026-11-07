@@ -1,7 +1,5 @@
-import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { useCustomModeStore } from "@/stores/agent/custom-mode-store"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
-import type { AddTeammateInput, CreateTaskInput, CreateTeamInput } from "@/types/agent/agent-team"
 import type { SubAgentTemplate } from "@/types/agent/sub-agent"
 import type { CustomModeConfig } from "@/stores/agent/custom-mode-store"
 import {
@@ -26,7 +24,12 @@ import {
 } from "@/lib/db/template-platform"
 import { isPublisherTrusted } from "@/lib/db/trusted-publishers"
 import { resolveScopeProjectId } from "@/lib/db/project-scope"
-import { createFullDomainAdapters, type FullDomainTemplatePorts } from "./adapters"
+import { loadPort } from "@/lib/modules/ports"
+import {
+  createFullDomainAdapters,
+  type AgentTeamTemplatePort,
+  type FullDomainTemplatePorts,
+} from "./adapters"
 import { templateCatalog, type TemplateCatalog } from "./catalog"
 import type { TemplateJson } from "./contracts"
 import type { TemplateRepository } from "./repository"
@@ -83,46 +86,41 @@ export function createTemplateRuntime(options: CreateTemplateRuntimeOptions): Te
   return { catalog, repository, service }
 }
 
+/**
+ * The agent-team side of the platform, through the squads module's
+ * `squad-templates` port: squads builds on templates, so templates reaches
+ * the agent-team store only through the port. Every call resolves the
+ * provider, so a squad template fails plainly when no module provides it.
+ */
+function squadTemplatesAgentTeam(): AgentTeamTemplatePort {
+  const port = async (): Promise<AgentTeamTemplatePort> => {
+    const provider = await loadPort("squad-templates")
+    if (!provider) throw new Error("No module provides squad templates")
+    return provider.agentTeam
+  }
+  return {
+    createTeam: async (input) => (await port()).createTeam(input),
+    addTeammate: async (input) => (await port()).addTeammate(input),
+    createTask: async (input) => (await port()).createTask(input),
+    deleteTeam: async (teamId) => (await port()).deleteTeam(teamId),
+    updateTeammate: async (teammateId, patch) => {
+      const agentTeam = await port()
+      if (!agentTeam.updateTeammate) throw new Error("AgentTeam teammates cannot be updated")
+      return agentTeam.updateTeammate(teammateId, patch)
+    },
+    snapshot: async (resourceIds) => (await port()).snapshot(resourceIds),
+    update: async (resourceIds, payload) => {
+      const agentTeam = await port()
+      if (!agentTeam.update) throw new Error("AgentTeam template instances cannot be updated")
+      return agentTeam.update(resourceIds, payload)
+    },
+    isActive: async (resourceIds) => (await port()).isActive?.(resourceIds) ?? false,
+  }
+}
+
 export function createProductionTemplatePorts(): FullDomainTemplatePorts {
   return {
-    agentTeam: {
-      createTeam: (input) =>
-        useAgentTeamStore.getState().createTeam(input as unknown as CreateTeamInput),
-      addTeammate: (input) =>
-        useAgentTeamStore.getState().addTeammate(input as unknown as AddTeammateInput),
-      createTask: (input) =>
-        useAgentTeamStore.getState().createTask(input as unknown as CreateTaskInput),
-      deleteTeam: (teamId) => useAgentTeamStore.getState().deleteTeam(teamId),
-      updateTeammate: (teammateId, patch) =>
-        useAgentTeamStore.getState().updateTeammate(teammateId, patch),
-      snapshot: (resourceIds) => {
-        const teamId = firstResourceId(resourceIds, "AgentTeam")
-        const state = useAgentTeamStore.getState()
-        const team = state.getTeam(teamId)
-        if (!team) throw new Error(`AgentTeam ${teamId} no longer exists`)
-        return json({
-          team,
-          teammates: state.getTeammates(teamId),
-          tasks: state.getTeamTasks(teamId),
-        })
-      },
-      update: (resourceIds, payload) => {
-        const teamId = firstResourceId(resourceIds, "AgentTeam")
-        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-          throw new Error("AgentTeam update payload is invalid")
-        }
-        const team = payload.team
-        if (!team || typeof team !== "object" || Array.isArray(team)) {
-          throw new Error("AgentTeam update payload has no team")
-        }
-        useAgentTeamStore.getState().updateTeam(teamId, team)
-        return { resources: [{ domain: "agentTeam", id: teamId }] }
-      },
-      isActive: (resourceIds) => {
-        const team = useAgentTeamStore.getState().getTeam(firstResourceId(resourceIds, "AgentTeam"))
-        return team?.status === "planning" || team?.status === "executing"
-      },
-    },
+    agentTeam: squadTemplatesAgentTeam(),
     workflow: {
       create: async (payload) => {
         const workflow = await createWorkflow(payload as unknown as WorkflowDraft)

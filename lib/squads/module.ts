@@ -104,12 +104,28 @@ export default defineHostModule({
   ],
   searchProviders: () => import("./search-provider"),
   prompts: () => import("./prompts"),
+  // The agent's Squad template tools, switched on with the template tools by
+  // `selfInvokeTools.templates`. Listing is free. Applying and saving a
+  // template ask the plugin consent broker inside the runner, under the
+  // template tools' subject, so the tier allows them rather than asking
+  // twice. None of the runners takes a cancel signal.
+  tools: {
+    declare: {
+      squad_list: { consent: "allow", effect: "read", cancellable: false },
+      squad_apply_template: { consent: "allow", effect: "write", cancellable: false },
+      squad_save_as_template: { consent: "allow", effect: "write", cancellable: false },
+    },
+    load: () => import("./agent-tools"),
+  },
   // The engines `launchChildRun` (ADR-0252 §3) asks for: a Squad run launched
   // by another run, and a twin answering as a child run. The twin's moves to
   // the twin module once that module has a manifest; the contract stays.
+  // And the Squad side of the template platform, which templates reaches
+  // through `squad-templates` because squads builds on templates.
   provides: [
     { port: "squad-launch", load: () => import("./ports/squad-launch") },
     { port: "twin-answer", load: () => import("./ports/twin-answer") },
+    { port: "squad-templates", load: () => import("./ports/squad-templates") },
   ],
   // The ordered Squad bootstrap (ADR-0169) on every host, from one
   // host-neutral adapter. It replaced the desktop's `SquadBootstrapInitializer`
