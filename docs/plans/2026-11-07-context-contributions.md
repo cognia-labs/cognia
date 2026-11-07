@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0–C3 已实施，记录见 §7–§10。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -221,3 +221,14 @@ interface ContextSection {
 - 还清方向边：`build-options`、`knowledge-builtin-tools`、`agent-executor`、`dispatch-agent-handler` 指向 knowledge-base 的四条。`dispatch-run`、`project-api` 读会话记录的两条保留（它们是 `api` 用法，迁到端口另议）。
 - 行为差别：泄露 PII 的检索块被剔除（以前整段原样发送）；知识工具和指引跟其他贡献工具一起，排在 working-set 工具之前；记录在对话跌出最近 64 个时也失效。尾部顺序不变：检索段在 `agent-knowledge` 位，排在协调者状态段和草稿段之前，与原来一致。
 - 测试：`context.test.ts` 9 例、`agent-tools.test.ts`、`module.test.ts` 新增；`session-reader.test.ts` 加 2 例；`context-session-state.test.ts` 加 1 例（forget）；`tool-contributions.test.ts` 加 1 例（surface 只读本模块状态）；`context-sources.test.ts` 新增；`build-options.test.ts` 改读 `contextSources` 并加一条 PII 块用例；`plugin-tool-ipc.test.ts` 的知识用例改走模块工具。`dispatch-agent-handler.test.ts` 两例后台派发的中止信号用例失败，原因在另一会话正在改的 `lib/execution/launch-child-run.ts`，与本次无关。
+
+## 11. C4 实施记录：工作区知识库（2026-11-07）
+
+- `project-knowledge` 从过渡表的行变成 manifest 模块（`lib/project-knowledge/module.ts`）：`dependsOn` rag、twin；`api` 列 `ingest/ingest-file`、`ingest/persist`、`runtime/build-deps`、`wire-ingest`（记忆、知识库管理界面、插件 project API、壳的 ingest 控制器和 project scope 用到的）。twin 行补 `runtime/reranker`。
+- 上下文贡献 `lib/project-knowledge/context.ts`：`retrieval`，turn、`project-knowledge` slot、`deadlineMs: 15_000`。条件与原分支相同：有工作区、有知识文件、有查询、`enableProjectRag` 开、并且有检索运行时或策略为 keyword。逐块过滤沿用 C3 的选择：`applyProjectKnowledgeContext` 新增可选的 `keepChunk`，贡献传入「正文和文件名都过 `hasNoLeakingPii`」，被剔除的块既不进段落也不上报；整段再过内核闸。来源类型 `ProjectKnowledgeRetrievalSources` 在 `types/project-knowledge/index.ts` 合并进 `ContextSourcesMap`。
+- `ContextHostDepsMap.projectKnowledge` 的声明从 `lib/knowledge-base/context.ts` 移到这里（键以本模块命名，两条知识贡献共用）；knowledge-base 只留 `knowledgeAccess`。
+- `build-options` 删掉项目知识检索块和 `systemPrompt` 里的 `projectKnowledgeSection`，保留 `projectKnowledgeQuery`（上下文贡献的查询文字）；`projectKnowledgeDeps` / `projectKnowledgeUserMessage` 的注释改为说明它们经 `hostDeps` 和 `query` 交给贡献。`SendOptions.projectKnowledgeContext` 删除；四个读取方（`claude-chat-events`、房间 runner、`chat-grounding`、`compaction-runtime`）改读 `contextSources`，`adapter` 的 `ProjectKnowledgeSourcesContext` 结构不变。
+- 还清方向边 `lib/claude/build-options.ts -> project-knowledge`。`lib/db/project-scope.ts`、`lib/plugin/api/project-api.ts` 指向它的两条保留（`api` 用法）。
+- 行为差别：泄露 PII 的块被剔除（以前整段不检查就发送）。尾部顺序不变（slot 顺序里 `project-knowledge` 在 `agent-knowledge` 之前，与原来两个分支的先后一致），新增用例在缓存优化开时核对。
+- 测试：`context.test.ts` 5 例、`module.test.ts` 2 例新增；`apply-project-context.test.ts` 加 1 例（`keepChunk`）；`build-options.test.ts` 改读 `contextSources` 并加 2 例（尾部顺序、PII 块）；`chat-grounding.test.ts`、`safe-send-prompt.test.ts` 改用 `contextSources`。
+- 至此 `build-options` 里不再有知识检索分支；剩下的上下文段是记忆、连续性和分身（§2.5）。

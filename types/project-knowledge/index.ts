@@ -101,3 +101,19 @@ export function resolveProjectKnowledgeSettings(
         : DEFAULT_PROJECT_KNOWLEDGE_SETTINGS.ragTopK,
   }
 }
+
+/**
+ * What the project-knowledge module's `retrieval` context contribution
+ * reports for the UI (`SendOptions.contextSources["project-knowledge.retrieval"]`):
+ * the workspace excerpts the turn's prompt holds.
+ */
+export interface ProjectKnowledgeRetrievalSources {
+  retrievedChunks: Array<{ fileId: string; fileName?: string; content: string; score: number }>
+  degraded: boolean
+}
+
+declare module "@/lib/modules/manifest-types" {
+  interface ContextSourcesMap {
+    "project-knowledge.retrieval": ProjectKnowledgeRetrievalSources
+  }
+}

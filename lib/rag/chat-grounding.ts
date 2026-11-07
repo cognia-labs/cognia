@@ -84,7 +84,10 @@ function optionHits(options: SendOptions): RetrievalHit[] {
       origin: "memory" as const,
       score: memory.score,
     })) ?? []),
-    ...(options.projectKnowledgeContext?.retrievedChunks.map((chunk) => ({
+    ...(contextSourcesOf(
+      options.contextSources,
+      "project-knowledge.retrieval"
+    )?.retrievedChunks.map((chunk) => ({
       id: `project-${chunk.fileId}`,
       title: chunk.fileName ?? chunk.fileId,
       snippet: chunk.content,
@@ -124,7 +127,7 @@ export function attachInteractiveGrounding(
   if (
     !options?.twinContext &&
     !options?.memoryContext &&
-    !options?.projectKnowledgeContext &&
+    !contextSourcesOf(options?.contextSources, "project-knowledge.retrieval") &&
     !contextSourcesOf(options?.contextSources, "knowledge-base.retrieval")
   ) {
     return messages

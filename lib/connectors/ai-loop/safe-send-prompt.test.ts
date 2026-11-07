@@ -348,9 +348,13 @@ describe("safeSendPrompt", () => {
         "sess_1",
         "clean",
         {
-          projectKnowledgeContext: {
-            retrievedChunks: [{ fileId: "package", content: "The workspace uses pnpm.", score: 1 }],
-            degraded: false,
+          contextSources: {
+            "project-knowledge.retrieval": {
+              retrievedChunks: [
+                { fileId: "package", content: "The workspace uses pnpm.", score: 1 },
+              ],
+              degraded: false,
+            },
           },
         },
         auditCtx

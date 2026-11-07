@@ -1874,7 +1874,7 @@ export class RoomRunner {
           )
           tagged = mergeProjectKnowledgeSourcesIntoLastAssistant(
             tagged,
-            ctx?.options.projectKnowledgeContext
+            contextSourcesOf(ctx?.options.contextSources, "project-knowledge.retrieval")
           )
           tagged = mergeAgentKnowledgeSourcesIntoLastAssistant(
             tagged,

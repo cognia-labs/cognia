@@ -19,7 +19,6 @@
 
 import { hasNoLeakingPii } from "@cognia/redact"
 import { applyCapabilityIdDelta } from "@cognia/agent-config-types/agent-capability-grant"
-import type { TwinRuntimeDepsForBuild } from "@/lib/claude/build-options"
 import type { ContextContribution, ContextTurnContext } from "@/lib/modules/manifest-types"
 import type { KnowledgeBaseChunk, KnowledgeBaseSource } from "@/types/knowledge-base"
 import {
@@ -38,10 +37,10 @@ import { resolveKnowledgeReadingSettings } from "./runtime/reading-settings"
 import { retrieveKnowledgeBaseChunks, type KnowledgeBaseRuntimeDeps } from "./runtime/retrieve"
 import { captureKnowledgeSessionState } from "./runtime/session-reader"
 
+// `hostDeps.projectKnowledge`, the vector store and embedding both knowledge
+// retrievals use, is declared by the project-knowledge module.
 declare module "@/lib/modules/manifest-types" {
   interface ContextHostDepsMap {
-    /** The vector store and embedding the caller resolved for knowledge retrieval. */
-    projectKnowledge: TwinRuntimeDepsForBuild
     /** The caller's knowledge ceiling: allowed bases, revisions, entrypoint. */
     knowledgeAccess: KnowledgeReadingAccess
   }

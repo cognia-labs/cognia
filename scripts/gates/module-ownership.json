@@ -701,9 +701,6 @@
     "project-environment": {
       "class": "kernel"
     },
-    "project-knowledge": {
-      "class": "module"
-    },
     "prompts": {
       "class": "kernel"
     },
@@ -1013,7 +1010,8 @@
         "lib/twin/ingest/redaction-key.ts",
         "lib/twin/runtime/apply-twin-context.ts",
         "lib/twin/runtime/build-deps.ts",
-        "lib/twin/runtime/inject-log.ts"
+        "lib/twin/runtime/inject-log.ts",
+        "lib/twin/runtime/reranker.ts"
       ]
     },
     "types-root": {

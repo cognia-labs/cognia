@@ -8479,8 +8479,83 @@ describe("resolveSendOptions — project knowledge base (project-scoped RAG)", (
     expect(opts.systemPrompt!.indexOf("base prompt")).toBeLessThan(
       opts.systemPrompt!.indexOf("## Project knowledge base")
     )
-    expect(opts.projectKnowledgeContext?.retrievedChunks).toHaveLength(1)
-    expect(opts.projectKnowledgeContext?.degraded).toBe(false)
+    expect(opts.contextSources?.["project-knowledge.retrieval"]).toEqual({
+      retrievedChunks: [{ fileId: "f1", fileName: "guide.md", content: "chunk text", score: 0.9 }],
+      degraded: false,
+    })
+    expect(opts).not.toHaveProperty("projectKnowledgeContext")
+    expect(mApplyProjectKnowledge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "ws1",
+        userMessage: "hello",
+        topK: 5,
+        strategy: "vector",
+        fileIds: ["f1"],
+        fileNames: { f1: "guide.md" },
+      })
+    )
+  })
+
+  it("keeps the workspace excerpts ahead of the agent's in the dynamic tail", async () => {
+    mApplyProjectKnowledge.mockResolvedValue({
+      systemPromptSection: "## Project knowledge base\nchunk text",
+      retrievedChunks: [{ fileId: "f1", content: "chunk text", score: 0.9 }],
+      degraded: false,
+    })
+    mApplyAgentKnowledge.mockResolvedValue({
+      systemPromptSection: "## Agent knowledge bases\nagent text",
+      retrievedChunks: [],
+      citations: [],
+      failures: [],
+      degraded: false,
+      budget: { limit: 2000, used: 0, truncated: false },
+    })
+    const opts = await resolveSendOptions({
+      character: makeChar({ id: "c1", systemPrompt: "base prompt", knowledgeBaseIds: ["kb-1"] }),
+      appSettings: { cacheOptimizationEnabled: true } as never,
+      activeProject: projectWithKb(),
+      projectKnowledgeDeps: { ...(deps as object), vectorBackend: "native" } as never,
+      projectKnowledgeUserMessage: "hello",
+    })
+    expect(opts.systemPrompt).not.toContain("## Project knowledge base")
+    expect(opts.dynamicSystemPrompt).toContain("## Project knowledge base")
+    expect(opts.dynamicSystemPrompt!.indexOf("## Project knowledge base")).toBeLessThan(
+      opts.dynamicSystemPrompt!.indexOf("## Agent knowledge bases")
+    )
+  })
+
+  it("leaves out a retrieved chunk whose text leaks PII", async () => {
+    mApplyProjectKnowledge.mockResolvedValue({
+      systemPromptSection: null,
+      retrievedChunks: [],
+      degraded: false,
+    })
+    await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      activeProject: projectWithKb(),
+      projectKnowledgeDeps: deps,
+      projectKnowledgeUserMessage: "hello",
+    })
+    const { keepChunk } = mApplyProjectKnowledge.mock.calls.at(-1)![0]
+    expect(keepChunk({ fileId: "f1", fileName: "guide.md", content: "Use pnpm.", score: 1 })).toBe(
+      true
+    )
+    expect(
+      keepChunk({
+        fileId: "f1",
+        fileName: "guide.md",
+        content: "Mail jane.doe@example.com",
+        score: 1,
+      })
+    ).toBe(false)
+    expect(
+      keepChunk({
+        fileId: "f1",
+        fileName: "jane.doe@example.com.md",
+        content: "Use pnpm.",
+        score: 1,
+      })
+    ).toBe(false)
   })
 
   it("skips when the workspace has no knowledge files", async () => {

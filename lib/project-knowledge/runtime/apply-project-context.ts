@@ -23,6 +23,8 @@ export interface ApplyProjectKnowledgeContextInput {
   fileIds?: readonly string[]
   /** Map of `KnowledgeFile.id` → display name, for citations. */
   fileNames?: Record<string, string>
+  /** Drops a retrieved chunk before it enters the section (and the reported chunks). */
+  keepChunk?: (chunk: AppliedProjectChunk) => boolean
   deps?: ProjectKnowledgeRuntimeDeps
 }
 
@@ -68,14 +70,14 @@ export async function applyProjectKnowledgeContext(
       deps: input.deps,
     })
 
-    const retrievedChunks: AppliedProjectChunk[] = result.chunks.map(
-      (rc: RetrievedProjectChunk) => ({
+    const retrievedChunks: AppliedProjectChunk[] = result.chunks
+      .map((rc: RetrievedProjectChunk) => ({
         fileId: rc.chunk.fileId,
         fileName: input.fileNames?.[rc.chunk.fileId],
         content: rc.chunk.content,
         score: rc.score,
-      })
-    )
+      }))
+      .filter((chunk) => !input.keepChunk || input.keepChunk(chunk))
 
     if (retrievedChunks.length === 0) {
       return { systemPromptSection: null, retrievedChunks: [], degraded: result.degraded }

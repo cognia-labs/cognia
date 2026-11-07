@@ -68,6 +68,24 @@ describe("applyProjectKnowledgeContext", () => {
     expect(res.retrievedChunks[0].fileName).toBe("guide.md")
   })
 
+  it("leaves out the chunks keepChunk rejects, from the section and the reported chunks", async () => {
+    retrieveMock.mockResolvedValue({
+      chunks: [hit("f1", "kept text"), hit("f2", "dropped text")],
+      degraded: false,
+    })
+    const res = await applyProjectKnowledgeContext({
+      projectId: "p",
+      userMessage: "q",
+      topK: 5,
+      fileNames: { f1: "a.md", f2: "b.md" },
+      keepChunk: (chunk) => chunk.fileId !== "f2",
+      deps,
+    })
+    expect(res.retrievedChunks.map((c) => c.fileId)).toEqual(["f1"])
+    expect(res.systemPromptSection).toContain("kept text")
+    expect(res.systemPromptSection).not.toContain("dropped text")
+  })
+
   it("falls back to a file-id label when the name is unknown", async () => {
     retrieveMock.mockResolvedValue({ chunks: [hit("f9", "x")], degraded: false })
     const res = await applyProjectKnowledgeContext({

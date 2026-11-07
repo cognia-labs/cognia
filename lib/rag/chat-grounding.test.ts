@@ -27,7 +27,7 @@ const base: UIMessage[] = [
 describe("attachInteractiveGrounding", () => {
   it("persists exact unsupported-claim offsets after a retrieval-backed chat turn", () => {
     const next = attachInteractiveGrounding(base, {
-      projectKnowledgeContext: { retrievedChunks: [], degraded: false },
+      contextSources: { "project-knowledge.retrieval": { retrievedChunks: [], degraded: false } },
     } as SendOptions)
 
     expect(next).not.toBe(base)
@@ -49,7 +49,7 @@ describe("attachInteractiveGrounding", () => {
 
   it("is idempotent", () => {
     const options = {
-      projectKnowledgeContext: { retrievedChunks: [], degraded: false },
+      contextSources: { "project-knowledge.retrieval": { retrievedChunks: [], degraded: false } },
     } as SendOptions
     const once = attachInteractiveGrounding(base, options)
     expect(attachInteractiveGrounding(once, options)).toBe(once)
@@ -59,9 +59,11 @@ describe("attachInteractiveGrounding", () => {
     const result = groundSendOptionsAnswer(
       "The workspace uses pnpm. Revenue doubled yesterday.",
       {
-        projectKnowledgeContext: {
-          retrievedChunks: [{ fileId: "package", content: "The workspace uses pnpm.", score: 1 }],
-          degraded: false,
+        contextSources: {
+          "project-knowledge.retrieval": {
+            retrievedChunks: [{ fileId: "package", content: "The workspace uses pnpm.", score: 1 }],
+            degraded: false,
+          },
         },
       } as SendOptions,
       "external_send"

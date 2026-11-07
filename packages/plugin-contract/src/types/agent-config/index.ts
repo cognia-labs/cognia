@@ -1245,24 +1245,6 @@ export type SendOptions = {
   }
 
   /**
-   * Project (workspace) knowledge-base context injected this turn (project-scoped
-   * RAG). Set by `resolveSendOptions` when `applyProjectKnowledgeContext`
-   * retrieved any chunks from the active workspace's knowledge files. Mirrors
-   * `twinContext` / `memoryContext` — stashed so the chat hook can render a
-   * "Project knowledge" SourcesPart. Stripped before the SDK call. `degraded` is
-   * true when the runtime failed and fell back to no context.
-   */
-  projectKnowledgeContext?: {
-    retrievedChunks: Array<{
-      fileId: string
-      fileName?: string
-      content: string
-      score: number
-    }>
-    degraded: boolean
-  }
-
-  /**
    * What the modules' context contributions reported for the UI this turn
    * (sources, budgets), keyed by `<module>.<id>` (ADR-0250 §14 `context`
    * amendment). Read through `contextSourcesOf`, which types each entry by

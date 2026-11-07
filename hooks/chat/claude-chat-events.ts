@@ -1421,7 +1421,10 @@ export async function handleEvent(
           )
           if (withHistory !== nextMessages) nextMessages = withHistory
         }
-        const projectKnowledgeCtx = last?.options.projectKnowledgeContext
+        const projectKnowledgeCtx = contextSourcesOf(
+          last?.options.contextSources,
+          "project-knowledge.retrieval"
+        )
         if (projectKnowledgeCtx) {
           const withProjectKnowledge = mergeProjectKnowledgeSourcesIntoLastAssistant(
             nextMessages,

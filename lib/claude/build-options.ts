@@ -146,7 +146,6 @@ import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
 import { resolveMemoryAgentNamespace } from "@/lib/memory/twin-namespace"
-import { resolveProjectKnowledgeSettings } from "@/types/project-knowledge"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import type { ConnectorMode } from "@/types/connectors/policy"
 import { type AgentModeConfig } from "@/types/agent/agent-mode"
@@ -733,20 +732,19 @@ export interface BuildOptionsContext {
    */
   memoryUserMessage?: string
   /**
-   * Optional project-scoped RAG dependencies (workspace knowledge base). When
-   * supplied AND `projectKnowledgeUserMessage` is set AND the active workspace
-   * (`activeProject`) has knowledge files AND project RAG is enabled,
-   * `resolveSendOptions` invokes `applyProjectKnowledgeContext` and APPENDS a
-   * "Project knowledge base" section — coexisting with, never replacing, the Twin
-   * / Memory sections. Reuses the twin deps shape (built by
-   * `tryBuildProjectKnowledgeDeps`, which shares the twin vector store). Undefined
-   * → project knowledge injection skipped.
+   * Optional knowledge retrieval dependencies, passed to the modules' context
+   * contributions as `hostDeps.projectKnowledge`: the project-knowledge
+   * module retrieves the workspace knowledge base through them, and the
+   * knowledge-base module the agent's bound libraries. Reuses the twin deps
+   * shape (built by `tryBuildProjectKnowledgeDeps`, which shares the twin
+   * vector store). Undefined → only keyword retrieval runs.
    */
   projectKnowledgeDeps?: TwinRuntimeDepsForBuild
   /**
-   * The user's current message text for project-knowledge retrieval. Usually the
-   * same value as `twinUserMessage`; kept separate so a caller can drive one
-   * without the other. Ignored when `projectKnowledgeDeps` is missing.
+   * The user's current message text for knowledge retrieval (the context
+   * contributions' `query.text`). Usually the same value as
+   * `twinUserMessage`; kept separate so a caller can drive one without the
+   * other.
    */
   projectKnowledgeUserMessage?: string
   /**
@@ -2621,63 +2619,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // --- Project knowledge base injection (project-scoped RAG) ---------------
-  // When `projectKnowledgeDeps` + `projectKnowledgeUserMessage` are supplied and
-  // the active workspace has knowledge files (and project RAG is enabled),
-  // retrieve the most relevant chunks and APPEND a "Project knowledge base"
-  // section. Coexists with the Twin (persona) + Memory (user facts) sections —
-  // it never replaces `baseSystem`. The runtime never throws; failures degrade
-  // silently. Query-dependent, so it rides the dynamic tail under cache
-  // optimization (like memory) to stay out of the cacheable prefix.
-  let projectKnowledgeSection = ""
+  // The retrieval query the modules' context contributions read (the
+  // workspace and agent knowledge bases): the caller's message, or the routing
+  // hint when it passed none.
   const projectKnowledgeQuery =
     ctx.projectKnowledgeUserMessage ?? ctx.routingContextHint?.promptText
-  const projectKnowledgeSettings = resolveProjectKnowledgeSettings(
-    ctx.activeProject?.knowledgeSettings
-  )
-  if (
-    (ctx.projectKnowledgeDeps || projectKnowledgeSettings.retrievalStrategy === "keyword") &&
-    projectKnowledgeQuery?.trim() &&
-    ctx.activeProject &&
-    (ctx.activeProject.knowledgeBase?.length ?? 0) > 0
-  ) {
-    const knowledgeSettings = projectKnowledgeSettings
-    if (knowledgeSettings.enableProjectRag) {
-      try {
-        const { applyProjectKnowledgeContext } =
-          await import("@/lib/project-knowledge/runtime/apply-project-context")
-        const fileNames: Record<string, string> = {}
-        for (const f of ctx.activeProject.knowledgeBase ?? []) fileNames[f.id] = f.name
-        const result = await applyProjectKnowledgeContext({
-          projectId: ctx.activeProject.id,
-          userMessage: projectKnowledgeQuery,
-          topK: knowledgeSettings.ragTopK,
-          strategy: knowledgeSettings.retrievalStrategy,
-          fileIds: (ctx.activeProject.knowledgeBase ?? []).map((file) => file.id),
-          precomputedQueryEmbedding: ctx.precomputedQueryEmbedding,
-          fileNames,
-          deps: ctx.projectKnowledgeDeps as Parameters<
-            typeof applyProjectKnowledgeContext
-          >[0]["deps"],
-        })
-        if (result.systemPromptSection) {
-          if (cacheOptimizationEnabled) {
-            dynamicTailSections.push(result.systemPromptSection)
-          } else {
-            projectKnowledgeSection = result.systemPromptSection
-          }
-        }
-        if (result.retrievedChunks.length > 0 || result.degraded) {
-          opts.projectKnowledgeContext = {
-            retrievedChunks: result.retrievedChunks,
-            degraded: result.degraded,
-          }
-        }
-      } catch {
-        // Project-knowledge runtime failure is non-fatal — keep the prompt as-is.
-      }
-    }
-  }
 
   // --- Working directory ---------------------------------------------------
   // Shared chain (see lib/workspace/effective-cwd.ts): per-session override →
@@ -2958,7 +2904,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     ...contextSlot("memory"),
     projectContinuitySection,
     ...contextSlot("continuity"),
-    projectKnowledgeSection,
     ...contextSlot("project-knowledge"),
     ...contextSlot("agent-knowledge"),
     modeSection,
