@@ -829,6 +829,27 @@ describe("executeAgent", () => {
       ])
     })
 
+    it("returns the served provider and model with the stream's cache tokens", async () => {
+      primeTextChannel(["cached"])
+      mockStreamText.mockReturnValue({
+        textStream: (async function* () {
+          yield "cached"
+        })(),
+        finishReason: Promise.resolve("stop"),
+        usage: Promise.resolve({ inputTokens: 40, outputTokens: 9, cachedInputTokens: 25 }),
+        providerMetadata: Promise.resolve({}),
+      } as never)
+
+      const result = await runCompletionRail("hi", {})
+      expect(result.usage).toEqual({
+        inputTokens: 40,
+        outputTokens: 9,
+        totalTokens: 49,
+        cacheReadTokens: 25,
+      })
+      expect(result.servedBy).toEqual({ providerId: "openai", modelId: "gpt-4o" })
+    })
+
     it("books every fallback attempt as its own reservation", async () => {
       mockLiveSettingsState.settings = ledgerOn
       primeTextChannel()
@@ -1058,6 +1079,41 @@ describe("executeAgent", () => {
         false,
         "claude-sonnet-4-5"
       )
+    })
+
+    it("reports the sidecar's usage, cost and the provider and model that served the turn", async () => {
+      mockResolveSendOptions.mockResolvedValue({
+        model: "claude-sonnet-4-5",
+        provider: "anthropic",
+      } as never)
+      mockRunAndCapture.mockResolvedValue({
+        text: "priced",
+        messageId: "m1",
+        a2uiSurfaces: {},
+        a2uiSurfaceOrder: [],
+        usage: {
+          inputTokens: 120,
+          outputTokens: 30,
+          cacheReadInputTokens: 400,
+          cacheCreationInputTokens: 50,
+          totalCostUsd: 0.02,
+        },
+      })
+      const result = await executeAgent("do work", { toolsEnabled: true })
+      expect(result.usage).toEqual({
+        inputTokens: 120,
+        outputTokens: 30,
+        totalTokens: 150,
+        cacheReadTokens: 400,
+        cacheCreationTokens: 50,
+        costUsd: 0.02,
+      })
+      expect(result.servedBy).toEqual({ providerId: "anthropic", modelId: "claude-sonnet-4-5" })
+    })
+
+    it("leaves out the provider and model when the send named no model", async () => {
+      const result = await executeAgent("do work", { toolsEnabled: true })
+      expect(result.servedBy).toBeUndefined()
     })
 
     it("fails closed before a tool rail attempt when prompt assembly leaks PII", async () => {

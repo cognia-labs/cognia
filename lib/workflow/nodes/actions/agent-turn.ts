@@ -18,7 +18,11 @@ import {
   runStructuredTurn,
   type SchemaViolationMode,
 } from "@/lib/workflow/nodes/ai/structured-turn"
-import type { ExecuteAgentConfig, ExecuteAgentResult } from "@/lib/ai/agent/agent-executor"
+import type {
+  ExecuteAgentConfig,
+  ExecuteAgentResult,
+  ExecuteAgentUsage,
+} from "@/lib/ai/agent/agent-executor"
 import {
   AGENT_CAPABILITY_GRANT_SCHEMA_VERSION,
   type AgentCapabilityGrantV1,
@@ -239,8 +243,7 @@ export async function runAgentTurn(ctx: StepExecutionContext): Promise<StepExecu
 
     if (outputSchema && Object.keys(outputSchema).length > 0) {
       let last: ExecuteAgentResult | undefined
-      const usageAcc = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
-      let sawUsage = false
+      let usageAcc: ExecuteAgentUsage | undefined
       const outcome = await runStructuredTurn({
         outputSchema,
         onSchemaViolation: params.onSchemaViolation,
@@ -253,17 +256,12 @@ export async function runAgentTurn(ctx: StepExecutionContext): Promise<StepExecu
             outputFormat: { type: "json_schema", schema: outputSchema },
           })
           last = r
-          if (r.usage) {
-            sawUsage = true
-            usageAcc.inputTokens += r.usage.inputTokens
-            usageAcc.outputTokens += r.usage.outputTokens
-            usageAcc.totalTokens += r.usage.totalTokens
-          }
+          if (r.usage) usageAcc = addAgentUsage(usageAcc, r.usage)
           return { object: r.object, parseError: r.parseError }
         },
       })
       if (!last) throw new Error("action.agent.turn: structured turn produced no result")
-      result = sawUsage ? { ...last, usage: usageAcc } : last
+      result = usageAcc ? { ...last, usage: usageAcc } : last
       structured = {
         object: outcome.object,
         schemaValid: outcome.schemaValid,
@@ -283,12 +281,23 @@ export async function runAgentTurn(ctx: StepExecutionContext): Promise<StepExecu
       )
     }
 
+    // The served provider and model let the run budget and the Runs UI price
+    // the turn when the runtime reported no cost (ADR-0254 §6).
+    const servedModel = result.servedBy?.modelId ?? params.model
     if (result.usage) {
       ctx.reportUsage?.({
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         totalTokens: result.usage.totalTokens,
-        ...(params.model ? { modelId: params.model } : {}),
+        ...(result.usage.cacheReadTokens !== undefined
+          ? { cacheReadTokens: result.usage.cacheReadTokens }
+          : {}),
+        ...(result.usage.cacheCreationTokens !== undefined
+          ? { cacheCreationTokens: result.usage.cacheCreationTokens }
+          : {}),
+        ...(result.servedBy ? { providerId: result.servedBy.providerId } : {}),
+        ...(servedModel ? { modelId: servedModel } : {}),
+        ...(result.usage.costUsd !== undefined ? { costUsd: result.usage.costUsd } : {}),
       })
     }
 
@@ -298,12 +307,12 @@ export async function runAgentTurn(ctx: StepExecutionContext): Promise<StepExecu
             usage: {
               inputTokens: result.usage.inputTokens,
               outputTokens: result.usage.outputTokens,
-              cacheReadTokens: 0,
-              cacheCreationTokens: 0,
+              cacheReadTokens: result.usage.cacheReadTokens ?? 0,
+              cacheCreationTokens: result.usage.cacheCreationTokens ?? 0,
             },
           }
         : {}),
-      ...(params.model ? { responseModel: params.model } : {}),
+      ...(servedModel ? { responseModel: servedModel } : {}),
       outputPreview: result.text.slice(0, 200),
     })
 
@@ -331,6 +340,35 @@ export async function runAgentTurn(ctx: StepExecutionContext): Promise<StepExecu
       errorMessage: err instanceof Error ? err.message : String(err),
     })
     throw err
+  }
+}
+
+/**
+ * Two model calls' usage summed (the structured auto-fix retry is billed too).
+ * A cost survives only when every call reported one; otherwise the sum would
+ * pass off a partial figure as the turn's price, so the step is priced from
+ * its tokens instead.
+ */
+export function addAgentUsage(
+  total: ExecuteAgentUsage | undefined,
+  next: ExecuteAgentUsage
+): ExecuteAgentUsage {
+  if (!total) return { ...next }
+  const sum = (a: number | undefined, b: number | undefined) =>
+    a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0)
+  const cacheReadTokens = sum(total.cacheReadTokens, next.cacheReadTokens)
+  const cacheCreationTokens = sum(total.cacheCreationTokens, next.cacheCreationTokens)
+  const costUsd =
+    total.costUsd !== undefined && next.costUsd !== undefined
+      ? total.costUsd + next.costUsd
+      : undefined
+  return {
+    inputTokens: total.inputTokens + next.inputTokens,
+    outputTokens: total.outputTokens + next.outputTokens,
+    totalTokens: total.totalTokens + next.totalTokens,
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
   }
 }
 

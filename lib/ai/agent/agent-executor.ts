@@ -41,6 +41,7 @@ import {
 } from "@cognia/agent-config-types/agent-capability-grant"
 import { resolveAgentModel } from "@/lib/agent/agent-profile-policy"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { UsageInfo } from "@/lib/claude/adapter"
 import type { DispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
 import { buildJsonInstruction, parseStructured } from "@/lib/workflow/nodes/ai/structured"
@@ -304,6 +305,22 @@ export interface ExecuteAgentLedger {
 
 export type ExecuteAgentChannel = "sidecar" | "text"
 
+export interface ExecuteAgentUsage {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  /** Prompt-cache reads, when the provider reported them. */
+  cacheReadTokens?: number
+  /** Prompt-cache writes, when the provider reported them. */
+  cacheCreationTokens?: number
+  /**
+   * USD the runtime reported for the turn (the SDK result's
+   * `total_cost_usd`). Only a positive figure is carried: a zero there cannot
+   * be told from "not priced" (`effectiveCostUsdDetailed`).
+   */
+  costUsd?: number
+}
+
 export interface ExecuteAgentResult {
   text: string
   /** Host-owned response state to persist with the assistant row, never model instructions. */
@@ -314,10 +331,16 @@ export interface ExecuteAgentResult {
   /** Whether the tool-enabled loop was used (true only on the sidecar channel). */
   toolsAvailable: boolean
   /**
-   * Token usage when the channel reports it (text channel via the AI SDK;
-   * the sidecar pipeline does not surface usage here). Undefined otherwise.
+   * Token usage when the channel reports it: the AI SDK's on the text channel,
+   * the SDK result message's on the sidecar channel. Undefined otherwise.
    */
-  usage?: { inputTokens: number; outputTokens: number; totalTokens: number }
+  usage?: ExecuteAgentUsage
+  /**
+   * The provider and model that served the turn, after any routing fallback.
+   * Undefined when the channel did not name a model (the provider's own
+   * default answered on the sidecar channel).
+   */
+  servedBy?: { providerId: string; modelId: string }
   /** Parsed object when `outputFormat` was requested and parsing succeeded. */
   object?: unknown
   /** Set (never thrown) when structured parsing failed. */
@@ -509,7 +532,12 @@ export async function buildAgentBoundContext(
 async function runToolEnabledStandalone(
   prompt: string,
   config: ExecuteAgentConfig
-): Promise<{ text: string; usage?: ExecuteAgentResult["usage"]; finishReason?: string }> {
+): Promise<{
+  text: string
+  usage?: ExecuteAgentUsage
+  servedBy?: ExecuteAgentResult["servedBy"]
+  finishReason?: string
+}> {
   const [
     { resolveCharacterById },
     sessionsDb,
@@ -801,16 +829,17 @@ async function runToolEnabledStandalone(
     }
     // Surface usage (best-effort) so nested-dispatch budget accounting can draw
     // down the subtree pool. The SDK result carries it at `session_ended`.
-    const usage = result.usage
-      ? {
-          inputTokens: result.usage.inputTokens ?? 0,
-          outputTokens: result.usage.outputTokens ?? 0,
-          totalTokens: (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0),
-        }
-      : undefined
+    const usage = result.usage ? sidecarUsage(result.usage) : undefined
+    // The options of the attempt that answered: a routing fallback swaps the
+    // provider and model the run started with.
+    const servedBy =
+      attemptOptions.provider && attemptOptions.model
+        ? { providerId: attemptOptions.provider, modelId: attemptOptions.model }
+        : undefined
     return {
       text: [result.text, result.budgetContinuationContext].filter(Boolean).join("\n\n"),
       ...(usage ? { usage } : {}),
+      ...(servedBy ? { servedBy } : {}),
       ...(result.resultSubtype
         ? { finishReason: result.resultSubtype === "success" ? "stop" : result.resultSubtype }
         : {}),
@@ -845,13 +874,14 @@ export async function runAgentRail(
   prompt: string,
   config: ExecuteAgentConfig
 ): Promise<ExecuteAgentResult> {
-  const { text, usage, finishReason } = await runToolEnabledStandalone(prompt, config)
+  const { text, usage, servedBy, finishReason } = await runToolEnabledStandalone(prompt, config)
   return {
     text,
     finishReason: finishReason ?? "stop",
     channel: "sidecar",
     toolsAvailable: true,
     ...(usage ? { usage } : {}),
+    ...(servedBy ? { servedBy } : {}),
     ...finalizeStructured(text, config.outputFormat),
   }
 }
@@ -1179,12 +1209,9 @@ export async function runCompletionRail(
       const rawUsage = await Promise.resolve(result.usage).catch(() => undefined)
       const inputTokens = Number(rawUsage?.inputTokens ?? 0) || 0
       const outputTokens = Number(rawUsage?.outputTokens ?? 0) || 0
-      if (lease) {
-        const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
-          () => undefined
-        )
-        await lease.succeeded(usageOfResult(rawUsage, providerMetadata))
-      }
+      const providerMetadata = await Promise.resolve(result.providerMetadata).catch(() => undefined)
+      const billed = usageOfResult(rawUsage, providerMetadata)
+      if (lease) await lease.succeeded(billed)
       controller.complete()
       return {
         text,
@@ -1192,8 +1219,19 @@ export async function runCompletionRail(
         channel: "text",
         toolsAvailable: false,
         ...(rawUsage
-          ? { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } }
+          ? {
+              usage: {
+                inputTokens,
+                outputTokens,
+                totalTokens: inputTokens + outputTokens,
+                ...(billed?.cacheReadTokens ? { cacheReadTokens: billed.cacheReadTokens } : {}),
+                ...(billed?.cacheWriteTokens
+                  ? { cacheCreationTokens: billed.cacheWriteTokens }
+                  : {}),
+              },
+            }
           : {}),
+        servedBy: { providerId: candidate.providerId, modelId: candidate.modelId },
         ...finalizeStructured(providerText, config.outputFormat),
       }
     } catch (error) {
@@ -1223,6 +1261,28 @@ export async function runCompletionRail(
   }
 
   throw lastError instanceof Error ? lastError : new Error("executeAgent: no routing candidate")
+}
+
+/**
+ * The sidecar result message's usage as an {@link ExecuteAgentUsage}. The SDK's
+ * `total_cost_usd` rides along only when positive: the ai-sdk channel writes 0
+ * when it could not price the turn.
+ */
+export function sidecarUsage(usage: UsageInfo): ExecuteAgentUsage {
+  const inputTokens = usage.inputTokens ?? 0
+  const outputTokens = usage.outputTokens ?? 0
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    ...(usage.cacheReadInputTokens ? { cacheReadTokens: usage.cacheReadInputTokens } : {}),
+    ...(usage.cacheCreationInputTokens
+      ? { cacheCreationTokens: usage.cacheCreationInputTokens }
+      : {}),
+    ...(typeof usage.totalCostUsd === "number" && usage.totalCostUsd > 0
+      ? { costUsd: usage.totalCostUsd }
+      : {}),
+  }
 }
 
 /**

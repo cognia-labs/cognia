@@ -1,4 +1,4 @@
-import { agentTurnCapabilityGrant, runAgentTurn } from "./agent-turn"
+import { addAgentUsage, agentTurnCapabilityGrant, runAgentTurn } from "./agent-turn"
 import type { StepExecutionContext } from "@/types/workflow/visual"
 
 const mockStartSpan = jest.fn(() => ({ spanId: "span1", traceId: "trace1" }))
@@ -162,6 +162,60 @@ describe("runAgentTurn", () => {
       "span1",
       expect.objectContaining({ outputPreview: "agent reply" })
     )
+  })
+
+  it("reports the served provider, model and cost so the turn can be priced", async () => {
+    mockIsTauri.mockReturnValue(true)
+    mockRunAgentRail.mockResolvedValue({
+      text: "done",
+      channel: "sidecar",
+      toolsAvailable: true,
+      usage: {
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 150,
+        cacheReadTokens: 30,
+        cacheCreationTokens: 7,
+        costUsd: 0.012,
+      },
+      servedBy: { providerId: "anthropic", modelId: "claude-sonnet-4-5" },
+    })
+    const reportUsage = jest.fn()
+    await runAgentTurn(makeCtx({ prompt: "fix it", model: "alias" }, { reportUsage }))
+
+    expect(reportUsage).toHaveBeenCalledWith({
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+      cacheReadTokens: 30,
+      cacheCreationTokens: 7,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      costUsd: 0.012,
+    })
+    expect(mockEndSpan).toHaveBeenCalledWith(
+      "span1",
+      expect.objectContaining({ responseModel: "claude-sonnet-4-5" })
+    )
+  })
+
+  it("names the text channel's served model when the node set none", async () => {
+    mockRunCompletionRail.mockResolvedValue({
+      text: "reply",
+      channel: "text",
+      toolsAvailable: false,
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+      servedBy: { providerId: "openai", modelId: "gpt-4o" },
+    })
+    const reportUsage = jest.fn()
+    await runAgentTurn(makeCtx({ prompt: "go" }, { reportUsage }))
+    expect(reportUsage).toHaveBeenCalledWith({
+      inputTokens: 1,
+      outputTokens: 2,
+      totalTokens: 3,
+      providerId: "openai",
+      modelId: "gpt-4o",
+    })
   })
 
   it("threads params + provider snapshot into executeAgent", async () => {
@@ -504,6 +558,27 @@ describe("agentTurnCapabilityGrant", () => {
       schemaVersion: 1,
       source: { kind: "workflow", id: "wf:s" },
       permissionMode: "acceptEdits",
+    })
+  })
+})
+
+describe("addAgentUsage", () => {
+  it("sums tokens and keeps a cost only when every call reported one", () => {
+    const priced = { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0.1 }
+    const unpriced = { inputTokens: 2, outputTokens: 2, totalTokens: 4, cacheReadTokens: 5 }
+    expect(addAgentUsage(undefined, priced)).toEqual(priced)
+    expect(addAgentUsage(priced, priced)).toEqual({
+      ...priced,
+      inputTokens: 2,
+      outputTokens: 2,
+      totalTokens: 4,
+      costUsd: 0.2,
+    })
+    expect(addAgentUsage(priced, unpriced)).toEqual({
+      inputTokens: 3,
+      outputTokens: 3,
+      totalTokens: 6,
+      cacheReadTokens: 5,
     })
   })
 })
