@@ -28,7 +28,14 @@ jest.mock("@/lib/plugin", () => ({
     dispatchMCPServerDisconnect: jest.fn(),
   }),
 }))
+jest.mock("@/lib/db/skills", () => ({
+  ...jest.requireActual("@/lib/db/skills"),
+  listSkillsByIds: jest.fn(async () => []),
+  recordSkillUsage: jest.fn(async () => undefined),
+}))
 import "."
+import { listSkillsByIds } from "@/lib/db/skills"
+import { __resetSkillsForTesting, registerSkill } from "@/lib/plugin/registries/skill-registry"
 import { getExecutor } from "../registry"
 
 describe("integration-nodes registration", () => {
@@ -96,4 +103,80 @@ it("binds workflow.task callbacks to the exact Host workflow execution", async (
     } as never)
   ).resolves.toMatchObject({ output: { data: "bound" } })
   expect(pluginExecutionContext("integration")).toBeUndefined()
+})
+
+describe("action.skill.invoke", () => {
+  const invoke = (skillIds: string) =>
+    getExecutor("action.skill.invoke", 1)!.execute({
+      runId: "wf",
+      params: { skillIds },
+      signal: new AbortController().signal,
+    } as never)
+
+  beforeEach(() => {
+    __resetSkillsForTesting()
+    jest.mocked(listSkillsByIds).mockClear().mockResolvedValue([])
+  })
+
+  it("injects a stored skill's body", async () => {
+    jest
+      .mocked(listSkillsByIds)
+      .mockResolvedValue([
+        { id: "review", name: "Review", content: "Refute every finding." },
+      ] as never)
+
+    await expect(invoke("review")).resolves.toEqual({
+      output: {
+        skills: [{ id: "review", name: "Review" }],
+        markdown: "### Review\n\nRefute every finding.",
+      },
+    })
+  })
+
+  it("injects a plugin skill's body with its plugin root bound", async () => {
+    registerSkill(
+      "plugin.lint",
+      {
+        id: "plugin.lint",
+        name: "Lint",
+        description: "",
+        source: { kind: "inline", markdown: "Run ${COGNIA_PLUGIN_ROOT}/lint.sh" },
+        runtimePluginRoot: "/plugins/lint",
+      } as never,
+      { pluginId: "lint" }
+    )
+
+    const result = await invoke("plugin.lint")
+    expect(result.output).toMatchObject({ markdown: "### Lint\n\nRun /plugins/lint/lint.sh" })
+  })
+
+  it("keeps the stored and plugin skills in one body and skips unknown ids", async () => {
+    jest
+      .mocked(listSkillsByIds)
+      .mockResolvedValue([{ id: "a", name: "A", content: "first" }] as never)
+    registerSkill(
+      "b",
+      {
+        id: "b",
+        name: "B",
+        description: "",
+        source: { kind: "inline", markdown: "second" },
+      } as never,
+      { pluginId: "p" }
+    )
+
+    const result = await invoke("a, b, missing")
+    expect(result.output).toEqual({
+      skills: [
+        { id: "a", name: "A" },
+        { id: "b", name: "B" },
+      ],
+      markdown: "### A\n\nfirst\n\n### B\n\nsecond",
+    })
+  })
+
+  it("returns an empty body when no ids are given", async () => {
+    await expect(invoke(" , ")).resolves.toEqual({ output: { skills: [], markdown: "" } })
+    expect(listSkillsByIds).not.toHaveBeenCalled()
+  })
 })

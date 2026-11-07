@@ -8,6 +8,7 @@ import {
   updateSkill,
 } from "@/lib/db/skills"
 import { getSkill as getPluginSkill } from "@/lib/plugin/registries/skill-registry"
+import { resolveSkillMarkdown } from "@/lib/claude/skills-io"
 import { invokeMcpTool } from "@/lib/mcp/invoke"
 import { guardWorkflowEgress } from "@/lib/workflow/runtime/egress-guard"
 import { proxyFetch } from "@/lib/network/proxy-fetch"
@@ -32,18 +33,12 @@ registerNodeExecutor({
       return { output: { skills: [], markdown: "" } }
     }
     const skills = await listSkillsByIds(ids)
-    const resolved = skills.map((s) => ({
-      id: s.id,
-      name: s.name,
-      markdown:
-        (s as unknown as { systemPrompt?: string; body?: string }).systemPrompt ??
-        (s as unknown as { body?: string }).body ??
-        "",
-    }))
+    const resolved = skills.map((s) => ({ id: s.id, name: s.name, markdown: s.content }))
     // Fall back to plugin-contributed skills (skill-registry overlay) for any
-    // ids the Dexie table didn't resolve. Inline-source skills carry their
-    // markdown directly; folder/managed sources resolve elsewhere, so we
-    // surface the name without a body here.
+    // ids the Dexie table didn't resolve. The body comes from the same reader
+    // the chat path uses, so folder, bundle and archive sources resolve too
+    // (desktop only) and plugin-root tokens are bound. A source with no
+    // readable body (managed, or a read failure) contributes its name only.
     const dbIds = new Set(skills.map((s) => s.id))
     for (const id of ids) {
       if (dbIds.has(id)) continue
@@ -52,7 +47,7 @@ registerNodeExecutor({
       resolved.push({
         id: def.id,
         name: def.name,
-        markdown: def.source.kind === "inline" ? def.source.markdown : "",
+        markdown: (await resolveSkillMarkdown(def)) ?? "",
       })
     }
     const markdown = resolved.map((s) => `### ${s.name}\n\n${s.markdown}`).join("\n\n")
