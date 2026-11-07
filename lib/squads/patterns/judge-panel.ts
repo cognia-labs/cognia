@@ -3,8 +3,13 @@
  * (e.g. MVP-first, risk-first, user-first), score each with a panel of
  * independent judges, and surface the winner plus the full ranking. Beats
  * one-attempt-iterated when the solution space is wide.
+ *
+ * The ranking is the shared one (`@cognia/agent-orchestration/aggregate`): an
+ * attempt no judge scored ranks after every scored one and cannot win, and a
+ * tie goes to the earlier attempt.
  */
 
+import { bestByScore, rankByScore } from "@cognia/agent-orchestration/aggregate"
 import { registerNodeExecutor, type NodeExecutorRegistration } from "@/lib/workflow/nodes/registry"
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
 import {
@@ -30,12 +35,24 @@ export const JUDGE_PANEL_KIND = "pattern.judge-panel" as const
 export interface RankedAttempt {
   attempt: Attempt
   scores: JudgeScore[]
+  /** The mean of `scores`; 0 for an attempt no judge scored (`scores` is empty). */
   avgScore: number
 }
 
-function average(nums: number[]): number {
-  if (nums.length === 0) return 0
-  return nums.reduce((a, b) => a + b, 0) / nums.length
+/** Rank attempts by their judges' mean score; `undefined` winner when nobody scored. */
+export function rankAttempts(
+  attempts: readonly Attempt[],
+  scoresByAttempt: ReadonlyMap<number, JudgeScore[]>
+): { ranked: RankedAttempt[]; winner: RankedAttempt | undefined } {
+  const order = rankByScore(attempts, (_attempt, ai) =>
+    (scoresByAttempt.get(ai) ?? []).map((s) => s.score)
+  )
+  const ranked = order.map(({ item, index, mean }) => ({
+    attempt: item,
+    scores: scoresByAttempt.get(index) ?? [],
+    avgScore: mean ?? 0,
+  }))
+  return { ranked, winner: bestByScore(order) ? ranked[0] : undefined }
 }
 
 async function execute(ctx: StepExecutionContext): Promise<StepExecutionResult> {
@@ -115,14 +132,10 @@ async function execute(ctx: StepExecutionContext): Promise<StepExecutionResult> 
     scoresByAttempt.set(res.ai, list)
   }
 
-  const ranked: RankedAttempt[] = attempts
-    .map((attempt, ai) => {
-      const scores = scoresByAttempt.get(ai) ?? []
-      return { attempt, scores, avgScore: average(scores.map((s) => s.score)) }
-    })
-    .sort((a, b) => b.avgScore - a.avgScore)
-
-  const winner = ranked[0]
+  const { ranked, winner } = rankAttempts(attempts, scoresByAttempt)
+  if (!winner) {
+    throw nonRetryable("pattern.judge-panel: every judge failed to score an attempt")
+  }
   ctx.log(
     "info",
     `judge-panel complete: winner "${winner.attempt.angle}" @ ${winner.avgScore.toFixed(2)}`

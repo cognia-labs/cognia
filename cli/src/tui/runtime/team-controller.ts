@@ -253,7 +253,7 @@ export async function teamRun(teamId: string, deps: TeamRunDeps): Promise<void> 
  *
  * The planning engine (`lib/squads/auto`) is pure and headless-capable,
  * so the full assess → compose → decompose pipeline runs in the CLI. EXECUTION
- * stays desktop-only (the renderer-bound `agentTeamManager` runtime), so the
+ * stays desktop-only (the renderer-bound Squad launch seam, `startSquadRun`), so the
  * doc is a preview — consistent with the `/team run` boundary.
  */
 export interface TeamAutoDeps {

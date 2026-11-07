@@ -1,6 +1,6 @@
 import { normalizeAgentTeamConfig, normalizeAgentTeamTask } from "./agent-team-normalize"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
-import { __resetAgentTeamRuntimeForTesting } from "./agent-team"
+import { __resetAgentTeamRuntimeForTesting } from "./squad/squad-lifecycle-runner"
 import { __resetInflightForTesting } from "./agent-team-runtime"
 
 beforeEach(() => {

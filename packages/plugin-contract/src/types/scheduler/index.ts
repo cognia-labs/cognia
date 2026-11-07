@@ -528,10 +528,11 @@ export interface ExternalAgentTaskPayload extends Record<string, unknown> {
 }
 
 /**
- * Payload for `agent-team` task type — runs a whole Agent Team to terminal
- * via `agentTeamManager.start` (ADR-0022). The team must already exist in the
- * team store (live teams are not persisted across an app restart — schedule a
- * team only within a running session, or persist its definition first).
+ * Payload for `agent-team` task type — runs a whole Agent Team to its end
+ * through the one launch seam, `startSquadRun` (ADR-0022, ADR-0252 §5). The
+ * team must already exist in the team store (live teams are not persisted
+ * across an app restart — schedule a team only within a running session, or
+ * persist its definition first).
  */
 export interface AgentTeamTaskPayload extends Record<string, unknown> {
   /** Required. The id of an existing AgentTeam to run. */

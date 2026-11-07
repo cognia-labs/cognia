@@ -28,14 +28,6 @@ jest.mock("@/lib/share/hash", () => ({
       .digest("hex"),
 }))
 
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    pause: jest.fn(async () => {}),
-    resume: jest.fn(async () => {}),
-    shutdown: jest.fn(async () => {}),
-  },
-}))
-
 jest.mock("@cognia/logging", () => {
   const child = {
     debug: jest.fn(),

@@ -1,8 +1,8 @@
 "use client"
 
 /**
- * Structured payload editor for `agent-team` tasks. Runs a whole AgentTeam to
- * terminal via `agentTeamManager.start` (ADR-0022).
+ * Structured payload editor for `agent-team` tasks. The scheduled task runs a
+ * whole Squad to its end through the one launch seam (ADR-0022, ADR-0252 §5).
  */
 
 import { useEffect, useState } from "react"
@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
-import { agentTeamManager } from "@/lib/squads/agent-team"
+import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeamDraft } from "./types"
 import { useProjectStore } from "@/stores/project/project-store"
 
@@ -57,8 +57,7 @@ export function TeamPayloadEditor({
           // resolved workspace binding will then attribute somewhere else.
           const activeProjectId = useProjectStore.getState().activeProjectId
           setTeams(
-            agentTeamManager
-              .list()
+            Object.values(useAgentTeamStore.getState().teams)
               .filter((tm) => !activeProjectId || !tm.projectId || tm.projectId === activeProjectId)
               .map((tm) => ({ id: tm.id, name: tm.name }))
           )

@@ -112,6 +112,34 @@ describe("runEnsemble", () => {
     expect(r.result).toEqual({ value: "yes", count: 2, total: 2 })
   })
 
+  it("fails a blank reply instead of counting it as a vote", async () => {
+    const deps = depsReturning([{ text: "yes" }, { text: "  \n" }, {}])
+    const r = await runEnsemble({ n: 3, aggregation: { kind: "majority-vote-on-field" } }, deps)
+    expect(r.respondedCount).toBe(1)
+    expect(r.samples.map((s) => [s.status, s.error])).toEqual([
+      ["completed", undefined],
+      ["failed", "empty response"],
+      ["failed", "empty response"],
+    ])
+    expect(r.result).toEqual({ value: "yes", count: 1, total: 1 })
+  })
+
+  it("votes on text without its surrounding whitespace", async () => {
+    const deps = depsReturning([{ text: "yes" }, { text: "yes\n" }, { text: " no " }])
+    const r = await runEnsemble({ n: 3, aggregation: { kind: "majority-vote-on-field" } }, deps)
+    expect(r.result).toEqual({ value: "yes", count: 2, total: 3 })
+    expect(r.samples.map((s) => s.text)).toEqual(["yes", "yes", "no"])
+  })
+
+  it("ignores a sample without a numeric score and picks the first of equal scores", async () => {
+    const deps = depsReturning([{ object: { s: "9" } }, { object: { s: 0 } }, { object: { s: 0 } }])
+    const r = await runEnsemble(
+      { n: 3, aggregation: { kind: "best-of-by-score", scoreField: "s" } },
+      deps
+    )
+    expect(r.result).toEqual({ winner: { s: 0 }, score: 0, index: 1 })
+  })
+
   it("returns null when all samples fail", async () => {
     const deps = depsReturning([new Error("a"), new Error("b")])
     const r = await runEnsemble(

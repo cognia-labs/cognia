@@ -19,8 +19,7 @@ describe("the background-tasks manifest", () => {
       criticality: "optional",
       adapters: { brain: { module: "./runtime-brain", hosts: ["brain"] } },
     })
-    expect(runtime!.adapters.desktop).toBeUndefined()
-    expect(runtime!.adapters.mobile).toBeUndefined()
+    expect(Object.keys(runtime!.adapters)).toEqual(["brain"])
     expect(runtime!.absent?.desktop).toMatch(/BackgroundTaskInitializer/)
     expect(runtime!.absent?.mobile).toMatch(/BackgroundTaskInitializer/)
   })

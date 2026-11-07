@@ -25,8 +25,12 @@
  * the palette can never offer a control the console would refuse, and the row
  * says the verb and the Squad name together rather than relying on an icon.
  *
- * `agentTeamManager` is imported lazily inside the callback on purpose. It
- * pulls the orchestration graph, and the command palette opens on every ⌘K.
+ * The control is the console's own: Start is a person's start attempt
+ * (`createSquadStartAttempt`, which routes to a paired Host), Pause and Resume
+ * go through `dispatchRunControl` against the Squad's newest run. Both are
+ * imported lazily inside the callback on purpose. They pull the orchestration
+ * graph, and the command palette opens on every ⌘K. A refusal says so in a
+ * toast rather than vanishing with the closed palette.
  * `recents.ts#toStoredAction` returns null for a `callback`, so running one of
  * these never lands in the recents list either.
  */
@@ -84,10 +88,69 @@ export function squadControlVerb(status: AgentTeam["status"]): SquadControlVerb 
 }
 
 /** Manager verb per control. Same calls the fleet inspector makes. */
-const MANAGER_VERB: Record<SquadControlVerb, "start" | "pause" | "resume"> = {
-  start: "start",
-  pause: "pause",
-  resume: "resume",
+export interface SquadPaletteControlDeps {
+  start?: (squadId: string) => Promise<{ started: boolean; reason?: string }>
+  control?: (
+    squadId: string,
+    action: "pause" | "resume"
+  ) => Promise<{ accepted: boolean; reason?: string }>
+  notifyFailure?: (title: string) => void
+}
+
+async function defaultPaletteStart(squadId: string) {
+  const [{ createSquadStartAttempt }, { detectHostProfile }] = await Promise.all([
+    import("@/lib/execution/squad-start-dispatch"),
+    import("@/lib/platform/capabilities"),
+  ])
+  return createSquadStartAttempt({ teamId: squadId, hostProfile: detectHostProfile() }).dispatch()
+}
+
+async function defaultPaletteControl(squadId: string, action: "pause" | "resume") {
+  const [{ readSquadLatestRun }, { dispatchRunControl }, { detectHostProfile }] = await Promise.all(
+    [
+      import("@/hooks/squads/use-squad-latest-run"),
+      import("@/lib/execution/run-control-dispatch"),
+      import("@/lib/platform/capabilities"),
+    ]
+  )
+  const { run } = await readSquadLatestRun(squadId)
+  if (!run) return { accepted: false, reason: "run_not_found" }
+  return dispatchRunControl({
+    runId: run.id,
+    action,
+    surface: "command-palette",
+    hostProfile: detectHostProfile(),
+  })
+}
+
+async function defaultNotifyFailure(title: string) {
+  const { toast } = await import("sonner")
+  toast.error(title)
+}
+
+/**
+ * Run the palette's control for one Squad. A refusal is toasted and thrown, so
+ * the palette's action log records its reason too.
+ */
+export async function runSquadPaletteControl(
+  verb: SquadControlVerb,
+  squadId: string,
+  t: GlobalSearchProviderInput["ctx"]["t"],
+  deps: SquadPaletteControlDeps = {}
+): Promise<void> {
+  const refused =
+    verb === "start"
+      ? await (deps.start ?? defaultPaletteStart)(squadId).then((outcome) =>
+          outcome.started ? undefined : (outcome.reason ?? "start_failed")
+        )
+      : await (deps.control ?? defaultPaletteControl)(squadId, verb).then((outcome) =>
+          outcome.accepted ? undefined : (outcome.reason ?? "control_failed")
+        )
+  if (refused === undefined) return
+  const title = t(`squads.fleet.control.failed.${verb}`)
+  if (deps.notifyFailure) deps.notifyFailure(title)
+  else void defaultNotifyFailure(title)
+  throw new Error(`Squad ${verb} refused: ${refused}`)
 }
 
 /** The identity subset the palette needs, never the whole team row. */
@@ -189,11 +252,7 @@ function controlItem(
     score: navigate.score * CONTROL_SCORE_FACTOR,
     action: {
       type: "callback" as const,
-      run: async () => {
-        // Lazily, so ⌘K does not pull the orchestration graph on every open.
-        const { agentTeamManager } = await import("@/lib/squads/agent-team")
-        await agentTeamManager[MANAGER_VERB[verb]](row.id)
-      },
+      run: () => runSquadPaletteControl(verb, row.id, t),
     },
   }
 }

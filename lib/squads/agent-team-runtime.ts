@@ -208,7 +208,7 @@ export interface RunTeamLifecycleDeps {
   runPrReview?: import("./pr-feedback/reviewer").RunReview
   /**
    * Optional filter applied to the team's task list before synthesis — used
-   * by `agentTeamManager.resume()` to skip already-done work. Filtered-out
+   * by a resume and a child retry to skip already-done work. Filtered-out
    * task ids are threaded as `satisfiedDependencyIds` so surviving tasks that
    * depend on them synthesize cleanly (their blackboard results remain
    * readable via `readDependencyResults`). Omitted → all tasks run

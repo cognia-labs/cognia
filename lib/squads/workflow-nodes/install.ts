@@ -19,7 +19,7 @@ const resolveTeamKnowledgeDependencies = (teamId: string) =>
 
 /**
  * Synthesized team runs are recovered by the team's durable coordinator
- * (squad bootstrap → `recoverDurableAgentTeams`), which re-registers the team
+ * (squad bootstrap → `recoverSquadRuns`), which re-registers the team
  * run context first. Workflow resume must not replay them on its own.
  */
 const teamRunRecoveryOwner: RunRecoveryOwner = {

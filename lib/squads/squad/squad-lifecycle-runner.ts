@@ -2,11 +2,10 @@
  * Run one Squad lifecycle against the live store, from prepared records to
  * settlement.
  *
- * This is the body `agentTeamManager.start/resume` used to carry inline. It
- * moved here so `startSquadRun` (ADR-0140's one launch seam) and the resume
- * path of `squad-control.ts` execute the SAME code: assemble the runtime deps,
- * run `runTeamLifecycle`, then settle the durable run, the execution row, the
- * GitHub delivery graph and the scheduler event. Two copies of that tail were
+ * `startSquadRun` (ADR-0140's one launch seam), the resume path of
+ * `squad-control.ts`, recovery and a child retry all execute this SAME code:
+ * assemble the runtime deps, run `runTeamLifecycle`, then settle the durable
+ * run, the execution row, the GitHub delivery graph and the scheduler event. Two copies of that tail were
  * how a legacy run's execution row once stayed `running` for good.
  *
  * Nothing in here decides whether a run MAY start. Readiness, the duplicate
@@ -65,6 +64,7 @@ export function configureAgentTeamRuntime(deps: ConfiguredSquadRuntimeDeps): voi
 
 export function __resetAgentTeamRuntimeForTesting(): void {
   configuredDeps = null
+  lifecycleResults.clear()
 }
 
 async function ensureConfiguredSquadRuntimeDeps(): Promise<ConfiguredSquadRuntimeDeps> {
@@ -266,6 +266,10 @@ export interface RunSquadLifecycleInput {
   sessionWorkingDir?: string
   /** Persona to enter the Squad as, resolved by the caller. */
   entryPersona?: { id: string; name: string; systemPrompt: string }
+  /** The knowledge a launching workflow may read. */
+  knowledgeAccess?: RunTeamLifecycleDeps["knowledgeAccess"]
+  /** Team-completion fan-outs that led here (the workflow loop guard). */
+  triggerChainDepth?: number
   traceId?: string
 }
 
@@ -328,6 +332,8 @@ export async function runSquadLifecycle(
       sessionWorkingDir: frozen.sessionWorkingDir,
       entryPersona: frozen.entryPersona,
       ultracode: frozen.ultracode,
+      knowledgeAccess: frozen.knowledgeAccess,
+      triggerChainDepth: frozen.triggerChainDepth,
     }
   }
   const { teamId, runId } = input
@@ -407,6 +413,8 @@ export async function runSquadLifecycle(
       ...(input.requirePlanApprovalFloor ? { requirePlanApprovalFloor: true } : {}),
       ...(input.permissionCeiling ? { parentPermissionCeiling: input.permissionCeiling } : {}),
       ...(input.sessionWorkingDir ? { sessionWorkingDir: input.sessionWorkingDir } : {}),
+      ...(input.knowledgeAccess ? { knowledgeAccess: input.knowledgeAccess } : {}),
+      ...(input.triggerChainDepth ? { triggerChainDepth: input.triggerChainDepth } : {}),
       traceId: input.traceId ?? rootSpan.traceId,
       // Manual "Run with ultracode" forces orchestration, an explicit normal run
       // turns it off, omitted lets the team's autoMode decide.
@@ -420,8 +428,31 @@ export async function runSquadLifecycle(
   )
 
   if (input.recovery?.signal?.aborted) return result
+  rememberSquadLifecycleResult(result)
   await settleSquadRun(teamId, runId, result)
   return result
+}
+
+/**
+ * The lifecycle's own result for runs that ended in this process, newest
+ * last. The execution row records how a run ended, not why (a rejected plan,
+ * an exhausted budget): a caller that waited for the row reads the reason
+ * here (`runSquadToEnd`).
+ */
+const lifecycleResults = new Map<string, RunTeamLifecycleResult>()
+const LIFECYCLE_RESULT_LIMIT = 256
+
+function rememberSquadLifecycleResult(result: RunTeamLifecycleResult): void {
+  lifecycleResults.delete(result.runId)
+  lifecycleResults.set(result.runId, result)
+  if (lifecycleResults.size > LIFECYCLE_RESULT_LIMIT) {
+    lifecycleResults.delete(lifecycleResults.keys().next().value!)
+  }
+}
+
+/** How the lifecycle of `runId` ended here, when it ran in this process. */
+export function endedSquadLifecycleResult(runId: string): RunTeamLifecycleResult | undefined {
+  return lifecycleResults.get(runId)
 }
 
 /** Close the root span with the terminal status, the reason code and the token totals. */

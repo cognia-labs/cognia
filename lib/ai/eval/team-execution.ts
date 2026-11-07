@@ -14,6 +14,7 @@ import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalSample } from "@/types/eval/eval"
 import type { EvalPersistenceScope } from "@/lib/db/eval-lab"
 import { startSquadRun } from "@/lib/squads/squad/start-squad-run"
+import { buildSquadStartInput } from "@/lib/squads/squad/build-start-input"
 import { runTeamWaves } from "@/lib/squads/team-wave-runner"
 import type { TeamRunContext } from "@/lib/squads/team-run-context"
 import { buildLeadExecutionConfig } from "@/lib/squads/squad/lead-execution"
@@ -340,13 +341,12 @@ export async function runIsolatedTeamEval(
   let failure: Error | undefined
   try {
     const launch = await startSquadRun(
-      {
+      buildSquadStartInput({
         squadId: teamId,
         goal: input.prompt,
-        origin: "evaluation",
-        triggeredFrom: { source: "api" },
         runId,
-      },
+        surface: { kind: "evaluation" },
+      }),
       {
         awaitRuntimeReady: async () => true,
         loadStore: async () => ({

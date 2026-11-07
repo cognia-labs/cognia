@@ -10,7 +10,7 @@
  *
  * # Wire path
  *
- * The orchestration entry points (`executeAgent`, `agentTeamManager`,
+ * The orchestration entry points (`executeAgent`, `startSquadRun`,
  * `getPluginManager`) live in the RENDERER, not the Node MCP sidecar.
  *  - When invoked from the renderer (or a test mount) — `isTauri()` true — the
  *    handler runs the real entry point directly via the `*Core` functions.

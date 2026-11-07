@@ -62,6 +62,13 @@ describe("pure helpers", () => {
     it("ignores out-of-range option indices", () => {
       expect(tallyVotes([vote("a", 5)], ["yes", "no"], "majority")).toEqual([0, 0])
     })
+
+    it("counts a weight that is not a finite non-negative number for nothing", () => {
+      const votes = [vote("a", 0, 2), vote("b", 1, 1), vote("c", 0, -5), vote("d", 0, Number.NaN)]
+      expect(tallyVotes(votes, ["yes", "no"], "weighted")).toEqual([2, 1])
+      // Before, the -5 and the NaN left "yes" at NaN and the vote never resolved.
+      expect(computeWinner(votes, ["yes", "no"], "weighted", 4)).toBe(0)
+    })
   })
 
   describe("computeWinner", () => {

@@ -1,35 +1,25 @@
 /**
- * Focused test for the `action.team.run` node's IM-origin derivation: it must
- * lift `ctx.trigger.binding` (set by `startWorkflowFromIM` on IM-triggered
- * runs) into a `triggeredFrom` dep so the team's synthesized run fans its
- * result back to the originating conversation. Mocks the three dynamic
- * imports the executor pulls in so we capture the deps without booting the
- * real team runtime / Zustand store.
+ * The `action.team.run` node starts its Squad run through the one launch seam
+ * (`startSquadRun` by way of `runSquadToEnd`, ADR-0252 §5). These tests pin
+ * what the node hands the seam (the workflow parent, the IM conversation it
+ * reports back to, the knowledge grant, the loop-guard depth, the goal, the
+ * caller's signal) and the node output shape `{ teamId, teamRunId, status,
+ * reason }` downstream steps read.
  */
 
-const runTeamLifecycle = jest.fn().mockResolvedValue({ runId: "team_run_1", status: "completed" })
+import type { StartSquadRunInput } from "../squad/start-squad-run"
+
+const runSquadToEnd = jest.fn()
 const readWorkflowRun = jest.fn()
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({ workflowRuns: { get: (...args: unknown[]) => readWorkflowRun(...args) } }),
 }))
-
-jest.mock("@/lib/squads/agent-team-runtime", () => ({
-  runTeamLifecycle: (...args: unknown[]) =>
-    runTeamLifecycle(...(args as Parameters<typeof runTeamLifecycle>)),
-}))
-jest.mock("@/lib/squads/agent-team-runtime-deps", () => ({
-  buildAgentTeamRuntimeDeps: () => ({
-    notifierDeps: { toast: () => {}, osNotify: async () => {}, log: async () => {} },
-  }),
+jest.mock("@/lib/squads/squad/run-squad-to-end", () => ({
+  runSquadToEnd: (...args: unknown[]) => runSquadToEnd(...args),
 }))
 jest.mock("@/stores/squads/agent-team-store/store", () => {
   const state = {
     getTeam: (id: string) => (id === "team-1" ? { id: "team-1", name: "T" } : undefined),
-    getTeammates: () => [],
-    getTeamTasks: () => [],
-    addMessage: () => {},
-    setTaskStatus: () => {},
-    updateTeammate: () => {},
   }
   return { useAgentTeamStore: { getState: () => state } }
 })
@@ -46,19 +36,25 @@ import type {
   WorkflowTriggerBinding,
 } from "@/types/workflow/visual"
 
-function ctxWithBinding(binding?: WorkflowTriggerBinding): StepExecutionContext {
+function ctxWith(
+  options: {
+    binding?: WorkflowTriggerBinding
+    payload?: Record<string, unknown>
+    params?: Record<string, unknown>
+  } = {}
+): StepExecutionContext {
   const trigger: TriggerEvent = {
     workflowId: "wf",
     kind: "trigger.manual",
-    payload: {},
+    payload: options.payload ?? {},
     originAt: 1,
-    ...(binding ? { binding } : {}),
+    ...(options.binding ? { binding: options.binding } : {}),
   }
   return {
     runId: "run_outer",
     workflowId: "wf",
     stepId: "n_team",
-    params: { teamId: "team-1" },
+    params: options.params ?? { teamId: "team-1", goal: "  ship it  " },
     upstream: {},
     trigger,
     signal: new AbortController().signal,
@@ -67,20 +63,88 @@ function ctxWithBinding(binding?: WorkflowTriggerBinding): StepExecutionContext 
   }
 }
 
-async function run(binding?: WorkflowTriggerBinding) {
-  const reg = getExecutor("action.team.run", 1)
-  if (!reg) throw new Error("no executor")
-  runTeamLifecycle.mockClear()
-  await reg.execute(ctxWithBinding(binding))
-  return runTeamLifecycle.mock.calls[0]?.[1] as { triggeredFrom?: unknown }
-}
+const execute = (ctx: StepExecutionContext) => getExecutor("action.team.run", 1)!.execute(ctx)
+const launched = () => runSquadToEnd.mock.calls.at(-1)?.[0] as StartSquadRunInput
 
-describe("action.team.run — IM origin derivation", () => {
+beforeEach(() => {
+  runSquadToEnd.mockReset()
+  runSquadToEnd.mockResolvedValue({
+    start: { started: true, runId: "run_team_1", executionRunId: "execution:team:run_team_1" },
+    status: "completed",
+    outcome: "completed",
+  })
+  readWorkflowRun.mockReset()
+})
+
+describe("action.team.run", () => {
+  it("starts the Squad as the workflow run's child with its goal, waits under the node's signal, and keeps the output shape", async () => {
+    const ctx = ctxWith()
+    await expect(execute(ctx)).resolves.toEqual({
+      output: { teamId: "team-1", teamRunId: "run_team_1", status: "completed", reason: undefined },
+    })
+    expect(runSquadToEnd).toHaveBeenCalledWith(
+      {
+        squadId: "team-1",
+        goal: "ship it",
+        origin: "interactive",
+        triggeredFrom: { source: "ui" },
+        launchedByRunId: "execution:workflow:run_outer",
+      },
+      { signal: ctx.signal }
+    )
+  })
+
+  it("reports how the run ended and why", async () => {
+    runSquadToEnd.mockResolvedValue({
+      start: { started: true, runId: "run_team_2", executionRunId: "execution:team:run_team_2" },
+      status: "cancelled",
+      outcome: "cancelled",
+      reason: "stop_unconfirmed",
+    })
+    await expect(execute(ctxWith())).resolves.toEqual({
+      output: {
+        teamId: "team-1",
+        teamRunId: "run_team_2",
+        status: "cancelled",
+        reason: "stop_unconfirmed",
+      },
+    })
+  })
+
+  it("runs headless and reports back to the IM conversation a complete binding names", async () => {
+    await execute(
+      ctxWith({
+        binding: { adapterId: "lark:a1", conversationKey: "lark:a1:oc_1", sessionId: "sess_1" },
+      })
+    )
+    expect(launched()).toMatchObject({
+      origin: "im",
+      triggeredFrom: {
+        source: "im",
+        adapterId: "lark:a1",
+        conversationKey: "lark:a1:oc_1",
+        sessionId: "sess_1",
+      },
+    })
+  })
+
+  it("keeps the blocking gates when the binding lacks adapterId or conversationKey", async () => {
+    await execute(ctxWith({ binding: { adapterId: "lark:a1" } }))
+    expect(launched()).toMatchObject({ origin: "interactive", triggeredFrom: { source: "ui" } })
+  })
+
+  it("threads a team-completion fan-out's chain depth into the run", async () => {
+    await execute(ctxWith({ payload: { chainDepth: 2 } }))
+    expect(launched().triggerChainDepth).toBe(2)
+    await execute(ctxWith({ payload: { chainDepth: "2" } }))
+    expect(launched()).not.toHaveProperty("triggerChainDepth")
+  })
+
   it("takes knowledge ACL identity from the durable public invocation and pins only admitted indexes", async () => {
     readWorkflowRun.mockResolvedValue({
       triggeredBy: { source: "api", initiator: { authenticated: true, principalId: "verified" } },
     })
-    const ctx = ctxWithBinding()
+    const ctx = ctxWith()
     ctx.executionBinding = {
       entrypoint: "http",
       dependencyLock: {
@@ -88,44 +152,29 @@ describe("action.team.run — IM origin derivation", () => {
         indexes: { "knowledge:kb:source": "gen", "other:index": "ignored" },
       },
     } as never
-    await getExecutor("action.team.run", 1)!.execute(ctx)
-    expect(runTeamLifecycle).toHaveBeenLastCalledWith(
-      "team-1",
-      expect.objectContaining({
-        knowledgeAccess: {
-          entrypoint: "http",
-          triggeredBy: {
-            source: "api",
-            initiator: { authenticated: true, principalId: "verified" },
-          },
-          revisionBindings: { kb: ["gen"] },
-          allowedKnowledgeBaseIds: ["kb"],
-        },
-      }),
-      ctx.signal
-    )
-  })
-  it("derives an IM triggeredFrom from a complete trigger binding", async () => {
-    const deps = await run({
-      adapterId: "lark:a1",
-      conversationKey: "lark:a1:oc_1",
-      sessionId: "sess_1",
-    })
-    expect(deps.triggeredFrom).toEqual({
-      source: "im",
-      adapterId: "lark:a1",
-      conversationKey: "lark:a1:oc_1",
-      sessionId: "sess_1",
+    await execute(ctx)
+    expect(launched().knowledgeAccess).toEqual({
+      entrypoint: "http",
+      triggeredBy: {
+        source: "api",
+        initiator: { authenticated: true, principalId: "verified" },
+      },
+      revisionBindings: { kb: ["gen"] },
+      allowedKnowledgeBaseIds: ["kb"],
     })
   })
 
-  it("omits triggeredFrom when the trigger has no binding (UI/API run)", async () => {
-    const deps = await run(undefined)
-    expect(deps.triggeredFrom).toBeUndefined()
-  })
-
-  it("omits triggeredFrom when the binding lacks adapterId or conversationKey", async () => {
-    const deps = await run({ adapterId: "lark:a1" })
-    expect(deps.triggeredFrom).toBeUndefined()
+  it("fails without retry for a missing or unknown Squad, and for a refused or failed run", async () => {
+    await expect(execute(ctxWith({ params: {} }))).rejects.toMatchObject({ retryable: false })
+    await expect(execute(ctxWith({ params: { teamId: "nope" } }))).rejects.toMatchObject({
+      message: expect.stringContaining("team nope not found"),
+      retryable: false,
+    })
+    expect(runSquadToEnd).not.toHaveBeenCalled()
+    runSquadToEnd.mockRejectedValue(new Error("Squad run refused: already_running"))
+    await expect(execute(ctxWith())).rejects.toMatchObject({
+      message: "action.team.run: Squad run refused: already_running",
+      retryable: false,
+    })
   })
 })

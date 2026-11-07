@@ -346,17 +346,20 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     const durable = await getAgentTeamRun(run.sourceId).catch(() => undefined)
     const teamId = durable?.teamId ?? (await teamIdForExecutionRun(run.id))
     if (!teamId) throw new UnsupportedForKindError("retry", "team")
-    const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
-    const result = await startSquadRun({
-      squadId: teamId,
-      goal: "",
-      origin: "interactive",
-      triggeredFrom: { source: "ui" },
-      parentRunId: run.id,
-      ...(run.sessionId
-        ? { session: { id: run.sessionId } as import("@cognia/agent-config-types").ChatSession }
-        : {}),
-    })
+    const [{ startSquadRun }, { buildSquadStartInput }] = await Promise.all([
+      import("@/lib/squads/squad/start-squad-run"),
+      import("@/lib/squads/squad/build-start-input"),
+    ])
+    const result = await startSquadRun(
+      buildSquadStartInput({
+        squadId: teamId,
+        surface: {
+          kind: "retry",
+          replacesRunId: run.id,
+          ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+        },
+      })
+    )
     if (!result.started || !result.executionRunId) {
       throw new Error(result.reason ?? "source_rejected")
     }

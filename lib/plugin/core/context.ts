@@ -98,7 +98,7 @@ import {
   type PluginInvocationOptions,
 } from "@/types/plugin/plugin-host-tools"
 import { resolvePluginHostRuntime } from "@/lib/plugin/runtime/host-runtime"
-import type { AgentTeamConfig } from "@/lib/squads/agent-team"
+import type { AgentTeam } from "@/types/agent/agent-team"
 import type { PluginNodeDef, PluginTriggerDef } from "@/types/plugin/plugin-workflow"
 import { registerNodeExecutor, unregisterNodeExecutor } from "@/lib/workflow/nodes/registry"
 import { registerMcpServerPreset } from "@/lib/plugin/registries/mcp-server-preset-registry"
@@ -1234,7 +1234,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
       })
     },
 
-    runTeam: async (teamOrConfig: string | AgentTeamConfig, options?: PluginRunTeamOptions) => {
+    runTeam: async (teamOrConfig: string | AgentTeam, options?: PluginRunTeamOptions) => {
       if (!pluginHasApiPermission(pluginId, "agent:dispatch")) {
         throw new Error(
           'agent.runTeam requires the "agent:dispatch" permission — declare it in the plugin manifest.'

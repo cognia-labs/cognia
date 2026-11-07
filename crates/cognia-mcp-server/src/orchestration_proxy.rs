@@ -6,7 +6,7 @@
 //!
 //! Unlike `automation_proxy` (which dispatches to a native Rust
 //! `AutomationHandle`), the orchestration entry points — `executeAgent`,
-//! `agentTeamManager`, `invokePluginTool` — live in the renderer JS, not in
+//! `startSquadRun`, `invokePluginTool` — live in the renderer JS, not in
 //! Rust and not in the Node sidecar. So this proxy executes nothing itself: it
 //! forwards each request to the renderer over a Tauri event, parks a `oneshot`
 //! keyed by request id, and the renderer posts the result back through the

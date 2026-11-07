@@ -31,8 +31,14 @@ jest.mock("@/lib/squads/auto/materialize", () => ({
   materializeProposal: jest.fn(),
 }))
 
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: { start: jest.fn() },
+jest.mock("@/lib/squads/squad/run-squad-to-end", () => ({
+  runSquadToEnd: jest.fn(),
+}))
+jest.mock("@/lib/squads/workflow-nodes/workflow-squad-surface", () => ({
+  workflowSquadSurface: jest.fn(async (ctx: { runId: string }) => ({
+    kind: "workflow",
+    workflowRunId: ctx.runId,
+  })),
 }))
 
 jest.mock("@/stores/squads/agent-team-store/store", () => ({
@@ -52,7 +58,7 @@ import {
   AutoOrchestrationPiiError,
 } from "@/lib/squads/auto/auto-orchestrate"
 import { materializeProposal } from "@/lib/squads/auto/materialize"
-import { agentTeamManager } from "@/lib/squads/agent-team"
+import { runSquadToEnd } from "@/lib/squads/squad/run-squad-to-end"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import {
   delegateToTwin,
@@ -64,7 +70,7 @@ import {
 const buildClientMock = buildRendererLlmClient as jest.Mock
 const planMock = planAutoOrchestration as jest.Mock
 const materializeMock = materializeProposal as jest.Mock
-const startMock = agentTeamManager.start as jest.Mock
+const startMock = runSquadToEnd as jest.Mock
 const getStateMock = useAgentTeamStore.getState as jest.Mock
 const delegateToTwinMock = delegateToTwin as jest.Mock
 const delegateToBackgroundMock = delegateToBackground as jest.Mock
@@ -191,12 +197,21 @@ describe("runTeamCompose", () => {
     expect(materializeMock).toHaveBeenCalledWith(PROPOSAL, { name: "My Team" })
   })
 
-  it("autoStart runs the lifecycle and surfaces the terminal state", async () => {
-    startMock.mockResolvedValue(undefined)
-    const result = await runTeamCompose(
-      makeCtx({ objective: "do it", autoStart: true, ultracode: true })
+  it("autoStart runs the Squad as the workflow run's child to its end and surfaces the terminal state", async () => {
+    startMock.mockResolvedValue({ outcome: "completed" })
+    const ctx = makeCtx({ objective: "do it", autoStart: true, ultracode: true })
+    const result = await runTeamCompose(ctx)
+    expect(startMock).toHaveBeenCalledWith(
+      {
+        squadId: "team_1",
+        goal: "",
+        ultracode: true,
+        origin: "interactive",
+        triggeredFrom: { source: "ui" },
+        launchedByRunId: "execution:workflow:run_1",
+      },
+      { signal: ctx.signal }
     )
-    expect(startMock).toHaveBeenCalledWith("team_1", { ultracode: true })
     expect(result.output).toMatchObject({
       started: true,
       status: "completed",

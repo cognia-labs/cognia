@@ -91,15 +91,10 @@ jest.mock("@/lib/squads/teammate/twin-context", () => ({
   ]),
 }))
 
-// The toolbar's run controls reach the manager facade (whose import graph
-// drags in the whole runtime) — stub it.
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    start: jest.fn(async () => {}),
-    pause: jest.fn(async () => {}),
-    resume: jest.fn(async () => {}),
-    shutdown: jest.fn(async () => {}),
-  },
+// The toolbar's run controls read the run journal and the Host profile —
+// irrelevant here, stub them.
+jest.mock("@/hooks/squads/use-squad-run-control", () => ({
+  useSquadRunControl: () => ({ busy: false, control: jest.fn(async () => {}) }),
 }))
 
 // The plugin slot pulls in the plugin registry graph — stub it.

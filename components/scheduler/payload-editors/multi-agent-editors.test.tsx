@@ -3,10 +3,11 @@
  *
  * Component tests for the multi-agent structured payload editors
  * (TeamPayloadEditor / GoalPayloadEditor / PlanPayloadEditor). Lists are
- * injected via the `*ForTesting` props so no DB / team-store is touched.
+ * injected via the `*ForTesting` props, except the one case that reads the
+ * (mocked) team store for its workspace filter.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { useState } from "react"
@@ -21,6 +22,15 @@ import {
   type GoalDraft,
   type PlanDraft,
 } from "./types"
+
+const mockTeams: Record<string, { id: string; name: string; projectId?: string }> = {}
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
+  useAgentTeamStore: { getState: () => ({ teams: mockTeams }) },
+}))
+let mockActiveProjectId: string | null = null
+jest.mock("@/stores/project/project-store", () => ({
+  useProjectStore: { getState: () => ({ activeProjectId: mockActiveProjectId }) },
+}))
 
 const messages = {
   scheduler: {
@@ -106,6 +116,25 @@ describe("TeamPayloadEditor", () => {
     )
     expect(screen.getByTestId("team-payload-editor-team-select")).toBeTruthy()
     expect(screen.getByText(/required/i)).toBeTruthy()
+  })
+
+  it("offers the Squads of the active workspace and those bound to none", async () => {
+    Object.assign(mockTeams, {
+      a: { id: "a", name: "Here", projectId: "p1" },
+      b: { id: "b", name: "Elsewhere", projectId: "p2" },
+      c: { id: "c", name: "Unbound" },
+    })
+    mockActiveProjectId = "p1"
+    function Host() {
+      const [draft, setDraft] = useState<AgentTeamDraft>({ ...EMPTY_AGENT_TEAM_DRAFT })
+      return <TeamPayloadEditor draft={draft} onDraftChange={setDraft} />
+    }
+    render(wrap(<Host />))
+    await waitFor(() => expect(screen.getByTestId("team-payload-editor-team-select")).toBeTruthy())
+    await userEvent.click(screen.getByTestId("team-payload-editor-team-select"))
+    expect(screen.getAllByText("Here").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Unbound").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Elsewhere")).toBeNull()
   })
 
   it("toggles ultracode", () => {

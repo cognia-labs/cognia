@@ -36,9 +36,9 @@ export async function executeAgentTeamTask(
 
   // Lazy import keeps the heavy agent-team runtime chain out of the scheduler
   // executor module graph at load time (and out of test hoisting order).
-  const { agentTeamManager } = await import("@/lib/squads/agent-team")
+  const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
 
-  const team = agentTeamManager.get(payload.teamId)
+  const team = useAgentTeamStore.getState().teams[payload.teamId]
   if (!team) {
     return {
       success: false,
@@ -50,7 +50,7 @@ export async function executeAgentTeamTask(
     return { success: false, error: "Agent-team task aborted before start" }
   }
 
-  log.info("Scheduler agent-team task → agentTeamManager.start", {
+  log.info("Scheduler agent-team task → runSquadToEnd", {
     taskId: task.id,
     executionId: execution.id,
     teamId: payload.teamId,
@@ -58,25 +58,32 @@ export async function executeAgentTeamTask(
   })
 
   try {
-    const result = await agentTeamManager.start(payload.teamId, {
-      origin: "scheduler",
-      runId: `run_team_scheduled_${execution.id}`,
-      signal,
-      ...(typeof payload.ultracode === "boolean" ? { ultracode: payload.ultracode } : {}),
-    })
-    const { getExecutionRun } = await import("@/lib/db/execution-runs")
-    const run = result.executionRunId ? await getExecutionRun(result.executionRunId) : undefined
-    const status = run?.status
-    const success = status === "completed"
+    const [{ runSquadToEnd }, { buildSquadStartInput }] = await Promise.all([
+      import("@/lib/squads/squad/run-squad-to-end"),
+      import("@/lib/squads/squad/build-start-input"),
+    ])
+    // The execution id keys the run, so a re-fired execution waits on the
+    // run it already started instead of starting another.
+    const end = await runSquadToEnd(
+      buildSquadStartInput({
+        squadId: payload.teamId,
+        runId: `run_team_scheduled_${execution.id}`,
+        ...(typeof payload.ultracode === "boolean" ? { ultracode: payload.ultracode } : {}),
+        surface: { kind: "scheduler" },
+      }),
+      { ...(signal ? { signal } : {}) }
+    )
+    const success = end.status === "completed"
     return {
       success,
       output: {
         teamId: payload.teamId,
-        runId: result.runId,
-        executionRunId: result.executionRunId,
-        status,
+        runId: end.start.runId,
+        executionRunId: end.start.executionRunId,
+        status: end.status,
+        ...(end.reason ? { reason: end.reason } : {}),
       },
-      ...(success ? {} : { error: `Team ended with status: ${status ?? "unknown"}` }),
+      ...(success ? {} : { error: `Team ended with status: ${end.status}` }),
     }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) }

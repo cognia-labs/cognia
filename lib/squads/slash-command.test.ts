@@ -2,10 +2,10 @@
 //
 // The store and the project store are mocked as plain state readers, matching
 // `plan.test.ts`, so a case can pose an exact fleet without booting Dexie.
-// `startSquadRun` and `agentTeamManager` are mocked because asserting WHICH
-// funnel a branch takes is most of the point: a `/squad run` that reached
-// `agentTeamManager.start` directly would skip the run-id convention and the
-// execution row, and the test would still look green.
+// `startSquadRun` and `controlSquadRun` are mocked because asserting WHICH
+// funnel a branch takes is most of the point: a `/squad run` that reached the
+// lifecycle directly would skip the run-id convention and the execution row,
+// and the test would still look green.
 
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 jest.mock("@/stores/squads/agent-team-store/store", () => ({
@@ -18,15 +18,9 @@ jest.mock("@/lib/squads/squad/start-squad-run", () => ({
   startSquadRun: (...a: unknown[]) => startSquadRun(...(a as [])),
 }))
 
-const managerPause = jest.fn()
-const managerResume = jest.fn()
-const managerShutdown = jest.fn()
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    pause: (...a: unknown[]) => managerPause(...(a as [])),
-    resume: (...a: unknown[]) => managerResume(...(a as [])),
-    shutdown: (...a: unknown[]) => managerShutdown(...(a as [])),
-  },
+const controlSquadRun = jest.fn()
+jest.mock("@/lib/squads/durable/durable-control", () => ({
+  controlSquadRun: (...a: unknown[]) => controlSquadRun(...(a as [])),
 }))
 
 import { getSession } from "@/lib/db/sessions"
@@ -209,17 +203,27 @@ describe("run", () => {
 })
 
 describe("control", () => {
-  it("maps each verb onto the manager", async () => {
+  it("sends each verb through the one control machine, addressed to the Squad's live run", async () => {
+    controlSquadRun.mockResolvedValue({ ok: true })
     await dispatchSquadSubcommand(ctx("pause"))
     await dispatchSquadSubcommand(ctx("resume"))
-    await dispatchSquadSubcommand(ctx("stop"))
-    expect(managerPause).toHaveBeenCalledWith("team_1")
-    expect(managerResume).toHaveBeenCalledWith("team_1")
-    expect(managerShutdown).toHaveBeenCalledWith("team_1")
+    const stopped = await dispatchSquadSubcommand(ctx("stop"))
+    expect(controlSquadRun.mock.calls).toEqual([
+      [{ teamId: "team_1" }, "pause"],
+      [{ teamId: "team_1" }, "resume"],
+      [{ teamId: "team_1" }, "stop"],
+    ])
+    expect(stopped.system).not.toMatch(/Could not/)
+  })
+
+  it("reports the control machine's refusal instead of claiming it worked", async () => {
+    controlSquadRun.mockResolvedValue({ ok: false, reason: "not_resumable" })
+    const result = await dispatchSquadSubcommand(ctx("resume"))
+    expect(result.system).toMatch(/Could not resume.*not_resumable/s)
   })
 
   it("reports a runtime rejection rather than throwing at the composer", async () => {
-    managerPause.mockRejectedValue(new Error("no live run"))
+    controlSquadRun.mockRejectedValue(new Error("no live run"))
     const result = await dispatchSquadSubcommand(ctx("pause"))
     expect(result.system).toMatch(/Could not pause.*no live run/s)
   })

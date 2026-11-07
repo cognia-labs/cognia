@@ -6,6 +6,7 @@ import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
 import {
   createSquadsProvider,
   loadSquadSearchRows,
+  runSquadPaletteControl,
   searchProviders,
   squadControlVerb,
   SQUADS_PROVIDER_ID,
@@ -233,5 +234,42 @@ describe("searchProviders", () => {
   it("is what the module manifest contributes: the Squads provider, under its stable id", () => {
     expect(searchProviders.map((provider) => provider.id)).toEqual([SQUADS_PROVIDER_ID])
     expect(searchProviders[0]?.kind).toBe("squad")
+  })
+})
+
+describe("runSquadPaletteControl", () => {
+  const t = ((key: string) => key) as never
+
+  it("starts as a person's start attempt and controls the Squad's newest run", async () => {
+    const start = jest.fn(async () => ({ started: true }))
+    const control = jest.fn(async () => ({ accepted: true }))
+    const notifyFailure = jest.fn()
+    await runSquadPaletteControl("start", "squad-1", t, { start, control, notifyFailure })
+    expect(start).toHaveBeenCalledWith("squad-1")
+    await runSquadPaletteControl("pause", "squad-1", t, { start, control, notifyFailure })
+    await runSquadPaletteControl("resume", "squad-1", t, { start, control, notifyFailure })
+    expect(control.mock.calls).toEqual([
+      ["squad-1", "pause"],
+      ["squad-1", "resume"],
+    ])
+    expect(notifyFailure).not.toHaveBeenCalled()
+  })
+
+  it("says a refusal out loud instead of dropping it with the closed palette", async () => {
+    const notifyFailure = jest.fn()
+    await expect(
+      runSquadPaletteControl("start", "squad-1", t, {
+        start: async () => ({ started: false, reason: "already_running" }),
+        notifyFailure,
+      })
+    ).rejects.toThrow("Squad start refused: already_running")
+    expect(notifyFailure).toHaveBeenLastCalledWith("squads.fleet.control.failed.start")
+    await expect(
+      runSquadPaletteControl("pause", "squad-1", t, {
+        control: async () => ({ accepted: false, reason: "run_not_found" }),
+        notifyFailure,
+      })
+    ).rejects.toThrow("Squad pause refused: run_not_found")
+    expect(notifyFailure).toHaveBeenLastCalledWith("squads.fleet.control.failed.pause")
   })
 })

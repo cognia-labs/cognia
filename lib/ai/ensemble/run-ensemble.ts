@@ -12,7 +12,21 @@
  * sub-workflow / the routing engine, and tests stay provider-free.
  *
  * Bundled aggregation means this does NOT depend on `data.aggregate` (D6③).
+ * The rules every aggregating surface shares (what counts as an answer, how a
+ * tie breaks, how an unscored sample ranks) come from
+ * `@cognia/agent-orchestration/aggregate`.
  */
+
+import {
+  answerText,
+  bestByScore,
+  isAnswer,
+  leader,
+  quorumMet,
+  rankByScore,
+  tally,
+  valueKey,
+} from "@cognia/agent-orchestration/aggregate"
 
 export type EnsembleAggregation =
   | { kind: "majority-vote-on-field"; field?: string }
@@ -73,26 +87,6 @@ export interface EnsembleOptions {
 const DEFAULT_TIMEOUT_MS = 180_000
 const DEFAULT_CONCURRENCY = 4
 
-/** Stable key for value-equality (order-insensitive object keys). */
-function stableKey(value: unknown): string {
-  const seen = new WeakSet<object>()
-  const norm = (v: unknown): unknown => {
-    if (v === null || typeof v !== "object") return v
-    if (seen.has(v as object)) return "[circular]"
-    seen.add(v as object)
-    if (Array.isArray(v)) return v.map(norm)
-    const obj = v as Record<string, unknown>
-    const out: Record<string, unknown> = {}
-    for (const k of Object.keys(obj).sort()) out[k] = norm(obj[k])
-    return out
-  }
-  try {
-    return JSON.stringify(norm(value)) ?? String(value)
-  } catch {
-    return String(value)
-  }
-}
-
 /** Run `fn` over `items` with at most `limit` in flight (lifted from run-council). */
 async function mapLimited<T, R>(
   items: readonly T[],
@@ -149,39 +143,30 @@ function aggregate(
   const completed = samples.filter((s) => s.status === "completed")
   switch (policy.kind) {
     case "majority-vote-on-field": {
+      // The most common answer with its count; deciding whether that is
+      // enough is `threshold-count`'s job.
       if (completed.length === 0) return null
-      const counts = new Map<string, { value: unknown; count: number }>()
-      for (const s of completed) {
-        const v = readField(s, policy.field)
-        const key = stableKey(v)
-        const entry = counts.get(key) ?? { value: v, count: 0 }
-        entry.count += 1
-        counts.set(key, entry)
-      }
-      // Map preserves insertion order → first-seen wins ties.
-      let best: { value: unknown; count: number } | undefined
-      for (const e of counts.values()) if (!best || e.count > best.count) best = e
-      return { value: best?.value ?? null, count: best?.count ?? 0, total: completed.length }
+      const best = leader(tally(completed.map((s) => ({ key: readField(s, policy.field) }))))
+      return { value: best?.key ?? null, count: best?.count ?? 0, total: completed.length }
     }
     case "threshold-count": {
       const count = completed.filter((s) => {
         const v = readField(s, policy.field)
-        return "equals" in policy ? stableKey(v) === stableKey(policy.equals) : Boolean(v)
+        return "equals" in policy ? valueKey(v) === valueKey(policy.equals) : Boolean(v)
       }).length
-      return { passed: count >= policy.threshold, count, threshold: policy.threshold }
+      return {
+        passed: quorumMet({ kind: "at-least", count: policy.threshold }, count, completed.length),
+        count,
+        threshold: policy.threshold,
+      }
     }
     case "best-of-by-score": {
-      let best: { sample: EnsembleSampleResult; score: number } | undefined
-      for (const s of completed) {
-        const raw = readField(s, policy.scoreField)
-        const score = typeof raw === "number" && Number.isFinite(raw) ? raw : -Infinity
-        if (!best || score > best.score) best = { sample: s, score }
-      }
-      if (!best || best.score === -Infinity) return null
+      const best = bestByScore(rankByScore(completed, (s) => [readField(s, policy.scoreField)]))
+      if (!best || best.mean === null) return null
       return {
-        winner: best.sample.object ?? best.sample.text,
-        score: best.score,
-        index: best.sample.index,
+        winner: best.item.object ?? best.item.text,
+        score: best.mean,
+        index: best.item.index,
       }
     }
     case "synthesize-by-final-agent":
@@ -219,11 +204,17 @@ export async function runEnsemble(
       const lens = lenses ? lenses[i % lenses.length] : undefined
       try {
         const out = await withTimeout(deps.runSample({ index: i, lens }), timeoutMs)
+        const text = answerText(out.text)
+        // A blank reply is a failed sample, not a vote for the empty string.
+        if (!isAnswer({ text, object: out.object })) {
+          deps.log?.("warn", `ensemble sample ${i} failed: empty response`)
+          return { index: i, ...(lens ? { lens } : {}), status: "failed", error: "empty response" }
+        }
         return {
           index: i,
           ...(lens ? { lens } : {}),
           status: "completed",
-          ...(out.text !== undefined ? { text: out.text } : {}),
+          ...(text !== undefined ? { text } : {}),
           ...(out.object !== undefined ? { object: out.object } : {}),
         }
       } catch (err) {

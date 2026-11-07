@@ -19,9 +19,9 @@
 //   /squad tasks                the board, in board order
 //
 // Nothing here is a new capability. Every branch funnels into a call some other
-// surface already makes: `startSquadRun` (the one ADR-0140 dispatch funnel, the
-// same one chat and the issues adapter use), `agentTeamManager` for control,
-// and the store for reads. The command is reach, not machinery.
+// surface already makes: `startSquadRun` (the one launch, its input built the
+// way chat builds it), `controlSquadRun` (the one control machine) for
+// control, and the store for reads. The command is reach, not machinery.
 //
 // Two guards copied from `/plan`, for the same reasons. No session means there
 // is nothing to bind to, and mutating a Squad mid-turn would race the in-session
@@ -244,15 +244,23 @@ async function commandRun(ctx: SlashContext, rest: string): Promise<SquadCommand
   }
 
   const session = await loadSession(ctx.activeSessionId!)
-  const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
-  const result = await startSquadRun({
-    localAuthorization: (await import("@/lib/execution/acting-authority")).LOCAL_PERSON_RUN,
-    squadId: squad.id,
-    goal,
-    origin: "chat",
-    triggeredFrom: { source: "chat" },
-    ...(session ? { session } : {}),
-  })
+  const [{ startSquadRun }, { buildSquadStartInput }] = await Promise.all([
+    import("@/lib/squads/squad/start-squad-run"),
+    import("@/lib/squads/squad/build-start-input"),
+  ])
+  // A person typed the command here.
+  const result = await startSquadRun(
+    buildSquadStartInput({
+      squadId: squad.id,
+      goal,
+      surface: {
+        kind: "chat",
+        person: true,
+        sessionId: ctx.activeSessionId!,
+        ...(session ? { session } : {}),
+      },
+    })
+  )
   if (!result.started) {
     return { system: `Could not start **${squad.name}**: ${result.reason ?? "dispatch_error"}.` }
   }
@@ -276,8 +284,13 @@ async function commandControl(
   if ("error" in resolved) return { system: resolved.error }
   const { squad } = resolved
   try {
-    const { agentTeamManager } = await import("@/lib/squads/agent-team")
-    await agentTeamManager[verb](squad.id)
+    const { controlSquadRun } = await import("./durable/durable-control")
+    const result = await controlSquadRun({ teamId: squad.id }, verb === "shutdown" ? "stop" : verb)
+    if (!result.ok) {
+      return {
+        system: `Could not ${VERB_LABEL[verb]} **${squad.name}**: ${result.reason ?? "dispatch_error"}.`,
+      }
+    }
   } catch (error) {
     const reason = error instanceof Error ? error.message : "dispatch_error"
     return { system: `Could not ${VERB_LABEL[verb]} **${squad.name}**: ${reason}.` }

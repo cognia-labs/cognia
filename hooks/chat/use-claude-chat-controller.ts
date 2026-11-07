@@ -3624,24 +3624,30 @@ export function useClaudeChat() {
       if (squadDecision.squadId) {
         const squadId = squadDecision.squadId
         try {
-          const [{ startSquadRun }, { agentTeamExecutionRunId }] = await Promise.all([
-            import("@/lib/squads/squad/start-squad-run"),
-            import("@/lib/execution/agent-team-bridge"),
-          ])
-          const result = await startSquadRun({
-            ...(localAuthorization ? { localAuthorization } : {}),
-            squadId,
-            ...(callOptions?.backgroundDelivery
-              ? { runId: callOptions.backgroundDelivery.id }
-              : {}),
-            // The goal is all the Squad is handed, so the whole turn: the
-            // attached files' text, then the question.
-            goal: externalTurn.prompt,
-            origin: "chat",
-            triggeredFrom: { source: "chat", sessionId },
-            ...(session ? { session } : {}),
-            ...(session?.characterId ? { characterId: session.characterId } : {}),
-          })
+          const [{ startSquadRun }, { buildSquadStartInput }, { agentTeamExecutionRunId }] =
+            await Promise.all([
+              import("@/lib/squads/squad/start-squad-run"),
+              import("@/lib/squads/squad/build-start-input"),
+              import("@/lib/execution/agent-team-bridge"),
+            ])
+          const result = await startSquadRun(
+            buildSquadStartInput({
+              squadId,
+              ...(callOptions?.backgroundDelivery
+                ? { runId: callOptions.backgroundDelivery.id }
+                : {}),
+              // The goal is all the Squad is handed, so the whole turn: the
+              // attached files' text, then the question.
+              goal: externalTurn.prompt,
+              surface: {
+                kind: "chat",
+                person: localAuthorization !== undefined,
+                sessionId,
+                ...(session ? { session } : {}),
+                ...(session?.characterId ? { characterId: session.characterId } : {}),
+              },
+            })
+          )
           if (!result.started || !result.runId) {
             store.getState().setSessionStatus(sessionId, "idle")
             store.getState().setSessionDiagnostic(

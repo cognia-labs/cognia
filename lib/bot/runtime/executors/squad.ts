@@ -153,32 +153,38 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
     // Memoized, so a re-entry does not re-dispatch. `startSquadRun` is
     // idempotent per run id and would answer `duplicate`, but paying for the
     // round trip every twenty seconds for the life of a Squad is waste.
+    const { buildSquadStartInput } = await import("@/lib/squads/squad/build-start-input")
     const result = await ctx.step.run("squad-start", () =>
-      start({
-        squadId,
-        goal: squadObjective(ctx),
-        origin: "bot",
-        // Derived from the delivery, so a re-entry lands on the run the
-        // previous attempt started instead of forking a second one.
-        runId: ctx.runId,
-        triggeredFrom: botTriggeredFrom(ctx),
-        permissionCeiling: botPermissionCeiling(ctx.composition.selection, ctx.policy),
-        ...(ctx.composition.selection.autonomy === "suggest" || ctx.policy.requireApprovalForWrites
-          ? { requirePlanApprovalFloor: true }
-          : {}),
-        ...(ctx.definition.character ? { characterId: ctx.definition.character } : {}),
-        planApprovalDelegate: async (request) => {
-          const decision = await blockingStep(ctx).waitForApproval("squad-plan", {
-            title: `Approve the plan for ${ctx.definition.name}?`,
-            // The plan text is rendered as DATA on the decision surface, never
-            // folded into the title, which is the line a person skims.
-            detail: { plan: request.planText, revision: request.revision },
-            ...(request.riskReason ? { message: request.riskReason } : {}),
-            risk: "medium",
-          })
-          return decision.outcome === "approved"
-        },
-      })
+      start(
+        buildSquadStartInput({
+          squadId,
+          goal: squadObjective(ctx),
+          // Derived from the delivery, so a re-entry lands on the run the
+          // previous attempt started instead of forking a second one.
+          runId: ctx.runId,
+          surface: {
+            kind: "bot",
+            triggeredFrom: botTriggeredFrom(ctx),
+            permissionCeiling: botPermissionCeiling(ctx.composition.selection, ctx.policy),
+            ...(ctx.composition.selection.autonomy === "suggest" ||
+            ctx.policy.requireApprovalForWrites
+              ? { requirePlanApprovalFloor: true }
+              : {}),
+            ...(ctx.definition.character ? { characterId: ctx.definition.character } : {}),
+            planApprovalDelegate: async (request) => {
+              const decision = await blockingStep(ctx).waitForApproval("squad-plan", {
+                title: `Approve the plan for ${ctx.definition.name}?`,
+                // The plan text is rendered as DATA on the decision surface,
+                // never folded into the title, which is the line a person skims.
+                detail: { plan: request.planText, revision: request.revision },
+                ...(request.riskReason ? { message: request.riskReason } : {}),
+                risk: "medium",
+              })
+              return decision.outcome === "approved"
+            },
+          },
+        })
+      )
     )
 
     if (ctx.signal.aborted) {

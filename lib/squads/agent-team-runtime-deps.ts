@@ -144,7 +144,8 @@ export interface BuildAgentTeamRuntimeDepsOptions {
 }
 
 /**
- * Build the runtime deps consumed by `agentTeamManager.start`.
+ * Build the runtime deps every Squad lifecycle runs with (installed once by
+ * the bootstrap, read by `runSquadLifecycle`).
  *
  * Returns `runLeadPlanning` (called by the synthesizer when
  * `team.config.requirePlanApproval` is true) and optional `notifierDeps`

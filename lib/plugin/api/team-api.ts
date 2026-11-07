@@ -68,22 +68,21 @@ export type {
  * `team:write` (enforced via the PermissionGuard proxy).
  */
 /**
- * One body for pause / resume / stop. Each is a distinct manager verb but the
- * same shape of call, and each already exists: the Companion write handlers
- * (`lib/companion/agent-team-write-handlers.ts`) have driven these from a
- * paired phone since ADR-0113, so nothing new is being taught to the runtime.
+ * One body for pause / resume / stop, each the one control machine's verb on
+ * the Squad's live run (`controlSquadRun`). A refusal (no live run, a run
+ * already over, a stop no child confirmed) is the plugin's answer.
  */
 async function runControl(
   teamId: string,
-  verb: "pause" | "resume" | "shutdown"
+  verb: "pause" | "resume" | "stop"
 ): Promise<PluginTeamRunControlResult> {
   if (!useAgentTeamStore.getState().teams[teamId]) {
     return { ok: false, reason: "squad_not_found" }
   }
   try {
-    const { agentTeamManager } = await import("@/lib/squads/agent-team")
-    await agentTeamManager[verb](teamId)
-    return { ok: true }
+    const { controlSquadRun } = await import("@/lib/squads/durable/durable-control")
+    const result = await controlSquadRun({ teamId }, verb)
+    return result.ok ? { ok: true } : { ok: false, reason: result.reason ?? "dispatch_error" }
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : "dispatch_error" }
   }
@@ -380,17 +379,20 @@ export function createTeamAPI(pluginId: string): PluginTeamAPI {
       if (!useAgentTeamStore.getState().teams[teamId]) {
         return { ok: false, reason: "squad_not_found" }
       }
-      // The ADR-0140 funnel, not `agentTeamManager.start`, so a plugin-started
-      // run gets the run id convention, the execution row and the workspace
-      // stamp. No `session`: a plugin is not a conversation, so the run is
-      // uncarded and says so on its row.
-      const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
-      const result = await startSquadRun({
-        squadId: teamId,
-        goal: options?.goal ?? "",
-        origin: "api",
-        triggeredFrom: { source: "api" },
-      })
+      // The one launch, so a plugin-started run gets the run id convention,
+      // the execution row and the workspace stamp. No `session`: a plugin is
+      // not a conversation, so the run is uncarded and says so on its row.
+      const [{ startSquadRun }, { buildSquadStartInput }] = await Promise.all([
+        import("@/lib/squads/squad/start-squad-run"),
+        import("@/lib/squads/squad/build-start-input"),
+      ])
+      const result = await startSquadRun(
+        buildSquadStartInput({
+          squadId: teamId,
+          goal: options?.goal ?? "",
+          surface: { kind: "plugin" },
+        })
+      )
       return {
         ok: result.started,
         ...(result.reason ? { reason: result.reason } : {}),
@@ -399,7 +401,7 @@ export function createTeamAPI(pluginId: string): PluginTeamAPI {
     },
     pause: async (teamId) => runControl(teamId, "pause"),
     resume: async (teamId) => runControl(teamId, "resume"),
-    stop: async (teamId) => runControl(teamId, "shutdown"),
+    stop: async (teamId) => runControl(teamId, "stop"),
 
     // best-of-N: start and observe only
     startBestOfN: async (input) => {

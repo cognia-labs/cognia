@@ -1,6 +1,18 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
-import { PayloadSection, type PayloadReferenceResolver } from "./payload-section"
+import {
+  PayloadSection,
+  resolvePayloadReference,
+  type PayloadReferenceResolver,
+} from "./payload-section"
+
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
+  useAgentTeamStore: {
+    getState: () => ({
+      getTeam: (id: string) => (id === "sq-1" ? { id: "sq-1", name: "Release Squad" } : undefined),
+    }),
+  },
+}))
 
 const copy = jest.fn(async () => true)
 jest.mock("@/hooks/ui/use-copy", () => ({
@@ -101,5 +113,12 @@ describe("PayloadSection", () => {
     )
     expect(screen.getByTestId("payload-empty")).toBeInTheDocument()
     expect(screen.queryByTestId("payload-raw-toggle")).toBeNull()
+  })
+})
+
+describe("resolvePayloadReference", () => {
+  it("names a Squad from the team store, and nothing for one it does not hold", async () => {
+    await expect(resolvePayloadReference("team", "sq-1")).resolves.toBe("Release Squad")
+    await expect(resolvePayloadReference("team", "gone")).resolves.toBeNull()
   })
 })

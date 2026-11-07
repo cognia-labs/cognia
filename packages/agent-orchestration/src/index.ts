@@ -5,9 +5,11 @@
  * conformance contract, the persistence rules every store applies, the
  * decision and evidence ledgers, the durable coordinator behind host ports,
  * replay
- * safety and attempt fencing, run usage accounting, and fair scheduling.
+ * safety and attempt fencing, run usage accounting, fair scheduling, and the
+ * rules for aggregating several agents' answers into one.
  * Hosts implement the store over their own database; nothing here touches a database, UI or process.
  */
+export * from "./aggregate"
 export * from "./content"
 export * from "./coordinator"
 export * from "./decision-ledger"

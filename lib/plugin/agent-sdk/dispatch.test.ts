@@ -19,7 +19,6 @@ import {
 import type { LaunchChildRunInput } from "@/lib/execution/launch-child-run"
 import { runCompletionRail } from "@/lib/ai/agent/agent-executor"
 import { getSubagent } from "@/lib/plugin/registries/subagent-registry"
-import { agentTeamManager } from "@/lib/squads/agent-team"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { PluginPiiError } from "@/lib/plugin/api/plugin-pii-gate"
 
@@ -63,13 +62,13 @@ jest.mock("@/lib/ai/agent/external/agent-hooks", () => ({
   __esModule: true,
   fireAgentHook: (...a: unknown[]) => mockFireAgentHook(...(a as [])),
 }))
-jest.mock("@/lib/squads/agent-team", () => ({
+const mockTeams: Record<string, unknown> = {}
+const mockUpsertTeam = jest.fn((team: { id: string }) => {
+  mockTeams[team.id] = team
+})
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
   __esModule: true,
-  agentTeamManager: {
-    get: jest.fn(),
-    create: jest.fn(),
-    start: jest.fn(async () => undefined),
-  },
+  useAgentTeamStore: { getState: () => ({ teams: mockTeams, upsertTeam: mockUpsertTeam }) },
 }))
 
 const externalExecute = jest.fn()
@@ -120,11 +119,6 @@ jest.mock("@/lib/ai/agent/external/runtimes/acp/resolve-acp-mcp-servers", () => 
 
 const mockExecute = runCompletionRail as jest.MockedFunction<typeof runCompletionRail>
 const mockGetSubagent = getSubagent as jest.MockedFunction<typeof getSubagent>
-const mockTeam = agentTeamManager as unknown as {
-  get: jest.Mock
-  create: jest.Mock
-  start: jest.Mock
-}
 
 const subagent: PluginSubagentDef = {
   id: "reviewer",
@@ -149,7 +143,8 @@ beforeEach(() => {
     toolsAvailable: true,
     finishReason: "stop",
   } as never)
-  mockTeam.start.mockResolvedValue(undefined)
+  for (const id of Object.keys(mockTeams)) delete mockTeams[id]
+  mockUpsertTeam.mockClear()
   externalGetAllAgents.mockReturnValue([])
   externalIsFromPreset.mockReturnValue(null)
   externalSupported.mockReturnValue(true)
@@ -975,7 +970,7 @@ describe("runTeam", () => {
     })
 
   it("launches an existing team as a squad child run and returns its outcome", async () => {
-    mockTeam.get.mockReturnValueOnce({ id: "t1" })
+    mockTeams.t1 = { id: "t1" }
     squadLaunch({ status: "completed" })
     const res = await runTeam("t1", { ultracode: true })
     expect(mockLaunchChildRun).toHaveBeenCalledWith({
@@ -983,12 +978,11 @@ describe("runTeam", () => {
       surface: "plugin",
       target: { kind: "squad", squadId: "t1", brief: "", origin: "plugin", ultracode: true },
     })
-    expect(mockTeam.start).not.toHaveBeenCalled()
     expect(res).toEqual({ teamId: "t1", status: "completed" })
   })
 
   it("keeps the caller's origin for the gate policy", async () => {
-    mockTeam.get.mockReturnValueOnce({ id: "t1" })
+    mockTeams.t1 = { id: "t1" }
     squadLaunch({ status: "failed" })
     const res = await runTeam("t1", { origin: "external" })
     expect(mockLaunchChildRun.mock.calls[0][0]).toMatchObject({
@@ -999,7 +993,6 @@ describe("runTeam", () => {
   })
 
   it("throws when the team id is not found", async () => {
-    mockTeam.get.mockReturnValue(undefined)
     await expect(runTeam("nope")).rejects.toThrow(/not found/)
     expect(mockLaunchChildRun).not.toHaveBeenCalled()
   })
@@ -1008,13 +1001,13 @@ describe("runTeam", () => {
     squadLaunch({ status: "completed" })
     const config = { id: "adhoc", name: "Ad-hoc" } as never
     const res = await runTeam(config)
-    expect(mockTeam.create).toHaveBeenCalledWith(config)
+    expect(mockUpsertTeam).toHaveBeenCalledWith(config)
     expect(mockLaunchChildRun.mock.calls[0][0].target).toMatchObject({ squadId: "adhoc" })
     expect(res.teamId).toBe("adhoc")
   })
 
   it("throws the Squad's refusal", async () => {
-    mockTeam.get.mockReturnValueOnce({ id: "t1" })
+    mockTeams.t1 = { id: "t1" }
     mockLaunchChildRun.mockResolvedValueOnce({
       started: false,
       reason: "engine_refused",

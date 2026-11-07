@@ -24,6 +24,7 @@ import {
   type StartSquadRunDeps,
   type SquadPlanApprovalRequest,
 } from "@/lib/squads/squad/start-squad-run"
+import { buildSquadStartInput } from "@/lib/squads/squad/build-start-input"
 
 export interface StartTeamRunFromIMInput {
   teamId: string
@@ -128,21 +129,23 @@ export async function startTeamRunFromIM(
         }
       : undefined
 
+  // An IM surface binds the run to its conversation: the presentation runner
+  // keys off a connector binding, chat does not.
   const result = await startSquadRun(
-    {
+    buildSquadStartInput({
       squadId: teamId,
       goal: input.goal,
-      origin: "im",
-      triggeredFrom,
       runId,
-      // The presentation runner keys off a connector binding; chat does not.
-      bindConnectorRun: true,
-      ...(input.session ? { session: input.session } : {}),
-      ...(input.characterId ? { characterId: input.characterId } : {}),
-      ...(input.permissionCeiling ? { permissionCeiling: input.permissionCeiling } : {}),
-      ...(input.requirePlanApprovalFloor ? { requirePlanApprovalFloor: true } : {}),
-      ...(planApprovalDelegate ? { planApprovalDelegate } : {}),
-    },
+      surface: {
+        kind: "im",
+        triggeredFrom,
+        ...(input.session ? { session: input.session } : {}),
+        ...(input.characterId ? { characterId: input.characterId } : {}),
+        ...(input.permissionCeiling ? { permissionCeiling: input.permissionCeiling } : {}),
+        ...(input.requirePlanApprovalFloor ? { requirePlanApprovalFloor: true } : {}),
+        ...(planApprovalDelegate ? { planApprovalDelegate } : {}),
+      },
+    }),
     deps
   )
 

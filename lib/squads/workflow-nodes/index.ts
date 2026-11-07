@@ -9,11 +9,7 @@
  * workflow orchestrator used to close through `built-ins → teams → runtime`.
  */
 
-import type {
-  StepExecutionContext,
-  StepExecutionResult,
-  WorkflowTriggeredFrom,
-} from "@/types/workflow/visual"
+import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
 import type { TeamWorkflowNodes } from "@/lib/workflow/nodes/teams/team-runtime-port"
 import { nonRetryable } from "@/lib/workflow/nodes/shared/executor-support"
 import { runTeamCompose, runTeamDelegate, runTeamMessage, runTeamStatus } from "./team-ops"
@@ -55,100 +51,36 @@ export async function resolveTeamKnowledgeBaseIds(teamId: string): Promise<reado
 }
 
 // ── action.team.run ───────────────────────────────────────────────────────
-// Per ADR-0022 §5 PR 4. Kicks off a team lifecycle via the F-path synthesizer.
-// Wires storeReader/storeWriter from the live Zustand store; the runtime
-// itself synthesizes a child VisualWorkflow and runs it through workflow
-// runtime. Returns the team-run id (the inner workflowRuns row) so the UI
-// can navigate.
+// Starts a Squad run through the one launch seam (`startSquadRun`, ADR-0252
+// §5) and waits for it to end. The workflow run is the Squad run's parent, so
+// a stop of the workflow reaches it and the run tree shows it under the node.
+// Returns the Squad run's id so the UI can navigate to it.
 export async function runTeamNode(ctx: StepExecutionContext): Promise<StepExecutionResult> {
   const params = ctx.params as { teamId?: string; goal?: string }
   const teamId = params.teamId?.trim()
   if (!teamId) throw nonRetryable("action.team.run requires 'teamId'")
 
-  const [{ useAgentTeamStore }, { runTeamLifecycle }, { buildAgentTeamRuntimeDeps }] =
-    await Promise.all([
-      import("@/stores/squads/agent-team-store/store"),
-      import("@/lib/squads/agent-team-runtime"),
-      import("@/lib/squads/agent-team-runtime-deps"),
-    ])
+  const [
+    { useAgentTeamStore },
+    { buildSquadStartInput },
+    { runSquadToEnd },
+    { workflowSquadSurface },
+  ] = await Promise.all([
+    import("@/stores/squads/agent-team-store/store"),
+    import("../squad/build-start-input"),
+    import("../squad/run-squad-to-end"),
+    import("./workflow-squad-surface"),
+  ])
+  if (!useAgentTeamStore.getState().getTeam(teamId)) throw nonRetryable(`team ${teamId} not found`)
 
-  const store = useAgentTeamStore.getState()
-  const team = store.getTeam(teamId)
-  if (!team) throw nonRetryable(`team ${teamId} not found`)
-
-  // When the outer run was kicked off from an IM channel (via
-  // `startWorkflowFromIM`, which mirrors the origin onto
-  // `trigger.binding`), carry that origin into the synthesized team run so
-  // the run-presentation runner fans the team's progress + final result
-  // back to the originating conversation. Only set `source: "im"` when both
-  // identifiers are present; UI / API runs leave it undefined so their
-  // behavior is unchanged.
-  const triggerBinding = ctx.trigger.binding
-  const triggeredFrom: WorkflowTriggeredFrom | undefined =
-    triggerBinding?.adapterId && triggerBinding?.conversationKey
-      ? {
-          source: "im",
-          adapterId: triggerBinding.adapterId,
-          conversationKey: triggerBinding.conversationKey,
-          ...(triggerBinding.sessionId ? { sessionId: triggerBinding.sessionId } : {}),
-        }
-      : undefined
-
-  // Loop guard: when THIS workflow was itself started by a team-completion
-  // fan-out (trigger.team payload carries chainDepth), thread the depth
-  // into the nested lifecycle so its own fan-out can stop at the cap.
-  const triggerPayload = ctx.trigger.payload as { chainDepth?: unknown } | undefined
-  const triggerChainDepth =
-    typeof triggerPayload?.chainDepth === "number" ? triggerPayload.chainDepth : 0
-
-  const partial = buildAgentTeamRuntimeDeps()
-  const { resolveWorkflowKnowledgeAccess } = await import("@/lib/workflow/knowledge/access")
-  const knowledgeAccess = await resolveWorkflowKnowledgeAccess(ctx)
-  const deps = {
-    ...partial,
-    ...(knowledgeAccess ? { knowledgeAccess } : {}),
-    ...(triggeredFrom ? { triggeredFrom } : {}),
-    triggerChainDepth,
-    // IM-originated workflows run headless (gate policy "im"); UI-launched
-    // workflows keep the interactive blocking gates.
-    origin: triggeredFrom ? ("im" as const) : ("interactive" as const),
-    storeReader: {
-      getTeam: (id: string) => useAgentTeamStore.getState().getTeam(id),
-      getTeammates: (id: string) => useAgentTeamStore.getState().getTeammates(id),
-      getTeamTasks: (id: string) => useAgentTeamStore.getState().getTeamTasks(id),
-    },
-    storeWriter: {
-      addMessage: (
-        input: Parameters<typeof useAgentTeamStore.getState>[never] extends never
-          ? never
-          : Parameters<ReturnType<typeof useAgentTeamStore.getState>["addMessage"]>[0]
-      ) => useAgentTeamStore.getState().addMessage(input),
-      setTaskStatus: (
-        taskId: string,
-        status: Parameters<ReturnType<typeof useAgentTeamStore.getState>["setTaskStatus"]>[1],
-        result?: string,
-        error?: string
-      ) => useAgentTeamStore.getState().setTaskStatus(taskId, status, result, error),
-      updateTeammate: (
-        teammateId: string,
-        updates: Parameters<ReturnType<typeof useAgentTeamStore.getState>["updateTeammate"]>[1]
-      ) => useAgentTeamStore.getState().updateTeammate(teammateId, updates),
-      addTask: (
-        input: Parameters<ReturnType<typeof useAgentTeamStore.getState>["createTask"]>[0]
-      ) => useAgentTeamStore.getState().createTask(input),
-      updateTask: (
-        taskId: string,
-        updates: Parameters<ReturnType<typeof useAgentTeamStore.getState>["updateTask"]>[1]
-      ) => useAgentTeamStore.getState().updateTask(taskId, updates),
-      addEvent: (event: Parameters<ReturnType<typeof useAgentTeamStore.getState>["addEvent"]>[0]) =>
-        useAgentTeamStore.getState().addEvent(event),
-      addTeammate: (
-        input: Parameters<ReturnType<typeof useAgentTeamStore.getState>["addTeammate"]>[0]
-      ) => useAgentTeamStore.getState().addTeammate(input),
-    },
-  }
-
-  const result = await runTeamLifecycle(teamId, deps, ctx.signal).catch((err: unknown) => {
+  const end = await runSquadToEnd(
+    buildSquadStartInput({
+      squadId: teamId,
+      ...(params.goal?.trim() ? { goal: params.goal.trim() } : {}),
+      surface: await workflowSquadSurface(ctx),
+    }),
+    { ...(ctx.signal ? { signal: ctx.signal } : {}) }
+  ).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err)
     const wrapped = new Error(`action.team.run: ${message}`) as Error & { retryable?: boolean }
     wrapped.retryable = false
@@ -158,9 +90,9 @@ export async function runTeamNode(ctx: StepExecutionContext): Promise<StepExecut
   return {
     output: {
       teamId,
-      teamRunId: result.runId,
-      status: result.status,
-      reason: result.reason,
+      teamRunId: end.start.runId,
+      status: end.outcome,
+      reason: end.reason,
     },
   }
 }

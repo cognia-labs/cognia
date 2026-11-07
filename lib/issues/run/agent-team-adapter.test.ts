@@ -13,7 +13,7 @@ import {
   createAgentTeamChildRun,
 } from "@/lib/db/agent-team-runtime"
 import {
-  squadRunOriginOf,
+  squadStartSurfaceOf,
   AGENT_TEAM_RUN_ADAPTER_ID,
   BUSY_TEAM_STATUSES,
   __setLoadedAgentTeamStoreForTesting,
@@ -26,7 +26,6 @@ import {
   type AgentTeamRunAdapterDeps,
 } from "./agent-team-adapter"
 
-const mockStart = jest.fn(async () => {})
 const mockAbort = jest.fn()
 // The default `startTeam` goes through the ADR-0140 funnel, not straight to
 // the manager, so the run gets the id convention, the `projectId` stamp and an
@@ -56,9 +55,6 @@ const mockMakeDelegate = jest.fn((_ctx: unknown) => async (request: unknown) => 
 })
 jest.mock("@/lib/connectors/hitl/plan-approval", () => ({
   makeImPlanApprovalDelegate: (ctx: unknown) => mockMakeDelegate(ctx),
-}))
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: { start: (...args: unknown[]) => mockStart(...(args as [])) },
 }))
 jest.mock("@/lib/squads/agent-team-runtime", () => ({
   abortTeam: (...args: unknown[]) => mockAbort(...args),
@@ -643,7 +639,6 @@ describe("default deps", () => {
       origin: "im",
       triggeredFrom: { source: "im" },
     })
-    expect(mockStart).not.toHaveBeenCalled()
     mockStartSquadRun.mockResolvedValueOnce({ started: false, reason: "not_ready" })
     await expect(deps.startTeam("team-1", "im", "x")).rejects.toThrow(
       "squad run refused: not_ready"
@@ -760,16 +755,24 @@ describe("default deps", () => {
   })
 })
 
-describe("squadRunOriginOf", () => {
-  it("runs a wakeup under the scheduler's headless policy and says so", () => {
-    expect(squadRunOriginOf("wakeup")).toEqual({
-      origin: "scheduler",
-      triggeredFrom: { source: "schedule" },
-    })
-    expect(squadRunOriginOf("im")).toEqual({ origin: "im", triggeredFrom: { source: "im" } })
-    expect(squadRunOriginOf("interactive")).toEqual({
-      origin: "interactive",
-      triggeredFrom: { source: "ui" },
+describe("squadStartSurfaceOf", () => {
+  it("runs a wakeup as the scheduler's, a tracker start as a person's, and an IM press as IM", () => {
+    expect(squadStartSurfaceOf("wakeup")).toEqual({ kind: "scheduler" })
+    expect(squadStartSurfaceOf("interactive")).toEqual({ kind: "issue" })
+    expect(squadStartSurfaceOf("im")).toEqual({ kind: "im", triggeredFrom: { source: "im" } })
+    const planApprovalDelegate = async () => undefined
+    const session = { id: "chat-1" } as never
+    expect(
+      squadStartSurfaceOf("im", {
+        triggeredFrom: { source: "im", adapterId: "lark", conversationKey: "k" },
+        planApprovalDelegate,
+        session,
+      })
+    ).toEqual({
+      kind: "im",
+      triggeredFrom: { source: "im", adapterId: "lark", conversationKey: "k" },
+      planApprovalDelegate,
+      session,
     })
   })
 })

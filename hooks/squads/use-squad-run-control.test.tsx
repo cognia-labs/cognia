@@ -278,6 +278,13 @@ describe("control", () => {
     }
   )
 
+  it("names the pressing surface it was given in the control", async () => {
+    mockRun = run(["pause"])
+    const { result } = renderHook(() => useSquadRunControl("a", { surface: "squad-board" }))
+    await act(() => result.current.control("pause"))
+    expect(mockControl).toHaveBeenCalledWith(expect.objectContaining({ surface: "squad-board" }))
+  })
+
   it("does nothing without a run", async () => {
     const { result } = renderHook(() => useSquadRunControl("a"))
     await act(() => result.current.control("pause"))

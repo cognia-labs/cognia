@@ -12,8 +12,14 @@
  * Both the `/council` slash command and the `ai.council` workflow node call
  * this one function. The synthesizer step is injectable (`deps.runPrompt`) so
  * the suite runs without touching real providers.
+ *
+ * What counts as a councillor's answer is the rule every aggregating surface
+ * shares (`@cognia/agent-orchestration/aggregate`). The agreement rating is
+ * the synthesizer's own, parsed from its report: councillors answer in free
+ * text, so there are no ballots to tally.
  */
 
+import { answerText } from "@cognia/agent-orchestration/aggregate"
 import type { RoutedPromptLedger } from "@/lib/workflow/nodes/ai/ai-prompt-routed"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
@@ -142,7 +148,7 @@ export function formatCouncillorResults(
   originalPrompt: string,
   results: CouncillorResult[]
 ): string {
-  const completed = results.filter((r) => r.status === "completed" && r.text)
+  const completed = results.filter((r) => r.status === "completed" && answerText(r.text))
   const failed = results.filter((r) => r.status !== "completed")
 
   if (completed.length === 0) {
@@ -221,7 +227,7 @@ async function runCouncillor(
       }),
       timeoutMs
     )
-    const text = (out.completion ?? "").trim()
+    const text = answerText(out.completion)
     if (!text) {
       return {
         name: spec.name,

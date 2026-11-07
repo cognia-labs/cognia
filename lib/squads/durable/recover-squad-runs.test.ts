@@ -14,12 +14,12 @@ const restoredInput = {
   sessionWorkingDir: "/original-workspace",
 }
 const restoreSquadRunInput = jest.fn<
-  ReturnType<typeof import("./squad/squad-lifecycle-runner").restoreSquadRunInput>,
-  Parameters<typeof import("./squad/squad-lifecycle-runner").restoreSquadRunInput>
+  ReturnType<typeof import("../squad/squad-lifecycle-runner").restoreSquadRunInput>,
+  Parameters<typeof import("../squad/squad-lifecycle-runner").restoreSquadRunInput>
 >(async () => restoredInput)
 const parkSquadRecovery = jest.fn<
-  ReturnType<typeof import("./squad/squad-lifecycle-runner").parkSquadRecovery>,
-  Parameters<typeof import("./squad/squad-lifecycle-runner").parkSquadRecovery>
+  ReturnType<typeof import("../squad/squad-lifecycle-runner").parkSquadRecovery>,
+  Parameters<typeof import("../squad/squad-lifecycle-runner").parkSquadRecovery>
 >(async () => undefined)
 const controlSquadRun = jest.fn(async (_target: unknown, _action: string) => ({
   ok: true,
@@ -46,7 +46,7 @@ const listPendingSquadReviews = jest.fn(
     }>
 )
 const openSquadReview = jest.fn()
-jest.mock("./gates/squad-review-gate", () => ({
+jest.mock("../gates/squad-review-gate", () => ({
   listPendingSquadReviews: () => listPendingSquadReviews(),
   openSquadReview: (...args: unknown[]) => openSquadReview(...args),
   squadReviewRequestIdFromInterrupt: () => ({
@@ -71,7 +71,7 @@ jest.mock("@/stores/squads/agent-team-store/store", () => ({
   useAgentTeamStore: { getState: () => storeState },
 }))
 
-jest.mock("./durable/durable-runtime", () => ({
+jest.mock("./durable-runtime", () => ({
   getDurableTeamCoordinator: () => ({ recover, retryChild }),
 }))
 
@@ -81,27 +81,30 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
 }))
 
 const guardSquadResume = jest.fn<
-  ReturnType<typeof import("./squad/squad-lifecycle-runner").guardSquadResume>,
-  Parameters<typeof import("./squad/squad-lifecycle-runner").guardSquadResume>
+  ReturnType<typeof import("../squad/squad-lifecycle-runner").guardSquadResume>,
+  Parameters<typeof import("../squad/squad-lifecycle-runner").guardSquadResume>
 >(async () => ({ blocked: false, blockers: [] }))
-jest.mock("./squad/squad-lifecycle-runner", () => ({
+jest.mock("../squad/squad-lifecycle-runner", () => ({
   runSquadLifecycle: (input: unknown) => runSquadLifecycle(input),
   prepareSquadResume: () => prepareSquadResume(),
   restoreSquadRunInput: (teamId: string, runId: string) => restoreSquadRunInput(teamId, runId),
   parkSquadRecovery: (...args: Parameters<typeof parkSquadRecovery>) => parkSquadRecovery(...args),
   guardSquadResume: (teamId: string, runId: string) => guardSquadResume(teamId, runId),
   resumeTaskFilter: () => true,
-  configureAgentTeamRuntime: jest.fn(),
-  __resetAgentTeamRuntimeForTesting: jest.fn(),
 }))
 
-jest.mock("./durable/durable-control", () => ({
+const settleAgentTeamExecutionRun = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("@/lib/execution/agent-team-bridge", () => ({
+  settleAgentTeamExecutionRun: (...args: unknown[]) => settleAgentTeamExecutionRun(...args),
+}))
+
+jest.mock("./durable-control", () => ({
   controlSquadRun: (target: unknown, action: string) => controlSquadRun(target, action),
 }))
 
-import { agentTeamManager, recoverDurableAgentTeams } from "./agent-team"
+import { recoverSquadRuns } from "./recover-squad-runs"
 
-describe("durable AgentTeam manager", () => {
+describe("recoverSquadRuns", () => {
   beforeEach(() => {
     jest.clearAllMocks()
     listPendingSquadReviews.mockResolvedValue([])
@@ -119,7 +122,7 @@ describe("durable AgentTeam manager", () => {
         approve = resolve
       })
     )
-    await recoverDurableAgentTeams()
+    await recoverSquadRuns()
     expect(openSquadReview).toHaveBeenCalled()
     expect(guardSquadResume).not.toHaveBeenCalled()
     expect(runSquadLifecycle).not.toHaveBeenCalled()
@@ -136,7 +139,7 @@ describe("durable AgentTeam manager", () => {
       { id: "review-1", reviewKind: "budget_extension" },
     ])
     openSquadReview.mockResolvedValueOnce({ kind: "budget_extension", outcome: "deny" })
-    await recoverDurableAgentTeams()
+    await recoverSquadRuns()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(controlSquadRun).toHaveBeenCalledWith({ runId: "run-1" }, "pause")
     expect(guardSquadResume).not.toHaveBeenCalled()
@@ -155,7 +158,7 @@ describe("durable AgentTeam manager", () => {
         finishGuard = resolve
       })
     )
-    await recoverDurableAgentTeams()
+    await recoverSquadRuns()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(guardSquadResume).toHaveBeenCalled()
     getAgentTeamRun.mockResolvedValue({ id: "run-1", teamId: "team-1", status: "paused" })
@@ -178,7 +181,7 @@ describe("durable AgentTeam manager", () => {
         openSquadReview.mockResolvedValueOnce({ kind: "budget_extension", outcome: "approve" })
         guardSquadResume.mockRejectedValueOnce(new Error("readiness read failed"))
       }
-      await recoverDurableAgentTeams()
+      await recoverSquadRuns()
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(parkSquadRecovery).toHaveBeenCalledWith("run-1", "team-1", "reentry_failed")
       expect(runSquadLifecycle).not.toHaveBeenCalled()
@@ -199,7 +202,7 @@ describe("durable AgentTeam manager", () => {
         })
       )
       const controller = new AbortController()
-      await recoverDurableAgentTeams({ signal: controller.signal })
+      await recoverSquadRuns({ signal: controller.signal })
       expect(openSquadReview).toHaveBeenCalledWith(
         expect.objectContaining({ signal: controller.signal })
       )
@@ -214,16 +217,14 @@ describe("durable AgentTeam manager", () => {
   )
 
   it("projects uncertain recovery as an operator input gate without replaying work", async () => {
-    await expect(recoverDurableAgentTeams()).resolves.toEqual([
-      { runId: "run-1", status: "needs_input" },
-    ])
+    await expect(recoverSquadRuns()).resolves.toEqual([{ runId: "run-1", status: "needs_input" }])
     expect(setTeamStatus).toHaveBeenCalledWith("team-1", "paused")
     expect(runSquadLifecycle).not.toHaveBeenCalled()
   })
 
   it("re-enters a safely recoverable run over its remaining work", async () => {
     recover.mockResolvedValueOnce([{ runId: "run-1", status: "recovering" as never }])
-    await recoverDurableAgentTeams()
+    await recoverSquadRuns()
     expect(restoreSquadRunInput).toHaveBeenCalledWith("team-1", "run-1")
     expect(prepareSquadResume).toHaveBeenCalledTimes(1)
     expect(runSquadLifecycle).toHaveBeenCalledWith(
@@ -240,7 +241,7 @@ describe("durable AgentTeam manager", () => {
       blocked: true,
       blockers: [{ code: "missing_environment_ref" }],
     })
-    const outcomes = await recoverDurableAgentTeams()
+    const outcomes = await recoverSquadRuns()
     expect(prepareSquadResume).not.toHaveBeenCalled()
     expect(runSquadLifecycle).not.toHaveBeenCalled()
     expect(restoreSquadRunInput).not.toHaveBeenCalled()
@@ -251,9 +252,7 @@ describe("durable AgentTeam manager", () => {
     recover.mockResolvedValueOnce([{ runId: "run-1", status: "recovering" as never }])
     restoreSquadRunInput.mockResolvedValueOnce(undefined)
 
-    await expect(recoverDurableAgentTeams()).resolves.toEqual([
-      { runId: "run-1", status: "needs_input" },
-    ])
+    await expect(recoverSquadRuns()).resolves.toEqual([{ runId: "run-1", status: "needs_input" }])
     expect(prepareSquadResume).not.toHaveBeenCalled()
     expect(runSquadLifecycle).not.toHaveBeenCalled()
   })
@@ -262,7 +261,7 @@ describe("durable AgentTeam manager", () => {
     recover.mockResolvedValueOnce([{ runId: "run-1", status: "recovering" as never }])
     runSquadLifecycle.mockRejectedValueOnce(new Error("re-entry failed"))
 
-    await recoverDurableAgentTeams()
+    await recoverSquadRuns()
 
     expect(parkSquadRecovery).toHaveBeenCalledWith("run-1", "team-1", "reentry_failed")
   })
@@ -273,37 +272,47 @@ describe("durable AgentTeam manager", () => {
       getAgentTeamRun.mockResolvedValue({ id: "run-1", teamId: "team-1", status: "running" })
       throw new Error("execution failed")
     })
-    await recoverDurableAgentTeams()
+    await recoverSquadRuns()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(parkSquadRecovery).toHaveBeenCalledWith("run-1", "team-1", "reentry_failed")
   })
 
-  /** Team-addressed verbs are adapters onto the one control state machine. */
-  it.each([
-    ["pause", "pause"],
-    ["resume", "resume"],
-    ["shutdown", "stop"],
-  ] as const)("routes %s through controlSquadRun as %s", async (verb, action) => {
-    await agentTeamManager[verb]("team-1")
-    expect(controlSquadRun).toHaveBeenCalledWith({ teamId: "team-1" }, action)
+  it.each(["cancelled", "terminated"] as const)(
+    "journals a recovered %s run even without a team definition",
+    async (status) => {
+      const run = { id: "run-1", teamId: "deleted-team", status, completedAt: 123 }
+      getAgentTeamRun.mockResolvedValue(run as never)
+      recover.mockResolvedValueOnce([{ runId: run.id, status } as never])
+      await expect(recoverSquadRuns()).resolves.toEqual([{ runId: run.id, status }])
+      expect(settleAgentTeamExecutionRun).toHaveBeenCalledWith(run, "cancelled", 123)
+      expect(setTeamStatus).toHaveBeenCalledWith("deleted-team", "cancelled")
+    }
+  )
+
+  it("does not publish a stale terminal recovery outcome", async () => {
+    getAgentTeamRun.mockResolvedValue({ id: "run-1", teamId: "team-1", status: "running" })
+    recover.mockResolvedValueOnce([{ runId: "run-1", status: "cancelled" as never }])
+    await recoverSquadRuns()
+    expect(settleAgentTeamExecutionRun).not.toHaveBeenCalled()
   })
 
-  it("retries one child through the durable coordinator and re-enters only that task", async () => {
-    await agentTeamManager.retryChild("child-1", "device:worker-b")
+  it("finishes recovery admission without awaiting a long recovered lifecycle", async () => {
+    recover.mockResolvedValueOnce([{ runId: "run-1", status: "recovering" as never }])
+    runSquadLifecycle.mockReturnValueOnce(new Promise(() => {}))
+    const result = await Promise.race([
+      recoverSquadRuns(),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 100)),
+    ])
+    expect(result).toEqual([{ runId: "run-1", status: "recovering" }])
+    expect(runSquadLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({ requirePlanApprovalFloor: true })
+    )
+  })
 
-    expect(retryChild).toHaveBeenCalledWith("child-1", "device:worker-b")
-    expect(updateTask).toHaveBeenCalledWith("task-1", {
-      status: "pending",
-      error: undefined,
-      completedAt: undefined,
-    })
-    const input = runSquadLifecycle.mock.calls[0]?.[0] as {
-      teamId: string
-      runId: string
-      taskFilter: (task: { id: string }) => boolean
-    }
-    expect(input).toMatchObject(restoredInput)
-    expect(input.taskFilter({ id: "task-1" })).toBe(true)
-    expect(input.taskFilter({ id: "task-2" })).toBe(false)
+  it("stops before reading anything once its signal is aborted", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(recoverSquadRuns({ signal: controller.signal })).resolves.toEqual([])
+    expect(recover).not.toHaveBeenCalled()
   })
 })

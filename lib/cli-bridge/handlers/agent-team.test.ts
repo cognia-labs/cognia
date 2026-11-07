@@ -1,7 +1,7 @@
 /**
  * Coverage for the CLI-bridge agent-team renderer handlers: store-backed
- * list projection (redacted), fire-and-forget run dispatch with the remote
- * origin, and the run-status projection (synthesized-run filter reuse +
+ * list projection (redacted), run dispatch with the remote origin that
+ * returns once launched, and the run-status projection (synthesized-run filter reuse +
  * PII-gated run_log messages, never step payloads).
  */
 
@@ -17,13 +17,9 @@ jest.mock("@cognia/redact", () => ({
   hasNoLeakingPii: (text: string) => hasNoLeakingPiiMock(text),
 }))
 
-const managerGetMock = jest.fn()
-const managerStartMock = jest.fn()
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    get: (...args: unknown[]) => managerGetMock(...args),
-    start: (...args: unknown[]) => managerStartMock(...args),
-  },
+const startSquadRunMock = jest.fn()
+jest.mock("@/lib/squads/squad/start-squad-run", () => ({
+  startSquadRun: (...args: unknown[]) => startSquadRunMock(...args),
 }))
 
 const runsRows: Array<Record<string, unknown>> = []
@@ -73,8 +69,7 @@ beforeEach(() => {
   for (const key of Object.keys(executionRuns)) delete executionRuns[key]
   redactTextMock.mockClear().mockImplementation((text: string) => ({ redacted: text, map: {} }))
   hasNoLeakingPiiMock.mockClear().mockReturnValue(true)
-  managerGetMock.mockReset()
-  managerStartMock.mockReset().mockResolvedValue(undefined)
+  startSquadRunMock.mockReset()
 })
 
 describe("agentTeamList", () => {
@@ -103,17 +98,40 @@ describe("agentTeamList", () => {
 describe("agentTeamRun", () => {
   it("requires a teamId and an existing team", async () => {
     expect((await agentTeamRun({})).ok).toBe(false)
-    managerGetMock.mockReturnValue(undefined)
+    storeState.teams = {}
     const out = await agentTeamRun({ teamId: "missing" })
     expect(out.ok).toBe(false)
     expect(out.error).toMatch(/not found/)
+    expect(startSquadRunMock).not.toHaveBeenCalled()
   })
 
-  it("dispatches fire-and-forget with the remote origin", async () => {
-    managerGetMock.mockReturnValue({ id: "t1" })
+  it("launches with the remote origin and returns without waiting for the run", async () => {
+    storeState.teams = { t1: { id: "t1" } }
+    startSquadRunMock.mockResolvedValueOnce({ started: true, runId: "run-1" })
     const out = await agentTeamRun({ teamId: "t1", ultracode: true })
     expect(out).toEqual({ ok: true, teamId: "t1", started: true })
-    expect(managerStartMock).toHaveBeenCalledWith("t1", { origin: "remote", ultracode: true })
+    expect(startSquadRunMock).toHaveBeenCalledWith({
+      squadId: "t1",
+      goal: "",
+      ultracode: true,
+      origin: "remote",
+      triggeredFrom: { source: "api" },
+    })
+  })
+
+  it("answers a refused start with its reason", async () => {
+    storeState.teams = { t1: { id: "t1" } }
+    startSquadRunMock.mockResolvedValueOnce({
+      started: false,
+      reason: "not_ready",
+      blockers: [{ code: "missing_environment_ref" }],
+    })
+    await expect(agentTeamRun({ teamId: "t1" })).resolves.toEqual({
+      ok: false,
+      teamId: "t1",
+      started: false,
+      error: "not_ready:missing_environment_ref",
+    })
   })
 })
 

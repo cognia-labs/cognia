@@ -7,30 +7,34 @@
 // the lifecycle settles; a stop is a run-control stop, so the run ends the way
 // any stopped Squad run ends and the watcher sees it settle as `cancelled`.
 
-import type { ChatSession } from "@cognia/agent-config-types"
 import type { ChildRunOutcome } from "@/types/execution/child-run"
 import type { SquadLaunchPort } from "@/types/modules/ports/squad-launch"
 
 export const port: SquadLaunchPort = {
   async start(input) {
-    const { startSquadRun } = await import("../squad/start-squad-run")
-    const result = await startSquadRun({
-      squadId: input.squadId,
-      goal: input.brief,
-      origin: input.origin,
-      // Another run asked for it. The acting identity is the parent's
-      // (`launchedByRunId`), not the surface's.
-      triggeredFrom: { source: "api" },
-      ...(input.sessionId ? { session: { id: input.sessionId } as ChatSession } : {}),
-      ...(input.launchedByRunId ? { launchedByRunId: input.launchedByRunId } : {}),
-      ...(input.ultracode !== undefined ? { ultracode: input.ultracode } : {}),
-    })
+    const [{ startSquadRun }, { buildSquadStartInput }, { squadStartRefusalDetail }] =
+      await Promise.all([
+        import("../squad/start-squad-run"),
+        import("../squad/build-start-input"),
+        import("../squad/run-squad-to-end"),
+      ])
+    // Another run asked for it. The acting identity is the parent's
+    // (`launchedByRunId`), not the surface's.
+    const result = await startSquadRun(
+      buildSquadStartInput({
+        squadId: input.squadId,
+        goal: input.brief,
+        ...(input.ultracode !== undefined ? { ultracode: input.ultracode } : {}),
+        surface: {
+          kind: "child",
+          origin: input.origin,
+          ...(input.launchedByRunId ? { launchedByRunId: input.launchedByRunId } : {}),
+          ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        },
+      })
+    )
     if (!result.started || !result.runId || !result.executionRunId) {
-      const reason =
-        result.reason === "not_ready"
-          ? `not_ready:${(result.blockers ?? []).map((blocker) => blocker.code).join(",")}`
-          : (result.reason ?? "dispatch_error")
-      return { started: false, reason }
+      return { started: false, reason: squadStartRefusalDetail(result) }
     }
     // A fresh launch mints its run id, so it is never a replay.
     if (result.duplicate) return { started: false, reason: "duplicate" }

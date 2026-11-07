@@ -3,8 +3,8 @@
  *
  * The issue's `team` assignee id is an `AgentTeam` id. The adapter appends one
  * `AgentTeamTask` to the team (with `metadata.issueId` so the team board can
- * badge it "from KEY-1"), then starts the team. `agentTeamManager.start`
- * snapshots the team's task list when it begins, so a team that is already
+ * badge it "from KEY-1"), then starts the team. A Squad run snapshots the
+ * team's task list when it begins, so a team that is already
  * executing / planning / paused cannot take a new task mid-run — the adapter
  * refuses with `team-busy` rather than adding a task nobody will pick up.
  *
@@ -30,6 +30,7 @@ import type { IssueRun, IssueRunArtifact } from "@/types/issues"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import type { SquadPlanApprovalDelegate } from "@/lib/squads/squad/start-squad-run"
+import type { SquadStartSurface } from "@/lib/squads/squad/build-start-input"
 import {
   getAgentTeamDeliveryGraph,
   getAgentTeamRun,
@@ -84,10 +85,9 @@ export interface AgentTeamRunAdapterDeps {
    * Kick off the run. Resolves once the Squad run is accepted (journalled,
    * lifecycle under way) with its id; throws when the Squad refused.
    *
-   * `goal` is the issue, stated as the Squad's objective. The previous
-   * `agentTeamManager.start` took none, so the lead planned against whatever
-   * objective the Squad had been configured with while the issue arrived as
-   * one more task in the list — the run row then had nothing to call itself.
+   * `goal` is the issue, stated as the Squad's objective, so the lead plans
+   * against it rather than whatever objective the Squad was configured with,
+   * and the run row is named after it.
    */
   startTeam: (
     teamId: string,
@@ -172,21 +172,29 @@ export async function resolveImSquadRunSurface(input: {
 }
 
 /**
- * The gate-policy origin and provenance a Squad run gets for an issue-run
- * origin. A wakeup is a scheduler fire: nobody is watching a modal, so the
- * Squad gets the scheduler's headless gate policy and says "schedule".
+ * The launch surface a Squad run gets for an issue-run origin. A wakeup is a
+ * scheduler fire: nobody is watching a modal, so the Squad gets the
+ * scheduler's headless gate policy and says "schedule". An IM card press is an
+ * IM surface, with somewhere to ask when its thread could be resolved.
  */
-export function squadRunOriginOf(origin: IssueRunOrigin): {
-  origin: string
-  triggeredFrom: WorkflowTriggeredFrom
-} {
+export function squadStartSurfaceOf(
+  origin: IssueRunOrigin,
+  im?: ImSquadRunSurface
+): SquadStartSurface {
   switch (origin) {
     case "wakeup":
-      return { origin: "scheduler", triggeredFrom: { source: "schedule" } }
+      return { kind: "scheduler" }
     case "im":
-      return { origin: "im", triggeredFrom: { source: "im" } }
+      return im
+        ? {
+            kind: "im",
+            triggeredFrom: im.triggeredFrom,
+            planApprovalDelegate: im.planApprovalDelegate,
+            ...(im.session ? { session: im.session } : {}),
+          }
+        : { kind: "im", triggeredFrom: { source: "im" } }
     case "interactive":
-      return { origin: "interactive", triggeredFrom: { source: "ui" } }
+      return { kind: "issue" }
   }
 }
 
@@ -214,10 +222,9 @@ export function createDefaultAgentTeamRunAdapterDeps(): AgentTeamRunAdapterDeps 
       return loadedStore.getState().createTask(input)
     },
     startTeam: async (teamId, origin, goal, conversation) => {
-      // `startSquadRun` is the one funnel (ADR-0140). Going straight to
-      // `agentTeamManager.start` skipped the run-id convention, the
-      // `projectId` stamp and the execution row itself, so an issue-dispatched
-      // run was invisible in the cockpit unless the Squad was `durable-v2`.
+      // `startSquadRun` is the one launch (ADR-0140, ADR-0252 §5): it gives an
+      // issue-dispatched run the run-id convention, the `projectId` stamp and
+      // the execution row, so the cockpit shows it.
       //
       // An issue is not a conversation, so by default there is no `session`
       // and the run is uncarded — no thread to project progress onto and no
@@ -225,22 +232,24 @@ export function createDefaultAgentTeamRunAdapterDeps(): AgentTeamRunAdapterDeps 
       // implies. An IM card press is the exception: it names the thread, so
       // the run is minted up front (the approval delegate closes over its id)
       // and the Squad gets somewhere to ask.
-      const { startSquadRun, mintSquadRunId } = await import("@/lib/squads/squad/start-squad-run")
+      const [{ startSquadRun, mintSquadRunId }, { buildSquadStartInput }] = await Promise.all([
+        import("@/lib/squads/squad/start-squad-run"),
+        import("@/lib/squads/squad/build-start-input"),
+      ])
       const objective = goal ?? ""
       const runId = origin === "im" && conversation ? mintSquadRunId() : undefined
       const im =
         runId && conversation
           ? await resolveImSquadRunSurface({ teamId, runId, objective, conversation })
           : undefined
-      const result = await startSquadRun({
-        squadId: teamId,
-        goal: objective,
-        ...squadRunOriginOf(origin),
-        ...(im?.triggeredFrom ? { triggeredFrom: im.triggeredFrom } : {}),
-        ...(runId ? { runId } : {}),
-        ...(im ? { planApprovalDelegate: im.planApprovalDelegate } : {}),
-        ...(im?.session ? { session: im.session, bindConnectorRun: true } : {}),
-      })
+      const result = await startSquadRun(
+        buildSquadStartInput({
+          squadId: teamId,
+          goal: objective,
+          ...(runId ? { runId } : {}),
+          surface: squadStartSurfaceOf(origin, im),
+        })
+      )
       if (!result.started) {
         throw new Error(`squad run refused: ${result.reason ?? "unknown"}`)
       }

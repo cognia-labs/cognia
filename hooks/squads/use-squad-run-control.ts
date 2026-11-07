@@ -81,7 +81,19 @@ export interface SquadRunControl {
   control: (action: SquadControlAction) => Promise<void>
 }
 
-export function useSquadRunControl(squadId: string): SquadRunControl {
+export interface SquadRunControlOptions {
+  /**
+   * The pressing surface, named in each control's idempotency key so two
+   * surfaces pressing at once stay two gestures. Defaults to the inspector.
+   */
+  surface?: string
+}
+
+export function useSquadRunControl(
+  squadId: string,
+  options: SquadRunControlOptions = {}
+): SquadRunControl {
+  const surface = options.surface ?? "squad-inspector"
   const tReadiness = useTranslations("squads.readiness")
   const tControl = useTranslations("squads.fleet.control")
   const tRun = useTranslations("agentRuns.outcome")
@@ -159,7 +171,7 @@ export function useSquadRunControl(squadId: string): SquadRunControl {
         const result = await dispatchRunControl({
           runId: run.id,
           action,
-          surface: "squad-inspector",
+          surface,
           hostProfile,
         })
         if (!result.accepted) {
@@ -177,7 +189,7 @@ export function useSquadRunControl(squadId: string): SquadRunControl {
         setBusy(false)
       }
     },
-    [run, hostProfile, tControl, tRun]
+    [run, surface, hostProfile, tControl, tRun]
   )
 
   const allowed = run?.latestSnapshot?.allowedActions ?? []

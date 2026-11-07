@@ -57,23 +57,29 @@ export async function agentTeamRun(payload: Record<string, unknown>): Promise<Ag
   const teamId = typeof payload.teamId === "string" ? payload.teamId : ""
   if (!teamId) return { ok: false, error: "agent_team_run requires a teamId" }
   try {
-    const { agentTeamManager } = await import("@/lib/squads/agent-team")
-    if (!agentTeamManager.get(teamId)) {
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
+    if (!useAgentTeamStore.getState().teams[teamId]) {
       return { ok: false, error: `team ${teamId} not found` }
     }
-    // Fire-and-forget, mirroring remote-control's team.dispatch: `start`
-    // awaits the whole run, and the CLI polls run-status instead. Origin
-    // "remote" applies the headless gate policy. The runtime's inflight
-    // guard throws "already running" synchronously-ish — surface that via
-    // the catch below only when it rejects before this handler returns.
-    void agentTeamManager
-      .start(teamId, {
-        origin: "remote",
+    // Launch and return, mirroring remote-control's team.dispatch: the CLI
+    // polls run-status for the outcome. Origin "remote" applies the headless
+    // gate policy. A refused start (not ready, already running) is the answer.
+    const [{ startSquadRun }, { buildSquadStartInput }, { squadStartRefusalDetail }] =
+      await Promise.all([
+        import("@/lib/squads/squad/start-squad-run"),
+        import("@/lib/squads/squad/build-start-input"),
+        import("@/lib/squads/squad/run-squad-to-end"),
+      ])
+    const result = await startSquadRun(
+      buildSquadStartInput({
+        squadId: teamId,
         ...(typeof payload.ultracode === "boolean" ? { ultracode: payload.ultracode } : {}),
+        surface: { kind: "remote" },
       })
-      .catch(() => {
-        // Terminal failures surface through run-status polling.
-      })
+    )
+    if (!result.started) {
+      return { ok: false, teamId, started: false, error: squadStartRefusalDetail(result) }
+    }
     return { ok: true, teamId, started: true }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

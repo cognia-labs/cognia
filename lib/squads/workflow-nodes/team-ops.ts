@@ -81,16 +81,26 @@ export async function runTeamCompose(ctx: StepExecutionContext): Promise<StepExe
   let finalStatus: string | undefined
   let finalResult: string | undefined
   if (params.autoStart) {
-    const { agentTeamManager } = await import("@/lib/squads/agent-team")
-    await agentTeamManager
-      .start(result.teamId, {
+    // The composed Squad starts through the one launch seam as this workflow
+    // run's child, and the step waits for it to end.
+    const [{ buildSquadStartInput }, { runSquadToEnd }, { workflowSquadSurface }] =
+      await Promise.all([
+        import("../squad/build-start-input"),
+        import("../squad/run-squad-to-end"),
+        import("./workflow-squad-surface"),
+      ])
+    await runSquadToEnd(
+      buildSquadStartInput({
+        squadId: result.teamId,
         ...(params.ultracode !== undefined ? { ultracode: params.ultracode } : {}),
-      })
-      .catch((err: unknown) => {
-        throw nonRetryable(
-          `action.team.compose: team start failed — ${err instanceof Error ? err.message : String(err)}`
-        )
-      })
+        surface: await workflowSquadSurface(ctx),
+      }),
+      { ...(ctx.signal ? { signal: ctx.signal } : {}) }
+    ).catch((err: unknown) => {
+      throw nonRetryable(
+        `action.team.compose: team start failed — ${err instanceof Error ? err.message : String(err)}`
+      )
+    })
     started = true
     const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const team = useAgentTeamStore.getState().getTeam(result.teamId)

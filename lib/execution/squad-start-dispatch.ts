@@ -7,7 +7,6 @@ import { HostConsentRequiredError, issueHostAdminLease } from "@/lib/tauri/admin
 import { getCompanionConfigGeneration } from "@/lib/tauri/transport-companion"
 import { transport } from "@/lib/tauri/transport-instance"
 import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
-import { LOCAL_PERSON_RUN } from "./acting-authority"
 
 export type SquadStartOutcome = Omit<StartSquadRunResult, "reason"> & {
   reason?:
@@ -53,16 +52,19 @@ export function createSquadStartAttempt(input: SquadStartDispatch) {
     try {
       if (!sameHost()) return { started: false, reason: "host_changed" }
       if (!remote) {
-        const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
-        return await startSquadRun({
-          localAuthorization: LOCAL_PERSON_RUN,
-          squadId: teamId,
-          runId: launchId,
-          goal: goal ?? "",
-          origin: "interactive",
-          triggeredFrom: { source: "ui" },
-          ...(ultracode !== undefined ? { ultracode } : {}),
-        })
+        const [{ startSquadRun }, { buildSquadStartInput }] = await Promise.all([
+          import("@/lib/squads/squad/start-squad-run"),
+          import("@/lib/squads/squad/build-start-input"),
+        ])
+        return await startSquadRun(
+          buildSquadStartInput({
+            squadId: teamId,
+            runId: launchId,
+            ...(goal !== undefined ? { goal } : {}),
+            ...(ultracode !== undefined ? { ultracode } : {}),
+            surface: { kind: "console" },
+          })
+        )
       }
       if (typeof navigator !== "undefined" && navigator.onLine === false) {
         return { started: false, reason: "offline" }

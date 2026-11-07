@@ -23,7 +23,7 @@ import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution
 
 import { normalizeAgentModelRoleOverrides } from "@cognia/agent-contracts/external-agent"
 import { mergeModelRoleLayers } from "@/lib/ai/agent/external/config/model-plan"
-import type { AgentTeamConfig } from "@/lib/squads/agent-team"
+import type { AgentTeam } from "@/types/agent/agent-team"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { normalizeCogniaModelBinding } from "@/types/agent/external-agent"
 import type {
@@ -704,22 +704,22 @@ export async function dispatchSubagentAsChildRun(
  * settles; a refused start throws.
  */
 export async function runTeam(
-  teamOrConfig: string | AgentTeamConfig,
+  teamOrConfig: string | AgentTeam,
   options: PluginRunTeamOptions = {}
 ): Promise<PluginRunTeamResult> {
-  const { agentTeamManager } = await import("@/lib/squads/agent-team")
+  const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
 
   let teamId: string
   if (typeof teamOrConfig === "string") {
     teamId = teamOrConfig
-    if (!agentTeamManager.get(teamId)) {
+    if (!useAgentTeamStore.getState().teams[teamId]) {
       throw new Error(`runTeam: team "${teamId}" not found`)
     }
   } else {
     if (!teamOrConfig?.id) {
       throw new Error("runTeam: an ad-hoc team config must carry an id")
     }
-    agentTeamManager.create(teamOrConfig)
+    useAgentTeamStore.getState().upsertTeam(teamOrConfig)
     teamId = teamOrConfig.id
   }
 

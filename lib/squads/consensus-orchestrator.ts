@@ -22,6 +22,13 @@
  */
 
 import { nanoid } from "nanoid"
+import {
+  leader,
+  quorumMet,
+  tally,
+  totalWeight,
+  type QuorumRule,
+} from "@cognia/agent-orchestration/aggregate"
 import type {
   CastVoteInput,
   ConsensusRequest,
@@ -32,23 +39,41 @@ import type {
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 
+/** A closed ballot over the option indices; only weighted consensus reads `weight`. */
+function optionTallies(
+  votes: ReadonlyArray<ConsensusVote>,
+  options: ReadonlyArray<string>,
+  type: ConsensusType
+) {
+  return tally(
+    votes.map((v) => ({
+      key: v.optionIndex,
+      ...(type === "weighted" && v.weight !== undefined ? { weight: v.weight } : {}),
+    })),
+    { candidates: options.map((_, i) => i), keyOf: String }
+  )
+}
+
 /**
  * Tally votes per option index. Returns an array indexed by option position.
  * Weighted consensus respects `vote.weight ?? 1`; every other type weighs
- * each vote as 1.
+ * each vote as 1. A vote for an index outside the options is ignored, and so
+ * is a weight that is not a finite non-negative number (the shared rules in
+ * `@cognia/agent-orchestration/aggregate`).
  */
 export function tallyVotes(
   votes: ReadonlyArray<ConsensusVote>,
   options: ReadonlyArray<string>,
   type: ConsensusType
 ): number[] {
-  const counts = new Array(options.length).fill(0)
-  for (const v of votes) {
-    if (v.optionIndex < 0 || v.optionIndex >= options.length) continue
-    const weight = type === "weighted" ? (v.weight ?? 1) : 1
-    counts[v.optionIndex] += weight
-  }
-  return counts
+  return optionTallies(votes, options, type).map((entry) => entry.weight)
+}
+
+const QUORUM: Partial<Record<ConsensusType, QuorumRule>> = {
+  majority: { kind: "majority" },
+  supermajority: { kind: "supermajority" },
+  unanimous: { kind: "unanimous" },
+  weighted: { kind: "majority" },
 }
 
 /**
@@ -72,35 +97,13 @@ export function computeWinner(
   type: ConsensusType,
   voterCount: number
 ): number | null {
-  const counts = tallyVotes(votes, options, type)
-  const total = counts.reduce((acc, c) => acc + c, 0)
-  if (total === 0 || options.length === 0) return null
-
-  // Find current leader index.
-  let leader = 0
-  for (let i = 1; i < counts.length; i += 1) {
-    if (counts[i] > counts[leader]) leader = i
-  }
-  const leaderCount = counts[leader]
-
-  switch (type) {
-    case "majority":
-      return voterCount > 0 && leaderCount > voterCount / 2 ? leader : null
-    case "supermajority":
-      return voterCount > 0 && leaderCount > (voterCount * 2) / 3 ? leader : null
-    case "unanimous":
-      return voterCount > 0 && leaderCount === voterCount ? leader : null
-    case "weighted":
-      // Weighted majority of the cast weight; expected total weight is
-      // not knowable until everyone has voted with their weights set.
-      return leaderCount > total / 2 ? leader : null
-    case "lead_override":
-      // Resolution requires explicit `resolveConsensus` call from the lead;
-      // automatic resolution never fires for this type.
-      return null
-    default:
-      return null
-  }
+  const rule = QUORUM[type]
+  if (!rule) return null
+  const tallies = optionTallies(votes, options, type)
+  const top = leader(tallies)
+  if (!top) return null
+  const denominator = type === "weighted" ? totalWeight(tallies) : voterCount
+  return quorumMet(rule, top.weight, denominator) ? top.key : null
 }
 
 /**

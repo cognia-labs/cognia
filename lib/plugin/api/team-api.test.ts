@@ -46,15 +46,16 @@ jest.mock("@/lib/squads/squad/start-squad-run", () => ({
   startSquadRun: (...args: unknown[]) => startSquadRun(...(args as [])),
 }))
 
-const managerPause = jest.fn(async () => {})
-const managerResume = jest.fn(async () => {})
-const managerShutdown = jest.fn(async () => {})
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    pause: (...a: unknown[]) => managerPause(...(a as [])),
-    resume: (...a: unknown[]) => managerResume(...(a as [])),
-    shutdown: (...a: unknown[]) => managerShutdown(...(a as [])),
-  },
+const controlSquadRun = jest.fn(
+  async (
+    _target: { teamId: string },
+    _verb: string
+  ): Promise<{ ok: boolean; reason?: string }> => ({
+    ok: true,
+  })
+)
+jest.mock("@/lib/squads/durable/durable-control", () => ({
+  controlSquadRun: (target: { teamId: string }, verb: string) => controlSquadRun(target, verb),
 }))
 
 const getAgentTeamTemplate = jest.fn()
@@ -371,16 +372,28 @@ describe("createTeamAPI", () => {
       expect(() => api.stop(team.id)).toThrow(PermissionError)
     })
 
-    it("maps each control verb onto the manager", async () => {
+    it("sends each control verb through the one control machine, addressed to the Squad's live run", async () => {
       guard.registerPlugin(PLUGIN, ["team:read", "agent:control"])
       const { team } = seed()
       const api = createTeamAPI(PLUGIN)
-      await api.pause(team.id)
+      expect(await api.pause(team.id)).toEqual({ ok: true })
       await api.resume(team.id)
       await api.stop(team.id)
-      expect(managerPause).toHaveBeenCalledWith(team.id)
-      expect(managerResume).toHaveBeenCalledWith(team.id)
-      expect(managerShutdown).toHaveBeenCalledWith(team.id)
+      expect(controlSquadRun.mock.calls).toEqual([
+        [{ teamId: team.id }, "pause"],
+        [{ teamId: team.id }, "resume"],
+        [{ teamId: team.id }, "stop"],
+      ])
+    })
+
+    it("answers the control machine's refusal instead of reporting success", async () => {
+      guard.registerPlugin(PLUGIN, ["team:read", "agent:control"])
+      const { team } = seed()
+      controlSquadRun.mockResolvedValueOnce({ ok: false, reason: "not_pausable" })
+      controlSquadRun.mockResolvedValueOnce({ ok: false })
+      const api = createTeamAPI(PLUGIN)
+      expect(await api.pause(team.id)).toEqual({ ok: false, reason: "not_pausable" })
+      expect(await api.resume(team.id)).toEqual({ ok: false, reason: "dispatch_error" })
     })
 
     it("refuses an unknown Squad without touching the runtime", async () => {
@@ -389,13 +402,13 @@ describe("createTeamAPI", () => {
       expect(await api.start("nope")).toEqual({ ok: false, reason: "squad_not_found" })
       expect(await api.pause("nope")).toEqual({ ok: false, reason: "squad_not_found" })
       expect(startSquadRun).not.toHaveBeenCalled()
-      expect(managerPause).not.toHaveBeenCalled()
+      expect(controlSquadRun).not.toHaveBeenCalled()
     })
 
     it("returns a failure rather than throwing when the runtime rejects", async () => {
       guard.registerPlugin(PLUGIN, ["team:read", "agent:control"])
       const { team } = seed()
-      managerPause.mockRejectedValueOnce(new Error("no live run"))
+      controlSquadRun.mockRejectedValueOnce(new Error("no live run"))
       const api = createTeamAPI(PLUGIN)
       expect(await api.pause(team.id)).toEqual({ ok: false, reason: "no live run" })
     })

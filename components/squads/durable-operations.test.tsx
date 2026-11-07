@@ -8,10 +8,8 @@ let liveValue: unknown = null
 jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => liveValue }))
 jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
 const retryChildMock = jest.fn<Promise<void>, [string, string?]>(async () => undefined)
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    retryChild: (childRunId: string, hostRef?: string) => retryChildMock(childRunId, hostRef),
-  },
+jest.mock("@/lib/squads/durable/retry-squad-child", () => ({
+  retrySquadChild: (childRunId: string, hostRef?: string) => retryChildMock(childRunId, hostRef),
 }))
 
 jest.mock("@/lib/ai/agent/execution/local-tauri-environment", () => ({

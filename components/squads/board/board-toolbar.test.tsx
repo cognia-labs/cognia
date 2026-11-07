@@ -6,7 +6,6 @@ import userEvent from "@testing-library/user-event"
 
 import { BoardToolbar } from "./board-toolbar"
 import { EMPTY_BOARD_FILTER, type BoardFilter } from "@/lib/squads/board-model"
-import { agentTeamManager } from "@/lib/squads/agent-team"
 import { createSquadStartAttempt } from "@/lib/execution/squad-start-dispatch"
 const dispatchStart = jest.fn(async () => ({ started: true }))
 jest.mock("@/lib/execution/squad-start-dispatch", () => ({
@@ -22,13 +21,15 @@ jest.mock("next-intl", () => ({
   },
 }))
 
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    start: jest.fn(async () => {}),
-    pause: jest.fn(async () => {}),
-    resume: jest.fn(async () => {}),
-    shutdown: jest.fn(async () => {}),
-  },
+const runControl = jest.fn(async (_action: string) => {})
+let runControlBusy = false
+const useSquadRunControl = jest.fn((_squadId: string, _options?: { surface?: string }) => ({
+  busy: runControlBusy,
+  control: runControl,
+}))
+jest.mock("@/hooks/squads/use-squad-run-control", () => ({
+  useSquadRunControl: (squadId: string, options?: { surface?: string }) =>
+    useSquadRunControl(squadId, options),
 }))
 
 let liveStatusOverride: AgentTeam["status"] | undefined
@@ -146,7 +147,8 @@ describe("BoardToolbar", () => {
     liveStatusOverride = "executing"
     renderToolbar()
     await user.click(screen.getByTestId("board-pause"))
-    expect(agentTeamManager.pause).toHaveBeenCalledWith("t1")
+    expect(useSquadRunControl).toHaveBeenCalledWith("t1", { surface: "squad-board" })
+    expect(runControl).toHaveBeenCalledWith("pause")
   })
 
   it("shows Resume while paused", async () => {
@@ -154,7 +156,15 @@ describe("BoardToolbar", () => {
     liveStatusOverride = "paused"
     renderToolbar()
     await user.click(screen.getByTestId("board-resume"))
-    expect(agentTeamManager.resume).toHaveBeenCalledWith("t1")
+    expect(runControl).toHaveBeenCalledWith("resume")
+  })
+
+  it("holds Pause while a control is in flight", () => {
+    liveStatusOverride = "executing"
+    runControlBusy = true
+    renderToolbar()
+    expect(screen.getByTestId("board-pause")).toBeDisabled()
+    runControlBusy = false
   })
 
   it("mounts the agent.team.board.toolbar plugin slot with teamId + filter", () => {

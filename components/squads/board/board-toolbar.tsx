@@ -21,10 +21,10 @@ import {
 import { Toggle } from "@/components/ui/toggle"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { cn } from "@/lib/utils"
-import { agentTeamManager } from "@/lib/squads/agent-team"
 import { createSquadStartAttempt } from "@/lib/execution/squad-start-dispatch"
 import { detectHostProfile } from "@/lib/platform/capabilities"
 import { useTeamLiveStatus } from "@/hooks/agent-runs/use-team-live-status"
+import { useSquadRunControl } from "@/hooks/squads/use-squad-run-control"
 import {
   collectFilterOptions,
   isFilterActive,
@@ -70,6 +70,9 @@ export function BoardToolbar({
   const t = useTranslations("agentTeamsWorkspace.tasks.board")
   const tPriority = useTranslations("agentPriority")
   const liveStatus = useTeamLiveStatus(team)
+  // Pause and Resume go through the one control path against the run's
+  // execution row, which also reaches a run on the paired Host.
+  const runControl = useSquadRunControl(team.id, { surface: "squad-board" })
   const isLive = liveStatus === "executing" || liveStatus === "planning"
 
   const options = collectFilterOptions(tasks)
@@ -182,7 +185,8 @@ export function BoardToolbar({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => void agentTeamManager.pause(team.id).catch(() => undefined)}
+            disabled={runControl.busy}
+            onClick={() => void runControl.control("pause")}
             data-testid="board-pause"
           >
             <PauseIcon className="mr-1 size-3.5" />
@@ -191,7 +195,8 @@ export function BoardToolbar({
         ) : liveStatus === "paused" ? (
           <Button
             size="sm"
-            onClick={() => void agentTeamManager.resume(team.id).catch(() => undefined)}
+            disabled={runControl.busy}
+            onClick={() => void runControl.control("resume")}
             data-testid="board-resume"
           >
             <PlayIcon className="mr-1 size-3.5" />

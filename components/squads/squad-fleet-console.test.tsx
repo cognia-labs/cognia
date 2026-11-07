@@ -149,14 +149,6 @@ let fleetSource: "tauri" | "companion" | "none" = "none"
 jest.mock("@/hooks/fleet/use-fleet-snapshot", () => ({
   useFleetSnapshot: () => ({ source: fleetSource, snapshot: { sessions: [] } }),
 }))
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    start: jest.fn(async () => {}),
-    pause: jest.fn(async () => {}),
-    resume: jest.fn(async () => {}),
-    shutdown: jest.fn(async () => {}),
-  },
-}))
 
 function squad(id: string, name: string, status: TeamStatus = "idle"): AgentTeam {
   return {

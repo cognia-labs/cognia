@@ -174,8 +174,8 @@ async function defaultRecoverInterrupts(now: number): Promise<void> {
 }
 
 async function defaultRecoverRuns(signal: AbortSignal) {
-  const { recoverDurableAgentTeams } = await import("@/lib/squads/agent-team")
-  return recoverDurableAgentTeams({ signal })
+  const { recoverSquadRuns } = await import("./durable/recover-squad-runs")
+  return recoverSquadRuns({ signal })
 }
 
 async function defaultArmRecoveries() {

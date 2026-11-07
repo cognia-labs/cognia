@@ -156,18 +156,22 @@ async function defaultStartReplacement(input: {
   objective: string
   executionConstraints?: AgentTeamRunRecord["executionConstraints"]
 }) {
-  const { startSquadRun } = await import("../squad/start-squad-run")
-  return startSquadRun({
-    squadId: input.teamId,
-    goal: input.objective,
-    origin: "interactive",
-    triggeredFrom: { source: "ui" },
-    parentRunId: input.parentExecutionRunId,
-    ...(input.executionConstraints ? { executionConstraints: input.executionConstraints } : {}),
-    ...(input.sessionId
-      ? { session: { id: input.sessionId } as import("@cognia/agent-config-types").ChatSession }
-      : {}),
-  })
+  const [{ startSquadRun }, { buildSquadStartInput }] = await Promise.all([
+    import("../squad/start-squad-run"),
+    import("../squad/build-start-input"),
+  ])
+  return startSquadRun(
+    buildSquadStartInput({
+      squadId: input.teamId,
+      goal: input.objective,
+      surface: {
+        kind: "retry",
+        replacesRunId: input.parentExecutionRunId,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.executionConstraints ? { executionConstraints: input.executionConstraints } : {}),
+      },
+    })
+  )
 }
 
 async function defaultListChildren(runId: string) {

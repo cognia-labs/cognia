@@ -43,6 +43,13 @@ export interface AgentTeamExecutionConstraints {
   requirePlanApprovalFloor: boolean
   entryPersona?: { id: string; name: string; systemPrompt: string }
   ultracode?: boolean
+  /** The knowledge a launching workflow was allowed to read, frozen with its grant. */
+  knowledgeAccess?: import("../../lib/knowledge-base/runtime/progressive-reading").KnowledgeReadingAccess
+  /**
+   * How many team-completion fan-outs led to this run. Frozen so a re-entered
+   * run keeps the loop guard's count instead of starting again at zero.
+   */
+  triggerChainDepth?: number
   teamConfig?: Pick<
     import("./agent-team").AgentTeamConfig,
     (typeof AGENT_TEAM_SECURITY_CONFIG_KEYS)[number]

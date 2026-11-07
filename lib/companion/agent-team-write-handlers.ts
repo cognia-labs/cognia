@@ -20,7 +20,6 @@ import type { SubAgentPriority } from "@/types/agent/sub-agent"
 import type { TeamTaskStatus } from "@/types/agent/agent-team"
 import type { StartSquadRunResult } from "@/lib/squads/squad/start-squad-run"
 import { sha256Hex } from "@/lib/share/hash"
-import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 const log = loggers.agent.child("team-rpc")
 
@@ -54,18 +53,19 @@ export async function handleTeamRunStart(
     // Bound the identifier's size and namespace it by the authenticated device.
     // A refreshed consent lease changes the transport attempt, not the run.
     const runId = `squad-companion-${await sha256Hex(JSON.stringify([callerDeviceId, launchId.toLowerCase()]))}`
-    const { startSquadRun } = await import("@/lib/squads/squad/start-squad-run")
-    return await startSquadRun({
-      localAuthorization: LOCAL_PERSON_RUN,
-      squadId: teamId,
-      runId,
-      goal: typeof payload.goal === "string" ? payload.goal : "",
-      // The manual console has the same durable review channel as desktop.
-      // `companion` would mean unattended and fail a required plan review.
-      origin: "interactive",
-      triggeredFrom: { source: "api", deviceId: callerDeviceId },
-      ...(typeof payload.ultracode === "boolean" ? { ultracode: payload.ultracode } : {}),
-    })
+    const [{ startSquadRun }, { buildSquadStartInput }] = await Promise.all([
+      import("@/lib/squads/squad/start-squad-run"),
+      import("@/lib/squads/squad/build-start-input"),
+    ])
+    return await startSquadRun(
+      buildSquadStartInput({
+        squadId: teamId,
+        runId,
+        ...(typeof payload.goal === "string" ? { goal: payload.goal } : {}),
+        ...(typeof payload.ultracode === "boolean" ? { ultracode: payload.ultracode } : {}),
+        surface: { kind: "companion", deviceId: callerDeviceId },
+      })
+    )
   } catch (error) {
     log.warn("team_run_start admission failed", { teamId, error })
     return { started: false, reason: "dispatch_error" }

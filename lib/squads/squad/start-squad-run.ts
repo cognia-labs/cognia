@@ -37,6 +37,7 @@ import {
 } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { SquadReadiness, SquadReadinessBlocker } from "@/lib/squads/squad-readiness"
 import type { LocalPersonRun } from "@/lib/execution/acting-authority"
+import type { KnowledgeReadingAccess } from "@cognia/plugin-contract/lib/knowledge-base/runtime/progressive-reading"
 
 /** A request for human sign-off on the lead's plan, raised mid-run. */
 export interface SquadPlanApprovalRequest {
@@ -93,6 +94,13 @@ export interface StartSquadRunInput {
   launchedByRunId?: string
   /** Frozen authority supplied by the governed replacement path. */
   executionConstraints?: AgentTeamExecutionConstraints
+  /**
+   * The knowledge a launching workflow may read (`resolveWorkflowKnowledgeAccess`).
+   * Frozen with the run's authority.
+   */
+  knowledgeAccess?: KnowledgeReadingAccess
+  /** Team-completion fan-outs that led here (the workflow loop guard). */
+  triggerChainDepth?: number
 }
 
 export type StartSquadRunRefusal =
@@ -190,6 +198,8 @@ export interface StartSquadRunDeps {
     permissionCeiling?: AgentPermissionCeiling
     sessionWorkingDir?: string
     entryPersona?: { id: string; name: string; systemPrompt: string }
+    knowledgeAccess?: KnowledgeReadingAccess
+    triggerChainDepth?: number
   }) => Promise<unknown>
   loadCharacter?: (
     characterId: string
@@ -272,6 +282,8 @@ async function defaultRunLifecycle(
     ...(input.permissionCeiling ? { permissionCeiling: input.permissionCeiling } : {}),
     ...(input.sessionWorkingDir ? { sessionWorkingDir: input.sessionWorkingDir } : {}),
     ...(input.entryPersona ? { entryPersona: input.entryPersona } : {}),
+    ...(input.knowledgeAccess ? { knowledgeAccess: input.knowledgeAccess } : {}),
+    ...(input.triggerChainDepth ? { triggerChainDepth: input.triggerChainDepth } : {}),
   })
 }
 
@@ -406,6 +418,8 @@ export async function startSquadRun(
         ...(sessionWorkingDir ? { sessionWorkingDir } : {}),
         ...(entryPersona ? { entryPersona } : {}),
         ...(input.ultracode !== undefined ? { ultracode: input.ultracode } : {}),
+        ...(input.knowledgeAccess ? { knowledgeAccess: input.knowledgeAccess } : {}),
+        ...(input.triggerChainDepth ? { triggerChainDepth: input.triggerChainDepth } : {}),
       }
     )
   ) as AgentTeamExecutionConstraints

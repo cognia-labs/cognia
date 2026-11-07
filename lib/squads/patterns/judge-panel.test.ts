@@ -81,6 +81,35 @@ describe("pattern.judge-panel", () => {
     expect(out.winner.attempt.angle).toBe("b")
   })
 
+  it("never lets an attempt no judge scored beat one that scored zero", async () => {
+    dispatchStructuredMock
+      .mockResolvedValueOnce({ value: { angle: "a", content: "a0" } })
+      .mockResolvedValueOnce({ value: { angle: "b", content: "a1" } })
+      .mockRejectedValueOnce(new Error("judge boom")) // nobody scores attempt 0
+      .mockResolvedValueOnce({ value: { score: 0, rationale: "r" } })
+    const ctx = makeCtx({ objective: "x", angles: ["a", "b"], judgesPerAttempt: 1 })
+    const out = (await judgePanelNode.execute(ctx)).output as {
+      winner: { attempt: { angle: string }; avgScore: number }
+      ranked: { attempt: { angle: string }; scores: unknown[] }[]
+    }
+    expect(out.winner.attempt.angle).toBe("b")
+    expect(out.ranked.map((r) => [r.attempt.angle, r.scores.length])).toEqual([
+      ["b", 1],
+      ["a", 0],
+    ])
+  })
+
+  it("names no winner, and fails, when every judge failed", async () => {
+    dispatchStructuredMock
+      .mockResolvedValueOnce({ value: { angle: "a", content: "a0" } })
+      .mockRejectedValue(new Error("judge boom"))
+    const ctx = makeCtx({ objective: "x", angles: ["a"], judgesPerAttempt: 2 })
+    await expect(judgePanelNode.execute(ctx)).rejects.toMatchObject({
+      message: expect.stringMatching(/every judge failed/),
+      retryable: false,
+    })
+  })
+
   it("throws when every attempt fails", async () => {
     dispatchStructuredMock.mockRejectedValue(new Error("all boom"))
     const ctx = makeCtx({ objective: "x", angles: ["a"], judgesPerAttempt: 1 })

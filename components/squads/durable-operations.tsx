@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Textarea } from "@/components/ui/textarea"
 import { useFleetSnapshot } from "@/hooks/fleet/use-fleet-snapshot"
-import { agentTeamManager } from "@/lib/squads/agent-team"
+import { retrySquadChild } from "@/lib/squads/durable/retry-squad-child"
 import { getDb } from "@/lib/db/schema"
 import { createDecisionLedger } from "@cognia/agent-orchestration/decision-ledger"
 import { getDurableTeamCoordinator } from "@/lib/squads/durable/durable-runtime"
@@ -289,7 +289,7 @@ export function DurableOperations({
                     disabled={!child.hostRef}
                     onClick={() =>
                       void invoke(
-                        () => agentTeamManager.retryChild(child.id, child.hostRef),
+                        () => retrySquadChild(child.id, child.hostRef),
                         t("children.retryStarted")
                       )
                     }
@@ -322,7 +322,7 @@ export function DurableOperations({
                     disabled={!retryHosts[child.id]}
                     onClick={() =>
                       void invoke(
-                        () => agentTeamManager.retryChild(child.id, retryHosts[child.id]),
+                        () => retrySquadChild(child.id, retryHosts[child.id]),
                         t("children.retryStarted")
                       )
                     }
