@@ -211,7 +211,8 @@ interface LaunchChildRunInput {
 - 授权：每个引擎声明自己应用哪些授权字段（`agent`、`twin` 全部；`external`、`squad` 一个都不应用）。授权设了引擎会忽略的字段时，在写任何东西之前拒绝（`grant_not_honoured`）。
 - 派发延迟：每个子运行在落定时发一条完成的 agent-trace span（`invoke_agent`，provider `cognia.subagent|external|twin|team`，`handoff` 从父到子，`child.dispatch` 事件带 `latencyMs`），只带 id 和代码。`recordSquadDispatchLatency`（无生产调用方）删除。
 - 本切片迁移：`delegation-orchestrator.ts` 的 background/external/twin/team 四个分支全部走 `launchChildRun`。编排器只留安静时段、审批、深度、环检测，以及记录和钩子。父运行：调用方给出且存在的运行（工作流节点传 `execution:workflow:<runId>`）优先，否则用来源小队的 live 运行行，否则无父。取消统一由 `AbortController` 交给启动器，不再分别调 `cancelAgent` / `abortTeam`。顺带修复：安静时段推迟的 team 委派在批准后会真正启动（原来批准后什么都不跑）。
-- 其余调用方按切片迁移：`dispatch-run.ts`（`startDispatchRun`）与 `background-tasks/redispatch.ts`、`lib/plugin/agent-sdk/dispatch.ts`（`dispatchSubagent` 与 `agentTeamManager` 分支）及其他 `dispatchSubagent` 调用方、`lib/best-of-n/runtime.ts` 与 `external.ts` 的候选。CLI `subagent-dispatch.ts` 暂不迁移：CLI 进程没有 `executionRuns` 账本（D13，残余 X5）。
+- `dispatch_agent`（`startDispatchRun`，Job Center 重跑和启动时自动恢复的 `background-tasks/redispatch.ts` 也经过它）已迁移：重试、子树预算、截止时间、审批路由和 Job Center 日志是调用方自己的策略，作为启动器的调用方引擎（`target: { kind: "agent", engine, label }`，不应用授权）。行的写入、父链接、落定和派发 span 由启动器负责。固定的父运行行已不存在时用 `missingParent: "unparented"` 无父启动，保持原来的语义。租约在启动前丢失时什么都不启动（原来会带着已中止的信号去派发）。
+- 其余调用方按切片迁移：`lib/plugin/agent-sdk/dispatch.ts`（`dispatchSubagent` 与 `agentTeamManager` 分支）及其他 `dispatchSubagent` 调用方、`lib/best-of-n/runtime.ts` 与 `external.ts` 的候选。CLI `subagent-dispatch.ts` 暂不迁移：CLI 进程没有 `executionRuns` 账本（D13，残余 X5）。
 
 ### 6.3 追踪器收敛
 

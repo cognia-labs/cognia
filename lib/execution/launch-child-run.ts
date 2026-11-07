@@ -9,7 +9,9 @@
  *
  * Four targets, two kinds of engine:
  *
- *   agent      `executeAgent` (kernel), a `job` row written here.
+ *   agent      `executeAgent` (kernel), or an engine the caller drives
+ *              itself (`dispatch_agent`'s retrying dispatch), a `job` row
+ *              written here either way.
  *   external   `ExternalAgentManager.execute` (kernel), placed on an always-on
  *              Host first (ADR-0224 A8), a `job` row written here.
  *   twin       the `twin-answer` port, a `job` row written here.
@@ -110,6 +112,12 @@ export interface LaunchChildRunInput {
    * When set it is the parent: a delegation's attempts are its children.
    */
   delegationRunId?: string
+  /**
+   * A named parent without a readable row: refuse (the default), or start the
+   * child unparented, for a caller whose pin may name a run since removed
+   * (`dispatch_agent` recovering a journaled run).
+   */
+  missingParent?: "refuse" | "unparented"
   target: ChildRunTarget
   grants?: readonly AgentCapabilityGrantV1[]
   /** The conversation the child belongs to. Defaults to the parent's. */
@@ -417,7 +425,9 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
 
   const parentId = input.delegationRunId ?? input.parentRunId
   const parent = parentId ? await getExecutionRun(parentId).catch(() => undefined) : undefined
-  if (parentId && !parent) return { started: false, reason: "parent_not_found", detail: parentId }
+  if (parentId && !parent && input.missingParent !== "unparented") {
+    return { started: false, reason: "parent_not_found", detail: parentId }
+  }
   const sessionId = input.sessionId ?? parent?.sessionId
   const surface = input.surface ?? "chat"
 
@@ -480,8 +490,14 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
     return { started: false, reason: "journal_failed", detail: errorText(error) }
   }
 
+  // Only an agent or twin the launcher runs itself is registered here; a
+  // caller's engine keeps its own journal.
   const background =
-    target.kind === "external" || "engine" in target ? undefined : target.background
+    target.kind === "twin"
+      ? target.background && { ...target.background, prompt: target.question }
+      : target.kind === "agent" && !("engine" in target)
+        ? target.background && { ...target.background, prompt: target.prompt }
+        : undefined
   let engine: StartedChildEngine
   // Set once this launch holds the Job Center entry; a failed registration
   // (an id already registered) must not settle somebody else's entry.
@@ -496,7 +512,7 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
         backgroundSignal = getBackgroundAgentManager().registerAgent(childId, {
           label: background.label,
           kind: background.kind,
-          prompt: target.kind === "twin" ? target.question : target.prompt,
+          prompt: background.prompt,
         })
       }
       const started = await startJobEngine(target, grants)

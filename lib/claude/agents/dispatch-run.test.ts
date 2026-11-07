@@ -306,16 +306,40 @@ describe("startDispatchRun — success + terminal records", () => {
     expect(activeToolExecutionRunId).not.toHaveBeenCalled()
   })
 
+  it("starts nothing when ownership is lost before the child is launched", async () => {
+    mockForegroundJournal.mockImplementation(async (runId, _meta, producer, controls) => {
+      controls?.onLeaseLost?.()
+      return producer
+    })
+    const handle = await startDispatchRun({
+      subagentId: "coder",
+      prompt: "work",
+      toolsEnabled: false,
+      background: false,
+      parentSessionId: "chat-1",
+      caller: caller(),
+    })
+    expect(mockDispatch).not.toHaveBeenCalled()
+    expect(startToolExecutionRun).not.toHaveBeenCalled()
+    expect(handle.text).toBe("[coder] cancelled.")
+    expect(runs()).toEqual([expect.objectContaining({ status: "cancelled" })])
+  })
+
   it("rejects late foreground success after ownership loss and keeps the terminal UI fenced", async () => {
     let resolveLate!: (value: PluginSubagentDispatchResult) => void
     let signal: AbortSignal | undefined
+    let dispatched!: () => void
+    const running = new Promise<void>((resolve) => (dispatched = resolve))
     mockDispatch.mockImplementation((_target, _prompt, options) => {
       signal = options?.abortSignal
+      dispatched()
       return new Promise((resolve) => {
         resolveLate = resolve
       })
     })
     mockForegroundJournal.mockImplementation(async (runId, _meta, _producer, controls) => {
+      // Ownership is lost while the dispatch runs.
+      await running
       controls?.onLeaseLost?.()
       return {
         text: "Background task ownership lost",

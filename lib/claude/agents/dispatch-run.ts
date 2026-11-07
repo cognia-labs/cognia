@@ -8,7 +8,11 @@
  *  - the per-run tracker (partial-text salvage + live usage),
  *  - bounded retries for transient failures (abort/deadline/budget-aware),
  *  - journaling: background runs enter the collectable registry; foreground
- *    runs are journal-only so a renderer reload reconciles them on boot.
+ *    runs are journal-only so a renderer reload reconciles them on boot,
+ *  - the child run: `launchChildRun` writes its `execution:job:` row under
+ *    the pinned parent and settles it, with the retrying dispatch as this
+ *    caller's own engine (ADR-0252 §3). The Job Center re-run and boot
+ *    auto-resume (`lib/background-tasks/redispatch.ts`) come through here too.
  *
  * Extracted from `dispatch-agent-handler.ts` so out-of-turn callers (Job
  * Center re-run, boot auto-resume) can dispatch without a live tool call.
@@ -19,8 +23,6 @@ import {
   observeActingAuthority,
   snapshotActingAuthority,
   type ActingAuthoritySnapshot,
-  startToolExecutionRun,
-  finishToolExecutionRun,
   activeToolExecutionRunId,
 } from "@/lib/execution/acting-authority"
 import { activeDirectChatExecutionRunId } from "@/lib/execution/direct-chat-run"
@@ -33,6 +35,7 @@ import {
 import { captureBackgroundDispatchRecovery } from "@/lib/background-tasks/redispatch"
 import { admitBackgroundDispatch } from "@/lib/db/background-tasks"
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { ChildRunOutcome } from "@/types/execution/child-run"
 import type {
   PluginDispatchErrorEnvelope,
   PluginSubagentDispatchResult,
@@ -306,6 +309,19 @@ export interface DispatchRunHandle {
 }
 
 /**
+ * A dispatch result as the child run's outcome: cancelled, failed (an error
+ * envelope, a rejection or an error finish) or completed. The text stays with
+ * the result; the run journal never sees it.
+ */
+function dispatchOutcome(result: PluginSubagentDispatchResult): ChildRunOutcome {
+  if (result.finishReason === "cancelled") return { status: "cancelled", error: result.text }
+  if (result.errorEnvelope || result.rejection || result.finishReason === "error") {
+    return { status: "failed", error: result.errorEnvelope?.message ?? result.text }
+  }
+  return { status: "completed", text: result.text }
+}
+
+/**
  * Start one dispatched run. Never throws — every failure collapses into the
  * model-facing text (and the structured envelope on the underlying result).
  */
@@ -566,29 +582,59 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     ...(p.resumeAttempt !== undefined ? { resumeAttempt: p.resumeAttempt } : {}),
   }
 
-  const runWithRetries = async () => {
-    const { getExecutionRun } = await import("@/lib/db/execution-runs")
-    // Finished parents retain the root's fixed identity. Missing/unreadable pins
-    // start an unparented, nonlocal run; never consult the session's active run.
-    const parent = parentExecutionRunId
-      ? await getExecutionRun(parentExecutionRunId).catch(() => undefined)
-      : undefined
-    const run = await startToolExecutionRun(p.parentSessionId, {
-      runId: `execution:job:${childRunId}`,
+  const failedResult = (message: string): PluginSubagentDispatchResult => ({
+    text: message,
+    channel: "text",
+    toolsAvailable: false,
+    runId: childRunId,
+    finishReason: "error",
+    errorEnvelope: { code: "unknown", retryable: false, message },
+  })
+
+  // The child run (ADR-0252 §3): the launcher writes its `execution:job:` row
+  // under the pinned parent, settles it from the dispatch's outcome and
+  // records the dispatch. The retrying dispatch is this caller's own engine.
+  const runWithRetries = async (): Promise<PluginSubagentDispatchResult> => {
+    const { launchChildRun } = await import("@/lib/execution/launch-child-run")
+    let result: PluginSubagentDispatchResult | undefined
+    const launched = await launchChildRun({
+      // Finished parents retain the root's fixed identity. Missing/unreadable
+      // pins start an unparented, nonlocal run; never consult the session's
+      // active run.
+      ...(parentExecutionRunId
+        ? { parentRunId: parentExecutionRunId, missingParent: "unparented" as const }
+        : {}),
+      sessionId: p.parentSessionId,
       title: p.subagentId,
-      ...(parent ? { parentRunId: parent.id } : {}),
+      childId: childRunId,
+      surface: "chat",
+      signal: abort.signal,
+      target: {
+        kind: "agent",
+        label: p.subagentId,
+        engine: {
+          run: async () => {
+            result = await runWithRetriesCore()
+            return dispatchOutcome(result)
+          },
+        },
+      },
     })
-    let terminal: boolean | "cancelled" = true
-    try {
-      const result = await runWithRetriesCore()
-      terminal =
-        result.finishReason === "cancelled"
-          ? "cancelled"
-          : Boolean(result.errorEnvelope || result.rejection || result.finishReason === "error")
-      return result
-    } finally {
-      await finishToolExecutionRun(run.id, terminal)
+    if (!launched.started) {
+      return finalize(
+        launched.reason === "cancelled"
+          ? cancelledResult({
+              code: "aborted",
+              retryable: false,
+              message: "Cancelled before dispatch",
+            })
+          : failedResult(
+              `Subagent run could not start: ${launched.reason}${launched.detail ? ` (${launched.detail})` : ""}`
+            )
+      )
     }
+    const settled = await launched.outcome
+    return result ?? finalize(failedResult(settled.error ?? "Subagent run failed"))
   }
 
   if (p.background) {
@@ -636,18 +682,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
           )
         return runWithRetries()
       })().catch((error) =>
-        finalize({
-          text: error instanceof Error ? error.message : String(error),
-          channel: "text",
-          toolsAvailable: false,
-          runId: childRunId,
-          finishReason: "error",
-          errorEnvelope: {
-            code: "unknown",
-            retryable: false,
-            message: error instanceof Error ? error.message : String(error),
-          },
-        })
+        finalize(failedResult(error instanceof Error ? error.message : String(error)))
       )
       startAcceptedRendererBackgroundRun(
         childRunId,

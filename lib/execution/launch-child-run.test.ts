@@ -323,6 +323,111 @@ describe("launchChildRun: agent", () => {
   })
 })
 
+describe("launchChildRun: a caller's own agent engine", () => {
+  it("writes the row first, runs the caller's engine and settles the row from its outcome", async () => {
+    await seedParent()
+    let rowAtRun: ExecutionRun | undefined
+    const run = jest.fn(async (signal: AbortSignal) => {
+      rowAtRun = await getExecutionRun(childJobExecutionRunId("dispatch-1"))
+      expect(signal.aborted).toBe(false)
+      return { status: "completed" as const, text: "dispatched answer" }
+    })
+    const launched = started(
+      await launchChildRun({
+        parentRunId: PARENT_ID,
+        sessionId: "chat-1",
+        target: { kind: "agent", label: "coder", engine: { run } },
+        title: "coder",
+        childId: "dispatch-1",
+      })
+    )
+    await expect(launched.outcome).resolves.toEqual({
+      status: "completed",
+      text: "dispatched answer",
+    })
+    expect(rowAtRun).toMatchObject({
+      parentRunId: PARENT_ID,
+      sessionId: "chat-1",
+      status: "running",
+    })
+    expect((await getExecutionRun(launched.executionRunId))?.status).toBe("completed")
+    expect(spans[0]).toMatchObject({ providerName: "cognia.subagent", agentId: "coder" })
+    // The caller keeps its own journal: no Job Center entry from here.
+    expect(registerAgentMock).not.toHaveBeenCalled()
+  })
+
+  it("refuses grants, which the caller's engine does not apply", async () => {
+    const run = jest.fn()
+    await expect(
+      launchChildRun({
+        target: { kind: "agent", label: "coder", engine: { run } },
+        grants: [grant({ model: "m" })],
+        title: "coder",
+      })
+    ).resolves.toEqual({ started: false, reason: "grant_not_honoured", detail: "model" })
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("aborts the engine's signal on a stop and fails a throwing engine", async () => {
+    const controller = new AbortController()
+    let seen: AbortSignal | undefined
+    const stopped = started(
+      await launchChildRun({
+        target: {
+          kind: "agent",
+          label: "coder",
+          engine: {
+            run: (signal) =>
+              new Promise((resolve) => {
+                seen = signal
+                signal.addEventListener("abort", () => resolve({ status: "cancelled" }))
+              }),
+          },
+        },
+        title: "coder",
+        signal: controller.signal,
+      })
+    )
+    controller.abort()
+    await expect(stopped.outcome).resolves.toEqual({ status: "cancelled" })
+    expect(seen?.aborted).toBe(true)
+    expect((await getExecutionRun(stopped.executionRunId))?.status).toBe("cancelled")
+
+    const thrown = started(
+      await launchChildRun({
+        target: {
+          kind: "agent",
+          label: "coder",
+          engine: {
+            run: async () => {
+              throw new Error("dispatch crashed")
+            },
+          },
+        },
+        title: "coder",
+      })
+    )
+    await expect(thrown.outcome).resolves.toEqual({ status: "failed", error: "dispatch crashed" })
+  })
+
+  it("starts unparented when asked to, for a pin whose row is gone", async () => {
+    const launched = started(
+      await launchChildRun({
+        parentRunId: "execution:tool:gone",
+        missingParent: "unparented",
+        target: {
+          kind: "agent",
+          label: "coder",
+          engine: { run: async () => ({ status: "completed" as const }) },
+        },
+        title: "coder",
+      })
+    )
+    await launched.outcome
+    expect((await getExecutionRun(launched.executionRunId))?.parentRunId).toBeUndefined()
+  })
+})
+
 describe("launchChildRun: external", () => {
   it("refuses a grant the external harness would ignore, before writing anything", async () => {
     const result = await launchChildRun({
