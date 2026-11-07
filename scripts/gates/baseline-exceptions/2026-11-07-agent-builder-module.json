@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:modules",
+  "allowGrowth": 1,
+  "owner": "lib/agent-builder",
+  "repaymentPhase": "2",
+  "reason": "ADR-0250 §14 moves the Agent Builder's agent tools (ADR-0220) out of lib/claude into a tools contribution. Their natural owner, the agent subsystem, is kernel, and a kernel subsystem cannot contribute tools without becoming a module that every kernel caller imports. So the tools become the agent-builder module (lib/agent-builder/module.ts), which reaches the builder's session and draft through the agent kernel's api files. The count rises by one; nothing is owed back, and phase 2 re-baselines the size measures once the transitional table is empty."
+}

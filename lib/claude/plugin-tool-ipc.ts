@@ -67,11 +67,6 @@ import {
   type SessionPeerToolRunDeps,
 } from "./session-peer-builtin-tools"
 import {
-  isAgentBuilderBuiltinTool,
-  runAgentBuilderBuiltinTool,
-  type AgentBuilderToolDeps,
-} from "./agent-builder-builtin-tools"
-import {
   isAttachmentBuiltinTool,
   resolveAttachmentToolDeps,
   runAttachmentBuiltinTool,
@@ -191,21 +186,6 @@ async function resolveSessionPeerToolDeps(): Promise<SessionPeerToolRunDeps> {
 }
 
 /** Resolver for the Agent Builder tools' host-side deps (ADR-0220). Swappable for tests. */
-let agentBuilderDepsOverride: (() => Promise<AgentBuilderToolDeps> | AgentBuilderToolDeps) | null =
-  null
-
-/** Inject Agent Builder deps (tests). Pass `null` to restore the default. */
-export function __setAgentBuilderToolDepsForTesting(
-  fn: (() => Promise<AgentBuilderToolDeps> | AgentBuilderToolDeps) | null
-): void {
-  agentBuilderDepsOverride = fn
-}
-
-async function resolveAgentBuilderDeps(): Promise<AgentBuilderToolDeps> {
-  if (agentBuilderDepsOverride) return agentBuilderDepsOverride()
-  const { resolveAgentBuilderToolDeps } = await import("@/lib/agents/builder/tool-deps")
-  return resolveAgentBuilderToolDeps()
-}
 
 /** Inject web-tool deps (tests / CLI host). Pass `null` to restore default. */
 export function __setWebToolDepsForTesting(
@@ -576,15 +556,6 @@ async function runPluginToolExec(
         request.name,
         request.args,
         await resolveSessionPeerToolDeps(),
-        { sessionId: request.sessionId }
-      )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    if (isAgentBuilderBuiltinTool(request.name)) {
-      const result = await runAgentBuilderBuiltinTool(
-        request.name,
-        request.args,
-        await resolveAgentBuilderDeps(),
         { sessionId: request.sessionId }
       )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }

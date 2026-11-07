@@ -1,4 +1,4 @@
-import { AGENT_BUILDER_TOOL_NAMES } from "@/lib/claude/agent-builder-builtin-tools"
+import { AGENT_BUILDER_TOOL_NAMES } from "./agent-tools"
 import { AGENT_BUILDER_PROTOCOL } from "./builder-protocol"
 
 describe("AGENT_BUILDER_PROTOCOL", () => {

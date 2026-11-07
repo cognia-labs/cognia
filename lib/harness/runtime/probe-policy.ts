@@ -201,8 +201,6 @@ const DENIED_BUILTIN_TOOLS = [
  */
 const DENIED_PLUGIN_TOOLS = [
   "ask_user",
-  "agent_builder_update_draft",
-  "agent_builder_create_agent",
   "template_instantiate",
   "squad_apply_template",
   "squad_save_as_template",

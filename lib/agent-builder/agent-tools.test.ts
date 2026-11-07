@@ -7,15 +7,18 @@ import {
   type DraftPatch,
 } from "@/lib/agents/builder/draft-ops"
 import { AGENT_AVATAR_COLORS } from "@/lib/agents/editor-state"
+import type { AgentBuilderToolDeps } from "@/lib/agents/builder/tool-deps"
+import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import {
-  AGENT_BUILDER_BUILTIN_PLUGIN_ID,
   AGENT_BUILDER_TOOL_NAMES as T,
   CATALOG_KINDS,
+  __setAgentBuilderToolDepsForTesting,
   buildAgentBuilderManifestEntries,
   isAgentBuilderBuiltinTool,
   runAgentBuilderBuiltinTool,
-  type AgentBuilderToolDeps,
-} from "./agent-builder-builtin-tools"
+  toolFamily,
+} from "./agent-tools"
+import { AGENT_BUILDER_PROTOCOL } from "./builder-protocol"
 
 const CATALOGS: DraftCatalogs = {
   skills: [
@@ -99,7 +102,7 @@ const run = (
 ) => runAgentBuilderBuiltinTool(name, args, d, { sessionId: "b1" })
 
 describe("manifest", () => {
-  it("declares the four builder tools under the builder plugin id", () => {
+  it("declares the four builder tools", () => {
     const entries = buildAgentBuilderManifestEntries()
     expect(entries.map((e) => e.name)).toEqual([
       "agent_builder_get_draft",
@@ -108,7 +111,6 @@ describe("manifest", () => {
       "agent_builder_create_agent",
     ])
     for (const e of entries) {
-      expect(e.pluginId).toBe(AGENT_BUILDER_BUILTIN_PLUGIN_ID)
       expect(e.description.length).toBeGreaterThan(0)
       expect(e.jsonSchema).toMatchObject({ type: "object", additionalProperties: false })
     }
@@ -458,5 +460,46 @@ describe("agent_builder_create_agent", () => {
       ok: false,
       error: "The draft is not ready: missing-instructions.",
     })
+  })
+})
+
+describe("toolFamily", () => {
+  const ctx = (sessionValue: ChatSession | null): ToolSurfaceContext => ({
+    session: sessionValue,
+    agent: null,
+    settings: null,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host: "desktop",
+    activeProject: null,
+  })
+  const call: ToolCallContext = {
+    sessionId: "b1",
+    toolUseId: "u1",
+    executionRunId: "run-1",
+    outboundAuthorization: { kind: "tool-call", sessionId: "b1", toolUseId: "u1" },
+  }
+
+  afterEach(() => __setAgentBuilderToolDepsForTesting(null))
+
+  it("offers the four tools with the builder protocol to a builder conversation", async () => {
+    expect(await toolFamily.surface(ctx(session()))).toEqual({
+      tools: buildAgentBuilderManifestEntries(),
+      instructions: AGENT_BUILDER_PROTOCOL,
+    })
+  })
+
+  it("offers nothing to another conversation, a builder one without its draft, or none", async () => {
+    expect(await toolFamily.surface(ctx(session({ kind: undefined })))).toBeNull()
+    expect(await toolFamily.surface(ctx(session({ agentBuilder: undefined })))).toBeNull()
+    expect(await toolFamily.surface(ctx(null))).toBeNull()
+  })
+
+  it("runs a call against the host deps for the calling session", async () => {
+    const d = deps()
+    __setAgentBuilderToolDepsForTesting(() => d)
+    const result = await toolFamily.run(T.getDraft, {}, call)
+    expect(d.getSession).toHaveBeenCalledWith("b1")
+    expect(result).toMatchObject({ ok: true, revision: 3 })
   })
 })

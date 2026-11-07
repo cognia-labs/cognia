@@ -2978,9 +2978,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // A coordinated project's coordinator and threads (ADR-0204): gates both the
   // project goal section below and the coordinator tool ruleset.
   const projectRoleToolsSurfaced = projectRoleToolsApply(session, ctx.activeProject)
-  // "Build with AI" on /agents (ADR-0220): the builder tools, their ruleset
-  // and the builder protocol, on the runtime and model the user picked.
-  const agentBuilderToolsSurfaced =
+  // "Build with AI" on /agents (ADR-0220): the live draft section. The
+  // builder tools and protocol are the agent-builder module's contribution.
+  const agentBuilderDraftSurfaced =
     session?.kind === "agent-builder" && Boolean(session.agentBuilder)
   // ADR-0237: the agent's always-on harness sections (standing rules, domain
   // facts, tool guidance), right after who the agent is.
@@ -3106,8 +3106,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const templateToolsEnabled =
     artifactsChannelAvailable && appSettings?.selfInvokeTools?.templates === true
   const { buildTemplateToolRuleset } = await import("@/lib/claude/permissions/template-tool-rules")
-  const { buildAgentBuilderToolRuleset } =
-    await import("@/lib/claude/permissions/agent-builder-tool-rules")
   // In-process tools feature modules contribute (ADR-0250 §14 amendment). One
   // answer per family gates both its manifest entries below and the tier
   // derived from their declarations here, so neither appears without the other.
@@ -3123,7 +3121,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   })
   const mergedRuleset = mergeRulesets(
     templateToolsEnabled ? buildTemplateToolRuleset() : undefined,
-    agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
     contributedTools.ruleset,
     commandRules && Object.keys(commandRules).length > 0 ? { Bash: commandRules } : undefined,
     toolRules
@@ -4221,24 +4218,20 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       })
     }
   }
-  // Agent Builder (ADR-0220): same shape as project coordination above — tools,
-  // a session-stable protocol, and the live draft as a per-turn section.
-  if (agentBuilderToolsSurfaced && session) {
+  // Agent Builder (ADR-0220): the live draft as a per-turn section, as for
+  // project coordination above. Its tools and protocol are the agent-builder
+  // module's tool contribution.
+  if (agentBuilderDraftSurfaced && session) {
     try {
-      const { resolveAgentBuilderSendExtras } = await import("@/lib/agents/builder/send-extras")
+      const { resolveAgentBuilderTurnSection } = await import("@/lib/agents/builder/send-extras")
       const { resolveAgentBuilderToolDeps } = await import("@/lib/agents/builder/tool-deps")
-      const extras = await resolveAgentBuilderSendExtras(
+      const section = await resolveAgentBuilderTurnSection(
         session,
         resolveAgentBuilderToolDeps().catalogs
       )
-      if (extras) {
-        opts.pluginTools = [...(opts.pluginTools ?? []), ...extras.pluginTools]
-        const existing = opts.appendSystemPrompt?.trim() ?? ""
-        opts.appendSystemPrompt = existing ? `${existing}\n\n${extras.protocol}` : extras.protocol
-        dynamicTailSections.push(extras.dynamicSection)
-      }
+      if (section) dynamicTailSections.push(section)
     } catch (err) {
-      loggers.app.warn("failed to append agent-builder built-in tools", { error: String(err) })
+      loggers.app.warn("failed to append the agent builder's draft", { error: String(err) })
     }
   }
   // Team-collaboration tools — only on a team dispatch session, opt-in. Lets a

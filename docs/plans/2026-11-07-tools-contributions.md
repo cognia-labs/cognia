@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）、T5（Sites + vector）、T6（验收 + 编辑器）、T7（Tasks 面板贡献点 + spawn_task）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§14。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）、T5（Sites + vector）、T6（验收 + 编辑器）、T7（Tasks 面板贡献点 + spawn_task）、T8（Agent Builder）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§15。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -298,3 +298,16 @@ interface ToolSurface {
 - 删除：`build-options` 的 spawn_task 追加段、`plugin-tool-ipc` 的分支与依赖解析、探针名单 1 个名字、实时语音名单 1 个名字。
 - 还清方向边 2 条：`plugin-tool-ipc -> tasks`、`spawn-task-builtin-tools -> tasks`。
 - 既有失败（未改）：`lib/shell/workbench-panels.test.ts` 对照 2 例，因为 `SANDBOX_DESKTOP_PANEL_ID` 未映射，HEAD 上就有。
+
+## 15. T8 实施记录：Agent Builder（2026-11-07）
+
+- 归属：按主题应归 `agent`（`lib/agents/` 经别名归 `agent`），但它是内核类。内核子系统要贡献工具得先变成模块，那样所有内核里导入 `lib/agents/**` 的文件都违反 G2，不可行。所以新建 `agent-builder` 模块（`lib/agent-builder/module.ts`），只装工具族和 builder 协议；会话、草稿、UI 留在内核，模块从内核的 lib 读（模块导入内核 lib 不需要 `api` 或 `dependsOn`）。
+- 把整个 builder 搬进模块，挡路的不是 /agents 页面（内核的 UI 层按门禁是模块类，模块导入模块允许），而是 `build-options` 每轮的草稿段要读 `send-extras` / `tool-deps`：内核 lib → 模块会违反 G2。等上下文贡献落地，草稿段改成贡献，builder 就能整体搬进来。
+- 搬动：`lib/claude/agent-builder-builtin-tools.ts` → `lib/agent-builder/agent-tools.ts`（加 `toolFamily` 和依赖注入）；`lib/agents/builder/builder-protocol.ts` → `lib/agent-builder/builder-protocol.ts`（现在只有工具族用它）；`AgentBuilderToolDeps` 接口挪到内核 `lib/agents/builder/tool-deps.ts`（内核不能导入模块的类型）。
+- `surface`：会话 `kind === "agent-builder"` 且带草稿状态时，给四个工具和 builder 协议（作为 `instructions`），所有宿主都给，与原来一致。
+- 声明：`agent_builder_get_draft`、`agent_builder_list_catalog` allow/read；`agent_builder_update_draft` allow/write；`agent_builder_create_agent` ask/write；全部不可取消。插件 id 仍是 `cognia-agent-builder-builtin`。
+- `send-extras.ts` 只剩每轮草稿段，入口改名 `resolveAgentBuilderTurnSection`；`build-options` 只把它放进动态尾部。
+- 删除：同意档文件 `lib/claude/permissions/agent-builder-tool-rules.ts`（及测试）、`build-options` 的同意档合并和工具/协议追加、`plugin-tool-ipc` 的分支与依赖解析、探针名单 2 个名字（现在由声明派生：update/create 是 write，被拒；get/list 是 read，放行，与原来一致）。
+- 门禁：模块数 +1，附例外记录 `2026-11-07-agent-builder-module.json`；没有方向边可还（原来的边是内核 → 内核）。
+- `build-options.test` 补两例：builder 对话拿到四个工具、同意档、协议和草稿段；普通对话都不拿。
+- 既有失败（未改，不属本次）：`colocated-tests` 报 `lib/workflow/runs/budget-summary.ts`、`lib/workflow/runtime/run-budget.ts` 缺测试，typecheck 报 `budget-summary.ts`，都是另一个会话未提交的工作流预算改动。

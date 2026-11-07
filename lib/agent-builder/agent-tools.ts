@@ -1,29 +1,36 @@
 /**
- * The Agent Builder's tools (ADR-0220): read the draft, list what it may
- * reference, write fields, and — with the user's approval — create the agent.
+ * The `agent-builder` module's tool family (ADR-0220, ADR-0250 §14
+ * amendment): read the draft, list what it may reference, write fields, and —
+ * with the user's approval — create the agent.
  *
- * Same shape as the other built-in families (`session-peer-builtin-tools.ts`):
- * manifest entries the send path appends to `pluginTools`, a predicate the IPC
- * dispatcher routes on, and a runner over injected deps that executes in the
- * renderer. Offered only on an `"agent-builder"` session, and each call
- * re-checks that the caller IS one, so a tool name replayed into another
+ * The manifest declares the tools; the kernel offers them, with the builder
+ * protocol as their instructions, only on an `"agent-builder"` session, and
+ * routes calls here, host-side, where the draft is stored. Each call re-checks
+ * that the caller IS a builder session, so a tool name replayed into another
  * conversation cannot write anything. External runtimes reach these tools
- * through the renderer tool host like any other built-in family.
+ * through the renderer tool host like any other plugin-manifest tool.
+ *
+ * The builder's session, draft and UI stay in the agent kernel
+ * (`lib/agents/builder/`, `components/agents/builder/`): the agents page that
+ * mounts them is kernel, and the kernel imports no module.
  */
 
-import type { AgentBuilderSessionState, Character, ChatSession } from "@cognia/agent-config-types"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 import {
   BUILDER_PERMISSION_MODES,
   DRAFT_DESCRIPTION_MAX,
   DRAFT_NAME_MAX,
   DRAFT_STARTERS_MAX,
   renderDraftForModel,
-  type DraftCatalogs,
   type DraftPatch,
 } from "@/lib/agents/builder/draft-ops"
 import { AGENT_AVATAR_COLORS } from "@/lib/agents/editor-state"
-
-export const AGENT_BUILDER_BUILTIN_PLUGIN_ID = "cognia-agent-builder-builtin"
+import type { AgentBuilderToolDeps } from "@/lib/agents/builder/tool-deps"
+import { AGENT_BUILDER_PROTOCOL } from "./builder-protocol"
 
 export const AGENT_BUILDER_TOOL_NAMES = {
   getDraft: "agent_builder_get_draft",
@@ -43,19 +50,12 @@ export const CATALOG_KINDS = [
 ] as const
 type CatalogKind = (typeof CATALOG_KINDS)[number]
 
-export interface AgentBuilderManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-}
-
 function entry(
   name: string,
   description: string,
   jsonSchema: Record<string, unknown>
-): AgentBuilderManifestEntry {
-  return { name, description, jsonSchema, pluginId: AGENT_BUILDER_BUILTIN_PLUGIN_ID }
+): ModuleToolEntry {
+  return { name, description, jsonSchema }
 }
 
 const stringArray = { type: "array", items: { type: "string" } }
@@ -142,7 +142,7 @@ const DRAFT_PATCH_SCHEMA = {
   },
 }
 
-export function buildAgentBuilderManifestEntries(): AgentBuilderManifestEntry[] {
+export function buildAgentBuilderManifestEntries(): ModuleToolEntry[] {
   const T = AGENT_BUILDER_TOOL_NAMES
   return [
     entry(
@@ -181,22 +181,6 @@ export function buildAgentBuilderManifestEntries(): AgentBuilderManifestEntry[] 
 
 export function isAgentBuilderBuiltinTool(name: string): boolean {
   return TOOLS.has(name)
-}
-
-export interface AgentBuilderToolDeps {
-  getSession: (id: string) => Promise<ChatSession | undefined>
-  catalogs: () => Promise<DraftCatalogs>
-  models: () => Array<{ id: string; name: string }>
-  writeDraft: (
-    sessionId: string,
-    patch: DraftPatch,
-    catalogs: DraftCatalogs
-  ) => Promise<{
-    state: AgentBuilderSessionState
-    changed: string[]
-    rejected: Array<{ field: string; reason: string }>
-  }>
-  createAgent: (sessionId: string) => Promise<Character>
 }
 
 type ToolError = { ok: false; error: string }
@@ -310,4 +294,41 @@ export async function runAgentBuilderBuiltinTool(
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error))
   }
+}
+
+let depsOverride: (() => Promise<AgentBuilderToolDeps> | AgentBuilderToolDeps) | null = null
+
+/** Inject the tools' deps (tests). Pass `null` to restore the default. */
+export function __setAgentBuilderToolDepsForTesting(
+  fn: (() => Promise<AgentBuilderToolDeps> | AgentBuilderToolDeps) | null
+): void {
+  depsOverride = fn
+}
+
+async function resolveDeps(): Promise<AgentBuilderToolDeps> {
+  if (depsOverride) return depsOverride()
+  const { resolveAgentBuilderToolDeps } = await import("@/lib/agents/builder/tool-deps")
+  return resolveAgentBuilderToolDeps()
+}
+
+/** Whether a run is an agent-builder conversation that carries its draft. */
+function isBuilderRun(session: ToolSurfaceContext["session"]): boolean {
+  return session?.kind === "agent-builder" && Boolean(session.agentBuilder)
+}
+
+/**
+ * The family the kernel loads: the four tools and the session-stable builder
+ * protocol, on every host, for a builder conversation only. The live draft is
+ * a per-turn section the send path still adds itself.
+ */
+export const toolFamily: ModuleToolFamily = {
+  surface(ctx: ToolSurfaceContext) {
+    if (!isBuilderRun(ctx.session)) return null
+    return { tools: buildAgentBuilderManifestEntries(), instructions: AGENT_BUILDER_PROTOCOL }
+  },
+  async run(name, args, call) {
+    return runAgentBuilderBuiltinTool(name, args, await resolveDeps(), {
+      sessionId: call.sessionId,
+    })
+  },
 }

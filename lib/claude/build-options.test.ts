@@ -40,6 +40,13 @@ jest.mock("@/lib/project-coordinator/thread-runtime", () => ({
   ],
 }))
 
+// The Agent Builder's draft section reads the catalogs from Dexie.
+jest.mock("@/lib/agents/builder/tool-deps", () => ({
+  resolveAgentBuilderToolDeps: () => ({
+    catalogs: async () => ({ skills: [], pluginSkills: [], mcpServers: [], knowledgeBases: [] }),
+  }),
+}))
+
 jest.mock("@/lib/db/characters", () => ({
   // ADR-0030: build-options switched to resolveCharacterById so plugin-
   // overlay characters resolve through the same path as Dexie rows.
@@ -7678,6 +7685,49 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
         expect(opts.systemPrompt ?? "").not.toContain("## Project goal")
         expect(opts.permissionRuleset?.spawn_thread).toBeUndefined()
       }
+    })
+  })
+
+  describe("agent builder (ADR-0220)", () => {
+    const builderSession = () =>
+      makeSession({
+        id: "b1",
+        kind: "agent-builder",
+        agentBuilder: {
+          draft: { name: "Reviewer" },
+          revision: 2,
+          editedBy: "user",
+          status: "drafting",
+          updatedAt: 1,
+        },
+      })
+
+    it("gives a builder conversation its tools, tier, protocol and live draft", async () => {
+      const opts = await resolveSendOptions({ session: builderSession() })
+      expect(toolNames(opts)).toEqual(
+        expect.arrayContaining([
+          "agent_builder_get_draft",
+          "agent_builder_list_catalog",
+          "agent_builder_update_draft",
+          "agent_builder_create_agent",
+        ])
+      )
+      const entry = opts.pluginTools?.find((tool) => tool.name === "agent_builder_get_draft")
+      expect(entry?.pluginId).toBe("cognia-agent-builder-builtin")
+      expect(opts.permissionRuleset?.agent_builder_update_draft).toBe("allow")
+      expect(opts.permissionRuleset?.agent_builder_create_agent).toBe("ask")
+      expect(opts.appendSystemPrompt).toContain("## You are Cognia's Agent Builder")
+      expect(opts.dynamicSystemPrompt).toContain(
+        "## Current agent draft (revision 2, last edited by user)"
+      )
+    })
+
+    it("adds nothing to an ordinary conversation", async () => {
+      const opts = await resolveSendOptions({ session: makeSession({ id: "s1" }) })
+      expect(toolNames(opts)).not.toContain("agent_builder_get_draft")
+      expect(opts.permissionRuleset?.agent_builder_create_agent).toBeUndefined()
+      expect(opts.appendSystemPrompt ?? "").not.toContain("Agent Builder")
+      expect(opts.dynamicSystemPrompt ?? "").not.toContain("Current agent draft")
     })
   })
 
