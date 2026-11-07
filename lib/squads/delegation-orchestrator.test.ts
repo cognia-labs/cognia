@@ -28,15 +28,29 @@ jest.mock("@/lib/connectors/outbound-runner", () => ({
 import { isInQuietHours } from "@/lib/connectors/outbound-runner"
 const isInQuietHoursMock = isInQuietHours as unknown as jest.Mock
 
-// Rows that exist in the ledger, and the live Squad run of each team.
-const rows = new Set<string>()
+// Rows that exist in the ledger (the run tree walks their `parentRunId`), the
+// live Squad run of each team, and the Squad each `team` row runs.
+interface FakeRow {
+  id: string
+  kind: string
+  sourceId: string
+  parentRunId?: string
+}
+const rows = new Map<string, FakeRow>()
+function addRow(id: string, patch: Partial<FakeRow> = {}): void {
+  rows.set(id, { id, kind: "workflow", sourceId: id, ...patch })
+}
 jest.mock("@/lib/db/execution-runs", () => ({
-  getExecutionRun: async (id: string) => (rows.has(id) ? { id } : undefined),
+  getExecutionRun: async (id: string) => rows.get(id),
+  listChildExecutionRuns: async (parentRunId: string) =>
+    [...rows.values()].filter((row) => row.parentRunId === parentRunId),
 }))
 const liveRuns: Record<string, string> = {}
+const squadOfRun: Record<string, string> = {}
 jest.mock("./squad/squad-run-records", () => ({
   findLiveSquadRun: async (teamId: string) =>
     liveRuns[teamId] ? { id: liveRuns[teamId] } : undefined,
+  squadIdForTeamRun: async (run: { sourceId: string }) => squadOfRun[run.sourceId],
 }))
 
 interface FakeChild {
@@ -98,12 +112,21 @@ function resetLauncher() {
   launchGate = undefined
   rows.clear()
   for (const key of Object.keys(liveRuns)) delete liveRuns[key]
+  for (const key of Object.keys(squadOfRun)) delete squadOfRun[key]
 }
 
-/** A live Squad run of `teamId` whose `execution:team:` row exists. */
-function liveRun(teamId: string, runId = `run_team_${teamId}`): string {
+/**
+ * A live Squad run of `teamId` whose `execution:team:` row exists, hanging
+ * under `parentRunId` when given (a Squad another one launched).
+ */
+function liveRun(teamId: string, parentRunId?: string, runId = `run_team_${teamId}`): string {
   liveRuns[teamId] = runId
-  rows.add(`execution:team:${runId}`)
+  squadOfRun[runId] = teamId
+  addRow(`execution:team:${runId}`, {
+    kind: "team",
+    sourceId: runId,
+    ...(parentRunId ? { parentRunId } : {}),
+  })
   return `execution:team:${runId}`
 }
 
@@ -211,7 +234,7 @@ describe("delegation-orchestrator", () => {
 
     it("hangs the child under the run that asked when it exists, else the live run", async () => {
       const live = liveRun("team-1")
-      rows.add("execution:workflow:wf-1")
+      addRow("execution:workflow:wf-1")
       await delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
@@ -811,34 +834,57 @@ describe("delegateToTeam (team → team)", () => {
     }))
   }
 
-  it("persists a secret-free HandoffEnvelope with identity chain and depth", () => {
-    autoOutcome = null
-    const { delegation } = delegateToTeam({
+  it("attaches a secret-free HandoffEnvelope whose ends are real runs (X7)", async () => {
+    const root = liveRun("root")
+    const parent = liveRun("a", root)
+    const { delegation, completionPromise } = delegateToTeam({
       sourceTeamId: "a",
       sourceTaskId: "task-9",
       targetTeamId: "b",
       reason: "split the work",
     })
-    expect(delegation.envelope).toMatchObject({
+    // No envelope before launch: the child run it names does not exist yet.
+    expect(delegation.envelope).toBeUndefined()
+    await completionPromise
+    const linked = useAgentTeamStore.getState().delegations[delegation.id]
+    expect(linked.envelope).toMatchObject({
       envelopeVersion: 1,
       identity: {
-        parentRunId: "a",
-        childRunId: delegation.id,
+        parentRunId: parent,
+        childRunId: lastLaunch().executionRunId,
+        teamId: "a",
         taskId: "task-9",
-        depth: 1,
-        parentChain: ["a"],
+        depth: 2,
+        parentChain: [root, parent],
       },
       task: { prompt: "split the work" },
       execution: { mode: "orchestrated" },
     })
-    expect(JSON.stringify(delegation.envelope)).not.toMatch(/sk-[a-z0-9]{6,}|api[_-]?key/i)
+    expect(linked.metadata).toMatchObject({
+      executionRunId: lastLaunch().executionRunId,
+      delegationDepth: 2,
+      delegationChain: ["root", "a"],
+    })
+    expect(JSON.stringify(linked.envelope)).not.toMatch(/sk-[a-z0-9]{6,}|api[_-]?key/i)
+  })
+
+  it("attaches no envelope to a delegation with no parent run", async () => {
+    const { delegation, completionPromise } = delegateToBackground({
+      sourceTeamId: "idle",
+      sourceTaskId: "t",
+      prompt: "x",
+      reason: "y",
+    })
+    await completionPromise
+    const linked = useAgentTeamStore.getState().delegations[delegation.id]
+    expect(linked.envelope).toBeUndefined()
+    expect(linked.metadata).toMatchObject({ delegationDepth: 1, delegationChain: ["idle"] })
   })
 
   it("depths 0/1/2 may delegate; a depth-2 source is refused with the typed code", async () => {
-    // Active chain: root → a → b, so b sits at delegation depth 2.
+    // Pending chain (not launched yet): root → a → b, so b sits at depth 2.
     seedActiveEdge("d-root-a", "root", "a")
     seedActiveEdge("d-a-b", "a", "b")
-    autoOutcome = null
 
     // From depth-1 team "a": child would be depth 2 — allowed.
     const fromA = delegateToTeam({
@@ -848,8 +894,10 @@ describe("delegateToTeam (team → team)", () => {
       reason: "ok",
     })
     expect(fromA.delegation.status).toBe("active")
-    expect(fromA.delegation.envelope?.identity.depth).toBe(2)
-    await flush()
+    await fromA.completionPromise
+    expect(useAgentTeamStore.getState().delegations[fromA.delegation.id].metadata).toMatchObject({
+      delegationDepth: 2,
+    })
 
     // From depth-2 team "b": child would be depth 3 — refused before dispatch.
     launchMock.mockClear()
@@ -863,6 +911,112 @@ describe("delegateToTeam (team → team)", () => {
     expect(fromB.delegation.metadata?.errorCode).toBe("delegation-depth-exceeded")
     expect((await fromB.completionPromise).status).toBe("failed")
     expect(launchMock).not.toHaveBeenCalled()
+  })
+
+  it("counts the Squad runs above the source on the run tree", async () => {
+    // b's live run hangs under a's, which hangs under root's: b is at depth 2.
+    const rootRun = liveRun("root")
+    const aRun = liveRun("a", rootRun)
+    liveRun("b", aRun)
+    const { delegation, completionPromise } = delegateToTeam({
+      sourceTeamId: "b",
+      sourceTaskId: "t",
+      targetTeamId: "d",
+      reason: "too deep",
+    })
+    // Nothing in the store says so: the tree refuses it at launch.
+    expect(delegation.status).toBe("active")
+    const settled = await completionPromise
+    expect(settled.status).toBe("failed")
+    expect(settled.metadata).toMatchObject({
+      errorCode: "delegation-depth-exceeded",
+      depth: 3,
+      maxDepth: 2,
+    })
+    expect(launchMock).not.toHaveBeenCalled()
+    expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
+      delegationId: delegation.id,
+      status: "failed",
+    })
+  })
+
+  it("refuses a target that is already above the source on the run tree", async () => {
+    // a launched b; b delegating back to a would close the loop.
+    const aRun = liveRun("a")
+    liveRun("b", aRun)
+    const settled = await delegateToTeam({
+      sourceTeamId: "b",
+      sourceTaskId: "t",
+      targetTeamId: "a",
+      reason: "loop",
+    }).completionPromise
+    expect(settled.status).toBe("failed")
+    expect(settled.metadata?.error).toMatch(/cycle/)
+    expect(launchMock).not.toHaveBeenCalled()
+  })
+
+  it("does not count a settled delegation's runs above an unrelated source", async () => {
+    // a once launched b, but c runs on its own: c → a is not a cycle.
+    const aRun = liveRun("a")
+    liveRun("b", aRun)
+    liveRun("c")
+    const settled = await delegateToTeam({
+      sourceTeamId: "c",
+      sourceTaskId: "t",
+      targetTeamId: "a",
+      reason: "fine",
+    }).completionPromise
+    expect(settled.status).toBe("completed")
+  })
+
+  it("re-checks a deferred delegation on the tree and fails one that can never run", async () => {
+    isInQuietHoursMock.mockReturnValue(true)
+    seedTeam("b", {
+      config: {
+        governancePolicy: { delivery: { quietHours: { from: "22:00", to: "07:00", tz: "UTC" } } },
+      },
+    })
+    const aRun = liveRun("a")
+    liveRun("b", aRun)
+    const { delegation, completionPromise } = delegateToTeam({
+      sourceTeamId: "b",
+      sourceTaskId: "t",
+      targetTeamId: "a",
+      reason: "loop later",
+    })
+    expect(delegation.status).toBe("awaiting_approval")
+    const settled = await completionPromise
+    expect(settled.status).toBe("failed")
+    expect(settled.metadata?.error).toMatch(/cycle/)
+    // An approval afterwards launches nothing.
+    approveDelegation(delegation.id)
+    await flush()
+    expect(launchMock).not.toHaveBeenCalled()
+  })
+
+  it("counts a delegation awaiting approval as an edge for the cycle check", async () => {
+    isInQuietHoursMock.mockReturnValue(true)
+    seedTeam("b", {
+      config: {
+        governancePolicy: { delivery: { quietHours: { from: "22:00", to: "07:00", tz: "UTC" } } },
+      },
+    })
+    const deferred = delegateToTeam({
+      sourceTeamId: "b",
+      sourceTaskId: "t",
+      targetTeamId: "a",
+      reason: "later",
+    })
+    expect((await deferred.completionPromise).status).toBe("awaiting_approval")
+    isInQuietHoursMock.mockReturnValue(false)
+    const { delegation } = delegateToTeam({
+      sourceTeamId: "a",
+      sourceTaskId: "t",
+      targetTeamId: "b",
+      reason: "loop",
+    })
+    expect(delegation.status).toBe("failed")
+    expect(delegation.metadata?.error).toMatch(/cycle/)
   })
 
   it("honors a per-team maxTeamDelegationDepth override", () => {

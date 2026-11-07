@@ -18,6 +18,7 @@ import {
   createSquadRunRecords,
   findLiveSquadRun,
   parkActiveSquadRun,
+  squadIdForTeamRun,
   type SquadRunSeed,
 } from "./squad-run-records"
 
@@ -680,5 +681,36 @@ describe("findLiveSquadRun", () => {
     ])
     expect((await findLiveSquadRun("t"))?.id).toBe("live")
     expect(await findLiveSquadRun("other")).toBeUndefined()
+  })
+})
+
+describe("squadIdForTeamRun", () => {
+  let disableDbRuntime: (() => void) | undefined
+  beforeEach(async () => {
+    disableDbRuntime = __enableDbRuntimeForTesting()
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+  afterEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    disableDbRuntime?.()
+  })
+
+  it("reads the Squad from the run record", async () => {
+    const { executionRun } = await createSquadRunRecords(seed)
+    await expect(squadIdForTeamRun(executionRun)).resolves.toBe("team-1")
+  })
+
+  it("falls back to the opening event when the record is gone", async () => {
+    const { executionRun } = await createSquadRunRecords(seed)
+    await getDb().agentTeamRuns.delete(seed.runId)
+    await expect(squadIdForTeamRun(executionRun)).resolves.toBe("team-1")
+  })
+
+  it("answers undefined for a row that names no Squad", async () => {
+    await expect(
+      squadIdForTeamRun({ id: "execution:team:nobody", sourceId: "nobody" })
+    ).resolves.toBeUndefined()
   })
 })

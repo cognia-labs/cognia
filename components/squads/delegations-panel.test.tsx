@@ -4,6 +4,32 @@
 
 import { render, screen, fireEvent } from "@testing-library/react"
 import type { TeamDelegationRecord } from "@/types/agent/agent-team"
+import type { ExecutionRun } from "@/types/execution/run"
+
+// The child runs a launched delegation links to, read as the live query would.
+jest.mock("@/hooks/data/use-client-live-query", () => {
+  const React = jest.requireActual<typeof import("react")>("react")
+  return {
+    useClientLiveQuery: <T,>(query: () => Promise<T> | T, deps: unknown[], initial: T) => {
+      const [value, setValue] = React.useState<T | undefined>(initial)
+      React.useEffect(() => {
+        let alive = true
+        void Promise.resolve(query()).then((next) => {
+          if (alive) setValue(next)
+        })
+        return () => {
+          alive = false
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, deps)
+      return value
+    },
+  }
+})
+const childRuns = new Map<string, Partial<ExecutionRun>>()
+jest.mock("@/lib/db/execution-runs", () => ({
+  getExecutionRun: async (id: string) => childRuns.get(id),
+}))
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
@@ -59,6 +85,7 @@ describe("DelegationsPanel", () => {
     mockDelegations = []
     mockActiveTeamId = null
     namedTeamIds = []
+    childRuns.clear()
   })
 
   it("shows the empty hint when there are no delegations", () => {
@@ -115,6 +142,46 @@ describe("DelegationsPanel", () => {
     render(<DelegationsPanel />)
     const reasons = screen.getAllByText(/Older|Newer/).map((el) => el.textContent)
     expect(reasons[0]).toBe("Newer")
+  })
+})
+
+describe("DelegationsPanel over child runs", () => {
+  beforeEach(() => {
+    mockDelegations = []
+    mockActiveTeamId = null
+    childRuns.clear()
+  })
+
+  const linked = (overrides: Partial<TeamDelegationRecord> = {}) =>
+    makeDelegation({ metadata: { executionRunId: "execution:job:bg_1" }, ...overrides })
+
+  it("shows the child run's settled status over a record that still reads active", async () => {
+    childRuns.set("execution:job:bg_1", {
+      id: "execution:job:bg_1",
+      status: "cancelled",
+      endedAt: 5,
+    })
+    mockDelegations = [linked()]
+    render(<DelegationsPanel />)
+    expect(await screen.findByText("status.cancelled")).toBeInTheDocument()
+    expect(screen.queryByText("cancel")).not.toBeInTheDocument()
+  })
+
+  it("says when the child run is paused, and keeps it cancellable", async () => {
+    childRuns.set("execution:job:bg_1", { id: "execution:job:bg_1", status: "paused" })
+    mockDelegations = [linked()]
+    render(<DelegationsPanel />)
+    expect(await screen.findByText("runStatus.paused")).toBeInTheDocument()
+    expect(screen.getByText("status.active")).toBeInTheDocument()
+    expect(screen.getByText("cancel")).toBeInTheDocument()
+  })
+
+  it("surfaces a failed child's error, which the record keeps as its result", async () => {
+    childRuns.set("execution:job:bg_1", { id: "execution:job:bg_1", status: "failed" })
+    mockDelegations = [linked({ result: "lead gave up" })]
+    render(<DelegationsPanel />)
+    expect(await screen.findByText("lead gave up")).toBeInTheDocument()
+    expect(screen.getByText("status.failed")).toBeInTheDocument()
   })
 })
 

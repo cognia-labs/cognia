@@ -3621,6 +3621,12 @@
       "cancel": "Cancel",
       "description": "Work handed off to background agents, external agents, or other teams.",
       "empty": "No delegations in this team.",
+      "runStatus": {
+        "paused": "Paused",
+        "queued": "Queued",
+        "recovery_required": "Needs recovery",
+        "waiting": "Waiting"
+      },
       "status": {
         "active": "Active",
         "awaiting_approval": "Awaiting approval",

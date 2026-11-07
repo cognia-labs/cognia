@@ -3621,6 +3621,12 @@
       "cancel": "取消",
       "description": "委派给后台 Agent、外部 Agent 或其他团队的工作。",
       "empty": "该团队暂无委派。",
+      "runStatus": {
+        "paused": "已暂停",
+        "queued": "排队中",
+        "recovery_required": "需要恢复",
+        "waiting": "等待中"
+      },
       "status": {
         "active": "进行中",
         "awaiting_approval": "等待批准",

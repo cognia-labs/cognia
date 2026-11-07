@@ -30,7 +30,7 @@ import {
 import { appendRunEventInsideTransaction } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
 import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
-import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
+import { agentTeamExecutionRunId, teamIdForExecutionRun } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeamRunRecord, AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
 import { isTerminalRunStatus, type ExecutionRun } from "@/types/execution/run"
 
@@ -298,6 +298,21 @@ export async function findLiveSquadRun(teamId: string): Promise<AgentTeamRunReco
   return rows
     .filter((row) => !isTerminalTeamStatus(row.status))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+}
+
+/**
+ * The Squad a `team` execution row runs. Its run record names it; a row whose
+ * record is gone (a remote projection, a pruned record) still has the Squad on
+ * its opening event. `undefined` when neither does.
+ */
+export async function squadIdForTeamRun(
+  run: Pick<ExecutionRun, "id" | "sourceId">
+): Promise<string | undefined> {
+  const record = await getDb()
+    .agentTeamRuns.get(run.sourceId)
+    .catch(() => undefined)
+  if (record?.teamId) return record.teamId
+  return teamIdForExecutionRun(run.id)
 }
 
 /** A late failure cannot resurrect a run that an operator already stopped. */

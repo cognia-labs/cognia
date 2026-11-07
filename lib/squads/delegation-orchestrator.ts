@@ -18,6 +18,14 @@
  *   - `cancelDelegation`: stops the child through the launcher and flips the
  *     record to `cancelled`.
  *
+ * The record is the Squad's policy view of the delegation (reason, target,
+ * approval, the depth it was admitted at, the text handed back). Once
+ * launched, its status is its child run's: the panel reads it through
+ * `projectDelegation` (`delegation-view.ts`). Depth and cycles are walked on
+ * the run tree (`lib/execution/run-tree.ts`): the Squads whose runs sit above
+ * the child, plus the edges the tree cannot see yet (a delegation awaiting
+ * approval, one still launching).
+ *
  * Every store mutation funnels through existing actions so persistence and
  * event-log wiring stay in one place.
  */
@@ -33,16 +41,19 @@ import type {
   TeamDelegationStatus,
 } from "@/types/agent/agent-team"
 import type { ChildRunOutcome } from "@/types/execution/child-run"
+import type { ExecutionRun } from "@/types/execution/run"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 import { isInQuietHours } from "@/lib/connectors/outbound-runner"
 import { getExecutionRun } from "@/lib/db/execution-runs"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
+import { readRunAncestors } from "@/lib/execution/run-tree"
 import {
   launchChildRun,
   type ChildRunTarget,
   type LaunchChildRunResult,
 } from "@/lib/execution/launch-child-run"
+import { delegationExecutionRunId } from "./delegation-view"
 
 /**
  * True when the team has a quiet-hours window configured and `now` falls
@@ -165,12 +176,40 @@ function delegationStatusFor(
   return outcome.status
 }
 
-/** Link the record to its child's row, for the panel and the run tree. */
-function recordChildRun(delegationId: string, executionRunId: string): void {
+/**
+ * Link the record to its child's row (the projection reads its status from
+ * there), stamp the depth it was admitted at, and attach the handoff envelope
+ * now that both ends of it are real runs.
+ */
+function linkChildRun(
+  delegationId: string,
+  executionRunId: string,
+  parentRunId: string | undefined,
+  lineage: DelegationLineage
+): void {
   const store = useAgentTeamStore.getState()
   const record = store.delegations[delegationId]
   if (!record) return
-  store.upsertDelegation({ ...record, metadata: { ...record.metadata, executionRunId } })
+  const envelope = parentRunId
+    ? buildDelegationEnvelope({
+        parentRunId,
+        childRunId: executionRunId,
+        sourceTeamId: record.sourceTeamId,
+        taskId: record.sourceTaskId,
+        reason: record.reason,
+        runChain: lineage.runChain,
+      })
+    : undefined
+  store.upsertDelegation({
+    ...record,
+    metadata: {
+      ...record.metadata,
+      executionRunId,
+      delegationDepth: lineage.squads.length,
+      delegationChain: lineage.squads,
+    },
+    ...(envelope ? { envelope } : {}),
+  })
 }
 
 /**
@@ -193,6 +232,17 @@ async function runDelegation(
   runControllers.set(delegationId, controller)
   try {
     const parentRunId = await resolveDelegationParent(run)
+    const lineage = await delegationLineage(run.sourceTeamId, parentRunId, delegationId)
+    if (run.kind === "team") {
+      // Re-checked here, on the tree as it stands at launch: an approval can
+      // come long after the delegation was created.
+      const refusal = teamDelegationRefusal(run.sourceTeamId, run.targetId, lineage, delegationId)
+      if (refusal) {
+        if (cancelled()) return current()
+        return refuseTeamDelegation(delegationId, refusal)
+      }
+    }
+    if (cancelled()) return current()
     const launched = await launchChildRun({
       ...(parentRunId ? { parentRunId } : {}),
       target: childTarget(delegationId, run),
@@ -205,7 +255,7 @@ async function runDelegation(
       if (cancelled()) return current()
       return settleTeamDelegation(delegationId, "failed", refusalText(run, launched))
     }
-    recordChildRun(delegationId, launched.executionRunId)
+    linkChildRun(delegationId, launched.executionRunId, parentRunId, lineage)
     const outcome = await launched.outcome
     if (cancelled()) return current()
     return settleTeamDelegation(
@@ -269,7 +319,6 @@ export interface DelegateToExternalInput {
   parentRunId?: string
 }
 
-/** Build a fresh delegation record with the canonical lifecycle defaults. */
 /** Default team delegation depth cap (ADR-0090 Phase 7) — depths 0/1/2 may
  * delegate; a depth-2 child delegating again is refused. Distinct from the
  * native subagent `dispatchContext.maxDepth` budget. */
@@ -291,73 +340,171 @@ export class DelegationDepthExceededError extends Error {
 }
 
 /**
- * Walk the ACTIVE team-delegation graph upward from `teamId` and return
- * `{ depth, chain }`: how many active team→team hops sit above it (a root
- * team is depth 0) and the team-id chain root→…→teamId.
+ * Team→team edges the run tree cannot see: a delegation awaiting approval has
+ * no child run yet, and one still launching has not been linked to its row.
+ * A launched delegation is on the tree (its target Squad's run hangs under the
+ * run that asked) and is not counted twice. `excludeId` leaves out the
+ * delegation being checked, which is itself still launching.
  */
-function activeTeamDelegationDepth(teamId: string): { depth: number; chain: string[] } {
-  const delegations = Object.values(useAgentTeamStore.getState().delegations).filter(
+function pendingTeamEdges(excludeId?: string): TeamDelegationRecord[] {
+  return Object.values(useAgentTeamStore.getState().delegations).filter(
     (d) =>
+      d.id !== excludeId &&
       d.targetType === "team" &&
-      d.targetId &&
-      (d.status === "active" || d.status === "awaiting_approval")
+      Boolean(d.targetId) &&
+      (d.status === "awaiting_approval" ||
+        ((d.status === "active" || d.status === "pending") && !delegationExecutionRunId(d)))
   )
-  const chain: string[] = [teamId]
-  const seen = new Set<string>([teamId])
-  let current = teamId
+}
+
+/**
+ * Extend `squads` (root→source) upward through pending edges into its root:
+ * a Squad that is about to be launched by another counts as already under it.
+ */
+function withPendingAncestry(squads: string[], excludeId?: string): string[] {
+  const edges = pendingTeamEdges(excludeId)
+  const chain = [...squads]
+  const seen = new Set(chain)
   for (;;) {
-    const incoming = delegations.find((d) => d.targetId === current)
-    if (!incoming || seen.has(incoming.sourceTeamId)) break
+    const incoming = edges.find((d) => d.targetId === chain[0] && !seen.has(d.sourceTeamId))
+    if (!incoming) return chain
     seen.add(incoming.sourceTeamId)
     chain.unshift(incoming.sourceTeamId)
-    current = incoming.sourceTeamId
   }
-  return { depth: chain.length - 1, chain }
+}
+
+/** Where a delegation's child sits in the run tree. */
+interface DelegationLineage {
+  /** The runs above the child, root→parent. Empty when it has no parent. */
+  runChain: string[]
+  /**
+   * The Squads above the child, root→source: the Squad of every `team` run in
+   * `runChain`, the source Squad last, extended upward through pending edges.
+   * Its length is the child's delegation depth.
+   */
+  squads: string[]
 }
 
 /**
- * Throw the typed depth error when a delegation FROM `sourceTeamId` would put
- * its child past the source team's `maxTeamDelegationDepth` (default 2).
- * Returns the child depth + root chain for envelope construction.
+ * Read the lineage of a delegation from `sourceTeamId` whose child hangs under
+ * `parentRunId`. The source Squad is appended when the parent is not its run
+ * (a workflow step's run, or no parent at all).
  */
-function assertTeamDelegationDepth(sourceTeamId: string): {
-  childDepth: number
-  chain: string[]
-} {
-  const { depth, chain } = activeTeamDelegationDepth(sourceTeamId)
-  const maxDepth =
+async function delegationLineage(
+  sourceTeamId: string,
+  parentRunId: string | undefined,
+  excludeId?: string
+): Promise<DelegationLineage> {
+  const runs: ExecutionRun[] = []
+  if (parentRunId) {
+    const parent = await getExecutionRun(parentRunId).catch(() => undefined)
+    if (parent) {
+      const ancestors = await readRunAncestors(parentRunId).catch(() => [])
+      runs.push(...ancestors.reverse(), parent)
+    }
+  }
+  const squads: string[] = []
+  if (runs.some((run) => run.kind === "team")) {
+    const { squadIdForTeamRun } = await import("./squad/squad-run-records")
+    for (const run of runs) {
+      if (run.kind !== "team") continue
+      const squad = await squadIdForTeamRun(run).catch(() => undefined)
+      // One Squad run per hop: a Squad's own nested rows (a best-of-N group
+      // under its run) are not a second delegation.
+      if (squad && squads[squads.length - 1] !== squad) squads.push(squad)
+    }
+  }
+  if (squads[squads.length - 1] !== sourceTeamId) squads.push(sourceTeamId)
+  return {
+    runChain: runs.map((run) => run.id),
+    squads: withPendingAncestry(squads, excludeId),
+  }
+}
+
+function maxTeamDelegationDepth(sourceTeamId: string): number {
+  return (
     useAgentTeamStore.getState().teams[sourceTeamId]?.config.maxTeamDelegationDepth ??
     DEFAULT_MAX_TEAM_DELEGATION_DEPTH
-  const childDepth = depth + 1
-  if (childDepth > maxDepth) {
-    throw new DelegationDepthExceededError(childDepth, maxDepth)
-  }
-  return { childDepth, chain }
+  )
+}
+
+/** Why a team delegation may not run, as the failed record's metadata. */
+interface TeamDelegationRefusal {
+  error: string
+  metadata: Record<string, unknown>
 }
 
 /**
- * Build (and validate) the persisted HandoffEnvelope for a delegation. The
- * persisted task text is the delegation REASON — raw prompts intentionally
- * never hit disk (see `PendingRun`). Refuses to attach an envelope that fails
- * the secret-free validator rather than persisting a leaking one.
+ * The refusal for a team delegation `source → target` at `lineage`, or
+ * `undefined` when it may run: a cycle (the target is already above the
+ * child, or reaches a Squad above it through pending edges), or a child past
+ * the source Squad's `maxTeamDelegationDepth` (default 2).
+ */
+function teamDelegationRefusal(
+  sourceTeamId: string,
+  targetTeamId: string,
+  lineage: DelegationLineage,
+  excludeId?: string
+): TeamDelegationRefusal | undefined {
+  if (wouldCreateTeamCycle(sourceTeamId, targetTeamId, lineage.squads, excludeId)) {
+    return { error: "team delegation cycle rejected", metadata: {} }
+  }
+  const childDepth = lineage.squads.length
+  const maxDepth = maxTeamDelegationDepth(sourceTeamId)
+  if (childDepth > maxDepth) {
+    const err = new DelegationDepthExceededError(childDepth, maxDepth)
+    return {
+      error: err.message,
+      metadata: { errorCode: "delegation-depth-exceeded", depth: childDepth, maxDepth },
+    }
+  }
+  return undefined
+}
+
+/** Settle a team delegation the tree refused at launch, keeping why. */
+function refuseTeamDelegation(
+  delegationId: string,
+  refusal: TeamDelegationRefusal
+): TeamDelegationRecord {
+  const store = useAgentTeamStore.getState()
+  const record = store.delegations[delegationId]
+  if (record) {
+    store.upsertDelegation({
+      ...record,
+      metadata: { ...record.metadata, ...refusal.metadata, error: refusal.error },
+    })
+  }
+  return settleTeamDelegation(delegationId, "failed", refusal.error)
+}
+
+/**
+ * Build (and validate) the persisted HandoffEnvelope for a launched
+ * delegation. Both ends are run ids: the run the child hangs under and the
+ * child's own row, with the runs above it root→parent as the chain. A
+ * delegation with no parent run has no envelope, since there is no parent end
+ * to name. The persisted task text is the delegation REASON — raw prompts
+ * intentionally never hit disk (see `PendingRun`). Refuses to attach an
+ * envelope that fails the secret-free validator rather than persisting a
+ * leaking one.
  */
 function buildDelegationEnvelope(input: {
-  delegationId: string
+  parentRunId: string
+  childRunId: string
   sourceTeamId: string
   taskId: string
   reason: string
-  depth: number
-  chain: string[]
+  runChain: string[]
 }): HandoffEnvelope | undefined {
+  const parentChain = input.runChain.length > 0 ? input.runChain : [input.parentRunId]
   const envelope: HandoffEnvelope = {
     envelopeVersion: 1,
     identity: {
-      parentRunId: input.sourceTeamId,
-      childRunId: input.delegationId,
+      parentRunId: input.parentRunId,
+      childRunId: input.childRunId,
       teamId: input.sourceTeamId,
       taskId: input.taskId,
-      depth: input.depth,
-      parentChain: input.chain,
+      depth: parentChain.length,
+      parentChain,
     },
     task: { prompt: input.reason },
     execution: { mode: "orchestrated" },
@@ -375,19 +522,10 @@ function buildDelegation(input: {
   manual?: boolean
   metadata?: Record<string, unknown>
   status?: TeamDelegationStatus
-  /** Delegation depth of the child; defaults to a fresh walk from the source. */
-  depth?: { childDepth: number; chain: string[] }
 }): TeamDelegationRecord {
   const now = new Date()
-  const id = nanoid()
-  const depth =
-    input.depth ??
-    (() => {
-      const walked = activeTeamDelegationDepth(input.sourceTeamId)
-      return { childDepth: walked.depth + 1, chain: walked.chain }
-    })()
   return {
-    id,
+    id: nanoid(),
     sourceTeamId: input.sourceTeamId,
     sourceTaskId: input.sourceTaskId,
     targetType: input.targetType,
@@ -398,14 +536,6 @@ function buildDelegation(input: {
     createdAt: now,
     updatedAt: now,
     metadata: input.metadata,
-    envelope: buildDelegationEnvelope({
-      delegationId: id,
-      sourceTeamId: input.sourceTeamId,
-      taskId: input.sourceTaskId,
-      reason: input.reason,
-      depth: depth.childDepth,
-      chain: depth.chain,
-    }),
   }
 }
 
@@ -622,33 +752,32 @@ export interface DelegateToTeamInput {
 }
 
 /**
- * True when delegating `source → target` would close a cycle in the ACTIVE
- * team-delegation graph (target already reaches source, or target === source).
- * Walks only `team`-typed delegations in a non-terminal status, so resolved
- * delegations never block a fresh one.
+ * True when delegating `source → target` would close a cycle: the target is
+ * the source, is one of the Squads above the child (`squads`, root→source,
+ * from the run tree), or reaches one of them through edges the tree cannot see
+ * yet (`pendingTeamEdges`). Settled delegations never block a fresh one: their
+ * runs are no longer above anything that is still delegating.
  *
  * @internal Test seam: exported for its unit tests, not for production callers.
  */
-export function wouldCreateTeamCycle(sourceTeamId: string, targetTeamId: string): boolean {
-  if (sourceTeamId === targetTeamId) return true
-  const delegations = Object.values(useAgentTeamStore.getState().delegations)
+export function wouldCreateTeamCycle(
+  sourceTeamId: string,
+  targetTeamId: string,
+  squads: readonly string[] = [sourceTeamId],
+  excludeId?: string
+): boolean {
+  const above = new Set([...squads, sourceTeamId])
   const edges = new Map<string, Set<string>>()
-  for (const d of delegations) {
-    if (
-      d.targetType === "team" &&
-      d.targetId &&
-      (d.status === "active" || d.status === "awaiting_approval")
-    ) {
-      if (!edges.has(d.sourceTeamId)) edges.set(d.sourceTeamId, new Set())
-      edges.get(d.sourceTeamId)!.add(d.targetId)
-    }
+  for (const d of pendingTeamEdges(excludeId)) {
+    if (!edges.has(d.sourceTeamId)) edges.set(d.sourceTeamId, new Set())
+    edges.get(d.sourceTeamId)!.add(d.targetId!)
   }
-  // Is `source` reachable FROM `target`? If so, target→…→source→target cycles.
+  // Does `target` reach a Squad above the child? Then target→…→source→target.
   const seen = new Set<string>()
   const stack = [targetTeamId]
   while (stack.length > 0) {
     const cur = stack.pop()!
-    if (cur === sourceTeamId) return true
+    if (above.has(cur)) return true
     if (seen.has(cur)) continue
     seen.add(cur)
     for (const next of edges.get(cur) ?? []) stack.push(next)
@@ -673,41 +802,21 @@ export function delegateToTeam(input: DelegateToTeamInput): {
   const store = useAgentTeamStore.getState()
   const hooks = getPluginLifecycleHooks()
 
-  if (wouldCreateTeamCycle(input.sourceTeamId, input.targetTeamId)) {
+  // What the store alone can tell is refused here, so the caller sees the
+  // failed record at once: a self-delegation, a cycle or depth overrun through
+  // edges not yet on the run tree. `runDelegation` re-checks on the tree.
+  const known = teamDelegationRefusal(input.sourceTeamId, input.targetTeamId, {
+    runChain: [],
+    squads: withPendingAncestry([input.sourceTeamId]),
+  })
+  if (known) {
     const failed = buildDelegation({
       sourceTeamId: input.sourceTeamId,
       sourceTaskId: input.sourceTaskId,
       targetType: "team",
       targetId: input.targetTeamId,
       reason: input.reason,
-      metadata: { ...input.metadata, error: "team delegation cycle rejected" },
-      status: "failed",
-    })
-    store.upsertDelegation(failed)
-    return { delegation: failed, completionPromise: Promise.resolve(failed) }
-  }
-
-  // ADR-0090 Phase 7: team delegation depth gate (default 2, per-team
-  // `maxTeamDelegationDepth`). Refused BEFORE any dispatch, persisted as a
-  // failed record so the board shows WHY nothing ran.
-  let depthInfo: { childDepth: number; chain: string[] }
-  try {
-    depthInfo = assertTeamDelegationDepth(input.sourceTeamId)
-  } catch (err) {
-    if (!(err instanceof DelegationDepthExceededError)) throw err
-    const failed = buildDelegation({
-      sourceTeamId: input.sourceTeamId,
-      sourceTaskId: input.sourceTaskId,
-      targetType: "team",
-      targetId: input.targetTeamId,
-      reason: input.reason,
-      metadata: {
-        ...input.metadata,
-        error: err.message,
-        errorCode: "delegation-depth-exceeded",
-        depth: err.depth,
-        maxDepth: err.maxDepth,
-      },
+      metadata: { ...input.metadata, ...known.metadata, error: known.error },
       status: "failed",
     })
     store.upsertDelegation(failed)
@@ -723,7 +832,6 @@ export function delegateToTeam(input: DelegateToTeamInput): {
     reason: input.reason,
     metadata: quietDeferred ? { ...input.metadata, quietHoursDeferred: true } : input.metadata,
     status: quietDeferred ? "awaiting_approval" : "active",
-    depth: depthInfo,
   })
   store.upsertDelegation(delegation)
   // Stashed like the other targets, so a quiet-hours deferral runs on approval.
@@ -745,12 +853,34 @@ export function delegateToTeam(input: DelegateToTeamInput): {
   })
 
   const completionPromise = (async (): Promise<TeamDelegationRecord> => {
-    if (quietDeferred) return delegation
+    if (quietDeferred) {
+      // Checked on the tree now, so a deferred delegation that could never
+      // run fails instead of waiting for an approval; checked again on launch.
+      const refusal = await deferredTeamRefusal(delegation.id, run)
+      if (
+        refusal &&
+        useAgentTeamStore.getState().delegations[delegation.id]?.status === "awaiting_approval"
+      ) {
+        pendingRuns.delete(delegation.id)
+        return refuseTeamDelegation(delegation.id, refusal)
+      }
+      return useAgentTeamStore.getState().delegations[delegation.id] ?? delegation
+    }
     const settled = await runDelegation(delegation.id, run)
     return settled ?? delegation
   })()
 
   return { delegation, completionPromise }
+}
+
+/** The tree's refusal for a deferred team delegation, read without launching it. */
+async function deferredTeamRefusal(
+  delegationId: string,
+  run: PendingRun
+): Promise<TeamDelegationRefusal | undefined> {
+  const parentRunId = await resolveDelegationParent(run)
+  const lineage = await delegationLineage(run.sourceTeamId, parentRunId, delegationId)
+  return teamDelegationRefusal(run.sourceTeamId, run.targetId, lineage, delegationId)
 }
 
 /**
