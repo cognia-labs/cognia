@@ -339,6 +339,14 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 托管桌面验收和编辑器工具随后（2026-11-07）。`automation` 成为 manifest 模块：验收工具族搬到 `lib/automation/agent-tools.ts`，在桌面宿主上提供（证据工具给验收运行挂靠的子会话，提议工具给其他不绑定 IM 的对话）。`codeserver`（Pro IDE）成为 manifest 模块：编辑器工具族连同依赖解析搬到 `lib/codeserver/agent-tools.ts`，有工作区且宿主有工作区文件系统后端时提供读取工具，再有 Pro IDE 能力时提供五个写入工具。编辑器工具归 `codeserver` 而不是 `editor`，因为后者会与 `artifact` 形成 `dependsOn` 环。它们的同意档、解析器里的段落和 `proIdeWriteToolsAvailable`、分发器的分支，以及探针和实时语音名单里的名字都已删除。`read_active_editor` 以前没有同意档，又几乎在每个带工作区的桌面回合都提供；声明为 `"ask"` 会让这些回合多出一个以前没有的规则集，所以为它和 vector 工具新增了 `consent: "default"`。还清两条方向边。
   - `spawn_task` 在拆掉阻挡它的环之后跟进（2026-11-07）。聊天停靠栏不再自己绘制 Tasks 面板：`tasks` 成为 manifest 模块，它的 UI manifest 挂一个副作用，把面板注册进上下文面板注册表（与 Files 面板做法相同）；sidechat 面板 id 移到 `artifact`。工具族搬到 `lib/tasks/agent-tools.ts`，在设置开启 `spawnTask` 时提供，手机宿主除外。`spawn_task` 以前没有同意档，所以声明为 `consent: "default"`。它在解析器里的段落、分发器的分支以及探针和实时语音名单里的名字都已删除，还清两条方向边。
   - Agent Builder 的工具随后（2026-11-07）作为 `agent-builder` 模块迁出：工具族 `lib/agent-builder/agent-tools.ts` 在 builder 对话里提供四个工具，builder 协议作为它们的 instructions。按主题它们归 agent 子系统，但那是内核；内核子系统要贡献工具就得变成模块，而所有内核调用方都会导入它。所以这些工具单独成为一个模块，通过内核的 lib 访问 builder 的会话和草稿。builder 的实时草稿是每轮的段落，仍由发送路径添加，所以 builder 其余部分留在内核，等上下文贡献。它们的同意档文件、分发器分支和探针名单里的名字都已删除。
+- **修订（2026-11-07）：`context` 贡献。** 模块往一次运行的系统提示里加文字，经由 manifest 贡献，不再在发送路径里加分支。现状调查和评审结论见 `docs/plans/2026-11-07-context-contributions.md`。
+  - 声明。`context.load` 指向一个导出 `contributions` 的文件。每条贡献有 `id`、`cache` 类别（`"turn"` 每轮变化，`"session"` 会话内稳定）、可选的 `slot`（内核的封闭列表：`project-goal`、`memory`、`continuity`、`project-knowledge`、`agent-knowledge`，按 `systemPrompt` 中的顺序）、可选的 `pii: "redacted-at-source"`、经网络检索时可选的 `deadlineMs`，以及返回段落（`text`、可选 `sources`、可选 `sessionState`）或 `null` 的 `produce(ctx)`。上下文在工具 surface 的上下文之外，还带本轮的查询、调用方注入的宿主依赖（按名字，类型由 `ContextHostDepsMap` 合并声明）和折叠后的能力授予。
+  - 放置。所有段落由内核放置，模块从不写 `SendOptions`。turn 段在开启缓存优化时进动态尾部，关闭时进它的 slot；没有 slot 的总是进尾部。session 段必须指明 slot，并且总是放在那里。尾部先按 slot 顺序列出 turn 段，再列没有 slot 的，每组内按模块 id 排序，所以从发送路径迁出的段落保持原分支给它的位置。
+  - PII。内核检查每段文字，泄露的连同其 sources 一起丢弃，除非贡献声明文字在来源处已脱敏。
+  - 旁路输出。贡献报给界面的内容放在 `SendOptions.contextSources`，键为 `<module>.<id>`，类型由合并进 `ContextSourcesMap` 声明（用 `contextSourcesOf` 读取）。`sessionState` 由内核按会话保存（`lib/claude/context-session-state.ts`，保留最近 64 个），同一模块的工具通过 `ToolCallContext.sessionState(id)` 读取；模块不再在解析时以副作用登记每会话状态。
+  - 失败。上下文只做加法：贡献文件加载失败、抛错、超时或段落没有文字，都只是跳过该部分并上报，从不拒绝这一轮。
+  - 位置。生成器写 `lib/modules/generated/context.ts`；`lib/claude/context-contributions.ts` 负责收集和放置；门禁检查 manifest 形状和 `contributions` 导出，读取方在文件加载时检查每条贡献的字段。
+  - 不属于上下文贡献的。分身替换的是身份段而不是追加段落，记忆召回又要读分身取回的内容，两者暂时留在发送路径。执行中计划的段落是内核自己的。活动目标已经作为能力授予的 instructions 进入。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

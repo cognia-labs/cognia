@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0 起实施。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0 已实施，记录见 §7。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -166,3 +166,19 @@ interface ContextSection {
 2. PII：内核对每段统一 `hasNoLeakingPiiDeep`，不过则丢弃并上报；来源已脱敏的贡献声明 `pii: "redacted-at-source"` 跳过。
 3. 旁路输出：`opts.contextSources`，按 `<module>.<id>` 键，`ContextSourcesMap` 声明合并；每迁一个生产者就改它的消费者并删掉专用字段。
 4. 宿主依赖：v1 原样透传进 `ctx.hostDeps`，查询进 `ctx.query`；`retrieval` 端口以后再做。
+
+## 7. C0 实施记录：内核部分（2026-11-07）
+
+- 类型（`lib/modules/manifest-types.ts`）：`ContextSlot`、`ContextHostDepsMap` / `ContextSourcesMap`（空接口，由模块从 `types/<id>/**` 合并声明）、`ContextTurnContext`（工具 surface 的上下文 + `query` + `hostDeps` + `grant`）、`ContextSection`、`ContextContribution`、`ModuleContextModule` / `ModuleContextEntry`；manifest 加 `context?: { load }`；`ToolCallContext` 加可选的 `sessionState(id)`。
+- 生成器：`lib/modules/generated/context.ts`（`MODULE_CONTEXT_CONTRIBUTIONS`，每模块一个懒加载，按模块 id 排序）。门禁：`context` 字段只能是 `{ load }` 且为懒加载项，被加载的文件要导出 `contributions`；测试 3 例。
+- 内核读取方 `lib/claude/context-contributions.ts`：并发 `produce`，每条贡献各自截止（默认 2 s，可声明 `deadlineMs`，上限 15 s）；PII 闸用 `hasNoLeakingPii`；放置、来源、会话状态如 §2.2；失败跳过并记日志。
+- 会话状态 `lib/claude/context-session-state.ts`：每次解析整体替换；工具调用经 `runContributedTool` 注入的 `sessionState(id)` 只能读本模块的键。
+- `build-options`：在拼 `systemPrompt` 之前收集；slot 段插在对应的内核段之后（`project-goal` 在协调者目标段后，`memory` 在记忆段后……），turn 段推进动态尾部（在内核检索段之后、协调者状态段和草稿段之前），`sources` 写 `opts.contextSources`，有会话时替换会话状态。`hostDeps` 的名字：`twin`、`memory`、`projectKnowledge`、`knowledgeAccess`；查询文字取 `projectKnowledgeQuery`（项目知识查询，缺省为路由提示）。
+- `SendOptions.contextSources`（`packages/plugin-contract`）：改了插件契约源码，authoring kit pin 失效，需从干净检出重建（CLAUDE.md 的 §26 流程），本次不做。
+- 与 §2 草案的差别（实现时定下）：
+  - `slot` 可选：协调者状态段和 Agent Builder 草稿段今天在缓存优化关时也进尾部，所以没有 slot 的 turn 段总是进尾部；`session` 段必须有 slot。
+  - 尾部排序：先按 slot 顺序，再放没有 slot 的，组内按模块 id 和 manifest 顺序。只按模块 id 排，等项目知识库（`project-knowledge`）和 Agent 知识库（`knowledge-base`）都迁出后，两段的顺序会按字母颠倒，提示词就不再逐字节一致。
+  - 工作流的知识访问策略不单列为 `ctx.knowledgeAccess`，而是作为 `hostDeps.knowledgeAccess` 传入：它的类型属于 `knowledge-base` 模块，内核的 manifest 类型不能引用。
+  - 会话删除时不单独清理：注册表只保留最近解析的 64 个会话，最久未解析的先淘汰。
+  - `slot` 合法性和 `id` 唯一性由类型和读取方在加载时检查（不合格则整个模块跳过并上报），门禁只查形状和导出。
+- 测试：`context-contributions.test.ts` 13 例、`context-session-state.test.ts` 4 例、`tool-contributions.test.ts` 加 1 例（只读本模块状态）、`build-options.test.ts` 加 4 例（尾部 / slot / 缓存关 / 上下文与旁路输出）。目前没有模块声明 `context`，所以运行时行为不变。

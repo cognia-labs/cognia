@@ -13,6 +13,10 @@ import {
   runContributedTool,
   toolSurfaceHost,
 } from "./tool-contributions"
+import {
+  __resetContextSessionStateForTests,
+  replaceContextSessionState,
+} from "./context-session-state"
 
 const ctx: ToolSurfaceContext = {
   session: null,
@@ -61,6 +65,7 @@ const crate = (toolFamily: ModuleToolFamily | (() => Promise<never>)) =>
 
 beforeEach(() => {
   __resetContributedToolsForTests()
+  __resetContextSessionStateForTests()
   jest.spyOn(console, "warn").mockImplementation(() => {})
 })
 afterEach(() => jest.restoreAllMocks())
@@ -237,8 +242,26 @@ describe("dispatch", () => {
       listed: 3,
     })
     await runContributedTool(found, {}, call)
-    expect(run).toHaveBeenCalledWith("crate_list", { limit: 3 }, call)
+    expect(run).toHaveBeenCalledWith("crate_list", { limit: 3 }, expect.objectContaining(call))
     expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it("lets a call read only its own module's context session state", async () => {
+    replaceContextSessionState(
+      "s1",
+      new Map<string, unknown>([
+        ["crate.scope", { ids: ["a"] }],
+        ["other.scope", { ids: ["b"] }],
+      ])
+    )
+    let seen: unknown[] = []
+    const run = jest.fn(async (_name: string, _args: unknown, ctx: ToolCallContext) => {
+      seen = [ctx.sessionState?.("scope"), ctx.sessionState?.("missing")]
+      return { ok: true }
+    })
+    const found = findContributedTool("crate_list", [crate(family({ run }))])!
+    await runContributedTool(found, {}, call)
+    expect(seen).toEqual([{ ids: ["a"] }, undefined])
   })
 })
 

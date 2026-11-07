@@ -33,6 +33,7 @@ import type {
 } from "@/lib/modules/manifest-types"
 import { findDeclaredModuleTool, type DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { detectPlatform, isCliHost, isHeadlessHost } from "@/lib/platform/detect"
+import { readContextSessionState } from "./context-session-state"
 import type { PermissionVerdict, Ruleset } from "./permissions/ruleset"
 
 /** How long all families together may take to say what a run is offered. */
@@ -246,14 +247,23 @@ export function findContributedTool(
   return tool && tool.entry.stage !== "experimental" && tool.name === name ? tool : undefined
 }
 
-/** Run one call through the family that declared its tool. */
+/**
+ * Run one call through the family that declared its tool. The call reads the
+ * session state its own module's context contributions left, never another
+ * module's.
+ */
 export async function runContributedTool(
   tool: DeclaredModuleTool,
   args: Record<string, unknown>,
   call: ToolCallContext
 ): Promise<unknown> {
   const family = await loadFamily(tool.entry)
-  return family.run(tool.name, args, call)
+  const owner = tool.entry.module
+  return family.run(tool.name, args, {
+    ...call,
+    sessionState: (contributionId) =>
+      readContextSessionState(call.sessionId, `${owner}.${contributionId}`),
+  })
 }
 
 /** Test helper: forget every loaded family. */

@@ -31,6 +31,7 @@ import {
   BRAIN_PROFILES,
   EFFECT_FIELDS,
   GENERATED_CAPABILITIES,
+  GENERATED_CONTEXT,
   GENERATED_HOST,
   GENERATED_PROMPTS,
   GENERATED_TOOLS,
@@ -1127,6 +1128,74 @@ test("the capability registry lazily imports each contributing module's file, by
   assert.ok(registry.indexOf('module: "browser-companion"') < registry.indexOf('module: "goal"'))
   assert.ok(registry.includes('load: () => import("@/lib/goal/context-injector")'))
   assert.ok(registry.includes('load: () => import("@/lib/browser-companion/agent-grant")'))
+  assert.ok(!registry.includes("crew"))
+})
+
+test("context contributions: a lazy load whose file exports `contributions`", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/radar/module.ts": hostManifest("radar", 'context: { load: () => import("./context") }'),
+    "lib/radar/context.ts": "export const contributions = []\n",
+    "lib/pet/module.ts": hostManifest("pet", 'context: { load: () => import("./context") }'),
+    "lib/pet/context.ts": "export const sections = []\n",
+  })
+  const errors = result.errors.filter((error) =>
+    /^lib\/(pet|radar)\/module\.ts: context/.test(error)
+  )
+  assert.deepEqual(errors, [
+    "lib/pet/module.ts: context: lib/pet/context.ts exports no `contributions`",
+  ])
+})
+
+test("validateHostManifest wants context as { load } with a lazy entry", () => {
+  const base = { id: "radar", kind: "module", stage: "beta" }
+  assert.ok(
+    validateHostManifest({ ...base, context: "./context" }, "radar").includes(
+      'context.load is a lazy entry `() => import("…")`'
+    )
+  )
+  assert.ok(
+    validateHostManifest(
+      { ...base, context: { load: { $lazy: "./context" }, slot: "memory" } },
+      "radar"
+    ).includes('context: unknown field "slot"')
+  )
+  assert.deepEqual(
+    validateHostManifest({ ...base, context: { load: { $lazy: "./context" } } }, "radar"),
+    []
+  )
+})
+
+test("the context registry lazily imports each contributing module's file, by module id", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "radar",
+        file: "lib/radar/module.ts",
+        value: { stage: "stable", context: { load: { $lazy: "./context" } } },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "goal",
+        file: "lib/goal/module.ts",
+        value: { stage: "experimental", context: { load: { $lazy: "./turn-section" } } },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_CONTEXT]
+  assert.match(
+    registry,
+    /export const MODULE_CONTEXT_CONTRIBUTIONS: readonly ModuleContextEntry\[\]/
+  )
+  assert.ok(registry.indexOf('module: "goal"') < registry.indexOf('module: "radar"'))
+  assert.ok(
+    registry.includes(
+      '    stage: "experimental",\n    load: () => import("@/lib/goal/turn-section"),'
+    )
+  )
+  assert.ok(registry.includes('load: () => import("@/lib/radar/context")'))
   assert.ok(!registry.includes("crew"))
 })
 

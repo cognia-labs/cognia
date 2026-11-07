@@ -245,6 +245,7 @@ function collectManifests(ctx, files) {
             ...provisionExportErrors(ctx, file, value),
             ...promptsExportErrors(ctx, file, value),
             ...contributionsExportErrors(ctx, file, value),
+            ...contextExportErrors(ctx, file, value),
             ...toolsExportErrors(ctx, file, value),
           ]
         : []
@@ -409,6 +410,16 @@ function contributionsExportErrors(ctx, file, manifest) {
   const target = resolveModule(ctx, spec, file)
   return target && !exportsName(ctx.ast(target), "contributions")
     ? [`capabilityContributions: ${target} exports no \`contributions\``]
+    : []
+}
+
+/** A module's `context.load` file exports them as `contributions`. */
+function contextExportErrors(ctx, file, manifest) {
+  const spec = manifest.context?.load?.$lazy
+  if (typeof spec !== "string") return []
+  const target = resolveModule(ctx, spec, file)
+  return target && !exportsName(ctx.ast(target), "contributions")
+    ? [`context: ${target} exports no \`contributions\``]
     : []
 }
 

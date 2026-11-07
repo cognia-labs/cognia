@@ -1296,6 +1296,14 @@ export type SendOptions = {
     degraded: boolean
   }
 
+  /**
+   * What the modules' context contributions reported for the UI this turn
+   * (sources, budgets), keyed by `<module>.<id>` (ADR-0250 §14 `context`
+   * amendment). Read through `contextSourcesOf`, which types each entry by
+   * `ContextSourcesMap`.
+   */
+  contextSources?: Record<string, unknown>
+
   /** Content-free version identities captured into an encrypted compaction checkpoint. */
   compactionCheckpointContext?: {
     selectedSkills: Array<{ id: string; version: string }>

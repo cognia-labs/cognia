@@ -30,6 +30,8 @@
  * - `tools` declare each tool's consent, effect and dispatch order as data,
  *   and load the family that offers and runs them; the kernel derives the
  *   ruleset and every name list from the declaration (ADR-0250 §14 amendment).
+ * - `context` produces system-prompt sections only; the kernel places,
+ *   PII-gates and reports them (ADR-0250 §14 `context` amendment).
  * - `tables` only declare ownership; the schema stays in `CURRENT_SCHEMA`.
  *
  * The registries generated from these fields arrive registry by registry
@@ -37,9 +39,9 @@
  * `nav`, `runtimes`, `slots` and `effects` (M2) are generated
  * (`scripts/build/gen-module-registry.mjs`) and read by their shells and hosts;
  * `provides` and `requires` (M3) are read by `lib/modules/ports.ts` from the
- * host registry, and `prompts`, `capabilityContributions` and `tools` (M3) by
- * the prompt catalog, the send resolver and the tool dispatcher, each from its
- * own generated registry. Every other field is shape-checked by the gate and
+ * host registry, and `prompts`, `capabilityContributions`, `tools` and
+ * `context` (M3) by the prompt catalog, the send resolver and the tool
+ * dispatcher, each from its own generated registry. Every other field is shape-checked by the gate and
  * read by nothing yet.
  */
 
@@ -334,6 +336,12 @@ export interface ToolCallContext {
   sandboxRuntimeRef?: string
   /** What an outbound delivery made during the call names as its authority (ADR-0239). */
   outboundAuthorization: { kind: "tool-call"; sessionId: string; toolUseId: string }
+  /**
+   * The session state one of this module's context contributions left for
+   * the calling conversation at its last resolution (`ContextSection.sessionState`),
+   * by contribution id; `undefined` when it left none. Set by the kernel.
+   */
+  sessionState?(contributionId: string): unknown
 }
 
 /**
@@ -346,6 +354,98 @@ export interface ToolCallContext {
 export interface ModuleToolFamily {
   surface(ctx: ToolSurfaceContext): ToolSurface | null | Promise<ToolSurface | null>
   run(name: string, args: Record<string, unknown>, call: ToolCallContext): Promise<unknown>
+}
+
+/**
+ * Where a context section sits in `systemPrompt`, in prompt order: after the
+ * workspace instructions, among the kernel's own retrieval sections. A closed
+ * list, so a migrated section lands where its kernel branch put it.
+ */
+export type ContextSlot =
+  "project-goal" | "memory" | "continuity" | "project-knowledge" | "agent-knowledge"
+
+/**
+ * Host-built dependencies a caller injects into a resolution (a vector
+ * backend, an embedder, a workflow's knowledge access), by name. Empty here:
+ * the module that reads one declares it by merging into this map from
+ * `types/<id>/**`.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- augmented by the modules that read one
+export interface ContextHostDepsMap {}
+
+/**
+ * What a context contribution reports for the UI (sources, budgets), keyed by
+ * `<module>.<id>`. Empty here: each contributing module declares its entry by
+ * merging into this map from `types/<id>/**`; readers use `contextSourcesOf`.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- augmented by contributing modules
+export interface ContextSourcesMap {}
+
+/** What a context contribution reads about the run. Read-only, no `SendOptions`. */
+export interface ContextTurnContext extends ToolSurfaceContext {
+  /** The turn's retrieval query: its text and, when the caller computed one, its embedding. */
+  query: { text: string | null; embedding: readonly number[] | null }
+  /** Dependencies the caller injected, by name; an absent one means the host has none. */
+  hostDeps: Readonly<Partial<ContextHostDepsMap>>
+  /** The run's folded capability grant (knowledge bases and the rest), or `null`. */
+  grant: Readonly<AgentCapabilityGrantV1> | null
+}
+
+/** What a contribution adds to one run. */
+export interface ContextSection {
+  /** The section as the model reads it. Blank text adds nothing. */
+  text: string
+  /** For the UI, under `contextSources["<module>.<id>"]`; typed by `ContextSourcesMap`. */
+  sources?: unknown
+  /**
+   * What this module's tools read at call time for the same conversation
+   * (`ToolCallContext.sessionState`). Replaced on every resolution.
+   */
+  sessionState?: unknown
+}
+
+/**
+ * A system-prompt section a module adds to the runs it applies to
+ * (ADR-0250 §14 `context` amendment). `produce` returns `null` when it does
+ * not apply.
+ *
+ * - `cache: "turn"` text changes from turn to turn: it goes to the dynamic
+ *   tail, outside the cacheable prefix, when cache optimization is on, and to
+ *   its `slot` when it is off. Without a `slot` it always goes to the tail.
+ * - `cache: "session"` text is stable within a session: it always goes to its
+ *   `slot`, which it must name.
+ * - `pii: "redacted-at-source"` says the text comes from a store that is
+ *   already redacted; every other section passes the kernel's PII gate and is
+ *   dropped when it leaks.
+ *
+ * Context only adds, so a failure (a throw, the deadline, malformed text)
+ * leaves the section out and is reported; it never refuses the turn.
+ */
+export interface ContextContribution {
+  /** Unique within the module; its key elsewhere is `<module>.<id>`. */
+  id: string
+  cache: "turn" | "session"
+  slot?: ContextSlot
+  pii?: "gate" | "redacted-at-source"
+  /**
+   * How long this contribution may take, in ms, when it retrieves over the
+   * network; the kernel's default otherwise. Capped by the kernel.
+   */
+  deadlineMs?: number
+  produce(ctx: ContextTurnContext): ContextSection | null | Promise<ContextSection | null>
+}
+
+/** What a module's `context.load` resolves to. */
+export interface ModuleContextModule {
+  contributions: readonly ContextContribution[]
+}
+
+/** One module's context contributions as `lib/modules/generated/context.ts` lists them. */
+export interface ModuleContextEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  load: LazyModule<ModuleContextModule>
 }
 
 /** What a module's `tools.load` resolves to. */
@@ -465,6 +565,8 @@ export interface HostModuleManifest {
   }
   /** Grants applied to every run the module customises (ADR-0198 amendment). */
   capabilityContributions?: { load: LazyModule<ModuleCapabilityContributionsModule> }
+  /** System-prompt sections the module adds to the runs it applies to (ADR-0250 §14 `context` amendment). */
+  context?: { load: LazyModule<ModuleContextModule> }
   /** Scheduler executors declared together with their task sources. */
   taskExecutors?: ModuleContribution
   builtinSkills?: ModuleContribution

@@ -38,6 +38,7 @@ export const HOST_FIELDS = [
   "tables",
   "tools",
   "capabilityContributions",
+  "context",
   "taskExecutors",
   "builtinSkills",
   "pluginApi",
@@ -137,12 +138,15 @@ export const GENERATED_CAPABILITIES = "lib/modules/generated/capabilities.ts"
  * the send resolver's and the tool dispatcher's only route to one.
  */
 export const GENERATED_TOOLS = "lib/modules/generated/tools.ts"
+/** Every module's `context` file, lazily: the send resolver's only route to one. */
+export const GENERATED_CONTEXT = "lib/modules/generated/context.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
   GENERATED_PROMPTS,
   GENERATED_CAPABILITIES,
   GENERATED_TOOLS,
+  GENERATED_CONTEXT,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -670,6 +674,14 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
       for (const key of Object.keys(contributions))
         if (key !== "load") errors.push(`capabilityContributions: unknown field "${key}"`)
   }
+  if (manifest.context !== undefined) {
+    const context = manifest.context
+    if (!context || typeof context !== "object" || !isLazy(context.load))
+      errors.push('context.load is a lazy entry `() => import("…")`')
+    else
+      for (const key of Object.keys(context))
+        if (key !== "load") errors.push(`context: unknown field "${key}"`)
+  }
   if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
@@ -841,6 +853,15 @@ const LAZY_REGISTRIES = {
       "// (`lib/claude/capability-contributions.ts`, ADR-0198 amendment).",
     ],
   },
+  context: {
+    spec: (value) => value?.context?.load?.$lazy,
+    constName: "MODULE_CONTEXT_CONTRIBUTIONS",
+    type: "ModuleContextEntry",
+    reader: [
+      "// Every module's `context` contributions, read by the send resolver",
+      "// (`lib/claude/context-contributions.ts`, ADR-0250 §14 `context` amendment).",
+    ],
+  },
 }
 
 /** The modules that contribute to `registry`, in module id order. */
@@ -955,6 +976,7 @@ export function renderRegistries({ host, ui }) {
     [GENERATED_PROMPTS]: renderLazyRegistry("prompts", host),
     [GENERATED_CAPABILITIES]: renderLazyRegistry("capabilities", host),
     [GENERATED_TOOLS]: renderTools(host),
+    [GENERATED_CONTEXT]: renderLazyRegistry("context", host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

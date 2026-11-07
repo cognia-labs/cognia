@@ -40,6 +40,12 @@ jest.mock("@/lib/project-coordinator/thread-runtime", () => ({
   ],
 }))
 
+// Module context contributions: empty unless a test fills it.
+const mockContextEntries: import("@/lib/modules/manifest-types").ModuleContextEntry[] = []
+jest.mock("@/lib/modules/generated/context", () => ({
+  MODULE_CONTEXT_CONTRIBUTIONS: mockContextEntries,
+}))
+
 // The Agent Builder's draft section reads the catalogs from Dexie.
 jest.mock("@/lib/agents/builder/tool-deps", () => ({
   resolveAgentBuilderToolDeps: () => ({
@@ -7685,6 +7691,94 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
         expect(opts.systemPrompt ?? "").not.toContain("## Project goal")
         expect(opts.permissionRuleset?.spawn_thread).toBeUndefined()
       }
+    })
+  })
+
+  describe("module context contributions (ADR-0250 §14 context amendment)", () => {
+    const { __resetContextContributionsForTests } =
+      jest.requireActual<typeof import("./context-contributions")>("./context-contributions")
+    const { readContextSessionState } =
+      jest.requireActual<typeof import("./context-session-state")>("./context-session-state")
+    const contribute = (
+      contributions: readonly import("@/lib/modules/manifest-types").ContextContribution[]
+    ) =>
+      mockContextEntries.push({
+        module: "crate",
+        stage: "stable",
+        load: async () => ({ contributions }),
+      })
+
+    beforeEach(() => __resetContextContributionsForTests())
+    afterEach(() => {
+      mockContextEntries.length = 0
+    })
+
+    it("puts a turn section in the dynamic tail and a session section in its slot", async () => {
+      contribute([
+        {
+          id: "status",
+          cache: "turn",
+          slot: "agent-knowledge",
+          produce: () => ({ text: "## Crate status" }),
+        },
+        {
+          id: "goal",
+          cache: "session",
+          slot: "project-goal",
+          produce: () => ({ text: "## Crate goal" }),
+        },
+      ])
+      const opts = await resolveSendOptions({ session: makeSession({ id: "s1" }) })
+      expect(opts.dynamicSystemPrompt).toContain("## Crate status")
+      expect(opts.appendSystemPrompt?.endsWith(opts.dynamicSystemPrompt ?? "")).toBe(true)
+      expect(opts.systemPrompt ?? "").not.toContain("## Crate status")
+      expect(opts.systemPrompt).toContain("## Crate goal")
+      expect(opts.dynamicSystemPrompt ?? "").not.toContain("## Crate goal")
+    })
+
+    it("moves a slotted turn section into systemPrompt when cache optimization is off", async () => {
+      contribute([
+        {
+          id: "status",
+          cache: "turn",
+          slot: "agent-knowledge",
+          produce: () => ({ text: "## Crate status" }),
+        },
+      ])
+      const opts = await resolveSendOptions({
+        session: makeSession({ id: "s1" }),
+        appSettings: { cacheOptimizationEnabled: false } as never,
+      })
+      expect(opts.systemPrompt).toContain("## Crate status")
+      expect(opts.dynamicSystemPrompt ?? "").not.toContain("## Crate status")
+    })
+
+    it("hands contributions the run's query and host deps, and keeps their sources and session state", async () => {
+      const produce = jest.fn(() => ({
+        text: "",
+        sources: { chunks: 1 },
+        sessionState: { scope: "kb-1" },
+      }))
+      contribute([{ id: "kb", cache: "turn", produce }])
+      const knowledgeAccess = { allowedKnowledgeBaseIds: ["kb-1"] }
+      const opts = await resolveSendOptions({
+        session: makeSession({ id: "s-ctx" }),
+        projectKnowledgeUserMessage: "where is the handbook?",
+        knowledgeAccess: knowledgeAccess as never,
+      })
+      expect(produce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: { text: "where is the handbook?", embedding: null },
+          hostDeps: { knowledgeAccess },
+        })
+      )
+      expect(opts.contextSources).toEqual({ "crate.kb": { chunks: 1 } })
+      expect(readContextSessionState("s-ctx", "crate.kb")).toEqual({ scope: "kb-1" })
+    })
+
+    it("adds nothing when no module contributes", async () => {
+      const opts = await resolveSendOptions({ session: makeSession({ id: "s1" }) })
+      expect(opts.contextSources).toBeUndefined()
     })
   })
 

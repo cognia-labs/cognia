@@ -20,6 +20,7 @@ import type { MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
 import type { RagEmbeddingProvider } from "@cognia/provider-embedding/embedding-catalog"
 import type { BedrockConnectionSettings } from "@cognia/provider-types"
 import type { IVectorStore } from "@cognia/vector/store"
+import type { ContextSlot, ContextTurnContext } from "@/lib/modules/manifest-types"
 import {
   RESTRICTED_MODE_DENIED_TOOLS,
   withRestrictedModeDenials,
@@ -2985,6 +2986,47 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // ADR-0237: the agent's always-on harness sections (standing rules, domain
   // facts, tool guidance), right after who the agent is.
   const harnessSection = renderHarnessSections(character?.harness)
+  // Sections feature modules contribute (ADR-0250 §14 `context` amendment),
+  // already placed: slot sections join `systemPrompt` below at their slot,
+  // turn sections join the dynamic tail here, after the kernel's own
+  // retrieval sections and before the per-turn sections added further down.
+  // The caller's host dependencies pass through by name: `twin`, `memory`,
+  // `projectKnowledge` and `knowledgeAccess`.
+  const { collectContextContributions } = await import("./context-contributions")
+  const { toolSurfaceHost: contextHost } = await import("./tool-contributions")
+  const contributedContext = await collectContextContributions(
+    {
+      session: session ?? null,
+      agent: character,
+      settings: appSettings ?? null,
+      activeGoal: ctx.activeGoal ?? null,
+      prompts: { snapshot: promptSnapshot, context: promptContext },
+      host: contextHost(),
+      activeProject: ctx.activeProject ?? null,
+      query: {
+        text: projectKnowledgeQuery?.trim() ? projectKnowledgeQuery : null,
+        embedding: ctx.precomputedQueryEmbedding ?? null,
+      },
+      hostDeps: Object.fromEntries(
+        Object.entries({
+          twin: ctx.twinDeps,
+          memory: ctx.memoryDeps,
+          projectKnowledge: ctx.projectKnowledgeDeps,
+          knowledgeAccess: ctx.knowledgeAccess,
+        }).filter(([, value]) => value !== undefined)
+      ) as ContextTurnContext["hostDeps"],
+      grant: grant ?? null,
+    },
+    { cacheOptimization: cacheOptimizationEnabled }
+  )
+  const contextSlot = (slot: ContextSlot) => contributedContext.slots[slot] ?? []
+  dynamicTailSections.push(...contributedContext.tail)
+  if (Object.keys(contributedContext.sources).length > 0)
+    opts.contextSources = contributedContext.sources
+  if (session?.id) {
+    const { replaceContextSessionState } = await import("./context-session-state")
+    replaceContextSessionState(session.id, contributedContext.sessionState)
+  }
   const systemPrompt = [
     baseSystem,
     personaSection,
@@ -2994,10 +3036,15 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // not whichever one is on screen.
     buildWorkspaceInstructionsSection(ctx.activeProject),
     projectRoleToolsSurfaced ? buildProjectGoalSection(ctx.activeProject) : "",
+    ...contextSlot("project-goal"),
     memorySection,
+    ...contextSlot("memory"),
     projectContinuitySection,
+    ...contextSlot("continuity"),
     projectKnowledgeSection,
+    ...contextSlot("project-knowledge"),
     agentKnowledgeSection,
+    ...contextSlot("agent-knowledge"),
     modeSection,
     skillSection,
     pluginSkillSection,
