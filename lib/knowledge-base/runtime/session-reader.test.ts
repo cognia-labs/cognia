@@ -1,5 +1,9 @@
+import { readContextSessionState } from "@/lib/claude/context-session-state"
 import {
+  KNOWLEDGE_SESSION_STATE_KEY,
+  captureKnowledgeSessionState,
   clearKnowledgeReaderForSession,
+  liveKnowledgeSessionState,
   getKnowledgeReaderForSession,
   registerKnowledgeReaderForSession,
   registerKnowledgeAccessForSession,
@@ -43,4 +47,22 @@ it("captures execution authority even when progressive tools are disabled and co
   expect(getKnowledgeAccessForSession("session")!.knowledgeAccess.allowedKnowledgeBaseIds).toEqual([
     "kb",
   ])
+})
+
+it("keeps the capture in the kernel's conversation state under the reader contribution's key", () => {
+  registerKnowledgeAccessForSession("session", { knowledgeBaseIds: ["kb"] })
+  const state = readContextSessionState("session", KNOWLEDGE_SESSION_STATE_KEY)
+  expect(KNOWLEDGE_SESSION_STATE_KEY).toBe("knowledge-base.reader")
+  expect(liveKnowledgeSessionState(state)?.knowledgeBaseIds).toEqual(["kb"])
+  expect(liveKnowledgeSessionState(undefined)).toBeUndefined()
+  expect(liveKnowledgeSessionState({ knowledgeBaseIds: [] })).toBeUndefined()
+})
+
+it("captures a copy of what the contribution resolved", () => {
+  const ids = ["kb"]
+  const capture = captureKnowledgeSessionState({ knowledgeBaseIds: ids })
+  ids.push("other")
+  expect(capture.knowledgeBaseIds).toEqual(["kb"])
+  expect(capture.knowledgeAccess).toEqual({})
+  expect(capture.reader).toBeUndefined()
 })

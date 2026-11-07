@@ -73,7 +73,6 @@ import {
   type AttachmentToolDeps,
 } from "./attachment-builtin-tools"
 import type { RemoteExecutionContext } from "./remote-execution"
-import { isKnowledgeBuiltinTool, runKnowledgeBuiltinTool } from "./knowledge-builtin-tools"
 
 const PLUGIN_TOOL_RESULT_PII_ERROR = "Plugin tool result blocked by the PII redaction gate"
 
@@ -528,10 +527,6 @@ async function runPluginToolExec(
     const contributed = findContributedTool(request.name)
     if (contributed && contributed.declaration.precedence !== "fallback") {
       const result = await runModuleToolCall(contributed, request)
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    if (isKnowledgeBuiltinTool(request.name)) {
-      const result = await runKnowledgeBuiltinTool(request.name, request.args, request)
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── Promoted web built-ins — web_search / web_fetch ────────────────────

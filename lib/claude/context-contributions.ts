@@ -20,8 +20,9 @@
  *   deadline or a malformed section leaves that part out and is reported.
  *
  * The caller puts the slot sections into `systemPrompt`, the tail into the
- * dynamic tail, the sources into `SendOptions.contextSources` and the session
- * state into `lib/claude/context-session-state.ts`.
+ * dynamic tail, the sources into `SendOptions.contextSources` (read back with
+ * `contextSourcesOf`, `./context-sources.ts`) and the session state into
+ * `lib/claude/context-session-state.ts`.
  */
 
 import { hasNoLeakingPii } from "@cognia/redact"
@@ -30,7 +31,6 @@ import { MODULE_CONTEXT_CONTRIBUTIONS } from "@/lib/modules/generated/context"
 import type {
   ContextContribution,
   ContextSlot,
-  ContextSourcesMap,
   ContextTurnContext,
   ModuleContextEntry,
 } from "@/lib/modules/manifest-types"
@@ -208,14 +208,6 @@ export async function collectContextContributions(
   // Stable: within one rank, module id and then manifest order.
   result.tail = tail.sort((a, b) => a.rank - b.rank).map((entry) => entry.text)
   return result
-}
-
-/** One contribution's UI report from `SendOptions.contextSources`, typed by `ContextSourcesMap`. */
-export function contextSourcesOf<K extends keyof ContextSourcesMap>(
-  contextSources: Readonly<Record<string, unknown>> | undefined,
-  key: K
-): ContextSourcesMap[K] | undefined {
-  return contextSources?.[key as string] as ContextSourcesMap[K] | undefined
 }
 
 /** Test helper: forget every loaded contribution file. */

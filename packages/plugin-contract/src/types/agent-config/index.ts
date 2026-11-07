@@ -1262,40 +1262,6 @@ export type SendOptions = {
     degraded: boolean
   }
 
-  /** Reusable Agent Knowledge Base context injected this turn. */
-  agentKnowledgeContext?: {
-    retrievedChunks: Array<{
-      chunk: {
-        id: string
-        knowledgeBaseId: string
-        sourceId: string
-        content: string
-        vectorDocId: string
-      }
-      score: number
-    }>
-    citations: Array<{
-      scope: "agent-knowledge-base"
-      knowledgeBaseId: string
-      knowledgeBaseName: string
-      sourceId: string
-      sourceTitle: string
-      chunkId: string
-      charStart: number
-      charEnd: number
-      pageNumber?: number
-      filePath?: string
-      score: number
-    }>
-    failures: Array<{
-      knowledgeBaseId: string
-      reason: string
-      rebuildRequired: boolean
-    }>
-    budget: { limit: number; used: number; truncated: boolean }
-    degraded: boolean
-  }
-
   /**
    * What the modules' context contributions reported for the UI this turn
    * (sources, budgets), keyed by `<module>.<id>` (ADR-0250 §14 `context`

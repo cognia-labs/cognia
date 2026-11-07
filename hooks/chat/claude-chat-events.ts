@@ -151,6 +151,7 @@ import {
 import type { SendFn } from "./claude-chat-turn-tasks"
 import { closeOpenToolParts, hasOpenToolParts } from "@/lib/chat/phantom-run"
 import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
+import { contextSourcesOf } from "@/lib/claude/context-sources"
 
 async function settleChatTranscript(
   sessionId: string,
@@ -1428,7 +1429,10 @@ export async function handleEvent(
           )
           if (withProjectKnowledge !== nextMessages) nextMessages = withProjectKnowledge
         }
-        const agentKnowledgeCtx = last?.options.agentKnowledgeContext
+        const agentKnowledgeCtx = contextSourcesOf(
+          last?.options.contextSources,
+          "knowledge-base.retrieval"
+        )
         if (agentKnowledgeCtx) {
           const withAgentKnowledge = mergeAgentKnowledgeSourcesIntoLastAssistant(
             nextMessages,

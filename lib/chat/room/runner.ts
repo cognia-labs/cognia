@@ -140,6 +140,7 @@ import type { ResolvedRoomSettings, RoomTurnRefusal } from "./types"
 import { RoomStreamRegistry } from "./runner-streaming"
 import { deriveMemberActivity } from "./member-activity"
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
+import { contextSourcesOf } from "@/lib/claude/context-sources"
 
 const MAX_SUPERVISOR_ROUNDS = 2
 /** A running tool with no result after this long stops being reported as the member's activity. */
@@ -1877,7 +1878,7 @@ export class RoomRunner {
           )
           tagged = mergeAgentKnowledgeSourcesIntoLastAssistant(
             tagged,
-            ctx?.options.agentKnowledgeContext
+            contextSourcesOf(ctx?.options.contextSources, "knowledge-base.retrieval")
           )
           tagged = mergeWebSearchSourcesIntoLastAssistant(
             tagged,

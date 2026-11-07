@@ -77,7 +77,7 @@ describe("collectContributedTools", () => {
       instructions: "  Use the crate tools for crates.  ",
     }))
     const result = await collectContributedTools(ctx, [crate(family({ surface }))])
-    expect(surface).toHaveBeenCalledWith(ctx)
+    expect(surface).toHaveBeenCalledWith({ ...ctx, sessionState: expect.any(Function) })
     expect(result.skipped).toEqual([])
     expect(result.tools).toEqual([
       { ...tool("crate_list"), pluginId: "cognia-crate-builtin" },
@@ -198,6 +198,26 @@ describe("collectContributedTools", () => {
       10
     )
     expect(String(result.skipped[0].error)).toContain("no answer within 10 ms")
+  })
+
+  it("lets a family's surface read only its own module's context session state", async () => {
+    replaceContextSessionState(
+      "s1",
+      new Map<string, unknown>([
+        ["crate.scope", { ids: ["a"] }],
+        ["other.scope", { ids: ["b"] }],
+      ])
+    )
+    let seen: unknown[] = []
+    const surface = jest.fn((surfaceCtx: ToolSurfaceContext) => {
+      seen = [surfaceCtx.sessionState?.("scope"), surfaceCtx.sessionState?.("missing")]
+      return null
+    })
+    const session = { id: "s1" } as ToolSurfaceContext["session"]
+    await collectContributedTools({ ...ctx, session }, [crate(family({ surface }))])
+    expect(seen).toEqual([{ ids: ["a"] }, undefined])
+    await collectContributedTools(ctx, [crate(family({ surface }))])
+    expect(seen).toEqual([undefined, undefined])
   })
 
   it("asks nothing of an experimental module", async () => {

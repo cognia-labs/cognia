@@ -102,3 +102,51 @@ export interface KnowledgeBaseReference {
   id: string
   name: string
 }
+
+/** One retrieved chunk an Agent-bound knowledge base put in a turn's prompt, as a citation. */
+export interface AgentKnowledgeCitation {
+  scope: "agent-knowledge-base"
+  knowledgeBaseId: string
+  knowledgeBaseName: string
+  sourceId: string
+  sourceTitle: string
+  chunkId: string
+  generationId?: string
+  documentVersion?: string
+  sectionId?: string
+  pageEnd?: number
+  lineStart?: number
+  lineEnd?: number
+  charStart: number
+  charEnd: number
+  pageNumber?: number
+  filePath?: string
+  score: number
+}
+
+/** A bound knowledge base whose retrieval failed this turn; the others still contribute. */
+export interface AgentKnowledgeFailure {
+  knowledgeBaseId: string
+  reason: string
+  rebuildRequired: boolean
+}
+
+/**
+ * What the knowledge-base module's `retrieval` context contribution reports
+ * for the UI (`SendOptions.contextSources["knowledge-base.retrieval"]`): the
+ * chunks the turn's prompt holds, their citations, and the libraries that
+ * failed.
+ */
+export interface AgentKnowledgeRetrievalSources {
+  retrievedChunks: Array<{ chunk: KnowledgeBaseChunk; score: number }>
+  citations: AgentKnowledgeCitation[]
+  failures: AgentKnowledgeFailure[]
+  budget: { limit: number; used: number; truncated: boolean }
+  degraded: boolean
+}
+
+declare module "@/lib/modules/manifest-types" {
+  interface ContextSourcesMap {
+    "knowledge-base.retrieval": AgentKnowledgeRetrievalSources
+  }
+}

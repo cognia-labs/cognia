@@ -573,9 +573,8 @@ async function runToolEnabled(
       }
     }
     releaseLiveControl?.()
-    const { clearKnowledgeReaderForSession } =
-      await import("@/lib/knowledge-base/runtime/session-reader")
-    clearKnowledgeReaderForSession(session.id)
+    const { forgetContextSessionState } = await import("@/lib/claude/context-session-state")
+    forgetContextSessionState(session.id)
     clearResolvedPermissionCeiling(session.id)
     clearTeamDispatchContext(session.id)
     try {

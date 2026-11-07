@@ -4,6 +4,7 @@ import { groundAnswer, type GroundingResult, type RetrievalHit } from "@cognia/r
 import type { SendOptions } from "@cognia/agent-config-types"
 
 import type { GroundingPart, SourcesPart, SourcesPartItem } from "@/lib/claude/parts-extensions"
+import { contextSourcesOf } from "@/lib/claude/context-sources"
 
 const EVIDENCE_ORIGINS = new Set<SourcesPartItem["origin"]>([
   "twin-rag",
@@ -90,13 +91,15 @@ function optionHits(options: SendOptions): RetrievalHit[] {
       origin: "project-knowledge" as const,
       score: chunk.score,
     })) ?? []),
-    ...(options.agentKnowledgeContext?.retrievedChunks.map(({ chunk, score }) => ({
-      id: `kb-${chunk.id}`,
-      title: chunk.sourceId,
-      snippet: chunk.content,
-      origin: "agent-knowledge-base" as const,
-      score,
-    })) ?? []),
+    ...(contextSourcesOf(options.contextSources, "knowledge-base.retrieval")?.retrievedChunks.map(
+      ({ chunk, score }) => ({
+        id: `kb-${chunk.id}`,
+        title: chunk.sourceId,
+        snippet: chunk.content,
+        origin: "agent-knowledge-base" as const,
+        score,
+      })
+    ) ?? []),
   ]
   return sources.map(sourceHit).filter((hit): hit is RetrievalHit => Boolean(hit))
 }
@@ -122,7 +125,7 @@ export function attachInteractiveGrounding(
     !options?.twinContext &&
     !options?.memoryContext &&
     !options?.projectKnowledgeContext &&
-    !options?.agentKnowledgeContext
+    !contextSourcesOf(options?.contextSources, "knowledge-base.retrieval")
   ) {
     return messages
   }

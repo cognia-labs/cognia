@@ -104,7 +104,7 @@ export interface AgentTool {
 
 export interface ExecuteAgentConfig {
   /** Trusted workflow execution identity, never inferred from prompt text. */
-  knowledgeAccess?: import("@/lib/knowledge-base/runtime/progressive-reading").KnowledgeReadingAccess
+  knowledgeAccess?: import("@cognia/plugin-contract/lib/knowledge-base/runtime/progressive-reading").KnowledgeReadingAccess
   systemPrompt?: string
   model?: string
   tools?: AgentTool[]
@@ -857,9 +857,8 @@ async function runToolEnabledStandalone(
     // Drop the ceiling resolveSendOptions deposited for this run's session id so
     // a re-used ephemeral id never inherits a stale ceiling.
     clearResolvedPermissionCeiling(session.id)
-    const { clearKnowledgeReaderForSession } =
-      await import("@/lib/knowledge-base/runtime/session-reader")
-    clearKnowledgeReaderForSession(session.id)
+    const { forgetContextSessionState } = await import("@/lib/claude/context-session-state")
+    forgetContextSessionState(session.id)
     // Ephemeral sessions are torn down; persistent ones survive for resume.
     if (!persistent) void sessionsDb.deleteSession(session.id).catch(() => undefined)
   }

@@ -40,6 +40,11 @@ export function readContextSessionState(sessionId: string, key: string): unknown
   return states.get(sessionId)?.get(key)
 }
 
+/** Forget everything the contributions left for `sessionId`: the conversation is torn down. */
+export function forgetContextSessionState(sessionId: string): void {
+  states.delete(sessionId)
+}
+
 /** Test helper: forget every conversation's state. */
 export function __resetContextSessionStateForTests(): void {
   states.clear()

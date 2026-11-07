@@ -1,6 +1,7 @@
 import {
   CONTEXT_SESSION_STATE_LIMIT,
   __resetContextSessionStateForTests,
+  forgetContextSessionState,
   readContextSessionState,
   replaceContextSessionState,
 } from "./context-session-state"
@@ -28,6 +29,14 @@ describe("context session state", () => {
     expect(readContextSessionState("s1", "pc.scope")).toBeUndefined()
     replaceContextSessionState("s1", new Map())
     expect(readContextSessionState("s1", "kb.reader")).toBeUndefined()
+  })
+
+  it("forgets one torn-down conversation and keeps the others", () => {
+    replaceContextSessionState("s1", new Map([["kb.reader", 1]]))
+    replaceContextSessionState("s2", new Map([["kb.reader", 2]]))
+    forgetContextSessionState("s1")
+    expect(readContextSessionState("s1", "kb.reader")).toBeUndefined()
+    expect(readContextSessionState("s2", "kb.reader")).toBe(2)
   })
 
   it("keeps its own copy of the entries", () => {

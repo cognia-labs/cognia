@@ -1,6 +1,14 @@
-import type { KnowledgeBase, KnowledgeBaseChunk, KnowledgeBaseSource } from "@/types/knowledge-base"
+import type {
+  AgentKnowledgeCitation,
+  AgentKnowledgeFailure,
+  KnowledgeBase,
+  KnowledgeBaseChunk,
+  KnowledgeBaseSource,
+} from "@/types/knowledge-base"
 import { getKnowledgeBasesByIds, getKnowledgeBaseSourcesByIds } from "@/lib/db/knowledge-bases"
 import { retrieveKnowledgeBaseChunks, type KnowledgeBaseRuntimeDeps } from "./retrieve"
+
+export type { AgentKnowledgeCitation, AgentKnowledgeFailure } from "@/types/knowledge-base"
 
 export interface RetrievedAgentKnowledgeChunk {
   chunk: KnowledgeBaseChunk
@@ -11,32 +19,6 @@ export interface AgentKnowledgeLibraryResult {
   chunks: RetrievedAgentKnowledgeChunk[]
   degraded: boolean
   degradedReason?: string
-}
-
-export interface AgentKnowledgeFailure {
-  knowledgeBaseId: string
-  reason: string
-  rebuildRequired: boolean
-}
-
-export interface AgentKnowledgeCitation {
-  scope: "agent-knowledge-base"
-  knowledgeBaseId: string
-  knowledgeBaseName: string
-  sourceId: string
-  sourceTitle: string
-  chunkId: string
-  generationId?: string
-  documentVersion?: string
-  sectionId?: string
-  pageEnd?: number
-  lineStart?: number
-  lineEnd?: number
-  charStart: number
-  charEnd: number
-  pageNumber?: number
-  filePath?: string
-  score: number
 }
 
 export interface ApplyAgentKnowledgeContextDeps {

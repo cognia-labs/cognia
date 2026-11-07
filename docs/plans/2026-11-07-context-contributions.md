@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0、C1、C2 已实施，记录见 §7–§9。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0–C3 已实施，记录见 §7–§10。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -207,3 +207,17 @@ interface ContextSection {
 - ADR-0243 的信任表里 setup 视图的路径同步改为新路径。
 - 行为差别：草稿段现在过内核 PII 闸；同一份草稿经 `agent_builder_get_draft` 读出时本来就过 `assertSafePluginToolResult` 的 PII 深检。
 - 测试：`context.test.ts` 加 3 例（声明、给 builder 对话、不给别的）；搬走的组件、hook、lib 测试照常通过；`build-options.test.ts` 的 builder 用例（工具、同意档、协议、草稿段）不改即通过。
+
+## 10. C3 实施记录：可复用知识库（2026-11-07）
+
+- `knowledge-base` 从过渡表的行变成 manifest 模块（`lib/knowledge-base/module.ts`）：`dependsOn` rag、twin、workflow；`api` 列 ingest、revisions、检索、阅读器、阅读设置、会话记录六类文件。rag 行补 `generation-ingest`、`safe-embedding`，twin 行补 ingest 的 chunk、embed、ocr-fallback、parse（以前行对行不查 `api`）。
+- 上下文贡献 `lib/knowledge-base/context.ts`：
+  - `reader`：turn、不加文字。按 agent 绑定、能力授予的增减和调用方 `hostDeps.knowledgeAccess` 的上限算出知识库列表；渐进阅读开启且有库时建阅读器。结果作为会话状态交给内核（键 `knowledge-base.reader`）。没有库也照样返回，所以上一轮留下的更宽的记录总会被替换。
+  - `retrieval`：turn、`agent-knowledge` slot、`deadlineMs: 15_000`。逐块过滤（评审选定）：`authorizeChunk` 在文档授权之外再要求块正文和文档标题都过 `hasNoLeakingPii`，泄露的块在计预算前剔除，其余照常；整段再过内核闸。块、引用、失败、预算经 `contextSources["knowledge-base.retrieval"]` 传出，类型 `AgentKnowledgeRetrievalSources` 在 `types/knowledge-base.ts` 合并进 `ContextSourcesMap`（引用和失败的类型也移到那里，原文件转导出）。`ContextHostDepsMap` 的 `projectKnowledge`、`knowledgeAccess` 在 `context.ts` 声明。
+- 工具贡献：`lib/claude/knowledge-builtin-tools.ts` → `lib/knowledge-base/agent-tools.ts`（`toolFamily`）。四个工具 `consent: "default"`、`effect: "read"`（以前没有规则，走默认权限路径）。`surface` 只在 `reader` 建出阅读器时提供工具和阅读指引；`run` 从 `call.sessionState("reader")` 取阅读器。为此 `ToolSurfaceContext` 加可选的 `sessionState(id)`，`collectContributedTools` 按模块注入（只读本模块的键）；`ContextTurnContext` 不含它。探针白名单里的四个名字保留（它是显式放行的读取名单，不是由声明推导的）。
+- 会话记录 `lib/knowledge-base/runtime/session-reader.ts` 改为读写内核的会话状态：`getKnowledgeAccessForSession`（防御性拷贝）、`getKnowledgeReaderForSession` 名字不变；一小时未用仍视为失效；`register*`、`clear*` 只留给测试和夹具。会话销毁的三处（`agent-executor`、`dispatch-agent-handler`、`dispatch-teammate`）改调内核新加的 `forgetContextSessionState`，一并丢掉所有模块的状态。
+- `build-options` 删掉 Agent 知识库检索块、`systemPrompt` 里的 `agentKnowledgeSection`、阅读器注册块（含工具清单和指引的追加）；`knowledgeAccess` 的类型改从 `@cognia/plugin-contract` 取。`plugin-tool-ipc` 删掉知识工具分支（调用改由贡献工具路由，结果照旧过 `assertSafePluginToolResult`）。
+- `contextSourcesOf` 移到 `lib/claude/context-sources.ts`，读取方不必加载贡献注册表。`SendOptions.agentKnowledgeContext` 删除；`hooks/chat/claude-chat-events.ts`、`lib/chat/room/runner.ts`、`lib/rag/chat-grounding.ts`、`lib/rag/compaction-runtime.ts` 改读 `contextSources`。插件契约源码又改了一次，authoring kit pin 仍待从干净检出重建。
+- 还清方向边：`build-options`、`knowledge-builtin-tools`、`agent-executor`、`dispatch-agent-handler` 指向 knowledge-base 的四条。`dispatch-run`、`project-api` 读会话记录的两条保留（它们是 `api` 用法，迁到端口另议）。
+- 行为差别：泄露 PII 的检索块被剔除（以前整段原样发送）；知识工具和指引跟其他贡献工具一起，排在 working-set 工具之前；记录在对话跌出最近 64 个时也失效。尾部顺序不变：检索段在 `agent-knowledge` 位，排在协调者状态段和草稿段之前，与原来一致。
+- 测试：`context.test.ts` 9 例、`agent-tools.test.ts`、`module.test.ts` 新增；`session-reader.test.ts` 加 2 例；`context-session-state.test.ts` 加 1 例（forget）；`tool-contributions.test.ts` 加 1 例（surface 只读本模块状态）；`context-sources.test.ts` 新增；`build-options.test.ts` 改读 `contextSources` 并加一条 PII 块用例；`plugin-tool-ipc.test.ts` 的知识用例改走模块工具。`dispatch-agent-handler.test.ts` 两例后台派发的中止信号用例失败，原因在另一会话正在改的 `lib/execution/launch-child-run.ts`，与本次无关。

@@ -7,6 +7,7 @@ import { getGoalRuntime } from "@/lib/goal/runtime"
 import { createProfileDekStore } from "@/lib/rag/profile-dek-store"
 import { storeCompactionCheckpoint } from "@/lib/rag/compaction-checkpoint"
 import type { Goal } from "@/types/goal"
+import { contextSourcesOf } from "@/lib/claude/context-sources"
 
 export interface CompactionBoundaryMetadata {
   pre_tokens?: number
@@ -68,7 +69,8 @@ function reinjectionRefs(
   for (const item of options?.projectKnowledgeContext?.retrievedChunks ?? []) {
     refs.push({ kind: "rag", id: `project:${item.fileId}`, version: "active-generation" })
   }
-  for (const item of options?.agentKnowledgeContext?.retrievedChunks ?? []) {
+  for (const item of contextSourcesOf(options?.contextSources, "knowledge-base.retrieval")
+    ?.retrievedChunks ?? []) {
     refs.push({ kind: "rag", id: `kb:${item.chunk.id}`, version: item.chunk.vectorDocId })
   }
   const seen = new Set<string>()

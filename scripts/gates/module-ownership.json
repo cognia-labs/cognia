@@ -556,13 +556,6 @@
     "keyring": {
       "class": "foundation"
     },
-    "knowledge-base": {
-      "class": "module",
-      "api": [
-        "lib/knowledge-base/runtime/progressive-reading.ts",
-        "lib/knowledge-base/runtime/session-reader.ts"
-      ]
-    },
     "labels": {
       "class": "module"
     },
@@ -733,7 +726,8 @@
       "class": "kernel"
     },
     "rag": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/rag/generation-ingest.ts", "lib/rag/safe-embedding.ts"]
     },
     "recovery": {
       "class": "module"
@@ -1011,7 +1005,11 @@
       "class": "module",
       "api": [
         "lib/twin/distill/llm.ts",
+        "lib/twin/ingest/chunk.ts",
+        "lib/twin/ingest/embed.ts",
         "lib/twin/ingest/lark-doc-fetcher.ts",
+        "lib/twin/ingest/ocr-fallback.ts",
+        "lib/twin/ingest/parse.ts",
         "lib/twin/ingest/redaction-key.ts",
         "lib/twin/runtime/apply-twin-context.ts",
         "lib/twin/runtime/build-deps.ts",

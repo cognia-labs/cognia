@@ -192,7 +192,18 @@ export async function collectContributedTools(
   try {
     const surfaces = await Promise.allSettled(
       active.map((entry) =>
-        Promise.race([loadFamily(entry).then((family) => family.surface(ctx)), deadline])
+        Promise.race([
+          loadFamily(entry).then((family) =>
+            family.surface({
+              ...ctx,
+              sessionState: (contributionId) =>
+                ctx.session
+                  ? readContextSessionState(ctx.session.id, `${entry.module}.${contributionId}`)
+                  : undefined,
+            })
+          ),
+          deadline,
+        ])
       )
     )
     const offered: { name: string; declaration: ModuleToolDeclaration }[] = []

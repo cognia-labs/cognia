@@ -7,7 +7,6 @@ import {
   CONTEXT_CONTRIBUTION_MAX_DEADLINE_MS,
   __resetContextContributionsForTests,
   collectContextContributions,
-  contextSourcesOf,
 } from "./context-contributions"
 
 const ctx: ContextTurnContext = {
@@ -137,15 +136,6 @@ describe("side outputs", () => {
     expect(result.sources).toEqual({ "kb.agent": { chunks: 2 } })
     expect([...result.sessionState]).toEqual([["kb.agent", { ids: ["x"] }]])
     expect(result.tail).toEqual([])
-  })
-
-  it("reads one contribution's sources from SendOptions.contextSources", () => {
-    const read = contextSourcesOf as unknown as (
-      sources: Record<string, unknown> | undefined,
-      key: string
-    ) => unknown
-    expect(read({ "kb.agent": { chunks: 1 } }, "kb.agent")).toEqual({ chunks: 1 })
-    expect(read(undefined, "kb.agent")).toBeUndefined()
   })
 })
 

@@ -298,6 +298,13 @@ export interface ToolSurfaceContext extends CapabilityContributionContext {
   host: ToolSurfaceHost
   /** The run's workspace (`resolveSessionWorkspace`), not whichever one is on screen. */
   activeProject: Readonly<Project> | null
+  /**
+   * The session state one of this module's context contributions left for
+   * the run's conversation at this resolution (`ContextSection.sessionState`),
+   * by contribution id; `undefined` when it left none or the run has no
+   * session. Set by the kernel, scoped to the asking module.
+   */
+  sessionState?(contributionId: string): unknown
 }
 
 /** One tool a family offers a run, as the model sees it. */
@@ -382,7 +389,7 @@ export interface ContextHostDepsMap {}
 export interface ContextSourcesMap {}
 
 /** What a context contribution reads about the run. Read-only, no `SendOptions`. */
-export interface ContextTurnContext extends ToolSurfaceContext {
+export interface ContextTurnContext extends Omit<ToolSurfaceContext, "sessionState"> {
   /** The turn's retrieval query: its text and, when the caller computed one, its embedding. */
   query: { text: string | null; embedding: readonly number[] | null }
   /** Dependencies the caller injected, by name; an absent one means the host has none. */

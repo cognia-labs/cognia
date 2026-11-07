@@ -28,7 +28,7 @@ import { collectRendererBackgroundResult } from "@/lib/background-tasks/renderer
 import { cancelSubagentRun } from "./cancel-subagent"
 import { renderDispatchOutcomeForModel } from "./dispatch-error"
 import { resolveCaller, startDispatchRun, DEFAULT_NESTING_MAX_DEPTH } from "./dispatch-run"
-import { clearKnowledgeReaderForSession } from "@/lib/knowledge-base/runtime/session-reader"
+import { forgetContextSessionState } from "@/lib/claude/context-session-state"
 
 export { DEFAULT_NESTING_MAX_DEPTH }
 
@@ -219,8 +219,9 @@ export function releaseDispatchBudgetForSession(sessionId: string): void {
 }
 
 /**
- * Drop ALL per-session dispatch state at chat session teardown: the subtree
- * budget guard AND the resolved permission ceiling. `resolveSendOptions`
+ * Drop ALL per-session dispatch state at chat session teardown: what the
+ * modules' context contributions left (the knowledge scope among it), the
+ * subtree budget guard AND the resolved permission ceiling. `resolveSendOptions`
  * deposits a ceiling under the chat session id on every send (not just dispatch
  * turns), so — like the budget guard — it leaks one entry per distinct session
  * id for the renderer's lifetime unless cleared here. Subagent/team sessions are
@@ -228,7 +229,7 @@ export function releaseDispatchBudgetForSession(sessionId: string): void {
  * long-lived chat session needs this teardown hook.
  */
 export function releaseDispatchStateForSession(sessionId: string): void {
-  clearKnowledgeReaderForSession(sessionId)
+  forgetContextSessionState(sessionId)
   releaseDispatchBudgetForSession(sessionId)
   clearResolvedPermissionCeiling(sessionId)
 }

@@ -8588,12 +8588,26 @@ describe("resolveSendOptions — reusable Agent Knowledge Bases", () => {
       tokenBudget: 33,
       revisionBindings: { "kb-1": ["revision"] },
     })
-    expect(input.authorizeChunk({ source: { knowledgeBaseId: "kb-1" } })).toBe(false)
+    const chunk = { content: "Refunds take five days." }
+    expect(input.authorizeChunk({ chunk, source: { knowledgeBaseId: "kb-1" } })).toBe(false)
     expect(
-      input.authorizeChunk({ source: { knowledgeBaseId: "kb-1", acl: { visibility: "public" } } })
+      input.authorizeChunk({
+        chunk,
+        source: { knowledgeBaseId: "kb-1", acl: { visibility: "public" } },
+      })
     ).toBe(true)
     expect(
-      input.authorizeChunk({ source: { knowledgeBaseId: "other", acl: { visibility: "public" } } })
+      input.authorizeChunk({
+        chunk,
+        source: { knowledgeBaseId: "other", acl: { visibility: "public" } },
+      })
+    ).toBe(false)
+    // A chunk that leaks PII stays out of the prompt; the others still go in.
+    expect(
+      input.authorizeChunk({
+        chunk: { content: "Mail jane.doe@example.com" },
+        source: { knowledgeBaseId: "kb-1", acl: { visibility: "public" } },
+      })
     ).toBe(false)
   })
 
@@ -8646,9 +8660,10 @@ describe("resolveSendOptions — reusable Agent Knowledge Bases", () => {
     expect(mApplyAgentKnowledge).toHaveBeenCalledWith(
       expect.objectContaining({ knowledgeBaseIds: ["kb-1", "kb-2"], tokenBudget: 2000 })
     )
-    expect(opts.agentKnowledgeContext?.citations[0]).toEqual(
-      expect.objectContaining({ knowledgeBaseId: "kb-1", sourceId: "source-1" })
-    )
+    expect(opts.contextSources?.["knowledge-base.retrieval"]).toMatchObject({
+      citations: [expect.objectContaining({ knowledgeBaseId: "kb-1", sourceId: "source-1" })],
+    })
+    expect(opts).not.toHaveProperty("agentKnowledgeContext")
   })
 
   it("skips unbound Agents", async () => {

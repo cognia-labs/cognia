@@ -60,6 +60,7 @@ import {
   registerKnowledgeReaderForSession,
   clearKnowledgeReaderForSession,
 } from "@/lib/knowledge-base/runtime/session-reader"
+import { toolFamily as knowledgeToolFamily } from "@/lib/knowledge-base/agent-tools"
 
 jest.mock("@/lib/plugin/api/project-api", () => {
   const actual = jest.requireActual("@/lib/plugin/api/project-api")
@@ -97,7 +98,8 @@ jest.mock("@/lib/connectors/im-permission-ceiling", () => ({
 // so the default-resolver path can be exercised deterministically; existing
 // tests use `__setWebToolDepsForTesting` and bypass these.
 let mockSettings: Record<string, unknown> = {}
-it("routes knowledge reads through captured host session authority and fails closed unbound", async () => {
+it("routes knowledge reads to their module, through the captured session authority, and fails closed unbound", async () => {
+  useModuleTools("knowledge-base", knowledgeToolFamily)
   const request = {
     type: "plugin_tool_exec" as const,
     sessionId: "knowledge-session",
@@ -105,23 +107,24 @@ it("routes knowledge reads through captured host session authority and fails clo
     name: "knowledge_list_documents",
     args: {},
   }
-  expect((await handlePluginToolExec(request)).result).toMatchObject({
-    ok: false,
-    code: "knowledge_scope_unavailable",
-  })
-  registerKnowledgeReaderForSession(request.sessionId, {
-    knowledgeBaseIds: [],
-    settings: { enabled: true },
-    deps: {
-      listSources: async () => [],
-      getSources: async () => [],
-      getSnapshot: async () => undefined,
-    },
-  })
   try {
+    expect((await handlePluginToolExec(request)).result).toMatchObject({
+      ok: false,
+      code: "knowledge_scope_unavailable",
+    })
+    registerKnowledgeReaderForSession(request.sessionId, {
+      knowledgeBaseIds: [],
+      settings: { enabled: true },
+      deps: {
+        listSources: async () => [],
+        getSources: async () => [],
+        getSnapshot: async () => undefined,
+      },
+    })
     expect((await handlePluginToolExec(request)).result).toMatchObject({ ok: true, documents: [] })
   } finally {
     clearKnowledgeReaderForSession(request.sessionId)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
   }
 })
 let mockClient: unknown = { complete: jest.fn() }
