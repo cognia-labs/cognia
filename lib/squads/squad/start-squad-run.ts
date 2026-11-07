@@ -227,13 +227,13 @@ async function defaultCreateRunRecords(seed: SquadRunRecordsSeed) {
   return createSquadRunRecords(seed)
 }
 
-async function defaultStopReplacedRun(runId: string, teamId: string): Promise<void> {
-  const [{ abortTeam }, { controlDurableRun }] = await Promise.all([
-    import("../agent-team-runtime"),
-    import("../durable/durable-control"),
-  ])
-  abortTeam(teamId, new Error("shutdown"), runId)
-  await controlDurableRun(runId, "stop")
+/** The one control machine's stop. Throws unless the replaced run is settled. */
+async function defaultStopReplacedRun(runId: string, _teamId: string): Promise<void> {
+  const { controlSquadRun } = await import("../durable/durable-control")
+  const result = await controlSquadRun({ runId }, "stop")
+  if (!result.ok && result.reason !== "already_terminal" && result.reason !== "run_not_found") {
+    throw new Error(result.reason ?? "stop_unconfirmed")
+  }
 }
 
 async function defaultParkFailedLaunch(runId: string, reason: string): Promise<void> {

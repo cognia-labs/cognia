@@ -134,7 +134,7 @@ import {
   prepareAndPublishGithubStack,
 } from "./delivery/github-delivery-adapter"
 import { runSquadLifecycle } from "./squad/squad-lifecycle-runner"
-import { controlSquadRun } from "./squad/squad-control"
+import { controlSquadRun } from "./durable/durable-control"
 import { watchSquadRunSettlement } from "./squad/watch-squad-run"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { createDeliveryGraphService } from "./delivery/delivery-graph"
@@ -502,7 +502,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
           pollIntervalMs: 5,
         })
         if (outcome === "cancel") {
-          await controlSquadRun(runId, "stop")
+          await controlSquadRun({ runId }, "stop")
         } else if (outcome === "cancel-race") {
           let release!: () => void
           let entered!: () => void
@@ -516,7 +516,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
             entered()
             await blocked
           })
-          const stopping = controlSquadRun(runId, "stop")
+          const stopping = controlSquadRun({ runId }, "stop")
           await started
           try {
             await approveAndPublishGithubStack(team, runId, { resolveTeamRepo, resolveOctokit })
@@ -918,7 +918,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
 
   it("does not reopen an operator-cancelled run when the aborted retry gate resumes", async () => {
     const { getDurableTeamCoordinator } = await import("./durable/durable-runtime")
-    const { controlSquadRun } = await import("./squad/squad-control")
+    const { controlSquadRun } = await import("./durable/durable-control")
     const { findLiveSquadRun } = await import("./squad/squad-run-records")
     const runId = "cancel-during-retry-gate"
     const coordinator = getDurableTeamCoordinator()
@@ -966,7 +966,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
         return children
       })
     try {
-      const stopping = controlSquadRun(runId, "stop")
+      const stopping = controlSquadRun({ runId }, "stop")
       await checking
       finishExecutor()
       const deadline = Date.now() + 4_000
@@ -980,7 +980,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
       }
       // A stop can initially report unconfirmed while the executor drains.
       if (!(await stopping).ok)
-        await expect(controlSquadRun(runId, "stop")).resolves.toMatchObject({ ok: true })
+        await expect(controlSquadRun({ runId }, "stop")).resolves.toMatchObject({ ok: true })
       expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
         status: "cancelled",
       })

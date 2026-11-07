@@ -7,7 +7,7 @@
  *   - `start()` goes through `startSquadRun`, the one launch seam, and then
  *     waits for the run to settle. Callers that await a start (the scheduler,
  *     `ctx.agent.runTeam`, a delegation) want the outcome, not the launch.
- *   - `pause() / resume() / shutdown()` go through `controlSquadTeam`, the one
+ *   - `pause() / resume() / shutdown()` go through `controlSquadRun`, the one
  *     control state machine, addressed to the team's live run.
  *   - `retryChild()` targets one durable child through the coordinator and
  *     re-enters the lifecycle over that task only.
@@ -23,7 +23,7 @@ import type { AgentTeam, AgentTeamTask } from "@/types/agent/agent-team"
 import type { LeadPlanResult, RunTeamLifecycleDeps } from "./agent-team-runtime"
 import type { TeamRunOrigin } from "./gates/gate-policy"
 import type { StartSquadRunResult } from "./squad/start-squad-run"
-import type { SquadControlResult } from "./squad/squad-control"
+import type { SquadControlResult } from "./durable/durable-control"
 import type { RecoveryOutcome } from "./durable/durable-runtime"
 
 export {
@@ -182,9 +182,9 @@ export async function recoverDurableAgentTeams(
             if (decision.outcome !== "approve") {
               // No lifecycle survived to handle a refusal. Keep the decision
               // durable and pause; only a new operator gesture may resume work.
-              const { controlSquadRun } = await import("./squad/squad-control")
+              const { controlSquadRun } = await import("./durable/durable-control")
               if (!(await stillRecovering())) return
-              await controlSquadRun(outcome.runId, "pause")
+              await controlSquadRun({ runId: outcome.runId }, "pause")
               return
             }
           }
@@ -232,16 +232,16 @@ export const agentTeamManager: AgentTeamManager = {
       throw new Error(`Squad run refused: ${detail}`)
     }
     if (opts?.signal?.aborted && result.runId) {
-      const { controlSquadRun } = await import("./squad/squad-control")
-      await controlSquadRun(result.runId, "stop")
+      const { controlSquadRun } = await import("./durable/durable-control")
+      await controlSquadRun({ runId: result.runId }, "stop")
       opts.signal.throwIfAborted()
     }
     if (opts?.detached || !result.executionRunId || result.duplicate) return result
     const { awaitSquadRunSettlement } = await import("./squad/watch-squad-run")
     if (opts?.signal) {
-      const { controlSquadRun } = await import("./squad/squad-control")
+      const { controlSquadRun } = await import("./durable/durable-control")
       const stop = () => {
-        void controlSquadRun(result.runId!, "stop").catch(() => undefined)
+        void controlSquadRun({ runId: result.runId! }, "stop").catch(() => undefined)
       }
       opts.signal.addEventListener("abort", stop, { once: true })
       try {
@@ -256,12 +256,12 @@ export const agentTeamManager: AgentTeamManager = {
     return result
   },
   pause: async (id) => {
-    const { controlSquadTeam } = await import("./squad/squad-control")
-    return controlSquadTeam(id, "pause")
+    const { controlSquadRun } = await import("./durable/durable-control")
+    return controlSquadRun({ teamId: id }, "pause")
   },
   resume: async (id) => {
-    const { controlSquadTeam } = await import("./squad/squad-control")
-    return controlSquadTeam(id, "resume")
+    const { controlSquadRun } = await import("./durable/durable-control")
+    return controlSquadRun({ teamId: id }, "resume")
   },
   retryChild: async (childRunId, optionalHostRef) => {
     const [{ getDurableTeamCoordinator }, { getAgentTeamChildRun }] = await Promise.all([
@@ -290,8 +290,8 @@ export const agentTeamManager: AgentTeamManager = {
     })
   },
   shutdown: async (id) => {
-    const { controlSquadTeam } = await import("./squad/squad-control")
-    return controlSquadTeam(id, "stop")
+    const { controlSquadRun } = await import("./durable/durable-control")
+    return controlSquadRun({ teamId: id }, "stop")
   },
 }
 

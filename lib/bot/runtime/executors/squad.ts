@@ -182,8 +182,8 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
     )
 
     if (ctx.signal.aborted) {
-      const { controlSquadRun } = await import("@/lib/squads/squad/squad-control")
-      await controlSquadRun(result.runId ?? ctx.runId, "stop")
+      const { controlSquadRun } = await import("@/lib/squads/durable/durable-control")
+      await controlSquadRun({ runId: result.runId ?? ctx.runId }, "stop")
       throw new Error("Bot cancelled")
     }
     if (!result.started) {

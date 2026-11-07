@@ -324,8 +324,8 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
             ? "resume"
             : undefined
     if (!action) throw new UnsupportedForKindError(command.action, "team")
-    const { controlSquadRun } = await import("@/lib/squads/squad/squad-control")
-    const result = await controlSquadRun(run.sourceId, action)
+    const { controlSquadRun } = await import("@/lib/squads/durable/durable-control")
+    const result = await controlSquadRun({ runId: run.sourceId }, action)
     if (!result.ok) {
       if (result.reason === "recovery_required") {
         throw new Error("recovery_required")

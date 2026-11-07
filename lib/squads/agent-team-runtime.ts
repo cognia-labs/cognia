@@ -1403,8 +1403,9 @@ export async function runTeamLifecycle(
       unregisterTeamRunContext(runId)
       if (settlementError) throw settlementError
       // Pending reviews are durable interrupts. A paused run keeps them for
-      // its resume, a stopped run has them denied by `squad-control.ts`. The
-      // waiters themselves are released by the abort signal.
+      // its resume, a stopped run has them denied by the control machine
+      // (`durable-control.ts`). The waiters themselves are released by the
+      // abort signal.
     }
   } finally {
     clearTimeout(deadlineTimer)

@@ -63,9 +63,9 @@ jest.mock("@/lib/squads/agent-team", () => ({
 jest.mock("@/lib/squads/agent-team-runtime", () => ({
   abortTeam: (...args: unknown[]) => mockAbort(...args),
 }))
-const mockControlDurableRun = jest.fn(async (..._args: unknown[]) => undefined)
+const mockControlSquadRun = jest.fn(async (..._args: unknown[]) => ({ ok: true }))
 jest.mock("@/lib/squads/durable/durable-control", () => ({
-  controlDurableRun: (...args: unknown[]) => mockControlDurableRun(...args),
+  controlSquadRun: (...args: unknown[]) => mockControlSquadRun(...args),
 }))
 const fakeStoreState = {
   teams: { "team-1": { id: "team-1", name: "Squad", status: "idle" } },
@@ -653,10 +653,10 @@ describe("default deps", () => {
 
     await deps.abortTeam("team-1", "why", "run_team_1")
     expect(mockAbort).toHaveBeenCalledWith("team-1", expect.any(Error), "run_team_1")
-    expect(mockControlDurableRun).toHaveBeenCalledWith("run_team_1", "stop")
-    mockControlDurableRun.mockClear()
+    expect(mockControlSquadRun).toHaveBeenCalledWith({ runId: "run_team_1" }, "stop")
+    mockControlSquadRun.mockClear()
     await deps.abortTeam("team-1", "why")
-    expect(mockControlDurableRun).not.toHaveBeenCalled()
+    expect(mockControlSquadRun).not.toHaveBeenCalled()
 
     await createAgentTeamRun(squadRun("running"))
     expect(await deps.getSquadRun("run_team_1")).toMatchObject({ status: "running" })

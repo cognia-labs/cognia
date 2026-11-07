@@ -34,12 +34,8 @@ jest.mock("@/lib/workflow/runtime/cancel-run", () => ({
 // A legacy-runtime team run writes no `agentTeamRuns` record, so the durable
 // branch cannot see it. The live run-context registry is what names its team.
 const mockControlSquadRun = jest.fn(
-  async (_runId: string, _action: string) => ({ ok: true }) as { ok: boolean; reason?: string }
+  async (_target: unknown, _action: string) => ({ ok: true }) as { ok: boolean; reason?: string }
 )
-jest.mock("@/lib/squads/squad/squad-control", () => ({
-  controlSquadRun: (...args: unknown[]) =>
-    mockControlSquadRun(...(args as Parameters<typeof mockControlSquadRun>)),
-}))
 
 const mockSettleSquadReview = jest.fn(async (_command: unknown) => undefined)
 jest.mock("@/lib/squads/gates/squad-review-gate", () => ({
@@ -72,6 +68,8 @@ const mockSteerDurableRun = jest.fn(async (_runId: string, _message: string) => 
   childCount: 1,
 }))
 jest.mock("@/lib/squads/durable/durable-control", () => ({
+  controlSquadRun: (...args: unknown[]) =>
+    mockControlSquadRun(...(args as Parameters<typeof mockControlSquadRun>)),
   controlDurableRun: (...args: unknown[]) =>
     mockControlDurableRun(...(args as Parameters<typeof mockControlDurableRun>)),
   steerDurableRun: (...args: unknown[]) =>
@@ -589,7 +587,7 @@ describe("team run control", () => {
       const result = await executeRunControlCommand(command("run_team_1", action))
 
       expect(result.accepted).toBe(true)
-      expect(mockControlSquadRun).toHaveBeenCalledWith("run_team_1", action)
+      expect(mockControlSquadRun).toHaveBeenCalledWith({ runId: "run_team_1" }, action)
       expect(mockCancelWorkflowRun).not.toHaveBeenCalled()
       handlers.dispose()
     }

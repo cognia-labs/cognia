@@ -354,8 +354,11 @@ export async function runSquadLifecycle(
   }
 
   if (admitted) {
-    const { assessSquadRunReplay } = await import("./squad-control")
-    const eligibility = await assessSquadRunReplay(runId)
+    const [{ assessStoredRunRecovery }, { dexieTeamRunStore }] = await Promise.all([
+      import("@cognia/agent-orchestration/coordinator"),
+      import("@/lib/db/agent-team-runtime"),
+    ])
+    const eligibility = await assessStoredRunRecovery(dexieTeamRunStore, runId, Date.now())
     if (!eligibility.safe) {
       await parkSquadRecovery(runId, teamId, eligibility.reason ?? "stop_unconfirmed")
       return { runId, status: "failed", reason: eligibility.reason ?? "stop_unconfirmed" }
@@ -554,7 +557,11 @@ async function settleSquadRun(
     !isTerminalTeamStatus(durableRun.status) &&
     !isParkedTeamStatus(durableRun.status)
   ) {
-    const { controlDurableRun } = await import("../durable/durable-control")
+    // The lifecycle settling its own abort: the machine's coordinator step,
+    // not its entry (the abort already happened and this function writes the
+    // mirror), then the stop's interrupt denial.
+    const { controlDurableRun, denyPendingSquadInterrupts } =
+      await import("../durable/durable-control")
     try {
       await controlDurableRun(runId, "stop")
     } catch {
@@ -562,6 +569,12 @@ async function settleSquadRun(
       return
     }
     durableRun = await getAgentTeamRun(runId).catch(() => undefined)
+    if (durableRun?.status === "cancelled") {
+      const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
+      await denyPendingSquadInterrupts(agentTeamExecutionRunId(runId), Date.now()).catch(
+        () => undefined
+      )
+    }
   }
 
   const durableStatus: AgentTeamRunStatus | undefined = durableRun?.status

@@ -21,7 +21,7 @@ const parkSquadRecovery = jest.fn<
   ReturnType<typeof import("./squad/squad-lifecycle-runner").parkSquadRecovery>,
   Parameters<typeof import("./squad/squad-lifecycle-runner").parkSquadRecovery>
 >(async () => undefined)
-const controlSquadTeam = jest.fn(async (_teamId: string, _action: string) => ({
+const controlSquadRun = jest.fn(async (_target: unknown, _action: string) => ({
   ok: true,
   status: "paused",
 }))
@@ -95,9 +95,8 @@ jest.mock("./squad/squad-lifecycle-runner", () => ({
   __resetAgentTeamRuntimeForTesting: jest.fn(),
 }))
 
-jest.mock("./squad/squad-control", () => ({
-  controlSquadTeam: (teamId: string, action: string) => controlSquadTeam(teamId, action),
-  controlSquadRun: (runId: string, action: string) => controlSquadTeam(runId, action),
+jest.mock("./durable/durable-control", () => ({
+  controlSquadRun: (target: unknown, action: string) => controlSquadRun(target, action),
 }))
 
 import { agentTeamManager, recoverDurableAgentTeams } from "./agent-team"
@@ -139,7 +138,7 @@ describe("durable AgentTeam manager", () => {
     openSquadReview.mockResolvedValueOnce({ kind: "budget_extension", outcome: "deny" })
     await recoverDurableAgentTeams()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(controlSquadTeam).toHaveBeenCalledWith("run-1", "pause")
+    expect(controlSquadRun).toHaveBeenCalledWith({ runId: "run-1" }, "pause")
     expect(guardSquadResume).not.toHaveBeenCalled()
     expect(runSquadLifecycle).not.toHaveBeenCalled()
   })
@@ -210,7 +209,7 @@ describe("durable AgentTeam manager", () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(guardSquadResume).not.toHaveBeenCalled()
       expect(runSquadLifecycle).not.toHaveBeenCalled()
-      expect(controlSquadTeam).not.toHaveBeenCalled()
+      expect(controlSquadRun).not.toHaveBeenCalled()
     }
   )
 
@@ -284,9 +283,9 @@ describe("durable AgentTeam manager", () => {
     ["pause", "pause"],
     ["resume", "resume"],
     ["shutdown", "stop"],
-  ] as const)("routes %s through controlSquadTeam as %s", async (verb, action) => {
+  ] as const)("routes %s through controlSquadRun as %s", async (verb, action) => {
     await agentTeamManager[verb]("team-1")
-    expect(controlSquadTeam).toHaveBeenCalledWith("team-1", action)
+    expect(controlSquadRun).toHaveBeenCalledWith({ teamId: "team-1" }, action)
   })
 
   it("retries one child through the durable coordinator and re-enters only that task", async () => {

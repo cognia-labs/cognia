@@ -1,7 +1,7 @@
 /**
  * The team-addressed facade. Definition CRUD proxies the store. Every runtime
  * verb is an adapter onto the two seams ADR-0169 leaves: `startSquadRun` and
- * `controlSquadTeam`. Both are mocked here so the facade's own contract is
+ * `controlSquadRun`. Both are mocked here so the facade's own contract is
  * what is pinned.
  */
 
@@ -36,11 +36,9 @@ const startSquadRun = jest.fn()
 jest.mock("./squad/start-squad-run", () => ({
   startSquadRun: (...args: unknown[]) => startSquadRun(...args),
 }))
-const controlSquadTeam = jest.fn(async (_teamId: string, _action: string) => ({ ok: true }))
-const controlSquadRun = jest.fn(async (_runId: string, _action: string) => ({ ok: true }))
-jest.mock("./squad/squad-control", () => ({
-  controlSquadTeam: (teamId: string, action: string) => controlSquadTeam(teamId, action),
-  controlSquadRun: (runId: string, action: string) => controlSquadRun(runId, action),
+const controlSquadRun = jest.fn(async (_target: unknown, _action: string) => ({ ok: true }))
+jest.mock("./durable/durable-control", () => ({
+  controlSquadRun: (target: unknown, action: string) => controlSquadRun(target, action),
 }))
 const awaitSquadRunSettlement = jest.fn(
   async (_executionRunId: string, _options?: { signal?: AbortSignal }) => "completed"
@@ -83,7 +81,6 @@ function makeTeam(overrides: Partial<AgentTeam> = {}): AgentTeam {
 beforeEach(() => {
   useAgentTeamStore.getState().reset()
   startSquadRun.mockReset()
-  controlSquadTeam.mockClear()
   controlSquadRun.mockClear()
   awaitSquadRunSettlement.mockClear()
   jest.mocked(settleAgentTeamExecutionRun).mockClear()
@@ -144,7 +141,7 @@ describe("agentTeamManager.start", () => {
       agentTeamManager.start("t1", { runId: "stable", signal: controller.signal })
     ).rejects.toThrow("caller stopped")
     expect(startSquadRun).toHaveBeenCalledWith(expect.objectContaining({ runId: "stable" }))
-    expect(controlSquadRun).toHaveBeenCalledWith("run_team_1", "stop")
+    expect(controlSquadRun).toHaveBeenCalledWith({ runId: "run_team_1" }, "stop")
   })
   it("launches through startSquadRun and waits for the run to settle", async () => {
     const result = await agentTeamManager.start("t1", { origin: "scheduler", ultracode: true })
@@ -244,10 +241,10 @@ describe("agentTeamManager control verbs", () => {
     ["resume", "resume"],
     ["shutdown", "stop"],
   ] as const)(
-    "%s addresses the team's live run through controlSquadTeam(%s)",
+    "%s addresses the team's live run through controlSquadRun(%s)",
     async (verb, action) => {
       const result = await agentTeamManager[verb]("t1")
-      expect(controlSquadTeam).toHaveBeenCalledWith("t1", action)
+      expect(controlSquadRun).toHaveBeenCalledWith({ teamId: "t1" }, action)
       expect(result).toEqual({ ok: true })
     }
   )

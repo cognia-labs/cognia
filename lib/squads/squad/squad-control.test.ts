@@ -1,30 +1,18 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
 
-const controlDurableRun = jest.fn(async (runId: string, action: string) => {
-  if (action === "stop") await getDb().agentTeamRuns.update(runId, { status: "cancelled" })
-})
-jest.mock("../durable/durable-control", () => ({
-  controlDurableRun: (runId: string, action: string) => controlDurableRun(runId, action),
-}))
-const abortTeam = jest.fn((_teamId: string, _reason?: unknown, _runId?: string) => true)
-jest.mock("../agent-team-runtime", () => ({
-  abortTeam: (teamId: string, reason?: unknown, runId?: string) => abortTeam(teamId, reason, runId),
-}))
-const setTeamStatus = jest.fn()
-jest.mock("@/stores/squads/agent-team-store/store", () => ({
-  useAgentTeamStore: { getState: () => ({ setTeamStatus }) },
-}))
-
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
-import { createRunInterrupt } from "@/lib/execution/run-control"
-import { runEventJournal, semanticRunEvent } from "@/lib/db/execution-runs"
-import type { AgentTeamCheckpoint, AgentTeamChildRun } from "@/types/agent/agent-team-runtime"
-import { assessSquadRunReplay, controlSquadRun, controlSquadTeam } from "./squad-control"
+import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
+import type {
+  AgentTeamCheckpoint,
+  AgentTeamChildRun,
+  AgentTeamRunRecord,
+} from "@/types/agent/agent-team-runtime"
+import { assessStoredRunRecovery } from "@cognia/agent-orchestration/coordinator"
+import { guardSquadRunResume } from "./squad-control"
 import { createSquadRunRecords } from "./squad-run-records"
 
 const RUN = "run_team_ctl01"
-const EXECUTION = `execution:team:${RUN}`
 
 async function seedRun(status: "queued" | "running" | "paused" | "completed" | "needs_input") {
   await createSquadRunRecords({
@@ -86,184 +74,52 @@ function checkpoint(
   }
 }
 
-async function events() {
-  return (await getDb().executionRunEvents.where("runId").equals(EXECUTION).toArray()).map(
-    (event) => event.type
-  )
+async function current(): Promise<AgentTeamRunRecord> {
+  return (await getDb().agentTeamRuns.get(RUN))!
 }
 
-describe("controlSquadRun legacy history", () => {
-  let disableDbRuntime: (() => void) | undefined
-
-  beforeEach(async () => {
-    disableDbRuntime = __enableDbRuntimeForTesting()
-    await getDb().delete()
-    __resetDbForTesting()
-    jest.clearAllMocks()
-  })
-
-  afterEach(async () => {
-    await getDb().delete()
-    __resetDbForTesting()
-    disableDbRuntime?.()
-  })
-
-  it("never resumes a backfilled legacy run, even when its status looks resumable", async () => {
-    await seedRun("needs_input")
-    await getDb().agentTeamRuns.update(RUN, { recoveryReason: "legacy_run_not_resumable" })
-    const result = await controlSquadRun(RUN, "resume", { isLive: () => false })
-    expect(result).toEqual({ ok: false, reason: "not_resumable", status: "needs_input" })
-    expect(controlDurableRun).not.toHaveBeenCalled()
-    expect(await events()).not.toContain("run.resumed")
-  })
-
-  it("still lets a backfilled legacy run stop", async () => {
-    await seedRun("needs_input")
-    await getDb().agentTeamRuns.update(RUN, { recoveryReason: "legacy_run_not_resumable" })
-    const result = await controlSquadRun(RUN, "stop")
-    expect(result).toEqual({ ok: true, status: "cancelled" })
-    expect(await events()).toContain("run.cancelled")
-  })
+let disableDbRuntime: (() => void) | undefined
+beforeEach(async () => {
+  disableDbRuntime = __enableDbRuntimeForTesting()
+  await getDb().delete()
+  __resetDbForTesting()
+})
+afterEach(async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  disableDbRuntime?.()
 })
 
-describe("controlSquadRun", () => {
-  let disableDbRuntime: (() => void) | undefined
+describe("guardSquadRunResume", () => {
+  const ready = async () => ({ blocked: false })
 
-  beforeEach(async () => {
-    disableDbRuntime = __enableDbRuntimeForTesting()
-    await getDb().delete()
-    __resetDbForTesting()
-    jest.clearAllMocks()
-  })
-
-  afterEach(async () => {
-    await getDb().delete()
-    __resetDbForTesting()
-    disableDbRuntime?.()
-  })
-
-  it("refuses an unknown run and a settled one", async () => {
-    expect(await controlSquadRun("nope", "pause")).toEqual({ ok: false, reason: "run_not_found" })
-    await seedRun("completed")
-    expect(await controlSquadRun(RUN, "stop")).toEqual({
-      ok: false,
-      reason: "already_terminal",
-      status: "completed",
-    })
-    expect(controlDurableRun).not.toHaveBeenCalled()
-  })
-
-  it("pauses cooperatively through the coordinator and journals run.paused", async () => {
-    await seedRun("running")
-    const result = await controlSquadRun(RUN, "pause", { now: () => 5_000 })
-    expect(result).toEqual({ ok: true, status: "paused" })
-    expect(controlDurableRun).toHaveBeenCalledWith(RUN, "pause")
-    expect((await events()).sort()).toEqual(["run.paused", "run.started"])
-    expect(setTeamStatus).toHaveBeenCalledWith("team-1", "paused")
-    expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("paused")
-  })
-
-  it("refuses to pause a run that is not running", async () => {
+  it("admits a run with its authority snapshot and nothing uncertain", async () => {
     await seedRun("paused")
-    expect(await controlSquadRun(RUN, "pause")).toEqual({
-      ok: false,
-      reason: "not_pausable",
-      status: "paused",
-    })
+    expect(
+      await guardSquadRunResume(await current(), { reentry: true }, { readiness: ready })
+    ).toEqual({ kind: "admit" })
   })
 
-  it("resumes a live lifecycle by unpausing the coordinator", async () => {
-    await seedRun("paused")
-    const reenter = jest.fn(async () => undefined)
-    const result = await controlSquadRun(RUN, "resume", {
-      isLive: () => true,
-      reenter,
-      now: () => 5_000,
-    })
-    expect(result).toEqual({ ok: true, status: "running" })
-    expect(controlDurableRun).toHaveBeenCalledWith(RUN, "resume")
-    expect(reenter).not.toHaveBeenCalled()
-    expect(await events()).toContain("run.resumed")
-  })
-
-  it("re-enters an exited lifecycle from a verified safe checkpoint", async () => {
-    await seedRun("paused")
-    await getDb().agentTeamChildRuns.add({
-      ...child("c1", "paused"),
-      stop: {
-        state: "confirmed",
-        epoch: 0,
-        requestedAt: 1,
-        proof: { kind: "ack", epoch: 0, at: 2 },
-      },
-    })
-    await getDb().agentTeamCheckpoints.add(checkpoint("c1", "safe"))
-    const reenter = jest.fn(async () => undefined)
-    const result = await controlSquadRun(RUN, "resume", { isLive: () => false, reenter })
-    expect(result).toEqual({ ok: true, status: "running" })
-    expect(reenter).toHaveBeenCalledWith({ teamId: "team-1", runId: RUN })
-    expect(controlDurableRun).not.toHaveBeenCalled()
-    expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("running")
-  })
-
-  it("re-enters an operator-requeued recovering run", async () => {
+  it("refuses a backfilled legacy run before anything else", async () => {
     await seedRun("needs_input")
-    await getDb().agentTeamRuns.update(RUN, { status: "recovering" })
-    await getDb().agentTeamChildRuns.add(child("c1", "queued"))
-    const reenter = jest.fn(async () => undefined)
-    expect(await controlSquadRun(RUN, "resume", { isLive: () => false, reenter })).toMatchObject({
-      ok: true,
+    await getDb().agentTeamRuns.update(RUN, {
+      recoveryReason: "legacy_run_not_resumable",
+      executionConstraints: undefined,
     })
-    expect(reenter).toHaveBeenCalledTimes(1)
+    expect(await guardSquadRunResume(await current(), { reentry: true })).toEqual({
+      kind: "legacy",
+    })
   })
 
-  it("admits only one re-entry when two resume requests race", async () => {
-    await seedRun("paused")
-    const reenter = jest.fn(async () => undefined)
-    const results = await Promise.all([
-      controlSquadRun(RUN, "resume", { isLive: () => false, reenter }),
-      controlSquadRun(RUN, "resume", { isLive: () => false, reenter }),
-    ])
-    expect(results.filter((result) => result.ok)).toHaveLength(1)
-    expect(reenter).toHaveBeenCalledTimes(1)
-  })
-
-  it("parks legacy runs without a frozen authority snapshot even at a safe checkpoint", async () => {
+  it("refuses a run without its frozen authority snapshot", async () => {
     await seedRun("paused")
     await getDb().agentTeamRuns.update(RUN, { executionConstraints: undefined })
-    const reenter = jest.fn(async () => undefined)
-    const openRecovery = jest.fn(async () => undefined)
-    expect(
-      await controlSquadRun(RUN, "resume", { isLive: () => false, reenter, openRecovery })
-    ).toMatchObject({ ok: false, reason: "recovery_required" })
-    expect(reenter).not.toHaveBeenCalled()
-    expect((await getDb().agentTeamRuns.get(RUN))?.recoveryReason).toBe(
-      "missing_execution_constraints"
-    )
-    expect(openRecovery).toHaveBeenCalledWith(RUN)
+    expect(await guardSquadRunResume(await current(), { reentry: false })).toEqual({
+      kind: "missing_constraints",
+    })
   })
 
-  it("does not resurrect a cancelled run when asynchronous re-entry fails", async () => {
-    await seedRun("paused")
-    let fail!: (error: Error) => void
-    const lifecycle = new Promise((_, reject) => {
-      fail = reject
-    })
-    const openRecovery = jest.fn(async () => undefined)
-    await controlSquadRun(RUN, "resume", {
-      isLive: () => false,
-      reenter: () => lifecycle,
-      openRecovery,
-    })
-    await getDb().agentTeamRuns.update(RUN, { status: "cancelled" })
-    fail(new Error("late setup failure"))
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("cancelled")
-    expect(openRecovery).not.toHaveBeenCalled()
-  })
-
-  /** Never silently replay ambiguous side effects. */
-  it("parks an uncertain resume on a recovery decision instead of replaying", async () => {
+  it("names the children whose last checkpoint cannot be trusted", async () => {
     await seedRun("paused")
     await getDb().agentTeamChildRuns.add({
       ...child("c1", "running"),
@@ -277,84 +133,36 @@ describe("controlSquadRun", () => {
     await getDb().agentTeamCheckpoints.add(
       checkpoint("c1", "safe", [{ id: "e1", kind: "Bash", state: "unknown", replay: "unknown" }])
     )
-    const reenter = jest.fn(async () => undefined)
-    const result = await controlSquadRun(RUN, "resume", { isLive: () => false, reenter })
-    expect(result).toEqual({ ok: false, reason: "recovery_required", status: "needs_input" })
-    expect(reenter).not.toHaveBeenCalled()
-    expect(await getDb().agentTeamRuns.get(RUN)).toMatchObject({
-      status: "needs_input",
-      recoveryReason: "uncertain_side_effect",
+    expect(await guardSquadRunResume(await current(), { reentry: false })).toEqual({
+      kind: "uncertain",
+      reason: "uncertain_side_effect",
+      uncertainChildIds: ["c1"],
     })
-    expect(await events()).toContain("run.waiting")
   })
 
-  it("stops for good: aborts the lifecycle, cascades, denies pending reviews, journals", async () => {
-    await seedRun("running")
-    await createRunInterrupt({
-      id: "action-review:squad-review:run_team_ctl01:plan:revision-0",
-      runId: EXECUTION,
-      type: "plan_approval",
-      status: "pending",
-      title: "plan",
-      expiresAt: Date.now() + 60_000,
-      createdAt: Date.now(),
-      reviewKind: "plan",
+  it("asks the readiness guard only for a re-entry", async () => {
+    await seedRun("paused")
+    const readiness = jest.fn(async () => ({ blocked: true }))
+    expect(await guardSquadRunResume(await current(), { reentry: false }, { readiness })).toEqual({
+      kind: "admit",
     })
-    const result = await controlSquadRun(RUN, "stop", { now: () => 9_000 })
-    expect(result).toEqual({ ok: true, status: "cancelled" })
-    expect(abortTeam).toHaveBeenCalledWith("team-1", expect.any(Error), RUN)
-    expect(controlDurableRun).toHaveBeenCalledWith(RUN, "stop")
-    const interrupt = await getDb().executionRunInterrupts.get(
-      "action-review:squad-review:run_team_ctl01:plan:revision-0"
-    )
-    expect(interrupt?.status).toBe("expired")
-    expect(setTeamStatus).toHaveBeenCalledWith("team-1", "cancelled")
-    expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("cancelled")
-  })
-
-  it("round 4: keeps the winning publication's terminal control result", async () => {
-    await seedRun("needs_input")
-    controlDurableRun.mockImplementationOnce(async () => {
-      await getDb().agentTeamRuns.update(RUN, { status: "completed" })
-      await runEventJournal.append(EXECUTION, semanticRunEvent("run.completed", {}))
+    expect(readiness).not.toHaveBeenCalled()
+    expect(await guardSquadRunResume(await current(), { reentry: true }, { readiness })).toEqual({
+      kind: "unready",
     })
-    expect(await controlSquadRun(RUN, "stop")).toMatchObject({
-      ok: false,
-      reason: "already_terminal",
-      status: "completed",
-    })
-    expect(setTeamStatus).not.toHaveBeenCalledWith("team-1", "cancelled")
-    expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("completed")
-  })
-
-  it("addresses a team through its live run", async () => {
-    await seedRun("running")
-    expect(await controlSquadTeam("team-1", "pause")).toEqual({ ok: true, status: "paused" })
-    expect(await controlSquadTeam("team-x", "pause")).toEqual({
-      ok: false,
-      reason: "run_not_found",
-    })
+    expect(readiness).toHaveBeenCalledWith("team-1", RUN)
   })
 })
 
-describe("assessSquadRunReplay", () => {
-  let disableDbRuntime: (() => void) | undefined
-  beforeEach(async () => {
-    disableDbRuntime = __enableDbRuntimeForTesting()
-    await getDb().delete()
-    __resetDbForTesting()
-  })
-  afterEach(async () => {
-    await getDb().delete()
-    __resetDbForTesting()
-    disableDbRuntime?.()
-  })
+/** The package's run gate over the Dexie store: the guard's replay step. */
+describe("assessStoredRunRecovery over the Dexie store", () => {
+  const assess = (runId: string) => assessStoredRunRecovery(dexieTeamRunStore, runId, Date.now())
 
   it("is safe with no children, with settled children, and with never-started ones", async () => {
-    expect(await assessSquadRunReplay(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
+    expect(await assess(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
     await getDb().agentTeamChildRuns.bulkAdd([child("done", "completed"), child("fresh", "queued")])
     await getDb().agentTeamCheckpoints.add(checkpoint("done", "safe"))
-    expect(await assessSquadRunReplay(RUN)).toMatchObject({
+    expect(await assess(RUN)).toMatchObject({
       safe: false,
       reason: "stop_unconfirmed",
     })
@@ -367,7 +175,7 @@ describe("assessSquadRunReplay", () => {
         proof: { kind: "ack", epoch: 0, at: 2 },
       },
     })
-    expect(await assessSquadRunReplay(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
+    expect(await assess(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
   })
 
   it("does not mistake a queued previous dispatch for work that never started", async () => {
@@ -378,7 +186,7 @@ describe("assessSquadRunReplay", () => {
       remoteDispatchEpoch: 1,
     })
     await getDb().agentTeamCheckpoints.add(checkpoint("queued-old", "safe"))
-    expect(await assessSquadRunReplay(RUN)).toMatchObject({
+    expect(await assess(RUN)).toMatchObject({
       safe: false,
       reason: "stop_unconfirmed",
     })
@@ -390,7 +198,7 @@ describe("assessSquadRunReplay", () => {
         proof: { kind: "ack", epoch: 1, at: 2 },
       },
     })
-    expect(await assessSquadRunReplay(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
+    expect(await assess(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
   })
 
   it("names every child whose last checkpoint cannot be trusted", async () => {
@@ -413,7 +221,7 @@ describe("assessSquadRunReplay", () => {
       checkpoint("intent", "safe", [{ id: "e", kind: "Write", state: "intent", replay: "unsafe" }]),
       checkpoint("ok", "safe", [{ id: "e", kind: "Read", state: "completed", replay: "safe" }]),
     ])
-    const assessment = await assessSquadRunReplay(RUN)
+    const assessment = await assess(RUN)
     expect(assessment.safe).toBe(false)
     expect([...assessment.uncertainChildIds].sort()).toEqual(["intent", "needs", "no-cp"])
   })
@@ -430,7 +238,7 @@ describe("assessSquadRunReplay", () => {
       correlationId: "remote-tail",
       createdAt: 3,
     })
-    expect(await assessSquadRunReplay(RUN)).toEqual({
+    expect(await assess(RUN)).toEqual({
       safe: false,
       uncertainChildIds: ["remote"],
       reason: "stop_unconfirmed",

@@ -20,7 +20,6 @@ import { getLiveSidecarSessionIds } from "@/lib/claude/ipc"
 import { getLiveExternalAgentProcessIds } from "@/lib/ai/agent/external/agent-transport"
 import {
   createDurableTeamCoordinator as createCoordinator,
-  isStoredChildReplaySafe,
   type DurableTeamCoordinator as Coordinator,
   type DurableTeamSpec,
   type TeamPathPolicy,
@@ -35,10 +34,8 @@ import { isPathWithinRoot, normalizeFsPath } from "@/lib/files/permissions"
 import { isTauri } from "@/lib/tauri"
 import type { AgentTeam, TeammateRuntime } from "@/types/agent/agent-team"
 import type {
-  AgentTeamCheckpoint,
   AgentTeamChildRun,
   AgentTeamExecutionConstraints,
-  AgentTeamTrajectoryEvent,
 } from "@/types/agent/agent-team-runtime"
 
 export type {
@@ -291,18 +288,4 @@ export function getDurableTeamCoordinator(): DurableTeamCoordinator {
 
 export function __resetDurableTeamCoordinatorForTesting(): void {
   sharedCoordinator = undefined
-}
-
-/**
- * Whether a child may be replayed from its checkpoint, reading from `store`
- * (the shared coordinator's store by default, so every app caller sees the
- * run state the coordinator writes).
- */
-export function isDurableChildReplaySafe(
-  childRunId: string,
-  checkpoint?: AgentTeamCheckpoint,
-  trajectory?: readonly AgentTeamTrajectoryEvent[],
-  store: TeamRunStore<AgentTeamExecutionConstraints> = getDurableTeamCoordinator().store
-): Promise<boolean> {
-  return isStoredChildReplaySafe(store, childRunId, checkpoint, trajectory)
 }

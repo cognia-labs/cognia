@@ -6,6 +6,7 @@
  */
 
 import {
+  assessStoredRunRecovery,
   createDurableTeamCoordinator,
   isStoredChildStopped,
   type DurableTeamCoordinator,
@@ -244,6 +245,22 @@ describe("durable AgentTeam coordinator", () => {
       expect((await store.getChild("legacy"))?.stop?.state).toBe("unconfirmed")
     }
   )
+
+  it("folds the task gate over a whole run for every resume surface", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await expect(assessStoredRunRecovery(store, "run-admission", 100)).resolves.toEqual({
+      safe: true,
+      uncertainChildIds: [],
+    })
+    await register(coordinator, "legacy-completed")
+    await store.updateChild("legacy-completed", { status: "completed" })
+    await expect(assessStoredRunRecovery(store, "run-admission", 100)).resolves.toEqual({
+      safe: false,
+      uncertainChildIds: ["legacy-completed"],
+      reason: "stop_unconfirmed",
+    })
+  })
 
   it("requires disposal even for completed legacy rows without startup metadata", async () => {
     const coordinator = make()

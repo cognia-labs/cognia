@@ -9,11 +9,13 @@ import {
   createDurableTeamCoordinator,
   durableTeamSpec,
   getDurableTeamCoordinator,
-  isDurableChildReplaySafe,
   redactTeamTextForPersistence,
 } from "./durable-runtime"
 import * as runtimeDb from "@/lib/db/agent-team-runtime"
-import { isStoredChildStopped } from "@cognia/agent-orchestration/coordinator"
+import {
+  isStoredChildReplaySafe,
+  isStoredChildStopped,
+} from "@cognia/agent-orchestration/coordinator"
 
 const mockLiveSidecarSessions = jest.fn<Promise<ReadonlySet<string> | undefined>, []>()
 const mockLiveExternalProcesses = jest.fn<Promise<ReadonlySet<string> | undefined>, []>()
@@ -528,17 +530,17 @@ describe("the app's durable AgentTeam coordinator", () => {
     expect((await runtimeDb.getAgentTeamChildRun("child-control"))?.status).toBe("terminated")
   })
 
-  it("shares one coordinator, and replay checks read its store by default", async () => {
+  it("shares one coordinator whose store the replay checks read", async () => {
     const shared = getDurableTeamCoordinator()
     expect(getDurableTeamCoordinator()).toBe(shared)
     await shared.prepareRun(team(), "run-replay")
     await registerChild(shared, "run-replay", "child-replay")
-    expect(await isDurableChildReplaySafe("child-replay")).toBe(false)
+    expect(await isStoredChildReplaySafe(shared.store, "child-replay")).toBe(false)
     await shared.checkpoint("child-replay", {
       trajectorySequence: 1,
       replay: "safe",
       sideEffects: [],
     })
-    expect(await isDurableChildReplaySafe("child-replay")).toBe(true)
+    expect(await isStoredChildReplaySafe(shared.store, "child-replay")).toBe(true)
   })
 })

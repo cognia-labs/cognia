@@ -1451,8 +1451,17 @@ export async function dispatchTeammate(
         if (recoverySessionId) {
           const { getLatestAgentTeamCheckpoint } = await import("@/lib/db/agent-team-runtime")
           const checkpoint = await getLatestAgentTeamCheckpoint(activeDispatch.childRunId)
-          const { isDurableChildReplaySafe } = await import("../durable/durable-runtime")
-          if (!(await isDurableChildReplaySafe(activeDispatch.childRunId, checkpoint))) {
+          const [{ isStoredChildReplaySafe }, { getDurableTeamCoordinator }] = await Promise.all([
+            import("@cognia/agent-orchestration/coordinator"),
+            import("../durable/durable-runtime"),
+          ])
+          if (
+            !(await isStoredChildReplaySafe(
+              getDurableTeamCoordinator().store,
+              activeDispatch.childRunId,
+              checkpoint
+            ))
+          ) {
             throw new Error("Remote session recovery requires a safe checkpoint")
           }
         }

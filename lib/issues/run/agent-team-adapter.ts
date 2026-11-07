@@ -250,14 +250,15 @@ export function createDefaultAgentTeamRunAdapterDeps(): AgentTeamRunAdapterDeps 
       loadedStore?.getState().deleteTask(taskId)
     },
     abortTeam: async (teamId, reason, squadRunId) => {
+      // The in-window lifecycle first, so it ends with the issue's reason.
       const { abortTeam } = await import("@/lib/squads/agent-team-runtime")
       abortTeam(teamId, new Error(reason), squadRunId)
       if (!squadRunId) return
-      // The same stop the Squad console sends (`startSquadRun`'s replaced-run
-      // path): it reaches a run that is parked or recovering, which the
-      // in-window abort above cannot.
-      const { controlDurableRun } = await import("@/lib/squads/durable/durable-control")
-      await controlDurableRun(squadRunId, "stop")
+      // The same stop the Squad console sends: the one control machine reaches
+      // a run that is parked or recovering, which the abort above cannot, and
+      // denies the reviews nobody will now answer.
+      const { controlSquadRun } = await import("@/lib/squads/durable/durable-control")
+      await controlSquadRun({ runId: squadRunId }, "stop")
     },
     getSquadRun: getAgentTeamRun,
     collectArtifacts: collectDurableArtifacts,

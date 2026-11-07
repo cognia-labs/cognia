@@ -145,8 +145,8 @@ async function defaultRetryChild(childRunId: string, hostRef?: string): Promise<
 }
 
 async function defaultControl(runId: string, action: "resume" | "stop") {
-  const { controlSquadRun } = await import("../squad/squad-control")
-  return controlSquadRun(runId, action)
+  const { controlSquadRun } = await import("./durable-control")
+  return controlSquadRun({ runId }, action)
 }
 
 async function defaultStartReplacement(input: {
@@ -176,8 +176,11 @@ async function defaultListChildren(runId: string) {
 }
 
 async function defaultAssessReplay(runId: string) {
-  const { assessSquadRunReplay } = await import("../squad/squad-control")
-  return assessSquadRunReplay(runId)
+  const [{ assessStoredRunRecovery }, { dexieTeamRunStore }] = await Promise.all([
+    import("@cognia/agent-orchestration/coordinator"),
+    import("@/lib/db/agent-team-runtime"),
+  ])
+  return assessStoredRunRecovery(dexieTeamRunStore, runId, Date.now())
 }
 
 /** The recovery interrupts already raised for a run, pending or settled. */

@@ -4,7 +4,7 @@ import { BotRunParkedError } from "../step"
 import { BotExecutorUnavailableError, type BotExecutorContext } from "./types"
 import { createSquadBotExecutor, squadObjective } from "./squad"
 
-jest.mock("@/lib/squads/squad/squad-control", () => ({
+jest.mock("@/lib/squads/durable/durable-control", () => ({
   controlSquadRun: jest.fn().mockResolvedValue({ accepted: true }),
 }))
 
@@ -246,6 +246,6 @@ it("stops a child that finishes admission after the Bot was cancelled", async ()
   await expect(
     createSquadBotExecutor({ start, isSquadRunSettled: () => false })(context)
   ).rejects.toThrow(/cancelled/)
-  const { controlSquadRun } = await import("@/lib/squads/squad/squad-control")
-  expect(controlSquadRun).toHaveBeenCalledWith("child", "stop")
+  const { controlSquadRun } = await import("@/lib/squads/durable/durable-control")
+  expect(controlSquadRun).toHaveBeenCalledWith({ runId: "child" }, "stop")
 })

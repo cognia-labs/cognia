@@ -170,6 +170,36 @@ export function assessRecoveryEligibility(
     : { eligible: true }
 }
 
+/** A whole run's replay verdict: the task gate's answers for every task, folded. */
+export interface RunRecoveryAssessment {
+  safe: boolean
+  /** Every child whose task the gate refused, once each. */
+  uncertainChildIds: string[]
+  /** `stop_unconfirmed` wins: an executor that may still act outranks an unsafe checkpoint. */
+  reason?: "stop_unconfirmed" | "uncertain_side_effect"
+}
+
+/**
+ * Fold the task gate over a run (`assessRecoveryEligibility` per task). A run
+ * is replayable only when every task is; an uncertain run is never silently
+ * replayed, whichever surface asks.
+ */
+export function summarizeRunRecovery(
+  results: readonly RecoveryEligibility[]
+): RunRecoveryAssessment {
+  const refusals = results.filter(
+    (result): result is Extract<RecoveryEligibility, { eligible: false }> => !result.eligible
+  )
+  if (refusals.length === 0) return { safe: true, uncertainChildIds: [] }
+  return {
+    safe: false,
+    uncertainChildIds: [...new Set(refusals.flatMap((result) => result.childRunIds))],
+    reason: refusals.some((result) => result.reason === "stop_unconfirmed")
+      ? "stop_unconfirmed"
+      : "uncertain_side_effect",
+  }
+}
+
 /**
  * Whether a child may be replayed from `checkpoint`. The checkpoint must be
  * the child's, marked replay-safe, carry no side effect of unknown outcome or

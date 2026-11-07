@@ -1,0 +1,412 @@
+/** @jest-environment jsdom */
+/**
+ * The one control state machine (`controlSquadRun`) over the real Dexie run
+ * records and its real coordinator step, with a fake coordinator standing in
+ * for the children's providers.
+ */
+import "fake-indexeddb/auto"
+
+const abortTeam = jest.fn((_teamId: string, _reason?: unknown, _runId?: string) => true)
+jest.mock("../agent-team-runtime", () => ({
+  abortTeam: (teamId: string, reason?: unknown, runId?: string) => abortTeam(teamId, reason, runId),
+}))
+const setTeamStatus = jest.fn()
+jest.mock("@/stores/squads/agent-team-store/store", () => ({
+  useAgentTeamStore: { getState: () => ({ setTeamStatus, teams: {}, teammates: {} }) },
+}))
+
+import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
+import { createRunInterrupt } from "@/lib/execution/run-control"
+import { runEventJournal, semanticRunEvent } from "@/lib/db/execution-runs"
+import type { AgentTeamCheckpoint, AgentTeamChildRun } from "@/types/agent/agent-team-runtime"
+import { controlSquadRun, type SquadControlDeps } from "./durable-control"
+import type { DurableTeamCoordinator } from "./durable-runtime"
+import { createSquadRunRecords } from "../squad/squad-run-records"
+
+const RUN = "run_team_ctl01"
+const EXECUTION = `execution:team:${RUN}`
+
+async function seedRun(status: "queued" | "running" | "paused" | "completed" | "needs_input") {
+  await createSquadRunRecords({
+    runId: RUN,
+    teamId: "team-1",
+    objective: "o",
+    origin: "chat",
+    executionConstraints: {
+      version: 1,
+      teamConfig: {},
+      origin: "chat",
+      triggeredFrom: { source: "ui" },
+      requirePlanApprovalFloor: false,
+    },
+    startedAt: 1_000,
+  })
+  await getDb().agentTeamRuns.update(RUN, { status })
+}
+
+function child(id: string, status: AgentTeamChildRun["status"]): AgentTeamChildRun {
+  return {
+    id,
+    runId: RUN,
+    teamId: "team-1",
+    teammateId: "m1",
+    taskId: `task-${id}`,
+    repositoryId: "primary",
+    status,
+    ...(status !== "queued" ? { startedAt: 1 } : { dispatchEpoch: 0 }),
+    attempt: 1,
+    resourceUsage: {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      wallTimeMs: 0,
+      toolTimeMs: 0,
+      attempts: status === "queued" ? 0 : 1,
+      failures: 0,
+    },
+    createdAt: 1,
+    updatedAt: 1,
+  }
+}
+
+function checkpoint(
+  childRunId: string,
+  replay: "safe" | "needs_input",
+  sideEffects: AgentTeamCheckpoint["sideEffects"] = []
+): AgentTeamCheckpoint {
+  return {
+    id: `cp-${childRunId}-${replay}`,
+    runId: RUN,
+    childRunId,
+    trajectorySequence: 1,
+    decisionVersion: 0,
+    replay,
+    sideEffects,
+    createdAt: 2,
+  }
+}
+
+async function events() {
+  return (await getDb().executionRunEvents.where("runId").equals(EXECUTION).toArray()).map(
+    (event) => event.type
+  )
+}
+
+function fakeCoordinator(patch: Partial<Record<string, jest.Mock>> = {}) {
+  return {
+    setRunPaused: jest.fn(),
+    pauseChild: jest.fn(async (_id: string): Promise<void> => undefined),
+    resumeChild: jest.fn(async (_id: string): Promise<void> => undefined),
+    sleepChild: jest.fn(async () => undefined),
+    wakeChild: jest.fn(async () => undefined),
+    terminateChild: jest.fn(async (id: string) => {
+      await getDb().agentTeamChildRuns.update(id, { status: "cancelled", settledEpoch: 0 })
+    }),
+    ...patch,
+  }
+}
+
+let coordinator: ReturnType<typeof fakeCoordinator>
+const control = (runId: string, action: "pause" | "resume" | "stop", deps: SquadControlDeps = {}) =>
+  controlSquadRun({ runId }, action, {
+    coordinator: coordinator as unknown as DurableTeamCoordinator,
+    openRecovery: async () => undefined,
+    ...deps,
+  })
+
+let disableDbRuntime: (() => void) | undefined
+beforeEach(async () => {
+  disableDbRuntime = __enableDbRuntimeForTesting()
+  await getDb().delete()
+  __resetDbForTesting()
+  jest.clearAllMocks()
+  coordinator = fakeCoordinator()
+})
+afterEach(async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  disableDbRuntime?.()
+})
+
+describe("controlSquadRun: legacy history", () => {
+  it("never resumes a backfilled legacy run, even when its status looks resumable", async () => {
+    await seedRun("needs_input")
+    await getDb().agentTeamRuns.update(RUN, { recoveryReason: "legacy_run_not_resumable" })
+    const result = await control(RUN, "resume", { isLive: () => false })
+    expect(result).toEqual({ ok: false, reason: "not_resumable", status: "needs_input" })
+    expect(coordinator.resumeChild).not.toHaveBeenCalled()
+    expect(await events()).not.toContain("run.resumed")
+  })
+
+  it("still lets a backfilled legacy run stop", async () => {
+    await seedRun("needs_input")
+    await getDb().agentTeamRuns.update(RUN, { recoveryReason: "legacy_run_not_resumable" })
+    expect(await control(RUN, "stop")).toEqual({ ok: true, status: "cancelled" })
+    expect(await events()).toContain("run.cancelled")
+  })
+})
+
+describe("controlSquadRun", () => {
+  it("refuses an unknown run and a settled one", async () => {
+    expect(await control("nope", "pause")).toEqual({ ok: false, reason: "run_not_found" })
+    await seedRun("completed")
+    expect(await control(RUN, "stop")).toEqual({
+      ok: false,
+      reason: "already_terminal",
+      status: "completed",
+    })
+    expect(coordinator.setRunPaused).not.toHaveBeenCalled()
+  })
+
+  it("pauses cooperatively through the coordinator and journals run.paused", async () => {
+    await seedRun("running")
+    await getDb().agentTeamChildRuns.add(child("c1", "running"))
+    expect(await control(RUN, "pause", { now: () => 5_000 })).toEqual({
+      ok: true,
+      status: "paused",
+    })
+    expect(coordinator.setRunPaused).toHaveBeenCalledWith(RUN, true)
+    expect(coordinator.pauseChild).toHaveBeenCalledWith("c1")
+    expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("paused")
+    expect((await events()).sort()).toEqual(["run.paused", "run.started"])
+    expect(setTeamStatus).toHaveBeenCalledWith("team-1", "paused")
+    expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("paused")
+  })
+
+  it("answers a pause a child could not confirm with a recovery decision, never a throw", async () => {
+    await seedRun("running")
+    await getDb().agentTeamChildRuns.add(child("c1", "running"))
+    coordinator.pauseChild.mockImplementationOnce(async (id: string) => {
+      await getDb().agentTeamChildRuns.update(id, {
+        status: "needs_input",
+        waitingReason: "pause_unconfirmed",
+      })
+    })
+    const openRecovery = jest.fn(async () => undefined)
+    expect(await control(RUN, "pause", { openRecovery })).toEqual({
+      ok: false,
+      reason: "recovery_required",
+      status: "needs_input",
+    })
+    expect(openRecovery).toHaveBeenCalledWith(RUN)
+    expect(await getDb().agentTeamRuns.get(RUN)).toMatchObject({
+      status: "needs_input",
+      recoveryReason: "stop_unconfirmed",
+    })
+    expect(setTeamStatus).not.toHaveBeenCalledWith("team-1", "paused")
+  })
+
+  it("refuses to pause a run that is not running", async () => {
+    await seedRun("paused")
+    expect(await control(RUN, "pause")).toEqual({
+      ok: false,
+      reason: "not_pausable",
+      status: "paused",
+    })
+  })
+
+  it("resumes a live lifecycle by unpausing the coordinator", async () => {
+    await seedRun("paused")
+    const reenter = jest.fn(async () => undefined)
+    const readiness = jest.fn(async () => ({ blocked: true }))
+    const result = await control(RUN, "resume", {
+      isLive: () => true,
+      reenter,
+      readiness,
+      now: () => 5_000,
+    })
+    expect(result).toEqual({ ok: true, status: "running" })
+    expect(coordinator.setRunPaused).toHaveBeenCalledWith(RUN, false)
+    expect(reenter).not.toHaveBeenCalled()
+    // A live lifecycle is only unpaused: the readiness guard is for re-entry.
+    expect(readiness).not.toHaveBeenCalled()
+    expect(await events()).toContain("run.resumed")
+    expect(setTeamStatus).toHaveBeenCalledWith("team-1", "executing")
+  })
+
+  it("re-enters an exited lifecycle from a verified safe checkpoint", async () => {
+    await seedRun("paused")
+    await getDb().agentTeamChildRuns.add({
+      ...child("c1", "paused"),
+      stop: {
+        state: "confirmed",
+        epoch: 0,
+        requestedAt: 1,
+        proof: { kind: "ack", epoch: 0, at: 2 },
+      },
+    })
+    await getDb().agentTeamCheckpoints.add(checkpoint("c1", "safe"))
+    const reenter = jest.fn(async () => undefined)
+    const result = await control(RUN, "resume", { isLive: () => false, reenter })
+    expect(result).toEqual({ ok: true, status: "running" })
+    expect(reenter).toHaveBeenCalledWith({ teamId: "team-1", runId: RUN })
+    expect(coordinator.resumeChild).not.toHaveBeenCalled()
+    expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("running")
+  })
+
+  it("parks a re-entry the readiness guard blocks instead of re-entering", async () => {
+    await seedRun("paused")
+    const reenter = jest.fn(async () => undefined)
+    const readiness = jest.fn(async () => ({ blocked: true }))
+    expect(await control(RUN, "resume", { isLive: () => false, reenter, readiness })).toEqual({
+      ok: false,
+      reason: "recovery_required",
+      status: "needs_input",
+    })
+    expect(readiness).toHaveBeenCalledWith("team-1", RUN)
+    expect(reenter).not.toHaveBeenCalled()
+    expect(await events()).not.toContain("run.resumed")
+  })
+
+  it("re-enters an operator-requeued recovering run", async () => {
+    await seedRun("needs_input")
+    await getDb().agentTeamRuns.update(RUN, { status: "recovering" })
+    await getDb().agentTeamChildRuns.add(child("c1", "queued"))
+    const reenter = jest.fn(async () => undefined)
+    expect(await control(RUN, "resume", { isLive: () => false, reenter })).toMatchObject({
+      ok: true,
+    })
+    expect(reenter).toHaveBeenCalledTimes(1)
+  })
+
+  it("admits only one re-entry when two resume requests race", async () => {
+    await seedRun("paused")
+    const reenter = jest.fn(async () => undefined)
+    const results = await Promise.all([
+      control(RUN, "resume", { isLive: () => false, reenter }),
+      control(RUN, "resume", { isLive: () => false, reenter }),
+    ])
+    expect(results.filter((result) => result.ok)).toHaveLength(1)
+    expect(reenter).toHaveBeenCalledTimes(1)
+  })
+
+  it("parks legacy runs without a frozen authority snapshot even at a safe checkpoint", async () => {
+    await seedRun("paused")
+    await getDb().agentTeamRuns.update(RUN, { executionConstraints: undefined })
+    const reenter = jest.fn(async () => undefined)
+    const openRecovery = jest.fn(async () => undefined)
+    expect(
+      await control(RUN, "resume", { isLive: () => false, reenter, openRecovery })
+    ).toMatchObject({ ok: false, reason: "recovery_required" })
+    expect(reenter).not.toHaveBeenCalled()
+    expect((await getDb().agentTeamRuns.get(RUN))?.recoveryReason).toBe(
+      "missing_execution_constraints"
+    )
+    expect(openRecovery).toHaveBeenCalledWith(RUN)
+  })
+
+  it("does not resurrect a cancelled run when asynchronous re-entry fails", async () => {
+    await seedRun("paused")
+    let fail!: (error: Error) => void
+    const lifecycle = new Promise((_, reject) => {
+      fail = reject
+    })
+    const openRecovery = jest.fn(async () => undefined)
+    await control(RUN, "resume", {
+      isLive: () => false,
+      reenter: () => lifecycle,
+      openRecovery,
+    })
+    await getDb().agentTeamRuns.update(RUN, { status: "cancelled" })
+    fail(new Error("late setup failure"))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("cancelled")
+    expect(openRecovery).not.toHaveBeenCalled()
+  })
+
+  /** Never silently replay ambiguous side effects. */
+  it("parks an uncertain resume on a recovery decision instead of replaying", async () => {
+    await seedRun("paused")
+    await getDb().agentTeamChildRuns.add({
+      ...child("c1", "running"),
+      stop: {
+        state: "confirmed",
+        epoch: 0,
+        requestedAt: 1,
+        proof: { kind: "ack", epoch: 0, at: 2 },
+      },
+    })
+    await getDb().agentTeamCheckpoints.add(
+      checkpoint("c1", "safe", [{ id: "e1", kind: "Bash", state: "unknown", replay: "unknown" }])
+    )
+    const reenter = jest.fn(async () => undefined)
+    const openRecovery = jest.fn(async () => undefined)
+    const result = await control(RUN, "resume", { isLive: () => false, reenter, openRecovery })
+    expect(result).toEqual({ ok: false, reason: "recovery_required", status: "needs_input" })
+    expect(reenter).not.toHaveBeenCalled()
+    expect(openRecovery).toHaveBeenCalledWith(RUN)
+    expect(await getDb().agentTeamRuns.get(RUN)).toMatchObject({
+      status: "needs_input",
+      recoveryReason: "uncertain_side_effect",
+    })
+    expect(await events()).toContain("run.waiting")
+  })
+
+  it("stops for good: aborts the lifecycle, cascades, denies pending reviews, journals", async () => {
+    await seedRun("running")
+    await getDb().agentTeamChildRuns.add(child("c1", "running"))
+    await createRunInterrupt({
+      id: "action-review:squad-review:run_team_ctl01:plan:revision-0",
+      runId: EXECUTION,
+      type: "plan_approval",
+      status: "pending",
+      title: "plan",
+      expiresAt: Date.now() + 60_000,
+      createdAt: Date.now(),
+      reviewKind: "plan",
+    })
+    const result = await control(RUN, "stop", { now: () => 9_000 })
+    expect(result).toEqual({ ok: true, status: "cancelled" })
+    expect(abortTeam).toHaveBeenCalledWith("team-1", expect.any(Error), RUN)
+    expect(coordinator.terminateChild).toHaveBeenCalledWith("c1")
+    const interrupt = await getDb().executionRunInterrupts.get(
+      "action-review:squad-review:run_team_ctl01:plan:revision-0"
+    )
+    expect(interrupt?.status).toBe("expired")
+    expect(setTeamStatus).toHaveBeenCalledWith("team-1", "cancelled")
+    expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("cancelled")
+  })
+
+  it("raises a recovery decision when a child cannot be proven stopped", async () => {
+    await seedRun("running")
+    await getDb().agentTeamChildRuns.add(child("c1", "running"))
+    coordinator.terminateChild.mockRejectedValueOnce(new Error("stop_unconfirmed"))
+    const openRecovery = jest.fn(async () => undefined)
+    expect(await control(RUN, "stop", { openRecovery })).toEqual({
+      ok: false,
+      reason: "recovery_required",
+      status: "needs_input",
+    })
+    expect(openRecovery).toHaveBeenCalledWith(RUN)
+    expect(setTeamStatus).not.toHaveBeenCalledWith("team-1", "cancelled")
+  })
+
+  it("round 4: keeps the winning publication's terminal control result", async () => {
+    await seedRun("needs_input")
+    await getDb().agentTeamChildRuns.add(child("c1", "running"))
+    coordinator.terminateChild.mockImplementationOnce(async () => {
+      await getDb().agentTeamRuns.update(RUN, { status: "completed" })
+      await runEventJournal.append(EXECUTION, semanticRunEvent("run.completed", {}))
+    })
+    expect(await control(RUN, "stop")).toMatchObject({
+      ok: false,
+      reason: "already_terminal",
+      status: "completed",
+    })
+    expect(setTeamStatus).not.toHaveBeenCalledWith("team-1", "cancelled")
+    expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("completed")
+  })
+
+  it("addresses a team through its live run", async () => {
+    await seedRun("running")
+    const deps = { coordinator: coordinator as unknown as DurableTeamCoordinator }
+    expect(await controlSquadRun({ teamId: "team-1" }, "pause", deps)).toEqual({
+      ok: true,
+      status: "paused",
+    })
+    expect(await controlSquadRun({ teamId: "team-x" }, "pause", deps)).toEqual({
+      ok: false,
+      reason: "run_not_found",
+    })
+  })
+})

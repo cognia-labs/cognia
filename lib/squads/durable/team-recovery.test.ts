@@ -14,7 +14,7 @@ import {
 } from "./team-recovery"
 import { createSquadRunRecords } from "../squad/squad-run-records"
 import { createDurableTeamCoordinator } from "./durable-runtime"
-import { controlSquadRun } from "../squad/squad-control"
+import { controlSquadRun } from "./durable-control"
 import { startSquadRun } from "../squad/start-squad-run"
 
 jest.mock("@/lib/claude/ipc", () => ({
@@ -265,7 +265,7 @@ describe("team recovery", () => {
           { kind: "team_recovery", choice: "restart_run" },
           {
             startReplacement,
-            control: (id, action) => controlSquadRun(id, action),
+            control: (id, action) => controlSquadRun({ runId: id }, action),
           }
         )
         expect(result).toMatchObject({ applied: true, replacementExecutionRunId: "replacement" })
@@ -286,7 +286,7 @@ describe("team recovery", () => {
         { kind: "team_recovery", choice: "restart_run" },
         {
           control: async (id, action) => {
-            await controlSquadRun(id, action)
+            await controlSquadRun({ runId: id }, action)
             throw new Error("late control failure")
           },
         }
@@ -329,7 +329,8 @@ describe("team recovery", () => {
         { kind: "team_recovery", choice: "retry_same_host" },
         {
           retryChild: (id, host) => coordinator.retryChild(id, host),
-          control: (id, action) => controlSquadRun(id, action, { isLive: () => false, reenter }),
+          control: (id, action) =>
+            controlSquadRun({ runId: id }, action, { isLive: () => false, reenter }),
         }
       )
       expect(result).toEqual({ applied: true, choice: "retry_same_host" })
@@ -392,7 +393,7 @@ describe("team recovery", () => {
                   stopReplacedRun,
                 }
               ),
-            control: (id, action) => controlSquadRun(id, action),
+            control: (id, action) => controlSquadRun({ runId: id }, action),
           }
         )
         expect(result.applied).toBe(true)

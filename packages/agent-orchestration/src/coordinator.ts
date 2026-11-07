@@ -32,6 +32,8 @@ import {
   isChildSettled,
   isChildNeverStarted,
   hasRemoteDispatch,
+  summarizeRunRecovery,
+  type RunRecoveryAssessment,
 } from "./replay"
 import { isTerminalTeamStatus } from "./rules"
 import type { TeamRunStore } from "./store"
@@ -254,6 +256,23 @@ export async function assessStoredTaskRecovery(
     await store.listTrajectory(runId),
     now,
     stoppedLocalChildIds
+  )
+}
+
+/**
+ * Store-backed run gate: the task gate for every task the run has children
+ * on, folded by `summarizeRunRecovery`. What every resume, re-entry and
+ * recovery surface asks before replaying a run.
+ */
+export async function assessStoredRunRecovery(
+  store: TeamRunStore<unknown>,
+  runId: string,
+  now: number
+): Promise<RunRecoveryAssessment> {
+  const children = await store.listChildren(runId)
+  const taskIds = [...new Set(children.map((child) => child.taskId))]
+  return summarizeRunRecovery(
+    await Promise.all(taskIds.map((taskId) => assessStoredTaskRecovery(store, runId, taskId, now)))
   )
 }
 

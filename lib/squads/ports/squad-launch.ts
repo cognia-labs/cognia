@@ -59,8 +59,8 @@ export const port: SquadLaunchPort = {
       squadRunId: runId,
       outcome,
       stop: () => {
-        void import("../squad/squad-control")
-          .then(({ controlSquadRun }) => controlSquadRun(runId, "stop"))
+        void import("../durable/durable-control")
+          .then(({ controlSquadRun }) => controlSquadRun({ runId }, "stop"))
           .catch(() => undefined)
       },
     }

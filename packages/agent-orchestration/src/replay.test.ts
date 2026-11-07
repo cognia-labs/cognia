@@ -8,6 +8,7 @@ import {
   assessRecoveryEligibility,
   deriveFenceExpiryProof,
   childStopProof,
+  summarizeRunRecovery,
 } from "./replay"
 
 function checkpoint(overrides: Partial<AgentTeamCheckpoint> = {}): AgentTeamCheckpoint {
@@ -299,5 +300,31 @@ describe("ownsDispatchAttempt", () => {
     expect(ownsDispatchAttempt(contractChild({ attempt: 3 }), 3)).toBe(true)
     expect(ownsDispatchAttempt(contractChild({ attempt: 4 }), 3)).toBe(false)
     expect(ownsDispatchAttempt(undefined, 1)).toBe(false)
+  })
+})
+
+describe("summarizeRunRecovery", () => {
+  it("is safe only when every task is, naming each refused child once", () => {
+    expect(summarizeRunRecovery([])).toEqual({ safe: true, uncertainChildIds: [] })
+    expect(summarizeRunRecovery([{ eligible: true }])).toEqual({
+      safe: true,
+      uncertainChildIds: [],
+    })
+    expect(
+      summarizeRunRecovery([
+        { eligible: true },
+        { eligible: false, reason: "uncertain_side_effect", childRunIds: ["a", "b"] },
+        { eligible: false, reason: "uncertain_side_effect", childRunIds: ["b"] },
+      ])
+    ).toEqual({ safe: false, uncertainChildIds: ["a", "b"], reason: "uncertain_side_effect" })
+  })
+
+  it("lets an unconfirmed stop outrank an unsafe checkpoint", () => {
+    expect(
+      summarizeRunRecovery([
+        { eligible: false, reason: "uncertain_side_effect", childRunIds: ["a"] },
+        { eligible: false, reason: "stop_unconfirmed", childRunIds: ["c"] },
+      ])
+    ).toEqual({ safe: false, uncertainChildIds: ["a", "c"], reason: "stop_unconfirmed" })
   })
 })

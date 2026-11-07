@@ -19,7 +19,7 @@ import { createEvidenceBundle } from "@cognia/agent-orchestration/evidence"
 import { createDecisionLedger } from "@cognia/agent-orchestration/decision-ledger"
 import type { AgentExecutionEnvironment } from "@/lib/ai/agent/execution/local-tauri-environment"
 import type { DurableChildControl, DurableTeamCoordinator } from "./durable-runtime"
-import { isDurableChildReplaySafe } from "./durable-runtime"
+import { isStoredChildReplaySafe } from "@cognia/agent-orchestration/coordinator"
 import { tokenize } from "@/lib/terminal/completion/tokenize"
 
 export interface BeginDurableDispatchInput {
@@ -442,7 +442,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
     ) {
       return false
     }
-    return !(await isDurableChildReplaySafe(childRunId, checkpoint, trajectory, store))
+    return !(await isStoredChildReplaySafe(store, childRunId, checkpoint, trajectory))
   }
 
   const capture = (event: CaptureStreamEvent): void => {

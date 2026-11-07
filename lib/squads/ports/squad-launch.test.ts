@@ -7,7 +7,7 @@ jest.mock("../squad/watch-squad-run", () => ({
   awaitSquadRunSettlement: (...args: unknown[]) => awaitSettlementMock(...args),
 }))
 const controlSquadRunMock = jest.fn(async (..._args: unknown[]) => undefined)
-jest.mock("../squad/squad-control", () => ({
+jest.mock("../durable/durable-control", () => ({
   controlSquadRun: (...args: unknown[]) => controlSquadRunMock(...args),
 }))
 const teams: Record<string, { finalResult?: string; error?: string }> = {}
@@ -104,6 +104,6 @@ describe("squad-launch port", () => {
     if (!result.started) throw new Error("expected a started run")
     result.stop("team delegation cancelled")
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(controlSquadRunMock).toHaveBeenCalledWith("run_team_child", "stop")
+    expect(controlSquadRunMock).toHaveBeenCalledWith({ runId: "run_team_child" }, "stop")
   })
 })
