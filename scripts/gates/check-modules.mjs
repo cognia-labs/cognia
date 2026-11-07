@@ -56,7 +56,8 @@
  *                  hand-added to them. Since M1, for settings sections, search
  *                  providers and slash commands. Since M3, a tool name is
  *                  declared by one module, and every per-call tool is on the
- *                  sidecar's `PER_CALL_PLUGIN_TOOL_NAMES`.
+ *                  sidecar's `PER_CALL_PLUGIN_TOOL_NAMES`; one module at most
+ *                  places a context section in the `identity` slot.
  *   G6 cycles      `dependsOn` across manifests is acyclic (blocking), and the
  *                  largest strongly connected component of the lib/ owner
  *                  graph may only shrink.
@@ -212,6 +213,7 @@ function collectManifests(ctx, files) {
   const warnings = []
   const host = new Map()
   const ui = new Map()
+  const identityModules = []
   const handles = ctx.exists(CODEOWNERS_FILE)
     ? codeownerHandles(ctx.read(CODEOWNERS_FILE))
     : new Set()
@@ -263,8 +265,14 @@ function collectManifests(ctx, files) {
       )
         warnings.push(`${file}: stable module "${id}" has no passed real smoke yet`)
       host.set(id, { file, manifest: value })
+      if (declaresIdentitySlot(ctx, file, value)) identityModules.push(id)
     } else ui.set(id, { file, manifest: value })
   }
+  // One identity replaces the base system prompt; a second would race it.
+  if (identityModules.length > 1)
+    errors.push(
+      `context: the identity slot is declared by more than one module (${identityModules.join(", ")})`
+    )
   for (const [id, { file }] of ui)
     if (!host.has(id)) errors.push(`${file}: no host manifest lib/${id}/module.ts declares "${id}"`)
   errors.push(
@@ -421,6 +429,29 @@ function contextExportErrors(ctx, file, manifest) {
   return target && !exportsName(ctx.ast(target), "contributions")
     ? [`context: ${target} exports no \`contributions\``]
     : []
+}
+
+/** Whether a module's `context.load` file places a section in the `identity` slot. */
+function declaresIdentitySlot(ctx, file, manifest) {
+  const spec = manifest.context?.load?.$lazy
+  if (typeof spec !== "string") return false
+  const target = resolveModule(ctx, spec, file)
+  if (!target) return false
+  let found = false
+  const visit = (node) => {
+    if (found) return
+    if (
+      ts.isPropertyAssignment(node) &&
+      (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)) &&
+      node.name.text === "slot" &&
+      ts.isStringLiteralLike(node.initializer) &&
+      node.initializer.text === "identity"
+    )
+      found = true
+    else ts.forEachChild(node, visit)
+  }
+  visit(ctx.ast(target))
+  return found
 }
 
 /** A module's `tools.load` file exports its family as `toolFamily`. */

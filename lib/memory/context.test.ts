@@ -45,7 +45,7 @@ function turn(fields: Partial<ContextTurnContext> = {}): ContextTurnContext {
       memoryScope: { branch: "main", path: "docs/release.md" },
     },
     grant: null,
-    kernelRetrieval: { twinChunkTexts: ["twin text"] },
+    kernelRetrieval: { identityTexts: ["twin text"] },
     ...fields,
   }
 }

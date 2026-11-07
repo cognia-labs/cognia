@@ -7765,7 +7765,40 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
         twinUserMessage: "hello",
       })
       await resolveSendOptions({ character: makeChar({ id: "c1" }) })
-      expect(seen).toEqual([{ twinChunkTexts: ["redacted twin text"] }, { twinChunkTexts: [] }])
+      expect(seen).toEqual([{ identityTexts: ["redacted twin text"] }, { identityTexts: [] }])
+    })
+
+    it("lets an identity section replace the base prompt, drop the persona and lead the tail", async () => {
+      contribute([
+        {
+          id: "who",
+          cache: "turn",
+          slot: "identity",
+          produce: () => ({
+            text: "I am Ada.\n\n## Retrieved",
+            cacheSplit: { stable: "I am Ada.", dynamic: "## Retrieved" },
+          }),
+        },
+        { id: "status", cache: "turn", produce: () => ({ text: "## Crate status" }) },
+      ])
+      const character = makeChar({
+        id: "c1",
+        systemPrompt: "base",
+        persona: { tone: "warm", personality: "Former teacher." },
+      })
+      const opts = await resolveSendOptions({ character, session: makeSession({ id: "s1" }) })
+      expect(opts.systemPrompt?.startsWith("I am Ada.")).toBe(true)
+      expect(opts.systemPrompt).not.toContain("base")
+      expect(opts.systemPrompt).not.toContain("## Persona")
+      expect(opts.dynamicSystemPrompt?.indexOf("## Retrieved")).toBeLessThan(
+        opts.dynamicSystemPrompt?.indexOf("## Crate status") ?? -1
+      )
+      const whole = await resolveSendOptions({
+        character,
+        session: makeSession({ id: "s1" }),
+        appSettings: { cacheOptimizationEnabled: false } as never,
+      })
+      expect(whole.systemPrompt?.startsWith("I am Ada.\n\n## Retrieved")).toBe(true)
     })
 
     it("puts a turn section in the dynamic tail and a session section in its slot", async () => {

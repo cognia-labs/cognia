@@ -4,7 +4,7 @@
  *
  * - `recall` is the personal memories relevant to the turn plus the learned
  *   procedural block, a turn section in the `memory` slot. It leaves out
- *   what the twin already retrieved (`ctx.kernelRetrieval.twinChunkTexts`)
+ *   what the identity section already retrieved (`ctx.kernelRetrieval.identityTexts`)
  *   and hands its recall budget over to `continuity`.
  * - `continuity` is the claims mined from this workspace's own history, a
  *   turn section in the `continuity` slot. It runs `after` `recall` and
@@ -107,7 +107,7 @@ export const contributions: readonly ContextContribution[] = [
         topK: config.retrievalTopK,
         relevanceFloor: config.relevanceFloor,
         maxTokens: config.recallTokenBudget,
-        twinChunkTexts: [...ctx.kernelRetrieval.twinChunkTexts],
+        twinChunkTexts: [...ctx.kernelRetrieval.identityTexts],
         enableQueryExpansion: config.enableQueryExpansion,
         recencyHalfLifeDays: config.decayHalfLifeDays,
         // Memory's vector backend shares the twin embedding model, so the

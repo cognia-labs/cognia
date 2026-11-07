@@ -367,9 +367,15 @@ export interface ModuleToolFamily {
  * Where a context section sits in `systemPrompt`, in prompt order: after the
  * workspace instructions, among the kernel's own retrieval sections. A closed
  * list, so a migrated section lands where its kernel branch put it.
+ *
+ * `identity` is not a position but a replacement: the section stands in for
+ * the agent's base system prompt and the persona section is left out (the
+ * twin, which speaks as a person). One module at most declares it, and its
+ * contribution runs before every other one, which read what it retrieved as
+ * `ctx.kernelRetrieval.identityTexts`.
  */
 export type ContextSlot =
-  "project-goal" | "memory" | "continuity" | "project-knowledge" | "agent-knowledge"
+  "identity" | "project-goal" | "memory" | "continuity" | "project-knowledge" | "agent-knowledge"
 
 /**
  * Host-built dependencies a caller injects into a resolution (a vector
@@ -397,12 +403,12 @@ export interface ContextTurnContext extends Omit<ToolSurfaceContext, "sessionSta
   /** The run's folded capability grant (knowledge bases and the rest), or `null`. */
   grant: Readonly<AgentCapabilityGrantV1> | null
   /**
-   * What the send path already retrieved this turn before collecting context,
-   * so a contribution can leave out what the prompt holds anyway. Today the
-   * twin's chunks (their redacted text), which memory recall deduplicates
-   * against; empty when the twin did not run.
+   * What was already retrieved for this turn's prompt before the other
+   * contributions ran, so a contribution can leave out what the prompt holds
+   * anyway: the redacted texts the `identity` section handed over (memory
+   * recall deduplicates against them). Empty when no identity section ran.
    */
-  kernelRetrieval: { twinChunkTexts: readonly string[] }
+  kernelRetrieval: { identityTexts: readonly string[] }
   /**
    * For a contribution that names `after`: the `handoff` the contribution it
    * waits for returned. `undefined` when that one failed, missed its deadline,
@@ -426,8 +432,19 @@ export interface ContextSection {
    * What a later contribution of the same module that names this one in
    * `after` reads as `ctx.prior` (a budget it may borrow, say). Kept for this
    * resolution only: never in the prompt, the sources or the session state.
+   * An `identity` section hands over the redacted texts it retrieved instead
+   * (a list of strings), which every other contribution reads as
+   * `ctx.kernelRetrieval.identityTexts`.
    */
   handoff?: unknown
+  /**
+   * For an `identity` section: `text` split into the part stable within a
+   * session and the part retrieved for this turn. With cache optimization on
+   * the stable part replaces the base system prompt and the dynamic part goes
+   * to the dynamic tail; without a split (or with it off) `text` replaces it
+   * whole. Ignored for every other slot.
+   */
+  cacheSplit?: { stable: string; dynamic: string }
 }
 
 /**

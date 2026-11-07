@@ -361,3 +361,11 @@ interface ContextSection {
 2. 记忆去重：两阶段收集；身份段的 `handoff` 由内核放进 `kernelRetrieval.identityTexts`（取代 `twinChunkTexts`）。
 3. 来源：`contextSources["twin.identity"]`，删除 `SendOptions.twinContext`。
 4. 截止时间：15 秒，超时按失败处理。
+
+## 18. C6a 实施记录：内核的身份位（2026-11-07）
+
+- 类型：`ContextSlot` 增加 `identity`；`ContextSection.cacheSplit?: { stable, dynamic }`；`kernelRetrieval.twinChunkTexts` 改名为 `identityTexts`（五个模块的上下文测试和记忆贡献跟着改）。
+- 收集器（`lib/claude/context-contributions.ts`）：身份段先单独运行，其余贡献再并发；身份段交出的字符串列表并入 `kernelRetrieval.identityTexts`。缓存优化开且有切分时，稳定部分进 `CollectedContext.identity`、动态部分排在尾部最前；否则整段进 `identity`。PII 闸查全文和两个切分部分，泄露时连来源和交出的文本一起丢。没有文字时仍交出文本、记来源。身份段不能声明 `after`，也不能被 `after` 指向（加载时检查）。两个模块都给了身份段时取模块 id 在前的那个，另一个上报。
+- `build-options`：收集后若有 `identity` 就替换 `baseSystem` 并抑制 persona（persona 段的计算移到收集之后）。分身仍在内核运行，`identityTexts` 暂时取自 `opts.twinContext`，行为不变。
+- 门禁 G5：各模块的上下文文件里出现 `slot: "identity"` 的不超过一个。
+- 测试：`context-contributions.test.ts` 加 7 例和 2 种不合格的 `after`；`build-options.test.ts` 加 1 例（替换、抑制 persona、尾部顺序、缓存关时整段）；`check-modules.test.mjs` 加 1 例。

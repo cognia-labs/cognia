@@ -128,7 +128,7 @@ describe("the coordinator's context contributions", () => {
     query: { text: null, embedding: null },
     hostDeps: {},
     grant: null,
-    kernelRetrieval: { twinChunkTexts: [] },
+    kernelRetrieval: { identityTexts: [] },
   })
   const coordinated = { coordinator: { enabled: true, goal: "Ship v2", setupOfferedAt: 1 } }
 

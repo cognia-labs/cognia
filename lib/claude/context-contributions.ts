@@ -19,10 +19,16 @@
  * - a contribution that names `after` runs once the one it waits for (same
  *   module, one level) settles, reading its `handoff` as `ctx.prior`; its own
  *   deadline starts then.
+ * - an `identity` section (one module at most) runs before all the others and
+ *   replaces the base system prompt: whole, or its stable part with the
+ *   dynamic part at the head of the tail when cache optimization is on. The
+ *   redacted texts it hands over reach every other contribution as
+ *   `ctx.kernelRetrieval.identityTexts`; one that leaks PII hands over nothing.
  * - context only adds: a contribution file that does not load, a throw, the
  *   deadline or a malformed section leaves that part out and is reported.
  *
- * The caller puts the slot sections into `systemPrompt`, the tail into the
+ * The caller puts the identity in place of the base system prompt (leaving
+ * the persona section out), the slot sections into `systemPrompt`, the tail into the
  * dynamic tail, the sources into `SendOptions.contextSources` (read back with
  * `contextSourcesOf`, `./context-sources.ts`) and the session state into
  * `lib/claude/context-session-state.ts`.
@@ -39,7 +45,10 @@ import type {
   ModuleContextEntry,
 } from "@/lib/modules/manifest-types"
 
-/** The slots, in the order `systemPrompt` holds them. */
+/** The slot that replaces the base system prompt rather than joining `systemPrompt`. */
+export const IDENTITY_SLOT = "identity" satisfies ContextSlot
+
+/** The slots placed in `systemPrompt`, in the order it holds them. */
 export const CONTEXT_SLOTS: readonly ContextSlot[] = [
   "project-goal",
   "memory",
@@ -61,6 +70,12 @@ export interface SkippedContextContribution {
 }
 
 export interface CollectedContext {
+  /**
+   * What replaces the base system prompt (the persona section is left out
+   * with it), already split for the cache setting; absent when no identity
+   * section applied.
+   */
+  identity?: string
   /** Sections for each slot of `systemPrompt`, in module id and then manifest order. */
   slots: Partial<Record<ContextSlot, string[]>>
   /** Sections for the dynamic tail, in placement order. */
@@ -92,7 +107,11 @@ function checkShape(module: string, list: unknown): readonly LoadedContribution[
     const name = `${module}.${item.id}`
     if (item.cache !== "turn" && item.cache !== "session")
       throw new Error(`${name}: cache is "turn" or "session"`)
-    if (item.slot !== undefined && !CONTEXT_SLOTS.includes(item.slot))
+    if (
+      item.slot !== undefined &&
+      item.slot !== IDENTITY_SLOT &&
+      !CONTEXT_SLOTS.includes(item.slot)
+    )
       throw new Error(`${name}: unknown slot "${String(item.slot)}"`)
     if (item.cache === "session" && item.slot === undefined)
       throw new Error(`${name}: a "session" section names its slot`)
@@ -105,6 +124,8 @@ function checkShape(module: string, list: unknown): readonly LoadedContribution[
       throw new Error(`${name}: deadlineMs is a positive number`)
     if (item.after !== undefined && (typeof item.after !== "string" || item.after === item.id))
       throw new Error(`${name}: after names another contribution of the module`)
+    if (item.slot === IDENTITY_SLOT && item.after !== undefined)
+      throw new Error(`${name}: an identity section runs first and waits for nothing`)
     if (typeof item.produce !== "function") throw new Error(`${name}: produce is not a function`)
     return { key: name, contribution: item }
   })
@@ -118,6 +139,10 @@ function checkShape(module: string, list: unknown): readonly LoadedContribution[
     if (waited.after !== undefined)
       throw new Error(
         `${key}: after names "${contribution.after}", which waits itself; one level only`
+      )
+    if (waited.slot === IDENTITY_SLOT)
+      throw new Error(
+        `${key}: after names "${contribution.after}", an identity section; read ctx.kernelRetrieval`
       )
   }
   return checked
@@ -161,6 +186,20 @@ function handoffOf(section: unknown): unknown {
     : undefined
 }
 
+/** The redacted texts an identity section handed over; nothing that is not a list of strings. */
+function identityTextsOf(section: ContextSection): string[] {
+  return Array.isArray(section.handoff)
+    ? section.handoff.filter((text): text is string => typeof text === "string")
+    : []
+}
+
+function leaks(contribution: ContextContribution, ...texts: string[]): boolean {
+  return (
+    contribution.pii !== "redacted-at-source" &&
+    texts.some((text) => text.trim() !== "" && !hasNoLeakingPii(text))
+  )
+}
+
 function deadlineOf(contribution: ContextContribution, fallbackMs: number): number {
   return Math.min(contribution.deadlineMs ?? fallbackMs, CONTEXT_CONTRIBUTION_MAX_DEADLINE_MS)
 }
@@ -202,6 +241,31 @@ export async function collectContextContributions(
     else report(result, active[index].module, outcome.reason)
   })
 
+  // The identity section runs first: every other contribution may read what
+  // it retrieved. One module at most declares it (the module gate checks);
+  // should two load, the first in module id order stands.
+  const identities = contributions.filter((entry) => entry.contribution.slot === IDENTITY_SLOT)
+  for (const extra of identities.slice(1))
+    report(result, extra.key, new Error(`${extra.key}: another module's identity section stands`))
+  const others = contributions.filter((entry) => entry.contribution.slot !== IDENTITY_SLOT)
+  let turnCtx = ctx
+  let identityTail: string | undefined
+  const identity = identities[0]
+  if (identity) {
+    const placed = await placeIdentity(identity, ctx, options, deadlineMs, result)
+    if (placed) {
+      if (placed.base !== undefined) result.identity = placed.base
+      identityTail = placed.tail
+      if (placed.texts.length > 0)
+        turnCtx = {
+          ...ctx,
+          kernelRetrieval: {
+            identityTexts: [...ctx.kernelRetrieval.identityTexts, ...placed.texts],
+          },
+        }
+    }
+  }
+
   // Independent contributions start together; one that names `after` starts
   // when the one it waits for settles, with that one's handoff as `prior`.
   const running = new Map<string, Promise<ContextSection | null>>()
@@ -210,14 +274,14 @@ export async function collectContextContributions(
     if (known) return known
     const run = (prior: unknown) =>
       withDeadline(
-        () => contribution.produce(prior === undefined ? ctx : { ...ctx, prior }),
+        () => contribution.produce(prior === undefined ? turnCtx : { ...turnCtx, prior }),
         deadlineOf(contribution, deadlineMs)
       )
     let pending: Promise<ContextSection | null>
     if (contribution.after === undefined) pending = run(undefined)
     else {
       const owner = key.slice(0, key.length - contribution.id.length - 1)
-      const waited = contributions.find(
+      const waited = others.find(
         (entry) => entry.key === `${owner}.${contribution.after}`
       ) as LoadedContribution
       pending = start(waited).then(
@@ -228,10 +292,10 @@ export async function collectContextContributions(
     running.set(key, pending)
     return pending
   }
-  const produced = await Promise.allSettled(contributions.map(start))
+  const produced = await Promise.allSettled(others.map(start))
   const tail: { rank: number; text: string }[] = []
   produced.forEach((outcome, index) => {
-    const { key, contribution } = contributions[index]
+    const { key, contribution } = others[index]
     if (outcome.status === "rejected") return report(result, key, outcome.reason)
     const section = outcome.value
     if (section === null || section === undefined) return
@@ -239,7 +303,7 @@ export async function collectContextContributions(
       return report(result, key, new Error(`${key}: the section has no text`))
     if (section.sessionState !== undefined) result.sessionState.set(key, section.sessionState)
     const text = section.text.trim()
-    if (contribution.pii !== "redacted-at-source" && text && !hasNoLeakingPii(text))
+    if (leaks(contribution, text))
       return report(result, key, new Error(`${key}: the section leaks PII; left out`))
     if (section.sources !== undefined) result.sources[key] = section.sources
     if (!text) return
@@ -255,9 +319,61 @@ export async function collectContextContributions(
     const placed = slot as ContextSlot
     ;(result.slots[placed] ??= []).push(text)
   })
-  // Stable: within one rank, module id and then manifest order.
-  result.tail = tail.sort((a, b) => a.rank - b.rank).map((entry) => entry.text)
+  // Stable: within one rank, module id and then manifest order. The
+  // identity's dynamic part comes first, where the kernel's twin block put it.
+  result.tail = [
+    ...(identityTail ? [identityTail] : []),
+    ...tail.sort((a, b) => a.rank - b.rank).map((entry) => entry.text),
+  ]
   return result
+}
+
+/**
+ * Run the identity section and place it: the base system prompt it replaces,
+ * the part for the tail, and the redacted texts it retrieved. `null` when it
+ * does not apply or is left out (reported); no `base` when it applied with
+ * no text.
+ */
+async function placeIdentity(
+  { key, contribution }: LoadedContribution,
+  ctx: ContextTurnContext,
+  options: { cacheOptimization: boolean },
+  deadlineMs: number,
+  result: CollectedContext
+): Promise<{ base?: string; tail?: string; texts: string[] } | null> {
+  let section: ContextSection | null
+  try {
+    section = await withDeadline(
+      () => contribution.produce(ctx),
+      deadlineOf(contribution, deadlineMs)
+    )
+  } catch (error) {
+    report(result, key, error)
+    return null
+  }
+  if (section === null || section === undefined) return null
+  if (typeof section !== "object" || typeof section.text !== "string") {
+    report(result, key, new Error(`${key}: the section has no text`))
+    return null
+  }
+  if (section.sessionState !== undefined) result.sessionState.set(key, section.sessionState)
+  const split =
+    section.cacheSplit &&
+    typeof section.cacheSplit.stable === "string" &&
+    typeof section.cacheSplit.dynamic === "string"
+      ? section.cacheSplit
+      : undefined
+  if (leaks(contribution, section.text, split?.stable ?? "", split?.dynamic ?? "")) {
+    report(result, key, new Error(`${key}: the section leaks PII; left out`))
+    return null
+  }
+  if (section.sources !== undefined) result.sources[key] = section.sources
+  // What it retrieved counts even when it replaces nothing.
+  const texts = identityTextsOf(section)
+  if (!section.text.trim()) return { texts }
+  if (options.cacheOptimization && split?.stable.trim() && split.dynamic.trim())
+    return { base: split.stable, tail: split.dynamic.trim(), texts }
+  return { base: section.text, texts }
 }
 
 /** Test helper: forget every loaded contribution file. */

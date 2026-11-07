@@ -2653,12 +2653,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     void recordPluginSkillUsage(pluginUsageIds, pluginIdMap).catch(() => undefined)
   }
 
-  // --- v2 persona (ADR-0030) ----------------------------------------------
-  // Project the character's free-form `tone` / `personality` into a short
-  // guidance block appended after the base system prompt. Suppressed when the
-  // twin runtime already produced a personality-rich prompt (see above).
-  const personaSection = twinReplacedBase ? "" : buildPersonaSection(character?.persona)
-
   // ADR-0237: the agent's always-on harness sections (standing rules, domain
   // facts, tool guidance), right after who the agent is.
   const harnessSection = renderHarnessSections(character?.harness)
@@ -2698,11 +2692,21 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       grant: grant ?? null,
       // The twin ran above; contributions may leave out what it retrieved.
       kernelRetrieval: {
-        twinChunkTexts: opts.twinContext?.retrievedChunks.map((c) => c.chunk.contentRedacted) ?? [],
+        identityTexts: opts.twinContext?.retrievedChunks.map((c) => c.chunk.contentRedacted) ?? [],
       },
     },
     { cacheOptimization: cacheOptimizationEnabled }
   )
+  // A module's identity section stands in for the agent's base system prompt.
+  if (contributedContext.identity !== undefined) {
+    baseSystem = contributedContext.identity
+    twinReplacedBase = true
+  }
+  // --- v2 persona (ADR-0030) ----------------------------------------------
+  // Project the character's free-form `tone` / `personality` into a short
+  // guidance block appended after the base system prompt. Suppressed when the
+  // twin or an identity section already produced a personality-rich prompt.
+  const personaSection = twinReplacedBase ? "" : buildPersonaSection(character?.persona)
   const contextSlot = (slot: ContextSlot) => contributedContext.slots[slot] ?? []
   dynamicTailSections.push(...contributedContext.tail)
   if (Object.keys(contributedContext.sources).length > 0)

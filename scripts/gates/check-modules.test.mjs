@@ -1148,6 +1148,34 @@ test("context contributions: a lazy load whose file exports `contributions`", ()
   ])
 })
 
+test("context contributions: one module at most places an identity section", () => {
+  const identity = 'export const contributions = [{ id: "who", cache: "turn", slot: "identity" }]\n'
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/radar/module.ts": hostManifest("radar", 'context: { load: () => import("./context") }'),
+    "lib/radar/context.ts": identity,
+    "lib/pet/module.ts": hostManifest("pet", 'context: { load: () => import("./context") }'),
+    "lib/pet/context.ts": identity,
+    "lib/goal/module.ts": hostManifest("goal", 'context: { load: () => import("./context") }'),
+    "lib/goal/context.ts": 'export const contributions = [{ id: "g", slot: "memory" }]\n',
+  })
+  const errors = result.errors.filter((error) => error.includes("identity slot"))
+  assert.equal(errors.length, 1)
+  assert.match(errors[0], /declared by more than one module \((pet, radar|radar, pet)\)/)
+
+  const single = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/radar/module.ts": hostManifest("radar", 'context: { load: () => import("./context") }'),
+    "lib/radar/context.ts": identity,
+  })
+  assert.deepEqual(
+    single.errors.filter((error) => error.includes("identity slot")),
+    []
+  )
+})
+
 test("validateHostManifest wants context as { load } with a lazy entry", () => {
   const base = { id: "radar", kind: "module", stage: "beta" }
   assert.ok(

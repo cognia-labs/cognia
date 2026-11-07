@@ -20,7 +20,7 @@ const ctx: ContextTurnContext = {
   query: { text: "what changed?", embedding: null },
   hostDeps: {},
   grant: null,
-  kernelRetrieval: { twinChunkTexts: [] },
+  kernelRetrieval: { identityTexts: [] },
 }
 
 function entry(
@@ -243,11 +243,169 @@ describe("after", () => {
 
   it("passes the run's kernel retrieval to every contribution", async () => {
     const produce = jest.fn(() => null)
-    const withTwin = { ...ctx, kernelRetrieval: { twinChunkTexts: ["twin chunk"] } }
+    const withTwin = { ...ctx, kernelRetrieval: { identityTexts: ["twin chunk"] } }
     await collectContextContributions(withTwin, { cacheOptimization: true }, [
       entry("mem", [{ id: "recall", cache: "turn", produce }]),
     ])
     expect(produce).toHaveBeenCalledWith(withTwin)
+  })
+})
+
+describe("identity", () => {
+  const identity = (fields: Partial<ContextContribution> = {}): ContextContribution => ({
+    id: "identity",
+    cache: "turn",
+    slot: "identity",
+    deadlineMs: 15_000,
+    produce: () => ({
+      text: "I am Ada.\n\nRetrieved: shipped Tuesday",
+      cacheSplit: { stable: "I am Ada.", dynamic: "Retrieved: shipped Tuesday" },
+      handoff: ["shipped Tuesday", 42],
+      sources: { chunks: 1 },
+    }),
+    ...fields,
+  })
+
+  it("replaces the base prompt with the stable part and leads the tail with the dynamic part", async () => {
+    const entries = [
+      entry("alpha", [section("status", "alpha status")]),
+      entry("twin", [identity()]),
+    ]
+    const result = await collectContextContributions(ctx, { cacheOptimization: true }, entries)
+    expect(result.identity).toBe("I am Ada.")
+    expect(result.tail).toEqual(["Retrieved: shipped Tuesday", "alpha status"])
+    expect(result.slots).toEqual({})
+    expect(result.sources).toEqual({ "twin.identity": { chunks: 1 } })
+  })
+
+  it("replaces the base prompt whole when cache optimization is off or there is no split", async () => {
+    const off = await collectContextContributions(ctx, { cacheOptimization: false }, [
+      entry("twin", [identity()]),
+    ])
+    expect(off.identity).toBe("I am Ada.\n\nRetrieved: shipped Tuesday")
+    expect(off.tail).toEqual([])
+    __resetContextContributionsForTests()
+    const unsplit = await collectContextContributions(ctx, { cacheOptimization: true }, [
+      entry("twin", [identity({ produce: () => ({ text: "I am Ada." }) })]),
+    ])
+    expect(unsplit.identity).toBe("I am Ada.")
+    expect(unsplit.tail).toEqual([])
+  })
+
+  it("runs first and hands its redacted texts to every other contribution", async () => {
+    const order: string[] = []
+    const seen: unknown[] = []
+    const entries = [
+      entry("alpha", [
+        {
+          id: "recall",
+          cache: "turn",
+          produce: (turnCtx) => {
+            order.push("recall")
+            seen.push(turnCtx.kernelRetrieval)
+            return null
+          },
+        },
+      ]),
+      entry("twin", [
+        identity({
+          produce: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 5))
+            order.push("identity")
+            return { text: "I am Ada.", handoff: ["shipped Tuesday", 42] }
+          },
+        }),
+      ]),
+    ]
+    await collectContextContributions(
+      { ...ctx, kernelRetrieval: { identityTexts: ["kernel text"] } },
+      { cacheOptimization: true },
+      entries
+    )
+    expect(order).toEqual(["identity", "recall"])
+    expect(seen).toEqual([{ identityTexts: ["kernel text", "shipped Tuesday"] }])
+  })
+
+  it("hands over what it retrieved even when it replaces nothing", async () => {
+    const seen: unknown[] = []
+    const entries = [
+      entry("alpha", [
+        {
+          id: "recall",
+          cache: "turn",
+          produce: (turnCtx) => {
+            seen.push(turnCtx.kernelRetrieval.identityTexts)
+            return null
+          },
+        },
+      ]),
+      entry("twin", [
+        identity({ produce: () => ({ text: "", handoff: ["t"], sources: { degraded: true } }) }),
+      ]),
+    ]
+    const result = await collectContextContributions(ctx, { cacheOptimization: true }, entries)
+    expect(result.identity).toBeUndefined()
+    expect(result.sources).toEqual({ "twin.identity": { degraded: true } })
+    expect(seen).toEqual([["t"]])
+  })
+
+  it("leaves out a leaking identity with its sources and texts, checking each split part", async () => {
+    const seen: unknown[] = []
+    const entries = [
+      entry("alpha", [
+        {
+          id: "recall",
+          cache: "turn",
+          produce: (turnCtx) => {
+            seen.push(turnCtx.kernelRetrieval.identityTexts)
+            return null
+          },
+        },
+      ]),
+      entry("twin", [
+        identity({
+          produce: () => ({
+            text: "I am Ada.",
+            cacheSplit: { stable: "I am Ada.", dynamic: "Mail jane.doe@example.com" },
+            handoff: ["t"],
+            sources: { chunks: 1 },
+          }),
+        }),
+      ]),
+    ]
+    const result = await collectContextContributions(ctx, { cacheOptimization: true }, entries)
+    expect(result.identity).toBeUndefined()
+    expect(result.tail).toEqual([])
+    expect(result.sources).toEqual({})
+    expect(seen).toEqual([[]])
+    expect(String(result.skipped[0].error)).toContain("leaks PII")
+  })
+
+  it("keeps the base prompt when the identity fails or misses its deadline, and the others run", async () => {
+    jest.useFakeTimers()
+    try {
+      const pending = collectContextContributions(ctx, { cacheOptimization: true }, [
+        entry("alpha", [section("status", "alpha status")]),
+        entry("twin", [identity({ produce: () => new Promise<never>(() => {}) })]),
+      ])
+      await jest.advanceTimersByTimeAsync(15_000)
+      const result = await pending
+      expect(result.identity).toBeUndefined()
+      expect(result.tail).toEqual(["alpha status"])
+      expect(result.skipped.map((skip) => skip.key)).toEqual(["twin.identity"])
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("lets only the first module's identity stand", async () => {
+    const entries = [
+      entry("persona", [identity({ produce: () => ({ text: "I am Bo." }) })]),
+      entry("twin", [identity()]),
+    ]
+    const result = await collectContextContributions(ctx, { cacheOptimization: false }, entries)
+    expect(result.identity).toBe("I am Bo.")
+    expect(result.skipped.map((skip) => skip.key)).toEqual(["twin.identity"])
   })
 })
 
@@ -363,6 +521,14 @@ describe("failure", () => {
       ],
       [
         { id: "a", cache: "turn", after: "b", produce: () => null },
+        { id: "b", cache: "turn", after: "a", produce: () => null },
+      ],
+      [
+        { id: "a", cache: "turn", produce: () => null },
+        { id: "b", cache: "turn", slot: "identity", after: "a", produce: () => null },
+      ],
+      [
+        { id: "a", cache: "turn", slot: "identity", produce: () => null },
         { id: "b", cache: "turn", after: "a", produce: () => null },
       ],
     ]
