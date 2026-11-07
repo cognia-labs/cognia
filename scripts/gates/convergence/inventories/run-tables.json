@@ -3750,7 +3750,7 @@
         "lib/squads/teammate/structured-dispatch.ts#dispatchStructured",
         "lib/ai/eval/project-service.ts#EvalProjectService::start",
         "lib/ai/providers/bedrock-connection.ts#testAndDiscoverBedrock",
-        "lib/claude/filespace-builtin-tools.ts#shareSnapshot",
+        "lib/filespace/agent-tools.ts#shareSnapshot",
         "lib/claude/template-builtin-tools.ts#blocked",
         "lib/claude/template-builtin-tools.ts#runTemplateBuiltinTool",
         "lib/db/agent-activity.ts#listAgentIssues",

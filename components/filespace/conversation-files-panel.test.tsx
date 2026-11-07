@@ -17,7 +17,7 @@ jest.mock("@/lib/filespace/open", () => ({ openFileSpacePath: jest.fn(async () =
 jest.mock("@/lib/db/session-assets", () => ({ getSessionAsset: jest.fn() }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 // The shared conversation's counterpart is a live query; each test says what it answers.
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: jest.fn((_query: unknown, _deps: unknown, initial: unknown) => initial),
 }))
 // The dialog has its own suite; this one pins what the panel hands it.
@@ -43,7 +43,7 @@ jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
 jest.mock("@/lib/tauri/clipboard", () => ({ writeClipboardText: jest.fn(async () => undefined) }))
 
 import { toast } from "sonner"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useConversationFileSpace } from "@/hooks/filespace/use-conversation-filespace"
 import { useLiveFileShare } from "@/hooks/filespace/use-live-file-share"
 import { getSessionAsset } from "@/lib/db/session-assets"

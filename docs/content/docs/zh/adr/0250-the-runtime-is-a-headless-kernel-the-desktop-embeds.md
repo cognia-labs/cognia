@@ -331,6 +331,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - sidecar。sidecar 是独立项目，保留字面量的 `PER_CALL_PLUGIN_TOOL_NAMES`。门禁检查它包含每个声明为 `consent: "per-call"` 的工具。
   - 代码位置。生成器写出 `lib/modules/generated/tools.ts`（声明数据加每个工具族一条懒加载导入）。`lib/modules/tool-declarations.ts` 不加载模块就能回答关于声明的问题，`lib/claude/tool-contributions.ts` 收集 surface 并执行调用。贡献的条目和说明在今天协调者工具加入的位置进入运行。
   - 不属于模块工具的。随工具族一起的每轮上下文（协调者的项目状态、知识检索）等上下文贡献。slash 命令工具读的是壳的注册表，computer use 的聊天端审批策略管的是插件的工具、自己不提供工具；两者都留在内核。试点先是 filespace，然后是项目协调者的工具和协议段。
+  - `filespace` 是第一个（2026-11-07）。它成为 manifest 模块（归属表的行删除，share、collab、artifact、terminal、account-sync 的行把它用到的文件列为 `api`），工具族搬到 `lib/filespace/agent-tools.ts`，手写的同意档、解析器里的两段、分发器的分支，以及权限类别、风险和探针名单里的名字都已删除。它的运行提供的工具和同意档与之前相同。还清四条方向边：`build-options.ts` 和 `plugin-tool-ipc.ts` 指向 filespace 的两条，以及旧工具文件指向 filespace 和 share 的两条。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

@@ -71,9 +71,6 @@ export const HOST_TOOL_CLASSES: Readonly<Record<string, readonly PermissionClass
   Object.freeze({
     // Publishes a site to an external host.
     deploy_site: ["outbound"],
-    // Give someone outside the conversation access to its files (ADR-0222 §9).
-    filespace_share: ["outbound"],
-    filespace_enable_webdav: ["outbound"],
     // Puts a stored password into a web page (ADR-0201).
     browser_fill_credential: ["secrets"],
   })

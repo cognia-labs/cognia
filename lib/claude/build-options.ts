@@ -3226,17 +3226,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     await import("@/lib/claude/permissions/agent-builder-tool-rules")
   const { buildAcceptanceProposalToolRuleset, buildAcceptanceToolRuleset } =
     await import("@/lib/claude/permissions/acceptance-tool-rules")
-  // A conversation's files (ADR-0222 §9). One answer gates the manifest below
-  // and this tier: reading and revoking for any conversation, sharing only
-  // when the effective policy allows agent sharing.
-  const { resolveFilespaceToolSurface } = await import("@/lib/filespace/agent-tool-deps")
-  const filespaceTools = await resolveFilespaceToolSurface({
-    hasSession: Boolean(session?.id),
-    cliHost: isCliHost(),
-    fileSharing: appSettings?.fileSharing,
-  })
-  const { buildFilespaceToolRuleset } =
-    await import("@/lib/claude/permissions/filespace-tool-rules")
   // In-process tools feature modules contribute (ADR-0250 §14 amendment). One
   // answer per family gates both its manifest entries below and the tier
   // derived from their declarations here, so neither appears without the other.
@@ -3261,9 +3250,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
     acceptanceToolsSurfaced ? buildAcceptanceToolRuleset() : undefined,
     acceptanceProposalSurfaced ? buildAcceptanceProposalToolRuleset() : undefined,
-    filespaceTools.surfaced
-      ? buildFilespaceToolRuleset({ sharing: filespaceTools.sharing })
-      : undefined,
     contributedTools.ruleset,
     commandRules && Object.keys(commandRules).length > 0 ? { Bash: commandRules } : undefined,
     toolRules
@@ -4368,22 +4354,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       ]
     } catch (err) {
       loggers.app.warn("failed to append acceptance built-in tools", { error: String(err) })
-    }
-  }
-  // A conversation's files and their shares (ADR-0222 §9). Gated on the same
-  // `filespaceTools` answer as the consent tier above.
-  if (filespaceTools.surfaced) {
-    try {
-      const { buildFilespaceManifestEntries } = await import("@/lib/claude/filespace-builtin-tools")
-      const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
-      opts.pluginTools = [
-        ...(opts.pluginTools ?? []),
-        ...buildFilespaceManifestEntries({ sharing: filespaceTools.sharing }).filter(
-          (entry) => !existing.has(entry.name)
-        ),
-      ]
-    } catch (err) {
-      loggers.app.warn("failed to append filespace built-in tools", { error: String(err) })
     }
   }
   // Desktop pet. Gated on the same `petToolsSurfaced` flag as its consent tier

@@ -220,5 +220,5 @@ never bundled into the app.
 | Members: requests and UI | `lib/collab/file-requests.ts`, `components/chat/shared-session-files.tsx` |
 | Members: the owner's view | `components/filespace/collab-host-status.tsx` |
 | One door for creating live shares | `lib/filespace/live-share.ts` |
-| Agent tools, consent, result card | `lib/claude/filespace-builtin-tools.ts`, `lib/claude/permissions/filespace-tool-rules.ts`, `components/chat/message-parts/mcp-renderers/filespace-share-card.tsx` |
+| Agent tools, consent, result card | `lib/filespace/agent-tools.ts` (the module's tool family), the `tools` declarations in `lib/filespace/module.ts` (consent and effect; the kernel derives the rules, ADR-0250 §14), `components/chat/message-parts/mcp-renderers/filespace-share-card.tsx` |
 | Lifecycle announcements | `lib/filespace/lifecycle.ts` |

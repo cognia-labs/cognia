@@ -50,11 +50,10 @@ export const RISK_EXTERNAL_SEND_TOOL_IDS: ReadonlySet<string> = new Set([
   // restore the previous version. `build_site` produces an immutable local
   // version and is deliberately absent.
   "deploy_site",
-  // An agent publishing a conversation's files as a public link or handing out
-  // network-drive access (ADR-0222 §9). `filespace_list` and the revoking
-  // tools only read or take access away, and are deliberately absent.
-  "filespace_share",
-  "filespace_enable_webdav",
+  // Module-contributed tools declared outbound (ADR-0250 §14 amendment), such
+  // as an agent publishing a conversation's files as a public link or handing
+  // out network-drive access (`filespace_share`, `filespace_enable_webdav`,
+  // ADR-0222 §9).
   ...moduleToolNamesWhere((declaration) => declaration.effect === "outbound").map((name) =>
     name.toLowerCase()
   ),

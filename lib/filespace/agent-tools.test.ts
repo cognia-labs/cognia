@@ -1,22 +1,22 @@
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { SharedLinkRow } from "@/lib/db/shared-links"
-import type { LoadedConversationFileSpace } from "@/lib/filespace/load"
-import {
-  DEFAULT_FILE_SHARING_POLICY,
-  type EffectiveFileSharingPolicy,
-} from "@/lib/filespace/policy"
+import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import type { ShareFileCandidate } from "@/lib/share/file-selection"
 import type { ConversationFileSpace, FileSpacePath } from "@/types/filespace"
 import type { CreatedLiveGrant, LiveGrant, LiveGrantView } from "@/types/filespace/live"
 
+import type { LoadedConversationFileSpace } from "./load"
+import { DEFAULT_FILE_SHARING_POLICY, type EffectiveFileSharingPolicy } from "./policy"
 import {
+  __setFilespaceToolDepsForTesting,
   buildFilespaceManifestEntries,
   FILESPACE_SHARING_TOOL_NAMES,
   FILESPACE_TOOL_NAMES as T,
   isFilespaceBuiltinTool,
   runFilespaceBuiltinTool,
+  toolFamily,
   type FilespaceToolDeps,
-} from "./filespace-builtin-tools"
+} from "./agent-tools"
 
 const p = (value: string) => value as FileSpacePath
 
@@ -225,7 +225,7 @@ describe("the filespace manifest", () => {
     expect(names).toEqual([T.list, T.revokeShare, T.disableWebdav])
   })
 
-  it("adds the sharing tools, each asking on every call", () => {
+  it("adds the sharing tools when agent sharing is allowed", () => {
     const entries = buildFilespaceManifestEntries({ sharing: true })
     expect(entries.map((entry) => entry.name)).toEqual([
       T.list,
@@ -234,10 +234,10 @@ describe("the filespace manifest", () => {
       T.share,
       T.enableWebdav,
     ])
-    for (const entry of entries) {
-      expect(entry.pluginId).toBe("cognia-filespace-builtin")
-      expect(entry.requiresApproval === true).toBe(FILESPACE_SHARING_TOOL_NAMES.has(entry.name))
-    }
+    // Consent lives in the manifest's declarations; an entry carries none.
+    for (const entry of entries)
+      expect(Object.keys(entry).sort()).toEqual(["description", "jsonSchema", "name"])
+    expect([...FILESPACE_SHARING_TOOL_NAMES].sort()).toEqual([T.enableWebdav, T.share].sort())
   })
 
   it("recognises its own names only", () => {
@@ -735,5 +735,55 @@ describe("filespace_disable_webdav", () => {
       revoked: [],
       failed: [{ grantId: "fg_1", code: "store_failed" }],
     })
+  })
+})
+
+describe("toolFamily (ADR-0250 §14 amendment)", () => {
+  const ctx = (overrides: Partial<ToolSurfaceContext> = {}): ToolSurfaceContext => ({
+    session: { id: "s1" } as ToolSurfaceContext["session"],
+    agent: null,
+    settings: null,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host: "desktop",
+    activeProject: null,
+    ...overrides,
+  })
+  const offered = async (context: ToolSurfaceContext) =>
+    (await toolFamily.surface(context))?.tools.map((tool) => tool.name) ?? null
+
+  afterEach(() => __setFilespaceToolDepsForTesting(null))
+
+  it("offers a conversation reading and revoking, sharing not by default", async () => {
+    expect(await offered(ctx())).toEqual([T.list, T.revokeShare, T.disableWebdav])
+  })
+
+  it("offers nothing without a conversation or in the standalone CLI", async () => {
+    expect(await offered(ctx({ session: null }))).toBeNull()
+    expect(await offered(ctx({ host: "cli" }))).toBeNull()
+  })
+
+  it("runs a call against the calling conversation through the host deps", async () => {
+    const listShareLinks = jest.fn(async () => [])
+    __setFilespaceToolDepsForTesting(
+      () =>
+        ({
+          listShareLinks,
+          revokeShareLink: jest.fn(),
+          describeError: () => ({ code: "unknown", message: "x" }),
+        }) as never
+    )
+    const result = await toolFamily.run(
+      T.revokeShare,
+      { code: "ELSEWHERE" },
+      {
+        sessionId: "trusted-session",
+        toolUseId: "u1",
+        executionRunId: "",
+        outboundAuthorization: { kind: "tool-call", sessionId: "trusted-session", toolUseId: "u1" },
+      }
+    )
+    expect(listShareLinks).toHaveBeenCalledWith("trusted-session")
+    expect(result).toMatchObject({ ok: false, code: "not_found" })
   })
 })

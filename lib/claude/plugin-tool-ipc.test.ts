@@ -7,6 +7,7 @@ import { hostCommandExecution } from "@/lib/plugin/core/invocation-identity"
 import { MODULE_TOOLS } from "@/lib/modules/generated/tools"
 import type { ModuleToolsEntry } from "@/lib/modules/manifest-types"
 import { __resetContributedToolsForTests } from "./tool-contributions"
+import { __setFilespaceToolDepsForTesting } from "@/lib/filespace/agent-tools"
 import {
   __setPluginToolResolverForTesting,
   __setWebToolDepsForTesting,
@@ -16,7 +17,6 @@ import {
   __setProjectHistoryToolDepsForTesting,
   __setSpawnTaskToolDepsForTesting,
   __setProjectCoordinatorToolDepsForTesting,
-  __setFilespaceToolDepsForTesting,
   __setSessionPeerToolDepsForTesting,
   __setTemplateToolDepsForTesting,
   handlePluginToolExec,
@@ -232,7 +232,6 @@ describe("handlePluginToolExec", () => {
     __setSessionPeerToolDepsForTesting(null)
     __setTemplateToolDepsForTesting(null)
     __setProjectCoordinatorToolDepsForTesting(null)
-    __setFilespaceToolDepsForTesting(null)
   })
 
   it.each(["arbitrary-plugin", "sandbox_bash", "wf_run_workflow_by_name"])(
@@ -318,7 +317,14 @@ describe("handlePluginToolExec", () => {
     expect(response.result).toEqual({ ok: true, threads: [] })
   })
 
-  it("routes the filespace tools to the host runner, bound to the calling session", async () => {
+  it("routes the filespace tools to their module, bound to the calling session", async () => {
+    // The real registry's filespace entry (ADR-0250 §14 amendment), in the
+    // registry this suite otherwise keeps empty.
+    const actual = jest.requireActual("@/lib/modules/generated/tools") as {
+      MODULE_TOOLS: ModuleToolsEntry[]
+    }
+    const filespace = actual.MODULE_TOOLS.find((entry) => entry.module === "filespace")!
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).push(filespace)
     const execute = jest.fn().mockResolvedValue({ from: "plugin" })
     __setPluginToolResolverForTesting({
       getTool: () => ({ pluginId: "some-plugin", execute }),
@@ -332,16 +338,21 @@ describe("handlePluginToolExec", () => {
           describeError: () => ({ code: "unknown", message: "x" }),
         }) as never
     )
-    const response = await handlePluginToolExec(
-      makeRequest({
-        name: "filespace_revoke_share",
-        sessionId: "trusted-session",
-        args: { code: "ELSEWHERE" },
-      })
-    )
-    expect(execute).not.toHaveBeenCalled()
-    expect(listShareLinks).toHaveBeenCalledWith("trusted-session")
-    expect(response.result).toMatchObject({ ok: false, code: "not_found" })
+    try {
+      const response = await handlePluginToolExec(
+        makeRequest({
+          name: "filespace_revoke_share",
+          sessionId: "trusted-session",
+          args: { code: "ELSEWHERE" },
+        })
+      )
+      expect(execute).not.toHaveBeenCalled()
+      expect(listShareLinks).toHaveBeenCalledWith("trusted-session")
+      expect(response.result).toMatchObject({ ok: false, code: "not_found" })
+    } finally {
+      ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
+      __setFilespaceToolDepsForTesting(null)
+    }
   })
 
   it("routes the template and squad tools to the host runner before the plugin registry", async () => {

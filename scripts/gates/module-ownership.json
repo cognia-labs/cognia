@@ -12,7 +12,8 @@
       "class": "kernel"
     },
     "account-sync": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/account-sync/enrollment/platform.ts"]
     },
     "agent": {
       "class": "kernel",
@@ -72,7 +73,12 @@
     },
     "artifact": {
       "class": "module",
-      "api": ["stores/artifact/artifact-store.ts"]
+      "api": [
+        "lib/artifacts/constants.ts",
+        "lib/artifacts/reveal.ts",
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/artifact/artifact-store.ts"
+      ]
     },
     "attention": {
       "class": "module",
@@ -164,7 +170,15 @@
       "class": "module"
     },
     "collab": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "hooks/collab/use-shared-session-members.ts",
+        "lib/collab/client.ts",
+        "lib/collab/file-host.ts",
+        "lib/collab/file-sharing-policy.ts",
+        "lib/collab/runtime-client.ts",
+        "lib/collab/shared-session-access.ts"
+      ]
     },
     "commands-import": {
       "class": "module"
@@ -299,9 +313,6 @@
       "class": "module"
     },
     "files-library": {
-      "class": "module"
-    },
-    "filespace": {
       "class": "module"
     },
     "fleet": {
@@ -706,7 +717,16 @@
     },
     "share": {
       "class": "module",
-      "api": ["components/share/template-definition-share-button.tsx", "lib/share/hash.ts"]
+      "api": [
+        "components/share/share-files-picker.tsx",
+        "components/share/share-link-dialog.tsx",
+        "components/share/template-definition-share-button.tsx",
+        "lib/share/client.ts",
+        "lib/share/config.ts",
+        "lib/share/file-selection.ts",
+        "lib/share/hash.ts",
+        "lib/share/payload.ts"
+      ]
     },
     "shared": {
       "class": "foundation"
@@ -823,6 +843,7 @@
       "api": [
         "lib/terminal/completion/tokenize.ts",
         "lib/terminal/headless-exec.ts",
+        "lib/terminal/terminal-links.ts",
         "stores/terminal/terminal-store.ts"
       ]
     },

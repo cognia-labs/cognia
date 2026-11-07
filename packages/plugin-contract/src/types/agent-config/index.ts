@@ -4065,7 +4065,7 @@ export interface RouterFusionRunSummary {
  *
  * Agent sharing (`allowAgentSharing`, phase 3) decides whether an agent is
  * offered the `filespace_share` / `filespace_enable_webdav` tools
- * (`lib/claude/filespace-builtin-tools.ts`); the runner re-checks it per call
+ * (`lib/filespace/agent-tools.ts`); the runner re-checks it per call
  * and the host refuses an agent-created grant without it.
  */
 export interface FileSharingPolicySettings {

@@ -299,10 +299,6 @@ jest.mock("@/lib/platform/detect", () => ({
   isNativeMobile: jest.fn(() => false),
 }))
 
-// Module-contributed tools (ADR-0250 §14 amendment): none unless a test adds a
-// family to the registry (`moduleToolRegistry()`).
-jest.mock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: [] }))
-
 const mockBuildSupportContext = jest.fn(async (..._args: unknown[]) => "SUPPORT_CONTEXT")
 jest.mock("@/lib/support-agent/context", () => {
   const actual = jest.requireActual("@/lib/support-agent/context")
@@ -9535,9 +9531,10 @@ it("keeps personal OAuth for a builtin member with an external session model", a
 })
 
 describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
+  // The registry the resolver reads, with the real modules' entries in it.
   const moduleToolRegistry = () =>
     (
-      jest.requireMock("@/lib/modules/generated/tools") as {
+      jest.requireActual("@/lib/modules/generated/tools") as {
         MODULE_TOOLS: import("@/lib/modules/manifest-types").ModuleToolsEntry[]
       }
     ).MODULE_TOOLS
@@ -9559,7 +9556,11 @@ describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
     })
   })
   afterEach(() => {
-    moduleToolRegistry().length = 0
+    const registry = moduleToolRegistry()
+    registry.splice(
+      registry.findIndex((entry) => entry.module === "crate"),
+      1
+    )
   })
 
   it("offers a family's tools with the tier derived from them and its instructions", async () => {

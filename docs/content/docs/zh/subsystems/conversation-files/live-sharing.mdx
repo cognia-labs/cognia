@@ -189,5 +189,5 @@ README）。SFTPGo 采用 AGPL-3.0 许可，从不打包进应用。
 | 成员：请求与界面 | `lib/collab/file-requests.ts`、`components/chat/shared-session-files.tsx` |
 | 成员：所有者视图 | `components/filespace/collab-host-status.tsx` |
 | 创建实时共享的唯一入口 | `lib/filespace/live-share.ts` |
-| 智能体工具、同意规则、结果卡片 | `lib/claude/filespace-builtin-tools.ts`、`lib/claude/permissions/filespace-tool-rules.ts`、`components/chat/message-parts/mcp-renderers/filespace-share-card.tsx` |
+| 智能体工具、同意规则、结果卡片 | `lib/filespace/agent-tools.ts`（模块的工具族）、`lib/filespace/module.ts` 里的 `tools` 声明（同意方式和作用；规则由内核派生，ADR-0250 §14）、`components/chat/message-parts/mcp-renderers/filespace-share-card.tsx` |
 | 生命周期通知 | `lib/filespace/lifecycle.ts` |

@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0 已实施（2026-11-07），T1–T2 待做。评审结论见 §6，实施时的调整见 §7。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1 已实施（2026-11-07），T2 待做。评审结论见 §6，实施记录见 §7、§8。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -208,3 +208,12 @@ interface ToolSurface {
 - 派生名单：`classesForPluginTool`（`outbound`/`secrets`）、`RISK_EXTERNAL_SEND_TOOL_IDS`（因此也进 `OUTBOUND_TOOL_IDS`；名字小写化以匹配 `normalizeToolId`）、探针的 `DENIED_PLUGIN_TOOLS`（非 `read`）、实时语音的不可取消名单。名单覆盖所有声明的工具，不论模块阶段；只有分发跳过 `experimental` 模块。
 - 与草案的差别：`instructions` 的位置按现状放在协调者块处，而不是 grant 的 `instructions` 之后，这样 T2 迁移前后协调者协议段在提示词里的位置不变。
 - 目前没有模块声明工具，所以 T0 不改变任何运行的行为；T1（filespace）是第一个使用者。
+
+## 8. T1 实施记录（2026-11-07）
+
+- `filespace` 成为 manifest 模块（`lib/filespace/module.ts`），归属表的 `filespace` 行删除。`dependsOn`：account-sync、artifact、collab、data、share、terminal。`api` 列出其他模块要用的 16 个文件（Files 面板与其 store、loader、paths、sources、sensitive、policy、settings-links、share-files、grants-client、link-params、open、copy-link、live-share-credentials、use-conversation-filespace、agent-tools）。反方向，share、collab、artifact、terminal、account-sync 的行补了 filespace 要用的 `api` 文件；Files 面板对 `hooks/data` 桶文件的导入改为具体文件。
+- 工具族：`lib/claude/filespace-builtin-tools.ts` → `lib/filespace/agent-tools.ts`，导出 `toolFamily`；条目不再带 `pluginId` / `requiresApproval`（由内核盖上，线上的 `pluginId` 仍是 `cognia-filespace-builtin`）。宿主依赖的测试接缝从 `plugin-tool-ipc` 移到 `agent-tools`。
+- 声明：list `allow`/`read`；revoke_share、disable_webdav `allow`/`write`；share、enable_webdav `per-call`/`outbound`；五个都 `cancellable: false`（运行器不接取消信号）。
+- 删除：`lib/claude/permissions/filespace-tool-rules.ts`（及测试）、`build-options` 的同意档和条目两段、`plugin-tool-ipc` 的分支、`HOST_TOOL_CLASSES` / `RISK_EXTERNAL_SEND_TOOL_IDS` / 探针拒绝名单里的手写 filespace 名字。保留：sidecar 的逐次名单（门禁要求）、外发目标抽取 `PUBLIC_TOOL_IDS`。
+- 还清方向边 4 条：`build-options -> filespace`、`plugin-tool-ipc -> filespace`、`filespace-builtin-tools -> filespace`、`-> share`。
+- 行为对照：`build-options` 现有的 filespace 用例（同意档、条目、`requiresApproval`、无会话不提供）全部改走模块后通过；条目在 `pluginTools` 里的位置从 acceptance 之后移到协调者块之前（已有的顺序断言里两者之间没有别的工具，结果不变）。

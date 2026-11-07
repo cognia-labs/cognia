@@ -1,10 +1,10 @@
 import type { ChatSession, SessionRole } from "@cognia/agent-config-types"
 import type { WorkspaceEntry } from "@/lib/files/types"
-import type { LoadedConversationFileSpace } from "@/lib/filespace/load"
-import { locateFileSpacePath, normalizeFileSpacePath } from "@/lib/filespace/paths"
-import type { EffectiveFileSharingPolicy } from "@/lib/filespace/policy"
-import { isSensitiveDirectory, isSensitivePath } from "@/lib/filespace/sensitive"
-import type { CreateFileShareInput } from "@/lib/filespace/share-files"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 import type { SharedLinkRow } from "@/lib/db/shared-links"
 import type { CreatedShare } from "@/lib/share/client"
 import {
@@ -23,24 +23,33 @@ import type {
   LiveProvider,
 } from "@/types/filespace/live"
 
+import type { LoadedConversationFileSpace } from "./load"
+import { locateFileSpacePath, normalizeFileSpacePath } from "./paths"
+import type { EffectiveFileSharingPolicy } from "./policy"
+import { isSensitiveDirectory, isSensitivePath } from "./sensitive"
+import type { CreateFileShareInput } from "./share-files"
+
 /**
- * Built-in tools for a conversation's files (ADR-0222 §9): what the agent of
- * a conversation may see of its FileSpace and do with its shares. Same family
- * shape as the artifact and project tools: a name map, manifest entries with
- * hand-written JSON Schema, a predicate, and a runner that never throws. Every
- * host effect goes through {@link FilespaceToolDeps}, wired in
- * `lib/filespace/agent-tool-deps.ts`.
+ * The filespace module's agent tools (ADR-0222 §9): what the agent of a
+ * conversation may see of its FileSpace and do with its shares. The module
+ * contributes them through its manifest (ADR-0250 §14 amendment): each tool's
+ * consent and effect are declared in `lib/filespace/module.ts`, and
+ * {@link toolFamily} decides what a run is offered and runs a call. The
+ * kernel derives the consent tier, `requiresApproval` and the outbound,
+ * probe and live-voice lists from those declarations. Every host effect goes
+ * through {@link FilespaceToolDeps}, wired in `lib/filespace/agent-tool-deps.ts`.
  *
  * - `filespace_list`, `filespace_revoke_share` and `filespace_disable_webdav`
- *   are allowed without asking (`filespace-tool-rules.ts`): reading the
- *   conversation's own files and taking access away.
+ *   are allowed without asking: reading the conversation's own files and
+ *   taking access away.
  * - `filespace_share` and `filespace_enable_webdav` give someone else access.
  *   They are offered only when the effective policy allows agent sharing,
- *   ask the person on every call (`requiresApproval` + the sidecar's
+ *   ask the person on every call (declared `per-call`, and on the sidecar's
  *   per-call list, so "allow always" cannot be remembered for them), classify
- *   as `external-send`, and the runner re-checks the policy because it can
- *   change between the manifest and the call. The host refuses an agent's
- *   live grant on its own without the policy (`CreatedBy::Agent`).
+ *   as `external-send` (declared `outbound`), and the runner re-checks the
+ *   policy because it can change between the manifest and the call. The host
+ *   refuses an agent's live grant on its own without the policy
+ *   (`CreatedBy::Agent`).
  *
  * Invariants:
  * - The conversation is always the calling one (`context.sessionId`); an
@@ -52,8 +61,6 @@ import type {
  *   issues one from the result card (`FilespaceShareCard`) or the Files
  *   panel, on whichever device they are using.
  */
-
-export const FILESPACE_BUILTIN_PLUGIN_ID = "cognia-filespace-builtin"
 
 export const FILESPACE_TOOL_NAMES = {
   list: "filespace_list",
@@ -79,31 +86,12 @@ const MAX_LABEL_CHARS = 120
 const DEFAULT_SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60
 const DEFAULT_LIVE_TTL_SECONDS = 24 * 60 * 60
 
-export interface FilespaceManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-  /**
-   * Every call asks a human; with the sidecar's `PER_CALL_PLUGIN_TOOL_NAMES`
-   * no remembered grant, mode or auto-answer skips it.
-   */
-  requiresApproval?: true
-}
-
 function entry(
   name: string,
   description: string,
-  jsonSchema: Record<string, unknown>,
-  requiresApproval = false
-): FilespaceManifestEntry {
-  return {
-    name,
-    description,
-    jsonSchema,
-    pluginId: FILESPACE_BUILTIN_PLUGIN_ID,
-    ...(requiresApproval ? { requiresApproval: true as const } : {}),
-  }
+  jsonSchema: Record<string, unknown>
+): ModuleToolEntry {
+  return { name, description, jsonSchema }
 }
 
 const pathsSchema = {
@@ -116,12 +104,10 @@ const pathsSchema = {
 }
 
 /**
- * The manifest. `sharing` adds the two tools that give access away; it is
- * true only when the effective policy allows agent sharing.
+ * The tools a run is offered. `sharing` adds the two that give access away;
+ * it is true only when the effective policy allows agent sharing.
  */
-export function buildFilespaceManifestEntries(options: {
-  sharing: boolean
-}): FilespaceManifestEntry[] {
+export function buildFilespaceManifestEntries(options: { sharing: boolean }): ModuleToolEntry[] {
   const T = FILESPACE_TOOL_NAMES
   const entries = [
     entry(
@@ -207,8 +193,7 @@ export function buildFilespaceManifestEntries(options: {
           },
           label: { type: "string", maxLength: MAX_LABEL_CHARS },
         },
-      },
-      true
+      }
     ),
     entry(
       T.enableWebdav,
@@ -225,8 +210,7 @@ export function buildFilespaceManifestEntries(options: {
           expires_in_seconds: { type: "integer", minimum: 3600 },
           label: { type: "string", maxLength: MAX_LABEL_CHARS },
         },
-      },
-      true
+      }
     ),
   ]
 }
@@ -892,4 +876,40 @@ async function runDisableWebdav(deps: FilespaceToolDeps, sessionId: string): Pro
     ...(alsoSftp.length > 0 ? { alsoEndedSftp: alsoSftp } : {}),
     ...(failed.length > 0 ? { failed, error: "Some access could not be revoked" } : {}),
   }
+}
+
+/** Where `run` takes its host effects from. Swappable for tests. */
+let depsOverride: (() => FilespaceToolDeps) | null = null
+
+/** Inject the tools' host deps (tests). Pass `null` to restore the default. */
+export function __setFilespaceToolDepsForTesting(fn: (() => FilespaceToolDeps) | null): void {
+  depsOverride = fn
+}
+
+async function resolveDeps(): Promise<FilespaceToolDeps> {
+  if (depsOverride) return depsOverride()
+  const { resolveFilespaceToolDeps } = await import("./agent-tool-deps")
+  return resolveFilespaceToolDeps()
+}
+
+/**
+ * The module's tool family (ADR-0250 §14 amendment). A conversation is
+ * offered the reading and revoking tools, and the sharing tools when the
+ * effective policy allows agent sharing; a run without a conversation, or in
+ * the standalone CLI (no FileSpace resolver), is offered none.
+ */
+export const toolFamily: ModuleToolFamily = {
+  async surface(ctx: ToolSurfaceContext) {
+    const { resolveFilespaceToolSurface } = await import("./agent-tool-deps")
+    const surface = await resolveFilespaceToolSurface({
+      hasSession: Boolean(ctx.session?.id),
+      cliHost: ctx.host === "cli",
+      fileSharing: ctx.settings?.fileSharing,
+    })
+    if (!surface.surfaced) return null
+    return { tools: buildFilespaceManifestEntries({ sharing: surface.sharing }) }
+  },
+  async run(name, args, call) {
+    return runFilespaceBuiltinTool(name, args, await resolveDeps(), { sessionId: call.sessionId })
+  },
 }

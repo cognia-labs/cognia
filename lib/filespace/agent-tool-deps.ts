@@ -8,7 +8,6 @@
  */
 
 import type { AppSettings } from "@cognia/agent-config-types"
-import type { FilespaceToolDeps } from "@/lib/claude/filespace-builtin-tools"
 import { getSession } from "@/lib/db/sessions"
 import { listSharedLinksForSession } from "@/lib/db/shared-links"
 import { listWorkspaceDir } from "@/lib/files/workspace-fs"
@@ -23,6 +22,7 @@ import {
 } from "@/lib/share/client"
 import { expandShareSelection } from "@/lib/share/file-selection"
 
+import type { FilespaceToolDeps } from "./agent-tools"
 import { fileShareErrorDetails, listLiveGrants, revokeLiveGrant } from "./grants-client"
 import { createLiveFileShare } from "./live-share"
 import { loadConversationFileSpace } from "./load"
