@@ -1,5 +1,6 @@
 import {
   BestOfNAttemptError,
+  BestOfNCandidateStoppedError,
   candidateGrant,
   createBestOfNService,
   type BestOfNExecution,
@@ -419,6 +420,21 @@ it("retries a CAS collision without dispatching another attempt", async () => {
     await f.service.startBestOfN(f.input)
   ).completion
   expect(f.execution.execute).toHaveBeenCalledTimes(2)
+})
+
+it("records a candidate a person stopped on its own row as cancelled, and its siblings go on", async () => {
+  const f = fixture()
+  f.execution.execute.mockImplementation(async ({ candidate }) => {
+    if (candidate.index === 0) throw new BestOfNCandidateStoppedError(1)
+    return { hasChanges: true, costUsd: null }
+  })
+  const result = await (await f.service.startBestOfN(f.input)).completion
+  expect(result.candidates.map((c) => [c.status, c.costUsd])).toEqual([
+    ["cancelled", 1],
+    ["succeeded", null],
+  ])
+  expect(result.phase).toBe("awaitingSelection")
+  expect(f.execution.stop).not.toHaveBeenCalled()
 })
 
 it("keeps known spend on a failed attempt", async () => {

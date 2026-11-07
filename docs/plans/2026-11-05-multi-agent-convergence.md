@@ -290,6 +290,15 @@ interface LaunchChildRunInput {
 - **best-of-N。** 保留直连协调器，候选已在 P3 成为子运行；这里只核对监控面板显示。
 - **聚合模块。** 新增 `packages/agent-orchestration/src/aggregate.ts`（无 `@/` 导入）。先写行为对照测试：对同一组输入分别跑 `consensus-orchestrator.ts`（`tallyVotes`/`computeWinner`/`thresholdMet`）、`lib/ai/ensemble/run-ensemble.ts`、`patterns/judge-panel.ts`、`lib/ai/council/run-council.ts` 的聚合部分，记录差异。一致的合并；不一致的逐项判断哪种正确，保留的在模块里写明原因。四个界面改为调用该模块。改完后 `pnpm build:packages`。
 
+按实际实现（2026-11-08，`29186d2655`）：
+
+- builder 按"来源界面"建模（`SquadStartSurface`：chat、console、companion、im、bot、scheduler、issue、workflow、plugin、remote、evaluation、retry、child），由它统一决定 `origin`、`triggeredFrom`、是否带本机人的授权，以及会话是完整对象还是只有 id。
+- 需要等结果的调用方（调度器、`action.team.run`、compose 的 `autoStart`）走 `lib/squads/squad/run-squad-to-end.ts`：经 `startSquadRun` 启动，等执行行进入终态，调用方取消时经 `controlSquadRun` 停掉这一个运行；拒绝抛 `SquadRunRefusedError`。生命周期的结束原因按 runId 留在进程内，取不到时读持久记录的 `recoveryReason`。
+- `action.team.run` 的工作流知识授权和 fan-out 深度冻结进 `executionConstraints`，恢复重入时不丢；节点的 `goal` 参数原来声明了却没传，现在传入。
+- 外观删除后：恢复是 `lib/squads/durable/recover-squad-runs.ts`，子运行重试是 `retry-squad-child.ts`；看板的暂停/恢复走 `useSquadRunControl`（可达配对 Host），⌘K 的启动是人的启动尝试，暂停/恢复走 `dispatchRunControl`，拒绝时 toast。
+- 聚合模块的对照测试是 `lib/squads/aggregation-parity.test.ts`。四处原本在打平规则上一致；不一致的四处按模块规则统一：空白回答算失败（ensemble 原来算作回答）、比较前去掉首尾空白（ensemble 原来把 `yes` 与 `yes\n` 分成两票）、没被评分的尝试排在最后且不能获胜（judge panel 原来当 0 分，可能被选为赢家），全部未评分时 judge panel 失败而不是给出 0 分赢家。另：非有限或负的票重计为 0（共识投票原来会被负权重拉低）。保留的差异写在模块头注释里：小队投票判定法定数、ensemble 的"多数票"只报众数、judge panel 取多名评委均值、council 的一致度是合成者自评。
+- best-of-N 监控面板核对：候选行的"停止"原来报成功但尝试继续跑，已改为只停这一个候选（中断其会话，记为 cancelled）。组行仍是 `team` 行：重试、暂停、引导会被提供却做不成，停止落到 recovery_required，候选不嵌套在组下，标签是原始提示词。修法要么给组一个独立的运行 kind（改动配对客户端校验的线上协议），要么在 `team` 行上加标记，待用户选择（证据台账 X20）。
+
 ## 9. P6：房间→小队
 
 - **删除房间里的协作工具。** squads 工具族的 `teamToolFamily.surface`（`lib/squads/collaboration-tools.ts`，原 `build-options.ts` 的分支，2026-11-07 迁入）改为只在小队队员会话（有 team-dispatch 上下文）下提供 `team_*`；房间会话不再添加。`selfInvokeTools.teamCollaboration` 的设置说明同步更新。

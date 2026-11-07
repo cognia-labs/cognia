@@ -102,7 +102,8 @@ jest.mock("@/lib/execution/agent-team-bridge", () => ({
   settleAgentTeamExecutionRun: (...args: unknown[]) => settleTeamRow(...args),
 }))
 import { bestOfNTeam, createBestOfNExecution } from "./runtime"
-import { candidateGrant } from "./core"
+import { BestOfNCandidateStoppedError, candidateGrant } from "./core"
+import { interruptSession } from "@/lib/claude/ipc"
 import {
   __resetClaimedTurnUsageForTesting,
   isTurnUsageClaimed,
@@ -262,6 +263,29 @@ describe("candidates as child runs", () => {
     launchChildRun.mockResolvedValueOnce({ started: false, reason: "cancelled" } as never)
     await expect(execute()).rejects.toThrow("cancelled before it started")
     expect(dispatch.run).not.toHaveBeenCalled()
+  })
+
+  it("stops only this attempt when its own row is stopped, interrupting its session", async () => {
+    const rowStop = new AbortController()
+    launchChildRun.mockImplementationOnce(async (input: LaunchInput) => ({
+      started: true as const,
+      childId: input.childId,
+      executionRunId: `execution:job:${input.childId}`,
+      outcome: input.target.engine
+        .run(rowStop.signal)
+        .catch((error: unknown) => ({ status: "cancelled", error: String(error) })),
+    }))
+    run.mockImplementationOnce(
+      (_session: string, _prompt: string, _options: unknown, { signal }: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+          queueMicrotask(() => rowStop.abort(new Error("stopped from the run monitor")))
+        })
+    )
+    const error = await execute().catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(BestOfNCandidateStoppedError)
+    expect(interruptSession).toHaveBeenCalledWith("session")
+    expect(dispatch.fail).toHaveBeenCalled()
   })
 
   it("rethrows the attempt's own error after the child run settles", async () => {

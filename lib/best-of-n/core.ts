@@ -41,6 +41,13 @@ export class BestOfNAttemptError extends Error {
     this.name = "BestOfNAttemptError"
   }
 }
+/** A person stopped this one candidate (its own row's Stop); its siblings go on. */
+export class BestOfNCandidateStoppedError extends BestOfNAttemptError {
+  constructor(costUsd: number | null, options?: ErrorOptions) {
+    super("Candidate stopped", costUsd, options)
+    this.name = "BestOfNCandidateStoppedError"
+  }
+}
 export interface BestOfNExecution {
   prepare(group: BestOfNGroup, input: BestOfNInput): Promise<void>
   acquire(
@@ -239,7 +246,10 @@ export function createBestOfNService(deps: {
             if (row && ["pending", "running", "cancelRequested"].includes(row.status)) {
               await progress(group.groupId, {
                 candidateId: candidate.candidateId,
-                status: abort.signal.aborted ? "cancelled" : "failed",
+                status:
+                  abort.signal.aborted || error instanceof BestOfNCandidateStoppedError
+                    ? "cancelled"
+                    : "failed",
                 ...(workspace
                   ? { workspaceBundleId: workspace.bundleId, physicalRoot: workspace.physicalRoot }
                   : {}),

@@ -28,6 +28,7 @@ import { describeBestOfNAgent } from "./agents"
 import { runExternalCandidate } from "./external"
 import {
   BestOfNAttemptError,
+  BestOfNCandidateStoppedError,
   type BestOfNExecution,
   type BestOfNInput,
   type CandidateResult,
@@ -208,6 +209,10 @@ export function createBestOfNExecution(): BestOfNExecution {
           console.warn("Best-of-N usage booking failed", error)
         }
       }
+      // A stop of this candidate's own row (the run monitor, the Job Center)
+      // ends this attempt alone; the group's signal ends them all.
+      const ownStop = new AbortController()
+      const attemptSignal = AbortSignal.any([signal, ownStop.signal])
       try {
         await dispatch.setWorkspace({ workspacePath: workspace.physicalRoot })
         await dispatch.attachControl(
@@ -224,7 +229,7 @@ export function createBestOfNExecution(): BestOfNExecution {
         // The attempt is the candidate's engine; the child run is its record.
         const attempt = () =>
           dispatch.run(async (): Promise<CandidateResult> => {
-            signal.throwIfAborted()
+            attemptSignal.throwIfAborted()
             turn.lease = await openWorkspaceBundleTurnLease(bundle, group.repositoryId, {
               taskId: candidate.candidateId,
               sessionId: session.id,
@@ -292,7 +297,7 @@ export function createBestOfNExecution(): BestOfNExecution {
                   prompt: request.prompt,
                   model: externalModel,
                   workingDirectory: workspace.physicalRoot,
-                  signal: AbortSignal.any([signal, AbortSignal.timeout(remainingMs)]),
+                  signal: AbortSignal.any([attemptSignal, AbortSignal.timeout(remainingMs)]),
                   onCapture: dispatch.capture,
                   onUsage: (usage) => {
                     // The agent's own figures. Its provider is not a Cognia price
@@ -341,7 +346,7 @@ export function createBestOfNExecution(): BestOfNExecution {
                   request.prompt,
                   turnOptions,
                   {
-                    signal,
+                    signal: attemptSignal,
                     timeoutMs: remainingMs,
                     onEvent: (event) => {
                       usageTracker.observe(event)
@@ -414,7 +419,7 @@ export function createBestOfNExecution(): BestOfNExecution {
                 ? { changesetId: changeset.changesetId, headSha: changeset.headSha }
                 : {}),
             }
-          }, signal)
+          }, attemptSignal)
         // Each candidate is a child run of the group's run (ADR-0252 §2), in
         // its own conversation. The group's row is the durable team run's,
         // written when the run was prepared. The launcher writes, links and
@@ -433,12 +438,24 @@ export function createBestOfNExecution(): BestOfNExecution {
             kind: "agent",
             label: candidate.agent.agentId,
             engine: {
-              run: async () => {
+              run: async (stopSignal) => {
+                // The launcher's stop for this row. Interrupting the session
+                // ends the turn the attempt is waiting on.
+                const stop = () => {
+                  ownStop.abort(stopSignal.reason)
+                  void Promise.resolve()
+                    .then(() => ipc.interruptSession(session.id))
+                    .catch(() => undefined)
+                }
+                if (stopSignal.aborted) stop()
+                else stopSignal.addEventListener("abort", stop, { once: true })
                 try {
                   result = await attempt()
                 } catch (error) {
                   thrown = { error }
                   throw error
+                } finally {
+                  stopSignal.removeEventListener("abort", stop)
                 }
                 return { status: "completed" }
               },
@@ -459,7 +476,7 @@ export function createBestOfNExecution(): BestOfNExecution {
       } catch (error) {
         const cleanup = await Promise.allSettled([
           dispatch.fail(error),
-          turn.lease?.settle(signal.aborted ? "cancelled" : "failed"),
+          turn.lease?.settle(attemptSignal.aborted ? "cancelled" : "failed"),
         ])
         const failed = cleanup.filter(
           (item): item is PromiseRejectedResult => item.status === "rejected"
@@ -468,6 +485,8 @@ export function createBestOfNExecution(): BestOfNExecution {
           throw new BestOfNAttemptError("Candidate execution and cleanup failed", costUsd, {
             cause: new AggregateError([error, ...failed.map((item) => item.reason)]),
           })
+        if (ownStop.signal.aborted && !signal.aborted)
+          throw new BestOfNCandidateStoppedError(costUsd, { cause: error })
         throw new BestOfNAttemptError(
           error instanceof Error ? error.message : String(error),
           costUsd,
