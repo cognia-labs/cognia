@@ -12,8 +12,8 @@ description: Send-time applyTwinContext — embed once, hybrid vector + BM25/RRF
   twin-bound character it embeds the user message **once**, runs RAG (vector, optionally fused with BM25 via
   RRF, optionally over-fetched and lexically reranked), selects style few-shot samples, and assembles a
   four-segment system prompt. It **never throws** — every fallible I/O step is individually guarded and
-  degrades to "less context" rather than breaking the chat. It is wired into `resolveSendOptions`
-  (`lib/claude/build-options.ts:625`).
+  degrades to "less context" rather than breaking the chat. The chat send path reaches it through the twin
+  module's `identity` context section (`lib/twin/context.ts`, ADR-0250 §14 `context` amendment).
 </TLDR>
 
 ## The send-time flow
@@ -150,30 +150,39 @@ the key-free `lexicalRerankScorer` with `overFetch: 3`.
 sequenceDiagram
   participant Hook as use-claude-chat
   participant BO as resolveSendOptions
+  participant CC as context collector
+  participant ID as twin identity section
   participant RT as applyTwinContext
-  Hook->>Hook: tryBuildTwinDeps() (twinHandshake, L1139)
+  Hook->>Hook: tryBuildTwinDeps()
   Hook->>BO: resolveSendOptions(ctx incl. twinDeps + twinUserMessage)
-  BO->>RT: applyTwinContext(...) (build-options.ts:627)
-  RT-->>BO: { applied, retrievedChunks, degraded }
-  BO->>BO: baseSystem = applied.systemPrompt; twinReplacedBase = true
-  BO-->>Hook: opts (incl. opts.twinContext)
-  Hook->>Hook: turnComplete → mergeTwinSourcesIntoLastAssistant (L1460)
+  BO->>CC: collect (hostDeps.twin, hostDeps.twinQuery)
+  CC->>ID: produce (runs first, 15 s)
+  ID->>RT: applyTwinContext(...)
+  RT-->>ID: { applied, retrievedChunks, degraded }
+  ID-->>CC: { text, cacheSplit, handoff, sources }
+  CC-->>BO: identity (replaces baseSystem), sources
+  BO-->>Hook: opts (incl. contextSources["twin.identity"])
+  Hook->>Hook: turnComplete → mergeTwinSourcesIntoLastAssistant
 ```
 
-- **Chat (primary)** — `resolveSendOptions` (`build-options.ts:625-662`) calls `applyTwinContext` when the
-  character is twin-bound and the caller supplied `twinDeps` + `twinUserMessage`. On `result.applied` it
-  replaces `baseSystem` and sets `twinReplacedBase = true` (which suppresses the v2 persona section to avoid
-  contradictory guidance). The whole block is wrapped in try/catch — failure keeps the original prompt. The
-  retrieved context is stashed on `opts.twinContext` for the UI.
-- **Chat hook handshake** — `use-claude-chat.ts:1139` builds the deps when there's a user message; at
-  `turnComplete` (`use-claude-chat.ts:1460`) it attaches a Twin SourcesPart to the assistant message.
-- **Workflow** — `lib/workflow/nodes/shared/twin-injector.ts:70` is the other invoker.
+- **Chat (primary)** — the twin module's `identity` section (`lib/twin/context.ts`) runs when the agent is
+  twin-bound and the caller supplied `twinDeps` + `twinUserMessage` (passed on as `hostDeps.twin` and
+  `hostDeps.twinQuery`). It runs before every other context contribution, within 15 s. When it applies, the
+  resolver replaces `baseSystem` with the twin prompt and sets `identityReplacedBase = true` (which suppresses
+  the v2 persona section to avoid contradictory guidance); with cache optimization on, the stable part
+  replaces `baseSystem` and the retrieved chunks and style few-shot lead the dynamic tail. The redacted chunk
+  text it hands over is what memory recall leaves out (`kernelRetrieval.identityTexts`). A failure, a timeout
+  or a prompt that leaks PII keeps the original prompt. The retrieved context is reported under
+  `contextSources["twin.identity"]` for the UI, grounding and compaction.
+- **Chat hook** — `use-claude-chat` builds the deps when there's a user message; at `turnComplete` it
+  attaches a Twin SourcesPart to the assistant message.
+- **Workflow** — `lib/workflow/nodes/shared/twin-injector.ts` is the other invoker.
 
-<Callout type="warn" title="Inject log is workflow-only">
-  `recordTwinInject` (`inject-log.ts:38`) is an in-memory ring buffer (last 200) surfaced by the
-  [inject-log card](./workbench-ui#settings-tab). Today the **only** producer is the workflow `twin-injector`;
-  the chat send path does **not** record to it, so chat-side injections are not captured in that diagnostic
-  view. Treat the card as workflow-focused until the chat path is wired in.
+<Callout type="info" title="Inject log">
+  `recordTwinInject` (`lib/twin/runtime/inject-log.ts`) is an in-memory ring buffer (last 200, also persisted
+  as spans) surfaced by the [inject-log card](./workbench-ui#settings-tab). Both the chat identity section and
+  the workflow `twin-injector` record to it; the chat side records applied, degraded, `prompt-pii-blocked` and
+  `timeout` runs, labelled by `twinInjectSource` (chat, team, …).
 </Callout>
 
 ## Next

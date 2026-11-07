@@ -10,8 +10,8 @@ description: 发送时的 applyTwinContext —— 只嵌入一次、向量 + BM2
 <TLDR>
   `applyTwinContext`（`lib/twin/runtime/apply-twin-context.ts:170`）是唯一的发送时入口。对一个绑定孪生的角色，它把用户消息
   **只嵌入一次**，执行 RAG（向量，可选经 RRF 与 BM25 融合，可选过取并做词法重排），挑选风格少样本，组装四段式系统提示。
-  它 **永不抛错** —— 每个可能失败的 I/O 步骤都独立处理错误；失败时减少上下文，而不打断聊天。它接入了 `resolveSendOptions`
-  （`lib/claude/build-options.ts:625`）。
+  它 **永不抛错** —— 每个可能失败的 I/O 步骤都独立处理错误；失败时减少上下文，而不打断聊天。聊天发送路径经 twin 模块的
+  `identity` 上下文段（`lib/twin/context.ts`，ADR-0250 §14 `context` 修订）调用它。
 </TLDR>
 
 ## 发送时流程
@@ -122,23 +122,27 @@ return 0.7 * c.score + 0.3 * coverage   // 70% 余弦, 30% 关键词覆盖
 sequenceDiagram
   participant Hook as use-claude-chat
   participant BO as resolveSendOptions
+  participant CC as 上下文收集器
+  participant ID as 分身身份段
   participant RT as applyTwinContext
-  Hook->>Hook: tryBuildTwinDeps()（twinHandshake，L1139）
+  Hook->>Hook: tryBuildTwinDeps()
   Hook->>BO: resolveSendOptions(ctx 含 twinDeps + twinUserMessage)
-  BO->>RT: applyTwinContext(...)（build-options.ts:627）
-  RT-->>BO: { applied, retrievedChunks, degraded }
-  BO->>BO: baseSystem = applied.systemPrompt; twinReplacedBase = true
-  BO-->>Hook: opts（含 opts.twinContext）
-  Hook->>Hook: turnComplete → mergeTwinSourcesIntoLastAssistant（L1460）
+  BO->>CC: 收集（hostDeps.twin、hostDeps.twinQuery）
+  CC->>ID: produce（最先运行，15 秒）
+  ID->>RT: applyTwinContext(...)
+  RT-->>ID: { applied, retrievedChunks, degraded }
+  ID-->>CC: { text, cacheSplit, handoff, sources }
+  CC-->>BO: identity（替换 baseSystem）、来源
+  BO-->>Hook: opts（含 contextSources["twin.identity"]）
+  Hook->>Hook: turnComplete → mergeTwinSourcesIntoLastAssistant
 ```
 
-- **聊天（主路径）** —— `resolveSendOptions`（`build-options.ts:625-662`）在角色绑定孪生且调用方提供了 `twinDeps` + `twinUserMessage` 时调用 `applyTwinContext`。`result.applied` 时它替换 `baseSystem` 并置 `twinReplacedBase = true`（这会抑制 v2 persona 段，避免矛盾指引）。整块包在 try/catch 中 —— 失败保留原提示。召回的上下文被暂存到 `opts.twinContext` 供 UI 使用。
-- **聊天 hook 握手** —— `use-claude-chat.ts:1139` 在有用户消息时构建 deps；在 `turnComplete`（`use-claude-chat.ts:1460`）把一个 Twin SourcesPart 附到助手消息。
-- **工作流** —— `lib/workflow/nodes/shared/twin-injector.ts:70` 是另一个调用方。
+- **聊天（主路径）** —— 当 agent 绑定分身且调用方提供了 `twinDeps` + `twinUserMessage`（作为 `hostDeps.twin`、`hostDeps.twinQuery` 传入）时，twin 模块的 `identity` 段（`lib/twin/context.ts`）运行。它先于其他上下文贡献运行，限时 15 秒。生效时解析器用分身提示词替换 `baseSystem` 并置 `identityReplacedBase = true`（这会抑制 v2 persona 段，避免矛盾指引）；开启缓存优化时，稳定部分替换 `baseSystem`，检索块和风格少样本排在动态尾部最前。它交出的检索块脱敏文本就是记忆召回去重所用的内容（`kernelRetrieval.identityTexts`）。失败、超时或提示词泄露 PII 时保留原提示。召回的上下文以 `contextSources["twin.identity"]` 上报，供 UI、grounding 和压缩使用。
+- **聊天 hook** —— `use-claude-chat` 在有用户消息时构建 deps；在 `turnComplete` 把一个 Twin SourcesPart 附到助手消息。
+- **工作流** —— `lib/workflow/nodes/shared/twin-injector.ts` 是另一个调用方。
 
-<Callout type="warn" title="注入日志仅工作流">
-  `recordTwinInject`（`inject-log.ts:38`）是一个内存环形缓冲（最近 200 条），由 [注入日志卡](./workbench-ui#settings-tab) 展示。
-  目前 **唯一** 的生产者是工作流 `twin-injector`；聊天发送路径 **不** 写入它，因此聊天侧的注入不会出现在该诊断视图。在聊天路径接入之前，请把该卡视为面向工作流的。
+<Callout type="info" title="注入日志">
+  `recordTwinInject`（`lib/twin/runtime/inject-log.ts`）是一个内存环形缓冲（最近 200 条，同时持久化为 span），由 [注入日志卡](./workbench-ui#settings-tab) 展示。聊天的身份段和工作流 `twin-injector` 都会写入；聊天侧记录生效、降级、`prompt-pii-blocked` 和 `timeout`，并按 `twinInjectSource`（chat、team……）标注来源。
 </Callout>
 
 ## 下一步

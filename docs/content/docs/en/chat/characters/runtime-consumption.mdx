@@ -11,7 +11,7 @@ It covers the `resolveSendOptions` precedence chains, chat header, TTS voice ove
 Field definitions are in [Data Model](./data-model). This page explains how the runtime uses those fields.
 
 <TLDR>
-The convergence point is `lib/claude/build-options.ts:resolveSendOptions`. Character resolution at <Term>369–376</Term>; base system precedence at <Term>589–594</Term>; twin injection <Term>606–643</Term>; persona section <Term>744–753</Term>; plugin skills <Term>709–737</Term>; tool whitelist union <Term>827–836</Term>; MCP subset <Term>987–1005</Term>; computer-use gate <Term>1052–1053</Term>; plugin-tools filter <Term>1088–1089</Term>. Chat header reads it at `components/chat/chat-header.tsx:387–433`. TTS overlay at `lib/tts/speak-chat-message.ts:19–54`. Pet binding at `components/pet/console/binding-tab.tsx:14–70`. Teammates synthesize an ephemeral Character at `lib/squads/teammate/teammate-character.ts:56`.
+The convergence point is `lib/claude/build-options.ts:resolveSendOptions`. Character resolution at <Term>369–376</Term>; base system precedence at <Term>589–594</Term>; twin identity in `lib/twin/context.ts` (a context section); persona section <Term>744–753</Term>; plugin skills <Term>709–737</Term>; tool whitelist union <Term>827–836</Term>; MCP subset <Term>987–1005</Term>; computer-use gate <Term>1052–1053</Term>; plugin-tools filter <Term>1088–1089</Term>. Chat header reads it at `components/chat/chat-header.tsx:387–433`. TTS overlay at `lib/tts/speak-chat-message.ts:19–54`. Pet binding at `components/pet/console/binding-tab.tsx:14–70`. Teammates synthesize an ephemeral Character at `lib/squads/teammate/teammate-character.ts:56`.
 </TLDR>
 
 ## The build-options resolution pipeline
@@ -23,7 +23,7 @@ Once a session binds a Character (`session.characterId`), `resolveSendOptions` i
 | Character resolution | `build-options.ts:369–376` | `ctx.character` if supplied, else `resolveCharacterById(session.characterId)` |
 | Team member prompt | `build-options.ts:346` | `member.systemPromptOverride` falls back to `character.systemPrompt` |
 | Base system precedence | `build-options.ts:589–594` | session prompt &rarr; member override &rarr; character prompt &rarr; app default |
-| Twin context injection | `build-options.ts:606–643` | when twin-bound + deps + user message, `applyTwinContext` replaces base; stamps `opts.twinContext`; fail-open |
+| Twin identity | `lib/twin/context.ts` (the twin module's `identity` context section) | when twin-bound + deps + user message, the twin prompt replaces base; reports `contextSources["twin.identity"]`; fail-open |
 | Persona section | `build-options.ts:744–753` | `## Persona` (tone + personality) appended only when twin did NOT replace base |
 | Plugin skills | `build-options.ts:709–737` | `resolveSkillsForCharacter` over `pluginSkillIds` &rarr; container skill ids + section + tool union |
 | Tool whitelist union | `build-options.ts:827–836` | member override or character whitelist, unioned with skill, plugin, mode, and A2UI tools |
@@ -46,8 +46,8 @@ flowchart TD
     s3 --> s4["appSettings.defaultSystemPrompt"]
   end
 
-  SYS --> TWIN{"twinId + twinDeps\n+ userMessage?\n606-643"}
-  TWIN -- "applied" --> TR["baseSystem replaced\ntwinReplacedBase = true\nopts.twinContext stamped"]
+  SYS --> TWIN{"twinId + twinDeps\n+ userMessage?\nidentity section"}
+  TWIN -- "applied" --> TR["baseSystem replaced\nidentityReplacedBase = true\ncontextSources twin.identity"]
   TWIN -- "no / failed" --> PERS{"character.persona\nand NOT twinReplaced?\n744-753"}
   TR --> PERS
   PERS -- yes --> PSEC["append ## Persona section"]
@@ -82,35 +82,33 @@ let baseSystem =
   undefined
 ```
 
-### Twin context injection (opt-in, fail-open)
+### Twin identity (opt-in, fail-open)
 
-When the resolving character is twin-bound *and* the caller supplied `twinDeps` plus a non-empty `twinUserMessage`, the four-segment twin prompt **replaces** `baseSystem`. The runtime never throws — any failure degrades to the original prompt. On success it sets `twinReplacedBase = true` (which suppresses the persona section below) and stamps `opts.twinContext` so the chat hook can render a Twin `SourcesPart` on the assistant message.
+When the resolving character is twin-bound *and* the caller supplied `twinDeps` plus a non-empty `twinUserMessage`, the twin module's `identity` context section (ADR-0250 §14 `context` amendment) **replaces** `baseSystem` with the four-segment twin prompt. It runs before every other context contribution, within 15 s; a failure, a timeout or a prompt that leaks PII leaves the original prompt. When it applies the resolver sets `identityReplacedBase = true` (which suppresses the persona section below), and its sources land in `contextSources["twin.identity"]` so the chat hook can render a Twin `SourcesPart` on the assistant message. With cache optimization on, the stable part of the twin prompt replaces `baseSystem` and the retrieved chunks and style few-shot lead the dynamic tail.
 
 ```typescript
-// lib/claude/build-options.ts:606-643 (trimmed)
-if (character?.twinId && ctx.twinDeps && ctx.twinUserMessage && ctx.twinUserMessage.trim()) {
-  try {
-    const { applyTwinContext } = await import("@/lib/twin/runtime")
-    const result = await applyTwinContext({ character, userMessage: ctx.twinUserMessage, ... })
-    if (result.applied) {
-      baseSystem = result.applied.systemPrompt
-      twinReplacedBase = true
+// lib/twin/context.ts (trimmed): the twin module's `identity` section
+{
+  id: "identity",
+  cache: "turn",
+  slot: "identity",
+  deadlineMs: 15_000,
+  produce: async (ctx) => {
+    if (!ctx.agent?.twinId || !ctx.hostDeps.twin || !ctx.hostDeps.twinQuery?.trim()) return null
+    const result = await applyTwinContext({ character: ctx.agent, userMessage: ctx.hostDeps.twinQuery, ... })
+    // a prompt that leaks PII returns null; the inject log records why
+    return {
+      text: result.applied?.systemPrompt ?? "",
+      cacheSplit: result.applied?.cacheSegments, // stable prefix + per-turn dynamic part
+      handoff: result.retrievedChunks.map(({ chunk }) => chunk.contentRedacted),
+      sources, // contextSources["twin.identity"]: chunks, style samples, degraded
     }
-    // stamped when the runtime ran (even degraded) so the UI can show context
-    opts.twinContext = {
-      twinId: character.twinId,
-      retrievedChunks: result.retrievedChunks,
-      selectedStyleSamples: result.selectedStyleSamples.map(/* id/contextLabel/summary/tone */),
-      degraded: result.degraded,
-    }
-  } catch {
-    // Twin runtime failure is non-fatal — keep the original baseSystem.
-  }
+  },
 }
 ```
 
 <Status type="info">
-The twin prompt already encodes personality, so when `twinReplacedBase` is set the v2 persona section (`744–753`) is intentionally skipped to avoid contradictory guidance. Bind fields live on `Character.twinId` / `twinSettings`; the deep-dive is in the Employee Twin subsystem (linked below).
+The twin prompt already encodes personality, so when `identityReplacedBase` is set the v2 persona section (`744–753`) is intentionally skipped to avoid contradictory guidance. Bind fields live on `Character.twinId` / `twinSettings`; the deep-dive is in the Employee Twin subsystem (linked below).
 </Status>
 
 ### Persona section, plugin skills, tool & MCP unions
@@ -201,7 +199,7 @@ Setting `skillIds` and `pluginSkillIds` to the same set is deliberate: each reso
 
 ## Pointers to subsystem deep-dives
 
-- **Twin** — `Character.twinId` / `twinSettings` are consumed by `lib/twin/runtime`'s `applyTwinContext`. Full pipeline in the [Employee Twin](../subsystems/employee-twin) subsystem.
+- **Twin** — `Character.twinId` / `twinSettings` are consumed by the twin module's `identity` section (`lib/twin/context.ts`), which calls `applyTwinContext`. Full pipeline in the [Employee Twin](../subsystems/employee-twin) subsystem.
 - **IM / platform defaults** — `Character.platformDefaults` is consumed by connector binding when a character is bound to an inbound conversation. See [Platform Connectors](../subsystems/platform-connectors).
 
 <Cards>
