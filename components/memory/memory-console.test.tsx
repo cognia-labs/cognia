@@ -7,7 +7,7 @@ import type { Memory } from "@/types/memory/memory"
 import type { ManageMemoryResult } from "@/lib/memory/control-plane/manage"
 
 let mockData: Memory[] | undefined = []
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (query: () => unknown) => {
     const result = query()
     // The console's per-selection governance queries resolve to arrays; the

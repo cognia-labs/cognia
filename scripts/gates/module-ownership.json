@@ -189,6 +189,7 @@
         "components/chat/composer/model-picker.tsx",
         "components/chat/empty-state.tsx",
         "components/chat/markdown-renderer.tsx",
+        "components/chat/mention-backlinks-chip.tsx",
         "components/chat/message-parts/file-part-preview.tsx",
         "components/chat/message-parts/kept-copy-source-badge.tsx",
         "components/chat/message-parts/mcp-renderers/common.tsx",
@@ -474,7 +475,8 @@
       "note": "`api` is the provider kit a module's search provider is built with."
     },
     "governance": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/governance/producers/memory.ts"]
     },
     "guide": {
       "class": "shell"
@@ -516,10 +518,12 @@
       "api": ["lib/images/pixel-buffer.ts"]
     },
     "inbound": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/inbound/distiller.ts"]
     },
     "inbox": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/inbox/extract-plain-text.ts"]
     },
     "initializers": {
       "class": "shell"
@@ -592,15 +596,6 @@
     },
     "me": {
       "class": "shell"
-    },
-    "memory": {
-      "class": "module",
-      "api": [
-        "lib/memory/retrieve/retriever.ts",
-        "lib/memory/runtime/apply-memory-context.ts",
-        "lib/memory/runtime/build-deps.ts",
-        "lib/memory/write/remember-fact.ts"
-      ]
     },
     "mobile": {
       "class": "shell",
@@ -724,7 +719,11 @@
     },
     "rag": {
       "class": "module",
-      "api": ["lib/rag/generation-ingest.ts", "lib/rag/safe-embedding.ts"]
+      "api": [
+        "components/rag/retrieval-control-panel.tsx",
+        "lib/rag/generation-ingest.ts",
+        "lib/rag/safe-embedding.ts"
+      ]
     },
     "recovery": {
       "class": "module"

@@ -1,16 +1,15 @@
 "use client"
 
 /**
- * Generic confirm dialog for the agent-team workspace, layered on the shared
- * `AlertDialog` primitive. Centralises the workspace's destructive flows
- * (critical-escalation change, clear memory, delete team, force-resolve
- * consensus, remove teammate) so they share one widget with consistent
- * wording, an optional type-to-confirm guard, and a tone.
+ * Generic confirm dialog layered on the shared `AlertDialog` primitive, for
+ * destructive or risky flows that want one widget with consistent wording, an
+ * optional type-to-confirm guard, and a tone (delete a team, clear memory,
+ * force-resolve consensus, close a thread's pull request).
  *
  * Not a replacement for `components/a2ui/delete-confirm-dialog.tsx` (a2ui-
- * namespaced) or `components/scheduler/task-confirmation-dialog.tsx`
- * (scheduler-shaped) — those stay domain-bound. This one is workspace-scoped
- * and string-prop driven so callers pass already-translated copy.
+ * namespaced), `components/scheduler/task-confirmation-dialog.tsx`
+ * (scheduler-shaped) or the promise-based `useConfirmDialog` beside this
+ * file. It is string-prop driven, so callers pass already-translated copy.
  */
 
 import { useState } from "react"

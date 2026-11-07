@@ -13,7 +13,7 @@ jest.mock("./settings-save-indicator", () => ({
 
 // Stub the confirm dialog to a controllable harness so we can drive the
 // confirm/cancel branches without radix.
-jest.mock("./confirm-action-dialog", () => ({
+jest.mock("@/components/shared/confirm-action-dialog", () => ({
   ConfirmActionDialog: ({
     open,
     onConfirm,

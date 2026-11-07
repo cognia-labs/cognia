@@ -14,7 +14,7 @@ jest.mock("./settings-save-indicator", () => ({
 }))
 
 // Stub ConfirmActionDialog so we control confirm/cancel in tests.
-jest.mock("./confirm-action-dialog", () => ({
+jest.mock("@/components/shared/confirm-action-dialog", () => ({
   ConfirmActionDialog: ({
     open,
     onConfirm,

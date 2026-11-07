@@ -2,7 +2,7 @@
 import { render, screen } from "@testing-library/react"
 import type { MemoryConsoleState } from "@/hooks/memory/use-memory-console"
 
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => [] }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => [] }))
 jest.mock("@/lib/db/characters", () => ({ listCharacters: async () => [] }))
 jest.mock("@/hooks/memory/use-memory-command", () => ({
   useMemoryCommand: () => ({ run: jest.fn(), authority: "local" }),

@@ -22,7 +22,7 @@ jest.mock("@/stores/squads/agent-team-store/store", () => ({
 }))
 
 // EditableSettingRow uses debounceMs, stub ConfirmActionDialog just in case.
-jest.mock("./confirm-action-dialog", () => ({
+jest.mock("@/components/shared/confirm-action-dialog", () => ({
   ConfirmActionDialog: () => null,
 }))
 

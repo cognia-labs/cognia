@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { Memory } from "@/types/memory/memory"
 import { useProjectStore } from "@/stores/project/project-store"
 
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => [] }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => [] }))
 jest.mock("@/lib/db/characters", () => ({ listCharacters: async () => [] }))
 
 import { MemoryMoveDialog } from "./memory-move-dialog"

@@ -41,7 +41,7 @@ import {
   MAX_TASK_REVIEW_REVISIONS,
 } from "@/lib/squads/gates/task-review-policy"
 import { markSettingsSaved } from "./settings-save-indicator"
-import { ConfirmActionDialog } from "./confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 
 /** Escalation actions that change runtime blocking — require confirmation. */
 const DANGEROUS_CRITICAL: ReadonlySet<TeamBudgetEscalationAction> = new Set([

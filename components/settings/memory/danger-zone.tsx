@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ConfirmActionDialog } from "@/components/squads/settings/confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 
 /** Which rows a clear should match. */
 export type MemoryClearScope = "all" | "global" | "workspace" | "character" | "invalidated"

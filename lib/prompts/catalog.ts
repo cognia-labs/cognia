@@ -119,10 +119,6 @@ import {
   PLAN_APPROVED_PROMPT,
 } from "@/lib/agent/plan/approval-prompts"
 import {
-  EPISODIC_DISTILL_REQUEST_PROMPT,
-  EPISODIC_DISTILL_SYSTEM_PROMPT,
-} from "@/lib/memory/write/run-episodic-distill"
-import {
   REPLY_COPILOT_DRAFT_PROMPT,
   REPLY_COPILOT_DRAFT_REQUEST_PROMPT,
   REPLY_COPILOT_UNATTRIBUTED_NOTE_PROMPT,
@@ -159,12 +155,6 @@ import {
   CLI_REVIEW_PROMPT,
 } from "@/lib/agent/prompts/cli-prompts"
 import { RAG_HYDE_PROMPT, RAG_STEP_BACK_PROMPT } from "@/lib/ai/retrieval/expansion-prompts"
-import { MEMORY_RERANK_PROMPT } from "@/lib/memory/runtime/rerank-prompt"
-import {
-  MEMORY_CONSOLIDATE_PROMPT,
-  MEMORY_EXTRACT_PROMPT,
-} from "@/lib/memory/write/run-memory-extraction"
-import { MEMORY_PROJECT_EXTRACT_PROMPT } from "@/lib/memory/write/run-project-mining"
 import { STANDALONE_SEARCH_ANSWER_PROMPT } from "@/lib/search/standalone-answer-prompt"
 import { MODULE_PROMPTS } from "@/lib/modules/generated/prompts"
 import type { ModulePromptsEntry } from "@/lib/modules/manifest-types"
@@ -249,12 +239,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   ...Object.values(TWIN_SYSTEM_TEMPLATE_PROMPTS),
   // knowledge
   WIKI_SYSTEM_VOICE_PROMPT,
-  EPISODIC_DISTILL_SYSTEM_PROMPT,
-  EPISODIC_DISTILL_REQUEST_PROMPT,
-  MEMORY_EXTRACT_PROMPT,
-  MEMORY_PROJECT_EXTRACT_PROMPT,
-  MEMORY_CONSOLIDATE_PROMPT,
-  MEMORY_RERANK_PROMPT,
   FETCH_EXTRACT_PROMPT,
   READER_DISTILL_PROMPT,
   STANDALONE_SEARCH_ANSWER_PROMPT,

@@ -18,7 +18,7 @@ import { useTranslations } from "next-intl"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { useDebouncedCallback } from "@/hooks/workflow/use-debounced-callback"
-import { ConfirmActionDialog } from "./confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 import { markSettingsSaved } from "./settings-save-indicator"
 
 export interface EditableSettingRowConfirm<T> {

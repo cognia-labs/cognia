@@ -6,7 +6,7 @@ let mockData: Memory[] | undefined = []
 jest.mock("@/hooks/ui", () => ({
   useLiveQueryState: () => ({ data: mockData, isLoading: mockData === undefined, isEmpty: false }),
 }))
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => [] }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => [] }))
 
 const mockToast = { error: jest.fn(), success: jest.fn(), warning: jest.fn() }
 jest.mock("sonner", () => ({

@@ -18,7 +18,7 @@ import { HistoryIcon, RotateCcwIcon } from "lucide-react"
 import type { Memory } from "@/types/memory/memory"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ConfirmActionDialog } from "@/components/squads/settings/confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 
 export interface MemoryRevisionHistoryProps {
   revisions: readonly Memory[]

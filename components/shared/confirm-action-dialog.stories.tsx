@@ -4,7 +4,7 @@ import { fn } from "storybook/test"
 import { ConfirmActionDialog } from "./confirm-action-dialog"
 
 const meta = {
-  title: "Agent/Workspace/Settings/ConfirmActionDialog",
+  title: "Shared/ConfirmActionDialog",
   component: ConfirmActionDialog,
   parameters: { layout: "fullscreen" },
   args: {

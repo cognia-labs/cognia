@@ -35,7 +35,7 @@ import {
   EMPTY_MEMORY_FILTER,
   type MemoryFilter,
 } from "./memory-filter-toolbar"
-import { ConfirmActionDialog } from "./confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 import { markSettingsSaved } from "./settings-save-indicator"
 
 export interface MemorySectionProps {

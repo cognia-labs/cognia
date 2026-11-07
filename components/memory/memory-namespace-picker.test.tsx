@@ -6,7 +6,7 @@ import { useProjectStore } from "@/stores/project/project-store"
 jest.mock("@/lib/db/characters", () => ({
   listCharacters: async () => [{ id: "char-1", name: "Coding Assistant" }],
 }))
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: () => [{ id: "char-1", name: "Coding Assistant" }],
 }))
 

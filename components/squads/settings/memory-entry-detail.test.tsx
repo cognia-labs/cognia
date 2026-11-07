@@ -19,7 +19,7 @@ jest.mock("@/lib/squads/memory/shared-memory-orchestrator", () => ({
 }))
 
 // Stub ConfirmActionDialog so we can drive confirm / cancel.
-jest.mock("./confirm-action-dialog", () => ({
+jest.mock("@/components/shared/confirm-action-dialog", () => ({
   ConfirmActionDialog: ({
     open,
     onConfirm,

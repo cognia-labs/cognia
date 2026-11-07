@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），C5a 已实施（§13），C5b–C5c 待做。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），C5a、C5b 已实施（§13–§14），C5c 待做。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -293,3 +293,11 @@ interface ContextSection {
   - 运行：没有 `after` 的照旧一起启动；有 `after` 的在被等的那条结束后启动，`prior` 取它的 `handoff`。对方失败、超时、返回 `null`、段没有文字或没交 handoff 时，等待方拿到的上下文里没有 `prior` 键。等待方的截止时间从这时算起。放置、PII 闸、来源和会话状态都不变；handoff 不进任何输出。
 - `build-options`：收集时传 `kernelRetrieval.twinChunkTexts`，取自上面分身段写好的 `opts.twinContext`（`contentRedacted`），没有分身时是空数组。
 - 测试：`context-contributions.test.ts` 加 7 例（先后与 handoff、对方 4 种失败、对方超时后自己的截止、kernelRetrieval 透传）和 4 种不合格的 `after` 列表；`build-options.test.ts` 加 1 例（有、无分身时贡献读到的 `kernelRetrieval`）；其余四个模块的上下文测试补上 `kernelRetrieval` 字段。目前没有贡献声明 `after`，运行时行为不变。
+
+## 14. C5b 实施记录：memory 成为 manifest 模块（2026-11-07）
+
+- `lib/memory/module.ts`：`dependsOn` chat、data、editor、git、governance、inbound、inbox、project-knowledge、rag、twin；`api` 在原来 4 个文件之外补 21 个（`lib/memory/api/*` 七个、`control-plane/{manage,routed-manage,policy}`、`external/{discover,home}`、`history-filter`、`memory-event-bus`、`run-turn-memory`、`twin-lifecycle`、`hooks/memory/{use-memory-command,use-message-memories}`、`components/memory/{add-memory-dialog,memory-delete-confirm,memory-row}`）。过渡表删掉 memory 行；chat 行补 `mention-backlinks-chip`，rag 补 `retrieval-control-panel`，governance 补 `producers/memory`，inbound 补 `distiller`，inbox 补 `extract-plain-text`。
+- 提示词贡献 `lib/memory/prompts.ts`：`knowledge.memory.*` 六个定义（顺序与目录原来一致），`lib/prompts/catalog.ts` 删掉对应的导入和条目。调用方本来就直接用定义解析，不依赖目录。还清 `lib/prompts/catalog.ts -> memory`。
+- 环：试改时 memory 和 squads 互相依赖。memory 只借用了 `components/squads/settings/confirm-action-dialog.tsx`，它是通用的确认框，于是连测试和 story 一起搬到 `components/shared/`（foundation），13 处导入改路径，squads 的 `api` 去掉它，story 标题改为 `Shared/ConfirmActionDialog`。
+- `hooks/data/index.ts` 是汇总导出，不能列为 `api`：`use-memory-console.ts` 和 `memory-namespace-picker.tsx` 改从 `hooks/data/use-client-live-query` 导入，五个测试的 mock 路径跟着改。
+- 测试：`module.test.ts`、`prompts.test.ts` 新增；记忆、提示词目录、squads 设置、协调者、记忆设置相关的 124 个套件通过。运行时行为不变。

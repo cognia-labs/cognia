@@ -13,7 +13,7 @@ import { ExternalLinkIcon, GitMergeIcon, GitPullRequestIcon, WrenchIcon } from "
 import type { ChatSession } from "@cognia/agent-config-types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ConfirmActionDialog } from "@/components/squads/settings/confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 import type { PrDerivedStatus } from "@/lib/github/pr-observe/types"
 import {
   availablePrActions,

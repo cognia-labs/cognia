@@ -44,7 +44,7 @@ import {
   selectTeamTeammates,
 } from "@/stores/squads/agent-team-store/selectors"
 import { cancelConsensus, castVote, resolveConsensus } from "@/lib/squads/consensus-orchestrator"
-import { ConfirmActionDialog } from "./settings/confirm-action-dialog"
+import { ConfirmActionDialog } from "@/components/shared/confirm-action-dialog"
 
 /** Lowest-index option leading the raw vote count. Ties fall to lowest index. */
 function leadingOption(row: ConsensusRequest): number {

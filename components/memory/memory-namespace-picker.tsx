@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { listCharacters } from "@/lib/db/characters"
 import type { Character } from "@cognia/agent-config-types"
 import { useProjectStore } from "@/stores/project/project-store"

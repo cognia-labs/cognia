@@ -27,7 +27,7 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { useLiveQueryState } from "@/hooks/ui"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useMemoryCommand } from "@/hooks/memory/use-memory-command"
 import { listMemories, listMemoryRevisions, type MemoryNamespaceTarget } from "@/lib/db/memories"
 import { listMemoryAuditEvents, listMemoryEvidence } from "@/lib/db/memory-governance"

@@ -64,7 +64,6 @@ export default defineHostModule({
     "components/squads/members.tsx",
     "components/squads/runtime-badge.tsx",
     "components/squads/settings.tsx",
-    "components/squads/settings/confirm-action-dialog.tsx",
     "components/squads/tasks.tsx",
     "components/squads/team-run-controls.tsx",
     "hooks/squads/use-pending-squad-reviews.ts",
