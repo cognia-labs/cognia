@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），C5a–C5c 已实施（§13–§15）。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），C5a–C5c 已实施（§13–§15），项目历史工具迁移见 §16。§17 分身身份段的契约已评审（结论见 §17.4）。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -321,3 +321,43 @@ interface ContextSection {
 - 删除：`plugin-tool-ipc.ts` 的导入、依赖解析和分发分支；`build-options.ts` 的提供块和 `resolveMemoryConfig` 导入。插件 id 变为 `cognia-memory-builtin`，没有读取方依赖旧 id `cognia-project-history-builtin`。
 - memory 的 `dependsOn` 加 `external-bridge`（执行逻辑用 `wrapUntrusted`）。还清 `lib/claude/build-options.ts -> memory`、`lib/claude/project-history-tool.ts -> external-bridge` 两条方向边。
 - 测试：`lib/memory/agent-tools.test.ts` 新增 5 例；`module.test.ts` 改为断言工具声明；`plugin-tool-ipc.test.ts` 的路由用例改走 `useModuleTools("memory", …)`，断言不变；`build-options-memory.test.ts` 的四个提供/不提供用例不改即通过，作为迁移前后的对照；`types/agent/tool.test.ts` 增加插件 id 断言。
+
+## 17. 分身：身份段的契约增补（2026-11-07）
+
+### 17.1 现状（`resolveSendOptions`，取自 `a2954d3ab3`）
+
+- 条件：角色有 `twinId`，调用方传了 `twinDeps` 和非空的 `twinUserMessage`。在收集上下文贡献**之前**、按顺序运行，没有截止时间。
+- `applyTwinContext` 返回 `applied`（整段 `systemPrompt`，以及缓存切分 `cacheSegments: { stable, dynamic }`）、`retrievedChunks`、`selectedStyleSamples`、`degraded` / `degradedReason`、`citations`。
+- `build-options` 对 `applied` 整体做 `hasNoLeakingPiiDeep`。通过时用它**替换** `baseSystem`：缓存优化开且有 `dynamic` 时，`stable` 进前缀、`dynamic` 进动态尾部；否则整段替换。同时设 `twinReplacedBase`，**抑制 persona 段**。
+- 没被闸拦、且有块、有风格样例或降级时，写 `opts.twinContext`。读取方：`hooks/chat/claude-chat-events.ts`、`lib/chat/room/runner.ts`（经 `mergeTwinSourcesIntoLastAssistant`，在 `lib/claude/adapter.ts`）、`lib/rag/chat-grounding.ts`、`lib/rag/compaction-runtime.ts`、`build-options` 自己（`kernelRetrieval.twinChunkTexts`）。
+- 最后写注入日志 `recordTwinInject`（applied、degraded、`prompt-pii-blocked`、块与样例数、耗时、会话）。失败一律保留原 `baseSystem`。
+- 归属：`twin` 是过渡表的行（`api` 11 个文件），有 24 条方向边指向它（多数来自内核的 `lib/ai/*`），其中 `build-options.ts -> twin` 只因上面这一块。
+
+### 17.2 要补的契约
+
+**A. 身份段放在哪里。** 推荐：`ContextSlot` 增加封闭的 `identity`。全应用最多一个模块声明它（G5 检查）。这一段的 `text` 是完整身份提示词，可另带 `cache: { stable, dynamic }` 切分。内核收到且过闸后用它替换 `baseSystem`、抑制 persona；缓存优化开且有切分时，`stable` 进前缀、`dynamic` 进尾部。没有这一段时一切照旧。备选：新的 manifest 字段 `identity`，作为单独一类贡献——语义更清楚，但要多一套生成表、加载器和门禁。
+
+**B. 记忆去重（跨模块）。** 推荐：分两阶段，`identity` 段先跑完，其余贡献再并发（与现在分身先跑的时序相同）。身份段在 `handoff` 交出检索到的脱敏文本，内核把它放进 `kernelRetrieval`。字段改名为与模块无关的 `identityTexts`，记忆因此不知道分身。备选：允许跨模块的 `after: "twin.identity"`——更通用，但模块之间多了一种耦合，一层限制也要重新定义。
+
+**C. 来源。** 推荐：`opts.twinContext` 改为 `contextSources["twin.identity"]`（类型在 `types/twin` 合并进 `ContextSourcesMap`），四个读取方改用 `contextSourcesOf`，删除 `SendOptions.twinContext`（插件契约的类型随之变，kit pin 再次过期）。备选：内核从贡献的来源回填 `SendOptions.twinContext`，读取方不动——改动小，但留下一个只为兼容存在的字段。
+
+**D. 截止时间。** 推荐：15 秒，与其他检索段一致；超时等同于失败（保留原 `baseSystem`、不抑制 persona），注入日志记 `degraded`。备选：不设，与现在一致——一次卡住的检索会一直拖住发送。
+
+**E. 闸与注入日志（不需决定，沿用现状）。** 模块对 `applied` 自查 PII：被拦就不交身份文字，注入日志记 `prompt-pii-blocked`。内核对身份段再闸一次作后备。`recordTwinInject` 移进模块的 `produce`。
+
+**F. 宿主依赖。** `hostDeps.twin` 已有；`twinUserMessage` 改为 `hostDeps.twinQuery`，`twinInjectSource` 改为 `hostDeps.twinInjectSource`，由 twin 模块声明。查询向量取 `ctx.query.embedding`。
+
+### 17.3 步骤
+
+- C6a 内核：`identity` slot、两阶段收集、`handoff` → `kernelRetrieval.identityTexts`、替换 `baseSystem` 与抑制 persona、缓存切分放置、G5 唯一性检查、单测。
+- C6b `twin` 成为 manifest 模块（补 `dependsOn`、`api`），行为不变。
+- C6c 分身贡献 `identity`（`lib/twin/context.ts`），来源迁移，删除 `build-options` 的分身块和 `SendOptions.twinContext`，还清 `build-options.ts -> twin`。
+
+### 17.4 评审结论（2026-11-07）
+
+全部采用推荐项：
+
+1. 身份段：`ContextSlot` 增加封闭的 `identity`，全应用最多一个模块声明，段可带 `cache: { stable, dynamic }`。
+2. 记忆去重：两阶段收集；身份段的 `handoff` 由内核放进 `kernelRetrieval.identityTexts`（取代 `twinChunkTexts`）。
+3. 来源：`contextSources["twin.identity"]`，删除 `SendOptions.twinContext`。
+4. 截止时间：15 秒，超时按失败处理。
