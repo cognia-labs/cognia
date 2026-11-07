@@ -10,6 +10,11 @@ const warn = jest.fn()
 jest.mock("@/lib/best-of-n/restart-recovery", () => ({
   recoverBestOfNRunsOnStartup: () => recover(),
 }))
+const dispose = jest.fn()
+const installRunControl = jest.fn(() => dispose)
+jest.mock("@/lib/best-of-n/run-control", () => ({
+  installBestOfNRunControl: () => installRunControl(),
+}))
 jest.mock("@cognia/logging", () => ({
   loggers: { agent: { warn: (...a: unknown[]) => warn(...a) } },
 }))
@@ -18,6 +23,8 @@ beforeEach(() => {
   __resetBestOfNRecoveryForTests()
   recover.mockReset()
   warn.mockReset()
+  installRunControl.mockClear()
+  dispose.mockClear()
 })
 
 it("recovers once per process, even under StrictMode remounts", async () => {
@@ -49,4 +56,13 @@ it("logs groups it could not recover and a failed pass", async () => {
   render(<BestOfNRecoveryInitializer />)
   await waitFor(() => expect(warn).toHaveBeenCalledTimes(2))
   expect(String(warn.mock.calls[1][1].error)).toContain("Host offline")
+})
+
+it("registers the group's run control while mounted, and removes it on unmount", async () => {
+  recover.mockResolvedValue({ recovered: [], released: [], failed: [] })
+  const view = render(<BestOfNRecoveryInitializer />)
+  await waitFor(() => expect(installRunControl).toHaveBeenCalledTimes(1))
+  expect(dispose).not.toHaveBeenCalled()
+  view.unmount()
+  expect(dispose).toHaveBeenCalledTimes(1)
 })

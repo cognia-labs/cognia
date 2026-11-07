@@ -40,6 +40,7 @@ import { useRunControlActions } from "@/hooks/agent-runs/use-agent-run-actions"
 import {
   COCKPIT_STATUS_GROUPS,
   filterKindLabelKey,
+  nestRunRows,
   runKindLabelKey,
   type CockpitStatusGroup,
 } from "@/lib/execution/cockpit-model"
@@ -143,6 +144,9 @@ export function AgentRunsPanel({
    * either so a `?run=` from an IM card resolves whether the run is currently
    * projected from the journal or from a live broker leg.
    */
+  // Each run under the run that started it: a best-of-N group's attempts
+  // under the group, a delegation's runs under the delegation.
+  const nestedRows = useMemo(() => nestRunRows(rows), [rows])
   const selected = useMemo(
     () =>
       selectedId
@@ -323,10 +327,11 @@ export function AgentRunsPanel({
                     : t("empty")}
               </li>
             )}
-            {rows.map((row) => (
+            {nestedRows.map(({ row, depth }) => (
               <li key={row.rowId}>
                 <RunListRow
                   row={row}
+                  depth={depth}
                   selected={selected?.rowId === row.rowId}
                   onSelect={() => onSelect(row.runId ?? row.nativeId)}
                 />
@@ -414,10 +419,13 @@ function FilterChip({
 
 function RunListRow({
   row,
+  depth,
   selected,
   onSelect,
 }: {
   row: UnifiedExecutionRow
+  /** How many listed runs above it started it; indents the row. */
+  depth: number
   selected: boolean
   onSelect: () => void
 }) {
@@ -429,10 +437,14 @@ function RunListRow({
       type="button"
       onClick={onSelect}
       aria-current={selected}
+      data-depth={depth}
       className={cn(
-        "flex w-full flex-col gap-1 border-b px-3 py-2 text-left hover:bg-muted/50",
+        "flex w-full flex-col gap-1 border-b py-2 pr-3 text-left hover:bg-muted/50",
+        depth > 0 && "border-l-2 border-l-muted",
         selected && "bg-muted"
       )}
+      // Capped so a deep tree cannot push the label out of a narrow list.
+      style={{ paddingLeft: `${0.75 + Math.min(depth, 4) * 1}rem` }}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="truncate text-sm font-medium">{row.label}</span>

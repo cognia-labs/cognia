@@ -5,6 +5,8 @@ import {
   elapsedPartsFrom,
   executionRowFilterKind,
   EXECUTION_FILTER_KINDS,
+  brokerLegRow,
+  brokerLegStandIns,
   journalRunRow,
   mapRunStatus,
   mapExecStatus,
@@ -435,5 +437,52 @@ describe("elapsedPartsFrom", () => {
 
   it("clamps negative skew to zero", () => {
     expect(elapsedPartsFrom(10_000, 5_000)).toEqual({ hours: 0, minutes: 0, seconds: 0 })
+  })
+})
+
+describe("broker legs that stand in for a journal run", () => {
+  const journal = (o: Partial<ExecutionRun> = {}): ExecutionRun => ({
+    id: "execution:job:candidate",
+    kind: "job",
+    sourceId: "candidate",
+    title: "Best-of-N 1/2 · agent",
+    status: "running",
+    currentRevision: 0,
+    startedAt: 1,
+    updatedAt: 1,
+    parentRunId: "execution:best-of-n:team",
+    ...o,
+  })
+
+  it("matches a leg to the run its lease names exactly, while that run is live", () => {
+    const attempt = journal()
+    const legs = [
+      leg({ id: "exact", kind: "team", runId: attempt.id }),
+      leg({ id: "by-source", kind: "team", runId: "candidate" }),
+      leg({ id: "none", kind: "team" }),
+    ]
+    expect([...brokerLegStandIns([attempt], legs).keys()]).toEqual(["exact"])
+    expect(brokerLegStandIns([journal({ status: "completed" })], legs).size).toBe(0)
+  })
+
+  it("takes that run's kind and parent, so a best-of-N attempt is not labelled a Squad", () => {
+    const attempt = journal()
+    const row = brokerLegRow(leg({ id: "exact", kind: "team", runId: attempt.id }), attempt)
+    expect(row.kind).toBe(executionRowFilterKind(journalRunRow(attempt)))
+    expect(row.parentRunId).toBe("execution:best-of-n:team")
+    expect(brokerLegRow(leg({ kind: "team" })).kind).toBe("team")
+  })
+
+  it("files a best-of-N group under its own filter kind, and journal rows keep their parent", () => {
+    const group = journal({
+      id: "execution:best-of-n:team",
+      kind: "best-of-n",
+      sourceId: "group",
+      parentRunId: undefined,
+    })
+    expect(EXECUTION_FILTER_KINDS).toContain("best-of-n")
+    expect(executionRowFilterKind(journalRunRow(group))).toBe("best-of-n")
+    expect(journalRunRow(journal()).parentRunId).toBe("execution:best-of-n:team")
+    expect(journalRunRow(group)).not.toHaveProperty("parentRunId")
   })
 })

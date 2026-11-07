@@ -2855,6 +2855,7 @@
     },
     "kind": {
       "agentTurn": "Chat",
+      "bestOfN": "Best-of-N",
       "bot": "Bot",
       "chat": "Chat",
       "connector": "Connector",
@@ -3013,6 +3014,7 @@
           "reentry_failed": "the Squad could not resume this run",
           "replacement_cleanup_failed": "the previous run could not be fully stopped for replacement",
           "squad_not_ready": "the Squad is missing a binding it needs to run",
+          "stop_unconfirmed": "a task's executor was told to stop, but its end was never confirmed",
           "uncertain_side_effect": "a side effect may or may not have happened"
         }
       },
@@ -18470,6 +18472,7 @@
     },
     "kind": {
       "agentTurn": "Chat",
+      "bestOfN": "Best-of-N",
       "bot": "Bot",
       "chat": "Chat",
       "connector": "Connector",

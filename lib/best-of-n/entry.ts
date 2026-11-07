@@ -134,6 +134,7 @@ export async function startPreparedBestOfN(
     ...target,
     prompt,
     projectId: session.projectId,
+    sessionId: session.id,
     requiredChecks,
     budgetPolicy: {},
     // Resolved again: a configuration disabled since the preview is refused.

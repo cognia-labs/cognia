@@ -136,6 +136,7 @@ const EN: ActivityI18n = {
       delegation: "Delegated task",
       job: "Background task",
       "security-scan": "Security scan",
+      "best-of-n": "Best-of-N",
       bot: "Bot",
       // A run the external Run API asked for (ADR-0188). Named for what the
       // reader sees, not the subsystem.
@@ -251,6 +252,7 @@ const ZH: ActivityI18n = {
       delegation: "委派任务",
       job: "后台任务",
       "security-scan": "安全扫描",
+      "best-of-n": "Best-of-N",
       bot: "Bot",
       fusion: "路由运行",
     })[kind] ?? "执行任务",

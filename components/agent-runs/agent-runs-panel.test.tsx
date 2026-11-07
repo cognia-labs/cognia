@@ -139,6 +139,35 @@ describe("AgentRunsPanel", () => {
     expect(within(list).getByText("kind.job")).toBeInTheDocument()
   })
 
+  it("lists a best-of-N group's attempts under the group, indented", () => {
+    const rows = [
+      row({
+        rowId: "journal:attempt",
+        nativeId: "attempt",
+        runId: "attempt",
+        kind: "job",
+        label: "Best-of-N 1/2 · agent",
+        parentRunId: "group",
+      }),
+      row({
+        rowId: "journal:group",
+        nativeId: "group",
+        runId: "group",
+        kind: "best-of-n",
+        label: "Fix it",
+      }),
+    ]
+    cockpit = state({ rows, allRows: rows })
+    render(<AgentRunsPanel onSelect={jest.fn()} />)
+    const list = screen.getByRole("list", { name: "title" })
+    const items = within(list)
+      .getAllByText(/Fix it|Best-of-N 1\/2/)
+      .map((label) => label.closest("[data-depth]")!)
+    expect(items.map((item) => item.getAttribute("data-depth"))).toEqual(["0", "1"])
+    expect(within(items[0] as HTMLElement).getByText("kind.bestOfN")).toBeInTheDocument()
+    expect((items[1] as HTMLElement).style.paddingLeft).toBe("1.75rem")
+  })
+
   /** A scheduler row's `kind` is an arbitrary product string. */
   it("never renders a raw taskType as a label", () => {
     const scheduled = row({

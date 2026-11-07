@@ -68,6 +68,8 @@ export interface UnifiedExecutionRow {
   waitingForSlot?: boolean
   /** Broker leg id when this row can be cancelled through the broker. */
   legId?: string
+  /** The run that started this one (journal rows only), for nesting the list. */
+  parentRunId?: string
   /** True when the panel's cancel affordance should be shown. */
   cancellable: boolean
 
@@ -202,6 +204,26 @@ function inProject(rowProjectId: string | undefined, filter: string | undefined)
  * finished run that session ever had. The live monitor never noticed because it
  * drops settled runs before asking; the cockpit keeps them on purpose.
  */
+/**
+ * Broker legs that name `run` by its own id: the leg IS that run, admitted.
+ * While it is live it stands in for the run's row, so it takes the run's
+ * place in the tree and the run's kind (a best-of-N attempt reads as the
+ * attempt under its group, not as a lease of the kind its turn was admitted
+ * under).
+ */
+export function brokerLegStandIns(
+  runs: readonly ExecutionRun[],
+  brokerLegs: readonly ExecutionLegSnapshot[]
+): Map<string, ExecutionRun> {
+  const byId = new Map(runs.map((run) => [run.id, run]))
+  const standIns = new Map<string, ExecutionRun>()
+  for (const leg of brokerLegs) {
+    const run = leg.runId ? byId.get(leg.runId) : undefined
+    if (run && !isTerminalRunStatus(run.status)) standIns.set(leg.id, run)
+  }
+  return standIns
+}
+
 export function hasLiveBrokerLeg(
   run: ExecutionRun,
   brokerLegs: readonly ExecutionLegSnapshot[]
@@ -236,12 +258,17 @@ function brokerKindForRun(run: ExecutionRun): ExecutionLegSnapshot["kind"] | und
  * work, the cockpit keeps history too — never in what a row means.
  */
 
-export function brokerLegRow(leg: ExecutionLegSnapshot): UnifiedExecutionRow {
+export function brokerLegRow(
+  leg: ExecutionLegSnapshot,
+  /** The journal run this leg stands in for (`brokerLegStandIns`). */
+  standsFor?: ExecutionRun
+): UnifiedExecutionRow {
   return {
     rowId: `broker:${leg.id}`,
     source: "broker",
     nativeId: leg.id,
-    kind: leg.kind,
+    kind: standsFor ? executionRowFilterKind(journalRunRow(standsFor)) : leg.kind,
+    ...(standsFor?.parentRunId ? { parentRunId: standsFor.parentRunId } : {}),
     label: leg.label,
     status: leg.cancelled ? "cancelled" : leg.state,
     startedAt: leg.startedAt,
@@ -308,6 +335,7 @@ export function journalRunRow(run: ExecutionRun): UnifiedExecutionRow {
     startedAt: run.startedAt,
     ...(run.sessionId ? { sessionId: run.sessionId } : {}),
     runId: run.id,
+    ...(run.parentRunId ? { parentRunId: run.parentRunId } : {}),
     ...(run.projectId ? { projectId: run.projectId } : {}),
     // The broker owns cancellation for a live leg; a journal row is driven
     // through the control plane instead, which `allowedActions` describes.
@@ -373,9 +401,10 @@ export function buildExecutionMonitorModel(input: BuildMonitorModelInput): Unifi
   const rows: UnifiedExecutionRow[] = []
   const journalSourceKeys = new Set<string>()
 
+  const standIns = brokerLegStandIns(input.executionRuns ?? [], input.brokerLegs)
   for (const leg of input.brokerLegs) {
     if (!inProject(leg.projectId, input.projectId)) continue
-    rows.push(brokerLegRow(leg))
+    rows.push(brokerLegRow(leg, standIns.get(leg.id)))
   }
 
   const supersededTeamRuns = supersededTeamRunIds(input.executionRuns ?? [])
@@ -448,6 +477,9 @@ export const EXECUTION_FILTER_KINDS = [
   // Reachable once the Router + Fusion Run API projects the runs it creates
   // (ADR-0188). Appended for the same KIND_RANK reason as everything above it.
   "fusion",
+  // A best-of-N group's own row (`best-of-n-bridge.ts`), apart from the
+  // Squad runs it was once listed among.
+  "best-of-n",
 ] as const
 
 export type ExecutionFilterKind = (typeof EXECUTION_FILTER_KINDS)[number]

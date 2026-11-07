@@ -67,6 +67,7 @@ const KIND_KEYS: Record<string, string> = {
   delegation: "kind.delegation",
   job: "kind.job",
   "security-scan": "kind.securityScan",
+  "best-of-n": "kind.bestOfN",
   // A run the Router + Fusion Run API asked for (ADR-0188 B2).
   fusion: "kind.fusion",
 }

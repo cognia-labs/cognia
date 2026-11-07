@@ -77,6 +77,19 @@ export type ExecutionRunKind =
    * with its own idempotency key rather than a second life for this one.
    */
   | "fusion"
+  /**
+   * A best-of-N group: one prompt run as N independent attempts, from which a
+   * person picks the result to publish. Each attempt is a `job` child of this
+   * run, in its own conversation.
+   *
+   * Its own kind rather than a `team`, although a durable team run keeps its
+   * ledger: a group has no Squad behind it, so a Squad's pause, steer, retry
+   * and coordination views would all be offered and fail. Stoppable (the whole
+   * group is cancelled) and inspectable, never steerable, pausable or
+   * retryable: the attempts share no input lane, and running the comparison
+   * again is a new request, not a second life for this one.
+   */
+  | "best-of-n"
 
 /**
  * Where a run was asked for. Absent means `"local"` — every run written before

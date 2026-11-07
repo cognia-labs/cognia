@@ -2,6 +2,7 @@ import "fake-indexeddb/auto"
 
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
+import { bestOfNExecutionRunId, ensureBestOfNExecutionRun } from "./best-of-n-bridge"
 import {
   agentTeamExecutionRunId,
   ensureAgentTeamExecutionRun,
@@ -169,6 +170,19 @@ describe("AgentTeam ExecutionRun bridge", () => {
       await reportTeamRunUsage(sourceRun.id, { ...usage, costUsd: 0.01 }, 200)
       const run = await getDb().executionRuns.get(agentTeamExecutionRunId(sourceRun.id))
       expect(run?.latestSnapshot?.usage).toEqual({ ...usage, costUsd: 0.01 })
+    })
+
+    it("lands a best-of-N group's spend on the group's own row", async () => {
+      await ensureBestOfNExecutionRun({
+        groupId: "group-1",
+        teamRunId: sourceRun.id,
+        prompt: "Fix it",
+        at: 100,
+      })
+      await reportTeamRunUsage(sourceRun.id, usage, 200)
+      const row = await getDb().executionRuns.get(bestOfNExecutionRunId(sourceRun.id))
+      expect(row?.latestSnapshot?.usage).toEqual(usage)
+      expect(await getDb().executionRuns.get(agentTeamExecutionRunId(sourceRun.id))).toBe(undefined)
     })
 
     /** A usage report must never be what creates an execution run. */

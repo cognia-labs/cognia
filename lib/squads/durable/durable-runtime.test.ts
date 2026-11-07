@@ -462,6 +462,22 @@ describe("the app's durable AgentTeam coordinator", () => {
     )
   })
 
+  it("writes no team row for a best-of-N group's run, which has a row of its own", async () => {
+    await getDb().executionRuns.add({
+      id: "execution:best-of-n:run-group",
+      kind: "best-of-n",
+      sourceId: "group-1",
+      title: "Fix it",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 80,
+      updatedAt: 80,
+    })
+    await createDurableTeamCoordinator({ now: () => 90 }).prepareRun(team(), "run-group")
+    expect(await getDb().executionRuns.get("execution:team:run-group")).toBeUndefined()
+    expect(await runEventJournal.replay("execution:team:run-group")).toEqual([])
+  })
+
   it("records a durable run without frozen origin as external-event", async () => {
     await createDurableTeamCoordinator({ now: () => 90 }).prepareRun(team(), "automatic")
     expect(

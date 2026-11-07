@@ -107,6 +107,7 @@
   },
   "kind": {
     "agentTurn": "对话",
+    "bestOfN": "Best-of-N",
     "bot": "Bot",
     "chat": "对话",
     "connector": "连接器",
@@ -233,6 +234,7 @@
         "recover_needs_input": "最后一个检查点需要人工决定",
         "squad_not_ready": "该小队缺少运行所需的绑定",
         "uncertain_side_effect": "某个副作用可能已发生也可能未发生",
+        "stop_unconfirmed": "已要求某个任务的执行器停止，但未能确认它已结束",
         "missing_execution_constraints": "缺少启动时保存的权限约束，无法安全恢复此运行",
         "replacement_cleanup_failed": "替代运行启动前，未能完全停止原运行",
         "launch_failed": "小队未能启动此运行",

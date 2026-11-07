@@ -13,6 +13,7 @@ import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type { RunEventType, RunUsageSnapshot } from "@/types/execution/run"
 
 import { ensureConnectorRunBinding } from "./agent-state-bridge"
+import { bestOfNExecutionRunId } from "./best-of-n-bridge"
 import {
   authorityFromPermissionCeiling,
   recordedRunMetadata,
@@ -149,8 +150,9 @@ export async function reopenTeamExecutionRun(sourceRunId: string, ts = Date.now(
  * phone needs to say how a run went travel as a summary-visibility event and
  * land on `latestSnapshot.usage` through the reducer.
  *
- * Only an existing execution run is reported on: a usage report must never be
- * what creates one. Failures are swallowed, because a lost report costs a
+ * A best-of-N group's durable run reports on the group's own row. Only an
+ * existing execution run is reported on: a usage report must never be what
+ * creates one. Failures are swallowed, because a lost report costs a
  * number on a screen and a thrown one would fail the dispatch that spent it.
  */
 export async function reportTeamRunUsage(
@@ -158,9 +160,16 @@ export async function reportTeamRunUsage(
   usage: RunUsageSnapshot,
   ts: number
 ): Promise<void> {
-  const runId = agentTeamExecutionRunId(sourceRunId)
   try {
-    if (!(await getExecutionRun(runId))) return
+    // A Squad's run reports on its team row, a best-of-N group's on its own.
+    const teamRunId = agentTeamExecutionRunId(sourceRunId)
+    const groupRunId = bestOfNExecutionRunId(sourceRunId)
+    const runId = (await getExecutionRun(teamRunId))
+      ? teamRunId
+      : (await getExecutionRun(groupRunId))
+        ? groupRunId
+        : undefined
+    if (!runId) return
     await runEventJournal.append(
       runId,
       semanticRunEvent(

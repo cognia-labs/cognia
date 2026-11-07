@@ -220,6 +220,7 @@ describe("cockpit dynamic translation keys", () => {
     const camel: Record<string, string> = {
       "workflow-step": "workflowStep",
       "security-scan": "securityScan",
+      "best-of-n": "bestOfN",
     }
     const keys = EXECUTION_FILTER_KINDS.map((kind) => camel[kind] ?? kind)
     expectKeys(enExecution.kind, zhExecution.kind, keys, "execution.kind")

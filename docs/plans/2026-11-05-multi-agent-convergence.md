@@ -297,7 +297,7 @@ interface LaunchChildRunInput {
 - `action.team.run` 的工作流知识授权和 fan-out 深度冻结进 `executionConstraints`，恢复重入时不丢；节点的 `goal` 参数原来声明了却没传，现在传入。
 - 外观删除后：恢复是 `lib/squads/durable/recover-squad-runs.ts`，子运行重试是 `retry-squad-child.ts`；看板的暂停/恢复走 `useSquadRunControl`（可达配对 Host），⌘K 的启动是人的启动尝试，暂停/恢复走 `dispatchRunControl`，拒绝时 toast。
 - 聚合模块的对照测试是 `lib/squads/aggregation-parity.test.ts`。四处原本在打平规则上一致；不一致的四处按模块规则统一：空白回答算失败（ensemble 原来算作回答）、比较前去掉首尾空白（ensemble 原来把 `yes` 与 `yes\n` 分成两票）、没被评分的尝试排在最后且不能获胜（judge panel 原来当 0 分，可能被选为赢家），全部未评分时 judge panel 失败而不是给出 0 分赢家。另：非有限或负的票重计为 0（共识投票原来会被负权重拉低）。保留的差异写在模块头注释里：小队投票判定法定数、ensemble 的"多数票"只报众数、judge panel 取多名评委均值、council 的一致度是合成者自评。
-- best-of-N 监控面板核对：候选行的"停止"原来报成功但尝试继续跑，已改为只停这一个候选（中断其会话，记为 cancelled）。组行仍是 `team` 行：重试、暂停、引导会被提供却做不成，停止落到 recovery_required，候选不嵌套在组下，标签是原始提示词。修法要么给组一个独立的运行 kind（改动配对客户端校验的线上协议），要么在 `team` 行上加标记，待用户选择（证据台账 X20）。
+- best-of-N 监控面板核对：候选行的"停止"原来报成功但尝试继续跑，已改为只停这一个候选（中断其会话，记为 cancelled）。组行原来是 `team` 行（重试、暂停、引导被提供却做不成，停止落到 recovery_required，候选不嵌套，标签是原始提示词）。按用户选择改为独立的运行 kind `best-of-n`：组行 `execution:best-of-n:<teamRunId>` 在持久运行准备前写出，团队日志因此不再写 `team` 行，持久运行的用量记到组行；唯一的控制是停止，由 best-of-N 自己注册（`lib/best-of-n/run-control.ts`，从桌面恢复初始化器挂上，内核控制表不能引用模块），取消整组，组读到 cancelled 后落定组行；候选是组行的子运行，标题 `Best-of-N i/n · 智能体 (模型)`，租约指向候选自己的行，活跃的 broker 腿替代该行并沿用其 kind 与父行；运行监控面板按父子嵌套显示。线上协议不需要改：没有任何地方枚举运行 kind（schema 目录、Rust 同步注册表、`execution_run_control` 只带 runId），旧版配对客户端把这一 kind 显示为"其他"（台账 D33、O38、X23–X25）。
 
 ## 9. P6：房间→小队
 

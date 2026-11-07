@@ -155,6 +155,19 @@ const until = async (check: () => boolean) => {
   expect(check()).toBe(true)
 }
 
+it("keeps the source conversation for the group's row, off what the Host allocates", async () => {
+  const f = fixture()
+  const handle = await f.service.startBestOfN({ ...f.input, sessionId: "source-chat" })
+  await handle.completion
+  expect(f.host.start).toHaveBeenCalledWith(
+    expect.not.objectContaining({ sessionId: expect.anything() })
+  )
+  expect(f.execution.prepare).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ sessionId: "source-chat" })
+  )
+})
+
 it("allocates once and dispatches exactly N independent attempts from the frozen base", async () => {
   const f = fixture()
   const [first, again] = await Promise.all([

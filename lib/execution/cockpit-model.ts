@@ -27,6 +27,7 @@
 
 import {
   brokerLegRow,
+  brokerLegStandIns,
   countExecutionRowsByKind,
   hasLiveBrokerLeg,
   journalRunRow,
@@ -48,6 +49,7 @@ import {
   type AgentRunKind,
   type AgentRunStatus,
 } from "@/types/agent-runs/agent-run"
+import { buildTree, flattenTree } from "./run-tree"
 import type { ExecutionLegSnapshot } from "./types"
 import type { ExecutionRun, ExecutionRunKind, ExecutionRunOrigin } from "@/types/execution/run"
 import type { WorkflowRunRow } from "@/types/workflow/visual"
@@ -163,9 +165,10 @@ export function buildCockpitRows(input: BuildCockpitRowsInput): UnifiedExecution
   const rows: UnifiedExecutionRow[] = []
   const journalSourceKeys = new Set<string>()
 
+  const standIns = brokerLegStandIns(input.executionRuns ?? [], input.brokerLegs)
   for (const leg of input.brokerLegs) {
     if (!inProject(leg.projectId, input.projectId)) continue
-    rows.push(brokerLegRow(leg))
+    rows.push(brokerLegRow(leg, standIns.get(leg.id)))
   }
 
   const supersededTeamRuns = supersededTeamRunIds(input.executionRuns ?? [])
@@ -221,6 +224,7 @@ export function buildCockpitRows(input: BuildCockpitRowsInput): UnifiedExecution
  */
 const KIND_LABEL_KEYS: Record<string, string> = {
   "agent-turn": "agentTurn",
+  "best-of-n": "bestOfN",
   bot: "bot",
   chat: "chat",
   connector: "connector",
@@ -393,4 +397,27 @@ export const COCKPIT_PAGE_SIZE = 50
 /** True when the source query returned a full page and may be hiding more. */
 export function cockpitHasMore(fetched: number, limit: number): boolean {
   return fetched >= limit
+}
+
+/** A list row and how deep it sits under the runs that started it. */
+export interface NestedRunRow {
+  row: UnifiedExecutionRow
+  /** 0 for a run whose parent is not in the list. */
+  depth: number
+}
+
+/**
+ * The list in run-tree order: each run directly after the run that started
+ * it, when both are listed (a best-of-N group's attempts under the group, a
+ * delegation's runs under the delegation). Roots and siblings keep the list's
+ * own order; a run whose parent is filtered out or on another page stays a
+ * root rather than disappearing.
+ */
+export function nestRunRows(rows: readonly UnifiedExecutionRow[]): NestedRunRow[] {
+  return flattenTree(
+    buildTree(rows, {
+      id: (row) => row.runId ?? row.rowId,
+      parent: (row) => row.parentRunId,
+    })
+  ).map((node) => ({ row: node.item, depth: node.depth }))
 }

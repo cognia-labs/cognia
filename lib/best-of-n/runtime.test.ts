@@ -95,13 +95,25 @@ const launchChildRun = jest.fn(async (input: LaunchInput) => ({
 }))
 jest.mock("@/lib/execution/launch-child-run", () => ({
   launchChildRun: (...args: unknown[]) => launchChildRun(...(args as [LaunchInput])),
+  childJobExecutionRunId: (id: string) => `execution:job:${id}`,
+}))
+const getExecutionRow = jest.fn(async (_id: string): Promise<unknown> => undefined)
+jest.mock("@/lib/db/execution-runs", () => ({
+  getExecutionRun: (id: string) => getExecutionRow(id),
+}))
+const ensureGroupRow = jest.fn(async (..._args: unknown[]) => "execution:best-of-n:team")
+const settleGroupRow = jest.fn(async (..._args: unknown[]) => true)
+jest.mock("@/lib/execution/best-of-n-bridge", () => ({
+  bestOfNExecutionRunId: (id: string) => `execution:best-of-n:${id}`,
+  ensureBestOfNExecutionRun: (...args: unknown[]) => ensureGroupRow(...args),
+  settleBestOfNExecutionRun: (...args: unknown[]) => settleGroupRow(...args),
 }))
 const settleTeamRow = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock("@/lib/execution/agent-team-bridge", () => ({
   agentTeamExecutionRunId: (id: string) => `execution:team:${id}`,
   settleAgentTeamExecutionRun: (...args: unknown[]) => settleTeamRow(...args),
 }))
-import { bestOfNTeam, createBestOfNExecution } from "./runtime"
+import { bestOfNTeam, candidateRowTitle, createBestOfNExecution } from "./runtime"
 import { BestOfNCandidateStoppedError, candidateGrant } from "./core"
 import { interruptSession } from "@/lib/claude/ipc"
 import {
@@ -130,6 +142,7 @@ const group = {
 const request = {
   prompt: "Fix this",
   projectId: "project",
+  sessionId: "source-chat",
   requiredChecks: ["approved-test"],
 } as BestOfNInput
 
@@ -159,6 +172,18 @@ it("binds a valid durable team without a planning or cross-candidate evidence ga
   expect(team.config.enableMessaging).toBe(false)
   await createBestOfNExecution().prepare(group, request)
   expect(prepareRun).toHaveBeenCalledWith(team, "team")
+  // The group's own row first, so the team journal writes no `team` row.
+  expect(ensureGroupRow).toHaveBeenCalledWith({
+    groupId: "group",
+    teamRunId: "team",
+    prompt: "Fix this",
+    sessionId: "source-chat",
+    projectId: "project",
+    at: expect.any(Number),
+  })
+  expect(ensureGroupRow.mock.invocationCallOrder[0]).toBeLessThan(
+    prepareRun.mock.invocationCallOrder[0]!
+  )
 })
 
 it("acquires the frozen base for the Host-assigned child, reusing its port block", async () => {
@@ -233,10 +258,10 @@ describe("candidates as child runs", () => {
     expect(launchChildRun).toHaveBeenCalledTimes(1)
     const [input] = launchChildRun.mock.calls[0] as unknown as [Record<string, unknown>]
     expect(input).toMatchObject({
-      parentRunId: "execution:team:team",
+      parentRunId: "execution:best-of-n:team",
       sessionId: "session",
       childId: "candidate",
-      title: "Best-of-N 1",
+      title: "Best-of-N 1/2 · agent (chosen)",
       surface: "agent-team",
       signal,
       target: { kind: "agent", label: "agent" },
@@ -244,6 +269,22 @@ describe("candidates as child runs", () => {
     // The grant reaches the resolver; the caller's engine applies none.
     expect(input).not.toHaveProperty("grants")
     expect(input.title).not.toContain("Fix this")
+  })
+
+  it("admits the attempt's turn under the candidate's own row, so the live leg stands in for it", async () => {
+    await execute()
+    const [, , , capture] = run.mock.calls[0] as [
+      unknown,
+      unknown,
+      unknown,
+      Record<string, unknown>,
+    ]
+    expect(capture.execution).toEqual({
+      kind: "team",
+      label: "Best-of-N 1/2 · agent (chosen)",
+      runId: "execution:job:candidate",
+      taskId: "candidate",
+    })
   })
 
   it("starts no attempt when the child run is refused, and fails the dispatch", async () => {
@@ -312,19 +353,35 @@ describe("finish", () => {
         record,
         expect.objectContaining({ status: durable })
       )
-      expect(settleTeamRow).toHaveBeenCalledWith(record, row, expect.any(Number))
+      expect(settleGroupRow).toHaveBeenCalledWith("team", row, expect.any(Number))
+      expect(settleTeamRow).not.toHaveBeenCalled()
     }
   )
+
+  it("settles the team row a group started before it had a row of its own, and never creates one", async () => {
+    store.getRun.mockResolvedValue(record)
+    settleGroupRow.mockResolvedValue(false)
+    getExecutionRow.mockResolvedValueOnce({ id: "execution:team:team" })
+    await createBestOfNExecution().finish({ ...group, phase: "cancelled" })
+    expect(getExecutionRow).toHaveBeenCalledWith("execution:team:team")
+    expect(settleTeamRow).toHaveBeenCalledWith(record, "cancelled", expect.any(Number))
+    settleTeamRow.mockClear()
+    getExecutionRow.mockResolvedValueOnce(undefined)
+    await createBestOfNExecution().finish({ ...group, phase: "cancelled" })
+    expect(settleTeamRow).not.toHaveBeenCalled()
+    settleGroupRow.mockResolvedValue(true)
+  })
 
   it("settles nothing for a group whose durable run is gone", async () => {
     store.getRun.mockResolvedValue(undefined)
     await createBestOfNExecution().finish({ ...group, phase: "awaitingSelection" })
+    expect(settleGroupRow).not.toHaveBeenCalled()
     expect(settleTeamRow).not.toHaveBeenCalled()
   })
 
   it("never fails the group because its row could not be settled", async () => {
     store.getRun.mockResolvedValue(record)
-    settleTeamRow.mockRejectedValueOnce(new Error("journal down"))
+    settleGroupRow.mockRejectedValueOnce(new Error("journal down"))
     await expect(
       createBestOfNExecution().finish({ ...group, phase: "awaitingSelection" })
     ).resolves.toBeUndefined()
@@ -573,5 +630,18 @@ describe("usage ledger booking", () => {
     expect(recordSurfaceUsage.mock.calls[0][0]).toMatchObject({
       usage: { costUsd: 0.02, costSource: "sdk", costKnown: true },
     })
+  })
+})
+
+describe("candidateRowTitle", () => {
+  it("names the attempt, the group size and who made it", () => {
+    const agent = { agentId: "agent-7", model: null }
+    expect(candidateRowTitle({ n: 3 }, { index: 1, agent }, "Reviewer")).toBe(
+      "Best-of-N 2/3 · Reviewer"
+    )
+    expect(candidateRowTitle({ n: 3 }, { index: 0, agent }, " ")).toBe("Best-of-N 1/3 · agent-7")
+    expect(
+      candidateRowTitle({ n: 2 }, { index: 0, agent: { agentId: "a", model: "m" } }, undefined)
+    ).toBe("Best-of-N 1/2 · a (m)")
   })
 })

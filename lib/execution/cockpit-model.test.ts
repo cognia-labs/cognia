@@ -8,6 +8,7 @@ import {
   countCockpitRowsByStatus,
   filterCockpitRows,
   legacyAgentRunRow,
+  nestRunRows,
   type CockpitFilter,
 } from "./cockpit-model"
 import { EXECUTION_FILTER_KINDS, type UnifiedExecutionRow } from "./monitor-model"
@@ -428,5 +429,73 @@ describe("filterCockpitRows by Bot installation", () => {
 
   it("passes everything through when no installation is pinned", () => {
     expect(filterCockpitRows(rows, {})).toHaveLength(4)
+  })
+})
+
+describe("nestRunRows", () => {
+  const row = (runId: string, parentRunId?: string): UnifiedExecutionRow => ({
+    rowId: `journal:${runId}`,
+    source: "journal",
+    nativeId: runId,
+    kind: "team",
+    label: runId,
+    status: "running",
+    startedAt: 1,
+    runId,
+    cancellable: false,
+    ...(parentRunId ? { parentRunId } : {}),
+  })
+  const order = (rows: UnifiedExecutionRow[]) =>
+    nestRunRows(rows).map(({ row: r, depth }) => `${r.runId}@${depth}`)
+
+  it("lists a group's attempts right after the group, in the list's own order", () => {
+    expect(
+      order([row("attempt-2", "group"), row("other"), row("group"), row("attempt-1", "group")])
+    ).toEqual(["other@0", "group@0", "attempt-2@1", "attempt-1@1"])
+  })
+
+  it("keeps a run whose parent is not listed as a root, where it was", () => {
+    expect(order([row("a"), row("orphan", "elsewhere"), row("b")])).toEqual([
+      "a@0",
+      "orphan@0",
+      "b@0",
+    ])
+  })
+
+  it("nests a broker leg standing in for an attempt under the group's row", () => {
+    const group = execRun({
+      id: "execution:best-of-n:team",
+      kind: "best-of-n",
+      sourceId: "group",
+      title: "Fix it",
+    })
+    const attempt = execRun({
+      id: "execution:job:candidate",
+      kind: "job",
+      sourceId: "candidate",
+      title: "Best-of-N 1/2 · agent",
+      parentRunId: "execution:best-of-n:team",
+    })
+    const rows = buildCockpitRows({
+      brokerLegs: [
+        leg({
+          id: "leg-attempt",
+          kind: "team",
+          label: "Best-of-N 1/2 · agent",
+          runId: "execution:job:candidate",
+        }),
+      ],
+      executionRuns: [group, attempt],
+    })
+    // The live leg replaces the attempt's journal row, keeping its place.
+    expect(rows.map((r) => r.rowId).sort()).toEqual([
+      "broker:leg-attempt",
+      "journal:execution:best-of-n:team",
+    ])
+    expect(nestRunRows(rows).map(({ row: r, depth }) => [r.rowId, r.kind, depth])).toEqual([
+      ["journal:execution:best-of-n:team", "best-of-n", 0],
+      ["broker:leg-attempt", rows.find((r) => r.legId)!.kind, 1],
+    ])
+    expect(rows.find((r) => r.legId)!.kind).not.toBe("team")
   })
 })

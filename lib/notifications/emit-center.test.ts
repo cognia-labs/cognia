@@ -44,6 +44,7 @@ describe("runKindToSource", () => {
     expect(runKindToSource("scheduled")).toBe("scheduler")
     expect(runKindToSource("agent-turn")).toBe("agent-team")
     expect(runKindToSource("team")).toBe("agent-team")
+    expect(runKindToSource("best-of-n")).toBe("agent-team")
     expect(runKindToSource("bot")).toBe("agent-team")
     expect(runKindToSource("delegation")).toBe("agent-team")
     expect(runKindToSource(undefined)).toBe("system")

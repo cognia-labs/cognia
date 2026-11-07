@@ -109,6 +109,8 @@ describe("resolveActivityI18n", () => {
     expect(zh.runStatus("completed")).toBe("任务已完成")
     expect(en.runKind("workflow")).toBe("Workflow")
     expect(zh.runKind("scheduled")).toBe("定时任务")
+    expect(en.runKind("best-of-n")).toBe("Best-of-N")
+    expect(zh.runKind("best-of-n")).toBe("Best-of-N")
     expect(
       zh.activityLabel({
         id: "lifecycle:done",

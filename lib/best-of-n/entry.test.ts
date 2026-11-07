@@ -97,6 +97,8 @@ it("calls the single service once, persists one parent pair, and binds the proje
     expect.objectContaining({
       requestId: prepared.requestId,
       baseRef: prepared.baseSha,
+      // The group's run row sits in the conversation it was started from.
+      sessionId: "s",
       requiredChecks: ["unit"],
       candidates: Array.from({ length: 4 }, () => ({ agentId: "agent", model: "model" })),
     })

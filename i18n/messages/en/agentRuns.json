@@ -107,6 +107,7 @@
   },
   "kind": {
     "agentTurn": "Chat",
+    "bestOfN": "Best-of-N",
     "bot": "Bot",
     "chat": "Chat",
     "connector": "Connector",
@@ -233,6 +234,7 @@
         "recover_needs_input": "the last checkpoint needs a decision",
         "squad_not_ready": "the Squad is missing a binding it needs to run",
         "uncertain_side_effect": "a side effect may or may not have happened",
+        "stop_unconfirmed": "a task's executor was told to stop, but its end was never confirmed",
         "missing_execution_constraints": "the saved launch permissions are missing; this run cannot safely resume",
         "replacement_cleanup_failed": "the previous run could not be fully stopped for replacement",
         "launch_failed": "the Squad could not start this run",

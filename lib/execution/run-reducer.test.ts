@@ -1157,3 +1157,28 @@ describe("usage", () => {
     })
   })
 })
+
+describe("a best-of-N group's controls", () => {
+  const groupSnapshot = (status: ExecutionRun["status"]) =>
+    reduceRunEvents(
+      {
+        id: "execution:best-of-n:team",
+        kind: "best-of-n",
+        sourceId: "group",
+        title: "Fix it",
+        status,
+        currentRevision: 1,
+        startedAt: 1,
+        updatedAt: 1,
+      },
+      []
+    )
+
+  it("offers only Stop: no Squad to pause or steer, nothing to re-dispatch", () => {
+    expect(groupSnapshot("running").allowedActions).toEqual(["stop", "open_details"])
+    // A parked group's attempts have all ended; Stop is how it is given up
+    // (the Host's cancel moves a `recoveryRequired` group to `cancelled`).
+    expect(groupSnapshot("recovery_required").allowedActions).toEqual(["stop", "open_details"])
+    expect(groupSnapshot("cancelled").allowedActions).toEqual(["open_details"])
+  })
+})

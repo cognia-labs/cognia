@@ -17,6 +17,8 @@ export interface BestOfNInput extends Omit<
   targetIsNew?: boolean
   prompt: string
   projectId?: string
+  /** The conversation the group was started from; its run row sits there. */
+  sessionId?: string
   /** Same approved acceptance profiles for every attempt. */
   requiredChecks?: string[]
 }
@@ -301,7 +303,13 @@ export function createBestOfNService(deps: {
     const allocation = (async () => {
       if (!input.prompt.trim() || input.candidates.length < 2 || input.candidates.length > 4)
         throw new Error("Best-of-N requires a prompt and 2–4 candidates")
-      const { prompt: _prompt, projectId: _project, requiredChecks: _checks, ...request } = input
+      const {
+        prompt: _prompt,
+        projectId: _project,
+        requiredChecks: _checks,
+        sessionId: _session,
+        ...request
+      } = input
       const group = await host.start({
         ...request,
         targetIsNew: request.targetIsNew ?? true,

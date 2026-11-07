@@ -30,6 +30,7 @@ export function runKindToSource(kind: ExecutionRunKind | undefined): Notificatio
       return "scheduler"
     case "agent-turn":
     case "team":
+    case "best-of-n":
     case "bot":
     case "delegation":
     case "job":

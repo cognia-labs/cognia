@@ -2855,6 +2855,7 @@
     },
     "kind": {
       "agentTurn": "对话",
+      "bestOfN": "Best-of-N",
       "bot": "Bot",
       "chat": "对话",
       "connector": "连接器",
@@ -3013,6 +3014,7 @@
           "reentry_failed": "小队未能恢复此运行",
           "replacement_cleanup_failed": "替代运行启动前，未能完全停止原运行",
           "squad_not_ready": "该小队缺少运行所需的绑定",
+          "stop_unconfirmed": "已要求某个任务的执行器停止，但未能确认它已结束",
           "uncertain_side_effect": "某个副作用可能已发生也可能未发生"
         }
       },
@@ -18470,6 +18472,7 @@
     },
     "kind": {
       "agentTurn": "对话",
+      "bestOfN": "Best-of-N",
       "bot": "Bot",
       "chat": "对话",
       "connector": "连接器",

@@ -10,6 +10,12 @@ import {
   settleAgentTeamExecutionRun,
 } from "@/lib/execution/agent-team-bridge"
 import {
+  bestOfNExecutionRunId,
+  ensureBestOfNExecutionRun,
+  settleBestOfNExecutionRun,
+} from "@/lib/execution/best-of-n-bridge"
+import { getExecutionRun } from "@/lib/db/execution-runs"
+import {
   acquireWorkspaceBundle,
   getWorkspaceBundle,
   ensureWorkspacePortLease,
@@ -81,12 +87,36 @@ export function bestOfNTeam(group: BestOfNGroup, request: BestOfNInput): AgentTe
   }
 }
 
+/**
+ * A candidate's run row title: which attempt of how many, and who made it.
+ * Two groups side by side in the run monitor stay told apart by their group.
+ */
+export function candidateRowTitle(
+  group: Pick<BestOfNGroup, "n">,
+  candidate: Pick<BestOfNGroup["candidates"][number], "index" | "agent">,
+  agentName: string | undefined
+): string {
+  const who = agentName?.trim() || candidate.agent.agentId
+  const model = candidate.agent.model ? ` (${candidate.agent.model})` : ""
+  return `Best-of-N ${candidate.index + 1}/${group.n} · ${who}${model}`
+}
+
 /** Production ports use the ordinary confined turn, PII gate, and capture pipeline. */
 export function createBestOfNExecution(): BestOfNExecution {
   const coordinator = getDurableTeamCoordinator()
   const scm = createScmHost()
   return {
     async prepare(group, request) {
+      // The group's own row first: the team journal sees it and writes no
+      // `team` row for this durable run (ADR-0252 P5).
+      await ensureBestOfNExecutionRun({
+        groupId: group.groupId,
+        teamRunId: group.teamRunId,
+        prompt: request.prompt,
+        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+        ...(request.projectId ? { projectId: request.projectId } : {}),
+        at: Date.now(),
+      })
       await coordinator.prepareRun(bestOfNTeam(group, request), group.teamRunId)
     },
     async acquire(group, candidate, request) {
@@ -226,6 +256,10 @@ export function createBestOfNExecution(): BestOfNExecution {
           },
           session.id
         )
+        const { launchChildRun, childJobExecutionRunId } =
+          await import("@/lib/execution/launch-child-run")
+        const candidateRunId = childJobExecutionRunId(candidate.candidateId)
+        const rowTitle = candidateRowTitle(group, candidate, character.name)
         // The attempt is the candidate's engine; the child run is its record.
         const attempt = () =>
           dispatch.run(async (): Promise<CandidateResult> => {
@@ -352,9 +386,13 @@ export function createBestOfNExecution(): BestOfNExecution {
                       usageTracker.observe(event)
                       dispatch.capture(event)
                     },
+                    // The lease names the candidate's own row, so the live
+                    // leg stands in for that row in the run monitor, under
+                    // the group, instead of a second row for the group.
                     execution: {
                       kind: "team",
-                      runId: group.teamRunId,
+                      label: rowTitle,
+                      runId: candidateRunId,
                       taskId: candidate.candidateId,
                     },
                   }
@@ -421,16 +459,15 @@ export function createBestOfNExecution(): BestOfNExecution {
             }
           }, attemptSignal)
         // Each candidate is a child run of the group's run (ADR-0252 §2), in
-        // its own conversation. The group's row is the durable team run's,
-        // written when the run was prepared. The launcher writes, links and
+        // its own conversation. The group's row is its own `best-of-n` row,
+        // written before the run was prepared. The launcher writes, links and
         // settles the child's row; the attempt keeps its own result and error.
-        const { launchChildRun } = await import("@/lib/execution/launch-child-run")
         let result: CandidateResult | undefined
         let thrown: { error: unknown } | undefined
         const launched = await launchChildRun({
-          parentRunId: agentTeamExecutionRunId(group.teamRunId),
+          parentRunId: bestOfNExecutionRunId(group.teamRunId),
           sessionId: session.id,
-          title: session.title,
+          title: rowTitle,
           childId: candidate.candidateId,
           surface: "agent-team",
           signal,
@@ -522,19 +559,27 @@ export function createBestOfNExecution(): BestOfNExecution {
         updatedAt: at,
         completedAt: at,
       })
-      // The group's execution row is the candidates' parent. Nothing else
-      // settles it: the durable record is not a Squad run, so no lifecycle
-      // writes its terminal event. Settled even when a stop already moved the
-      // durable record: that stop does not write the row either.
-      await settleAgentTeamExecutionRun(
-        run,
+      // The group's row is the candidates' parent. Nothing else settles it:
+      // the durable record is not a Squad run, so no lifecycle writes its
+      // terminal event. Settled even when a stop already moved the durable
+      // record: that stop does not write the row either. A group started
+      // before it had a row of its own settles the `team` row it had, never
+      // one created now.
+      const outcome =
         group.phase === "cancelled"
           ? "cancelled"
           : group.phase === "recoveryRequired"
             ? "recovery_required"
-            : "completed",
-        at
-      ).catch(() => undefined)
+            : "completed"
+      try {
+        if (!(await settleBestOfNExecutionRun(group.teamRunId, outcome, at))) {
+          if (await getExecutionRun(agentTeamExecutionRunId(group.teamRunId)))
+            await settleAgentTeamExecutionRun(run, outcome, at)
+        }
+      } catch {
+        // The ledger is settled above; a row that could not be written stays
+        // as the last event left it.
+      }
     },
   }
 }

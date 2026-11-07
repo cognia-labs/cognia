@@ -30,6 +30,7 @@ import type { TeamRunStore } from "@cognia/agent-orchestration/store"
 import { dexieTeamRunStore, getAgentTeamRun } from "@/lib/db/agent-team-runtime"
 import { createExecutionRun, getExecutionRun, runEventJournal } from "@/lib/db/execution-runs"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
+import { bestOfNExecutionRunId } from "@/lib/execution/best-of-n-bridge"
 import { isPathWithinRoot, normalizeFsPath } from "@/lib/files/permissions"
 import { isTauri } from "@/lib/tauri"
 import type { AgentTeam, TeammateRuntime } from "@/types/agent/agent-team"
@@ -57,6 +58,10 @@ export type {
  */
 export const executionRunTeamJournal: TeamRunJournal = {
   async runPrepared({ runId, projectId, title, at }) {
+    // A best-of-N group's durable run is recorded under the group's own row,
+    // written before the run is prepared. A `team` row for it would offer a
+    // Squad's controls for a group that has no Squad.
+    if (await getExecutionRun(bestOfNExecutionRunId(runId))) return
     const executionRunId = agentTeamExecutionRunId(runId)
     const executionRun = await getExecutionRun(executionRunId)
     if (!executionRun) {
