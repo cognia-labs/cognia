@@ -163,8 +163,8 @@ export type BuiltInToolName =
   | "pet_say"
   | "pet_reward"
   | "pet_show"
-  // Project-context deep path — implemented in
-  // `lib/claude/project-history-tool.ts`, routed host-side through
+  // Project-context deep path — the memory module's tool contribution
+  // (`lib/memory/agent-tools.ts`, ADR-0250 §14), routed host-side through
   // `lib/claude/plugin-tool-ipc.ts`. Offered only when the user turned project
   // continuity on AND the chat is bound to a workspace, because the workspace
   // scope IS the isolation.

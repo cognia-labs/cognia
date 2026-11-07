@@ -7,9 +7,16 @@ describe("the memory manifest", () => {
     expect(prompts).toHaveLength(6)
   })
 
-  it("contributes recall and project continuity as context, lazily, and no tools", async () => {
+  it("contributes recall and project continuity as context, lazily", async () => {
     const { contributions } = await memoryModule.context!.load()
     expect(contributions.map((contribution) => contribution.id)).toEqual(["recall", "continuity"])
-    expect("tools" in memoryModule).toBe(false)
+  })
+
+  it("declares project_history_search as a read tool its runner cannot cancel", async () => {
+    expect(memoryModule.tools!.declare).toEqual({
+      project_history_search: { consent: "default", effect: "read", cancellable: false },
+    })
+    const { toolFamily } = await memoryModule.tools!.load()
+    expect(typeof toolFamily.run).toBe("function")
   })
 })

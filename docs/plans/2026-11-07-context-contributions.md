@@ -313,3 +313,11 @@ interface ContextSection {
 - 提交说明：本步的 `build-options.ts` 删块和 `lib/memory/module.ts` 的 `context` 一行，被另一会话的提交 `63ffc35320`（ADR-0252 P4）在它的提交钩子运行时一并带走；其余部分在本步提交。
 - 测试：`lib/memory/context.test.ts` 9 例新增；`build-options-memory.test.ts`（召回、程序块、降级、连续性借预算、闸）改读 `contextSources` 后不改断言即通过，作为迁移前后的对照；`compaction-runtime.test.ts` 改用 `contextSources`；`build-options.test.ts` 的 hostDeps 用例不变。
 - 至此发送路径里只剩分身一个检索段（§2.5）。
+
+## 16. 项目历史工具迁入 memory 工具族（2026-11-07）
+
+- `lib/claude/project-history-tool.ts` 和测试移到 `lib/memory/`。`buildProjectHistoryManifestEntries`（带 `pluginId`）改为返回 `ModuleToolEntry` 的 `projectHistoryToolEntries`，删掉 `PROJECT_HISTORY_BUILTIN_PLUGIN_ID`、`isProjectHistorySearchTool`；证据登记表 `project-history-evidence-registry` 留在 `lib/claude`（房间 runner、adapter、聊天钩子都读它）。
+- `lib/memory/agent-tools.ts`：`surface` 沿用 `build-options` 原来的条件（有会话；工作区取 `session.projectId`，否则 `activeProject`；`enableProjectContinuity` 开、非 `temporary`）；`run` 解析宿主依赖（原 `plugin-tool-ipc.ts` 的 `resolveProjectHistoryToolDeps` 和测试注入点一起搬来），证据按调用会话登记。manifest 声明 `project_history_search: { consent: "default", effect: "read", cancellable: false }`。
+- 删除：`plugin-tool-ipc.ts` 的导入、依赖解析和分发分支；`build-options.ts` 的提供块和 `resolveMemoryConfig` 导入。插件 id 变为 `cognia-memory-builtin`，没有读取方依赖旧 id `cognia-project-history-builtin`。
+- memory 的 `dependsOn` 加 `external-bridge`（执行逻辑用 `wrapUntrusted`）。还清 `lib/claude/build-options.ts -> memory`、`lib/claude/project-history-tool.ts -> external-bridge` 两条方向边。
+- 测试：`lib/memory/agent-tools.test.ts` 新增 5 例；`module.test.ts` 改为断言工具声明；`plugin-tool-ipc.test.ts` 的路由用例改走 `useModuleTools("memory", …)`，断言不变；`build-options-memory.test.ts` 的四个提供/不提供用例不改即通过，作为迁移前后的对照；`types/agent/tool.test.ts` 增加插件 id 断言。

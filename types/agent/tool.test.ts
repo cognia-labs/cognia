@@ -12,7 +12,7 @@ import {
   buildCanvasManifestEntries,
 } from "@/lib/artifacts/agent-tools"
 import type { BuiltInToolName } from "./tool"
-import { buildProjectHistoryManifestEntries } from "@/lib/claude/project-history-tool"
+import { projectHistoryToolEntries } from "@/lib/memory/project-history-tool"
 import { buildPetManifestEntries } from "@/lib/pet/agent-tools"
 import { contributedToolPluginId } from "@/lib/claude/tool-contributions"
 import { buildMediaManifestEntries } from "@/lib/media/agent-tools"
@@ -57,8 +57,12 @@ const DECLARED_PROJECT_HISTORY_TOOLS = [
 
 describe("declared project-history tool names", () => {
   it("match the tool actually shipped in the manifest", () => {
-    const shipped = buildProjectHistoryManifestEntries().map((entry) => entry.name)
+    const shipped = projectHistoryToolEntries().map((entry) => entry.name)
     expect([...shipped].sort()).toEqual([...DECLARED_PROJECT_HISTORY_TOOLS].sort())
+  })
+
+  it("travels under the memory module's plugin id", () => {
+    expect(contributedToolPluginId("memory")).toBe("cognia-memory-builtin")
   })
 })
 

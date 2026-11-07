@@ -17,8 +17,7 @@ import {
   PROJECT_HISTORY_NOTICE,
   PROJECT_HISTORY_TIME_BUDGET_MS,
   PROJECT_HISTORY_TOOL_NAME,
-  buildProjectHistoryManifestEntries,
-  isProjectHistorySearchTool,
+  projectHistoryToolEntries,
   runProjectHistorySearch,
   type ProjectHistoryMessageHit,
   type ProjectHistoryResultHit,
@@ -99,16 +98,14 @@ function makeDeps(overrides: Partial<ProjectHistoryToolDeps> = {}): ProjectHisto
 const ctx = { sessionId: "current" }
 
 describe("manifest", () => {
-  it("ships exactly one entry under the built-in plugin id", () => {
-    const entries = buildProjectHistoryManifestEntries()
+  it("ships exactly one entry", () => {
+    const entries = projectHistoryToolEntries()
     expect(entries).toHaveLength(1)
     expect(entries[0].name).toBe(PROJECT_HISTORY_TOOL_NAME)
-    expect(isProjectHistorySearchTool(entries[0].name)).toBe(true)
-    expect(isProjectHistorySearchTool("working_set")).toBe(false)
   })
 
   it("bounds every array the model can send", () => {
-    const props = buildProjectHistoryManifestEntries()[0].jsonSchema.properties as Record<
+    const props = projectHistoryToolEntries()[0].jsonSchema.properties as Record<
       string,
       { maxItems?: number }
     >

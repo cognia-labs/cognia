@@ -5,7 +5,7 @@ import { defineHostModule } from "@/lib/modules/define"
 // consolidation, project mining, distillation), governed and recalled. Its
 // writing and reranking prompts reach the Prompt Center as its prompt
 // contribution; the turn's recall and project continuity are its context
-// contributions.
+// contributions, and `project_history_search` its tool contribution.
 export default defineHostModule({
   id: "memory",
   kind: "module",
@@ -15,6 +15,7 @@ export default defineHostModule({
     "chat",
     "data",
     "editor",
+    "external-bridge",
     "git",
     "governance",
     "inbound",
@@ -51,6 +52,13 @@ export default defineHostModule({
     "lib/memory/write/remember-fact.ts",
   ],
   prompts: () => import("./prompts"),
+  // The deep path of project continuity, on the same switch as the section.
+  tools: {
+    declare: {
+      project_history_search: { consent: "default", effect: "read", cancellable: false },
+    },
+    load: () => import("./agent-tools"),
+  },
   // Personal recall (`memory` slot) and project continuity (`continuity`
   // slot, after recall, borrowing its unspent budget).
   context: { load: () => import("./context") },

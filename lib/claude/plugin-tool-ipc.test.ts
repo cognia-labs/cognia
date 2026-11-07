@@ -14,7 +14,6 @@ import {
   __setWebToolDepsForTesting,
   __setSkillToolDepsForTesting,
   __setSlashToolDepsForTesting,
-  __setProjectHistoryToolDepsForTesting,
   __setSessionPeerToolDepsForTesting,
   __setTemplateToolDepsForTesting,
   handlePluginToolExec,
@@ -45,7 +44,11 @@ import {
 import { buildApprovalSurface } from "@/lib/connectors/a2ui-bridge/workflow-to-a2ui"
 import { createWorkflowAuthorAPI } from "@/lib/plugin/api/workflow-author-api"
 import { holdWorkflowDispatchForApproval } from "@/lib/connectors/hitl/workflow-run-approval"
-import type { ProjectHistoryToolDeps } from "./project-history-tool"
+import type { ProjectHistoryToolDeps } from "@/lib/memory/project-history-tool"
+import {
+  __setProjectHistoryToolDepsForTesting,
+  toolFamily as memoryToolFamily,
+} from "@/lib/memory/agent-tools"
 // Static imports so these share the SAME module instance the top-level
 // `handlePluginToolExec` closes over (sibling describes call jest.resetModules,
 // which would make a dynamic import resolve a different registry instance).
@@ -1913,9 +1916,11 @@ describe("handlePluginToolExec — host web dependency injection", () => {
 })
 
 describe("project_history_search routing", () => {
+  beforeEach(() => useModuleTools("memory", memoryToolFamily))
   afterEach(() => {
     __setProjectHistoryToolDepsForTesting(null)
     __setPluginToolResolverForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
   })
 
   function makeDeps(overrides: Partial<ProjectHistoryToolDeps> = {}): ProjectHistoryToolDeps {
