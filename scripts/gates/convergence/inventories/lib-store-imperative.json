@@ -1178,8 +1178,8 @@
       ]
     },
     {
-      "key": "lib/claude/artifact-builtin-tools.ts",
-      "owner": "lib/claude",
+      "key": "lib/artifacts/agent-tools.ts",
+      "owner": "lib/artifacts",
       "note": "",
       "imports": [
         "static"

@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0、T1、T2 已实施，T3（宠物）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7、§8、§9、§10。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§11。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -237,3 +237,17 @@ interface ToolSurface {
 - 删除：`lib/claude/permissions/pet-tool-rules.ts`（及测试）、`build-options` 的 `petToolsSurfaced` 开关、同意档参数和追加段、`plugin-tool-ipc` 的分支、探针拒绝名单里的四个手写名字。
 - 还清：方向边 `pet-builtin-tools -> pet`，`settingsAccess` 的 `pet-builtin-tools -> petSettings`，`size.settingsStoreImporters` 531 → 530；收敛清单 `lib-store-imperative` 去掉旧文件一条。
 - 测试：`build-options` 的宠物用例改为模拟 `detectPlatform` 返回 `tauri`（模块工具族看的是 `toolSurfaceHost`，不再看 `isTauri`）；`plugin-tool-ipc` 的路由用例把注册表条目的 `load` 固定到静态导入的工具族（同文件其他用例会 `jest.resetModules`，懒加载拿到的副本看不到注入的 deps）；`types/agent/tool.test.ts` 改为断言内核盖的 plugin id。
+
+## 11. T4 实施记录：artifact/canvas 与视频生成（2026-11-07）
+
+- manifest 位置：`artifact` 的代码在复数目录（`lib/artifacts/`、`components/artifacts/`），分类器早就把它们归到子系统键 `artifact`。门禁的 `manifestKind` 改为用同一张别名表取 id，`lib/artifacts/module.ts` 的 id 是 `artifact`；不另建 `lib/artifact/`。
+- artifact 成为 manifest 模块（归属表行删除）：`api` 由门禁报告的 22 个被引用文件组成（三处桶文件导入改成具体文件：`lib/artifacts/index.ts` 四处、`stores/artifact/index.ts` 一处、`hooks/data` 三处，测试 mock 同步）；它引用的 25 个模块的行补上 114 个 `api` 文件。`dependsOn` 25 项（去掉 filespace，加上 modules）。
+- 依赖环（G6 不允许基线豁免）：filespace 依赖 artifact（FileSpace 把 artifact 当来源、打开 artifact），而 `components/artifacts/` 下的会话停靠栏 import 了 filespace 的文件面板、面板 id 和复制链接。按评审选择（停靠栏面板改成贡献点）：
+  - 文件面板：`components/filespace/files-dock-panel.tsx` 作为 filespace UI manifest（新建 `components/filespace/module.ui.ts`）的 effect，挂载时把面板定义注册进 `contextPanelRegistry`（停靠栏本来就解析注册表里的面板，插件面板走同一条路）。停靠栏里的定义、渲染器、`DOCK_SESSION_PANEL_META` 条目、`WORKBENCH_PANEL_CATALOG` 条目删除；`artifact-dock` 的 reveal 判断改用 `isKnownDockPanel`，注册面板也能被 reveal 到。渲染器按会话 id 加 key，保留以前切会话重建的行为。
+  - 复制链接：新端口 `conversation-file-links`（`types/modules/ports/conversation-file-links.ts`），filespace `provides`，artifact `requires: ["conversation-file-links?"]`；停靠栏编辑器用 `usePort`，没有提供方时不给"复制链接"。`hooks/modules/use-port.ts` 列入 `modules` 行的 `api`。
+- 工具族：`lib/claude/artifact-builtin-tools.ts` → `lib/artifacts/agent-tools.ts`，`lib/claude/media-builtin-tools.ts` → `lib/media/agent-tools.ts`，各导出 `toolFamily`；`videoToolsAvailable` 从 `build-options` 移进 media 工具族。`lib/ai/media/` 经 `paths` 覆盖本来就归 media，9 个被引用文件列入 media 的 `api`。
+- 声明：artifact_create/update、canvas_create/update/open `allow`/`write`；artifact_read/capture、canvas_read `allow`/`read`；artifact_delete `ask`/`write`；video_generate `ask`/`write`；video_status `allow`/`read`；全部 `cancellable: false`。同意档、探针拒绝名单与之前一致。实时语音：这些工具以前没登记为不可取消，会被提供给实时语音；现在如实声明，不再提供（它们的运行器不接取消信号，正是该名单注释说要排除的情况）。video_generate 的 effect 仍记为 `write`，没有改成 `outbound`，避免改变外发授权行为。
+- 删除：两个同意档文件（及测试）、`build-options` 的 `videoToolsSurfaced`、两个同意档参数和两段追加、`plugin-tool-ipc` 的两个分支、探针名单里 7 个手写名字。`build-options` 保留 `artifactsChannelAvailable` / `artifactAuthoringEnabled`（路由提示词仍用，且它读本轮是否真的提供了 `artifact_create`）。
+- 还清方向边 3 条：`artifact-builtin-tools -> artifact`、`media-builtin-tools -> media`、`build-options -> media`；收敛清单 `lib-store-imperative` 的旧条目改到新路径（同一笔债）。
+- 测试：build-options 的移动端用例改为模拟 `detectPlatform`；IPC 测试抽出 `useModuleTools` 帮手（固定到静态导入的工具族），artifact、视频、宠物三处路由用例共用；停靠栏测试去掉文件面板用例（由 `files-dock-panel.test.tsx` 覆盖）。
+- 既有问题（未改）：`lib/shell/workbench-panels.test.ts` 的对照测试在 HEAD 就失败（常量表缺 `SESSION_TASKS_PANEL_ID`、`SANDBOX_DESKTOP_PANEL_ID` 等）；`components/artifacts/artifact-annotations.test.tsx` 一处默认值断言失败；支持文档语料 `support:docs:check` 已过期。

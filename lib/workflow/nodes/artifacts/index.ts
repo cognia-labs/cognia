@@ -35,7 +35,7 @@ import {
   CANVAS_CREATE_TOOL_NAME,
   resolveArtifactToolDeps,
   runArtifactBuiltinTool,
-} from "@/lib/claude/artifact-builtin-tools"
+} from "@/lib/artifacts/agent-tools"
 import { renderArtifactExport } from "@/lib/artifacts/export"
 import { getArtifactExportFormats } from "@/components/artifacts/runtime-adapters"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"

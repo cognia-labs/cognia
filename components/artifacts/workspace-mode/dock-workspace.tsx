@@ -20,7 +20,7 @@ import {
   useProjectEditorWorkbench,
 } from "@/components/editor/project/project-editor-workbench"
 import { useChatStore } from "@/stores/chat"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useGitActions } from "@/hooks/git/use-git-actions"
 import { getSession } from "@/lib/db/sessions"
 import { useCodeServerSupported } from "@/hooks/codeserver/use-code-server-supported"
@@ -44,7 +44,7 @@ import { WorkspaceFilePreview } from "./workspace-file-preview"
 import { WorkspaceReview } from "./workspace-review"
 import { isSnapshotSelection } from "./snapshot-review"
 import { changedPathCount } from "@/lib/git/conversation-scope"
-import { copyConversationFileLink } from "@/lib/filespace/copy-link"
+import { usePort } from "@/hooks/modules/use-port"
 
 interface DockWorkspaceProps {
   activeSessionId: string | null
@@ -321,18 +321,21 @@ function WorkspaceEditorBody({
   const { roots, rootKey, rootPath, selectRoot, pinned, resumeFollow } = editor
   const tFiles = useTranslations("filespace")
   // "Copy Link" on a tree entry addresses it inside this conversation's
-  // FileSpace (ADR-0222), whichever root the editor is showing.
+  // FileSpace (ADR-0222), whichever root the editor is showing. The filespace
+  // module provides it as a port; without one the tree offers no Copy Link.
+  const fileLinks = usePort("conversation-file-links")
   const copyFileLink = useCallback(
     (root: string, relPath: string) => {
-      void copyConversationFileLink({ sessionId, path: joinProjectPath(root, relPath) }).then(
-        (result) => {
+      if (!fileLinks) return
+      void fileLinks
+        .copyLink({ sessionId, path: joinProjectPath(root, relPath) })
+        .then((result) => {
           if (result === "copied") toast.success(tFiles("toast.linkCopied"))
           else if (result === "outside") toast.error(tFiles("toast.linkOutside"))
           else toast.error(tFiles("toast.copyFailed"))
-        }
-      )
+        })
     },
-    [sessionId, tFiles]
+    [fileLinks, sessionId, tFiles]
   )
 
   // One resolver for every directory-facing panel. The pin layer is fed from
@@ -752,7 +755,7 @@ function WorkspaceEditorBody({
                 workbench={workbench}
                 active={visibleSurface === "file"}
                 panelIdPrefix="workspace"
-                onCopyFileLink={copyFileLink}
+                onCopyFileLink={fileLinks ? copyFileLink : undefined}
               />
             </div>
           ) : null}

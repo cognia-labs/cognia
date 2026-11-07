@@ -49,12 +49,30 @@ export interface ChildRunBackgroundRegistration {
   kind: BackgroundAgentKind
 }
 
+/**
+ * An agent run the caller drives itself, because how it runs is the caller's
+ * own policy: `dispatch_agent`'s retries, subtree budget, deadline, approval
+ * route and Job Center journal (`lib/claude/agents/dispatch-run.ts`). The
+ * launcher still writes the row, links the parent, settles the row from the
+ * returned outcome and records the dispatch; a stop aborts `signal`. It
+ * applies no grant: the caller resolved the run's configuration itself.
+ */
+export interface ChildRunCallerEngine {
+  run(signal: AbortSignal): Promise<ChildRunOutcome>
+}
+
 export type ChildRunTarget =
   | {
       kind: "agent"
       prompt: string
       systemPrompt?: string
       background?: ChildRunBackgroundRegistration
+    }
+  | {
+      kind: "agent"
+      engine: ChildRunCallerEngine
+      /** The agent's id for the dispatch span (a subagent id). Never free text. */
+      label: string
     }
   | {
       kind: "external"
@@ -151,7 +169,8 @@ export function grantFieldsSet(grant: AgentCapabilityGrantV1): GrantField[] {
  * What each engine applies. `executeAgent` resolves grants through
  * `resolveSendOptions` like any other run, and a twin answers through it. An
  * external agent runs its own harness, and a Squad run is governed by its own
- * team configuration and frozen execution constraints, so neither applies any.
+ * team configuration and frozen execution constraints, so neither applies any;
+ * nor does a caller's own engine.
  */
 const HONOURED_GRANT_FIELDS: Record<ChildRunTargetKind, "all" | readonly GrantField[]> = {
   agent: "all",
@@ -161,10 +180,10 @@ const HONOURED_GRANT_FIELDS: Record<ChildRunTargetKind, "all" | readonly GrantFi
 }
 
 function unhonouredGrantFields(
-  kind: ChildRunTargetKind,
+  target: ChildRunTarget,
   grants: readonly AgentCapabilityGrantV1[]
 ): GrantField[] {
-  const honoured = HONOURED_GRANT_FIELDS[kind]
+  const honoured = "engine" in target ? [] : HONOURED_GRANT_FIELDS[target.kind]
   if (honoured === "all") return []
   const set = new Set(grants.flatMap(grantFieldsSet))
   return [...set].filter((field) => !honoured.includes(field))
@@ -180,7 +199,7 @@ const SPAN_PROVIDER: Record<ChildRunTargetKind, string> = {
 function targetRef(target: ChildRunTarget): string {
   switch (target.kind) {
     case "agent":
-      return target.background?.label ?? "agent"
+      return "engine" in target ? target.label : (target.background?.label ?? "agent")
     case "external":
       return target.agentId
     case "twin":
@@ -281,6 +300,7 @@ async function startJobEngine(
 ): Promise<StartedChildEngine | { refused: LaunchChildRunRefusal; detail?: string }> {
   switch (target.kind) {
     case "agent":
+      if ("engine" in target) return startCallerEngine(target.engine)
       return startAgentEngine({
         prompt: target.prompt,
         ...(target.systemPrompt ? { systemPrompt: target.systemPrompt } : {}),
@@ -299,6 +319,21 @@ async function startJobEngine(
       })
     }
   }
+}
+
+/** A caller's engine: its run gets the stop signal; a throw is a failed outcome. */
+function startCallerEngine(engine: ChildRunCallerEngine): StartedChildEngine {
+  const controller = new AbortController()
+  const outcome = (async (): Promise<ChildRunOutcome> => {
+    try {
+      return await engine.run(controller.signal)
+    } catch (error) {
+      return controller.signal.aborted
+        ? { status: "cancelled", error: errorText(error) }
+        : { status: "failed", error: errorText(error) }
+    }
+  })()
+  return { outcome, stop: (reason) => controller.abort(new Error(reason ?? "stopped")) }
 }
 
 function settledEngine(outcome: ChildRunOutcome): StartedChildEngine {
@@ -374,7 +409,7 @@ function emitDispatchSpan(input: {
 export async function launchChildRun(input: LaunchChildRunInput): Promise<LaunchChildRunResult> {
   const launchedAt = Date.now()
   const grants = input.grants ?? []
-  const unhonoured = unhonouredGrantFields(input.target.kind, grants)
+  const unhonoured = unhonouredGrantFields(input.target, grants)
   if (unhonoured.length > 0) {
     return { started: false, reason: "grant_not_honoured", detail: unhonoured.join(",") }
   }
@@ -445,7 +480,8 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
     return { started: false, reason: "journal_failed", detail: errorText(error) }
   }
 
-  const background = target.kind === "external" ? undefined : target.background
+  const background =
+    target.kind === "external" || "engine" in target ? undefined : target.background
   let engine: StartedChildEngine
   // Set once this launch holds the Job Center entry; a failed registration
   // (an id already registered) must not settle somebody else's entry.

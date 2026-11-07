@@ -10,15 +10,12 @@
 import {
   buildArtifactManifestEntries,
   buildCanvasManifestEntries,
-} from "@/lib/claude/artifact-builtin-tools"
+} from "@/lib/artifacts/agent-tools"
 import type { BuiltInToolName } from "./tool"
 import { buildProjectHistoryManifestEntries } from "@/lib/claude/project-history-tool"
 import { buildPetManifestEntries } from "@/lib/pet/agent-tools"
 import { contributedToolPluginId } from "@/lib/claude/tool-contributions"
-import {
-  MEDIA_BUILTIN_PLUGIN_ID,
-  buildMediaManifestEntries,
-} from "@/lib/claude/media-builtin-tools"
+import { buildMediaManifestEntries } from "@/lib/media/agent-tools"
 
 // The artifact/canvas arm, restated as a value so it can be compared. If the
 // union changes, this list must change with it — a `satisfies` keeps the two
@@ -100,9 +97,8 @@ describe("declared media tool names", () => {
     expect([...shipped].sort()).toEqual([...DECLARED_MEDIA_TOOLS].sort())
   })
 
-  it("all agree on the plugin id the relay routes them under", () => {
-    for (const entry of buildMediaManifestEntries()) {
-      expect(entry.pluginId).toBe(MEDIA_BUILTIN_PLUGIN_ID)
-    }
+  it("travel under the plugin id the relay has always routed them under", () => {
+    // The kernel stamps a module's tools with it (ADR-0250 §14 amendment).
+    expect(contributedToolPluginId("media")).toBe("cognia-media-builtin")
   })
 })

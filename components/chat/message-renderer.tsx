@@ -77,7 +77,7 @@ import { SlashCommandResultChip } from "@/components/chat/message-parts/slash-co
 import { VideoJobView } from "@/components/chat/video-generation/video-job-view"
 import { ShellJobView } from "@/components/chat/shell-job/shell-job-view"
 import { toolNameOf } from "@/components/chat/message-parts/mcp-tool-card"
-import { VIDEO_GENERATE_TOOL_NAME } from "@/lib/claude/media-builtin-tools"
+import { VIDEO_GENERATE_TOOL_NAME } from "@/lib/media/agent-tools"
 import {
   DIAGNOSTICS_PART_TYPE,
   isSystemMessageBlock,

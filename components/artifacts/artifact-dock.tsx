@@ -28,8 +28,7 @@ import {
 } from "@/stores/artifact/artifact-dock-layout-store"
 import type { ArtifactPanelMode } from "./artifact-panel-content"
 import { ArtifactTabStrip, useOpenArtifactTabs } from "./artifact-tab-strip"
-import { DockTabStrip } from "./dock-tab-strip"
-import { DOCK_SESSION_PANEL_META } from "./dock-panel-meta"
+import { DockTabStrip, isKnownDockPanel } from "./dock-tab-strip"
 import { useArtifactSurfacePanels, useSessionSurfacePanels } from "./chat-dock-panels"
 import {
   ContextWorkbench,
@@ -419,7 +418,9 @@ export function ArtifactContextWorkbench({
     !mobile &&
     revealIntent !== null &&
     !panels.some((panel) => panel.id === revealIntent.panelId) &&
-    revealIntent.panelId in DOCK_SESSION_PANEL_META
+    // A first-party session panel, or one a module or plugin registered (the
+    // conversation's Files panel is filespace's).
+    isKnownDockPanel(revealIntent.panelId)
   useEffect(() => {
     if (revealTargetsSessionTab)
       useArtifactStore.getState().setActiveArtifact(null, activeSessionId)

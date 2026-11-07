@@ -27,7 +27,6 @@ import {
   FileSearchIcon,
   FileTextIcon,
   FolderKanbanIcon,
-  FolderOpenIcon,
   GitBranchIcon,
   GlobeIcon,
   InfoIcon,
@@ -44,7 +43,6 @@ import {
 } from "lucide-react"
 
 import { NEW_TAB_PANEL_ID } from "@/lib/artifacts/session-workbench-scope-key"
-import { CONVERSATION_FILES_PANEL_ID } from "@/stores/filespace/filespace-panel-store"
 import type { ContextPanelMode } from "@/types/context-workbench"
 
 /**
@@ -88,7 +86,6 @@ export const DOCK_SESSION_PANEL_META: Readonly<Record<string, DockPanelMeta>> = 
     icon: FolderKanbanIcon,
     preferredMode: "wide",
   },
-  [CONVERSATION_FILES_PANEL_ID]: { labelKey: "filespace.panel.title", icon: FolderOpenIcon },
   workspace: {
     labelKey: "artifacts.dock.workspaceMode",
     icon: SearchCodeIcon,

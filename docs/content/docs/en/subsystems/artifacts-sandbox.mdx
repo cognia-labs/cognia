@@ -145,8 +145,9 @@ When a chat message arrives, `useChatStore` routes code blocks and inline conten
 
 Detection is the fallback, not the only path. Eight tools —
 `artifact_{create,update,read,delete}` and `canvas_{create,update,read,open}` —
-are published through the host-routed builtin-tool relay
-(`lib/claude/artifact-builtin-tools.ts`, executed by `lib/claude/plugin-tool-ipc.ts`),
+are published through the host-routed builtin-tool relay as the artifact
+module's tool contribution (`lib/artifacts/agent-tools.ts`, declared in
+`lib/artifacts/module.ts`, executed by `lib/claude/plugin-tool-ipc.ts`),
 which is what lets a chart artifact carry its `chartType` and a real title:
 neither is recoverable from a fenced block by regex.
 

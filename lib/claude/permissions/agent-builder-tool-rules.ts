@@ -13,7 +13,7 @@
 import { AGENT_BUILDER_TOOL_NAMES } from "@/lib/claude/agent-builder-builtin-tools"
 import type { PermissionVerdict, Ruleset } from "./ruleset"
 
-/** Mirrors `PLUGIN_TOOLS_SERVER_NAME` (see artifact-tool-rules.ts for why both keys). */
+/** Mirrors `PLUGIN_TOOLS_SERVER_NAME` (see `rulesetForTools` in `../tool-contributions.ts` for why both keys). */
 const PLUGIN_TOOLS_SERVER_NAME = "cognia-plugin-tools"
 
 function verdictFor(tool: string): PermissionVerdict {

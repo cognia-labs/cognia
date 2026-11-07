@@ -127,8 +127,9 @@ export type BuiltInToolName =
   | "display_step_guide"
   | "display_concept_map"
   | "display_animation"
-  // Canvas tools — implemented in `lib/claude/artifact-builtin-tools.ts`,
-  // routed host-side through `lib/claude/plugin-tool-ipc.ts`.
+  // Canvas tools — the artifact module's tool contribution
+  // (`lib/artifacts/agent-tools.ts`, ADR-0250 §14), routed host-side through
+  // `lib/claude/plugin-tool-ipc.ts`.
   | "canvas_create"
   | "canvas_update"
   | "canvas_read"

@@ -201,12 +201,6 @@ const DENIED_BUILTIN_TOOLS = [
  */
 const DENIED_PLUGIN_TOOLS = [
   "ask_user",
-  "artifact_create",
-  "artifact_update",
-  "artifact_delete",
-  "canvas_create",
-  "canvas_update",
-  "canvas_open",
   "agent_builder_update_draft",
   "agent_builder_create_agent",
   "open_in_editor",
@@ -260,7 +254,6 @@ const DENIED_PLUGIN_TOOLS = [
   "im_remove_members",
   "im_broadcast",
   "im_dispatch_task",
-  "video_generate",
   "plugin_conversion_apply",
   "terminal_dock_spawn",
   "terminal_dock_write",

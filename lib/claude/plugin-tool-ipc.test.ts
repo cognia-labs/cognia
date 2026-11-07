@@ -5,7 +5,7 @@
 
 import { hostCommandExecution } from "@/lib/plugin/core/invocation-identity"
 import { MODULE_TOOLS } from "@/lib/modules/generated/tools"
-import type { ModuleToolsEntry } from "@/lib/modules/manifest-types"
+import type { ModuleToolFamily, ModuleToolsEntry } from "@/lib/modules/manifest-types"
 import { __resetContributedToolsForTests } from "./tool-contributions"
 import { __setFilespaceToolDepsForTesting } from "@/lib/filespace/agent-tools"
 import { __setProjectCoordinatorToolDepsForTesting } from "@/lib/project-coordinator/agent-tools"
@@ -25,7 +25,11 @@ import {
   type PluginToolResolver,
 } from "./plugin-tool-ipc"
 import { __setPetToolDepsForTesting, toolFamily as petToolFamily } from "@/lib/pet/agent-tools"
-import { __setMediaToolDepsForTesting } from "./media-builtin-tools"
+import {
+  __setMediaToolDepsForTesting,
+  toolFamily as mediaToolFamily,
+} from "@/lib/media/agent-tools"
+import { toolFamily as artifactToolFamily } from "@/lib/artifacts/agent-tools"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import {
   recordCallbackBinding,
@@ -1437,18 +1441,7 @@ describe("handlePluginToolExec — desktop pet built-ins", () => {
   })
 
   it("routes a pet tool to its module ahead of the plugin registry", async () => {
-    // The real registry's entry (ADR-0250 §14 amendment), in the registry
-    // this suite otherwise keeps empty. Its family is the statically imported
-    // one: sibling suites reset the module registry, and a lazily imported
-    // copy would not see the deps injected below.
-    const actual = jest.requireActual("@/lib/modules/generated/tools") as {
-      MODULE_TOOLS: ModuleToolsEntry[]
-    }
-    __resetContributedToolsForTests()
-    ;(MODULE_TOOLS as ModuleToolsEntry[]).push({
-      ...actual.MODULE_TOOLS.find((entry) => entry.module === "pet")!,
-      load: async () => ({ toolFamily: petToolFamily }),
-    })
+    useModuleTools("pet", petToolFamily)
     const execute = jest.fn()
     __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "x", execute }) })
     __setPetToolDepsForTesting(() => ({
@@ -1525,13 +1518,50 @@ describe("handlePluginToolExec — managed desktop acceptance built-ins", () => 
   })
 })
 
+/**
+ * The real registry's entry for `module` (ADR-0250 §14 amendment), in the
+ * registry this suite otherwise keeps empty. Its family is the statically
+ * imported one: sibling suites reset the module registry, and a lazily
+ * imported copy would not see the deps the test injects.
+ */
+function useModuleTools(module: string, toolFamily: ModuleToolFamily) {
+  const actual = jest.requireActual("@/lib/modules/generated/tools") as {
+    MODULE_TOOLS: ModuleToolsEntry[]
+  }
+  __resetContributedToolsForTests()
+  ;(MODULE_TOOLS as ModuleToolsEntry[]).push({
+    ...actual.MODULE_TOOLS.find((entry) => entry.module === module)!,
+    load: async () => ({ toolFamily }),
+  })
+}
+
+describe("handlePluginToolExec — artifact built-ins", () => {
+  afterEach(() => {
+    __setPluginToolResolverForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
+  })
+
+  it("routes an artifact tool to its module ahead of the plugin registry", async () => {
+    useModuleTools("artifact", artifactToolFamily)
+    const execute = jest.fn()
+    __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "x", execute }) })
+    const response = await handlePluginToolExec(
+      makeRequest({ name: "artifact_read", args: {}, sessionId: "s1" })
+    )
+    expect(execute).not.toHaveBeenCalled()
+    expect(response.result).toMatchObject({ ok: true })
+  })
+})
+
 describe("handlePluginToolExec — video generation built-ins", () => {
   afterEach(() => {
     __setMediaToolDepsForTesting(null)
     __setPluginToolResolverForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
   })
 
-  it("routes a video tool ahead of the plugin registry with the calling session and tool call", async () => {
+  it("routes a video tool to its module ahead of the plugin registry with the calling session and tool call", async () => {
+    useModuleTools("media", mediaToolFamily)
     const execute = jest.fn()
     __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "x", execute }) })
     const start = jest.fn(async () => ({

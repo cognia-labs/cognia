@@ -74,7 +74,7 @@ jest.mock("@/stores/chat/session-store", () => ({
 
 let artifacts: Record<string, { title?: string }> = {}
 let canvasDocuments: Record<string, { title?: string }> = {}
-jest.mock("@/stores/artifact", () => ({
+jest.mock("@/stores/artifact/artifact-store", () => ({
   useArtifactStore: { getState: () => ({ artifacts, canvasDocuments }) },
 }))
 

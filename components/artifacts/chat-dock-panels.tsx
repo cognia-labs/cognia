@@ -44,7 +44,6 @@ import {
   FileSearchIcon,
   FileTextIcon,
   FolderKanbanIcon,
-  FolderOpenIcon,
   InfoIcon,
   GlobeIcon,
   CornerUpLeftIcon,
@@ -121,8 +120,6 @@ import {
 import { RunContextPanel } from "@/components/context-workbench/panels/run-context-panel"
 import { SessionTasksPanel } from "@/components/tasks/session-tasks-panel"
 import { useSessionOpenTaskCount } from "@/hooks/chat/use-session-tasks"
-import { ConversationFilesPanel } from "@/components/filespace/conversation-files-panel"
-import { CONVERSATION_FILES_PANEL_ID } from "@/stores/filespace/filespace-panel-store"
 import { listPlansBySession } from "@/lib/db/plans"
 import type {
   ContextPanelDefinition,
@@ -816,11 +813,6 @@ function SessionSandboxDesktopRenderer({ inputs }: Inputs<SessionPanelInputs>) {
   ) : null
 }
 
-function SessionFilesRenderer({ inputs }: Inputs<SessionPanelInputs>) {
-  const activeSessionId = usePanelInput(inputs, (input) => input.activeSessionId)
-  return <ConversationFilesPanel sessionId={activeSessionId} />
-}
-
 function SessionTeamMembersRenderer({ inputs }: Inputs<SessionPanelInputs>) {
   const activeSessionId = usePanelInput(inputs, (input) => input.activeSessionId)
   const teamId = usePanelInput(inputs, (input) => input.session?.teamId ?? null)
@@ -889,7 +881,6 @@ export function useSessionSurfacePanels({
       document: () => <SessionDocumentRenderer key={key} inputs={inputs} />,
       projectOverview: () => <DockProjectOverviewPanel key={key} inputs={inputs} />,
       workspace: () => <DockWorkspacePanel key={key} inputs={inputs} />,
-      files: () => <SessionFilesRenderer key={key} inputs={inputs} />,
       sandboxDesktop: () => <SessionSandboxDesktopRenderer key={key} inputs={inputs} />,
       sourceControl: () => <SessionSourceControlRenderer key={key} inputs={inputs} />,
       bestOfN: () => <DockBestOfNPanel key={key} inputs={inputs} />,
@@ -1029,20 +1020,9 @@ export function useSessionSurfacePanels({
         preferredMode: "wide",
         renderer: renderers.projectOverview,
       },
-      {
-        // Everything this conversation owns as files — its working directory,
-        // its other roots, its uploads and its artifacts — with a link to each
-        // (ADR-0222). The editor beside it browses one root; this lists them.
-        id: CONVERSATION_FILES_PANEL_ID,
-        activity: "workspace",
-        labelKey: "filespace.panel.title",
-        icon: FolderOpenIcon,
-        order: 28,
-        appliesTo: (resource) => resource.kind === "session",
-        retention: "stateful",
-        scope: "session",
-        renderer: renderers.files,
-      },
+      // The conversation's Files panel (order 28) is the filespace module's,
+      // registered with the context panel registry
+      // (`components/filespace/files-dock-panel.tsx`).
       {
         id: WORKSPACE_PANEL_ID,
         activity: "workspace",

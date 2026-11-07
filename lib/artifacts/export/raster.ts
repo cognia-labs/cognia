@@ -32,7 +32,7 @@
  *   contract the dock uses (`components/artifacts/artifact-renderers.tsx`), so
  *   the capture is exactly what a person would see, with no preview open.
  *   `captureArtifactToPngBlob` routes there; this is how an agent sees what it
- *   produced (`artifact_capture` in `lib/claude/artifact-builtin-tools.ts`).
+ *   produced (`artifact_capture` in `lib/artifacts/agent-tools.ts`).
  */
 
 import html2canvas from "html2canvas-pro"

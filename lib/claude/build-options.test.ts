@@ -7609,6 +7609,10 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     // whichever runs first and the rest see `false`.
     const mobile = isNativeMobile as jest.Mock
     mobile.mockReturnValue(true)
+    // The artifact module's tool family reads the host from the detected
+    // platform (`toolSurfaceHost`).
+    const platform = detectPlatform as jest.Mock
+    platform.mockReturnValue("mobile")
     try {
       const mobileOpts = await resolveSendOptions({
         session: makeSession({ id: "s1", characterId: "c1" }),
@@ -7623,6 +7627,8 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
       expect(toolNames(mobileOpts)).toContain("artifact_create")
     } finally {
       mobile.mockReturnValue(false)
+      platform.mockReset()
+      platform.mockImplementation(jest.requireActual("@/lib/platform/detect").detectPlatform)
     }
   })
 

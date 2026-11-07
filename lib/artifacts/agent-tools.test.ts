@@ -5,10 +5,11 @@ import {
   READ_CONTENT_MAX_CHARS,
   buildArtifactManifestEntries,
   buildCanvasManifestEntries,
-  isArtifactBuiltinTool,
   runArtifactBuiltinTool,
+  toolFamily,
   type ArtifactToolDeps,
-} from "./artifact-builtin-tools"
+} from "./agent-tools"
+import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -52,19 +53,6 @@ beforeEach(() => {
 })
 
 describe("tool surface", () => {
-  it("recognises every shipped name and nothing else", () => {
-    for (const name of [...ARTIFACT_TOOL_NAMES, ...CANVAS_TOOL_NAMES]) {
-      expect(isArtifactBuiltinTool(name)).toBe(true)
-    }
-    // Retired from the declared union: `artifact_search` folded into
-    // `artifact_read`'s optional `query`; `artifact_render` had nothing to ask
-    // for; `artifact_export` would be a model-initiated write to the user's
-    // disk for a button already on screen.
-    for (const name of ["artifact_search", "artifact_render", "artifact_export", "nope"]) {
-      expect(isArtifactBuiltinTool(name)).toBe(false)
-    }
-  })
-
   it("declares a manifest entry per tool, each with a closed schema", () => {
     const entries = [...buildArtifactManifestEntries(), ...buildCanvasManifestEntries()]
     expect(entries.map((e) => e.name).sort()).toEqual(
@@ -73,8 +61,59 @@ describe("tool surface", () => {
     for (const entry of entries) {
       expect(entry.description.length).toBeGreaterThan(20)
       expect(entry.jsonSchema.additionalProperties).toBe(false)
-      expect(entry.pluginId).toBe("cognia-artifact-builtin")
     }
+  })
+})
+
+describe("toolFamily", () => {
+  const surfaceFor = (over: Partial<ToolSurfaceContext> = {}) =>
+    toolFamily.surface({
+      session: null,
+      agent: null,
+      settings: null,
+      activeGoal: null,
+      prompts: { snapshot: null, context: {} },
+      host: "desktop",
+      activeProject: null,
+      ...over,
+    }) as { tools: { name: string }[] } | null
+
+  it("offers the artifact and canvas tools where the send has a dock", () => {
+    expect(surfaceFor()?.tools.map((t) => t.name)).toEqual([
+      ...ARTIFACT_TOOL_NAMES,
+      ...CANVAS_TOOL_NAMES,
+    ])
+    expect(surfaceFor({ host: "web" })?.tools).toHaveLength(9)
+  })
+
+  it("leaves the canvas tools out on the mobile shell, which has no editor guild", () => {
+    expect(surfaceFor({ host: "mobile" })?.tools.map((t) => t.name)).toEqual([
+      ...ARTIFACT_TOOL_NAMES,
+    ])
+  })
+
+  it("offers nothing in the CLI, to an IM-bound session, or with agent authoring off", () => {
+    expect(surfaceFor({ host: "cli" })).toBeNull()
+    expect(
+      surfaceFor({
+        session: { id: "s", platformBinding: { adapterId: "lark" } } as never,
+      })
+    ).toBeNull()
+    expect(surfaceFor({ settings: { artifacts: { agentAuthoring: false } } as never })).toBeNull()
+  })
+
+  it("runs a call against the calling conversation", async () => {
+    const result = (await toolFamily.run(
+      "artifact_read",
+      {},
+      {
+        sessionId: "s-run",
+        toolUseId: "u1",
+        executionRunId: "run-1",
+        outboundAuthorization: { kind: "tool-call", sessionId: "s-run", toolUseId: "u1" },
+      }
+    )) as { ok: boolean }
+    expect(result.ok).toBe(true)
   })
 })
 

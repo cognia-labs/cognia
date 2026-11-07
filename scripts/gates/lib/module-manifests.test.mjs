@@ -31,6 +31,12 @@ test("manifestKind recognises the two manifest paths and nothing else", () => {
   assert.equal(manifestKind("components/pet/module.ts"), null)
 })
 
+test("manifestKind gives a manifest in an aliased plural directory its subsystem's id", () => {
+  assert.equal(manifestKind("lib/artifacts/module.ts").id, "artifact")
+  assert.equal(manifestKind("components/artifacts/module.ui.ts").id, "artifact")
+  assert.equal(manifestKind("lib/media/module.ts").id, "media")
+})
+
 test("findManifestFiles lists manifests one directory deep, sorted", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "module-manifests-")))
   try {

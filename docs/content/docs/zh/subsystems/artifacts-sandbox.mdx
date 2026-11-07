@@ -121,7 +121,7 @@ jupyter: [/"cells"\s*:\s*\[/, /"cell_type"\s*:\s*"(code|markdown)"/, /"nbformat"
 
 ### 模型也可以直接开口（ADR-0158）
 
-检测是兜底，不是唯一路径。8 个工具——`artifact_{create,update,read,delete}` 与 `canvas_{create,update,read,open}`——通过 host-routed builtin-tool 中继发布（`lib/claude/artifact-builtin-tools.ts`，由 `lib/claude/plugin-tool-ipc.ts` 执行）。这正是 chart artifact 能带上 `chartType` 和一个真正标题的原因：两者都不可能靠正则从一个 fence 里恢复出来。
+检测是兜底，不是唯一路径。8 个工具——`artifact_{create,update,read,delete}` 与 `canvas_{create,update,read,open}`——作为 artifact 模块的工具贡献，通过 host-routed builtin-tool 中继发布（`lib/artifacts/agent-tools.ts`，在 `lib/artifacts/module.ts` 中声明，由 `lib/claude/plugin-tool-ipc.ts` 执行）。这正是 chart artifact 能带上 `chartType` 和一个真正标题的原因：两者都不可能靠正则从一个 fence 里恢复出来。
 
 动这块之前需要知道的三条规则：
 

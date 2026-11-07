@@ -23,12 +23,8 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
-import {
-  computeDiff,
-  computeDiffStats,
-  getMonacoLanguage,
-  newLineForOldLine,
-} from "@/lib/artifacts"
+import { computeDiff, computeDiffStats, newLineForOldLine } from "@/lib/artifacts/diff"
+import { getMonacoLanguage } from "@/lib/artifacts/constants"
 import { guardDiffEditorModelDisposal } from "@/lib/canvas/monaco-diff-disposal"
 import { cn } from "@/lib/utils"
 import { LineDiffView, type LineDiffViewHandle } from "@/components/diff/line-diff-view"

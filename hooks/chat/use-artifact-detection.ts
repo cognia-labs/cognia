@@ -7,10 +7,8 @@
 
 import { useMemo } from "react"
 import type { ArtifactType, ArtifactLanguage } from "@/types"
-import {
-  mapToArtifactLanguage as centralMapToArtifactLanguage,
-  generateArtifactTitle,
-} from "@/lib/artifacts"
+import { mapToArtifactLanguage as centralMapToArtifactLanguage } from "@/lib/artifacts/constants"
+import { generateArtifactTitle } from "@/lib/artifacts/utils"
 import {
   detectArtifactType as centralDetectArtifactType,
   detectArtifacts,

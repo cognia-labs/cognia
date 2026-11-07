@@ -39,7 +39,7 @@ import {
 import { TooltipIconButton } from "@/components/chat/ui/tooltip-icon-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useCopy } from "@/hooks/ui/use-copy"
-import { parseChartPayload, type ChartContract } from "@/lib/artifacts"
+import { parseChartPayload, type ChartContract } from "@/lib/artifacts/chart-contract"
 import { useChatDiagramPalette, type ChatDiagramPalette } from "@/lib/chat/diagram-palette"
 import { downloadBlob } from "@/lib/files/download"
 import { cn } from "@/lib/utils"

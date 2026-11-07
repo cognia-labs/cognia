@@ -7,7 +7,7 @@
  * returns source; `office_validate_workbook` returns findings), so a
  * wrong-but-valid chart or a workbook whose column is `########` passes all of
  * them. This turns an artifact into the PNG a person would see, for
- * `artifact_capture` (`lib/claude/artifact-builtin-tools.ts`).
+ * `artifact_capture` (`lib/artifacts/agent-tools.ts`).
  *
  * Pixels come from `captureArtifactToPngBlob` (`lib/artifacts/export/raster.ts`):
  * plugin renderers are mounted off-screen, sources with a serialisable form

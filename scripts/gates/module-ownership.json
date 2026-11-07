@@ -62,22 +62,21 @@
       "class": "kernel"
     },
     "annotations": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "components/annotations/annotation-intent-controls.tsx",
+        "components/annotations/annotation-queue-list.tsx"
+      ]
     },
     "app-root": {
       "class": "foundation"
     },
     "appearance": {
       "class": "module",
-      "api": ["lib/appearance/resolve-app-palette.ts", "lib/appearance/theme-token-catalog.ts"]
-    },
-    "artifact": {
-      "class": "module",
       "api": [
-        "lib/artifacts/constants.ts",
-        "lib/artifacts/reveal.ts",
-        "stores/artifact/artifact-dock-layout-store.ts",
-        "stores/artifact/artifact-store.ts"
+        "lib/appearance/resolve-app-palette.ts",
+        "lib/appearance/theme-token-catalog.ts",
+        "lib/appearance/use-theme-css-vars.ts"
       ]
     },
     "attention": {
@@ -91,7 +90,8 @@
       "class": "kernel"
     },
     "automation": {
-      "class": "module"
+      "class": "module",
+      "api": ["hooks/automation/use-session-sandbox-desktop.ts"]
     },
     "background-tasks": {
       "class": "module",
@@ -101,7 +101,8 @@
       ]
     },
     "best-of-n": {
-      "class": "module"
+      "class": "module",
+      "api": ["components/best-of-n/best-of-n-comparison.tsx"]
     },
     "biometric": {
       "class": "foundation"
@@ -118,7 +119,26 @@
     },
     "browser": {
       "class": "module",
-      "api": ["lib/browser/extension-engine.ts"]
+      "api": [
+        "components/browser/browser-backend-switcher.tsx",
+        "components/browser/browser-history-menu.tsx",
+        "components/browser/browser-preview-pane.tsx",
+        "components/browser/document-viewer-browser.tsx",
+        "components/browser/extensions/browser-extensions-panel.tsx",
+        "components/browser/launch/browser-launch-configs.tsx",
+        "components/browser/local-content/browser-local-content-picker.tsx",
+        "hooks/browser/use-local-browser.ts",
+        "hooks/browser/use-recent-pages.ts",
+        "hooks/browser/use-selection-to-chat.ts",
+        "lib/browser/agent-engine.ts",
+        "lib/browser/backend-availability.ts",
+        "lib/browser/document-viewer-session.ts",
+        "lib/browser/extension-engine.ts",
+        "lib/browser/local-content-client.ts",
+        "lib/browser/open-url-request.ts",
+        "lib/browser/protocol.ts",
+        "lib/browser/shared-local-browser.ts"
+      ]
     },
     "browser-stubs": {
       "class": "foundation"
@@ -127,7 +147,13 @@
       "class": "kernel"
     },
     "canvas": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/canvas/document-disposal.ts",
+        "lib/canvas/monaco-diff-disposal.ts",
+        "stores/canvas/canvas-layout-store.ts",
+        "stores/canvas/canvas-settings-store.ts"
+      ]
     },
     "capacitor": {
       "class": "foundation"
@@ -147,13 +173,25 @@
       "class": "kernel",
       "api": [
         "components/chat/markdown-renderer.tsx",
+        "components/chat/message-parts/file-part-preview.tsx",
+        "components/chat/message-parts/kept-copy-source-badge.tsx",
+        "components/chat/message-parts/mcp-renderers/common.tsx",
+        "components/chat/motion/motion-reveal.tsx",
+        "components/chat/renderers/code-block.tsx",
+        "components/chat/renderers/math-block.tsx",
+        "components/chat/renderers/mermaid-block.tsx",
         "components/chat/session-run-indicator.tsx",
         "hooks/chat/chat-control-bridge.ts",
         "hooks/chat/chat-send-bridge.ts",
         "hooks/chat/claude-chat-turn-tasks.ts",
         "hooks/chat/steer-runtime.ts",
+        "hooks/chat/use-artifact-detection.ts",
+        "hooks/chat/use-docs-providers.ts",
         "hooks/chat/use-effective-cwd.ts",
+        "hooks/chat/use-remote-doc-kept-copy-source.ts",
+        "hooks/chat/use-session-resource-changes.ts",
         "hooks/chat/use-session-run-status-map.ts",
+        "hooks/chat/use-session-tasks.ts",
         "hooks/chat/use-sessions.ts"
       ]
     },
@@ -167,10 +205,12 @@
       "class": "module"
     },
     "code-adoption": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/code-adoption/persist.ts", "lib/code-adoption/types.ts"]
     },
     "codeserver": {
-      "class": "module"
+      "class": "module",
+      "api": ["hooks/codeserver/use-code-server-supported.ts", "lib/codeserver/client.ts"]
     },
     "cogsets": {
       "class": "module"
@@ -220,7 +260,31 @@
     },
     "context-workbench": {
       "class": "module",
-      "api": ["components/context-workbench/run-retrospective-view.tsx"]
+      "api": [
+        "components/context-workbench/context-capability-unavailable.tsx",
+        "components/context-workbench/context-comments-panel.tsx",
+        "components/context-workbench/context-metadata-panel.tsx",
+        "components/context-workbench/context-workbench.tsx",
+        "components/context-workbench/panels/logs-workbench-panel.tsx",
+        "components/context-workbench/panels/memory-workbench-panel.tsx",
+        "components/context-workbench/panels/run-context-panel.tsx",
+        "components/context-workbench/panels/source-control-workbench-panel.tsx",
+        "components/context-workbench/panels/squad-context-panel.tsx",
+        "components/context-workbench/panels/team-members-panel.tsx",
+        "components/context-workbench/resource-workbench-chat-panel.tsx",
+        "components/context-workbench/run-retrospective-view.tsx",
+        "components/context-workbench/session-overview-panel.tsx",
+        "components/context-workbench/session-sources-panel.tsx",
+        "components/context-workbench/session-usage/session-usage-panel.tsx",
+        "hooks/context-workbench/use-context-comment-badge.ts",
+        "hooks/context-workbench/use-context-workbench-instance-id.ts",
+        "hooks/context-workbench/use-panel-inputs.ts",
+        "lib/context-workbench/active-context.ts",
+        "lib/context-workbench/capabilities.ts",
+        "lib/context-workbench/panel-label.ts",
+        "lib/context-workbench/panel-registry.ts",
+        "stores/context-workbench/context-workbench-store.ts"
+      ]
     },
     "conversations": {
       "class": "shell"
@@ -266,14 +330,16 @@
       "class": "foundation"
     },
     "diff": {
-      "class": "module"
+      "class": "module",
+      "api": ["components/diff/line-diff-view.tsx"]
     },
     "discover": {
       "class": "module"
     },
     "docs-providers": {
       "class": "kernel",
-      "note": "The framework and the `docs-provider` port; vendor implementations follow the three-layer rule."
+      "note": "The framework and the `docs-provider` port; vendor implementations follow the three-layer rule.",
+      "api": ["components/docs-providers/docs-provider-notice.tsx"]
     },
     "document": {
       "class": "module"
@@ -288,10 +354,24 @@
       "class": "foundation"
     },
     "editor": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "components/editor/editor-language.ts",
+        "components/editor/light-code-editor.tsx",
+        "components/editor/lsp-server-hint.tsx",
+        "components/editor/monaco-diagnostics-bar.tsx",
+        "components/editor/project/code-server-pane.tsx",
+        "components/editor/project/code-server-web-pane.tsx",
+        "components/editor/project/editor-engine-toggle.tsx",
+        "components/editor/project/light-editor-goto.ts",
+        "components/editor/project/project-editor-workbench.tsx",
+        "components/editor/project/project-root-switcher.tsx",
+        "stores/editor/project-editor-session-store.ts"
+      ]
     },
     "editor-workbench": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/editor-workbench/monaco-workbench.ts"]
     },
     "error": {
       "class": "foundation"
@@ -316,10 +396,16 @@
       "class": "foundation"
     },
     "file-viewer": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/file-viewer/load-workspace-text.ts",
+        "lib/file-viewer/probe.ts",
+        "lib/file-viewer/types.ts"
+      ]
     },
     "files-library": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/files-library/safe-filename.ts"]
     },
     "fleet": {
       "class": "module",
@@ -335,7 +421,17 @@
     },
     "git": {
       "class": "module",
-      "api": ["lib/git/commands.ts", "stores/git/git-store.ts"]
+      "api": [
+        "hooks/git/use-conversation-changed-paths.ts",
+        "hooks/git/use-git-actions.ts",
+        "hooks/git/use-git-repo.ts",
+        "hooks/git/use-monaco-active-theme.ts",
+        "lib/git/commands.ts",
+        "lib/git/conversation-scope.ts",
+        "lib/git/diff-presentation.ts",
+        "lib/git/load.ts",
+        "stores/git/git-store.ts"
+      ]
     },
     "github": {
       "class": "module",
@@ -399,7 +495,8 @@
       "class": "kernel"
     },
     "images": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/images/pixel-buffer.ts"]
     },
     "inbound": {
       "class": "module"
@@ -484,9 +581,6 @@
     "me": {
       "class": "shell"
     },
-    "media": {
-      "class": "module"
-    },
     "memory": {
       "class": "module",
       "api": [
@@ -506,7 +600,8 @@
     },
     "modules": {
       "class": "kernel",
-      "note": "The module system: the manifest schema and, from M1, the generated registries (ADR-0250 §14)."
+      "note": "The module system: the manifest schema and, from M1, the generated registries (ADR-0250 §14).",
+      "api": ["hooks/modules/use-port.ts"]
     },
     "monaco": {
       "class": "module"
@@ -634,7 +729,8 @@
       "class": "module"
     },
     "review": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/review/scope.ts"]
     },
     "router-fusion": {
       "class": "kernel",
@@ -771,7 +867,17 @@
       "class": "shell"
     },
     "source-control": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "components/source-control/branch-header.tsx",
+        "components/source-control/changes-view.tsx",
+        "components/source-control/commit-box.tsx",
+        "components/source-control/diff-pane.tsx",
+        "components/source-control/diff-viewer.tsx",
+        "components/source-control/review-scope-picker.tsx",
+        "components/source-control/root-switcher.tsx",
+        "components/source-control/status-decoration.ts"
+      ]
     },
     "stack": {
       "class": "module",
@@ -818,11 +924,12 @@
       "class": "foundation"
     },
     "task-workspace": {
-      "class": "kernel"
+      "class": "kernel",
+      "api": ["hooks/task-workspace/use-port-lease-resolve.ts"]
     },
     "tasks": {
       "class": "module",
-      "api": ["lib/tasks/spawn-task-core.ts"]
+      "api": ["components/tasks/session-tasks-panel.tsx", "lib/tasks/spawn-task-core.ts"]
     },
     "tauri": {
       "class": "foundation"
@@ -854,6 +961,7 @@
       "api": [
         "lib/terminal/completion/tokenize.ts",
         "lib/terminal/headless-exec.ts",
+        "lib/terminal/pick-transport.ts",
         "lib/terminal/terminal-links.ts",
         "stores/terminal/terminal-store.ts"
       ]
@@ -957,7 +1065,11 @@
       ]
     },
     "workspace": {
-      "class": "kernel"
+      "class": "kernel",
+      "api": [
+        "components/workspace/panel-root-chip.tsx",
+        "components/workspace/port-lease-badge.tsx"
+      ]
     }
   },
   "paths": [

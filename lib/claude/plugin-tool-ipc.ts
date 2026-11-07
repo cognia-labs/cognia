@@ -78,16 +78,6 @@ import {
   runAcceptanceProposalTool,
 } from "./acceptance-builtin-tools"
 import {
-  isArtifactBuiltinTool,
-  resolveArtifactToolDeps,
-  runArtifactBuiltinTool,
-} from "./artifact-builtin-tools"
-import {
-  isMediaBuiltinTool,
-  resolveMediaToolDeps,
-  runMediaBuiltinTool,
-} from "./media-builtin-tools"
-import {
   isTemplateBuiltinTool,
   resolveTemplateToolDeps as resolveProductionTemplateToolDeps,
   runTemplateBuiltinTool,
@@ -835,11 +825,6 @@ async function runPluginToolExec(
       )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
-    // ── Agent-authored artifacts and canvas documents ─────────────────────
-    // Host-routed for the same reason as the working set: the artifact store is
-    // a renderer singleton the .mjs sidecar cannot import. Before this the
-    // declared `artifact_create` / `canvas_create` tools had a consumer on the
-    // message-conversion side and no producer anywhere.
     if (isTemplateBuiltinTool(request.name)) {
       // Agent-facing templates, chat templates and squads (ADR-0164).
       // Host-routed: the template catalog, the Dexie chat-template table and
@@ -867,28 +852,6 @@ async function runPluginToolExec(
       const result = await runAcceptanceProposalTool(request.args, {
         sessionId: request.sessionId,
       })
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    if (isArtifactBuiltinTool(request.name)) {
-      const result = await runArtifactBuiltinTool(
-        request.name,
-        request.args,
-        resolveArtifactToolDeps(),
-        { sessionId: request.sessionId }
-      )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    // ── Video generation (ADR-0205) ──────────────────────────────────────
-    // Host-routed: the job engine, its Dexie table and the provider transport
-    // all live in the renderer. `video_generate` returns a job id at once; the
-    // reconciler carries the job from there.
-    if (isMediaBuiltinTool(request.name)) {
-      const result = await runMediaBuiltinTool(
-        request.name,
-        request.args,
-        await resolveMediaToolDeps(),
-        { sessionId: request.sessionId }
-      )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── Promoted vector built-ins — project-scoped vector memory ───────────

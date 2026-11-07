@@ -22,7 +22,7 @@ jest.mock("@/stores/chat", () => ({
   useChatStore: (selector: (state: { activeSessionId: string | null }) => unknown) =>
     selector({ activeSessionId }),
 }))
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: () => session,
 }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))

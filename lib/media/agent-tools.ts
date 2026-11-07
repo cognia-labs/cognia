@@ -12,15 +12,20 @@
  * `DECLARED_MEDIA_TOOLS` pin in `types/agent/tool.test.ts` keeps the union and
  * this manifest one fact.
  *
+ * The media module contributes them through its manifest (ADR-0250 §14
+ * amendment): it declares each tool's consent and effect, and
+ * {@link toolFamily} decides what a run is offered and runs a call.
+ *
  * ## Import discipline
  *
- * Static imports here are TYPE-ONLY: `plugin-tool-ipc` is imported by the Node
- * CLI, which has no DOM, so the job engine, Dexie and the settings store are
- * reached through `await import()` at call time. The CLI never offers these
- * tools (`build-options.ts` gates them on a chat surface with a dock).
+ * Static imports here are TYPE-ONLY (and the pure redaction gate): the
+ * generated tools registry loads this file on every host, the Node CLI (no
+ * DOM) included, so the job engine, Dexie and the settings store are reached
+ * through `await import()` at call time. The CLI is never offered these
+ * tools (see {@link toolFamily}).
  */
 
-import type { VideoGenerationSettings } from "@cognia/agent-config-types"
+import type { AppSettings, VideoGenerationSettings } from "@cognia/agent-config-types"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import type { UIMessage } from "ai"
 
@@ -31,19 +36,16 @@ import type {
 } from "@/lib/ai/media/video-jobs/engine"
 import type { MediaGenerationJobRow } from "@/lib/ai/media/video-jobs/types"
 import type { VideoProviderId } from "@/lib/ai/media/video-generation-sdk"
-
-export const MEDIA_BUILTIN_PLUGIN_ID = "cognia-media-builtin"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 
 export const VIDEO_GENERATE_TOOL_NAME = "video_generate"
 export const VIDEO_STATUS_TOOL_NAME = "video_status"
 
 export const MEDIA_TOOL_NAMES = [VIDEO_GENERATE_TOOL_NAME, VIDEO_STATUS_TOOL_NAME] as const
-
-const MEDIA_TOOL_NAME_SET: ReadonlySet<string> = new Set(MEDIA_TOOL_NAMES)
-
-export function isMediaBuiltinTool(name: string): boolean {
-  return MEDIA_TOOL_NAME_SET.has(name)
-}
 
 /** `image` value that picks the newest image in the conversation. */
 export const LATEST_IMAGE = "latest"
@@ -51,18 +53,10 @@ export const LATEST_IMAGE = "latest"
 const MAX_PROMPT_CHARS = 4000
 const MEDIA_REF_PREFIX = "cognia-media:"
 
-export interface MediaManifestEntry {
-  name: string
-  pluginId: string
-  description: string
-  jsonSchema: Record<string, unknown>
-}
-
-export function buildMediaManifestEntries(): MediaManifestEntry[] {
+export function buildMediaManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: VIDEO_GENERATE_TOOL_NAME,
-      pluginId: MEDIA_BUILTIN_PLUGIN_ID,
       description:
         "Start generating a short video from a text prompt, optionally animating an image from this conversation. Returns a job id immediately; generation takes minutes and continues in the background, and the video appears in the chat when it is ready. Do not poll in a loop: check once with video_status only if the user asks. Unset options use the user's defaults from Settings → Media generation.",
       jsonSchema: {
@@ -100,7 +94,6 @@ export function buildMediaManifestEntries(): MediaManifestEntry[] {
     },
     {
       name: VIDEO_STATUS_TOOL_NAME,
-      pluginId: MEDIA_BUILTIN_PLUGIN_ID,
       description:
         "Read a video job started in this conversation: generating, succeeded (with the stored video's size and duration), failed, cancelled or timed_out, with a failure code.",
       jsonSchema: {
@@ -321,4 +314,57 @@ export async function runMediaBuiltinTool(
   } catch (error) {
     return fail("internal_error", error instanceof Error ? error.message : String(error))
   }
+}
+
+/**
+ * Whether the video tools can run for this send: the user has not switched
+ * them off, and a video provider is configured that this shell can reach
+ * (the web build reaches only CORS-open providers). Never throws: a failure
+ * to answer means "do not offer".
+ */
+export async function videoToolsAvailable(
+  appSettings: Readonly<AppSettings> | null | undefined
+): Promise<boolean> {
+  if (appSettings?.videoGeneration?.agentTool === false) return false
+  try {
+    const [
+      { hasUsableVideoProvider },
+      { reachesNonCorsHosts },
+      { createProviderSettingsSnapshot },
+    ] = await Promise.all([
+      import("@/lib/ai/media/video-jobs/defaults"),
+      import("@/lib/network/platform-fetch"),
+      import("@/lib/ai/provider-consumption"),
+    ])
+    const snapshot = createProviderSettingsSnapshot({
+      defaultProvider: appSettings?.defaultProvider,
+      providerSettings: appSettings?.providerSettings as
+        Record<string, import("@/lib/ai/provider-consumption").ProviderSettingsEntry> | undefined,
+      customProviders: appSettings?.customProviders as
+        import("@/lib/ai/provider-consumption").RichCustomProviderEntry[] | undefined,
+    })
+    return hasUsableVideoProvider(snapshot, reachesNonCorsHosts())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The media module's tool family (ADR-0250 §14 amendment). Offered where a
+ * job's live card and its video have a chat surface to land on (not an
+ * IM-bound session, not the CLI) and a reachable video provider is
+ * configured, so the model is never handed a tool that can only answer
+ * `no_provider`.
+ */
+export const toolFamily: ModuleToolFamily = {
+  async surface(ctx: ToolSurfaceContext) {
+    if (ctx.session?.platformBinding?.adapterId || ctx.host === "cli") return null
+    if (!(await videoToolsAvailable(ctx.settings))) return null
+    return { tools: buildMediaManifestEntries() }
+  },
+  async run(name, args, call) {
+    return runMediaBuiltinTool(name, args, await resolveMediaToolDeps(), {
+      sessionId: call.sessionId,
+    })
+  },
 }

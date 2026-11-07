@@ -17,6 +17,8 @@ import { join, posix } from "node:path"
 
 import ts from "typescript"
 
+import { ALIASES } from "./subsystems.mjs"
+
 export const DEFINE_MODULE = "@/lib/modules/define"
 
 /** Top-level fields of `HostModuleManifest` (`lib/modules/manifest-types.ts`). */
@@ -700,12 +702,17 @@ export function validateUiManifest(manifest, id, vocabulary = {}) {
 
 // -------------------------------------------------------------- discover
 
-/** Which manifest a path is, if any. */
+/**
+ * Which manifest a path is, if any. Its id is the subsystem key of its
+ * directory: a plural directory the classifier aliases (`lib/artifacts`) holds
+ * the singular subsystem's manifest (`artifact`), as its files are owned.
+ */
 export function manifestKind(file) {
   const host = HOST_MANIFEST.exec(file)
-  if (host) return { layer: "host", id: host[1], helper: "defineHostModule" }
+  if (host)
+    return { layer: "host", id: ALIASES.get(host[1]) ?? host[1], helper: "defineHostModule" }
   const ui = UI_MANIFEST.exec(file)
-  if (ui) return { layer: "ui", id: ui[1], helper: "defineUiModule" }
+  if (ui) return { layer: "ui", id: ALIASES.get(ui[1]) ?? ui[1], helper: "defineUiModule" }
   return null
 }
 

@@ -1254,32 +1254,6 @@ async function proIdeWriteToolsAvailable(ctx: BuildOptionsContext): Promise<bool
 }
 
 /**
- * Whether the video tools (ADR-0205) can run for this send: the user has not
- * switched them off, and a video provider is configured that this shell can
- * reach (the web build reaches only CORS-open providers). Never throws: a
- * failure to answer means "do not surface", like the Pro IDE check above.
- */
-async function videoToolsAvailable(appSettings: AppSettings | null | undefined): Promise<boolean> {
-  if (appSettings?.videoGeneration?.agentTool === false) return false
-  try {
-    const [{ hasUsableVideoProvider }, { reachesNonCorsHosts }] = await Promise.all([
-      import("@/lib/ai/media/video-jobs/defaults"),
-      import("@/lib/network/platform-fetch"),
-    ])
-    const snapshot = createProviderSettingsSnapshot({
-      defaultProvider: appSettings?.defaultProvider,
-      providerSettings: appSettings?.providerSettings as
-        Record<string, import("@/lib/ai/provider-consumption").ProviderSettingsEntry> | undefined,
-      customProviders: appSettings?.customProviders as
-        import("@/lib/ai/provider-consumption").RichCustomProviderEntry[] | undefined,
-    })
-    return hasUsableVideoProvider(snapshot, reachesNonCorsHosts())
-  } catch {
-    return false
-  }
-}
-
-/**
  * Add a session-stable section to `appendSystemPrompt`, ahead of the per-turn
  * dynamic tail when that tail is already in place.
  *
@@ -3140,18 +3114,15 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // provider prompt cache.
   // Whether this send has an artifact dock on the other end. An IM-bound
   // session does not: a chart or canvas artifact would arrive as raw JSON.
-  // Hoisted here because the SAME answer gates three things — the routing
-  // prompt (ADR-0139), the artifact tool manifest, and the consent tier below.
-  // The routing prompt advertising a chart artifact while the tool that makes
-  // one is absent is the exact mismatch this file used to ship.
+  // It gates the routing prompt (ADR-0139) and the dock-bound tool families
+  // below. The artifact and media modules' tool families ask the same
+  // questions (`lib/artifacts/agent-tools.ts`, `lib/media/agent-tools.ts`),
+  // and the routing prompt advertises the artifact tools only when
+  // `artifact_create` was actually offered: the prompt promising a tool the
+  // turn lacks is the exact mismatch this file used to ship.
   const artifactsChannelAvailable = !session?.platformBinding?.adapterId && !isCliHost()
   const artifactAuthoringEnabled =
     artifactsChannelAvailable && appSettings?.artifacts?.agentAuthoring !== false
-  // Video generation (ADR-0205): the same dock condition — a job's live card
-  // and its video need a chat surface, not an IM thread or the CLI — plus a
-  // reachable video provider, so the model is never handed a tool that can
-  // only answer `no_provider`. One flag for the manifest and the consent tier.
-  const videoToolsSurfaced = artifactsChannelAvailable && (await videoToolsAvailable(appSettings))
 
   const editorWriteToolsSurfaced = await proIdeWriteToolsAvailable(ctx)
   // Sites publishing needs Dexie, the OS keyring, and `sandbox_exec` — all
@@ -3162,7 +3133,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const commandRules = appSettings?.agentPermissions?.commandRules
   const toolRules = appSettings?.agentPermissions?.toolRules
   const { buildEditorToolRuleset } = await import("@/lib/claude/permissions/editor-tool-rules")
-  const { buildArtifactToolRuleset } = await import("@/lib/claude/permissions/artifact-tool-rules")
   const { buildSiteToolRuleset } = await import("@/lib/claude/permissions/site-tool-rules")
   // Template / chat-template / squad tools (ADR-0164). Opt-in, and withheld
   // for an IM-bound session for the same reason the artifact tools are: the
@@ -3179,7 +3149,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const acceptanceProposalSurfaced =
     managedAcceptanceHost && artifactsChannelAvailable && !session?.managedAcceptance
   const { buildTemplateToolRuleset } = await import("@/lib/claude/permissions/template-tool-rules")
-  const { buildMediaToolRuleset } = await import("@/lib/claude/permissions/media-tool-rules")
   const { buildAgentBuilderToolRuleset } =
     await import("@/lib/claude/permissions/agent-builder-tool-rules")
   const { buildAcceptanceProposalToolRuleset, buildAcceptanceToolRuleset } =
@@ -3200,9 +3169,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const mergedRuleset = mergeRulesets(
     editorWriteToolsSurfaced ? buildEditorToolRuleset() : undefined,
     sitesToolsSurfaced ? buildSiteToolRuleset() : undefined,
-    artifactAuthoringEnabled ? buildArtifactToolRuleset() : undefined,
     templateToolsEnabled ? buildTemplateToolRuleset() : undefined,
-    videoToolsSurfaced ? buildMediaToolRuleset() : undefined,
     agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
     acceptanceToolsSurfaced ? buildAcceptanceToolRuleset() : undefined,
     acceptanceProposalSurfaced ? buildAcceptanceProposalToolRuleset() : undefined,
@@ -4268,32 +4235,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // Artifact / Canvas authoring. On by default — the routing prompt above
-  // already tells the model to reach for a chart artifact, and before these
-  // tools existed the only way to make one was to hope the fence detector
-  // lifted a code block at turn end.
-  //
-  // Withheld for an IM-bound session for the same reason the routing prompt
-  // withholds the option: there is no dock on the other end.
-  if (artifactAuthoringEnabled) {
-    try {
-      const { buildArtifactManifestEntries, buildCanvasManifestEntries } =
-        await import("@/lib/claude/artifact-builtin-tools")
-      const { isNativeMobile } = await import("@/lib/platform/detect")
-      const entries = [...buildArtifactManifestEntries()]
-      // Canvas is a desktop/web surface: the mobile shell has no editor guild
-      // to open a document in, so offering `canvas_open` there would advertise a
-      // destination that does not exist.
-      if (!isNativeMobile()) entries.push(...buildCanvasManifestEntries())
-      const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
-      opts.pluginTools = [
-        ...(opts.pluginTools ?? []),
-        ...entries.filter((entry) => !existing.has(entry.name)),
-      ]
-    } catch (err) {
-      loggers.app.warn("failed to append artifact built-in tools", { error: String(err) })
-    }
-  }
   // Managed desktop acceptance (ADR-0233 A6). Gated on the same flags as the
   // consent tier above.
   if (acceptanceToolsSurfaced || acceptanceProposalSurfaced) {
@@ -4310,23 +4251,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       ]
     } catch (err) {
       loggers.app.warn("failed to append acceptance built-in tools", { error: String(err) })
-    }
-  }
-  // Video generation (ADR-0205). Gated on the same `videoToolsSurfaced` flag
-  // as its consent tier above: a tier surfaced apart from the tools it
-  // governs is inert payload, and it would break the "no rules configured, no
-  // ruleset at all" invariant that keeps SendOptions byte-identical for the
-  // provider prompt cache.
-  if (videoToolsSurfaced) {
-    try {
-      const { buildMediaManifestEntries } = await import("@/lib/claude/media-builtin-tools")
-      const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
-      opts.pluginTools = [
-        ...(opts.pluginTools ?? []),
-        ...buildMediaManifestEntries().filter((entry) => !existing.has(entry.name)),
-      ]
-    } catch (err) {
-      loggers.app.warn("failed to append video built-in tools", { error: String(err) })
     }
   }
   // Template / chat-template / squad tools (ADR-0164). Gated on the same

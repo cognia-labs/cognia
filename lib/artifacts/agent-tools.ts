@@ -14,9 +14,11 @@
  *
  * `lib/claude/plugin-tool-ipc.ts` + `opts.pluginTools` is a generic host-routed
  * tool channel that is already live on both dispatch paths and already carries
- * six tool families (web, editor, skill, team, vector, session-peer). The
- * artifact store lives in the renderer and the sidecar cannot import `lib/`, so
- * this is exactly the shape that channel exists for. Building a second relay
+ * many tool families. The artifact store lives in the renderer and the sidecar
+ * cannot import `lib/`, so this is exactly the shape that channel exists for.
+ * The artifact module contributes the tools through its manifest (ADR-0250
+ * §14 amendment): it declares each tool's consent and effect, and
+ * {@link toolFamily} decides what a run is offered and runs a call. Building a second relay
  * beside it — the `sidecar/a2ui-tools/` MCP-server shape — would be duplicating
  * working machinery; A2UI needs its own only because an IM-projected surface
  * has a reader outside cognia, which an artifact never does.
@@ -33,15 +35,18 @@
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
-import { revealCanvasDocument } from "@/lib/artifacts/reveal"
-import { buildArtifactSourceMetadata } from "@/lib/artifacts/source-metadata"
-import { CHART_TYPES } from "@/lib/artifacts/chart-contract"
-import { ARTIFACT_TYPES } from "@/lib/artifacts/constants"
-import type { ArtifactImage } from "@/lib/artifacts/capture"
-import type { CaptureOptions } from "@/lib/artifacts/export/raster"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 import type { Artifact, ArtifactLanguage, ArtifactType, CanvasDocument } from "@/types"
-
-export const ARTIFACT_BUILTIN_PLUGIN_ID = "cognia-artifact-builtin"
+import { revealCanvasDocument } from "./reveal"
+import { buildArtifactSourceMetadata } from "./source-metadata"
+import { CHART_TYPES } from "./chart-contract"
+import { ARTIFACT_TYPES } from "./constants"
+import type { ArtifactImage } from "./capture"
+import type { CaptureOptions } from "./export/raster"
 
 export const ARTIFACT_CREATE_TOOL_NAME = "artifact_create"
 export const ARTIFACT_UPDATE_TOOL_NAME = "artifact_update"
@@ -67,19 +72,6 @@ export const CANVAS_TOOL_NAMES = [
   CANVAS_READ_TOOL_NAME,
   CANVAS_OPEN_TOOL_NAME,
 ] as const
-
-const ALL_TOOL_NAMES: ReadonlySet<string> = new Set([...ARTIFACT_TOOL_NAMES, ...CANVAS_TOOL_NAMES])
-
-export function isArtifactBuiltinTool(name: string): boolean {
-  return ALL_TOOL_NAMES.has(name)
-}
-
-export interface ArtifactManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-}
 
 /**
  * Read results are capped. A 400 KB artifact pasted whole into the context
@@ -111,11 +103,10 @@ const ARTIFACT_LANGUAGES: readonly ArtifactLanguage[] = [
   "latex",
 ]
 
-export function buildArtifactManifestEntries(): ArtifactManifestEntry[] {
+export function buildArtifactManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: ARTIFACT_CREATE_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "Create an artifact and open it in the user's artifact dock. Prefer this over a fenced code block whenever the content is a deliverable the user will keep, re-read or export — a chart, a diagram, a page, a document. Load the `chart-design` skill before emitting a chart.",
       jsonSchema: {
@@ -137,7 +128,6 @@ export function buildArtifactManifestEntries(): ArtifactManifestEntry[] {
     },
     {
       name: ARTIFACT_UPDATE_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "Revise an existing artifact. When the user has review-before-apply on (the default), the revision is staged as a diff for them to accept per hunk rather than overwriting.",
       jsonSchema: {
@@ -154,7 +144,6 @@ export function buildArtifactManifestEntries(): ArtifactManifestEntry[] {
     },
     {
       name: ARTIFACT_READ_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "Read one artifact by id, or list this conversation's artifacts. Pass `artifactId` for one; pass nothing (optionally with `query`) to list titles and types.",
       jsonSchema: {
@@ -168,7 +157,6 @@ export function buildArtifactManifestEntries(): ArtifactManifestEntry[] {
     },
     {
       name: ARTIFACT_DELETE_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "Delete an artifact. Destroys user-visible work, so the user is asked before it runs.",
       jsonSchema: {
@@ -180,7 +168,6 @@ export function buildArtifactManifestEntries(): ArtifactManifestEntry[] {
     },
     {
       name: ARTIFACT_CAPTURE_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "See an artifact the way the user does: renders it and returns a PNG. Call it after creating or changing a chart, page, diagram, workbook, document or deck, and fix clipped, overflowing, blank or wrong-looking output before telling the user it is done. Charts and React pages are brought on screen to be captured.",
       jsonSchema: {
@@ -209,11 +196,10 @@ export function buildArtifactManifestEntries(): ArtifactManifestEntry[] {
   ]
 }
 
-export function buildCanvasManifestEntries(): ArtifactManifestEntry[] {
+export function buildCanvasManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: CANVAS_CREATE_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "Create a Canvas document — an editable buffer the user will keep working in with you. Use this over an artifact when the point is continued editing rather than a finished result.",
       jsonSchema: {
@@ -230,7 +216,6 @@ export function buildCanvasManifestEntries(): ArtifactManifestEntry[] {
     },
     {
       name: CANVAS_UPDATE_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "Rewrite a Canvas document's buffer. With review-before-apply on (the default) this is staged as a diff for the user to accept rather than replacing what they are editing.",
       jsonSchema: {
@@ -247,7 +232,6 @@ export function buildCanvasManifestEntries(): ArtifactManifestEntry[] {
     },
     {
       name: CANVAS_READ_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description:
         "Read one Canvas document by id, or list the open documents. Includes the user's current selection when there is one.",
       jsonSchema: {
@@ -258,7 +242,6 @@ export function buildCanvasManifestEntries(): ArtifactManifestEntry[] {
     },
     {
       name: CANVAS_OPEN_TOOL_NAME,
-      pluginId: ARTIFACT_BUILTIN_PLUGIN_ID,
       description: "Bring a Canvas document on screen for the user.",
       jsonSchema: {
         type: "object",
@@ -340,7 +323,7 @@ export function resolveArtifactToolDeps(): ArtifactToolDeps {
     activeSessionId: useChatStore.getState().activeSessionId,
     // Loaded on first capture: html2canvas is not free, and most turns never look.
     capture: async (artifact, options) =>
-      (await import("@/lib/artifacts/capture")).captureArtifactImage(artifact, options),
+      (await import("./capture")).captureArtifactImage(artifact, options),
   }
 }
 
@@ -602,4 +585,31 @@ export async function runArtifactBuiltinTool(
       error: err instanceof Error ? err.message : String(err),
     }
   }
+}
+
+/**
+ * The artifact module's tool family (ADR-0250 §14 amendment). Offered where
+ * the send has an artifact dock on the other end (not an IM-bound session,
+ * not the CLI) and the user left agent authoring on. `resolveSendOptions`
+ * asks the same two questions for the routing prompt (ADR-0139), and reads
+ * whether `artifact_create` was offered before it advertises the tools.
+ * Canvas is a desktop/web surface: the mobile shell has no editor guild to
+ * open a document in, so the canvas tools are not offered there.
+ */
+export const toolFamily: ModuleToolFamily = {
+  surface(ctx: ToolSurfaceContext) {
+    if (ctx.session?.platformBinding?.adapterId || ctx.host === "cli") return null
+    if (ctx.settings?.artifacts?.agentAuthoring === false) return null
+    return {
+      tools: [
+        ...buildArtifactManifestEntries(),
+        ...(ctx.host === "mobile" ? [] : buildCanvasManifestEntries()),
+      ],
+    }
+  },
+  async run(name, args, call) {
+    return runArtifactBuiltinTool(name, args, resolveArtifactToolDeps(), {
+      sessionId: call.sessionId,
+    })
+  },
 }

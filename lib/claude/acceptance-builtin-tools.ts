@@ -1,6 +1,5 @@
 /** Evidence-only tools for a human-started child, and a separate proposal with no spend authority. */
 import type { ChatSession } from "@cognia/agent-config-types"
-import type { ArtifactManifestEntry } from "./artifact-builtin-tools"
 import { getSession } from "@/lib/db/sessions"
 import { managedDesktopClient } from "@/lib/automation/managed-desktop-client"
 import {
@@ -35,7 +34,15 @@ const criteriaSchema = {
   },
 }
 
-export function buildAcceptanceManifestEntries(): ArtifactManifestEntry[] {
+/** A tool entry as `SendOptions.pluginTools` carries it. */
+export interface AcceptanceManifestEntry {
+  name: string
+  description: string
+  jsonSchema: Record<string, unknown>
+  pluginId: string
+}
+
+export function buildAcceptanceManifestEntries(): AcceptanceManifestEntry[] {
   return [
     {
       name: TOOLS[0],
@@ -193,7 +200,7 @@ export interface AcceptanceProposal {
   summary?: string
   estimate: { currency: string; hourlyRateMicros: number } | null
 }
-export function buildAcceptanceProposalManifestEntries(): ArtifactManifestEntry[] {
+export function buildAcceptanceProposalManifestEntries(): AcceptanceManifestEntry[] {
   return [
     {
       name: "propose_acceptance",

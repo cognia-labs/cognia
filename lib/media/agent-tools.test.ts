@@ -1,14 +1,24 @@
 import type { UIMessage } from "ai"
 
 import type { MediaGenerationJobRow } from "@/lib/ai/media/video-jobs/types"
+import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import {
-  MEDIA_BUILTIN_PLUGIN_ID,
   MEDIA_TOOL_NAMES,
+  __setMediaToolDepsForTesting,
   buildMediaManifestEntries,
-  isMediaBuiltinTool,
   runMediaBuiltinTool,
+  toolFamily,
+  videoToolsAvailable,
   type MediaToolDeps,
-} from "./media-builtin-tools"
+} from "./agent-tools"
+
+// Whether a reachable video provider is configured; the real answer needs a
+// provider snapshot, which the surface tests below do not build.
+const mockHasUsableVideoProvider = jest.fn((..._args: unknown[]) => true)
+jest.mock("@/lib/ai/media/video-jobs/defaults", () => ({
+  ...jest.requireActual("@/lib/ai/media/video-jobs/defaults"),
+  hasUsableVideoProvider: (...args: unknown[]) => mockHasUsableVideoProvider(...args),
+}))
 
 function job(overrides: Partial<MediaGenerationJobRow> = {}): MediaGenerationJobRow {
   return {
@@ -48,14 +58,70 @@ function deps(overrides: Partial<MediaToolDeps> = {}) {
 const context = { sessionId: "s1" }
 
 describe("media built-in tool manifest", () => {
-  it("ships video_generate and video_status under one plugin id", () => {
+  it("ships video_generate and video_status", () => {
     const entries = buildMediaManifestEntries()
     expect(entries.map((entry) => entry.name)).toEqual([...MEDIA_TOOL_NAMES])
-    for (const entry of entries) {
-      expect(entry.pluginId).toBe(MEDIA_BUILTIN_PLUGIN_ID)
-      expect(isMediaBuiltinTool(entry.name)).toBe(true)
+  })
+})
+
+describe("toolFamily", () => {
+  const surfaceFor = (over: Partial<ToolSurfaceContext> = {}) =>
+    toolFamily.surface({
+      session: null,
+      agent: null,
+      settings: null,
+      activeGoal: null,
+      prompts: { snapshot: null, context: {} },
+      host: "desktop",
+      activeProject: null,
+      ...over,
+    }) as Promise<{ tools: { name: string }[] } | null>
+
+  beforeEach(() => mockHasUsableVideoProvider.mockReturnValue(true))
+
+  it("offers both tools where a chat surface and a reachable provider exist", async () => {
+    expect((await surfaceFor())?.tools.map((t) => t.name)).toEqual([...MEDIA_TOOL_NAMES])
+  })
+
+  it("offers nothing without a usable provider, with the tool switched off, in the CLI or to an IM-bound session", async () => {
+    mockHasUsableVideoProvider.mockReturnValue(false)
+    await expect(surfaceFor()).resolves.toBeNull()
+    mockHasUsableVideoProvider.mockReturnValue(true)
+    await expect(
+      surfaceFor({ settings: { videoGeneration: { agentTool: false } } as never })
+    ).resolves.toBeNull()
+    await expect(surfaceFor({ host: "cli" })).resolves.toBeNull()
+    await expect(
+      surfaceFor({ session: { id: "s", platformBinding: { adapterId: "lark" } } as never })
+    ).resolves.toBeNull()
+  })
+
+  it("never throws while deciding: a failing provider check means no tools", async () => {
+    mockHasUsableVideoProvider.mockImplementation(() => {
+      throw new Error("snapshot")
+    })
+    await expect(videoToolsAvailable(null)).resolves.toBe(false)
+  })
+
+  it("runs a call through the injected deps for the calling conversation", async () => {
+    const getJob = jest.fn(async () => job())
+    __setMediaToolDepsForTesting(() => deps({ getJob }).deps)
+    try {
+      const result = await toolFamily.run(
+        "video_status",
+        { jobId: "vjob_1" },
+        {
+          sessionId: "s1",
+          toolUseId: "u1",
+          executionRunId: "run-1",
+          outboundAuthorization: { kind: "tool-call", sessionId: "s1", toolUseId: "u1" },
+        }
+      )
+      expect(getJob).toHaveBeenCalledWith("vjob_1")
+      expect(result).toMatchObject({ ok: true })
+    } finally {
+      __setMediaToolDepsForTesting(null)
     }
-    expect(isMediaBuiltinTool("image_generate")).toBe(false)
   })
 })
 

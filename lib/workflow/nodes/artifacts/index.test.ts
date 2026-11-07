@@ -1,7 +1,7 @@
 import type { StepExecutionContext } from "@/types/workflow/visual"
 
 const runArtifactBuiltinTool = jest.fn()
-jest.mock("@/lib/claude/artifact-builtin-tools", () => ({
+jest.mock("@/lib/artifacts/agent-tools", () => ({
   ARTIFACT_CREATE_TOOL_NAME: "artifact_create",
   ARTIFACT_UPDATE_TOOL_NAME: "artifact_update",
   CANVAS_CREATE_TOOL_NAME: "canvas_create",

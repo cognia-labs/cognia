@@ -9,7 +9,7 @@
  * table (`lib/db/chat-templates.ts`) and the agent-team store. The sidecar
  * cannot import `lib/`, so the tools are manifested through `opts.pluginTools`
  * and executed by `lib/claude/plugin-tool-ipc.ts`, exactly like the artifact
- * tools in `lib/claude/artifact-builtin-tools.ts`.
+ * tools in `lib/artifacts/agent-tools.ts`.
  *
  * ## Why every write goes through the plugin consent broker
  *

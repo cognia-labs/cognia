@@ -149,7 +149,7 @@ jest.mock("@/components/editor/project/code-server-web-pane", () => ({
   ),
 }))
 
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: () => session,
 }))
 
@@ -267,8 +267,11 @@ jest.mock("@/components/editor/project/project-file-tree", () => ({
 const mockCopyConversationFileLink = jest.fn(
   async (..._args: unknown[]): Promise<string> => "copied"
 )
-jest.mock("@/lib/filespace/copy-link", () => ({
-  copyConversationFileLink: (...args: unknown[]) => mockCopyConversationFileLink(...args),
+// The filespace module's `conversation-file-links` port (ADR-0250 §14).
+jest.mock("@/hooks/modules/use-port", () => ({
+  usePort: () => ({
+    copyLink: (...args: unknown[]) => mockCopyConversationFileLink(...args),
+  }),
 }))
 const mockToastSuccess = jest.fn()
 const mockToastError = jest.fn()

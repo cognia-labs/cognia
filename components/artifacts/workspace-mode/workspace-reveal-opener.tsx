@@ -2,7 +2,7 @@
 
 import { useEffect } from "react"
 import type { ChatSession } from "@cognia/agent-config-types"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { getSession } from "@/lib/db/sessions"
 import { registerProjectEditorOpener } from "@/lib/files/project-editor-bridge"
 import { hasWorkspaceFsBackend } from "@/lib/files/workspace-backend"

@@ -33,7 +33,7 @@ import {
   DIAGRAM_DESIGN_THEME_DEFAULTS,
   DIAGRAM_DESIGN_THEME_KEYS,
   renderHTML,
-} from "@/lib/artifacts"
+} from "@/lib/artifacts/preview-utils"
 import { useThemeCssVars } from "@/lib/appearance/use-theme-css-vars"
 import { FilePreviewSurface } from "@/components/file-viewer/file-preview-surface"
 import { BUILTIN_FILE_VIEWERS } from "@/lib/file-viewer/builtins"

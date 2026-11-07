@@ -32,7 +32,7 @@ jest.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
 }))
 
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (query: () => unknown, deps: unknown[]) => {
     liveQueries.push({ query, deps })
     return liveCounts

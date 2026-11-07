@@ -67,11 +67,6 @@ jest.mock("@/lib/db/plans", () => ({
   listPlansBySession: jest.fn(async () => sessionPlans),
   listPlanEvents: jest.fn(async () => []),
 }))
-jest.mock("@/components/filespace/conversation-files-panel", () => ({
-  ConversationFilesPanel: ({ sessionId }: { sessionId: string | null }) => (
-    <div data-testid="conversation-files-panel" data-session={sessionId ?? ""} />
-  ),
-}))
 let mockOpenTaskCount: number | null = null
 jest.mock("@/hooks/chat/use-session-tasks", () => ({
   useSessionOpenTaskCount: () => mockOpenTaskCount,
@@ -756,7 +751,6 @@ describe("useSessionSurfacePanels", () => {
       ["cloud-document", "preview-run", 21],
       ["sandbox-desktop", "preview-run", 22],
       [PROJECT_OVERVIEW_PANEL_ID, "workspace", 25],
-      ["conversation-files", "workspace", 28],
       [WORKSPACE_PANEL_ID, "workspace", 30],
       ["best-of-n", "review", 29],
       ["source-control", "workspace", 35],
@@ -982,21 +976,6 @@ describe("useSessionSurfacePanels", () => {
     } finally {
       mockOpenTaskCount = null
     }
-  })
-
-  it("lists the conversation's files beside the workspace editor, for sessions only", () => {
-    const files = panelById(collect(useSessionSurfacePanels, sessionInput()), "conversation-files")
-    expect(files).toMatchObject({
-      activity: "workspace",
-      labelKey: "filespace.panel.title",
-      order: 28,
-      retention: "stateful",
-      scope: "session",
-    })
-    expect(files.appliesTo(SESSION_RESOURCE)).toBe(true)
-    expect(files.appliesTo(ARTIFACT_RESOURCE)).toBe(false)
-    renderPanel(files, SESSION_RESOURCE)
-    expect(screen.getByTestId("conversation-files-panel")).toHaveAttribute("data-session", "s1")
   })
 
   it("keeps sidechat off an embedded resource workbench", () => {

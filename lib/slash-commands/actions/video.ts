@@ -18,7 +18,7 @@ import {
   VIDEO_GENERATION_PROVIDER_IDS,
   VIDEO_RESOLUTIONS,
 } from "@/lib/ai/media/video-generation-sdk"
-import type { MediaToolDeps } from "@/lib/claude/media-builtin-tools"
+import type { MediaToolDeps } from "@/lib/media/agent-tools"
 import type { SlashContext, SlashParamSpec } from "../builtin"
 
 const USAGE =
@@ -125,7 +125,7 @@ export interface VideoCommandDeps extends Pick<
 
 async function resolveVideoCommandDeps(): Promise<VideoCommandDeps> {
   const [{ resolveMediaToolDeps }, assets, card] = await Promise.all([
-    import("@/lib/claude/media-builtin-tools"),
+    import("@/lib/media/agent-tools"),
     import("@/lib/db/session-assets"),
     import("@/lib/chat/video-job-card"),
   ])

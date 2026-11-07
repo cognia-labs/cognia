@@ -7,7 +7,15 @@ export default defineHostModule({
   kind: "module",
   stage: "stable",
   acceptance: { realSmoke: "pending" },
-  dependsOn: ["account-sync", "artifact", "collab", "data", "share", "terminal"],
+  dependsOn: [
+    "account-sync",
+    "artifact",
+    "collab",
+    "context-workbench",
+    "data",
+    "share",
+    "terminal",
+  ],
   // The Files dock panel and its store, the FileSpace loader, paths, sources
   // and sensitive floor the share picker and the Files page read, the sharing
   // policy and its settings links, the snapshot and live-share doors, the
@@ -31,6 +39,10 @@ export default defineHostModule({
     "lib/filespace/sources.ts",
     "stores/filespace/filespace-panel-store.ts",
   ],
+  // Copying a conversation file's link, for the chat dock's editor, which
+  // cannot import this module (it depends on the artifact module the dock
+  // lives in).
+  provides: [{ port: "conversation-file-links", load: () => import("./file-links-port") }],
   // The agent's tools over the calling conversation's files (ADR-0222 §9).
   // Reading and taking access away are allowed; giving access away asks on
   // every call and is outbound. None of the runners honour a cancel signal.
