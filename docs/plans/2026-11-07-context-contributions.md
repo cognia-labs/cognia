@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），待实施 C5a–C5c。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -232,3 +232,55 @@ interface ContextSection {
 - 行为差别：泄露 PII 的块被剔除（以前整段不检查就发送）。尾部顺序不变（slot 顺序里 `project-knowledge` 在 `agent-knowledge` 之前，与原来两个分支的先后一致），新增用例在缓存优化开时核对。
 - 测试：`context.test.ts` 5 例、`module.test.ts` 2 例新增；`apply-project-context.test.ts` 加 1 例（`keepChunk`）；`build-options.test.ts` 改读 `contextSources` 并加 2 例（尾部顺序、PII 块）；`chat-grounding.test.ts`、`safe-send-prompt.test.ts` 改用 `contextSources`。
 - 至此 `build-options` 里不再有知识检索分支；剩下的上下文段是记忆、连续性和分身（§2.5）。
+
+## 12. 记忆与项目连续性：契约增补（2026-11-07）
+
+### 12.1 现状（`resolveSendOptions`，取自 `064d195145`）
+
+| 段                            | 生产者                                                                                    | 输入                                                                                                                                           | 旁路输出                                                                                   | 与别的段的耦合                                                                                          |
+| ----------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| 个人记忆召回（`memory` 位）   | `@cognia/memory` 的 `applyMemoryContext`，经 `lib/memory/runtime/apply-memory-context.ts` | `memoryDeps`、`memoryUserMessage`、查询向量、`targetAgentId` / `memoryBranch` / `memoryPath`、记忆配置、agent 记忆策略（可读 scope 收窄 deps） | `opts.memoryContext`（含投递回执 `snapshot`）；每次解析写一条 `recall-allowed/denied` 审计 | **分身已取回的块**（`opts.twinContext` 的 `contentRedacted`）用于去重；**把用掉的预算**交给连续性       |
+| 项目连续性（`continuity` 位） | `@cognia/memory` 的 `applyProjectContinuityContext`                                       | 同上 + 召回闸 `evaluateProjectRecallGate`、workspace scope 可读                                                                                | `opts.projectContinuityContext`                                                            | 预算 = `resolveProjectRecallBudget(个人上限, 个人已用, 项目预算)`，借个人段剩下的；个人段失败时视为用满 |
+| 数字分身（替换 `baseSystem`） | `twin`                                                                                    | `twinDeps`、`twinUserMessage`                                                                                                                  | `opts.twinContext`                                                                         | 本草案不动（§2.5）                                                                                      |
+
+另外三点事实：
+
+- 记忆的查询文字不等于知识查询。调用方只在记忆握手成功时给 `memoryUserMessage`，连接器在消息不适合嵌入时也不给（`lib/connectors/runtime.ts`），而 `memoryDeps` 仍然在。所以不能复用 `ctx.query.text`。
+- 两段都已逐条过 PII（`hasNoLeakingPii`），挪进贡献后内核闸只是兜底，不会多丢段。
+- `memory` 现在是过渡表的行。试把它改成 manifest：`dependsOn` 要列 11 个模块（chat、data、editor、git、governance、inbound、inbox、project-knowledge、rag、squads、twin），`rerank-prompt.ts` 定义的提示词要改成 `prompts` 贡献，约 38 处外部导入要补进各自的 `api`。
+
+### 12.2 要补的三处契约
+
+**A. 同模块内的先后（预算交接）。** 贡献可声明 `after: "<同模块另一条的 id>"`。内核先跑被依赖的那条，再跑依赖方，依赖方在 `ctx.prior` 里读到前者返回的 `handoff`（`ContextSection` 新增的可选字段，只在本次解析内传递，不进提示词、不存会话状态）。被依赖方失败、超时或返回 `null` 时，`ctx.prior` 为 `undefined`，依赖方按今天的规则退化（连续性当作个人预算已用满）。只允许同模块、一层、无环；加载时检查，不合格整个模块跳过并上报。截止时间各算各的。
+
+- 备选：一条贡献交回多个 slot 的段（`sections: [{ slot, text, sources }]`）。内核不用排先后，但 sources 和 PII 闸都要按段拆，形状改动更大。
+- 备选：连续性不借个人剩余，固定用项目预算。最简单，但会改变每轮的召回量。
+
+**B. 内核已检索的内容（分身去重）。** `ContextTurnContext` 新增只读的 `kernelRetrieval: { twinChunkTexts: readonly string[] }`，取自分身段已经写好的 `opts.twinContext`（分身仍在内核，先于收集点运行）。分身迁出后改为同一字段由分身模块的贡献 `handoff` 提供，或另行设计。
+
+- 备选：不传，放弃去重。记忆和分身会重复召回同一段话。
+
+**C. 记忆专属的调用方输入。** 经 `hostDeps` 按名传入：`memoryQuery`（即 `memoryUserMessage`，缺省表示调用方没给，记忆不跑）、`memoryScope`（`{ targetAgentId, branch, path }`）。`hostDeps.memory` 继续是 `memoryDeps`。声明放在 memory 模块。
+
+- 备选：把 `ctx.query` 扩成按用途的 `{ knowledge, memory }`。语义更清楚，但要改 C0–C4 已用的 `query.text`。
+
+### 12.3 截止时间
+
+两段今天没有时限；`enableQueryExpansion` 开着时，召回前会调一次效用模型做查询扩展。拟定 `recall` 和 `continuity` 都声明 `deadlineMs: 15_000`（内核上限）。超时则该段缺席并上报，不阻塞发送。连续性在 `after` 下串行，最坏情况是 30 s，比今天的「无上限」短。
+
+### 12.4 步骤
+
+| 步骤 | 内容                                                                                                                                                                                                                                                                                                                                                                 | 还清的方向边              |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| C5a  | 内核：`after` / `prior` / `handoff`、`kernelRetrieval`；ADR-0250 修订；单测                                                                                                                                                                                                                                                                                          | 无                        |
+| C5b  | `memory` 成为 manifest 模块（补 `dependsOn`、`api`，提示词改为 `prompts` 贡献），行为不变                                                                                                                                                                                                                                                                            | 无                        |
+| C5c  | `memory` 贡献 `recall`（turn、`memory` 位）和 `continuity`（turn、`continuity` 位、`after: "recall"`）；`opts.memoryContext` / `opts.projectContinuityContext` → `contextSources["memory.recall" / "memory.continuity"]`，消费者（`claude-chat-events`、房间 runner、adapter 两个 merge、`chat-grounding`、`compaction-runtime`）跟着改；删除 `build-options` 两个块 | `build-options -> memory` |
+
+验收沿用 §5：缓存优化开关两种情况下提示词逐字节一致（尾部顺序 memory → continuity → project-knowledge → agent-knowledge 不变），来源在消息上的呈现、投递回执和审计事件不变。
+
+### 12.5 评审结论（2026-11-07）
+
+1. 预算交接：同模块内的 `after` + `handoff`（`ctx.prior`），只允许一层、无环。
+2. 分身去重：内核只读字段 `kernelRetrieval.twinChunkTexts`。
+3. 记忆专属输入：走 `hostDeps.memoryQuery`、`hostDeps.memoryScope`，`query.text` 不动。
+4. 截止时间：`recall`、`continuity` 各 15 s，内核上限不变。
