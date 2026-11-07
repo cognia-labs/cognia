@@ -679,3 +679,15 @@ V26/V28、X14/X16 与 P1d 的其余边界不变：生产静态导出、真实 Ta
 **规则：** P4 之前不在新仓库修改 `host-sync-paths.txt` 所列文件，插件改动只进 Host 再同步；两仓差异只放在新仓库自己的配置与 `scripts/*.mjs` 中。新仓库提交使用 GitHub 账号身份（`277988694+MaxQian888@users.noreply.github.com`）。
 
 P2 交付物已建立，但 §17–§26 记录的 P1 验收边界未变，P2 不改变产品 pin，不能据此启动 P4/P5。
+
+## 28. Kit pin 再次重建（2026-11-07）
+
+上下文贡献迁移（ADR-0250 §14）两次改动了 authoring 输入：`9d699315d7` 从插件契约删除 `SendOptions.twinContext`，此前 C3、C4 又把 `ContextSourcesMap` 的模块扩充写进了 `types/knowledge-base.ts` 与 `types/project-knowledge/index.ts`。
+
+| 项目     | 结果                                                                                                                                                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SDK 构建 | 在干净检出中，`plugin-sdk` 的声明构建拒绝发布：`types/knowledge-base.ts` 进入 SDK 声明，扩充把 `@/lib/modules/manifest-types` 带了进去。两处扩充移到各自的 `context-sources.ts`，由模块的贡献导入（`3c7f602b94`）                                      |
+| 构建前提 | `plugin-contract` 的声明构建需要先运行 `scripts/build/gen-module-registry.mjs`：生成的模块注册表被 gitignore，干净检出里没有                                                                                                                           |
+| Kit      | 在 `3c7f602b94` 的干净 worktree 中重建 Kit `01c67873c883`（`sdkSourceSha256` 由 `84065ee1…` 变为 `c7f22dbe…`）；`test-authoring-kit.mjs` 通过：76 个 frontend 包、346 个类型检查文件、19 组 helper suites（105 例）与 Python wheel 导入                |
+| Host pin | `2a190110b9`；按提交树计算的 ABI 与 pin 一致                                                                                                                                                                                                           |
+| 新仓库   | Kit 发布在 `authoring-kits` 提交 `831c22b`；`main` 的 lock 提交 `71dbae6`（`pnpm-lock.yaml` 只更新 SDK、UI 两个 tarball 的 integrity）；bootstrap、typecheck、build（76 个 frontend 包）通过。本轮没有运行 `sync-from-host.sh`，也没有比对两仓产物集合 |
