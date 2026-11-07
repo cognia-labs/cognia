@@ -1,4 +1,5 @@
-import { SQUAD_TOOL_NAMES } from "./agent-tools"
+import { TEAM_TOOL_NAMES } from "./collaboration-tools"
+import { SQUAD_TOOL_NAMES } from "./template-tools"
 import squads from "./module"
 
 describe("squads module manifest", () => {
@@ -46,11 +47,30 @@ describe("squads module manifest", () => {
     ])
   })
 
-  it("declares the Squad template tools, allowed because the writes ask the consent broker", async () => {
+  it("declares the collaboration tools without a tier, and the Squad template tools allowed", async () => {
     const declare = squads.tools!.declare
-    expect(Object.keys(declare).sort()).toEqual(Object.values(SQUAD_TOOL_NAMES).sort())
-    for (const [name, declaration] of Object.entries(declare)) {
-      expect(declaration).toEqual({
+    expect(Object.keys(declare).sort()).toEqual(
+      [...Object.values(TEAM_TOOL_NAMES), ...Object.values(SQUAD_TOOL_NAMES)].sort()
+    )
+    const teamReads = new Set<string>([
+      TEAM_TOOL_NAMES.readMemory,
+      TEAM_TOOL_NAMES.listMembers,
+      TEAM_TOOL_NAMES.getTask,
+      TEAM_TOOL_NAMES.twinKnowledgeSearch,
+    ])
+    for (const name of Object.values(TEAM_TOOL_NAMES)) {
+      expect(declare[name]).toEqual({
+        consent: "default",
+        effect: teamReads.has(name) ? "read" : "write",
+        cancellable: false,
+      })
+    }
+    // Reviewed by the outbound engine by name, never counted as external-send.
+    expect(declare.team_post_to_chat.effect).toBe("write")
+    // The writes ask the consent broker inside the runner (the
+    // template tools' subject), so the tier allows them.
+    for (const name of Object.values(SQUAD_TOOL_NAMES)) {
+      expect(declare[name]).toEqual({
         consent: "allow",
         effect: name === SQUAD_TOOL_NAMES.list ? "read" : "write",
         cancellable: false,

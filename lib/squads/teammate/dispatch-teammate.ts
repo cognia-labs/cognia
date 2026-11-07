@@ -295,7 +295,7 @@ async function runToolEnabled(
     ? deriveExternalSessionPermission(teamCtx.parentPermissionCeiling, teamCeiling)
     : teamCeiling
   // Bind this ephemeral session to the teammate's identity so host-routed
-  // team-collaboration tools (team-builtin-tools.ts) know who is calling.
+  // team-collaboration tools (`../collaboration-tools.ts`) know who is calling.
   const { registerTeamDispatchContext, clearTeamDispatchContext, clearResolvedPermissionCeiling } =
     await import("@/lib/claude/agents/dispatch-context-registry")
   registerTeamDispatchContext(session.id, {

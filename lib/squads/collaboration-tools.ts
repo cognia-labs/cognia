@@ -1,6 +1,6 @@
 /**
- * Host-routed Agent-Team collaboration tools, modelled on the promoted
- * `Skill` / `SlashCommand` built-ins (`skill-builtin-tools.ts`).
+ * The Squad collaboration tools (the squads module's tool family, ADR-0250
+ * §14 amendment; composed with the Squad template tools in `./agent-tools.ts`).
  *
  * These let a teammate, DURING its own dispatch turn, collaborate with the
  * rest of the team instead of producing an isolated output: message a peer,
@@ -9,13 +9,13 @@
  * `SendMessage` + multi-agent coordination — the layer that turns a DAG of
  * parallel task runs into a team that actually talks.
  *
- * Host-routed (renderer) because the work reaches the Zustand agent-team store
- * and the consensus / delegation / shared-memory orchestrators — TS the pure
- * `.mjs` sidecar can't import. `build-options` appends
- * {@link buildTeamCollabManifestEntries} when the session is a team dispatch AND
- * `selfInvokeTools.teamCollaboration` is on (opt-in); `plugin-tool-ipc` resolves
- * the caller's identity (which teammate / team) from the per-session
- * team-dispatch-context registry and invokes {@link runTeamBuiltinTool}.
+ * Host-routed because the work reaches the Zustand agent-team store and the
+ * consensus / delegation / shared-memory orchestrators — TS the sidecar can't
+ * import. {@link teamToolFamily} offers them on a team dispatch session once
+ * `selfInvokeTools.teamCollaboration` is on (opt-in), with
+ * {@link TEAM_MESSAGING_PROTOCOL} as their instructions, and binds every call
+ * to the teammate that issued it through the per-session team-dispatch
+ * registry (`lib/claude/agents/dispatch-context-registry.ts`).
  *
  * Every orchestrator call is reused verbatim — this module is pure glue:
  * argument shaping + identity binding + JSON-safe results for the model. The
@@ -31,16 +31,23 @@ import type {
 } from "@/types/agent/agent-team"
 import type { AuditKind } from "@/types/connectors/audit"
 import type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
-import type { TwinKnowledgeHit } from "@/lib/squads/teammate/twin-context"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolCallContext,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
+import { getTeamDispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
+import type { TwinKnowledgeHit } from "./teammate/twin-context"
 import {
   canSendMessage,
   describeSuppressedMessage,
   type RecentMessage,
-} from "@/lib/squads/gates/message-guard"
+} from "./gates/message-guard"
 
 /**
- * System-prompt fragment appended for a team dispatch session (alongside the
- * collaboration tool manifest). Teaches the two conventions the message guard and the
+ * The collaboration tools' instructions, appended to the system prompt with
+ * them. Teaches the two conventions the message guard and the
  * `<info_for_agent>` UI strip rely on. Kept here so the prompt + the tools agree.
  */
 export const TEAM_MESSAGING_PROTOCOL = `TEAM MESSAGING PROTOCOL:
@@ -68,21 +75,11 @@ export const TEAM_TOOL_NAMES = {
   proposeDecision: "team_propose_decision",
 } as const
 
-/** Synthetic plugin id tagging the promoted team-collaboration manifest entries. */
-export const TEAM_BUILTIN_PLUGIN_ID = "cognia-team-builtin"
-
 const ALL_TEAM_TOOL_NAMES: ReadonlySet<string> = new Set(Object.values(TEAM_TOOL_NAMES))
 
-/** Is this tool name one of the promoted team-collaboration built-ins? */
-export function isTeamBuiltinTool(name: string): boolean {
+/** Is this tool name one of the collaboration tools? */
+export function isTeamTool(name: string): boolean {
   return ALL_TEAM_TOOL_NAMES.has(name)
-}
-
-export interface TeamBuiltinManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
 }
 
 /** Identity of the teammate making the call, resolved from the session registry. */
@@ -92,7 +89,7 @@ export interface TeamToolCaller {
   teammateName: string
   runId?: string
   /**
-   * The tool call being run, set by `plugin-tool-ipc`. What `team_post_to_chat`
+   * The tool call being run, from the call's context. What `team_post_to_chat`
    * delivers is authorized by it (ADR-0239).
    */
   toolCall?: { kind: "tool-call"; sessionId: string; toolUseId: string }
@@ -390,32 +387,23 @@ const PROPOSE_DECISION_SCHEMA = {
   required: ["title", "detail", "evidenceIds"],
 } as const
 
-export interface BuildTeamCollabManifestOptions {
+export interface BuildTeamToolEntriesOptions {
   /**
    * Append the `twin_knowledge_search` tool. Only true when the team exposes at
    * least one knowledge twin (team `knowledgeTwinIds` or a member's `twinId`),
-   * so the tool is never offered as a dead capability. See `build-options.ts`.
+   * so the tool is never offered as a dead capability
+   * ({@link teamHasKnowledgeTwins}).
    */
   includeTwinKnowledgeSearch?: boolean
 }
 
-/**
- * Manifest entries for the team-collaboration tools. Returned to `build-options`
- * to append to `pluginTools` for a team dispatch session (opt-in).
- */
-export function buildTeamCollabManifestEntries(
-  opts: BuildTeamCollabManifestOptions = {}
-): TeamBuiltinManifestEntry[] {
+/** The collaboration tools a team dispatch session is offered. */
+export function buildTeamToolEntries(opts: BuildTeamToolEntriesOptions = {}): ModuleToolEntry[] {
   const entry = (
     name: string,
     description: string,
     jsonSchema: Record<string, unknown>
-  ): TeamBuiltinManifestEntry => ({
-    name,
-    description,
-    jsonSchema,
-    pluginId: TEAM_BUILTIN_PLUGIN_ID,
-  })
+  ): ModuleToolEntry => ({ name, description, jsonSchema })
   return [
     entry(
       TEAM_TOOL_NAMES.sendMessage,
@@ -709,18 +697,18 @@ function asString(v: unknown): string {
 
 /**
  * Execute a team-collaboration tool host-side. `caller` binds the call to the
- * teammate that issued it (resolved from the session registry in
- * plugin-tool-ipc). Returns a JSON-safe value / string the model reads back.
- * Never throws — every failure is returned as an `Error: …` string so a tool
- * mishap can't abort the teammate's turn.
+ * teammate that issued it (resolved from the session registry by
+ * {@link teamToolFamily}). Returns a JSON-safe value / string the model reads
+ * back. Never throws — every failure is returned as an `Error: …` string so a
+ * tool mishap can't abort the teammate's turn.
  */
-export async function runTeamBuiltinTool(
+export async function runTeamTool(
   name: string,
   args: Record<string, unknown>,
   caller: TeamToolCaller,
   deps?: TeamToolDeps
 ): Promise<unknown> {
-  if (!isTeamBuiltinTool(name)) return `Error: unknown team tool: ${name}`
+  if (!isTeamTool(name)) return `Error: unknown team tool: ${name}`
   const d = deps ?? (await defaultTeamToolDeps())
   const writer = { id: caller.teammateId, name: caller.teammateName }
   try {
@@ -987,11 +975,78 @@ export async function runTeamBuiltinTool(
         }
         return { twinId: res.twinId, hits: res.hits }
       }
-      /* istanbul ignore next -- unreachable: isTeamBuiltinTool() filters non-team names before the switch */
+      /* istanbul ignore next -- unreachable: isTeamTool() filters non-team names before the switch */
       default:
         return `Error: unhandled team tool: ${name}`
     }
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`
   }
+}
+
+/**
+ * Whether the dispatching teammate's team has a digital-employee (Employee
+ * Digital Twin) knowledge source: a member's bound `twinId` or a team-level
+ * `knowledgeTwinIds`. Gates `twin_knowledge_search` so it is never offered as
+ * a dead capability. Best-effort — a twin-bound current teammate is a
+ * sufficient signal even if the store lookup fails.
+ */
+export async function teamHasKnowledgeTwins(
+  sessionId: string,
+  currentTwinId: string | undefined
+): Promise<boolean> {
+  if (currentTwinId) return true
+  try {
+    const teamId = getTeamDispatchContext(sessionId)?.teamId
+    if (!teamId) return false
+    const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
+    const state = useAgentTeamStore.getState()
+    if ((state.teams[teamId]?.config.knowledgeTwinIds?.length ?? 0) > 0) return true
+    return Object.values(state.teammates).some(
+      (t) => t.teamId === teamId && Boolean(t.config?.twinId)
+    )
+  } catch {
+    return false
+  }
+}
+
+let depsOverride: (() => Promise<TeamToolDeps> | TeamToolDeps) | null = null
+
+/** Inject collaboration-tool deps (tests). Pass `null` to restore the default. */
+export function __setTeamToolDepsForTesting(
+  fn: (() => Promise<TeamToolDeps> | TeamToolDeps) | null
+): void {
+  depsOverride = fn
+}
+
+/**
+ * The collaboration tools as one half of the squads module's tool family.
+ * Offered to a team dispatch session (a teammate's own turn) once the user
+ * turned `selfInvokeTools.teamCollaboration` on. A call is bound to the
+ * teammate the session was dispatched as; from any other session it is
+ * refused rather than mis-attributed.
+ */
+export const teamToolFamily: ModuleToolFamily = {
+  async surface(ctx: ToolSurfaceContext) {
+    if (ctx.session?.kind !== "team") return null
+    if (ctx.settings?.selfInvokeTools?.teamCollaboration !== true) return null
+    const includeTwinKnowledgeSearch = await teamHasKnowledgeTwins(
+      ctx.session.id,
+      ctx.agent?.twinId
+    )
+    return {
+      tools: buildTeamToolEntries({ includeTwinKnowledgeSearch }),
+      instructions: TEAM_MESSAGING_PROTOCOL,
+    }
+  },
+  async run(name: string, args: Record<string, unknown>, call: ToolCallContext) {
+    const caller = getTeamDispatchContext(call.sessionId)
+    if (!caller) return `Error: ${name} is only available to a teammate during a team run.`
+    return runTeamTool(
+      name,
+      args,
+      { ...caller, toolCall: call.outboundAuthorization },
+      depsOverride ? await depsOverride() : undefined
+    )
+  },
 }

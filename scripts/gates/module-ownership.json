@@ -266,11 +266,14 @@
       "class": "module",
       "api": [
         "lib/connectors/activity/turn-activity-tracker.ts",
+        "lib/connectors/audit.ts",
         "lib/connectors/bus.ts",
         "lib/connectors/circuit-breaker.ts",
+        "lib/connectors/delivery-gateway.ts",
         "lib/connectors/hitl/approval-registry.ts",
         "lib/connectors/outbound-runner.ts",
         "lib/connectors/permission-resolve.ts",
+        "lib/connectors/session-bindings.ts",
         "lib/skills/built-in/lark/exec-lark-cli.ts"
       ]
     },

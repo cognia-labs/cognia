@@ -72,6 +72,7 @@ export default defineHostModule({
     "lib/squads/apply-squad-template.ts",
     "lib/squads/binding-candidates.ts",
     "lib/squads/bootstrap.ts",
+    "lib/squads/collaboration-tools.ts",
     "lib/squads/create-squad.ts",
     "lib/squads/durable/durable-control.ts",
     "lib/squads/durable/durable-dispatch.ts",
@@ -104,13 +105,36 @@ export default defineHostModule({
   ],
   searchProviders: () => import("./search-provider"),
   prompts: () => import("./prompts"),
-  // The agent's Squad template tools, switched on with the template tools by
+  // The agent's tools, two kinds in one family (`./agent-tools.ts`). None of
+  // the runners takes a cancel signal.
+  //
+  // The collaboration tools a teammate uses during its own dispatch turn,
+  // opted in by `selfInvokeTools.teamCollaboration`. They never had a tier,
+  // so the run's own approval decides (`"default"`). `team_post_to_chat`
+  // delivers into the run's IM conversation or a sibling one; it is declared
+  // `write`, not `outbound`, because the risk classifier must not count it as
+  // external-send (every headless IM team run would fail closed, ADR-0070).
+  // The outbound engine still reviews it by name (`OUTBOUND_TOOLS_OUTSIDE_RISK`).
+  //
+  // The Squad template tools, switched on with the template tools by
   // `selfInvokeTools.templates`. Listing is free. Applying and saving a
   // template ask the plugin consent broker inside the runner, under the
   // template tools' subject, so the tier allows them rather than asking
-  // twice. None of the runners takes a cancel signal.
+  // twice.
   tools: {
     declare: {
+      team_send_message: { consent: "default", effect: "write", cancellable: false },
+      team_publish_memory: { consent: "default", effect: "write", cancellable: false },
+      team_read_memory: { consent: "default", effect: "read", cancellable: false },
+      team_request_consensus: { consent: "default", effect: "write", cancellable: false },
+      team_vote: { consent: "default", effect: "write", cancellable: false },
+      team_delegate: { consent: "default", effect: "write", cancellable: false },
+      team_list_members: { consent: "default", effect: "read", cancellable: false },
+      task_add_comment: { consent: "default", effect: "write", cancellable: false },
+      task_get: { consent: "default", effect: "read", cancellable: false },
+      twin_knowledge_search: { consent: "default", effect: "read", cancellable: false },
+      team_post_to_chat: { consent: "default", effect: "write", cancellable: false },
+      team_propose_decision: { consent: "default", effect: "write", cancellable: false },
       squad_list: { consent: "allow", effect: "read", cancellable: false },
       squad_apply_template: { consent: "allow", effect: "write", cancellable: false },
       squad_save_as_template: { consent: "allow", effect: "write", cancellable: false },

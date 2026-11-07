@@ -72,18 +72,6 @@ const NON_CANCELLABLE_LIVE_VOICE_TOOLS = new Set([
   "wf_run_workflow_typed",
   "dispatch_agent",
   "Task",
-  "team_send_message",
-  "team_publish_memory",
-  "team_read_memory",
-  "team_request_consensus",
-  "team_vote",
-  "team_delegate",
-  "team_list_members",
-  "task_add_comment",
-  "task_get",
-  "twin_knowledge_search",
-  "team_post_to_chat",
-  "team_propose_decision",
   // Module-contributed tools whose runner does not honour the signal.
   ...moduleToolNamesWhere((declaration) => declaration.cancellable === false),
 ])

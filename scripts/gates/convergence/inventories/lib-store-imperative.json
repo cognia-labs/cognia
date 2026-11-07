@@ -1200,7 +1200,6 @@
       ],
       "stores": [
         "stores/agent/agent-runtime-store.ts",
-        "stores/squads/agent-team-store/index.ts",
         "stores/agent/custom-mode-store/helpers.ts",
         "stores/chat/fusion-mode-store.ts",
         "stores/plugin-runtime/index.ts"
@@ -1330,8 +1329,8 @@
       ]
     },
     {
-      "key": "lib/claude/team-builtin-tools.ts",
-      "owner": "lib/claude",
+      "key": "lib/squads/collaboration-tools.ts",
+      "owner": "lib/squads",
       "note": "",
       "imports": [
         "dynamic"
@@ -1341,7 +1340,7 @@
       ]
     },
     {
-      "key": "lib/squads/agent-tools.ts",
+      "key": "lib/squads/template-tools.ts",
       "owner": "lib/squads",
       "note": "",
       "imports": [

@@ -47,8 +47,6 @@ import {
   runSlashCommandBuiltinTool,
   type SlashToolRunDeps,
 } from "./slash-builtin-tools"
-import { isTeamBuiltinTool, runTeamBuiltinTool } from "./team-builtin-tools"
-import { getTeamDispatchContext } from "./agents/dispatch-context-registry"
 import { isWorkingSetTool, runWorkingSetTool, type WorkingSetStore } from "./working-set-tool"
 import {
   isSessionPeerBuiltinTool,
@@ -520,20 +518,6 @@ async function runPluginToolExec(
         },
         () => runSlashCommandBuiltinTool(request.name, request.args, deps, context)
       )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    // ── Promoted team-collaboration built-ins — message / blackboard /
-    // consensus / delegate. Host-routed; the caller's teammate identity is
-    // resolved from the per-session team-dispatch-context registry. A call from
-    // a non-team session (no identity) is rejected rather than mis-attributed.
-    if (isTeamBuiltinTool(request.name)) {
-      const caller = getTeamDispatchContext(request.sessionId)
-      const result = caller
-        ? await runTeamBuiltinTool(request.name, request.args, {
-            ...caller,
-            toolCall: toolCallAuthorization(request),
-          })
-        : `Error: ${request.name} is only available to a teammate during a team run.`
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     if (resolverOverride) {

@@ -89,11 +89,12 @@ export function clearResolvedPermissionCeiling(sessionId: string): void {
 
 // ── Team-dispatch identity registry ──────────────────────────────────────────
 // When a teammate runs through `dispatchTeammate.runToolEnabled`, it gets a
-// fresh ephemeral session. Host-routed team-collaboration tools
-// (`team-builtin-tools.ts`) need to know WHICH teammate (and team/run) issued a
-// call, but the `plugin_tool_exec` wire only carries `sessionId`. `runToolEnabled`
-// registers the identity here keyed by the session id and clears it in `finally`;
-// `plugin-tool-ipc` reads it back to bind the tool call to its caller.
+// fresh ephemeral session. Host-routed team-collaboration tools (the squads
+// module's `lib/squads/collaboration-tools.ts`) need to know WHICH teammate (and
+// team/run) issued a call, but the `plugin_tool_exec` wire only carries
+// `sessionId`. `runToolEnabled` registers the identity here keyed by the session
+// id and clears it in `finally`; the tools read it back to bind the call to its
+// caller.
 
 export interface TeamDispatchContext {
   teamId: string

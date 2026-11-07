@@ -322,3 +322,15 @@ interface ToolSurface {
 - 删除：`lib/claude/template-builtin-tools.ts`、`lib/claude/permissions/template-tool-rules.ts`（及测试）、`build-options` 的 `templateToolsEnabled`、同意档合并和追加段、`plugin-tool-ipc` 的分支和依赖注入（`__setTemplateToolDepsForTesting` 搬进模块，squads 一侧为 `__setSquadToolDepsForTesting`）、探针名单 3 个名字。
 - 还清方向边 2 条：`template-builtin-tools -> squads`、`template-builtin-tools -> templates`。收敛清单：`lib-store-imperative` 旧条目改到 `lib/squads/agent-tools.ts`，端口文件新增一个成员（templates 的两个文件去掉 agent-team store，仍是成员），附例外记录 `2026-11-07-squad-templates-port-stores-{static,all}.json`；`run-tables` 两个成员改到新路径。
 - 测试：旧运行器测试拆成两族各自的测试并加 `surface` 用例；`agent-tool-kit`、templates manifest、squads manifest（工具与端口）、端口实现的测试；runtime 和 legacy-sources 补端口转发与无提供方的用例；IPC 两例走模块注册表。`build-options.test` 的两例模板用例未改，经模块通过。
+
+## 17. T10 实施记录：Squad 协作工具（2026-11-07）
+
+- 一个模块只有一个工具族，squads 现在有两半：`lib/claude/team-builtin-tools.ts` → `lib/squads/collaboration-tools.ts`（`git mv`，导出 `teamToolFamily`），上一步的 Squad 模板工具 `lib/squads/agent-tools.ts` → `lib/squads/template-tools.ts`（导出 `templateToolFamily`）；新的 `lib/squads/agent-tools.ts` 合并两半的 `surface`（工具相加，instructions 只来自协作一半），`run` 按 `isTeamTool` 路由。
+- 门槛不变：会话 `kind === "team"` 且 `selfInvokeTools.teamCollaboration` 开启；`twin_knowledge_search` 仍只在当前队员绑定了 twin、或团队有 `knowledgeTwinIds` / 成员有 `twinId` 时提供（`teamHasKnowledgeTwins` 从 `build-options` 搬入，`ctx.agent.twinId` 代替 `character.twinId`）。`TEAM_MESSAGING_PROTOCOL` 作为 `instructions`，位置从 team 段之后变成贡献工具的 instructions 内，内容不变。
+- 调用：`run` 用 `getTeamDispatchContext(call.sessionId)` 找队员身份，`toolCall` 取 `call.outboundAuthorization`（与原分发器的 `toolCallAuthorization` 相同）；没有身份时返回原来的拒绝文案。注册表改为静态导入（只有类型依赖），避免兄弟测试 `resetModules` 后拿到另一份实例。
+- 声明：十二个工具都是 `consent: "default"`（原来没有同意档），读为 `team_read_memory`、`team_list_members`、`task_get`、`twin_knowledge_search`，其余为 `write`，全部不可取消。`team_post_to_chat` 故意声明 `write`：声明 `outbound` 会进入风险分类器的 external-send 集合，让每次无头 IM 小队运行失败关闭（ADR-0070 否决过）；外发引擎仍按名字在 `OUTBOUND_TOOLS_OUTSIDE_RISK` 里审查它，外发目标提取器的分支保留。
+- 删除：`build-options` 的 `teamHasKnowledgeTwins` 和 team 追加段、`plugin-tool-ipc` 的分支和注册表导入、探针拒绝名单 8 个名字（由非 read 声明派生；四个读工具本来就被发现阶段拒绝，行为不变）、实时语音名单 12 个名字（由 `cancellable: false` 派生）。插件 id 由 `cognia-team-builtin` 变为 `cognia-squads-builtin`，源码里没有按旧 id 判断的地方。
+- 最佳 N 选一的拒绝名单仍按 `TEAM_TOOL_NAMES` 写死，改从 `lib/squads/collaboration-tools.ts` 导入（列为 squads 的 `api`）。connectors 行补 `audit.ts`、`delivery-gateway.ts`、`session-bindings.ts` 三个 `api` 文件。
+- 还清方向边 4 条：`build-options -> squads`、`team-builtin-tools -> connectors / squads / twin`。收敛清单 `lib-store-imperative`：两个成员改到新路径，`build-options` 去掉 agent-team store。
+- 测试：协作工具的原测试随文件搬动，补 `teamToolFamily`（门槛、twin 门、身份绑定、无身份拒绝）和 `teamHasKnowledgeTwins` 的用例；新增合并族测试；squads manifest 测试覆盖全部 15 个声明；IPC 两组 team 用例走模块注册表（`team_post_to_chat` 用例改为检查投递的授权）。`build-options.test` 的四例 team 用例未改，经模块通过。
+- 多智能体收敛计划 P6 要求"只在小队队员会话下添加 `team_*`"，对应位置现在是 `teamToolFamily.surface`。

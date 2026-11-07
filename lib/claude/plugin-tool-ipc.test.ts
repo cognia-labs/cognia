@@ -39,10 +39,9 @@ import {
   __setTemplateToolDepsForTesting,
   toolFamily as templateToolFamily,
 } from "@/lib/templates/agent-tools"
-import {
-  __setSquadToolDepsForTesting,
-  toolFamily as squadToolFamily,
-} from "@/lib/squads/agent-tools"
+import { __setSquadToolDepsForTesting } from "@/lib/squads/template-tools"
+import { TEAM_TOOL_NAMES, __setTeamToolDepsForTesting } from "@/lib/squads/collaboration-tools"
+import { toolFamily as squadToolFamily } from "@/lib/squads/agent-tools"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import {
   recordCallbackBinding,
@@ -63,7 +62,6 @@ import {
   registerTeamDispatchContext,
   clearTeamDispatchContext,
 } from "./agents/dispatch-context-registry"
-import { TEAM_TOOL_NAMES } from "./team-builtin-tools"
 import { createSkillLoadContext, releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import type { Skill } from "@cognia/agent-config-types"
 import {
@@ -186,18 +184,6 @@ const mockExecuteRunWorkflowTyped = jest.fn()
 jest.mock("@/lib/workflow/publish/run-workflow-typed-tool", () => ({
   executeRunWorkflowTyped: (args: Record<string, unknown>) => mockExecuteRunWorkflowTyped(args),
 }))
-// Pass-through, so a test can see the caller a team tool runs as.
-const mockRunTeamBuiltinTool = jest.fn()
-jest.mock("./team-builtin-tools", () => {
-  const actual = jest.requireActual("./team-builtin-tools")
-  return {
-    ...actual,
-    runTeamBuiltinTool: (...args: Parameters<typeof actual.runTeamBuiltinTool>) => {
-      mockRunTeamBuiltinTool(...args)
-      return actual.runTeamBuiltinTool(...args)
-    },
-  }
-})
 const mockRunWorkingSetTool = jest.fn()
 // Module-contributed tools (ADR-0250 §14 amendment): none unless a test adds one.
 jest.mock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: [] }))
@@ -1077,28 +1063,42 @@ describe("handlePluginToolExec — built-in skill fallback", () => {
 })
 
 describe("handlePluginToolExec — team tools", () => {
+  beforeEach(() => useModuleTools("squads", squadToolFamily))
+  afterEach(() => {
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
+    __setTeamToolDepsForTesting(null)
+  })
+
   it("runs a team tool as its teammate, under this tool call (ADR-0239)", async () => {
-    const { registerTeamDispatchContext, clearTeamDispatchContext } =
-      await import("./agents/dispatch-context-registry")
     registerTeamDispatchContext("session-1", {
       teamId: "team-1",
       teammateId: "tm-1",
       teammateName: "Ada",
+      runId: "run-1",
     } as never)
-    mockRunTeamBuiltinTool.mockClear()
+    const postToConversation = jest.fn(async (_input: unknown) => "queued" as const)
+    __setTeamToolDepsForTesting(
+      () =>
+        ({
+          resolveOriginConversation: async () => ({ adapterId: "bot-a", conversationKey: "k" }),
+          listSiblingConversations: async () => [],
+          messagePassesPiiGate: async () => true,
+          postToConversation,
+          appendAuditEntry: async () => undefined,
+        }) as never
+    )
     try {
-      await handlePluginToolExec(
+      const response = await handlePluginToolExec(
         makeRequest({ name: "team_post_to_chat", args: { conversationKey: "k", message: "m" } })
       )
+      expect(response.result).toBe("Posted to this run's conversation.")
     } finally {
       clearTeamDispatchContext("session-1")
     }
-    expect(mockRunTeamBuiltinTool).toHaveBeenCalledWith(
-      "team_post_to_chat",
-      { conversationKey: "k", message: "m" },
+    expect(postToConversation).toHaveBeenCalledWith(
       expect.objectContaining({
-        teamId: "team-1",
-        toolCall: { kind: "tool-call", sessionId: "session-1", toolUseId: "use-1" },
+        conversationKey: "k",
+        authorization: { kind: "tool-call", sessionId: "session-1", toolUseId: "use-1" },
       })
     )
   })
@@ -1604,7 +1604,12 @@ describe("handlePluginToolExec — video generation built-ins", () => {
   })
 })
 
-describe("handlePluginToolExec — team-collaboration built-ins", () => {
+describe("handlePluginToolExec — team-collaboration tools", () => {
+  beforeEach(() => useModuleTools("squads", squadToolFamily))
+  afterEach(() => {
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
+  })
+
   it("routes a team tool to the team router when a team-dispatch identity is registered", async () => {
     registerTeamDispatchContext("team-sess", {
       teamId: "team-1",

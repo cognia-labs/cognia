@@ -285,7 +285,7 @@ interface LaunchChildRunInput {
 
 ## 9. P6：房间→小队
 
-- **删除房间里的协作工具。** `build-options.ts:4496` 的分支改为只在小队队员会话（有 team-dispatch 上下文）下添加 `team_*`；房间会话不再添加。`selfInvokeTools.teamCollaboration` 的设置说明同步更新。
+- **删除房间里的协作工具。** squads 工具族的 `teamToolFamily.surface`（`lib/squads/collaboration-tools.ts`，原 `build-options.ts` 的分支，2026-11-07 迁入）改为只在小队队员会话（有 team-dispatch 上下文）下提供 `team_*`；房间会话不再添加。`selfInvokeTools.teamCollaboration` 的设置说明同步更新。
 - **新工具 `room_handoff_to_squad({ squadId?, brief })`。** 定义在房间工具清单中，带权限规则；只在房间会话里提供。调用写一张提议卡（A2UI 或现有卡片部件），不启动任何东西。
 - **设置。** `roomSettings.squadHandoff: "confirm" | "auto"`，默认 `confirm`。在房间设置编辑器中可改；`auto` 需在 UI 上说明含义。
 - **确认。** 桌面、手机、IM、宿主渠道的确认都走同一个命令（`desktop-write-source.ts` 增加分支，headless 共用）。确认后：`acceptDelegation`（来源 = 房间这一轮），再经 `launchChildRun` 以 `squad` 目标启动；默认小队为房间绑定的小队（P7），卡上可改选。

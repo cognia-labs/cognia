@@ -9,16 +9,24 @@
 import "fake-indexeddb/auto"
 import {
   TEAM_TOOL_NAMES,
-  TEAM_BUILTIN_PLUGIN_ID,
-  buildTeamCollabManifestEntries,
+  buildTeamToolEntries,
   defaultTeamToolDeps,
-  isTeamBuiltinTool,
-  runTeamBuiltinTool,
+  isTeamTool,
+  runTeamTool,
+  TEAM_MESSAGING_PROTOCOL,
+  __setTeamToolDepsForTesting,
+  teamHasKnowledgeTwins,
+  teamToolFamily,
   type TeamToolCaller,
   type TeamToolDeps,
-} from "./team-builtin-tools"
+} from "./collaboration-tools"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { ConsensusRequest, SharedMemoryEntry } from "@/types/agent/agent-team"
+import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
+import {
+  clearTeamDispatchContext,
+  registerTeamDispatchContext,
+} from "@/lib/claude/agents/dispatch-context-registry"
 
 // Keep the background-delegation path off the real LLM / background runtime so
 // the defaultTeamToolDeps `background` branch is safe to exercise.
@@ -147,39 +155,36 @@ function makeDeps(over: Partial<TeamToolDeps> = {}): {
   return { deps, calls }
 }
 
-describe("team-builtin-tools manifest", () => {
-  it("isTeamBuiltinTool recognises exactly the canonical names", () => {
-    for (const n of Object.values(TEAM_TOOL_NAMES)) expect(isTeamBuiltinTool(n)).toBe(true)
-    expect(isTeamBuiltinTool("Skill")).toBe(false)
-    expect(isTeamBuiltinTool("team_unknown")).toBe(false)
+describe("collaboration tool entries", () => {
+  it("isTeamTool recognises exactly the canonical names", () => {
+    for (const n of Object.values(TEAM_TOOL_NAMES)) expect(isTeamTool(n)).toBe(true)
+    expect(isTeamTool("Skill")).toBe(false)
+    expect(isTeamTool("team_unknown")).toBe(false)
   })
 
-  it("every manifest entry is tagged + named, and every name is routable", () => {
+  it("every entry is named and described, and every name is routable", () => {
     // With the twin knowledge tool enabled, the manifest covers every canonical name.
-    const entries = buildTeamCollabManifestEntries({ includeTwinKnowledgeSearch: true })
+    const entries = buildTeamToolEntries({ includeTwinKnowledgeSearch: true })
     const names = entries.map((e) => e.name).sort()
     expect(names).toEqual(Object.values(TEAM_TOOL_NAMES).sort())
     for (const e of entries) {
-      expect(e.pluginId).toBe(TEAM_BUILTIN_PLUGIN_ID)
       expect(typeof e.description).toBe("string")
       expect(e.jsonSchema).toBeTruthy()
     }
   })
 
   it("gates twin_knowledge_search behind includeTwinKnowledgeSearch", () => {
-    const without = buildTeamCollabManifestEntries().map((e) => e.name)
+    const without = buildTeamToolEntries().map((e) => e.name)
     expect(without).not.toContain(TEAM_TOOL_NAMES.twinKnowledgeSearch)
-    const withTool = buildTeamCollabManifestEntries({ includeTwinKnowledgeSearch: true }).map(
-      (e) => e.name
-    )
+    const withTool = buildTeamToolEntries({ includeTwinKnowledgeSearch: true }).map((e) => e.name)
     expect(withTool).toContain(TEAM_TOOL_NAMES.twinKnowledgeSearch)
   })
 })
 
-describe("runTeamBuiltinTool", () => {
+describe("runTeamTool", () => {
   it("rejects an unknown tool name", async () => {
     const { deps } = makeDeps()
-    expect(await runTeamBuiltinTool("nope", {}, caller, deps)).toMatch(/unknown team tool/)
+    expect(await runTeamTool("nope", {}, caller, deps)).toMatch(/unknown team tool/)
   })
 
   it("routes evidence-backed durable decision proposals with caller identity", async () => {
@@ -191,7 +196,7 @@ describe("runTeamBuiltinTool", () => {
     const { deps } = makeDeps({ proposeDecision })
 
     await expect(
-      runTeamBuiltinTool(
+      runTeamTool(
         TEAM_TOOL_NAMES.proposeDecision,
         {
           title: "Migration shape",
@@ -216,7 +221,7 @@ describe("runTeamBuiltinTool", () => {
     })
 
     await expect(
-      runTeamBuiltinTool(
+      runTeamTool(
         TEAM_TOOL_NAMES.proposeDecision,
         { title: "No evidence", detail: "Unsupported", evidenceIds: [] },
         caller,
@@ -227,16 +232,11 @@ describe("runTeamBuiltinTool", () => {
 
   it("team_send_message broadcasts when no recipient, direct otherwise", async () => {
     const { deps, calls } = makeDeps()
-    expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.sendMessage, { content: "hi" }, caller, deps)
-    ).toMatch(/broadcast/)
-    expect((calls.addMessage[0] as [{ type: string }])[0].type).toBe("broadcast")
-    await runTeamBuiltinTool(
-      TEAM_TOOL_NAMES.sendMessage,
-      { content: "yo", to: "tm-b" },
-      caller,
-      deps
+    expect(await runTeamTool(TEAM_TOOL_NAMES.sendMessage, { content: "hi" }, caller, deps)).toMatch(
+      /broadcast/
     )
+    expect((calls.addMessage[0] as [{ type: string }])[0].type).toBe("broadcast")
+    await runTeamTool(TEAM_TOOL_NAMES.sendMessage, { content: "yo", to: "tm-b" }, caller, deps)
     expect((calls.addMessage[1] as [{ type: string; recipientId: string }])[0]).toMatchObject({
       type: "direct",
       recipientId: "tm-b",
@@ -245,14 +245,14 @@ describe("runTeamBuiltinTool", () => {
 
   it("team_send_message rejects empty content", async () => {
     const { deps } = makeDeps()
-    expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.sendMessage, { content: "  " }, caller, deps)
-    ).toMatch(/requires non-empty/)
+    expect(await runTeamTool(TEAM_TOOL_NAMES.sendMessage, { content: "  " }, caller, deps)).toMatch(
+      /requires non-empty/
+    )
   })
 
   it("team_send_message suppresses idle/ack-only chatter without writing", async () => {
     const { deps, calls } = makeDeps()
-    const out = await runTeamBuiltinTool(
+    const out = await runTeamTool(
       TEAM_TOOL_NAMES.sendMessage,
       { content: "understood" },
       caller,
@@ -273,7 +273,7 @@ describe("runTeamBuiltinTool", () => {
     const { deps, calls } = makeDeps({
       recentMessages: (() => recent) as TeamToolDeps["recentMessages"],
     })
-    const out = await runTeamBuiltinTool(
+    const out = await runTeamTool(
       TEAM_TOOL_NAMES.sendMessage,
       { content: "  deploy is GREEN and stable. " },
       caller,
@@ -285,7 +285,7 @@ describe("runTeamBuiltinTool", () => {
 
   it("team_publish_memory writes with the caller as writer and surfaces PII errors", async () => {
     const { deps, calls } = makeDeps()
-    const ok = await runTeamBuiltinTool(
+    const ok = await runTeamTool(
       TEAM_TOOL_NAMES.publishMemory,
       { key: "decision", value: "ship it", tags: ["x"] },
       caller,
@@ -300,25 +300,15 @@ describe("runTeamBuiltinTool", () => {
       },
     }).deps
     expect(
-      await runTeamBuiltinTool(
-        TEAM_TOOL_NAMES.publishMemory,
-        { key: "k", value: "v" },
-        caller,
-        piiDeps
-      )
+      await runTeamTool(TEAM_TOOL_NAMES.publishMemory, { key: "k", value: "v" }, caller, piiDeps)
     ).toMatch(/PII detected/)
   })
 
   it("team_read_memory returns entries, filtered by keys when provided", async () => {
     const { deps } = makeDeps()
-    const all = (await runTeamBuiltinTool(
-      TEAM_TOOL_NAMES.readMemory,
-      {},
-      caller,
-      deps
-    )) as unknown[]
+    const all = (await runTeamTool(TEAM_TOOL_NAMES.readMemory, {}, caller, deps)) as unknown[]
     expect(all).toHaveLength(2)
-    const filtered = (await runTeamBuiltinTool(
+    const filtered = (await runTeamTool(
       TEAM_TOOL_NAMES.readMemory,
       { keys: ["k2"] },
       caller,
@@ -330,14 +320,14 @@ describe("runTeamBuiltinTool", () => {
   it("team_request_consensus needs a question and >=2 options", async () => {
     const { deps, calls } = makeDeps()
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.requestConsensus,
         { question: "q", options: ["a"] },
         caller,
         deps
       )
     ).toMatch(/at least two/)
-    const ok = await runTeamBuiltinTool(
+    const ok = await runTeamTool(
       TEAM_TOOL_NAMES.requestConsensus,
       { question: "Pick", options: ["a", "b"], type: "unanimous" },
       caller,
@@ -356,7 +346,7 @@ describe("runTeamBuiltinTool", () => {
         ({ id: "c", status: "resolved", winningOption: 1 }) as unknown as ConsensusRequest,
     }).deps
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.vote,
         { consensusId: "c", optionIndex: 1 },
         caller,
@@ -368,14 +358,9 @@ describe("runTeamBuiltinTool", () => {
   it("team_delegate validates target and forwards source identity", async () => {
     const { deps, calls } = makeDeps()
     expect(
-      await runTeamBuiltinTool(
-        TEAM_TOOL_NAMES.delegate,
-        { target: "nope", reason: "r" },
-        caller,
-        deps
-      )
+      await runTeamTool(TEAM_TOOL_NAMES.delegate, { target: "nope", reason: "r" }, caller, deps)
     ).toMatch(/must be background/)
-    const ok = await runTeamBuiltinTool(
+    const ok = await runTeamTool(
       TEAM_TOOL_NAMES.delegate,
       { target: "background", reason: "offload", prompt: "do x" },
       caller,
@@ -390,7 +375,7 @@ describe("runTeamBuiltinTool", () => {
 
   it("team_list_members returns the roster", async () => {
     const { deps } = makeDeps()
-    expect(await runTeamBuiltinTool(TEAM_TOOL_NAMES.listMembers, {}, caller, deps)).toEqual([
+    expect(await runTeamTool(TEAM_TOOL_NAMES.listMembers, {}, caller, deps)).toEqual([
       { id: "tm-a", name: "Ada", role: "lead" },
     ])
   })
@@ -398,14 +383,14 @@ describe("runTeamBuiltinTool", () => {
   it("team_delegate routes target=twin and requires a twinId", async () => {
     const { deps, calls } = makeDeps()
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.delegate,
         { target: "twin", reason: "ask the expert" },
         caller,
         deps
       )
     ).toMatch(/target=twin requires a `twinId`/)
-    const ok = await runTeamBuiltinTool(
+    const ok = await runTeamTool(
       TEAM_TOOL_NAMES.delegate,
       { target: "twin", reason: "ask the expert", twinId: "tw1", prompt: "how?" },
       caller,
@@ -421,9 +406,9 @@ describe("runTeamBuiltinTool", () => {
   it("twin_knowledge_search requires a query and returns redacted hits", async () => {
     const { deps, calls } = makeDeps()
     expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.twinKnowledgeSearch, { query: "  " }, caller, deps)
+      await runTeamTool(TEAM_TOOL_NAMES.twinKnowledgeSearch, { query: "  " }, caller, deps)
     ).toMatch(/requires a non-empty `query`/)
-    const out = await runTeamBuiltinTool(
+    const out = await runTeamTool(
       TEAM_TOOL_NAMES.twinKnowledgeSearch,
       { query: "how to deploy", topK: 3 },
       caller,
@@ -444,7 +429,7 @@ describe("runTeamBuiltinTool", () => {
       })) as TeamToolDeps["searchTwinKnowledge"],
     }).deps
     expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.twinKnowledgeSearch, { query: "q" }, caller, errDeps)
+      await runTeamTool(TEAM_TOOL_NAMES.twinKnowledgeSearch, { query: "q" }, caller, errDeps)
     ).toMatch(/Error: no sources/)
     const emptyDeps = makeDeps({
       searchTwinKnowledge: (async () => ({
@@ -454,20 +439,15 @@ describe("runTeamBuiltinTool", () => {
       })) as TeamToolDeps["searchTwinKnowledge"],
     }).deps
     expect(
-      await runTeamBuiltinTool(
-        TEAM_TOOL_NAMES.twinKnowledgeSearch,
-        { query: "q" },
-        caller,
-        emptyDeps
-      )
+      await runTeamTool(TEAM_TOOL_NAMES.twinKnowledgeSearch, { query: "q" }, caller, emptyDeps)
     ).toMatch(/No knowledge found in twin "twX"/)
   })
 
   it("team_vote rejects a missing consensusId / non-integer option", async () => {
     const { deps } = makeDeps()
-    expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.vote, { optionIndex: 0 }, caller, deps)
-    ).toMatch(/requires `consensusId`/)
+    expect(await runTeamTool(TEAM_TOOL_NAMES.vote, { optionIndex: 0 }, caller, deps)).toMatch(
+      /requires `consensusId`/
+    )
   })
 
   it("team_delegate falls back to a synthetic source task + default reason", async () => {
@@ -477,7 +457,7 @@ describe("runTeamBuiltinTool", () => {
       teammateId: "tm-a",
       teammateName: "Ada",
     }
-    await runTeamBuiltinTool(TEAM_TOOL_NAMES.delegate, { target: "background" }, callerNoRun, deps)
+    await runTeamTool(TEAM_TOOL_NAMES.delegate, { target: "background" }, callerNoRun, deps)
     expect((calls.delegate[0] as [{ sourceTaskId: string; reason: string }])[0]).toMatchObject({
       sourceTaskId: "adhoc:tm-a",
       reason: "delegated by teammate",
@@ -486,7 +466,7 @@ describe("runTeamBuiltinTool", () => {
 
   it("team_vote forwards optional reasoning", async () => {
     const { deps, calls } = makeDeps()
-    await runTeamBuiltinTool(
+    await runTeamTool(
       TEAM_TOOL_NAMES.vote,
       { consensusId: "c", optionIndex: 0, reasoning: "because" },
       caller,
@@ -497,19 +477,19 @@ describe("runTeamBuiltinTool", () => {
 
   it("team_delegate forwards optional fields for team / external / background targets", async () => {
     const { deps, calls } = makeDeps()
-    await runTeamBuiltinTool(
+    await runTeamTool(
       TEAM_TOOL_NAMES.delegate,
       { target: "team", reason: "r", targetTeamId: "t2", ultracode: true },
       caller,
       deps
     )
-    await runTeamBuiltinTool(
+    await runTeamTool(
       TEAM_TOOL_NAMES.delegate,
       { target: "external", reason: "r", targetAgentId: "cc" },
       caller,
       deps
     )
-    await runTeamBuiltinTool(
+    await runTeamTool(
       TEAM_TOOL_NAMES.delegate,
       { target: "background", reason: "r", prompt: "p", systemPrompt: "s" },
       caller,
@@ -524,13 +504,13 @@ describe("runTeamBuiltinTool", () => {
 
   it("falls back to the default store-backed deps when none are injected", async () => {
     useAgentTeamStore.getState().reset()
-    const r = await runTeamBuiltinTool(TEAM_TOOL_NAMES.listMembers, {}, caller)
+    const r = await runTeamTool(TEAM_TOOL_NAMES.listMembers, {}, caller)
     expect(Array.isArray(r)).toBe(true)
   })
 
   it("task_add_comment records a comment authored by the caller", async () => {
     const { deps, calls } = makeDeps()
-    const out = await runTeamBuiltinTool(
+    const out = await runTeamTool(
       TEAM_TOOL_NAMES.addTaskComment,
       {
         taskId: "task-9",
@@ -552,10 +532,10 @@ describe("runTeamBuiltinTool", () => {
   it("task_add_comment validates taskId and content", async () => {
     const { deps } = makeDeps()
     expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.addTaskComment, { content: "x" }, caller, deps)
+      await runTeamTool(TEAM_TOOL_NAMES.addTaskComment, { content: "x" }, caller, deps)
     ).toMatch(/requires a `taskId`/)
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.addTaskComment,
         { taskId: "t", content: "   " },
         caller,
@@ -567,7 +547,7 @@ describe("runTeamBuiltinTool", () => {
   it("task_add_comment reports a missing task", async () => {
     const { deps } = makeDeps({ addTaskComment: (() => null) as TeamToolDeps["addTaskComment"] })
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.addTaskComment,
         { taskId: "ghost", content: "hi" },
         caller,
@@ -578,7 +558,7 @@ describe("runTeamBuiltinTool", () => {
 
   it("task_get returns the task with its comment thread", async () => {
     const { deps } = makeDeps()
-    const out = (await runTeamBuiltinTool(
+    const out = (await runTeamTool(
       TEAM_TOOL_NAMES.getTask,
       { taskId: "task-9" },
       caller,
@@ -589,12 +569,12 @@ describe("runTeamBuiltinTool", () => {
 
   it("task_get validates taskId and reports a missing task", async () => {
     const { deps } = makeDeps()
-    expect(await runTeamBuiltinTool(TEAM_TOOL_NAMES.getTask, {}, caller, deps)).toMatch(
+    expect(await runTeamTool(TEAM_TOOL_NAMES.getTask, {}, caller, deps)).toMatch(
       /requires a `taskId`/
     )
     const { deps: nullDeps } = makeDeps({ getTask: (() => null) as TeamToolDeps["getTask"] })
     expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.getTask, { taskId: "ghost" }, caller, nullDeps)
+      await runTeamTool(TEAM_TOOL_NAMES.getTask, { taskId: "ghost" }, caller, nullDeps)
     ).toMatch(/not found/)
   })
 
@@ -604,9 +584,7 @@ describe("runTeamBuiltinTool", () => {
         throw new Error("store down")
       },
     }).deps
-    expect(await runTeamBuiltinTool(TEAM_TOOL_NAMES.listMembers, {}, caller, boom)).toMatch(
-      /store down/
-    )
+    expect(await runTeamTool(TEAM_TOOL_NAMES.listMembers, {}, caller, boom)).toMatch(/store down/)
   })
 })
 
@@ -785,11 +763,11 @@ describe("defaultTeamToolDeps.searchTwinKnowledge (authorization + redaction)", 
 describe("team_post_to_chat", () => {
   it("validates conversationKey and message", async () => {
     const { deps } = makeDeps()
+    expect(await runTeamTool(TEAM_TOOL_NAMES.postToChat, { message: "hi" }, caller, deps)).toMatch(
+      /requires a `conversationKey`/
+    )
     expect(
-      await runTeamBuiltinTool(TEAM_TOOL_NAMES.postToChat, { message: "hi" }, caller, deps)
-    ).toMatch(/requires a `conversationKey`/)
-    expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.postToChat,
         { conversationKey: "lark:bot-a:chat-1", message: "  " },
         caller,
@@ -803,7 +781,7 @@ describe("team_post_to_chat", () => {
       resolveOriginConversation: (async () => null) as TeamToolDeps["resolveOriginConversation"],
     })
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.postToChat,
         { conversationKey: "lark:bot-a:chat-1", message: "hi" },
         caller,
@@ -815,7 +793,7 @@ describe("team_post_to_chat", () => {
 
   it("posts to the run's own conversation and audits team.posted_as_bot", async () => {
     const { deps, calls } = makeDeps()
-    const out = await runTeamBuiltinTool(
+    const out = await runTeamTool(
       TEAM_TOOL_NAMES.postToChat,
       { conversationKey: "lark:bot-a:chat-1", message: "status: done" },
       caller,
@@ -843,7 +821,7 @@ describe("team_post_to_chat", () => {
 
   it("posts to a SIBLING conversation under the sibling adapter's identity", async () => {
     const { deps, calls } = makeDeps()
-    const out = await runTeamBuiltinTool(
+    const out = await runTeamTool(
       TEAM_TOOL_NAMES.postToChat,
       { conversationKey: "lark:bot-b:chat-1", message: "posting as B" },
       caller,
@@ -865,7 +843,7 @@ describe("team_post_to_chat", () => {
   it("delivers under the tool call's own authorization when it has one", async () => {
     const { deps, calls } = makeDeps()
     const toolCall = { kind: "tool-call", sessionId: "s1", toolUseId: "toolu_1" } as const
-    await runTeamBuiltinTool(
+    await runTeamTool(
       TEAM_TOOL_NAMES.postToChat,
       { conversationKey: "lark:bot-a:chat-1", message: "status: done" },
       { ...caller, toolCall },
@@ -880,7 +858,7 @@ describe("team_post_to_chat", () => {
     const { deps, calls } = makeDeps({
       postToConversation: (async () => "drafted") as TeamToolDeps["postToConversation"],
     })
-    const out = await runTeamBuiltinTool(
+    const out = await runTeamTool(
       TEAM_TOOL_NAMES.postToChat,
       { conversationKey: "lark:bot-a:chat-1", message: "status: done" },
       caller,
@@ -893,7 +871,7 @@ describe("team_post_to_chat", () => {
   it("rejects a target that is neither the origin nor a sibling", async () => {
     const { deps, calls } = makeDeps()
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.postToChat,
         { conversationKey: "lark:bot-x:chat-99", message: "hi" },
         caller,
@@ -909,7 +887,7 @@ describe("team_post_to_chat", () => {
       messagePassesPiiGate: (async () => false) as TeamToolDeps["messagePassesPiiGate"],
     })
     expect(
-      await runTeamBuiltinTool(
+      await runTeamTool(
         TEAM_TOOL_NAMES.postToChat,
         { conversationKey: "lark:bot-b:chat-1", message: "alice@example.com" },
         caller,
@@ -925,7 +903,7 @@ describe("team_post_to_chat", () => {
   })
 
   it("manifest offers team_post_to_chat alongside the base tools", () => {
-    const names = buildTeamCollabManifestEntries().map((e) => e.name)
+    const names = buildTeamToolEntries().map((e) => e.name)
     expect(names).toContain(TEAM_TOOL_NAMES.postToChat)
   })
 })
@@ -1037,5 +1015,124 @@ describe("defaultTeamToolDeps — team_post_to_chat wiring", () => {
     expect(await deps.messagePassesPiiGate("plain safe text")).toBe(
       hasNoLeakingPiiDeep("plain safe text")
     )
+  })
+})
+
+describe("teamToolFamily", () => {
+  const settingsOn = {
+    selfInvokeTools: { teamCollaboration: true },
+  } as unknown as ToolSurfaceContext["settings"]
+
+  function surfaceCtx(fields: Partial<ToolSurfaceContext> = {}): ToolSurfaceContext {
+    return {
+      session: { id: "team-sess", kind: "team" } as ToolSurfaceContext["session"],
+      agent: null,
+      settings: settingsOn,
+      activeGoal: null,
+      prompts: { snapshot: null, context: {} },
+      host: "desktop",
+      activeProject: null,
+      ...fields,
+    }
+  }
+
+  const call = (sessionId: string): ToolCallContext => ({
+    sessionId,
+    toolUseId: "use-1",
+    executionRunId: "run-1",
+    outboundAuthorization: { kind: "tool-call", sessionId, toolUseId: "use-1" },
+  })
+
+  afterEach(() => {
+    __setTeamToolDepsForTesting(null)
+    clearTeamDispatchContext("team-sess")
+  })
+
+  it("offers the tools with the messaging protocol on a team session once opted in", async () => {
+    const surface = await teamToolFamily.surface(surfaceCtx())
+    expect(surface?.instructions).toBe(TEAM_MESSAGING_PROTOCOL)
+    const names = surface!.tools.map((t) => t.name)
+    expect(names).toContain(TEAM_TOOL_NAMES.sendMessage)
+    // No knowledge twin anywhere: the twin search is not offered.
+    expect(names).not.toContain(TEAM_TOOL_NAMES.twinKnowledgeSearch)
+  })
+
+  it("offers twin_knowledge_search to a twin-bound teammate", async () => {
+    const surface = await teamToolFamily.surface(
+      surfaceCtx({ agent: { id: "c1", twinId: "tw-1" } as ToolSurfaceContext["agent"] })
+    )
+    expect(surface?.tools.map((t) => t.name)).toContain(TEAM_TOOL_NAMES.twinKnowledgeSearch)
+  })
+
+  it("offers nothing off a team session or with the switch off", async () => {
+    expect(
+      await teamToolFamily.surface(
+        surfaceCtx({ session: { id: "s", kind: "direct" } as ToolSurfaceContext["session"] })
+      )
+    ).toBeNull()
+    expect(await teamToolFamily.surface(surfaceCtx({ settings: null }))).toBeNull()
+  })
+
+  it("runs a call as the teammate the session was dispatched as, under the call's authority", async () => {
+    registerTeamDispatchContext("team-sess", {
+      teamId: "team-1",
+      teammateId: "tm-a",
+      teammateName: "Ada",
+    })
+    const listMembers = jest.fn(() => [{ id: "tm-a", name: "Ada", role: "lead" }])
+    __setTeamToolDepsForTesting(() => makeDeps({ listMembers }).deps)
+    expect(await teamToolFamily.run(TEAM_TOOL_NAMES.listMembers, {}, call("team-sess"))).toEqual([
+      { id: "tm-a", name: "Ada", role: "lead" },
+    ])
+    expect(listMembers).toHaveBeenCalledWith("team-1")
+  })
+
+  it("refuses a call from a session no teammate was dispatched in", async () => {
+    expect(
+      await teamToolFamily.run(TEAM_TOOL_NAMES.sendMessage, { content: "hi" }, call("plain"))
+    ).toMatch(/only available to a teammate during a team run/)
+  })
+})
+
+describe("teamHasKnowledgeTwins", () => {
+  afterEach(() => clearTeamDispatchContext("kt-sess"))
+
+  it("counts a twin-bound teammate without a lookup", async () => {
+    expect(await teamHasKnowledgeTwins("kt-sess", "tw-1")).toBe(true)
+  })
+
+  it("is false without a dispatch context", async () => {
+    expect(await teamHasKnowledgeTwins("kt-sess", undefined)).toBe(false)
+  })
+
+  it("reads the team's knowledge twins and its members' twins from the store", async () => {
+    registerTeamDispatchContext("kt-sess", {
+      teamId: "kt-team",
+      teammateId: "tm-x",
+      teammateName: "X",
+    })
+    const state = useAgentTeamStore.getState()
+    const previousTeams = state.teams
+    const previousTeammates = state.teammates
+    try {
+      useAgentTeamStore.setState({
+        teams: { "kt-team": { id: "kt-team", config: { knowledgeTwinIds: [] } } } as never,
+        teammates: {},
+      })
+      expect(await teamHasKnowledgeTwins("kt-sess", undefined)).toBe(false)
+      useAgentTeamStore.setState({
+        teammates: {
+          "tm-x": { id: "tm-x", teamId: "kt-team", config: { twinId: "tw-2" } },
+        } as never,
+      })
+      expect(await teamHasKnowledgeTwins("kt-sess", undefined)).toBe(true)
+      useAgentTeamStore.setState({
+        teams: { "kt-team": { id: "kt-team", config: { knowledgeTwinIds: ["tw-3"] } } } as never,
+        teammates: {},
+      })
+      expect(await teamHasKnowledgeTwins("kt-sess", undefined)).toBe(true)
+    } finally {
+      useAgentTeamStore.setState({ teams: previousTeams, teammates: previousTeammates })
+    }
   })
 })
