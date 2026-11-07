@@ -294,7 +294,11 @@ export function createIssueWakeupExecutor(overrides: Partial<IssueWakeupExecutor
 
     const active = (await listIssueRuns({ issueId: issue.id, activeOnly: true }))[0]
     if (active) {
-      if (await deps.steer(active, brief(true))) return delivered("joined", active.id)
+      // A wakeup is a derived input: it joins the running turn at its boundary,
+      // behind anything the person said meanwhile (ADR-0252 §5).
+      if (await deps.steer(active, brief(true), { origin: "derived" })) {
+        return delivered("joined", active.id)
+      }
       return hold("active-run-not-steerable", active)
     }
 

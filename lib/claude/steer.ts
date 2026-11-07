@@ -22,6 +22,16 @@ export interface SteerPayload {
 /** Prefix that marks a replayed message as a course-correction to the model. */
 export const STEER_PREFIX = "By the way (steering): "
 
+/**
+ * The IM steer prefixes: a typed reply that starts with one of these carries a
+ * correction for the run its card controls (`steer:` / `调整：`). The
+ * half-width colon too, because IM keyboards produce both and people type
+ * both. Every steer text rule lives in this module (ADR-0252 §5).
+ */
+export const IM_STEER_PREFIX_EN = "steer:"
+export const IM_STEER_PREFIX_ZH = "调整："
+export const IM_STEER_PREFIX_ZH_ASCII = "调整:"
+
 /** Wrap one steer message so the model reads it as a course-correction. */
 export function frameSteer(text: string): string {
   return STEER_PREFIX + text.trim()

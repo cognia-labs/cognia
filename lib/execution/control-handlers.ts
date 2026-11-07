@@ -9,7 +9,6 @@ import { getDb } from "@/lib/db/schema"
 import {
   fusionApprovalRunIdOf,
   type ExecutionRun,
-  type ExecutionRunStatus,
   type RunControlCommand,
 } from "@/types/execution/run"
 // Type-only: erased at build time, so the gate boundary is untouched and no
@@ -29,6 +28,13 @@ import {
 import { currentDelegationAttempts, recordDelegationRetry } from "./delegation"
 import { isLiveRunStatus } from "./run-status"
 import { hasRunStop, stopRegisteredRun } from "./run-stops"
+import {
+  registerRunSteerEngine,
+  steerExecutionRun,
+  type RunSteerEngine,
+  type SteerOutcome,
+} from "./steer"
+import { steerTextOf } from "@/lib/claude/steer"
 
 /**
  * The action exists in the vocabulary but this run kind cannot perform it.
@@ -61,6 +67,60 @@ export class SteerDegradedError extends Error {
     super(`Steer degraded: ${reason}`)
     this.name = "SteerDegradedError"
   }
+}
+
+/**
+ * A gate `steer` through the one steer entry (ADR-0252 §5). The gate's steer
+ * is a person's (IM `steer:`, a card button), so it goes live; anything but a
+ * delivery is the refusal the card reports.
+ */
+async function steerFromGate(
+  run: ExecutionRun,
+  command: RunControlCommand
+): Promise<RunControlHandlerOutcome> {
+  return outcomeOrThrow(
+    await steerExecutionRun(run, {
+      target: { runId: run.id },
+      origin: "person",
+      content: command.steerMessage ?? "",
+    }),
+    command.action
+  )
+}
+
+function outcomeOrThrow(outcome: SteerOutcome, action: string): RunControlHandlerOutcome {
+  switch (outcome.status) {
+    case "delivered":
+      return outcome.receiptIds.length > 0 ? { steerReceiptIds: outcome.receiptIds } : {}
+    case "queued":
+      return {}
+    case "degraded":
+      throw new SteerDegradedError(outcome.reason)
+    case "unsupported_for_kind":
+      throw new UnsupportedForKindError(action, outcome.kind)
+    case "run_not_found":
+      throw new Error("Execution run not found")
+  }
+}
+
+/**
+ * A Squad run's steer: its durable runtime fans the message out to every live
+ * teammate. The coordinator persists a receipt BEFORE attempting live
+ * delivery, so "nothing is attached right now" is the durable path working,
+ * not a failure; only "no teammate can act at all" is a degradation. A
+ * Squad's input is text: content blocks do not reach it.
+ */
+const steerSquadRun: RunSteerEngine = async (run, request) => {
+  const { getAgentTeamRun } = await import("@/lib/db/agent-team-runtime")
+  if (!(await getAgentTeamRun(run.sourceId).catch(() => undefined))) {
+    return { status: "degraded", reason: "no_active_run" }
+  }
+  const text = steerTextOf(request.content)
+  if (!text) return { status: "degraded", reason: "not_admitted" }
+  const { steerDurableRun } = await import("@/lib/squads/durable/durable-control")
+  const { receiptIds, childCount } = await steerDurableRun(run.sourceId, text)
+  if (childCount === 0) return { status: "degraded", reason: "no_active_run" }
+  return { status: "delivered", receiptIds }
 }
 
 const agentControllers = new Map<string, AbortController>()
@@ -165,19 +225,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     if (command.action === "steer") {
       const run = await getExecutionRun(command.runId)
       if (!run?.sessionId) throw new SteerDegradedError("no_active_run")
-      const { steerSession } = await import("@/lib/claude/ipc")
-      try {
-        // `steerSession` runs its own renderer-side PII gate and throws rather
-        // than sending — so the gate is not re-implemented here, it is relied
-        // on, and its refusal is reported as the reason it actually was.
-        await steerSession(run.sessionId, command.steerMessage ?? "")
-      } catch (error) {
-        throw new SteerDegradedError(
-          error instanceof Error && /PII/i.test(error.message)
-            ? "pii_blocked"
-            : "provider_unsupported"
-        )
-      }
+      await steerFromGate(run, command)
       return
     }
     if (command.action === "approve" || command.action === "deny") {
@@ -238,16 +286,8 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     if (!durable) throw new Error("No durable record behind this Squad run")
 
     if (command.action === "steer") {
-      const { steerDurableRun } = await import("@/lib/squads/durable/durable-control")
-      // The coordinator persists a receipt BEFORE attempting live delivery, so
-      // "nothing is attached right now" is the durable path working, not a
-      // failure. Only "no child can act at all" is a real degradation.
-      const { receiptIds, childCount } = await steerDurableRun(
-        run.sourceId,
-        command.steerMessage ?? ""
-      )
-      if (childCount === 0) throw new SteerDegradedError("no_active_run")
-      return { steerReceiptIds: receiptIds }
+      const { steerReceiptIds } = await steerFromGate(run, command)
+      return { steerReceiptIds: steerReceiptIds ?? [] }
     }
 
     if (command.action === "approve" || command.action === "deny") {
@@ -461,7 +501,11 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
             isLiveRunStatus(child.status)
           )
           for (const child of live) {
-            await forwardToChild(child, { ...command, action: "steer" }).catch(() => undefined)
+            await steerExecutionRun(child, {
+              target: { runId: child.id },
+              origin: "person",
+              content: command.steerMessage,
+            })
           }
         }
         return
@@ -473,22 +517,9 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     )
 
     if (command.action === "steer") {
-      if (children.length === 0) throw new SteerDegradedError("no_active_run")
-      const receiptIds: string[] = []
-      let applied = 0
-      let lastReason: SteerDegradedReason | undefined
-      for (const child of children) {
-        try {
-          const outcome = await forwardToChild(child, command)
-          for (const id of outcome?.steerReceiptIds ?? []) receiptIds.push(id)
-          applied += 1
-        } catch (error) {
-          if (error instanceof SteerDegradedError) lastReason = error.reason
-          // A child that cannot be steered must not stop the ones that can.
-        }
-      }
-      if (applied === 0) throw new SteerDegradedError(lastReason ?? "no_active_run")
-      return { steerReceiptIds: receiptIds }
+      const run = await getExecutionRun(command.runId)
+      if (!run) throw new Error("Execution run not found")
+      return steerFromGate(run, command)
     }
 
     if (command.action !== "stop" && command.action !== "pause" && command.action !== "resume") {
@@ -782,6 +813,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     registerRunControlHandler(kind, workflow)
   )
   const unregisterTeam = registerRunControlHandler("team", team)
+  const unregisterTeamSteer = registerRunSteerEngine("team", steerSquadRun)
   const unregisterDelegation = registerRunControlHandler("delegation", delegation)
   const unregisterGoal = registerRunControlHandler("goal", goal)
   const unregisterPlan = registerRunControlHandler("plan", plan)
@@ -826,6 +858,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
       unregisterSecurityScan()
       unregisterBot()
       unregisterTeam()
+      unregisterTeamSteer()
       unregisterDelegation()
       for (const unregister of unregisterWorkflows) unregister()
       unregisterGoal()

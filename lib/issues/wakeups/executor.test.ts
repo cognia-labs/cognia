@@ -312,15 +312,19 @@ describe("delivering", () => {
     })
     const task = wakeupTask(issue.id)
     const steered: string[] = []
+    const origins: unknown[] = []
     const { execute } = harness(task, {
-      steer: async (_run, text) => {
+      steer: async (_run, text, deps) => {
         steered.push(text)
+        origins.push(deps?.origin)
         return true
       },
     })
     const result = await execute(fired(task, comment(issue.id)), EXECUTION, SIGNAL)
     expect(result.output).toMatchObject({ outcome: "joined", runId: active.id })
     expect(steered[0]).toContain("joined this run")
+    // A wakeup joins the running turn as a derived input (ADR-0252 §5).
+    expect(origins).toEqual(["derived"])
     const events = await listIssueEvents({ issueId: issue.id })
     expect(events.at(-1)?.payload).toMatchObject({
       kind: "wakeup_fired",

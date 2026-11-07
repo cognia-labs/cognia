@@ -4,11 +4,11 @@
  * Steer an issue's active run from its detail panel (plan 2026-09-29,
  * Phase 4).
  *
- * There is one steer path, `steerIssueRun` in `lib/issues/run/registry.ts`:
- * it finds the run's newest live session through its adapter and hands the
- * text to `steerSession`, which runs the PII gate. Wakeups that join an
- * active run ride the same call, so this box is a person doing by hand what
- * a wakeup does on its own.
+ * `steerIssueRun` in `lib/issues/run/registry.ts` finds the run's newest live
+ * session through its adapter and hands the text to the one steer entry
+ * (`lib/execution/steer.ts`), whose engine runs the PII gate. This box is a
+ * person's input, so it goes live; a wakeup that joins an active run rides
+ * the same call as a derived input, which waits for the turn's boundary.
  *
  * Only some engines take input mid-run. When the run's adapter reports no
  * live session the box is replaced by a line saying so, rather than offering

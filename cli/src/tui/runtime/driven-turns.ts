@@ -18,6 +18,7 @@
  */
 
 import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import { frameSteer } from "@/lib/claude/steer"
 import { formatTokens } from "../format/usage"
 import type { ActivityKind, TuiAction } from "../state/types"
 
@@ -73,10 +74,11 @@ function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
-/** Frame a steer message so the model reads it as a mid-run aside, not a new task. */
-export function frameSteer(steer: string): string {
-  return `By the way (steering): ${steer}`
-}
+/**
+ * Frame a steer message so the model reads it as a mid-run aside, not a new
+ * task. The text rule lives in one module (ADR-0252 §5).
+ */
+export { frameSteer }
 
 export async function runDrivenTurns(deps: DrivenTurnsDeps): Promise<void> {
   const { send, advance, dispatch, signal, takeSteer } = deps

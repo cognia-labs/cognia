@@ -491,7 +491,7 @@ describe("installConnectorRuntime", () => {
       accepted: true,
     })
     expect(mockInsertInboundMessage).toHaveBeenCalledWith(event, "session-1")
-    expect(mockSteerSession).toHaveBeenCalledWith("session-1", "redirect", "om-steer")
+    expect(mockSteerSession).toHaveBeenCalledWith("session-1", "redirect", "om-steer", {})
 
     mockIsPiiSafeSendContent.mockReturnValue(false)
     await expect(

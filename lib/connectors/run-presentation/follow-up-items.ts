@@ -13,6 +13,11 @@
 
 import type { RunControlAction, RunProjectionSnapshot } from "@/types/execution/run"
 import { safeStableActivityId } from "@/lib/execution/run-activity"
+import {
+  IM_STEER_PREFIX_EN,
+  IM_STEER_PREFIX_ZH,
+  IM_STEER_PREFIX_ZH_ASCII,
+} from "@/lib/claude/steer"
 import type { FollowUpControlItem } from "@/lib/connectors/follow-up-control"
 
 export const RUN_ACTION_LABEL_EN: Record<RunControlAction, string> = {
@@ -48,11 +53,9 @@ export const RUN_ACTION_LABEL_ZH: Record<RunControlAction, string> = {
  * treats the remainder as the correction, which also means it must not consume
  * the registration: buttons are one-shot, but a person redirecting work says
  * several things over the life of one run.
+ *
+ * The prefixes themselves are the steer text rules in `lib/claude/steer.ts`.
  */
-export const STEER_PREFIX_EN = "steer:"
-export const STEER_PREFIX_ZH = "调整："
-/** Half-width colon too — IM keyboards produce both, and users type both. */
-export const STEER_PREFIX_ZH_ASCII = "调整:"
 
 export interface FollowUpMatch {
   item: FollowUpControlItem
@@ -81,7 +84,7 @@ export function matchFollowUpItem(
 
   for (const item of items) {
     if (item.match !== "prefix") continue
-    for (const prefix of [item.content, item.localizedContent, STEER_PREFIX_ZH_ASCII]) {
+    for (const prefix of [item.content, item.localizedContent, IM_STEER_PREFIX_ZH_ASCII]) {
       if (!prefix || !trimmed.toLowerCase().startsWith(prefix.toLowerCase())) continue
       const body = trimmed.slice(prefix.length).trim()
       // A bare prefix carries no correction. Refusing it here is what stops an
@@ -124,8 +127,8 @@ export function buildFollowUpItems(snapshot: RunProjectionSnapshot): FollowUpCon
   if (snapshot.allowedActions.includes("steer")) {
     capped.push({
       action: "steer",
-      content: STEER_PREFIX_EN,
-      localizedContent: STEER_PREFIX_ZH,
+      content: IM_STEER_PREFIX_EN,
+      localizedContent: IM_STEER_PREFIX_ZH,
       match: "prefix",
     })
   }

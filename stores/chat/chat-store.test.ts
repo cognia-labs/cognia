@@ -1807,6 +1807,29 @@ describe("steer queue + run timing", () => {
     expect(result.current).toBe(before)
   })
 
+  it("keeps people ahead of derived entries when queueing and reordering (ADR-0252 §5)", () => {
+    act(() => {
+      const st = useChatStore.getState()
+      st.enqueueSteer("s1", { id: "p1", text: "person 1" })
+      st.enqueueSteer("s1", {
+        id: "d1",
+        text: "wakeup",
+        origin: "derived",
+        derivedSource: "wakeup",
+      })
+      st.enqueueSteer("s1", { id: "p2", text: "person 2" })
+    })
+    const { result } = renderHook(() => useSessionSteerQueue("s1"))
+    expect(result.current.map((e) => e.id)).toEqual(["p1", "p2", "d1"])
+
+    // A move never crosses the line between the two groups.
+    const before = result.current
+    act(() => useChatStore.getState().moveSteerEntry("s1", "d1", -1))
+    expect(result.current).toBe(before)
+    act(() => useChatStore.getState().moveSteerEntry("s1", "p2", -1))
+    expect(result.current.map((e) => e.id)).toEqual(["p2", "p1", "d1"])
+  })
+
   it("clearSteerQueue on an empty queue is a no-op", () => {
     act(() => useChatStore.getState().clearSteerQueue("ghost"))
     const { result } = renderHook(() => useSessionSteerQueue("ghost"))

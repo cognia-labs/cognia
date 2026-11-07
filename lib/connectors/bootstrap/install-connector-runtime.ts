@@ -47,7 +47,6 @@ import {
 } from "@/lib/connectors/runtime"
 import { createConnectorLiveSteerCoordinator } from "@/lib/connectors/live-steer"
 import { connectorInjectionProtection } from "@/lib/connectors/content-safety"
-import { steerSession } from "@/lib/claude/ipc"
 import { startOutboundRunner } from "@/lib/connectors/outbound-runner"
 import { installScheduledOutboundHandlers } from "@/lib/connectors/scheduled-outbound"
 import {
@@ -663,8 +662,20 @@ export function installConnectorRuntime(
         })
         throw new PiiGateBlocked("prompt", event.adapterId, event.conversationKey)
       },
-      steer: (sessionId, event) =>
-        steerSession(sessionId, inboundEventToSendContent(event), event.messageId),
+      // A person's message into the run this conversation drives: the one
+      // steer entry, live (ADR-0252 §5). Anything but a delivery leaves the
+      // durable job to replay at the FIFO boundary.
+      steer: async (sessionId, event) => {
+        const { steerRun } = await import("@/lib/execution/steer")
+        const outcome = await steerRun({
+          target: { sessionId },
+          origin: "person",
+          content: inboundEventToSendContent(event),
+          sourceMessageId: event.messageId,
+        })
+        if (outcome.status !== "delivered") throw new Error(`live steer ${outcome.status}`)
+        return { accepted: true as const }
+      },
     })
 
     // Wire the runtime through `safeSendPrompt` — the PII gate that walks

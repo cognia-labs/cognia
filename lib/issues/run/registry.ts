@@ -68,6 +68,7 @@ import type {
   IssueRunVerdict,
 } from "./types"
 import { isNamedRunOrigin } from "./types"
+import type { SteerOrigin } from "@/lib/execution/steer-queue"
 
 /** Raised by `startIssueRun` for a policy refusal — machine-readable, i18n at the UI. */
 export class IssueRunRefusedError extends Error {
@@ -494,16 +495,23 @@ export async function issueRunSessionIds(
 
 export interface SteerIssueRunDeps {
   registry?: IssueRunRegistry
-  /** Defaults to `steerSession` in `lib/claude/ipc`, which runs its own PII gate. */
-  steer?: (sessionId: string, text: string) => Promise<unknown>
+  /**
+   * Who the text is from. A person's goes live; a wakeup's brief is a derived
+   * input that waits for the running turn's boundary (ADR-0252 §5).
+   */
+  origin?: SteerOrigin
+  /** Defaults to the one steer entry (`steerRun`), whose engines run their own PII gate. */
+  steer?: (sessionId: string, text: string, origin: SteerOrigin) => Promise<boolean>
 }
 
 /**
- * Deliver `text` into an active run's live session. Resolves `true` when the
- * session acknowledged it, `false` when the run has no steerable session or
- * the steer was refused (provider without a live-input lane, PII gate, the
- * turn already closed its input). Never throws for a refusal: the caller has
- * a fallback, and a refusal is the ordinary case for two of three engines.
+ * Deliver `text` into an active run's live session, through the one steer
+ * entry. Resolves `true` when the session took it (or holds a derived input
+ * for its boundary), `false` when the run has no steerable session or the
+ * steer was refused (provider without a live-input lane, PII gate, the turn
+ * already closed its input, nothing running). Never throws for a refusal:
+ * the caller has a fallback, and a refusal is the ordinary case for two of
+ * three engines.
  */
 export async function steerIssueRun(
   run: IssueRun,
@@ -513,18 +521,29 @@ export async function steerIssueRun(
   const sessions = await issueRunSessionIds(run, deps.registry)
   const sessionId = sessions[0]
   if (!sessionId) return false
-  const steer =
-    deps.steer ??
-    (async (id: string, prompt: string) => {
-      const { steerSession } = await import("@/lib/claude/ipc")
-      return steerSession(id, prompt)
-    })
+  const steer = deps.steer ?? steerThroughEntry
   try {
-    await steer(sessionId, text)
-    return true
+    return await steer(sessionId, text, deps.origin ?? "person")
   } catch {
     return false
   }
+}
+
+async function steerThroughEntry(
+  sessionId: string,
+  text: string,
+  origin: SteerOrigin
+): Promise<boolean> {
+  const { steerRun } = await import("@/lib/execution/steer")
+  const outcome = await steerRun({
+    target: { sessionId },
+    origin,
+    content: text,
+    ...(origin === "derived"
+      ? { derived: { source: "wakeup" as const, producer: "issue-wakeup" as const } }
+      : {}),
+  })
+  return outcome.status === "delivered" || outcome.status === "queued"
 }
 
 export type CheckInIssueRunResult =

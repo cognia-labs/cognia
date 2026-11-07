@@ -36,6 +36,8 @@ export const AUTOMATED_TURN_PRODUCERS = [
   "external-runtime",
   /** A transcript carried over from another device or app. */
   "history-import",
+  /** An issue wakeup's brief for the run it joins (ADR-0252 §5). */
+  "issue-wakeup",
 ] as const
 
 export type AutomatedTurnProducer = (typeof AUTOMATED_TURN_PRODUCERS)[number]

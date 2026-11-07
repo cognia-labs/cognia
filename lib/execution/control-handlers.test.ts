@@ -812,7 +812,12 @@ describe("steering", () => {
     })
 
     expect(result.accepted).toBe(true)
-    expect(mockSteerSession).toHaveBeenCalledWith("s-1", "focus on the migration first")
+    expect(mockSteerSession).toHaveBeenCalledWith(
+      "s-1",
+      "focus on the migration first",
+      undefined,
+      {}
+    )
     handlers.dispose()
   })
 
@@ -1009,7 +1014,7 @@ describe("delegation controls fan out to the runs carrying the work", () => {
     })
 
     expect(result.accepted).toBe(true)
-    expect(mockSteerSession).toHaveBeenCalledWith("s-child", "start with the tests")
+    expect(mockSteerSession).toHaveBeenCalledWith("s-child", "start with the tests", undefined, {})
     // The delegation's own journal carries the control — the child's does not
     // need to, and re-authorizing against a child with no initiator would have
     // rejected every forwarded control as `forbidden`.

@@ -260,6 +260,8 @@ export function drainSteerVia(sessionId: string, sendRef: React.MutableRefObject
         : {}),
       ...(references?.citations ? { citations: references.citations } : {}),
       ...(references?.promptPreamble ? { promptPreamble: references.promptPreamble } : {}),
+      // A derived brief replays as the automation's turn (ADR-0239).
+      ...(references?.automatedTurn ? { automatedTurn: references.automatedTurn } : {}),
     }).then(() => true)
   })
 }

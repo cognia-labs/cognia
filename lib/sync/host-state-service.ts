@@ -627,11 +627,24 @@ export function createAgentRpcHostStateDispatcher(
         if (dependencies.steer) {
           await dependencies.steer(sessionId, action.action.text, priority, action.actionId)
         } else {
-          const { steerSession } = await import("@/lib/claude/ipc")
-          await steerSession(sessionId, action.action.text, undefined, {
+          // A paired device's follow-up is a person's: the one steer entry,
+          // live (ADR-0252 §5) — the sidecar's input, or the Squad run the
+          // conversation is holding for.
+          const { steerRun } = await import("@/lib/execution/steer")
+          const outcome = await steerRun({
+            target: { sessionId },
+            origin: "person",
+            content: action.action.text,
             priority,
             commandId: action.actionId,
           })
+          if (outcome.status !== "delivered") {
+            throw new Error(
+              outcome.status === "degraded"
+                ? `steer degraded: ${outcome.reason}`
+                : `steer ${outcome.status}`
+            )
+          }
         }
         break
       }

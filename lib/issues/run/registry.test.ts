@@ -678,10 +678,14 @@ describe("wakeup support", () => {
       { issueId: issue.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
       registry
     )
-    const steer = jest.fn(async () => ({ accepted: true }))
+    const steer = jest.fn(async () => true)
     expect(await steerIssueRun(run, "hi", { registry, steer })).toBe(true)
-    expect(steer).toHaveBeenCalledWith("s2", "hi")
-    const refuse = jest.fn(async () => {
+    expect(steer).toHaveBeenCalledWith("s2", "hi", "person")
+    // A wakeup's brief is a derived input (ADR-0252 §5).
+    expect(await steerIssueRun(run, "brief", { registry, steer, origin: "derived" })).toBe(true)
+    expect(steer).toHaveBeenLastCalledWith("s2", "brief", "derived")
+    expect(await steerIssueRun(run, "hi", { registry, steer: async () => false })).toBe(false)
+    const refuse = jest.fn(async (): Promise<boolean> => {
       throw new Error("PII")
     })
     expect(await steerIssueRun(run, "hi", { registry, steer: refuse })).toBe(false)

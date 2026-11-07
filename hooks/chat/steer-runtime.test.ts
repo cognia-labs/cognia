@@ -20,6 +20,10 @@ interface SliceLike {
     replyTo?: { messageId: string; preview: string }
     citations?: ContextRef[]
     promptPreamble?: PromptPreambleSummary
+    origin?: "person" | "derived"
+    derivedSource?: import("@/lib/execution/steer-queue").DerivedSteerSource
+    dedupeKey?: string
+    automatedTurn?: import("@cognia/agent-config-types/automated-turn").AutomatedTurnProducer
   }>
   messages?: UIMessage[]
 }
@@ -54,6 +58,13 @@ const state = {
     const slice = state.sessions[id]
     if (slice) slice.steerQueue = slice.steerQueue.filter((e) => e.id !== entryId)
   }),
+  enqueueSteer: jest.fn((id: string, entry: SliceLike["steerQueue"][number]) => {
+    const { insertSteerEntry } = jest.requireActual<typeof import("@/lib/execution/steer-queue")>(
+      "@/lib/execution/steer-queue"
+    )
+    const slice = (state.sessions[id] ??= { steerQueue: [] })
+    slice.steerQueue = insertSteerEntry(slice.steerQueue, entry)
+  }),
 }
 
 jest.mock("@/stores/chat", () => ({
@@ -73,18 +84,20 @@ import {
   isHeldInBackgroundOnly,
   isSessionOpen,
   liveSessionIds,
+  installChatSessionSteerLane,
   markPendingSteersFailed,
-  mergeSteerWebSearchContexts,
   mergeSteerWebSearchIntoLastSend,
   maybeDrainSteer,
   recordLocalPersonSteer,
   promoteAcceptedSteers,
+  queueDerivedSteer,
   sessionExternalLane,
   sessionStatusOf,
   setSessionExternalLane,
   setSteerMessageState,
   steerArmed,
 } from "./steer-runtime"
+import { __resetSteerForTesting, steerRun } from "@/lib/execution/steer"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { steerMetaOf, type SteerState } from "@/lib/claude/steer"
 import {
@@ -148,13 +161,6 @@ describe("steer web-search context", () => {
       { title: "C", url: "https://c.example", content: "third", score: 0.6 },
     ],
   } satisfies NonNullable<WebSearchContext>
-
-  it("keeps the first provider id and de-duplicates results by URL", () => {
-    expect(mergeSteerWebSearchContexts([first, undefined, second])).toEqual({
-      provider: "tavily",
-      results: [first.results[0], first.results[1], second.results[1]],
-    })
-  })
 
   it("attaches a live-accepted follow-up to the running turn snapshot", () => {
     state.lastSendBySession.s1 = {
@@ -534,7 +540,7 @@ describe("maybeDrainSteer", () => {
     }
     const replay = jest.fn()
     maybeDrainSteer("s1", replay)
-    expect(state.clearSteerQueue).toHaveBeenCalledWith("s1")
+    expect(state.sessions.s1.steerQueue).toEqual([])
     expect(replay).toHaveBeenCalledTimes(1)
     const payload = replay.mock.calls[0][0]
     const text = typeof payload === "string" ? payload : JSON.stringify(payload)
@@ -747,4 +753,116 @@ it("drains full text attachments with aligned provenance and strips raw original
     kind: "document",
   })
   expect(references.attachmentManifest[1]).toMatchObject({ kind: "image", mediaType: "image/png" })
+})
+
+describe("people first (ADR-0252 §5)", () => {
+  afterEach(() => __resetSteerForTesting())
+
+  it("drains every person's follow-up first and keeps the derived ones for the next boundary", () => {
+    state.sessions["s1"] = {
+      steerQueue: [
+        { id: "p1", text: "use the staging db" },
+        { id: "d1", text: "CI failed on lint", origin: "derived", derivedSource: "ci" },
+        { id: "p2", text: "and skip the docs" },
+      ],
+    }
+    const replay = jest.fn()
+    maybeDrainSteer("s1", replay)
+    const payload = replay.mock.calls[0][0] as string
+    expect(payload).toContain("use the staging db")
+    expect(payload).toContain("and skip the docs")
+    expect(payload).not.toContain("CI failed")
+    // A person's turn is not an automation's.
+    expect(replay.mock.calls[0][3]?.automatedTurn).toBeUndefined()
+    expect(state.sessions.s1.steerQueue.map((entry) => entry.id)).toEqual(["d1"])
+  })
+
+  it("drains the derived entries as one brief stamped with their producer", () => {
+    state.sessions["s1"] = {
+      steerQueue: [
+        {
+          id: "d1",
+          text: "CI failed on lint",
+          origin: "derived",
+          derivedSource: "ci",
+          automatedTurn: "issue-wakeup",
+        },
+        { id: "d2", text: "review asked for tests", origin: "derived", derivedSource: "review" },
+      ],
+    }
+    const replay = jest.fn()
+    maybeDrainSteer("s1", replay)
+    expect(replay).toHaveBeenCalledTimes(1)
+    const payload = replay.mock.calls[0][0] as string
+    expect(payload).toContain("[CI] CI failed on lint")
+    expect(payload).toContain("[Review] review asked for tests")
+    expect(payload).not.toContain("By the way (steering)")
+    expect(replay.mock.calls[0][3]).toMatchObject({ automatedTurn: "issue-wakeup" })
+    expect(replay.mock.calls[0][2]).toBeUndefined()
+    expect(state.sessions.s1.steerQueue).toEqual([])
+  })
+
+  it("queues a derived input behind the people, as an automated row", () => {
+    state.sessions["s1"] = { steerQueue: [{ id: "p1", text: "person" }], messages: [] }
+    const entryId = queueDerivedSteer("s1", {
+      text: "Wakeup: comment on MERC-7",
+      source: "wakeup",
+      producer: "issue-wakeup",
+    })
+    expect(state.sessions.s1.steerQueue.map((entry) => entry.id)).toEqual(["p1", entryId])
+    const row = state.sessions.s1.messages!.at(-1)!
+    expect(row.metadata).toMatchObject({
+      steer: { entryId, state: "queued" },
+      automatedTurn: { producer: "issue-wakeup" },
+    })
+    expect(mockPersistMessages).toHaveBeenCalled()
+  })
+
+  it("replaces an older derived input with the same key, bubble and entry", () => {
+    state.sessions["s1"] = { steerQueue: [], messages: [] }
+    const first = queueDerivedSteer("s1", {
+      text: "review v1",
+      source: "review",
+      producer: "background-result",
+      dedupeKey: "pr-7",
+    })
+    const second = queueDerivedSteer("s1", {
+      text: "review v2",
+      source: "review",
+      producer: "background-result",
+      dedupeKey: "pr-7",
+    })
+    expect(state.sessions.s1.steerQueue.map((entry) => entry.id)).toEqual([second])
+    expect(
+      state.sessions.s1.messages!.map((message) => steerMetaOf(message.metadata)?.entryId)
+    ).toEqual([second])
+    expect(first).not.toBe(second)
+  })
+
+  it("registers the chat lane: a derived input to a busy open conversation waits for its boundary", async () => {
+    const uninstall = installChatSessionSteerLane()
+    state.openSessionIds = ["s1"]
+    state.sessions["s1"] = { status: "streaming", steerQueue: [], messages: [] }
+    const outcome = await steerRun({
+      target: { sessionId: "s1" },
+      origin: "derived",
+      content: "Wakeup: comment on MERC-7",
+      derived: { source: "wakeup", producer: "issue-wakeup" },
+    })
+    expect(outcome).toMatchObject({ status: "queued" })
+    expect(state.sessions.s1.steerQueue).toHaveLength(1)
+
+    // Idle: there is no turn to join, and the caller keeps its fallback.
+    state.sessions["s1"].status = "idle"
+    await expect(
+      steerRun({
+        target: { sessionId: "s1" },
+        origin: "derived",
+        content: "again",
+        derived: { source: "wakeup", producer: "issue-wakeup" },
+      })
+    ).resolves.toEqual({ status: "degraded", reason: "no_active_run" })
+    uninstall()
+    state.openSessionIds = []
+  })
 })

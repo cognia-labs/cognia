@@ -75,6 +75,7 @@ import { notifyOverBudgetOnce } from "@/lib/claude/over-budget-toast"
 import { steerBlocksOf, steerTextOf, type SteerMessageMeta } from "@/lib/claude/steer"
 import {
   appendSteerMessage,
+  installChatSessionSteerLane,
   isSessionOpen,
   liveSessionIds,
   markPendingSteersFailed,
@@ -2168,11 +2169,17 @@ export function useClaudeChat() {
           // verdict reached under the old instruction must not auto-approve
           // the retried command under this one. Awaited so the denial lands
           // before the steer text the model reads next.
-          invalidateJudgeContext(sessionId)
-          try {
-            await supersedePendingApprovals(sessionId, { getExecutionHandle })
-          } catch (err) {
-            console.warn("approval supersede failed", err)
+          // An automation's message is a derived input (ADR-0252 §5): it is not
+          // a new instruction, so it supersedes nothing, and it waits for the
+          // turn boundary behind any person's follow-up instead of going live.
+          const derivedProducer = callOptions?.automatedTurn
+          if (!derivedProducer) {
+            invalidateJudgeContext(sessionId)
+            try {
+              await supersedePendingApprovals(sessionId, { getExecutionHandle })
+            } catch (err) {
+              console.warn("approval supersede failed", err)
+            }
           }
 
           // Show it immediately, in the user's own words. The model-facing
@@ -2209,6 +2216,7 @@ export function useClaudeChat() {
           // follow-up waits in the queue and becomes the next turn.
           const fusionTurn = fusionChatTurnActive(sessionId)
           if (
+            !derivedProducer &&
             !fusionTurn &&
             !turnQueued &&
             !externalAgentId &&
@@ -2263,9 +2271,10 @@ export function useClaudeChat() {
           // The lane comes from what THIS session dispatched
           // (`sessionExternalLane`), not the composer's global runtime pick,
           // which in split view describes whichever pane happens to be focused.
-          if (fusionTurn || turnQueued) {
-            // Queued below: a verified run has no live input, and a turn that
-            // has not been admitted has no input open at all.
+          if (derivedProducer || fusionTurn || turnQueued) {
+            // Queued below: a derived input waits for the boundary, a verified
+            // run has no live input, and a turn that has not been admitted has
+            // no input open at all.
           } else if (externalAgentId) {
             // Adapter steering carries text only (`turn/steer` takes a string),
             // so an attachment-only follow-up has to queue on this lane.
@@ -2312,8 +2321,15 @@ export function useClaudeChat() {
               const handle = getExecutionHandle(sessionId)
               if (handle) await handle.steer(content)
               else {
-                const { steerSession } = await import("@/lib/claude/ipc")
-                await steerSession(sessionId, content)
+                // The one steer entry (ADR-0252 §5): the sidecar's streaming
+                // input, or the Squad run this conversation is holding for.
+                const { steerRun } = await import("@/lib/execution/steer")
+                const outcome = await steerRun({
+                  target: { sessionId },
+                  origin: "person",
+                  content,
+                })
+                if (outcome.status !== "delivered") throw new Error(`steer ${outcome.status}`)
               }
               mergeSteerWebSearchIntoLastSend(sessionId, callOptions?.webSearchContext)
               setSteerMessageState(sessionId, entryId, "accepted")
@@ -2341,6 +2357,13 @@ export function useClaudeChat() {
             // only carrier when a remote drain rebuilds the turn.
             ...(steerMentions.length > 0 ? { citations: steerMentions } : {}),
             ...(callOptions?.promptPreamble ? { promptPreamble: callOptions.promptPreamble } : {}),
+            ...(derivedProducer
+              ? {
+                  origin: "derived" as const,
+                  derivedSource: "automation" as const,
+                  automatedTurn: derivedProducer,
+                }
+              : {}),
           })
           return
         }
@@ -6675,6 +6698,10 @@ export function useClaudeChat() {
       window.removeEventListener("cognia:shared-run-completed", listener)
     }
   }, [])
+
+  // The chat lane of the one steer entry: derived inputs (a wakeup, an
+  // automation) wait in a running conversation's queue for its boundary.
+  useEffect(() => installChatSessionSteerLane(), [])
 
   // Background-run result delivery: register the hook's send as the replay
   // channel, and drain pending results whenever a session (re)opens idle —

@@ -25,6 +25,7 @@ import {
   buildSteerPayload,
   steerMetaOf,
   stripSteerPrefix,
+  type SteerMessageMeta,
   type SteerState,
 } from "@/lib/claude/steer"
 import { persistMessages } from "@/lib/db/messages"
@@ -44,8 +45,18 @@ import {
 import { dispatchComposerAppend } from "@/lib/chat/composer-append"
 import { mergeContextRefs } from "@/lib/chat/mentions/merge-refs"
 import { LOCAL_PERSON_RUN, type LocalPersonRun } from "@/lib/execution/acting-authority"
+import {
+  derivedBriefProducer,
+  frameDerivedBrief,
+  mergeSteerWebSearchContexts,
+  takeBoundaryBatch,
+  type DerivedSteerSource,
+  type SteerDrainReferences,
+} from "@/lib/execution/steer-queue"
+import type { AutomatedTurnProducer } from "@cognia/agent-config-types/automated-turn"
+import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
+import { registerSessionSteerLane } from "@/lib/execution/steer"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
-import type { ContextRef } from "@/lib/chat/mentions/types"
 
 const localPersonSteers = new Set<string>()
 export function recordLocalPersonSteer(
@@ -63,27 +74,6 @@ export function recordLocalPersonSteer(
  * ended via interrupt/error (set by `interruptAndSteer`). A natural clean end
  * always drains regardless of this set. */
 export const steerArmed = new Set<string>()
-
-type WebSearchContext = NonNullable<SendOptions["webSearchContext"]>
-
-/** Merge sources from several pre-searched follow-ups without duplicating URLs. */
-export function mergeSteerWebSearchContexts(
-  contexts: Array<SendOptions["webSearchContext"]>
-): SendOptions["webSearchContext"] {
-  const available = contexts.filter((context): context is WebSearchContext => Boolean(context))
-  if (available.length === 0) return undefined
-  const byUrl = new Map<string, WebSearchContext["results"][number]>()
-  for (const context of available) {
-    for (const result of context.results) {
-      if (!byUrl.has(result.url)) byUrl.set(result.url, result)
-    }
-  }
-  // `provider` is a single provider id everywhere else that writes it — the UI
-  // renders it as one ("via {provider}") and callers compare it to a known id.
-  // Joining several into "tavily, brave" produced a value that is not an id at
-  // all, so keep the first contributor's rather than inventing a compound one.
-  return { provider: available[0].provider, results: [...byUrl.values()] }
-}
 
 /** Attach a live-accepted follow-up's sources to the turn that is already running. */
 export function mergeSteerWebSearchIntoLastSend(
@@ -468,23 +458,6 @@ export async function putBackPendingSteers(
   return restored.length
 }
 
-/**
- * The reference fields a drained steer turn carries: every queued entry's
- * citations merged into one list, and their envelope summaries folded into
- * one — the drained payload is a single turn, so it claims every record any
- * of its entries cited.
- *
- * The replay needs these on a REMOTE lane (a companion's `room_send` drain),
- * where the host writes the persisted row from what the RPC carries. Locally
- * each entry's optimistic bubble already holds the same metadata.
- */
-export interface SteerDrainReferences {
-  localAuthorization?: LocalPersonRun
-  attachmentManifest?: AttachmentManifestEntry[]
-  citations?: ContextRef[]
-  promptPreamble?: PromptPreambleSummary
-}
-
 function mergeSteerReferences(
   queue: readonly SteerEntry[],
   sessionId: string
@@ -564,9 +537,13 @@ export function maybeDrainSteer(
   setSessionExternalLane(sessionId, null)
   // A live-accepted steer rode along inside the turn that just ended.
   promoteAcceptedSteers(sessionId)
-  const queue = useChatStore.getState().sessions[sessionId]?.steerQueue ?? []
-  if (queue.length === 0) return
-  useChatStore.getState().clearSteerQueue(sessionId)
+  // People first (ADR-0252 §5): a boundary takes every person's follow-up,
+  // and the derived entries wait for the boundary after that turn. With no
+  // person waiting it takes the derived ones, as one brief.
+  const taken = takeBoundaryBatch(useChatStore.getState().sessions[sessionId]?.steerQueue ?? [])
+  if (!taken) return
+  const queue = taken.batch
+  for (const entry of queue) useChatStore.getState().removeSteerEntry(sessionId, entry.id)
   // The replay turn carries these entries to the model, so they are applied as
   // of now. Flip before dispatching: `replay` is synchronous into `send`, which
   // persists the transcript, and a later flip would race that write.
@@ -576,10 +553,14 @@ export function maybeDrainSteer(
   }
   // The drained turn is one prompt, so it can answer one message: the first
   // queued reply target wins, the way the first web-search provider does.
-  const payload = buildSteerPayload(queue)
+  const payload = taken.origin === "derived" ? derivedBriefPayload(queue) : buildSteerPayload(queue)
   const webSearchContext = mergeSteerWebSearchContexts(queue.map((entry) => entry.webSearchContext))
-  const replyTo = queue.find((entry) => entry.replyTo)?.replyTo
-  const references = mergeSteerReferences(queue, sessionId)
+  const replyTo =
+    taken.origin === "person" ? queue.find((entry) => entry.replyTo)?.replyTo : undefined
+  const merged = mergeSteerReferences(queue, sessionId)
+  // A derived brief is an automation's turn, never the person's instruction.
+  const references: SteerDrainReferences | undefined =
+    taken.origin === "derived" ? { ...merged, automatedTurn: derivedBriefProducer(queue) } : merged
   const outcome = replay(payload, webSearchContext, replyTo, references)
   if (awaitAdmission) {
     const settle = (accepted: boolean) =>
@@ -605,6 +586,80 @@ export function maybeDrainSteer(
   )
 }
 
+/** The replay payload of a derived batch: one brief, attachments ahead of it. */
+function derivedBriefPayload(entries: readonly SteerEntry[]): SendContent {
+  const brief = frameDerivedBrief(
+    entries.map((entry) => ({
+      ...(entry.derivedSource ? { source: entry.derivedSource } : {}),
+      text: entry.text,
+    }))
+  )
+  const blocks = entries.flatMap((entry) => entry.blocks ?? [])
+  return blocks.length === 0 ? brief : [...blocks, { type: "text", text: brief }]
+}
+
+/**
+ * Hold a derived input for this session's next turn boundary (ADR-0252 §5).
+ *
+ * Shown at once as an automated row in the transcript, the same way a queued
+ * follow-up is, so the person sees what is waiting; stamped with its producer
+ * so it is never read as the person's instruction (ADR-0239). A newer input
+ * with the same `dedupeKey` replaces the older one, bubble and entry. Returns
+ * the entry id.
+ */
+export function queueDerivedSteer(
+  sessionId: string,
+  input: {
+    text: string
+    source: DerivedSteerSource
+    producer: AutomatedTurnProducer
+    dedupeKey?: string
+  }
+): string {
+  const store = useChatStore.getState()
+  if (input.dedupeKey) {
+    const superseded = (store.sessions[sessionId]?.steerQueue ?? []).filter(
+      (entry) => entry.origin === "derived" && entry.dedupeKey === input.dedupeKey
+    )
+    for (const entry of superseded) discardPendingSteer(sessionId, entry.id)
+  }
+  const entryId = crypto.randomUUID()
+  const steer: SteerMessageMeta = { entryId, state: "queued" }
+  appendSteerMessage(sessionId, {
+    id: crypto.randomUUID(),
+    role: "user",
+    parts: [{ type: "text", text: input.text }],
+    metadata: { steer, ...automatedTurnMetadata(input.producer) },
+  } as UIMessage)
+  useChatStore.getState().enqueueSteer(sessionId, {
+    id: entryId,
+    text: input.text,
+    origin: "derived",
+    derivedSource: input.source,
+    automatedTurn: input.producer,
+    ...(input.dedupeKey ? { dedupeKey: input.dedupeKey } : {}),
+  })
+  return entryId
+}
+
 function markDrainedFailed(sessionId: string, drained: ReadonlySet<string>): void {
   patchSteerMessages(sessionId, (meta) => drained.has(meta.entryId), { state: "failed" })
+}
+
+/**
+ * Register this renderer's chat lane with the one steer entry (ADR-0252 §5):
+ * it says whether a turn runs in a conversation this renderer drives, and it
+ * holds derived inputs in the conversation's queue for the turn boundary,
+ * where the settle drains them as one brief after any person's follow-up. A
+ * conversation this renderer does not have open is unknown to it.
+ */
+export function installChatSessionSteerLane(): () => void {
+  return registerSessionSteerLane({
+    busy: (sessionId) => {
+      if (!isSessionOpen(sessionId)) return undefined
+      const status = sessionStatusOf(sessionId)
+      return status === "streaming" || status === "awaiting_approval"
+    },
+    queueDerived: (sessionId, input) => queueDerivedSteer(sessionId, input),
+  })
 }

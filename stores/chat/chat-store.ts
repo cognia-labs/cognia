@@ -34,6 +34,13 @@ import {
   type ChatTurnOutcomeState,
 } from "@/lib/chat/continuation"
 import { getExecutionBroker, DEFAULT_AI_TURN_LIMIT } from "@/lib/execution/broker"
+import {
+  insertSteerEntry,
+  isDerivedEntry,
+  type DerivedSteerSource,
+  type SteerOrigin,
+} from "@/lib/execution/steer-queue"
+import type { AutomatedTurnProducer } from "@cognia/agent-config-types/automated-turn"
 import type { ChatStatus, PermissionMode } from "@cognia/plugin-contract/stores/chat/chat-store"
 export type { ChatStatus, PermissionMode } from "@cognia/plugin-contract/stores/chat/chat-store"
 
@@ -72,6 +79,18 @@ export type SteerEntry = {
   citations?: ContextRef[]
   /** What the follow-up's context envelope carried; merged on drain. */
   promptPreamble?: PromptPreambleSummary
+  /**
+   * Who it came from (ADR-0252 §5). Absent on a person's follow-up. A derived
+   * entry (an automation, a wakeup, a review) always waits behind people and
+   * drains in its own boundary as one brief (`lib/execution/steer-queue.ts`).
+   */
+  origin?: SteerOrigin
+  /** Derived only: which kind of update, the label of its line in the brief. */
+  derivedSource?: DerivedSteerSource
+  /** Derived only: a newer entry with the same key replaces the older one. */
+  dedupeKey?: string
+  /** Derived only: the producer the drained brief is stamped with (ADR-0239). */
+  automatedTurn?: AutomatedTurnProducer
 }
 
 /**
@@ -1302,7 +1321,9 @@ export const useChatStore = create<ChatState>((set) => ({
       })
     ),
   enqueueSteer: (id, entry) =>
-    set((s) => patchSliceState(s, id, { steerQueue: [...sliceForId(s, id).steerQueue, entry] })),
+    set((s) =>
+      patchSliceState(s, id, { steerQueue: insertSteerEntry(sliceForId(s, id).steerQueue, entry) })
+    ),
   removeSteerEntry: (id, entryId) =>
     set((s) => {
       const queue = sliceForId(s, id).steerQueue
@@ -1323,6 +1344,9 @@ export const useChatStore = create<ChatState>((set) => ({
       if (from < 0) return s
       const to = from + delta
       if (to < 0 || to >= queue.length || to === from) return s
+      // People stay ahead of derived entries: a move only reorders within
+      // its own group (ADR-0252 §5).
+      if (isDerivedEntry(queue[from]) !== isDerivedEntry(queue[to])) return s
       const next = [...queue]
       const [moved] = next.splice(from, 1)
       next.splice(to, 0, moved)
