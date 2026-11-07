@@ -11,6 +11,7 @@ const ROOT = join(__dirname, "..", "..")
 const REVIEWED_WRITES: Record<string, number> = {
   "components/chat/message-parts/async-questions-card.tsx": 1,
   "components/settings/agent-runtime/sdk-session-manager.tsx": 1,
+  "lib/background-tasks/host-delivery-lane.ts": 1,
   "hooks/chat/claude-chat-events.ts": 8,
   "hooks/chat/plan-turn-settle.ts": 1,
   "hooks/chat/router-fusion-chat-turn.ts": 2,
@@ -187,7 +188,14 @@ it("pins each Host producer and every canonical persistence form to marking", ()
     "lib/sync/host-state-service.ts": [
       "bindToolCallRun(sessionId, prepared.turnId, receipt.runId)",
     ],
-    "hooks/chat/background-result-runtime.ts": ["backgroundResultRunIds", "map(jobExecutionRunId)"],
+    "lib/background-tasks/result-delivery.ts": [
+      "backgroundResultRunIds",
+      "map(childJobExecutionRunId)",
+    ],
+    "lib/background-tasks/host-delivery-lane.ts": [
+      "bindPersonalMessageRun(messageId, runIds)",
+      'automatedTurnMetadata("background-result")',
+    ],
     "lib/claude/adapter.ts": ["remoteDocumentPersonalMarks(manifest)"],
     "lib/connectors/runtime.ts": ["personalMarkVersion: 1"],
     "lib/connectors/inbox-writes/local.ts": ["personalMarkVersion: 1"],
