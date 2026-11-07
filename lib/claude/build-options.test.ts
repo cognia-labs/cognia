@@ -699,7 +699,7 @@ describe("resolveSendOptions — workflow skills guarantee the typed runner tool
     const names = toolNames(opts)
     expect(names).toContain("wf_run_workflow_typed")
     const entry = (opts.pluginTools ?? []).find((t) => t.name === "wf_run_workflow_typed")
-    expect(entry?.pluginId).toBe("cognia-workflow-ai")
+    expect(entry?.pluginId).toBe("cognia-workflow-builtin")
   })
 
   it("does not duplicate the runner when the workflow-ai plugin already manifests it", async () => {
@@ -5838,7 +5838,7 @@ describe("resolveSendOptions — the ultracode thinking tier", () => {
 
   it("adds the shared runner even when the workflow plugin contributes nothing", async () => {
     // The plugin is disabled, so its own registration is absent; the tier's
-    // guarantee still holds through the `plugin-tool-ipc.ts` fallback executor.
+    // guarantee still holds through the workflow module's own tool.
     mBuildManifest.mockReturnValue([unrelatedTool])
     const opts = await resolveSendOptions({
       session: ultracodeSession(),

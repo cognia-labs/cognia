@@ -46,7 +46,7 @@
  */
 
 import type { ComponentType } from "react"
-import type { AppSettings, Character, ChatSession } from "@cognia/agent-config-types"
+import type { AppSettings, Character, ChatSession, Skill } from "@cognia/agent-config-types"
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 
 import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
@@ -299,6 +299,12 @@ export interface ToolSurfaceContext extends CapabilityContributionContext {
   host: ToolSurfaceHost
   /** The run's workspace (`resolveSessionWorkspace`), not whichever one is on screen. */
   activeProject: Readonly<Project> | null
+  /**
+   * The skills the run resolved (the agent's and the conversation's, after
+   * disables and a grant's removals), by id and kind; absent when the caller
+   * resolved none.
+   */
+  skills?: readonly Pick<Skill, "id" | "kind">[]
   /**
    * The session state one of this module's context contributions left for
    * the run's conversation at this resolution (`ContextSection.sessionState`),

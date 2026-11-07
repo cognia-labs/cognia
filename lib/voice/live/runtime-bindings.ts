@@ -68,7 +68,6 @@ const NON_CANCELLABLE_LIVE_VOICE_TOOLS = new Set([
   "Skill",
   "load_skill",
   "load_skill_resource",
-  "wf_run_workflow_typed",
   "dispatch_agent",
   "Task",
   // Module-contributed tools whose runner does not honour the signal.

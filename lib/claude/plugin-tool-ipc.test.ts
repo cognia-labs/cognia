@@ -25,6 +25,7 @@ import {
   toolFamily as mediaToolFamily,
 } from "@/lib/media/agent-tools"
 import { toolFamily as artifactToolFamily } from "@/lib/artifacts/agent-tools"
+import { toolFamily as workflowToolFamily } from "@/lib/workflow/agent-tools"
 import {
   __setSpawnTaskToolDepsForTesting,
   toolFamily as spawnTaskToolFamily,
@@ -185,8 +186,8 @@ const mockResolveSkillContext = jest.fn(async (sessionId: string) => ({ sessionI
 jest.mock("@/lib/skills/built-in/context", () => ({
   resolveBuiltInSkillContext: (sessionId: string) => mockResolveSkillContext(sessionId),
 }))
-// Typed workflow runner fallback — the real core drags the orchestrator +
-// Dexie in; the IPC suite only pins the ROUTING (name → shared executor).
+// Typed workflow runner — the real core drags the orchestrator + Dexie in;
+// the IPC suite only pins the ROUTING (name → the workflow module's runner).
 const mockExecuteRunWorkflowTyped = jest.fn()
 jest.mock("@/lib/workflow/publish/run-workflow-typed-tool", () => ({
   executeRunWorkflowTyped: (args: Record<string, unknown>) => mockExecuteRunWorkflowTyped(args),
@@ -896,14 +897,16 @@ describe("handlePluginToolExec — unified invokePluginTool path", () => {
   })
 })
 
-// ── Typed workflow runner fallback ─────────────────────────────────────
-describe("handlePluginToolExec — workflow runner fallback", () => {
+// ── Typed workflow runner (the workflow module's tool) ─────────────────
+describe("handlePluginToolExec — workflow runner", () => {
+  beforeEach(() => useModuleTools("workflow", workflowToolFamily))
   afterEach(() => {
     __setPluginToolResolverForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
     mockExecuteRunWorkflowTyped.mockReset()
   })
 
-  it("routes wf_run_workflow_typed to the shared lib core when the plugin registry misses", async () => {
+  it("routes wf_run_workflow_typed to the workflow module when the plugin registry misses", async () => {
     __setPluginToolResolverForTesting({ getTool: () => undefined })
     const ok = { ok: true, workflowId: "wf1", workflowName: "X", runId: "r1", output: 42 }
     mockExecuteRunWorkflowTyped.mockResolvedValue(ok)

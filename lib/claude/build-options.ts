@@ -167,6 +167,8 @@ import {
 import { isLocalProvider } from "@cognia/provider-core/providers/local-providers"
 import { modelSupportsEffort } from "@/lib/ai/reasoning-capability"
 import { isUltracodeLevel, resolveThinkingLevel } from "@/lib/ai/thinking-level"
+import { WORKFLOW_AI_PLUGIN_ID } from "@cognia/plugin-contract/lib/workflow/publish/runner-tool"
+import { loadPort } from "@/lib/modules/ports"
 import { resolveCommandcodeVaultCredential } from "@/lib/subscription/commandcode/chat-bridge"
 import { getSubscriptionProvider } from "@/lib/subscription/core/provider-registry"
 import { resolveManagedSubscriptionCredential } from "@/lib/subscription/core/managed-key-credential"
@@ -468,56 +470,6 @@ async function resolveSummaryProviderForCompaction(args: {
   }
 
   return null
-}
-
-/**
- * Build the workflow-editor system-prompt snapshot block.
- *
- * Trimmed to <3KB so we don't blow the system-prompt budget on a
- * 200-node graph: only the envelope, node count, selection, and (for
- * up to 12 selected nodes) per-node detail. The agent gets the full
- * picture via wf_read_graph when it needs it.
- */
-function buildWorkflowSnapshotBlock(
-  workflowId: string,
-  s: {
-    baseWorkflow: { id: string; name?: string; description?: string }
-    nodes: ReadonlyArray<{ id: string; data: { kind: string; label: string } }>
-    edges: ReadonlyArray<unknown>
-    selectedNodeIds: string[]
-    runStatusByStepId: Record<string, string>
-    validationByStepId: Record<string, unknown>
-  }
-): string {
-  const lines: string[] = []
-  lines.push("# Currently-open workflow")
-  lines.push(`- workflowId: ${workflowId}`)
-  lines.push(`- name: ${s.baseWorkflow.name ?? "(untitled)"}`)
-  if (s.baseWorkflow.description) {
-    lines.push(`- description: ${s.baseWorkflow.description}`)
-  }
-  lines.push(`- nodes: ${s.nodes.length}; edges: ${s.edges.length}`)
-  const failingCount = Object.keys(s.validationByStepId).length
-  if (failingCount > 0) lines.push(`- nodes failing validation: ${failingCount}`)
-  const runningCount = Object.values(s.runStatusByStepId).filter((v) => v === "running").length
-  if (runningCount > 0) lines.push(`- nodes currently running: ${runningCount}`)
-  if (s.selectedNodeIds.length > 0) {
-    lines.push(`- selection: ${s.selectedNodeIds.length} node(s)`)
-    const detailLimit = 12
-    const detailIds = s.selectedNodeIds.slice(0, detailLimit)
-    for (const id of detailIds) {
-      const node = s.nodes.find((n) => n.id === id)
-      if (node) lines.push(`  - ${id} :: ${node.data.kind} :: ${node.data.label}`)
-    }
-    if (s.selectedNodeIds.length > detailLimit) {
-      lines.push(`  - …and ${s.selectedNodeIds.length - detailLimit} more`)
-    }
-  }
-  lines.push("")
-  lines.push(
-    "Use the wf_* MCP tools to read, propose reviewed graph changes, validate, and run this workflow. Route every graph mutation or layout change through wf_propose_batch; ALWAYS call wf_read_graph before referencing any node id you did not just propose."
-  )
-  return lines.join("\n")
 }
 
 export interface BuildOptionsContext {
@@ -2733,6 +2685,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     prompts: { snapshot: promptSnapshot, context: promptContext },
     host: toolSurfaceHost(),
     activeProject: ctx.activeProject ?? null,
+    skills: skills.map(({ id, kind }) => ({ id, kind })),
   })
   const mergedRuleset = mergeRulesets(
     contributedTools.ruleset,
@@ -3477,59 +3430,26 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         })),
       ]
       // Graph-bodied skills (`kind:"workflow"`) instruct the model to call the
-      // shared typed runner — that tool must therefore BE in the session
-      // whenever such a skill is active, even when the `cognia-workflow-ai`
-      // plugin is disabled (its registration normally provides it) or when
-      // semantic pruning would have dropped it. Appended AFTER pruning so it
-      // can't be pruned away; execution falls back to
-      // `lib/workflow/publish/run-workflow-typed-tool.ts` via
-      // `plugin-tool-ipc.ts` when the plugin isn't there to resolve it.
-      if (skills.some((s) => s.kind === "workflow")) {
-        const {
-          WORKFLOW_RUNNER_TOOL_NAME,
-          WORKFLOW_RUNNER_TOOL_DEFINITION,
-          WORKFLOW_AI_PLUGIN_ID,
-        } = await import("@/lib/workflow/publish/runner-tool")
-        if (!combined.some((entry) => entry.name === WORKFLOW_RUNNER_TOOL_NAME)) {
-          combined.push({
-            name: WORKFLOW_RUNNER_TOOL_NAME,
-            description: WORKFLOW_RUNNER_TOOL_DEFINITION.description,
-            jsonSchema: WORKFLOW_RUNNER_TOOL_DEFINITION.parametersSchema,
-            pluginId: WORKFLOW_AI_PLUGIN_ID,
-          })
-        }
-      }
+      // shared typed runner; the workflow module contributes it (below, with
+      // the module tools) when the `cognia-workflow-ai` plugin's own entry is
+      // not here, outside semantic pruning.
       // `ultracode` is the composite top thinking tier: `"xhigh"` effort (which
       // the tier persists as `ChatSession.effort`, so the effort chain below
       // needs no special case) PLUS the dynamic-workflow `wf_*` suite. The CLI
       // expresses that second half through its `config.pluginTools` gate; this
       // is the desktop/web equivalent.
       //
-      // Two steps, both appended AFTER pruning so neither can be pruned away:
-      // re-attach the workflow plugin's own entries when it IS enabled, and
-      // fall back to the shared typed runner when it is not — the same seam,
-      // and the same `plugin-tool-ipc.ts` executor, as the graph-bodied-skills
-      // branch above. Choosing the tier is the opt-in; nothing here overrides a
+      // Re-attach the workflow plugin's own entries when it IS enabled, AFTER
+      // pruning so none can be pruned away. When it is not, the workflow
+      // module contributes the typed runner on its own (with the module tools
+      // below). Choosing the tier is the opt-in; nothing here overrides a
       // per-character `disablePluginTools` (we are already inside that guard).
       if (isUltracodeLevel(resolveThinkingLevel(session))) {
-        const {
-          WORKFLOW_RUNNER_TOOL_NAME,
-          WORKFLOW_RUNNER_TOOL_DEFINITION,
-          WORKFLOW_AI_PLUGIN_ID,
-        } = await import("@/lib/workflow/publish/runner-tool")
         const present = new Set(combined.map((entry) => entry.name))
         for (const entry of unprunedManifest) {
           if (entry.pluginId !== WORKFLOW_AI_PLUGIN_ID || present.has(entry.name)) continue
           present.add(entry.name)
           combined.push(entry)
-        }
-        if (!present.has(WORKFLOW_RUNNER_TOOL_NAME)) {
-          combined.push({
-            name: WORKFLOW_RUNNER_TOOL_NAME,
-            description: WORKFLOW_RUNNER_TOOL_DEFINITION.description,
-            jsonSchema: WORKFLOW_RUNNER_TOOL_DEFINITION.parametersSchema,
-            pluginId: WORKFLOW_AI_PLUGIN_ID,
-          })
         }
       }
       if (combined.length > 0) opts.pluginTools = combined
@@ -4510,56 +4430,29 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     } catch (err) {
       console.warn("workflow-editor subagent registration failed:", err)
     }
-    // Sessions for this surface are minted with id = `workflow:${workflowId}`.
-    // Extract the workflow id and look up the registered editor store so we
-    // can build a snapshot. If no editor is open (rare race during nav),
-    // skip the snapshot block — the agent will discover the graph via its
-    // first wf_read_graph tool call.
-    const workflowId = session.id.startsWith("workflow:")
-      ? session.id.slice("workflow:".length)
-      : undefined
-    let snapshot: string | null = null
-    if (workflowId) {
-      try {
-        const { getEditorStore } = await import("@/lib/workflow/editor/store-registry")
-        const store = getEditorStore(workflowId)
-        if (store) {
-          const s = store.getState()
-          snapshot = buildWorkflowSnapshotBlock(workflowId, s)
-        }
-      } catch (err) {
-        console.warn("workflow-editor snapshot block failed:", err)
-      }
-    }
+    // The Workflow Copilot itself is the workflow module's
+    // (`workflow-editor-session` port): its identity, the open workflow's
+    // snapshot, the strict tool lists and the one directory Read may reach.
+    // Overwrite, not union: the additive stack above has already run
+    // (character prompt, skills, mode, A2UI capability prompt, goal, twin
+    // runtime), and for this session kind every one of those layers gives
+    // way to the Copilot. With no provider the session keeps that stack.
     try {
-      const {
-        buildWorkflowCopilotPrompt,
-        WORKFLOW_COPILOT_ALLOWED_TOOLS,
-        WORKFLOW_COPILOT_DISALLOWED_TOOLS,
-      } = await import("@/lib/workflow/editor/copilot-prompts")
-      // Overwrite — not union. The additive stack above has already run
-      // (character prompt, skills, mode, A2UI capability prompt, goal,
-      // twin runtime) but for this session kind we deliberately drop
-      // every one of those layers in favour of the Workflow Copilot
-      // identity.
-      opts.systemPrompt = buildWorkflowCopilotPrompt(null)
-      opts.appendSystemPrompt = snapshot ?? undefined
-      opts.allowedTools = [...WORKFLOW_COPILOT_ALLOWED_TOOLS]
-      opts.disallowedTools = [...WORKFLOW_COPILOT_DISALLOWED_TOOLS]
-      // Scope the built-in Read tool to the copilot-templates directory
-      // only. The IDENTITY section of the prompt promises Read access is
-      // limited; without this clamp the SDK would otherwise inherit the
-      // additive stack's referencedPaths (which can include any user-
-      // @-referenced folder). Overwriting `additionalDirectories` is the
-      // single source of truth: anything under `lib/workflow/copilot-
-      // templates/` (relative to the sidecar's cwd) is readable, nothing
-      // else is. In dev / packaged Tauri the sidecar cwd is the repo root,
-      // so the relative path resolves consistently across platforms.
-      opts.additionalDirectories = ["lib/workflow/copilot-templates"]
-      // External MCP servers are character-scope; the Copilot operates
-      // purely through the workflow-ai plugin tools (already populated on
-      // `opts.pluginTools` above by `buildPluginToolsManifest()`).
-      delete opts.mcpServers
+      const editorSession = await loadPort("workflow-editor-session")
+      if (editorSession) {
+        const setup = await editorSession.prepare(session.id)
+        opts.systemPrompt = setup.systemPrompt
+        opts.appendSystemPrompt = setup.appendSystemPrompt
+        opts.allowedTools = [...setup.allowedTools]
+        opts.disallowedTools = [...setup.disallowedTools]
+        opts.additionalDirectories = [...setup.additionalDirectories]
+        // External MCP servers are character-scope; the Copilot operates
+        // purely through the workflow-ai plugin tools (already populated on
+        // `opts.pluginTools` above by `buildPluginToolsManifest()`).
+        delete opts.mcpServers
+      } else {
+        console.warn("workflow-editor copilot not installed: no module provides it")
+      }
     } catch (err) {
       console.warn("workflow-editor copilot prompt installation failed:", err)
     }

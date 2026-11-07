@@ -101,7 +101,27 @@ export default defineHostModule({
   // knowledge-base generations goes through `knowledge-base-revisions`, which
   // fails the deployment when no module provides it.
   requires: ["ocr", "knowledge-base-revisions?"],
+  // The Workflow Copilot a conversation in the editor runs as, which the send
+  // resolver asks for by the session kind.
+  provides: [{ port: "workflow-editor-session", load: () => import("./ports/editor-session") }],
   // The AI nodes' prompts and the editor Copilot's identity, quick actions and
   // slash-command turns.
   prompts: () => import("./prompts"),
+  // The typed runner (`./agent-tools.ts`), offered to a run with a
+  // graph-bodied skill or at the ultracode tier. It stands in for the
+  // `cognia-workflow-ai` plugin's own registration, which answers first when
+  // it exists (`precedence: "fallback"`). It never had a tier of its own, so
+  // the run's approval decides; it starts a workflow run and takes no cancel
+  // signal.
+  tools: {
+    declare: {
+      wf_run_workflow_typed: {
+        consent: "default",
+        effect: "write",
+        cancellable: false,
+        precedence: "fallback",
+      },
+    },
+    load: () => import("./agent-tools"),
+  },
 })

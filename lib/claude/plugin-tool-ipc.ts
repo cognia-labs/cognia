@@ -28,7 +28,6 @@ import {
   beginOutboundToolExecution,
   endOutboundToolExecution,
 } from "@/lib/policy/action-review/authorized-tool-calls"
-import { WORKFLOW_RUNNER_TOOL_NAME } from "@/lib/workflow/publish/runner-tool"
 import { findContributedTool, runContributedTool } from "./tool-contributions"
 import type { DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { ASK_USER_TOOL_NAME } from "./ask-user-tool"
@@ -553,18 +552,6 @@ async function runPluginToolExec(
     // registry did not resolve: run the module's own.
     if (contributed) {
       const result = await runModuleToolCall(contributed, request)
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    // ── Typed workflow runner fallback ─────────────────────────────────
-    // Graph-bodied skills (`kind:"workflow"`) point the model at the shared
-    // runner; `build-options.ts` manifests it even when the workflow-ai
-    // plugin is disabled, so resolution through the plugin registry can
-    // legitimately miss. Execute the shared lib core directly — same code
-    // the plugin registration wraps.
-    if (request.name === WORKFLOW_RUNNER_TOOL_NAME) {
-      const { executeRunWorkflowTyped } =
-        await import("@/lib/workflow/publish/run-workflow-typed-tool")
-      const result = await executeRunWorkflowTyped(request.args)
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── ADR-0026 — built-in skill fallback ────────────────────────────
