@@ -38,7 +38,50 @@ beforeEach(() => {
   useSubagentRuntimeStore.setState((s) => {
     const seeded: Record<string, SubAgentTemplate> = {}
     for (const t of BUILT_IN_SUBAGENT_TEMPLATES) seeded[t.id] = t
-    return { ...s, templates: seeded, subAgents: {} }
+    return { ...s, templates: seeded, subAgents: {}, runs: {} }
+  })
+})
+
+describe("subagent-runtime-store — the run is the status (ADR-0252 §2)", () => {
+  it("takes a run row's status over what the engine reported", () => {
+    snapshot().upsert(makeSubAgent({ status: "running" }))
+    snapshot().applyRuns({ "sa-1": { status: "failed", endedAt: 3000 } })
+    expect(snapshot().subAgents["sa-1"]).toMatchObject({
+      status: "failed",
+      completedAt: new Date(3000),
+    })
+    // A later engine report cannot move it off the run's status.
+    snapshot().setStatus("sa-1", "completed")
+    expect(snapshot().subAgents["sa-1"].status).toBe("failed")
+    snapshot().upsert(makeSubAgent({ status: "running" }))
+    expect(snapshot().subAgents["sa-1"].status).toBe("failed")
+  })
+
+  it("keeps a timeout the engine reported when the run failed", () => {
+    snapshot().upsert(makeSubAgent({ status: "timeout" }))
+    snapshot().applyRuns({ "sa-1": { status: "failed" } })
+    expect(snapshot().subAgents["sa-1"].status).toBe("timeout")
+  })
+
+  it("reads a run that is waiting or paused as waiting, with no completion time", () => {
+    snapshot().upsert(makeSubAgent({ status: "completed", completedAt: new Date(1) }))
+    snapshot().applyRuns({ "sa-1": { status: "paused" } })
+    expect(snapshot().subAgents["sa-1"]).toMatchObject({ status: "waiting" })
+    expect(snapshot().subAgents["sa-1"].completedAt).toBeUndefined()
+  })
+
+  it("leaves an entry with no run row to its engine", () => {
+    snapshot().upsert(makeSubAgent({ status: "running" }))
+    snapshot().applyRuns({ "sa-1": undefined })
+    snapshot().setStatus("sa-1", "cancelled")
+    expect(snapshot().subAgents["sa-1"].status).toBe("cancelled")
+  })
+
+  it("drops a removed entry's run with it", () => {
+    snapshot().upsert(makeSubAgent())
+    snapshot().applyRuns({ "sa-1": { status: "running" } })
+    snapshot().remove("sa-1")
+    expect(snapshot().runs["sa-1"]).toBeUndefined()
   })
 })
 

@@ -4,7 +4,10 @@
  * Aborts the run's controller (registered by `dispatch-agent-handler`), also
  * cancels the background-run promise when the run was detached, and
  * marks the runtime-store node `cancelled` so the chat card reflects the action
- * after its durable receipt (the terminal handler is idempotent).
+ * after its durable receipt (the terminal handler is idempotent). For a
+ * dispatched run that mark is only the engine's report: the store keeps the
+ * status its run row settles to (ADR-0252 §2). An in-turn SDK `Task` has no
+ * row, so the mark is its status.
  */
 
 import { requestCancelSubagentRunAndWait } from "./subagent-cancel-registry"

@@ -85,6 +85,31 @@ jest.mock("@/lib/db/sessions", () => ({ getSession: (id: string) => getSession(i
 
 const toastError = jest.fn()
 jest.mock("sonner", () => ({ toast: { error: (m: string) => toastError(m) } }))
+// A live query that resolves its query once per dependency change (no Dexie).
+jest.mock("@/hooks/data/use-client-live-query", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const React = require("react") as typeof import("react")
+  return {
+    useClientLiveQuery: <T,>(query: () => Promise<T> | T, deps: unknown[]) => {
+      const [value, setValue] = React.useState<T | undefined>(undefined)
+      React.useEffect(() => {
+        let alive = true
+        void Promise.resolve(query()).then((next) => {
+          if (alive) setValue(next)
+        })
+        return () => {
+          alive = false
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, deps)
+      return value
+    },
+  }
+})
+const getExecutionRun = jest.fn(async (_id: string): Promise<unknown> => undefined)
+jest.mock("@/lib/db/execution-runs", () => ({
+  getExecutionRun: (id: string) => getExecutionRun(id),
+}))
 
 const basePart: SubagentPartType = {
   type: "subagent",
@@ -120,7 +145,9 @@ function makeSubAgent(overrides: Partial<SubAgent> = {}): SubAgent {
 }
 
 beforeEach(() => {
-  useSubagentRuntimeStore.setState((s) => ({ ...s, subAgents: {} }))
+  useSubagentRuntimeStore.setState((s) => ({ ...s, subAgents: {}, runs: {} }))
+  getExecutionRun.mockReset()
+  getExecutionRun.mockResolvedValue(undefined)
   cancelSubagentRun.mockClear()
 })
 
@@ -130,6 +157,22 @@ describe("SubagentPart", () => {
     const root = screen.getByTestId("subagent-part-sa-1")
     expect(root.dataset.status).toBe("running")
     expect(screen.getByText("Researcher")).toBeInTheDocument()
+  })
+
+  // After a reload the store is empty and the snapshot was taken mid-run.
+  it("follows the run row when there is no live entry", async () => {
+    getExecutionRun.mockResolvedValue({ status: "cancelled", endedAt: basePart.startedAt + 2000 })
+    render(<SubagentPart part={basePart} />)
+    await waitFor(() =>
+      expect(screen.getByTestId("subagent-part-sa-1").dataset.status).toBe("cancelled")
+    )
+    expect(getExecutionRun).toHaveBeenCalledWith("execution:job:sa-1")
+  })
+
+  it("does not read the run row while a live entry is present", () => {
+    useSubagentRuntimeStore.getState().upsert(makeSubAgent({ status: "running" }))
+    render(<SubagentPart part={basePart} />)
+    expect(getExecutionRun).not.toHaveBeenCalled()
   })
 
   it("uses the live store value for status + progress when present", () => {

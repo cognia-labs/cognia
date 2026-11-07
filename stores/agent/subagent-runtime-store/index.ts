@@ -11,17 +11,22 @@
  *    create from scratch. Built-ins are read-only — `updateTemplate` and
  *    `deleteTemplate` refuse on `isBuiltIn: true`.
  *
- *  - `subAgents` — ephemeral runtime registry of currently-executing
- *    SubAgents. The producer is `lib/claude/agents/dispatch-runtime.ts`
- *    (`recordDispatchStart/Complete/Failed/Rejected`), driven by the
- *    `dispatch_agent` host tool. Consumers subscribe to read: the chat-side
- *    `SubagentPart` tree (via `subagent-bridge` → `use-claude-chat`) and the
- *    Settings Runtime tab.
+ *  - `subAgents` — a read model of subagent runs, not persisted. Live
+ *    progress (logs, tool calls, streamed text, usage, the result detail)
+ *    comes from the two engines' events: `lib/claude/agents/dispatch-runtime.ts`
+ *    for `dispatch_agent` and `lib/claude/sdk-subagent-bridge.ts` for the SDK
+ *    `Task` tool. The status of a run that has an `execution:job:<id>` row is
+ *    that row's (ADR-0252 §2), kept in `runs` by the run projection
+ *    (`./run-projection.ts`): what an engine reports stands only for an entry
+ *    with no run row (an in-turn SDK `Task`, a dispatch refused before it
+ *    started). Consumers subscribe to read: the chat-side `SubagentPart` tree
+ *    (via `subagent-bridge` → `use-claude-chat`) and the Settings Runtime tab.
  */
 
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import { persistLocalStorage } from "@/stores/persist-storage"
+import type { ExecutionRunStatus } from "@cognia/plugin-contract/types/execution/run"
 import {
   BUILT_IN_SUBAGENT_TEMPLATES,
   assertSubagentContextPolicy,
@@ -43,8 +48,60 @@ interface TemplatesSlice {
   deleteTemplate: (id: string) => void
 }
 
+/** What the run projection reads off an entry's `execution:job:<id>` row. */
+export interface SubAgentRunState {
+  status: ExecutionRunStatus
+  endedAt?: number
+}
+
+/**
+ * An entry with its run's status, when it has a run row. `timeout` survives a
+ * `failed` run (the row has no timeout status; the engine knows why it ended).
+ */
+export function withRunStatus(entry: SubAgent, run: SubAgentRunState | undefined): SubAgent {
+  if (!run) return entry
+  const status = subAgentStatusOf(run.status, entry.status)
+  const ended =
+    status === "completed" || status === "failed" || status === "cancelled" || status === "timeout"
+  const completedAt = ended
+    ? (entry.completedAt ?? (run.endedAt !== undefined ? new Date(run.endedAt) : new Date()))
+    : undefined
+  if (status === entry.status && completedAt === entry.completedAt) return entry
+  return { ...entry, status, ...(ended ? { completedAt } : { completedAt: undefined }) }
+}
+
+/**
+ * A run row's status in subagent words. `reported` is the engine's own
+ * status, which only tells a timeout from another failure.
+ */
+export function subAgentStatusOf(
+  run: ExecutionRunStatus,
+  reported: SubAgentStatus
+): SubAgentStatus {
+  switch (run) {
+    case "queued":
+      return "queued"
+    case "running":
+      return "running"
+    case "waiting":
+    case "paused":
+    case "recovery_required":
+      return "waiting"
+    case "completed":
+      return "completed"
+    case "failed":
+      return reported === "timeout" ? "timeout" : "failed"
+    case "cancelled":
+      return "cancelled"
+  }
+}
+
 interface RuntimeSlice {
   subAgents: Record<string, SubAgent>
+  /** Run status by entry id, for entries that have a run row (the projection's). */
+  runs: Record<string, SubAgentRunState>
+  /** The run projection's write: record each id's run row and re-derive its entry. */
+  applyRuns: (runs: Record<string, SubAgentRunState | undefined>) => void
   upsert: (subAgent: SubAgent) => void
   setStatus: (id: string, status: SubAgentStatus) => void
   setProgress: (id: string, progress: number) => void
@@ -115,8 +172,48 @@ export const useSubagentRuntimeStore = create<SubagentRuntimeState>()(
 
       // ---- Runtime (ephemeral) ----------------------------------------
       subAgents: {},
-      upsert: (subAgent) =>
-        set((s) => ({ subAgents: { ...s.subAgents, [subAgent.id]: subAgent } })),
+      runs: {},
+      applyRuns: (runs) =>
+        set((s) => {
+          let changed = false
+          const nextRuns = { ...s.runs }
+          const nextAgents = { ...s.subAgents }
+          for (const [id, run] of Object.entries(runs)) {
+            const before = s.runs[id]
+            if (run) {
+              if (before?.status !== run.status || before?.endedAt !== run.endedAt) {
+                nextRuns[id] = run
+                changed = true
+              }
+            } else if (before) {
+              delete nextRuns[id]
+              changed = true
+            }
+            const sa = s.subAgents[id]
+            if (sa && run) {
+              const derived = withRunStatus(sa, run)
+              if (derived !== sa) {
+                nextAgents[id] = derived
+                changed = true
+              }
+            }
+          }
+          return changed ? { runs: nextRuns, subAgents: nextAgents } : s
+        }),
+      // An engine's status stands only until the run row says otherwise.
+      upsert: (subAgent) => {
+        set((s) => ({
+          subAgents: {
+            ...s.subAgents,
+            [subAgent.id]: withRunStatus(subAgent, s.runs[subAgent.id]),
+          },
+        }))
+        void import("./run-projection")
+          .then(({ ensureSubagentRunProjection }) =>
+            ensureSubagentRunProjection(useSubagentRuntimeStore)
+          )
+          .catch(() => undefined)
+      },
       setStatus: (id, status) =>
         set((s) => {
           const sa = s.subAgents[id]
@@ -125,7 +222,12 @@ export const useSubagentRuntimeStore = create<SubagentRuntimeState>()(
             status === "completed" || status === "failed" || status === "cancelled"
               ? new Date()
               : sa.completedAt
-          return { subAgents: { ...s.subAgents, [id]: { ...sa, status, completedAt } } }
+          return {
+            subAgents: {
+              ...s.subAgents,
+              [id]: withRunStatus({ ...sa, status, completedAt }, s.runs[id]),
+            },
+          }
         }),
       setProgress: (id, progress) =>
         set((s) => {
@@ -256,9 +358,11 @@ export const useSubagentRuntimeStore = create<SubagentRuntimeState>()(
           if (!s.subAgents[id]) return s
           const next = { ...s.subAgents }
           delete next[id]
-          return { subAgents: next }
+          const runs = { ...s.runs }
+          delete runs[id]
+          return { subAgents: next, runs }
         }),
-      clearRuntime: () => set({ subAgents: {} }),
+      clearRuntime: () => set({ subAgents: {}, runs: {} }),
     }),
     {
       name: "cognia.subagent-runtime",

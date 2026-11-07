@@ -8,6 +8,11 @@
  * the store, and retains the streamed text so the error path can salvage
  * partial output.
  *
+ * The statuses written here are the engine's report. Each dispatched run also
+ * has its `execution:job:<id>` row, and the store derives the status from that
+ * row once its projection has read it (ADR-0252 §2); the report stands only for
+ * a dispatch with no row (one refused before it started).
+ *
  * Pure-ish: it only touches the Zustand store's vanilla `getState()` API, so it
  * is callable from the renderer IPC handler (non-React) and unit-testable.
  */

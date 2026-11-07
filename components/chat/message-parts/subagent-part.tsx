@@ -27,7 +27,9 @@ import Link from "next/link"
 import { toast } from "sonner"
 import { AlertTriangleIcon, BotIcon, ExternalLinkIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
+import { subAgentStatusOf, useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
+import { getExecutionRun } from "@/lib/db/execution-runs"
 import { useChatStore } from "@/stores/chat/chat-store"
 import type { SubagentPart as SubagentPartType } from "@/lib/claude/parts-extensions"
 import { SUB_AGENT_STATUS_CONFIG } from "@/types/agent/sub-agent"
@@ -282,8 +284,20 @@ export const SubagentPart = memo(function SubagentPart({
   const tStatus = useTranslations("agentStatus")
   // Live read for progress + logs; falls back to the static part snapshot.
   const live = useSubagentRuntimeStore((s) => s.subAgents[part.subagentId])
+  // With no live entry (after a reload) a snapshot taken mid-run would read
+  // `running` forever; the run's own row says how it ended (ADR-0252 §2).
+  const followRow = !live && part.completedAt == null
+  const runRow = useClientLiveQuery(
+    () =>
+      followRow
+        ? getExecutionRun(childJobExecutionRunId(part.subagentId))
+        : Promise.resolve(undefined),
+    [followRow, part.subagentId],
+    undefined
+  )
 
-  const status = live?.status ?? part.status
+  const status =
+    live?.status ?? (runRow ? subAgentStatusOf(runRow.status, part.status) : part.status)
   // Honest live tool-call count (Claude Code / Codex style) — replaces the old
   // pseudo-percentage progress bar, which implied a completion ratio a subagent
   // run doesn't actually have. gap7: falls back to the persisted snapshot when
@@ -321,8 +335,8 @@ export const SubagentPart = memo(function SubagentPart({
   // Rendered through `formatDurationShort` ("2.4s", "1m 12s"), not raw
   // milliseconds. A five-minute run used to print "301274ms": unreadable, and
   // an unbounded-width cell in a row that already competes for space.
-  const durationMs =
-    part.completedAt != null ? part.completedAt - part.startedAt : now - part.startedAt
+  const endedAt = part.completedAt ?? runRow?.endedAt
+  const durationMs = endedAt != null ? endedAt - part.startedAt : now - part.startedAt
 
   const controlled = open !== undefined
   const [internalOpen, setInternalOpen] = useState<boolean | null>(null)

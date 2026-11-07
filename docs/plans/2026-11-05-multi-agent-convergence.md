@@ -219,7 +219,7 @@ interface LaunchChildRunInput {
 
 - `lib/background-tasks/` 已改为投递箱：渲染端条目不再保存 `status`，只保留投递字段（父会话、结果、批次身份、投递状态、重放凭据）和投递箱自己的两个事实：`settledAt`（结果已记录）、新增的 `interruptedAt`（结果到达前宿主已停止）。`listBackgroundTaskRecords` / `getBackgroundTaskRecord` 联接 `execution:job:<runId>` 得出 `status`：宿主停止为 `interrupted`；结果未记录或运行未结束为 `running`；运行完成为 `done`，否则 `error`；没有运行行（启动被拒）的按结果判断。租约围栏、重放、投递、清理只读投递箱事实。CLI 条目继续保存状态（D13）。不升 Dexie 版本：渲染端条目不再进入 `status` 索引，索引继续服务 CLI 条目；更新时清除旧行残留的状态。旧数据不迁移（X11）。
 - 已删除 `lib/execution/job-bridge.ts` 及测试。桥原来独占的两件事已迁走：插件 `ctx.agent.run` / `runStreamed`（`lib/plugin/agent-sdk/run.ts`）改为启动器的调用方引擎（独立行，标题为 label 或 agent id，Job Center 登记保留用于取消）；启动时被中断的渲染端任务，由启动对账（`interruptBackgroundTasksOnBoot` 的 `onInterrupted`）把对应 `execution:job:<runId>` 行落定为 `cancelled`，所有者未知的也算。父运行解析：admission pin 早已经 `dispatch_agent` 传给启动器；桥对非 subagent 行按会话推断父运行的逻辑从未生效（这些行都不带会话），不迁移。遗留：没有 `backgroundTasks` 条目的启动器行（调用方引擎、非后台 twin/external）在宿主重启后不会对账（X10，6.5）。
-- `stores/agent/subagent-runtime-store`：改为读模型，持久化部分只保留 `templates`（现状），运行记录从 `executionRuns` + 实时进度事件派生。
+- `stores/agent/subagent-runtime-store` 已改为读模型：持久化部分只保留 `templates`；条目的实时进度来自两个引擎的事件；有 `execution:job:<id>` 行的运行，状态取自该行（`runs`，由 `run-projection.ts` 维护：对跟踪中的 id 发一条 live query，store 有第一个条目时启动，没有 IndexedDB 时不启动），`upsert` / `setStatus` 不能把条目改离运行行的状态。只有没有运行行的条目（轮内 SDK `Task`、启动前被拒的派发）用引擎上报的状态；运行行为 `failed` 时保留引擎报的 `timeout`。聊天卡片没有实时条目时跟随运行行（刷新后不再永远显示运行中）。契约类型 `SubAgent` 不变。
 - `TeamDelegationRecord`：改为子运行投影 + 小队策略字段，改名（见 P9 命名表）。`delegations-panel.tsx` 改读投影。
 - best-of-N：候选写子运行行，分组运行为父（已在 6.2 完成）。
 
