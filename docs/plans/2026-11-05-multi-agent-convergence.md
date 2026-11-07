@@ -270,6 +270,13 @@ interface LaunchChildRunInput {
 - 验收用例：job 在启动 ACK 之前退出；消费者在 job 中途重载；事件到达两次；同一个 monitor 内联与异步两条路径。
 - i18n：通知文案中英两份。
 
+按实际实现（2026-11-08，`cb06a20651`、`4bb804800e`、`7d0f2dc091`）：
+
+- 窗口的消费者没有放进 `use-tauri-events.ts`（它只在 Tauri 里挂载），而是放在 `BackgroundTaskInitializer`，桌面和配对的手机都经它消费。进程内的 shell（CLI 的 sidecar）发 `background_job_settled` 帧，记录同一条 outbox 条目。
+- 每个 job/monitor 的结束都先向 supervisor 认领投递（`jobs.claimDelivery`，先到先得），两台配对设备或窗口加 brain 只有一方投递。
+- 投递核心移到 `lib/background-tasks/result-delivery.ts`，按宿主注册一条 lane：窗口的 lane 在 `hooks/chat/background-result-runtime.ts`；brain 的 lane 是宿主内部的自动轮（`lib/background-tasks/host-delivery-lane.ts`），先入工作账本再按 HostState 的方式派发，不改线上协议。`background-tasks` 成为清单模块，brain runtime 为 `background-job-delivery`。
+- 未覆盖：房间成员子会话、成员分区、IM 推送只走原有投递，见证据台账 X14–X19。
+
 ### 7.4 验收
 
 - headless 冒烟（真实模型）：agent 后台跑一个 `sleep 5 && echo done`，结束后会话被唤醒并看到结果；人在唤醒排队期间发的消息先被处理。
