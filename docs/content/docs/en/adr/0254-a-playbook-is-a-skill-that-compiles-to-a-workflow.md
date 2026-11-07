@@ -43,7 +43,7 @@ A **playbook** (中文：流程) is a skill that composes other skills. Its `SKI
 - **As a skill.** An agent follows the playbook in chat or a room. The skills it references enter the run's scope through the grant's `skills.add`, and `limits.maxBudgetUsd` becomes the grant's `maxBudgetUsd`. Steps that write code start a Squad through `startSquadRun`.
 - **As a workflow.** `flow.yaml` compiles deterministically into a `VisualWorkflow`: the same input gives the same graph. The graph is **derived**: it records `derivedFrom` (skill id, content hash) and is `readOnly`, and it is recompiled when the skill changes. A person who wants to edit the graph **detaches** it into an ordinary workflow that no longer follows the skill. A skill without `flow.yaml` can still be turned into a workflow by the editor's AI drafting, reviewed by a person, and saved as an ordinary workflow.
 
-Playbooks call each other through `flow.subworkflow`, which already pins versions and rejects cycles.
+In workflow mode, a playbook that calls another is compiled with the called playbook **inlined** under the calling step, and the called playbook's text feeds the content hash. `flow.subworkflow` is not used: it runs only a published workflow, and a derived workflow is never published. The compiler rejects call cycles. A playbook with a `sensitive` input does not compile, because a workflow run stores its inputs in run history; it runs as a skill.
 
 ### 3. Patterns are building-block skills with one core
 

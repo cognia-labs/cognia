@@ -24,14 +24,14 @@
 
 ### 0.2 工作流一侧
 
-| 事实                                                                                                 | 位置                                                                                                                                     | 影响                                         |
-| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| 模式节点：隐藏、诊断报错、执行器要小队上下文、懒注册                                                 | `lib/workflow/nodes/catalog.ts:2678–2725`；`lib/workflow/diagnostics/checks/synthesizer-only.ts`；`lib/squads/patterns/_shared.ts:20–28` | 放开要等模式核心抽离（F1b）                  |
-| `action.team.run` 绕过 `startSquadRun`，`goal` 参数从不读取                                          | `lib/squads/workflow-nodes/index.ts:57–160`                                                                                              | 收敛 P5 修；本计划在其上加模板实例化         |
-| `flow.subworkflow` 按 `workflowId` 引用，准入时锁定部署和版本，拒绝环，深度上限 10                   | `lib/workflow/nodes/data/flow.ts:646–730`；`lib/workflow/runtime/execution-authority.ts:134–170`                                         | 编译器生成的流程间调用直接用它               |
-| 内置工作流每次启动 `bulkPut` 覆盖；没有只读标记，`isBuiltIn` 只防删除；`VisualWorkflow` 没有来源字段 | `lib/db/workflows.ts:236–240,324–333`；`packages/plugin-contract/src/types/workflow/visual.ts`                                           | 派生工作流需要新增来源与只读字段（契约改动） |
-| 工作流没有运行预估面，没有美元上限；成本门禁只接了聊天发送                                           | `lib/usage/run-estimate/estimate.ts:38`；`WorkflowSettings`                                                                              | WP4、WP5 新做                                |
-| 单一运行入口 `runWorkflow`；已发布的先经 `executeDeployedWorkflow`                                   | `lib/workflow/runtime/orchestrator.ts:126`                                                                                               | 预算与预估挂在这里                           |
+| 事实                                                                                                 | 位置                                                                                                                                     | 影响                                                           |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| 模式节点：隐藏、诊断报错、执行器要小队上下文、懒注册                                                 | `lib/workflow/nodes/catalog.ts:2678–2725`；`lib/workflow/diagnostics/checks/synthesizer-only.ts`；`lib/squads/patterns/_shared.ts:20–28` | 放开要等模式核心抽离（F1b）                                    |
+| `action.team.run` 绕过 `startSquadRun`，`goal` 参数从不读取                                          | `lib/squads/workflow-nodes/index.ts:57–160`                                                                                              | 收敛 P5 修；本计划在其上加模板实例化                           |
+| `flow.subworkflow` 按 `workflowId` 引用，准入时锁定部署和版本，拒绝环，深度上限 10                   | `lib/workflow/nodes/data/flow.ts:646–730`；`lib/workflow/runtime/execution-authority.ts:134–170`                                         | 只运行已发布工作流，派生工作流不发布，编译器改为内联（见 WP2） |
+| 内置工作流每次启动 `bulkPut` 覆盖；没有只读标记，`isBuiltIn` 只防删除；`VisualWorkflow` 没有来源字段 | `lib/db/workflows.ts:236–240,324–333`；`packages/plugin-contract/src/types/workflow/visual.ts`                                           | 派生工作流需要新增来源与只读字段（契约改动）                   |
+| 工作流没有运行预估面，没有美元上限；成本门禁只接了聊天发送                                           | `lib/usage/run-estimate/estimate.ts:38`；`WorkflowSettings`                                                                              | WP4、WP5 新做                                                  |
+| 单一运行入口 `runWorkflow`；已发布的先经 `executeDeployedWorkflow`                                   | `lib/workflow/runtime/orchestrator.ts:126`                                                                                               | 预算与预估挂在这里                                             |
 
 ### 0.3 模式核心
 
@@ -99,10 +99,10 @@
 ### WP2 编译器与派生工作流
 
 - `lib/skills/playbook/compile.ts`：`flow.yaml` → `VisualWorkflow`，确定性（同输入同输出，节点 id 由步骤 id 派生）。映射：
-  - `skill:` → `action.skill.invoke` + `ai.prompt`（WP3 修好后）。
+  - `skill:` → `action.agent.turn`，`skillIds` 带上该 skill（与聊天同一条注入路径，可带工具）。实现时由 `action.skill.invoke` + `ai.prompt` 改为此，因为后者不能用工具。
   - `pattern:` → `pattern.*` 节点。F1b 之前能编译出图，但不能运行：编辑器诊断照旧拦截，带模式步骤的 playbook 在卡片上不提供「以 workflow 运行」，并标明原因（规则 7，见 §7）。
-  - `squad:` → `action.team.run`（参数形状按收敛 P5 之后的定义；F1a 只产出图，不运行）。
-  - `playbook:` → `flow.subworkflow`（被调用的 playbook 先编译）。
+  - `squad:` → `action.team.run`（带 `templateId`；参数形状按收敛 P5 之后的定义；F1a 只产出图，不运行，与模式步骤一样列为休眠）。
+  - `playbook:` → 被调用的 playbook 内联到该步骤下，以 `io.output` 收尾；被调用方的文本计入内容哈希。不用 `flow.subworkflow`，因为它只运行已发布的工作流，而派生工作流不发布。对内联 playbook 的 `forEach` 拒绝编译。带 `sensitive` 输入的 playbook 不编译成工作流。
   - `approval` → `action.approval.request`；`issue.*` → `action.issue.*`；`notify` → `action.notify.send`。
 - 契约：`VisualWorkflow` 加 `derivedFrom?: { kind: "playbook"; skillId; contentHash; compiledAt }` 与 `readOnly?: boolean`（`packages/plugin-contract`，重建 authoring kit，cognia-plugins 仓库重钉）。
 - 存储与保护：`updateWorkflow` 拒绝写 `readOnly` 行；编辑器只读打开；「分离」= `duplicateWorkflow` 并清掉 `derivedFrom` / `readOnly`。skill 内容哈希变化时重新编译覆盖派生行。
