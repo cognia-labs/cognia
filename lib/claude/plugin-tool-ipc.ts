@@ -595,13 +595,6 @@ async function runPluginToolExec(
       // string verbatim — opaque to the model is fine.
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
-    // ── Wave 1 — Terminal dock fallback ────────────────────────────────
-    // The 4 synthetic `terminal_dock_*` tools are manifested by
-    // `lib/plugin/bridge/sidecar-tools-bridge.ts:buildTerminalDockManifestEntries`
-    // when `settings.terminal.exposeDockToAgents` is true. They proxy
-    // through the same `plugin_tool_exec` wire as plugin tools; resolve
-    // them here so the model's tool call lands in the user's visible
-    // dock PTY rather than a sidecar `child_process` ghost.
     // ── Wave 1 — ask_user elicitation tool ─────────────────────────────
     // Surfaced by `buildAskUserManifestEntry()`; round-trips through the same
     // `plugin_tool_exec` wire. A connector-initiated turn registers an
@@ -646,17 +639,6 @@ async function runPluginToolExec(
         sessionId: request.sessionId,
         args: request.args,
         executionRunId,
-      })
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    if (request.name.startsWith("terminal_dock_")) {
-      const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
-      const action = request.name.slice("terminal_dock_".length) as
-        "spawn" | "write" | "read_recent" | "wait_for_exit"
-      const result = await runTerminalDockAction({
-        action,
-        args: request.args,
-        chatSessionId: request.sessionId,
       })
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }

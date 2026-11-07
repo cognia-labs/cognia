@@ -4,12 +4,11 @@
  * Renderer-side dispatcher for the agent's `terminal_dock_*` MCP tool
  * calls. Wave 1 of the dock↔agent unification: the agent's MCP tool no
  * longer spawns its own `child_process` siblings of the user's dock —
- * the four synthetic `terminal_dock_*` tools are manifested by
- * `lib/plugin/bridge/sidecar-tools-bridge.ts:buildTerminalDockManifestEntries`,
- * the sidecar proxies them through the existing `plugin_tool_exec`
- * stream (`sidecar/src/tools/plugin/server.ts`), and the renderer's
- * `lib/claude/plugin-tool-ipc.ts:handlePluginToolExec` recognises the
- * `terminal_dock_` prefix and routes here.
+ * the four `terminal_dock_*` tools are the terminal module's tools
+ * contribution (`./agent-tools.ts`), the sidecar proxies them through the
+ * existing `plugin_tool_exec` stream (`sidecar/src/tools/plugin/server.ts`),
+ * and the renderer's `lib/claude/plugin-tool-ipc.ts:handlePluginToolExec`
+ * routes them by declared name to the module, which calls here.
  *
  * Result: the bytes the agent "types" land in the user's visible PTY.
  * One shell, one cwd, one history. No more parallel terminal universes.
@@ -25,7 +24,7 @@ import { runInDockTab } from "./run-in-dock"
 import { spawnFromDock } from "./spawn-orchestrator"
 import { useSettingsStore } from "@/stores/settings"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
-import type { TerminalDockAction } from "@/lib/plugin/bridge/terminal-dock-schemas"
+import type { TerminalDockAction } from "./dock-tool-schemas"
 
 import { getLiveSession } from "./session-registry"
 import { spawnerMessage } from "./spawner-message-arg"

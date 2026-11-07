@@ -16,7 +16,7 @@ import { useTranslations } from "next-intl"
 
 import { cn } from "@/lib/utils"
 import { taskItemLabel, type TaskViewItem } from "@/lib/tasks/task-view"
-import { TaskStatusIcon } from "./task-status-icon"
+import { TaskStatusIcon } from "@/components/shared/task-status-icon"
 
 /** Lists longer than this fold their completed items by default. */
 export const TASK_LIST_FOLD_THRESHOLD = 8

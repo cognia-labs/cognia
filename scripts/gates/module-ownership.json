@@ -38,7 +38,8 @@
       "class": "module"
     },
     "agent-ecosystem": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/agent-ecosystem/terminal-agents.ts"]
     },
     "agent-migration": {
       "class": "module"
@@ -102,13 +103,6 @@
     },
     "auth-providers": {
       "class": "kernel"
-    },
-    "background-tasks": {
-      "class": "module",
-      "api": [
-        "lib/background-tasks/registry-core.ts",
-        "lib/background-tasks/renderer-subagent-registry.ts"
-      ]
     },
     "best-of-n": {
       "class": "module",
@@ -209,6 +203,7 @@
         "components/chat/session-run-indicator.tsx",
         "hooks/chat/chat-control-bridge.ts",
         "hooks/chat/chat-send-bridge.ts",
+        "hooks/chat/claude-chat-send-options.ts",
         "hooks/chat/claude-chat-turn-tasks.ts",
         "hooks/chat/steer-runtime.ts",
         "hooks/chat/use-artifact-detection.ts",
@@ -258,7 +253,10 @@
     },
     "companion": {
       "class": "kernel",
-      "api": ["hooks/companion/use-connection-state.ts"]
+      "api": [
+        "hooks/companion/use-connection-state.ts",
+        "hooks/companion/use-remote-terminal-grant.ts"
+      ]
     },
     "components-root": {
       "class": "foundation"
@@ -351,7 +349,12 @@
       "class": "shell"
     },
     "device": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "lib/device/device-identity.ts",
+        "lib/devices/build-device-rows.ts",
+        "lib/devices/device-console-href.ts"
+      ]
     },
     "diagnostic-service": {
       "class": "module"
@@ -431,6 +434,7 @@
       "class": "module",
       "api": [
         "lib/file-viewer/load-workspace-text.ts",
+        "lib/file-viewer/open.ts",
         "lib/file-viewer/probe.ts",
         "lib/file-viewer/types.ts"
       ]
@@ -566,7 +570,8 @@
       ]
     },
     "jobs": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/jobs/background-jobs.ts"]
     },
     "jsonc": {
       "class": "foundation"
@@ -963,17 +968,6 @@
     "telemetry": {
       "class": "foundation"
     },
-    "terminal": {
-      "class": "module",
-      "api": [
-        "lib/terminal/completion/tokenize.ts",
-        "lib/terminal/headless-exec.ts",
-        "lib/terminal/pick-transport.ts",
-        "lib/terminal/spawn-orchestrator.ts",
-        "lib/terminal/terminal-links.ts",
-        "stores/terminal/terminal-store.ts"
-      ]
-    },
     "test": {
       "class": "foundation"
     },
@@ -1020,7 +1014,8 @@
       "class": "foundation"
     },
     "vscode-compat": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/plugin/vscode-shim/terminal-handlers.ts"]
     },
     "web": {
       "class": "kernel",
@@ -1060,14 +1055,17 @@
         "lib/workflow/runtime/execution-authority.ts",
         "lib/workflow/runtime/model-preference-controller.ts",
         "lib/workflow/runtime/orchestrator.ts",
-        "lib/workflow/runtime/resume-controller.ts"
+        "lib/workflow/runtime/resume-controller.ts",
+        "lib/workflow/runtime/trigger-bridge.ts",
+        "lib/workflow/runtime/trigger-subscriptions.ts"
       ]
     },
     "workspace": {
       "class": "kernel",
       "api": [
         "components/workspace/panel-root-chip.tsx",
-        "components/workspace/port-lease-badge.tsx"
+        "components/workspace/port-lease-badge.tsx",
+        "hooks/workspace/use-session-execution-context.ts"
       ]
     }
   },

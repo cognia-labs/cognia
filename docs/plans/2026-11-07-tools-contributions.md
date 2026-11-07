@@ -346,3 +346,13 @@ interface ToolSurface {
 - 删除：`build-options` 的追加段（注释改为只讲 Skill）、`plugin-tool-ipc` 的分支、依赖解析和不再使用的 `withHostCommandExecution` 导入。
 - 门禁：还清方向边 26 条（slash-commands 21 条，含 `build-options`、`plugin-tool-ipc` 两条；boot 5 条），最大 lib 环 166 → 165。模块数 139 → 140，附例外记录 `2026-11-08-slash-commands-module.json`。
 - 既有失败（未改，不属本次）：`lib/slash-commands/actions/lark.test.ts` 1 例（`opts.transport is not a function`，把新 manifest 移开后照样失败）；`lib/squads/durable/durable-dispatch.test.ts`、`lib/squads/legacy-run-history.test.ts` 共 6 例，是多智能体那条线 P4 的控制机改动。
+
+## 19. T12 实施记录：终端坞工具与 terminal 模块（2026-11-08）
+
+- `terminal` 从模块行变成 manifest 模块（`lib/terminal/module.ts`，归属表行删除）。`dependsOn`：agent-ecosystem、chat、companion、device、file-viewer、memory、plugin、twin、vscode-compat、workflow、workspace；`api` 为其他模块在用的 34 个文件（会话与登记表、坞运行器 `run-in-dock`/`run-cognia`/`script-runner`、SSH 配置与连接、shell 检测、补全、`dock-tool-handler`（终端启动初始化器预热导入）、两个 hook 和 terminal store）。companion、workspace、agent-ecosystem、device、file-viewer、vscode-compat、workflow 的行补了终端用到的 `api` 文件。
+- 提示词：`completion.terminal`、`developer.ai-shell.plan`、`developer.ai-shell.error-advisor` 作为模块的 `prompts` 贡献（`lib/terminal/prompts.ts`），`lib/prompts/catalog.ts` 不再导入。
+- 拆环：artifact 依赖 terminal（坞新标签页的终端按钮），tasks 依赖 artifact，而 AI shell 计划视图从 tasks 取状态图标，声明后成环。`TaskStatusIcon` 移到基础层 `components/shared/task-status-icon.tsx`（测试随移），只以 `import type` 读 `TaskViewStatus`（方向检查不计纯类型导入）；计划视图用 `TaskStatusIconProps["status"]` 取状态类型，不再导入 tasks。五个使用者改导入路径，tasks 的 `api` 去掉该文件。
+- 工具族：`lib/terminal/agent-tools.ts`。`surface`：`settings.terminal.exposeDockToAgents` 为 true、代理未关闭插件工具（原来整个清单在 `disablePluginTools` 闸内）、且不是无头宿主上的 scratch 工作区会话（原来在 scratch 里被过滤并按名拒绝）时提供四个条目；`run` 校验动作名后调用 `runTerminalDockAction`，处理器每次调用仍重读开关。schema 文件 `git mv` 到 `lib/terminal/dock-tool-schemas.ts`，删掉旧插件 id `cognia:builtin:terminal-dock`（条目改以 `cognia-terminal-builtin` 传递）。
+- 声明：spawn、write 为 default/write；read_recent、wait_for_exit 为 default/read；都不可取消（处理器不接收取消信号）。探针名单里手写的 spawn/write 删除（由 `effect !== "read"` 派生；两个读取和原来一样由发现式拒绝覆盖，因为模块条目也在解析后的 `pluginTools` 里）。实时语音的 `terminal_dock_` 前缀排除删除（由 `cancellable: false` 派生）。
+- 删除：`sidecar-tools-bridge` 的 `buildTerminalDockManifestEntries` 和 `exposeDockToAgents` 选项、`build-options` 的开关读取、`plugin-tool-ipc` 的前缀分支。顺序变化：坞条目原在插件条目之后、`ask_user` 之前，现在随模块工具追加在清单末尾；语义裁剪原本作用于整份插件清单，模块工具不经过它。
+- 门禁：还清方向边 2 条（`plugin-tool-ipc -> terminal`、`prompts/catalog -> terminal`），尺寸度量没有增长，不需要例外记录。`packages/plugin-contract` 里 `exposeDockToAgents` 注释仍提到旧函数名，未改（改动会使作者工具包锁失效）。

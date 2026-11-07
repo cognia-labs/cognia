@@ -3,7 +3,9 @@
 /**
  * The one status glyph for every task list (agent todos, plan steps, ACP plan
  * entries, AI-shell steps). Covers the whole {@link TaskViewStatus} vocabulary,
- * so no surface keeps a private map that silently lacks a state.
+ * so no surface keeps a private map that silently lacks a state. It lives
+ * with the shared components, below every module that draws it, and reads
+ * the tasks module's vocabulary as a type only.
  */
 
 import {

@@ -11,8 +11,7 @@ import { AlertTriangleIcon, PencilIcon, SkipForwardIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
-import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
-import type { TaskViewStatus } from "@/lib/tasks/task-view"
+import { TaskStatusIcon, type TaskStatusIconProps } from "@/components/shared/task-status-icon"
 import type { ExecutionPlan, ErrorAdvisory, StepStatus } from "@/lib/terminal/ai-shell"
 
 export interface AiShellPlanViewProps {
@@ -31,7 +30,7 @@ export interface AiShellPlanViewProps {
 }
 
 /** AI-shell step vocabulary → the shared task status glyph. */
-const STEP_TASK_STATUS: Record<StepStatus, TaskViewStatus> = {
+const STEP_TASK_STATUS: Record<StepStatus, TaskStatusIconProps["status"]> = {
   pending: "pending",
   running: "in_progress",
   succeeded: "completed",

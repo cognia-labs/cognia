@@ -45,9 +45,6 @@ import {
   ISSUE_RELATIONS_PROMPT,
   ISSUE_TITLE_PROMPT,
 } from "@/lib/issues/ai-issue-assist"
-import { TERMINAL_COMPLETION_PROMPT } from "@/lib/terminal/completion/prompt"
-import { AI_SHELL_PLAN_PROMPT } from "@/lib/terminal/ai-shell/plan-generator"
-import { AI_SHELL_ERROR_ADVISOR_PROMPT } from "@/lib/terminal/ai-shell/error-advisor"
 import { WIKI_SYSTEM_VOICE_PROMPT } from "@/lib/wiki/prompts"
 import {
   COMPACT_HANDOFF_PROMPT,
@@ -215,7 +212,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   FOLLOW_UP_SUGGESTIONS_PROMPT,
   ENHANCE_SYSTEM_PROMPT,
   ...Object.values(ENHANCE_STYLE_PROMPTS),
-  TERMINAL_COMPLETION_PROMPT,
   // knowledge
   WIKI_SYSTEM_VOICE_PROMPT,
   FETCH_EXTRACT_PROMPT,
@@ -225,8 +221,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   RAG_STEP_BACK_PROMPT,
   CLI_OCR_VISION_PROMPT,
   // developer
-  AI_SHELL_PLAN_PROMPT,
-  AI_SHELL_ERROR_ADVISOR_PROMPT,
   DIFF_REVIEW_PROMPT,
   CREATOR_SURVEY_PROMPT,
   CREATOR_PLAN_PROMPT,

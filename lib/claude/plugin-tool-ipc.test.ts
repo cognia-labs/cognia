@@ -72,6 +72,10 @@ import {
   clearKnowledgeReaderForSession,
 } from "@/lib/knowledge-base/runtime/session-reader"
 import { toolFamily as knowledgeToolFamily } from "@/lib/knowledge-base/agent-tools"
+import { toolFamily as terminalDockToolFamily } from "@/lib/terminal/agent-tools"
+import { runTerminalDockAction } from "@/lib/terminal/dock-tool-handler"
+
+jest.mock("@/lib/terminal/dock-tool-handler", () => ({ runTerminalDockAction: jest.fn() }))
 
 jest.mock("@/lib/plugin/api/project-api", () => {
   const actual = jest.requireActual("@/lib/plugin/api/project-api")
@@ -1107,32 +1111,26 @@ describe("handlePluginToolExec — team tools", () => {
   })
 })
 
-// ── Wave 1 — Terminal dock fallback ──────────────────────────────────
-describe("handlePluginToolExec — terminal-dock fallback", () => {
-  beforeEach(() => {
-    jest.resetModules()
-  })
-
+// ── Terminal dock tools (the terminal module's contribution) ──────────
+describe("handlePluginToolExec — terminal dock tools", () => {
   afterEach(() => {
     __setPluginToolResolverForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
+    jest.mocked(runTerminalDockAction).mockReset()
   })
 
-  it("routes terminal_dock_* names to the dock-tool-handler", async () => {
-    // Plugin resolver misses + built-in skill registry empty → terminal-dock path.
-    __setPluginToolResolverForTesting({ getTool: () => undefined })
-    const runTerminalDockAction = jest.fn().mockResolvedValue({
+  it("routes terminal_dock_* names to the terminal module, which drives the dock", async () => {
+    useModuleTools("terminal", terminalDockToolFamily)
+    const execute = jest.fn()
+    __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "x", execute }) })
+    jest.mocked(runTerminalDockAction).mockResolvedValue({
       ok: true,
       sessionId: "tab-1",
       exitCode: 0,
       output: "ls",
     })
-    jest.doMock("@/lib/terminal/dock-tool-handler", () => ({ runTerminalDockAction }))
 
-    const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
-      await import("./plugin-tool-ipc")
-    freshSet({ getTool: () => undefined })
-
-    const response = await freshHandle({
+    const response = await handlePluginToolExec({
       type: "plugin_tool_exec",
       sessionId: "sess-X",
       toolUseId: "use-X",
@@ -1140,6 +1138,7 @@ describe("handlePluginToolExec — terminal-dock fallback", () => {
       args: { tabId: "tab-1", command: "ls" },
     })
 
+    expect(execute).not.toHaveBeenCalled()
     expect(runTerminalDockAction).toHaveBeenCalledWith({
       action: "write",
       args: { tabId: "tab-1", command: "ls" },

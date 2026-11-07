@@ -8,14 +8,14 @@ export default defineHostModule({
   stage: "stable",
   acceptance: { realSmoke: "pending" },
   dependsOn: ["agent", "artifact", "chat", "context-workbench"],
-  // The task rows, icons and progress the plan views, the chat and the AI
-  // shell draw, the task view model they read, the Tasks panel, and the
+  // The task rows and progress the plan views and the chat draw (the status
+  // glyph itself is shared, `components/shared/task-status-icon.tsx`), the
+  // task view model they read, the Tasks panel, and the
   // spawn_task handoff the result card, the bridge and the sheet dispatch.
   api: [
     "components/tasks/session-tasks-panel.tsx",
     "components/tasks/task-progress-bar.tsx",
     "components/tasks/task-progress-chip.tsx",
-    "components/tasks/task-status-icon.tsx",
     "components/tasks/task-update-row.tsx",
     "lib/tasks/agent-tools.ts",
     "lib/tasks/spawn-task-core.ts",

@@ -27,6 +27,8 @@ Before: `sidecar/builtin-tools/terminal-dock-tool.mjs` admitted that the agent's
 
 After: the renderer manifests 4 synthetic `terminal_dock_*` tools to the SDK sidecar via the existing `pluginTools` channel (`lib/plugin/bridge/sidecar-tools-bridge.ts:buildTerminalDockManifestEntries`). The sidecar's existing `plugin-tools.mjs` proxy wraps them with the same `plugin_tool_exec` → `plugin_tool_response` round-trip used by user-installed plugin tools. The renderer's `lib/claude/plugin-tool-ipc.ts:handlePluginToolExec` recognises the `terminal_dock_` prefix and dispatches to `lib/terminal/dock-tool-handler.ts:runTerminalDockAction`. That helper goes through `requestAgentTrust` and `runInDockTab` so the consent + tab gating matches the chat affordance.
 
+Amendment (2026-11-08, ADR-0250 §14): the four tools are now the terminal module's tools contribution. `lib/terminal/module.ts` declares them and `lib/terminal/agent-tools.ts` offers them (same setting, plus no agent with plugin tools off and no headless scratch-workspace session) and runs them through `runTerminalDockAction`. The schemas moved to `lib/terminal/dock-tool-schemas.ts`; `buildTerminalDockManifestEntries` and the `terminal_dock_` branch in `plugin-tool-ipc.ts` are gone, and the entries travel under `cognia-terminal-builtin`.
+
 Eliminated 2 net-new files (`terminal-dock-bridge.mjs`, `terminal-dock-ipc.ts`) by reusing the protocol that was already live for `pluginTools`. The gate is per-call:
 
 1. **Manifest** — `buildPluginToolsManifest({ exposeDockToAgents })` skips the synthetic entries when the setting is off, so the sidecar never registers them.
@@ -134,7 +136,7 @@ New / updated i18n keys land in both `i18n/messages/en.json` and `i18n/messages/
 
 Per-file co-located tests (CLAUDE.md rule #3, ≥90% lines/branches/functions on new code):
 
-- `lib/plugin/bridge/terminal-dock-schemas.test.ts` (10 tests)
+- `lib/terminal/dock-tool-schemas.test.ts` (moved from `lib/plugin/bridge/terminal-dock-schemas.test.ts`)
 - `lib/plugin/bridge/sidecar-tools-bridge.test.ts` (13 tests — extended)
 - `lib/terminal/dock-tool-handler.test.ts` (17 tests covering all four actions + gate + consent + timeout)
 - `lib/claude/plugin-tool-ipc.test.ts` (extended with terminal-dock fallback test)
@@ -157,7 +159,7 @@ Net: **121 + 15 + 8 = 144 new/extended tests, all passing.**
 
 - `lib/terminal/base-session.ts`
 - `lib/terminal/dock-tool-handler.ts`
-- `lib/plugin/bridge/terminal-dock-schemas.ts`
+- `lib/terminal/dock-tool-schemas.ts` (moved from `lib/plugin/bridge/terminal-dock-schemas.ts`)
 - `lib/workflow/nodes/terminal.ts`
 - `sidecar/builtin-tools/terminal-repl-tool.mjs` (replaces deleted `terminal-dock-tool.mjs`)
 - `src-tauri/src/terminal/replay.rs`

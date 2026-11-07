@@ -3347,8 +3347,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     (!imSession || imHostCapabilities.ocr)
 
   // --- Plugin tools → SDK sidecar ------------------------------------------
-  // Surface enabled plugin tools + ADR-0026 built-in skills + terminal_dock_*
-  // as a manifest the sidecar turns into the synthetic `cognia-plugin-tools`
+  // Surface enabled plugin tools + ADR-0026 built-in skills as a manifest the sidecar turns into the synthetic `cognia-plugin-tools`
   // MCP server. Functions don't cross stdio; the sidecar emits
   // `plugin_tool_exec` and the global `PluginToolDispatchProvider`
   // (components/providers/plugin-tool-dispatch-provider.tsx) routes it to
@@ -3365,13 +3364,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       const { buildPluginToolsManifest, prepareVscodeLanguageModelTools } =
         await import("@/lib/plugin/bridge/sidecar-tools-bridge")
       await prepareVscodeLanguageModelTools()
-      // Wave 1 — when the user has opted into agent-driven terminal use,
-      // the manifest carries 4 synthetic `terminal_dock_*` entries that
-      // route through the existing plugin_tool_exec wire and land in
-      // `lib/terminal/dock-tool-handler.ts:runTerminalDockAction`. The
-      // setting lives in `appSettings.terminal.exposeDockToAgents` and
-      // defaults to false (agent has no terminal access).
-      const exposeDockToAgents = appSettings?.terminal?.exposeDockToAgents === true
       // Nested dispatch — surface the `dispatch_agent` tool when (a) this build
       // is for a dispatched subagent below its depth cap, or (b) it's a
       // top-level direct chat and the user enabled nesting. Withheld otherwise
@@ -3383,7 +3375,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         turnRuntime
       )
       let manifest = buildPluginToolsManifest({
-        exposeDockToAgents,
         ...(dispatchAgentGate ? { dispatchAgent: dispatchAgentGate } : {}),
       })
       if (scratchWorkspace) {

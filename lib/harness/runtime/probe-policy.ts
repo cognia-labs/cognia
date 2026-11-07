@@ -232,8 +232,6 @@ const DENIED_PLUGIN_TOOLS = [
   "im_broadcast",
   "im_dispatch_task",
   "plugin_conversion_apply",
-  "terminal_dock_spawn",
-  "terminal_dock_write",
   "expand_element",
   "perform_action",
   "click_text",

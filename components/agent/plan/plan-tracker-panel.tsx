@@ -29,7 +29,7 @@ import { resolvePlanHtmlStyle, type PlanHtmlStyle } from "@/lib/agent/plan/plan-
 import { useSettingsStore } from "@/stores/settings"
 import type { AgentPlan, PlanStepStatus } from "@/types/agent/plan"
 import { TaskProgressBar } from "@/components/tasks/task-progress-bar"
-import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
+import { TaskStatusIcon } from "@/components/shared/task-status-icon"
 import { planStepStatusToTask } from "@/lib/tasks/task-view"
 
 const STEP_STATUS_LABEL_KEY: Record<PlanStepStatus, string> = {

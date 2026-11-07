@@ -76,9 +76,7 @@ const NON_CANCELLABLE_LIVE_VOICE_TOOLS = new Set([
 ])
 
 function liveVoiceToolIsCancellable(entry: PluginToolEntry): boolean {
-  return (
-    !NON_CANCELLABLE_LIVE_VOICE_TOOLS.has(entry.name) && !entry.name.startsWith("terminal_dock_")
-  )
+  return !NON_CANCELLABLE_LIVE_VOICE_TOOLS.has(entry.name)
 }
 
 /** Lazy defaults — none of these are reachable from a node-env test. */

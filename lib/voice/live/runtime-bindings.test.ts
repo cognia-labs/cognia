@@ -90,7 +90,7 @@ describe("buildLiveVoiceRuntimeBindings", () => {
               name: "terminal_dock_write",
               description: "write",
               jsonSchema: {},
-              pluginId: "cognia:builtin:terminal-dock",
+              pluginId: "cognia-terminal-builtin",
             },
             {
               name: "search_notes",

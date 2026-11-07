@@ -1,20 +1,15 @@
 import {
   TERMINAL_DOCK_ACTIONS,
-  TERMINAL_DOCK_PLUGIN_ID,
   TERMINAL_DOCK_READ_RECENT_SCHEMA,
   TERMINAL_DOCK_SPAWN_SCHEMA,
   TERMINAL_DOCK_TOOL_PREFIX,
   TERMINAL_DOCK_WAIT_FOR_EXIT_SCHEMA,
   TERMINAL_DOCK_WRITE_SCHEMA,
   type TerminalDockAction,
-} from "./terminal-dock-schemas"
+} from "./dock-tool-schemas"
 
 describe("terminal-dock-schemas", () => {
-  it("exposes the synthetic plugin namespace constant", () => {
-    expect(TERMINAL_DOCK_PLUGIN_ID).toBe("cognia:builtin:terminal-dock")
-  })
-
-  it("exposes the dispatch prefix the renderer-side IPC matches on", () => {
+  it("exposes the prefix every dock tool name carries", () => {
     expect(TERMINAL_DOCK_TOOL_PREFIX).toBe("terminal_dock_")
   })
 

@@ -25,6 +25,8 @@ Phase 1 在 `master` 上以未提交形式落地了约 80 个文件，覆盖完�
 
 之后：渲染端通过已有的 `pluginTools` 通道向 sidecar 上报 4 个合成的 `terminal_dock_*` 工具（`lib/plugin/bridge/sidecar-tools-bridge.ts:buildTerminalDockManifestEntries`）。sidecar 现有的 `plugin-tools.mjs` 代理用与第三方插件工具完全一致的 `plugin_tool_exec` → `plugin_tool_response` 来回桥接。渲染端 `lib/claude/plugin-tool-ipc.ts:handlePluginToolExec` 识别 `terminal_dock_` 前缀并派发到 `lib/terminal/dock-tool-handler.ts:runTerminalDockAction`，该 helper 经过 `requestAgentTrust` 和 `runInDockTab`，与聊天侧的 "Run in dock" 保持一致的同意 + tab 闸。
 
+修订（2026-11-08，ADR-0250 §14）：这四个工具现在是 terminal 模块的工具贡献。`lib/terminal/module.ts` 声明它们，`lib/terminal/agent-tools.ts` 提供它们（同一开关，另外关闭插件工具的代理和无头宿主的 scratch 工作区会话不提供），并经 `runTerminalDockAction` 执行。schema 移到 `lib/terminal/dock-tool-schemas.ts`；`buildTerminalDockManifestEntries` 和 `plugin-tool-ipc.ts` 里的 `terminal_dock_` 分支已删除，条目以 `cognia-terminal-builtin` 传递。
+
 通过复用 `pluginTools` 协议，方案净减 2 个新文件（`terminal-dock-bridge.mjs`、`terminal-dock-ipc.ts`）。每次调用都过三道闸：
 
 1. **Manifest** — `buildPluginToolsManifest({ exposeDockToAgents })` 在开关关闭时根本不上报合成条目，sidecar 也就不会注册。
@@ -132,7 +134,7 @@ github-delivery 的 manifest 加上 `terminal:spawn` + `terminal:write`，整条
 
 每文件配套测试（CLAUDE.md 第 #3 条规则，新代码 ≥90% 行/分支/函数）：
 
-- `lib/plugin/bridge/terminal-dock-schemas.test.ts`（10 用例）
+- `lib/terminal/dock-tool-schemas.test.ts`（由 `lib/plugin/bridge/terminal-dock-schemas.test.ts` 移来）
 - `lib/plugin/bridge/sidecar-tools-bridge.test.ts`（13 用例 —— 扩展）
 - `lib/terminal/dock-tool-handler.test.ts`（17 用例，覆盖 4 个 action + 闸门 + 同意 + 超时）
 - `lib/claude/plugin-tool-ipc.test.ts`（扩展，新增 terminal-dock fallback 用例）
@@ -155,7 +157,7 @@ github-delivery 的 manifest 加上 `terminal:spawn` + `terminal:write`，整条
 
 - `lib/terminal/base-session.ts`
 - `lib/terminal/dock-tool-handler.ts`
-- `lib/plugin/bridge/terminal-dock-schemas.ts`
+- `lib/terminal/dock-tool-schemas.ts`（由 `lib/plugin/bridge/terminal-dock-schemas.ts` 移来）
 - `lib/workflow/nodes/terminal.ts`
 - `sidecar/builtin-tools/terminal-repl-tool.mjs`（替换被删的 `terminal-dock-tool.mjs`）
 - `src-tauri/src/terminal/replay.rs`

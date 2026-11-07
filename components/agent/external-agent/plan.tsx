@@ -16,7 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { TaskProgressBar } from "@/components/tasks/task-progress-bar"
-import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
+import { TaskStatusIcon } from "@/components/shared/task-status-icon"
 import { acpStatusToTask } from "@/lib/tasks/task-view"
 import { cn } from "@/lib/utils"
 import type { AcpPlanEntry, ExternalAgentPlanDocument } from "@/types/agent/external-agent"

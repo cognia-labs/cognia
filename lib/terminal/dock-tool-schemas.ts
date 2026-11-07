@@ -1,13 +1,10 @@
 /**
- * JSON Schemas for the 4 synthetic terminal-dock tools that the renderer
- * manifests to the SDK sidecar via `pluginTools` in `SendOptions` (see
- * `lib/plugin/bridge/sidecar-tools-bridge.ts:buildTerminalDockManifestEntries`).
- *
- * These are NOT registered as a plugin — they're a built-in capability
- * surfaced through the same pluginTools wire so the sidecar's existing
- * `cognia-plugin-tools` MCP server proxies them through `plugin_tool_exec`.
- * The renderer-side dispatcher lives in `lib/terminal/dock-tool-handler.ts`,
- * routed from `lib/claude/plugin-tool-ipc.ts` by the `terminal_dock_` prefix.
+ * JSON Schemas for the terminal module's four `terminal_dock_*` tools
+ * (`./agent-tools.ts`), which the module's manifest declares as its tools
+ * contribution (ADR-0250 §14 amendment). They travel to the SDK sidecar on
+ * the `pluginTools` wire under `cognia-terminal-builtin`, and the sidecar's
+ * `cognia-plugin-tools` MCP server proxies each call back through
+ * `plugin_tool_exec` to `./dock-tool-handler.ts`.
  *
  * Wire format: plain JSON Schema objects (not zod). The sidecar's
  * `jsonSchemaToZodShape` (`sidecar/src/tools/plugin/json-schema-zod.ts`)
@@ -15,10 +12,7 @@
  * before the proxy roundtrip.
  */
 
-/** Pseudo plugin id used in the manifest entries — namespaces the synthetic tools. */
-export const TERMINAL_DOCK_PLUGIN_ID = "cognia:builtin:terminal-dock"
-
-/** Tool-name prefix the renderer-side IPC dispatcher matches on. */
+/** The prefix every dock tool's name carries before its action. */
 export const TERMINAL_DOCK_TOOL_PREFIX = "terminal_dock_"
 
 export const TERMINAL_DOCK_SPAWN_SCHEMA = {

@@ -6,12 +6,10 @@
 import {
   buildPluginToolsManifest,
   prepareVscodeLanguageModelTools,
-  buildTerminalDockManifestEntries,
   buildDispatchAgentManifestEntries,
   type PluginToolManifestEntry,
 } from "./sidecar-tools-bridge"
 import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
-import { TERMINAL_DOCK_PLUGIN_ID } from "./terminal-dock-schemas"
 import { usePluginStore } from "@/stores/plugin-runtime"
 import type { Plugin, PluginTool } from "@/types/plugin"
 
@@ -95,10 +93,10 @@ describe("buildPluginToolsManifest", () => {
     jest.clearAllMocks()
   })
 
-  // The manifest always carries synthetic entries (ask_user, and dock tools
-  // when gated on); these assertions target only the plugin-derived rows.
+  // The manifest always carries the synthetic ask_user entry; these
+  // assertions target only the plugin-derived rows.
   const pluginsOnly = (result: PluginToolManifestEntry[]) =>
-    result.filter((t) => t.name !== "ask_user" && !t.name.startsWith("terminal_dock_"))
+    result.filter((t) => t.name !== "ask_user")
 
   it("returns no plugin entries when no plugins are registered", () => {
     setStore({})
@@ -194,32 +192,10 @@ describe("buildPluginToolsManifest", () => {
     expect(pluginsOnly(result).map((t) => t.name)).toEqual(["kept"])
   })
 
-  it("does NOT include terminal-dock entries by default (gate off)", () => {
+  it("carries no terminal-dock entries: they are the terminal module's tools", () => {
     setStore({ p: makePlugin("p", { tools: [makeTool("only")] }) })
     const result = buildPluginToolsManifest()
     expect(result.find((t) => t.name.startsWith("terminal_dock_"))).toBeUndefined()
-  })
-
-  it("appends 4 terminal-dock entries when exposeDockToAgents is on", () => {
-    setStore({ p: makePlugin("p", { tools: [makeTool("only")] }) })
-    const result = buildPluginToolsManifest({ exposeDockToAgents: true })
-    const dockEntries = result.filter((t) => t.name.startsWith("terminal_dock_"))
-    expect(dockEntries.map((t) => t.name).sort()).toEqual([
-      "terminal_dock_read_recent",
-      "terminal_dock_spawn",
-      "terminal_dock_wait_for_exit",
-      "terminal_dock_write",
-    ])
-    expect(dockEntries.every((t) => t.pluginId === TERMINAL_DOCK_PLUGIN_ID)).toBe(true)
-  })
-
-  it("places terminal-dock entries after plugin entries (stable ordering)", () => {
-    setStore({ alpha: makePlugin("alpha", { tools: [makeTool("plug_a")] }) })
-    const result = buildPluginToolsManifest({ exposeDockToAgents: true })
-    expect(result[0].name).toBe("plug_a")
-    // dock entries follow plugin entries; ask_user is appended last.
-    const middle = result.slice(1, -1)
-    expect(middle.every((t) => t.name.startsWith("terminal_dock_"))).toBe(true)
   })
 
   it("always appends the ask_user elicitation tool (both gates off)", () => {
@@ -310,32 +286,6 @@ describe("buildPluginToolsManifest", () => {
     })
     const result = pluginsOnly(buildPluginToolsManifest())
     expect(result.find((t) => t.name === "retrying")?.timeoutMs).toBe(240_000)
-  })
-})
-
-describe("buildTerminalDockManifestEntries", () => {
-  it("returns an empty array when the gate is off", () => {
-    expect(buildTerminalDockManifestEntries()).toEqual([])
-    expect(buildTerminalDockManifestEntries({ exposeDockToAgents: false })).toEqual([])
-  })
-
-  it("returns four entries with stable names + descriptions when on", () => {
-    const entries = buildTerminalDockManifestEntries({ exposeDockToAgents: true })
-    expect(entries).toHaveLength(4)
-    for (const entry of entries) {
-      expect(entry.name).toMatch(/^terminal_dock_/)
-      expect(entry.pluginId).toBe(TERMINAL_DOCK_PLUGIN_ID)
-      expect(typeof entry.description).toBe("string")
-      expect(entry.description.length).toBeGreaterThan(20)
-      expect(entry.jsonSchema).toMatchObject({ type: "object", additionalProperties: false })
-    }
-  })
-
-  it("does not mutate its schemas between calls (frozen identity)", () => {
-    const a = buildTerminalDockManifestEntries({ exposeDockToAgents: true })
-    const b = buildTerminalDockManifestEntries({ exposeDockToAgents: true })
-    // Schema objects are imported constants — must be the same reference.
-    expect(a[0].jsonSchema).toBe(b[0].jsonSchema)
   })
 })
 

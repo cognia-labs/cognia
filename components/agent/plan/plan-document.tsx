@@ -54,7 +54,7 @@ import {
   stepsSectionWindow,
   withoutRestatedTitle,
 } from "@/lib/agent/plan/plan-doc"
-import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
+import { TaskStatusIcon } from "@/components/shared/task-status-icon"
 import { planStepStatusToTask } from "@/lib/tasks/task-view"
 import type { AgentPlan, PlanEditPatch, PlanEvent } from "@/types/agent/plan"
 

@@ -85,7 +85,6 @@ unregister(pluginId: string): void | Promise<void>
 | `snippets-bridge.ts` | `contributes.snippets[]` (VS Code JSON) | Monaco completion + slash palette | `registerSnippetFile` `:79`, `listSnippetsForLanguage` `:139` |
 | `trigger-bridge.ts` | plugin-emitted trigger events (SDK) | workflow orchestrator `dispatchTrigger` | `dispatchPluginTrigger` `:53` (uses `prefixPluginKind` `:57`) |
 | `workflow-integration.ts` | plugin hooks (store) | hooks-system dispatch (chat/workflow/export/RAG lifecycle) | `PluginWorkflowIntegration` `:18`, `processMessageBeforeSend` `:24`, `getPluginWorkflowIntegration` `:176` |
-| `terminal-dock-schemas.ts` | none (built-in) | JSON Schemas for 4 synthetic dock tools | `TERMINAL_DOCK_*_SCHEMA` `:24`/`:58`/`:82`/`:100`, `TERMINAL_DOCK_PLUGIN_ID` `:19` |
 
 ## 派发流程
 
@@ -252,10 +251,10 @@ await dispatchTrigger({ workflowId, kind: prefixedKind as never, payload, origin
 
 ## 陷阱
 
-- **注册不等于执行（默认关闭）**——chat-middleware 在启用时注册，但仅在功能开关后运行（`chat-middleware-bridge.ts:14-16`）；终端坞工具仅当 `settings.terminal.exposeDockToAgents` 为 true 时出现（`sidecar-tools-bridge.ts:64`，默认关闭 `:49`）；调度任务遵循 `def.defaultEnabled === false`，会暂停新行（`scheduled-task-bridge.ts:128-130`）。
+- **注册不等于执行（默认关闭）**——chat-middleware 在启用时注册，但仅在功能开关后运行（`chat-middleware-bridge.ts:14-16`）；终端坞工具已不在这份清单里：它们是 terminal 模块的工具贡献（`lib/terminal/agent-tools.ts`），仅当 `settings.terminal.exposeDockToAgents` 为 true 时提供；调度任务遵循 `def.defaultEnabled === false`，会暂停新行（`scheduled-task-bridge.ts:128-130`）。
 - **两张派发表**——`module-bridge-map.ts`（20 个字段驱动模块桥）对 `capability-bridge-map.ts`（16 个同步的内联定义叠加能力）。VS Code 风格的存储桥接器（语法、图标、语言、片段）两者皆不在——它们由 `vscode-loader`/`context.ts` 驱动。
 - **字段驱动门控 + 规范能力标签**——派发依据 `manifest[manifestField]?.length` 门控；`workspace-backend`、`message-renderer`、`chat-middleware`、`modal-mount`、`density-preset` 等字段驱动桥现在都有显式能力契约和 SDK helper（`module-bridge-map.ts:146`）。
-- **terminal-dock-schemas 不是插件**——它是内置能力（`TERMINAL_DOCK_PLUGIN_ID = "cognia:builtin:terminal-dock"`，`:19`），经由 plugin-tools 线路暴露，并在渲染端由 `terminal_dock_` 前缀派发（`:21-22`）。
+- **坞工具不是插件**——四个 `terminal_dock_*` 工具以 `cognia-terminal-builtin` 走同一条 plugin-tools 线路，但它们是 terminal 模块的工具贡献（ADR-0250 §14 修订）：schema 位于 `lib/terminal/dock-tool-schemas.ts`，内核按声明的名字把调用路由到模块，而不是按前缀。
 - **异步 unregister**——调度器的 `unregister` 是异步的（它删除 Dexie 行，`module-bridge-map.ts:273-275`）；管理器会 await 全部。
 - **幂等性 / 重新启用**——桥接器在 `register` 顶部清除该插件的旧状态（`ai-providers-bridge.ts:73`；字体/壁纸为替换而非追加 `:142-143`）。类桥接器保留仅供测试的 `__reset…ForTesting` 单例。
 - **保留命名空间 / 冲突**——`message-renderer-bridge` 拒绝宿主保留的 `partType`（`:46-54`）；语法/语言在跨插件 id 冲突时抛错（`grammars-bridge.ts:152`、`languages-bridge.ts:110`）；a2ui 警告并覆盖（`a2ui-bridge.ts:106-112`）；主题对 CSS 变量做净化以防 `</style>` 注入（`themes-bridge.ts:143`），并拒绝 `vscodeJsonPath` 中的路径穿越（`:55-62`）。

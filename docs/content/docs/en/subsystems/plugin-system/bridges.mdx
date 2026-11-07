@@ -101,7 +101,6 @@ catalog id so two plugins can never collide: `trigger.foo` becomes `trigger.${pl
 | `snippets-bridge.ts` | `contributes.snippets[]` (VS Code JSON) | Monaco completion + slash palette | `registerSnippetFile` `:79`, `listSnippetsForLanguage` `:139` |
 | `trigger-bridge.ts` | plugin-emitted trigger events (SDK) | workflow orchestrator `dispatchTrigger` | `dispatchPluginTrigger` `:53` (uses `prefixPluginKind` `:57`) |
 | `workflow-integration.ts` | plugin hooks (store) | hooks-system dispatch (chat/workflow/export/RAG lifecycle) | `PluginWorkflowIntegration` `:18`, `processMessageBeforeSend` `:24`, `getPluginWorkflowIntegration` `:176` |
-| `terminal-dock-schemas.ts` | none (built-in) | JSON Schemas for 4 synthetic dock tools | `TERMINAL_DOCK_*_SCHEMA` `:24`/`:58`/`:82`/`:100`, `TERMINAL_DOCK_PLUGIN_ID` `:19` |
 
 ## The dispatch flow
 
@@ -291,8 +290,9 @@ await dispatchTrigger({ workflowId, kind: prefixedKind as never, payload, origin
 ## Gotchas
 
 - **Registration is not execution (default-off)** — chat-middleware registers on enable but runs only
-  behind the feature flag (`chat-middleware-bridge.ts:14-16`); terminal-dock tools appear only when
-  `settings.terminal.exposeDockToAgents` is true (`sidecar-tools-bridge.ts:64`, default off `:49`);
+  behind the feature flag (`chat-middleware-bridge.ts:14-16`); the terminal dock tools are no longer
+  on this manifest at all: they are the terminal module's tools contribution
+  (`lib/terminal/agent-tools.ts`), offered only when `settings.terminal.exposeDockToAgents` is true;
   scheduled tasks honour `def.defaultEnabled === false` by pausing the new row
   (`scheduled-task-bridge.ts:128-130`).
 - **Two dispatch tables** — `module-bridge-map.ts` (20 field-driven module bridges) versus
@@ -303,9 +303,10 @@ await dispatchTrigger({ workflowId, kind: prefixedKind as never, payload, origin
   `manifest[manifestField]?.length`; field-driven bridges such as `workspace-backend`,
   `message-renderer`, `chat-middleware`, `modal-mount`, and `density-preset` now have explicit
   capability contracts and SDK helpers (`module-bridge-map.ts:146`).
-- **terminal-dock-schemas is not a plugin** — it is a built-in capability
-  (`TERMINAL_DOCK_PLUGIN_ID = "cognia:builtin:terminal-dock"`, `:19`) surfaced through the plugin-tools
-  wire and dispatched renderer-side by the `terminal_dock_` prefix (`:21-22`).
+- **The dock tools are not a plugin** — the four `terminal_dock_*` tools travel on the same
+  plugin-tools wire under `cognia-terminal-builtin`, but they are the terminal module's tools
+  contribution (ADR-0250 §14 amendment): their schemas live in `lib/terminal/dock-tool-schemas.ts`
+  and the kernel routes a call to the module by its declared name, not by a prefix.
 - **Async unregister** — the scheduler's `unregister` is async (it deletes Dexie rows,
   `module-bridge-map.ts:273-275`); the manager awaits all of them.
 - **Idempotency / re-enable** — bridges clear prior plugin state at the top of `register`
