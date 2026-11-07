@@ -7,11 +7,13 @@
 //
 // Two modes, one tool. Short waits block and answer inline. Past
 // `BLOCKING_THRESHOLD_MS` the tool stops blocking and hands back a monitorId:
-// the watch is durable on the host and survives a restart, and its outcome is
-// read back with `monitor_list`. Nothing delivers it to the session when it
-// fires yet (see `MONITOR_FIRE_DELIVERY`). The model does not choose the mode
-// — it states how long it is willing to wait and the tool degrades on its own,
-// so a bad guess costs neither a stalled turn nor a wasted round-trip.
+// the watch is durable on the host and survives a restart, and when it settles
+// its outcome is delivered into the conversation (ADR-0249) — the same path a
+// background shell's end takes. An outcome a blocking call already returned
+// inline is never delivered a second time: the host marks it so. The model does
+// not choose the mode — it states how long it is willing to wait and the tool
+// degrades on its own, so a bad guess costs neither a stalled turn nor a wasted
+// round-trip.
 
 import { z } from "zod"
 
@@ -25,13 +27,14 @@ import type { CoreFileToolContext } from "./context.ts"
 export const BLOCKING_THRESHOLD_MS = 5 * 60_000
 
 /**
- * How a background watch's outcome reaches the session when it fires: not at
- * all, yet. The host emits `jobs://monitor-fired`, but only the scheduler
- * listens; delivering it to the agent is ADR-0249's job. Until that lands the
- * outcome is read with `monitor_list`, and no tool text may promise that the
- * model will be told (dormant on purpose — pinned by `monitor.test.ts`).
+ * How a background watch's outcome reaches the session when it fires: it is
+ * delivered into the conversation that registered it (ADR-0249). The host
+ * emits `jobs://monitor-fired` with the monitor's delivery contract, and every
+ * shell's consumer (desktop chat, headless brain) settles it into that
+ * session. A tool session with no conversation registers no contract, and
+ * then its outcome is only read with `monitor_list`.
  */
-export const MONITOR_FIRE_DELIVERY = "none" as const
+export const MONITOR_FIRE_DELIVERY = "session" as const
 
 /** Longest a single `monitors.wait` round-trip blocks host-side. */
 const WAIT_CHUNK_MS = 30_000
@@ -78,7 +81,7 @@ export const monitorShape = {
     .max(MAX_TIMEOUT_MS)
     .optional()
     .describe(
-      `How long you are willing to wait in total (default ${BLOCKING_THRESHOLD_MS}). Up to ${BLOCKING_THRESHOLD_MS} ms this call blocks and returns the outcome; beyond that it returns a monitorId and the watch keeps running in the background. Check its outcome later with monitor_list.`
+      `How long you are willing to wait in total (default ${BLOCKING_THRESHOLD_MS}). Up to ${BLOCKING_THRESHOLD_MS} ms this call blocks and returns the outcome; beyond that it returns a monitorId and the watch keeps running in the background; the tool description says how its outcome reaches you.`
     ),
   label: z.string().optional().describe("Short human-readable label shown in the Job Center."),
 }
@@ -189,6 +192,7 @@ export function describeOutcome(record: Pick<MonitorRecord, "status" | "detail">
 export function createMonitorTool({
   hostRpc,
   sessionId,
+  delivery,
   blockingThresholdMs = BLOCKING_THRESHOLD_MS,
   waitChunkMs = WAIT_CHUNK_MS,
 }: CoreFileToolContext & { blockingThresholdMs?: number; waitChunkMs?: number }) {
@@ -212,6 +216,16 @@ export function createMonitorTool({
         // block for — otherwise a degraded watch would expire early.
         expiresAtMs: Date.now() + budget,
         label: args.label ?? null,
+        // The conversation its outcome reports into when it settles after
+        // this call stops blocking (ADR-0249).
+        ...(delivery
+          ? {
+              delivery: {
+                sessionId: delivery.sessionId,
+                ...(delivery.runId ? { runId: delivery.runId } : {}),
+              },
+            }
+          : {}),
       })) as MonitorRecord
     } catch (err) {
       return toolError(errorText(err), "Monitor")
@@ -223,7 +237,9 @@ export function createMonitorTool({
       try {
         record = (await hostRpc.call(
           "monitors.wait",
-          { monitorId: record.id, waitMs: remaining },
+          // `inline`: what this wait returns settled is this call's result,
+          // so the host marks it and nothing delivers it again.
+          { monitorId: record.id, waitMs: remaining, inline: true },
           { timeoutMs: remaining + HOST_RPC_TIMEOUT_MARGIN_MS }
         )) as MonitorRecord
       } catch (err) {
@@ -236,15 +252,21 @@ export function createMonitorTool({
 
     // Degraded to an async watch. Say so explicitly, and name the escape hatch
     // — a silent "still waiting" reads like a failure.
+    const later = delivery
+      ? "Its outcome will be delivered into this conversation when it settles: carry on with other work. monitor_list shows it sooner."
+      : "Nothing will interrupt you when it fires: carry on with other work and check its outcome with monitor_list."
     return toolText(
       `Still waiting after ${Math.round(willBlock / 1000)}s, so this is now a background watch (monitor ${record.id}, waiting for ${describeCondition(args)}). ` +
-        `Nothing will interrupt you when it fires: carry on with other work and check its outcome with monitor_list. Stop it with monitor_cancel({ monitorId: "${record.id}" }).`
+        `${later} Stop it with monitor_cancel({ monitorId: "${record.id}" }).`
     )
   }
 
   return tool(
     "Monitor",
-    "Wait until a condition holds: a background shell exits, its output matches a pattern, a predicate command exits 0, or an upstream subagent/scheduled task completes. Blocks and answers inline for short waits; past a few minutes it converts to a background watch that keeps running on the host, and you read its outcome later with monitor_list.",
+    "Wait until a condition holds: a background shell exits, its output matches a pattern, a predicate command exits 0, or an upstream subagent/scheduled task completes. Blocks and answers inline for short waits; past a few minutes it converts to a background watch that keeps running on the host, and " +
+      (delivery
+        ? "its outcome is delivered into this conversation when it settles (monitor_list shows it sooner)."
+        : "you read its outcome later with monitor_list."),
     monitorShape,
     execMonitor
   )

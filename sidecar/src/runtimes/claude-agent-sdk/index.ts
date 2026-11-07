@@ -99,7 +99,16 @@ export function dispatchAnthropic(
   /** Late-bound so a ledger refusal inside a hook can stop the query built below. */
   let interruptForLedger = () => {}
 
-  const toolSession = createToolSessionContext({ sendOptions, log, hostRpc, sessionId })
+  const toolSession = createToolSessionContext({
+    sendOptions,
+    log,
+    hostRpc,
+    sessionId,
+    // An in-process shell's end, for a host with no job supervisor (the CLI).
+    // A host-backed job reports through the supervisor's `jobs://exited`.
+    onBackgroundJobSettled: (settlement) =>
+      emit({ type: "background_job_settled", sessionId, settlement }),
+  })
   const surface = buildToolSurface({
     sendOptions,
     sessionId,

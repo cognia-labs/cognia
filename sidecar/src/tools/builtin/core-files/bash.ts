@@ -203,7 +203,13 @@ export const bashShape = {
     .boolean()
     .optional()
     .describe(
-      "Run the command in the background and return a shellId immediately instead of waiting. Poll its output with bash_output and stop it with kill_shell. Use for dev servers, watchers, and long builds."
+      "Run the command in the background and return a shellId immediately instead of waiting. When it exits, its exit code and the tail of its output are delivered into this conversation (see notify), so you can carry on with other work. Read it sooner with bash_output and stop it with kill_shell. Use for dev servers, watchers, and long builds."
+    ),
+  notify: z
+    .enum(["on_exit", "none"])
+    .optional()
+    .describe(
+      'For run_in_background: "on_exit" (default) delivers the command\'s end into this conversation, waking it if it is idle; "none" delivers nothing, for a server or watcher you will read with bash_output yourself. A shell you stop with kill_shell is never delivered.'
     ),
   detach: z
     .boolean()
@@ -268,8 +274,9 @@ export function bashToolDescription(
     "Execute a shell command in the session working directory and return its combined output."
   const hint = descriptor.syntaxHint ? ` ${descriptor.syntaxHint}` : ` Runs ${descriptor.label}.`
   const tail =
-    "Long output keeps the tail. Set run_in_background to start a long-running command and poll it " +
-    "with bash_output. Each call is approval-gated unless a permission rule allows it. " +
+    "Long output keeps the tail. Set run_in_background to start a long-running command; its end is " +
+    "delivered into the conversation (notify), and bash_output reads it sooner. Each call is " +
+    "approval-gated unless a permission rule allows it. " +
     "Interactive programs (REPLs, editors, ssh, login flows) do NOT work here — use terminal_repl_* for those."
   return `${base}${hint} ${tail}`
 }
@@ -355,6 +362,7 @@ export function createBashTool({
   processSignal,
   groupProofSupported = GROUP_KILL,
   bgShells,
+  delivery,
   shell,
   spawnProcess = spawn,
   builtinProcessSandbox,
@@ -447,14 +455,19 @@ export function createBashTool({
           env,
           detach: args.detach === true,
           label: args.description,
+          notify: args.notify ?? "on_exit",
         })
         const scope = args.detach
           ? "processOrigin" in bgShells && bgShells.processOrigin
             ? " It survives turn completion; explicit disposal of this session still stops it."
             : " It will keep running after this session ends, until the app exits."
           : ""
+        const delivered =
+          (args.notify ?? "on_exit") === "on_exit" && delivery
+            ? " Its exit code and output tail will be delivered into this conversation when it ends; you do not need to poll for that."
+            : ""
         return toolText(
-          `background shell started: ${entry.id} (status: running).${scope} Poll output with bash_output({ shellId: "${entry.id}" }) and stop it with kill_shell.`
+          `background shell started: ${entry.id} (status: running).${scope}${delivered} Poll output with bash_output({ shellId: "${entry.id}" }) and stop it with kill_shell.`
         )
       }
 

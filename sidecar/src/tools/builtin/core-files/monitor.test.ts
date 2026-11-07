@@ -183,36 +183,69 @@ test("monitor definitions and outcome text stay stable", () => {
   assert.equal(describeOutcome({ status: "waiting" }), "monitor is still waiting")
 })
 
-// ADR-0249 has not landed: nothing delivers a fired background watch to the
-// session (`jobs://monitor-fired` reaches only the scheduler). Until it does,
-// no text the model reads may promise that it will be told, and the way to
-// learn the outcome is `monitor_list`. Pinned on all three axes (Rule 7): the
-// exported constant, the tool text, and this test.
-test("Monitor does not promise to deliver a background watch's outcome (ADR-0249 pending)", async () => {
-  assert.equal(MONITOR_FIRE_DELIVERY, "none")
-  const promise = /\b(told|tell you|deliver(ed|s)?|notif(y|ied)|will be informed)\b/i
-  const definitions = createMonitorTools({})
-  for (const definition of definitions) {
-    assert.doesNotMatch(definition.description, promise, definition.name)
-  }
-  assert.doesNotMatch(monitorShape.timeout_ms.description ?? "", promise)
-  assert.match(monitorShape.timeout_ms.description ?? "", /monitor_list/)
-  assert.match(
-    definitions.find((definition) => definition.name === "Monitor")!.description,
-    /monitor_list/
-  )
-
-  const { hostRpc } = fakeHost({
+// ADR-0249: a background watch's outcome is delivered into the conversation
+// that registered it. The register call carries the delivery contract, the
+// blocking wait asks the host to mark what it returns inline, and the text
+// the model reads says which applies.
+test("Monitor registers its delivery contract and waits inline (ADR-0249)", async () => {
+  assert.equal(MONITOR_FIRE_DELIVERY, "session")
+  const { hostRpc, calls } = fakeHost({
     "monitors.register": () => ({ id: "monitor-async", status: "waiting" }),
     "monitors.wait": async () => {
       await new Promise((resolve) => setTimeout(resolve, 6))
       return { id: "monitor-async", status: "waiting" }
     },
   })
-  const monitor = findTool(
-    createMonitorTools({ hostRpc, sessionId: "session-1", blockingThresholdMs: 5, waitChunkMs: 5 }),
-    "Monitor"
+  const tools = createMonitorTools({
+    hostRpc,
+    sessionId: "executor-1",
+    delivery: { sessionId: "chat-1", runId: "execution:agent:run-1" },
+    blockingThresholdMs: 5,
+    waitChunkMs: 5,
+  })
+  const monitor = findTool(tools, "Monitor")
+  assert.match(
+    tools.find((definition) => definition.name === "Monitor")!.description,
+    /delivered into this conversation/
   )
+  const degraded = firstText(
+    await monitor.handler(
+      { condition: "upstream", source: "subagent", id: "task-1", timeout_ms: 60_000 },
+      {}
+    )
+  )
+  assert.match(degraded, /delivered into this conversation/)
+  const register = calls.find((call) => call.method === "monitors.register")!
+  assert.deepEqual(register.params.owner, { kind: "session", sessionId: "executor-1" })
+  assert.deepEqual((register.params as { delivery?: unknown }).delivery, {
+    sessionId: "chat-1",
+    runId: "execution:agent:run-1",
+  })
+  const wait = calls.find((call) => call.method === "monitors.wait")!
+  assert.equal((wait.params as { inline?: unknown }).inline, true)
+})
+
+test("Monitor without a conversation promises no delivery and points at monitor_list", async () => {
+  const { hostRpc, calls } = fakeHost({
+    "monitors.register": () => ({ id: "monitor-async", status: "waiting" }),
+    "monitors.wait": async () => {
+      await new Promise((resolve) => setTimeout(resolve, 6))
+      return { id: "monitor-async", status: "waiting" }
+    },
+  })
+  const tools = createMonitorTools({
+    hostRpc,
+    sessionId: "executor-1",
+    blockingThresholdMs: 5,
+    waitChunkMs: 5,
+  })
+  const monitor = findTool(tools, "Monitor")
+  const promise = /\bdeliver(ed|s)?\b/i
+  const description = tools.find((definition) => definition.name === "Monitor")!.description
+  assert.doesNotMatch(description, promise)
+  assert.match(description, /monitor_list/)
+  // The parameter text is shared by both cases, so it promises nothing.
+  assert.doesNotMatch(monitorShape.timeout_ms.description ?? "", promise)
   const degraded = firstText(
     await monitor.handler(
       { condition: "upstream", source: "subagent", id: "task-1", timeout_ms: 60_000 },
@@ -221,4 +254,6 @@ test("Monitor does not promise to deliver a background watch's outcome (ADR-0249
   )
   assert.doesNotMatch(degraded, promise)
   assert.match(degraded, /monitor_list/)
+  const register = calls.find((call) => call.method === "monitors.register")!
+  assert.equal("delivery" in register.params, false)
 })

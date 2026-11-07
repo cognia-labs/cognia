@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { createToolSessionContext } from "./session.ts"
+import { backgroundDeliveryFor, createToolSessionContext } from "./session.ts"
 import { createReadTracker } from "./state/read-tracker.ts"
 import { createSessionTaskStore } from "./state/tasks.ts"
 import { createSessionBgShellRegistry } from "./state/host-background-shells.ts"
@@ -302,4 +302,47 @@ test("Windows-shaped session disposal completes while proof remains unconfirmed"
   await context.dispose()
   assert.equal(await context.hasRunningProcesses(), false)
   assert.equal(await context.hasLiveProcesses(), true)
+})
+
+// ADR-0249: the tool session's id is the executor's; jobs report into the
+// conversation and run the send named.
+test("background delivery names the conversation and the run the send carried", () => {
+  assert.equal(backgroundDeliveryFor("", {}), undefined)
+  assert.deepEqual(backgroundDeliveryFor("chat-1", {}), { sessionId: "chat-1" })
+  assert.deepEqual(
+    backgroundDeliveryFor("chat-1", { execution: { identity: { runId: "execution:agent:r1" } } }),
+    { sessionId: "chat-1", runId: "execution:agent:r1" }
+  )
+  assert.deepEqual(
+    backgroundDeliveryFor("chat-1", {
+      processOrigin: { childRunId: "child-run" },
+      execution: { identity: { runId: "execution:agent:r1" } },
+    } as never),
+    { sessionId: "chat-1", runId: "child-run" }
+  )
+})
+
+test("the tool context carries the delivery and in-process shells report through the session", async () => {
+  const settled: string[] = []
+  const context = createToolSessionContext({
+    sessionId: "chat-delivery",
+    sendOptions: {},
+    onBackgroundJobSettled: (settlement) => settled.push(settlement.jobId),
+  })
+  try {
+    assert.deepEqual(context.toolContext().delivery, { sessionId: "chat-delivery" })
+    const entry = await context.bgShells.spawnBackground({
+      command: "echo settled",
+      shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh",
+      shellArgs:
+        process.platform === "win32" ? ["/d", "/s", "/c", "echo settled"] : ["-c", "echo settled"],
+    })
+    const deadline = Date.now() + 10_000
+    while (!settled.includes(entry.id) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.deepEqual(settled, [entry.id])
+  } finally {
+    await context.dispose()
+  }
 })

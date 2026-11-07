@@ -31,7 +31,8 @@ use crate::limits::{clamp_poll_interval, next_poll_interval, MAX_MONITORS_GLOBAL
 use crate::store::JobStore;
 use crate::supervisor::JobSupervisor;
 use crate::types::{
-    now_ms, JobError, JobOwner, MonitorCondition, MonitorRecord, MonitorStatus, Result,
+    now_ms, JobError, JobOwner, MonitorCondition, MonitorDelivery, MonitorDeliveryState,
+    MonitorRecord, MonitorStatus, Result,
 };
 
 /// Rolling window of job output kept while looking for a pattern. Bounded so a
@@ -59,6 +60,28 @@ pub struct MonitorRegistry {
     supervisor: Arc<JobSupervisor>,
     live: Mutex<HashMap<String, LiveMonitor>>,
     listeners: Mutex<Vec<MonitorListener>>,
+    /// Blocking agent waits in flight per monitor. A monitor that settles
+    /// while one is waiting is returned inline by that wait (ADR-0249 §5).
+    inline_waiters: Mutex<HashMap<String, usize>>,
+}
+
+/// Counts one blocking agent wait for as long as it is in flight, including
+/// when the RPC that awaits it is dropped.
+struct InlineWait<'a> {
+    registry: &'a MonitorRegistry,
+    monitor_id: String,
+}
+
+impl Drop for InlineWait<'_> {
+    fn drop(&mut self) {
+        let mut waiters = self.registry.inline_waiters.lock();
+        if let Some(count) = waiters.get_mut(&self.monitor_id) {
+            *count -= 1;
+            if *count == 0 {
+                waiters.remove(&self.monitor_id);
+            }
+        }
+    }
 }
 
 impl MonitorRegistry {
@@ -68,6 +91,7 @@ impl MonitorRegistry {
             supervisor,
             live: Mutex::new(HashMap::new()),
             listeners: Mutex::new(Vec::new()),
+            inline_waiters: Mutex::new(HashMap::new()),
         }
     }
 
@@ -108,6 +132,19 @@ impl MonitorRegistry {
         expires_at_ms: Option<i64>,
         label: Option<String>,
     ) -> Result<MonitorRecord> {
+        self.register_delivered(condition, owner, expires_at_ms, label, None)
+    }
+
+    /// Register a monitor an agent asked for: its outcome reports into
+    /// `delivery`'s session when it settles (ADR-0249).
+    pub fn register_delivered(
+        self: &Arc<Self>,
+        condition: MonitorCondition,
+        owner: JobOwner,
+        expires_at_ms: Option<i64>,
+        label: Option<String>,
+        delivery: Option<MonitorDelivery>,
+    ) -> Result<MonitorRecord> {
         if self.store.count_waiting_monitors()? >= MAX_MONITORS_GLOBAL {
             return Err(JobError::LimitReached(format!(
                 "at most {MAX_MONITORS_GLOBAL} monitors may wait at once; \
@@ -124,6 +161,11 @@ impl MonitorRegistry {
             expires_at_ms,
             detail: None,
             label,
+            delivery: delivery.map(|delivery| MonitorDelivery {
+                state: MonitorDeliveryState::Pending,
+                claimed_by: None,
+                ..delivery
+            }),
         };
         self.store.insert_monitor(&record)?;
         self.start_evaluator(record.clone());
@@ -171,6 +213,65 @@ impl MonitorRegistry {
             };
             let _ = tokio::time::timeout(remaining, notify.notified()).await;
         }
+    }
+
+    /// The agent's blocking `Monitor` wait. Whatever this returns settled is
+    /// the agent's inline result, so the monitor is marked delivered inline
+    /// and no consumer delivers it again. A settle that raced the wait's own
+    /// deadline (marked inline while this returned still waiting) goes back
+    /// to pending, so the async delivery still happens.
+    pub async fn wait_inline(&self, monitor_id: &str, wait: Duration) -> Result<MonitorRecord> {
+        let guard = {
+            *self
+                .inline_waiters
+                .lock()
+                .entry(monitor_id.to_string())
+                .or_insert(0) += 1;
+            InlineWait {
+                registry: self,
+                monitor_id: monitor_id.to_string(),
+            }
+        };
+        let record = self.wait(monitor_id, wait).await;
+        drop(guard);
+        let mut record = record?;
+        let delivered = record.delivery.as_ref().map(|delivery| delivery.state);
+        if record.status.is_terminal() {
+            if delivered == Some(MonitorDeliveryState::Pending) {
+                // Settled between two of the agent's waits: still this call's,
+                // unless a consumer already took its delivery.
+                if self.store.mark_monitor_delivered_inline(monitor_id)? {
+                    if let Some(delivery) = record.delivery.as_mut() {
+                        delivery.state = MonitorDeliveryState::Inline;
+                    }
+                }
+            }
+        } else if let Some(current) = self.store.get_monitor(monitor_id)? {
+            if current.status.is_terminal()
+                && current.delivery.as_ref().map(|delivery| delivery.state)
+                    == Some(MonitorDeliveryState::Inline)
+            {
+                self.store.set_monitor_delivery_pending(monitor_id)?;
+            }
+        }
+        Ok(record)
+    }
+
+    /// Take the delivery of a settled monitor's outcome for `consumer`
+    /// (ADR-0249 §7). Only the first consumer to claim it delivers.
+    pub fn claim_delivery(&self, monitor_id: &str, consumer: &str) -> Result<bool> {
+        self.store
+            .claim_monitor_delivery(monitor_id, consumer, now_ms())
+    }
+
+    /// Settled agent-registered monitors, for a consumer reconciling what
+    /// its events missed (ADR-0249 §7).
+    pub fn settlements(
+        &self,
+        session_id: Option<&str>,
+        since_ms: Option<i64>,
+    ) -> Result<Vec<MonitorRecord>> {
+        self.store.list_monitor_settlements(session_id, since_ms)
     }
 
     /// Cancel a waiting monitor. Idempotent; scoped like job kills.
@@ -232,10 +333,19 @@ impl MonitorRegistry {
     /// Write the terminal verdict, wake waiters, stop the evaluator, and
     /// notify listeners. Returns whether THIS call was the one that settled it.
     fn settle(&self, monitor_id: &str, status: MonitorStatus, detail: &str) -> bool {
-        let won = self
-            .store
-            .settle_monitor(monitor_id, status, Some(detail), now_ms())
-            .unwrap_or(false);
+        let won = {
+            // Held across the verdict so a blocking wait's count cannot change
+            // between the settle and the inline mark.
+            let waiters = self.inline_waiters.lock();
+            let won = self
+                .store
+                .settle_monitor(monitor_id, status, Some(detail), now_ms())
+                .unwrap_or(false);
+            if won && waiters.get(monitor_id).is_some_and(|count| *count > 0) {
+                let _ = self.store.mark_monitor_delivered_inline(monitor_id);
+            }
+            won
+        };
         // Wake blocked callers even when we lost the race, so nobody is left
         // hanging on an already-settled monitor. Signalling `cancel` is what
         // actually STOPS the evaluator task: without it a cancelled shell
@@ -974,6 +1084,7 @@ mod tests {
                 expires_at_ms: None,
                 detail: None,
                 label: None,
+                delivery: None,
             })
             .unwrap();
 
@@ -1010,6 +1121,7 @@ mod tests {
                     expires_at_ms,
                     detail: None,
                     label: Some("preserved label".into()),
+                    delivery: None,
                 })
                 .unwrap();
         }
@@ -1128,5 +1240,212 @@ mod tests {
                 drop(runtime);
             }
         }
+    }
+
+    fn upstream(id: &str) -> MonitorCondition {
+        MonitorCondition::Upstream {
+            source: "test".into(),
+            id: id.into(),
+        }
+    }
+
+    fn agent_delivery(session_id: &str) -> Option<MonitorDelivery> {
+        Some(MonitorDelivery {
+            session_id: session_id.into(),
+            run_id: Some("execution:agent:run".into()),
+            state: MonitorDeliveryState::Inline,
+            claimed_by: None,
+        })
+    }
+
+    fn state_of(reg: &MonitorRegistry, id: &str) -> Option<MonitorDeliveryState> {
+        reg.get(id)
+            .unwrap()
+            .and_then(|record| record.delivery)
+            .map(|delivery| delivery.state)
+    }
+
+    #[tokio::test]
+    async fn an_agent_monitor_starts_pending_whatever_the_caller_asked() {
+        let dir = TempDir::new().unwrap();
+        let (_sup, reg) = setup(&dir);
+        let mon = reg
+            .register_delivered(
+                upstream("a"),
+                session("s1"),
+                None,
+                None,
+                agent_delivery("s1"),
+            )
+            .unwrap();
+        assert_eq!(state_of(&reg, &mon.id), Some(MonitorDeliveryState::Pending));
+        let listed = reg.list(Some(&session("s1"))).unwrap();
+        assert_eq!(
+            listed[0]
+                .delivery
+                .as_ref()
+                .map(|delivery| delivery.session_id.as_str()),
+            Some("s1")
+        );
+    }
+
+    /// ADR-0249 §5: a blocking `Monitor` call that returns the outcome inline
+    /// marks it delivered, so no consumer delivers it a second time.
+    #[tokio::test]
+    async fn a_monitor_that_settles_during_the_agents_wait_is_delivered_inline() {
+        let dir = TempDir::new().unwrap();
+        let (_sup, reg) = setup(&dir);
+        let mon = reg
+            .register_delivered(
+                upstream("b"),
+                session("s1"),
+                None,
+                None,
+                agent_delivery("s1"),
+            )
+            .unwrap();
+        let fired: Arc<Mutex<Vec<MonitorRecord>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&fired);
+        reg.on_fired(Arc::new(move |record| sink.lock().push(record)));
+        let waiter = {
+            let reg = Arc::clone(&reg);
+            let id = mon.id.clone();
+            tokio::spawn(async move { reg.wait_inline(&id, Duration::from_secs(5)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(reg.signal_upstream("test", "b").unwrap(), 1);
+        let returned = waiter.await.unwrap().unwrap();
+        assert_eq!(returned.status, MonitorStatus::Fired);
+        assert_eq!(state_of(&reg, &mon.id), Some(MonitorDeliveryState::Inline));
+        // The event already says so: a consumer never queues it.
+        assert_eq!(
+            fired.lock()[0]
+                .delivery
+                .as_ref()
+                .map(|delivery| delivery.state),
+            Some(MonitorDeliveryState::Inline)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_monitor_that_settles_after_the_wait_gave_up_is_delivered_async() {
+        let dir = TempDir::new().unwrap();
+        let (_sup, reg) = setup(&dir);
+        let mon = reg
+            .register_delivered(
+                upstream("c"),
+                session("s1"),
+                None,
+                None,
+                agent_delivery("s1"),
+            )
+            .unwrap();
+        let still = reg
+            .wait_inline(&mon.id, Duration::from_millis(20))
+            .await
+            .unwrap();
+        assert_eq!(still.status, MonitorStatus::Waiting);
+        reg.signal_upstream("test", "c").unwrap();
+        assert_eq!(state_of(&reg, &mon.id), Some(MonitorDeliveryState::Pending));
+        let settled = reg.settlements(Some("s1"), None).unwrap();
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].id, mon.id);
+    }
+
+    /// Settled between two of the agent's waits: the next wait returns it, so
+    /// it is that wait's inline result.
+    #[tokio::test]
+    async fn a_monitor_settled_between_two_waits_is_claimed_by_the_next_one() {
+        let dir = TempDir::new().unwrap();
+        let (_sup, reg) = setup(&dir);
+        let mon = reg
+            .register_delivered(
+                upstream("d"),
+                session("s1"),
+                None,
+                None,
+                agent_delivery("s1"),
+            )
+            .unwrap();
+        reg.signal_upstream("test", "d").unwrap();
+        assert_eq!(state_of(&reg, &mon.id), Some(MonitorDeliveryState::Pending));
+        let returned = reg
+            .wait_inline(&mon.id, Duration::from_millis(20))
+            .await
+            .unwrap();
+        assert_eq!(returned.status, MonitorStatus::Fired);
+        assert_eq!(
+            returned.delivery.map(|delivery| delivery.state),
+            Some(MonitorDeliveryState::Inline)
+        );
+        assert_eq!(state_of(&reg, &mon.id), Some(MonitorDeliveryState::Inline));
+    }
+
+    #[tokio::test]
+    async fn a_settled_monitors_delivery_goes_to_one_consumer_and_never_after_inline() {
+        let dir = TempDir::new().unwrap();
+        let (_sup, reg) = setup(&dir);
+        let watched = reg
+            .register_delivered(
+                upstream("c"),
+                session("s1"),
+                None,
+                None,
+                agent_delivery("s1"),
+            )
+            .unwrap();
+        assert!(
+            !reg.claim_delivery(&watched.id, "brain").unwrap(),
+            "still waiting"
+        );
+        reg.signal_upstream("test", "c").unwrap();
+        assert!(reg.claim_delivery(&watched.id, "brain").unwrap());
+        assert!(!reg.claim_delivery(&watched.id, "window").unwrap());
+        assert!(reg.claim_delivery(&watched.id, "brain").unwrap());
+        let delivery = reg.get(&watched.id).unwrap().unwrap().delivery.unwrap();
+        assert_eq!(delivery.claimed_by.as_deref(), Some("brain"));
+        // A claimed delivery is not taken back by a late inline mark.
+        assert!(!reg
+            .store
+            .mark_monitor_delivered_inline(&watched.id)
+            .unwrap());
+        assert_eq!(
+            state_of(&reg, &watched.id),
+            Some(MonitorDeliveryState::Pending)
+        );
+
+        // An outcome the blocking call returned inline is nobody's to deliver.
+        let inline = reg
+            .register_delivered(
+                upstream("d"),
+                session("s1"),
+                None,
+                None,
+                agent_delivery("s1"),
+            )
+            .unwrap();
+        reg.signal_upstream("test", "d").unwrap();
+        assert!(reg.store.mark_monitor_delivered_inline(&inline.id).unwrap());
+        assert!(!reg.claim_delivery(&inline.id, "brain").unwrap());
+    }
+
+    #[tokio::test]
+    async fn settlements_leave_out_waiting_and_unattributed_monitors() {
+        let dir = TempDir::new().unwrap();
+        let (_sup, reg) = setup(&dir);
+        reg.register_delivered(
+            upstream("e"),
+            session("s1"),
+            None,
+            None,
+            agent_delivery("s1"),
+        )
+        .unwrap();
+        let plain = reg
+            .register(upstream("f"), session("s1"), None, None)
+            .unwrap();
+        reg.signal_upstream("test", "f").unwrap();
+        assert!(reg.get(&plain.id).unwrap().unwrap().status.is_terminal());
+        assert!(reg.settlements(Some("s1"), None).unwrap().is_empty());
     }
 }

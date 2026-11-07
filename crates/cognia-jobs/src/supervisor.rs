@@ -27,13 +27,19 @@ use parking_lot::Mutex;
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 
-use crate::limits::{MAX_JOBS_GLOBAL, MAX_JOBS_PER_SESSION, MAX_LOG_BYTES_GLOBAL};
+use crate::limits::{
+    EXIT_TAIL_DRAIN_GRACE, JOB_OUTPUT_TAIL_BYTES, MAX_JOBS_GLOBAL, MAX_JOBS_PER_SESSION,
+    MAX_LOG_BYTES_GLOBAL,
+};
 use crate::output::JobOutput;
 use crate::store::JobStore;
 use crate::types::{
-    now_ms, JobError, JobExit, JobOrigin, JobOutputSlice, JobOwner, JobRecord, JobStatus, Result,
-    SpawnJobRequest,
+    now_ms, JobDelivery, JobError, JobExit, JobOrigin, JobOutputSlice, JobOwner, JobRecord,
+    JobStatus, JobStopCause, Result, SpawnJobRequest,
 };
+
+/// Most settlements one reconciliation query returns.
+const MAX_SETTLEMENTS: usize = 200;
 
 /// How long a killed process group gets to exit on SIGTERM before SIGKILL.
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
@@ -287,6 +293,18 @@ impl JobSupervisor {
         req: SpawnJobRequest,
         origin: Option<JobOrigin>,
     ) -> Result<JobRecord> {
+        self.spawn_attributed(req, origin, None).await
+    }
+
+    /// Start a job an agent asked for. `delivery` names the chat session and
+    /// run its end reports into (ADR-0249). That is the conversation, not the
+    /// job's owner: a tool session owns its jobs under its executor's id.
+    pub(crate) async fn spawn_attributed(
+        &self,
+        req: SpawnJobRequest,
+        origin: Option<JobOrigin>,
+        delivery: Option<JobDelivery>,
+    ) -> Result<JobRecord> {
         let _admission = self.admission.read().await;
         // Legacy session-owned jobs have the same admission owner even without
         // explicit attempt metadata (detached jobs keep their explicit origin).
@@ -306,6 +324,19 @@ impl JobSupervisor {
             }
             _ => false,
         };
+        if delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.session_id.trim().is_empty())
+        {
+            return Err(JobError::Store(
+                "a job's delivery must name the session it reports into".into(),
+            ));
+        }
+        let delivery = delivery.map(|delivery| JobDelivery {
+            stopped_by: None,
+            claimed_by: None,
+            ..delivery
+        });
         if owner_closed
             || self.all_closed.load(Ordering::SeqCst)
             || origin.as_ref().is_some_and(|origin| {
@@ -446,7 +477,10 @@ impl JobSupervisor {
             exit: None,
         }));
         self.process_groups.lock().insert(id.clone(), group.clone());
-        if let Err(error) = self.store.insert_with_origin(&record, origin.as_ref()) {
+        if let Err(error) =
+            self.store
+                .insert_attributed(&record, origin.as_ref(), delivery.as_ref())
+        {
             #[cfg(unix)]
             group.lock().signal(libc::SIGKILL);
             #[cfg(not(unix))]
@@ -491,6 +525,8 @@ impl JobSupervisor {
         let waiter_groups = Arc::clone(&self.process_groups);
         let group_proof_supported = self.group_proof_supported;
         let listeners = self.exit_listeners.lock().clone();
+        let waiter_command = req.command.clone();
+        let waiter_label = req.label.clone();
         tokio::spawn(async move {
             let status = loop {
                 match group.lock().observe() {
@@ -522,7 +558,21 @@ impl JobSupervisor {
                 status.and_then(|s| s.code())
             };
 
-            {
+            // The direct child's last bytes can still be in its pipes. Give
+            // the pumps a short grace so the tail an agent reads is complete,
+            // without letting a grandchild that holds a pipe delay the event.
+            let mut pumps: Vec<Option<tokio::task::JoinHandle<()>>> =
+                pumps.into_iter().map(Some).collect();
+            let grace = tokio::time::Instant::now() + EXIT_TAIL_DRAIN_GRACE;
+            for slot in pumps.iter_mut() {
+                if let Some(handle) = slot.as_mut() {
+                    if tokio::time::timeout_at(grace, handle).await.is_ok() {
+                        *slot = None;
+                    }
+                }
+            }
+            let delivery = store.job_delivery(&waiter_id).ok().flatten();
+            let output_tail = {
                 let mut out = waiter_output.lock();
                 out.flush();
                 let _ = store.update_output_counters(
@@ -530,16 +580,34 @@ impl JobSupervisor {
                     out.total_bytes(),
                     out.dropped_bytes(),
                 );
-            }
+                delivery.as_ref().map(|_| {
+                    let total = out.total_bytes();
+                    out.read(
+                        total.saturating_sub(JOB_OUTPUT_TAIL_BYTES as u64),
+                        JOB_OUTPUT_TAIL_BYTES,
+                    )
+                    .data
+                })
+            };
             let _ = store.settle(&waiter_id, final_status, exit_code, ended_at_ms);
             waiter_notify.notify_waiters();
+            // A kill settles the row before this waiter runs: its verdict wins.
+            let settled = store.get(&waiter_id).ok().flatten();
 
             let exit = JobExit {
                 job_id: waiter_id,
-                status: final_status,
-                exit_code,
+                status: settled.as_ref().map_or(final_status, |row| row.status),
+                exit_code: settled.as_ref().map_or(exit_code, |row| row.exit_code),
                 owner: waiter_owner,
-                ended_at_ms,
+                ended_at_ms: settled
+                    .as_ref()
+                    .and_then(|row| row.ended_at_ms)
+                    .unwrap_or(ended_at_ms),
+                started_at_ms,
+                command: waiter_command,
+                label: waiter_label,
+                output_tail,
+                delivery,
             };
             for listener in listeners {
                 listener(exit.clone());
@@ -548,7 +616,7 @@ impl JobSupervisor {
             // Drain before dropping the live state. Grandchildren that inherited
             // the pipes keep the pumps running past the direct child's exit;
             // until both hit EOF, late bytes only exist in this `JobOutput`.
-            for handle in pumps {
+            for handle in pumps.into_iter().flatten() {
                 let _ = handle.await;
             }
             {
@@ -653,11 +721,25 @@ impl JobSupervisor {
         if !self.job_is_live(&record) {
             return Ok(record);
         }
-        self.stop_job(&record, false).await
+        // A scoped kill is the agent's own (`kill_shell`); an unscoped one is
+        // a person's, from the Job Center.
+        let cause = if requester.is_some() {
+            JobStopCause::Agent
+        } else {
+            JobStopCause::Person
+        };
+        self.stop_job(&record, false, cause).await
     }
 
-    async fn stop_job(&self, record: &JobRecord, require_group_proof: bool) -> Result<JobRecord> {
+    async fn stop_job(
+        &self,
+        record: &JobRecord,
+        require_group_proof: bool,
+        cause: JobStopCause,
+    ) -> Result<JobRecord> {
         let job_id = &record.id;
+        // Before the signal: the exit this causes must carry its cause.
+        self.store.mark_job_stopped_by(job_id, cause)?;
         let live = self.live.lock().get(job_id).cloned();
         let group = self
             .process_groups
@@ -742,7 +824,10 @@ impl JobSupervisor {
         }
         for record in &records {
             if self.job_is_live(record) || self.process_group_running(&record.id) == Some(true) {
-                match self.stop_job(record, self.group_proof_supported).await {
+                match self
+                    .stop_job(record, self.group_proof_supported, JobStopCause::Owner)
+                    .await
+                {
                     Ok(_) => stopped.push(record.id.clone()),
                     Err(error) => errors.push(error.to_string()),
                 }
@@ -837,7 +922,10 @@ impl JobSupervisor {
         for record in &records {
             let proof = self.process_group_running(&record.id);
             if self.job_is_live(&record) || proof == Some(true) {
-                match self.stop_job(&record, self.group_proof_supported).await {
+                match self
+                    .stop_job(&record, self.group_proof_supported, JobStopCause::Owner)
+                    .await
+                {
                     Ok(_) => stopped.push(record.id.clone()),
                     Err(error) => errors.push(error.to_string()),
                 }
@@ -882,7 +970,10 @@ impl JobSupervisor {
         let mut errors = Vec::new();
         for record in records {
             if self.process_groups.lock().contains_key(&record.id) {
-                match self.stop_job(&record, self.group_proof_supported).await {
+                match self
+                    .stop_job(&record, self.group_proof_supported, JobStopCause::Shutdown)
+                    .await
+                {
                     Ok(_) => stopped.push(record.id.clone()),
                     Err(error) => errors.push(error.to_string()),
                 }
@@ -902,6 +993,51 @@ impl JobSupervisor {
 
     pub fn get(&self, job_id: &str) -> Result<Option<JobRecord>> {
         self.store.get(job_id)
+    }
+
+    /// Take the delivery of an ended agent-started job for `consumer`
+    /// (ADR-0249 §7). Only the first consumer to claim it delivers.
+    pub fn claim_delivery(&self, job_id: &str, consumer: &str) -> Result<bool> {
+        self.store.claim_job_delivery(job_id, consumer, now_ms())
+    }
+
+    /// Ended agent-started jobs as the exit events that reported them, for a
+    /// consumer reconciling what its events missed (ADR-0249 §7). Newest
+    /// first, at most [`MAX_SETTLEMENTS`]; the tail is read from the log.
+    pub fn settlements(
+        &self,
+        session_id: Option<&str>,
+        since_ms: Option<i64>,
+    ) -> Result<Vec<JobExit>> {
+        let rows = self.store.list_job_settlements(session_id, since_ms)?;
+        Ok(rows
+            .into_iter()
+            .take(MAX_SETTLEMENTS)
+            .map(|(record, delivery)| {
+                let output_tail = self
+                    .read(
+                        &record.id,
+                        record
+                            .total_output_bytes
+                            .saturating_sub(JOB_OUTPUT_TAIL_BYTES as u64),
+                        JOB_OUTPUT_TAIL_BYTES,
+                    )
+                    .ok()
+                    .map(|slice| slice.data);
+                JobExit {
+                    ended_at_ms: record.ended_at_ms.unwrap_or(record.started_at_ms),
+                    job_id: record.id,
+                    status: record.status,
+                    exit_code: record.exit_code,
+                    owner: record.owner,
+                    started_at_ms: record.started_at_ms,
+                    command: record.command,
+                    label: record.label,
+                    output_tail,
+                    delivery: Some(delivery),
+                }
+            })
+            .collect())
     }
 
     /// Find a RUNNING job by its OS pid.
@@ -1806,5 +1942,196 @@ mod tests {
             &session("t")
         ));
         assert!(owner_matches(&JobOwner::App, &JobOwner::App));
+    }
+
+    #[cfg(unix)]
+    fn delivered(session_id: &str, notify: crate::types::JobNotify) -> JobDelivery {
+        JobDelivery {
+            session_id: session_id.into(),
+            run_id: Some(format!("execution:agent:{session_id}")),
+            notify,
+            stopped_by: None,
+            claimed_by: None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn origin_of(session_id: &str) -> JobOrigin {
+        JobOrigin {
+            session_id: session_id.into(),
+            child_run_id: None,
+            dispatch_epoch: None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn exits(sup: &JobSupervisor) -> Arc<Mutex<Vec<JobExit>>> {
+        let seen: Arc<Mutex<Vec<JobExit>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        sup.on_exit(Arc::new(move |exit| sink.lock().push(exit)));
+        seen
+    }
+
+    #[cfg(unix)]
+    async fn await_exit(seen: &Arc<Mutex<Vec<JobExit>>>, id: &str) -> JobExit {
+        for _ in 0..200 {
+            if let Some(exit) = seen.lock().iter().find(|exit| exit.job_id == id) {
+                return exit.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("no exit event for job {id}");
+    }
+
+    /// ADR-0249: a fast job can exit before its start returns; its exit event
+    /// still carries the session and run it reports into, and its output.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_agent_started_job_reports_its_contract_and_tail_on_exit() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let seen = exits(&sup);
+        let rec = sup
+            .spawn_attributed(
+                sh("echo first; echo done; exit 3", session("s1")),
+                Some(origin_of("s1")),
+                Some(delivered("s1", crate::types::JobNotify::OnExit)),
+            )
+            .await
+            .unwrap();
+        let exit = await_exit(&seen, &rec.id).await;
+        assert_eq!(exit.exit_code, Some(3));
+        assert_eq!(exit.command, "echo first; echo done; exit 3");
+        assert_eq!(exit.started_at_ms, rec.started_at_ms);
+        assert!(exit.output_tail.as_deref().unwrap_or("").contains("done"));
+        assert_eq!(
+            exit.delivery,
+            Some(delivered("s1", crate::types::JobNotify::OnExit))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_job_without_a_delivery_contract_carries_no_tail() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let seen = exits(&sup);
+        let rec = sup.spawn(sh("echo quiet", session("s1"))).await.unwrap();
+        let exit = await_exit(&seen, &rec.id).await;
+        assert!(exit.delivery.is_none());
+        assert!(exit.output_tail.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_delivery_must_name_the_session_it_reports_into() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let refused = sup
+            .spawn_attributed(
+                sh("true", session("executor-1")),
+                Some(origin_of("executor-1")),
+                Some(delivered(" ", crate::types::JobNotify::OnExit)),
+            )
+            .await;
+        assert!(refused.is_err());
+        assert!(sup.list(None).unwrap().is_empty(), "nothing was started");
+    }
+
+    /// `kill_shell` is the agent stopping its own job: it must not wake it.
+    /// A person's stop from the Job Center is reported.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stop_records_whether_the_agent_or_a_person_asked() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let seen = exits(&sup);
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            ids.push(
+                sup.spawn_attributed(
+                    sh("sleep 30", session("s1")),
+                    Some(origin_of("s1")),
+                    Some(delivered("s1", crate::types::JobNotify::OnExit)),
+                )
+                .await
+                .unwrap()
+                .id,
+            );
+        }
+        sup.kill(&ids[0], Some(&session("s1"))).await.unwrap();
+        sup.kill(&ids[1], None).await.unwrap();
+        let by_agent = await_exit(&seen, &ids[0]).await;
+        let by_person = await_exit(&seen, &ids[1]).await;
+        assert_eq!(by_agent.status, JobStatus::Killed);
+        assert_eq!(
+            by_agent.delivery.and_then(|delivery| delivery.stopped_by),
+            Some(JobStopCause::Agent)
+        );
+        assert_eq!(
+            by_person.delivery.and_then(|delivery| delivery.stopped_by),
+            Some(JobStopCause::Person)
+        );
+    }
+
+    /// Reconciliation reads what the events reported, from the store.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn settlements_list_ended_agent_jobs_for_a_session() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let seen = exits(&sup);
+        let ended = sup
+            .spawn_attributed(
+                sh("echo reconciled", session("s1")),
+                Some(origin_of("s1")),
+                Some(delivered("s1", crate::types::JobNotify::None)),
+            )
+            .await
+            .unwrap();
+        let running = sup
+            .spawn_attributed(
+                sh("sleep 30", session("s1")),
+                Some(origin_of("s1")),
+                Some(delivered("s1", crate::types::JobNotify::OnExit)),
+            )
+            .await
+            .unwrap();
+        let other = sup
+            .spawn_attributed(
+                sh("true", session("s2")),
+                Some(origin_of("s2")),
+                Some(delivered("s2", crate::types::JobNotify::OnExit)),
+            )
+            .await
+            .unwrap();
+        let plain = sup.spawn(sh("true", session("s1"))).await.unwrap();
+        for id in [&ended.id, &other.id, &plain.id] {
+            await_exit(&seen, id).await;
+        }
+
+        let rows = sup.settlements(Some("s1"), None).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.job_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![ended.id.as_str()],
+            "only ended, agent-started jobs of the session"
+        );
+        assert!(rows[0]
+            .output_tail
+            .as_deref()
+            .unwrap_or("")
+            .contains("reconciled"));
+        assert_eq!(
+            rows[0].delivery.as_ref().map(|delivery| delivery.notify),
+            Some(crate::types::JobNotify::None)
+        );
+        assert_eq!(sup.settlements(None, None).unwrap().len(), 2);
+        assert!(sup
+            .settlements(Some("s1"), Some(rows[0].ended_at_ms + 1))
+            .unwrap()
+            .is_empty());
+        let _ = sup.kill(&running.id, None).await;
     }
 }

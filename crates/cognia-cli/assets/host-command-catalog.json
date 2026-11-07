@@ -3150,6 +3150,62 @@
       "outputTyped": true
     },
     {
+      "name": "background_job_claim_delivery",
+      "category": "automation",
+      "resource": "background-jobs",
+      "target": "execution",
+      "operation": "write",
+      "capability": "process.spawn",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "background_job_claim_delivery (process.spawn)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "zod-contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "job",
+              "monitor"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "consumer": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "consumer"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "crates/cognia-jobs/src/host.rs \"jobs.claimDelivery\" -> json!({ \"claimed\": .. })",
+        "required": [
+          "claimed"
+        ],
+        "properties": {
+          "claimed": {
+            "type": "boolean",
+            "description": "Whether this consumer holds the delivery (ADR-0249 §7)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
       "name": "background_job_kill",
       "category": "automation",
       "resource": "background-jobs",
@@ -3572,6 +3628,350 @@
         "additionalProperties": true,
         "x-cognia-opaque-reason": "The command serializes an existing domain record whose stable root is an object; property-level compatibility remains owned by that domain.",
         "x-cognia-schema-owner": "background-jobs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "background_job_settlements",
+      "category": "automation",
+      "resource": "background-jobs",
+      "target": "execution",
+      "operation": "read",
+      "capability": "process.spawn",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "background_job_settlements (process.spawn)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "zod-contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sinceMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "crates/cognia-jobs/src/host.rs \"jobs.settlements\" -> json!({ \"jobs\": .., \"monitors\": .. })",
+        "required": [
+          "jobs",
+          "monitors"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs JobExit",
+              "required": [
+                "jobId",
+                "status",
+                "exitCode",
+                "owner",
+                "endedAtMs",
+                "startedAtMs",
+                "command"
+              ],
+              "properties": {
+                "jobId": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "running",
+                    "exited",
+                    "killed",
+                    "interrupted",
+                    "failed"
+                  ]
+                },
+                "exitCode": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "owner": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "sessionId"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "session"
+                          ]
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "taskId"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "scheduledTask"
+                          ]
+                        },
+                        "taskId": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "app"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "endedAtMs": {
+                  "type": "integer"
+                },
+                "startedAtMs": {
+                  "type": "integer"
+                },
+                "command": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "outputTail": {
+                  "type": "string"
+                },
+                "delivery": {
+                  "type": "object",
+                  "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs JobDelivery",
+                  "required": [
+                    "sessionId",
+                    "notify"
+                  ],
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "description": "The chat session the job's end reports into (ADR-0249)."
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "notify": {
+                      "type": "string",
+                      "enum": [
+                        "on_exit",
+                        "none"
+                      ]
+                    },
+                    "stoppedBy": {
+                      "type": "string",
+                      "enum": [
+                        "agent",
+                        "person",
+                        "owner",
+                        "shutdown"
+                      ]
+                    },
+                    "claimedBy": {
+                      "type": "string",
+                      "description": "The consumer that took the delivery of this end."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "monitors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-cognia-wire-source": "lib/jobs/background-jobs.ts BackgroundMonitorRecord",
+              "required": [
+                "id",
+                "condition",
+                "owner",
+                "status",
+                "createdAtMs"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "object",
+                  "description": "Discriminated by `kind`; the per-kind fields are declared open (BackgroundMonitorCondition).",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true
+                },
+                "owner": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "sessionId"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "session"
+                          ]
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "taskId"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "scheduledTask"
+                          ]
+                        },
+                        "taskId": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "app"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "waiting",
+                    "fired",
+                    "unsatisfiable",
+                    "cancelled",
+                    "expired"
+                  ]
+                },
+                "createdAtMs": {
+                  "type": "integer"
+                },
+                "settledAtMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "expiresAtMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "detail": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "delivery": {
+                  "type": "object",
+                  "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs MonitorDelivery",
+                  "required": [
+                    "sessionId",
+                    "state"
+                  ],
+                  "properties": {
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "inline"
+                      ]
+                    },
+                    "claimedBy": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "outputTyped": true
     },
@@ -4078,6 +4478,33 @@
               "string",
               "null"
             ]
+          },
+          "delivery": {
+            "type": "object",
+            "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs MonitorDelivery",
+            "required": [
+              "sessionId",
+              "state"
+            ],
+            "properties": {
+              "sessionId": {
+                "type": "string"
+              },
+              "runId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "inline"
+                ]
+              },
+              "claimedBy": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -4286,6 +4713,33 @@
                     "string",
                     "null"
                   ]
+                },
+                "delivery": {
+                  "type": "object",
+                  "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs MonitorDelivery",
+                  "required": [
+                    "sessionId",
+                    "state"
+                  ],
+                  "properties": {
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "inline"
+                      ]
+                    },
+                    "claimedBy": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
                 }
               },
               "additionalProperties": false
@@ -4569,6 +5023,33 @@
               "string",
               "null"
             ]
+          },
+          "delivery": {
+            "type": "object",
+            "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs MonitorDelivery",
+            "required": [
+              "sessionId",
+              "state"
+            ],
+            "properties": {
+              "sessionId": {
+                "type": "string"
+              },
+              "runId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "inline"
+                ]
+              },
+              "claimedBy": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -111505,5 +111986,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "d05cc550f4437b30c26c34854b145ec93caae4d971e47fb496a45f201cb9f314"
+  "catalogHash": "4073b9ff6386c900cf5a68e8a8b7e1f6968a873d847da23298790256d366059f"
 }

@@ -2094,6 +2094,84 @@
       },
       "additionalProperties": false
     },
+    "BackgroundJobDelivery": {
+      "type": "object",
+      "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs JobDelivery",
+      "required": ["sessionId", "notify"],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "The chat session the job's end reports into (ADR-0249)."
+        },
+        "runId": {
+          "type": "string"
+        },
+        "notify": {
+          "type": "string",
+          "enum": ["on_exit", "none"]
+        },
+        "stoppedBy": {
+          "type": "string",
+          "enum": ["agent", "person", "owner", "shutdown"]
+        },
+        "claimedBy": {
+          "type": "string",
+          "description": "The consumer that took the delivery of this end."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackgroundDeliveryClaim": {
+      "type": "object",
+      "x-cognia-wire-source": "crates/cognia-jobs/src/host.rs \"jobs.claimDelivery\" -> json!({ \"claimed\": .. })",
+      "required": ["claimed"],
+      "properties": {
+        "claimed": {
+          "type": "boolean",
+          "description": "Whether this consumer holds the delivery (ADR-0249 §7)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackgroundJobExit": {
+      "type": "object",
+      "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs JobExit",
+      "required": ["jobId", "status", "exitCode", "owner", "endedAtMs", "startedAtMs", "command"],
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["running", "exited", "killed", "interrupted", "failed"]
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "owner": {
+          "$ref": "#/$defs/BackgroundJobOwner"
+        },
+        "endedAtMs": {
+          "type": "integer"
+        },
+        "startedAtMs": {
+          "type": "integer"
+        },
+        "command": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "outputTail": {
+          "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/$defs/BackgroundJobDelivery"
+        }
+      },
+      "additionalProperties": false
+    },
     "BackgroundJobList": {
       "type": "object",
       "x-cognia-wire-source": "src-tauri/src/jobs/mod.rs \"jobs.list\" -> json!({ \"jobs\": rows })",
@@ -2213,6 +2291,47 @@
       },
       "additionalProperties": false
     },
+    "BackgroundJobSettlements": {
+      "type": "object",
+      "x-cognia-wire-source": "crates/cognia-jobs/src/host.rs \"jobs.settlements\" -> json!({ \"jobs\": .., \"monitors\": .. })",
+      "required": ["jobs", "monitors"],
+      "properties": {
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BackgroundJobExit"
+          }
+        },
+        "monitors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BackgroundMonitorRecord"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackgroundMonitorDelivery": {
+      "type": "object",
+      "x-cognia-wire-source": "crates/cognia-jobs/src/types.rs MonitorDelivery",
+      "required": ["sessionId", "state"],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["pending", "inline"]
+        },
+        "claimedBy": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "BackgroundMonitorList": {
       "type": "object",
       "x-cognia-wire-source": "src-tauri/src/jobs/mod.rs \"monitors.list\" -> json!({ \"monitors\": rows })",
@@ -2267,6 +2386,9 @@
         },
         "label": {
           "type": ["string", "null"]
+        },
+        "delivery": {
+          "$ref": "#/$defs/BackgroundMonitorDelivery"
         }
       },
       "additionalProperties": false
@@ -16122,6 +16244,12 @@
     },
     "background_job_read": {
       "$ref": "#/$defs/LegacyRecord"
+    },
+    "background_job_settlements": {
+      "$ref": "#/$defs/BackgroundJobSettlements"
+    },
+    "background_job_claim_delivery": {
+      "$ref": "#/$defs/BackgroundDeliveryClaim"
     },
     "background_job_spawn_scheduled": {
       "$ref": "#/$defs/BackgroundJobRecord"

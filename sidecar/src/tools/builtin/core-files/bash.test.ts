@@ -389,6 +389,40 @@ test("bash run_in_background returns a shellId and does not block", async () => 
   await bgShells.killAll()
 })
 
+// ADR-0249: a background job reports its end into the conversation, so the
+// model is told not to poll — unless it asked for no report.
+test("bash run_in_background tells the model whether the end will be delivered", async () => {
+  const delivery = { sessionId: "chat-1" }
+  const notified = new Map<string, string | undefined>()
+  const bgShells = createBgShellRegistry({
+    delivery,
+    onSettled: (settlement) => notified.set(settlement.jobId, settlement.delivery?.notify),
+  })
+  const bash = asCallable(
+    createBashTool({ cwd: os.tmpdir(), bgShells, shell: legacyShell, delivery })
+  )
+  const delivered = await bash.handler({ command: "echo hi", run_in_background: true }, {})
+  assert.match(textOf(delivered), /delivered into this conversation/)
+  const quiet = await bash.handler(
+    { command: "echo hi", run_in_background: true, notify: "none" },
+    {}
+  )
+  assert.doesNotMatch(textOf(quiet), /delivered into this conversation/)
+  const quietId = extractShellId(textOf(quiet))
+  assert.ok(quietId)
+  const deadline = Date.now() + 10_000
+  while (!notified.has(quietId) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(notified.get(quietId), "none")
+
+  const noConversation = asCallable(
+    createBashTool({ cwd: os.tmpdir(), bgShells: createBgShellRegistry(), shell: legacyShell })
+  )
+  const local = await noConversation.handler({ command: "echo hi", run_in_background: true }, {})
+  assert.doesNotMatch(textOf(local), /delivered into this conversation/)
+})
+
 test("bash run_in_background errors without a registry", async () => {
   const bash = asCallable(createBashTool({ cwd: os.tmpdir(), shell: legacyShell }))
   const res = await bash.handler({ command: "echo hi", run_in_background: true }, {})

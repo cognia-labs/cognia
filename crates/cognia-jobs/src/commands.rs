@@ -255,6 +255,31 @@ pub async fn background_job_wait(
     .await
 }
 
+/// Ended agent-started jobs and settled agent-registered monitors, for the
+/// renderer's reconciliation on start and reconnect (ADR-0249 §7).
+pub async fn background_job_settlements(
+    session_id: Option<String>,
+    since_ms: Option<i64>,
+) -> Result<Value, String> {
+    dispatch_host_rpc(
+        "jobs.settlements",
+        &json!({ "sessionId": session_id, "sinceMs": since_ms }),
+    )
+    .await
+}
+
+pub async fn background_job_claim_delivery(
+    kind: String,
+    id: String,
+    consumer: String,
+) -> Result<Value, String> {
+    dispatch_host_rpc(
+        "jobs.claimDelivery",
+        &json!({ "kind": kind, "id": id, "consumer": consumer }),
+    )
+    .await
+}
+
 pub async fn background_monitor_list(owner: Option<JobOwner>) -> Result<Value, String> {
     dispatch_host_rpc("monitors.list", &json!({ "owner": owner })).await
 }

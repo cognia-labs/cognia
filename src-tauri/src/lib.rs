@@ -680,6 +680,8 @@ pub fn run() {
             jobs::background_job_spawn_bridge,
             jobs::background_job_spawn_session,
             jobs::background_job_wait,
+            jobs::background_job_settlements,
+            jobs::background_job_claim_delivery,
             jobs::background_monitor_list,
             jobs::background_monitor_cancel,
             jobs::background_monitor_register_scheduled,

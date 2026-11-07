@@ -45,6 +45,15 @@ pub const DETACHED_JOB_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// reload or a brief disconnect does not destroy in-flight work.
 pub const SESSION_CLOSE_GRACE: Duration = Duration::from_secs(30);
 
+/// Output tail an agent-started job's end carries into its session
+/// (ADR-0249 §2): the `bash` tool's inline output budget.
+pub const JOB_OUTPUT_TAIL_BYTES: usize = 30_000;
+
+/// How long a job's exit waits for its output pumps before the tail is read.
+/// A direct child's last bytes can still be in the pipe when it exits; a
+/// grandchild holding the pipe open must not delay the exit event further.
+pub const EXIT_TAIL_DRAIN_GRACE: Duration = Duration::from_millis(250);
+
 /// Longest a `Monitor` call blocks before degrading to an async watch.
 pub const MONITOR_BLOCKING_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 

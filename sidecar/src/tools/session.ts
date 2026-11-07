@@ -19,12 +19,14 @@ import {
   hasSessionForegroundProcesses,
 } from "./builtin/core-files/bash.ts"
 import type { HostRpcCaller } from "./state/host-background-shells.ts"
+import type { BackgroundDelivery, BackgroundJobSettlement } from "./state/background-shells.ts"
 import { randomUUID } from "node:crypto"
 
 export type ToolSessionSendOptions = Parameters<typeof makeLazyLspResolver>[0]["sendOptions"] &
   Parameters<typeof makeLazyCodeGraphResolver>[0]["sendOptions"] & {
     backgroundProcessHost?: string | undefined
     processOrigin?: { childRunId: string; dispatchEpoch: number } | undefined
+    execution?: { identity?: { runId?: string | undefined } | undefined } | undefined
   }
 
 export interface ToolSessionOptions {
@@ -35,6 +37,25 @@ export interface ToolSessionOptions {
   groupProofSupported?: boolean
   hostRpc?: HostRpcCaller | null | undefined
   log?: (level: "info" | "warn" | "error", message: string) => void
+  /**
+   * An in-process background shell ended (ADR-0249). Host-backed jobs report
+   * through the host supervisor instead.
+   */
+  onBackgroundJobSettled?: ((settlement: BackgroundJobSettlement) => void) | undefined
+}
+
+/**
+ * Where this session's agent-started jobs and monitors report their end: the
+ * conversation, and the run the executor was created for when the send named
+ * one (a durable child's run, else the execution identity's).
+ */
+export function backgroundDeliveryFor(
+  sessionId: string,
+  sendOptions: ToolSessionSendOptions
+): BackgroundDelivery | undefined {
+  if (!sessionId) return undefined
+  const runId = sendOptions.processOrigin?.childRunId ?? sendOptions.execution?.identity?.runId
+  return { sessionId, ...(runId ? { runId } : {}) }
 }
 
 const factories = {
@@ -49,14 +70,18 @@ const factories = {
 export function createToolSessionContext(
   {
     sendOptions,
+    sessionId: conversationId,
     executorId = randomUUID(),
     hostRpc,
     groupProofSupported = process.platform !== "win32",
     log = () => {},
+    onBackgroundJobSettled,
   }: ToolSessionOptions,
   dependencies: typeof factories = factories
 ) {
+  // Process/admission identity: the tools' jobs are owned by the executor.
   const sessionId = executorId
+  const delivery = backgroundDeliveryFor(conversationId, sendOptions)
   const readTracker = dependencies.createReadTracker()
   const taskStore = dependencies.createSessionTaskStore()
   const bgShells = dependencies.createSessionBgShellRegistry({
@@ -65,6 +90,8 @@ export function createToolSessionContext(
     groupProofSupported,
     backgroundProcessHost: sendOptions.backgroundProcessHost,
     processOrigin: sendOptions.processOrigin,
+    delivery,
+    onSettled: onBackgroundJobSettled,
   })
   let lsp = dependencies.makeLazyLspResolver({ sendOptions, log })
   let codeGraph = dependencies.makeLazyCodeGraphResolver({ sendOptions, log })
@@ -154,6 +181,7 @@ export function createToolSessionContext(
         bgShells,
         hostRpc,
         sessionId,
+        delivery,
         processSignal: processAdmission.signal,
         groupProofSupported,
         lspResolver: lsp.lspResolver,

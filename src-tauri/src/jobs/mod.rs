@@ -76,6 +76,25 @@ pub async fn background_job_wait(
     commands::background_job_wait(job_id, from_offset, max_bytes, wait_ms).await
 }
 
+/// Ended agent-started jobs and settled agent-registered monitors (ADR-0249).
+#[tauri::command]
+pub async fn background_job_settlements(
+    session_id: Option<String>,
+    since_ms: Option<i64>,
+) -> Result<Value, String> {
+    commands::background_job_settlements(session_id, since_ms).await
+}
+
+/// Take the delivery of an ended job's or settled monitor's outcome (ADR-0249).
+#[tauri::command]
+pub async fn background_job_claim_delivery(
+    kind: String,
+    id: String,
+    consumer: String,
+) -> Result<Value, String> {
+    commands::background_job_claim_delivery(kind, id, consumer).await
+}
+
 #[tauri::command]
 pub async fn background_monitor_list(owner: Option<JobOwner>) -> Result<Value, String> {
     commands::background_monitor_list(owner).await

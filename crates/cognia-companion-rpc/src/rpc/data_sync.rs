@@ -16,6 +16,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "message_send",
     "background_job_list",
     "background_job_read",
+    "background_job_settlements",
+    "background_job_claim_delivery",
     "background_job_kill",
     "background_job_spawn_scheduled",
     "background_job_spawn_session",
@@ -634,6 +636,21 @@ pub(super) async fn dispatch(
             let cwd: std::path::PathBuf = required(&args, "cwd")?;
             let label: Option<String> = optional(&args, "label")?;
             cognia_jobs::commands::background_job_spawn_session(session_id, command, program, argv, cwd, label)
+                .await
+                .map_err(RpcError::internal)
+        }
+        "background_job_settlements" => {
+            let session_id: Option<String> = optional(&args, "sessionId")?;
+            let since_ms: Option<i64> = optional(&args, "sinceMs")?;
+            cognia_jobs::commands::background_job_settlements(session_id, since_ms)
+                .await
+                .map_err(RpcError::internal)
+        }
+        "background_job_claim_delivery" => {
+            let kind: String = required(&args, "kind")?;
+            let id: String = required(&args, "id")?;
+            let consumer: String = required(&args, "consumer")?;
+            cognia_jobs::commands::background_job_claim_delivery(kind, id, consumer)
                 .await
                 .map_err(RpcError::internal)
         }

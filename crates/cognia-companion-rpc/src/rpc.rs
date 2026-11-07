@@ -1248,6 +1248,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     // Unified Rust background-job supervisor and durable monitors.
     "background_job_list",
     "background_job_read",
+    "background_job_settlements",
+    "background_job_claim_delivery",
     "background_job_kill",
     "background_job_spawn_scheduled",
     "background_job_spawn_session",
@@ -1598,6 +1600,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "scheduled_task_export",
     "background_job_list",
     "background_job_read",
+    "background_job_settlements",
     "background_monitor_list",
     // ADR-0056 Wave 4 — read-only external-agent list projection.
     "external_agent_list",

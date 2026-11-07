@@ -554,7 +554,16 @@ export function dispatchAiSdk({
   // Teardown for external MCP-server connections, set when they're opened.
   /** @type {(() => Promise<void>) | null} */
   let mcpClose: (() => Promise<void>) | null = null
-  const toolSession = createToolSessionContext({ sendOptions, log, hostRpc, sessionId })
+  const toolSession = createToolSessionContext({
+    sendOptions,
+    log,
+    hostRpc,
+    sessionId,
+    // An in-process shell's end, for a host with no job supervisor (the CLI).
+    // A host-backed job reports through the supervisor's `jobs://exited`.
+    onBackgroundJobSettled: (settlement) =>
+      emit({ type: "background_job_settled", sessionId, settlement }),
+  })
 
   // Agentic step budget for the WHOLE user turn. The turn runs a manual agent
   // loop (see `runTurn`) of `STEP_CHUNK`-step legs until the model naturally

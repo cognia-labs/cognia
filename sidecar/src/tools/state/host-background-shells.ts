@@ -22,7 +22,12 @@
 import { HOST_RPC_TIMEOUT_MARGIN_MS } from "../../platform/host-rpc.ts"
 import type { HostRpcClient } from "../../platform/host-rpc.ts"
 import { createBgShellRegistry } from "./background-shells.ts"
-import type { BgShellRegistry, SpawnBackgroundOptions } from "./background-shells.ts"
+import type {
+  BackgroundDelivery,
+  BackgroundJobSettlement,
+  BgShellRegistry,
+  SpawnBackgroundOptions,
+} from "./background-shells.ts"
 
 /** Cap on bytes pulled per host round-trip. */
 const READ_CHUNK_BYTES = 30_000
@@ -151,11 +156,14 @@ export function createHostBgShellRegistry({
   hostRpc,
   sessionId,
   processOrigin,
+  delivery,
   groupProofSupported = process.platform !== "win32",
 }: {
   hostRpc: HostRpcCaller
   sessionId: string
   processOrigin?: { childRunId: string; dispatchEpoch: number } | undefined
+  /** The chat session agent-started jobs report into (ADR-0249). */
+  delivery?: BackgroundDelivery | undefined
   groupProofSupported?: boolean | undefined
 }): HostBgShellRegistry {
   /** shellId → next unread absolute byte offset. */
@@ -191,6 +199,7 @@ export function createHostBgShellRegistry({
     env,
     detach,
     label,
+    notify,
   }: HostSpawnOptions): Promise<HostJobRecord> {
     const record = (await hostRpc.call("jobs.spawn", {
       command,
@@ -202,6 +211,17 @@ export function createHostBgShellRegistry({
       origin: { sessionId, ...processOrigin },
       windowsVerbatimArguments: Boolean(isWin),
       label: label ?? null,
+      // Passed into the start itself, so the exit event already carries it
+      // even when the job ends before this call returns (ADR-0249 §1).
+      ...(delivery
+        ? {
+            delivery: {
+              sessionId: delivery.sessionId,
+              ...(delivery.runId ? { runId: delivery.runId } : {}),
+              notify: notify ?? "on_exit",
+            },
+          }
+        : {}),
     })) as HostJobRecord
     cursors.set(record.id, 0)
     known.add(record.id)
@@ -447,15 +467,29 @@ export function createSessionBgShellRegistry({
   sessionId,
   backgroundProcessHost,
   processOrigin,
+  delivery,
+  onSettled,
   groupProofSupported = process.platform !== "win32",
 }: {
   hostRpc?: HostRpcCaller | null | undefined
   sessionId: string
   backgroundProcessHost?: string | undefined
   processOrigin?: { childRunId: string; dispatchEpoch: number } | undefined
+  delivery?: BackgroundDelivery | undefined
+  /**
+   * In-process shells only: the host supervisor reports a host job's end
+   * itself (`jobs://exited`).
+   */
+  onSettled?: ((settlement: BackgroundJobSettlement) => void) | undefined
   groupProofSupported?: boolean | undefined
 }): SessionBgShellRegistry {
   return hostRpc && backgroundProcessHost !== "sidecar"
-    ? createHostBgShellRegistry({ hostRpc, sessionId, processOrigin, groupProofSupported })
-    : createBgShellRegistry({ groupProofSupported })
+    ? createHostBgShellRegistry({
+        hostRpc,
+        sessionId,
+        processOrigin,
+        delivery,
+        groupProofSupported,
+      })
+    : createBgShellRegistry({ groupProofSupported, delivery, onSettled })
 }

@@ -105,6 +105,50 @@ test("spawnBackground sends the session owner and returns the host record", asyn
   assert.deepEqual(nth(calls, 0).params.args, ["-c", "pnpm dev"])
 })
 
+// ADR-0249: the start carries the conversation the job reports into, so an
+// exit that lands before this call returns already names it.
+test("spawnBackground passes the delivery contract into the start itself", async () => {
+  const { hostRpc, calls } = fakeHost({
+    "jobs.spawn": () => ({ id: "job-1", command: "pnpm test", startedAtMs: 1 }),
+  })
+  const reg = createHostBgShellRegistry({
+    hostRpc,
+    sessionId: "executor-1",
+    delivery: { sessionId: "chat-1", runId: "execution:agent:r1" },
+  })
+  const spawnOptions = {
+    command: "pnpm test",
+    shell: "/bin/sh",
+    shellArgs: ["-c", "pnpm test"],
+    cwd: "/repo",
+  }
+  await reg.spawnBackground(spawnOptions)
+  await reg.spawnBackground({ ...spawnOptions, notify: "none" })
+  assert.deepEqual(nth(calls, 0).params.owner, { kind: "session", sessionId: "executor-1" })
+  assert.deepEqual(nth(calls, 0).params.delivery, {
+    sessionId: "chat-1",
+    runId: "execution:agent:r1",
+    notify: "on_exit",
+  })
+  assert.deepEqual(nth(calls, 1).params.delivery, {
+    sessionId: "chat-1",
+    runId: "execution:agent:r1",
+    notify: "none",
+  })
+})
+
+test("a registry with no conversation starts jobs without a delivery contract", async () => {
+  const { hostRpc, calls } = fakeHost({
+    "jobs.spawn": () => ({ id: "job-1", command: "true", startedAtMs: 1 }),
+  })
+  await createHostBgShellRegistry({ hostRpc, sessionId: "executor-1" }).spawnBackground({
+    command: "true",
+    shell: "/bin/sh",
+    shellArgs: ["-c", "true"],
+  })
+  assert.equal("delivery" in nth(calls, 0).params, false)
+})
+
 test("detach promotes lifetime ownership but retains its immutable dispatch origin", async () => {
   const { hostRpc, calls } = fakeHost({ "jobs.spawn": () => ({ id: "job-1", startedAtMs: 1 }) })
   const reg = createHostBgShellRegistry({

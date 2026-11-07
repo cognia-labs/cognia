@@ -701,6 +701,18 @@ const schemas = {
     maxBytes: z.number().int().positive().optional(),
   }),
   background_job_kill: z.object({ jobId: z.string().min(1) }),
+  // ADR-0249: ended agent-started jobs and settled agent monitors, for a
+  // consumer reconciling the completions its events missed.
+  background_job_settlements: z.object({
+    sessionId: z.string().min(1).optional(),
+    sinceMs: z.number().int().nonnegative().optional(),
+  }),
+  // ADR-0249: the first consumer to claim an end is the one that delivers it.
+  background_job_claim_delivery: z.object({
+    kind: z.enum(["job", "monitor"]),
+    id: z.string().min(1),
+    consumer: z.string().min(1),
+  }),
   background_monitor_list: z.object({ owner: jobOwner.optional() }),
   background_monitor_cancel: z.object({ monitorId: z.string().min(1) }),
   background_job_spawn_scheduled: z.object({

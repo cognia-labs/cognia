@@ -19,6 +19,58 @@ import { pickStreamDecoder } from "../../platform/process/console-decode.ts"
 /** Max bytes of combined stdout+stderr retained per background shell. */
 export const MAX_RING_BYTES = 256 * 1024
 
+/**
+ * Output tail a settlement carries into its session (ADR-0249 §2): the `bash`
+ * tool's inline output budget. The host supervisor uses the same number
+ * (`crates/cognia-jobs/src/limits.rs` `JOB_OUTPUT_TAIL_BYTES`).
+ */
+export const SETTLEMENT_TAIL_CHARS = 30_000
+
+/**
+ * How long an exited shell waits for its pipes to close before it settles. A
+ * grandchild that keeps a pipe open must not hold the settlement back.
+ */
+export const SETTLEMENT_DRAIN_GRACE_MS = 250
+
+/** Whether a job's end is delivered into its session (ADR-0249 §5). */
+export type BackgroundNotify = "on_exit" | "none"
+
+/** Who stopped a job that did not end on its own. */
+export type BackgroundStopCause = "agent" | "person" | "owner" | "shutdown"
+
+/**
+ * Where an agent-started job or monitor reports its end (ADR-0249): the chat
+ * session the agent's turn runs in, not the executor id that owns the work.
+ */
+export interface BackgroundDelivery {
+  sessionId: string
+  /** The run the executor was created for, when the send named one. */
+  runId?: string | undefined
+}
+
+/**
+ * One job's end, in the host supervisor's `JobExit` wire shape so a consumer
+ * settles a host job and an in-process shell the same way.
+ */
+export interface BackgroundJobSettlement {
+  jobId: string
+  status: "exited" | "killed" | "interrupted" | "failed"
+  exitCode: number | null
+  startedAtMs: number
+  endedAtMs: number
+  command: string
+  label?: string | undefined
+  outputTail?: string | undefined
+  delivery?:
+    | {
+        sessionId: string
+        runId?: string | undefined
+        notify: BackgroundNotify
+        stoppedBy?: BackgroundStopCause | undefined
+      }
+    | undefined
+}
+
 export type BgShellStatus = "running" | "exited"
 
 export interface BgShellEntry {
@@ -36,6 +88,10 @@ export interface BgShellEntry {
   endedAt: number | null
   cwd: string | undefined
   waiters: Set<() => void>
+  label?: string | undefined
+  notify: BackgroundNotify
+  /** Set when a kill, not the program, ended it. */
+  stoppedBy?: BackgroundStopCause | undefined
 }
 
 export interface SpawnBackgroundOptions {
@@ -45,6 +101,9 @@ export interface SpawnBackgroundOptions {
   cwd?: string | undefined
   isWin?: boolean | undefined
   env?: NodeJS.ProcessEnv | undefined
+  label?: string | null | undefined
+  /** Default `on_exit`: the end is delivered into the session. */
+  notify?: BackgroundNotify | undefined
 }
 
 export interface ReadOptions {
@@ -85,7 +144,15 @@ export interface BgShellRegistry {
 /** Create a fresh per-session background-shell registry. */
 export function createBgShellRegistry({
   groupProofSupported = process.platform !== "win32",
-}: { groupProofSupported?: boolean } = {}): BgShellRegistry {
+  delivery,
+  onSettled,
+}: {
+  groupProofSupported?: boolean
+  /** The session agent-started shells report into; absent, nothing is reported. */
+  delivery?: BackgroundDelivery | undefined
+  /** Called once per shell when it ends, for a session with a delivery. */
+  onSettled?: ((settlement: BackgroundJobSettlement) => void) | undefined
+} = {}): BgShellRegistry {
   const shells = new Map<string, BgShellEntry>()
   let proofUnavailable = false
   const groups = new Map<string, ProcessGroup>()
@@ -99,6 +166,8 @@ export function createBgShellRegistry({
     cwd,
     isWin,
     env,
+    label,
+    notify = "on_exit",
   }: SpawnBackgroundOptions): BgShellEntry {
     if (closing) throw new Error("background shell registry is closing")
     const id = randomUUID()
@@ -125,6 +194,8 @@ export function createBgShellRegistry({
       endedAt: null,
       cwd,
       waiters: new Set(),
+      ...(label ? { label } : {}),
+      notify,
     }
     groups.set(id, trackChildProcessGroup(child, groupProofSupported))
     if (!groupProofSupported) proofUnavailable = true
@@ -155,6 +226,36 @@ export function createBgShellRegistry({
       }
       notifyWaiters()
     }
+    // Report the end once, with the output that arrived: on `close`, or a
+    // short grace after `exit` when a grandchild keeps the pipes open.
+    let reported = false
+    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    const report = () => {
+      if (reported) return
+      reported = true
+      if (graceTimer) clearTimeout(graceTimer)
+      if (!delivery || !onSettled) return
+      try {
+        onSettled({
+          jobId: entry.id,
+          status: entry.stoppedBy ? "killed" : "exited",
+          exitCode: entry.stoppedBy ? null : entry.exitCode,
+          startedAtMs: entry.startedAt,
+          endedAtMs: entry.endedAt ?? Date.now(),
+          command: entry.command,
+          ...(entry.label ? { label: entry.label } : {}),
+          outputTail: entry.buffer.slice(-SETTLEMENT_TAIL_CHARS),
+          delivery: {
+            sessionId: delivery.sessionId,
+            ...(delivery.runId ? { runId: delivery.runId } : {}),
+            notify: entry.notify,
+            ...(entry.stoppedBy ? { stoppedBy: entry.stoppedBy } : {}),
+          },
+        })
+      } catch {
+        // A consumer's failure must not break the shell's own lifecycle.
+      }
+    }
     child.stdout?.on("data", cap)
     child.stderr?.on("data", cap)
     child.on("error", (err: Error) => {
@@ -165,12 +266,15 @@ export function createBgShellRegistry({
         entry.endedAt = Date.now()
         notifyWaiters()
       }
+      report()
     })
     child.on("exit", (code) => {
       entry.status = "exited"
       entry.exitCode = code
       entry.endedAt = Date.now()
       notifyWaiters()
+      graceTimer ??= setTimeout(report, SETTLEMENT_DRAIN_GRACE_MS)
+      graceTimer.unref?.()
     })
     child.on("close", (code) => {
       if (decoder) cap(decoder.decode())
@@ -178,6 +282,7 @@ export function createBgShellRegistry({
       entry.exitCode = code
       entry.endedAt = Date.now()
       notifyWaiters()
+      report()
     })
     shells.set(id, entry)
     return entry
@@ -260,6 +365,9 @@ export function createBgShellRegistry({
     const entry = shells.get(id)
     if (!entry) return { ok: false, reason: "not_found" }
     if (entry.status === "running") {
+      // Only the agent's own tools reach this registry's kill (`kill_shell`,
+      // `terminate_process`): its stop does not wake it.
+      entry.stoppedBy ??= "agent"
       try {
         signalEntry(entry, signal)
       } catch {
@@ -276,6 +384,7 @@ export function createBgShellRegistry({
       const pending = () => (groupProofSupported ? groupIsLive(entry) : entry.status === "running")
       const start = Date.now()
       let escalated = false
+      if (entry.status === "running") entry.stoppedBy ??= "owner"
       try {
         if (pending()) signalEntry(entry)
       } catch {

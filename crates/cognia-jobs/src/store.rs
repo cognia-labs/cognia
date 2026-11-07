@@ -16,7 +16,8 @@ use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::types::{
-    JobError, JobOrigin, JobOwner, JobRecord, JobStatus, MonitorRecord, MonitorStatus, Result,
+    JobDelivery, JobError, JobNotify, JobOrigin, JobOwner, JobRecord, JobStatus, JobStopCause,
+    MonitorDelivery, MonitorDeliveryState, MonitorRecord, MonitorStatus, Result,
 };
 
 fn map_sql_err(err: rusqlite::Error) -> JobError {
@@ -76,7 +77,38 @@ CREATE TABLE IF NOT EXISTS monitors (
 
 CREATE INDEX IF NOT EXISTS idx_monitors_status ON monitors(status);
 CREATE INDEX IF NOT EXISTS idx_monitors_owner ON monitors(owner_kind, owner_id);
+
+-- The agent-facing contract of work an agent started (ADR-0249): the session
+-- and run its end reports into, whether it reports, and who stopped a job.
+-- Read back on every consumer start to settle what an event never reached.
+CREATE TABLE IF NOT EXISTS job_deliveries (
+    job_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    run_id TEXT,
+    notify TEXT NOT NULL DEFAULT 'on_exit',
+    stopped_by TEXT,
+    claimed_by TEXT,
+    claimed_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_job_deliveries_session ON job_deliveries(session_id);
+
+CREATE TABLE IF NOT EXISTS monitor_deliveries (
+    monitor_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    run_id TEXT,
+    state TEXT NOT NULL DEFAULT 'pending',
+    claimed_by TEXT,
+    claimed_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_monitor_deliveries_session ON monitor_deliveries(session_id);
 "#;
+
+/// Monitor rows with their delivery contract, when an agent registered them.
+const MONITOR_SELECT: &str =
+    "SELECT monitors.*, monitor_deliveries.session_id AS delivery_session_id, \
+     monitor_deliveries.run_id AS delivery_run_id, monitor_deliveries.state AS delivery_state, \
+     monitor_deliveries.claimed_by AS delivery_claimed_by \
+     FROM monitors LEFT JOIN monitor_deliveries ON monitor_deliveries.monitor_id = monitors.id";
 
 pub struct JobStore {
     conn: Mutex<Connection>,
@@ -128,6 +160,18 @@ impl JobStore {
         rec: &JobRecord,
         origin: Option<&JobOrigin>,
     ) -> Result<()> {
+        self.insert_attributed(rec, origin, None)
+    }
+
+    /// Insert a job with its attribution and its delivery contract in one
+    /// transaction: an exit can never be recorded for a job whose contract
+    /// is missing.
+    pub(crate) fn insert_attributed(
+        &self,
+        rec: &JobRecord,
+        origin: Option<&JobOrigin>,
+        delivery: Option<&JobDelivery>,
+    ) -> Result<()> {
         #[cfg(test)]
         if self.fail_next_insert.swap(false, std::sync::atomic::Ordering::SeqCst) {
             return Err(JobError::Store("injected journal write failure".into()));
@@ -165,8 +209,85 @@ impl JobStore {
                 params![rec.id, origin.session_id, origin.child_run_id, origin.dispatch_epoch],
             ).map_err(map_sql_err)?;
         }
+        if let Some(delivery) = delivery {
+            tx.execute(
+                "INSERT INTO job_deliveries (job_id, session_id, run_id, notify) VALUES (?1, ?2, ?3, ?4)",
+                params![rec.id, delivery.session_id, delivery.run_id, notify_str(delivery.notify)],
+            )
+            .map_err(map_sql_err)?;
+        }
         tx.commit().map_err(map_sql_err)?;
         Ok(())
+    }
+
+    /// The delivery contract of an agent-started job.
+    pub fn job_delivery(&self, job_id: &str) -> Result<Option<JobDelivery>> {
+        self.conn
+            .lock()
+            .query_row(
+                "SELECT session_id, run_id, notify, stopped_by, claimed_by FROM job_deliveries \
+                 WHERE job_id = ?1",
+                [job_id],
+                row_to_job_delivery,
+            )
+            .optional()
+            .map_err(map_sql_err)
+    }
+
+    /// Record who stopped a job. The first cause wins: a teardown that lands
+    /// after the agent's own `kill_shell` does not turn it into a wake.
+    pub fn mark_job_stopped_by(&self, job_id: &str, cause: JobStopCause) -> Result<()> {
+        self.conn
+            .lock()
+            .execute(
+                "UPDATE job_deliveries SET stopped_by = ?2 WHERE job_id = ?1 AND stopped_by IS NULL",
+                params![job_id, cause.as_str()],
+            )
+            .map_err(map_sql_err)?;
+        Ok(())
+    }
+
+    /// Ended agent-started jobs with their delivery contract, newest first,
+    /// optionally for one session and ended at or after `since_ms`.
+    pub fn list_job_settlements(
+        &self,
+        session_id: Option<&str>,
+        since_ms: Option<i64>,
+    ) -> Result<Vec<(JobRecord, JobDelivery)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT jobs.*, job_deliveries.session_id AS delivery_session_id, \
+                 job_deliveries.run_id AS delivery_run_id, job_deliveries.notify AS delivery_notify, \
+                 job_deliveries.stopped_by AS delivery_stopped_by, \
+                 job_deliveries.claimed_by AS delivery_claimed_by \
+                 FROM jobs JOIN job_deliveries ON job_deliveries.job_id = jobs.id \
+                 WHERE jobs.status != 'running' \
+                   AND (?1 IS NULL OR job_deliveries.session_id = ?1) \
+                   AND (?2 IS NULL OR COALESCE(jobs.ended_at_ms, jobs.started_at_ms) >= ?2) \
+                 ORDER BY COALESCE(jobs.ended_at_ms, jobs.started_at_ms) DESC",
+            )
+            .map_err(map_sql_err)?;
+        let rows = stmt
+            .query_map(params![session_id, since_ms], |row| {
+                Ok((
+                    row_to_job(row)?,
+                    JobDelivery {
+                        session_id: row.get("delivery_session_id")?,
+                        run_id: row.get("delivery_run_id")?,
+                        notify: parse_notify(&row.get::<_, String>("delivery_notify")?),
+                        stopped_by: row
+                            .get::<_, Option<String>>("delivery_stopped_by")?
+                            .as_deref()
+                            .and_then(JobStopCause::parse),
+                        claimed_by: row.get("delivery_claimed_by")?,
+                    },
+                ))
+            })
+            .map_err(map_sql_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql_err)?;
+        Ok(rows)
     }
 
     /// Include promoted jobs, and legacy session-owned rows without attribution.
@@ -324,6 +445,8 @@ impl JobStore {
         let tx = conn.transaction().map_err(map_sql_err)?;
         tx.execute("DELETE FROM job_origins WHERE job_id = ?1", params![id])
             .map_err(map_sql_err)?;
+        tx.execute("DELETE FROM job_deliveries WHERE job_id = ?1", params![id])
+            .map_err(map_sql_err)?;
         tx.execute("DELETE FROM jobs WHERE id = ?1", params![id])
             .map_err(map_sql_err)?;
         tx.commit().map_err(map_sql_err)?;
@@ -363,8 +486,9 @@ impl JobStore {
     pub fn insert_monitor(&self, rec: &MonitorRecord) -> Result<()> {
         let condition_json =
             serde_json::to_string(&rec.condition).map_err(|e| JobError::Store(e.to_string()))?;
-        let conn = self.conn.lock();
-        conn.execute(
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction().map_err(map_sql_err)?;
+        tx.execute(
             r#"
             INSERT INTO monitors (
                 id, condition_json, owner_kind, owner_id, status,
@@ -385,7 +509,113 @@ impl JobStore {
             ],
         )
         .map_err(map_sql_err)?;
+        if let Some(delivery) = &rec.delivery {
+            tx.execute(
+                "INSERT INTO monitor_deliveries (monitor_id, session_id, run_id, state) VALUES (?1, ?2, ?3, ?4)",
+                params![rec.id, delivery.session_id, delivery.run_id, delivery.state.as_str()],
+            )
+            .map_err(map_sql_err)?;
+        }
+        tx.commit().map_err(map_sql_err)?;
         Ok(())
+    }
+
+    /// Mark that a blocking `Monitor` call returned this monitor's outcome
+    /// inline, so no consumer delivers it a second time. A delivery a
+    /// consumer already claimed stays claimed: the agent then hears the
+    /// outcome twice, never not at all. Returns whether it was marked.
+    pub fn mark_monitor_delivered_inline(&self, id: &str) -> Result<bool> {
+        let changed = self
+            .conn
+            .lock()
+            .execute(
+                "UPDATE monitor_deliveries SET state = 'inline' \
+                 WHERE monitor_id = ?1 AND claimed_by IS NULL",
+                params![id],
+            )
+            .map_err(map_sql_err)?;
+        Ok(changed > 0)
+    }
+
+    /// Take the delivery of an ended agent-started job for `consumer`
+    /// (ADR-0249 §7). Several consumers may hear one end (a window and a Host
+    /// brain), and only the first to claim it delivers. The claimant may claim
+    /// again (a reload retrying its own delivery). A job still running, one
+    /// whose agent asked for no report, or one another consumer took is
+    /// refused.
+    pub fn claim_job_delivery(&self, job_id: &str, consumer: &str, now_ms: i64) -> Result<bool> {
+        let changed = self
+            .conn
+            .lock()
+            .execute(
+                "UPDATE job_deliveries SET claimed_by = ?2, claimed_at_ms = COALESCE(claimed_at_ms, ?3) \
+                 WHERE job_id = ?1 AND notify = 'on_exit' \
+                   AND (claimed_by IS NULL OR claimed_by = ?2) \
+                   AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id = ?1 AND jobs.status != 'running')",
+                params![job_id, consumer, now_ms],
+            )
+            .map_err(map_sql_err)?;
+        Ok(changed > 0)
+    }
+
+    /// Take the delivery of a settled agent-registered monitor, as
+    /// [`Self::claim_job_delivery`]. An outcome a blocking call returned
+    /// inline is refused.
+    pub fn claim_monitor_delivery(
+        &self,
+        monitor_id: &str,
+        consumer: &str,
+        now_ms: i64,
+    ) -> Result<bool> {
+        let changed = self
+            .conn
+            .lock()
+            .execute(
+                "UPDATE monitor_deliveries SET claimed_by = ?2, claimed_at_ms = COALESCE(claimed_at_ms, ?3) \
+                 WHERE monitor_id = ?1 AND state = 'pending' \
+                   AND (claimed_by IS NULL OR claimed_by = ?2) \
+                   AND EXISTS (SELECT 1 FROM monitors WHERE monitors.id = ?1 AND monitors.status != 'waiting')",
+                params![monitor_id, consumer, now_ms],
+            )
+            .map_err(map_sql_err)?;
+        Ok(changed > 0)
+    }
+
+    /// Undo an inline mark the blocking wait did not honour.
+    pub fn set_monitor_delivery_pending(&self, id: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .execute(
+                "UPDATE monitor_deliveries SET state = 'pending' WHERE monitor_id = ?1",
+                params![id],
+            )
+            .map_err(map_sql_err)?;
+        Ok(())
+    }
+
+    /// Settled agent-registered monitors, newest first, optionally for one
+    /// session and settled at or after `since_ms`.
+    pub fn list_monitor_settlements(
+        &self,
+        session_id: Option<&str>,
+        since_ms: Option<i64>,
+    ) -> Result<Vec<MonitorRecord>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(&format!(
+                "{MONITOR_SELECT} WHERE monitors.status != 'waiting' \
+                   AND monitor_deliveries.monitor_id IS NOT NULL \
+                   AND (?1 IS NULL OR monitor_deliveries.session_id = ?1) \
+                   AND (?2 IS NULL OR COALESCE(monitors.settled_at_ms, monitors.created_at_ms) >= ?2) \
+                 ORDER BY COALESCE(monitors.settled_at_ms, monitors.created_at_ms) DESC"
+            ))
+            .map_err(map_sql_err)?;
+        let rows = stmt
+            .query_map(params![session_id, since_ms], row_to_monitor)
+            .map_err(map_sql_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql_err)?;
+        Ok(rows)
     }
 
     /// Record a monitor's terminal outcome. Idempotent on the same principle as
@@ -415,7 +645,7 @@ impl JobStore {
     pub fn get_monitor(&self, id: &str) -> Result<Option<MonitorRecord>> {
         let conn = self.conn.lock();
         conn.query_row(
-            "SELECT * FROM monitors WHERE id = ?1",
+            &format!("{MONITOR_SELECT} WHERE monitors.id = ?1"),
             params![id],
             row_to_monitor,
         )
@@ -427,16 +657,15 @@ impl JobStore {
         let conn = self.conn.lock();
         let mut stmt = match owner {
             Some(_) => conn
-                .prepare(
-                    r#"
-                    SELECT * FROM monitors
-                     WHERE owner_kind = ?1 AND (owner_id IS ?2)
-                     ORDER BY created_at_ms DESC
-                    "#,
-                )
+                .prepare(&format!(
+                    "{MONITOR_SELECT} WHERE monitors.owner_kind = ?1 AND (monitors.owner_id IS ?2) \
+                     ORDER BY monitors.created_at_ms DESC"
+                ))
                 .map_err(map_sql_err)?,
             None => conn
-                .prepare("SELECT * FROM monitors ORDER BY created_at_ms DESC")
+                .prepare(&format!(
+                    "{MONITOR_SELECT} ORDER BY monitors.created_at_ms DESC"
+                ))
                 .map_err(map_sql_err)?,
         };
         let rows = match owner {
@@ -459,7 +688,9 @@ impl JobStore {
     pub fn list_waiting_monitors(&self) -> Result<Vec<MonitorRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn
-            .prepare("SELECT * FROM monitors WHERE status = 'waiting' ORDER BY created_at_ms DESC")
+            .prepare(&format!(
+                "{MONITOR_SELECT} WHERE monitors.status = 'waiting' ORDER BY monitors.created_at_ms DESC"
+            ))
             .map_err(map_sql_err)?;
         let rows = stmt
             .query_map([], row_to_monitor)
@@ -509,6 +740,47 @@ fn row_to_monitor(row: &Row<'_>) -> rusqlite::Result<MonitorRecord> {
         expires_at_ms: row.get("expires_at_ms")?,
         detail: row.get("detail")?,
         label: row.get("label")?,
+        delivery: match row.get::<_, Option<String>>("delivery_session_id")? {
+            Some(session_id) => Some(MonitorDelivery {
+                session_id,
+                run_id: row.get("delivery_run_id")?,
+                state: row
+                    .get::<_, Option<String>>("delivery_state")?
+                    .as_deref()
+                    .and_then(MonitorDeliveryState::parse)
+                    .unwrap_or(MonitorDeliveryState::Pending),
+                claimed_by: row.get("delivery_claimed_by")?,
+            }),
+            None => None,
+        },
+    })
+}
+
+fn notify_str(notify: JobNotify) -> &'static str {
+    match notify {
+        JobNotify::OnExit => "on_exit",
+        JobNotify::None => "none",
+    }
+}
+
+fn parse_notify(raw: &str) -> JobNotify {
+    if raw == "none" {
+        JobNotify::None
+    } else {
+        JobNotify::OnExit
+    }
+}
+
+fn row_to_job_delivery(row: &Row<'_>) -> rusqlite::Result<JobDelivery> {
+    Ok(JobDelivery {
+        session_id: row.get("session_id")?,
+        run_id: row.get("run_id")?,
+        notify: parse_notify(&row.get::<_, String>("notify")?),
+        stopped_by: row
+            .get::<_, Option<String>>("stopped_by")?
+            .as_deref()
+            .and_then(JobStopCause::parse),
+        claimed_by: row.get("claimed_by")?,
     })
 }
 
@@ -626,6 +898,7 @@ mod tests {
                     expires_at_ms: Some(12345),
                     detail: None,
                     label: Some("watch".into()),
+                    delivery: None,
                 })
                 .unwrap();
         }

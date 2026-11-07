@@ -182,7 +182,79 @@ pub struct JobOutputSlice {
     pub has_more: bool,
 }
 
-/// Why a job stopped, for the `job:exited` scheduler event and notifications.
+/// Whether a job's end is reported back to the agent that started it
+/// (ADR-0249 §5). Wire values match the `bash` tool's `notify` argument.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobNotify {
+    /// Deliver the job's end into the session that started it. The default.
+    #[default]
+    #[serde(rename = "on_exit")]
+    OnExit,
+    /// The agent reads the job itself (`bash_output`); nothing is delivered.
+    #[serde(rename = "none")]
+    None,
+}
+
+/// Who stopped a job that did not end on its own. A job the agent stopped
+/// with `kill_shell` does not wake it (ADR-0249 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JobStopCause {
+    /// The agent's own session asked (`kill_shell`, a scoped kill).
+    Agent,
+    /// A person, from the Job Center or another unscoped surface.
+    Person,
+    /// The owner went away: its session closed or its origin was torn down.
+    Owner,
+    /// The host shut down.
+    Shutdown,
+}
+
+impl JobStopCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobStopCause::Agent => "agent",
+            JobStopCause::Person => "person",
+            JobStopCause::Owner => "owner",
+            JobStopCause::Shutdown => "shutdown",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "agent" => Some(JobStopCause::Agent),
+            "person" => Some(JobStopCause::Person),
+            "owner" => Some(JobStopCause::Owner),
+            "shutdown" => Some(JobStopCause::Shutdown),
+            _ => None,
+        }
+    }
+}
+
+/// The agent-facing contract of a job an agent started (ADR-0249): the
+/// session and run it reports into, whether it reports at all, and who
+/// stopped it. Passed into the start call, so the exit event carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobDelivery {
+    pub session_id: String,
+    /// The execution run whose turn started the job, when the caller knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub notify: JobNotify,
+    /// Set by the supervisor, never by a caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_by: Option<JobStopCause>,
+    /// The consumer that took the delivery of this end (ADR-0249 §7): a
+    /// window and a Host brain may both hear it, and only the claimant
+    /// delivers. Set by the supervisor, never by a caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<String>,
+}
+
+/// Why a job stopped, for the `job:exited` scheduler event, notifications and
+/// the agent that started it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobExit {
@@ -191,6 +263,19 @@ pub struct JobExit {
     pub exit_code: Option<i32>,
     pub owner: JobOwner,
     pub ended_at_ms: i64,
+    #[serde(default)]
+    pub started_at_ms: i64,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The last [`crate::limits::JOB_OUTPUT_TAIL_BYTES`] of output at exit;
+    /// the full log stays readable through `bash_output`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tail: Option<String>,
+    /// Present when an agent started the job (ADR-0249).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<JobDelivery>,
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +378,53 @@ impl MonitorStatus {
     }
 }
 
+/// Whether a settled monitor's outcome still has to reach its agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MonitorDeliveryState {
+    /// Delivered later, into the session, when it settles.
+    Pending,
+    /// A blocking `Monitor` call was waiting when it settled and returned the
+    /// outcome inline: it is never delivered a second time (ADR-0249 §5).
+    Inline,
+}
+
+impl MonitorDeliveryState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MonitorDeliveryState::Pending => "pending",
+            MonitorDeliveryState::Inline => "inline",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "pending" => Some(MonitorDeliveryState::Pending),
+            "inline" => Some(MonitorDeliveryState::Inline),
+            _ => None,
+        }
+    }
+}
+
+/// The agent-facing contract of a monitor an agent registered (ADR-0249).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorDelivery {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Set by the registry, never by a caller.
+    #[serde(default = "pending_delivery")]
+    pub state: MonitorDeliveryState,
+    /// The consumer that took the delivery, as for [`JobDelivery`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<String>,
+}
+
+fn pending_delivery() -> MonitorDeliveryState {
+    MonitorDeliveryState::Pending
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorRecord {
@@ -307,6 +439,9 @@ pub struct MonitorRecord {
     /// Why it settled the way it did — the text handed to the model.
     pub detail: Option<String>,
     pub label: Option<String>,
+    /// Present when an agent registered the monitor (ADR-0249).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<MonitorDelivery>,
 }
 
 #[derive(Debug, thiserror::Error)]

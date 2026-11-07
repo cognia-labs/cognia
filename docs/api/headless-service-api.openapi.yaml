@@ -6420,6 +6420,193 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
       x-cognia-response-schema-source: contract
+  /internal/_rpc/background_job_claim_delivery:
+    post:
+      operationId: internalRpcBackgroundJobClaimDelivery
+      tags:
+        - headless-rpc
+      summary: background_job_claim_delivery (process.spawn)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: zod-contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - job
+                    - monitor
+                id:
+                  type: string
+                  minLength: 1
+                consumer:
+                  type: string
+                  minLength: 1
+              required:
+                - kind
+                - id
+                - consumer
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                x-cognia-wire-source: 'crates/cognia-jobs/src/host.rs "jobs.claimDelivery" -> json!({ "claimed": .. })'
+                required:
+                  - claimed
+                properties:
+                  claimed:
+                    type: boolean
+                    description: Whether this consumer holds the delivery (ADR-0249 §7).
+                additionalProperties: false
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
   /internal/_rpc/background_job_kill:
     post:
       operationId: internalRpcBackgroundJobKill
@@ -7010,6 +7197,387 @@ paths:
                 x-cognia-opaque-reason: The command serializes an existing domain record whose stable root is an object; property-level
                   compatibility remains owned by that domain.
                 x-cognia-schema-owner: background-jobs
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/background_job_settlements:
+    post:
+      operationId: internalRpcBackgroundJobSettlements
+      tags:
+        - headless-rpc
+      summary: background_job_settlements (process.spawn)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: zod-contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+                sinceMs:
+                  type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                x-cognia-wire-source: 'crates/cognia-jobs/src/host.rs "jobs.settlements" -> json!({ "jobs": .., "monitors": .. })'
+                required:
+                  - jobs
+                  - monitors
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      type: object
+                      x-cognia-wire-source: crates/cognia-jobs/src/types.rs JobExit
+                      required:
+                        - jobId
+                        - status
+                        - exitCode
+                        - owner
+                        - endedAtMs
+                        - startedAtMs
+                        - command
+                      properties:
+                        jobId:
+                          type: string
+                        status:
+                          type: string
+                          enum:
+                            - running
+                            - exited
+                            - killed
+                            - interrupted
+                            - failed
+                        exitCode:
+                          type:
+                            - integer
+                            - "null"
+                        owner:
+                          oneOf:
+                            - type: object
+                              required:
+                                - kind
+                                - sessionId
+                              properties:
+                                kind:
+                                  type: string
+                                  enum:
+                                    - session
+                                sessionId:
+                                  type: string
+                              additionalProperties: false
+                            - type: object
+                              required:
+                                - kind
+                                - taskId
+                              properties:
+                                kind:
+                                  type: string
+                                  enum:
+                                    - scheduledTask
+                                taskId:
+                                  type: string
+                              additionalProperties: false
+                            - type: object
+                              required:
+                                - kind
+                              properties:
+                                kind:
+                                  type: string
+                                  enum:
+                                    - app
+                              additionalProperties: false
+                        endedAtMs:
+                          type: integer
+                        startedAtMs:
+                          type: integer
+                        command:
+                          type: string
+                        label:
+                          type: string
+                        outputTail:
+                          type: string
+                        delivery:
+                          type: object
+                          x-cognia-wire-source: crates/cognia-jobs/src/types.rs JobDelivery
+                          required:
+                            - sessionId
+                            - notify
+                          properties:
+                            sessionId:
+                              type: string
+                              description: The chat session the job's end reports into (ADR-0249).
+                            runId:
+                              type: string
+                            notify:
+                              type: string
+                              enum:
+                                - on_exit
+                                - none
+                            stoppedBy:
+                              type: string
+                              enum:
+                                - agent
+                                - person
+                                - owner
+                                - shutdown
+                            claimedBy:
+                              type: string
+                              description: The consumer that took the delivery of this end.
+                          additionalProperties: false
+                      additionalProperties: false
+                  monitors:
+                    type: array
+                    items:
+                      type: object
+                      x-cognia-wire-source: lib/jobs/background-jobs.ts BackgroundMonitorRecord
+                      required:
+                        - id
+                        - condition
+                        - owner
+                        - status
+                        - createdAtMs
+                      properties:
+                        id:
+                          type: string
+                        condition:
+                          type: object
+                          description: Discriminated by `kind`; the per-kind fields are declared open (BackgroundMonitorCondition).
+                          required:
+                            - kind
+                          properties:
+                            kind:
+                              type: string
+                          additionalProperties: true
+                        owner:
+                          oneOf:
+                            - type: object
+                              required:
+                                - kind
+                                - sessionId
+                              properties:
+                                kind:
+                                  type: string
+                                  enum:
+                                    - session
+                                sessionId:
+                                  type: string
+                              additionalProperties: false
+                            - type: object
+                              required:
+                                - kind
+                                - taskId
+                              properties:
+                                kind:
+                                  type: string
+                                  enum:
+                                    - scheduledTask
+                                taskId:
+                                  type: string
+                              additionalProperties: false
+                            - type: object
+                              required:
+                                - kind
+                              properties:
+                                kind:
+                                  type: string
+                                  enum:
+                                    - app
+                              additionalProperties: false
+                        status:
+                          type: string
+                          enum:
+                            - waiting
+                            - fired
+                            - unsatisfiable
+                            - cancelled
+                            - expired
+                        createdAtMs:
+                          type: integer
+                        settledAtMs:
+                          type:
+                            - integer
+                            - "null"
+                        expiresAtMs:
+                          type:
+                            - integer
+                            - "null"
+                        detail:
+                          type:
+                            - string
+                            - "null"
+                        label:
+                          type:
+                            - string
+                            - "null"
+                        delivery:
+                          type: object
+                          x-cognia-wire-source: crates/cognia-jobs/src/types.rs MonitorDelivery
+                          required:
+                            - sessionId
+                            - state
+                          properties:
+                            sessionId:
+                              type: string
+                            runId:
+                              type: string
+                            state:
+                              type: string
+                              enum:
+                                - pending
+                                - inline
+                            claimedBy:
+                              type: string
+                          additionalProperties: false
+                      additionalProperties: false
+                additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
           content:
@@ -7798,6 +8366,25 @@ paths:
                     type:
                       - string
                       - "null"
+                  delivery:
+                    type: object
+                    x-cognia-wire-source: crates/cognia-jobs/src/types.rs MonitorDelivery
+                    required:
+                      - sessionId
+                      - state
+                    properties:
+                      sessionId:
+                        type: string
+                      runId:
+                        type: string
+                      state:
+                        type: string
+                        enum:
+                          - pending
+                          - inline
+                      claimedBy:
+                        type: string
+                    additionalProperties: false
                 additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
@@ -8083,6 +8670,25 @@ paths:
                           type:
                             - string
                             - "null"
+                        delivery:
+                          type: object
+                          x-cognia-wire-source: crates/cognia-jobs/src/types.rs MonitorDelivery
+                          required:
+                            - sessionId
+                            - state
+                          properties:
+                            sessionId:
+                              type: string
+                            runId:
+                              type: string
+                            state:
+                              type: string
+                              enum:
+                                - pending
+                                - inline
+                            claimedBy:
+                              type: string
+                          additionalProperties: false
                       additionalProperties: false
                 additionalProperties: false
         "202":
@@ -8422,6 +9028,25 @@ paths:
                     type:
                       - string
                       - "null"
+                  delivery:
+                    type: object
+                    x-cognia-wire-source: crates/cognia-jobs/src/types.rs MonitorDelivery
+                    required:
+                      - sessionId
+                      - state
+                    properties:
+                      sessionId:
+                        type: string
+                      runId:
+                        type: string
+                      state:
+                        type: string
+                        enum:
+                          - pending
+                          - inline
+                      claimedBy:
+                        type: string
+                    additionalProperties: false
                 additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
@@ -226185,9 +226810,11 @@ components:
           - automation_kill_switch
           - automation_kill_switch_engaged
           - automation_settings_get
+          - background_job_claim_delivery
           - background_job_kill
           - background_job_list
           - background_job_read
+          - background_job_settlements
           - background_job_spawn_scheduled
           - background_job_spawn_session
           - background_monitor_cancel
@@ -227432,10 +228059,10 @@ x-cognia-generated:
     - protocol/headless-command-dispositions.json
     - protocol/companion-command-renames.json
     - scripts/build/companion-request-schema-contracts.mjs
-  internalCommandCount: 995
-  generatedRequestSchemaCount: 995
+  internalCommandCount: 997
+  generatedRequestSchemaCount: 997
   runtimeInferredRequestSchemaCount: 0
-  contractRequestSchemaCount: 995
+  contractRequestSchemaCount: 997
   genericRequestSchemaCount: 0
-  generatedResponseSchemaCount: 995
+  generatedResponseSchemaCount: 997
   loopbackOnly: true

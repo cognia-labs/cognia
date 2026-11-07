@@ -3,7 +3,12 @@ import assert from "node:assert/strict"
 import os from "node:os"
 
 import { createBgShellRegistry, MAX_RING_BYTES } from "./background-shells.ts"
-import type { BgShellRegistry, ReadResult, SpawnBackgroundOptions } from "./background-shells.ts"
+import type {
+  BackgroundJobSettlement,
+  BgShellRegistry,
+  ReadResult,
+  SpawnBackgroundOptions,
+} from "./background-shells.ts"
 
 const isWin = process.platform === "win32"
 
@@ -114,6 +119,73 @@ test("spawnBackground captures output and reports exit", async (t) => {
   assert.equal(r.status, "exited")
   assert.equal(r.exitCode, 0)
   assert.match(r.data, /bg-shell-ok/)
+})
+
+async function settlementOf(
+  settled: BackgroundJobSettlement[],
+  id: string,
+  timeoutMs = 10_000
+): Promise<BackgroundJobSettlement> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const found = settled.find((settlement) => settlement.jobId === id)
+    if (found) return found
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`shell ${id} never settled`)
+}
+
+// ADR-0249: an in-process shell (the CLI's) reports its end in the host
+// supervisor's `JobExit` shape, with the conversation it reports into.
+test("an ended shell is reported once with its exit code, tail and delivery", async (t) => {
+  const settled: BackgroundJobSettlement[] = []
+  const reg = fixtureRegistry(t, {
+    delivery: { sessionId: "chat-1", runId: "execution:agent:r1" },
+    onSettled: (settlement) => settled.push(settlement),
+  })
+  const entry = reg.spawnBackground({
+    ...inv(isWin ? "echo settled-tail & exit 4" : "echo settled-tail; exit 4"),
+    label: "build",
+  })
+  const settlement = await settlementOf(settled, entry.id)
+  assert.equal(settlement.status, "exited")
+  assert.equal(settlement.exitCode, 4)
+  assert.equal(settlement.label, "build")
+  assert.match(settlement.outputTail ?? "", /settled-tail/)
+  assert.deepEqual(settlement.delivery, {
+    sessionId: "chat-1",
+    runId: "execution:agent:r1",
+    notify: "on_exit",
+  })
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(settled.filter((candidate) => candidate.jobId === entry.id).length, 1)
+})
+
+test("a shell the agent killed reports that it stopped it", async (t) => {
+  const settled: BackgroundJobSettlement[] = []
+  const reg = fixtureRegistry(t, {
+    delivery: { sessionId: "chat-1" },
+    onSettled: (settlement) => settled.push(settlement),
+  })
+  const entry = reg.spawnBackground({
+    ...inv(isWin ? "ping -n 30 127.0.0.1" : "sleep 30"),
+    notify: "none",
+  })
+  reg.kill(entry.id)
+  const settlement = await settlementOf(settled, entry.id)
+  assert.equal(settlement.status, "killed")
+  assert.equal(settlement.exitCode, null)
+  assert.equal(settlement.delivery?.stoppedBy, "agent")
+  assert.equal(settlement.delivery?.notify, "none")
+})
+
+test("a registry with no conversation reports nothing", async (t) => {
+  const settled: BackgroundJobSettlement[] = []
+  const reg = fixtureRegistry(t, { onSettled: (settlement) => settled.push(settlement) })
+  const entry = reg.spawnBackground(inv("echo quiet"))
+  await waitExit(reg, entry.id)
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.deepEqual(settled, [])
 })
 
 test("read is a non-destructive incremental delta (cursor advances)", async (t) => {

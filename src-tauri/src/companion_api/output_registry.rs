@@ -256,6 +256,8 @@ mod tests {
         ("background_job_kill", OutputShape::Declared(RootType::Object)),
         ("background_job_spawn_scheduled", OutputShape::Declared(RootType::Object)),
         ("background_job_spawn_session", OutputShape::Declared(RootType::Object)),
+        ("background_job_settlements", OutputShape::Declared(RootType::Object)),
+        ("background_job_claim_delivery", OutputShape::Declared(RootType::Object)),
         ("background_monitor_list", OutputShape::Declared(RootType::Object)),
         ("background_monitor_cancel", OutputShape::Declared(RootType::Object)),
         ("background_monitor_register_scheduled", OutputShape::Declared(RootType::Object)),

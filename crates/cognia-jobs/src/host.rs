@@ -13,7 +13,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::{
-    JobOwner, JobStore, JobSupervisor, MonitorCondition, MonitorRegistry, SpawnJobRequest,
+    JobDelivery, JobOwner, JobStore, JobSupervisor, MonitorCondition, MonitorDelivery,
+    MonitorRegistry, SpawnJobRequest,
 };
 use serde_json::{json, Value};
 
@@ -104,6 +105,20 @@ fn u64_field(params: &Value, key: &str, default: u64) -> u64 {
     params.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
 }
 
+/// An optional, typed field: absent or null is `None`, a malformed value an
+/// error naming the field (never a silent default).
+fn optional_field<T: serde::de::DeserializeOwned>(
+    params: &Value,
+    key: &str,
+) -> Result<Option<T>, String> {
+    params
+        .get(key)
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<T>(value.clone()))
+        .transpose()
+        .map_err(|error| format!("invalid {key}: {error}"))
+}
+
 /// Dispatch one `host_rpc` frame. Returns the value to put in `result`.
 ///
 /// Every arm is answered here in Rust — nothing is forwarded to the renderer,
@@ -126,10 +141,11 @@ async fn dispatch_with_supervisor(
                 .map(|value| serde_json::from_value::<crate::types::JobOrigin>(value.clone()))
                 .transpose()
                 .map_err(|error| format!("invalid job origin: {error}"))?;
+            let delivery = optional_field::<JobDelivery>(params, "delivery")?;
             let req: SpawnJobRequest = serde_json::from_value(params.clone())
                 .map_err(|e| format!("invalid spawn request: {e}"))?;
             let rec = sup
-                .spawn_with_origin(req, origin)
+                .spawn_attributed(req, origin, delivery)
                 .await
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(rec).map_err(|e| e.to_string())
@@ -228,6 +244,43 @@ async fn dispatch_with_supervisor(
             }
             Ok(response)
         }
+        // Ended agent-started jobs and settled agent-registered monitors, for
+        // a consumer settling what its events missed (ADR-0249 §7).
+        "jobs.settlements" => {
+            let session_id = params.get("sessionId").and_then(Value::as_str);
+            let since_ms = params.get("sinceMs").and_then(Value::as_i64);
+            let jobs = sup
+                .settlements(session_id, since_ms)
+                .map_err(|e| e.to_string())?;
+            let monitors = match monitors() {
+                Some(reg) => reg
+                    .settlements(session_id, since_ms)
+                    .map_err(|e| e.to_string())?,
+                None => Vec::new(),
+            };
+            Ok(json!({ "jobs": jobs, "monitors": monitors }))
+        }
+        // Several consumers may hear one end (a window and a Host brain);
+        // the first to claim it is the one that delivers (ADR-0249 §7).
+        "jobs.claimDelivery" => {
+            let id = params
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or("missing id")?;
+            let consumer = params
+                .get("consumer")
+                .and_then(Value::as_str)
+                .filter(|consumer| !consumer.trim().is_empty())
+                .ok_or("missing consumer")?;
+            let claimed = match params.get("kind").and_then(Value::as_str) {
+                Some("job") => sup.claim_delivery(id, consumer),
+                Some("monitor") => require_monitors()?.claim_delivery(id, consumer),
+                _ => return Err("kind must be \"job\" or \"monitor\"".into()),
+            }
+            .map_err(|e| e.to_string())?;
+            Ok(json!({ "claimed": claimed }))
+        }
         "jobs.killOwnedBy" => {
             let owner = owner_from(params)?;
             let ids = match (&owner, params.get("includeOrigin").and_then(Value::as_bool)) {
@@ -254,8 +307,17 @@ async fn dispatch_with_supervisor(
                 .get("label")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let delivery = optional_field::<MonitorDelivery>(params, "delivery")?;
+            // The conversation it reports into, not its owner (a tool
+            // session's executor id).
+            if delivery
+                .as_ref()
+                .is_some_and(|delivery| delivery.session_id.trim().is_empty())
+            {
+                return Err("a monitor's delivery must name the session it reports into".into());
+            }
             let rec = reg
-                .register(condition, owner, expires_at_ms, label)
+                .register_delivered(condition, owner, expires_at_ms, label, delivery)
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(rec).map_err(|e| e.to_string())
         }
@@ -264,10 +326,15 @@ async fn dispatch_with_supervisor(
             let id = str_field(params, "monitorId")?;
             // Bounded host-side so one caller cannot pin a worker forever.
             let wait_ms = u64_field(params, "waitMs", 0).min(60_000);
-            let rec = reg
-                .wait(&id, Duration::from_millis(wait_ms))
-                .await
-                .map_err(|e| e.to_string())?;
+            // `inline`: the agent's own blocking `Monitor` call. What it
+            // returns settled is its result, never delivered a second time.
+            let wait = Duration::from_millis(wait_ms);
+            let rec = if params.get("inline").and_then(Value::as_bool) == Some(true) {
+                reg.wait_inline(&id, wait).await
+            } else {
+                reg.wait(&id, wait).await
+            }
+            .map_err(|e| e.to_string())?;
             serde_json::to_value(rec).map_err(|e| e.to_string())
         }
         "monitors.cancel" => {
@@ -412,6 +479,135 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("origin process did not stop");
+    }
+
+    /// The sidecar's spawn carries the delivery contract, naming the chat
+    /// session (its tool session owns the job as an executor); settlements
+    /// list the ended job under that chat session (ADR-0249 §7).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rpc_spawn_with_delivery_is_listed_by_settlements_once_ended() {
+        let dir = tempfile::tempdir().unwrap();
+        let sup = JobSupervisor::new(
+            Arc::new(JobStore::new_in_memory().unwrap()),
+            dir.path().join("logs"),
+        );
+        let spawned = dispatch_with_supervisor(
+            &sup,
+            "jobs.spawn",
+            &json!({
+                "command": "echo hi", "program": "/bin/sh", "args": ["-c", "echo hi"],
+                "cwd": dir.path(), "env": { "PATH": "/usr/bin:/bin" },
+                "owner": { "kind": "session", "sessionId": "executor-1" },
+                "origin": { "sessionId": "executor-1" },
+                "delivery": { "sessionId": "s1", "runId": "execution:agent:r1", "notify": "none" }
+            }),
+        )
+        .await
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let settled =
+                dispatch_with_supervisor(&sup, "jobs.settlements", &json!({ "sessionId": "s1" }))
+                    .await
+                    .unwrap();
+            if let Some(job) = settled["jobs"].as_array().and_then(|jobs| jobs.first()) {
+                assert_eq!(job["jobId"], spawned["id"]);
+                assert_eq!(job["delivery"]["runId"], "execution:agent:r1");
+                assert_eq!(job["delivery"]["notify"], "none");
+                assert!(job["outputTail"].as_str().unwrap_or("").contains("hi"));
+                assert_eq!(settled["monitors"], json!([]));
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "job never settled");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rpc_claim_hands_an_ended_jobs_delivery_to_the_first_consumer_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let sup = JobSupervisor::new(
+            Arc::new(JobStore::new_in_memory().unwrap()),
+            dir.path().join("logs"),
+        );
+        let spawned = dispatch_with_supervisor(
+            &sup,
+            "jobs.spawn",
+            &json!({
+                "command": "echo hi", "program": "/bin/sh", "args": ["-c", "echo hi"],
+                "cwd": dir.path(), "env": { "PATH": "/usr/bin:/bin" },
+                "owner": { "kind": "session", "sessionId": "executor-1" },
+                "delivery": { "sessionId": "s1" }
+            }),
+        )
+        .await
+        .unwrap();
+        let id = spawned["id"].as_str().unwrap().to_string();
+        let claim = |consumer: &'static str| {
+            let id = id.clone();
+            let sup = &sup;
+            async move {
+                dispatch_with_supervisor(
+                    sup,
+                    "jobs.claimDelivery",
+                    &json!({ "kind": "job", "id": id, "consumer": consumer }),
+                )
+                .await
+                .unwrap()["claimed"]
+                    .as_bool()
+                    .unwrap()
+            }
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        // A running job's end is not there to claim yet.
+        while !claim("window-a").await {
+            assert!(tokio::time::Instant::now() < deadline, "job never ended");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            !claim("brain").await,
+            "a second consumer must not deliver it too"
+        );
+        assert!(
+            claim("window-a").await,
+            "the claimant may retry its own delivery"
+        );
+        let settled = dispatch_with_supervisor(&sup, "jobs.settlements", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(settled["jobs"][0]["delivery"]["claimedBy"], "window-a");
+        let err = dispatch_with_supervisor(
+            &sup,
+            "jobs.claimDelivery",
+            &json!({ "kind": "shell", "id": id, "consumer": "brain" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("kind"), "got {err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rpc_spawn_rejects_a_malformed_delivery_instead_of_dropping_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let sup = JobSupervisor::new(
+            Arc::new(JobStore::new_in_memory().unwrap()),
+            dir.path().join("logs"),
+        );
+        let err = dispatch_with_supervisor(
+            &sup,
+            "jobs.spawn",
+            &json!({
+                "command": "true", "program": "/bin/sh", "args": ["-c", "true"],
+                "cwd": dir.path(), "owner": { "kind": "session", "sessionId": "s1" },
+                "delivery": { "sessionId": "s1", "notify": "sometimes" }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("invalid delivery"), "got {err}");
     }
 
     #[test]

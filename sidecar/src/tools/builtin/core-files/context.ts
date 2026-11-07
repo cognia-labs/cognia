@@ -3,6 +3,7 @@
 
 import type { ProcessSandboxScope } from "../../../platform/process/exec.ts"
 import type { HostRpcCaller, SessionBgShellRegistry } from "../../state/host-background-shells.ts"
+import type { BackgroundDelivery } from "../../state/background-shells.ts"
 import type { ReadTracker } from "../../state/read-tracker.ts"
 import type { VerificationBudget } from "../../../shared/verification-budget.ts"
 
@@ -32,5 +33,8 @@ export interface CoreFileToolContext {
   hostRpc?: HostRpcCaller | null | undefined
   processSignal?: AbortSignal | undefined
   groupProofSupported?: boolean | undefined
+  /** The tool session's executor id: the owner of its jobs and monitors. */
   sessionId?: string | undefined
+  /** The conversation its agent-started jobs and monitors report into (ADR-0249). */
+  delivery?: BackgroundDelivery | undefined
 }

@@ -47,6 +47,7 @@ pub use output::JobOutput;
 pub use store::JobStore;
 pub use supervisor::{ExitListener, JobSupervisor};
 pub use types::{
-    JobError, JobExit, JobOutputSlice, JobOwner, JobRecord, JobStatus, MonitorCondition,
-    MonitorRecord, MonitorStatus, Result, SpawnJobRequest,
+    JobDelivery, JobError, JobExit, JobNotify, JobOutputSlice, JobOwner, JobRecord, JobStatus,
+    JobStopCause, MonitorCondition, MonitorDelivery, MonitorDeliveryState, MonitorRecord,
+    MonitorStatus, Result, SpawnJobRequest,
 };

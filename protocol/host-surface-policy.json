@@ -453,11 +453,19 @@
       "reason": "Observes or waits for an existing terminal/forward; does not create or write to a process."
     },
     {
+      "arm": "background_job_claim_delivery",
+      "reason": "Updates settings, flow control, dimensions or an existing process state flag; does not launch or send executable input."
+    },
+    {
       "arm": "background_job_list",
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
     },
     {
       "arm": "background_job_read",
+      "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
+    },
+    {
+      "arm": "background_job_settlements",
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
     },
     {
