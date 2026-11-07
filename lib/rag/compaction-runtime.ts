@@ -53,7 +53,8 @@ function reinjectionRefs(
   for (const skill of options?.compactionCheckpointContext?.selectedSkills ?? []) {
     refs.push({ kind: "selected_skill", ...skill })
   }
-  for (const memory of options?.memoryContext?.retrievedMemories ?? []) {
+  for (const memory of contextSourcesOf(options?.contextSources, "memory.recall")
+    ?.retrievedMemories ?? []) {
     refs.push({
       kind:
         memory.type === "procedural" && memory.reviewStatus === "verified"

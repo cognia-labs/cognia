@@ -714,19 +714,19 @@ export interface BuildOptionsContext {
   /** Semantic Agent model role. Normal chat/dispatch defaults to `execute`. */
   modelRole?: import("@cognia/agent-config-types").AgentModelRole
   /**
-   * Optional long-term memory runtime dependencies (ADR — autonomous memory).
-   * When supplied AND `memoryUserMessage` is set AND `appSettings.memory` is
-   * enabled (and not in temporary mode), `resolveSendOptions` invokes
-   * `applyMemoryContext` and APPENDS a "What you remember about the user"
-   * section to the system prompt — coexisting with, never replacing, the Twin
-   * section. Built by `tryBuildMemoryDeps`. Structurally typed + lazily used so
-   * non-memory callers omit it cleanly. Undefined → memory injection skipped.
+   * Optional long-term memory runtime dependencies (ADR — autonomous memory),
+   * passed to the memory module's context contributions as `hostDeps.memory`:
+   * with `memoryUserMessage` set and memory enabled (not temporary), they
+   * recall the user's memories and this workspace's mined claims into the
+   * `memory` and `continuity` slots. Built by `tryBuildMemoryDeps`.
+   * Undefined → no memory recall.
    */
-  memoryDeps?: import("@/lib/memory/runtime/apply-memory-context").ApplyMemoryContextDeps
+  memoryDeps?: import("@cognia/memory/runtime/apply-memory-context").ApplyMemoryContextDeps
   /**
-   * The user's current message text for memory recall. Usually the same value
-   * as `twinUserMessage`; kept separate so a caller can drive one without the
-   * other. Ignored when `memoryDeps` is missing.
+   * The user's current message text for memory recall (`hostDeps.memoryQuery`).
+   * Usually the same value as `twinUserMessage`; kept separate so a caller can
+   * drive one without the other, or withhold it when the text may not be
+   * embedded. Ignored when `memoryDeps` is missing.
    */
   memoryUserMessage?: string
   /**
@@ -2689,11 +2689,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
           twin: ctx.twinDeps,
           memory: ctx.memoryDeps,
           memoryQuery: ctx.memoryUserMessage,
-          memoryScope: {
-            targetAgentId: ctx.targetAgentId,
-            branch: ctx.memoryBranch,
-            path: ctx.memoryPath,
-          },
+          memoryScope: ctx.memoryDeps
+            ? { targetAgentId: ctx.targetAgentId, branch: ctx.memoryBranch, path: ctx.memoryPath }
+            : undefined,
           projectKnowledge: ctx.projectKnowledgeDeps,
           knowledgeAccess: ctx.knowledgeAccess,
         }).filter(([, value]) => value !== undefined)

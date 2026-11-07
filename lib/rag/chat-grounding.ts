@@ -77,13 +77,15 @@ function optionHits(options: SendOptions): RetrievalHit[] {
       origin: "twin-rag" as const,
       score,
     })) ?? []),
-    ...(options.memoryContext?.retrievedMemories.map((memory) => ({
-      id: `memory-${memory.id}`,
-      title: memory.id,
-      snippet: memory.text,
-      origin: "memory" as const,
-      score: memory.score,
-    })) ?? []),
+    ...(contextSourcesOf(options.contextSources, "memory.recall")?.retrievedMemories.map(
+      (memory) => ({
+        id: `memory-${memory.id}`,
+        title: memory.id,
+        snippet: memory.text,
+        origin: "memory" as const,
+        score: memory.score,
+      })
+    ) ?? []),
     ...(contextSourcesOf(
       options.contextSources,
       "project-knowledge.retrieval"
@@ -126,7 +128,7 @@ export function attachInteractiveGrounding(
 ): UIMessage[] {
   if (
     !options?.twinContext &&
-    !options?.memoryContext &&
+    !contextSourcesOf(options?.contextSources, "memory.recall") &&
     !contextSourcesOf(options?.contextSources, "project-knowledge.retrieval") &&
     !contextSourcesOf(options?.contextSources, "knowledge-base.retrieval")
   ) {

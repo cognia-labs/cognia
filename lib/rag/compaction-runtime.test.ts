@@ -48,19 +48,21 @@ describe("captureCompactionCheckpoint", () => {
             selectedSkills: [{ id: "skill-1", version: "1.2.0" }],
             policyVersions: [{ id: "workspace-trust", version: "trusted-v1" }],
           },
-          memoryContext: {
-            retrievedMemories: [
-              {
-                id: "instruction-1",
-                type: "procedural",
-                text: "Use TDD",
-                score: 1,
-                evidenceState: "verified",
-                reviewStatus: "verified",
-              },
-            ],
-            proceduralCount: 1,
-            degraded: false,
+          contextSources: {
+            "memory.recall": {
+              retrievedMemories: [
+                {
+                  id: "instruction-1",
+                  type: "procedural",
+                  text: "Use TDD",
+                  score: 1,
+                  evidenceState: "verified",
+                  reviewStatus: "verified",
+                },
+              ],
+              proceduralCount: 1,
+              degraded: false,
+            },
           },
         } as unknown as SendOptions,
       },

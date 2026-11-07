@@ -1,9 +1,9 @@
 /**
  * Per-session registry of the history evidence a turn actually read.
  *
- * Mined claims reach the message fold through `opts.projectContinuityContext`,
- * because `resolveSendOptions` runs before the turn and can stash them on the
- * send record. A `project_history_search` hit has no such slot: it is produced
+ * Mined claims reach the message fold through
+ * `opts.contextSources["memory.continuity"]`, because the send resolution runs
+ * before the turn and can stash them on the send record. A `project_history_search` hit has no such slot: it is produced
  * mid-turn, by a tool call, long after the options were built. This registry is
  * that missing slot — the tool deposits what it returned, keyed by the calling
  * session, and the fold picks it up when the turn lands.

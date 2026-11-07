@@ -1188,63 +1188,6 @@ export type SendOptions = {
   }
 
   /**
-   * Long-term memory context injected this turn (ADR — autonomous memory).
-   * Set by `resolveSendOptions` when `applyMemoryContext` recalled any
-   * semantic/episodic memory. Mirrors `twinContext` — stashed so the chat hook
-   * can render a "Memory" SourcesPart on the assistant message (transparency).
-   * Stripped before the SDK call (no behavioural impact). `degraded` is true
-   * when the memory runtime failed and fell back to no context.
-   */
-  memoryContext?: {
-    retrievedMemories: Array<{
-      id: string
-      type: import("@cognia/memory/types/memory").MemoryType
-      text: string
-      score: number
-      evidenceState?: import("@cognia/memory/types/memory").MemoryEvidenceState
-      reviewStatus?: import("@cognia/memory/types/memory").MemoryReviewStatus
-    }>
-    proceduralCount: number
-    withheldCount?: number
-    budget?: { limit: number; used: number; truncated: boolean }
-    degraded: boolean
-    /**
-     * `"prepared"` delivery receipt for the injection pass
-     * (`packages/memory/src/types/context-snapshot.ts`). The chat hook's
-     * sources merge upgrades it to `delivered` as it lands on the message —
-     * the persisted part is then the auditable proof of what was injected.
-     */
-    snapshot?: import("@cognia/memory").MemoryContextSnapshot
-  }
-
-  /**
-   * Mined project claims injected this turn (project-context mining).
-   *
-   * Set by `resolveSendOptions` when `applyProjectContinuityContext` recalled
-   * any. Mirrors `memoryContext`, with one addition: each claim carries the
-   * message it was observed in, so the chat's source chip can jump back to the
-   * conversation the fact was learned from rather than merely naming it.
-   * Stripped before the SDK call.
-   */
-  projectContinuityContext?: {
-    claims: Array<{
-      id: string
-      kind: import("@cognia/memory/types/memory").ProjectMemoryKind
-      text: string
-      relevance: number
-      observedAt?: number
-      validatedAt?: number
-      sourceSessionId?: string
-      sourceMessageId?: string
-    }>
-    withheldCount: number
-    budget: { limit: number; used: number; truncated: boolean }
-    /** Retrieval was thin — claims existed but did not make it in. */
-    weak: boolean
-    degraded: boolean
-  }
-
-  /**
    * What the modules' context contributions reported for the UI this turn
    * (sources, budgets), keyed by `<module>.<id>` (ADR-0250 §14 `context`
    * amendment). Read through `contextSourcesOf`, which types each entry by

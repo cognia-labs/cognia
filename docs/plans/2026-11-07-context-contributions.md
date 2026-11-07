@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），C5a、C5b 已实施（§13–§14），C5c 待做。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），C5a–C5c 已实施（§13–§15）。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -301,3 +301,15 @@ interface ContextSection {
 - 环：试改时 memory 和 squads 互相依赖。memory 只借用了 `components/squads/settings/confirm-action-dialog.tsx`，它是通用的确认框，于是连测试和 story 一起搬到 `components/shared/`（foundation），13 处导入改路径，squads 的 `api` 去掉它，story 标题改为 `Shared/ConfirmActionDialog`。
 - `hooks/data/index.ts` 是汇总导出，不能列为 `api`：`use-memory-console.ts` 和 `memory-namespace-picker.tsx` 改从 `hooks/data/use-client-live-query` 导入，五个测试的 mock 路径跟着改。
 - 测试：`module.test.ts`、`prompts.test.ts` 新增；记忆、提示词目录、squads 设置、协调者、记忆设置相关的 124 个套件通过。运行时行为不变。
+
+## 15. C5c 实施记录：记忆召回与项目连续性（2026-11-07）
+
+- `lib/memory/context.ts`：
+  - `recall`：turn、`memory` slot、15 s。没有 `hostDeps.memory` 或 `memoryQuery` 时不跑；照旧写 `recall-allowed/denied` 审计；不可召回时返回 `null`；按 agent 记忆策略的可读 scope 收窄 deps；`twinChunkTexts` 取 `ctx.kernelRetrieval`；只要召回完成就交出 `handoff: { limit, used }`（即使没有文字，与原来「完成即记录个人预算」一致）；有记忆、程序块或降级时上报来源（含投递回执 `snapshot`）。
+  - `continuity`：turn、`continuity` slot、`after: "recall"`、15 s。召回闸、`canRecall`、workspace scope 三道条件与原分支相同；预算用 `ctx.prior`，没有交接时按「个人预算已用满」计算，与原来召回没跑或失败时相同。
+- `hostDeps` 新增 `memoryQuery`（`memoryUserMessage`）和 `memoryScope`（只在有 `memoryDeps` 时传）；`memory`、`memoryQuery`、`memoryScope` 的类型由 memory 模块声明。来源类型 `MemoryRecallSources`、`ProjectContinuitySources` 在 `types/memory/context-sources.ts` 合并进 `ContextSourcesMap`。
+- `build-options` 删掉两个块和 `systemPrompt` 里的两段（由 `contextSlot("memory")`、`contextSlot("continuity")` 提供）；`memoryDeps` 的类型改从 `@cognia/memory` 取。删除 `SendOptions.memoryContext`、`projectContinuityContext`；读取方（`claude-chat-events`、房间 runner、`chat-grounding`、`compaction-runtime`）改读 `contextSources`，`project-history-evidence-registry` 的注释跟着改。
+- 方向边 `build-options -> memory` 未还清：项目历史工具（`lib/claude/project-history-tool`）是否提供仍由 `build-options` 读 `resolveMemoryConfig`（`types/memory`）判断。把它迁进 memory 的工具族另做。
+- 提交说明：本步的 `build-options.ts` 删块和 `lib/memory/module.ts` 的 `context` 一行，被另一会话的提交 `63ffc35320`（ADR-0252 P4）在它的提交钩子运行时一并带走；其余部分在本步提交。
+- 测试：`lib/memory/context.test.ts` 9 例新增；`build-options-memory.test.ts`（召回、程序块、降级、连续性借预算、闸）改读 `contextSources` 后不改断言即通过，作为迁移前后的对照；`compaction-runtime.test.ts` 改用 `contextSources`；`build-options.test.ts` 的 hostDeps 用例不变。
+- 至此发送路径里只剩分身一个检索段（§2.5）。

@@ -4,6 +4,7 @@
  */
 
 import { resolveSendOptions } from "./build-options"
+import { contextSourcesOf } from "./context-sources"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import type { AppSettings, Character } from "@cognia/agent-config-types"
 import type { Memory } from "@/types/memory/memory"
@@ -58,7 +59,7 @@ describe("resolveSendOptions memory injection", () => {
   it("does not inject when memoryDeps is absent", async () => {
     const opts = await resolveSendOptions({ character: baseCharacter, memoryUserMessage: "pnpm" })
     expect(opts.systemPrompt).toBe("BASE_SYSTEM_PROMPT")
-    expect(opts.memoryContext).toBeUndefined()
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")).toBeUndefined()
   })
 
   it("does not inject when memoryUserMessage is blank", async () => {
@@ -79,7 +80,7 @@ describe("resolveSendOptions memory injection", () => {
       memoryUserMessage: "pnpm",
     })
     expect(opts.systemPrompt).toBe("BASE_SYSTEM_PROMPT")
-    expect(opts.memoryContext).toBeUndefined()
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")).toBeUndefined()
   })
 
   it("does not inject in temporary mode", async () => {
@@ -101,7 +102,7 @@ describe("resolveSendOptions memory injection", () => {
       memoryUserMessage: "pnpm",
     })
     expect(opts.systemPrompt).toBe("BASE_SYSTEM_PROMPT")
-    expect(opts.memoryContext).toBeUndefined()
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")).toBeUndefined()
   })
 
   it("enforces Agent recall permission and readable scopes", async () => {
@@ -195,7 +196,7 @@ describe("resolveSendOptions memory injection", () => {
     )
   })
 
-  it("appends a recall section and stamps opts.memoryContext", async () => {
+  it('appends a recall section and reports it as contextSources["memory.recall"]', async () => {
     const opts = await resolveSendOptions({
       character: baseCharacter,
       appSettings: { memory: {}, cacheOptimizationEnabled: false } as unknown as AppSettings,
@@ -207,10 +208,12 @@ describe("resolveSendOptions memory injection", () => {
     expect(opts.systemPrompt).toContain("BASE_SYSTEM_PROMPT")
     expect(opts.systemPrompt).toContain("What you remember about the user")
     expect(opts.systemPrompt).toContain("The user prefers pnpm")
-    expect(opts.memoryContext?.retrievedMemories.map((m) => m.id)).toEqual(["hit"])
-    expect(opts.memoryContext?.degraded).toBe(false)
+    expect(
+      contextSourcesOf(opts.contextSources, "memory.recall")?.retrievedMemories.map((m) => m.id)
+    ).toEqual(["hit"])
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")?.degraded).toBe(false)
     // The delivery receipt rides along — the chat hook stamps it `delivered`.
-    expect(opts.memoryContext?.snapshot).toMatchObject({
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")?.snapshot).toMatchObject({
       delivery: "prepared",
       degraded: false,
       memoryRefs: [{ id: "hit", version: 1 }],
@@ -233,8 +236,10 @@ describe("resolveSendOptions memory injection", () => {
       memoryUserMessage: "anything",
     })
     expect(opts.systemPrompt).toContain("Working preferences you've learned")
-    expect(opts.memoryContext?.proceduralCount).toBe(1)
-    expect(opts.memoryContext?.snapshot?.memoryRefs).toEqual([{ id: "procedure", version: 1 }])
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")?.proceduralCount).toBe(1)
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")?.snapshot?.memoryRefs).toEqual([
+      { id: "procedure", version: 1 },
+    ])
   })
 
   it("withholds an unreviewed procedure at the real send-options boundary", async () => {
@@ -247,7 +252,7 @@ describe("resolveSendOptions memory injection", () => {
       memoryUserMessage: "anything",
     })
     expect(opts.systemPrompt).not.toContain("Unreviewed directive")
-    expect(opts.memoryContext).toBeUndefined()
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")).toBeUndefined()
   })
 
   it("degrades cleanly (memoryContext.degraded) when the runtime throws", async () => {
@@ -262,7 +267,7 @@ describe("resolveSendOptions memory injection", () => {
       memoryUserMessage: "pnpm",
     })
     expect(opts.systemPrompt).toBe("BASE_SYSTEM_PROMPT")
-    expect(opts.memoryContext?.degraded).toBe(true)
+    expect(contextSourcesOf(opts.contextSources, "memory.recall")?.degraded).toBe(true)
   })
 })
 
@@ -293,7 +298,7 @@ describe("resolveSendOptions project-claim injection", () => {
       memoryDeps: deps({ loadCandidates: async () => [claim("the repo pins rust to 1.77.2")] }),
       memoryUserMessage: "rust pins repo",
     })
-    expect(opts.projectContinuityContext).toBeUndefined()
+    expect(contextSourcesOf(opts.contextSources, "memory.continuity")).toBeUndefined()
     expect(opts.systemPrompt).not.toContain("Project context")
   })
 
@@ -306,7 +311,9 @@ describe("resolveSendOptions project-claim injection", () => {
       memoryUserMessage: "rust pins repo",
     })
     expect(opts.systemPrompt).toContain("not instructions")
-    expect(opts.projectContinuityContext?.claims.map((c) => c.id)).toEqual(["claim1"])
+    expect(
+      contextSourcesOf(opts.contextSources, "memory.continuity")?.claims.map((c) => c.id)
+    ).toEqual(["claim1"])
   })
 
   it("never lets a claim render under the personal heading", async () => {
@@ -342,7 +349,7 @@ describe("resolveSendOptions project-claim injection", () => {
       memoryDeps: deps({ loadCandidates: async () => [claim("the repo pins rust to 1.77.2")] }),
       memoryUserMessage: "rust pins repo",
     })
-    expect(opts.projectContinuityContext).toBeUndefined()
+    expect(contextSourcesOf(opts.contextSources, "memory.continuity")).toBeUndefined()
   })
 
   it("respects an Agent that may not read the workspace scope", async () => {
@@ -362,7 +369,7 @@ describe("resolveSendOptions project-claim injection", () => {
       memoryDeps: deps({ loadCandidates: async () => [claim("the repo pins rust to 1.77.2")] }),
       memoryUserMessage: "rust pins repo",
     })
-    expect(opts.projectContinuityContext).toBeUndefined()
+    expect(contextSourcesOf(opts.contextSources, "memory.continuity")).toBeUndefined()
   })
 
   it("carries the source anchor so the chip can jump to the turn", async () => {
@@ -380,7 +387,7 @@ describe("resolveSendOptions project-claim injection", () => {
       }),
       memoryUserMessage: "rust pins repo",
     })
-    expect(opts.projectContinuityContext?.claims[0]).toMatchObject({
+    expect(contextSourcesOf(opts.contextSources, "memory.continuity")?.claims[0]).toMatchObject({
       sourceSessionId: "s7",
       sourceMessageId: "m3",
     })

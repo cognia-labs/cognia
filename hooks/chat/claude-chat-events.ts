@@ -1391,18 +1391,18 @@ export async function handleEvent(
           }
           nextMessages = attachTwinProvenanceToLastAssistant(nextMessages, twinCtx.twinId)
         }
-        // Long-term memory sources — same lastSend-cache read as twin, stashed
-        // by `resolveSendOptions` onto `options.memoryContext`.
-        const memoryCtx = last?.options.memoryContext
+        // Long-term memory sources — same lastSend-cache read as twin, reported
+        // by the memory module's `recall` context contribution.
+        const memoryCtx = contextSourcesOf(last?.options.contextSources, "memory.recall")
         if (memoryCtx) {
           const withMemory = mergeMemorySourcesIntoLastAssistant(nextMessages, memoryCtx)
           if (withMemory !== nextMessages) {
             nextMessages = withMemory
           }
         }
-        // Mined project claims — the same lastSend-cache read, stashed by
-        // `resolveSendOptions` onto `options.projectContinuityContext`.
-        const projectClaimCtx = last?.options.projectContinuityContext
+        // Mined project claims — the same lastSend-cache read, reported by the
+        // memory module's `continuity` context contribution.
+        const projectClaimCtx = contextSourcesOf(last?.options.contextSources, "memory.continuity")
         if (projectClaimCtx) {
           const withClaims = mergeProjectClaimSourcesIntoLastAssistant(
             nextMessages,

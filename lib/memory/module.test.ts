@@ -7,8 +7,9 @@ describe("the memory manifest", () => {
     expect(prompts).toHaveLength(6)
   })
 
-  it("contributes no context or tools yet", () => {
-    expect("context" in memoryModule).toBe(false)
+  it("contributes recall and project continuity as context, lazily, and no tools", async () => {
+    const { contributions } = await memoryModule.context!.load()
+    expect(contributions.map((contribution) => contribution.id)).toEqual(["recall", "continuity"])
     expect("tools" in memoryModule).toBe(false)
   })
 })

@@ -1863,10 +1863,13 @@ export class RoomRunner {
             tagged = tagged.filter((message) => !duplicateIds.has(message.id))
           }
           tagged = mergeTwinSourcesIntoLastAssistant(tagged, ctx?.options.twinContext)
-          tagged = mergeMemorySourcesIntoLastAssistant(tagged, ctx?.options.memoryContext)
+          tagged = mergeMemorySourcesIntoLastAssistant(
+            tagged,
+            contextSourcesOf(ctx?.options.contextSources, "memory.recall")
+          )
           tagged = mergeProjectClaimSourcesIntoLastAssistant(
             tagged,
-            ctx?.options.projectContinuityContext
+            contextSourcesOf(ctx?.options.contextSources, "memory.continuity")
           )
           tagged = mergeProjectHistorySourcesIntoLastAssistant(
             tagged,
