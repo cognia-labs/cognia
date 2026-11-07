@@ -204,6 +204,7 @@ import {
   sharedRequestTranscript,
   canAutomaticallyDrainSharedQueue,
 } from "@/lib/collab/shared-run-coordinator"
+import { installSharedSessionSteerLane, steerSharedFollowUp } from "@/lib/collab/shared-run-steer"
 import {
   acceptChatTurn,
   bindChatTurnContext,
@@ -2086,6 +2087,17 @@ export function useClaudeChat() {
           parts: persistedMessage.parts,
           ...(Object.keys(sharedMetadata).length > 0 ? { metadata: sharedMetadata } : {}),
         })
+        // Written while the session's run streams, the message also steers
+        // that run — on this device or the holder's (ADR-0252 §5). It is in
+        // the transcript either way; a steer that cannot land leaves it a
+        // message, or the next run's input on the holder.
+        const followUpText = steerTextOf(shared.content, sharedManifest?.length ?? 0)
+        if (followUpText) {
+          await steerSharedFollowUp(sessionId, {
+            messageId: persistedMessage.id,
+            content: followUpText,
+          }).catch((error) => console.warn("shared follow-up steer failed", error))
+        }
         return
       }
 
@@ -6702,6 +6714,8 @@ export function useClaudeChat() {
   // The chat lane of the one steer entry: derived inputs (a wakeup, an
   // automation) wait in a running conversation's queue for its boundary.
   useEffect(() => installChatSessionSteerLane(), [])
+  // Its remote lane: a shared conversation whose run another device holds.
+  useEffect(() => installSharedSessionSteerLane(), [])
 
   // Background-run result delivery: register the hook's send as the replay
   // channel, and drain pending results whenever a session (re)opens idle —

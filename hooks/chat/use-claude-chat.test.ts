@@ -1097,6 +1097,11 @@ jest.mock("@/lib/collab/shared-run-coordinator", () => ({
   beginSharedSessionRun: (...args: unknown[]) => beginSharedSessionRunMock(...args),
   sendSharedSessionMessage: (...args: unknown[]) => sendSharedSessionMessageMock(...args),
 }))
+const steerSharedFollowUpMock = jest.fn(async (..._args: unknown[]) => "none" as const)
+jest.mock("@/lib/collab/shared-run-steer", () => ({
+  installSharedSessionSteerLane: () => () => undefined,
+  steerSharedFollowUp: (...args: unknown[]) => steerSharedFollowUpMock(...args),
+}))
 const isCostBudgetConfiguredMock = jest.fn(() => false)
 const enforceCostBudgetMock = jest.fn(async (..._args: unknown[]) => ({
   allowed: true,
@@ -7900,6 +7905,35 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       expect.objectContaining({ id: "sess-shared-plain" }),
       expect.not.objectContaining({ metadata: expect.anything() })
     )
+  })
+
+  it("steers the session's running shared run with the message it just posted (ADR-0252 §5)", async () => {
+    steerSharedFollowUpMock.mockClear()
+    chatState.activeSessionId = "sess-shared-steer"
+    chatState.openSessionIds = ["sess-shared-steer"]
+    getSessionMock.mockResolvedValue({
+      id: "sess-shared-steer",
+      title: "Shared",
+      model: "sonnet",
+      collaboration: {
+        orgId: "org_1",
+        workspaceId: "ws_1",
+        sessionId: "shared_3",
+        policyRevision: 1,
+        syncCursor: 0,
+      },
+    })
+    const { result } = renderHook(() => useClaudeChat())
+    await flush()
+    await act(async () => {
+      await result.current.send("add the tests first")
+    })
+    const posted = sendSharedSessionMessageMock.mock.calls.at(-1)?.[1] as { id: string }
+    expect(steerSharedFollowUpMock).toHaveBeenCalledWith("sess-shared-steer", {
+      messageId: posted.id,
+      content: "add the tests first",
+    })
+    expect(sendPromptMock).not.toHaveBeenCalled()
   })
 
   it("tries the live lane while awaiting approval, which is when redirecting matters most", async () => {

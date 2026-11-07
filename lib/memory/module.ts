@@ -4,7 +4,8 @@ import { defineHostModule } from "@/lib/modules/define"
 // about the user and their projects, how it is written (extraction,
 // consolidation, project mining, distillation), governed and recalled. Its
 // writing and reranking prompts reach the Prompt Center as its prompt
-// contribution.
+// contribution; the turn's recall and project continuity are its context
+// contributions.
 export default defineHostModule({
   id: "memory",
   kind: "module",
@@ -50,4 +51,7 @@ export default defineHostModule({
     "lib/memory/write/remember-fact.ts",
   ],
   prompts: () => import("./prompts"),
+  // Personal recall (`memory` slot) and project continuity (`continuity`
+  // slot, after recall, borrowing its unspent budget).
+  context: { load: () => import("./context") },
 })

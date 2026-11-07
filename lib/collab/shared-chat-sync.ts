@@ -651,6 +651,18 @@ async function synchronize(
     ) {
       markSessionDirty(result.localSessionId)
     }
+    // The holder's side of a member's steer (ADR-0252 §5): a `run.steered`
+    // for the run this device holds goes into its live turn, or queues its
+    // message for the next run when that turn has closed its input.
+    const steers = result.events.filter(
+      (event) => event.sequence > applied && event.kind === "run.steered"
+    )
+    if (steers.length > 0) {
+      const { applySharedRunSteer } = await import("./shared-run-steer")
+      for (const event of steers) {
+        void applySharedRunSteer(result.localSessionId, event).catch(() => undefined)
+      }
+    }
     if (
       typeof window !== "undefined" &&
       events.some(

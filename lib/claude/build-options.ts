@@ -144,8 +144,6 @@ import type { SessionImAuthority } from "@cognia/plugin-contract/types/connector
 import type { Project } from "@/types"
 import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
 import { resolveMemoryConfig } from "@/types/memory/memory"
-import { resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
-import { resolveMemoryAgentNamespace } from "@/lib/memory/twin-namespace"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import type { ConnectorMode } from "@/types/connectors/policy"
 import { type AgentModeConfig } from "@/types/agent/agent-mode"
@@ -2436,189 +2434,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // --- Long-term memory injection (opt-in) ---------------------------------
-  // When `memoryDeps` + `memoryUserMessage` are supplied and memory is enabled
-  // (and not in temporary mode), recall semantic/episodic facts + the learned
-  // procedural block and APPEND them as a dedicated section. This coexists with
-  // the Twin section (Twin = persona, Memory = durable user facts) — it never
-  // replaces `baseSystem`. The runtime never throws; failures degrade silently.
-  let memorySection = ""
-  // Hoisted: the project-claim section below borrows whatever the personal
-  // section left unspent, and borrowing is one-way precisely because this has to
-  // be packed before the leftover is knowable.
-  let personalRecallBudget: { limit: number; used: number } | undefined
-  if (ctx.memoryDeps && ctx.memoryUserMessage && ctx.memoryUserMessage.trim()) {
-    const memoryConfig = resolveMemoryConfig(appSettings?.memory)
-    const memoryPolicy = resolveAgentMemoryPolicy({
-      config: memoryConfig,
-      session: session ?? undefined,
-      agentPolicy: character?.memoryPolicy,
-    })
-    await import("@/lib/db/memory-governance")
-      .then(({ appendMemoryAuditEvent }) =>
-        appendMemoryAuditEvent({
-          action: memoryPolicy.canRecall ? "recall-allowed" : "recall-denied",
-          sessionId: session?.id,
-          reason: memoryPolicy.recallReason,
-        })
-      )
-      .catch(() => undefined)
-    if (memoryPolicy.canRecall) {
-      try {
-        const { applyMemoryContext } = await import("@/lib/memory/runtime/apply-memory-context")
-        const twinChunkTexts =
-          opts.twinContext?.retrievedChunks.map((c) => c.chunk.contentRedacted) ?? []
-        const readableScopes = new Set(memoryPolicy.readableScopes)
-        const scopedMemoryDeps = {
-          ...ctx.memoryDeps,
-          loadCandidates: async (
-            reader?: Parameters<NonNullable<typeof ctx.memoryDeps>["loadCandidates"]>[0]
-          ) =>
-            (await ctx.memoryDeps!.loadCandidates(reader)).filter((memory) =>
-              readableScopes.has(memory.scope)
-            ),
-          loadProcedural: async (
-            reader?: Parameters<NonNullable<typeof ctx.memoryDeps>["loadProcedural"]>[0]
-          ) =>
-            (await ctx.memoryDeps!.loadProcedural(reader)).filter((memory) =>
-              readableScopes.has(memory.scope)
-            ),
-        }
-        const result = await applyMemoryContext({
-          userMessage: ctx.memoryUserMessage,
-          reader: {
-            characterId: character?.id,
-            projectId: session?.projectId ?? ctx.activeProject?.id,
-            agentId: resolveMemoryAgentNamespace({
-              targetAgentId: ctx.targetAgentId,
-              twinId: character?.twinId,
-              characterId: character?.id,
-            }),
-            branch: ctx.memoryBranch,
-            path: ctx.memoryPath,
-          },
-          topK: memoryConfig.retrievalTopK,
-          relevanceFloor: memoryConfig.relevanceFloor,
-          maxTokens: memoryConfig.recallTokenBudget,
-          twinChunkTexts,
-          enableQueryExpansion: memoryConfig.enableQueryExpansion,
-          recencyHalfLifeDays: memoryConfig.decayHalfLifeDays,
-          // Reuse the turn's query embedding (memory's vector backend shares the
-          // twin embedding model via resolveMemoryBackend) — no re-embed.
-          precomputedQueryEmbedding: ctx.precomputedQueryEmbedding,
-          deps: scopedMemoryDeps,
-        })
-        if (result.systemPromptSection) {
-          if (cacheOptimizationEnabled) {
-            // Query-dependent recall changes every turn — keep it out of the
-            // cacheable prefix and append it to the dynamic tail instead.
-            dynamicTailSections.push(result.systemPromptSection)
-          } else {
-            memorySection = result.systemPromptSection
-          }
-        }
-        personalRecallBudget = { limit: result.budget.limit, used: result.budget.used }
-        if (result.retrievedMemories.length > 0 || result.proceduralCount > 0 || result.degraded) {
-          opts.memoryContext = {
-            retrievedMemories: result.retrievedMemories.map((m) => ({
-              id: m.id,
-              type: m.type,
-              text: m.text,
-              score: m.score,
-              evidenceState: m.evidenceState,
-              reviewStatus: m.reviewStatus,
-            })),
-            proceduralCount: result.proceduralCount,
-            withheldCount: result.withheldCount,
-            budget: result.budget,
-            degraded: result.degraded,
-            // Delivery receipt — `mergeMemorySourcesIntoLastAssistant` upgrades
-            // it to `delivered` as it lands on the assistant message.
-            snapshot: result.snapshot,
-          }
-        }
-      } catch {
-        // Memory runtime failure is non-fatal — keep the prompt as-is.
-      }
-    }
-  }
-
-  // --- Project-context claims (mined from this workspace's own history) -----
-  // A SIBLING of the memory block, not part of it: `applyProjectContinuityContext`
-  // has its own try/catch so a malformed claim cannot take the user's personal
-  // recall down with it. Everything expensive is reused rather than recomputed —
-  // the resolved policy, the scope-narrowed deps, the same reader, and above all
-  // `ctx.precomputedQueryEmbedding`, so this is a second vector SEARCH but not a
-  // second embed. That is what makes two retrievals per turn affordable.
-  let projectContinuitySection = ""
-  if (ctx.memoryDeps && ctx.memoryUserMessage && ctx.memoryUserMessage.trim()) {
-    const memoryConfig = resolveMemoryConfig(appSettings?.memory)
-    const projectId = session?.projectId ?? ctx.activeProject?.id
-    const { evaluateProjectRecallGate } = await import("@cognia/memory/runtime/recall-gate")
-    const gate = evaluateProjectRecallGate({
-      userMessage: ctx.memoryUserMessage,
-      projectId,
-      enableProjectContinuity: memoryConfig.enableProjectContinuity,
-      temporary: memoryConfig.temporary,
-    })
-    if (gate.allowed) {
-      try {
-        const memoryPolicy = resolveAgentMemoryPolicy({
-          config: memoryConfig,
-          session: session ?? undefined,
-          agentPolicy: character?.memoryPolicy,
-        })
-        // Claims live at workspace scope, so an Agent that may not read that
-        // scope may not read them — the same narrowing the personal path applies.
-        if (memoryPolicy.canRecall && memoryPolicy.readableScopes.includes("workspace")) {
-          const [{ applyProjectContinuityContext }, { resolveProjectRecallBudget }] =
-            await Promise.all([
-              import("@cognia/memory/runtime/project-continuity-context"),
-              import("@cognia/memory/runtime/recall-budget"),
-            ])
-          const { limit } = resolveProjectRecallBudget({
-            personalLimit: personalRecallBudget?.limit ?? memoryConfig.recallTokenBudget,
-            personalUsed: personalRecallBudget?.used ?? memoryConfig.recallTokenBudget,
-            projectBudget: memoryConfig.projectRecallTokenBudget,
-          })
-          const result = await applyProjectContinuityContext({
-            userMessage: ctx.memoryUserMessage,
-            reader: {
-              projectId,
-              branch: ctx.memoryBranch,
-              path: ctx.memoryPath,
-            },
-            topK: memoryConfig.projectRecallTopK,
-            relevanceFloor: memoryConfig.relevanceFloor,
-            maxTokens: limit,
-            enableQueryExpansion: memoryConfig.enableQueryExpansion,
-            recencyHalfLifeDays: memoryConfig.decayHalfLifeDays,
-            precomputedQueryEmbedding: ctx.precomputedQueryEmbedding,
-            deps: ctx.memoryDeps,
-          })
-          if (result.systemPromptSection) {
-            if (cacheOptimizationEnabled) {
-              dynamicTailSections.push(result.systemPromptSection)
-            } else {
-              projectContinuitySection = result.systemPromptSection
-            }
-          }
-          if (result.claims.length > 0 || result.degraded) {
-            opts.projectContinuityContext = {
-              claims: result.claims,
-              withheldCount: result.withheldCount,
-              budget: result.budget,
-              weak: result.weak,
-              degraded: result.degraded,
-            }
-          }
-        }
-      } catch {
-        // Non-fatal, and isolated from the personal section by construction.
-      }
-    }
-  }
-
   // The retrieval query the modules' context contributions read (the
   // workspace and agent knowledge bases): the caller's message, or the routing
   // hint when it passed none.
@@ -2873,6 +2688,12 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         Object.entries({
           twin: ctx.twinDeps,
           memory: ctx.memoryDeps,
+          memoryQuery: ctx.memoryUserMessage,
+          memoryScope: {
+            targetAgentId: ctx.targetAgentId,
+            branch: ctx.memoryBranch,
+            path: ctx.memoryPath,
+          },
           projectKnowledge: ctx.projectKnowledgeDeps,
           knowledgeAccess: ctx.knowledgeAccess,
         }).filter(([, value]) => value !== undefined)
@@ -2904,9 +2725,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // A coordinated project's goal (ADR-0204) is the project-coordinator
     // module's context contribution.
     ...contextSlot("project-goal"),
-    memorySection,
     ...contextSlot("memory"),
-    projectContinuitySection,
     ...contextSlot("continuity"),
     ...contextSlot("project-knowledge"),
     ...contextSlot("agent-knowledge"),

@@ -10,6 +10,11 @@ import {
 import type { PlatformWebSocketHandlers } from "@/lib/network/platform-websocket"
 import { subscribeSharedLive } from "./shared-live-frames"
 
+const mockApplySharedRunSteer = jest.fn(async (..._args: unknown[]) => "steered" as const)
+jest.mock("./shared-run-steer", () => ({
+  applySharedRunSteer: (...args: unknown[]) => mockApplySharedRunSteer(...args),
+}))
+
 const dbFixture = createDbTestFixture()
 
 const session: SharedSession = {
@@ -449,6 +454,28 @@ describe("shared chat synchronization", () => {
       if (descriptor) Object.defineProperty(globalThis, "window", descriptor)
       else Reflect.deleteProperty(globalThis, "window")
     }
+  })
+
+  it("hands each newly pulled steer to the holder once (ADR-0252 §5)", async () => {
+    mockApplySharedRunSteer.mockClear()
+    const steer: SessionEvent = {
+      ...messageEvent,
+      id: "event_steer",
+      kind: "run.steered",
+      payload: { runId: "run_1", input: { text: "add tests", messageId: "message_1" } },
+    }
+    const reader = readerFor(steer)
+    const result = await syncSharedSession(reader, session.orgId, session.id)
+    await Promise.resolve()
+    expect(mockApplySharedRunSteer).toHaveBeenCalledTimes(1)
+    expect(mockApplySharedRunSteer).toHaveBeenCalledWith(
+      result.localSessionId,
+      expect.objectContaining({ id: "event_steer", kind: "run.steered" })
+    )
+    // Already applied: a later pull of the same history does not steer again.
+    await syncSharedSession(reader, session.orgId, session.id)
+    await Promise.resolve()
+    expect(mockApplySharedRunSteer).toHaveBeenCalledTimes(1)
   })
 
   it("downloads scoped attachments before committing their message projection", async () => {

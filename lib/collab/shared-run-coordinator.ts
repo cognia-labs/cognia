@@ -796,6 +796,12 @@ export function hasActiveSharedRun(localSessionId: string): boolean {
   return active !== undefined && !active.leaseLost
 }
 
+/** The id of the run this device executes for the session now, if any (ADR-0252 §5). */
+export function activeSharedRunId(localSessionId: string): string | undefined {
+  const active = activeRuns.get(localSessionId)
+  return active && !active.leaseLost ? active.runId : undefined
+}
+
 export function getSharedRunRequester(localSessionId: string): string | undefined {
   const active = activeRuns.get(localSessionId)
   return active && !active.leaseLost ? active.requestedByUserId : undefined
