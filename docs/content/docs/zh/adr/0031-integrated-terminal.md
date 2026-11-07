@@ -84,7 +84,7 @@ ADR-0021 的 signaling 栈（`src-tauri/src/companion_api/signaling/{mod,client,
 
 ### D7 — 工作流节点 `action.system.terminal`
 
-新增 node kind（`types/workflow/visual.ts` union + `WORKFLOW_NODE_KINDS` 数组），executor 在 `lib/workflow/nodes/terminal.ts`。输入：`command`、可选 `args` / `cwd` / `shell` / `projectId` / `tabId` / `timeoutSec` / `onFailure`（`"throw" | "branch"`）。输出：`{ exitCode, output, sessionId }`，并附带 `decision`（exit 0 ⇒ `"success"`，否则 `"failure"`），供 `flow.branch` 路由。
+新增 node kind（`types/workflow/visual.ts` union + `WORKFLOW_NODE_KINDS` 数组），executor 在 `lib/workflow/nodes/terminal.ts`（现为 `lib/terminal/workflow-nodes/dock.ts`，terminal 模块的 `workflowNodes` 贡献）。输入：`command`、可选 `args` / `cwd` / `shell` / `projectId` / `tabId` / `timeoutSec` / `onFailure`（`"throw" | "branch"`）。输出：`{ exitCode, output, sessionId }`，并附带 `decision`（exit 0 ⇒ `"success"`，否则 `"failure"`），供 `flow.branch` 路由。
 
 executor 委托给 `runTerminalDockAction`，使同意 + tab + 超时解析与聊天 affordance、agent MCP 路径完全一致。仅渲染端执行——工作流在 Next.js 进程中跑；若 V2 server 侧工作流执行将来落地，需为同意 broker 做 Tauri command 桥（本波不在范围内）。
 
@@ -143,7 +143,7 @@ github-delivery 的 manifest 加上 `terminal:spawn` + `terminal:write`，整条
 - `lib/terminal/transport-ws.test.ts`（重写 —— 20 用例，含 7 个 Wave 2 重连场景）
 - `lib/terminal/pick-transport.test.ts`（扩展 chain）
 - `components/mobile/mobile-terminal-screen.test.tsx`（11 用例，含 3 个 overlay 对齐）
-- `lib/workflow/nodes/terminal.test.ts`（10 用例）
+- `lib/terminal/workflow-nodes/dock.test.ts`（由 `lib/workflow/nodes/terminal.test.ts` 移来）
 - `sidecar/builtin-tools/__tests__/terminal-repl-tool.test.mjs`（15 个 Node-test 用例 —— node-pty stub）
 - `lib/plugin/security/permission-guard.test.ts`（扩展 `terminal:write` dangerous 分级）
 - `plugins/first-party-manifests.test.ts`（覆盖 github-delivery manifest 扩展）
@@ -158,7 +158,7 @@ github-delivery 的 manifest 加上 `terminal:spawn` + `terminal:write`，整条
 - `lib/terminal/base-session.ts`
 - `lib/terminal/dock-tool-handler.ts`
 - `lib/terminal/dock-tool-schemas.ts`（由 `lib/plugin/bridge/terminal-dock-schemas.ts` 移来）
-- `lib/workflow/nodes/terminal.ts`
+- `lib/terminal/workflow-nodes/dock.ts`（由 `lib/workflow/nodes/terminal.ts` 移来）
 - `sidecar/builtin-tools/terminal-repl-tool.mjs`（替换被删的 `terminal-dock-tool.mjs`）
 - `src-tauri/src/terminal/replay.rs`
 - `src-tauri/resources/terminal/shell-integration.fish`

@@ -236,7 +236,7 @@ Registers 12 desktop executors + `trigger.desktop.event`, each wrapping a deskto
 
 `trigger.desktop.event` is a runtime passthrough; real UIA firing happens via the Rust trigger bridge. Its params schema still constrains `kinds` to the supported UIA event kinds. `invokePattern` values are aligned with the automation `PatternKind` wire values such as `invoke`, `toggle`, and `expandCollapse`.
 
-## Terminal node (`lib/workflow/nodes/terminal.ts`)
+## Terminal node (`lib/terminal/workflow-nodes/dock.ts`)
 
 A single executor `action.system.terminal` (L48, `retryable: false`) lazy-imports `runTerminalDockAction` from `@/lib/terminal/dock-tool-handler` (renderer-only). It reuses the consent gate `requestAgentTrust` (scoped to `ctx.runId`), waits on OSC 633 `command_end`, spawns when there is no `tabId` else writes, clamps timeout to 5-600s, and decides `exit 0 -> "success"` else `"failure"` or throw per `onFailure` (default `"throw"`). Output: `{ exitCode, output, sessionId, command }`.
 

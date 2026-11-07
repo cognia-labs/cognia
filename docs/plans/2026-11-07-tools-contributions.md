@@ -356,3 +356,25 @@ interface ToolSurface {
 - 声明：spawn、write 为 default/write；read_recent、wait_for_exit 为 default/read；都不可取消（处理器不接收取消信号）。探针名单里手写的 spawn/write 删除（由 `effect !== "read"` 派生；两个读取和原来一样由发现式拒绝覆盖，因为模块条目也在解析后的 `pluginTools` 里）。实时语音的 `terminal_dock_` 前缀排除删除（由 `cancellable: false` 派生）。
 - 删除：`sidecar-tools-bridge` 的 `buildTerminalDockManifestEntries` 和 `exposeDockToAgents` 选项、`build-options` 的开关读取、`plugin-tool-ipc` 的前缀分支。顺序变化：坞条目原在插件条目之后、`ask_user` 之前，现在随模块工具追加在清单末尾；语义裁剪原本作用于整份插件清单，模块工具不经过它。
 - 门禁：还清方向边 2 条（`plugin-tool-ipc -> terminal`、`prompts/catalog -> terminal`），尺寸度量没有增长，不需要例外记录。`packages/plugin-contract` 里 `exposeDockToAgents` 注释仍提到旧函数名，未改（改动会使作者工具包锁失效）。
+
+## 20. T13 实施记录：workflowNodes 贡献、workflow 模块与 typed runner（2026-11-08）
+
+- 起因：工具贡献只能由 manifest 模块提供，而如实声明 workflow 的依赖（35 个模块）会经由 10 个反向依赖 workflow 的 manifest 模块（artifact、eval、goal、knowledge-base、pet、sites、slash-commands、squads、templates、terminal）形成 11 个模块的 G6 环。用户选择先做节点贡献机制，再反转零散的边。
+- W1 机制（2d3b8d9383）：`ModuleManifest.workflowNodes = { load }`，被加载的文件在导入时经 `registerNodeExecutor` 注册执行器并导出 `workflowNodeKinds`。生成器写 `lib/modules/generated/workflow-nodes.ts`（`MODULE_WORKFLOW_NODES`），manifest 校验覆盖该字段。加载器 `lib/workflow/nodes/module-nodes.ts`：按模块记忆化、并发调用共用一次加载、跳过 experimental、导入后核对声明的 kind 是否都已注册（缺失记错误日志）、失败的模块下次再试且不影响其他模块。`built-ins/index.ts` 在引擎导入时启动加载，`step-executor.ts` 的 `runStep` 在 `getExecutor` 之前等待它；`executor-coverage.test.ts` 先等待加载器再做覆盖检查。
+- W2 节点族迁入各模块（b26d0cd298）：`git mv` 七个节点族及其测试——terminal → `lib/terminal/workflow-nodes/{dock,session,script}.ts`（入口 `index.ts` 汇总 8 个 kind），artifacts、goals（20 个 kind）、sites、knowledge、evaluation（`eval.run`、`eval.gate`）、automation/pet → `lib/<module>/workflow-nodes.ts`。每个入口导出 `workflowNodeKinds`，测试断言声明与实际注册一致；七个 manifest 加 `workflowNodes`，artifact、pet、sites 的 `dependsOn` 加 `workflow`。运行结束时的资源释放改为登记式：`lib/workflow/runtime/run-resources.ts` 的 `registerRunResourceReleaser`，terminal 的会话节点登记 `closeRunSessions`，编排器不再导入 terminal。
+- W3 反转零散的边（同一提交）：
+  - knowledge-base：新端口 `knowledge-base-revisions`（`assertBindings`、`resolveCurrentBindings`，契约 `types/modules/ports/knowledge-base-revisions.ts`，提供方 `lib/knowledge-base/ports/revisions.ts`）；`execution-authority.ts` 和 `lib/db/workflow-apps.ts` 经 `lib/workflow/runtime/knowledge-revisions.ts` 使用，没有提供方而需要检查绑定时抛错，不静默跳过。`knowledge/access.ts` 的类型改从 plugin-contract 取。
+  - pet：`runtime/pet-event-trigger.ts` 移到 `lib/pet/workflow-trigger.ts`（列入 pet 的 `api`），两个启动方改导入。
+  - artifact：`ARTIFACT_TYPES` 移到 `types/artifact/artifact-types.ts`，`lib/artifacts/constants.ts` 重新导出。
+  - templates：`authoring.ts`、`portable-bundle.ts`、`types/workflow/portable-bundle.ts` 的契约改从 `@cognia/plugin-contract/lib/templates/contracts` 导入；`lib/templates/{catalog,repository}.` 路径覆盖归 `db`。
+  - eval：`lib/ai/eval/artifact-crypto.` 路径覆盖归 `credentials`（四条 foundation → eval 边变成 foundation → credentials，净数下降，增长检查通过）。
+  - slash-commands：`lib/slash-commands/actions/workflow.ts` 移到 `lib/workflow/editor/copilot-slash-commands.ts`；slash 的 `prompts` 贡献随之删除（`lib/slash-commands/prompts.ts` 及测试），prompt id 不变。
+- W4 workflow 成为 manifest 模块（同一提交）：`lib/workflow/module.ts`，`owns` `app/portal/` 和 `lib/db/workflow-{apps,conversations,stats}.ts`，`dependsOn` 26 个模块，`api` 43 个文件，`requires: ["ocr", "knowledge-base-revisions?"]`，`prompts` 为新文件 `lib/workflow/prompts.ts`（AI 节点提示、Copilot 提示与快捷动作、slash 工作流提示），`lib/prompts/catalog.ts` 不再导入 workflow。归属表删除 workflow 行，十余个被 workflow 导入的行补了 `api`。
+- W5 runner 与 Copilot（ab256d1686）：
+  - `ToolSurfaceContext.skills`：本次运行已解析的技能（`id`、`kind`），build-options 传给 `collectContributedTools`。
+  - 工具族 `lib/workflow/agent-tools.ts`：有 `kind: "workflow"` 技能或处于 `ultracode` 档、且代理未关闭插件工具时提供 `wf_run_workflow_typed`（描述与 schema 取自 plugin-contract 的 `WORKFLOW_RUNNER_TOOL_DEFINITION`），`run` 懒加载 `executeRunWorkflowTyped`。声明 `default`/`write`、不可取消、`precedence: "fallback"`：插件 `cognia-workflow-ai` 启用时它的注册先应答，清单按名字去重保留插件条目；插件缺席时条目以 `cognia-workflow-builtin` 传递。实时语音名单里手写的 `wf_run_workflow_typed` 删除（由 `cancellable: false` 派生）。
+  - build-options 删掉两段 runner 追加（技能和 ultracode），ultracode 档"重新挂回插件自己的 `wf_*` 条目"保留，`WORKFLOW_AI_PLUGIN_ID` 改从 plugin-contract 取；plugin-tool-ipc 删掉 runner 回退分支，由模块的 fallback 分支接手。
+  - Copilot：新端口 `workflow-editor-session`（契约 `types/modules/ports/workflow-editor-session.ts`，`prepare(sessionId)` 返回身份提示、打开图的快照、允许/禁止工具名单和可读目录），workflow 以 `lib/workflow/ports/editor-session.ts` 提供，`buildWorkflowSnapshotBlock` 一并搬入。build-options 的 workflow-editor 分支保留子代理注册、`forwardSubagentText` 和删除 `mcpServers`，其余应用端口返回值；没有提供方时保持原提示并记警告。
+- 门禁：还清方向边 `build-options -> workflow`、`plugin-tool-ipc -> workflow`，此前还清 `catalog -> workflow`、`hooks/use-template-catalog -> templates`、`work-submission -> eval`；没有尺寸度量增长，不需要例外记录。`lib/execution/control-handlers.ts -> best-of-n` 是其他会话的新边，每次写基线后剔除。
+- 既有失败（在 HEAD 上同样失败，非本次引入）：`lib/workflow/nodes/built-ins/index.test.ts` 18 例，`lib/eval/workflow-nodes.test.ts` "gates a run against param thresholds"，`lib/db/workflow-apps.test.ts` "freezes an app-selected Knowledge Base revision override"。
+- 未做：桌面冒烟（运行一个含终端/目标/知识库节点的工作流、带图体技能的对话调用 runner、编辑器 Copilot 会话）。

@@ -236,7 +236,7 @@ execute: async (ctx) => {
 
 `trigger.desktop.event` 在 runtime 中透传；真正的 UIA 触发由 Rust trigger 桥完成。它的 params schema 仍会把 `kinds` 限定为受支持的 UIA 事件类型。`invokePattern` 的值与 automation `PatternKind` wire value 对齐，例如 `invoke`、`toggle`、`expandCollapse`。
 
-## Terminal 节点（`lib/workflow/nodes/terminal.ts`)
+## Terminal 节点（`lib/terminal/workflow-nodes/dock.ts`)
 
 单一执行器 `action.system.terminal`（L48，`retryable: false`），懒导入 `@/lib/terminal/dock-tool-handler` 的 `runTerminalDockAction`（仅渲染端）。它复用同意门 `requestAgentTrust`（作用域为 `ctx.runId`），等待 OSC 633 `command_end`，无 `tabId` 时 spawn 否则写入，将超时夹在 5-600s，并按 `onFailure`（默认 `"throw"`）判定 `exit 0 -> "success"` 否则 `"failure"` 或抛错。输出：`{ exitCode, output, sessionId, command }`。
 

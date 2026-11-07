@@ -34,7 +34,7 @@ It is not:
 - **Share links, the docs site or the marketing site.** Share links are ADR-0037's service. The docs site is `docs/`. The marketing site is its own repository.
 - **Server operations.** Deploying Cognia's own services to a machine the user owns is the Ops Controller (ADR-0059). Sites deploys the user's projects.
 - **A multi-provider abstraction.** See section 3.
-- **An unattended publisher.** Takedown and purge are console-only, and workflow nodes cannot reach them (`lib/workflow/nodes/sites/index.ts`).
+- **An unattended publisher.** Takedown and purge are console-only, and workflow nodes cannot reach them (`lib/sites/workflow-nodes.ts`).
 
 ### 2. Boundary
 

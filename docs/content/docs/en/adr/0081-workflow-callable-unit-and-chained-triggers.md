@@ -41,6 +41,9 @@ entry of `kind:"workflow"`. Two of these interfaces no longer matched the delive
    whenever a workflow skill is active and the plugin didn't provide it (post
    semantic-pruning, so it cannot be pruned), and `lib/claude/plugin-tool-ipc.ts`
    executes the shared core directly when plugin resolution misses.
+   Amendment (2026-11-08, ADR-0250 §14): the guarantee is now the workflow module's tools
+   contribution (`lib/workflow/agent-tools.ts`, `precedence: "fallback"`), offered when a
+   workflow skill is active or at the `ultracode` tier; neither file above names the runner.
 3. **`trigger.workflow.completed` chains decoupled workflows.** The orchestrator
    announces every real terminal state (succeeded/failed — including validation,
    preflight, and sort failures) through

@@ -86,7 +86,7 @@ ADR-0021's signaling stack (`src-tauri/src/companion_api/signaling/{mod,client,d
 
 ### D7 — Workflow node `action.system.terminal`
 
-A new node kind (`types/workflow/visual.ts` union + `WORKFLOW_NODE_KINDS` array) with executor `lib/workflow/nodes/terminal.ts`. Inputs: `command`, optional `args` / `cwd` / `shell` / `projectId` / `tabId` / `timeoutSec` / `onFailure` (`"throw" | "branch"`). Output: `{ exitCode, output, sessionId }` and a `decision` of `"success"` (exit 0) or `"failure"` (non-zero) for downstream `flow.branch`-style routing.
+A new node kind (`types/workflow/visual.ts` union + `WORKFLOW_NODE_KINDS` array) with executor `lib/workflow/nodes/terminal.ts` (now `lib/terminal/workflow-nodes/dock.ts`, the terminal module's `workflowNodes` contribution). Inputs: `command`, optional `args` / `cwd` / `shell` / `projectId` / `tabId` / `timeoutSec` / `onFailure` (`"throw" | "branch"`). Output: `{ exitCode, output, sessionId }` and a `decision` of `"success"` (exit 0) or `"failure"` (non-zero) for downstream `flow.branch`-style routing.
 
 The executor delegates to `runTerminalDockAction` so consent + tab gating + timeout-resolution behaviour is identical to the chat affordance and the agent's MCP path. Renderer-only execution — workflows run in the Next.js process today; if/when V2 server-side workflow execution lands, a Tauri command bridge for the consent broker becomes necessary (scoped out of this wave).
 
@@ -145,7 +145,7 @@ Per-file co-located tests (CLAUDE.md rule #3, ≥90% lines/branches/functions on
 - `lib/terminal/transport-ws.test.ts` (rewritten — 20 tests including 7 Wave 2 reconnect scenarios)
 - `lib/terminal/pick-transport.test.ts` (extended with chain tests)
 - `components/mobile/mobile-terminal-screen.test.tsx` (11 tests including 3 overlay parity)
-- `lib/workflow/nodes/terminal.test.ts` (10 tests)
+- `lib/terminal/workflow-nodes/dock.test.ts` (moved from `lib/workflow/nodes/terminal.test.ts`)
 - `sidecar/builtin-tools/__tests__/terminal-repl-tool.test.mjs` (15 Node-test tests — node-pty stubbed)
 - `lib/plugin/security/permission-guard.test.ts` (extended for `terminal:write` dangerous classification)
 - `plugins/first-party-manifests.test.ts` (covers the github-delivery manifest extension)
@@ -160,7 +160,7 @@ Net: **121 + 15 + 8 = 144 new/extended tests, all passing.**
 - `lib/terminal/base-session.ts`
 - `lib/terminal/dock-tool-handler.ts`
 - `lib/terminal/dock-tool-schemas.ts` (moved from `lib/plugin/bridge/terminal-dock-schemas.ts`)
-- `lib/workflow/nodes/terminal.ts`
+- `lib/terminal/workflow-nodes/dock.ts` (moved from `lib/workflow/nodes/terminal.ts`)
 - `sidecar/builtin-tools/terminal-repl-tool.mjs` (replaces deleted `terminal-dock-tool.mjs`)
 - `src-tauri/src/terminal/replay.rs`
 - `src-tauri/resources/terminal/shell-integration.fish`

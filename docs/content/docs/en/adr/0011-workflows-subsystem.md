@@ -134,6 +134,13 @@ happen as a side effect of importing `lib/workflow/nodes/built-ins.ts`. Plugins 
 executors via the same `registerNodeExecutor` API; missing registrations surface as a
 "no executor registered" run failure (recoverable).
 
+Amendment (2026-11-08, ADR-0250 §14): the workflow engine is the `workflow` manifest module
+(`lib/workflow/module.ts`). Node families owned by another module are that module's
+`workflowNodes` contribution, loaded by `lib/workflow/nodes/module-nodes.ts` before the step
+executor looks an executor up: terminal (`lib/terminal/workflow-nodes/`), artifact, goal, sites,
+knowledge-base, eval and pet (`lib/<module>/workflow-nodes.ts`). The pet event trigger lives in
+`lib/pet/workflow-trigger.ts`.
+
 Phase 1 ships 23 real (non-stub) executors:
 
 | Kind                      | Behavior                                                                                    |

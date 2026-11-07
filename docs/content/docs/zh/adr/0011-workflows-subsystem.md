@@ -101,6 +101,8 @@ cognia-next 拥有丰富的运行时实体——角色（Characters）、智能�
 
 `lib/workflow/nodes/registry.ts` 把 `(kind, typeVersion)` 映射到 execute 函数。注册作为 import `lib/workflow/nodes/built-ins.ts` 的副作用发生。插件可通过同一个 `registerNodeExecutor` API 注册新执行器；缺失的注册会以 "no executor registered" 运行失败的形式暴露（可恢复）。
 
+修订（2026-11-08，ADR-0250 §14）：工作流引擎是 `workflow` manifest 模块（`lib/workflow/module.ts`）。归其他模块所有的节点族是该模块的 `workflowNodes` 贡献，由 `lib/workflow/nodes/module-nodes.ts` 在步骤执行器查找执行器之前加载：terminal（`lib/terminal/workflow-nodes/`）、artifact、goal、sites、knowledge-base、eval 和 pet（`lib/<module>/workflow-nodes.ts`）。宠物事件触发器位于 `lib/pet/workflow-trigger.ts`。
+
 Phase 1 交付 23 个真实（非桩）执行器：
 
 | 种类                      | 行为                                                                                        |

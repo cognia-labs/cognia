@@ -18,7 +18,7 @@ description: 所有已发布工作流统一由一个共享类型化 runner 执�
 ## 决策
 
 1. **一个共享类型化 runner，不注册每工作流工具。** `wf_run_workflow_typed`（名称与定义的唯一来源是 `lib/workflow/publish/runner-tool.ts`，插件注册与所有其他表面共享它）是已发布工作流的调用面。`published.toolName`（`wf_<slug>`）仅作展示。执行核心位于 `lib/workflow/publish/run-workflow-typed-tool.ts`；插件注册只是薄包装。
-2. **图体技能自愈并保证 runner 可用。** `renderSkillsSection` / `renderSkillsCatalog` 特判 `kind:"workflow"`：正文/目录行在渲染时由工作流名重新推导（修复前存量行里指向 `wf_<slug>` 的旧正文无需迁移即自愈），并以精确的 `{ "name": … }` 调用形态指向共享 runner。`lib/claude/build-options.ts` 的技能→工具投射在工作流技能激活且插件未提供时自动补齐 runner 清单项（在语义裁剪之后追加，不会被裁掉）；插件解析未命中时, `lib/claude/plugin-tool-ipc.ts` 直接执行共享核心。
+2. **图体技能自愈并保证 runner 可用。** `renderSkillsSection` / `renderSkillsCatalog` 特判 `kind:"workflow"`：正文/目录行在渲染时由工作流名重新推导（修复前存量行里指向 `wf_<slug>` 的旧正文无需迁移即自愈），并以精确的 `{ "name": … }` 调用形态指向共享 runner。`lib/claude/build-options.ts` 的技能→工具投射在工作流技能激活且插件未提供时自动补齐 runner 清单项（在语义裁剪之后追加，不会被裁掉）；插件解析未命中时, `lib/claude/plugin-tool-ipc.ts` 直接执行共享核心。修订（2026-11-08，ADR-0250 §14）：这一保证现在是 workflow 模块的工具贡献（`lib/workflow/agent-tools.ts`，`precedence: "fallback"`），工作流技能激活或处于 `ultracode` 档时提供；上述两个文件都不再提到 runner。
 3. **`trigger.workflow.completed` 链接解耦的工作流。** 编排器在每个真实终态（succeeded/failed——含校验、preflight、排序失败）经 `lib/workflow/runtime/workflow-completion-fanout.ts` 火并遗忘地发布完成事件。匹配的订阅（可按来源 `workflowId` 与结果 `status` 过滤）经由规范触发桥分发，载荷为 `{ workflowId, workflowName, runId, status, output?, error?, chainDepth }`。
 4. **防环/防风暴。** 链深上限 `MAX_WORKFLOW_CHAIN_DEPTH`（10），通过触发载荷（`chainDepth`）继承；工作流永远不会触发自身（即使订阅未加过滤）。catch 子运行（`suppressCatch`）与编辑器局部运行（`startStepId` / `restrictToStepIds`）不发布。
 5. **事件等待成真。** `flow.wait` 的 event 模式在进程内 wake 总线（`subscribeWake`）上阻塞，键为用户声明的 `eventKey`（缺省为运行级 `runId:stepId`），可选超时；`wf_emit_workflow_event` 是 agent 可达的唤醒源。订阅前到达的事件被丢弃，不排队。
