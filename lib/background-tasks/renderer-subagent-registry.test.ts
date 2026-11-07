@@ -8,6 +8,7 @@ jest.mock("@/lib/db/seed", () => ({
 }))
 
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
+import { getBackgroundTaskRecord } from "@/lib/db/background-tasks"
 import {
   __clearRendererBackgroundRunsForTesting,
   cancelRendererBackgroundRun,
@@ -53,6 +54,18 @@ beforeEach(async () => {
   __clearRendererBackgroundRunsForTesting()
 })
 
+/** The launcher's row for a child run, settled the way `end` says. */
+async function childRun(runId: string, end?: "completed" | "failed" | "cancelled") {
+  const { startToolExecutionRun, finishToolExecutionRun } =
+    await import("@/lib/execution/acting-authority")
+  await startToolExecutionRun("ses_1", { runId: `execution:job:${runId}` })
+  if (end)
+    await finishToolExecutionRun(
+      `execution:job:${runId}`,
+      end === "completed" ? false : end === "cancelled" ? "cancelled" : true
+    )
+}
+
 describe("renderer subagent background registry", () => {
   it("parks a structured run, journals it, and collects the live value", async () => {
     startRendererBackgroundRun("r1", meta(), Promise.resolve(ok("done")))
@@ -62,7 +75,7 @@ describe("renderer subagent background registry", () => {
     expect(listRendererBackgroundRuns()).toEqual([
       expect.objectContaining({ runId: "r1", status: "running", subagentId: "reviewer" }),
     ])
-    await expect(getDb().backgroundTasks.get("r1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("r1")).resolves.toMatchObject({
       runId: "r1",
       status: "running",
       prompt: "check this",
@@ -71,7 +84,7 @@ describe("renderer subagent background registry", () => {
     const collected = await collectRendererBackgroundResult("r1")
     expect(collected).toMatchObject({ text: "done", channel: "sidecar" })
     expect(listRendererBackgroundRuns()).toEqual([])
-    await expect(getDb().backgroundTasks.get("r1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("r1")).resolves.toMatchObject({
       status: "done",
       resultText: "done",
       usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
@@ -113,7 +126,6 @@ describe("renderer subagent background registry", () => {
       prompt: "check this",
       sessionId: "ses_1",
       host: "renderer",
-      status: "done",
       startedAt: 1000,
       settledAt: 2000,
       resultText: "journal done",
@@ -137,7 +149,6 @@ describe("renderer subagent background registry", () => {
       prompt: "check this",
       sessionId: "ses_1",
       host: "renderer",
-      status: "done",
       startedAt: 1000,
       settledAt: 2000,
       resultText: "journal done",
@@ -153,6 +164,9 @@ describe("renderer subagent background registry", () => {
   })
 
   it("falls back to journaled error variants after live memory is gone", async () => {
+    // The runs failed; the entries hold what each one left to deliver.
+    for (const runId of ["with-error", "with-result-text", "without-message"])
+      await childRun(runId, "failed")
     await getDb().backgroundTasks.bulkPut([
       {
         runId: "with-error",
@@ -161,7 +175,6 @@ describe("renderer subagent background registry", () => {
         prompt: "check this",
         sessionId: "ses_1",
         host: "renderer",
-        status: "error",
         startedAt: 1000,
         settledAt: 2000,
         error: "journal boom",
@@ -173,7 +186,6 @@ describe("renderer subagent background registry", () => {
         prompt: "check this",
         sessionId: "ses_1",
         host: "renderer",
-        status: "error",
         startedAt: 1000,
         settledAt: 2000,
         resultText: "fallback boom",
@@ -185,7 +197,6 @@ describe("renderer subagent background registry", () => {
         prompt: "check this",
         sessionId: "ses_1",
         host: "renderer",
-        status: "error",
         startedAt: 1000,
         settledAt: 2000,
       },
@@ -216,9 +227,9 @@ describe("renderer subagent background registry", () => {
       prompt: "check this",
       sessionId: "ses_1",
       host: "renderer",
-      status: "interrupted",
       startedAt: 1000,
       settledAt: 2000,
+      interruptedAt: 2000,
       resultText: "partial before crash",
     })
 
@@ -239,7 +250,7 @@ describe("renderer subagent background registry", () => {
     // Second collect falls back to the journal instead of "not found".
     const second = await collectRendererBackgroundResult("r1")
     expect(second).toMatchObject({ text: "done twice", channel: "text" })
-    await expect(getDb().backgroundTasks.get("r1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("r1")).resolves.toMatchObject({
       collectedAt: expect.any(Number),
     })
   })
@@ -310,7 +321,7 @@ describe("renderer subagent background registry", () => {
     startRendererBackgroundRun("r1", meta(), Promise.resolve(failed))
     await collectRendererBackgroundResult("r1")
 
-    await expect(getDb().backgroundTasks.get("r1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("r1")).resolves.toMatchObject({
       status: "error",
       error: "429 too many requests",
       resultText: "got halfway",
@@ -363,9 +374,9 @@ describe("renderer subagent background registry", () => {
       prompt: "check this",
       sessionId: "ses_1",
       host: "renderer",
-      status: "interrupted",
       startedAt: 1000,
       settledAt: 2000,
+      interruptedAt: 2000,
     })
 
     await expect(collectRendererBackgroundResult("r1")).resolves.toMatchObject({
@@ -420,7 +431,7 @@ describe("renderer subagent background registry", () => {
 
     const flipped = await interruptRendererBackgroundTasksOnBoot({ now: () => 3000 })
 
-    await expect(getDb().backgroundTasks.get("stale")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("stale")).resolves.toMatchObject({
       status: "interrupted",
       settledAt: 3000,
     })
@@ -482,7 +493,7 @@ describe("journalRendererForegroundRun", () => {
     })
     const result = journalRendererForegroundRun("fg-expired", meta(), producer)
     await settle()
-    const row = await getDb().backgroundTasks.get("fg-expired")
+    const row = await getBackgroundTaskRecord("fg-expired")
     await getDb().backgroundTasks.update("fg-expired", {
       ownerLease: { ...row!.ownerLease!, expiresAt: Date.now() },
     })
@@ -492,14 +503,14 @@ describe("journalRendererForegroundRun", () => {
       finishReason: "error",
       errorEnvelope: { retryable: false },
     })
-    expect((await getDb().backgroundTasks.get("fg-expired"))?.resultText).toBeUndefined()
+    expect((await getBackgroundTaskRecord("fg-expired"))?.resultText).toBeUndefined()
   })
 
   it("journals a foreground run as mode foreground and settles done, never collectable", async () => {
     await journalRendererForegroundRun("fg1", meta(), Promise.resolve(ok("fg done", "fg1")))
     await settle()
 
-    await expect(getDb().backgroundTasks.get("fg1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("fg1")).resolves.toMatchObject({
       mode: "foreground",
       status: "done",
       resultText: "fg done",
@@ -524,7 +535,7 @@ describe("journalRendererForegroundRun", () => {
     await journalRendererForegroundRun("fg1", meta(), Promise.resolve(failed))
     await settle()
 
-    await expect(getDb().backgroundTasks.get("fg1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("fg1")).resolves.toMatchObject({
       status: "error",
       error: "boom",
       resultText: "half",
@@ -543,7 +554,7 @@ describe("journalRendererForegroundRun", () => {
     await journalRendererForegroundRun("fg1", meta(), Promise.resolve(cancelled))
     await settle()
 
-    await expect(getDb().backgroundTasks.get("fg1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("fg1")).resolves.toMatchObject({
       status: "error",
       error: "cancelled",
     })
@@ -553,7 +564,7 @@ describe("journalRendererForegroundRun", () => {
     await journalRendererForegroundRun("fg1", meta(), Promise.reject(new Error("unexpected")))
     await settle()
 
-    await expect(getDb().backgroundTasks.get("fg1")).resolves.toMatchObject({
+    await expect(getBackgroundTaskRecord("fg1")).resolves.toMatchObject({
       status: "error",
       error: "unexpected",
     })
@@ -563,7 +574,7 @@ describe("journalRendererForegroundRun", () => {
     journalRendererForegroundRun("fg1", meta(), new Promise(() => {}))
     await settle()
 
-    const row = await getDb().backgroundTasks.get("fg1")
+    const row = await getBackgroundTaskRecord("fg1")
     const flipped = await interruptRendererBackgroundTasksOnBoot({
       now: () => row!.ownerLease!.expiresAt,
     })
@@ -580,7 +591,7 @@ it("delivers an admitted run only after the result is durable and does not overw
   await journal.recordStart({ runId: "accepted", ...meta(), status: "running", mode: "background" })
   const persistedAtDelivery: unknown[] = []
   setRendererBackgroundSettleListener(() => {
-    persistedAtDelivery.push(getDb().backgroundTasks.get("accepted"))
+    persistedAtDelivery.push(getBackgroundTaskRecord("accepted"))
   })
   startAcceptedRendererBackgroundRun(
     "accepted",
@@ -602,10 +613,10 @@ it("does not interrupt this renderer's live run when boot reconciliation repeats
   startRendererBackgroundRun("live", meta(), new Promise<PluginSubagentDispatchResult>(() => {}))
   // Let the existing best-effort admission journal commit.
   await new Promise((resolve) => setTimeout(resolve, 0))
-  expect(await getDb().backgroundTasks.get("live")).toMatchObject({ status: "running" })
+  expect(await getBackgroundTaskRecord("live")).toMatchObject({ status: "running" })
   const interrupted = await interruptRendererBackgroundTasksOnBoot()
   expect(interrupted).toEqual([])
-  expect(await getDb().backgroundTasks.get("live")).toMatchObject({ status: "running" })
+  expect(await getBackgroundTaskRecord("live")).toMatchObject({ status: "running" })
 })
 
 it("does not interrupt a CLI host's independent running work", async () => {
@@ -616,5 +627,5 @@ it("does not interrupt a CLI host's independent running work", async () => {
     status: "running",
   })
   expect(await interruptRendererBackgroundTasksOnBoot()).toEqual([])
-  expect(await getDb().backgroundTasks.get("cli-live")).toMatchObject({ status: "running" })
+  expect(await getBackgroundTaskRecord("cli-live")).toMatchObject({ status: "running" })
 })

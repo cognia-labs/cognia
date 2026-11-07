@@ -3,10 +3,12 @@ jest.mock("@/lib/db/seed", () => ({
 }))
 
 import { getDb, type BackgroundTaskJournalRow } from "./schema"
+import type { BackgroundTaskJournalRecord } from "@/lib/background-tasks/registry-core"
 import { activateAccountDatabase, clearAccountDatabaseSelection } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 import {
   BACKGROUND_TASK_LEASE_TTL_MS,
+  backgroundTaskStatus,
   clearSettledBackgroundTasks,
   reserveBackgroundTaskDelivery,
   admitBackgroundDispatch,
@@ -20,8 +22,14 @@ import {
   updateBackgroundTaskRecord,
 } from "./background-tasks"
 
+/**
+ * A stored entry. A renderer entry stores no status (its run is the status),
+ * so a `status` given here is written as the outbox facts that read back as
+ * it with no run row: `done` and `error` are a recorded result, `interrupted`
+ * an entry whose host stopped first. A CLI entry stores its status as given.
+ */
 function row(overrides: Partial<BackgroundTaskJournalRow> = {}): BackgroundTaskJournalRow {
-  return {
+  const stored: BackgroundTaskJournalRow = {
     runId: "bg_1",
     kind: "subagent",
     subagentId: "reviewer",
@@ -32,6 +40,21 @@ function row(overrides: Partial<BackgroundTaskJournalRow> = {}): BackgroundTaskJ
     startedAt: 1000,
     ...overrides,
   }
+  if (stored.host !== "renderer") return stored
+  const { status, ...outbox } = stored
+  if (status === "running") return outbox
+  const settledAt = outbox.settledAt ?? 3000
+  return {
+    ...outbox,
+    settledAt,
+    ...(status === "interrupted" ? { interruptedAt: outbox.interruptedAt ?? settledAt } : {}),
+    ...(status === "error" && !outbox.error ? { error: "failed" } : {}),
+  }
+}
+
+/** What the registry hands a journal at start: an entry with its status. */
+function started(overrides: Partial<BackgroundTaskJournalRow> = {}): BackgroundTaskJournalRecord {
+  return { ...row(overrides), status: "running" }
 }
 
 const expiredLease = { ownerId: "previous-window", epoch: 1, expiresAt: 2000 }
@@ -55,7 +78,7 @@ describe("background task journal table", () => {
   it("round-trips start and settle transitions through the journal adapter", async () => {
     const journal = createDexieBackgroundTaskJournal()
 
-    await journal.recordStart(row())
+    await journal.recordStart(started())
     await journal.recordSettle("bg_1", {
       status: "done",
       settledAt: 2000,
@@ -122,7 +145,7 @@ describe("background task journal table", () => {
     const journal = createDexieBackgroundTaskJournal()
 
     await journal.recordStart(
-      row({
+      started({
         mode: "background",
         toolsEnabled: false,
         resumeOfRunId: "bg_0",
@@ -183,6 +206,86 @@ describe("background task journal table", () => {
   })
 })
 
+describe("the outbox and its read model (ADR-0252 §2)", () => {
+  const open = row({ runId: "x" })
+  const settled = row({ runId: "x", status: "done" })
+  const failed = row({ runId: "x", status: "error" })
+  const interrupted = row({ runId: "x", status: "interrupted" })
+
+  it.each([
+    ["an open entry of a running run", open, "running", "running"],
+    ["a recorded result of a run still settling", settled, "running", "running"],
+    ["a recorded result of a completed run", settled, "completed", "done"],
+    ["a recorded result of a failed run", settled, "failed", "error"],
+    ["a recorded result of a cancelled run", settled, "cancelled", "error"],
+    // The run ended, the result has not landed: a collect must keep waiting.
+    ["an open entry of a completed run", open, "completed", "running"],
+    [
+      "an entry whose host stopped, its run cancelled after",
+      interrupted,
+      "cancelled",
+      "interrupted",
+    ],
+    ["an entry whose host stopped, its run still open", interrupted, "running", "interrupted"],
+  ] as const)("reads %s as its run says", (_name, entry, run, status) => {
+    expect(backgroundTaskStatus(entry, { status: run })).toBe(status)
+  })
+
+  it("reads an entry with no run row (its launch was refused) from its result", () => {
+    expect(backgroundTaskStatus(open, undefined)).toBe("running")
+    expect(backgroundTaskStatus(settled, undefined)).toBe("done")
+    expect(backgroundTaskStatus(failed, undefined)).toBe("error")
+    expect(backgroundTaskStatus(interrupted, undefined)).toBe("interrupted")
+  })
+
+  it("reads a CLI entry from the status it stores", () => {
+    const cli = row({ runId: "x", host: "cli", status: "error", settledAt: 2000 })
+    expect(backgroundTaskStatus(cli, { status: "completed" })).toBe("error")
+  })
+
+  it("stores no status on a renderer entry, start to settle", async () => {
+    const journal = createDexieBackgroundTaskJournal()
+    await journal.recordStart({ ...row({ runId: "outbox" }), status: "running" })
+    expect(await getDb().backgroundTasks.get("outbox")).not.toHaveProperty("status")
+    await journal.recordSettle("outbox", { status: "done", settledAt: 2000, resultText: "ok" })
+    const stored = await getDb().backgroundTasks.get("outbox")
+    expect(stored).not.toHaveProperty("status")
+    expect(stored).toMatchObject({ settledAt: 2000, resultText: "ok" })
+  })
+
+  it("keeps the status a CLI entry stores", async () => {
+    const journal = createDexieBackgroundTaskJournal()
+    await journal.recordStart({ ...row({ runId: "cli", host: "cli" }), status: "running" })
+    await journal.recordSettle("cli", { status: "error", settledAt: 2000, error: "boom" })
+    expect(await getDb().backgroundTasks.get("cli")).toMatchObject({ status: "error" })
+  })
+
+  it("clears a status written before the outbox when the entry is next updated", async () => {
+    await getDb().backgroundTasks.put({ ...row({ runId: "legacy" }), status: "running" })
+    await updateBackgroundTaskRecord("legacy", { collectedAt: 1500 })
+    expect(await getDb().backgroundTasks.get("legacy")).not.toHaveProperty("status")
+  })
+
+  it("lists entries with their run's status and follows the run", async () => {
+    const { startToolExecutionRun, finishToolExecutionRun } =
+      await import("@/lib/execution/acting-authority")
+    await startToolExecutionRun("ses_1", { runId: "execution:job:joined" })
+    await getDb().backgroundTasks.put(
+      row({ runId: "joined", status: "done", settledAt: 2000, resultText: "ok" })
+    )
+    await expect(getBackgroundTaskRecord("joined")).resolves.toMatchObject({ status: "running" })
+    await expect(listBackgroundTaskRecords({ status: "running" })).resolves.toHaveLength(1)
+
+    await finishToolExecutionRun("execution:job:joined", true)
+
+    await expect(getBackgroundTaskRecord("joined")).resolves.toMatchObject({ status: "error" })
+    await expect(listBackgroundTaskRecords({ status: "running" })).resolves.toEqual([])
+    await expect(listBackgroundTaskRecords({ status: "error" })).resolves.toEqual([
+      expect.objectContaining({ runId: "joined", resultText: "ok" }),
+    ])
+  })
+})
+
 describe("pruneBackgroundTaskRecords", () => {
   const DAY = 24 * 60 * 60 * 1000
 
@@ -204,7 +307,8 @@ describe("pruneBackgroundTaskRecords", () => {
   it("uses startedAt for age when a row never settled", async () => {
     const db = getDb()
     await db.backgroundTasks.bulkPut([
-      row({ runId: "stale-interrupted", status: "interrupted", startedAt: 0 }),
+      // A CLI entry keeps its status; this one never recorded a settle time.
+      row({ runId: "stale-interrupted", host: "cli", status: "interrupted", startedAt: 0 }),
     ])
 
     const removed = await pruneBackgroundTaskRecords({ now: 15 * DAY, maxAgeMs: 14 * DAY })
@@ -301,7 +405,8 @@ describe("durable background admission", () => {
   it("claims one replacement atomically and reuses the persistent child", async () => {
     await admitBackgroundDispatch(admissionRow())
     await getDb().backgroundTasks.update("bg_1", {
-      status: "interrupted",
+      interruptedAt: 3000,
+      settledAt: 3000,
       ownerLease: expiredLease,
     })
     const outcomes = await Promise.allSettled([
@@ -328,7 +433,11 @@ it("rejects stale accepted recovery proof if dispatch began before boot interrup
   await getDb().sessions.put({ id: "ses_1", title: "Parent", createdAt: 1, updatedAt: 1 })
   const original = await admitBackgroundDispatch(admissionRow())
   await original.markDispatched()
-  await getDb().backgroundTasks.update("bg_1", { status: "interrupted", ownerLease: expiredLease })
+  await getDb().backgroundTasks.update("bg_1", {
+    interruptedAt: 3000,
+    settledAt: 3000,
+    ownerLease: expiredLease,
+  })
   await expect(
     admitBackgroundDispatch(admissionRow({ runId: "retry-stale" }), "bg_1", "accepted")
   ).rejects.toThrow("already claimed or changed")
@@ -442,7 +551,7 @@ describe("renderer owner leases", () => {
     let at = 1000
     const owner = createDexieBackgroundTaskJournal({ ownerId: "window-a", now: () => at })
     const other = createDexieBackgroundTaskJournal({ ownerId: "window-b", now: () => at })
-    await owner.recordStart(row())
+    await owner.recordStart(started())
     expect(await interruptBackgroundTasksOnBoot({ now: () => at })).toEqual([])
     expect(await other.renewLease("bg_1")).toBe(false)
     await expect(other.recordSettle("bg_1", { status: "done" })).rejects.toThrow("ownership")
@@ -548,7 +657,7 @@ describe("renderer owner leases", () => {
   it("binds writers to the account captured at admission", async () => {
     const db = getDb()
     const generic = createDexieBackgroundTaskJournal({ ownerId: "window-a", now: () => 1000 })
-    await generic.recordStart(row({ runId: "generic" }))
+    await generic.recordStart(started({ runId: "generic" }))
     await db.sessions.put({ id: "ses_1", title: "Parent", createdAt: 1, updatedAt: 1 })
     const handle = await admitBackgroundDispatch(admissionRow(), undefined, undefined, {
       ownerId: "window-a",
@@ -572,14 +681,15 @@ describe("renderer owner leases", () => {
       await otherDb.delete()
       clearAccountDatabaseSelection()
     }
+    // Nothing was settled through the stale scope: every entry is still open.
     expect(
-      (await getDb().backgroundTasks.toArray()).every((record) => record.status === "running")
+      (await getDb().backgroundTasks.toArray()).every((record) => record.settledAt === undefined)
     ).toBe(true)
   })
 
   it("rejects the same owner under a newer epoch and prevents unowned execution updates", async () => {
     const owner = createDexieBackgroundTaskJournal({ ownerId: "window-a", now: () => 1000 })
-    await owner.recordStart(row())
+    await owner.recordStart(started())
     await getDb().backgroundTasks.update("bg_1", {
       ownerLease: { ownerId: "window-a", epoch: 2, expiresAt: 100_000 },
     })
@@ -601,7 +711,7 @@ describe("renderer owner leases", () => {
 
   it("keeps a generic cancellation receipt writable after stopping its heartbeat", async () => {
     const owner = createDexieBackgroundTaskJournal({ ownerId: "window-a", now: () => 1000 })
-    await owner.recordStart(row())
+    await owner.recordStart(started())
     await owner.update("bg_1", { cancelRequestedAt: 1000 })
     expect(await owner.renewLease("bg_1")).toBe(false)
     await owner.recordSettle("bg_1", { status: "error", error: "Cancelled" })
@@ -610,7 +720,7 @@ describe("renderer owner leases", () => {
 
   it("does not let unowned helpers overwrite leased execution evidence", async () => {
     const owner = createDexieBackgroundTaskJournal({ ownerId: "window-a", now: () => 1000 })
-    await owner.recordStart(row())
+    await owner.recordStart(started())
     await expect(recordBackgroundTaskStart(row({ status: "done" }))).rejects.toThrow()
     await expect(recordBackgroundTaskSettle("bg_1", { status: "done" })).rejects.toThrow(
       "ownership"

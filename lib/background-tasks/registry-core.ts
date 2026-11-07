@@ -53,9 +53,22 @@ export interface BackgroundTaskJournalRecord {
    */
   rootSessionId?: string
   host: BackgroundTaskHost
+  /**
+   * For a renderer entry this is a read model: the entry stores no status, its
+   * run's `execution:job:<runId>` row is the status (ADR-0252 §2), read back by
+   * `listBackgroundTaskRecords` / `getBackgroundTaskRecord`. A CLI-host entry
+   * stores it (the CLI journal has no execution runs).
+   */
   status: BackgroundTaskStatus
   startedAt: number
+  /** When the result was recorded: the outbox's own "settled" fact. */
   settledAt?: number
+  /**
+   * When the host stopped before the result arrived (boot reconciliation).
+   * The run row reads `cancelled`; this is what tells an interruption from a
+   * cancel, so only interrupted work is offered for replay.
+   */
+  interruptedAt?: number
   resultText?: string
   error?: string
   usage?: BackgroundTaskUsage
@@ -90,6 +103,7 @@ export type BackgroundTaskJournalPatch = Partial<
     BackgroundTaskJournalRecord,
     | "status"
     | "settledAt"
+    | "interruptedAt"
     | "resultText"
     | "error"
     | "usage"
@@ -127,6 +141,7 @@ export type BackgroundTaskStartMeta = Omit<
   | "runId"
   | "status"
   | "settledAt"
+  | "interruptedAt"
   | "resultText"
   | "error"
   | "usage"

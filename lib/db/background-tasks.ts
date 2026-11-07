@@ -7,13 +7,122 @@ import type {
   BackgroundTaskJournalWriter,
 } from "@/lib/background-tasks/registry-core"
 import { interruptRunningTasks } from "@/lib/background-tasks/registry-core"
+// The contract package, not the kernel's `types/execution` (foundation).
+import { isTerminalRunStatus, type ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 import { getDb } from "./schema"
 import { assertSessionWritable } from "@/lib/chat/session-write-guard"
+
+/*
+ * The renderer's `backgroundTasks` table is a delivery outbox (ADR-0252 §2):
+ * an entry holds what a parent session is owed — the result, its delivery
+ * batch and state, the replay proof — and the outbox's own two facts, whether
+ * the result has been recorded (`settledAt`) and whether its host stopped
+ * before it was (`interruptedAt`). It stores no run status: the launcher's
+ * `execution:job:<runId>` row is the run, and the read functions below join
+ * it back as `status`. CLI-host entries keep storing `status` (the CLI journal
+ * has no execution runs, ADR-0252 D13).
+ */
 
 export const BACKGROUND_TASK_LEASE_TTL_MS = 60_000
 const DEFAULT_OWNER_ID = crypto.randomUUID()
 type OwnerLease = NonNullable<BackgroundTaskJournalRow["ownerLease"]>
 type LeaseOptions = { ownerId?: string; now?: () => number }
+
+/**
+ * The result is not recorded yet: for the outbox, the entry is still open. A
+ * CLI entry's stored status says so.
+ */
+function isUnsettled(row: BackgroundTaskJournalRow): boolean {
+  if (row.host === "renderer") return row.settledAt === undefined
+  return row.status === "running" || (row.status === undefined && row.settledAt === undefined)
+}
+
+/**
+ * Its host stopped before the result arrived. A CLI entry, and a renderer
+ * entry written before the outbox, say so with their stored status.
+ */
+function isInterrupted(row: BackgroundTaskJournalRow): boolean {
+  return (
+    row.interruptedAt !== undefined || (row.host !== "renderer" && row.status === "interrupted")
+  )
+}
+
+/** A renderer entry never stores the run's status; a CLI entry does. */
+function storedRow<T extends Partial<BackgroundTaskJournalRecord>>(
+  host: BackgroundTaskJournalRow["host"],
+  row: T
+): Omit<T, "status"> | T {
+  if (host !== "renderer") return row
+  const { status: _status, ...rest } = row
+  return rest
+}
+
+/**
+ * An update to a stored entry. On a renderer entry it also clears a status
+ * written before the outbox (Dexie deletes a key updated to `undefined`), so
+ * no stale copy of the run's status survives on the row.
+ */
+function storedPatch<T extends Partial<BackgroundTaskJournalRecord>>(
+  host: BackgroundTaskJournalRow["host"],
+  patch: T
+): Omit<T, "status"> | T {
+  return host === "renderer" ? { ...storedRow(host, patch), status: undefined } : patch
+}
+
+function executionRowId(runId: string): string {
+  return `execution:job:${runId}`
+}
+
+/**
+ * The status an entry reads with. A renderer entry's is its run's, gated by
+ * the outbox: until the result is recorded the entry is still `running` (a
+ * collect must never read an ended run whose result has not landed), and an
+ * entry whose host stopped first is `interrupted` whatever the run row says.
+ * An entry with no run row (its launch was refused) reads from its result.
+ */
+export function backgroundTaskStatus(
+  row: BackgroundTaskJournalRow,
+  run: Pick<ExecutionRun, "status"> | undefined
+): BackgroundTaskStatus {
+  if (row.host !== "renderer")
+    return row.status ?? (isUnsettled(row) ? "running" : row.error ? "error" : "done")
+  if (isInterrupted(row)) return "interrupted"
+  if (isUnsettled(row) || (run && !isTerminalRunStatus(run.status))) return "running"
+  if (run) return run.status === "completed" ? "done" : "error"
+  return row.error ? "error" : "done"
+}
+
+/** Outbox facts only, for decisions made inside a `backgroundTasks` transaction. */
+function outboxRecord(row: BackgroundTaskJournalRow): BackgroundTaskJournalRecord {
+  return {
+    ...row,
+    status:
+      row.host !== "renderer" && row.status
+        ? row.status
+        : isInterrupted(row)
+          ? "interrupted"
+          : isUnsettled(row)
+            ? "running"
+            : row.error
+              ? "error"
+              : "done",
+  }
+}
+
+async function withRunStatus(
+  rows: BackgroundTaskJournalRow[]
+): Promise<BackgroundTaskJournalRecord[]> {
+  const renderer = rows.filter((row) => row.host === "renderer")
+  const runs = renderer.length
+    ? await getDb().executionRuns.bulkGet(renderer.map((row) => executionRowId(row.runId)))
+    : []
+  const byId = new Map<string, ExecutionRun>()
+  for (const run of runs) if (run) byId.set(run.id, run)
+  return rows.map((row) => ({
+    ...row,
+    status: backgroundTaskStatus(row, byId.get(executionRowId(row.runId))),
+  }))
+}
 
 function ownsRunningTask(
   row: BackgroundTaskJournalRow | undefined,
@@ -21,16 +130,20 @@ function ownsRunningTask(
   now: number
 ): boolean {
   return Boolean(
-    row?.status === "running" &&
+    row &&
+    isUnsettled(row) &&
+    !isInterrupted(row) &&
     row.ownerLease?.ownerId === lease.ownerId &&
     row.ownerLease?.epoch === lease.epoch &&
     row.ownerLease.expiresAt > now
   )
 }
 
+/** A settle records the result: the entry is settled from then on. */
 function terminalPatch(current: BackgroundTaskJournalRow, patch: BackgroundTaskJournalPatch) {
   return {
-    ...patch,
+    ...storedPatch(current.host, patch),
+    settledAt: patch.settledAt ?? Date.now(),
     ...(current.host === "renderer" &&
     current.kind === "subagent" &&
     current.mode !== "foreground" &&
@@ -46,7 +159,14 @@ function changesExecution(patch: BackgroundTaskJournalPatch): boolean {
   )
 }
 
-export type BackgroundTaskJournalRow = BackgroundTaskJournalRecord
+/**
+ * The stored entry. `status` is absent from a renderer entry (its run is the
+ * status) and present on a CLI one; read entries back through
+ * `listBackgroundTaskRecords` / `getBackgroundTaskRecord` to get a status.
+ */
+export type BackgroundTaskJournalRow = Omit<BackgroundTaskJournalRecord, "status"> & {
+  status?: BackgroundTaskStatus
+}
 
 export interface BackgroundTaskListFilter {
   host?: BackgroundTaskJournalRow["host"]
@@ -54,7 +174,7 @@ export interface BackgroundTaskListFilter {
 }
 
 export async function recordBackgroundTaskStart(row: BackgroundTaskJournalRow): Promise<void> {
-  await getDb().backgroundTasks.add(row)
+  await getDb().backgroundTasks.add(storedRow(row.host, row))
 }
 
 export async function recordBackgroundTaskSettle(
@@ -79,36 +199,42 @@ export async function updateBackgroundTaskRecord(
     const current = await db.backgroundTasks.get(runId)
     if (current?.ownerLease && changesExecution(patch))
       throw new Error("Background task ownership required")
-    await db.backgroundTasks.update(runId, patch)
+    await db.backgroundTasks.update(runId, current ? storedPatch(current.host, patch) : patch)
   })
 }
 
+/** One entry with its status (its run's, for a renderer entry). */
 export async function getBackgroundTaskRecord(
   runId: string
-): Promise<BackgroundTaskJournalRow | undefined> {
-  return getDb().backgroundTasks.get(runId)
+): Promise<BackgroundTaskJournalRecord | undefined> {
+  const row = await getDb().backgroundTasks.get(runId)
+  return row ? (await withRunStatus([row]))[0] : undefined
 }
 
-export async function listBackgroundTaskRecords(
-  filter: BackgroundTaskListFilter = {}
+/** Stored entries, newest first, with no status joined. */
+async function listStoredRows(
+  host: BackgroundTaskJournalRow["host"] | undefined
 ): Promise<BackgroundTaskJournalRow[]> {
   const db = getDb()
-  let rows: BackgroundTaskJournalRow[]
-  if (filter.host && filter.status) {
-    rows = await db.backgroundTasks
-      .where("[host+status]")
-      .equals([filter.host, filter.status])
-      .toArray()
-  } else if (filter.host) {
-    rows = await db.backgroundTasks.where("host").equals(filter.host).toArray()
-  } else if (filter.status) {
-    rows = await db.backgroundTasks.where("status").equals(filter.status).toArray()
-  } else {
-    rows = await db.backgroundTasks.toArray()
-  }
+  const rows = host
+    ? await db.backgroundTasks.where("host").equals(host).toArray()
+    : await db.backgroundTasks.toArray()
   return rows.sort((a, b) => b.startedAt - a.startedAt)
 }
 
+/**
+ * Entries with their status, newest first. Reads `executionRuns` as well, so
+ * a live query over it follows each run, and it cannot run inside a
+ * transaction that only spans `backgroundTasks`.
+ */
+export async function listBackgroundTaskRecords(
+  filter: BackgroundTaskListFilter = {}
+): Promise<BackgroundTaskJournalRecord[]> {
+  const rows = await withRunStatus(await listStoredRows(filter.host))
+  return filter.status ? rows.filter((row) => row.status === filter.status) : rows
+}
+
+/** Drop every entry whose result is recorded (its run has ended). */
 export async function clearSettledBackgroundTasks(
   filter: BackgroundTaskListFilter = {}
 ): Promise<void> {
@@ -142,7 +268,7 @@ export function createDexieBackgroundTaskJournal(
       admissions.set(record.runId, { db, lease })
       try {
         await db.backgroundTasks.add({
-          ...record,
+          ...storedRow(record.host, record),
           ...(record.host === "renderer" ? { ownerLease: lease } : {}),
         })
       } catch (error) {
@@ -201,9 +327,9 @@ export function createDexieBackgroundTaskJournal(
         requireAdmission(runId)
         const current = await db.backgroundTasks.get(runId)
         requireAdmission(runId)
-        if (!ownsRunningTask(current, lease, now()))
+        if (!current || !ownsRunningTask(current, lease, now()))
           throw new Error("Background task ownership lost")
-        await db.backgroundTasks.update(runId, patch)
+        await db.backgroundTasks.update(runId, storedPatch(current.host, patch))
       })
     },
     clearSettled: clearSettledBackgroundTasks,
@@ -227,19 +353,23 @@ export async function interruptBackgroundTasksOnBoot(
      * once the flip has committed. The caller settles what else the rows stood
      * for (the renderer: each run's `executionRuns` row).
      */
-    onInterrupted?: (rows: BackgroundTaskJournalRow[]) => Promise<void>
+    onInterrupted?: (rows: BackgroundTaskJournalRecord[]) => Promise<void>
   } = {}
-): Promise<BackgroundTaskJournalRow[]> {
+): Promise<BackgroundTaskJournalRecord[]> {
   const db = getDb()
-  let flipped: BackgroundTaskJournalRow[] = []
+  let flipped: BackgroundTaskJournalRecord[] = []
   const result = await db.transaction("rw", db.backgroundTasks, async () => {
     const at = (options.now ?? Date.now)()
-    const rows = (await db.backgroundTasks.toArray()).filter(
-      (row) =>
-        (!options.host || row.host === options.host) &&
-        (row.ownerLease !== undefined || !options.isLive?.(row.runId)) &&
-        !(row.host === "renderer" && row.ownerLease && row.ownerLease.expiresAt > at)
-    )
+    // Outbox facts decide here: an open entry whose host stopped is
+    // interrupted, whatever its run row says (that row is settled after).
+    const rows = (await db.backgroundTasks.toArray())
+      .filter(
+        (row) =>
+          (!options.host || row.host === options.host) &&
+          (row.ownerLease !== undefined || !options.isLive?.(row.runId)) &&
+          !(row.host === "renderer" && row.ownerLease && row.ownerLease.expiresAt > at)
+      )
+      .map(outboxRecord)
     const unknownOwners = new Set(
       rows.filter((row) => row.host === "renderer" && !row.ownerLease).map((row) => row.runId)
     )
@@ -248,8 +378,10 @@ export async function interruptBackgroundTasksOnBoot(
         ...createDexieBackgroundTaskJournal(),
         list: async () => rows,
         update: async (runId, patch) => {
+          const host = rows.find((row) => row.runId === runId)?.host ?? "renderer"
           await db.backgroundTasks.update(runId, {
-            ...patch,
+            ...storedPatch(host, patch),
+            ...(patch.settledAt !== undefined ? { interruptedAt: patch.settledAt } : {}),
             ...(unknownOwners.has(runId)
               ? {
                   error: "Background task ownership is unknown; automatic recovery is unavailable.",
@@ -260,9 +392,14 @@ export async function interruptBackgroundTasksOnBoot(
       },
       options
     )
-    flipped = interrupted
+    // The entries as stored: each flip also stamped when its host stopped.
+    const stamped = interrupted.map((row) => ({
+      ...row,
+      interruptedAt: row.interruptedAt ?? row.settledAt,
+    }))
+    flipped = stamped
     return [
-      ...interrupted.filter((row) => row.host !== "renderer" || row.ownerLease),
+      ...stamped.filter((row) => row.host !== "renderer" || row.ownerLease),
       ...(options.recoverInterrupted
         ? rows.filter(
             (row) =>
@@ -300,8 +437,9 @@ export async function pruneBackgroundTaskRecords(opts: {
   const db = getDb()
   let removed = 0
   await db.transaction("rw", db.backgroundTasks, async () => {
-    const rows = await listBackgroundTaskRecords(opts.host ? { host: opts.host } : {})
-    const settled = rows.filter((row) => row.status !== "running")
+    // Outbox facts only: this transaction spans `backgroundTasks` alone.
+    const rows = await listStoredRows(opts.host)
+    const settled = rows.filter((row) => !isUnsettled(row))
     const doomed = new Set<string>()
     if (maxAgeMs > 0) {
       const cutoff = opts.now - maxAgeMs
@@ -354,7 +492,7 @@ export async function admitBackgroundDispatch(
       const prior = await db.backgroundTasks.get(recoveryOf)
       if (
         !prior ||
-        prior.status !== "interrupted" ||
+        !isInterrupted(prior) ||
         !prior.ownerLease ||
         prior.ownerLease.expiresAt > now() ||
         prior.resumedByRunId ||
@@ -399,7 +537,7 @@ export async function admitBackgroundDispatch(
         },
       })
     }
-    await db.backgroundTasks.add({ ...row, ownerLease: lease })
+    await db.backgroundTasks.add({ ...storedRow(row.host, row), ownerLease: lease })
   })
   const assertScope = () => {
     if (getDb() !== db) throw new Error("Background dispatch scope changed")
@@ -478,7 +616,7 @@ export async function admitBackgroundDispatch(
           !parent ||
           !child ||
           child.attachedChild?.status === "closed" ||
-          current?.status !== "running" ||
+          !current ||
           !ownsRunningTask(current, lease, now()) ||
           current.cancelRequestedAt !== undefined ||
           current.recovery?.phase !== "accepted"
@@ -514,7 +652,8 @@ export async function reserveBackgroundTaskDelivery(
           row.host === "renderer" &&
           row.kind === "subagent" &&
           row.deliveryState === "pending" &&
-          (row.status === "done" || row.status === "error")
+          !isUnsettled(row) &&
+          !isInterrupted(row)
         )
     )
     const existingId = rows.find((row) => row.deliveryId)?.deliveryId
