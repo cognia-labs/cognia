@@ -242,6 +242,7 @@ function collectManifests(ctx, files) {
             ...runtimeAdapterErrors(ctx, file, value),
             ...provisionExportErrors(ctx, file, value),
             ...promptsExportErrors(ctx, file, value),
+            ...contributionsExportErrors(ctx, file, value),
           ]
         : []
     for (const message of [...readErrors, ...shapeErrors, ...lazyErrors, ...adapterErrors])
@@ -385,6 +386,16 @@ function promptsExportErrors(ctx, file, manifest) {
   // An unresolved lazy entry is already reported with the other lazy entries.
   return target && !exportsName(ctx.ast(target), "prompts")
     ? [`prompts: ${target} exports no \`prompts\``]
+    : []
+}
+
+/** A module's `capabilityContributions` file exports them as `contributions`. */
+function contributionsExportErrors(ctx, file, manifest) {
+  const spec = manifest.capabilityContributions?.load?.$lazy
+  if (typeof spec !== "string") return []
+  const target = resolveModule(ctx, spec, file)
+  return target && !exportsName(ctx.ast(target), "contributions")
+    ? [`capabilityContributions: ${target} exports no \`contributions\``]
     : []
 }
 

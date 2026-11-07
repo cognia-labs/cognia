@@ -8111,6 +8111,73 @@ describe("maxBudgetUsd from active goal (/goal cost ceiling)", () => {
     const opts = await resolveSendOptions({ character: makeChar({ id: "c1" }) })
     expect(opts.maxBudgetUsd).toBeUndefined()
   })
+
+  it("keeps the lower of the goal's ceiling and a caller grant's budget", async () => {
+    const grant = (maxBudgetUsd: number) => [
+      { schemaVersion: 1 as const, source: { kind: "agent-team" as const }, maxBudgetUsd },
+    ]
+    const lower = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      activeGoal: activeGoal(3.5),
+      capabilityGrants: grant(0.5),
+    })
+    expect(lower.maxBudgetUsd).toBe(0.5)
+    const higher = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      activeGoal: activeGoal(3.5),
+      capabilityGrants: grant(9),
+    })
+    expect(higher.maxBudgetUsd).toBe(3.5)
+  })
+
+  it("adds the goal's section among the grant instructions, after the caller's", async () => {
+    const goal = { ...activeGoal(), safeObjective: "ship the flag system" }
+    const opts = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      activeGoal: goal,
+      capabilityGrants: [
+        { schemaVersion: 1, source: { kind: "workflow" }, instructions: ["CALLER FRAGMENT"] },
+      ],
+    })
+    const text = opts.appendSystemPrompt ?? ""
+    expect(text).toContain("ship the flag system")
+    expect(text.indexOf("CALLER FRAGMENT")).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf("CALLER FRAGMENT")).toBeLessThan(text.indexOf("ship the flag system"))
+  })
+
+  it("adds no goal section for a goal that is not active", async () => {
+    const opts = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      activeGoal: { ...activeGoal(2), status: "paused", safeObjective: "ship the flag system" },
+    })
+    expect(opts.appendSystemPrompt ?? "").not.toContain("ship the flag system")
+    expect(opts.maxBudgetUsd).toBeUndefined()
+  })
+})
+
+describe("browser-companion's agent-mode contribution", () => {
+  afterEach(async () => {
+    const { resetExtensionBindings } = await import("@/lib/browser/extension-engine")
+    resetExtensionBindings()
+  })
+
+  it("tells a conversation bound to a paired browser where its browser tools act", async () => {
+    const [{ bindExtensionSession }, { BROWSER_COMPANION_AGENT_INSTRUCTION }] = await Promise.all([
+      import("@/lib/browser/extension-engine"),
+      import("@/lib/browser-companion/agent-grant"),
+    ])
+    bindExtensionSession("bound-session", { deviceId: "browser-a" })
+    const bound = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      session: makeSession({ id: "bound-session" }),
+    })
+    expect(bound.appendSystemPrompt).toContain(BROWSER_COMPANION_AGENT_INSTRUCTION)
+    const other = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      session: makeSession({ id: "other-session" }),
+    })
+    expect(other.appendSystemPrompt ?? "").not.toContain(BROWSER_COMPANION_AGENT_INSTRUCTION)
+  })
 })
 
 describe("resolveSendOptions — agent-trace root span minting", () => {

@@ -1,50 +1,55 @@
 /**
- * Goal → `appendSystemPrompt` bridge.
+ * An active goal's share of every run in its session, as the goal module's
+ * capability contribution (ADR-0198 amendment, ADR-0250 §14 M3).
  *
- * `resolveSendOptions` in `lib/claude/build-options.ts` already has a
- * conventional way to add prompt sections without disturbing the
- * base/character/skill/mode pipeline: the `appendSystemPrompt` field on
- * `SendOptions`. The A2UI and brief-mode injections both use it.
+ * Two parts, folded with the run's other grants by `resolveSendOptions`:
+ * - the goal's system section (Codex-style `<objective>` wrap and injection
+ *   warning) as an instruction, appended after the agent's own prompt;
+ * - the goal's per-turn USD ceiling as the run's budget, so a runaway turn
+ *   halts (subtype `error_max_budget_usd`) instead of burning cost until the
+ *   renderer-side turn and token budget catches it after the turn.
  *
- * This helper does the same for an active goal — keeping the surgical
- * change in `build-options.ts` to a single import + one `if` block while
- * the actual formatting logic (and tests for it) stay here.
+ * Only an `active` goal contributes: paused, inactive and terminal goals are
+ * skipped, so the model sees goal context only while it is being driven. The
+ * budget narrows the run, so a failure here fails the resolution rather than
+ * letting the turn run without its ceiling.
  */
 
 import type { Goal } from "@/types/goal"
+import type {
+  CapabilityContribution,
+  ContributedCapabilityGrant,
+} from "@/lib/modules/manifest-types"
 import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import { renderGoalSystemSection } from "./prompts"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { loggers } from "@cognia/logging"
 
-/**
- * If `goal` is in the `active` state, returns the new value for
- * `opts.appendSystemPrompt`. Otherwise returns the unchanged input.
- *
- * The append uses the existing convention seen in `build-options.ts`:
- * sections are joined with two newlines so they read as distinct paragraphs
- * to the model. Empty / whitespace-only existing sections are normalised
- * away so the output never starts with the joiner.
- */
-export function appendGoalContext(opts: {
-  appendSystemPrompt?: string
-  activeGoal?: Goal | null
-  /** The turn's frozen Prompt Center snapshot (ADR-0236). */
-  promptSnapshot?: PromptOverrideSnapshot | null
-}): string | undefined {
-  const goal = opts.activeGoal
-  if (!goal || goal.status !== "active") return opts.appendSystemPrompt
-  const section = renderGoalSystemSection(
-    goal,
-    opts.promptSnapshot !== undefined ? { snapshot: opts.promptSnapshot } : {}
-  )
+/** What an active goal adds to a run of its session; `null` for any other goal. */
+export function goalCapabilityGrant(
+  goal: Readonly<Goal> | null | undefined,
+  /** The run's frozen Prompt Center snapshot (ADR-0236). */
+  snapshot?: PromptOverrideSnapshot | null
+): ContributedCapabilityGrant | null {
+  if (!goal || goal.status !== "active") return null
+  const grant: ContributedCapabilityGrant = {}
+  const section = renderGoalSystemSection(goal, snapshot !== undefined ? { snapshot } : {})
   // PII red-line: the goal text is human-editable and flows straight into the
-  // outbound system prompt. Skip the injection if it carries leaking PII rather
-  // than send it to the model (matches the connector auto-mode safe-send gate).
-  if (!hasNoLeakingPii(section)) {
-    loggers.agent.warn("Goal context carries PII; skipping system-prompt injection")
-    return opts.appendSystemPrompt
-  }
-  const existing = opts.appendSystemPrompt?.trim() ?? ""
-  return existing.length > 0 ? `${existing}\n\n${section}` : section
+  // outbound system prompt. Leave the section out if it carries leaking PII
+  // rather than send it to the model (matches the connector auto-mode
+  // safe-send gate). The budget still applies.
+  if (hasNoLeakingPii(section)) grant.instructions = [section]
+  else loggers.agent.warn("Goal context carries PII; skipping system-prompt injection")
+  const budget = goal.config?.maxBudgetUsd
+  if (typeof budget === "number" && budget > 0) grant.maxBudgetUsd = budget
+  return grant.instructions || grant.maxBudgetUsd !== undefined ? grant : null
 }
+
+export const contributions: readonly CapabilityContribution[] = [
+  {
+    id: "active-goal",
+    // The budget narrows the run: never let it silently disappear.
+    failure: "refuse-turn",
+    produce: ({ activeGoal, prompts }) => goalCapabilityGrant(activeGoal, prompts.snapshot),
+  },
+]

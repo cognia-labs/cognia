@@ -45,6 +45,7 @@
 import type { Goal } from "@/types/goal"
 import { resolvePrompt, resolvePromptAsync } from "@/lib/prompts/resolve"
 import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
+import type { ModulePromptsModule } from "@/lib/modules/manifest-types"
 import { definePrompt, type PromptResolutionContext } from "@/lib/prompts/types"
 import { MAX_SUGGESTED_DELAY_MS, MIN_SUGGESTED_DELAY_MS } from "./pacing"
 
@@ -486,3 +487,13 @@ Return the JSON object only.`
  * larger composed prompt.
  */
 export const GOAL_SECTION_MARKER = "## Active Goal"
+
+/** What goal's manifest contributes to the prompt catalog (ADR-0250 §14, M3). */
+export const prompts: ModulePromptsModule["prompts"] = [
+  GOAL_SYSTEM_SECTION_PROMPT,
+  GOAL_JUDGE_PROMPT,
+  GOAL_SUBGOALS_PROMPT,
+  GOAL_CONTINUATION_PROMPT,
+  GOAL_PROMISE_VERIFICATION_PROMPT,
+  GOAL_OBJECTIVE_UPDATED_PROMPT,
+]

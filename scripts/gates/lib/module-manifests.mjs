@@ -128,10 +128,13 @@ export const GENERATED_RUNTIMES = {
 }
 /** Every module's `prompts` file, lazily: the prompt catalog's only route to a module. */
 export const GENERATED_PROMPTS = "lib/modules/generated/prompts.ts"
+/** Every module's `capabilityContributions` file, lazily: the send resolver's only route to one. */
+export const GENERATED_CAPABILITIES = "lib/modules/generated/capabilities.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
   GENERATED_PROMPTS,
+  GENERATED_CAPABILITIES,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -609,6 +612,14 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
     errors.push('searchProviders is a lazy entry `() => import("…")`')
   if (manifest.prompts !== undefined && !isLazy(manifest.prompts))
     errors.push('prompts is a lazy entry `() => import("…")`')
+  if (manifest.capabilityContributions !== undefined) {
+    const contributions = manifest.capabilityContributions
+    if (!contributions || typeof contributions !== "object" || !isLazy(contributions.load))
+      errors.push('capabilityContributions.load is a lazy entry `() => import("…")`')
+    else
+      for (const key of Object.keys(contributions))
+        if (key !== "load") errors.push(`capabilityContributions: unknown field "${key}"`)
+  }
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
   if (manifest.nav !== undefined) errors.push(...navErrors(manifest.nav, vocabulary))
@@ -749,25 +760,54 @@ function renderRuntimes(host, modules) {
   ].join("\n")
 }
 
-/** The modules that contribute prompts, in module id order. */
-export function promptEntries(modules) {
+/**
+ * The registries that hold one lazy import per contributing module and
+ * nothing else, so their reader (and anything that bundles it, such as the
+ * CLI or the brain) loads no manifest and no other feature code. `spec`
+ * finds a module's lazy specifier in its manifest value.
+ */
+const LAZY_REGISTRIES = {
+  prompts: {
+    spec: (value) => value?.prompts?.$lazy,
+    constName: "MODULE_PROMPTS",
+    type: "ModulePromptsEntry",
+    reader: [
+      "// Every module's `prompts` contribution, read by the prompt catalog",
+      "// (`lib/prompts/catalog.ts`).",
+    ],
+  },
+  capabilities: {
+    spec: (value) => value?.capabilityContributions?.load?.$lazy,
+    constName: "MODULE_CAPABILITY_CONTRIBUTIONS",
+    type: "ModuleCapabilityContributionsEntry",
+    reader: [
+      "// Every module's `capabilityContributions`, read by the send resolver",
+      "// (`lib/claude/capability-contributions.ts`, ADR-0198 amendment).",
+    ],
+  },
+}
+
+/** The modules that contribute to `registry`, in module id order. */
+export function lazyRegistryEntries(registry, modules) {
+  const { spec } = LAZY_REGISTRIES[registry]
   return [...modules]
     .sort((a, b) => a.id.localeCompare(b.id))
-    .filter(({ value }) => typeof value?.prompts?.$lazy === "string")
+    .filter(({ value }) => typeof spec(value) === "string")
     .map(({ id, file, value }) => ({
       module: id,
       stage: value.stage,
-      load: adapterImport(file, value.prompts.$lazy),
+      load: adapterImport(file, spec(value)),
     }))
 }
 
-/**
- * The prompt catalog's registry: one lazy import per module's `prompts` file
- * and nothing else, so the catalog (and the CLI, which bundles it) loads no
- * manifest and no other feature code.
- */
-function renderPrompts(modules) {
-  const rows = promptEntries(modules).map((entry) =>
+/** The modules that contribute prompts, in module id order. */
+export function promptEntries(modules) {
+  return lazyRegistryEntries("prompts", modules)
+}
+
+function renderLazyRegistry(registry, modules) {
+  const { constName, type, reader } = LAZY_REGISTRIES[registry]
+  const rows = lazyRegistryEntries(registry, modules).map((entry) =>
     [
       "  {",
       `    module: ${JSON.stringify(entry.module)},`,
@@ -779,14 +819,13 @@ function renderPrompts(modules) {
   return [
     `${HEADER("lib/<id>/module.ts")}`,
     "//",
-    "// Every module's `prompts` contribution, read by the prompt catalog",
-    "// (`lib/prompts/catalog.ts`).",
+    ...reader,
     "",
-    'import type { ModulePromptsEntry } from "@/lib/modules/manifest-types"',
+    `import type { ${type} } from "@/lib/modules/manifest-types"`,
     "",
     rows.length
-      ? `export const MODULE_PROMPTS: readonly ModulePromptsEntry[] = [\n${rows.join("\n")}\n]`
-      : "export const MODULE_PROMPTS: readonly ModulePromptsEntry[] = []",
+      ? `export const ${constName}: readonly ${type}[] = [\n${rows.join("\n")}\n]`
+      : `export const ${constName}: readonly ${type}[] = []`,
     "",
   ].join("\n")
 }
@@ -811,7 +850,8 @@ export function renderRegistries({ host, ui }) {
     ...Object.fromEntries(
       Object.entries(GENERATED_RUNTIMES).map(([name, file]) => [file, renderRuntimes(name, host)])
     ),
-    [GENERATED_PROMPTS]: renderPrompts(host),
+    [GENERATED_PROMPTS]: renderLazyRegistry("prompts", host),
+    [GENERATED_CAPABILITIES]: renderLazyRegistry("capabilities", host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

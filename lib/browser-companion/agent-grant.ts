@@ -1,15 +1,16 @@
 /**
  * The capability grant a Browser Companion agent conversation runs with
- * (ADR-0228 §6, ADR-0198).
+ * (ADR-0228 §6, ADR-0198), contributed by this module to every run of such a
+ * conversation.
  *
  * Instructions only. The browser tools are admitted at the plugin-manifest gate
  * in `lib/claude/build-options.ts` for a conversation bound to a paired
  * browser — not through `tools.add`, which joins an allow list and would narrow
  * a turn that had no allow list down to the browser tools alone.
  */
-import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
+import { extensionBindingFor } from "@/lib/browser/extension-engine"
+import type { CapabilityContribution } from "@/lib/modules/manifest-types"
 import { resolvePrompt } from "@/lib/prompts/resolve"
-import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import { definePrompt } from "@/lib/prompts/types"
 
 /** What the model is told about where its browser tools act (the shipped text). */
@@ -52,17 +53,25 @@ export const BROWSER_COMPANION_AGENT_PROMPT = definePrompt({
 })
 
 /**
- * Resolved synchronously: build-options loads the turn's override snapshot
- * before it folds grants, so the loaded snapshot is the turn's.
+ * The grant as browser-companion's capability contribution (ADR-0198
+ * amendment): every run of a conversation bound to a paired browser gets the
+ * instruction, resolved against the run's frozen Prompt Center view. It only
+ * adds, so a failure leaves it out instead of failing the turn.
  */
-export function browserCompanionGrant(
-  deviceId: string,
-  /** The turn's frozen Prompt Center snapshot; the loaded one when omitted. */
-  snapshot?: PromptOverrideSnapshot | null
-): AgentCapabilityGrantV1 {
-  return {
-    schemaVersion: 1,
-    source: { kind: "browser-companion", id: deviceId },
-    instructions: [resolvePrompt(BROWSER_COMPANION_AGENT_PROMPT, { snapshot }).text],
-  }
-}
+export const contributions: readonly CapabilityContribution[] = [
+  {
+    id: "agent-mode",
+    failure: "skip",
+    produce: ({ session, prompts }) => {
+      if (!session?.id || !extensionBindingFor(session.id)) return null
+      return {
+        instructions: [
+          resolvePrompt(BROWSER_COMPANION_AGENT_PROMPT, {
+            snapshot: prompts.snapshot,
+            context: prompts.context,
+          }).text,
+        ],
+      }
+    },
+  },
+]

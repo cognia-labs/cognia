@@ -13,7 +13,7 @@
  *      and folds it into `SendOptions.appendHeaders["anthropic-beta"]`.
  *
  * Pure helper — no React, no I/O beyond the in-memory registry. Same
- * convention as `lib/goal/context-injector:appendGoalContext`.
+ * convention as `lib/agent/plan/context-injector:appendPlanContext`.
  */
 
 import {

@@ -149,7 +149,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | 34 | 账号 / 代理 env | `resolveAccountEnv` + `resolveProxyEnv` → `opts.env` | `:1159` |
 | 35 | 便捷模式 | bare（`settingSources:[]`）/ debug（env）/ brief（`lib/agent/prompts/brief-mode.ts` 的 `BRIEF_MODE_PROMPT`，经 Prompt Center 解析，ADR-0236） | `:1179` |
-| 36 | 活跃 `/goal` | `appendGoalContext`（ADR-0013/0019） | `:1211` |
+| 36 | 活跃 `/goal` | `goal` 模块的能力授予贡献（`lib/goal/context-injector.ts`，ADR-0198 修订）：目标段落并入授予说明，美元上限并入授予预算 | `:1211` |
 | 37 | 收件箱抑制 | manual > muted > quietHours → `opts.suppressedReason` | `:1224` |
 | 38 | 思考预算 | session > character > appDefault | `:1253` |
 | 39 | **工作流编辑器分支** | **覆写** `systemPrompt`/`appendSystemPrompt`/`allowedTools`/`additionalDirectories`；删 `mcpServers` | `:1285` |

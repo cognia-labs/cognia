@@ -52,6 +52,11 @@ export type CapabilityGrantSourceKind =
   | "browser-companion"
   /** A Harness Evolution probe or editor session (ADR-0237). */
   | "harness-evolution"
+  /**
+   * A feature module's contribution to every run it applies to (ADR-0198
+   * amendment, ADR-0250 §14); `id` is `<module>/<contribution>`.
+   */
+  | "module"
 
 export const CAPABILITY_GRANT_SOURCE_KINDS: readonly CapabilityGrantSourceKind[] = [
   "scheduler",
@@ -67,6 +72,7 @@ export const CAPABILITY_GRANT_SOURCE_KINDS: readonly CapabilityGrantSourceKind[]
   "automation",
   "browser-companion",
   "harness-evolution",
+  "module",
 ]
 
 /** Additive/subtractive change to an id set. `remove` beats `add` for the same id. */

@@ -150,7 +150,7 @@ The exhaustive list. "Precedence" reads left-to-right, highest first.
 | --- | --- | --- | --- |
 | 34 | Account / proxy env | `resolveAccountEnv` + `resolveProxyEnv` → `opts.env` | `:1159` |
 | 35 | Convenience modes | bare (`settingSources:[]`) / debug (env) / brief (`BRIEF_MODE_PROMPT` in `lib/agent/prompts/brief-mode.ts`, resolved through the Prompt Center, ADR-0236) | `:1179` |
-| 36 | Active `/goal` | `appendGoalContext` (ADR-0013/0019) | `:1211` |
+| 36 | Active `/goal` | The `goal` module's capability contribution (`lib/goal/context-injector.ts`, ADR-0198 amendment): its section joins the grant instructions, its USD ceiling the grant budget | `:1211` |
 | 37 | Inbox suppression | manual > muted > quietHours → `opts.suppressedReason` | `:1224` |
 | 38 | Thinking budget | session > character > appDefault | `:1253` |
 | 39 | **Workflow-editor branch** | **overwrites** `systemPrompt`/`appendSystemPrompt`/`allowedTools`/`additionalDirectories`; deletes `mcpServers` | `:1285` |

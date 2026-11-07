@@ -225,7 +225,6 @@ import {
   foldCapabilityGrants,
   type AgentCapabilityGrantV1,
 } from "@cognia/agent-config-types/agent-capability-grant"
-import { browserCompanionGrant } from "@/lib/browser-companion/agent-grant"
 import { extensionBindingFor } from "@/lib/browser/extension-engine"
 import { resolveTurnCompositionSafely } from "./resolve-turn-composition-safely"
 import { resolvePrompt } from "@/lib/prompts/resolve"
@@ -1425,13 +1424,25 @@ export async function resolveSessionAsideReadOnly(
     sessionId: session.id,
     selection: overrides.compositionSelection,
   })
+  // A module's contributed permission cap binds the aside's authority too.
+  const { collectContributedGrants } = await import("./capability-contributions")
+  const contributed = await collectContributedGrants({
+    session,
+    agent: character ?? null,
+    settings: appSettings ?? null,
+    activeGoal: null,
+    prompts: {
+      snapshot: null,
+      context: { sessionId: session.id, workspaceId: session.projectId, agentId: character?.id },
+    },
+  })
   const permission = capPermissionModeByGrant(
     session.permissionMode ??
       mode.requestedAuthority ??
       mode.mode?.permissionMode ??
       character?.permissionMode ??
       appSettings?.permissionMode,
-    foldCapabilityGrants(overrides.capabilityGrants)
+    foldCapabilityGrants([...(overrides.capabilityGrants ?? []), ...contributed.grants])
   )
   return permission === "plan"
 }
@@ -1662,12 +1673,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const readOnlyAside = Boolean(asideBinding && requiresReadOnlyAside)
   const asideGrants: AgentCapabilityGrantV1[] = []
   // A conversation the user started from the Browser Companion's agent mode
-  // acts in that browser (ADR-0228 §6). The grant says so to the model; the
-  // browser tools themselves are admitted at the plugin-manifest gate below,
-  // because adding them to an empty allow list would narrow the turn to them.
+  // acts in that browser (ADR-0228 §6). The browser-companion module's
+  // contribution says so to the model; the browser tools themselves are
+  // admitted at the plugin-manifest gate below, because adding them to an
+  // empty allow list would narrow the turn to them.
   const extensionBinding = session?.id ? extensionBindingFor(session.id) : null
-  if (extensionBinding)
-    asideGrants.push(browserCompanionGrant(extensionBinding.deviceId, promptSnapshot))
   if (asideBinding) {
     if (asideParentPermission) {
       asideGrants.push({
@@ -1697,7 +1707,21 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         : {}),
     })
   }
-  const grant = foldCapabilityGrants([...(ctx.capabilityGrants ?? []), ...asideGrants])
+  // What feature modules contribute to every run they apply to (ADR-0198
+  // amendment): after the caller's grants, before the resolver's own.
+  const { collectContributedGrants } = await import("./capability-contributions")
+  const contributed = await collectContributedGrants({
+    session: session ?? null,
+    agent: character,
+    settings: appSettings ?? null,
+    activeGoal: ctx.activeGoal ?? null,
+    prompts: { snapshot: promptSnapshot, context: promptContext },
+  })
+  const grant = foldCapabilityGrants([
+    ...(ctx.capabilityGrants ?? []),
+    ...contributed.grants,
+    ...asideGrants,
+  ])
   if (grant?.maxTurns !== undefined) opts.maxTurns = grant.maxTurns
   if (grant?.maxBudgetUsd !== undefined) opts.maxBudgetUsd = grant.maxBudgetUsd
 
@@ -5178,26 +5202,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // --- Active /goal context (ADR-0013) -------------------------------------
-  // When the resolving session has an active goal, append the goal's system
-  // section (Codex-style <objective> wrap + injection warning) to
-  // `appendSystemPrompt`. Inactive / paused / terminal goals are skipped so
-  // the model only sees goal context while it's actually being driven.
-  if (ctx.activeGoal && ctx.activeGoal.status === "active") {
-    const { appendGoalContext } = await import("@/lib/goal/context-injector")
-    opts.appendSystemPrompt = appendGoalContext({
-      appendSystemPrompt: opts.appendSystemPrompt,
-      activeGoal: ctx.activeGoal,
-      promptSnapshot,
-    })
-    // Forward the goal's per-turn USD ceiling as the SDK's hard budget cap so a
-    // runaway turn halts (subtype `error_max_budget_usd`) instead of burning
-    // cost until the renderer-side turn/token budget catches it post-turn.
-    const goalBudget = ctx.activeGoal.config?.maxBudgetUsd
-    if (typeof goalBudget === "number" && goalBudget > 0) {
-      opts.maxBudgetUsd = Math.min(opts.maxBudgetUsd ?? goalBudget, goalBudget)
-    }
-  }
+  // An active /goal (ADR-0013) reaches the run as the goal module's
+  // capability contribution: its section among the grant instructions below,
+  // its USD ceiling as the grant budget folded above.
 
   // --- Active plan context (ADR-0045) --------------------------------------
   // When the resolving session has an executing plan, append the plan's

@@ -1,6 +1,8 @@
 import type { Goal, GoalConfig, GoalStatus } from "@/types/goal"
+import type { CapabilityContributionContext } from "@/lib/modules/manifest-types"
 import { GOAL_SECTION_MARKER } from "./prompts"
-import { appendGoalContext } from "./context-injector"
+import { contributions, goalCapabilityGrant } from "./context-injector"
+import goalModule from "./module"
 
 const SAMPLE_CONFIG: GoalConfig = {
   maxTurns: 20,
@@ -29,15 +31,10 @@ function buildGoal(overrides: Partial<Goal> = {}): Goal {
   }
 }
 
-describe("appendGoalContext", () => {
-  it("returns the input unchanged when activeGoal is null", () => {
-    const out = appendGoalContext({ appendSystemPrompt: "existing", activeGoal: null })
-    expect(out).toBe("existing")
-  })
-
-  it("returns the input unchanged when activeGoal is undefined", () => {
-    const out = appendGoalContext({ appendSystemPrompt: "existing" })
-    expect(out).toBe("existing")
+describe("goalCapabilityGrant", () => {
+  it("adds nothing without a goal", () => {
+    expect(goalCapabilityGrant(null)).toBeNull()
+    expect(goalCapabilityGrant(undefined)).toBeNull()
   })
 
   it.each<GoalStatus>([
@@ -48,62 +45,61 @@ describe("appendGoalContext", () => {
     "turn_limited",
     "timed_out",
     "preempted",
-  ])("does NOT inject when status is %s", (status) => {
-    const goal = buildGoal({ status })
-    const out = appendGoalContext({ appendSystemPrompt: "existing", activeGoal: goal })
-    expect(out).toBe("existing")
+  ])("adds nothing when status is %s", (status) => {
+    expect(goalCapabilityGrant(buildGoal({ status }))).toBeNull()
   })
 
-  it("injects the goal section when status is active", () => {
-    const goal = buildGoal({ status: "active" })
-    const out = appendGoalContext({ appendSystemPrompt: undefined, activeGoal: goal })
-    expect(out).toContain(GOAL_SECTION_MARKER)
-    expect(out).toContain("ship feature flag system")
+  it("adds the goal section as the only instruction when status is active", () => {
+    const grant = goalCapabilityGrant(buildGoal({ status: "active" }))
+    expect(grant?.instructions).toHaveLength(1)
+    expect(grant?.instructions?.[0].startsWith(GOAL_SECTION_MARKER)).toBe(true)
+    expect(grant?.instructions?.[0]).toContain("ship feature flag system")
+    expect(grant).not.toHaveProperty("maxBudgetUsd")
   })
 
-  it("appends to existing appendSystemPrompt with paragraph separator", () => {
-    const goal = buildGoal({ status: "active" })
-    const out = appendGoalContext({
-      appendSystemPrompt: "[A2UI section]",
-      activeGoal: goal,
-    })
-    expect(out).toMatch(/^\[A2UI section\]\n\n## Active Goal/)
+  it("carries a positive per-turn USD ceiling as the run's budget", () => {
+    const goal = buildGoal({ config: { ...SAMPLE_CONFIG, maxBudgetUsd: 1.5 } })
+    expect(goalCapabilityGrant(goal)?.maxBudgetUsd).toBe(1.5)
+    for (const maxBudgetUsd of [0, -1]) {
+      const unset = buildGoal({ config: { ...SAMPLE_CONFIG, maxBudgetUsd } })
+      expect(goalCapabilityGrant(unset)).not.toHaveProperty("maxBudgetUsd")
+    }
   })
 
-  it("trims whitespace from existing appendSystemPrompt before joining", () => {
-    const goal = buildGoal({ status: "active" })
-    const out = appendGoalContext({
-      appendSystemPrompt: "   [brief]   \n\n",
-      activeGoal: goal,
-    })
-    expect(out).toMatch(/^\[brief\]\n\n## Active Goal/)
-  })
-
-  it("returns just the goal section when no existing prompt is present", () => {
-    const goal = buildGoal({ status: "active" })
-    const out = appendGoalContext({ activeGoal: goal })
-    expect(out?.startsWith(GOAL_SECTION_MARKER)).toBe(true)
-  })
-
-  it("returns just the goal section when existing prompt is whitespace only", () => {
-    const goal = buildGoal({ status: "active" })
-    const out = appendGoalContext({ appendSystemPrompt: "   ", activeGoal: goal })
-    expect(out?.startsWith(GOAL_SECTION_MARKER)).toBe(true)
-  })
-
-  it("skips injection when the goal section carries leaking PII (red-line gate)", () => {
+  it("leaves out a section that carries leaking PII (red-line gate) but keeps the budget", () => {
     const goal = buildGoal({
-      status: "active",
       safeObjective: "email the report to john.doe@example.com before EOD",
+      config: { ...SAMPLE_CONFIG, maxBudgetUsd: 2 },
     })
-    const out = appendGoalContext({ appendSystemPrompt: "[brief]", activeGoal: goal })
-    expect(out).toBe("[brief]")
-    expect(out).not.toContain("john.doe@example.com")
+    expect(goalCapabilityGrant(goal)).toEqual({ maxBudgetUsd: 2 })
+    expect(goalCapabilityGrant({ ...goal, config: SAMPLE_CONFIG })).toBeNull()
   })
 
-  it("still injects a clean goal section that has no PII", () => {
-    const goal = buildGoal({ status: "active", safeObjective: "ship the flag system" })
-    const out = appendGoalContext({ appendSystemPrompt: "[brief]", activeGoal: goal })
-    expect(out).toContain("ship the flag system")
+  it("still adds a clean goal section that has no PII", () => {
+    const grant = goalCapabilityGrant(buildGoal({ safeObjective: "ship the flag system" }))
+    expect(grant?.instructions?.[0]).toContain("ship the flag system")
+  })
+})
+
+describe("the goal module's contribution", () => {
+  const run = (activeGoal: Goal | null): CapabilityContributionContext => ({
+    session: null,
+    agent: null,
+    settings: null,
+    activeGoal,
+    prompts: { snapshot: null, context: {} },
+  })
+
+  it("is one refuse-turn contribution, because its budget narrows the run", async () => {
+    expect(contributions.map(({ id, failure }) => ({ id, failure }))).toEqual([
+      { id: "active-goal", failure: "refuse-turn" },
+    ])
+    expect((await goalModule.capabilityContributions.load()).contributions).toBe(contributions)
+  })
+
+  it("reads the run's active goal", async () => {
+    const goal = buildGoal({ config: { ...SAMPLE_CONFIG, maxBudgetUsd: 3 } })
+    expect(await contributions[0].produce(run(goal))).toEqual(goalCapabilityGrant(goal, null))
+    expect(await contributions[0].produce(run(null))).toBeNull()
   })
 })

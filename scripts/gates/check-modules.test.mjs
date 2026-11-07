@@ -29,6 +29,7 @@ import {
 import {
   BRAIN_PROFILES,
   EFFECT_FIELDS,
+  GENERATED_CAPABILITIES,
   GENERATED_HOST,
   GENERATED_PROMPTS,
   GENERATED_UI,
@@ -1043,6 +1044,82 @@ test("the prompt registry lazily imports each contributing module's prompts file
   assert.ok(registry.includes('load: () => import("@/lib/radar/prompts")'))
   assert.ok(!registry.includes("crew"))
   assert.ok(!files[GENERATED_HOST].includes("generated/prompts"))
+})
+
+test("capability contributions: a lazy load whose file exports `contributions`", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/goal/module.ts": hostManifest(
+      "goal",
+      'capabilityContributions: { load: () => import("./grants") }'
+    ),
+    "lib/goal/grants.ts": "export const contributions = []\n",
+    "lib/pet/module.ts": hostManifest(
+      "pet",
+      'capabilityContributions: { load: () => import("./grants") }'
+    ),
+    "lib/pet/grants.ts": "export const grants = []\n",
+  })
+  const errors = result.errors.filter(
+    (error) => /contribution/.test(error) && !error.startsWith("lib/modules/generated/")
+  )
+  assert.deepEqual(errors, [
+    "lib/pet/module.ts: capabilityContributions: lib/pet/grants.ts exports no `contributions`",
+  ])
+})
+
+test("validateHostManifest wants capabilityContributions as { load } with a lazy entry", () => {
+  const base = { id: "goal", kind: "module", stage: "beta" }
+  assert.ok(
+    validateHostManifest({ ...base, capabilityContributions: "./grants" }, "goal").includes(
+      'capabilityContributions.load is a lazy entry `() => import("…")`'
+    )
+  )
+  assert.ok(
+    validateHostManifest(
+      { ...base, capabilityContributions: { load: { $lazy: "./grants" }, order: 1 } },
+      "goal"
+    ).includes('capabilityContributions: unknown field "order"')
+  )
+  assert.deepEqual(
+    validateHostManifest(
+      { ...base, capabilityContributions: { load: { $lazy: "./grants" } } },
+      "goal"
+    ),
+    []
+  )
+})
+
+test("the capability registry lazily imports each contributing module's file, by module id", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "goal",
+        file: "lib/goal/module.ts",
+        value: {
+          stage: "stable",
+          capabilityContributions: { load: { $lazy: "./context-injector" } },
+        },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "browser-companion",
+        file: "lib/browser-companion/module.ts",
+        value: { stage: "stable", capabilityContributions: { load: { $lazy: "./agent-grant" } } },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_CAPABILITIES]
+  assert.match(
+    registry,
+    /export const MODULE_CAPABILITY_CONTRIBUTIONS: readonly ModuleCapabilityContributionsEntry\[\]/
+  )
+  assert.ok(registry.indexOf('module: "browser-companion"') < registry.indexOf('module: "goal"'))
+  assert.ok(registry.includes('load: () => import("@/lib/goal/context-injector")'))
+  assert.ok(registry.includes('load: () => import("@/lib/browser-companion/agent-grant")'))
+  assert.ok(!registry.includes("crew"))
 })
 
 test("ports: a collection port takes a member from every module, and its framework asks without requires", () => {

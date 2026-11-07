@@ -1,10 +1,10 @@
 /**
  * Plan → `appendSystemPrompt` bridge (ADR-0045).
  *
- * Mirrors `lib/goal/context-injector.ts:appendGoalContext`: it keeps the
- * surgical change in `lib/claude/build-options.ts:resolveSendOptions` to a
- * single import + one `if` block, while the formatting logic (and its tests)
- * live here next to `renderPlanSystemSection`.
+ * It keeps the surgical change in `lib/claude/build-options.ts:resolveSendOptions`
+ * to a single import + one `if` block, while the formatting logic (and its
+ * tests) live here next to `renderPlanSystemSection`. (Goals used the same
+ * bridge until they became the goal module's capability contribution.)
  */
 
 import type { AgentPlan } from "@/types/agent/plan"

@@ -39,14 +39,6 @@ import { TITLE_CHAT_PROMPT, TITLE_WORK_PROMPT } from "@/lib/ai/generation/title"
 import { ENHANCE_STYLE_PROMPTS, ENHANCE_SYSTEM_PROMPT } from "@/lib/chat/completion/enhance"
 import { GHOST_TEXT_PROMPT } from "@/lib/chat/completion/ghost-prompt"
 import {
-  GOAL_CONTINUATION_PROMPT,
-  GOAL_JUDGE_PROMPT,
-  GOAL_OBJECTIVE_UPDATED_PROMPT,
-  GOAL_PROMISE_VERIFICATION_PROMPT,
-  GOAL_SUBGOALS_PROMPT,
-  GOAL_SYSTEM_SECTION_PROMPT,
-} from "@/lib/goal/prompts"
-import {
   FOLLOW_UP_SUGGESTIONS_PROMPT,
   STARTER_SUGGESTIONS_PROMPT,
 } from "@/lib/chat/completion/suggestions"
@@ -106,11 +98,6 @@ import {
   CREATOR_REVIEW_PROMPT,
   CREATOR_SURVEY_PROMPT,
 } from "@/lib/creator/agent-ports"
-import { BROWSER_COMPANION_AGENT_PROMPT } from "@/lib/browser-companion/agent-grant"
-import {
-  BROWSER_CONTEXT_MULTI_PAGE_PREAMBLE_PROMPT,
-  BROWSER_CONTEXT_PREAMBLE_PROMPT,
-} from "@/lib/browser-companion/build-prompt"
 import { CONNECTOR_CAPABILITY_PROMPTS } from "@/lib/connectors/a2ui-bridge/capability-evaluator"
 import { DEFAULT_TEAMMATE_IDENTITY_PROMPT } from "@/lib/ai/agent/team/teammate/teammate-character"
 import {
@@ -248,9 +235,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   EXECUTOR_FALLBACK_PROMPT,
   RUN_RETROSPECTIVE_PROMPT,
   RUN_RETROSPECTIVE_REPLY_FORMAT_PROMPT,
-  BROWSER_COMPANION_AGENT_PROMPT,
-  BROWSER_CONTEXT_PREAMBLE_PROMPT,
-  BROWSER_CONTEXT_MULTI_PAGE_PREAMBLE_PROMPT,
   PLAN_APPROVED_PROMPT,
   PLAN_APPROVED_EDITED_PROMPT,
   LOOP_ITERATION_PROMPT,
@@ -279,13 +263,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   ENHANCE_SYSTEM_PROMPT,
   ...Object.values(ENHANCE_STYLE_PROMPTS),
   TERMINAL_COMPLETION_PROMPT,
-  // goals
-  GOAL_SYSTEM_SECTION_PROMPT,
-  GOAL_JUDGE_PROMPT,
-  GOAL_SUBGOALS_PROMPT,
-  GOAL_CONTINUATION_PROMPT,
-  GOAL_PROMISE_VERIFICATION_PROMPT,
-  GOAL_OBJECTIVE_UPDATED_PROMPT,
   // twin
   STYLE_AGENT_PROMPT,
   PLAYBOOK_AGENT_PROMPT,

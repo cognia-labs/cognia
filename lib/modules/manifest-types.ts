@@ -34,19 +34,22 @@
  * `nav`, `runtimes`, `slots` and `effects` (M2) are generated
  * (`scripts/build/gen-module-registry.mjs`) and read by their shells and hosts;
  * `provides` and `requires` (M3) are read by `lib/modules/ports.ts` from the
- * host registry, and `prompts` (M3) by the prompt catalog from its own
- * generated registry. Every other field is shape-checked by the gate and read by
+ * host registry, and `prompts` and `capabilityContributions` (M3) by the
+ * prompt catalog and the send resolver, each from its own generated registry. Every other field is shape-checked by the gate and read by
  * nothing yet.
  */
 
 import type { ComponentType } from "react"
-import type { AppSettings } from "@cognia/agent-config-types"
+import type { AppSettings, Character, ChatSession } from "@cognia/agent-config-types"
+import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 
 import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
 import type { BootCapability } from "@/lib/boot/capabilities"
 import type { HeadlessHost, HeadlessRuntime } from "@/lib/headless/types"
 import type { GlobalSearchProvider } from "@/lib/global-search/types"
-import type { PromptDefinitionV1 } from "@/lib/prompts/types"
+import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
+import type { PromptDefinitionV1, PromptResolutionContext } from "@/lib/prompts/types"
+import type { Goal } from "@/types/goal"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type {
   CanonicalExtensionPoint,
@@ -180,6 +183,68 @@ export interface ModulePromptsEntry {
   load: LazyModule<ModulePromptsModule>
 }
 
+/**
+ * What a module may put in a contributed grant (ADR-0198 amendment): every
+ * grant field except the caller's own choices for its run (`model`,
+ * `provider`, `effort`, `maxTurns`, `permissionProfile`). The kernel stamps
+ * the schema version and the source, `{ kind: "module", id: "<module>/<id>" }`.
+ */
+export type ContributedCapabilityGrant = Omit<
+  AgentCapabilityGrantV1,
+  "schemaVersion" | "source" | "model" | "provider" | "effort" | "maxTurns" | "permissionProfile"
+>
+
+/**
+ * What a contribution reads about the run. Read-only, and nothing a caller
+ * injected (no `SendOptions`, no retrieval dependencies).
+ */
+export interface CapabilityContributionContext {
+  /** The run's session; `null` for a run without one. */
+  session: Readonly<ChatSession> | null
+  /** The agent the run resolved, before any routing fallback. */
+  agent: Readonly<Character> | null
+  /** The person's settings as the run reads them. */
+  settings: Readonly<AppSettings> | null
+  /** The session's active goal, as the caller passed it. */
+  activeGoal: Readonly<Goal> | null
+  /** The run's frozen Prompt Center view (ADR-0236): resolve contributed wording against it. */
+  prompts: { snapshot: PromptOverrideSnapshot | null; context: PromptResolutionContext }
+}
+
+/**
+ * One grant a module contributes to every run it applies to (ADR-0198
+ * amendment, ADR-0250 §14). `produce` returns `null` when it does not apply.
+ *
+ * `failure` says what a failure means (a throw, the deadline, a refused
+ * grant). `"skip"` leaves the contribution out and reports it; such a
+ * contribution may only add (instructions, tools, skills, servers, knowledge
+ * bases), so losing it never widens a run. `"refuse-turn"` fails the
+ * resolution instead, and is required for anything that narrows: a deny
+ * list, an allow-list restriction, a removal, a subagent subset, a
+ * permission cap or a budget.
+ */
+export interface CapabilityContribution {
+  /** Unique within the module; the grant's source id is `<module>/<id>`. */
+  id: string
+  failure: "skip" | "refuse-turn"
+  produce(
+    ctx: CapabilityContributionContext
+  ): ContributedCapabilityGrant | null | Promise<ContributedCapabilityGrant | null>
+}
+
+/** What a module's `capabilityContributions.load` resolves to. */
+export interface ModuleCapabilityContributionsModule {
+  contributions: readonly CapabilityContribution[]
+}
+
+/** One module's contributions as `lib/modules/generated/capabilities.ts` lists them. */
+export interface ModuleCapabilityContributionsEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  load: LazyModule<ModuleCapabilityContributionsModule>
+}
+
 /** What a port provision's `load` resolves to: the implementation, as `port`. */
 export interface ModulePortModule {
   port: unknown
@@ -275,8 +340,8 @@ export interface HostModuleManifest {
   tables?: readonly string[]
   /** Built-in tools together with their permission rules. */
   tools?: ModuleContribution
-  /** Producers of `AgentCapabilityGrantV1` (ADR-0198). */
-  capabilityContributions?: ModuleContribution
+  /** Grants applied to every run the module customises (ADR-0198 amendment). */
+  capabilityContributions?: { load: LazyModule<ModuleCapabilityContributionsModule> }
   /** Scheduler executors declared together with their task sources. */
   taskExecutors?: ModuleContribution
   builtinSkills?: ModuleContribution
