@@ -112,7 +112,14 @@
     },
     "best-of-n": {
       "class": "module",
-      "api": ["components/best-of-n/best-of-n-comparison.tsx"]
+      "api": [
+        "components/best-of-n/best-of-n-comparison.tsx",
+        "lib/best-of-n/agents.ts",
+        "lib/best-of-n/paired.ts",
+        "lib/best-of-n/projection.ts",
+        "lib/best-of-n/publication.ts",
+        "lib/best-of-n/service.ts"
+      ]
     },
     "biometric": {
       "class": "foundation"
@@ -305,6 +312,7 @@
         "lib/context-workbench/capabilities.ts",
         "lib/context-workbench/panel-label.ts",
         "lib/context-workbench/panel-registry.ts",
+        "lib/context-workbench/resource-session.ts",
         "stores/context-workbench/context-workbench-store.ts"
       ]
     },
@@ -586,7 +594,8 @@
       "class": "kernel"
     },
     "loop": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/loop/interval.ts", "lib/loop/runtime.ts"]
     },
     "lsp": {
       "class": "module"
@@ -877,14 +886,15 @@
     },
     "skill-recorder": {
       "class": "module",
-      "api": ["lib/skills/recording/recorder-client.ts", "lib/skills/recording/types.ts"]
+      "api": [
+        "lib/skills/recording/recorder-availability.ts",
+        "lib/skills/recording/recorder-client.ts",
+        "lib/skills/recording/types.ts"
+      ]
     },
     "skills": {
       "class": "kernel",
       "api": ["hooks/skills/use-plugin-skills.ts"]
-    },
-    "slash-commands": {
-      "class": "shell"
     },
     "source-control": {
       "class": "module",
@@ -1040,6 +1050,7 @@
         "lib/workflow/definition/migrate.ts",
         "lib/workflow/knowledge/access.ts",
         "lib/workflow/node-groups/materialize.ts",
+        "lib/workflow/nodes/ai/ai-prompt-routed.ts",
         "lib/workflow/nodes/ai/pii-gate.ts",
         "lib/workflow/nodes/ai/schema-validate.ts",
         "lib/workflow/nodes/registry.ts",
@@ -1495,6 +1506,11 @@
       "prefix": "lib/db/workflow-stats.ts",
       "owner": "workflow",
       "why": "Single-user data file (ADR-0250 M2): only `workflow` imports it."
+    },
+    {
+      "prefix": "lib/boot/capabilities.",
+      "owner": "runtime",
+      "why": "The boot capability registry imports nothing: it records which runtime capabilities were requested and are ready, and every layer asks it to bring one up (the plugin runtime before a plugin tool, command or activation event runs). It sits in the foundation beside the typed topics so the kernel and modules reach it without importing the boot shell, which keeps the initializers that report readiness (ADR-0250 §14, slash-commands manifest)."
     }
   ]
 }

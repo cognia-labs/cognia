@@ -13,7 +13,6 @@ import {
   __setPluginToolResolverForTesting,
   __setWebToolDepsForTesting,
   __setSkillToolDepsForTesting,
-  __setSlashToolDepsForTesting,
   __setSessionPeerToolDepsForTesting,
   handlePluginToolExec,
   resolveWebToolDeps,
@@ -42,6 +41,10 @@ import {
 import { __setSquadToolDepsForTesting } from "@/lib/squads/template-tools"
 import { TEAM_TOOL_NAMES, __setTeamToolDepsForTesting } from "@/lib/squads/collaboration-tools"
 import { toolFamily as squadToolFamily } from "@/lib/squads/agent-tools"
+import {
+  __setSlashToolDepsForTesting,
+  toolFamily as slashToolFamily,
+} from "@/lib/slash-commands/agent-tools"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import {
   recordCallbackBinding,
@@ -1255,6 +1258,7 @@ describe("handlePluginToolExec — Skill / SlashCommand built-ins", () => {
   afterEach(() => {
     __setSkillToolDepsForTesting(null)
     __setSlashToolDepsForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
   })
 
   it("routes the Skill tool to the skill resolver, before the plugin registry", async () => {
@@ -1354,6 +1358,7 @@ describe("handlePluginToolExec — Skill / SlashCommand built-ins", () => {
   })
 
   it("routes the SlashCommand tool to the slash dispatcher with the session id", async () => {
+    useModuleTools("slash-commands", slashToolFamily)
     const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
     bindToolCallRun("sess-Z", "slash-turn", "exact-slash-attempt", "slash-attempt")
     const dispatch = jest.fn(async (_line, context) => {

@@ -1,7 +1,4 @@
-import {
-  withPluginExecutionContext,
-  withHostCommandExecution,
-} from "@/lib/plugin/core/invocation-identity"
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Renderer-side IPC handler for `plugin_tool_exec` events from the SDK
  * sidecar (M2 of the plugin-first Computer Use plan).
@@ -42,11 +39,6 @@ import {
   runSkillBuiltinTool,
   type SkillToolRunDeps,
 } from "./skill-builtin-tools"
-import {
-  isSlashCommandBuiltinTool,
-  runSlashCommandBuiltinTool,
-  type SlashToolRunDeps,
-} from "./slash-builtin-tools"
 import { isWorkingSetTool, runWorkingSetTool, type WorkingSetStore } from "./working-set-tool"
 import {
   isSessionPeerBuiltinTool,
@@ -206,28 +198,6 @@ async function resolveSkillToolDeps(): Promise<SkillToolRunDeps> {
         return undefined
       }
     },
-  }
-}
-
-/** Resolver for the SlashCommand tool's host-side deps. Swappable for tests. */
-let slashToolDepsOverride: (() => Promise<SlashToolRunDeps> | SlashToolRunDeps) | null = null
-
-/** Inject SlashCommand-tool deps (tests / CLI host). Pass `null` to restore. */
-export function __setSlashToolDepsForTesting(
-  fn: (() => Promise<SlashToolRunDeps> | SlashToolRunDeps) | null
-): void {
-  slashToolDepsOverride = fn
-}
-
-async function resolveSlashToolDeps(): Promise<SlashToolRunDeps> {
-  if (slashToolDepsOverride) return slashToolDepsOverride()
-  try {
-    const { dispatchSlashCommand } = await import("@/lib/slash-commands/registry")
-    return {
-      dispatch: (line, ctx) => dispatchSlashCommand(line, ctx),
-    }
-  } catch {
-    return {}
   }
 }
 
@@ -501,22 +471,6 @@ async function runPluginToolExec(
           turnId: request.turnId,
           attemptId: request.attemptId,
         }
-      )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    // ── Promoted SlashCommand built-in — run a registered slash command ────
-    if (isSlashCommandBuiltinTool(request.name)) {
-      const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
-      const context = { sessionId: request.sessionId }
-      const deps = await resolveSlashToolDeps()
-      const result = await withHostCommandExecution(
-        context,
-        {
-          sessionId: request.sessionId,
-          executionRunId:
-            toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
-        },
-        () => runSlashCommandBuiltinTool(request.name, request.args, deps, context)
       )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }

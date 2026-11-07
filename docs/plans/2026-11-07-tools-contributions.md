@@ -334,3 +334,15 @@ interface ToolSurface {
 - 还清方向边 4 条：`build-options -> squads`、`team-builtin-tools -> connectors / squads / twin`。收敛清单 `lib-store-imperative`：两个成员改到新路径，`build-options` 去掉 agent-team store。
 - 测试：协作工具的原测试随文件搬动，补 `teamToolFamily`（门槛、twin 门、身份绑定、无身份拒绝）和 `teamHasKnowledgeTwins` 的用例；新增合并族测试；squads manifest 测试覆盖全部 15 个声明；IPC 两组 team 用例走模块注册表（`team_post_to_chat` 用例改为检查投递的授权）。`build-options.test` 的四例 team 用例未改，经模块通过。
 - 多智能体收敛计划 P6 要求"只在小队队员会话下添加 `team_*`"，对应位置现在是 `teamToolFamily.surface`。
+
+## 18. T11 实施记录：SlashCommand 与 slash-commands 模块（2026-11-08）
+
+- `slash-commands` 从 shell 行变成 manifest 模块（`lib/slash-commands/module.ts`，归属表行删除）。`dependsOn`：artifact、best-of-n、context-workbench、goal、issues、loop、media、memory、skill-recorder、squads、workflow；`api` 为其他模块和界面在用的 13 个文件（注册表、`builtin`、`parse-segments`、`mention-boundary`、`merge`、`run-segments`、`system-blocks`、`custom`、`build-args`、`plugin-commands`、`actions/{goal,side-chat,workflow}`）。best-of-n、workflow、loop、skill-recorder、context-workbench 的行补了 slash 动作用到的 `api` 文件。
+- 提示词：`actions/workflow.ts` 的五个 `developer.workflow.slash.*` 作为模块的 `prompts` 贡献（`lib/slash-commands/prompts.ts`），`lib/prompts/catalog.ts` 不再导入它。
+- 拆环：`lib/squads/auto/run-executor.ts` 引用 `/council` 动作里的 `resolveCouncilRoster`，而 slash 的 `/plan` 动作读 agent-team store，两边都声明后会成环。`parseCouncilArgs`、`ParsedCouncilArgs`、`resolveCouncilRoster` 移到议会引擎 `lib/ai/council/roster.ts`（内核，纯函数，测试随移），`/council` 动作、自动小队执行器和 CLI 的议会控制器都从这里取。
+- boot 依赖（评审选择"归入内核"）：注册表在命令未注册时动态导入 `lib/boot/capabilities.ts` 拉起插件运行时，模块不能导入 shell。该文件不导入任何东西，归属表加路径覆盖 `lib/boot/capabilities.` → `runtime`（基础层，与类型化 topic 同层，比内核更低，内核、模块、shell 都可用）。顺带还清内核和模块指向 boot 的 5 条基线边（`invoke-plugin-tool`、`activation-triggers`、`turn-route/snapshot`、`use-shadow-report`、`plugin-extension-slot` 等）。
+- 工具族：`lib/claude/slash-builtin-tools.ts` → `lib/slash-commands/agent-tools.ts`（`git mv`），依赖注入 `__setSlashToolDepsForTesting` 从 `plugin-tool-ipc` 搬入。`surface`：`selfInvokeTools.slashCommand` 开启时在所有宿主提供（与原来一致，含 CLI），描述里列出注册的命令；`run` 用 `withHostCommandExecution` 以调用会话、`call.executionRunId` 执行，参数里伪造的运行 id 不起作用。
+- 声明：`SlashCommand` default/write，不可取消。它以前没有同意档；探针拒绝和实时语音不可取消名单里的手写名字改由声明派生。
+- 删除：`build-options` 的追加段（注释改为只讲 Skill）、`plugin-tool-ipc` 的分支、依赖解析和不再使用的 `withHostCommandExecution` 导入。
+- 门禁：还清方向边 26 条（slash-commands 21 条，含 `build-options`、`plugin-tool-ipc` 两条；boot 5 条），最大 lib 环 166 → 165。模块数 139 → 140，附例外记录 `2026-11-08-slash-commands-module.json`。
+- 既有失败（未改，不属本次）：`lib/slash-commands/actions/lark.test.ts` 1 例（`opts.transport is not a function`，把新 manifest 移开后照样失败）；`lib/squads/durable/durable-dispatch.test.ts`、`lib/squads/legacy-run-history.test.ts` 共 6 例，是多智能体那条线 P4 的控制机改动。

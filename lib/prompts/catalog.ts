@@ -131,7 +131,6 @@ import { JSON_OUTPUT_PROMPT, JSON_OUTPUT_SHAPE_PROMPT } from "@/lib/workflow/nod
 import { SCHEMA_REPAIR_PROMPT } from "@/lib/workflow/nodes/ai/schema-validate"
 import { WORKFLOW_COPILOT_PROMPT } from "@/lib/workflow/editor/copilot-prompts"
 import { WORKFLOW_QUICK_ACTION_PROMPTS } from "@/lib/workflow/editor/quick-action-prompts"
-import { WORKFLOW_SLASH_PROMPTS } from "@/lib/slash-commands/actions/workflow"
 import {
   CLI_BASH_ANALYSIS_PROMPT,
   CLI_COMMIT_MESSAGE_PROMPT,
@@ -256,7 +255,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   SCHEMA_REPAIR_PROMPT,
   WORKFLOW_COPILOT_PROMPT,
   ...Object.values(WORKFLOW_QUICK_ACTION_PROMPTS),
-  ...Object.values(WORKFLOW_SLASH_PROMPTS),
   CLI_COMMIT_MESSAGE_PROMPT,
   CLI_PR_SUMMARY_PROMPT,
   CLI_FIX_TESTS_PROMPT,

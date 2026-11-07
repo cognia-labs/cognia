@@ -3749,10 +3749,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // Agent self-invocation tools (Skill / SlashCommand). Opt-in (default off).
-  // Like the web tools they are appended OUTSIDE the disablePluginTools gate and
-  // round-trip through the same plugin_tool_exec wire, resolving host-side in
-  // plugin-tool-ipc. Both are Claude Code parity surfaces.
+  // Agent self-invocation tool (Skill). Opt-in (default off). Like the web
+  // tools it is appended OUTSIDE the disablePluginTools gate and round-trips
+  // through the same plugin_tool_exec wire, resolving host-side in
+  // plugin-tool-ipc. A Claude Code parity surface; its sibling `SlashCommand`
+  // is the slash-commands module's tools contribution.
   if (appSettings?.selfInvokeTools?.skill === true) {
     try {
       const { buildSkillManifestEntries } = await import("@/lib/claude/skill-builtin-tools")
@@ -3762,22 +3763,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  if (appSettings?.selfInvokeTools?.slashCommand === true) {
-    try {
-      const { buildSlashCommandManifestEntries } = await import("@/lib/claude/slash-builtin-tools")
-      const { listSlashCommands } = await import("@/lib/slash-commands/registry")
-      const summaries = listSlashCommands().map((c) => ({
-        name: c.name,
-        description: c.description,
-      }))
-      opts.pluginTools = [
-        ...(opts.pluginTools ?? []),
-        ...buildSlashCommandManifestEntries(summaries),
-      ]
-    } catch (err) {
-      loggers.app.warn("failed to append SlashCommand built-in tool", { error: String(err) })
-    }
-  }
   if (appSettings?.selfInvokeTools?.sessionMessaging === true) {
     try {
       const { buildSessionPeerManifestEntries } =

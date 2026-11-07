@@ -237,7 +237,6 @@ const DENIED_PLUGIN_TOOLS = [
   "expand_element",
   "perform_action",
   "click_text",
-  "SlashCommand",
   // Every module-contributed tool that is not declared read-only.
   ...moduleToolNamesWhere((declaration) => declaration.effect !== "read"),
 ]

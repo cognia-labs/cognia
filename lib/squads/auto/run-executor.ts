@@ -13,7 +13,7 @@
  */
 
 import { runCouncil, renderCouncilReport, type RunCouncilDeps } from "@/lib/ai/council/run-council"
-import { resolveCouncilRoster } from "@/lib/slash-commands/actions/council"
+import { resolveCouncilRoster } from "@/lib/ai/council/roster"
 import {
   runEnsemble,
   type EnsembleSampleResult,

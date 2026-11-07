@@ -18,7 +18,7 @@ import {
   defaultCouncilRunPrompt,
   type RunCouncilDeps,
 } from "@/lib/ai/council/run-council"
-import { parseCouncilArgs, resolveCouncilRoster } from "@/lib/slash-commands/actions/council"
+import { parseCouncilArgs, resolveCouncilRoster } from "@/lib/ai/council/roster"
 
 import { ensureCliDb } from "../../db/bootstrap"
 import { errorMessage, truncate } from "./shared"

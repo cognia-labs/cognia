@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:modules",
+  "allowGrowth": 1,
+  "owner": "lib/slash-commands",
+  "repaymentPhase": "2",
+  "reason": "ADR-0250 §14 moves the agent's SlashCommand tool out of lib/claude into a tools contribution, and only a manifest module contributes tools. Slash commands were a shell row; they become the slash-commands manifest module (lib/slash-commands/module.ts), whose files every surface that runs or lists a command imports through its api. The module count rises by one; nothing is owed back, and phase 2 re-baselines the size measures once the transitional table is empty."
+}

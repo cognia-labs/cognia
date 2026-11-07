@@ -12,22 +12,21 @@
  * (it triggers the command; whether the command can run headless is the
  * command's concern).
  *
- * Host-routed (renderer + CLI) because the registry and command handlers are
- * TS the pure `.mjs` sidecar can't import. Opt-in via the
- * `selfInvokeTools.slashCommand` setting.
+ * The slash-commands module's tool family (ADR-0250 §14 amendment):
+ * host-routed (renderer + CLI) because the registry and command handlers are
+ * TS the sidecar can't import. Offered on every host once the user turned
+ * `selfInvokeTools.slashCommand` on, with the registered commands listed in
+ * its description.
  */
 
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
+import { withHostCommandExecution } from "@/lib/plugin/core/invocation-identity"
+
 export const SLASH_COMMAND_TOOL_NAME = "SlashCommand"
-
-/** Synthetic plugin id tagging the promoted SlashCommand manifest entry. */
-export const SLASH_BUILTIN_PLUGIN_ID = "cognia-slash-builtin"
-
-export interface SlashBuiltinManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-}
 
 const SLASH_SCHEMA = {
   type: "object",
@@ -48,13 +47,13 @@ export interface SlashCommandSummary {
 }
 
 /**
- * Manifest entry for the SlashCommand tool. When command summaries are
- * supplied, they're embedded in the description so the model can discover what
- * exists; otherwise a generic description is used.
+ * The SlashCommand tool's entry. When command summaries are supplied, they're
+ * embedded in the description so the model can discover what exists;
+ * otherwise a generic description is used.
  */
-export function buildSlashCommandManifestEntries(
+export function buildSlashCommandToolEntries(
   commands: SlashCommandSummary[] = []
-): SlashBuiltinManifestEntry[] {
+): ModuleToolEntry[] {
   const list = commands
     .slice(0, 60)
     .map((c) => `- /${c.name}${c.description ? `: ${c.description}` : ""}`)
@@ -68,14 +67,8 @@ export function buildSlashCommandManifestEntries(
       name: SLASH_COMMAND_TOOL_NAME,
       description,
       jsonSchema: SLASH_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: SLASH_BUILTIN_PLUGIN_ID,
     },
   ]
-}
-
-/** Is this tool name the promoted SlashCommand built-in? */
-export function isSlashCommandBuiltinTool(name: string): boolean {
-  return name === SLASH_COMMAND_TOOL_NAME
 }
 
 export interface SlashToolRunDeps {
@@ -91,7 +84,7 @@ export interface SlashToolRunDeps {
  * dispatch it through the registry, returning the command's message/payload as
  * text. Returns an error string when the command is unknown or dispatch fails.
  */
-export async function runSlashCommandBuiltinTool(
+export async function runSlashCommandTool(
   name: string,
   args: Record<string, unknown>,
   deps: SlashToolRunDeps,
@@ -113,4 +106,49 @@ export async function runSlashCommandBuiltinTool(
   if (result.message) return result.message
   if (result.payload) return JSON.stringify(result.payload, null, 2)
   return `Command ${line.split(/\s+/)[0]} ran (no output).`
+}
+
+let depsOverride: (() => Promise<SlashToolRunDeps> | SlashToolRunDeps) | null = null
+
+/** Inject SlashCommand-tool deps (tests / CLI host). Pass `null` to restore the default. */
+export function __setSlashToolDepsForTesting(
+  fn: (() => Promise<SlashToolRunDeps> | SlashToolRunDeps) | null
+): void {
+  depsOverride = fn
+}
+
+async function resolveSlashToolDeps(): Promise<SlashToolRunDeps> {
+  if (depsOverride) return depsOverride()
+  try {
+    const { dispatchSlashCommand } = await import("./registry")
+    return { dispatch: (line, ctx) => dispatchSlashCommand(line, ctx) }
+  } catch {
+    return {}
+  }
+}
+
+export const toolFamily: ModuleToolFamily = {
+  async surface(ctx: ToolSurfaceContext) {
+    if (ctx.settings?.selfInvokeTools?.slashCommand !== true) return null
+    const { listSlashCommands } = await import("./registry")
+    return {
+      tools: buildSlashCommandToolEntries(
+        listSlashCommands().map((command) => ({
+          name: command.name,
+          description: command.description,
+        }))
+      ),
+    }
+  },
+  async run(name, args, call) {
+    const context = { sessionId: call.sessionId }
+    const deps = await resolveSlashToolDeps()
+    // The command runs as a host command of the calling conversation, under
+    // the run the tool call belongs to, never one the arguments name.
+    return withHostCommandExecution(
+      context,
+      { sessionId: call.sessionId, executionRunId: call.executionRunId },
+      () => runSlashCommandTool(name, args, deps, context)
+    )
+  },
 }
