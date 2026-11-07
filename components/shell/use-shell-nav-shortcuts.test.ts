@@ -14,7 +14,7 @@ const Icon = (() => null) as unknown as LucideIcon
 const item = (id: string): SidebarCatalogItem => ({
   id,
   route: `/${id}`,
-  i18nKey: id,
+  labelKey: `desktop.guildRail.${id}`,
   group: "feature",
   category: "agents",
   Icon,

@@ -22,7 +22,7 @@ describe("manifest-types", () => {
       owns: ["lib/db/pet-models.ts"],
       dependsOn: ["chat"],
       api: ["lib/pet/api/status.ts"],
-      provides: [{ port: "glance.slice", load: () => import("./define") }],
+      provides: [{ port: "glance.slice", load: async () => ({ port: {} }) }],
       requires: ["ocr?"],
       runtimes: [
         {
@@ -36,10 +36,15 @@ describe("manifest-types", () => {
           absent: { mobile: "The phone has no pet window." },
         },
       ],
-      settings: { keys: ["petEnabled"] },
+      settings: { keys: ["petSettings"] },
       tables: ["petModels"],
-      tools: { load: () => import("./define") },
-      capabilityContributions: { load: () => import("./define") },
+      tools: {
+        declare: { pet_feed: { consent: "allow", effect: "write", cancellable: false } },
+        load: async () => ({
+          toolFamily: { surface: () => null, run: async () => ({ ok: true }) },
+        }),
+      },
+      capabilityContributions: { load: async () => ({ contributions: [] }) },
       taskExecutors: { load: () => import("./define") },
       builtinSkills: { load: () => import("./define") },
       pluginApi: { namespaces: ["pet"], load: () => import("./define") },
@@ -71,7 +76,7 @@ describe("manifest-types", () => {
           mobileShortcut: { after: "twin" },
         },
       ],
-      prompts: () => import("./define"),
+      prompts: async () => ({ prompts: [] }),
       flags: { proactiveChat: { default: false } },
       messages: "pet",
     }

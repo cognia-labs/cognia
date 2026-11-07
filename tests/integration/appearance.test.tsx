@@ -117,7 +117,7 @@ beforeEach(async () => {
   }
   __resetDbForTesting()
 
-  useSettingsStore.setState({ settings: null, loaded: false, providerKeys: {} })
+  useSettingsStore.setState({ settings: null, loaded: false })
 
   // Wipe any DOM state a previous test may have left behind.
   document.documentElement.removeAttribute("style")
@@ -339,7 +339,7 @@ describe("appearance integration: 8-step manual checklist", () => {
 
     // Reset Zustand only — keep the IndexedDB content so the next mount
     // can reload it.
-    useSettingsStore.setState({ settings: null, loaded: false, providerKeys: {} })
+    useSettingsStore.setState({ settings: null, loaded: false })
 
     renderApp()
     await waitForLoaded()

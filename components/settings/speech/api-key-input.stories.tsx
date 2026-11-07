@@ -1,19 +1,20 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { ApiKeyInput } from "./api-key-input"
-import { resetStore, seedStore } from "@/lib/storybook/seed-stores"
-import { useSettingsStore } from "@/stores/settings"
+import { __resetSpeechProviderKeysForTests } from "@/lib/speech/provider-keys"
 
-// `ApiKeyInput` reads the stored key from `useSettingsStore.providerKeys[provider]`
-// and renders the "configured" badge + Clear button only when a key is present.
-// Reset the store each story so a seeded key never leaks into the empty case.
+// `ApiKeyInput` reads the stored key from the speech module's provider-key
+// mirror (`lib/speech/provider-keys.ts`) and renders the "configured" badge +
+// Clear button only when a key is present. Reset the mirror each story (as
+// loaded, so it never reaches for the keyring) so a seeded key never leaks
+// into the empty case.
 const meta = {
   title: "Settings/Speech/ApiKeyInput",
   component: ApiKeyInput,
   args: { provider: "openai", label: "OpenAI", placeholder: "sk-…" },
   parameters: { layout: "padded" },
   beforeEach: () => {
-    resetStore(useSettingsStore)
+    __resetSpeechProviderKeysForTests({}, true)
   },
 } satisfies Meta<typeof ApiKeyInput>
 
@@ -27,8 +28,7 @@ export const NotConfigured: Story = {}
 // (masked) and Save stays disabled until the draft diverges.
 export const Configured: Story = {
   beforeEach: () => {
-    resetStore(useSettingsStore)
-    seedStore(useSettingsStore, { providerKeys: { openai: "sk-demo-configured-key" } })
+    __resetSpeechProviderKeysForTests({ openai: "sk-demo-configured-key" }, true)
   },
 }
 

@@ -34,7 +34,7 @@ jest.mock("next-themes", () => ({
 
 describe("SettingsHydrator", () => {
   beforeEach(() => {
-    useSettingsStore.setState({ settings: null, loaded: false, providerKeys: {} })
+    useSettingsStore.setState({ settings: null, loaded: false })
     window.localStorage.clear()
     mockResolvedTheme = "dark"
   })

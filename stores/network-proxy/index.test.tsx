@@ -59,7 +59,7 @@ beforeEach(() => {
   windowRole.isMainAppWindow.mockReturnValue(true)
   jest.spyOn(console, "warn").mockImplementation(() => {})
   jest.spyOn(console, "debug").mockImplementation(() => {})
-  useSettingsStore.setState({ settings: null, loaded: false, providerKeys: {} })
+  useSettingsStore.setState({ settings: null, loaded: false })
   proxyStore.resetApplyProxyDedupeForTesting()
 })
 
@@ -82,7 +82,6 @@ describe("useProxyStore (legacy shape)", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     const state = proxyStore.useProxyStore.getState()
     expect(state.config.enabled).toBe(true)
@@ -99,7 +98,6 @@ describe("useProxyStore (legacy shape)", () => {
         username: "alice",
       }),
       loaded: true,
-      providerKeys: {},
     })
     const state = proxyStore.useProxyStore.getState()
     expect(state.config).not.toHaveProperty("manual")
@@ -112,7 +110,6 @@ describe("useProxyStore (legacy shape)", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     expect(listener).toHaveBeenCalledTimes(1)
     expect(listener.mock.calls[0][0].config.url).toBe("http://127.0.0.1:7890")
@@ -123,7 +120,6 @@ describe("useProxyStore (legacy shape)", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     const listener = jest.fn()
     const unsub = proxyStore.useProxyStore.subscribe(listener)
@@ -139,7 +135,6 @@ describe("useProxyStore (legacy shape)", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "1.1.1.1", port: 5555 }),
       loaded: true,
-      providerKeys: {},
     })
     const state = proxyStore.useProxyStore()
     expect(state.config.url).toBe("http://1.1.1.1:5555")
@@ -155,7 +150,6 @@ describe("getActiveProxyUrl", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     expect(proxyStore.getActiveProxyUrl()).toBe("http://127.0.0.1:7890")
   })
@@ -175,7 +169,6 @@ describe("getNetworkProxy", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "10.0.0.1", port: 1080 }),
       loaded: true,
-      providerKeys: {},
     })
     expect(proxyStore.getNetworkProxy().host).toBe("10.0.0.1")
     expect(proxyStore.getNetworkProxy().port).toBe(1080)
@@ -296,7 +289,6 @@ describe("applyProxyToRust", () => {
         username: "alice",
       }),
       loaded: true,
-      providerKeys: {},
     })
     await proxyStore.applyProxyToRust()
     expect(tauriCore.invoke).toHaveBeenCalledWith("proxy_apply", {
@@ -330,7 +322,6 @@ describe("applyProxyToRust", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     await proxyStore.applyProxyToRust()
     await proxyStore.applyProxyToRust()
@@ -343,13 +334,11 @@ describe("applyProxyToRust", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     await proxyStore.applyProxyToRust()
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "10.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     await proxyStore.applyProxyToRust()
     expect(tauriCore.invoke).toHaveBeenCalledTimes(2)
@@ -368,7 +357,6 @@ describe("applyProxyToRust", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "off" }),
       loaded: true,
-      providerKeys: {},
     })
     await proxyStore.applyProxyToRust()
     expect(tauriCore.invoke).toHaveBeenCalledWith(
@@ -384,7 +372,6 @@ describe("applyProxyToRust", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "off" }),
       loaded: true,
-      providerKeys: {},
     })
     await proxyStore.applyProxyToRust({
       ...DEFAULT_NETWORK_PROXY_SETTINGS,
@@ -414,7 +401,6 @@ describe("maybeAutoDetectProxy", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "auto" }),
       loaded: true,
-      providerKeys: {},
     })
 
     await proxyStore.maybeAutoDetectProxy()
@@ -427,7 +413,6 @@ describe("maybeAutoDetectProxy", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
     })
     await proxyStore.maybeAutoDetectProxy()
     expect(tauriCore.invoke).not.toHaveBeenCalled()
@@ -439,7 +424,6 @@ describe("maybeAutoDetectProxy", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "auto", host: "127.0.0.1", port: 1111 }),
       loaded: true,
-      providerKeys: {},
       save: saveSpy,
     })
     tauriCore.invoke.mockResolvedValue([
@@ -468,7 +452,6 @@ describe("maybeAutoDetectProxy", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "auto", host: "127.0.0.1", port: 7890 }),
       loaded: true,
-      providerKeys: {},
       save: saveSpy,
     })
     tauriCore.invoke.mockResolvedValue([
@@ -491,7 +474,6 @@ describe("maybeAutoDetectProxy", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "auto", host: "1.2.3.4", port: 9 }),
       loaded: true,
-      providerKeys: {},
       save: saveSpy,
     })
     tauriCore.invoke.mockResolvedValue([])
@@ -504,7 +486,6 @@ describe("maybeAutoDetectProxy", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "auto" }),
       loaded: true,
-      providerKeys: {},
     })
     tauriCore.invoke.mockRejectedValue(new Error("boom"))
     await expect(proxyStore.maybeAutoDetectProxy()).resolves.toBeUndefined()
@@ -528,7 +509,6 @@ describe("useNetworkProxy hook", () => {
     useSettingsStore.setState({
       settings: baseSettings({ mode: "manual", host: "1.2.3.4", port: 9999 }),
       loaded: true,
-      providerKeys: {},
     })
     const seen: unknown[] = []
     render(<HookProbe onValue={(v) => seen.push(v)} />)

@@ -11,7 +11,7 @@ describe("defineHostModule", () => {
         {
           name: "pet-proactive",
           criticality: "optional",
-          adapters: { desktop: () => import("./manifest-types") },
+          adapters: { desktop: "./runtime/desktop" },
         },
       ],
     } as const
@@ -37,7 +37,7 @@ describe("defineHostModule", () => {
           criticality: "optional",
           adapters: {
             // @ts-expect-error -- adapters exist only for the hosts registries are generated for.
-            web: () => import("./define"),
+            web: "./runtime/web",
           },
         },
       ],
@@ -50,8 +50,18 @@ describe("defineUiModule", () => {
   it("returns the manifest unchanged", () => {
     const manifest = {
       id: "pet",
-      nav: [{ route: "/pet", icon: "paw-print" }],
-      effects: [{ name: "pet-window-title", load: () => import("./define") }],
+      nav: [
+        {
+          id: "pet",
+          route: "/pet",
+          label: "pet.nav.label",
+          icon: "PawPrint",
+          spotIcon: "pet",
+          group: "feature" as const,
+          category: "agents" as const,
+        },
+      ],
+      effects: [{ name: "pet-window-title", load: async () => ({ default: () => null }) }],
     }
     expect(defineUiModule(manifest)).toBe(manifest)
   })
