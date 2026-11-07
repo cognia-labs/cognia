@@ -153,10 +153,10 @@ export type BuiltInToolName =
   //   to be drawn for the user, it returns the drawn pixels to the MODEL, so
   //   it can check the result it would otherwise ship blind.
   | "artifact_capture"
-  // Desktop pet (ADR-0058), implemented in `lib/claude/pet-builtin-tools.ts`
-  // and routed host-side through `lib/claude/plugin-tool-ipc.ts`. Offered only
-  // when the user turned them on in Settings, Tools, and never on the mobile
-  // shell where the pet subsystem does not run at all.
+  // Desktop pet (ADR-0058): the pet module's tool contribution
+  // (`lib/pet/agent-tools.ts`, ADR-0250 §14), routed host-side through
+  // `lib/claude/plugin-tool-ipc.ts`. Offered only when the user turned them on
+  // in Settings, Tools, and only in the desktop app, where the pet runs.
   | "pet_status"
   | "pet_care"
   | "pet_say"

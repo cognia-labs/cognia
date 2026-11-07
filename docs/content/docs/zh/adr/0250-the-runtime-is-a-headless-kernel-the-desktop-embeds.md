@@ -333,6 +333,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 不属于模块工具的。随工具族一起的每轮上下文（协调者的项目状态、知识检索）等上下文贡献。slash 命令工具读的是壳的注册表，computer use 的聊天端审批策略管的是插件的工具、自己不提供工具；两者都留在内核。试点先是 filespace，然后是项目协调者的工具和协议段。
   - `filespace` 是第一个（2026-11-07）。它成为 manifest 模块（归属表的行删除，share、collab、artifact、terminal、account-sync 的行把它用到的文件列为 `api`），工具族搬到 `lib/filespace/agent-tools.ts`，手写的同意档、解析器里的两段、分发器的分支，以及权限类别、风险和探针名单里的名字都已删除。它的运行提供的工具和同意档与之前相同。还清四条方向边：`build-options.ts` 和 `plugin-tool-ipc.ts` 指向 filespace 的两条，以及旧工具文件指向 filespace 和 share 的两条。
   - 项目协调者是第二个（2026-11-07）。它成为 manifest 模块（chat、issues、usage、memory、tasks、fleet、stack 的行把它用到的文件列为 `api`），两套工具族搬到 `lib/project-coordinator/agent-tools.ts`：`surface` 给协调者它的工具和协议段，给线程汇报工具和线程协议段。手写的同意档、分发器的分支，以及探针和实时语音名单里的名字都已删除。它的运行提供的工具和同意档与之前相同，协议段在提示词里的位置不变。每轮的项目状态段和项目目标段在有上下文贡献之前留在解析器里，所以 `build-options.ts -> project-coordinator` 保留；还清另外三条方向边：`plugin-tool-ipc.ts` 指向协调者的一条，以及旧工具文件指向协调者和 tasks 的两条。
+  - 桌面宠物随后（2026-11-07）。宠物本来就是 manifest 模块，所以只迁工具：工具族搬到 `lib/pet/agent-tools.ts`（`selfInvokeTools.pet` 打开后在桌面宿主上提供，宠物偏好通过它自己的设置视图读取），手写的同意档、解析器里的开关和追加段、分发器的分支，以及探针名单里的名字都已删除。它的运行提供的工具和同意档与之前相同（`pet_show` 询问）。还清一条方向边和一条 `settingsAccess` 记录，设置 store 的导入者少了一个。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0、T1、T2 已实施（2026-11-07）。评审结论见 §6，实施记录见 §7、§8、§9。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1、T2 已实施，T3（宠物）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7、§8、§9、§10。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -227,3 +227,13 @@ interface ToolSurface {
 - 删除：`lib/claude/permissions/project-coordinator-tool-rules.ts`（及测试）、`build-options` 的同意档参数和工具 / 协议拼接、`plugin-tool-ipc` 的分支和接缝、探针拒绝名单与实时语音不可取消名单里的手写协调者名字（现在由声明派生）。
 - 还清方向边 3 条：`plugin-tool-ipc -> project-coordinator`、`project-coordinator-builtin-tools -> project-coordinator`、`-> tasks`。`build-options -> project-coordinator` 保留到上下文贡献。
 - 行为对照：`build-options` 现有的协调者用例（工具、协议段、目标段、项目状态、线程只拿汇报工具、协调关闭不提供）改走模块后全部通过。有一处细微差别：旧代码里项目状态段读取失败会连同工具和协议段一起丢掉，现在工具和协议段不受状态段失败影响。旧同意档在有角色时给全部十一个工具写规则，现在只给本次提供的工具写。
+
+## 10. T3 实施记录：宠物（2026-11-07）
+
+计划外追加的一步：宠物已经是 manifest 模块，工具族和同意档却还在 `lib/claude/`，按同一套路迁过来。
+
+- 工具族：`lib/claude/pet-builtin-tools.ts` → `lib/pet/agent-tools.ts`，导出 `toolFamily`。`surface`：`selfInvokeTools.pet === true` 且宿主是 `desktop` 时提供五个工具，否则 `null`（与原来的 `isTauri()` 判定等价：CLI 和 brain 先于平台检测）。宠物偏好改走 `petSettingsView`，不再直接读设置 store。条目不再带 `pluginId`（线上仍是 `cognia-pet-builtin`）；没有调用者的 `isPetBuiltinTool` 删除。
+- 声明：pet_status `allow`/`read`；pet_care、pet_say、pet_reward `allow`/`write`；pet_show `ask`/`write`；五个都 `cancellable: false`。同意档和探针拒绝名单与之前一致；实时语音名单里宠物工具以前没有登记，现在按运行器不接取消信号如实声明为不可取消。
+- 删除：`lib/claude/permissions/pet-tool-rules.ts`（及测试）、`build-options` 的 `petToolsSurfaced` 开关、同意档参数和追加段、`plugin-tool-ipc` 的分支、探针拒绝名单里的四个手写名字。
+- 还清：方向边 `pet-builtin-tools -> pet`，`settingsAccess` 的 `pet-builtin-tools -> petSettings`，`size.settingsStoreImporters` 531 → 530；收敛清单 `lib-store-imperative` 去掉旧文件一条。
+- 测试：`build-options` 的宠物用例改为模拟 `detectPlatform` 返回 `tauri`（模块工具族看的是 `toolSurfaceHost`，不再看 `isTauri`）；`plugin-tool-ipc` 的路由用例把注册表条目的 `load` 固定到静态导入的工具族（同文件其他用例会 `jest.resetModules`，懒加载拿到的副本看不到注入的 deps）；`types/agent/tool.test.ts` 改为断言内核盖的 plugin id。

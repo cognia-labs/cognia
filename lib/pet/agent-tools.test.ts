@@ -1,20 +1,22 @@
 import type { PetProfile } from "@/types/pet"
+import type { AppSettings } from "@cognia/agent-config-types"
+import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import { makePetProfile } from "@/lib/storybook/fixtures/pet-core"
 import {
   PET_TOOL_NAMES,
   __setPetToolDepsForTesting,
   buildPetManifestEntries,
-  isPetBuiltinTool,
   resolvePetToolDeps,
   runPetBuiltinTool,
+  toolFamily,
   type PetToolDeps,
-} from "./pet-builtin-tools"
+} from "./agent-tools"
 
 // Only the live-wiring suite at the bottom reads these; every other test hands
 // `runPetBuiltinTool` its own fake deps.
 let mockPetSettings: { enabled: boolean } | undefined = { enabled: true }
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: { getState: () => ({ settings: { petSettings: mockPetSettings } }) },
+jest.mock("./settings", () => ({
+  petSettingsView: { get: () => ({ petSettings: mockPetSettings }) },
 }))
 let mockPlatform: "tauri" | "web" = "tauri"
 jest.mock("@/lib/platform/detect", () => ({
@@ -78,11 +80,6 @@ describe("the manifest", () => {
       expect(entry.jsonSchema.additionalProperties).toBe(false)
       expect(entry.description.length).toBeGreaterThan(40)
     }
-  })
-
-  it("recognizes its own tools and nothing else", () => {
-    expect(isPetBuiltinTool("pet_status")).toBe(true)
-    expect(isPetBuiltinTool("artifact_create")).toBe(false)
   })
 })
 
@@ -446,5 +443,51 @@ describe("resolvePetToolDeps (the live wiring the fakes stand in for)", () => {
     )
     expect(opened).toBe(1)
     expect(res).toMatchObject({ ok: true, switchedOn: true })
+  })
+})
+
+describe("toolFamily", () => {
+  const surfaceFor = (
+    selfInvokeTools: AppSettings["selfInvokeTools"] | undefined,
+    host: ToolSurfaceContext["host"] = "desktop"
+  ) =>
+    toolFamily.surface({
+      session: null,
+      agent: null,
+      settings: (selfInvokeTools ? { selfInvokeTools } : {}) as AppSettings,
+      activeGoal: null,
+      prompts: { snapshot: null, context: {} },
+      host,
+      activeProject: null,
+    })
+
+  it("offers every pet tool on the desktop once the user turned them on", () => {
+    const surface = surfaceFor({ pet: true } as AppSettings["selfInvokeTools"])
+    expect(surface && "tools" in surface ? surface.tools.map((t) => t.name) : []).toEqual([
+      ...PET_TOOL_NAMES,
+    ])
+  })
+
+  it("offers nothing while switched off or off the desktop", () => {
+    expect(surfaceFor(undefined)).toBeNull()
+    expect(surfaceFor({ pet: false } as AppSettings["selfInvokeTools"])).toBeNull()
+    for (const host of ["web", "mobile", "cli", "brain"] as const) {
+      expect(surfaceFor({ pet: true } as AppSettings["selfInvokeTools"], host)).toBeNull()
+    }
+  })
+
+  it("runs a call through the injected deps", async () => {
+    __setPetToolDepsForTesting(() => deps())
+    const call: ToolCallContext = {
+      sessionId: "s1",
+      toolUseId: "u1",
+      executionRunId: "run-1",
+      outboundAuthorization: { kind: "tool-call", sessionId: "s1", toolUseId: "u1" },
+    }
+    try {
+      await expect(toolFamily.run("pet_status", {}, call)).resolves.toMatchObject({ ok: true })
+    } finally {
+      __setPetToolDepsForTesting(null)
+    }
   })
 })

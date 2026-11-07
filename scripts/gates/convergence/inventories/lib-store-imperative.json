@@ -7,7 +7,7 @@
   },
   "metrics": {
     "static": 285,
-    "all": 400
+    "all": 399
   },
   "members": [
     {
@@ -1216,17 +1216,6 @@
       "stores": [
         "stores/account/account-store.ts",
         "stores/settings/settings-store.ts"
-      ]
-    },
-    {
-      "key": "lib/claude/pet-builtin-tools.ts",
-      "owner": "lib/claude",
-      "note": "",
-      "imports": [
-        "dynamic"
-      ],
-      "stores": [
-        "stores/settings/index.ts"
       ]
     },
     {

@@ -1,3 +1,4 @@
+import { PET_SHOW_TOOL_NAME, PET_STATUS_TOOL_NAME, PET_TOOL_NAMES } from "./agent-tools"
 import petModule from "./module"
 
 describe("pet module manifest", () => {
@@ -66,5 +67,18 @@ describe("pet module manifest", () => {
     )
     const handler = await command!.load()
     expect(typeof handler.run).toBe("function")
+  })
+
+  it("declares exactly the agent's pet tools, and asks only before showing the pet", async () => {
+    const declare = petModule.tools!.declare
+    expect(Object.keys(declare).sort()).toEqual([...PET_TOOL_NAMES].sort())
+    for (const [name, declaration] of Object.entries(declare)) {
+      expect(declaration.consent).toBe(name === PET_SHOW_TOOL_NAME ? "ask" : "allow")
+      expect(declaration.effect).toBe(name === PET_STATUS_TOOL_NAME ? "read" : "write")
+      // The runners take no cancel signal.
+      expect(declaration.cancellable).toBe(false)
+    }
+    const { toolFamily } = await petModule.tools!.load()
+    expect(typeof toolFamily.surface).toBe("function")
   })
 })

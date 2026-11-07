@@ -11,7 +11,7 @@
     "unclaimedTables": 370,
     "singleUserDataModules": 0,
     "settingsStateMembers": 139,
-    "settingsStoreImporters": 531,
+    "settingsStoreImporters": 530,
     "registryEagerFiles": 1
   },
   "direction": [
@@ -446,7 +446,6 @@
     "lib/claude/knowledge-builtin-tools.ts -> knowledge-base",
     "lib/claude/media-builtin-tools.ts -> media",
     "lib/claude/permissions/command-judge.ts -> twin",
-    "lib/claude/pet-builtin-tools.ts -> pet",
     "lib/claude/plugin-tool-ipc.ts -> codeserver",
     "lib/claude/plugin-tool-ipc.ts -> connectors",
     "lib/claude/plugin-tool-ipc.ts -> slash-commands",
@@ -1067,7 +1066,6 @@
     "hooks/chat/use-chat-auto-play-tts.ts -> ttsAutoPlay",
     "hooks/chat/use-chat-auto-play-tts.ts -> ttsEnabled",
     "hooks/onboarding/use-machine-scan.ts -> ocrSettings",
-    "lib/claude/pet-builtin-tools.ts -> petSettings",
     "lib/plugin/api/pet-api.ts -> petSettings",
     "lib/storage/retention.ts -> ocrSettings"
   ],

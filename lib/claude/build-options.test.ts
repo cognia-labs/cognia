@@ -294,10 +294,16 @@ jest.mock("@/lib/skills/built-in/lark/capabilities", () => ({
   probeLarkCliCapabilities: jest.fn(),
 }))
 
-jest.mock("@/lib/platform/detect", () => ({
-  ...jest.requireActual("@/lib/platform/detect"),
-  isNativeMobile: jest.fn(() => false),
-}))
+jest.mock("@/lib/platform/detect", () => {
+  const actual = jest.requireActual("@/lib/platform/detect")
+  return {
+    ...actual,
+    isNativeMobile: jest.fn(() => false),
+    // The host a module's tool family sees (`toolSurfaceHost`); the real one
+    // answers "web" under Jest, the desktop tests flip it.
+    detectPlatform: jest.fn(actual.detectPlatform),
+  }
+})
 
 const mockBuildSupportContext = jest.fn(async (..._args: unknown[]) => "SUPPORT_CONTEXT")
 jest.mock("@/lib/support-agent/context", () => {
@@ -323,7 +329,7 @@ import {
   __setLarkCliCapabilityDiagnosticsForTests,
   type LarkCliCapabilityDiagnostics,
 } from "@/lib/skills/built-in/lark/capabilities"
-import { isNativeMobile } from "@/lib/platform/detect"
+import { detectPlatform, isNativeMobile } from "@/lib/platform/detect"
 import { createManagedWorkspaceContext } from "@/lib/task-workspace/managed-workspace"
 import { buildAgentModeSessionUpdate } from "@/lib/agent/mode-session-update"
 import { resolveAccountEnv, resolveAccountId, resolveProxyEnv } from "@/lib/claude/env-resolver"
@@ -7479,8 +7485,9 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
   })
 
   it("appends the pet tools only when opted in, with their consent tier", async () => {
-    const tauri = isTauri as jest.Mock
-    tauri.mockReturnValue(true)
+    // The pet module offers its tools on the desktop host only.
+    const platform = detectPlatform as jest.Mock
+    platform.mockReturnValue("tauri")
     try {
       const off = await resolveSendOptions({ character: makeChar({ id: "c1" }) })
       expect(toolNames(off)).not.toContain("pet_status")
@@ -7502,7 +7509,8 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
       expect(toolNames(on)).toContain("pet_show")
       expect(on.permissionRuleset?.pet_show).toBe("ask")
     } finally {
-      tauri.mockReturnValue(false)
+      platform.mockReset()
+      platform.mockImplementation(jest.requireActual("@/lib/platform/detect").detectPlatform)
     }
   })
 
@@ -7570,8 +7578,8 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     async (_label, nativeMobile) => {
       // The pet runs only in the desktop app, so surfacing the tier anywhere else
       // would leave ten permission rules governing tools that can only refuse:
-      // the inert payload this file warns about twice. `isTauri` stays false
-      // (the suite default) for both hosts.
+      // the inert payload this file warns about twice. The detected platform
+      // stays the suite default ("web") for both hosts.
       const mobile = isNativeMobile as jest.Mock
       mobile.mockReturnValue(nativeMobile)
       try {

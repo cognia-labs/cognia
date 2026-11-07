@@ -3169,17 +3169,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // consent overlay every write inside them asks has no screen to appear on.
   const templateToolsEnabled =
     artifactsChannelAvailable && appSettings?.selfInvokeTools?.templates === true
-  // Desktop pet (ADR-0058). Opt-in and off by default. The host check belongs
-  // in the flag itself rather than only on the manifest append: the pet runs
-  // only in the desktop shell (ADR-0058 D9), and a ruleset merged elsewhere
-  // without its tools is the inert payload this file warns about twice. This
-  // asked `!isNativeMobile()`, which is also true in a plain browser, the CLI
-  // and a headless brain, so the tools surfaced where every call could only
-  // refuse `unsupported-host` (or where the renderer relay cannot run at
-  // all). The runner re-checks availability at call time as well, because a
-  // setting can change between the manifest being built and a tool being run.
-  const petToolsSurfaced =
-    appSettings?.selfInvokeTools?.pet === true && (await import("@/lib/tauri")).isTauri()
   // Managed desktop acceptance (ADR-0233 A6). The evidence tools exist only in
   // the child session a Host acceptance run was attached to; every other
   // desktop chat may propose an acceptance, which reads deliveries and a price
@@ -3190,7 +3179,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const acceptanceProposalSurfaced =
     managedAcceptanceHost && artifactsChannelAvailable && !session?.managedAcceptance
   const { buildTemplateToolRuleset } = await import("@/lib/claude/permissions/template-tool-rules")
-  const { buildPetToolRuleset } = await import("@/lib/claude/permissions/pet-tool-rules")
   const { buildMediaToolRuleset } = await import("@/lib/claude/permissions/media-tool-rules")
   const { buildAgentBuilderToolRuleset } =
     await import("@/lib/claude/permissions/agent-builder-tool-rules")
@@ -3214,7 +3202,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     sitesToolsSurfaced ? buildSiteToolRuleset() : undefined,
     artifactAuthoringEnabled ? buildArtifactToolRuleset() : undefined,
     templateToolsEnabled ? buildTemplateToolRuleset() : undefined,
-    petToolsSurfaced ? buildPetToolRuleset() : undefined,
     videoToolsSurfaced ? buildMediaToolRuleset() : undefined,
     agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
     acceptanceToolsSurfaced ? buildAcceptanceToolRuleset() : undefined,
@@ -4325,25 +4312,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       loggers.app.warn("failed to append acceptance built-in tools", { error: String(err) })
     }
   }
-  // Desktop pet. Gated on the same `petToolsSurfaced` flag as its consent tier
-  // above: a tier surfaced apart from the tools it governs is inert payload,
-  // and it would break the "no rules configured, no ruleset at all" invariant
-  // that keeps SendOptions byte-identical for the provider prompt cache.
-  if (petToolsSurfaced) {
-    try {
-      const { buildPetManifestEntries } = await import("@/lib/claude/pet-builtin-tools")
-      const entries = buildPetManifestEntries()
-      const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
-      opts.pluginTools = [
-        ...(opts.pluginTools ?? []),
-        ...entries.filter((entry) => !existing.has(entry.name)),
-      ]
-    } catch (err) {
-      loggers.app.warn("failed to append pet built-in tools", { error: String(err) })
-    }
-  }
   // Video generation (ADR-0205). Gated on the same `videoToolsSurfaced` flag
-  // as its consent tier above, for the same reason as the pet tools.
+  // as its consent tier above: a tier surfaced apart from the tools it
+  // governs is inert payload, and it would break the "no rules configured, no
+  // ruleset at all" invariant that keeps SendOptions byte-identical for the
+  // provider prompt cache.
   if (videoToolsSurfaced) {
     try {
       const { buildMediaManifestEntries } = await import("@/lib/claude/media-builtin-tools")

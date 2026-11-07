@@ -24,7 +24,7 @@ import {
   type PluginToolExecRequest,
   type PluginToolResolver,
 } from "./plugin-tool-ipc"
-import { __setPetToolDepsForTesting } from "./pet-builtin-tools"
+import { __setPetToolDepsForTesting, toolFamily as petToolFamily } from "@/lib/pet/agent-tools"
 import { __setMediaToolDepsForTesting } from "./media-builtin-tools"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import {
@@ -1433,9 +1433,22 @@ describe("handlePluginToolExec — desktop pet built-ins", () => {
   afterEach(() => {
     __setPetToolDepsForTesting(null)
     __setPluginToolResolverForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
   })
 
-  it("routes a pet tool ahead of the plugin registry", async () => {
+  it("routes a pet tool to its module ahead of the plugin registry", async () => {
+    // The real registry's entry (ADR-0250 §14 amendment), in the registry
+    // this suite otherwise keeps empty. Its family is the statically imported
+    // one: sibling suites reset the module registry, and a lazily imported
+    // copy would not see the deps injected below.
+    const actual = jest.requireActual("@/lib/modules/generated/tools") as {
+      MODULE_TOOLS: ModuleToolsEntry[]
+    }
+    __resetContributedToolsForTests()
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).push({
+      ...actual.MODULE_TOOLS.find((entry) => entry.module === "pet")!,
+      load: async () => ({ toolFamily: petToolFamily }),
+    })
     const execute = jest.fn()
     __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "x", execute }) })
     __setPetToolDepsForTesting(() => ({

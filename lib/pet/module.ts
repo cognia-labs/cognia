@@ -89,6 +89,24 @@ export default defineHostModule({
       load: () => import("./slash-command"),
     },
   ],
+  // The agent's pet tools (`./agent-tools.ts`), offered on the desktop once
+  // the user turns them on. The tier mostly removes prompts: without a rule
+  // every call would raise a dialog, and the enforcement that matters is
+  // elsewhere (the opt-in switch, the access gate's cooldown and daily
+  // budget, clamped rewards). Reading and nurturing are allowed; `pet_show`
+  // asks, because it raises an always-on-top window and switches the pet on
+  // (a summon enables, ADR-0058 D9). An explicit user rule overrides either
+  // way. None of the runners honour a cancel signal.
+  tools: {
+    declare: {
+      pet_status: { consent: "allow", effect: "read", cancellable: false },
+      pet_care: { consent: "allow", effect: "write", cancellable: false },
+      pet_say: { consent: "allow", effect: "write", cancellable: false },
+      pet_reward: { consent: "allow", effect: "write", cancellable: false },
+      pet_show: { consent: "ask", effect: "write", cancellable: false },
+    },
+    load: () => import("./agent-tools"),
+  },
   // Its persona, soul and sprite-hatch prompts, for the Prompt Center.
   prompts: () => import("./prompts"),
   messages: "pet",

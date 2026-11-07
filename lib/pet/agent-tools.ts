@@ -19,27 +19,33 @@
  * platform axis, while the pet's real constraints are the host (the desktop
  * app only, ADR-0058 D9) and the window role.
  *
- * The relay already expresses exactly those: `build-options.ts` drops Canvas
- * on native mobile and gates Sites on `isTauri()`. The pet's state also lives
- * in the renderer (Dexie plus a zustand store), which the sidecar cannot
- * import, and that is precisely what this channel exists for.
+ * The relay already expresses exactly those: a module's tool family decides
+ * per host what a run is offered. The pet's state also lives in the renderer
+ * (Dexie plus a zustand store), which the sidecar cannot import, and that is
+ * precisely what this channel exists for.
+ *
+ * ## A module tool contribution
+ *
+ * The pet module's manifest declares each tool's consent and effect
+ * (ADR-0250 §14 amendment), and {@link toolFamily} decides what a run is
+ * offered and runs a call. The kernel derives the consent tier and the probe
+ * and live-voice lists from those declarations.
  *
  * ## Import discipline
  *
- * Static imports here are TYPE-ONLY. `plugin-tool-ipc` is imported by the Node
- * CLI, which has no DOM, so every real dependency is reached through
- * `await import()` at call time.
+ * Static imports here are TYPE-ONLY or pure. The generated tools registry
+ * loads this file on every host, the Node CLI (no DOM) included, so every
+ * real dependency is reached through `await import()` at call time.
  */
 
-import type { PetAvailability } from "@/lib/pet/access/availability"
-import {
-  PET_CONSOLE_DESTINATIONS,
-  isPetConsoleTab,
-  type PetConsoleTab,
-} from "@/lib/pet/console-tabs"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 import type { PetOneShot } from "@/types/pet"
-
-export const PET_BUILTIN_PLUGIN_ID = "cognia-pet-builtin"
+import type { PetAvailability } from "./access/availability"
+import { PET_CONSOLE_DESTINATIONS, isPetConsoleTab, type PetConsoleTab } from "./console-tabs"
 
 export const PET_STATUS_TOOL_NAME = "pet_status"
 export const PET_CARE_TOOL_NAME = "pet_care"
@@ -54,19 +60,6 @@ export const PET_TOOL_NAMES = [
   PET_REWARD_TOOL_NAME,
   PET_SHOW_TOOL_NAME,
 ] as const
-
-const PET_TOOL_NAME_SET: ReadonlySet<string> = new Set(PET_TOOL_NAMES)
-
-export function isPetBuiltinTool(name: string): boolean {
-  return PET_TOOL_NAME_SET.has(name)
-}
-
-export interface PetManifestEntry {
-  name: string
-  pluginId: string
-  description: string
-  jsonSchema: Record<string, unknown>
-}
 
 /** Nurture actions, in the agent's vocabulary, mapped to the event kinds. */
 const CARE_ACTIONS = {
@@ -90,11 +83,10 @@ const CONSOLE_TABS: readonly PetConsoleTab[] = PET_CONSOLE_DESTINATIONS
 
 const MAX_SAY_CHARS = 200
 
-export function buildPetManifestEntries(): PetManifestEntry[] {
+export function buildPetManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: PET_STATUS_TOOL_NAME,
-      pluginId: PET_BUILTIN_PLUGIN_ID,
       description:
         "Read the user's desktop pet: name, level, stage, mood, needs, condition, coins and streak. Use it when the user asks about their pet, or before nurturing so you know what it actually needs. An unhatched egg is a successful read with `hatched: false`.",
       jsonSchema: {
@@ -111,7 +103,6 @@ export function buildPetManifestEntries(): PetManifestEntry[] {
     },
     {
       name: PET_CARE_TOOL_NAME,
-      pluginId: PET_BUILTIN_PLUGIN_ID,
       description:
         "Nurture the pet. Each action is on a short cooldown and refuses while it is cooling, so read `pet_status` first rather than retrying. Talking is not here: use `pet_say`.",
       jsonSchema: {
@@ -131,7 +122,6 @@ export function buildPetManifestEntries(): PetManifestEntry[] {
     },
     {
       name: PET_SAY_TOOL_NAME,
-      pluginId: PET_BUILTIN_PLUGIN_ID,
       description:
         "Make the pet say something in its speech bubble, in the pet's voice rather than yours. Good for reacting to what just happened. Shares the user's own speak budget, so it will refuse if the pet has been talking a lot.",
       jsonSchema: {
@@ -147,7 +137,6 @@ export function buildPetManifestEntries(): PetManifestEntry[] {
     },
     {
       name: PET_REWARD_TOOL_NAME,
-      pluginId: PET_BUILTIN_PLUGIN_ID,
       description:
         "Give the pet XP and coins for a milestone the user reached. Amounts are clamped per call and against a daily budget, so an exhausted budget is a success that granted zero, not an error.",
       jsonSchema: {
@@ -163,7 +152,6 @@ export function buildPetManifestEntries(): PetManifestEntry[] {
     },
     {
       name: PET_SHOW_TOOL_NAME,
-      pluginId: PET_BUILTIN_PLUGIN_ID,
       description:
         "Bring the pet to the user's attention: raise the desktop overlay, or open the pet console on a tab. Raising the overlay also switches the pet on when the user has it turned off. Ask the user before using this unprompted, since the overlay floats above whatever they are doing.",
       jsonSchema: {
@@ -211,15 +199,15 @@ export interface PetToolDeps {
   interact: (
     kind: string,
     opts: { itemId?: string }
-  ) => Promise<import("@/lib/pet/access/gate").PetAccessResult>
+  ) => Promise<import("./access/gate").PetAccessResult>
   reward: (
     kind: string,
     opts: { xp?: number; coins?: number }
-  ) => Promise<import("@/lib/pet/access/gate").PetAccessResult>
+  ) => Promise<import("./access/gate").PetAccessResult>
   say: (
     text: string,
     opts: { emotion?: PetOneShot; durationMs?: number }
-  ) => import("@/lib/pet/bubbles/say").SayResult
+  ) => import("./bubbles/say").SayResult
   openOverlay: () => Promise<boolean>
   openConsole: (tab?: PetConsoleTab) => boolean
   listActivity: (limit: number) => Promise<unknown[]>
@@ -271,14 +259,14 @@ export async function resolvePetToolDeps(): Promise<PetToolDeps> {
     interactionGate,
   ] = await Promise.all([
     import("@/lib/db/pet"),
-    import("@/lib/pet/access/summary"),
-    import("@/lib/pet/access/gate"),
-    import("@/lib/pet/bubbles/say"),
-    import("@/lib/pet/commands"),
-    import("@/lib/pet/console-request"),
-    import("@/stores/settings"),
-    import("@/lib/pet/access/availability"),
-    import("@/lib/pet/interaction/gate"),
+    import("./access/summary"),
+    import("./access/gate"),
+    import("./bubbles/say"),
+    import("./commands"),
+    import("./console-request"),
+    import("./settings"),
+    import("./access/availability"),
+    import("./interaction/gate"),
   ])
   const subject = { kind: "agent" } as const
   return {
@@ -293,11 +281,10 @@ export async function resolvePetToolDeps(): Promise<PetToolDeps> {
     listActivity: (limit) => db.listPetActivity(limit),
     listAchievements: () => db.listPetAchievements(),
     listInventory: () => db.listPetInventory(),
-    bubblesMuted: () =>
-      settings.useSettingsStore.getState().settings?.petSettings?.mutedBubbles === true,
+    bubblesMuted: () => settings.petSettingsView.get()?.petSettings?.mutedBubbles === true,
     availability: () =>
       availability.resolveLivePetAvailability(
-        settings.useSettingsStore.getState().settings?.petSettings?.enabled !== false
+        settings.petSettingsView.get()?.petSettings?.enabled !== false
       ),
     cooldownMs: (profile, kind, now) =>
       interactionGate.remainingCooldownMs(
@@ -311,7 +298,7 @@ export async function resolvePetToolDeps(): Promise<PetToolDeps> {
 
 /** Map an access-gate refusal onto the tool failure vocabulary. */
 function refusalToFailure(
-  refusal: import("@/lib/pet/access/gate").PetRefusal
+  refusal: import("./access/gate").PetRefusal
 ): Failure & { retryAfterMs?: number } {
   switch (refusal.code) {
     case "unavailable":
@@ -541,4 +528,21 @@ export async function runPetBuiltinTool(
   } catch (err) {
     return fail("invalid_arguments", err instanceof Error ? err.message : String(err))
   }
+}
+
+/**
+ * The pet module's tool family (ADR-0250 §14 amendment). Offered only when
+ * the user turned the pet tools on (`selfInvokeTools.pet`) and only in the
+ * desktop app, where the pet runs (ADR-0058 D9): anywhere else every call
+ * could only refuse. The runner re-checks availability at call time, because
+ * a setting can change between the manifest being built and a tool being run.
+ */
+export const toolFamily: ModuleToolFamily = {
+  surface(ctx: ToolSurfaceContext) {
+    if (ctx.settings?.selfInvokeTools?.pet !== true || ctx.host !== "desktop") return null
+    return { tools: buildPetManifestEntries() }
+  },
+  async run(name, args, call) {
+    return runPetBuiltinTool(name, args, await resolvePetToolDeps(), { sessionId: call.sessionId })
+  },
 }

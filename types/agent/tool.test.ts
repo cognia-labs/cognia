@@ -13,7 +13,8 @@ import {
 } from "@/lib/claude/artifact-builtin-tools"
 import type { BuiltInToolName } from "./tool"
 import { buildProjectHistoryManifestEntries } from "@/lib/claude/project-history-tool"
-import { PET_BUILTIN_PLUGIN_ID, buildPetManifestEntries } from "@/lib/claude/pet-builtin-tools"
+import { buildPetManifestEntries } from "@/lib/pet/agent-tools"
+import { contributedToolPluginId } from "@/lib/claude/tool-contributions"
 import {
   MEDIA_BUILTIN_PLUGIN_ID,
   buildMediaManifestEntries,
@@ -80,10 +81,9 @@ describe("declared pet tool names", () => {
     expect([...shipped].sort()).toEqual([...DECLARED_PET_TOOLS].sort())
   })
 
-  it("all agree on the plugin id the relay routes them under", () => {
-    for (const entry of buildPetManifestEntries()) {
-      expect(entry.pluginId).toBe(PET_BUILTIN_PLUGIN_ID)
-    }
+  it("travel under the plugin id the relay has always routed them under", () => {
+    // The kernel stamps a module's tools with it (ADR-0250 §14 amendment).
+    expect(contributedToolPluginId("pet")).toBe("cognia-pet-builtin")
   })
 })
 
