@@ -18,6 +18,7 @@ import type {
   BackgroundTaskStatus,
 } from "@/lib/background-tasks/registry-core"
 import { collectRendererBackgroundResult } from "@/lib/background-tasks/renderer-subagent-registry"
+import { isJobOutboxKind } from "@/lib/background-tasks/job-settlement"
 import { redispatchBackgroundRun } from "@/lib/background-tasks/redispatch"
 import { cancelChildRun, cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
@@ -98,7 +99,12 @@ export function JobCenterPanel({
   const liveRecords =
     useClientLiveQuery(() => listBackgroundTaskRecords({ host: "renderer" }), [], EMPTY_RECORDS) ??
     EMPTY_RECORDS
-  const records = liveRecords
+  // A shell's or monitor's outbox entry (ADR-0249) is listed by its own
+  // section below, from the supervisor; it is not a task row as well.
+  const records = useMemo(
+    () => liveRecords.filter((record) => !isJobOutboxKind(record.kind)),
+    [liveRecords]
+  )
   const [now, setNow] = useState(() => Date.now())
   const [jobs, setJobs] = useState<BackgroundJobRecord[]>([])
   const [monitors, setMonitors] = useState<BackgroundMonitorRecord[]>([])

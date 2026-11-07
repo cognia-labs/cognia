@@ -6,7 +6,9 @@ import {
   bridgeJobOwner,
   cancelBackgroundMonitor,
   chatShellJobOwner,
+  claimBackgroundJobDelivery,
   killBackgroundJob,
+  listBackgroundJobSettlements,
   listBackgroundJobs,
   listBackgroundMonitors,
   readBackgroundJobOutput,
@@ -251,4 +253,33 @@ it("sends an admin lease only when one was issued", async () => {
     "background_job_spawn_session",
     expect.objectContaining({ adminLease: "lease-1" })
   )
+})
+
+it("reads settlements for reconciliation, scoped only by the filters given", async () => {
+  invoke.mockResolvedValue({ jobs: [], monitors: [] })
+
+  await expect(listBackgroundJobSettlements()).resolves.toEqual({ jobs: [], monitors: [] })
+  expect(invoke).toHaveBeenLastCalledWith("background_job_settlements", {})
+
+  await listBackgroundJobSettlements({ sessionId: "chat-1", sinceMs: 0 })
+  expect(invoke).toHaveBeenLastCalledWith("background_job_settlements", {
+    sessionId: "chat-1",
+    sinceMs: 0,
+  })
+})
+
+it("claims a delivery for one consumer and reads the verdict", async () => {
+  invoke.mockResolvedValue({ claimed: true })
+  await expect(
+    claimBackgroundJobDelivery({ kind: "job", id: "job-1", consumer: "renderer:a" })
+  ).resolves.toBe(true)
+  expect(invoke).toHaveBeenLastCalledWith("background_job_claim_delivery", {
+    kind: "job",
+    id: "job-1",
+    consumer: "renderer:a",
+  })
+  invoke.mockResolvedValue({ claimed: false })
+  await expect(
+    claimBackgroundJobDelivery({ kind: "monitor", id: "mon-1", consumer: "renderer:a" })
+  ).resolves.toBe(false)
 })

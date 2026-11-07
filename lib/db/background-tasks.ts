@@ -7,6 +7,7 @@ import type {
   BackgroundTaskJournalWriter,
 } from "@/lib/background-tasks/registry-core"
 import { interruptRunningTasks } from "@/lib/background-tasks/registry-core"
+import { isJobOutboxKind, JOB_RECONCILE_WINDOW_MS } from "@/lib/background-tasks/job-settlement"
 // The contract package, not the kernel's `types/execution` (foundation).
 import { isTerminalRunStatus, type ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 import { getDb } from "./schema"
@@ -20,7 +21,9 @@ import { assertSessionWritable } from "@/lib/chat/session-write-guard"
  * before it was (`interruptedAt`). It stores no run status: the launcher's
  * `execution:job:<runId>` row is the run, and the read functions below join
  * it back as `status`. CLI-host entries keep storing `status` (the CLI journal
- * has no execution runs, ADR-0252 D13).
+ * has no execution runs, ADR-0252 D13), and so do `shell-job` and `monitor`
+ * entries, which are not runs at all (ADR-0249): they are written once, settled,
+ * by `upsertBackgroundJobSettlement`.
  */
 
 export const BACKGROUND_TASK_LEASE_TTL_MS = 60_000
@@ -28,12 +31,17 @@ const DEFAULT_OWNER_ID = crypto.randomUUID()
 type OwnerLease = NonNullable<BackgroundTaskJournalRow["ownerLease"]>
 type LeaseOptions = { ownerId?: string; now?: () => number }
 
+/** Whether the entry keeps its own status instead of reading its run's. */
+function storesOwnStatus(row: Pick<BackgroundTaskJournalRow, "host" | "kind">): boolean {
+  return row.host !== "renderer" || isJobOutboxKind(row.kind)
+}
+
 /**
  * The result is not recorded yet: for the outbox, the entry is still open. A
  * CLI entry's stored status says so.
  */
 function isUnsettled(row: BackgroundTaskJournalRow): boolean {
-  if (row.host === "renderer") return row.settledAt === undefined
+  if (!storesOwnStatus(row)) return row.settledAt === undefined
   return row.status === "running" || (row.status === undefined && row.settledAt === undefined)
 }
 
@@ -42,17 +50,15 @@ function isUnsettled(row: BackgroundTaskJournalRow): boolean {
  * entry written before the outbox, say so with their stored status.
  */
 function isInterrupted(row: BackgroundTaskJournalRow): boolean {
-  return (
-    row.interruptedAt !== undefined || (row.host !== "renderer" && row.status === "interrupted")
-  )
+  return row.interruptedAt !== undefined || (storesOwnStatus(row) && row.status === "interrupted")
 }
 
-/** A renderer entry never stores the run's status; a CLI entry does. */
+/** A renderer run's entry never stores the run's status; a CLI or job entry does. */
 function storedRow<T extends Partial<BackgroundTaskJournalRecord>>(
-  host: BackgroundTaskJournalRow["host"],
+  owner: Pick<BackgroundTaskJournalRow, "host" | "kind">,
   row: T
 ): Omit<T, "status"> | T {
-  if (host !== "renderer") return row
+  if (storesOwnStatus(owner)) return row
   const { status: _status, ...rest } = row
   return rest
 }
@@ -63,10 +69,10 @@ function storedRow<T extends Partial<BackgroundTaskJournalRecord>>(
  * no stale copy of the run's status survives on the row.
  */
 function storedPatch<T extends Partial<BackgroundTaskJournalRecord>>(
-  host: BackgroundTaskJournalRow["host"],
+  owner: Pick<BackgroundTaskJournalRow, "host" | "kind">,
   patch: T
 ): Omit<T, "status"> | T {
-  return host === "renderer" ? { ...storedRow(host, patch), status: undefined } : patch
+  return storesOwnStatus(owner) ? patch : { ...storedRow(owner, patch), status: undefined }
 }
 
 function executionRowId(runId: string): string {
@@ -84,7 +90,7 @@ export function backgroundTaskStatus(
   row: BackgroundTaskJournalRow,
   run: Pick<ExecutionRun, "status"> | undefined
 ): BackgroundTaskStatus {
-  if (row.host !== "renderer")
+  if (storesOwnStatus(row))
     return row.status ?? (isUnsettled(row) ? "running" : row.error ? "error" : "done")
   if (isInterrupted(row)) return "interrupted"
   if (isUnsettled(row) || (run && !isTerminalRunStatus(run.status))) return "running"
@@ -97,7 +103,7 @@ function outboxRecord(row: BackgroundTaskJournalRow): BackgroundTaskJournalRecor
   return {
     ...row,
     status:
-      row.host !== "renderer" && row.status
+      storesOwnStatus(row) && row.status
         ? row.status
         : isInterrupted(row)
           ? "interrupted"
@@ -112,7 +118,7 @@ function outboxRecord(row: BackgroundTaskJournalRow): BackgroundTaskJournalRecor
 async function withRunStatus(
   rows: BackgroundTaskJournalRow[]
 ): Promise<BackgroundTaskJournalRecord[]> {
-  const renderer = rows.filter((row) => row.host === "renderer")
+  const renderer = rows.filter((row) => !storesOwnStatus(row))
   const runs = renderer.length
     ? await getDb().executionRuns.bulkGet(renderer.map((row) => executionRowId(row.runId)))
     : []
@@ -142,7 +148,7 @@ function ownsRunningTask(
 /** A settle records the result: the entry is settled from then on. */
 function terminalPatch(current: BackgroundTaskJournalRow, patch: BackgroundTaskJournalPatch) {
   return {
-    ...storedPatch(current.host, patch),
+    ...storedPatch(current, patch),
     settledAt: patch.settledAt ?? Date.now(),
     ...(current.host === "renderer" &&
     current.kind === "subagent" &&
@@ -174,7 +180,47 @@ export interface BackgroundTaskListFilter {
 }
 
 export async function recordBackgroundTaskStart(row: BackgroundTaskJournalRow): Promise<void> {
-  await getDb().backgroundTasks.add(storedRow(row.host, row))
+  await getDb().backgroundTasks.add(storedRow(row, row))
+}
+
+export type JobSettlementUpsert =
+  /** First sight of this end: the entry was written. */
+  | { kind: "created"; record: BackgroundTaskJournalRecord }
+  /** Already recorded (a second event, or reconciliation after the event). */
+  | { kind: "known"; record: BackgroundTaskJournalRecord }
+
+/**
+ * Record a `shell-job` or `monitor` entry's end (ADR-0249 §1). Idempotent by
+ * job or monitor id: the first report writes the settled entry, a repeat
+ * leaves it as it is. One fact may still move: a monitor end first reported
+ * as owed and since returned inline by the blocking call becomes `skipped`,
+ * as long as no delivery batch has claimed it.
+ */
+export async function upsertBackgroundJobSettlement(
+  record: BackgroundTaskJournalRecord
+): Promise<JobSettlementUpsert> {
+  if (!isJobOutboxKind(record.kind)) throw new Error("Not a background job entry")
+  const db = getDb()
+  return db.transaction("rw", db.backgroundTasks, async () => {
+    const current = await db.backgroundTasks.get(record.runId)
+    if (!current) {
+      await db.backgroundTasks.add(record)
+      return { kind: "created" as const, record }
+    }
+    if (
+      record.deliveryState === "skipped" &&
+      current.deliveryState === "pending" &&
+      !current.deliveryId
+    ) {
+      const patch = {
+        deliveryState: "skipped" as const,
+        ...(record.job ? { job: record.job } : {}),
+      }
+      await db.backgroundTasks.update(record.runId, patch)
+      return { kind: "known" as const, record: outboxRecord({ ...current, ...patch }) }
+    }
+    return { kind: "known" as const, record: outboxRecord(current) }
+  })
 }
 
 export async function recordBackgroundTaskSettle(
@@ -199,7 +245,7 @@ export async function updateBackgroundTaskRecord(
     const current = await db.backgroundTasks.get(runId)
     if (current?.ownerLease && changesExecution(patch))
       throw new Error("Background task ownership required")
-    await db.backgroundTasks.update(runId, current ? storedPatch(current.host, patch) : patch)
+    await db.backgroundTasks.update(runId, current ? storedPatch(current, patch) : patch)
   })
 }
 
@@ -268,7 +314,7 @@ export function createDexieBackgroundTaskJournal(
       admissions.set(record.runId, { db, lease })
       try {
         await db.backgroundTasks.add({
-          ...storedRow(record.host, record),
+          ...storedRow(record, record),
           ...(record.host === "renderer" ? { ownerLease: lease } : {}),
         })
       } catch (error) {
@@ -329,7 +375,7 @@ export function createDexieBackgroundTaskJournal(
         requireAdmission(runId)
         if (!current || !ownsRunningTask(current, lease, now()))
           throw new Error("Background task ownership lost")
-        await db.backgroundTasks.update(runId, storedPatch(current.host, patch))
+        await db.backgroundTasks.update(runId, storedPatch(current, patch))
       })
     },
     clearSettled: clearSettledBackgroundTasks,
@@ -378,9 +424,12 @@ export async function interruptBackgroundTasksOnBoot(
         ...createDexieBackgroundTaskJournal(),
         list: async () => rows,
         update: async (runId, patch) => {
-          const host = rows.find((row) => row.runId === runId)?.host ?? "renderer"
+          const owner = rows.find((row) => row.runId === runId) ?? {
+            host: "renderer" as const,
+            kind: "subagent" as const,
+          }
           await db.backgroundTasks.update(runId, {
-            ...storedPatch(host, patch),
+            ...storedPatch(owner, patch),
             ...(patch.settledAt !== undefined ? { interruptedAt: patch.settledAt } : {}),
             ...(unknownOwners.has(runId)
               ? {
@@ -439,7 +488,16 @@ export async function pruneBackgroundTaskRecords(opts: {
   await db.transaction("rw", db.backgroundTasks, async () => {
     // Outbox facts only: this transaction spans `backgroundTasks` alone.
     const rows = await listStoredRows(opts.host)
-    const settled = rows.filter((row) => !isUnsettled(row))
+    // A job entry inside the reconciliation window stays: dropping it would
+    // let the next reconciliation write it again and deliver it twice.
+    const settled = rows.filter(
+      (row) =>
+        !isUnsettled(row) &&
+        !(
+          isJobOutboxKind(row.kind) &&
+          (row.settledAt ?? row.startedAt) > opts.now - JOB_RECONCILE_WINDOW_MS
+        )
+    )
     const doomed = new Set<string>()
     if (maxAgeMs > 0) {
       const cutoff = opts.now - maxAgeMs
@@ -537,7 +595,7 @@ export async function admitBackgroundDispatch(
         },
       })
     }
-    await db.backgroundTasks.add({ ...storedRow(row.host, row), ownerLease: lease })
+    await db.backgroundTasks.add({ ...storedRow(row, row), ownerLease: lease })
   })
   const assertScope = () => {
     if (getDb() !== db) throw new Error("Background dispatch scope changed")
@@ -650,7 +708,7 @@ export async function reserveBackgroundTaskDelivery(
           row &&
           row.sessionId === sessionId &&
           row.host === "renderer" &&
-          row.kind === "subagent" &&
+          (row.kind === "subagent" || isJobOutboxKind(row.kind)) &&
           row.deliveryState === "pending" &&
           !isUnsettled(row) &&
           !isInterrupted(row)

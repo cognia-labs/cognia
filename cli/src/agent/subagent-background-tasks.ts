@@ -3,6 +3,7 @@ import {
   backgroundTaskInterruptedMessage,
   type BackgroundTaskControls,
   type BackgroundTaskDeliveryState,
+  type BackgroundTaskJournalRecord,
   type BackgroundTaskJournalWriter,
   type BackgroundTaskKind,
   type BackgroundTaskStartMeta,
@@ -17,7 +18,9 @@ import {
   getBackgroundTaskRecord,
   interruptBackgroundTasksOnBoot,
   listBackgroundTaskRecords,
+  upsertBackgroundJobSettlement,
 } from "@/lib/db/background-tasks"
+import { isJobOutboxKind } from "@/lib/background-tasks/job-settlement"
 import { ensureCliDb } from "../db/bootstrap"
 
 export type CliBackgroundRunStatus = BackgroundTaskStatus
@@ -312,9 +315,25 @@ export function markCliBackgroundDelivery(
 }
 
 /**
+ * Record an in-process background shell's end (ADR-0249) in this home's
+ * outbox. Idempotent by job id; resolves the stored entry, or `null` when the
+ * journal could not be written (the TUI still delivers from memory).
+ */
+export function recordCliBackgroundJobSettlement(
+  record: BackgroundTaskJournalRecord,
+  home?: string
+): Promise<BackgroundTaskJournalRecord | null> {
+  return enqueueJournal(
+    home,
+    async () => (await upsertBackgroundJobSettlement(record)).record
+  ).catch(() => null)
+}
+
+/**
  * Settled runs this session started whose result never reached the parent
  * chat (the process exited between settle and delivery). Read at boot so a
- * resumed session still hears about them.
+ * resumed session still hears about them. Shell ends the session is owed are
+ * included (ADR-0249).
  */
 export async function listPendingCliBackgroundDeliveries(options: {
   home?: string
@@ -323,7 +342,8 @@ export async function listPendingCliBackgroundDeliveries(options: {
   const records = await readJournalRecords(options.home)
   const entries: BackgroundResultDeliveryEntry[] = []
   for (const record of records) {
-    if (record.host !== "cli" || record.kind !== "subagent") continue
+    if (record.host !== "cli" || (record.kind !== "subagent" && !isJobOutboxKind(record.kind)))
+      continue
     if (record.sessionId !== options.owner || record.deliveryState !== "pending") continue
     const entry = deliveryEntryFromJournal(record)
     if (entry) entries.push(entry)

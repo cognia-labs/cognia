@@ -69,6 +69,42 @@ export interface BackgroundJobOutput {
   hasMore: boolean
 }
 
+/**
+ * Where an agent-started job reports its end (ADR-0249): the conversation it
+ * reports into, the run that started it, whether the agent wants the report,
+ * and who stopped it when it did not exit on its own.
+ */
+export interface BackgroundJobDelivery {
+  sessionId: string
+  runId?: string
+  notify: "on_exit" | "none"
+  stoppedBy?: "agent" | "person" | "owner" | "shutdown"
+}
+
+/** A job's end, as `jobs://exited` and `background_job_settlements` carry it. */
+export interface BackgroundJobExit {
+  jobId: string
+  status: Exclude<BackgroundJobStatus, "running">
+  exitCode?: number | null
+  owner: BackgroundJobOwner
+  endedAtMs: number
+  startedAtMs: number
+  command: string
+  label?: string
+  outputTail?: string
+  delivery?: BackgroundJobDelivery
+}
+
+/**
+ * Where an agent-registered monitor reports its verdict. `inline` once a
+ * blocking `Monitor` call returned it, so it is not delivered again.
+ */
+export interface BackgroundMonitorDelivery {
+  sessionId: string
+  runId?: string
+  state: "pending" | "inline"
+}
+
 export interface BackgroundMonitorRecord {
   id: string
   condition: { kind: string; [key: string]: unknown }
@@ -79,6 +115,12 @@ export interface BackgroundMonitorRecord {
   expiresAtMs?: number
   detail?: string
   label?: string
+  delivery?: BackgroundMonitorDelivery
+}
+
+export interface BackgroundJobSettlements {
+  jobs: BackgroundJobExit[]
+  monitors: BackgroundMonitorRecord[]
 }
 
 export async function listBackgroundJobs(
@@ -216,4 +258,32 @@ export function registerScheduledBackgroundMonitor(input: {
   label?: string
 }): Promise<BackgroundMonitorRecord> {
   return transport.call<BackgroundMonitorRecord>("background_monitor_register_scheduled", input)
+}
+
+/**
+ * Ended agent-started jobs and settled agent-registered monitors, for a
+ * consumer reconciling the events it missed (ADR-0249 §7). Scoped to one
+ * conversation when `sessionId` is given; `sinceMs` bounds by end time.
+ */
+export function listBackgroundJobSettlements(
+  filter: { sessionId?: string; sinceMs?: number } = {}
+): Promise<BackgroundJobSettlements> {
+  return transport.call<BackgroundJobSettlements>("background_job_settlements", {
+    ...(filter.sessionId ? { sessionId: filter.sessionId } : {}),
+    ...(filter.sinceMs !== undefined ? { sinceMs: filter.sinceMs } : {}),
+  })
+}
+
+/**
+ * Take the delivery of an ended job's or settled monitor's outcome for
+ * `consumer` (ADR-0249 §7). Several consumers can hear one end; only the
+ * first to claim it delivers, and the claimant may claim again.
+ */
+export async function claimBackgroundJobDelivery(input: {
+  kind: "job" | "monitor"
+  id: string
+  consumer: string
+}): Promise<boolean> {
+  const result = await transport.call<{ claimed: boolean }>("background_job_claim_delivery", input)
+  return result.claimed === true
 }

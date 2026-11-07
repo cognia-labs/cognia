@@ -8,6 +8,14 @@ const startBackgroundTaskRecovery = jest.fn(
   (_options: { onResumed: (count: number) => Promise<void> }) => stopRecovery
 )
 const notify = jest.fn(async () => "n1")
+const onBackgroundJobSettled = jest.fn(async (_record: unknown) => undefined)
+const stopConsumer = jest.fn()
+const startJobSettlementConsumer = jest.fn((_deps: Record<string, unknown>) => ({
+  stop: stopConsumer,
+  reconcile: jest.fn(),
+}))
+let tauri = true
+let remoteHost = false
 let accountRevision = 1
 let targetId: string | undefined = "local"
 let vaultState = "unlocked"
@@ -27,6 +35,7 @@ jest.mock("@/lib/background-tasks/renderer-subagent-registry", () => ({
     setRendererBackgroundSettleListener(...args),
 }))
 jest.mock("@/hooks/chat/background-result-runtime", () => ({
+  onBackgroundJobSettled: (record: unknown) => onBackgroundJobSettled(record),
   onBackgroundRunSettled: (...args: unknown[]) => onBackgroundRunSettled(...args),
   registerBackgroundResultNotifyStrings: (strings: unknown) =>
     registerBackgroundResultNotifyStrings(strings),
@@ -35,6 +44,12 @@ jest.mock("@/lib/background-tasks/redispatch", () => ({
   startBackgroundTaskRecovery: (options: { onResumed: (count: number) => Promise<void> }) =>
     startBackgroundTaskRecovery(options),
 }))
+jest.mock("@/lib/background-tasks/job-settlement-consumer", () => ({
+  startJobSettlementConsumer: (deps: Record<string, unknown>) => startJobSettlementConsumer(deps),
+}))
+jest.mock("@/lib/jobs/background-jobs", () => ({ listBackgroundJobSettlements: jest.fn() }))
+jest.mock("@/lib/tauri", () => ({ isTauri: () => tauri, onTauriEvent: jest.fn() }))
+jest.mock("@/lib/tauri/transport-routing", () => ({ isRemoteHostActive: () => remoteHost }))
 jest.mock("@/lib/notifications/runtime", () => ({
   notify: (...args: unknown[]) => notify(...(args as [])),
 }))
@@ -46,6 +61,61 @@ beforeEach(() => {
   accountRevision = 1
   targetId = "local"
   vaultState = "unlocked"
+  tauri = true
+  remoteHost = false
+})
+
+describe("background job ends (ADR-0249)", () => {
+  it("consumes the supervisor this window reaches, delivering through the outbox", () => {
+    const { unmount } = render(<BackgroundTaskInitializer />)
+    expect(startJobSettlementConsumer).toHaveBeenCalledTimes(1)
+    const deps = startJobSettlementConsumer.mock.calls[0]![0] as {
+      host: string
+      onSettled: (record: unknown) => Promise<void>
+      registerResync: unknown
+    }
+    expect(deps.host).toBe("renderer")
+    expect(typeof deps.registerResync).toBe("function")
+    void deps.onSettled({ runId: "shell-job:job-1" })
+    expect(onBackgroundJobSettled).toHaveBeenCalledWith({ runId: "shell-job:job-1" })
+    unmount()
+    expect(stopConsumer).toHaveBeenCalledTimes(1)
+  })
+
+  it("starts for a paired Host from a browser, and not without any supervisor", () => {
+    tauri = false
+    remoteHost = true
+    render(<BackgroundTaskInitializer />).unmount()
+    expect(startJobSettlementConsumer).toHaveBeenCalledTimes(1)
+    remoteHost = false
+    render(<BackgroundTaskInitializer />).unmount()
+    expect(startJobSettlementConsumer).toHaveBeenCalledTimes(1)
+  })
+
+  it("waits for an unlocked vault and restarts when the runtime target changes", () => {
+    vaultState = "locked"
+    const { rerender } = render(<BackgroundTaskInitializer />)
+    expect(startJobSettlementConsumer).not.toHaveBeenCalled()
+    vaultState = "unlocked"
+    rerender(<BackgroundTaskInitializer />)
+    targetId = "host-2"
+    rerender(<BackgroundTaskInitializer />)
+    expect(startJobSettlementConsumer).toHaveBeenCalledTimes(2)
+    expect(stopConsumer).toHaveBeenCalledTimes(1)
+  })
+
+  it("localizes the waiting-results notice for both reasons", () => {
+    render(<BackgroundTaskInitializer />)
+    const strings = registerBackgroundResultNotifyStrings.mock.calls[0]![0] as {
+      wakeDeferredTitle: (p: { count: number; reason: string }) => string
+      wakeDeferredBody: (p: { reason: string }) => string
+    }
+    expect(strings.wakeDeferredTitle({ count: 2, reason: "cap" })).toBe(
+      'wakeDeferredTitle:{"count":2}'
+    )
+    expect(strings.wakeDeferredBody({ reason: "cap" })).toBe("wakeDeferredBodyCap")
+    expect(strings.wakeDeferredBody({ reason: "budget" })).toBe("wakeDeferredBodyBudget")
+  })
 })
 
 it("starts shared recovery and stops on unmount", () => {

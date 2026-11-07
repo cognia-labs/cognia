@@ -396,7 +396,10 @@
       "autoResumed": "{count, plural, one {Auto-resumed # interrupted background run} other {Auto-resumed # interrupted background runs}}",
       "body": "Run {runId}",
       "doneTitle": "Subagent \"{subagentId}\" finished ({elapsed})",
-      "failedTitle": "Subagent \"{subagentId}\" failed ({elapsed})"
+      "failedTitle": "Subagent \"{subagentId}\" failed ({elapsed})",
+      "wakeDeferredBodyBudget": "The spending limit is reached, so the conversation was not started for them.",
+      "wakeDeferredBodyCap": "The conversation has been woken often this hour. They will reach it with its next turn.",
+      "wakeDeferredTitle": "{count, plural, one {# background job result is waiting} other {# background job results are waiting}}"
     },
     "open": "Open Job Center",
     "status": {

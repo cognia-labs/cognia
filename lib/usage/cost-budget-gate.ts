@@ -143,6 +143,32 @@ export async function enforceCostBudget(
   return { allowed: true, verdict: worst, blockedBy: [] }
 }
 
+/**
+ * Whether a send now would exceed a ceiling, without asking anyone. For work
+ * nobody is waiting on, such as a background job's wake (ADR-0249 §4): such
+ * work is not started over budget, and no person is asked to approve it.
+ * Fails open like {@link enforceCostBudget}.
+ */
+export async function isCostBudgetExhausted(
+  input: Pick<EnforceCostBudgetInput, "providerId" | "projectId" | "loadSettings" | "now"> = {}
+): Promise<boolean> {
+  try {
+    const settings = await (input.loadSettings ?? defaultLoadSettings)()
+    const policy = settings?.costBudget ?? {}
+    if (!hasAnyCostCeiling(policy)) return false
+    const spend = await readCostBudgetSpend(
+      input.now,
+      input.projectId && projectHasCostCeiling(policy, input.projectId) ? [input.projectId] : []
+    )
+    return (
+      exceededScopes(evaluateCostBudget(policy, spend, input.providerId, input.projectId)).length >
+      0
+    )
+  } catch {
+    return false
+  }
+}
+
 /** Notify once per scope per level; re-arm when a scope falls back to ok. */
 async function announceThresholds(
   verdicts: readonly CostBudgetVerdict[],

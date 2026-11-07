@@ -4,16 +4,57 @@ import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { startLeaseHeartbeat } from "@/lib/runtime/lease-heartbeat"
 
 export type BackgroundTaskHost = "renderer" | "cli"
-export type BackgroundTaskKind = "subagent" | "plugin-agent" | "team-delegation"
+/**
+ * `shell-job` and `monitor` are the outbox's two kinds that are not runs
+ * (ADR-0249, ADR-0252 §9): an agent-started background shell or watch whose
+ * end is owed to the conversation that started it. They store their own
+ * status and carry the supervisor's facts in `job`.
+ */
+export type BackgroundTaskKind =
+  "subagent" | "plugin-agent" | "team-delegation" | "shell-job" | "monitor"
 export type BackgroundTaskStatus = "running" | "done" | "error" | "interrupted"
 
 /**
  * Parent-session delivery state for a settled run's result re-injection:
  * `pending` (settled, not yet deliverable), `delivered` (injected into the
  * parent chat), `notified` (surfaced via notification only), `orphaned`
- * (parent session no longer exists).
+ * (parent session no longer exists), `skipped` (owed nothing here: a job the
+ * agent asked not to hear from, stopped itself, or whose watch already
+ * returned its outcome inline, ADR-0249 §5; or one another device or the Host
+ * brain claimed the delivery of, §7).
  */
-export type BackgroundTaskDeliveryState = "pending" | "delivered" | "notified" | "orphaned"
+export type BackgroundTaskDeliveryState =
+  "pending" | "delivered" | "notified" | "orphaned" | "skipped"
+
+/** Who ended a background shell before it exited on its own. */
+export type BackgroundJobStopCause = "agent" | "person" | "owner" | "shutdown"
+
+/**
+ * What the job supervisor reported about a `shell-job` or `monitor` entry's
+ * end. A shell carries its exit; a monitor its verdict.
+ */
+export type BackgroundJobSettlementFacts =
+  | {
+      kind: "shell-job"
+      /** The run that started it, when the send named one. */
+      runId?: string
+      status: "exited" | "killed" | "interrupted" | "failed"
+      exitCode?: number
+      command: string
+      /** A bounded tail of the output; the full log stays in `bash_output`. */
+      outputTail?: string
+      notify: "on_exit" | "none"
+      stoppedBy?: BackgroundJobStopCause
+    }
+  | {
+      kind: "monitor"
+      runId?: string
+      status: "fired" | "unsatisfiable" | "cancelled" | "expired"
+      condition: string
+      detail?: string
+      /** The blocking `Monitor` call already returned this outcome. */
+      deliveredInline: boolean
+    }
 
 export interface BackgroundTaskUsage {
   inputTokens?: number
@@ -95,6 +136,8 @@ export interface BackgroundTaskJournalRecord {
   pluginId?: string
   /** Optional human label (plugin-agent / team-delegation rows). */
   label?: string
+  /** The supervisor's facts for a `shell-job` or `monitor` entry. */
+  job?: BackgroundJobSettlementFacts
 }
 
 /** Journal fields mutable after start (settle + post-settle bookkeeping). */

@@ -20,7 +20,11 @@ jest.mock("./cost-budget-runtime", () => ({
     requestOverrideMock(verdict, options),
 }))
 
-import { enforceCostBudget, __resetCostBudgetGateForTesting } from "./cost-budget-gate"
+import {
+  enforceCostBudget,
+  isCostBudgetExhausted,
+  __resetCostBudgetGateForTesting,
+} from "./cost-budget-gate"
 
 function settings(costBudget?: AppSettings["costBudget"]): () => Promise<AppSettings> {
   return async () => ({ id: "singleton", ...(costBudget ? { costBudget } : {}) }) as AppSettings
@@ -206,5 +210,28 @@ describe("enforceCostBudget — per-project ceilings", () => {
     })
     expect(readSpendMock).toHaveBeenCalledWith(undefined, [])
     expect(result).toEqual({ allowed: true, verdict: null, blockedBy: [] })
+  })
+})
+
+describe("isCostBudgetExhausted", () => {
+  it("answers without asking anyone or announcing a threshold", async () => {
+    readSpendMock.mockResolvedValue({ dayUsd: 12, monthUsd: 12 })
+    await expect(isCostBudgetExhausted({ loadSettings: settings({ dailyUsd: 10 }) })).resolves.toBe(
+      true
+    )
+    expect(requestOverrideMock).not.toHaveBeenCalled()
+    expect(notifyThresholdMock).not.toHaveBeenCalled()
+  })
+
+  it("is false under the ceiling, with nothing configured, and when the rollup fails", async () => {
+    readSpendMock.mockResolvedValue({ dayUsd: 2, monthUsd: 2 })
+    await expect(isCostBudgetExhausted({ loadSettings: settings({ dailyUsd: 10 }) })).resolves.toBe(
+      false
+    )
+    await expect(isCostBudgetExhausted({ loadSettings: settings() })).resolves.toBe(false)
+    readSpendMock.mockRejectedValue(new Error("dexie"))
+    await expect(isCostBudgetExhausted({ loadSettings: settings({ dailyUsd: 10 }) })).resolves.toBe(
+      false
+    )
   })
 })

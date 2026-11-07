@@ -13,6 +13,7 @@ jest.mock("@/lib/db/seed", () => ({
 import { __resetDbForTesting, getDb, type BackgroundTaskJournalRow } from "@/lib/db/schema"
 import { __resetCliDbForTesting, ensureCliDb } from "../db/bootstrap"
 import type { DbLike } from "../db/snapshot"
+import { outboxRecordFromJobExit } from "@/lib/background-tasks/job-settlement"
 import {
   __clearAllCliBackgroundRunsForTesting,
   __disposeCliBackgroundJournalForTesting,
@@ -28,6 +29,7 @@ import {
   subscribeCliBackgroundSettle,
   cancelCliBackgroundRun,
   recordCliIncompleteForegroundRun,
+  recordCliBackgroundJobSettlement,
   getCliBackgroundRecord,
   type CliBackgroundSettleEvent,
 } from "./subagent-background-tasks"
@@ -451,6 +453,38 @@ describe("CLI background settle push", () => {
     expect(typeof delivered?.deliveredAt).toBe("number")
     // A no-op for an empty list never touches the journal.
     await expect(markCliBackgroundDelivery([], "pending", home)).resolves.toBeUndefined()
+  })
+})
+
+describe("CLI background shell ends (ADR-0249)", () => {
+  it("records an in-process shell's end once and lists it pending for its session", async () => {
+    const home = makeHome()
+    await startCliBackgroundJournal(home)
+    const record = outboxRecordFromJobExit(
+      {
+        jobId: "bg-1",
+        status: "exited",
+        exitCode: 0,
+        endedAtMs: 6_000,
+        startedAtMs: 1_000,
+        command: "sleep 5 && echo done",
+        outputTail: "done\n",
+        delivery: { sessionId: "owner", notify: "on_exit" },
+      },
+      "cli"
+    )!
+    await expect(recordCliBackgroundJobSettlement(record, home)).resolves.toMatchObject({
+      runId: "shell-job:bg-1",
+      deliveryState: "pending",
+    })
+    await expect(recordCliBackgroundJobSettlement(record, home)).resolves.toMatchObject({
+      runId: "shell-job:bg-1",
+    })
+    await expect(listPendingCliBackgroundDeliveries({ home, owner: "owner" })).resolves.toEqual([
+      expect.objectContaining({ runId: "shell-job:bg-1", jobId: "bg-1", text: "done\n" }),
+    ])
+    await markCliBackgroundDelivery(["shell-job:bg-1"], "delivered", home)
+    await expect(listPendingCliBackgroundDeliveries({ home, owner: "owner" })).resolves.toEqual([])
   })
 })
 

@@ -58,7 +58,11 @@ import {
 import { drainProjectHistoryEvidence } from "@/lib/claude/project-history-evidence-registry"
 import { drainSessionPeerMessages } from "@/lib/chat/session-peer-messaging"
 import { completeAttachedSession } from "@/lib/chat/attached-session"
-import { maybeDrainBackgroundResults } from "./background-result-runtime"
+import { maybeDrainBackgroundResults, onBackgroundJobSettled } from "./background-result-runtime"
+import {
+  jobExitFromSettledFrame,
+  outboxRecordFromJobExit,
+} from "@/lib/background-tasks/job-settlement"
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 import { resolveRootSessionId } from "@/lib/claude/agents/root-session"
 import { approveTool, toolResultDecision } from "@/lib/claude/ipc"
@@ -425,6 +429,14 @@ export async function handleEvent(
   sendRef: React.MutableRefObject<SendFn | null>,
   coalescing: StreamCoalescing
 ) {
+  // An in-process background shell ended (a sidecar with no job supervisor):
+  // the same outbox entry `jobs://exited` writes (ADR-0249). Not a turn event.
+  const jobExit = jobExitFromSettledFrame(evt)
+  if (jobExit) {
+    const record = outboxRecordFromJobExit(jobExit, "renderer")
+    if (record) void onBackgroundJobSettled(record)
+    return
+  }
   // Captures own response commands; durable Bot/plugin drivers also claim
   // transcript ingestion so an open desktop pane cannot persist it twice.
   if (hasCaptureResponder(evt)) return
@@ -814,7 +826,7 @@ export async function handleEvent(
         // Then deliver any settled background-run results. Steer wins: if the
         // steer replay just started a new turn, the idle check inside defers
         // this to the NEXT settle.
-        maybeDrainBackgroundResults(evt.sessionId)
+        maybeDrainBackgroundResults(evt.sessionId, { turnSettled: true })
         void drainSessionPeerMessages(evt.sessionId).catch(() => undefined)
       }
       if (!sealOpen) {

@@ -14703,7 +14703,10 @@
         "autoResumed": "{count, plural, other {已自动恢复 # 个被中断的后台运行}}",
         "body": "运行 {runId}",
         "doneTitle": "子代理“{subagentId}”已完成（{elapsed}）",
-        "failedTitle": "子代理“{subagentId}”失败（{elapsed}）"
+        "failedTitle": "子代理“{subagentId}”失败（{elapsed}）",
+        "wakeDeferredBodyBudget": "已达到花费上限，因此没有为它们启动对话。",
+        "wakeDeferredBodyCap": "这个对话在一小时内已被唤醒多次，结果会在它的下一轮送达。",
+        "wakeDeferredTitle": "{count, plural, other {# 个后台任务结果正在等待}}"
       },
       "open": "打开任务中心",
       "status": {

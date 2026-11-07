@@ -175,6 +175,24 @@ it("opens from the trigger and separates active runs from history", async () => 
   expect(screen.getByText("qa")).toBeInTheDocument()
 })
 
+it("leaves a shell's or monitor's outbox entry to the supervisor sections", async () => {
+  const user = userEvent.setup()
+  useClientLiveQuery.mockReturnValue([
+    row({
+      runId: "shell-job:job-1",
+      kind: "shell-job",
+      subagentId: "",
+      prompt: "sleep 5 && echo done",
+      status: "done",
+      settledAt: Date.now() - 1_000,
+    }),
+  ])
+  render(<JobCenterPanel />)
+  await user.click(screen.getByTestId("status-job-center"))
+  await user.click(screen.getByRole("tab", { name: /History/ }))
+  expect(screen.queryByText("sleep 5 && echo done")).not.toBeInTheDocument()
+})
+
 // Compact sits among the mobile app bar's ghost icon buttons, so it takes their
 // tone and box; only the status-bar trigger stays muted.
 it("compact trigger matches the app bar's icon buttons", () => {

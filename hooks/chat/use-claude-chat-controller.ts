@@ -6853,6 +6853,9 @@ export function useClaudeChat() {
             }
           }
         }
+        // As at a local settle: steer first, then background results, which
+        // defer themselves if the steer replay started a new turn.
+        maybeDrainBackgroundResults(sessionId, { turnSettled: true })
       }
     }
     return useChatStore.subscribe(settleHostStateTurns)

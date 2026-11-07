@@ -3,7 +3,12 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 
 import type { BackgroundResultDeliveryEntry } from "@/lib/background-tasks/completion-delivery"
 import type { CliBackgroundSettleEvent } from "../../../agent/subagent-background-tasks"
-import { backgroundSettleNotice, useBackgroundResults } from "./use-background-results"
+import {
+  BACKGROUND_WAKE_CAP_NOTICE,
+  backgroundSettleNotice,
+  useBackgroundResults,
+} from "./use-background-results"
+import { WAKE_CAP_PER_HOUR, WAKE_COALESCE_MS } from "@/lib/background-tasks/wake-policy"
 
 function entry(
   overrides: Partial<BackgroundResultDeliveryEntry> = {}
@@ -45,6 +50,13 @@ function harness(opts: { idle?: boolean; pending?: BackgroundResultDeliveryEntry
   const markDelivery = jest.fn(async () => undefined)
   const deliver = jest.fn(async (_text: string): Promise<void> => undefined)
   const dispatch = jest.fn()
+  const frameListeners = new Set<(frame: unknown) => void>()
+  const subscribeFrames = jest.fn((listener: (frame: unknown) => void) => {
+    frameListeners.add(listener)
+    return () => frameListeners.delete(listener)
+  })
+  const recordJob = jest.fn(async (record: unknown) => record as never)
+  const clock = { now: 1_000_000 }
   const hook = renderHook(
     ({ idle }: { idle: boolean }) =>
       useBackgroundResults({
@@ -56,14 +68,33 @@ function harness(opts: { idle?: boolean; pending?: BackgroundResultDeliveryEntry
         subscribe,
         listPending,
         markDelivery,
+        subscribeFrames,
+        recordJob,
+        now: () => clock.now,
       }),
     { initialProps: { idle: opts.idle ?? true } }
   )
+  const frame = (frameValue: unknown) =>
+    act(() => {
+      for (const listener of frameListeners) listener(frameValue)
+    })
   const fire = (event: CliBackgroundSettleEvent) =>
     act(() => {
       for (const listener of listeners) listener(event)
     })
-  return { ...hook, subscribe, listPending, markDelivery, deliver, dispatch, fire, listeners }
+  return {
+    ...hook,
+    subscribe,
+    listPending,
+    markDelivery,
+    deliver,
+    dispatch,
+    fire,
+    listeners,
+    frame,
+    recordJob,
+    clock,
+  }
 }
 
 describe("backgroundSettleNotice", () => {
@@ -198,5 +229,96 @@ describe("useBackgroundResults", () => {
     act(() => release())
     // The second result waits for the next idle edge or the follow-up drain.
     expect(h.result.current.takeBackgroundResults()).toContain("run_2")
+  })
+})
+
+describe("background shell ends (ADR-0249)", () => {
+  beforeEach(() => jest.useFakeTimers())
+  afterEach(() => jest.useRealTimers())
+
+  const shellFrame = (jobId = "bg-1", overrides: Record<string, unknown> = {}) => ({
+    type: "background_job_settled",
+    sessionId: "ses_1",
+    settlement: {
+      jobId,
+      status: "exited",
+      exitCode: 0,
+      endedAtMs: 6_000,
+      startedAtMs: 1_000,
+      command: "sleep 5 && echo done",
+      outputTail: "done\n",
+      delivery: { sessionId: "ses_1", notify: "on_exit" },
+      ...overrides,
+    },
+  })
+
+  async function elapse(h: ReturnType<typeof harness>, ms: number) {
+    h.clock.now += ms
+    await act(async () => {
+      jest.advanceTimersByTime(ms)
+    })
+  }
+
+  it("records the end and wakes the idle session after the coalescing window", async () => {
+    const h = harness({ idle: true })
+    h.frame(shellFrame())
+    expect(h.recordJob).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "shell-job:bg-1", host: "cli" }),
+      "/home"
+    )
+    expect(h.deliver).not.toHaveBeenCalled()
+    await elapse(h, WAKE_COALESCE_MS)
+    expect(h.deliver).toHaveBeenCalledTimes(1)
+    expect(h.deliver.mock.calls[0][0]).toContain("(shellId bg-1)")
+    expect(h.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Background shell bg-1 exited") })
+    )
+  })
+
+  it("ignores another session's shell and one the agent asked not to hear from", async () => {
+    const h = harness({ idle: true })
+    h.frame({
+      ...shellFrame(),
+      settlement: { ...shellFrame().settlement, delivery: { sessionId: "other" } },
+    })
+    h.frame(shellFrame("bg-quiet", { delivery: { sessionId: "ses_1", notify: "none" } }))
+    await elapse(h, WAKE_COALESCE_MS)
+    expect(h.deliver).not.toHaveBeenCalled()
+    expect(h.recordJob).toHaveBeenCalledTimes(1)
+  })
+
+  it("leaves shell ends alone at a turn boundary, and takes them with a run's result", async () => {
+    const h = harness({ idle: false })
+    h.frame(shellFrame())
+    expect(h.result.current.takeBackgroundResults()).toBeNull()
+    h.fire(settleEvent())
+    const framed = h.result.current.takeBackgroundResults()
+    expect(framed).toContain('Subagent "reviewer"')
+    expect(framed).toContain("(shellId bg-1)")
+  })
+
+  it("holds ends past the hourly cap and releases them after a turn taken for another reason", async () => {
+    const h = harness({ idle: true })
+    for (let i = 0; i < WAKE_CAP_PER_HOUR; i += 1) {
+      h.frame(shellFrame(`bg-${i}`))
+      await elapse(h, WAKE_COALESCE_MS)
+      // The wake's own boundary.
+      act(() => {
+        expect(h.result.current.takeBackgroundResults()).toBeNull()
+      })
+    }
+    expect(h.deliver).toHaveBeenCalledTimes(WAKE_CAP_PER_HOUR)
+    h.frame(shellFrame("bg-over"))
+    await elapse(h, WAKE_COALESCE_MS)
+    expect(h.deliver).toHaveBeenCalledTimes(WAKE_CAP_PER_HOUR)
+    expect(h.dispatch).toHaveBeenCalledWith({ type: "NOTICE", message: BACKGROUND_WAKE_CAP_NOTICE })
+    // A person's turn ends: its boundary leaves the ends, the idle edge sends them.
+    h.rerender({ idle: false })
+    act(() => {
+      expect(h.result.current.takeBackgroundResults()).toBeNull()
+    })
+    h.rerender({ idle: true })
+    await waitFor(() => expect(h.deliver).toHaveBeenCalledTimes(WAKE_CAP_PER_HOUR + 1))
+    expect(h.deliver.mock.calls.at(-1)?.[0]).toContain("(shellId bg-over)")
   })
 })

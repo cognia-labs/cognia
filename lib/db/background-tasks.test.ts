@@ -20,7 +20,13 @@ import {
   recordBackgroundTaskStart,
   recordBackgroundTaskSettle,
   updateBackgroundTaskRecord,
+  upsertBackgroundJobSettlement,
 } from "./background-tasks"
+import {
+  JOB_RECONCILE_WINDOW_MS,
+  outboxRecordFromJobExit,
+  outboxRecordFromMonitor,
+} from "@/lib/background-tasks/job-settlement"
 
 /**
  * A stored entry. A renderer entry stores no status (its run is the status),
@@ -731,5 +737,87 @@ describe("renderer owner leases", () => {
     expect((await getBackgroundTaskRecord("bg_1"))?.status).toBe("running")
     await owner.recordSettle("bg_1", { status: "done", resultText: "owner result" })
     expect((await getBackgroundTaskRecord("bg_1"))?.resultText).toBe("owner result")
+  })
+})
+
+describe("shell-job and monitor entries (ADR-0249)", () => {
+  const exit = (overrides: Record<string, unknown> = {}) =>
+    outboxRecordFromJobExit(
+      {
+        jobId: "job-1",
+        status: "exited",
+        exitCode: 0,
+        endedAtMs: 5_000,
+        startedAtMs: 1_000,
+        command: "sleep 5 && echo done",
+        outputTail: "done\n",
+        delivery: { sessionId: "ses_1", notify: "on_exit" },
+        ...overrides,
+      },
+      "renderer"
+    )!
+  const monitor = (state: "pending" | "inline") =>
+    outboxRecordFromMonitor(
+      {
+        id: "mon-1",
+        status: "fired",
+        condition: { kind: "jobExit", jobId: "job-1" },
+        createdAtMs: 1_000,
+        settledAtMs: 2_000,
+        detail: "job job-1 exited",
+        delivery: { sessionId: "ses_1", state },
+      },
+      "renderer"
+    )!
+
+  it("writes an end once, whichever report arrives first, and stores its own status", async () => {
+    // The exit can land before the agent ever saw the start ACK: the end alone
+    // carries the conversation, so the first report writes the settled entry.
+    await expect(upsertBackgroundJobSettlement(exit())).resolves.toMatchObject({ kind: "created" })
+    await expect(upsertBackgroundJobSettlement(exit())).resolves.toMatchObject({ kind: "known" })
+    const stored = await getDb().backgroundTasks.get("shell-job:job-1")
+    expect(stored).toMatchObject({ status: "done", deliveryState: "pending", settledAt: 5_000 })
+    await expect(getBackgroundTaskRecord("shell-job:job-1")).resolves.toMatchObject({
+      status: "done",
+      job: { kind: "shell-job", exitCode: 0 },
+    })
+  })
+
+  it("lets a monitor end move to skipped once the blocking call returned it inline", async () => {
+    await upsertBackgroundJobSettlement(monitor("pending"))
+    await expect(upsertBackgroundJobSettlement(monitor("inline"))).resolves.toMatchObject({
+      record: { deliveryState: "skipped" },
+    })
+    // A claimed batch is never taken back.
+    await getDb().backgroundTasks.clear()
+    await upsertBackgroundJobSettlement(monitor("pending"))
+    await reserveBackgroundTaskDelivery("ses_1", ["monitor:mon-1"], "delivery-1")
+    await expect(upsertBackgroundJobSettlement(monitor("inline"))).resolves.toMatchObject({
+      record: { deliveryState: "pending", deliveryId: "delivery-1" },
+    })
+  })
+
+  it("reserves job entries in the same delivery batches as run results", async () => {
+    await upsertBackgroundJobSettlement(exit())
+    await getDb().backgroundTasks.put(row({ runId: "a", status: "done", deliveryState: "pending" }))
+    await expect(
+      reserveBackgroundTaskDelivery("ses_1", ["a", "shell-job:job-1"], "delivery-1")
+    ).resolves.toEqual({ deliveryId: "delivery-1", runIds: ["a", "shell-job:job-1"] })
+  })
+
+  it("refuses an entry that is not a job's", async () => {
+    await expect(upsertBackgroundJobSettlement(started())).rejects.toThrow(/Not a background job/)
+  })
+
+  it("keeps job entries inside the reconciliation window when pruning", async () => {
+    const now = 30 * 24 * 60 * 60 * 1000
+    await upsertBackgroundJobSettlement(exit({ endedAtMs: now - 1_000, startedAtMs: now - 2_000 }))
+    await upsertBackgroundJobSettlement(
+      exit({ jobId: "job-old", endedAtMs: now - JOB_RECONCILE_WINDOW_MS - 1, startedAtMs: 0 })
+    )
+    await expect(pruneBackgroundTaskRecords({ now, maxAgeMs: 1, maxItems: 0 })).resolves.toBe(1)
+    expect((await listBackgroundTaskRecords()).map((record) => record.runId)).toEqual([
+      "shell-job:job-1",
+    ])
   })
 })

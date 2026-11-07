@@ -102,6 +102,11 @@ jest.mock("@/lib/db/messages", () => ({
   ...jest.requireActual("@/lib/db/messages"),
   persistMessages: (...args: unknown[]) => mockPersistMessages(...args),
 }))
+const mockOnBackgroundJobSettled = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("./background-result-runtime", () => ({
+  ...jest.requireActual("./background-result-runtime"),
+  onBackgroundJobSettled: (...args: unknown[]) => mockOnBackgroundJobSettled(...args),
+}))
 const mockStandaloneChatMode = jest.fn(() => false)
 jest.mock("@/lib/runtime/standalone-mode", () => ({
   ...jest.requireActual("@/lib/runtime/standalone-mode"),
@@ -680,6 +685,36 @@ describe("Claude chat event seam", () => {
       }
     }
   )
+
+  it("records an in-process shell's end from its frame without touching a transcript", async () => {
+    mockOnBackgroundJobSettled.mockClear()
+    await expect(
+      handleEvent(
+        {
+          type: "background_job_settled",
+          sessionId: "chat-1",
+          settlement: {
+            jobId: "bg-1",
+            status: "exited",
+            exitCode: 0,
+            endedAtMs: 5_000,
+            startedAtMs: 1_000,
+            command: "sleep 5 && echo done",
+            delivery: { sessionId: "chat-1", notify: "on_exit" },
+          },
+        } as never,
+        { current: null },
+        { current: [] },
+        { current: new Map() },
+        { current: new Map() },
+        { current: null },
+        undefined as never
+      )
+    ).resolves.toBeUndefined()
+    expect(mockOnBackgroundJobSettled).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "shell-job:bg-1", kind: "shell-job", sessionId: "chat-1" })
+    )
+  })
 
   it("exports event routing and filters team sub-sessions", () => {
     expect(typeof handleEvent).toBe("function")
