@@ -1,4 +1,5 @@
 import type { ChatSession } from "@cognia/agent-config-types"
+import type { ContextContribution } from "@/lib/modules/manifest-types"
 import type { Project } from "@/types"
 import { useChatStore } from "@/stores/chat"
 import { sessionStatusOf } from "@/hooks/chat/steer-runtime"
@@ -7,19 +8,27 @@ import { buildCoordinatorContextSection, type DigestThreadInput } from "./digest
 import { listProjectThreads } from "./thread-runtime"
 import { updateCoordinator } from "./project-access"
 import { buildSetupRecommendationsSection, shouldOfferSetup } from "./setup-recommendations"
+import { buildProjectGoalSection } from "./protocol"
 import { schedulerDb } from "@/lib/scheduler/scheduler-db"
 import type { ScheduledTask } from "@/types/scheduler"
 import { listSessionPrObservationsByProject } from "@/lib/db/session-pr-observations"
 import type { PrDerivedStatus } from "@/lib/github/pr-observe/types"
 
 /**
- * The per-turn project status a coordinator turn adds to its send options
- * (ADR-0204): the thread digest and, once, the setup offer. It changes every
- * turn, so it belongs in the dynamic tail. The tools and the session-stable
- * protocols are the module's tool contribution (`./agent-tools.ts`).
+ * What project coordination adds to a coordinated conversation's system
+ * prompt (ADR-0204), as the module's context contributions (ADR-0250 §14
+ * `context` amendment):
+ *
+ * - the project goal, for the coordinator and its threads: stable within a
+ *   session, in the `project-goal` slot after the workspace instructions;
+ * - the coordinator's live project status (the thread digest and, once, the
+ *   setup offer): it changes every turn, so it goes to the dynamic tail.
+ *
+ * The tools and the session-stable protocols are the module's tool
+ * contribution (`./agent-tools.ts`).
  */
 
-export interface SendExtrasDeps {
+export interface CoordinatorStatusDeps {
   listThreads: (coordinatorSessionId: string) => Promise<ChatSession[]>
   prStatuses: (projectId: string) => Promise<ReadonlyMap<string, PrDerivedStatus>>
   threadInput: (thread: ChatSession) => Omit<DigestThreadInput, "pr">
@@ -28,7 +37,7 @@ export interface SendExtrasDeps {
   markSetupOffered: (projectId: string, at: number) => void
 }
 
-function defaultDeps(): SendExtrasDeps {
+function defaultDeps(): CoordinatorStatusDeps {
   return {
     listThreads: listProjectThreads,
     prStatuses: async (projectId) =>
@@ -53,7 +62,7 @@ function defaultDeps(): SendExtrasDeps {
 export async function resolveCoordinatorTurnSection(
   session: Pick<ChatSession, "id" | "projectRole" | "projectId">,
   project: Pick<Project, "coordinator"> & Partial<Pick<Project, "roots">>,
-  deps: SendExtrasDeps = defaultDeps()
+  deps: CoordinatorStatusDeps = defaultDeps()
 ): Promise<string | undefined> {
   if (session.projectRole !== "coordinator" || !projectRoleToolsApply(session, project))
     return undefined
@@ -75,7 +84,7 @@ async function setupSection(
   projectId: string | undefined,
   project: Pick<Project, "coordinator"> & Partial<Pick<Project, "roots">>,
   threadCount: number,
-  deps: SendExtrasDeps
+  deps: CoordinatorStatusDeps
 ): Promise<string | undefined> {
   const { setupOfferedAt } = resolveCoordinatorConfig(project)
   if (!projectId || !shouldOfferSetup({ setupOfferedAt, threadCount })) return undefined
@@ -84,3 +93,28 @@ async function setupSection(
   deps.markSetupOffered(projectId, deps.now())
   return buildSetupRecommendationsSection({ project, schedules })
 }
+
+export const contributions: readonly ContextContribution[] = [
+  {
+    id: "project-goal",
+    cache: "session",
+    slot: "project-goal",
+    produce: ({ session, activeProject }) => {
+      if (!projectRoleToolsApply(session, activeProject)) return null
+      const text = buildProjectGoalSection(activeProject)
+      return text ? { text } : null
+    },
+  },
+  {
+    id: "status",
+    cache: "turn",
+    // Dexie reads of the threads, their pull requests and the schedules; a
+    // busy disk must not drop the status (or an offer already marked made).
+    deadlineMs: 5_000,
+    produce: async ({ session, activeProject }) => {
+      if (!session || !activeProject) return null
+      const text = await resolveCoordinatorTurnSection(session, activeProject)
+      return text ? { text } : null
+    },
+  },
+]

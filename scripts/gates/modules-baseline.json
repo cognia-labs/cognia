@@ -427,7 +427,6 @@
     "lib/claude/build-options.ts -> knowledge-base",
     "lib/claude/build-options.ts -> lsp",
     "lib/claude/build-options.ts -> memory",
-    "lib/claude/build-options.ts -> project-coordinator",
     "lib/claude/build-options.ts -> project-knowledge",
     "lib/claude/build-options.ts -> slash-commands",
     "lib/claude/build-options.ts -> squads",

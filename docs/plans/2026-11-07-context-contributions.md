@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0 已实施，记录见 §7。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0、C1 已实施，记录见 §7–§8。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -182,3 +182,14 @@ interface ContextSection {
   - 会话删除时不单独清理：注册表只保留最近解析的 64 个会话，最久未解析的先淘汰。
   - `slot` 合法性和 `id` 唯一性由类型和读取方在加载时检查（不合格则整个模块跳过并上报），门禁只查形状和导出。
 - 测试：`context-contributions.test.ts` 13 例、`context-session-state.test.ts` 4 例、`tool-contributions.test.ts` 加 1 例（只读本模块状态）、`build-options.test.ts` 加 4 例（尾部 / slot / 缓存关 / 上下文与旁路输出）。目前没有模块声明 `context`，所以运行时行为不变。
+
+## 8. C1 实施记录：项目协调（2026-11-07）
+
+- `lib/project-coordinator/send-extras.ts` → `context.ts`（测试同改名）：保留 `resolveCoordinatorTurnSection`（依赖接口改名 `CoordinatorStatusDeps`），导出 `contributions`：
+  - `project-goal`：`cache: "session"`、`slot: "project-goal"`；协调者和线程都给（`projectRoleToolsApply`），复用 `buildProjectGoalSection`（它自己的 PII 判断保留）。
+  - `status`：`cache: "turn"`、无 slot（缓存优化开关都进尾部，与原来一致）；`deadlineMs: 5_000`，因为要读线程、PR 观测和日程三处 Dexie，磁盘忙时不能丢段（setup 提议一旦记为已提出就不会再给）。
+- manifest 加 `context: { load: () => import("./context") }`。
+- `build-options`：删掉两处 import、`projectRoleToolsSurfaced`、`systemPrompt` 里的目标段和尾部的状态段分支；目标段由 `...contextSlot("project-goal")` 在原位置提供，状态段在收集点推入尾部（原分支与收集点之间没有别的尾部段，顺序不变）。
+- 还清方向边 `lib/claude/build-options.ts -> project-coordinator`。
+- 行为差别：状态段现在过内核 PII 闸（线程标题等若含泄露信息，整段丢弃并上报）；以前不检查。目标段以前就检查。
+- 测试：`context.test.ts` 加 4 例（声明、目标段给谁、状态段给谁）；`build-options.test.ts` 的上下文注册表 mock 改为真实注册表 + 测试模块，新增 1 例：缓存优化开关两种情况下目标段就是整个 `systemPrompt`、状态段就是整个动态尾部。原有的协调者用例全部通过。

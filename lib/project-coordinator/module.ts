@@ -62,4 +62,7 @@ export default defineHostModule({
     },
     load: () => import("./agent-tools"),
   },
+  // The project goal (stable, after the workspace instructions) and the
+  // coordinator's live project status (per turn, in the dynamic tail).
+  context: { load: () => import("./context") },
 })

@@ -347,6 +347,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 失败。上下文只做加法：贡献文件加载失败、抛错、超时或段落没有文字，都只是跳过该部分并上报，从不拒绝这一轮。
   - 位置。生成器写 `lib/modules/generated/context.ts`；`lib/claude/context-contributions.ts` 负责收集和放置；门禁检查 manifest 形状和 `contributions` 导出，读取方在文件加载时检查每条贡献的字段。
   - 不属于上下文贡献的。分身替换的是身份段而不是追加段落，记忆召回又要读分身取回的内容，两者暂时留在发送路径。执行中计划的段落是内核自己的。活动目标已经作为能力授予的 instructions 进入。
+  - 项目协调是第一个（2026-11-07）：`lib/project-coordinator/context.ts` 贡献项目目标（session 段，放在 `project-goal` slot，给协调者和它的线程）和协调者的实时项目状态（没有 slot 的 turn 段，所以无论是否开启缓存优化都在尾部）。两个分支都离开了发送路径，方向边已还清。一次运行发送内容的唯一变化：状态段现在和其他段一样要过内核的 PII 闸，以前不经检查直接发送。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

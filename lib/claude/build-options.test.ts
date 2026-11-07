@@ -40,11 +40,16 @@ jest.mock("@/lib/project-coordinator/thread-runtime", () => ({
   ],
 }))
 
-// Module context contributions: empty unless a test fills it.
+// Module context contributions: the real registry, plus a test module some
+// cases add for the duration of the case.
 const mockContextEntries: import("@/lib/modules/manifest-types").ModuleContextEntry[] = []
-jest.mock("@/lib/modules/generated/context", () => ({
-  MODULE_CONTEXT_CONTRIBUTIONS: mockContextEntries,
-}))
+jest.mock("@/lib/modules/generated/context", () => {
+  const actual = jest.requireActual<typeof import("@/lib/modules/generated/context")>(
+    "@/lib/modules/generated/context"
+  )
+  mockContextEntries.push(...actual.MODULE_CONTEXT_CONTRIBUTIONS)
+  return { MODULE_CONTEXT_CONTRIBUTIONS: mockContextEntries }
+})
 
 // The Agent Builder's draft section reads the catalogs from Dexie.
 jest.mock("@/lib/agents/builder/tool-deps", () => ({
@@ -7667,6 +7672,23 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
       expect(opts.permissionRuleset?.set_project_preference).toBe("ask")
     })
 
+    it("places the goal in the system prompt and the status as the whole tail, cache optimization on or off", async () => {
+      for (const cacheOptimizationEnabled of [true, false]) {
+        const opts = await resolveSendOptions({
+          session: makeSession({ id: "coord", projectId: "ws1", projectRole: "coordinator" }),
+          activeProject: coordinated("Ship the checkout rewrite"),
+          appSettings: { cacheOptimizationEnabled } as never,
+        })
+        // The fixture has no base prompt or workspace instructions, so the
+        // goal is the whole system prompt.
+        expect(opts.systemPrompt).toBe("## Project goal\n\nShip the checkout rewrite")
+        expect(opts.dynamicSystemPrompt?.startsWith("## Project status")).toBe(true)
+        expect(opts.dynamicSystemPrompt).toContain("- Fix login (t1)")
+        expect(opts.appendSystemPrompt?.endsWith(opts.dynamicSystemPrompt ?? "")).toBe(true)
+        expect(opts.systemPrompt).not.toContain("## Project status")
+      }
+    })
+
     it("gives a thread only its report tool", async () => {
       const opts = await resolveSendOptions({
         session: makeSession({ id: "t1", projectId: "ws1", projectRole: "thread" }),
@@ -7710,7 +7732,8 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
 
     beforeEach(() => __resetContextContributionsForTests())
     afterEach(() => {
-      mockContextEntries.length = 0
+      const at = mockContextEntries.findIndex((entry) => entry.module === "crate")
+      if (at >= 0) mockContextEntries.splice(at, 1)
     })
 
     it("puts a turn section in the dynamic tail and a session section in its slot", async () => {

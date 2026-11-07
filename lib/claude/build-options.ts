@@ -11,8 +11,6 @@ import { getAllProviders } from "@cognia/provider-types/provider"
 import { additionalDirsOf, allRootPaths } from "@/lib/workspace/roots"
 import { resolveEffectiveCwd } from "@/lib/workspace/effective-cwd"
 import { buildWorkspaceInstructionsSection } from "@/lib/workspace/workspace-instructions"
-import { buildProjectGoalSection } from "@/lib/project-coordinator/protocol"
-import { projectRoleToolsApply } from "@/lib/project-coordinator/config"
 import { resolveSessionWorkspaceRoot } from "@/lib/task-workspace/session-execution-context"
 import { isSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
 import { listBuiltinTools, namespaced } from "@/lib/settings/builtin-tools"
@@ -2976,9 +2974,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // twin runtime already produced a personality-rich prompt (see above).
   const personaSection = twinReplacedBase ? "" : buildPersonaSection(character?.persona)
 
-  // A coordinated project's coordinator and threads (ADR-0204): gates both the
-  // project goal section below and the coordinator tool ruleset.
-  const projectRoleToolsSurfaced = projectRoleToolsApply(session, ctx.activeProject)
   // "Build with AI" on /agents (ADR-0220): the live draft section. The
   // builder tools and protocol are the agent-builder module's contribution.
   const agentBuilderDraftSurfaced =
@@ -3035,7 +3030,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // The turn's own workspace (`activeProject` is `resolveSessionWorkspace`),
     // not whichever one is on screen.
     buildWorkspaceInstructionsSection(ctx.activeProject),
-    projectRoleToolsSurfaced ? buildProjectGoalSection(ctx.activeProject) : "",
+    // A coordinated project's goal (ADR-0204) is the project-coordinator
+    // module's context contribution.
     ...contextSlot("project-goal"),
     memorySection,
     ...contextSlot("memory"),
@@ -4251,23 +4247,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         .filter(Boolean)
         .join("\n\n")
   }
-  // Project coordination (ADR-0204): the coordinator's per-turn project
-  // status. Its tools and protocols are the module's tool contribution above.
-  if (projectRoleToolsSurfaced && session && ctx.activeProject) {
-    try {
-      const { resolveCoordinatorTurnSection } =
-        await import("@/lib/project-coordinator/send-extras")
-      const section = await resolveCoordinatorTurnSection(session, ctx.activeProject)
-      if (section) dynamicTailSections.push(section)
-    } catch (err) {
-      loggers.app.warn("failed to append the project coordinator's status", {
-        error: String(err),
-      })
-    }
-  }
-  // Agent Builder (ADR-0220): the live draft as a per-turn section, as for
-  // project coordination above. Its tools and protocol are the agent-builder
-  // module's tool contribution.
+  // Agent Builder (ADR-0220): the live draft as a per-turn section. Its tools
+  // and protocol are the agent-builder module's tool contribution.
   if (agentBuilderDraftSurfaced && session) {
     try {
       const { resolveAgentBuilderTurnSection } = await import("@/lib/agents/builder/send-extras")

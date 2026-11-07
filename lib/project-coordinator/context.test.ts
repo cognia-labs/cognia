@@ -1,8 +1,21 @@
 import type { ChatSession } from "@cognia/agent-config-types"
-import { resolveCoordinatorTurnSection, type SendExtrasDeps } from "./send-extras"
+import type { ContextTurnContext } from "@/lib/modules/manifest-types"
+import type { Project } from "@/types"
+import { contributions, resolveCoordinatorTurnSection, type CoordinatorStatusDeps } from "./context"
 import { projectRoleToolsApply } from "./config"
 
-const deps: SendExtrasDeps = {
+// The status contribution reads threads and their pull requests through the
+// default deps; the cases that pass their own deps never reach these.
+jest.mock("./thread-runtime", () => ({
+  listProjectThreads: jest.fn(async () => [
+    { id: "t9", title: "Ship docs", createdAt: 1, updatedAt: 1, projectRole: "thread" },
+  ]),
+}))
+jest.mock("@/lib/db/session-pr-observations", () => ({
+  listSessionPrObservationsByProject: async () => [],
+}))
+
+const deps: CoordinatorStatusDeps = {
   listThreads: jest.fn(async () => [
     { id: "t1", title: "Fix login", createdAt: 1, updatedAt: 1 } as ChatSession,
   ]),
@@ -53,12 +66,12 @@ describe("resolveCoordinatorTurnSection", () => {
       coordinator: { enabled: true },
       roots: [{ id: "r1", path: "/src/app", isPrimary: true }],
     }
-    const empty: SendExtrasDeps = {
+    const empty: CoordinatorStatusDeps = {
       ...deps,
       listThreads: jest.fn(async () => []),
       listSchedules: jest.fn(async () => [
         { name: "Nightly deps", status: "active" },
-      ]) as unknown as SendExtrasDeps["listSchedules"],
+      ]) as unknown as CoordinatorStatusDeps["listSchedules"],
       markSetupOffered: jest.fn(),
     }
     const section = await resolveCoordinatorTurnSection(
@@ -96,5 +109,67 @@ describe("resolveCoordinatorTurnSection", () => {
     )
     expect(failing).toContain("Project setup")
     expect(markSetupOffered).toHaveBeenCalled()
+  })
+})
+
+describe("the coordinator's context contributions", () => {
+  const byId = (id: string) => contributions.find((c) => c.id === id)!
+  const ctx = (
+    session: Partial<ChatSession> | null,
+    activeProject: Partial<Project> | null
+  ): ContextTurnContext => ({
+    session: session as ChatSession | null,
+    agent: null,
+    settings: null,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host: "desktop",
+    activeProject: activeProject as Project | null,
+    query: { text: null, embedding: null },
+    hostDeps: {},
+    grant: null,
+  })
+  const coordinated = { coordinator: { enabled: true, goal: "Ship v2", setupOfferedAt: 1 } }
+
+  it("declares the goal as a session section in its slot and the status as a turn section", () => {
+    expect(byId("project-goal")).toMatchObject({ cache: "session", slot: "project-goal" })
+    expect(byId("status")).toMatchObject({ cache: "turn", deadlineMs: 5_000 })
+    expect(byId("status").slot).toBeUndefined()
+  })
+
+  it("gives the coordinator and its threads the project goal", async () => {
+    for (const projectRole of ["coordinator", "thread"] as const) {
+      expect(
+        await byId("project-goal").produce(ctx({ id: "c", projectRole }, coordinated))
+      ).toEqual({ text: "## Project goal\n\nShip v2" })
+    }
+  })
+
+  it("gives no goal to an ordinary session, without coordination, or without a goal", async () => {
+    const goal = byId("project-goal")
+    expect(await goal.produce(ctx({ id: "s" }, coordinated))).toBeNull()
+    expect(
+      await goal.produce(
+        ctx({ id: "c", projectRole: "coordinator" }, { coordinator: { enabled: false, goal: "x" } })
+      )
+    ).toBeNull()
+    expect(
+      await goal.produce(
+        ctx({ id: "c", projectRole: "coordinator" }, { coordinator: { enabled: true } })
+      )
+    ).toBeNull()
+    expect(await goal.produce(ctx(null, null))).toBeNull()
+  })
+
+  it("gives the coordinator its live status and nobody else one", async () => {
+    const status = byId("status")
+    const section = await status.produce(
+      ctx({ id: "c", projectRole: "coordinator", projectId: "p1" }, coordinated)
+    )
+    expect(section?.text).toContain("## Project status")
+    expect(section?.text).toContain("Ship docs (t9)")
+    expect(await status.produce(ctx({ id: "t", projectRole: "thread" }, coordinated))).toBeNull()
+    expect(await status.produce(ctx({ id: "c", projectRole: "coordinator" }, null))).toBeNull()
+    expect(await status.produce(ctx(null, coordinated))).toBeNull()
   })
 })
