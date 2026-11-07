@@ -7,10 +7,13 @@
  *
  *   squad.review        a child span from "interrupt raised" to "settled",
  *                       carrying the review kind and the outcome
- *   squad.dispatch      an event with the queue-to-start latency of a child
  *   squad.recovery      an event with the choice and whether it applied
  *   squad.duplicate     an event for a control the gate recognised as a replay
  *   terminal reason     closes the root span, with token totals when known
+ *
+ * How long a child run took to dispatch is not here: every child, a Squad run
+ * launched by another run included, records it on its own span through
+ * `launchChildRun` (`lib/execution/launch-child-run.ts`, ADR-0252 §3).
  *
  * Nothing here carries a prompt, an argument, a file path or a secret. Ids,
  * codes, counts and durations only: every attribute is something the run
@@ -154,27 +157,6 @@ export function endSquadReviewSpan(input: {
     },
   })
   return waitMs
-}
-
-/** Queue-to-start latency of one child dispatch. */
-export function recordSquadDispatchLatency(input: {
-  runId: string
-  childRunId: string
-  latencyMs: number
-  hostRef?: string
-  now?: () => number
-}): boolean {
-  const root = roots.get(input.runId)
-  if (!root) return false
-  return recordEvent(root.spanId, {
-    name: "squad.dispatch",
-    at: (input.now ?? Date.now)(),
-    attributes: {
-      childRunId: input.childRunId,
-      latencyMs: input.latencyMs,
-      ...(input.hostRef ? { hostRef: input.hostRef } : {}),
-    },
-  })
 }
 
 /** A recovery decision was applied (or refused). */

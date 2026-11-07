@@ -84,6 +84,13 @@ export interface StartSquadRunInput {
   ultracode?: boolean
   /** The settled run this one replaces (a `retry`). */
   parentRunId?: string
+  /**
+   * The run that launched this one as its child (`launchChildRun`, ADR-0252
+   * §3): written as the row's parent, with the parent's acting identity. No
+   * replacement semantics. A replacement's parent is the run it replaces, so
+   * this is ignored when `parentRunId` is set.
+   */
+  launchedByRunId?: string
   /** Frozen authority supplied by the governed replacement path. */
   executionConstraints?: AgentTeamExecutionConstraints
 }
@@ -139,6 +146,7 @@ export interface SquadRunRecordsSeed {
   environmentVersionId?: string
   executionConstraints?: AgentTeamExecutionConstraints
   parentRunId?: string
+  launchedByRunId?: string
   startedAt: number
 }
 
@@ -424,7 +432,11 @@ export async function startSquadRun(
       ...(executionConstraints.teamConfig?.environmentRef
         ? { environmentVersionId: executionConstraints.teamConfig.environmentRef.versionId }
         : {}),
-      ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
+      ...(input.parentRunId
+        ? { parentRunId: input.parentRunId }
+        : input.launchedByRunId
+          ? { launchedByRunId: input.launchedByRunId }
+          : {}),
       startedAt: now(),
     })
     executionRunId = records.executionRunId

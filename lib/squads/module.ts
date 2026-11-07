@@ -105,6 +105,13 @@ export default defineHostModule({
   ],
   searchProviders: () => import("./search-provider"),
   prompts: () => import("./prompts"),
+  // The engines `launchChildRun` (ADR-0252 §3) asks for: a Squad run launched
+  // by another run, and a twin answering as a child run. The twin's moves to
+  // the twin module once that module has a manifest; the contract stays.
+  provides: [
+    { port: "squad-launch", load: () => import("./ports/squad-launch") },
+    { port: "twin-answer", load: () => import("./ports/twin-answer") },
+  ],
   // The ordered Squad bootstrap (ADR-0169) on every host, from one
   // host-neutral adapter. It replaced the desktop's `SquadBootstrapInitializer`
   // and the brain roster's own registration; the name stays the one brain

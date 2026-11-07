@@ -2,10 +2,12 @@
 /**
  * Delegation orchestrator tests.
  *
- * Mocks the plugin hooks + executeAgent + background-agent manager so we
- * can drive the orchestrator without spinning the AI provider runtime.
- * Asserts the full lifecycle: create → start hook → settle → complete hook,
- * plus cancellation and approval branches.
+ * The orchestrator keeps a Squad's delegation policy (quiet hours, approval,
+ * depth, cycles), the record and the hooks; every target runs through
+ * `launchChildRun`. The launcher is replaced by a controllable fake here (its
+ * engines are covered by `lib/execution/launch-child-run.test.ts`), so these
+ * tests assert what the orchestrator asks it for and how it settles the record
+ * from what comes back.
  */
 
 import "fake-indexeddb/auto"
@@ -20,80 +22,56 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
   })),
 }))
 
-jest.mock("@/lib/ai/agent/background-agent-manager", () => {
-  const registerAgent = jest.fn()
-  const cancelAgent = jest.fn()
-  const finishAgent = jest.fn()
-  return {
-    __mocks: { registerAgent, cancelAgent, finishAgent },
-    getBackgroundAgentManager: jest.fn(() => ({
-      registerAgent,
-      cancelAgent,
-      finishAgent,
-    })),
-    __resetBackgroundAgentManagerForTesting: jest.fn(),
-  }
-})
-
-jest.mock("@/lib/ai/agent/agent-executor", () => ({
-  executeAgent: jest.fn(),
-}))
-
-const externalExecuteMock = jest.fn()
-jest.mock("@/lib/ai/agent/external/manager", () => ({
-  getExternalAgentManager: jest.fn(() => ({ execute: externalExecuteMock })),
-}))
-
-const placeDispatchedAgentMock = jest.fn(async (..._args: unknown[]) => undefined)
-jest.mock("@/lib/sandbox/host-agent-placement", () => ({
-  placeDispatchedAgent: (...args: unknown[]) => placeDispatchedAgentMock(...args),
-}))
-
 jest.mock("@/lib/connectors/outbound-runner", () => ({
   isInQuietHours: jest.fn(() => false),
 }))
 import { isInQuietHours } from "@/lib/connectors/outbound-runner"
 const isInQuietHoursMock = isInQuietHours as unknown as jest.Mock
 
-const teamStartMock = jest.fn()
-const teamGetMock = jest.fn()
-jest.mock("@/lib/squads/agent-team", () => ({
-  agentTeamManager: {
-    start: (...a: unknown[]) => teamStartMock(...a),
-    get: (...a: unknown[]) => teamGetMock(...a),
-  },
+// Rows that exist in the ledger, and the live Squad run of each team.
+const rows = new Set<string>()
+jest.mock("@/lib/db/execution-runs", () => ({
+  getExecutionRun: async (id: string) => (rows.has(id) ? { id } : undefined),
 }))
-const abortTeamMock = jest.fn()
-jest.mock("@/lib/squads/agent-team-runtime", () => ({
-  abortTeam: (...a: unknown[]) => abortTeamMock(...a),
-}))
-// Twin runtime — dynamic-imported by runTwinDelegation.
-const tryBuildTwinDepsMock = jest.fn()
-jest.mock("@/lib/twin/runtime/build-deps", () => ({
-  tryBuildTwinDeps: (...a: unknown[]) => tryBuildTwinDepsMock(...a),
-}))
-const applyTeammateTwinContextMock = jest.fn()
-jest.mock("@/lib/squads/teammate/twin-context", () => ({
-  applyTeammateTwinContext: (...a: unknown[]) => applyTeammateTwinContextMock(...a),
-}))
-const getTwinMock = jest.fn()
-jest.mock("@/lib/db/twins", () => ({
-  getTwin: (...a: unknown[]) => getTwinMock(...a),
+const liveRuns: Record<string, string> = {}
+jest.mock("./squad/squad-run-records", () => ({
+  findLiveSquadRun: async (teamId: string) =>
+    liveRuns[teamId] ? { id: liveRuns[teamId] } : undefined,
 }))
 
-import * as bgManagerModule from "@/lib/ai/agent/background-agent-manager"
-import { executeAgent } from "@/lib/ai/agent/agent-executor"
-const {
-  registerAgent: registerAgentMock,
-  cancelAgent: cancelAgentMock,
-  finishAgent: finishAgentMock,
-} = (
-  bgManagerModule as unknown as {
-    __mocks: { registerAgent: jest.Mock; cancelAgent: jest.Mock; finishAgent: jest.Mock }
-  }
-).__mocks
-const executeAgentMock = executeAgent as unknown as jest.Mock
+interface FakeChild {
+  input: LaunchChildRunInput
+  executionRunId: string
+  settle: (outcome: ChildRunOutcome) => void
+}
+const children: FakeChild[] = []
+/** Settles every child at once unless a test takes over (`null`). */
+let autoOutcome: ChildRunOutcome | null
+let launchRefusal: { reason: string; detail?: string } | undefined
+/** Holds the launch open until released, to cancel while it is in flight. */
+let launchGate: Promise<void> | undefined
+const launchMock = jest.fn(async (input: LaunchChildRunInput) => {
+  if (launchGate) await launchGate
+  if (input.signal?.aborted) return { started: false, reason: "cancelled" }
+  if (launchRefusal) return { started: false, ...launchRefusal }
+  let settle!: (outcome: ChildRunOutcome) => void
+  const outcome = new Promise<ChildRunOutcome>((resolve) => (settle = resolve))
+  const childId = input.childId ?? `child-${children.length + 1}`
+  const executionRunId =
+    input.target.kind === "squad" ? `execution:team:run_${childId}` : `execution:job:${childId}`
+  input.signal?.addEventListener("abort", () =>
+    settle({ status: "cancelled", error: "Cancelled." })
+  )
+  children.push({ input, executionRunId, settle })
+  if (autoOutcome) settle(autoOutcome)
+  return { started: true, childId, executionRunId, outcome }
+})
+jest.mock("@/lib/execution/launch-child-run", () => ({
+  launchChildRun: (input: LaunchChildRunInput) => launchMock(input),
+}))
 
+import type { LaunchChildRunInput } from "@/lib/execution/launch-child-run"
+import type { ChildRunOutcome } from "@/types/execution/child-run"
 import {
   __resetPendingDelegationRunsForTesting,
   approveDelegation,
@@ -107,8 +85,52 @@ import {
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
-/** Flush pending microtasks + a macrotask so async re-dispatch settles. */
+/** Flush pending microtasks + a macrotask so async launches settle. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+const lastLaunch = () => children[children.length - 1]
+
+function resetLauncher() {
+  launchMock.mockClear()
+  children.length = 0
+  autoOutcome = { status: "completed", text: "ok" }
+  launchRefusal = undefined
+  launchGate = undefined
+  rows.clear()
+  for (const key of Object.keys(liveRuns)) delete liveRuns[key]
+}
+
+/** A live Squad run of `teamId` whose `execution:team:` row exists. */
+function liveRun(teamId: string, runId = `run_team_${teamId}`): string {
+  liveRuns[teamId] = runId
+  rows.add(`execution:team:${runId}`)
+  return `execution:team:${runId}`
+}
+
+const quietPolicy = {
+  approval: { requirePlanApproval: false, requireDelegationApproval: false },
+  budget: {
+    tokenBudget: 0,
+    warningThreshold: 0.8,
+    criticalThreshold: 0.95,
+    onCritical: "notify" as const,
+  },
+  escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
+  delivery: { quietHours: { from: "00:00", to: "23:59", tz: "UTC" } },
+}
+
+function seedTeamWithQuietHours(): string {
+  const team = useAgentTeamStore.getState().createTeam({ name: "Quiet", task: "t" })
+  useAgentTeamStore.setState((s) => {
+    const existing = s.teams[team.id]
+    const updated: AgentTeam = {
+      ...existing,
+      config: { ...existing.config, governancePolicy: quietPolicy },
+    }
+    return { teams: { ...s.teams, [team.id]: updated } }
+  })
+  return team.id
+}
 
 describe("delegation-orchestrator", () => {
   beforeEach(() => {
@@ -116,29 +138,13 @@ describe("delegation-orchestrator", () => {
     __resetPendingDelegationRunsForTesting()
     dispatchOnTeamDelegationStart.mockReset()
     dispatchOnTeamDelegationComplete.mockReset()
-    registerAgentMock.mockReset()
-    cancelAgentMock.mockReset()
-    finishAgentMock.mockReset()
-    executeAgentMock.mockReset()
-    externalExecuteMock.mockReset()
-    registerAgentMock.mockImplementation(() => {
-      const controller = new AbortController()
-      return controller.signal
-    })
-    executeAgentMock.mockResolvedValue({ text: "ok" })
-    externalExecuteMock.mockResolvedValue({ success: true, finalResponse: "external result" })
     isInQuietHoursMock.mockReturnValue(false)
-    tryBuildTwinDepsMock.mockReset()
-    applyTeammateTwinContextMock.mockReset()
-    getTwinMock.mockReset()
-    tryBuildTwinDepsMock.mockResolvedValue({ store: {}, embedding: {} })
-    applyTeammateTwinContextMock.mockResolvedValue({ systemPrompt: "TWIN-INJECTED", applied: true })
-    getTwinMock.mockResolvedValue({ id: "tw1", name: "Alice" })
+    resetLauncher()
   })
 
   describe("delegateToBackground", () => {
     it("creates an active delegation and fires onTeamDelegationStart", async () => {
-      const { delegation } = delegateToBackground({
+      const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
         prompt: "Investigate",
@@ -156,29 +162,77 @@ describe("delegation-orchestrator", () => {
           targetType: "background",
         })
       )
+      await completionPromise
     })
 
-    it("dispatches executeAgent and settles to completed on success", async () => {
-      executeAgentMock.mockResolvedValue({ text: "background result" })
+    it("launches an agent child of the source team's live run and settles from its outcome", async () => {
+      const parent = liveRun("team-1")
+      autoOutcome = { status: "completed", text: "background result" }
       const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
         prompt: "Investigate",
+        systemPrompt: "be careful",
         reason: "offline",
       })
       const settled = await completionPromise
-      expect(executeAgentMock).toHaveBeenCalled()
+      expect(lastLaunch().input).toEqual({
+        parentRunId: parent,
+        target: {
+          kind: "agent",
+          prompt: "Investigate",
+          systemPrompt: "be careful",
+          background: { label: `team-delegation:${delegation.id}`, kind: "team-delegation" },
+        },
+        title: `team-delegation:${delegation.id}`,
+        // The record's target is the Job Center entry and the child row.
+        childId: delegation.targetId,
+        surface: "agent-team",
+        signal: expect.any(AbortSignal),
+      })
       expect(settled.status).toBe("completed")
       expect(settled.result).toBe("background result")
-      expect(finishAgentMock).toHaveBeenCalled()
+      expect(settled.metadata?.executionRunId).toBe(`execution:job:${delegation.targetId}`)
       expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
         delegationId: delegation.id,
         status: "completed",
       })
     })
 
-    it("settles to failed when executeAgent throws", async () => {
-      executeAgentMock.mockRejectedValue(new Error("boom"))
+    it("launches unparented when the source team has no live run", async () => {
+      await delegateToBackground({
+        sourceTeamId: "team-idle",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "y",
+      }).completionPromise
+      expect(lastLaunch().input.parentRunId).toBeUndefined()
+    })
+
+    it("hangs the child under the run that asked when it exists, else the live run", async () => {
+      const live = liveRun("team-1")
+      rows.add("execution:workflow:wf-1")
+      await delegateToBackground({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "y",
+        parentRunId: "execution:workflow:wf-1",
+      }).completionPromise
+      expect(lastLaunch().input.parentRunId).toBe("execution:workflow:wf-1")
+
+      await delegateToBackground({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "y",
+        parentRunId: "execution:workflow:not-projected-yet",
+      }).completionPromise
+      expect(lastLaunch().input.parentRunId).toBe(live)
+    })
+
+    it("settles to failed with the child's error", async () => {
+      autoOutcome = { status: "failed", error: "boom" }
       const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
@@ -194,6 +248,18 @@ describe("delegation-orchestrator", () => {
       })
     })
 
+    it("fails a delegation the launcher refuses, saying why", async () => {
+      launchRefusal = { reason: "journal_failed", detail: "disk full" }
+      const settled = await delegateToBackground({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "y",
+      }).completionPromise
+      expect(settled.status).toBe("failed")
+      expect(settled.result).toBe("background delegation refused: journal_failed (disk full)")
+    })
+
     it("respects awaitingApproval and keeps the delegation in that status", async () => {
       const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
@@ -205,18 +271,19 @@ describe("delegation-orchestrator", () => {
       expect(delegation.status).toBe("awaiting_approval")
       const settled = await completionPromise
       expect(settled.status).toBe("awaiting_approval")
-      expect(executeAgentMock).not.toHaveBeenCalled()
+      expect(launchMock).not.toHaveBeenCalled()
     })
   })
 
   describe("delegateToTwin", () => {
-    it("creates a twin delegation, injects the persona + knowledge, and settles completed", async () => {
-      executeAgentMock.mockResolvedValue({ text: "twin answer" })
+    it("launches a twin child registered in the Job Center and settles with its answer", async () => {
+      autoOutcome = { status: "completed", text: "twin answer" }
       const { delegation, completionPromise } = delegateToTwin({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
         twinId: "tw1",
         prompt: "analyze the incident",
+        systemPrompt: "BASE",
         reason: "ask the domain expert",
       })
       expect(delegation.targetType).toBe("twin")
@@ -226,42 +293,21 @@ describe("delegation-orchestrator", () => {
         expect.objectContaining({ delegationId: delegation.id, targetType: "twin" })
       )
       const settled = await completionPromise
-      expect(applyTeammateTwinContextMock).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(lastLaunch().input).toMatchObject({
+        target: {
+          kind: "twin",
           twinId: "tw1",
-          userPrompt: "analyze the incident",
-          source: "team-delegation",
-        })
-      )
-      expect(executeAgentMock).toHaveBeenCalledWith(
-        "analyze the incident",
-        expect.objectContaining({ systemPrompt: "TWIN-INJECTED" })
-      )
+          question: "analyze the incident",
+          systemPrompt: "BASE",
+          background: { label: `team-delegation:${delegation.id}`, kind: "team-delegation" },
+        },
+        childId: delegation.targetId,
+      })
       expect(settled.status).toBe("completed")
       expect(settled.result).toBe("twin answer")
     })
 
-    it("degrades to the plain prompt when the twin runtime is unavailable", async () => {
-      tryBuildTwinDepsMock.mockResolvedValue(undefined)
-      executeAgentMock.mockResolvedValue({ text: "ok" })
-      const { completionPromise } = delegateToTwin({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        twinId: "tw1",
-        prompt: "p",
-        systemPrompt: "BASE",
-        reason: "r",
-      })
-      await completionPromise
-      expect(applyTeammateTwinContextMock).not.toHaveBeenCalled()
-      expect(executeAgentMock).toHaveBeenCalledWith(
-        "p",
-        expect.objectContaining({ systemPrompt: "BASE" })
-      )
-    })
-
-    it("defers to awaiting_approval and re-dispatches (with injection) on approval", async () => {
-      executeAgentMock.mockResolvedValue({ text: "late answer" })
+    it("defers to awaiting_approval and launches on approval", async () => {
       const { delegation, completionPromise } = delegateToTwin({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
@@ -272,50 +318,49 @@ describe("delegation-orchestrator", () => {
       })
       expect(delegation.status).toBe("awaiting_approval")
       await completionPromise
-      expect(applyTeammateTwinContextMock).not.toHaveBeenCalled()
+      expect(launchMock).not.toHaveBeenCalled()
       approveDelegation(delegation.id)
       await flush()
-      expect(applyTeammateTwinContextMock).toHaveBeenCalled()
-      expect(executeAgentMock).toHaveBeenCalledWith(
-        "p",
-        expect.objectContaining({ systemPrompt: "TWIN-INJECTED" })
-      )
-    })
-
-    it("cancelDelegation aborts the underlying background agent", () => {
-      const { delegation } = delegateToTwin({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        twinId: "tw1",
-        prompt: "p",
-        reason: "r",
-        awaitingApproval: true,
-      })
-      cancelDelegation(delegation.id)
-      expect(cancelAgentMock).toHaveBeenCalledWith(delegation.targetId)
-      expect(useAgentTeamStore.getState().delegations[delegation.id]!.status).toBe("cancelled")
+      expect(lastLaunch().input.target).toMatchObject({ kind: "twin", twinId: "tw1" })
+      expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
     })
   })
 
   describe("delegateToExternal", () => {
-    it("creates an active sub_agent delegation, fires the start hook, and executes", async () => {
+    it("launches an external child in the team's working directory and settles completed", async () => {
+      const team = useAgentTeamStore.getState().createTeam({ name: "Ext", task: "t" })
+      useAgentTeamStore.setState((s) => ({
+        teams: {
+          ...s.teams,
+          [team.id]: {
+            ...s.teams[team.id],
+            config: { ...s.teams[team.id].config, workingDir: "/repo" },
+          },
+        },
+      }))
+      autoOutcome = { status: "completed", text: "external result" }
       const { delegation, completionPromise } = delegateToExternal({
-        sourceTeamId: "team-1",
+        sourceTeamId: team.id,
         sourceTaskId: "task-1",
         targetAgentId: "claude-code",
         prompt: "do the thing",
         reason: "use external",
+        timeoutMs: 1_000,
       })
       expect(delegation.status).toBe("active")
       expect(delegation.targetType).toBe("sub_agent")
       expect(delegation.targetId).toBe("claude-code")
-      expect(dispatchOnTeamDelegationStart).toHaveBeenCalled()
       const settled = await completionPromise
-      expect(externalExecuteMock).toHaveBeenCalledWith(
-        "claude-code",
-        "do the thing",
-        expect.objectContaining({ signal: expect.any(AbortSignal) })
-      )
+      const { input } = lastLaunch()
+      expect(input.target).toEqual({
+        kind: "external",
+        agentId: "claude-code",
+        prompt: "do the thing",
+        workingDirectory: "/repo",
+        timeoutMs: 1_000,
+      })
+      // Not a Job Center entry; the launcher mints the child id.
+      expect(input.childId).toBeUndefined()
       expect(settled.status).toBe("completed")
       expect(settled.result).toBe("external result")
       expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
@@ -324,58 +369,35 @@ describe("delegation-orchestrator", () => {
       })
     })
 
-    it("settles to failed when the external run returns success=false", async () => {
-      externalExecuteMock.mockResolvedValue({ success: false, error: "agent exploded" })
-      const { completionPromise } = delegateToExternal({
+    it("settles to failed with the agent's error", async () => {
+      autoOutcome = { status: "failed", error: "agent exploded" }
+      const settled = await delegateToExternal({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
         targetAgentId: "codex",
         prompt: "x",
         reason: "y",
-      })
-      const settled = await completionPromise
+      }).completionPromise
       expect(settled.status).toBe("failed")
       expect(settled.result).toBe("agent exploded")
     })
 
-    it("places the agent before it runs and fails the delegation on a refusal (ADR-0224 A8)", async () => {
-      placeDispatchedAgentMock.mockClear()
-      placeDispatchedAgentMock.mockRejectedValueOnce(new Error("environment refused"))
-      const { completionPromise } = delegateToExternal({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        targetAgentId: "codex",
-        prompt: "x",
-        reason: "y",
-      })
-      const settled = await completionPromise
-      expect(placeDispatchedAgentMock).toHaveBeenCalledWith("codex", undefined, expect.anything())
-      expect(settled.status).toBe("failed")
-      expect(externalExecuteMock).not.toHaveBeenCalled()
-    })
-
-    it("settles to timeout when the watchdog fires", async () => {
-      externalExecuteMock.mockImplementation(
-        (_id: string, _p: string, opts: { signal: AbortSignal }) =>
-          new Promise((_resolve, reject) => {
-            opts.signal.addEventListener("abort", () => reject(new Error("aborted by watchdog")))
-          })
-      )
-      const { completionPromise } = delegateToExternal({
+    it("settles to timeout when the child's deadline ended it", async () => {
+      autoOutcome = { status: "failed", error: "external agent timed out", timedOut: true }
+      const settled = await delegateToExternal({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
         targetAgentId: "codex",
         prompt: "x",
         reason: "y",
         timeoutMs: 5,
-      })
-      const settled = await completionPromise
+      }).completionPromise
       expect(settled.status).toBe("timeout")
     })
   })
 
   describe("approveDelegation", () => {
-    it("flips awaiting_approval to active AND re-dispatches the background run", async () => {
+    it("flips awaiting_approval to active AND launches the background run", async () => {
       const { delegation } = delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
@@ -383,65 +405,40 @@ describe("delegation-orchestrator", () => {
         reason: "y",
         awaitingApproval: true,
       })
-      expect(executeAgentMock).not.toHaveBeenCalled()
+      expect(launchMock).not.toHaveBeenCalled()
       const after = approveDelegation(delegation.id)
       expect(after?.status).toBe("active")
       await flush()
-      expect(executeAgentMock).toHaveBeenCalledWith(
-        "investigate later",
-        expect.objectContaining({})
-      )
+      expect(lastLaunch().input.target).toMatchObject({
+        kind: "agent",
+        prompt: "investigate later",
+      })
       expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
     })
 
-    it("re-dispatches a deferred external run on approval", async () => {
+    it("launches a deferred external run on approval", async () => {
       isInQuietHoursMock.mockReturnValue(true)
-      const team = useAgentTeamStore.getState().createTeam({ name: "Quiet", task: "t" })
-      useAgentTeamStore.setState((s) => {
-        const existing = s.teams[team.id]
-        const updated: AgentTeam = {
-          ...existing,
-          config: {
-            ...existing.config,
-            // `config.governancePolicy` is optional, so spreading it would
-            // widen the required approval/budget/escalation fields to
-            // `| undefined`. Provide a complete policy literal instead; the
-            // orchestrator only reads `delivery.quietHours`.
-            governancePolicy: {
-              approval: { requirePlanApproval: false, requireDelegationApproval: false },
-              budget: {
-                tokenBudget: 0,
-                warningThreshold: 0.8,
-                criticalThreshold: 0.95,
-                onCritical: "notify",
-              },
-              escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
-              delivery: { quietHours: { from: "00:00", to: "23:59", tz: "UTC" } },
-            },
-          },
-        }
-        return { teams: { ...s.teams, [team.id]: updated } }
-      })
+      const teamId = seedTeamWithQuietHours()
       const { delegation } = delegateToExternal({
-        sourceTeamId: team.id,
+        sourceTeamId: teamId,
         sourceTaskId: "task-q",
         targetAgentId: "claude-code",
         prompt: "handoff payload",
         reason: "handoff",
       })
       expect(delegation.status).toBe("awaiting_approval")
-      expect(externalExecuteMock).not.toHaveBeenCalled()
+      expect(launchMock).not.toHaveBeenCalled()
       approveDelegation(delegation.id)
       await flush()
-      expect(externalExecuteMock).toHaveBeenCalledWith(
-        "claude-code",
-        "handoff payload",
-        expect.objectContaining({})
-      )
+      expect(lastLaunch().input.target).toMatchObject({
+        kind: "external",
+        agentId: "claude-code",
+        prompt: "handoff payload",
+      })
       expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
     })
 
-    it("no-ops on non-awaiting delegations", () => {
+    it("no-ops on non-awaiting delegations", async () => {
       const { delegation } = delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
@@ -449,121 +446,34 @@ describe("delegation-orchestrator", () => {
         reason: "y",
         awaitingApproval: true,
       })
+      autoOutcome = null
       // Approve once (→ active), then approving again is a no-op.
       approveDelegation(delegation.id)
       const after = approveDelegation(delegation.id)
       expect(after?.status).toBe("active")
+      await flush()
+      expect(launchMock).toHaveBeenCalledTimes(1)
     })
   })
 
   describe("cancelDelegation", () => {
-    it("flips active background delegation to cancelled and aborts the runtime signal", () => {
-      const { delegation } = delegateToBackground({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        prompt: "x",
-        reason: "y",
-      })
-      const after = cancelDelegation(delegation.id)
-      expect(after?.status).toBe("cancelled")
-      expect(cancelAgentMock).toHaveBeenCalledWith(delegation.targetId)
-      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
-        delegationId: delegation.id,
-        status: "cancelled",
-      })
-    })
-
-    it("no-ops on already-settled delegations", async () => {
-      // The external run settles itself; a cancel after that changes nothing.
-      const { delegation, completionPromise } = delegateToExternal({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        targetAgentId: "x",
-        prompt: "p",
-        reason: "y",
-      })
-      await completionPromise
-      cancelAgentMock.mockReset()
-      const after = cancelDelegation(delegation.id)
-      expect(after?.status).toBe("completed")
-      expect(cancelAgentMock).not.toHaveBeenCalled()
-    })
-
-    it("returns undefined for unknown delegationId", () => {
-      const after = cancelDelegation("missing")
-      expect(after).toBeUndefined()
-    })
-
-    // An external run is stopped through the signal handed to the manager:
-    // `ExternalAgentManager.execute` cancels the agent's session when it aborts.
-    it("aborts a running external delegation so the agent is stopped", async () => {
-      let runSignal: AbortSignal | undefined
-      externalExecuteMock.mockImplementation(
-        (_id: string, _p: string, opts: { signal: AbortSignal }) =>
-          new Promise((_resolve, reject) => {
-            runSignal = opts.signal
-            opts.signal.addEventListener("abort", () => reject(new Error("aborted")))
-          })
-      )
-      const { delegation, completionPromise } = delegateToExternal({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        targetAgentId: "codex",
-        prompt: "p",
-        reason: "y",
-      })
-      await flush()
-      expect(runSignal?.aborted).toBe(false)
-
-      cancelDelegation(delegation.id)
-
-      expect(runSignal?.aborted).toBe(true)
-      const settled = await completionPromise
-      expect(settled.status).toBe("cancelled")
-      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
-      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
-        delegationId: delegation.id,
-        status: "cancelled",
-      })
-    })
-
-    it("does not start the external agent when cancelled during placement", async () => {
-      let releasePlacement: () => void = () => {}
-      placeDispatchedAgentMock.mockImplementationOnce(
-        () => new Promise<undefined>((resolve) => (releasePlacement = () => resolve(undefined)))
-      )
-      const { delegation, completionPromise } = delegateToExternal({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        targetAgentId: "codex",
-        prompt: "p",
-        reason: "y",
-      })
-      await flush()
-      cancelDelegation(delegation.id)
-      releasePlacement()
-
-      const settled = await completionPromise
-      expect(externalExecuteMock).not.toHaveBeenCalled()
-      expect(settled.status).toBe("cancelled")
-      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
-    })
-
-    it("fires one complete hook when a cancelled background run ends afterwards", async () => {
-      let finishRun: (value: unknown) => void = () => {}
-      executeAgentMock.mockImplementation(() => new Promise((resolve) => (finishRun = resolve)))
+    it("stops the running child, flips the record to cancelled and fires one hook", async () => {
+      autoOutcome = null
       const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
         prompt: "x",
         reason: "y",
       })
-      cancelDelegation(delegation.id)
-      finishRun({ text: "late" })
+      await flush()
+      const { input } = lastLaunch()
+      expect(input.signal?.aborted).toBe(false)
 
-      const settled = await completionPromise
-      expect(settled.status).toBe("cancelled")
-      expect(finishAgentMock).toHaveBeenCalledWith(delegation.targetId, { text: "late" })
+      const after = cancelDelegation(delegation.id)
+
+      expect(after?.status).toBe("cancelled")
+      expect(input.signal?.aborted).toBe(true)
+      expect((await completionPromise).status).toBe("cancelled")
       expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
       expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
         delegationId: delegation.id,
@@ -571,35 +481,9 @@ describe("delegation-orchestrator", () => {
       })
     })
 
-    it("does not start a twin delegation cancelled while its persona loads", async () => {
-      let releaseDeps: () => void = () => {}
-      tryBuildTwinDepsMock.mockImplementationOnce(
-        () => new Promise((resolve) => (releaseDeps = () => resolve(undefined)))
-      )
-      const { delegation, completionPromise } = delegateToTwin({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        twinId: "tw1",
-        prompt: "x",
-        reason: "y",
-      })
-      await flush()
-      cancelDelegation(delegation.id)
-      releaseDeps()
-
-      const settled = await completionPromise
-      expect(settled.status).toBe("cancelled")
-      expect(registerAgentMock).not.toHaveBeenCalled()
-      expect(executeAgentMock).not.toHaveBeenCalled()
-      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
-    })
-
-    it("keeps a cancelled external delegation cancelled when a late result arrives", async () => {
-      // The run resolves after the cancel (the agent finished before the
-      // cancel reached it); that completion must not revive the delegation or
-      // tell consumers it completed.
-      let finishRun: (value: unknown) => void = () => {}
-      externalExecuteMock.mockImplementation(() => new Promise((resolve) => (finishRun = resolve)))
+    it("stops a child still being launched, and it never runs", async () => {
+      let release!: () => void
+      launchGate = new Promise<void>((resolve) => (release = resolve))
       const { delegation, completionPromise } = delegateToExternal({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
@@ -609,7 +493,33 @@ describe("delegation-orchestrator", () => {
       })
       await flush()
       cancelDelegation(delegation.id)
-      finishRun({ success: true, finalResponse: "late answer" })
+      release()
+
+      const settled = await completionPromise
+      expect(settled.status).toBe("cancelled")
+      expect(children).toHaveLength(0)
+      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    it("keeps a cancelled delegation cancelled when a late result arrives", async () => {
+      autoOutcome = null
+      launchMock.mockImplementationOnce(async (input: LaunchChildRunInput) => {
+        // An engine that finished before the stop reached it.
+        let settle!: (outcome: ChildRunOutcome) => void
+        const outcome = new Promise<ChildRunOutcome>((resolve) => (settle = resolve))
+        children.push({ input, executionRunId: "execution:job:late", settle })
+        return { started: true, childId: "late", executionRunId: "execution:job:late", outcome }
+      })
+      const { delegation, completionPromise } = delegateToExternal({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        targetAgentId: "codex",
+        prompt: "p",
+        reason: "y",
+      })
+      await flush()
+      cancelDelegation(delegation.id)
+      lastLaunch().settle({ status: "completed", text: "late answer" })
 
       const settled = await completionPromise
       expect(settled.status).toBe("cancelled")
@@ -619,36 +529,43 @@ describe("delegation-orchestrator", () => {
         expect.objectContaining({ status: "completed" })
       )
     })
+
+    it("never launches a deferred delegation cancelled before its approval", async () => {
+      const { delegation } = delegateToTwin({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        twinId: "tw1",
+        prompt: "p",
+        reason: "r",
+        awaitingApproval: true,
+      })
+      cancelDelegation(delegation.id)
+      expect(useAgentTeamStore.getState().delegations[delegation.id]!.status).toBe("cancelled")
+      approveDelegation(delegation.id)
+      await flush()
+      expect(launchMock).not.toHaveBeenCalled()
+    })
+
+    it("no-ops on already-settled delegations", async () => {
+      const { delegation, completionPromise } = delegateToExternal({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        targetAgentId: "x",
+        prompt: "p",
+        reason: "y",
+      })
+      await completionPromise
+      const after = cancelDelegation(delegation.id)
+      expect(after?.status).toBe("completed")
+      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
+    })
+
+    it("returns undefined for unknown delegationId", () => {
+      expect(cancelDelegation("missing")).toBeUndefined()
+    })
   })
 
   describe("quiet-hours gating", () => {
-    const seedTeamWithQuietHours = (): string => {
-      const team = useAgentTeamStore.getState().createTeam({ name: "Quiet", task: "t" })
-      useAgentTeamStore.setState((s) => ({
-        teams: {
-          ...s.teams,
-          [team.id]: {
-            ...s.teams[team.id],
-            config: {
-              ...s.teams[team.id].config,
-              governancePolicy: {
-                approval: { requirePlanApproval: false, requireDelegationApproval: false },
-                budget: {
-                  tokenBudget: 0,
-                  warningThreshold: 0.8,
-                  criticalThreshold: 0.95,
-                  onCritical: "notify",
-                },
-                escalation: { allowOperatorPatternOverride: true, pauseOnHighRisk: false },
-                delivery: { quietHours: { from: "00:00", to: "23:59", tz: "UTC" } },
-              },
-            },
-          },
-        },
-      }))
-      return team.id
-    }
-
     it("defers a background delegation to awaiting_approval during quiet hours", async () => {
       isInQuietHoursMock.mockReturnValue(true)
       const teamId = seedTeamWithQuietHours()
@@ -660,9 +577,8 @@ describe("delegation-orchestrator", () => {
       })
       expect(delegation.status).toBe("awaiting_approval")
       expect(delegation.metadata?.quietHoursDeferred).toBe(true)
-      expect(executeAgentMock).not.toHaveBeenCalled()
       await completionPromise
-      expect(executeAgentMock).not.toHaveBeenCalled()
+      expect(launchMock).not.toHaveBeenCalled()
     })
 
     it("force=true launches a background delegation even during quiet hours", async () => {
@@ -677,7 +593,7 @@ describe("delegation-orchestrator", () => {
       })
       expect(delegation.status).toBe("active")
       await completionPromise
-      expect(executeAgentMock).toHaveBeenCalledTimes(1)
+      expect(launchMock).toHaveBeenCalledTimes(1)
     })
 
     it("defers an external delegation to awaiting_approval during quiet hours", async () => {
@@ -693,18 +609,19 @@ describe("delegation-orchestrator", () => {
       expect(delegation.status).toBe("awaiting_approval")
       expect(delegation.metadata?.quietHoursDeferred).toBe(true)
       expect((await completionPromise).status).toBe("awaiting_approval")
-      expect(externalExecuteMock).not.toHaveBeenCalled()
+      expect(launchMock).not.toHaveBeenCalled()
     })
 
     it("does not gate when no quiet-hours policy is configured", async () => {
       isInQuietHoursMock.mockReturnValue(true) // predicate would say yes, but no policy
-      const { delegation } = delegateToBackground({
+      const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-no-policy",
         sourceTaskId: "task-1",
         prompt: "Go",
         reason: "r",
       })
       expect(delegation.status).toBe("active")
+      await completionPromise
     })
   })
 })
@@ -721,12 +638,11 @@ describe("delegateToTeam (team → team)", () => {
 
   beforeEach(() => {
     useAgentTeamStore.getState().reset()
+    __resetPendingDelegationRunsForTesting()
     dispatchOnTeamDelegationStart.mockReset()
     dispatchOnTeamDelegationComplete.mockReset()
-    teamStartMock.mockReset().mockResolvedValue(undefined)
-    teamGetMock.mockReset()
-    abortTeamMock.mockReset()
     isInQuietHoursMock.mockReturnValue(false)
+    resetLauncher()
   })
 
   it("rejects self-delegation as a cycle", async () => {
@@ -739,7 +655,7 @@ describe("delegateToTeam (team → team)", () => {
     expect(delegation.status).toBe("failed")
     expect(delegation.metadata?.error).toMatch(/cycle/)
     expect((await completionPromise).status).toBe("failed")
-    expect(teamStartMock).not.toHaveBeenCalled()
+    expect(launchMock).not.toHaveBeenCalled()
   })
 
   it("detects a multi-hop cycle in the active delegation graph", () => {
@@ -765,23 +681,27 @@ describe("delegateToTeam (team → team)", () => {
     expect(wouldCreateTeamCycle("a", "c")).toBe(false)
   })
 
-  it("runs the target team and settles completed with its finalResult", async () => {
-    teamGetMock.mockReturnValue({ id: "b" })
-    teamStartMock.mockImplementation(async () => {
-      seedTeam("b", { status: "completed", finalResult: "team B output" })
-    })
+  it("launches a Squad child of the source team's live run and settles with its result", async () => {
+    const parent = liveRun("a")
+    autoOutcome = { status: "completed", text: "team B output" }
     const { delegation, completionPromise } = delegateToTeam({
       sourceTeamId: "a",
       sourceTaskId: "t",
       targetTeamId: "b",
       reason: "split work",
+      ultracode: true,
     })
     expect(delegation.status).toBe("active")
     expect(dispatchOnTeamDelegationStart).toHaveBeenCalledWith(
       expect.objectContaining({ targetType: "team", targetId: "b" })
     )
     const settled = await completionPromise
-    expect(teamStartMock).toHaveBeenCalledWith("b", { origin: "delegation" })
+    expect(lastLaunch().input).toMatchObject({
+      parentRunId: parent,
+      // A team delegation runs the target Squad on its own objective.
+      target: { kind: "squad", squadId: "b", brief: "", origin: "delegation", ultracode: true },
+      surface: "agent-team",
+    })
     expect(settled.status).toBe("completed")
     expect(settled.result).toBe("team B output")
     expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith(
@@ -790,21 +710,19 @@ describe("delegateToTeam (team → team)", () => {
   })
 
   it("fails when the target team is not found", async () => {
-    teamGetMock.mockReturnValue(undefined)
-    const { completionPromise } = delegateToTeam({
+    launchRefusal = { reason: "engine_refused", detail: "squad_not_found" }
+    const settled = await delegateToTeam({
       sourceTeamId: "a",
       sourceTaskId: "t",
       targetTeamId: "ghost",
       reason: "x",
-    })
-    const settled = await completionPromise
+    }).completionPromise
     expect(settled.status).toBe("failed")
-    expect(teamStartMock).not.toHaveBeenCalled()
+    expect(settled.result).toBe("target team not found: ghost")
   })
 
-  it("fails when the target team run ends non-terminally", async () => {
-    teamGetMock.mockReturnValue({ id: "b" })
-    teamStartMock.mockImplementation(async () => seedTeam("b", { status: "failed" }))
+  it("fails when the target team is already running", async () => {
+    launchRefusal = { reason: "engine_refused", detail: "already_running" }
     const settled = await delegateToTeam({
       sourceTeamId: "a",
       sourceTaskId: "t",
@@ -812,9 +730,22 @@ describe("delegateToTeam (team → team)", () => {
       reason: "x",
     }).completionPromise
     expect(settled.status).toBe("failed")
+    expect(settled.result).toBe("team delegation refused: engine_refused (already_running)")
   })
 
-  it("defers to awaiting_approval inside quiet hours", async () => {
+  it("fails when the target team run fails", async () => {
+    autoOutcome = { status: "failed", error: "lead gave up" }
+    const settled = await delegateToTeam({
+      sourceTeamId: "a",
+      sourceTaskId: "t",
+      targetTeamId: "b",
+      reason: "x",
+    }).completionPromise
+    expect(settled.status).toBe("failed")
+    expect(settled.result).toBe("lead gave up")
+  })
+
+  it("defers to awaiting_approval inside quiet hours and runs once approved", async () => {
     isInQuietHoursMock.mockReturnValue(true)
     seedTeam("a", {
       config: {
@@ -829,35 +760,16 @@ describe("delegateToTeam (team → team)", () => {
     })
     expect(delegation.status).toBe("awaiting_approval")
     expect((await completionPromise).status).toBe("awaiting_approval")
-    expect(teamStartMock).not.toHaveBeenCalled()
+    expect(launchMock).not.toHaveBeenCalled()
+
+    approveDelegation(delegation.id)
+    await flush()
+    expect(lastLaunch().input.target).toMatchObject({ kind: "squad", squadId: "b" })
+    expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
   })
 
-  it("cancelDelegation aborts the target team run", () => {
-    teamGetMock.mockReturnValue({ id: "b" })
-    teamStartMock.mockReturnValue(new Promise(() => {})) // never settles
-    const { delegation } = delegateToTeam({
-      sourceTeamId: "a",
-      sourceTaskId: "t",
-      targetTeamId: "b",
-      reason: "x",
-    })
-    cancelDelegation(delegation.id)
-    expect(abortTeamMock).toHaveBeenCalledWith("b", expect.any(String))
-    expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("cancelled")
-  })
-
-  it("keeps a cancelled team delegation cancelled when the aborted run settles", async () => {
-    teamGetMock.mockReturnValue({ id: "b" })
-    let endRun: () => void = () => {}
-    teamStartMock.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          endRun = () => {
-            seedTeam("b", { status: "failed" })
-            resolve()
-          }
-        })
-    )
+  it("cancelDelegation stops the target team run and keeps the record cancelled", async () => {
+    autoOutcome = null
     const { delegation, completionPromise } = delegateToTeam({
       sourceTeamId: "a",
       sourceTaskId: "t",
@@ -866,7 +778,7 @@ describe("delegateToTeam (team → team)", () => {
     })
     await flush()
     cancelDelegation(delegation.id)
-    endRun()
+    expect(lastLaunch().input.signal?.aborted).toBe(true)
 
     const settled = await completionPromise
     expect(settled.status).toBe("cancelled")
@@ -900,8 +812,7 @@ describe("delegateToTeam (team → team)", () => {
   }
 
   it("persists a secret-free HandoffEnvelope with identity chain and depth", () => {
-    teamGetMock.mockReturnValue({ id: "b" })
-    teamStartMock.mockReturnValue(new Promise(() => {}))
+    autoOutcome = null
     const { delegation } = delegateToTeam({
       sourceTeamId: "a",
       sourceTaskId: "task-9",
@@ -927,8 +838,7 @@ describe("delegateToTeam (team → team)", () => {
     // Active chain: root → a → b, so b sits at delegation depth 2.
     seedActiveEdge("d-root-a", "root", "a")
     seedActiveEdge("d-a-b", "a", "b")
-    teamGetMock.mockReturnValue({ id: "c" })
-    teamStartMock.mockReturnValue(new Promise(() => {}))
+    autoOutcome = null
 
     // From depth-1 team "a": child would be depth 2 — allowed.
     const fromA = delegateToTeam({
@@ -939,9 +849,10 @@ describe("delegateToTeam (team → team)", () => {
     })
     expect(fromA.delegation.status).toBe("active")
     expect(fromA.delegation.envelope?.identity.depth).toBe(2)
+    await flush()
 
     // From depth-2 team "b": child would be depth 3 — refused before dispatch.
-    teamStartMock.mockClear()
+    launchMock.mockClear()
     const fromB = delegateToTeam({
       sourceTeamId: "b",
       sourceTaskId: "t",
@@ -951,12 +862,11 @@ describe("delegateToTeam (team → team)", () => {
     expect(fromB.delegation.status).toBe("failed")
     expect(fromB.delegation.metadata?.errorCode).toBe("delegation-depth-exceeded")
     expect((await fromB.completionPromise).status).toBe("failed")
-    expect(teamStartMock).not.toHaveBeenCalled()
+    expect(launchMock).not.toHaveBeenCalled()
   })
 
   it("honors a per-team maxTeamDelegationDepth override", () => {
     seedTeam("a", { config: { maxTeamDelegationDepth: 0 } })
-    teamGetMock.mockReturnValue({ id: "b" })
     const { delegation } = delegateToTeam({
       sourceTeamId: "a",
       sourceTaskId: "t",

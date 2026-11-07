@@ -337,6 +337,61 @@ describe("createSquadRunRecords", () => {
     expect(await getDb().agentTeamRuns.count()).toBe(2)
   })
 
+  it("links a launched Squad run to the run that launched it, without replacing anything", async () => {
+    const parent = await createSquadRunRecords(seed)
+    const launched = await createSquadRunRecords({
+      ...seed,
+      runId: "run_team_child",
+      teamId: "team-2",
+      launchedByRunId: parent.executionRunId,
+      startedAt: 2_000,
+    })
+    expect(launched.created).toBe(true)
+    expect(launched.replacedRunId).toBeUndefined()
+    // It acts as the run that launched it: same root, same trigger.
+    expect(launched.executionRun).toMatchObject({
+      parentRunId: parent.executionRunId,
+      actingIdentity: expect.objectContaining({
+        rootRunId: parent.executionRunId,
+        trigger: parent.executionRun.actingIdentity?.trigger,
+      }),
+    })
+    // The launching run keeps running.
+    expect((await getDb().agentTeamRuns.get(seed.runId))?.status).toBe("queued")
+  })
+
+  it("does not take a launched child of another Squad for the parent's replacement", async () => {
+    const parent = await createSquadRunRecords(seed)
+    await createSquadRunRecords({
+      ...seed,
+      runId: "run_team_child",
+      teamId: "team-2",
+      launchedByRunId: parent.executionRunId,
+      startedAt: 2_000,
+    })
+    await getDb().agentTeamRuns.update(seed.runId, { status: "needs_input" })
+    const replacement = await createSquadRunRecords({
+      ...seed,
+      runId: "replacement",
+      parentRunId: parent.executionRunId,
+      startedAt: 3_000,
+    })
+    expect(replacement).toMatchObject({ created: true, replacedRunId: seed.runId })
+  })
+
+  it("prefers the replaced run over the launcher when a replacement names both", async () => {
+    const parent = await createSquadRunRecords(seed)
+    await getDb().agentTeamRuns.update(seed.runId, { status: "needs_input" })
+    const replacement = await createSquadRunRecords({
+      ...seed,
+      runId: "replacement",
+      parentRunId: parent.executionRunId,
+      launchedByRunId: "execution:team:someone-else",
+      startedAt: 3_000,
+    })
+    expect(replacement.executionRun.parentRunId).toBe(parent.executionRunId)
+  })
+
   it("converges concurrent restart deliveries onto one replacement", async () => {
     await createSquadRunRecords(seed)
     await getDb().agentTeamRuns.update(seed.runId, { status: "needs_input" })

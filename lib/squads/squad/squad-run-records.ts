@@ -49,6 +49,11 @@ export interface SquadRunSeed {
   executionConstraints?: AgentTeamRunRecord["executionConstraints"]
   /** Previous run this one replaces (a `retry`). Linked by the control plane too. */
   parentRunId?: string
+  /**
+   * The run that launched this one as its child (ADR-0252 §3). Becomes the
+   * row's parent, without replacing anything. Ignored beside `parentRunId`.
+   */
+  launchedByRunId?: string
   startedAt: number
 }
 
@@ -103,12 +108,20 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
           .where("parentRunId")
           .equals(seed.parentRunId)
           .toArray()
-        const replacement = replacements.find((row) => row.kind === "team")
-        if (replacement) {
-          const run = await db.agentTeamRuns.get(replacement.sourceId)
-          if (!run || run.teamId !== seed.teamId) {
-            throw new Error("Squad replacement history is incomplete or belongs to another Squad")
-          }
+        // A run's `team` children are its replacements and the Squad runs it
+        // launched (`launchedByRunId`). A replacement runs the same Squad; a
+        // launched run never does, because a Squad cannot delegate to itself.
+        let replacement: ExecutionRun | undefined
+        let run: AgentTeamRunRecord | undefined
+        for (const row of replacements.filter((candidate) => candidate.kind === "team")) {
+          const candidate = await db.agentTeamRuns.get(row.sourceId)
+          if (!candidate) throw new Error("Squad replacement history is incomplete")
+          if (candidate.teamId !== seed.teamId) continue
+          replacement = row
+          run = candidate
+          break
+        }
+        if (replacement && run) {
           return {
             runId: run.id,
             executionRunId: replacement.id,
@@ -200,10 +213,11 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
       }
       let executionRun = existingExecution
       if (!executionRun) {
+        const parentRunId = seed.parentRunId ?? seed.launchedByRunId
         executionRun = {
           id: executionRunId,
           ...recordedRunMetadata(
-            seed.parentRunId
+            parentRunId
               ? "child"
               : seed.localAuthorization === LOCAL_PERSON_RUN
                 ? "local"
@@ -215,7 +229,7 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
               ...(seed.localAuthorization === LOCAL_PERSON_RUN
                 ? { authorizingPrincipal: { kind: "local-person" as const } }
                 : {}),
-              parent: seed.parentRunId ? await db.executionRuns.get(seed.parentRunId) : undefined,
+              parent: parentRunId ? await db.executionRuns.get(parentRunId) : undefined,
               requesters: requestersFromRunOrigin(seed.executionConstraints?.triggeredFrom),
               authority: authorityFromPermissionCeiling(
                 seed.executionConstraints?.permissionCeiling
@@ -224,7 +238,7 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
           ),
           kind: "team",
           sourceId: seed.runId,
-          ...(seed.parentRunId ? { parentRunId: seed.parentRunId } : {}),
+          ...(parentRunId ? { parentRunId } : {}),
           ...(seed.projectId ? { projectId: seed.projectId } : {}),
           ...(seed.sessionId ? { sessionId: seed.sessionId } : {}),
           title: seed.objective,

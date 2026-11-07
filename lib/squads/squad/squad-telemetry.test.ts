@@ -9,7 +9,6 @@ import {
   beginSquadReviewSpan,
   endSquadReviewSpan,
   endSquadRunSpan,
-  recordSquadDispatchLatency,
   recordSquadDuplicateControl,
   recordSquadRecoveryOutcome,
   squadDuplicateControlCount,
@@ -75,17 +74,8 @@ describe("squad telemetry", () => {
     expect(endSquadReviewSpan({ interruptId: "i1", outcome: "deny", now })).toBeUndefined()
   })
 
-  it("records dispatch latency, recovery and duplicate controls as events on the root", () => {
+  it("records recovery and duplicate controls as events on the root", () => {
     startSquadRunSpan({ runId: "r1", teamId: "t1", now })
-    expect(
-      recordSquadDispatchLatency({
-        runId: "r1",
-        childRunId: "c1",
-        latencyMs: 250,
-        hostRef: "h",
-        now,
-      })
-    ).toBe(true)
     expect(
       recordSquadRecoveryOutcome({ runId: "r1", choice: "retry_same_host", applied: true, now })
     ).toBe(true)
@@ -102,12 +92,10 @@ describe("squad telemetry", () => {
     expect(written).toHaveLength(1)
     const root = written[0]!
     expect(root.events?.map((event) => event.name)).toEqual([
-      "squad.dispatch",
       "squad.recovery",
       "squad.duplicate_control",
       "squad.duplicate_control",
     ])
-    expect(root.events?.[0]?.attributes).toEqual({ childRunId: "c1", latencyMs: 250, hostRef: "h" })
     expect(root.metadata).toMatchObject({ terminalStatus: "completed", duplicateControls: 2 })
     expect(root.usage).toMatchObject({ inputTokens: 10, outputTokens: 5 })
   })
@@ -122,10 +110,7 @@ describe("squad telemetry", () => {
     expect(written).toHaveLength(1)
   })
 
-  it("dispatch latency without a root is dropped, recovery without a root emits its own span", () => {
-    expect(recordSquadDispatchLatency({ runId: "ghost", childRunId: "c", latencyMs: 1, now })).toBe(
-      false
-    )
+  it("recovery without a root emits its own span", () => {
     expect(
       recordSquadRecoveryOutcome({
         runId: "ghost",

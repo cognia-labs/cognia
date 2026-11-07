@@ -169,28 +169,49 @@
 
 ### 6.2 `launchChildRun`
 
-新增 `lib/execution/launch-child-run.ts`：
+新增 `lib/execution/launch-child-run.ts`（内核）。按实际实现：
 
 ```ts
 interface LaunchChildRunInput {
-  parentRunId: string
-  delegationRunId?: string // 属于某个委派时
+  parentRunId?: string
+  delegationRunId?: string // 属于某个委派时，它就是父运行
   target:
-    | { kind: "agent"; agentId: string; prompt: string; background: boolean }
-    | { kind: "external"; integrationId: string; prompt: string }
-    | { kind: "twin"; twinId: string; question: string }
-    | { kind: "squad"; squadId: string; brief: string; origin: SquadRunOrigin }
-  grant: AgentCapabilityGrantV1 // ADR-0198
-  sessionId?: string
-  actingIdentity?: ActingIdentityV1 // ADR-0243，沿用父运行
+    | { kind: "agent"; prompt: string; systemPrompt?: string; background?: JobCenterEntry }
+    | {
+        kind: "external"
+        agentId: string
+        prompt: string
+        systemPrompt?: string
+        workingDirectory?: string
+        timeoutMs?: number
+      }
+    | {
+        kind: "twin"
+        twinId: string
+        question: string
+        systemPrompt?: string
+        background?: JobCenterEntry
+      }
+    | { kind: "squad"; squadId: string; brief: string; origin: string; ultracode?: boolean }
+  grants?: readonly AgentCapabilityGrantV1[] // ADR-0198，与 executeAgent 一致是数组
+  sessionId?: string // 缺省取父运行的会话
+  title: string // id 或固定短语，不放提示词
+  childId?: string
+  surface?: SpanSurface
+  signal?: AbortSignal // 停止：引擎启动前中止则什么都不启动
 }
+// → { started: true; childId; executionRunId; outcome: Promise<ChildRunOutcome> }
+//   | { started: false; reason: "parent_not_found" | "grant_not_honoured" | "engine_unavailable" | "engine_refused" | "journal_failed" | "cancelled"; detail? }
 ```
 
-- 先写 `executionRuns` 行（kind 由目标决定：`job`、`team`），带 `parentRunId`，再启动引擎。写行与绑定同一 tick 内完成，沿用 ADR-0137 “先绑定再写 journal” 的顺序。
-- 引擎适配：`agent` → `executeAgent`；`external` → `ExternalAgentManager`；`twin` → `delegateToTwin`；`squad` → `startSquadRun`（P5 的 builder）。
-- 记录派发延迟（原 `recordSquadDispatchLatency`）。
-- 调用方迁移：`lib/claude/agents/dispatch-run.ts`（`startDispatchRun`）、`cli/src/agent/subagent-dispatch.ts`、`delegation-orchestrator.ts` 的 background/external/twin/team 分支、`lib/plugin/agent-sdk/dispatch.ts`（`dispatchSubagent` 与 `agentTeamManager` 分支）、`lib/best-of-n/runtime.ts` 与 `external.ts` 的候选。
-- `delegation-orchestrator.ts` 只留审批、深度、环检测，作为守卫调用。
+- 结果契约 `types/execution/child-run.ts`：`ChildRunOutcome { status: completed|failed|cancelled; text?; error?; timedOut? }`、`StartedChildEngine { outcome; stop }`。文本和错误只交给调用方，不进 journal，不进 span。
+- 引擎：`agent` → `executeAgent`、`external` → 托管主机上先 `placeDispatchedAgent`，再在截止时间内调 `ExternalAgentManager.execute`，这两个都是内核导入。`twin` 和 `squad` 是模块拥有的能力，走端口：`types/modules/ports/twin-answer.ts`、`types/modules/ports/squad-launch.ts`，由 squads 清单 `provides` 提供（`lib/squads/ports/`）。twin 端口在 twin 模块有清单后迁过去，契约不变。
+- 行的写入：`agent`/`external`/`twin` 由启动器先写 `execution:job:<childId>`（`startToolExecutionRun`，`parentRunId` 加上从父运行继承的身份），然后才登记到 Job Center、启动引擎。这样 `job-bridge` 的投影会找到已有行，不会写出无父的行（它在 6.3 删除）。最后由启动器按结果落定。`squad` 的 `team` 行由小队运行在自己的事务里写：`startSquadRun` / `createSquadRunRecords` 新增 `launchedByRunId`，写成父链接和 `child` 身份，不带替换语义。同时有 `parentRunId`（替换）时以替换为准。替换查找改为只认同一小队的 `team` 子行，被启动的其他小队子运行不再被误判成替换。
+- 父运行必须存在，否则拒绝（`parent_not_found`），不会挂一个悬空链接。
+- 授权：每个引擎声明自己应用哪些授权字段（`agent`、`twin` 全部；`external`、`squad` 一个都不应用）。授权设了引擎会忽略的字段时，在写任何东西之前拒绝（`grant_not_honoured`）。
+- 派发延迟：每个子运行在落定时发一条完成的 agent-trace span（`invoke_agent`，provider `cognia.subagent|external|twin|team`，`handoff` 从父到子，`child.dispatch` 事件带 `latencyMs`），只带 id 和代码。`recordSquadDispatchLatency`（无生产调用方）删除。
+- 本切片迁移：`delegation-orchestrator.ts` 的 background/external/twin/team 四个分支全部走 `launchChildRun`。编排器只留安静时段、审批、深度、环检测，以及记录和钩子。父运行：调用方给出且存在的运行（工作流节点传 `execution:workflow:<runId>`）优先，否则用来源小队的 live 运行行，否则无父。取消统一由 `AbortController` 交给启动器，不再分别调 `cancelAgent` / `abortTeam`。顺带修复：安静时段推迟的 team 委派在批准后会真正启动（原来批准后什么都不跑）。
+- 其余调用方按切片迁移：`dispatch-run.ts`（`startDispatchRun`）与 `background-tasks/redispatch.ts`、`lib/plugin/agent-sdk/dispatch.ts`（`dispatchSubagent` 与 `agentTeamManager` 分支）及其他 `dispatchSubagent` 调用方、`lib/best-of-n/runtime.ts` 与 `external.ts` 的候选。CLI `subagent-dispatch.ts` 暂不迁移：CLI 进程没有 `executionRuns` 账本（D13，残余 X5）。
 
 ### 6.3 追踪器收敛
 

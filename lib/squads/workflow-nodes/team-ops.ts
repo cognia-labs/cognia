@@ -215,7 +215,13 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
     taskId = tracking.id
   }
 
-  const orchestrator = await import("@/lib/squads/delegation-orchestrator")
+  const [orchestrator, { workflowExecutionRunId }] = await Promise.all([
+    import("@/lib/squads/delegation-orchestrator"),
+    import("@/lib/execution/workflow-bridge"),
+  ])
+  // The delegated child hangs under this workflow run when its row exists,
+  // otherwise under the team's live run (`resolveDelegationParent`).
+  const parentRunId = workflowExecutionRunId(ctx.runId)
   let launched: {
     delegation: import("@/types/agent/agent-team").TeamDelegationRecord
     completionPromise: Promise<import("@/types/agent/agent-team").TeamDelegationRecord>
@@ -231,6 +237,7 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
         prompt: prompt as string,
         ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
         reason,
+        parentRunId,
         ...(params.force !== undefined ? { force: params.force } : {}),
       })
       break
@@ -242,6 +249,7 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
         prompt: prompt as string,
         ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
         reason,
+        parentRunId,
         ...(params.force !== undefined ? { force: params.force } : {}),
       })
       break
@@ -258,6 +266,7 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
         prompt: prompt as string,
         ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
         reason,
+        parentRunId,
         ...(params.force !== undefined ? { force: params.force } : {}),
       })
       break
@@ -272,6 +281,7 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
         sourceTaskId: taskId,
         targetTeamId,
         reason,
+        parentRunId,
         ...(params.force !== undefined ? { force: params.force } : {}),
         ...(params.ultracode !== undefined ? { ultracode: params.ultracode } : {}),
       })

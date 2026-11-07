@@ -330,6 +330,32 @@ describe("startSquadRun: fail-closed record creation", () => {
     expect(h.seeds[0]?.parentRunId).toBe("execution:team:old")
   })
 
+  it("links a launched run to the run that launched it, and refuses while the Squad is busy", async () => {
+    const h = harness()
+    await start(h, { launchedByRunId: "execution:team:launcher" })
+    expect(h.seeds[0]).toMatchObject({ launchedByRunId: "execution:team:launcher" })
+    expect(h.seeds[0]?.parentRunId).toBeUndefined()
+
+    // A launch is not a replacement: a live run still holds the Squad.
+    const busy = harness({ liveRunId: "live" })
+    expect(await start(busy, { launchedByRunId: "execution:team:launcher" })).toMatchObject({
+      started: false,
+      reason: "already_running",
+      runId: "live",
+    })
+    expect(busy.seeds).toEqual([])
+  })
+
+  it("keeps a replacement's parent the replaced run when a launcher is also named", async () => {
+    const h = harness()
+    await start(h, {
+      parentRunId: "execution:team:old",
+      launchedByRunId: "execution:team:launcher",
+    })
+    expect(h.seeds[0]?.parentRunId).toBe("execution:team:old")
+    expect(h.seeds[0]?.launchedByRunId).toBeUndefined()
+  })
+
   it("returns the canonical replacement identity when a parent restart is replayed", async () => {
     const h = harness({ liveRunId: "canonical-replacement" })
     h.deps.createRunRecords = async () => ({

@@ -304,6 +304,8 @@ describe("runTeamDelegate", () => {
         sourceTaskId: "task_new",
         twinId: "tw_1",
         prompt: "help",
+        // The child hangs under this workflow run.
+        parentRunId: "execution:workflow:run_1",
       })
     )
     expect(result.output).toMatchObject({
@@ -335,7 +337,10 @@ describe("runTeamDelegate", () => {
       makeCtx({ teamId: "team_1", target: "external", targetAgentId: "claude-code", prompt: "p" })
     )
     expect(delegateToExternalMock).toHaveBeenCalledWith(
-      expect.objectContaining({ targetAgentId: "claude-code" })
+      expect.objectContaining({
+        targetAgentId: "claude-code",
+        parentRunId: "execution:workflow:run_1",
+      })
     )
 
     delegateToTeamMock.mockReturnValue(settled("completed"))
@@ -343,7 +348,11 @@ describe("runTeamDelegate", () => {
       makeCtx({ teamId: "team_1", target: "team", targetTeamId: "team_2", ultracode: true })
     )
     expect(delegateToTeamMock).toHaveBeenCalledWith(
-      expect.objectContaining({ targetTeamId: "team_2", ultracode: true })
+      expect.objectContaining({
+        targetTeamId: "team_2",
+        ultracode: true,
+        parentRunId: "execution:workflow:run_1",
+      })
     )
   })
 
