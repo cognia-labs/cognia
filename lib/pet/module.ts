@@ -42,6 +42,7 @@ export default defineHostModule({
     "squads",
     "terminal",
     "twin",
+    "workflow",
   ],
   // It speaks through the `speech` port, and stays silent without one.
   requires: ["speech?"],
@@ -58,6 +59,7 @@ export default defineHostModule({
     "lib/pet/remote/client.ts",
     "lib/pet/runtime/pet-view.ts",
     "lib/pet/settings.ts",
+    "lib/pet/workflow-trigger.ts",
   ],
   // The pet's preferences; only `lib/pet/settings.ts` writes them, and the
   // Pet section resets and reviews them.
@@ -110,4 +112,7 @@ export default defineHostModule({
   // Its persona, soul and sprite-hatch prompts, for the Prompt Center.
   prompts: () => import("./prompts"),
   messages: "pet",
+  // Its workflow nodes (ADR-0250 §14 `workflowNodes`): the pet interaction and the pet-event
+  // trigger's pass-through. The workflow engine loads them before it looks an executor up.
+  workflowNodes: { load: () => import("./workflow-nodes") },
 })

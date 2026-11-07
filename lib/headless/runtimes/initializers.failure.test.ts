@@ -27,7 +27,7 @@ jest.mock("@/lib/workflow/runtime/trigger-subscriptions", () => ({
   initTriggerSubscriptions: jest.fn(),
   disposeTriggerSubscriptions: jest.fn(),
 }))
-jest.mock("@/lib/workflow/runtime/pet-event-trigger", () => ({
+jest.mock("@/lib/pet/workflow-trigger", () => ({
   initPetEventTrigger: jest.fn(),
   disposePetEventTrigger: jest.fn(),
 }))

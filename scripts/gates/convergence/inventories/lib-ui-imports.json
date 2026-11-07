@@ -785,8 +785,8 @@
       "typeOnly": true
     },
     {
-      "key": "lib/workflow/nodes/artifacts/index.ts",
-      "owner": "lib/workflow",
+      "key": "lib/artifacts/workflow-nodes.ts",
+      "owner": "lib/artifacts",
       "note": "",
       "imports": [
         "static"

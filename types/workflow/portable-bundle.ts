@@ -1,4 +1,4 @@
-import type { TemplateDefinitionEnvelope } from "@/lib/templates/contracts"
+import type { TemplateDefinitionEnvelope } from "@cognia/plugin-contract/lib/templates/contracts"
 import type { VisualWorkflow, WorkflowInterface } from "./visual"
 
 export interface WorkflowPortableDependency {

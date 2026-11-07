@@ -1,4 +1,8 @@
-import type { TemplateDefinitionEnvelope, TemplateJson, TemplateTrust } from "./contracts"
+import type {
+  TemplateDefinitionEnvelope,
+  TemplateJson,
+  TemplateTrust,
+} from "@cognia/plugin-contract/lib/templates/contracts"
 import type {
   StoredTemplatePackage,
   TemplateDerivation,

@@ -79,4 +79,8 @@ export default defineHostModule({
     },
     load: () => import("./agent-tools"),
   },
+  // Its workflow nodes (ADR-0250 §14 `workflowNodes`): the dock command, the persistent sessions
+  // (which register their run-end release) and the script-file node. The workflow engine loads
+  // them before it looks an executor up.
+  workflowNodes: { load: () => import("./workflow-nodes") },
 })

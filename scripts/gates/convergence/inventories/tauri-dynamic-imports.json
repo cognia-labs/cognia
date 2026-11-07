@@ -487,9 +487,9 @@
       "staticAlsoInClassA": false
     },
     {
-      "key": "lib/workflow/nodes/terminal/session.ts",
-      "file": "lib/workflow/nodes/terminal/session.ts",
-      "owner": "lib/workflow",
+      "key": "lib/terminal/workflow-nodes/session.ts",
+      "file": "lib/terminal/workflow-nodes/session.ts",
+      "owner": "lib/terminal",
       "note": "",
       "staticAlsoInClassA": false
     },

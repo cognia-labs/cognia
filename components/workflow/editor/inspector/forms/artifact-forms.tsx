@@ -29,7 +29,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { Field, FieldGroup, patchParam, readString } from "./shared"
 import { ExpressionField } from "./shared/expression-field"
-import { ARTIFACT_TYPES } from "@/lib/artifacts/constants"
+import { ARTIFACT_TYPES } from "@/types/artifact/artifact-types"
 
 type Params = Record<string, unknown>
 interface ConfigProps {

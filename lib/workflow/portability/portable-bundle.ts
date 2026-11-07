@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db/schema"
 import type { TemplateDefinitionRow } from "@/lib/db/template-platform"
-import { verifyTemplateDefinitionHash } from "@/lib/templates/contracts"
+import { verifyTemplateDefinitionHash } from "@cognia/plugin-contract/lib/templates/contracts"
 import { validateWorkflow } from "@/lib/workflow/definition/validate"
 import {
   WORKFLOW_NODE_KINDS,

@@ -6,7 +6,7 @@ import type {
   WorkflowAppRelease,
 } from "@/types/workflow/app"
 import { createWorkflowDependencyLockForVersion } from "@/lib/workflow/runtime/execution-authority"
-import { assertKnowledgeBaseRevisionBindings } from "@/lib/knowledge-base/revisions"
+import { knowledgeBaseRevisions } from "@/lib/workflow/runtime/knowledge-revisions"
 import {
   assertWorkflowReviewGate,
   markWorkflowReviewPublished,
@@ -407,7 +407,7 @@ export async function publishWorkflowApp(input: {
   dependencyLock.plugins = await assertWorkflowPluginPublicationPreflight(preliminaryVersion)
   for (const [knowledgeBaseId, binding] of Object.entries(preliminaryApp.draft.knowledgeBindings)) {
     const generationIds = Array.isArray(binding) ? binding : [binding]
-    await assertKnowledgeBaseRevisionBindings(knowledgeBaseId, generationIds)
+    await (await knowledgeBaseRevisions()).assertBindings(knowledgeBaseId, generationIds)
     for (const key of Object.keys(dependencyLock.indexes)) {
       if (key.startsWith(`knowledge:${knowledgeBaseId}:`)) delete dependencyLock.indexes[key]
     }

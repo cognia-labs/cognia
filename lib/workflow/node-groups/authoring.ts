@@ -6,7 +6,10 @@ import {
   type WorkflowNodeGroupNode,
 } from "@cognia/plugin-sdk/templates"
 import { TemplateCatalog, templateCatalog } from "@/lib/templates/catalog"
-import { createTemplateDefinition, type TemplateJson } from "@/lib/templates/contracts"
+import {
+  createTemplateDefinition,
+  type TemplateJson,
+} from "@cognia/plugin-contract/lib/templates/contracts"
 import type { TemplateRepository } from "@/lib/templates/repository"
 import { DexieTemplateRepository } from "@/lib/db/template-platform"
 import { parseExpression, tokenize } from "@/lib/workflow/runtime/expression"

@@ -1423,7 +1423,7 @@ export const DESKTOP_EVENT_KINDS = [
 export { CONNECTOR_SYSTEM_EVENT_KINDS } from "@/lib/workflow/nodes/params-schemas"
 
 // ── trigger.pet.event ─────────────────────────────────────────────────────
-// Pet lifecycle event bridge. Mirrors `lib/workflow/runtime/pet-event-trigger.ts`.
+// Pet lifecycle event bridge. Mirrors `lib/pet/workflow-trigger.ts`.
 export const PET_EVENT_KINDS = ["levelUp", "evolved", "achievementUnlocked", "unwell"] as const
 
 // ── action.pet.interact ───────────────────────────────────────────────────

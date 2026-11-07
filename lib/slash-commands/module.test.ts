@@ -15,8 +15,7 @@ describe("the slash-commands manifest", () => {
     expect(typeof toolFamily.surface).toBe("function")
   })
 
-  it("contributes the workflow Copilot prompts lazily", async () => {
-    const { prompts } = await slashCommands.prompts!()
-    expect(prompts.length).toBeGreaterThan(0)
+  it("contributes no prompts: the workflow Copilot turns are the workflow module's", () => {
+    expect("prompts" in slashCommands).toBe(false)
   })
 })

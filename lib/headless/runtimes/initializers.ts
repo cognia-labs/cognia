@@ -85,7 +85,7 @@ registerHeadlessRuntime({
       { registerThreadHandoffDelivery },
     ] = await Promise.all([
       import("@/lib/workflow/runtime/trigger-subscriptions"),
-      import("@/lib/workflow/runtime/pet-event-trigger"),
+      import("@/lib/pet/workflow-trigger"),
       import("@/lib/workflow/runtime/issue-event-trigger"),
       import("@/lib/workflow/runtime/plan-event-trigger"),
       import("@/lib/workflow/runtime/memory-written-trigger"),

@@ -135,7 +135,7 @@ jest.mock("@/lib/workflow/editor/mention-expand", () => ({
   expandWorkflowMentions: (x: string) => x,
   snapshotFromEditorState: () => ({}),
 }))
-jest.mock("@/lib/slash-commands/actions/workflow", () => ({
+jest.mock("@/lib/workflow/editor/copilot-slash-commands", () => ({
   WORKFLOW_COPILOT_DISPATCH_EVENT: "workflow-copilot-dispatch",
   buildWorkflowSlashPrompt: () => null,
 }))

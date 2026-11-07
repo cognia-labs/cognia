@@ -22,10 +22,7 @@ import {
   initDesktopEventTrigger,
   disposeDesktopEventTrigger,
 } from "@/lib/workflow/runtime/desktop-event-trigger"
-import {
-  initPetEventTrigger,
-  disposePetEventTrigger,
-} from "@/lib/workflow/runtime/pet-event-trigger"
+import { initPetEventTrigger, disposePetEventTrigger } from "@/lib/pet/workflow-trigger"
 import {
   disposeIssueEventTrigger,
   initIssueEventTrigger,

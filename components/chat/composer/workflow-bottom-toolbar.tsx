@@ -57,7 +57,7 @@ import {
 } from "@/lib/workflow/editor/workflow-editor-context"
 import type { EditorState } from "@/lib/workflow/editor/store"
 import { buildMentionableWorkflowElements } from "@/lib/workflow/editor/use-mentionable-workflow-elements"
-import { dispatchWorkflowSlashAction } from "@/lib/slash-commands/actions/workflow"
+import { dispatchWorkflowSlashAction } from "@/lib/workflow/editor/copilot-slash-commands"
 import { useComposerSessionId } from "./composer-session-context"
 
 interface WorkflowBottomToolbarProps {

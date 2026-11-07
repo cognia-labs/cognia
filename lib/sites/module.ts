@@ -16,6 +16,7 @@ export default defineHostModule({
     "scheduler",
     "share",
     "terminal",
+    "workflow",
   ],
   // The status badge the device pages show, the build, publish and Cloudflare
   // steps the workflow nodes drive, and the agent's tools.
@@ -42,4 +43,7 @@ export default defineHostModule({
     },
     load: () => import("./agent-tools"),
   },
+  // Its workflow nodes (ADR-0250 §14 `workflowNodes`): the Cognia Sites build, deploy, rollback
+  // and status actions. The workflow engine loads them before it looks an executor up.
+  workflowNodes: { load: () => import("./workflow-nodes") },
 })

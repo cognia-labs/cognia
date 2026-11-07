@@ -44,6 +44,7 @@ import type {
 // Importing the built-ins triggers their registration side effect.
 import "@/lib/workflow/nodes/built-ins"
 import { createRunLogger, listRunEvents } from "./event-log"
+import { releaseRegisteredRunResources } from "./run-resources"
 import { effectiveBudgetLimitUsd } from "@/lib/workflow/runs/budget-summary"
 import {
   createRunBudget,
@@ -92,8 +93,9 @@ export type {
 
 /**
  * Release run-scoped resources, then drop the cancel-registry entry.
- * Terminal sessions opened by `action.terminal.session.open` are closed
- * here so a run can never leak a PTY — regardless of how it terminated.
+ * Resources a module's node family opened (the terminal module's sessions,
+ * so a run can never leak a PTY) are released through the releasers those
+ * families registered (`./run-resources`), regardless of how the run ended.
  * Cleanup failures are swallowed: they must never mask the run's result.
  */
 async function releaseRunResources(runId: string): Promise<void> {
@@ -103,12 +105,7 @@ async function releaseRunResources(runId: string): Promise<void> {
   } catch {
     // best-effort MCP scope cleanup
   }
-  try {
-    const { closeRunSessions } = await import("@/lib/terminal/headless-session-registry")
-    await closeRunSessions(runId)
-  } catch {
-    // best-effort cleanup
-  }
+  await releaseRegisteredRunResources(runId)
   try {
     // A browser family is multi-step over one page, so its remote session
     // outlives a step. Without this it would outlive the run too.

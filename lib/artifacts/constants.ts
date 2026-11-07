@@ -63,20 +63,8 @@ export const ARTIFACT_COLORS: Record<ArtifactType, string> = {
   jupyter: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
 }
 
-/**
- * All artifact types as an array (single source of truth)
- */
-export const ARTIFACT_TYPES: ArtifactType[] = [
-  "code",
-  "document",
-  "svg",
-  "html",
-  "react",
-  "mermaid",
-  "chart",
-  "math",
-  "jupyter",
-]
+/** All artifact types as an array (single source of truth: `@/types/artifact/artifact-types`). */
+export { ARTIFACT_TYPES } from "@/types/artifact/artifact-types"
 
 /**
  * Types whose content is something the user can execute or run a live preview

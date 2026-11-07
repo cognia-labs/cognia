@@ -60,7 +60,7 @@ import {
   buildWorkflowSlashPrompt,
   type WorkflowDispatchEventDetail,
   type WorkflowSlashAction,
-} from "@/lib/slash-commands/actions/workflow"
+} from "@/lib/workflow/editor/copilot-slash-commands"
 import {
   expandWorkflowMentions,
   snapshotFromEditorState,
@@ -262,7 +262,7 @@ export function WorkflowEditorChatTab({
   }, [useStore, handleSend, requestedCopilotPrompt])
 
   // Listen for slash-command dispatches from anywhere in the app. The
-  // event is fired by `lib/slash-commands/actions/workflow.ts` when the
+  // event is fired by `lib/workflow/editor/copilot-slash-commands.ts` when the
   // user types `/validate`, `/run`, etc. We translate the action into
   // the same prompt-builder + handleSend pathway the quick-action
   // buttons use, so commands and buttons share one execution route.

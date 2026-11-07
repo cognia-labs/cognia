@@ -36,4 +36,10 @@ export default defineHostModule({
   },
   // The reading scope (session state, no text) and the retrieved excerpts.
   context: { load: () => import("./context") },
+  // Pinning a workflow deployment to index generations, which the workflow
+  // engine asks for through a port rather than importing the knowledge base.
+  provides: [{ port: "knowledge-base-revisions", load: () => import("./ports/revisions") }],
+  // Its workflow nodes (ADR-0250 §14 `workflowNodes`): the knowledge ingestion pipeline and
+  // retrieval. The workflow engine loads them before it looks an executor up.
+  workflowNodes: { load: () => import("./workflow-nodes") },
 })

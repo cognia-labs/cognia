@@ -32,6 +32,7 @@ export default defineHostModule({
     "source-control",
     "task-workspace",
     "terminal",
+    "workflow",
     "workspace",
   ],
   // The dock editor copies a conversation file's link through filespace's
@@ -88,4 +89,7 @@ export default defineHostModule({
     },
     load: () => import("./agent-tools"),
   },
+  // Its workflow nodes (ADR-0250 §14 `workflowNodes`): the artifact and canvas actions. The
+  // workflow engine loads them before it looks an executor up.
+  workflowNodes: { load: () => import("./workflow-nodes") },
 })

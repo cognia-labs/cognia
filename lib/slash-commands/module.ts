@@ -26,12 +26,12 @@ export default defineHostModule({
   // What other modules may import: the registry and the built-in list, the
   // composer's parsing, merging and running of command segments, custom
   // commands, the result blocks a command leaves in the transcript, and the
-  // actions other surfaces run directly (the workflow editor's Copilot turns,
-  // the side-chat shortcut, `/goal` from IM).
+  // actions other surfaces run directly (the side-chat shortcut, `/goal` from
+  // IM). The workflow editor's Copilot commands are the workflow module's;
+  // the built-in list includes them.
   api: [
     "lib/slash-commands/actions/goal.ts",
     "lib/slash-commands/actions/side-chat.ts",
-    "lib/slash-commands/actions/workflow.ts",
     "lib/slash-commands/build-args.ts",
     "lib/slash-commands/builtin.ts",
     "lib/slash-commands/custom.ts",
@@ -43,9 +43,6 @@ export default defineHostModule({
     "lib/slash-commands/run-segments.ts",
     "lib/slash-commands/system-blocks.ts",
   ],
-  // The workflow Copilot turns `/run`, `/debug`, `/refactor` and the
-  // subagent delegations send.
-  prompts: () => import("./prompts"),
   // The agent's `SlashCommand` tool, opted in by `selfInvokeTools.slashCommand`.
   // It never had a tier, so the run's own approval decides (`"default"`). A
   // command can change anything a command can, so it counts as a write; the

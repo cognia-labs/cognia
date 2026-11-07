@@ -10,10 +10,7 @@ import {
 } from "@/lib/db/workflow-deployments"
 import { validateAgainstJsonSchema } from "@/lib/workflow/nodes/ai/schema-validate"
 import { workflowVersionDigest } from "@/lib/workflow/versioning/version-snapshot"
-import {
-  assertKnowledgeBaseRevisionBindings,
-  resolveCurrentKnowledgeBaseRevisionBindings,
-} from "@/lib/knowledge-base/revisions"
+import { knowledgeBaseRevisions } from "./knowledge-revisions"
 import type {
   WorkflowEntrypoint,
   WorkflowDependencyBinding,
@@ -197,15 +194,16 @@ export async function createWorkflowDependencyLockForVersion(
       knowledgeBaseIds.push(...(character?.knowledgeBaseIds ?? []))
     }
     for (const knowledgeBaseId of [...new Set(knowledgeBaseIds)]) {
+      const revisions = await knowledgeBaseRevisions()
       const authored = params.revisionBindings?.[knowledgeBaseId]
       const generationIds = Array.isArray(authored) ? authored : authored ? [authored] : []
       if (generationIds.length > 0) {
-        await assertKnowledgeBaseRevisionBindings(knowledgeBaseId, generationIds)
+        await revisions.assertBindings(knowledgeBaseId, generationIds)
         generationIds.forEach((generationId, index) => {
           indexes[`knowledge:${knowledgeBaseId}:pinned:${node.id}:${index}`] = generationId
         })
       } else {
-        Object.assign(indexes, await resolveCurrentKnowledgeBaseRevisionBindings(knowledgeBaseId))
+        Object.assign(indexes, await revisions.resolveCurrentBindings(knowledgeBaseId))
       }
     }
   }

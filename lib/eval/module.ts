@@ -34,7 +34,6 @@ export default defineHostModule({
   // tabular import (issues), recommendation application (harness), the
   // routing experiment (router-fusion), the twin benchmark and the eval node.
   api: [
-    "lib/ai/eval/artifact-crypto.ts",
     "lib/ai/eval/import/parse-tabular.ts",
     "lib/ai/eval/online/policy-cache.ts",
     "lib/ai/eval/recommendation-application.ts",
@@ -99,4 +98,7 @@ export default defineHostModule({
     },
   ],
   messages: "eval",
+  // Its workflow nodes (ADR-0250 §14 `workflowNodes`): running a dataset eval and gating a run on
+  // its result. The workflow engine loads them before it looks an executor up.
+  workflowNodes: { load: () => import("./workflow-nodes") },
 })

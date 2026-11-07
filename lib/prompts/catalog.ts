@@ -120,15 +120,6 @@ import {
 } from "@/lib/skills/ai-prompts"
 import { SKILL_RECORDING_PROMPT } from "@/lib/skills/recording/generation-envelope"
 import {
-  ENSEMBLE_SYNTHESIZER_PROMPT,
-  ENSEMBLE_SYNTHESIZER_REQUEST_PROMPT,
-} from "@/lib/workflow/nodes/ai/ai-ensemble"
-import { CLASSIFY_NODE_PROMPT, EXTRACT_NODE_PROMPT } from "@/lib/workflow/nodes/ai/executors"
-import { JSON_OUTPUT_PROMPT, JSON_OUTPUT_SHAPE_PROMPT } from "@/lib/workflow/nodes/ai/structured"
-import { SCHEMA_REPAIR_PROMPT } from "@/lib/workflow/nodes/ai/schema-validate"
-import { WORKFLOW_COPILOT_PROMPT } from "@/lib/workflow/editor/copilot-prompts"
-import { WORKFLOW_QUICK_ACTION_PROMPTS } from "@/lib/workflow/editor/quick-action-prompts"
-import {
   CLI_BASH_ANALYSIS_PROMPT,
   CLI_COMMIT_MESSAGE_PROMPT,
   CLI_FIX_TESTS_PROMPT,
@@ -240,15 +231,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   ...Object.values(SKILL_AI_INTENT_PROMPTS),
   SKILL_AI_REQUEST_PROMPT,
   SKILL_RECORDING_PROMPT,
-  ENSEMBLE_SYNTHESIZER_PROMPT,
-  ENSEMBLE_SYNTHESIZER_REQUEST_PROMPT,
-  CLASSIFY_NODE_PROMPT,
-  EXTRACT_NODE_PROMPT,
-  JSON_OUTPUT_PROMPT,
-  JSON_OUTPUT_SHAPE_PROMPT,
-  SCHEMA_REPAIR_PROMPT,
-  WORKFLOW_COPILOT_PROMPT,
-  ...Object.values(WORKFLOW_QUICK_ACTION_PROMPTS),
   CLI_COMMIT_MESSAGE_PROMPT,
   CLI_PR_SUMMARY_PROMPT,
   CLI_FIX_TESTS_PROMPT,

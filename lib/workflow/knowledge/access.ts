@@ -2,7 +2,7 @@ import type { KnowledgeBaseSource } from "@/types/knowledge-base"
 import type { WorkflowEntrypoint } from "@/types/workflow/deployment"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import type { StepExecutionContext } from "@/types/workflow/visual"
-import type { KnowledgeReadingAccess } from "@/lib/knowledge-base/runtime/progressive-reading"
+import type { KnowledgeReadingAccess } from "@cognia/plugin-contract/lib/knowledge-base/runtime/progressive-reading"
 
 /** Verified workflow authority is shared by Agent turns and nested Team runs. */
 export async function resolveWorkflowKnowledgeAccess(

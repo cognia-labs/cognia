@@ -7,7 +7,10 @@
     },
     "a2ui": {
       "class": "module",
-      "api": ["lib/a2ui/templates/index.ts"]
+      "api": [
+        "components/a2ui/from-execution/interactive-page-dialog.tsx",
+        "lib/a2ui/templates/index.ts"
+      ]
     },
     "account": {
       "class": "kernel"
@@ -126,7 +129,8 @@
       "class": "shell"
     },
     "bot": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/bot/sources/desktop-event.ts", "lib/bot/sources/workflow-completed.ts"]
     },
     "browser": {
       "class": "module",
@@ -145,12 +149,17 @@
         "hooks/browser/use-selection-to-chat.ts",
         "lib/browser/agent-engine.ts",
         "lib/browser/backend-availability.ts",
+        "lib/browser/client.ts",
         "lib/browser/document-viewer-session.ts",
+        "lib/browser/domain-authorization.ts",
         "lib/browser/extension-engine.ts",
         "lib/browser/local-content-client.ts",
         "lib/browser/open-url-request.ts",
         "lib/browser/protocol.ts",
-        "lib/browser/shared-local-browser.ts"
+        "lib/browser/recording/replayer.ts",
+        "lib/browser/remote-chromium-engine.ts",
+        "lib/browser/shared-local-browser.ts",
+        "lib/browser/submission-gate.ts"
       ]
     },
     "browser-stubs": {
@@ -187,12 +196,14 @@
       "api": [
         "components/chat/chat-scope-provider.tsx",
         "components/chat/chat-view.tsx",
+        "components/chat/composer-trigger.ts",
         "components/chat/composer.tsx",
         "components/chat/composer/model-picker.tsx",
         "components/chat/empty-state.tsx",
         "components/chat/markdown-renderer.tsx",
         "components/chat/mention-backlinks-chip.tsx",
         "components/chat/message-parts/file-part-preview.tsx",
+        "components/chat/message-parts/handler-badge.tsx",
         "components/chat/message-parts/kept-copy-source-badge.tsx",
         "components/chat/message-parts/mcp-renderers/common.tsx",
         "components/chat/message-parts/tool-row.tsx",
@@ -214,7 +225,8 @@
         "hooks/chat/use-session-resource-changes.ts",
         "hooks/chat/use-session-run-status-map.ts",
         "hooks/chat/use-session-tasks.ts",
-        "hooks/chat/use-sessions.ts"
+        "hooks/chat/use-sessions.ts",
+        "hooks/chat/use-workflow-editor-session.ts"
       ]
     },
     "chat-copilot": {
@@ -272,6 +284,7 @@
       "api": [
         "lib/connectors/activity/turn-activity-tracker.ts",
         "lib/connectors/audit.ts",
+        "lib/connectors/automation-control.ts",
         "lib/connectors/bus.ts",
         "lib/connectors/circuit-breaker.ts",
         "lib/connectors/delivery-gateway.ts",
@@ -351,9 +364,13 @@
     "device": {
       "class": "module",
       "api": [
+        "hooks/devices/use-device-options.ts",
+        "hooks/devices/use-execution-host-switch.tsx",
         "lib/device/device-identity.ts",
         "lib/devices/build-device-rows.ts",
-        "lib/devices/device-console-href.ts"
+        "lib/devices/device-console-href.ts",
+        "lib/devices/placement-directory.ts",
+        "lib/devices/types.ts"
       ]
     },
     "diagnostic-service": {
@@ -382,7 +399,8 @@
       "api": ["lib/document-templates/builtin.ts"]
     },
     "durable": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/durable/idempotency.ts"]
     },
     "e2e": {
       "class": "foundation"
@@ -494,7 +512,7 @@
     },
     "governance": {
       "class": "module",
-      "api": ["lib/governance/producers/memory.ts"]
+      "api": ["lib/governance/producers/memory.ts", "lib/governance/producers/workflow.ts"]
     },
     "guide": {
       "class": "shell"
@@ -533,7 +551,12 @@
     },
     "images": {
       "class": "module",
-      "api": ["lib/images/pixel-buffer.ts"]
+      "api": [
+        "lib/images/adjust.ts",
+        "lib/images/codec.ts",
+        "lib/images/pixel-buffer.ts",
+        "lib/images/transform.ts"
+      ]
     },
     "inbound": {
       "class": "module",
@@ -564,9 +587,11 @@
       "class": "module",
       "api": [
         "lib/issues/editor-links.ts",
+        "lib/issues/event-bus.ts",
         "lib/issues/hrefs.ts",
         "lib/issues/run/agent-task-adapter.ts",
-        "lib/issues/service.ts"
+        "lib/issues/service.ts",
+        "lib/issues/sync/apply.ts"
       ]
     },
     "jobs": {
@@ -684,7 +709,10 @@
     },
     "plugin": {
       "class": "kernel",
-      "api": ["components/plugins/plugin-extension-slot.tsx"]
+      "api": [
+        "components/plugins/plugin-extension-slot.tsx",
+        "hooks/plugins/use-plugin-context-menu-items.ts"
+      ]
     },
     "plugin-convert": {
       "class": "module"
@@ -785,7 +813,8 @@
       "class": "kernel",
       "api": [
         "components/scheduler/filter-chips.tsx",
-        "components/scheduler/run-artifact-links.tsx"
+        "components/scheduler/run-artifact-links.tsx",
+        "components/scheduler/timezone-select.tsx"
       ]
     },
     "scm": {
@@ -917,6 +946,7 @@
     "stack": {
       "class": "module",
       "api": [
+        "lib/stack/discover.ts",
         "lib/stack/forge/github.ts",
         "lib/stack/forge/remote.ts",
         "lib/stack/model.ts",
@@ -1025,7 +1055,8 @@
       "class": "module"
     },
     "webhooks": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/webhooks/egress-registry.ts"]
     },
     "wiki": {
       "class": "module"
@@ -1035,30 +1066,6 @@
     },
     "work-submission": {
       "class": "kernel"
-    },
-    "workflow": {
-      "class": "module",
-      "api": [
-        "components/workflow/editor/inspector/forms/shared/entity-picker.tsx",
-        "components/workflow/editor/inspector/forms/shared/multi-entity-picker.tsx",
-        "hooks/workflow/use-debounced-callback.ts",
-        "lib/workflow/definition/migrate.ts",
-        "lib/workflow/knowledge/access.ts",
-        "lib/workflow/node-groups/materialize.ts",
-        "lib/workflow/nodes/ai/ai-prompt-routed.ts",
-        "lib/workflow/nodes/ai/pii-gate.ts",
-        "lib/workflow/nodes/ai/schema-validate.ts",
-        "lib/workflow/nodes/registry.ts",
-        "lib/workflow/nodes/shared/executor-support.ts",
-        "lib/workflow/nodes/teams/team-runtime-port.ts",
-        "lib/workflow/runtime/concurrency-controller.ts",
-        "lib/workflow/runtime/execution-authority.ts",
-        "lib/workflow/runtime/model-preference-controller.ts",
-        "lib/workflow/runtime/orchestrator.ts",
-        "lib/workflow/runtime/resume-controller.ts",
-        "lib/workflow/runtime/trigger-bridge.ts",
-        "lib/workflow/runtime/trigger-subscriptions.ts"
-      ]
     },
     "workspace": {
       "class": "kernel",
@@ -1509,6 +1516,21 @@
       "prefix": "lib/boot/capabilities.",
       "owner": "runtime",
       "why": "The boot capability registry imports nothing: it records which runtime capabilities were requested and are ready, and every layer asks it to bring one up (the plugin runtime before a plugin tool, command or activation event runs). It sits in the foundation beside the typed topics so the kernel and modules reach it without importing the boot shell, which keeps the initializers that report readiness (ADR-0250 §14, slash-commands manifest)."
+    },
+    {
+      "prefix": "lib/ai/eval/artifact-crypto.",
+      "owner": "credentials",
+      "why": "Account artifact encryption (keyring- or vault-held account key, envelopes). Eval, workflow, perf and work submission share it and it imports only the credentials, runtime and platform layers, so it sits in the kernel beside the keyring rather than in the eval module (ADR-0250 §14; workflow becomes a manifest module, T13)."
+    },
+    {
+      "prefix": "lib/templates/catalog.",
+      "owner": "db",
+      "why": "The template platform's in-memory catalog of definitions, a cache over the template library (`lib/db/template-platform.ts`). It imports only the contract types, and the workflow engine and the template module both read it, so it sits with the library rather than in the templates module (ADR-0250 §14, T13)."
+    },
+    {
+      "prefix": "lib/templates/repository.",
+      "owner": "db",
+      "why": "The template library's storage contract and its in-memory implementation, which `lib/db/template-platform.ts` implements over Dexie. It imports only the contract types; the workflow engine's node-group authoring takes a repository, so it sits with the library rather than in the templates module (ADR-0250 §14, T13)."
     }
   ]
 }

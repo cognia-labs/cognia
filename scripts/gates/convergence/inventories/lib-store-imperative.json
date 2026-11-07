@@ -4463,8 +4463,8 @@
       ]
     },
     {
-      "key": "lib/workflow/nodes/artifacts/index.ts",
-      "owner": "lib/workflow",
+      "key": "lib/artifacts/workflow-nodes.ts",
+      "owner": "lib/artifacts",
       "note": "",
       "imports": [
         "static"
@@ -4485,8 +4485,8 @@
       ]
     },
     {
-      "key": "lib/workflow/nodes/evaluation/index.ts",
-      "owner": "lib/workflow",
+      "key": "lib/eval/workflow-nodes.ts",
+      "owner": "lib/eval",
       "note": "",
       "imports": [
         "dynamic"
@@ -4496,8 +4496,8 @@
       ]
     },
     {
-      "key": "lib/workflow/nodes/goals/index.ts",
-      "owner": "lib/workflow",
+      "key": "lib/goal/workflow-nodes.ts",
+      "owner": "lib/goal",
       "note": "",
       "imports": [
         "static"
@@ -4518,8 +4518,8 @@
       ]
     },
     {
-      "key": "lib/workflow/nodes/sites/index.ts",
-      "owner": "lib/workflow",
+      "key": "lib/sites/workflow-nodes.ts",
+      "owner": "lib/sites",
       "note": "",
       "imports": [
         "static"
@@ -4540,8 +4540,8 @@
       ]
     },
     {
-      "key": "lib/workflow/nodes/terminal/session.ts",
-      "owner": "lib/workflow",
+      "key": "lib/terminal/workflow-nodes/session.ts",
+      "owner": "lib/terminal",
       "note": "",
       "imports": [
         "dynamic"

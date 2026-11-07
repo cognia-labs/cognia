@@ -5,23 +5,9 @@
 import "../automation/desktop"
 // OCR extraction node (ADR-0024) — turns an image/PDF/screen into text.
 import "../data/ocr"
-// Desktop-pet nodes — the `action.pet.interact` emitter + the
-// `trigger.pet.event` pass-through (real firing: runtime/pet-event-trigger).
-import "../automation/pet"
-// Eval nodes — run a dataset eval / gate a run from a workflow.
-import "../evaluation"
 // Optional browser-local Transformers.js inference. The module only registers
 // an executor; the runtime itself is dynamically imported when the node runs.
 import "../ai/browser-model"
-// Wave 3 — registers the `action.system.terminal` executor that drives
-// the integrated terminal dock from a workflow step.
-import "../terminal"
-// Persistent terminal-session nodes (open / run / close) — dock or
-// unattended-headless mode, with run-scoped cleanup via the orchestrator.
-import "../terminal/session"
-// Script-file node — runs a .sh/.ps1/.py/… file under its detected
-// interpreter (lib/terminal/script-runner.ts), dock or unattended mode.
-import "../terminal/script"
 // Pro IDE editor nodes (ADR-0088 Phase 3) — open / reveal / diff / read / edit
 // / save against the bound embedded code-server.
 import "../editor"
@@ -43,21 +29,12 @@ import "../automation/web-clone"
 import "../triggers"
 import "../data/flow"
 import "../ai/executors"
-import "../goals"
 import "../plans"
 import "../scheduling"
 import "../teams"
 import "../connectors"
 import "../integrations"
-import "../knowledge"
 import "../mobile/executors"
-// Cognia Sites publish actions (ADR-0084). A registry nobody registers into is
-// this repo's most recurrent defect; `executor-coverage.test.ts` fails without
-// this line.
-import "../sites"
-// Artifact + Canvas actions. A registry nobody registers into is this repo's
-// most recurrent defect; `executor-coverage.test.ts` fails without this line.
-import "../artifacts"
 import "../issues"
 // Native media nodes (FFmpeg), video generation and the pure image engine. A
 // registry nobody registers into is this repo's most recurrent defect;
@@ -78,8 +55,9 @@ import "../sessions"
 // most recurrent defect; `executor-coverage.test.ts` fails without this line.
 import "../notifications"
 // Node families feature modules own are their manifests' `workflowNodes`
-// contributions (ADR-0250 §14). Start loading them with the built-ins so they
+// contributions (ADR-0250 §14): the pet, eval, terminal, goal, knowledge-base,
+// sites and artifact nodes. Start loading them with the built-ins so they
 // register about as early; the step executor awaits the same load before any
-// lookup.
+// lookup, and `executor-coverage.test.ts` fails when one is not wired.
 import { loadModuleWorkflowNodes } from "../module-nodes"
 void loadModuleWorkflowNodes()

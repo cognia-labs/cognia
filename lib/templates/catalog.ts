@@ -1,4 +1,4 @@
-import type { TemplateDefinitionEnvelope } from "./contracts"
+import type { TemplateDefinitionEnvelope } from "@cognia/plugin-contract/lib/templates/contracts"
 import type { TemplateCatalogQuery } from "@cognia/plugin-contract/lib/templates/catalog"
 export type { TemplateCatalogQuery } from "@cognia/plugin-contract/lib/templates/catalog"
 

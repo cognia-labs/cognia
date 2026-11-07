@@ -30,4 +30,7 @@ export default defineHostModule({
   // The goal's system section, judge, subgoal and continuation prompts, for
   // the Prompt Center.
   prompts: () => import("./prompts"),
+  // Its workflow nodes (ADR-0250 §14 `workflowNodes`): the goal and goal-template actions. The
+  // workflow engine loads them before it looks an executor up.
+  workflowNodes: { load: () => import("./workflow-nodes") },
 })
