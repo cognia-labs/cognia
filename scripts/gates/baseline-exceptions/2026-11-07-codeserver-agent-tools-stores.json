@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/convergence/inventories/lib-store-imperative.json",
+  "measure": "all",
+  "allowGrowth": 1,
+  "owner": "lib/codeserver",
+  "repaymentPhase": "3",
+  "reason": "The editor agent tools' dependency resolver moved from lib/claude/plugin-tool-ipc.ts into the codeserver module (lib/codeserver/agent-tools.ts, ADR-0250 §14 tools contribution). It reads the same project store (the projects a session's execution root is resolved against) it read there; plugin-tool-ipc stays a member for its other reads, so the move counts one new file. Repaid when the session's execution root reaches the family through an injected interface instead of the store."
+}

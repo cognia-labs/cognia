@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import type { ModuleToolEntry } from "@/lib/modules/manifest-types"
 import { transport } from "@/lib/tauri"
 import { waitFor } from "@testing-library/react"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -801,18 +802,22 @@ describe("Claude session commands", () => {
     const { hasNoLeakingPiiDeep } =
       jest.requireActual<typeof import("@cognia/redact")>("@cognia/redact")
     const { buildEditorBuiltinManifestEntries, buildEditorWriteManifestEntries } =
-      await import("@/lib/claude/editor-builtin-tools")
+      await import("@/lib/codeserver/agent-tools")
     const { buildVectorManifestEntries } = await import("@/lib/vector/agent-tools")
     mockHasNoLeakingPiiDeep.mockImplementation((payload) => hasNoLeakingPiiDeep(payload))
     callSpy.mockResolvedValueOnce(undefined)
-    const pluginTools = [
-      ...buildEditorBuiltinManifestEntries(),
-      ...buildEditorWriteManifestEntries(),
-      // As the kernel carries a module's tools: under `cognia-<module>-builtin`.
-      ...buildVectorManifestEntries().map((entry) => ({
+    // As the kernel carries a module's tools: under `cognia-<module>-builtin`.
+    const carried =
+      (pluginId: string) =>
+      ({ pathParams, ...entry }: ModuleToolEntry) => ({
         ...entry,
-        pluginId: "cognia-vector-builtin",
-      })),
+        ...(pathParams ? { pathParams: [...pathParams] } : {}),
+        pluginId,
+      })
+    const pluginTools = [
+      ...buildEditorBuiltinManifestEntries().map(carried("cognia-codeserver-builtin")),
+      ...buildEditorWriteManifestEntries().map(carried("cognia-codeserver-builtin")),
+      ...buildVectorManifestEntries().map(carried("cognia-vector-builtin")),
     ]
     await sendPrompt("sess", "Inspect the workspace", { pluginTools })
     expect(callSpy).toHaveBeenCalledWith("claude_send", {

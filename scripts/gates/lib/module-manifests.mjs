@@ -149,7 +149,7 @@ export const GENERATOR = "scripts/build/gen-module-registry.mjs"
 
 /** Fields of `ModuleToolDeclaration`, and the values each takes. */
 export const TOOL_DECLARATION_FIELDS = ["consent", "effect", "secrets", "cancellable", "precedence"]
-export const TOOL_CONSENTS = ["allow", "ask", "per-call"]
+export const TOOL_CONSENTS = ["allow", "ask", "per-call", "default"]
 export const TOOL_EFFECTS = ["read", "write", "outbound"]
 /** A bare tool name as the model and the sidecar see it; `__` is the MCP separator. */
 const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/

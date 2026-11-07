@@ -316,7 +316,6 @@ jest.mock("@/lib/support-agent/context", () => {
   }
 })
 
-import { isTauri } from "@/lib/tauri"
 import {
   resetRemoteHostKeysForTests,
   setRemoteHostKeyedProviders,
@@ -7515,8 +7514,9 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
   })
 
   it("gives only an attached acceptance child the evidence tools, and others the proposal (ADR-0233 A6)", async () => {
-    const tauri = isTauri as jest.Mock
-    tauri.mockReturnValue(true)
+    // The automation module offers them on the desktop host only.
+    const platform = detectPlatform as jest.Mock
+    platform.mockReturnValue("tauri")
     try {
       const source = await resolveSendOptions({
         session: makeSession({ id: "s1", characterId: "c1" }),
@@ -7552,7 +7552,8 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
       })
       expect(toolNames(im)).not.toContain("propose_acceptance")
     } finally {
-      tauri.mockReturnValue(false)
+      platform.mockReset()
+      platform.mockImplementation(jest.requireActual("@/lib/platform/detect").detectPlatform)
     }
   })
 

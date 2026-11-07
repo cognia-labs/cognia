@@ -7,7 +7,7 @@
   },
   "metrics": {
     "static": 285,
-    "all": 400
+    "all": 401
   },
   "members": [
     {
@@ -1239,7 +1239,6 @@
       "stores": [
         "stores/agent/ask-user-store.ts",
         "stores/chat/chat-store.ts",
-        "stores/project/project-store.ts",
         "stores/settings/index.ts"
       ]
     },
@@ -1408,6 +1407,17 @@
       "stores": [
         "stores/chat/chat-store.ts",
         "stores/task-workspace-store.ts"
+      ]
+    },
+    {
+      "key": "lib/codeserver/agent-tools.ts",
+      "owner": "lib/codeserver",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
       ]
     },
     {

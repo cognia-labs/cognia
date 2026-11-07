@@ -4,11 +4,21 @@ import {
   READ_ACTIVE_EDITOR_TOOL_NAME,
   buildEditorBuiltinManifestEntries,
   buildEditorWriteManifestEntries,
-  isEditorBuiltinTool,
   isEditorWriteTool,
   runEditorBuiltinTool,
+  toolFamily,
   type EditorToolRunDeps,
-} from "./editor-builtin-tools"
+} from "./agent-tools"
+import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
+
+const mockHasWorkspaceFsBackend = jest.fn(() => true)
+jest.mock("@/lib/files/workspace-backend", () => ({
+  hasWorkspaceFsBackend: () => mockHasWorkspaceFsBackend(),
+}))
+const mockHasCapability = jest.fn((_capability: string) => true)
+jest.mock("@/lib/platform/capabilities", () => ({
+  hasCapability: (capability: string) => mockHasCapability(capability),
+}))
 
 const activeEditor: ActiveEditorContext = {
   path: "/repo/src/a.ts",
@@ -30,14 +40,11 @@ function deps(overrides: Partial<EditorToolRunDeps> = {}): EditorToolRunDeps {
 const run = (d: EditorToolRunDeps) =>
   runEditorBuiltinTool(READ_ACTIVE_EDITOR_TOOL_NAME, {}, d, { sessionId: "s1" })
 
-describe("editor-builtin-tools", () => {
+describe("read_active_editor", () => {
   it("exposes exactly the read_active_editor manifest entry", () => {
     const entries = buildEditorBuiltinManifestEntries()
     expect(entries).toHaveLength(1)
     expect(entries[0].name).toBe("read_active_editor")
-    expect(entries[0].pluginId).toBe("cognia-editor-builtin")
-    expect(isEditorBuiltinTool("read_active_editor")).toBe(true)
-    expect(isEditorBuiltinTool("web_search")).toBe(false)
   })
 
   it("returns the full editor context when the PII gate passes", async () => {
@@ -145,11 +152,9 @@ describe("editor write tools", () => {
 
   it("routes every write tool name to the write runner", () => {
     for (const name of EDITOR_WRITE_TOOL_NAMES) {
-      expect(isEditorBuiltinTool(name)).toBe(true)
       expect(isEditorWriteTool(name)).toBe(true)
     }
     // The read stays outside the write set — it is engine-agnostic.
-    expect(isEditorBuiltinTool("read_active_editor")).toBe(true)
     expect(isEditorWriteTool("read_active_editor")).toBe(false)
   })
 
@@ -257,5 +262,41 @@ describe("editor write tools", () => {
     expect(required("show_editor_diff")).toEqual(["path", "content"])
     // saveAll's `path` is the optional narrowing filter, not a target.
     expect(required("save_editor_buffers")).toEqual([])
+  })
+})
+
+describe("toolFamily", () => {
+  const ctx = (overrides: Partial<ToolSurfaceContext> = {}): ToolSurfaceContext => ({
+    session: null,
+    agent: null,
+    settings: null,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host: "desktop",
+    activeProject: { id: "p1" } as ToolSurfaceContext["activeProject"],
+    ...overrides,
+  })
+  const names = async (c: ToolSurfaceContext) =>
+    (await toolFamily.surface(c))?.tools.map((tool) => tool.name) ?? null
+
+  afterEach(() => {
+    mockHasWorkspaceFsBackend.mockReturnValue(true)
+    mockHasCapability.mockReturnValue(true)
+  })
+
+  it("offers the read and the write tools where the Pro IDE can run", async () => {
+    expect(await names(ctx())).toEqual([READ_ACTIVE_EDITOR_TOOL_NAME, ...EDITOR_WRITE_TOOL_NAMES])
+    expect(mockHasCapability).toHaveBeenCalledWith("pro-ide")
+  })
+
+  it("offers only the read without the Pro IDE capability", async () => {
+    mockHasCapability.mockReturnValue(false)
+    expect(await names(ctx())).toEqual([READ_ACTIVE_EDITOR_TOOL_NAME])
+  })
+
+  it("offers nothing without a workspace or a workspace filesystem backend", async () => {
+    expect(await names(ctx({ activeProject: null }))).toBeNull()
+    mockHasWorkspaceFsBackend.mockReturnValue(false)
+    expect(await names(ctx())).toBeNull()
   })
 })

@@ -85,8 +85,12 @@ export function contributedToolPluginId(module: string): string {
   return `cognia-${module}-builtin`
 }
 
-/** The consent tier of a declaration: `"per-call"` asks, and more (see `requiresApproval`). */
-export function verdictFor(declaration: ModuleToolDeclaration): PermissionVerdict {
+/**
+ * The consent tier of a declaration: `"per-call"` asks, and more (see
+ * `requiresApproval`); `"default"` has none, so no rule is written for it.
+ */
+export function verdictFor(declaration: ModuleToolDeclaration): PermissionVerdict | null {
+  if (declaration.consent === "default") return null
   return declaration.consent === "allow" ? "allow" : "ask"
 }
 
@@ -97,6 +101,7 @@ export function rulesetForTools(
   const rules: Ruleset = {}
   for (const { name, declaration } of tools) {
     const verdict = verdictFor(declaration)
+    if (verdict === null) continue
     rules[name] = verdict
     rules[`mcp__${PLUGIN_TOOLS_SERVER_NAME}__${name}`] = verdict
   }

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import {
   CODESERVER_EVENTS,
   codeServerClient,

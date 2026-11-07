@@ -1137,6 +1137,7 @@ test("validateHostManifest wants tools as { declare, load } with complete declar
     errors({
       declare: {
         crate_list: { consent: "allow", effect: "read" },
+        crate_peek: { consent: "default", effect: "read" },
         crate_send: { consent: "per-call", effect: "outbound", cancellable: false },
         crate_stand_in: { consent: "ask", effect: "write", secrets: true, precedence: "fallback" },
       },
@@ -1163,7 +1164,7 @@ test("validateHostManifest wants tools as { declare, load } with complete declar
     "tools.declare.mcp__x__y: a tool name is a letter then letters, digits or single underscores",
     "tools.declare.9lives: a tool name is a letter then letters, digits or single underscores",
     'tools.declare.crate_a: unknown field "order"',
-    "tools.declare.crate_a.consent is one of allow, ask, per-call",
+    "tools.declare.crate_a.consent is one of allow, ask, per-call, default",
     "tools.declare.crate_a.effect is one of read, write, outbound",
     "tools.declare.crate_b.secrets is true or absent",
     "tools.declare.crate_b.cancellable is false or absent",

@@ -17,7 +17,7 @@ let issuesValue: unknown[] | undefined = []
 let plansValue: unknown[] | undefined = []
 let runsValue: unknown[] | undefined = []
 let mockUseRealQueries = false
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (fn: () => unknown, deps: unknown[], initial: unknown) => {
     if (mockUseRealQueries) {
       return jest

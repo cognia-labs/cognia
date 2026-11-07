@@ -19,15 +19,16 @@ import { getSession } from "@/lib/db/sessions"
 import { managedDesktopClient } from "@/lib/automation/managed-desktop-client"
 import { managedDesktopHandoffClient } from "@/lib/automation/managed-desktop-handoff-client"
 import { createManagedDesktopResultsScope } from "@/lib/automation/managed-desktop-results-client"
+import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import {
-  ACCEPTANCE_BUILTIN_PLUGIN_ID,
   buildAcceptanceManifestEntries,
   buildAcceptanceProposalManifestEntries,
   isAcceptanceBuiltinTool,
   isAcceptanceProposalTool,
   runAcceptanceBuiltinTool,
   runAcceptanceProposalTool,
-} from "./acceptance-builtin-tools"
+  toolFamily,
+} from "./agent-tools"
 
 const api = jest.mocked(managedDesktopHandoffClient)
 const criteria = [{ description: "Page loads", screenshotRequired: true }]
@@ -67,7 +68,7 @@ test("manifests and matchers isolate child tools from the proposal tool", () => 
     "acceptance_complete",
   ])
   expect(buildAcceptanceProposalManifestEntries()).toEqual([
-    expect.objectContaining({ name: "propose_acceptance", pluginId: ACCEPTANCE_BUILTIN_PLUGIN_ID }),
+    expect.objectContaining({ name: "propose_acceptance" }),
   ])
   expect(isAcceptanceBuiltinTool("mcp__cognia-plugin-tools__acceptance_checkpoint")).toBe(true)
   expect(isAcceptanceBuiltinTool("propose_acceptance")).toBe(false)
@@ -190,4 +191,55 @@ test("completion rejects duplicate criteria, invalid outcomes and oversized UTF-
     ).toEqual({ ok: false, code: "invalid_arguments" })
   expect(api.acceptanceComplete).not.toHaveBeenCalled()
   expect(createManagedDesktopResultsScope).not.toHaveBeenCalled()
+})
+
+describe("toolFamily", () => {
+  const ctx = (overrides: Partial<ToolSurfaceContext> = {}): ToolSurfaceContext => ({
+    session: null,
+    agent: null,
+    settings: null,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host: "desktop",
+    activeProject: null,
+    ...overrides,
+  })
+  const names = async (c: ToolSurfaceContext) =>
+    (await toolFamily.surface(c))?.tools.map((tool) => tool.name) ?? null
+  const session = (extra: Record<string, unknown>) =>
+    ({ id: "s", ...extra }) as unknown as ToolSurfaceContext["session"]
+
+  it("offers the evidence tools to an acceptance child and the proposal to any other desktop chat", async () => {
+    expect(
+      await names(ctx({ session: session({ managedAcceptance: { acceptanceId: "a" } }) }))
+    ).toEqual(["acceptance_checkpoint", "acceptance_complete"])
+    expect(await names(ctx({ session: session({}) }))).toEqual(["propose_acceptance"])
+    expect(await names(ctx())).toEqual(["propose_acceptance"])
+  })
+
+  it("offers nothing off the desktop, to an IM-bound session, or to a child without its run", async () => {
+    for (const host of ["web", "mobile", "cli", "brain"] as const) {
+      expect(await names(ctx({ host }))).toBeNull()
+    }
+    expect(
+      await names(ctx({ session: session({ platformBinding: { adapterId: "lark" } }) }))
+    ).toBeNull()
+    expect(await names(ctx({ session: session({ managedAcceptance: {} }) }))).toBeNull()
+  })
+
+  it("runs the proposal and the evidence tools for the calling session", async () => {
+    const call: ToolCallContext = {
+      sessionId: "child",
+      toolUseId: "u1",
+      executionRunId: "run-1",
+      outboundAuthorization: { kind: "tool-call", sessionId: "child", toolUseId: "u1" },
+    }
+    await expect(
+      toolFamily.run("acceptance_checkpoint", { criterionId: "criterion-0" }, call)
+    ).resolves.toMatchObject({ ok: true, code: "recorded" })
+    jest.mocked(getSession).mockResolvedValue({ id: "source" } as never)
+    await expect(toolFamily.run("propose_acceptance", { criteria }, call)).resolves.toMatchObject({
+      ok: true,
+    })
+  })
 })

@@ -1,20 +1,33 @@
-/** Evidence-only tools for a human-started child, and a separate proposal with no spend authority. */
+/**
+ * The `automation` module's tool family (ADR-0250 §14 amendment), for managed
+ * desktop acceptance (ADR-0233 A6): evidence-only tools for the child session
+ * a human-started acceptance run was attached to, and a separate proposal
+ * with no spend authority for every other desktop chat. Both talk to the
+ * local Host, so both need the desktop.
+ */
 import type { ChatSession } from "@cognia/agent-config-types"
 import { getSession } from "@/lib/db/sessions"
-import { managedDesktopClient } from "@/lib/automation/managed-desktop-client"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
+import { managedDesktopClient } from "./managed-desktop-client"
 import {
   managedDesktopHandoffClient,
   validManagedDesktopCriteria,
   type ManagedDesktopAcceptanceCriterion,
   type ManagedDesktopAcceptanceComplete,
   type ManagedDesktopDeliverySummary,
-} from "@/lib/automation/managed-desktop-handoff-client"
-import { createManagedDesktopResultsScope } from "@/lib/automation/managed-desktop-results-client"
+} from "./managed-desktop-handoff-client"
+import { createManagedDesktopResultsScope } from "./managed-desktop-results-client"
 
 type AcceptanceSession = ChatSession & { managedAcceptance?: { acceptanceId: string } }
-export const ACCEPTANCE_BUILTIN_PLUGIN_ID = "cognia-acceptance-builtin"
 const PREFIX = "mcp__cognia-plugin-tools__"
-const TOOLS = ["acceptance_checkpoint", "acceptance_complete"] as const
+/** The evidence tools of an acceptance child session. */
+export const ACCEPTANCE_TOOL_NAMES = ["acceptance_checkpoint", "acceptance_complete"] as const
+const TOOLS = ACCEPTANCE_TOOL_NAMES
+export const PROPOSE_ACCEPTANCE_TOOL_NAME = "propose_acceptance"
 const normalize = (name: string) => (name.startsWith(PREFIX) ? name.slice(PREFIX.length) : name)
 const outcomes = ["passed", "failed", "inconclusive", "cancelled"] as const
 const criterionOutcomes = ["passed", "failed", "incomplete"] as const
@@ -34,19 +47,10 @@ const criteriaSchema = {
   },
 }
 
-/** A tool entry as `SendOptions.pluginTools` carries it. */
-export interface AcceptanceManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-}
-
-export function buildAcceptanceManifestEntries(): AcceptanceManifestEntry[] {
+export function buildAcceptanceManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: TOOLS[0],
-      pluginId: ACCEPTANCE_BUILTIN_PLUGIN_ID,
       description:
         "Save a private checkpoint screenshot for criterion-0, criterion-1, etc. in this human-started acceptance. Stored evidence is not sent to a model. Retries reuse the criterion's checkpoint.",
       jsonSchema: {
@@ -58,7 +62,6 @@ export function buildAcceptanceManifestEntries(): AcceptanceManifestEntry[] {
     },
     {
       name: TOOLS[1],
-      pluginId: ACCEPTANCE_BUILTIN_PLUGIN_ID,
       description:
         "Complete this acceptance with an agent verdict. All criteria and required screenshots must be complete to pass. This destroys its desktop; it never approves, merges or completes the source task.",
       jsonSchema: {
@@ -200,11 +203,10 @@ export interface AcceptanceProposal {
   summary?: string
   estimate: { currency: string; hourlyRateMicros: number } | null
 }
-export function buildAcceptanceProposalManifestEntries(): AcceptanceManifestEntry[] {
+export function buildAcceptanceProposalManifestEntries(): ModuleToolEntry[] {
   return [
     {
-      name: "propose_acceptance",
-      pluginId: ACCEPTANCE_BUILTIN_PLUGIN_ID,
+      name: PROPOSE_ACCEPTANCE_TOOL_NAME,
       description:
         "Suggest GUI acceptance of an immutable delivery. Returns a proposal card only. No prepare, authorization, template build, start or spending occurs; the human opens the panel and confirms a fresh quote.",
       jsonSchema: {
@@ -221,7 +223,7 @@ export function buildAcceptanceProposalManifestEntries(): AcceptanceManifestEntr
   ]
 }
 export function isAcceptanceProposalTool(name: string): boolean {
-  return normalize(name) === "propose_acceptance"
+  return normalize(name) === PROPOSE_ACCEPTANCE_TOOL_NAME
 }
 export async function runAcceptanceProposalTool(
   input: unknown,
@@ -267,4 +269,25 @@ export async function runAcceptanceProposalTool(
   } catch {
     return { ok: false as const, code: "acceptance_proposal_failed" }
   }
+}
+
+/**
+ * The family the kernel loads, on the desktop only. A child session an
+ * acceptance run was attached to is offered the evidence tools; any other
+ * chat with a screen on the other end (not an IM-bound session) is offered
+ * the proposal, which reads deliveries and a price and cannot spend.
+ */
+export const toolFamily: ModuleToolFamily = {
+  surface(ctx: ToolSurfaceContext) {
+    if (ctx.host !== "desktop") return null
+    const session = ctx.session as AcceptanceSession | null
+    if (session?.managedAcceptance?.acceptanceId) return { tools: buildAcceptanceManifestEntries() }
+    if (session?.managedAcceptance || session?.platformBinding?.adapterId) return null
+    return { tools: buildAcceptanceProposalManifestEntries() }
+  },
+  async run(name, args, call) {
+    return name === PROPOSE_ACCEPTANCE_TOOL_NAME
+      ? runAcceptanceProposalTool(args, { sessionId: call.sessionId })
+      : runAcceptanceBuiltinTool(name, args, { sessionId: call.sessionId })
+  },
 }

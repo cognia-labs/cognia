@@ -255,9 +255,11 @@ export interface ModuleCapabilityContributionsEntry {
  * turns it into the lowest ruleset layer: `"allow"` and `"ask"` as named,
  * `"per-call"` as `"ask"` plus `requiresApproval` on the manifest entry, which
  * with the sidecar's `PER_CALL_PLUGIN_TOOL_NAMES` means no remembered grant,
- * mode or auto-answer skips the question.
+ * mode or auto-answer skips the question. `"default"` adds no rule: the run's
+ * own approval decides, as for any tool nobody wrote a rule for (it asks
+ * unless a remembered grant, the mode or a person's rule allows it).
  */
-export type ModuleToolConsent = "allow" | "ask" | "per-call"
+export type ModuleToolConsent = "allow" | "ask" | "per-call" | "default"
 
 /**
  * What a call does. `"read"` reads; `"write"` changes the app's or the

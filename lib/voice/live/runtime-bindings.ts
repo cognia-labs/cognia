@@ -63,7 +63,6 @@ const NON_CANCELLABLE_LIVE_VOICE_TOOLS = new Set([
   "ask_user",
   "web_search",
   "web_fetch",
-  "read_active_editor",
   "spawn_task",
   "list_sessions",
   "send_session_message",

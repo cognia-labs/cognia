@@ -76,8 +76,10 @@
       "class": "module",
       "api": [
         "lib/appearance/resolve-app-palette.ts",
+        "lib/appearance/shell-sync.ts",
         "lib/appearance/theme-token-catalog.ts",
-        "lib/appearance/use-theme-css-vars.ts"
+        "lib/appearance/use-theme-css-vars.ts",
+        "lib/appearance/vscode-theme/token-mapping.ts"
       ]
     },
     "attention": {
@@ -89,10 +91,6 @@
     },
     "auth-providers": {
       "class": "kernel"
-    },
-    "automation": {
-      "class": "module",
-      "api": ["hooks/automation/use-session-sandbox-desktop.ts"]
     },
     "background-tasks": {
       "class": "module",
@@ -128,8 +126,10 @@
         "components/browser/extensions/browser-extensions-panel.tsx",
         "components/browser/launch/browser-launch-configs.tsx",
         "components/browser/local-content/browser-local-content-picker.tsx",
+        "hooks/browser/use-element-rect.ts",
         "hooks/browser/use-local-browser.ts",
         "hooks/browser/use-recent-pages.ts",
+        "hooks/browser/use-region-visibility.ts",
         "hooks/browser/use-selection-to-chat.ts",
         "lib/browser/agent-engine.ts",
         "lib/browser/backend-availability.ts",
@@ -210,10 +210,6 @@
       "class": "module",
       "api": ["lib/code-adoption/persist.ts", "lib/code-adoption/types.ts"]
     },
-    "codeserver": {
-      "class": "module",
-      "api": ["hooks/codeserver/use-code-server-supported.ts", "lib/codeserver/client.ts"]
-    },
     "cogsets": {
       "class": "module"
     },
@@ -235,7 +231,8 @@
       "class": "foundation"
     },
     "companion": {
-      "class": "kernel"
+      "class": "kernel",
+      "api": ["hooks/companion/use-connection-state.ts"]
     },
     "components-root": {
       "class": "foundation"
@@ -365,6 +362,7 @@
         "components/editor/project/code-server-pane.tsx",
         "components/editor/project/code-server-web-pane.tsx",
         "components/editor/project/editor-engine-toggle.tsx",
+        "components/editor/project/file-chat-context.ts",
         "components/editor/project/light-editor-goto.ts",
         "components/editor/project/project-editor-workbench.tsx",
         "components/editor/project/project-root-switcher.tsx",
@@ -526,6 +524,7 @@
     "issues": {
       "class": "module",
       "api": [
+        "lib/issues/editor-links.ts",
         "lib/issues/hrefs.ts",
         "lib/issues/run/agent-task-adapter.ts",
         "lib/issues/service.ts"
@@ -723,7 +722,8 @@
       "class": "module"
     },
     "remote-desktop": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/remote-desktop/native-stream.ts", "lib/remote-desktop/types.ts"]
     },
     "remote-host": {
       "class": "kernel"
@@ -861,7 +861,8 @@
       "class": "module"
     },
     "skill-recorder": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/skills/recording/recorder-client.ts", "lib/skills/recording/types.ts"]
     },
     "skills": {
       "class": "kernel"
@@ -977,7 +978,8 @@
       "class": "foundation"
     },
     "theme": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/theme/theme-registry.ts"]
     },
     "thread-handoff": {
       "class": "module"

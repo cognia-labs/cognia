@@ -248,6 +248,10 @@ describe("helpers", () => {
     expect(
       rulesetForTools([{ name: "x_tidy", declaration: { consent: "ask", effect: "write" } }])
     ).toEqual({ x_tidy: "ask", "mcp__cognia-plugin-tools__x_tidy": "ask" })
+    // `"default"` writes no rule: the run's own approval decides.
+    expect(
+      rulesetForTools([{ name: "x_peek", declaration: { consent: "default", effect: "read" } }])
+    ).toEqual({})
   })
 
   it("reads the host from the platform markers", () => {

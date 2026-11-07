@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）、T5（Sites + vector）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§12。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）、T5（Sites + vector）、T6（验收 + 编辑器）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§13。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -262,8 +262,24 @@ interface ToolSurface {
 - 门槛：Sites 只在 `host === "desktop"`（原来是 `isTauri()`）；vector 要 `selfInvokeTools.vector`、桌面、且会话或运行工作区有项目（与原来相同）。
 - 声明：`list_sites` allow/read，`build_site` allow/write，`deploy_site` ask/outbound；`vector_search` ask/read，`vector_add_document`、`vector_delete_document` ask/write；全部 `cancellable: false`。
   - `deploy_site` 原本就在风险集合和 `HOST_TOOL_CLASSES` 里按名字记为外发，现在由声明派生，两处手写删除，行为不变。
-  - vector 以前没有同意档，按"无规则即询问"落到人工审批，所以声明为 `ask`。区别只有一处：用户写了 `"*": "allow"` 这类通配规则时，以前会放行，现在按工具名的 `ask` 优先（解析器里工具名匹配高于通配）。用户给这三个工具写的具体规则仍然覆盖。
+  - vector 以前没有同意档，按"无规则即询问"落到人工审批。提交时先声明为 `ask`；T6 新增 `consent: "default"` 后改用它（见 §13），不再写规则，与迁移前完全一致。
   - vector 的运行器本来就接中止信号（与超时合并），以前分发器没传；现在传 `call.signal`。实时语音照旧不提供（已发到原生端的写入不会撤销）。
 - 删除：`site-tool-rules`（及测试）、`build-options` 的 `sitesToolsSurfaced`、同意档参数和两段追加、`plugin-tool-ipc` 的两个分支和向量依赖解析、探针名单 4 个名字、实时语音名单 3 个名字、风险集合和 `HOST_TOOL_CLASSES` 里的 `deploy_site`。最佳 N 选一的 grant 拒绝名单和探针允许名单里的 `vector_search` 是策略选择，保留。
 - 还清方向边 3 条：`sites-builtin-tools -> sites`、`vector-builtin-tools -> vector`、`plugin-tool-ipc -> vector`。收敛清单 `lib-store-imperative`：旧 Sites 条目改到新路径；向量依赖解析读的 vector store 和 project store 随文件搬走，新增一个成员（`plugin-tool-ipc` 还有别的读取，仍是成员，去掉它的 `stores/index.ts`），附例外记录 `2026-11-07-vector-agent-tools-stores.json`。
 - 测试：两族各自的测试改到新位置并加 `toolFamily` 用例；两个 manifest 测试；build-options 的向量用例改为模拟 `detectPlatform`；IPC 的向量用例走模块注册表（`useModuleTools`）；`ipc.test.ts` 给向量条目补上内核会加的 `pluginId`。
+
+## 13. T6 实施记录：托管桌面验收与编辑器（2026-11-07）
+
+- spawn_task 试过、已撤回：`spawn-task-dispatch` 写停靠栏的 store，`tasks` 要依赖 `artifact`；而 `artifact` 已依赖 `tasks`（停靠栏渲染 Tasks 面板、用 `SIDECHAT_PANEL_ID`）。要先把 Tasks 面板改成贡献点、把 sidechat 面板 id 移到 artifact，再迁。改动保存在 `~/.cognia-briefs/patches/spawn-task-tools-wip.patch`。
+- `automation` 成为 manifest 模块（归属表行删除）：`dependsOn` companion、remote-desktop、skill-recorder，`requires: ["ocr?"]`（屏幕 OCR 走端口，缺提供方时报类型化错误）；`api` 为门禁报的 19 个被引用文件加工具族。companion、skill-recorder、remote-desktop 的行补 `api`。
+  - 工具族 `lib/claude/acceptance-builtin-tools.ts` → `lib/automation/agent-tools.ts`：仅桌面；有 `managedAcceptance.acceptanceId` 的子会话给两个证据工具；其他非 IM 会话（含无会话）给提议工具；有 `managedAcceptance` 但没有 id 时都不给。
+  - 声明：`acceptance_checkpoint`、`acceptance_complete` allow/write，`propose_acceptance` allow/read，全部不可取消。
+  - 以前分发器也接受 `mcp__cognia-plugin-tools__` 前缀的名字；模块分发只按裸名。sidecar 两条路径（`tools/plugin/proxy.ts`、`tools/adapters/ai-sdk.ts`）都发清单里的裸名，所以前缀写法实际不会出现，测试里去掉了这一例。
+- `codeserver`（Pro IDE）成为 manifest 模块：`dependsOn` appearance、browser、canvas、data、editor、issues、theme；`api` 为 16 个被引用文件加工具族；`hooks/codeserver/use-code-server-workspace-sync.ts` 的 `hooks/data` 桶导入改成具体文件（测试 mock 同步）；editor、browser、appearance、theme、issues 的行补 `api`。
+  - 归属：编辑器工具放 `codeserver` 而不是 `editor`：`components/editor/project/project-file-review-panel.tsx` 引用 artifact，而 artifact 依赖 editor，editor 成为 manifest 会成环。读取工具不分引擎，但整族的写入一半只有 code-server 能做，ADR-0088 也是 Pro IDE 的 ADR。
+  - 工具族连同 `resolveEditorToolDeps` 搬到 `lib/codeserver/agent-tools.ts`；`surface`：有工作区且 `hasWorkspaceFsBackend()` 时给 `read_active_editor`，再有 `pro-ide` 能力时加五个写入工具（与原来的 `proIdeWriteToolsAvailable` 一致，该函数删除）。
+  - 声明：`read_active_editor` default/read；`open_in_editor`、`reveal_in_editor`、`show_editor_diff`、`apply_editor_edit` allow/write；`save_editor_buffers` ask/write；全部不可取消。
+- 新增 `consent: "default"`（评审选择）：`read_active_editor` 以前没有同意档，几乎每个带工作区的桌面回合都会提供；写成 `ask` 会让这些回合多一个规则集（测试"still omits the EDITOR tier"失败），并压过用户对整个工具写的通配规则。`"default"` 不写规则、不加 `requiresApproval`，调用交给本次运行自己的审批。类型、`rulesetForTools`、门禁的 `TOOL_CONSENTS`、门禁测试、ADR 文字、CLAUDE.md 同步；vector 三个工具也改用它。
+- 删除：两个同意档文件（及测试）、`build-options` 的验收门槛和追加段、编辑器追加段和 `proIdeWriteToolsAvailable`、`plugin-tool-ipc` 的验收和编辑器分支与编辑器依赖解析、探针名单 5 个名字、实时语音名单 1 个名字。
+- 还清方向边 2 条：`acceptance-builtin-tools -> automation`、`plugin-tool-ipc -> codeserver`。收敛清单 `lib-store-imperative`：编辑器依赖解析读 project store，随文件搬走，新增一个成员（`plugin-tool-ipc` 去掉 `stores/project/project-store.ts`，仍是成员），附例外记录 `2026-11-07-codeserver-agent-tools-stores.json`。
+- 既有失败（未改，不属本次）：`lib/claude/agents/dispatch-run.identity.test.ts` 7 例（多智能体那条线的派发改动）、`lib/claude/usage.test.ts` 目录对照 1 例。

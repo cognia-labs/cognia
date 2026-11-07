@@ -1,12 +1,12 @@
 /**
  * First-class editor tools (editor ⇄ agent).
  *
- * Surfaced to the agent as a plugin-manifest entry (same wire as the promoted
- * web tools) but resolved host-side in `plugin-tool-ipc`, because it needs the
- * renderer's project-editor bridge AND the PII gate (`@cognia/redact`) —
- * neither reachable from the pure `.mjs` sidecar. `build-options` appends
- * {@link buildEditorBuiltinManifestEntries} when a workspace filesystem backend
- * exists (desktop).
+ * The `codeserver` (Pro IDE) module's tool family (ADR-0250 §14 amendment):
+ * the manifest declares the tools, and the kernel offers them as
+ * plugin-manifest entries and routes their calls here, host-side, because
+ * they need the renderer's project-editor bridge AND the PII gate
+ * (`@cognia/redact`), neither reachable from the sidecar. The read is
+ * offered when a workspace filesystem backend exists (desktop).
  *
  * **Engine-agnostic.** The read resolves through `project-editor-bridge`, so
  * whichever editor is mounted answers — Monaco assembles the snapshot from its
@@ -35,7 +35,7 @@
  * address the bound Pro IDE via `resolveProIdeRoot` and degrade to a structured
  * `{ available: false }` when none is bound.
  *
- * **Consent is tiered, not uniform** — see `./permissions/editor-tool-rules`.
+ * **Consent is tiered, not uniform**, in the manifest (`./module.ts`).
  * Four of the five only move the user's viewport or reflect a write that already
  * happened on disk; `save_editor_buffers` is the one that forces the user's own
  * unsaved edits to disk, so it is the one that asks.
@@ -43,6 +43,11 @@
 
 import type { ActiveEditorContext } from "@/lib/files/project-editor-bridge"
 import { screenActiveEditorContext } from "@/lib/files/active-editor-screen"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 
 export const READ_ACTIVE_EDITOR_TOOL_NAME = "read_active_editor"
 export const OPEN_IN_EDITOR_TOOL_NAME = "open_in_editor"
@@ -68,21 +73,11 @@ export type EditorWriteToolName = (typeof EDITOR_WRITE_TOOL_NAMES)[number]
 
 const EDITOR_WRITE_TOOL_SET: ReadonlySet<string> = new Set(EDITOR_WRITE_TOOL_NAMES)
 
-/** Synthetic plugin id tagging the promoted editor built-in manifest entry. */
-export const EDITOR_BUILTIN_PLUGIN_ID = "cognia-editor-builtin"
-
 const READ_ACTIVE_EDITOR_SCHEMA = {
   type: "object",
   properties: {},
   required: [],
 } as const
-
-export interface EditorBuiltinManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-}
 
 /**
  * Manifest entry for `read_active_editor`. Appended to `opts.pluginTools` by
@@ -104,7 +99,7 @@ const POSITION_PROPERTIES = {
  * Split from the read entry because they are appended under a different
  * condition: the read works with any mounted editor, these need code-server.
  */
-export function buildEditorWriteManifestEntries(): EditorBuiltinManifestEntry[] {
+export function buildEditorWriteManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: OPEN_IN_EDITOR_TOOL_NAME,
@@ -115,7 +110,6 @@ export function buildEditorWriteManifestEntries(): EditorBuiltinManifestEntry[] 
         properties: { path: PATH_PROPERTY, ...POSITION_PROPERTIES },
         required: ["path"],
       },
-      pluginId: EDITOR_BUILTIN_PLUGIN_ID,
     },
     {
       name: REVEAL_IN_EDITOR_TOOL_NAME,
@@ -126,7 +120,6 @@ export function buildEditorWriteManifestEntries(): EditorBuiltinManifestEntry[] 
         properties: { path: PATH_PROPERTY },
         required: ["path"],
       },
-      pluginId: EDITOR_BUILTIN_PLUGIN_ID,
     },
     {
       name: SHOW_EDITOR_DIFF_TOOL_NAME,
@@ -144,7 +137,6 @@ export function buildEditorWriteManifestEntries(): EditorBuiltinManifestEntry[] 
         },
         required: ["path", "content"],
       },
-      pluginId: EDITOR_BUILTIN_PLUGIN_ID,
     },
     {
       name: APPLY_EDITOR_EDIT_TOOL_NAME,
@@ -155,7 +147,6 @@ export function buildEditorWriteManifestEntries(): EditorBuiltinManifestEntry[] 
         properties: { path: PATH_PROPERTY, ...POSITION_PROPERTIES },
         required: ["path"],
       },
-      pluginId: EDITOR_BUILTIN_PLUGIN_ID,
     },
     {
       name: SAVE_EDITOR_BUFFERS_TOOL_NAME,
@@ -171,26 +162,19 @@ export function buildEditorWriteManifestEntries(): EditorBuiltinManifestEntry[] 
         },
         required: [],
       },
-      pluginId: EDITOR_BUILTIN_PLUGIN_ID,
     },
   ]
 }
 
-export function buildEditorBuiltinManifestEntries(): EditorBuiltinManifestEntry[] {
+export function buildEditorBuiltinManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: READ_ACTIVE_EDITOR_TOOL_NAME,
       description:
         "Read what the user is currently looking at in the project editor: the focused file, the selection (1-based) and selected text, that file's diagnostics, and the open editors. Works with either editor engine (the built-in editor or the embedded VS Code 'Pro IDE'). Returns { available: false } when no project editor is open for this session. Does not return whole-file contents — read files with your file tools.",
       jsonSchema: READ_ACTIVE_EDITOR_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: EDITOR_BUILTIN_PLUGIN_ID,
     },
   ]
-}
-
-/** Is this tool name one of the promoted editor built-ins? */
-export function isEditorBuiltinTool(name: string): boolean {
-  return name === READ_ACTIVE_EDITOR_TOOL_NAME || EDITOR_WRITE_TOOL_SET.has(name)
 }
 
 /** Is this tool name one of the Pro-IDE-only write tools? */
@@ -408,4 +392,85 @@ async function runEditorWriteTool(
       reason: `The Pro IDE did not accept this: ${cause instanceof Error ? cause.message : String(cause)}`,
     }
   }
+}
+
+/**
+ * Resolve the renderer-side deps: the session's execution root, the editor
+ * bridge, the PII gate and the code-server client.
+ */
+export async function resolveEditorToolDeps(): Promise<EditorToolRunDeps> {
+  const [
+    { readActiveFromProjectEditor },
+    { getSession },
+    { sessionExecutionRootPath },
+    { useProjectStore },
+    { hasNoLeakingPiiDeep },
+    { codeServerClient },
+    { getActiveProIdeRoot },
+  ] = await Promise.all([
+    import("@/lib/files/project-editor-bridge"),
+    import("@/lib/db/sessions"),
+    import("@/lib/workspace/session-root"),
+    import("@/stores/project/project-store"),
+    import("@cognia/redact"),
+    import("./client"),
+    import("./pane-manager"),
+  ])
+  return {
+    resolveRoot: async (sessionId) => {
+      const session = await getSession(sessionId).catch(() => null)
+      const projects = useProjectStore.getState().projects
+      // The conversation's execution root: a plugin reading "the open file"
+      // must read the tree the agent just edited, not the one its worktree was
+      // cut from.
+      return sessionExecutionRootPath(session, projects) ?? null
+    },
+    // Through the bridge, not `codeServerClient`: whichever engine is mounted
+    // answers. Reading code-server directly made the tool return
+    // `{available:false}` for every user who never switched to Pro IDE — i.e.
+    // almost all of them — while Monaco could answer the whole time.
+    readActive: readActiveFromProjectEditor,
+    gate: (payload) => hasNoLeakingPiiDeep(payload),
+    // The write half goes direct to code-server rather than through the bridge:
+    // a native diff view, an undo-able external-edit reflection and an explorer
+    // reveal have no Monaco equivalent for the bridge to dispatch to.
+    proIde: {
+      resolveProIdeRoot: getActiveProIdeRoot,
+      open: (root, path, line, column) => codeServerClient.driveOpen(root, path, line, column),
+      reveal: (root, path) => codeServerClient.reveal(root, path),
+      showDiff: (root, path, content, title) =>
+        codeServerClient.showDiff(root, path, content, title),
+      applyEdit: (root, path, line, column) =>
+        codeServerClient.driveApplyEdit(root, path, line, column),
+      saveAll: (root, path) => codeServerClient.saveAll(root, path),
+    },
+  }
+}
+
+/**
+ * The family the kernel loads. The read is offered to a run with a workspace
+ * on a host with a workspace filesystem backend (the desktop): whichever
+ * editor is mounted answers it. The write tools also need the Pro IDE
+ * capability, since they drive code-server.
+ */
+export const toolFamily: ModuleToolFamily = {
+  async surface(ctx: ToolSurfaceContext) {
+    if (!ctx.activeProject) return null
+    const [{ hasWorkspaceFsBackend }, { hasCapability }] = await Promise.all([
+      import("@/lib/files/workspace-backend"),
+      import("@/lib/platform/capabilities"),
+    ])
+    if (!hasWorkspaceFsBackend()) return null
+    return {
+      tools: [
+        ...buildEditorBuiltinManifestEntries(),
+        ...(hasCapability("pro-ide") ? buildEditorWriteManifestEntries() : []),
+      ],
+    }
+  },
+  async run(name, args, call) {
+    return runEditorBuiltinTool(name, args, await resolveEditorToolDeps(), {
+      sessionId: call.sessionId,
+    })
+  },
 }

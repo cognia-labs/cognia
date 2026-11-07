@@ -8,7 +8,7 @@
  * already given.
  *
  * This closes a real asymmetry — first-party code could already open files,
- * reflect agent edits, and read the active editor (`lib/claude/editor-builtin-tools.ts`),
+ * reflect agent edits, and read the active editor (`lib/codeserver/agent-tools.ts`),
  * while `lib/plugin/api/` had no editor surface at all.
  *
  * Permissions (`editor:read` / `editor:write`, plus `terminal:write` for shell

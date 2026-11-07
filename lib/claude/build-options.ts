@@ -1231,29 +1231,6 @@ async function teamHasKnowledgeTwins(
 }
 
 /**
- * Whether this turn should surface the Pro-IDE-only editor write tools — and,
- * with them, their baked-in consent tier.
- *
- * Three conditions, all of them real: a project to act inside, a workspace
- * filesystem backend (the same gate the read tool uses), and a shell that can
- * host code-server at all. Never throws: a failure to answer means "do not
- * surface", because the write tools are an enhancement and no turn should fail
- * over their absence.
- */
-async function proIdeWriteToolsAvailable(ctx: BuildOptionsContext): Promise<boolean> {
-  if (!ctx.activeProject) return false
-  try {
-    const [{ hasWorkspaceFsBackend }, { hasCapability }] = await Promise.all([
-      import("@/lib/files/workspace-backend"),
-      import("@/lib/platform/capabilities"),
-    ])
-    return hasWorkspaceFsBackend() && hasCapability("pro-ide")
-  } catch {
-    return false
-  }
-}
-
-/**
  * Add a session-stable section to `appendSystemPrompt`, ahead of the per-turn
  * dynamic tail when that tail is already in place.
  *
@@ -3100,18 +3077,15 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // result is key-sorted so the serialized SendOptions stay byte-identical
   // across turns (provider prompt-cache prefix matching).
   //
-  // The Pro IDE editor tools carry a baked-in tier (`editor-tool-rules`) as the
-  // LOWEST layer, so `save_editor_buffers` asks by default while the four
-  // viewport-only tools do not — and an explicit user rule still overrides
-  // either way. It is a genuine exception to "only explicit rules are sent":
-  // without it every one of the five would prompt on every call, since a
-  // non-shell tool with no rule falls through to a human approval.
-  //
-  // Gated on the same condition that surfaces the tools, not merely on desktop:
-  // rules for tools this turn never offers are inert payload, and emitting them
-  // unconditionally would also break the "no rules configured → no ruleset at
-  // all" invariant that keeps SendOptions byte-identical across turns for the
-  // provider prompt cache.
+  // Module-contributed tools carry the tier their manifest declares as the
+  // LOWEST layer (`contributedTools.ruleset`), so an explicit user rule still
+  // overrides it either way. It is a genuine exception to "only explicit
+  // rules are sent": without it every such tool would prompt on every call,
+  // since a non-shell tool with no rule falls through to a human approval.
+  // It covers exactly the tools this turn offers: rules for tools it never
+  // offers are inert payload, and emitting them unconditionally would also
+  // break the "no rules configured → no ruleset at all" invariant that keeps
+  // SendOptions byte-identical across turns for the provider prompt cache.
   // Whether this send has an artifact dock on the other end. An IM-bound
   // session does not: a chart or canvas artifact would arrive as raw JSON.
   // It gates the routing prompt (ADR-0139) and the dock-bound tool families
@@ -3124,29 +3098,16 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const artifactAuthoringEnabled =
     artifactsChannelAvailable && appSettings?.artifacts?.agentAuthoring !== false
 
-  const editorWriteToolsSurfaced = await proIdeWriteToolsAvailable(ctx)
   const commandRules = appSettings?.agentPermissions?.commandRules
   const toolRules = appSettings?.agentPermissions?.toolRules
-  const { buildEditorToolRuleset } = await import("@/lib/claude/permissions/editor-tool-rules")
   // Template / chat-template / squad tools (ADR-0164). Opt-in, and withheld
   // for an IM-bound session for the same reason the artifact tools are: the
   // consent overlay every write inside them asks has no screen to appear on.
   const templateToolsEnabled =
     artifactsChannelAvailable && appSettings?.selfInvokeTools?.templates === true
-  // Managed desktop acceptance (ADR-0233 A6). The evidence tools exist only in
-  // the child session a Host acceptance run was attached to; every other
-  // desktop chat may propose an acceptance, which reads deliveries and a price
-  // and cannot spend. Both talk to the local Host, so both need the desktop.
-  const managedAcceptanceHost = (await import("@/lib/tauri")).isTauri() && !isCliHost()
-  const acceptanceToolsSurfaced =
-    managedAcceptanceHost && Boolean(session?.managedAcceptance?.acceptanceId)
-  const acceptanceProposalSurfaced =
-    managedAcceptanceHost && artifactsChannelAvailable && !session?.managedAcceptance
   const { buildTemplateToolRuleset } = await import("@/lib/claude/permissions/template-tool-rules")
   const { buildAgentBuilderToolRuleset } =
     await import("@/lib/claude/permissions/agent-builder-tool-rules")
-  const { buildAcceptanceProposalToolRuleset, buildAcceptanceToolRuleset } =
-    await import("@/lib/claude/permissions/acceptance-tool-rules")
   // In-process tools feature modules contribute (ADR-0250 §14 amendment). One
   // answer per family gates both its manifest entries below and the tier
   // derived from their declarations here, so neither appears without the other.
@@ -3161,11 +3122,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     activeProject: ctx.activeProject ?? null,
   })
   const mergedRuleset = mergeRulesets(
-    editorWriteToolsSurfaced ? buildEditorToolRuleset() : undefined,
     templateToolsEnabled ? buildTemplateToolRuleset() : undefined,
     agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
-    acceptanceToolsSurfaced ? buildAcceptanceToolRuleset() : undefined,
-    acceptanceProposalSurfaced ? buildAcceptanceProposalToolRuleset() : undefined,
     contributedTools.ruleset,
     commandRules && Object.keys(commandRules).length > 0 ? { Bash: commandRules } : undefined,
     toolRules
@@ -4147,29 +4105,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // First-class editor context tool — read_active_editor (Pro IDE → agent).
-  // Appended OUTSIDE the disablePluginTools gate when a workspace filesystem
-  // backend exists (desktop), and resolved host-side in plugin-tool-ipc where the
-  // renderer transport + PII gate live. On web/mobile there is no backend, so it
-  // is not surfaced at all.
-  try {
-    const { hasWorkspaceFsBackend } = await import("@/lib/files/workspace-backend")
-    if (ctx.activeProject && hasWorkspaceFsBackend()) {
-      const { buildEditorBuiltinManifestEntries, buildEditorWriteManifestEntries } =
-        await import("@/lib/claude/editor-builtin-tools")
-      opts.pluginTools = [...(opts.pluginTools ?? []), ...buildEditorBuiltinManifestEntries()]
-      // The write tools are Pro-IDE-only (native diff view, undo-able external
-      // edit, explorer reveal), so they ride the same flag the consent tier was
-      // gated on above — one source of truth, so the tools and their rules can
-      // never be surfaced apart from each other.
-      if (editorWriteToolsSurfaced) {
-        opts.pluginTools = [...opts.pluginTools, ...buildEditorWriteManifestEntries()]
-      }
-    }
-  } catch (err) {
-    loggers.app.warn("failed to append editor built-in tool", { error: String(err) })
-  }
-
   // Plugin conversion is a prompt-skill-backed capability, not a global
   // plugin-tool toggle. Preload its two typed tools when the skill is active,
   // or when the opt-in Skill self-loader may activate it during the turn.
@@ -4216,24 +4151,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
   }
 
-  // Managed desktop acceptance (ADR-0233 A6). Gated on the same flags as the
-  // consent tier above.
-  if (acceptanceToolsSurfaced || acceptanceProposalSurfaced) {
-    try {
-      const { buildAcceptanceManifestEntries, buildAcceptanceProposalManifestEntries } =
-        await import("@/lib/claude/acceptance-builtin-tools")
-      const entries = acceptanceToolsSurfaced
-        ? buildAcceptanceManifestEntries()
-        : buildAcceptanceProposalManifestEntries()
-      const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
-      opts.pluginTools = [
-        ...(opts.pluginTools ?? []),
-        ...entries.filter((entry) => !existing.has(entry.name)),
-      ]
-    } catch (err) {
-      loggers.app.warn("failed to append acceptance built-in tools", { error: String(err) })
-    }
-  }
   // Template / chat-template / squad tools (ADR-0164). Gated on the same
   // condition as their consent tier above, so the tier is never surfaced
   // apart from the tools it governs.

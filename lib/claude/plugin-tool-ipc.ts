@@ -47,11 +47,6 @@ import {
   runSlashCommandBuiltinTool,
   type SlashToolRunDeps,
 } from "./slash-builtin-tools"
-import {
-  isEditorBuiltinTool,
-  runEditorBuiltinTool,
-  type EditorToolRunDeps,
-} from "./editor-builtin-tools"
 import { isTeamBuiltinTool, runTeamBuiltinTool } from "./team-builtin-tools"
 import { getTeamDispatchContext } from "./agents/dispatch-context-registry"
 import { isWorkingSetTool, runWorkingSetTool, type WorkingSetStore } from "./working-set-tool"
@@ -60,12 +55,6 @@ import {
   runProjectHistorySearch,
   type ProjectHistoryToolDeps,
 } from "./project-history-tool"
-import {
-  isAcceptanceBuiltinTool,
-  isAcceptanceProposalTool,
-  runAcceptanceBuiltinTool,
-  runAcceptanceProposalTool,
-} from "./acceptance-builtin-tools"
 import {
   isTemplateBuiltinTool,
   resolveTemplateToolDeps as resolveProductionTemplateToolDeps,
@@ -307,55 +296,6 @@ async function resolveSlashToolDeps(): Promise<SlashToolRunDeps> {
     }
   } catch {
     return {}
-  }
-}
-
-async function resolveEditorToolDeps(): Promise<EditorToolRunDeps> {
-  const [
-    { readActiveFromProjectEditor },
-    { getSession },
-    { sessionExecutionRootPath },
-    { useProjectStore },
-    { hasNoLeakingPiiDeep },
-    { codeServerClient },
-    { getActiveProIdeRoot },
-  ] = await Promise.all([
-    import("@/lib/files/project-editor-bridge"),
-    import("@/lib/db/sessions"),
-    import("@/lib/workspace/session-root"),
-    import("@/stores/project/project-store"),
-    import("@cognia/redact"),
-    import("@/lib/codeserver/client"),
-    import("@/lib/codeserver/pane-manager"),
-  ])
-  return {
-    resolveRoot: async (sessionId) => {
-      const session = await getSession(sessionId).catch(() => null)
-      const projects = useProjectStore.getState().projects
-      // The conversation's execution root: a plugin reading "the open file"
-      // must read the tree the agent just edited, not the one its worktree was
-      // cut from.
-      return sessionExecutionRootPath(session, projects) ?? null
-    },
-    // Through the bridge, not `codeServerClient`: whichever engine is mounted
-    // answers. Reading code-server directly made the tool return
-    // `{available:false}` for every user who never switched to Pro IDE — i.e.
-    // almost all of them — while Monaco could answer the whole time.
-    readActive: readActiveFromProjectEditor,
-    gate: (payload) => hasNoLeakingPiiDeep(payload),
-    // The write half goes direct to code-server rather than through the bridge:
-    // a native diff view, an undo-able external-edit reflection and an explorer
-    // reveal have no Monaco equivalent for the bridge to dispatch to.
-    proIde: {
-      resolveProIdeRoot: getActiveProIdeRoot,
-      open: (root, path, line, column) => codeServerClient.driveOpen(root, path, line, column),
-      reveal: (root, path) => codeServerClient.reveal(root, path),
-      showDiff: (root, path, content, title) =>
-        codeServerClient.showDiff(root, path, content, title),
-      applyEdit: (root, path, line, column) =>
-        codeServerClient.driveApplyEdit(root, path, line, column),
-      saveAll: (root, path) => codeServerClient.saveAll(root, path),
-    },
   }
 }
 
@@ -649,18 +589,6 @@ async function runPluginToolExec(
       const result = await runWebBuiltinTool(request.name, request.args, { ...webDeps, signal })
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
-    // ── Promoted editor built-in — read_active_editor (Pro IDE → agent) ────
-    // Host-routed: needs the renderer transport (codeserver_agent_read_active)
-    // and the `@cognia/redact` PII gate, neither reachable from the .mjs sidecar.
-    if (isEditorBuiltinTool(request.name)) {
-      const result = await runEditorBuiltinTool(
-        request.name,
-        request.args,
-        await resolveEditorToolDeps(),
-        { sessionId: request.sessionId }
-      )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
     // ── Promoted spawn_task built-in — stage a user-started sidechat ──────
     if (isSpawnTaskBuiltinTool(request.name)) {
       const result = await runSpawnTaskBuiltinTool(
@@ -739,22 +667,6 @@ async function runPluginToolExec(
         await resolveTemplateToolDeps(),
         { sessionId: request.sessionId }
       )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    // ── Managed desktop acceptance (ADR-0233 A6) ──────────────────────────
-    // The evidence tools act only for the session the Host run was attached
-    // to (the Host rechecks the delegation and session key); the proposal
-    // reads deliveries and a price and never spends.
-    if (isAcceptanceBuiltinTool(request.name)) {
-      const result = await runAcceptanceBuiltinTool(request.name, request.args, {
-        sessionId: request.sessionId,
-      })
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    if (isAcceptanceProposalTool(request.name)) {
-      const result = await runAcceptanceProposalTool(request.args, {
-        sessionId: request.sessionId,
-      })
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── Promoted Skill built-in — load a skill's instructions ──────────────
