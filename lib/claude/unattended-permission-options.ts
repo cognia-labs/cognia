@@ -69,8 +69,6 @@ export const WORKSPACE_PLUGIN_PERMISSIONS: ReadonlySet<string> = new Set([
  */
 export const HOST_TOOL_CLASSES: Readonly<Record<string, readonly PermissionClass[]>> =
   Object.freeze({
-    // Publishes a site to an external host.
-    deploy_site: ["outbound"],
     // Puts a stored password into a web page (ADR-0201).
     browser_fill_credential: ["secrets"],
   })

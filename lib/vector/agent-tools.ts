@@ -2,11 +2,11 @@
  * Host-routed vector agent tools — `vector_search`, `vector_add_document`,
  * `vector_delete_document`.
  *
- * Surfaced to the agent as plugin-manifest entries (the same wire as
- * `ask_user` / `web_search` / `Skill`) and resolved host-side in
- * `plugin-tool-ipc`, because the native vector store is reachable only from
- * the renderer/CLI host: it is a Tauri command surface plus TS the pure `.mjs`
- * sidecar cannot import. No MCP process is involved and no second vector
+ * The `vector` module's tool family (ADR-0250 §14 amendment): the manifest
+ * declares the tools, and the kernel offers them as plugin-manifest entries
+ * and routes their calls here, host-side, because the native vector store is
+ * reachable only from the renderer/CLI host: it is a Tauri command surface
+ * plus TS the sidecar cannot import. No MCP process is involved and no second vector
  * backend is introduced — `lib/vector/agent-vector-service` instantiates the
  * existing `NativeVectorStore` directly.
  *
@@ -29,6 +29,11 @@
  */
 
 import { hasNoLeakingPii, hasNoLeakingPiiDeep } from "@cognia/redact"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 import type { PluginAPIPermission } from "@/types/plugin/plugin"
 import type { PayloadFilter } from "@cognia/vector/store"
 import {
@@ -36,30 +41,34 @@ import {
   checkLogicalCollection,
   describeLogicalCollectionRejection,
   resolveAgentCollection,
-} from "@/lib/vector/agent-collections"
-import type { AgentVectorService } from "@/lib/vector/agent-vector-service"
-import { VectorServiceError } from "@/lib/vector/agent-vector-service"
+} from "./agent-collections"
+import type { AgentVectorService } from "./agent-vector-service"
+import { VectorServiceError } from "./agent-vector-service"
 import {
   recordVectorToolAudit,
   type VectorToolDenialReason,
   type VectorToolOperation,
-} from "@/lib/vector/agent-tool-audit"
+} from "./agent-tool-audit"
 
 export const VECTOR_SEARCH_TOOL_NAME = "vector_search"
 export const VECTOR_ADD_DOCUMENT_TOOL_NAME = "vector_add_document"
 export const VECTOR_DELETE_DOCUMENT_TOOL_NAME = "vector_delete_document"
 
-/** Synthetic plugin id tagging the promoted built-in vector manifest entries. */
+/**
+ * The synthetic subject the tools' permissions are granted to in the shared
+ * `PluginAPIPermission` space (`./agent-tool-permissions`).
+ */
 export const VECTOR_BUILTIN_PLUGIN_ID = "cognia-vector-builtin"
 
 /** Default per-call wall-clock budget. Embedding + search over a cold index. */
 export const DEFAULT_VECTOR_TOOL_TIMEOUT_MS = 30_000
 
-const VECTOR_TOOL_NAMES = new Set<string>([
+/** Every vector tool, in the order they are surfaced to the model. */
+export const VECTOR_TOOL_NAMES = [
   VECTOR_SEARCH_TOOL_NAME,
   VECTOR_ADD_DOCUMENT_TOOL_NAME,
   VECTOR_DELETE_DOCUMENT_TOOL_NAME,
-])
+] as const
 
 /** Permissions each tool requires, in the shared `PluginAPIPermission` space. */
 export const VECTOR_TOOL_PERMISSIONS: Record<string, readonly PluginAPIPermission[]> = {
@@ -139,46 +148,28 @@ const VECTOR_DELETE_DOCUMENT_SCHEMA = {
   required: ["id"],
 } as const
 
-export interface VectorBuiltinManifestEntry {
-  name: string
-  description: string
-  jsonSchema: Record<string, unknown>
-  pluginId: string
-}
-
-/**
- * Manifest entries for the three vector tools. Appended to `opts.pluginTools`
- * by `build-options` when `selfInvokeTools.vector` is on.
- */
-export function buildVectorManifestEntries(): VectorBuiltinManifestEntry[] {
+/** The three vector tools as the model sees them. */
+export function buildVectorManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: VECTOR_SEARCH_TOOL_NAME,
       description:
         "Semantic search over the current project's vector memory. Returns ranked documents with their similarity scores and metadata. Use it to recall facts, notes or files you stored earlier in this project.",
       jsonSchema: VECTOR_SEARCH_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: VECTOR_BUILTIN_PLUGIN_ID,
     },
     {
       name: VECTOR_ADD_DOCUMENT_TOOL_NAME,
       description:
         "Store a document in the current project's vector memory so it can be recalled later with vector_search. The collection is created on first write.",
       jsonSchema: VECTOR_ADD_DOCUMENT_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: VECTOR_BUILTIN_PLUGIN_ID,
     },
     {
       name: VECTOR_DELETE_DOCUMENT_TOOL_NAME,
       description:
         "Remove a document from the current project's vector memory by id. Returns deleted:false when the id or collection does not exist.",
       jsonSchema: VECTOR_DELETE_DOCUMENT_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: VECTOR_BUILTIN_PLUGIN_ID,
     },
   ]
-}
-
-/** Is this tool name one of the promoted vector built-ins? */
-export function isVectorBuiltinTool(name: string): boolean {
-  return VECTOR_TOOL_NAMES.has(name)
 }
 
 export interface VectorToolRunDeps {
@@ -289,8 +280,7 @@ function positiveNumber(raw: unknown): number | undefined {
 }
 
 /**
- * Execute a vector built-in host-side. Called from `plugin-tool-ipc`'s
- * `plugin_tool_exec` handler. Never throws.
+ * Execute a vector tool host-side. Never throws.
  */
 export async function runVectorBuiltinTool(
   name: string,
@@ -457,4 +447,100 @@ let fallbackCounter = 0
 function defaultDocumentId(): string {
   fallbackCounter = (fallbackCounter + 1) % 1_000_000
   return `vdoc_${Date.now().toString(36)}_${fallbackCounter.toString(36)}`
+}
+
+let vectorToolDepsOverride: (() => Promise<VectorToolRunDeps> | VectorToolRunDeps) | null = null
+
+/** Inject vector-tool deps (tests / CLI host). Pass `null` to restore default. */
+export function __setVectorToolDepsForTesting(
+  fn: (() => Promise<VectorToolRunDeps> | VectorToolRunDeps) | null
+): void {
+  vectorToolDepsOverride = fn
+}
+
+/**
+ * Build the vector tools' host deps: the native-only vector service bound to
+ * the user's configured embedding settings, the session→project resolver, and
+ * the permission check.
+ *
+ * Permissions live in the shared `PluginAPIPermission` space under the
+ * synthetic `cognia-vector-builtin` subject. Enabling `selfInvokeTools.vector`
+ * is the consent event, so the three permissions are seeded on first use; a
+ * host policy that revokes one through the permission guard still wins,
+ * because `hasApiOrGuardPermission` consults both.
+ */
+export async function resolveVectorToolDeps(): Promise<VectorToolRunDeps> {
+  if (vectorToolDepsOverride) return vectorToolDepsOverride()
+  const [
+    { createAgentVectorService },
+    { isTauri },
+    { vectorSettingsView },
+    { useVectorStore },
+    { DEFAULT_EMBEDDING_MODELS, resolveEmbeddingApiKey },
+    { hasApiOrGuardPermission },
+    { ensureVectorBuiltinPermissions },
+  ] = await Promise.all([
+    import("./agent-vector-service"),
+    import("@/lib/tauri"),
+    import("./settings"),
+    import("@/stores/vector/vector-store"),
+    import("@cognia/vector/embedding"),
+    import("@/lib/plugin/api/api-permission-gate"),
+    import("./agent-tool-permissions"),
+  ])
+  ensureVectorBuiltinPermissions()
+
+  return {
+    service: createAgentVectorService({
+      isTauri,
+      resolveEmbedding: () => {
+        const providerSettings = (vectorSettingsView.get()?.providerSettings ?? {}) as Parameters<
+          typeof resolveEmbeddingApiKey
+        >[1]
+        const vectorSettings = useVectorStore.getState().settings
+        const provider = (vectorSettings.embeddingProvider ||
+          "openai") as keyof typeof DEFAULT_EMBEDDING_MODELS
+        const defaults = DEFAULT_EMBEDDING_MODELS[provider]
+        if (!defaults) return null
+        return {
+          embeddingConfig: {
+            provider,
+            model: vectorSettings.embeddingModel || defaults.model,
+            dimensions: defaults.dimensions,
+          },
+          embeddingApiKey: resolveEmbeddingApiKey(provider, providerSettings),
+        }
+      },
+    }),
+    resolveProjectId: async (sessionId) => {
+      const [{ getSession }, { useProjectStore }] = await Promise.all([
+        import("@/lib/db/sessions"),
+        import("@/stores/project/project-store"),
+      ])
+      const session = await getSession(sessionId).catch(() => null)
+      return session?.projectId ?? useProjectStore.getState().activeProjectId ?? null
+    },
+    hasPermission: (permission) => hasApiOrGuardPermission(VECTOR_BUILTIN_PLUGIN_ID, permission),
+  }
+}
+
+/**
+ * The family the kernel loads. Opt-in through `selfInvokeTools.vector`, and
+ * offered only where the tools can run: the native sqlite-vec store needs the
+ * desktop, and collections are scoped to the run's project, so a run with no
+ * linked project would be handed three tools that can only return an error.
+ */
+export const toolFamily: ModuleToolFamily = {
+  surface(ctx: ToolSurfaceContext) {
+    if (ctx.settings?.selfInvokeTools?.vector !== true) return null
+    if (ctx.host !== "desktop") return null
+    if (!(ctx.session?.projectId ?? ctx.activeProject?.id)) return null
+    return { tools: buildVectorManifestEntries() }
+  },
+  async run(name, args, call) {
+    const deps = await resolveVectorToolDeps()
+    return runVectorBuiltinTool(name, args, call.signal ? { ...deps, signal: call.signal } : deps, {
+      sessionId: call.sessionId,
+    })
+  },
 }

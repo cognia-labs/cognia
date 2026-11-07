@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/convergence/inventories/lib-store-imperative.json",
+  "measure": "all",
+  "allowGrowth": 1,
+  "owner": "lib/vector",
+  "repaymentPhase": "3",
+  "reason": "The vector agent tools' dependency resolver moved from lib/claude/plugin-tool-ipc.ts into the vector module (lib/vector/agent-tools.ts, ADR-0250 §14 tools contribution). It reads the same two stores (the embedding choice in the vector store, the active project as the fallback scope) it read there; plugin-tool-ipc stays a member for its other reads, so the move counts one new file. Repaid when the vector module's embedding settings and the run's project reach the family through an injected interface instead of the stores."
+}

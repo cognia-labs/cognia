@@ -50,7 +50,8 @@
       "api": ["lib/agent-tasks/runtime.ts"]
     },
     "agent-trace": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/agent-trace/instrument.ts"]
     },
     "ai": {
       "class": "kernel"
@@ -202,7 +203,8 @@
       "class": "kernel"
     },
     "cli-bridge": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/cli-bridge/detect-cli.ts"]
     },
     "code-adoption": {
       "class": "module",
@@ -558,7 +560,8 @@
       "class": "foundation"
     },
     "logging": {
-      "class": "module"
+      "class": "module",
+      "api": ["hooks/logging/use-theme-colors.ts"]
     },
     "logto": {
       "class": "kernel"
@@ -753,7 +756,10 @@
     },
     "scheduler": {
       "class": "kernel",
-      "api": ["components/scheduler/run-artifact-links.tsx"]
+      "api": [
+        "components/scheduler/filter-chips.tsx",
+        "components/scheduler/run-artifact-links.tsx"
+      ]
     },
     "scm": {
       "class": "module",
@@ -850,9 +856,6 @@
     },
     "signaling": {
       "class": "kernel"
-    },
-    "sites": {
-      "class": "module"
     },
     "skill-marketplace": {
       "class": "module"
@@ -962,6 +965,7 @@
         "lib/terminal/completion/tokenize.ts",
         "lib/terminal/headless-exec.ts",
         "lib/terminal/pick-transport.ts",
+        "lib/terminal/spawn-orchestrator.ts",
         "lib/terminal/terminal-links.ts",
         "stores/terminal/terminal-store.ts"
       ]
@@ -1020,9 +1024,6 @@
     },
     "utils": {
       "class": "foundation"
-    },
-    "vector": {
-      "class": "module"
     },
     "vscode-compat": {
       "class": "module"

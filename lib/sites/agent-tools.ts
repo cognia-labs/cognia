@@ -1,15 +1,16 @@
 /**
  * Cognia Sites tools (agent ⇄ Sites), ADR-0084.
  *
- * Surfaced to the agent as plugin-manifest entries on the same wire as the
- * editor built-ins, and resolved host-side in `plugin-tool-ipc` — *not* in
- * `sidecar/builtin-tools/`. The sidecar is a pure `.mjs` process with no Dexie,
- * no OS keyring, and no Tauri `invoke`; every step of a publish needs all three
- * (`listSiteProjects` reads IndexedDB, the provider token comes out of the
- * keyring, and the build runs through `sandbox_exec`).
+ * The `sites` module's tool family (ADR-0250 §14 amendment): the manifest
+ * declares the tools, and the kernel offers them as plugin-manifest entries
+ * and routes their calls here, host-side — *not* to `sidecar/builtin-tools/`.
+ * The sidecar has no Dexie, no OS keyring, and no Tauri `invoke`; every step
+ * of a publish needs all three (`listSiteProjects` reads IndexedDB, the
+ * provider token comes out of the keyring, and the build runs through
+ * `sandbox_exec`). That is also why only the desktop is offered them.
  *
- * Consent is tiered rather than uniform — see
- * `./permissions/site-tool-rules`. Listing is a read. Building produces an
+ * Consent is tiered rather than uniform, in the manifest (`./module.ts`).
+ * Listing is a read. Building produces an
  * immutable local version and publishes nothing, which is why the console's own
  * gate for it is `edit` rather than `deploy`; making it ask would turn "prepare
  * a release" into a click-through and train the user to approve everything,
@@ -17,9 +18,11 @@
  * puts a URL other people can load in front of the world, with no undo —
  * `takeDown` removes the Site, it does not restore the previous version.
  */
-import type { EditorBuiltinManifestEntry } from "./editor-builtin-tools"
-
-export const SITES_BUILTIN_PLUGIN_ID = "cognia-sites-builtin"
+import type {
+  ModuleToolEntry,
+  ModuleToolFamily,
+  ToolSurfaceContext,
+} from "@/lib/modules/manifest-types"
 
 export const LIST_SITES_TOOL_NAME = "list_sites"
 export const BUILD_SITE_TOOL_NAME = "build_site"
@@ -68,36 +71,28 @@ const DEPLOY_SITE_SCHEMA = {
   additionalProperties: false,
 } as const
 
-/** Same wire shape the editor built-ins use — `build-options` appends both. */
-export function buildSitesBuiltinManifestEntries(): EditorBuiltinManifestEntry[] {
+/** The three tools as the model sees them. */
+export function buildSitesManifestEntries(): ModuleToolEntry[] {
   return [
     {
       name: LIST_SITES_TOOL_NAME,
       description:
         "List the user's Cognia Sites: id, name, worker name, lifecycle, and the live production URL when there is one. Read-only.",
       jsonSchema: LIST_SITES_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: SITES_BUILTIN_PLUGIN_ID,
     },
     {
       name: BUILD_SITE_TOOL_NAME,
       description:
         "Build a Cognia Site into a new immutable version. Runs the project's build in an OS sandbox with no network unless hosts are named. Publishes nothing — use deploy_site for that. Returns the new version, or the build's failure message.",
       jsonSchema: BUILD_SITE_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: SITES_BUILTIN_PLUGIN_ID,
     },
     {
       name: DEPLOY_SITE_TOOL_NAME,
       description:
         "Publish a built Site version to Cloudflare so it serves public traffic. Irreversible: taking the Site down removes it, it does not restore the previous version. Returns the production URL.",
       jsonSchema: DEPLOY_SITE_SCHEMA as unknown as Record<string, unknown>,
-      pluginId: SITES_BUILTIN_PLUGIN_ID,
     },
   ]
-}
-
-/** Is this tool name one of the Sites built-ins? */
-export function isSitesBuiltinTool(name: string): name is SitesToolName {
-  return (SITES_TOOL_NAMES as readonly string[]).includes(name)
 }
 
 export interface SitesToolRunDeps {
@@ -204,4 +199,18 @@ export async function runSitesBuiltinTool(
     })
   }
   throw new Error(`unknown Sites tool: ${name}`)
+}
+
+/**
+ * The family the kernel loads. Offered on the desktop only: every step of a
+ * publish needs Dexie, the keyring and the OS sandbox, which no other host
+ * the tools could run on has.
+ */
+export const toolFamily: ModuleToolFamily = {
+  surface(ctx: ToolSurfaceContext) {
+    return ctx.host === "desktop" ? { tools: buildSitesManifestEntries() } : null
+  },
+  async run(name, args) {
+    return runSitesBuiltinTool(name, args, await resolveSitesToolDeps())
+  },
 }

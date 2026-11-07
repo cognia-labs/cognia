@@ -52,18 +52,7 @@ import {
   runEditorBuiltinTool,
   type EditorToolRunDeps,
 } from "./editor-builtin-tools"
-import {
-  isSitesBuiltinTool,
-  resolveSitesToolDeps,
-  runSitesBuiltinTool,
-} from "./sites-builtin-tools"
 import { isTeamBuiltinTool, runTeamBuiltinTool } from "./team-builtin-tools"
-import {
-  VECTOR_BUILTIN_PLUGIN_ID,
-  isVectorBuiltinTool,
-  runVectorBuiltinTool,
-  type VectorToolRunDeps,
-} from "./vector-builtin-tools"
 import { getTeamDispatchContext } from "./agents/dispatch-context-registry"
 import { isWorkingSetTool, runWorkingSetTool, type WorkingSetStore } from "./working-set-tool"
 import {
@@ -429,81 +418,6 @@ async function resolveProjectHistoryToolDeps(): Promise<ProjectHistoryToolDeps> 
   }
 }
 
-/** Resolver for the vector tools' host-side deps. Swappable for tests / CLI. */
-let vectorToolDepsOverride: (() => Promise<VectorToolRunDeps> | VectorToolRunDeps) | null = null
-
-/** Inject vector-tool deps (tests / CLI host). Pass `null` to restore default. */
-export function __setVectorToolDepsForTesting(
-  fn: (() => Promise<VectorToolRunDeps> | VectorToolRunDeps) | null
-): void {
-  vectorToolDepsOverride = fn
-}
-
-/**
- * Build the vector tools' host deps: the native-only vector service bound to
- * the user's configured embedding settings, the session→project resolver, and
- * the permission check.
- *
- * Permissions live in the shared `PluginAPIPermission` space under the
- * synthetic `cognia-vector-builtin` subject. Enabling `selfInvokeTools.vector`
- * is the consent event, so the three permissions are seeded on first use; a
- * host policy that revokes one through the permission guard still wins,
- * because `hasApiOrGuardPermission` consults both.
- */
-async function resolveVectorToolDeps(): Promise<VectorToolRunDeps> {
-  if (vectorToolDepsOverride) return vectorToolDepsOverride()
-  const [
-    { createAgentVectorService },
-    { isTauri },
-    { useSettingsStore },
-    { useVectorStore },
-    { DEFAULT_EMBEDDING_MODELS, resolveEmbeddingApiKey },
-    { hasApiOrGuardPermission },
-    { ensureVectorBuiltinPermissions },
-  ] = await Promise.all([
-    import("@/lib/vector/agent-vector-service"),
-    import("@/lib/tauri"),
-    import("@/stores/settings"),
-    import("@/stores"),
-    import("@cognia/vector/embedding"),
-    import("@/lib/plugin/api/api-permission-gate"),
-    import("@/lib/vector/agent-tool-permissions"),
-  ])
-  ensureVectorBuiltinPermissions()
-
-  return {
-    service: createAgentVectorService({
-      isTauri,
-      resolveEmbedding: () => {
-        const providerSettings = (useSettingsStore.getState().settings?.providerSettings ??
-          {}) as Parameters<typeof resolveEmbeddingApiKey>[1]
-        const vectorSettings = useVectorStore.getState().settings
-        const provider = (vectorSettings.embeddingProvider ||
-          "openai") as keyof typeof DEFAULT_EMBEDDING_MODELS
-        const defaults = DEFAULT_EMBEDDING_MODELS[provider]
-        if (!defaults) return null
-        return {
-          embeddingConfig: {
-            provider,
-            model: vectorSettings.embeddingModel || defaults.model,
-            dimensions: defaults.dimensions,
-          },
-          embeddingApiKey: resolveEmbeddingApiKey(provider, providerSettings),
-        }
-      },
-    }),
-    resolveProjectId: async (sessionId) => {
-      const [{ getSession }, { useProjectStore }] = await Promise.all([
-        import("@/lib/db/sessions"),
-        import("@/stores/project/project-store"),
-      ])
-      const session = await getSession(sessionId).catch(() => null)
-      return session?.projectId ?? useProjectStore.getState().activeProjectId ?? null
-    },
-    hasPermission: (permission) => hasApiOrGuardPermission(VECTOR_BUILTIN_PLUGIN_ID, permission),
-  }
-}
-
 export async function resolveWebToolDeps(): Promise<WebToolRunDeps> {
   if (webToolDepsOverride) return webToolDepsOverride()
   try {
@@ -747,17 +661,6 @@ async function runPluginToolExec(
       )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
-    // ── Cognia Sites built-ins (ADR-0084) ────────────────────────────────
-    // Host-routed: every step needs Dexie, the OS keyring, and `sandbox_exec`,
-    // none of which the .mjs sidecar has.
-    if (isSitesBuiltinTool(request.name)) {
-      const result = await runSitesBuiltinTool(
-        request.name,
-        request.args,
-        await resolveSitesToolDeps()
-      )
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
     // ── Promoted spawn_task built-in — stage a user-started sidechat ──────
     if (isSpawnTaskBuiltinTool(request.name)) {
       const result = await runSpawnTaskBuiltinTool(
@@ -852,20 +755,6 @@ async function runPluginToolExec(
       const result = await runAcceptanceProposalTool(request.args, {
         sessionId: request.sessionId,
       })
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    // ── Promoted vector built-ins — project-scoped vector memory ───────────
-    // Host-routed: the native sqlite-vec store is a Tauri command surface and
-    // the service reaches `@/stores` for the embedding config — neither is
-    // importable from the .mjs sidecar. Opt-in via selfInvokeTools.vector.
-    // The runner never throws; it returns a structured {ok:false,code,error}.
-    if (isVectorBuiltinTool(request.name)) {
-      const result = await runVectorBuiltinTool(
-        request.name,
-        request.args,
-        await resolveVectorToolDeps(),
-        { sessionId: request.sessionId }
-      )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── Promoted Skill built-in — load a skill's instructions ──────────────

@@ -2,11 +2,13 @@ import {
   BUILD_SITE_TOOL_NAME,
   DEPLOY_SITE_TOOL_NAME,
   LIST_SITES_TOOL_NAME,
-  buildSitesBuiltinManifestEntries,
-  isSitesBuiltinTool,
+  SITES_TOOL_NAMES,
+  buildSitesManifestEntries,
   runSitesBuiltinTool,
+  toolFamily,
   type SitesToolRunDeps,
-} from "./sites-builtin-tools"
+} from "./agent-tools"
+import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
 
 function deps(): SitesToolRunDeps {
   return {
@@ -16,34 +18,43 @@ function deps(): SitesToolRunDeps {
   }
 }
 
-it("surfaces exactly three tools, each owned by the Sites plugin id", () => {
-  const entries = buildSitesBuiltinManifestEntries()
-  expect(entries.map((entry) => entry.name)).toEqual([
+it("surfaces exactly three tools", () => {
+  expect(buildSitesManifestEntries().map((entry) => entry.name)).toEqual([
     LIST_SITES_TOOL_NAME,
     BUILD_SITE_TOOL_NAME,
     DEPLOY_SITE_TOOL_NAME,
   ])
-  expect(entries.every((entry) => entry.pluginId === "cognia-sites-builtin")).toBe(true)
 })
 
 it("tells the model that publishing cannot be undone", () => {
   // The description is the only place a model learns this before it acts.
-  const deploy = buildSitesBuiltinManifestEntries().find(
-    (entry) => entry.name === DEPLOY_SITE_TOOL_NAME
-  )
+  const deploy = buildSitesManifestEntries().find((entry) => entry.name === DEPLOY_SITE_TOOL_NAME)
   expect(deploy?.description).toMatch(/[Ii]rreversible/)
 })
 
 it("tells the model that building publishes nothing", () => {
-  const build = buildSitesBuiltinManifestEntries().find(
-    (entry) => entry.name === BUILD_SITE_TOOL_NAME
-  )
+  const build = buildSitesManifestEntries().find((entry) => entry.name === BUILD_SITE_TOOL_NAME)
   expect(build?.description).toMatch(/Publishes nothing/)
 })
 
-it("recognizes its own tools and nothing else", () => {
-  expect(isSitesBuiltinTool(LIST_SITES_TOOL_NAME)).toBe(true)
-  expect(isSitesBuiltinTool("read_active_editor")).toBe(false)
+describe("toolFamily", () => {
+  const ctx = (host: ToolSurfaceContext["host"]): ToolSurfaceContext => ({
+    session: null,
+    agent: null,
+    settings: null,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host,
+    activeProject: null,
+  })
+
+  it("offers the three tools on the desktop only", async () => {
+    const surface = await toolFamily.surface(ctx("desktop"))
+    expect(surface?.tools.map((tool) => tool.name)).toEqual([...SITES_TOOL_NAMES])
+    for (const host of ["web", "mobile", "cli", "brain"] as const) {
+      expect(await toolFamily.surface(ctx(host))).toBeNull()
+    }
+  })
 })
 
 it("lists sites without any arguments", async () => {

@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { VECTOR_BUILTIN_PLUGIN_ID } from "@/lib/claude/vector-builtin-tools"
+import { VECTOR_BUILTIN_PLUGIN_ID } from "./agent-tools"
 import {
   grantPermission,
   pluginHasApiPermission,

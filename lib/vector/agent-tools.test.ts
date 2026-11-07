@@ -4,15 +4,18 @@ import { VectorServiceError, type AgentVectorService } from "@/lib/vector/agent-
 import {
   DEFAULT_VECTOR_TOOL_TIMEOUT_MS,
   VECTOR_ADD_DOCUMENT_TOOL_NAME,
-  VECTOR_BUILTIN_PLUGIN_ID,
   VECTOR_DELETE_DOCUMENT_TOOL_NAME,
   VECTOR_SEARCH_TOOL_NAME,
   VECTOR_TOOL_PERMISSIONS,
   buildVectorManifestEntries,
-  isVectorBuiltinTool,
+  VECTOR_TOOL_NAMES,
+  __setVectorToolDepsForTesting,
   runVectorBuiltinTool,
+  toolFamily,
   type VectorToolRunDeps,
-} from "./vector-builtin-tools"
+} from "./agent-tools"
+import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
+import type { AppSettings } from "@cognia/agent-config-types"
 
 const ALL_PERMISSIONS: PluginAPIPermission[] = ["vector:read", "vector:write", "ai:embed"]
 
@@ -45,7 +48,7 @@ beforeEach(() => {
 })
 
 describe("manifest", () => {
-  it("exposes exactly the three tools, tagged with the built-in plugin id", () => {
+  it("exposes exactly the three tools", () => {
     const entries = buildVectorManifestEntries()
     expect(entries.map((e) => e.name)).toEqual([
       VECTOR_SEARCH_TOOL_NAME,
@@ -53,7 +56,6 @@ describe("manifest", () => {
       VECTOR_DELETE_DOCUMENT_TOOL_NAME,
     ])
     for (const entry of entries) {
-      expect(entry.pluginId).toBe(VECTOR_BUILTIN_PLUGIN_ID)
       expect(entry.description.length).toBeGreaterThan(20)
       expect(entry.jsonSchema).toMatchObject({ type: "object" })
     }
@@ -67,13 +69,71 @@ describe("manifest", () => {
       expect(JSON.stringify(entry.jsonSchema)).not.toContain("projectId")
     }
   })
+})
 
-  it("recognises its own tool names and nothing else", () => {
-    expect(isVectorBuiltinTool(VECTOR_SEARCH_TOOL_NAME)).toBe(true)
-    expect(isVectorBuiltinTool(VECTOR_ADD_DOCUMENT_TOOL_NAME)).toBe(true)
-    expect(isVectorBuiltinTool(VECTOR_DELETE_DOCUMENT_TOOL_NAME)).toBe(true)
-    expect(isVectorBuiltinTool("web_search")).toBe(false)
-    expect(isVectorBuiltinTool("vector_")).toBe(false)
+describe("toolFamily", () => {
+  const optedIn = { selfInvokeTools: { vector: true } } as unknown as AppSettings
+  const ctx = (overrides: Partial<ToolSurfaceContext> = {}): ToolSurfaceContext => ({
+    session: { projectId: "p1" } as ToolSurfaceContext["session"],
+    agent: null,
+    settings: optedIn,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host: "desktop",
+    activeProject: null,
+    ...overrides,
+  })
+
+  it("offers the three tools on the desktop to an opted-in run with a project", async () => {
+    const surface = await toolFamily.surface(ctx())
+    expect(surface?.tools.map((tool) => tool.name)).toEqual([...VECTOR_TOOL_NAMES])
+    // The run's workspace stands in for a session that has no project of its own.
+    expect(
+      await toolFamily.surface(
+        ctx({
+          session: null,
+          activeProject: { id: "p2" } as ToolSurfaceContext["activeProject"],
+        })
+      )
+    ).not.toBeNull()
+  })
+
+  it("offers nothing without the opt-in, off the desktop, or without a project", async () => {
+    expect(await toolFamily.surface(ctx({ settings: null }))).toBeNull()
+    expect(
+      await toolFamily.surface(
+        ctx({ settings: { selfInvokeTools: { vector: false } } as unknown as AppSettings })
+      )
+    ).toBeNull()
+    for (const host of ["web", "mobile", "cli", "brain"] as const) {
+      expect(await toolFamily.surface(ctx({ host }))).toBeNull()
+    }
+    expect(await toolFamily.surface(ctx({ session: null }))).toBeNull()
+  })
+
+  it("runs a call for the calling session, with the turn's abort signal", async () => {
+    const resolveProjectId = jest.fn(() => "p1")
+    const deps = makeDeps({ resolveProjectId })
+    __setVectorToolDepsForTesting(() => deps)
+    try {
+      const controller = new AbortController()
+      const call: ToolCallContext = {
+        sessionId: "sess-V",
+        toolUseId: "u1",
+        executionRunId: "run-1",
+        signal: controller.signal,
+        outboundAuthorization: { kind: "tool-call", sessionId: "sess-V", toolUseId: "u1" },
+      }
+      controller.abort()
+      await toolFamily.run(VECTOR_SEARCH_TOOL_NAME, { query: "hi" }, call)
+      expect(resolveProjectId).toHaveBeenCalledWith("sess-V")
+      const [collection, query, options] = (deps.service.search as jest.Mock).mock.calls[0]
+      expect([collection, query]).toEqual(["project_p1__documents", "hi"])
+      // The turn's abort reaches the store call through the runner's budget.
+      expect(options.signal.aborted).toBe(true)
+    } finally {
+      __setVectorToolDepsForTesting(null)
+    }
   })
 })
 

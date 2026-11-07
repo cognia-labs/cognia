@@ -45,15 +45,12 @@ export const RISK_EXTERNAL_SEND_TOOL_IDS: ReadonlySet<string> = new Set([
   "connector_send",
   "send_message",
   "send_email",
-  // Publishing a Cognia Site puts a URL other people can load in front of the
-  // world, and it cannot be unsent: `takeDown` removes the Site, it does not
-  // restore the previous version. `build_site` produces an immutable local
-  // version and is deliberately absent.
-  "deploy_site",
   // Module-contributed tools declared outbound (ADR-0250 §14 amendment), such
   // as an agent publishing a conversation's files as a public link or handing
   // out network-drive access (`filespace_share`, `filespace_enable_webdav`,
-  // ADR-0222 §9).
+  // ADR-0222 §9), or publishing a Cognia Site (`deploy_site`), which cannot
+  // be unsent: `takeDown` removes the Site, it does not restore the previous
+  // version. `build_site` produces an immutable local version and is not.
   ...moduleToolNamesWhere((declaration) => declaration.effect === "outbound").map((name) =>
     name.toLowerCase()
   ),

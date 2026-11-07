@@ -3125,15 +3125,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     artifactsChannelAvailable && appSettings?.artifacts?.agentAuthoring !== false
 
   const editorWriteToolsSurfaced = await proIdeWriteToolsAvailable(ctx)
-  // Sites publishing needs Dexie, the OS keyring, and `sandbox_exec` — all
-  // renderer-side, none reachable from the sidecar — so the tools ride the same
-  // desktop condition as the manifest entries below, one source of truth so the
-  // tier can never be surfaced apart from the tools it governs.
-  const sitesToolsSurfaced = (await import("@/lib/tauri")).isTauri()
   const commandRules = appSettings?.agentPermissions?.commandRules
   const toolRules = appSettings?.agentPermissions?.toolRules
   const { buildEditorToolRuleset } = await import("@/lib/claude/permissions/editor-tool-rules")
-  const { buildSiteToolRuleset } = await import("@/lib/claude/permissions/site-tool-rules")
   // Template / chat-template / squad tools (ADR-0164). Opt-in, and withheld
   // for an IM-bound session for the same reason the artifact tools are: the
   // consent overlay every write inside them asks has no screen to appear on.
@@ -3168,7 +3162,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   })
   const mergedRuleset = mergeRulesets(
     editorWriteToolsSurfaced ? buildEditorToolRuleset() : undefined,
-    sitesToolsSurfaced ? buildSiteToolRuleset() : undefined,
     templateToolsEnabled ? buildTemplateToolRuleset() : undefined,
     agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
     acceptanceToolsSurfaced ? buildAcceptanceToolRuleset() : undefined,
@@ -4177,18 +4170,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     loggers.app.warn("failed to append editor built-in tool", { error: String(err) })
   }
 
-  // Cognia Sites tools (ADR-0084). Desktop only, for the same reason the tier
-  // above is: every step of a publish needs Dexie, the keyring, and the OS
-  // sandbox, none of which the sidecar has.
-  if (sitesToolsSurfaced) {
-    try {
-      const { buildSitesBuiltinManifestEntries } = await import("@/lib/claude/sites-builtin-tools")
-      opts.pluginTools = [...(opts.pluginTools ?? []), ...buildSitesBuiltinManifestEntries()]
-    } catch (err) {
-      loggers.app.warn("failed to append Sites built-in tools", { error: String(err) })
-    }
-  }
-
   // Plugin conversion is a prompt-skill-backed capability, not a global
   // plugin-tool toggle. Preload its two typed tools when the skill is active,
   // or when the opt-in Skill self-loader may activate it during the turn.
@@ -4307,23 +4288,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       loggers.app.warn("failed to append session messaging built-in tools", {
         error: String(err),
       })
-    }
-  }
-  // Project-scoped vector memory (vector_search / vector_add_document /
-  // vector_delete_document). Opt-in, and only manifested when the tools can
-  // actually run: they need the native sqlite-vec store (desktop) AND a linked
-  // project to scope collections to. Advertising them without both would hand
-  // the model three tools that can only ever return an error.
-  if (appSettings?.selfInvokeTools?.vector === true) {
-    try {
-      const vectorProjectId = session?.projectId ?? ctx.activeProject?.id
-      const { isTauri } = await import("@/lib/tauri")
-      if (vectorProjectId && isTauri()) {
-        const { buildVectorManifestEntries } = await import("@/lib/claude/vector-builtin-tools")
-        opts.pluginTools = [...(opts.pluginTools ?? []), ...buildVectorManifestEntries()]
-      }
-    } catch (err) {
-      loggers.app.warn("failed to append vector built-in tools", { error: String(err) })
     }
   }
   // Module-contributed tools (ADR-0250 §14 amendment): the entries and the

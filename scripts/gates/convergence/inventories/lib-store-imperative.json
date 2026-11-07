@@ -7,7 +7,7 @@
   },
   "metrics": {
     "static": 285,
-    "all": 399
+    "all": 400
   },
   "members": [
     {
@@ -1239,7 +1239,6 @@
       "stores": [
         "stores/agent/ask-user-store.ts",
         "stores/chat/chat-store.ts",
-        "stores/index.ts",
         "stores/project/project-store.ts",
         "stores/settings/index.ts"
       ]
@@ -1310,8 +1309,8 @@
       ]
     },
     {
-      "key": "lib/claude/sites-builtin-tools.ts",
-      "owner": "lib/claude",
+      "key": "lib/sites/agent-tools.ts",
+      "owner": "lib/sites",
       "note": "",
       "imports": [
         "dynamic"
@@ -4387,6 +4386,18 @@
       ],
       "stores": [
         "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/vector/agent-tools.ts",
+      "owner": "lib/vector",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts",
+        "stores/vector/vector-store.ts"
       ]
     },
     {

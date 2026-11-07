@@ -7700,14 +7700,20 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
 
   describe("project-scoped vector memory", () => {
     const VECTOR_TOOLS = ["vector_search", "vector_add_document", "vector_delete_document"]
-    const isTauriMock = isTauri as jest.Mock
+    // The vector module's family asks the host (`toolSurfaceHost`), which
+    // reads the platform.
+    const platform = detectPlatform as jest.Mock
+    const onDesktop = (desktop: boolean) =>
+      platform.mockReturnValue(
+        desktop ? "tauri" : jest.requireActual("@/lib/platform/detect").detectPlatform()
+      )
 
     afterEach(() => {
-      isTauriMock.mockReturnValue(false)
+      platform.mockImplementation(jest.requireActual("@/lib/platform/detect").detectPlatform)
     })
 
     it("does not surface the vector tools by default (opt-in)", async () => {
-      isTauriMock.mockReturnValue(true)
+      onDesktop(true)
       const opts = await resolveSendOptions({
         session: makeSession({ id: "s1", characterId: "c1", projectId: "p1" }),
         character: makeChar({ id: "c1" }),
@@ -7716,7 +7722,7 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     })
 
     it("appends all three tools on desktop with a linked project", async () => {
-      isTauriMock.mockReturnValue(true)
+      onDesktop(true)
       const opts = await resolveSendOptions({
         session: makeSession({ id: "s1", characterId: "c1", projectId: "p1" }),
         character: makeChar({ id: "c1" }),
@@ -7726,7 +7732,7 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     })
 
     it("does NOT append them off the desktop shell — they cannot run there", async () => {
-      isTauriMock.mockReturnValue(false)
+      onDesktop(false)
       const opts = await resolveSendOptions({
         session: makeSession({ id: "s1", characterId: "c1", projectId: "p1" }),
         character: makeChar({ id: "c1" }),
@@ -7736,7 +7742,7 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     })
 
     it("does NOT append them without a linked project — collections would be unscoped", async () => {
-      isTauriMock.mockReturnValue(true)
+      onDesktop(true)
       const opts = await resolveSendOptions({
         session: makeSession({ id: "s1", characterId: "c1" }),
         character: makeChar({ id: "c1" }),
@@ -7746,7 +7752,7 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     })
 
     it("falls back to the active project when the session has none", async () => {
-      isTauriMock.mockReturnValue(true)
+      onDesktop(true)
       const opts = await resolveSendOptions({
         session: makeSession({ id: "s1", characterId: "c1" }),
         character: makeChar({ id: "c1" }),

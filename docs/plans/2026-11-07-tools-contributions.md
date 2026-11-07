@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§11。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）、T5（Sites + vector）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§12。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -251,3 +251,19 @@ interface ToolSurface {
 - 还清方向边 3 条：`artifact-builtin-tools -> artifact`、`media-builtin-tools -> media`、`build-options -> media`；收敛清单 `lib-store-imperative` 的旧条目改到新路径（同一笔债）。
 - 测试：build-options 的移动端用例改为模拟 `detectPlatform`；IPC 测试抽出 `useModuleTools` 帮手（固定到静态导入的工具族），artifact、视频、宠物三处路由用例共用；停靠栏测试去掉文件面板用例（由 `files-dock-panel.test.tsx` 覆盖）。
 - 既有问题（未改）：`lib/shell/workbench-panels.test.ts` 的对照测试在 HEAD 就失败（常量表缺 `SESSION_TASKS_PANEL_ID`、`SANDBOX_DESKTOP_PANEL_ID` 等）；`components/artifacts/artifact-annotations.test.tsx` 一处默认值断言失败；支持文档语料 `support:docs:check` 已过期。
+
+## 12. T5 实施记录：Sites 与 vector（2026-11-07）
+
+- 范围：Sites、vector 两族。templates 暂缓：它的 `squad_*` 三个工具会套用和保存 squad 模板（`lib/squads/apply-squad-template`、`publish-template-to-platform`、agent-team store），而 squads 的 `dependsOn` 已含 templates；templates 成为 manifest 后整族归它会形成环。要先把 `squad_*` 拆到 squads 模块的工具族（squads manifest 正由多智能体收敛那条线在改），`template_*`、`chat_template_*` 留给 templates。
+- 两者成为 manifest 模块（归属表的 `sites`、`vector` 行删除）。
+  - `sites`：`dependsOn` browser、cli-bridge、data、editor、logging、scheduler、share、terminal；`api` 为设备页用的 `components/sites/site-status.tsx`、工作流节点用的 5 个构建/发布文件和工具族。logging、scheduler、terminal、cli-bridge 的行各补一个 `api` 文件。
+  - `vector`：`dependsOn` agent-trace（agent-trace 行补 `instrument.ts`）；`settings: { keys: [] }` 加 `lib/vector/settings.ts` 的视图，只用来读内核的 `providerSettings`（找嵌入提供方的密钥），避免工具族直接导入设置 store（`settingsStoreImporters` 不增）。
+- 工具族：`lib/claude/sites-builtin-tools.ts` → `lib/sites/agent-tools.ts`；`lib/claude/vector-builtin-tools.ts` → `lib/vector/agent-tools.ts`，`resolveVectorToolDeps` 和测试替身 `__setVectorToolDepsForTesting` 从 `plugin-tool-ipc` 一起搬入。`VECTOR_BUILTIN_PLUGIN_ID` 保留，它是向量权限在 `PluginAPIPermission` 空间里的主体，值不变。
+- 门槛：Sites 只在 `host === "desktop"`（原来是 `isTauri()`）；vector 要 `selfInvokeTools.vector`、桌面、且会话或运行工作区有项目（与原来相同）。
+- 声明：`list_sites` allow/read，`build_site` allow/write，`deploy_site` ask/outbound；`vector_search` ask/read，`vector_add_document`、`vector_delete_document` ask/write；全部 `cancellable: false`。
+  - `deploy_site` 原本就在风险集合和 `HOST_TOOL_CLASSES` 里按名字记为外发，现在由声明派生，两处手写删除，行为不变。
+  - vector 以前没有同意档，按"无规则即询问"落到人工审批，所以声明为 `ask`。区别只有一处：用户写了 `"*": "allow"` 这类通配规则时，以前会放行，现在按工具名的 `ask` 优先（解析器里工具名匹配高于通配）。用户给这三个工具写的具体规则仍然覆盖。
+  - vector 的运行器本来就接中止信号（与超时合并），以前分发器没传；现在传 `call.signal`。实时语音照旧不提供（已发到原生端的写入不会撤销）。
+- 删除：`site-tool-rules`（及测试）、`build-options` 的 `sitesToolsSurfaced`、同意档参数和两段追加、`plugin-tool-ipc` 的两个分支和向量依赖解析、探针名单 4 个名字、实时语音名单 3 个名字、风险集合和 `HOST_TOOL_CLASSES` 里的 `deploy_site`。最佳 N 选一的 grant 拒绝名单和探针允许名单里的 `vector_search` 是策略选择，保留。
+- 还清方向边 3 条：`sites-builtin-tools -> sites`、`vector-builtin-tools -> vector`、`plugin-tool-ipc -> vector`。收敛清单 `lib-store-imperative`：旧 Sites 条目改到新路径；向量依赖解析读的 vector store 和 project store 随文件搬走，新增一个成员（`plugin-tool-ipc` 还有别的读取，仍是成员，去掉它的 `stores/index.ts`），附例外记录 `2026-11-07-vector-agent-tools-stores.json`。
+- 测试：两族各自的测试改到新位置并加 `toolFamily` 用例；两个 manifest 测试；build-options 的向量用例改为模拟 `detectPlatform`；IPC 的向量用例走模块注册表（`useModuleTools`）；`ipc.test.ts` 给向量条目补上内核会加的 `pluginId`。

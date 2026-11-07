@@ -19,7 +19,7 @@
 
 import type { PluginAPIPermission } from "@/types/plugin/plugin"
 import { grantPermission, pluginHasApiPermission } from "@/lib/plugin/api/permission-api"
-import { VECTOR_BUILTIN_PLUGIN_ID } from "@/lib/claude/vector-builtin-tools"
+import { VECTOR_BUILTIN_PLUGIN_ID } from "./agent-tools"
 
 /** Permissions seeded for the built-in subject on first use. */
 export const VECTOR_BUILTIN_SEEDED_PERMISSIONS: readonly PluginAPIPermission[] = [

@@ -14,7 +14,6 @@ import {
   __setWebToolDepsForTesting,
   __setSkillToolDepsForTesting,
   __setSlashToolDepsForTesting,
-  __setVectorToolDepsForTesting,
   __setProjectHistoryToolDepsForTesting,
   __setSpawnTaskToolDepsForTesting,
   __setSessionPeerToolDepsForTesting,
@@ -30,6 +29,11 @@ import {
   toolFamily as mediaToolFamily,
 } from "@/lib/media/agent-tools"
 import { toolFamily as artifactToolFamily } from "@/lib/artifacts/agent-tools"
+import {
+  __setVectorToolDepsForTesting,
+  toolFamily as vectorToolFamily,
+  type VectorToolRunDeps,
+} from "@/lib/vector/agent-tools"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import {
   recordCallbackBinding,
@@ -38,7 +42,6 @@ import {
 import { buildApprovalSurface } from "@/lib/connectors/a2ui-bridge/workflow-to-a2ui"
 import { createWorkflowAuthorAPI } from "@/lib/plugin/api/workflow-author-api"
 import { holdWorkflowDispatchForApproval } from "@/lib/connectors/hitl/workflow-run-approval"
-import type { VectorToolRunDeps } from "./vector-builtin-tools"
 import type { ProjectHistoryToolDeps } from "./project-history-tool"
 // Static imports so these share the SAME module instance the top-level
 // `handlePluginToolExec` closes over (sibling describes call jest.resetModules,
@@ -1357,9 +1360,11 @@ describe("handlePluginToolExec — Skill / SlashCommand built-ins", () => {
 })
 
 describe("handlePluginToolExec — vector built-ins", () => {
+  beforeEach(() => useModuleTools("vector", vectorToolFamily))
   afterEach(() => {
     __setVectorToolDepsForTesting(null)
     __setPluginToolResolverForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
   })
 
   function makeVectorDeps(overrides: Partial<VectorToolRunDeps> = {}): VectorToolRunDeps {
@@ -1377,7 +1382,7 @@ describe("handlePluginToolExec — vector built-ins", () => {
   }
 
   it.each(["vector_search", "vector_add_document", "vector_delete_document"])(
-    "routes %s ahead of the plugin registry",
+    "routes %s to its module ahead of the plugin registry",
     async (name) => {
       const execute = jest.fn()
       __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "x", execute }) })

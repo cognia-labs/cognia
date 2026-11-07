@@ -802,13 +802,17 @@ describe("Claude session commands", () => {
       jest.requireActual<typeof import("@cognia/redact")>("@cognia/redact")
     const { buildEditorBuiltinManifestEntries, buildEditorWriteManifestEntries } =
       await import("@/lib/claude/editor-builtin-tools")
-    const { buildVectorManifestEntries } = await import("@/lib/claude/vector-builtin-tools")
+    const { buildVectorManifestEntries } = await import("@/lib/vector/agent-tools")
     mockHasNoLeakingPiiDeep.mockImplementation((payload) => hasNoLeakingPiiDeep(payload))
     callSpy.mockResolvedValueOnce(undefined)
     const pluginTools = [
       ...buildEditorBuiltinManifestEntries(),
       ...buildEditorWriteManifestEntries(),
-      ...buildVectorManifestEntries(),
+      // As the kernel carries a module's tools: under `cognia-<module>-builtin`.
+      ...buildVectorManifestEntries().map((entry) => ({
+        ...entry,
+        pluginId: "cognia-vector-builtin",
+      })),
     ]
     await sendPrompt("sess", "Inspect the workspace", { pluginTools })
     expect(callSpy).toHaveBeenCalledWith("claude_send", {
