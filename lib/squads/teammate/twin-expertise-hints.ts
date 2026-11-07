@@ -28,7 +28,11 @@ export function tokenize(text: string): string[] {
   return (text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).slice(0, 64)
 }
 
-/** Count how many distinct task tokens appear in the expertise blurb. */
+/**
+ * Count how many distinct task tokens appear in the expertise blurb.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function expertiseMatchScore(taskTokens: readonly string[], expertise: string): number {
   if (taskTokens.length === 0 || expertise.length === 0) return 0
   const haystack = expertise.toLowerCase()

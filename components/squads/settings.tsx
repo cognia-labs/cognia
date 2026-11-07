@@ -41,6 +41,7 @@ import { StackedDeliverySection } from "./settings/section-stacked-delivery"
 import { MemorySection } from "./settings/section-memory"
 import { TeamKnowledgeTwinsCard } from "./settings/team-knowledge-twins-card"
 import { SettingsSaveIndicator } from "./settings/settings-save-indicator"
+import { CapabilityWarningsNotice } from "./settings/capability-warnings-notice"
 
 export interface AgentTeamSettingsProps {
   team: AgentTeam
@@ -52,6 +53,7 @@ export function AgentTeamSettings({ team }: AgentTeamSettingsProps) {
   return (
     <div className="w-full space-y-4" data-testid="workspace-settings">
       <SettingsSaveIndicator teamId={team.id} />
+      <CapabilityWarningsNotice teamId={team.id} />
       <Accordion type="multiple" defaultValue={["overview"]} className="space-y-2">
         <AccordionItem value="overview" className="border-none">
           <AccordionTrigger className="rounded-md bg-muted/40 px-3 text-sm font-medium">

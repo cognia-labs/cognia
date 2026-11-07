@@ -76,7 +76,7 @@ export function assessProgressDeterministic(
 }
 
 /** The LLM judge's verdict on a stalled run. */
-export const progressLedgerVerdictSchema = z.object({
+const progressLedgerVerdictSchema = z.object({
   /** Whether the original objective already appears satisfied (stop early). */
   isSatisfied: z.boolean(),
   /** Whether the team is making meaningful progress at all. */

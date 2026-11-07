@@ -29,7 +29,10 @@ import {
   countRunningRendererBackgroundRuns,
 } from "@/lib/background-tasks/renderer-subagent-registry"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
-import { requestCancelSubagentRun, liveSubagentRunCount } from "./subagent-cancel-registry"
+import {
+  requestCancelSubagentRun,
+  __liveSubagentRunCountForTesting,
+} from "./subagent-cancel-registry"
 import type { PluginSubagentDispatchResult } from "@/types/plugin/plugin-agent-sdk"
 import { startToolExecutionRun } from "@/lib/execution/acting-authority"
 import { getExecutionRun } from "@/lib/db/execution-runs"
@@ -374,13 +377,13 @@ describe("runDispatchAgentTool — call modes", () => {
     })
 
     // The foreground run is registered (Abort button can reach it) and running.
-    // (liveSubagentRunCount is process-global; assert the delta, not an absolute.)
+    // (__liveSubagentRunCountForTesting is process-global; assert the delta, not an absolute.)
     const running = await waitFor(() =>
       Object.values(useSubagentRuntimeStore.getState().subAgents).find(
         (r) => r.status === "running"
       )
     )
-    const liveBefore = liveSubagentRunCount()
+    const liveBefore = __liveSubagentRunCountForTesting()
     expect(liveBefore).toBeGreaterThanOrEqual(1)
 
     expect(requestCancelSubagentRun(running.id)).toBe(true)
@@ -393,7 +396,7 @@ describe("runDispatchAgentTool — call modes", () => {
     const runs = Object.values(useSubagentRuntimeStore.getState().subAgents)
     expect(runs.some((r) => r.status === "cancelled")).toBe(true)
     expect(runs.some((r) => r.status === "failed")).toBe(false)
-    expect(liveSubagentRunCount()).toBe(liveBefore - 1)
+    expect(__liveSubagentRunCountForTesting()).toBe(liveBefore - 1)
   })
 
   it("returns a clear message when collecting an unknown run", async () => {

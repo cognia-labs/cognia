@@ -109,7 +109,11 @@ describe("createCompanionProjectionDeps", () => {
 describe("CompanionRoomProjector", () => {
   function projector(grace = 100) {
     const sinks = createStoreRoomSinksMock() as never
-    const runner = { handleEvent: jest.fn(), dispose: jest.fn() } as unknown as RoomRunner
+    const runner = {
+      handleEvent: jest.fn(),
+      dispose: jest.fn(),
+      releaseStoppedTurn: jest.fn(),
+    } as unknown as RoomRunner
     return { projector: new CompanionRoomProjector(runner, sinks, grace), runner }
   }
 
@@ -180,6 +184,22 @@ describe("CompanionRoomProjector", () => {
     p.handleEvent(evt("session_ended", SUB_A))
     jest.advanceTimersByTime(100)
     expect(statusBySession.get("room-1")).toBe("error")
+  })
+
+  it("forgets a stopped room it was projecting and releases the turn locally", () => {
+    const { projector: p, runner } = projector(100)
+    // Host accepted the send, no member has started yet.
+    p.markSending("room-1")
+    expect(p.isRoomActive("room-1")).toBe(true)
+    p.markStopped("room-1")
+    expect(p.isRoomActive("room-1")).toBe(false)
+    expect(runner.releaseStoppedTurn).toHaveBeenCalledWith("room-1")
+
+    // A member that was running, then its idle timer: both are dropped.
+    p.handleEvent(evt("event", SUB_A))
+    p.handleEvent(evt("session_ended", SUB_A))
+    p.markStopped("room-1")
+    expect(p.isRoomActive("room-1")).toBe(false)
   })
 
   it("disposes its timers and the runner", () => {

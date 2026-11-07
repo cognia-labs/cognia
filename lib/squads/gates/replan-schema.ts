@@ -10,6 +10,7 @@
  */
 import { z } from "zod"
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export const replanNewTaskSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
@@ -22,7 +23,7 @@ export const replanNewTaskSchema = z.object({
 
 export type ReplanNewTask = z.infer<typeof replanNewTaskSchema>
 
-export const replanNewMemberSchema = z.object({
+const replanNewMemberSchema = z.object({
   /** Display name for the recruited teammate. */
   name: z.string().min(1),
   /**

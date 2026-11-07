@@ -3,7 +3,6 @@ import { DEFAULT_TEAM_CONFIG } from "@/types/agent/agent-team"
 import {
   clampCapabilitiesToRuntime,
   RESOLVED_CAPABILITY_KEYS,
-  resolveTeamCapabilities,
   resolveTeammateCapabilities,
 } from "./capability-resolver"
 
@@ -141,9 +140,9 @@ describe("capability-resolver", () => {
     })
   })
 
-  describe("resolveTeamCapabilities", () => {
+  describe("resolveTeammateCapabilities without a teammate (the Squad pool)", () => {
     it("returns an empty bundle when the team has no capabilities", () => {
-      expect(resolveTeamCapabilities(makeTeam())).toEqual({
+      expect(resolveTeammateCapabilities(makeTeam())).toEqual({
         mcpServerIds: [],
         skillIds: [],
         nativeAnthropicToolIds: [],
@@ -158,7 +157,7 @@ describe("capability-resolver", () => {
       const team = makeTeam({
         capabilities: { skillIds: ["s1", "s1", "s2"], mcpServerIds: ["m"] },
       })
-      const out = resolveTeamCapabilities(team)
+      const out = resolveTeammateCapabilities(team)
       expect(out.skillIds).toEqual(["s1", "s2"])
       expect(out.mcpServerIds).toEqual(["m"])
     })

@@ -19,7 +19,6 @@ import {
   TERMINAL_SQUAD_RUN_STATUSES,
   createSquadRunRecords,
   findLiveSquadRun,
-  isLiveSquadRunStatus,
   isTerminalSquadRunStatus,
   parkActiveSquadRun,
   type SquadRunSeed,
@@ -633,12 +632,11 @@ describe("findLiveSquadRun", () => {
 
   it("partitions every status into live or terminal", () => {
     for (const status of LIVE_SQUAD_RUN_STATUSES) {
-      expect(isLiveSquadRunStatus(status)).toBe(true)
       expect(isTerminalSquadRunStatus(status)).toBe(false)
     }
     for (const status of TERMINAL_SQUAD_RUN_STATUSES) {
       expect(isTerminalSquadRunStatus(status)).toBe(true)
-      expect(isLiveSquadRunStatus(status)).toBe(false)
+      expect(LIVE_SQUAD_RUN_STATUSES.has(status)).toBe(false)
     }
   })
 })

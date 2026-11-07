@@ -2,8 +2,6 @@ import type { AgentTeam, AgentTeamConfig, AgentTeamTemplate } from "@/types/agen
 import { DEFAULT_TEAM_CONFIG } from "@/types/agent/agent-team"
 import {
   SQUAD_DEFINITION_CONTRACT_VERSION,
-  carriesLegacyRuntimeSelector,
-  isOnCurrentSquadContract,
   migrateSquadConfig,
   migrateSquadDefinition,
   migrateSquadTemplate,
@@ -39,7 +37,6 @@ describe("stripLegacyRuntimeSelector", () => {
     })
     expect(stripped).toBe(true)
     expect(config).toEqual({ maxTeammates: 3 })
-    expect(carriesLegacyRuntimeSelector(config)).toBe(false)
   })
 
   it("returns the same object when nothing is retired", () => {
@@ -74,7 +71,8 @@ describe("migrateSquadConfig", () => {
     const second = migrateSquadConfig(first.config)
     expect(second.changed).toBe(false)
     expect(second.config).toEqual(first.config)
-    expect(isOnCurrentSquadContract(second.config)).toBe(true)
+    expect(second.config.contractVersion).toBe(SQUAD_DEFINITION_CONTRACT_VERSION)
+    expect(stripLegacyRuntimeSelector(second.config).stripped).toBe(false)
   })
 
   it("infers the primary repository from workingDir when it is the only candidate", () => {

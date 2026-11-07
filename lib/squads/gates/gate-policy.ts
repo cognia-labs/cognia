@@ -53,6 +53,7 @@ export interface TeamGatePolicy {
   replan: GateBehavior
 }
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export function isHeadlessOrigin(origin: TeamRunOrigin | undefined): boolean {
   return origin !== undefined && origin !== "interactive"
 }

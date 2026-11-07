@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useClientLiveQuery } from "@/hooks/data"
 import { useTeamMemberRoles, useTeamMembers } from "@/hooks/use-team-members"
+import { holdReasonFor, type TurnHoldReason } from "@/lib/claude/team-router"
 import { resolveRoomSettings } from "@/lib/chat/room/settings"
 import type { RoomReplyMode } from "@/lib/chat/room/types"
 import { getSession } from "@/lib/db/sessions"
@@ -43,23 +44,25 @@ import { ComposerMenuPanel, useComposerMenuPanels } from "./composer-menu-contex
 import { CapabilityRow } from "./capability-row"
 
 /** Why the next send may get no reply, or `null` when somebody will answer. */
-export type RoomReplyHint = "asleep" | "mention_only" | "manual"
+export type RoomReplyHint = TurnHoldReason
 
 /**
- * The composer's mirror of `planUserTurn`'s hold reasons, minus what it
- * cannot know before the text is typed (a mention). Pure, so the chip and a
- * test read one rule.
+ * The runner's own hold rule (`holdReasonFor`) applied to what the composer
+ * knows before the text is typed: the picked members are the targets, except
+ * that an asleep room routes nobody, picks included (`routeTurn`). A mention
+ * in the draft is not seen here. Pure, so the chip and a test read one rule.
  */
 export function roomReplyHint(input: {
   orchestration: TeamOrchestration | undefined
   replyMode: RoomReplyMode
   pickedCount: number
 }): RoomReplyHint | null {
-  if (input.replyMode === "asleep") return "asleep"
-  if (input.pickedCount > 0) return null
-  if (input.replyMode === "mention_only") return "mention_only"
-  if (input.orchestration === "manual") return "manual"
-  return null
+  const answered = input.replyMode === "asleep" ? 0 : input.pickedCount
+  return holdReasonFor(
+    { orchestration: input.orchestration },
+    { length: answered },
+    { replyMode: input.replyMode }
+  )
 }
 
 function useRoomTargetContext(session: ChatSession | null | undefined) {

@@ -98,7 +98,6 @@ import {
   __resetPendingDelegationRunsForTesting,
   approveDelegation,
   cancelDelegation,
-  completeExternalDelegation,
   delegateToBackground,
   delegateToExternal,
   delegateToTeam,
@@ -373,30 +372,6 @@ describe("delegation-orchestrator", () => {
       const settled = await completionPromise
       expect(settled.status).toBe("timeout")
     })
-
-    it("completeExternalDelegation still settles out-of-band runs (manual escape hatch)", () => {
-      // Manager hangs → the auto-run never settles; the manual call wins.
-      externalExecuteMock.mockReturnValue(new Promise(() => {}))
-      const { delegation } = delegateToExternal({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        targetAgentId: "codex",
-        prompt: "x",
-        reason: "y",
-      })
-      const settled = completeExternalDelegation(delegation.id, "completed", "manual result")
-      expect(settled?.status).toBe("completed")
-      expect(settled?.result).toBe("manual result")
-      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
-        delegationId: delegation.id,
-        status: "completed",
-      })
-    })
-
-    it("completeExternalDelegation no-ops for unknown ids", () => {
-      const result = completeExternalDelegation("missing", "completed")
-      expect(result).toBeUndefined()
-    })
   })
 
   describe("approveDelegation", () => {
@@ -498,16 +473,16 @@ describe("delegation-orchestrator", () => {
       })
     })
 
-    it("no-ops on already-settled delegations", () => {
-      externalExecuteMock.mockReturnValue(new Promise(() => {})) // hang so only the manual settle wins
-      const { delegation } = delegateToExternal({
+    it("no-ops on already-settled delegations", async () => {
+      // The external run settles itself; a cancel after that changes nothing.
+      const { delegation, completionPromise } = delegateToExternal({
         sourceTeamId: "team-1",
         sourceTaskId: "task-1",
         targetAgentId: "x",
         prompt: "p",
         reason: "y",
       })
-      completeExternalDelegation(delegation.id, "completed")
+      await completionPromise
       cancelAgentMock.mockReset()
       const after = cancelDelegation(delegation.id)
       expect(after?.status).toBe("completed")
@@ -616,23 +591,6 @@ describe("delegation-orchestrator", () => {
       expect(settled.status).toBe("cancelled")
       expect(registerAgentMock).not.toHaveBeenCalled()
       expect(executeAgentMock).not.toHaveBeenCalled()
-      expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
-    })
-
-    it("completeExternalDelegation leaves a cancelled delegation cancelled", async () => {
-      externalExecuteMock.mockReturnValue(new Promise(() => {}))
-      const { delegation } = delegateToExternal({
-        sourceTeamId: "team-1",
-        sourceTaskId: "task-1",
-        targetAgentId: "codex",
-        prompt: "p",
-        reason: "y",
-      })
-      cancelDelegation(delegation.id)
-      const after = completeExternalDelegation(delegation.id, "completed", "manual result")
-
-      expect(after?.status).toBe("cancelled")
-      expect(after?.result).not.toBe("manual result")
       expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
     })
 

@@ -37,7 +37,11 @@ const BASE_BACKOFF_MIN = 10
 const MAX_BACKOFF_MIN = 60
 const JITTER_MAX_SEC = 5
 
-/** Small deterministic jitter (0..JITTER_MAX_SEC seconds) derived from a seed. */
+/**
+ * Small deterministic jitter (0..JITTER_MAX_SEC seconds) derived from a seed.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function stableJitterMs(seed: string, generation: number): number {
   let h = 0x811c9dc5
   const text = `${seed}:${generation}`

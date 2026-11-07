@@ -107,6 +107,8 @@ export function steerMetaOf(metadata: unknown): SteerMessageMeta | null {
  * Join queued steer entries (most-recent last) into one framed prompt. Blank
  * entries are dropped; an all-blank queue collapses to the bare prefix (callers
  * guard against draining an empty queue).
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function frameSteerQueue(entries: readonly string[]): string {
   const joined = entries

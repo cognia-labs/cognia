@@ -123,12 +123,15 @@ import { BranchNavigator } from "@/components/chat/branch-navigator"
 import { BranchPointMarker } from "@/components/chat/branch-children-chip"
 import { TriggerBadge } from "@/components/chat/trigger-badge"
 import { MemoryLearnedChip, MemoryRecalledChip } from "@/components/chat/memory-chips"
-import { isSourcesPart, isToolUseSummaryPart } from "@/lib/claude/parts-extensions"
+import {
+  isAgentTeamDispatchPart,
+  isSourcesPart,
+  isSquadGatePart,
+  isSquadRunPart,
+  isToolUseSummaryPart,
+} from "@/lib/claude/parts-extensions"
 import type {
   A2UIPart as A2UIPartType,
-  AgentTeamDispatchPart as AgentTeamDispatchPartType,
-  SquadRunPart as SquadRunPartType,
-  SquadGatePart as SquadGatePartType,
   VerificationVerdictPart as VerificationVerdictPartType,
   ArtifactPart as ArtifactPartType,
   CanvasInlinePart as CanvasInlinePartType,
@@ -2348,18 +2351,22 @@ function renderPart(
     return null
   }
 
-  if (type === "agent-team-dispatch") {
-    const dp = part as unknown as AgentTeamDispatchPartType
-    const fromName = characterById?.get(dp.from)?.name
-    return <AgentTeamDispatchPart key={key} part={dp} fromName={fromName} mode={mode} />
+  // The guards check the fields each card reads, so a part that only carries
+  // the type (a truncated sync, an older writer) is not handed to it. They read
+  // an `unknown` view: these custom parts are not members of the declared part
+  // union, so narrowing `part` itself would leave `never`.
+  const custom: unknown = part
+  if (isAgentTeamDispatchPart(custom)) {
+    const fromName = characterById?.get(custom.from)?.name
+    return <AgentTeamDispatchPart key={key} part={custom} fromName={fromName} mode={mode} />
   }
 
-  if (type === "squad-run") {
-    return <SquadRunPart key={key} part={part as unknown as SquadRunPartType} />
+  if (isSquadRunPart(custom)) {
+    return <SquadRunPart key={key} part={custom} />
   }
 
-  if (type === "squad-gate") {
-    return <SquadGatePart key={key} part={part as unknown as SquadGatePartType} />
+  if (isSquadGatePart(custom)) {
+    return <SquadGatePart key={key} part={custom} />
   }
 
   if (type === "verification-verdict") {

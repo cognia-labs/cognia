@@ -28,6 +28,13 @@ jest.mock("@/stores/squads/agent-team-store/store", () => ({
     }),
 }))
 
+// The notice audits through the store and registries; its own suite covers it.
+jest.mock("./settings/capability-warnings-notice", () => ({
+  CapabilityWarningsNotice: ({ teamId }: { teamId: string }) => (
+    <div data-testid="capability-warnings-notice" data-team-id={teamId} />
+  ),
+}))
+
 import { AgentTeamSettings } from "./settings"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
@@ -70,6 +77,14 @@ describe("AgentTeamSettings", () => {
     expect(nameInput).toBeInTheDocument()
     expect(screen.getByDisplayValue("research squad")).toBeInTheDocument()
     expect(screen.getByDisplayValue("10000")).toBeInTheDocument()
+  })
+
+  it("mounts the stale-capability notice for this squad", () => {
+    render(<AgentTeamSettings team={baseTeam} />)
+    expect(screen.getByTestId("capability-warnings-notice")).toHaveAttribute(
+      "data-team-id",
+      "team_x"
+    )
   })
 
   it("renders the PR feedback settings accordion", () => {

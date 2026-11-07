@@ -220,7 +220,11 @@ export function summarizeToolCall(toolName: string, input: unknown): string {
   return firstString(rec, ["file_path", "filePath", "path", "url", "query", "command"]) ?? ""
 }
 
-/** `<tool>: <summary>` (or just `<tool>` when there's no natural summary). */
+/**
+ * `<tool>: <summary>` (or just `<tool>` when there's no natural summary).
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function formatToolLine(toolName: string, input: unknown): string {
   const label = toolDisplayName(toolName)
   const summary = summarizeToolCall(toolName, input)

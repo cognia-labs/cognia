@@ -30,6 +30,7 @@ const TERMINAL_STATUSES: ReadonlySet<ExecutionRunStatus> = new Set<ExecutionRunS
   "cancelled",
 ])
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export function isSettledSquadRunStatus(status: ExecutionRunStatus): boolean {
   return TERMINAL_STATUSES.has(status)
 }

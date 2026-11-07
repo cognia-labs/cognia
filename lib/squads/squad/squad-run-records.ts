@@ -30,11 +30,16 @@ import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeamRunRecord, AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
 import type { ExecutionRun } from "@/types/execution/run"
 
-/** Run statuses that hold a live run open. A team with one cannot start another. */
+/**
+ * Run statuses that hold a live run open. A team with one cannot start another.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export const LIVE_SQUAD_RUN_STATUSES: ReadonlySet<AgentTeamRunStatus> = new Set<AgentTeamRunStatus>(
   ["queued", "running", "pausing", "paused", "sleeping", "recovering", "needs_input"]
 )
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export const TERMINAL_SQUAD_RUN_STATUSES: ReadonlySet<AgentTeamRunStatus> =
   new Set<AgentTeamRunStatus>(["completed", "failed", "cancelled", "terminated"])
 
@@ -288,10 +293,6 @@ export async function findLiveSquadRun(teamId: string): Promise<AgentTeamRunReco
   return rows
     .filter((row) => LIVE_SQUAD_RUN_STATUSES.has(row.status))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
-}
-
-export function isLiveSquadRunStatus(status: AgentTeamRunStatus): boolean {
-  return LIVE_SQUAD_RUN_STATUSES.has(status)
 }
 
 export function isTerminalSquadRunStatus(status: AgentTeamRunStatus): boolean {

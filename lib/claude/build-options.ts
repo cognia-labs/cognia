@@ -75,7 +75,7 @@ import { trippedSurfaceError } from "@/lib/router-fusion/gate/guard"
 import { breakerThresholdOf, routerFusionGate } from "@/lib/router-fusion/gate/feature-gate"
 import { loadRouterFusionHost, type RouterFusionHost } from "@/lib/router-fusion/gate/load-engine"
 import { ASK_USER_TOOL_NAME } from "@/lib/claude/ask-user-tool"
-import { listCharactersByIds, resolveCharacterById } from "@/lib/db/characters"
+import { resolveCharacterById } from "@/lib/db/characters"
 import {
   activeEffectiveSkillIds,
   listEnabledSkillsByIds,
@@ -138,7 +138,6 @@ import type {
   ChatSession,
   SendOptions,
   Skill,
-  Team,
   TeamMember,
 } from "@cognia/agent-config-types"
 import type { AgentExecutionIdentity } from "@cognia/agent-config-types/agent-execution"
@@ -1045,33 +1044,6 @@ export interface TwinRuntimeDepsForBuild {
    * module (the `applyTwinContext` cast bridges it).
    */
   expansion?: { model: unknown; strategy: "hyde" | "stepback" }
-}
-
-/**
- * Resolves the effective per-member configuration inside a team. Each override
- * field on `member` (when present) replaces the corresponding character
- * default; absent fields fall through. `mcpServerIdsOverride` further falls
- * through to the team-level MCP subset before defaulting to "all enabled".
- *
- * Pure: no I/O. Used both by `resolveSendOptions` and by UI surfaces that
- * preview a member's effective config.
- */
-export function resolveMemberConfig(
-  team: Team,
-  member: TeamMember,
-  character: Character
-): {
-  systemPrompt?: string
-  model?: string
-  allowedTools?: string[]
-  mcpServerIds?: string[]
-} {
-  return {
-    systemPrompt: member.systemPromptOverride ?? character.systemPrompt,
-    model: member.modelOverride ?? character.model,
-    allowedTools: member.allowedToolsOverride ?? character.allowedTools,
-    mcpServerIds: member.mcpServerIdsOverride ?? character.mcpServerIds ?? team.mcpServerIds,
-  }
 }
 
 /**
@@ -6645,12 +6617,4 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       .catch(() => undefined)
   }
   return opts
-}
-
-/**
- * Convenience: pre-resolve every team member's character row for the team
- * chat hook so it doesn't have to call getCharacter() per member.
- */
-export async function listTeamMembers(memberCharacterIds: string[]): Promise<Character[]> {
-  return listCharactersByIds(memberCharacterIds)
 }

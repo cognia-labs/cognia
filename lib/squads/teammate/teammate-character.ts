@@ -29,7 +29,11 @@ import { clampSandboxPolicy } from "@/lib/sandbox/policy-bridge"
 import { resolvePrompt } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
 
-/** Stable synthetic character id for a teammate. Never looked up in the DB. */
+/**
+ * Stable synthetic character id for a teammate. Never looked up in the DB.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function teammateCharacterId(teammate: Pick<AgentTeammate, "id">): string {
   return `__teammate__:${teammate.id}`
 }

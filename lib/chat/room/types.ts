@@ -33,9 +33,10 @@ import type { RoomReplyMode } from "@cognia/agent-config-types"
  * - `mention_only`: an explicit `@` is the only thing that gets a reply.
  * - `asleep`: nothing replies until the mode is changed.
  *
- * The team runner reads it through `planUserTurn` and IM admission maps it
- * onto the activation policy (`mention_only` forces a mention, `asleep`
- * denies with `room_asleep`, `auto` defers to what the operator configured).
+ * The team runner reads it through `routeTurn` / `holdReasonFor` and IM
+ * admission maps it onto the activation policy (`mention_only` forces a
+ * mention, `asleep` denies with `room_asleep`, `auto` defers to what the
+ * operator configured).
  */
 export type { RoomReplyMode, RoomSettings } from "@cognia/agent-config-types"
 

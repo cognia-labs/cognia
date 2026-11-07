@@ -622,7 +622,6 @@
     "lib/db/skills.ts -> workflow",
     "lib/db/skills.ts -> workspace",
     "lib/db/storage-layout.ts -> router-fusion",
-    "lib/db/teams.ts -> claude",
     "lib/db/trusted-workspaces.ts -> claude",
     "lib/db/trusted-workspaces.ts -> project-environment",
     "lib/db/twin-jobs.ts -> twin",

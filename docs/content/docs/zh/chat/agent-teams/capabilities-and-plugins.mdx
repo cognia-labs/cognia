@@ -48,7 +48,7 @@ const CAPABILITY_KEYS = [
 
 每个键的合并只有一条规则。若存在 `replace` 就短路取胜，小队默认值被忽略。否则结果是小队默认值减去 `remove` 再并上 `add`。重复 id 会按首次出现顺序去重，于是运行时总能看到一份稳定且最小的 id 列表。`applyOverlay`（`:65`）是每个键的内核，整个函数是纯的、同步的：没有注册表查询、没有持久化、没有日志。
 
-`resolveTeamCapabilities`（`:135`）只解析小队级的池。它支撑设置里的 Plugins 视图，也在注册时校验团队模板的 `requires` 块。
+不传队友时，`resolveTeammateCapabilities` 只解析小队级的池（去重），供还没有成员的调用方使用。团队模板的 `requires` 块在注册时由模板注册表里的 `validateTemplateRequires` 校验，小队保存的能力由能力审计（`lib/squads/capability-audit.ts`）校验，两者都不经过这个解析器。
 
 ### 第三个阶段：运行时收紧
 
@@ -112,7 +112,7 @@ flowchart TD
 
 因为能力是以纯 id 列表存放的，一个被禁用的插件可以让一支小队引用着再也解析不出来的 id。审计会检测出这一点，而且从不持久化结果。
 
-`buildKnownCapabilityIds()`（`capability-audit.ts:109`）为八类能力生成快照：七个能力列表，以及 `sharedMemoryAdapterIds`。快照合并 Dexie 中的技能、MCP 与 A2UI 表、覆盖层注册表和内置子智能体 id。`validateInstanceCapabilitiesWith(known, team, teammate?)`（`:155`）比较实例与快照，生成 `CapabilityAuditWarning[]`。`refreshAllInstanceCapabilityWarnings()`（`:250`）维护派生的警告表，该表不持久化；界面通过 `getInstanceCapabilityWarnings`（`:257`）和 `getTeammateCapabilityWarnings`（`:262`）读取警告。
+`buildKnownCapabilityIds()`（`capability-audit.ts:99`）为八类能力生成快照：七个能力列表，以及 `sharedMemoryAdapterIds`。快照合并 Dexie 中的技能、MCP 与 A2UI 表、覆盖层注册表和小队界面可用的子智能体 id。`validateInstanceCapabilitiesWith(known, team, teammate?)`（`:141`）比较实例与快照，生成 `CapabilityAuditWarning[]`。`refreshAllInstanceCapabilityWarnings()`（`:233`）维护派生的警告表，该表不持久化，更新后通知 `subscribeCapabilityWarnings`（`:244`）的订阅者。`useSquadCapabilityWarnings`（`hooks/squads/use-squad-capability-warnings.ts`）通过 `getInstanceCapabilityWarnings`（`:252`）读取警告：小队设置里的提示列出每个失效 id 及其归属和类别，成员列表的每一行标出该队员自身覆盖配置里的失效 id（`teammateWarningsIn`，`:257`）。这两处在所显示的 id 变化时都会重新审核。运行前的审核也会以 `subject.missingCapabilities` 列出同一批 id（已去重）。
 
 运行前闸门在 `lib/squads/agent-team-runtime.ts:495`。它的行为取决于本次运行的闸门策略，也就是无头拆分，而不是一个写死的模态框。
 

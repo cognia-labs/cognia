@@ -146,7 +146,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import {
   runTeamLifecycle,
   abortTeam,
-  getInflightController,
+  __getInflightControllerForTesting,
   parseProposedPlan,
   __resetInflightForTesting,
   type RunTeamLifecycleDeps,
@@ -584,7 +584,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
       expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
         status: mode === "hold" ? "waiting" : "failed",
       })
-      expect(getInflightController(baseTeam.id)).toBeUndefined()
+      expect(__getInflightControllerForTesting(baseTeam.id)).toBeUndefined()
     }
   )
   it("publishes with PAT in the real finally before terminal settlement", async () => {
@@ -1215,7 +1215,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     }
     const active = runTeamLifecycle("team-1", deps)
     expect(abortTeam("team-1", new Error("shutdown"), "previous-run")).toBe(false)
-    expect(getInflightController("team-1")?.signal.aborted).toBe(false)
+    expect(__getInflightControllerForTesting("team-1")?.signal.aborted).toBe(false)
     await expect(active).resolves.toMatchObject({ status: "completed" })
   })
 
@@ -1312,7 +1312,41 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     await previous
     await expect(replacement).resolves.toMatchObject({ runId: "next-run", status: "completed" })
     expect(readNextTeam).toHaveBeenCalled()
-    expect(getInflightController("team-1")).toBeUndefined()
+    expect(__getInflightControllerForTesting("team-1")).toBeUndefined()
+  })
+})
+
+describe("runTeamLifecycle — pre-run capability audit", () => {
+  /**
+   * The review form lists `subject.missingCapabilities`, but the gate used to
+   * send only a count, so the operator was asked to approve stale ids it never
+   * named (ADR-0252 P2).
+   */
+  it("names the ids that no longer resolve in the review it opens", async () => {
+    const stale: AgentTeam = {
+      ...baseTeam,
+      config: {
+        ...baseTeam.config,
+        capabilities: { skillIds: ["ghost-skill", "ghost-skill"], mcpServerIds: ["ghost-mcp"] },
+      },
+    }
+    const deps = buildDeps(stale, [task("t1")], [lead, worker("w1")])
+    const runPromise = runTeamLifecycle("team-1", deps)
+    const deadline = Date.now() + 4_000
+    let subject: Record<string, unknown> | undefined
+    while (!subject && Date.now() < deadline) {
+      const row = (await getDb().executionRunInterrupts.toArray()).find(
+        (r) => r.reviewKind === "capability_audit" && r.status === "pending"
+      )
+      subject = row?.subject as Record<string, unknown> | undefined
+      if (!subject) await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    // Settle the gate before asserting, so a failed expectation never leaves
+    // the review polling past the suite's teardown.
+    await answerPendingReview("capability_audit", "deny")
+    await expect(runPromise).resolves.toMatchObject({ status: "cancelled" })
+    // Deduplicated, in validation order (MCP servers before skills).
+    expect(subject).toEqual({ staleCount: 3, missingCapabilities: ["ghost-mcp", "ghost-skill"] })
   })
 })
 

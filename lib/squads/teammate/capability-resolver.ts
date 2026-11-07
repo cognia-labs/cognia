@@ -87,13 +87,16 @@ function applyOverlay(
  * Resolve a teammate's effective capability set against its team's default
  * pool. Returns a fully-populated `ResolvedCapabilities` (no undefined
  * fields) so downstream consumers can iterate without null guards.
+ *
+ * Without a teammate it resolves the Squad-level pool alone (deduplicated),
+ * for a caller that has no member yet.
  */
 export function resolveTeammateCapabilities(
   team: Pick<AgentTeam, "config">,
-  teammate: Pick<AgentTeammate, "config">
+  teammate?: Pick<AgentTeammate, "config">
 ): ResolvedCapabilities {
   const teamBundle: TeamCapabilityBundle = team.config.capabilities ?? {}
-  const overlay: TeammateCapabilityOverlay = teammate.config.capabilities ?? {}
+  const overlay: TeammateCapabilityOverlay = teammate?.config.capabilities ?? {}
 
   // Fast path: both empty — return a fresh empty bundle. We avoid the
   // `EMPTY_RESOLVED_CAPABILITIES` sentinel here because callers commonly
@@ -124,36 +127,6 @@ export function resolveTeammateCapabilities(
     result[key] = applyOverlay(teamBundle[key], overlay[key])
   }
   return result
-}
-
-/**
- * Resolve the team-level pool only (no teammate overlay). Used when emitting
- * `Plugins` settings UI and validating team-template `requires` blocks at
- * registration time, where individual teammates haven't been instantiated
- * yet.
- */
-export function resolveTeamCapabilities(team: Pick<AgentTeam, "config">): ResolvedCapabilities {
-  const teamBundle: TeamCapabilityBundle = team.config.capabilities ?? {}
-  if (Object.keys(teamBundle).length === 0) {
-    return {
-      mcpServerIds: [],
-      skillIds: [],
-      nativeAnthropicToolIds: [],
-      characterPackIds: [],
-      externalAgentPresetIds: [],
-      subagentIds: [],
-      a2uiTemplateIds: [],
-    }
-  }
-  return {
-    mcpServerIds: dedupe(teamBundle.mcpServerIds ?? []),
-    skillIds: dedupe(teamBundle.skillIds ?? []),
-    nativeAnthropicToolIds: dedupe(teamBundle.nativeAnthropicToolIds ?? []),
-    characterPackIds: dedupe(teamBundle.characterPackIds ?? []),
-    externalAgentPresetIds: dedupe(teamBundle.externalAgentPresetIds ?? []),
-    subagentIds: dedupe(teamBundle.subagentIds ?? []),
-    a2uiTemplateIds: dedupe(teamBundle.a2uiTemplateIds ?? []),
-  }
 }
 
 /**

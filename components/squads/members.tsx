@@ -4,7 +4,14 @@ import { MobileSpotIcon } from "@/components/mobile/mobile-spot-icon"
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { AnimatePresence, motion } from "motion/react"
-import { CrownIcon, MoreHorizontalIcon, PlusIcon, Settings2Icon, Trash2Icon } from "lucide-react"
+import {
+  AlertTriangleIcon,
+  CrownIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
+  Settings2Icon,
+  Trash2Icon,
+} from "lucide-react"
 
 import {
   MOBILE_SPRING,
@@ -72,6 +79,8 @@ import {
 import { ExternalAgentConfigPinField } from "@/components/agent/external-agent/external-agent-config-pin-field"
 import { TeammateConfigDialog } from "./teammate-config-dialog"
 import { AgentTeamAvatar } from "./agent-team-avatar"
+import { useSquadCapabilityWarnings } from "@/hooks/squads/use-squad-capability-warnings"
+import { teammateWarningsIn, type CapabilityAuditWarning } from "@/lib/squads/capability-audit"
 
 export interface AgentTeamMembersProps {
   /**
@@ -115,6 +124,9 @@ export function AgentTeamMembers({
   const addTeammate = useAgentTeamStore((s) => s.addTeammate)
   const removeTeammate = useAgentTeamStore((s) => s.removeTeammate)
   const updateTeammate = useAgentTeamStore((s) => s.updateTeammate)
+  // The roster is where an overlay's stale ids are fixed, so it audits as the
+  // overlays change rather than waiting for "Audit now".
+  const capabilityWarnings = useSquadCapabilityWarnings(teamId || undefined, { audit: true })
 
   const [ownAddOpen, setOwnAddOpen] = useState(false)
   const addOpen = controlledAddOpen ?? ownAddOpen
@@ -270,6 +282,7 @@ export function AgentTeamMembers({
                     ? {}
                     : { onMakeLead: () => handleMakeLead(m), makeLeadDisabled: leadLocked })}
                   onRuntimeChange={(r) => handleRuntimeChange(m, r)}
+                  capabilityWarnings={teammateWarningsIn(capabilityWarnings, m.id)}
                   {...(isLead ? {} : { onConfigPinChange: (id) => handleConfigPinChange(m, id) })}
                 />
               </motion.li>
@@ -333,6 +346,7 @@ function MemberRow({
   makeLeadDisabled = false,
   onRuntimeChange,
   onConfigPinChange,
+  capabilityWarnings,
 }: {
   member: AgentTeammate
   teamId: string
@@ -346,6 +360,8 @@ function MemberRow({
   onRuntimeChange: (runtime: TeammateRuntime) => void
   /** Pin (or clear) the exact external-agent config. Absent for the lead. */
   onConfigPinChange?: (configId: string | undefined) => void
+  /** Ids this member's own capability overlay names that no longer resolve. */
+  capabilityWarnings: readonly CapabilityAuditWarning[]
 }) {
   const t = useTranslations("agentTeamsWorkspace.members")
   const tRuntime = useTranslations("agentTeamsWorkspace.chat.runtime")
@@ -377,6 +393,17 @@ function MemberRow({
             )}
             {prRow && <PrStatusBadge status={prRow.derivedStatus} prUrl={prRow.prUrl} />}
             <RuntimeBadge runtime={runtime} />
+            {capabilityWarnings.length > 0 && (
+              <Badge
+                variant="outline"
+                className="gap-1 border-amber-500/40 text-[10px] text-amber-600 dark:text-amber-400"
+                title={capabilityWarnings.map((w) => w.missingId).join(", ")}
+                data-testid={`member-${member.id}-stale-capabilities`}
+              >
+                <AlertTriangleIcon className="size-3" aria-hidden />
+                {t("staleCapabilities", { count: capabilityWarnings.length })}
+              </Badge>
+            )}
           </div>
           {member.description && (
             <p className="mt-0.5 text-xs text-muted-foreground line-clamp-1">

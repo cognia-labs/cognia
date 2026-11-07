@@ -26,6 +26,7 @@ function ensureSuccess(status: number, operation: string): void {
   if (status < 200 || status >= 300) throw new Error(`GitHub ${operation} failed with ${status}`)
 }
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export function createGithubDeliveryAdapter(
   options: GithubDeliveryAdapterOptions
 ): ScmDeliveryAdapter {
@@ -518,6 +519,8 @@ export async function approveAndPublishGithubStack(
  * A person refused a held stack publish on its pushed card: the repositories
  * are fenced for the rest of the request, the draft stays unpublished, and the
  * run says so. The run's "approve and publish" still publishes it.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export async function declineGithubStackPublish(
   team: AgentTeam,

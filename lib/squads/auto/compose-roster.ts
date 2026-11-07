@@ -143,7 +143,11 @@ function str(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, 160) : fallback
 }
 
-/** Deterministic fallback roster: a lead + two generalists. Never throws. */
+/**
+ * Deterministic fallback roster: a lead + two generalists. Never throws.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function heuristicRoster(): ProposedTeammate[] {
   return [
     { name: "Lead", role: "lead", description: "Coordinates the team and synthesizes results." },

@@ -56,7 +56,7 @@ const CAPABILITY_KEYS = [
 
 For each key the merge follows one rule. If `replace` is present it short-circuits and wins, so the Squad default is ignored. Otherwise the result is the Squad default minus `remove`, unioned with `add`. Duplicate ids are deduplicated preserving first-occurrence order, so the runtime always sees a stable, minimal id list. `applyOverlay` (`:65`) is the per-key kernel, and the whole function is pure and synchronous: no registry lookups, no persistence, no logging.
 
-`resolveTeamCapabilities` (`:135`) resolves the Squad-level pool alone. It backs the Plugins settings view and validates a team template's `requires` block at registration time.
+Called without a teammate, `resolveTeammateCapabilities` resolves the Squad-level pool alone (deduplicated), for a caller that has no member yet. A team template's `requires` block is checked at registration by `validateTemplateRequires` in the template registry, and a Squad's saved capabilities by the capability audit (`lib/squads/capability-audit.ts`); neither goes through this resolver.
 
 ### The third stage: the runtime clamp
 
@@ -120,7 +120,7 @@ Registering or unregistering one capability can resolve or stale another's warni
 
 Because capabilities are stored as plain id lists, a disabled plugin can leave a Squad referencing ids that no longer resolve. The audit detects this without ever persisting the result.
 
-`buildKnownCapabilityIds()` (`capability-audit.ts:109`) snapshots eight buckets, the seven capability lists plus `sharedMemoryAdapterIds`, by unioning the Dexie skill, MCP and A2UI tables, the overlay registries, and the built-in subagent ids. `validateInstanceCapabilitiesWith(known, team, teammate?)` (`:155`) diffs an instance against that snapshot into `CapabilityAuditWarning[]`. `refreshAllInstanceCapabilityWarnings()` (`:250`) maintains a derived, never-persisted sidecar map, and `getInstanceCapabilityWarnings` (`:257`) and `getTeammateCapabilityWarnings` (`:262`) feed the UI.
+`buildKnownCapabilityIds()` (`capability-audit.ts:99`) snapshots eight buckets, the seven capability lists plus `sharedMemoryAdapterIds`, by unioning the Dexie skill, MCP and A2UI tables, the overlay registries, and the team surface's subagent ids. `validateInstanceCapabilitiesWith(known, team, teammate?)` (`:141`) diffs an instance against that snapshot into `CapabilityAuditWarning[]`. `refreshAllInstanceCapabilityWarnings()` (`:233`) maintains a derived, never-persisted sidecar map and notifies `subscribeCapabilityWarnings` (`:244`) listeners. `useSquadCapabilityWarnings` (`hooks/squads/use-squad-capability-warnings.ts`) reads it through `getInstanceCapabilityWarnings` (`:252`): the Squad settings notice lists every stale id with its owner and bucket, and each roster row flags the ids its own overlay names (`teammateWarningsIn`, `:257`). Both surfaces re-audit when the ids they show change. The pre-run review lists the same ids, deduplicated, as `subject.missingCapabilities`.
 
 The pre-run gate is in `lib/squads/agent-team-runtime.ts:495`. Its behaviour depends on the run's gate policy, which is the headless split rather than a single hardcoded modal.
 

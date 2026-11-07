@@ -2,9 +2,9 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import { persistLocalStorage } from "@/stores/persist-storage"
 import { registerProjectBucketPurger } from "@/lib/project/project-bucket-purge"
-import { DEFAULT_TEAM_CONFIG } from "@/types/agent/agent-team"
+import { DEFAULT_TEAM_CONFIG, type AgentTeamTemplate } from "@/types/agent/agent-team"
 import { DEFAULT_PROJECT_ID } from "@/lib/db/project-defaults"
-import { stripLegacyRuntimeSelector } from "@/lib/squads/definition-contract"
+import { migrateSquadTemplate, stripLegacyRuntimeSelector } from "@/lib/squads/definition-contract"
 import { initialState } from "./initial-state"
 import { createAgentTeamActionsSlice } from "./slices/actions.slice"
 import type { AgentTeamState } from "./types"
@@ -259,12 +259,13 @@ export function stripLegacyRuntimeSelectors(raw: {
     }
   }
   if (raw.templates && typeof raw.templates === "object") {
-    for (const template of Object.values(raw.templates)) {
+    for (const [id, template] of Object.entries(raw.templates)) {
       if (!template || typeof template !== "object" || !template.config) continue
       if (typeof template.config !== "object") continue
-      const result = stripLegacyRuntimeSelector(template.config)
-      if (result.stripped) {
-        template.config = result.config
+      // The one template upgrade (`definition-contract.ts`), not a second copy.
+      const result = migrateSquadTemplate(template as unknown as AgentTeamTemplate)
+      if (result.changed) {
+        raw.templates[id] = result.template as unknown as typeof template
         stripped += 1
       }
     }

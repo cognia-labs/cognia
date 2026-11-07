@@ -134,6 +134,8 @@ const IDLE_ACK_EXACT_TEXT: ReadonlySet<string> = new Set([
  * True when `value` is an idle/acknowledgement-only message — a short reply that adds no
  * information (no findings, no decision, no question). Used to keep "ok / 收到 / waiting
  * for tasks" chatter out of the mailbox.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function looksLikeIdleAckOnlyText(
   value: string,

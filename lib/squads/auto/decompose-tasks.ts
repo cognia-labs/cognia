@@ -117,6 +117,8 @@ function cleanDependencies(value: unknown, currentIndex: number): number[] {
  * Linear fallback chain: one task per non-lead member (or a single task for a
  * lead-only roster), each depending on the previous, assigned round-robin
  * across non-lead members. Never throws.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function heuristicTasks(objective: string, roster: ProposedTeammate[]): ProposedTask[] {
   const workerIndices = roster.map((_, i) => i).filter((i) => roster[i].role !== "lead")

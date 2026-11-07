@@ -11,7 +11,7 @@ import {
   type AgentTeamTemplate,
   type TeamDelegationRecord,
 } from "@/types/agent/agent-team"
-import { normalizeAgentTeamConfig, normalizeAgentTeamTask } from "@/lib/squads/agent-team-compat"
+import { normalizeAgentTeamConfig, normalizeAgentTeamTask } from "@/lib/squads/agent-team-normalize"
 import { assertNoNewRawTeammateCredentials } from "@/lib/squads/teammate/execution-binding-resolver"
 import { canMoveTask, reorderColumn, sortColumn } from "@/lib/squads/gates/task-move-guard"
 import { assignAgentTeamAvatarId, resolveAgentTeamAvatarId } from "@/lib/squads/avatar"

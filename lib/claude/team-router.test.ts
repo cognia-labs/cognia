@@ -9,7 +9,6 @@ import {
   holdReasonFor,
   parseMentions,
   planAutoRound,
-  planUserTurn,
   routeTurn,
   stickyResponderOf,
   stripDispatches,
@@ -578,24 +577,22 @@ describe("routeTurn with room options", () => {
   })
 })
 
-describe("planUserTurn", () => {
+describe("holdReasonFor", () => {
   const coder = makeCharacter({ id: "c1", name: "Coder" })
   const members = [coder]
   const team = makeTeam({ members: [{ characterId: "c1" }], orchestration: "round_robin" })
+  const plan = (t: typeof team, opts?: Parameters<typeof routeTurn>[4]) => {
+    const targets = routeTurn(t, members, "hi", undefined, opts)
+    return { targets, held: holdReasonFor(t, targets, opts) }
+  }
 
   it("names why the room held its tongue", () => {
-    expect(planUserTurn(team, members, "hi", undefined, { replyMode: "asleep" })).toEqual({
-      targets: [],
-      held: "asleep",
-    })
-    expect(planUserTurn(team, members, "hi", undefined, { replyMode: "mention_only" })).toEqual({
+    expect(plan(team, { replyMode: "asleep" })).toEqual({ targets: [], held: "asleep" })
+    expect(plan(team, { replyMode: "mention_only" })).toEqual({
       targets: [],
       held: "mention_only",
     })
-    expect(planUserTurn({ ...team, orchestration: "manual" }, members, "hi")).toEqual({
-      targets: [],
-      held: "manual",
-    })
+    expect(plan({ ...team, orchestration: "manual" })).toEqual({ targets: [], held: "manual" })
   })
 
   it("names the hold for a routing result the runner computed itself", () => {
@@ -606,11 +603,8 @@ describe("planUserTurn", () => {
   })
 
   it("leaves the supervisor loop unnamed, since somebody still answers", () => {
-    expect(planUserTurn({ ...team, orchestration: "supervisor" }, members, "hi")).toEqual({
-      targets: [],
-      held: null,
-    })
-    expect(planUserTurn(team, members, "hi")).toEqual({ targets: [coder], held: null })
+    expect(plan({ ...team, orchestration: "supervisor" })).toEqual({ targets: [], held: null })
+    expect(plan(team)).toEqual({ targets: [coder], held: null })
   })
 })
 

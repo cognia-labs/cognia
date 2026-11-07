@@ -74,6 +74,7 @@ export class SynthesizeError extends Error {
   }
 }
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export function classifyTeamTaskAccess(task: AgentTeamTask): "read" | "write" {
   const explicit = task.metadata?.access
   if (explicit === "read" || explicit === "write") return explicit

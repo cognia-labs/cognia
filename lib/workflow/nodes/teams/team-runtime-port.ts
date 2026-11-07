@@ -10,8 +10,22 @@
  * instead of the workflow engine reaching into the team runtime itself.
  */
 
+import type { z } from "zod"
+
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
+import type { ParamsSchemas } from "../params-schemas"
 import { nonRetryable } from "../shared/executor-support"
+
+/** The team node kinds whose implementations read their params through this port. */
+type TeamParamsKind =
+  "action.team.compose" | "action.team.status" | "action.team.delegate" | "action.team.message"
+
+/**
+ * The params a team node reads, derived from its `PARAMS_SCHEMAS` entry so the
+ * schema is the only source of the field set. Partial on purpose: an executor
+ * re-checks what it requires rather than trusting that validation ran.
+ */
+export type TeamNodeParams<K extends TeamParamsKind> = Partial<z.input<ParamsSchemas[K]>>
 
 type TeamNodeExecutor = (ctx: StepExecutionContext) => Promise<StepExecutionResult>
 

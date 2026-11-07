@@ -171,39 +171,16 @@ function explicitTargetsOf(
 /** Why a user turn produced no reply on purpose. */
 export type TurnHoldReason = "asleep" | "mention_only" | "manual"
 
-export interface UserTurnPlan {
-  targets: Character[]
-  /**
-   * Set when the room chose silence. `null` with no targets means the
-   * supervisor loop owns the turn, or the roster is empty.
-   */
-  held: TurnHoldReason | null
-}
-
 /**
- * `routeTurn` plus the reason nobody was picked, so the runner can tell a
- * held turn (the room's settings said so) from a supervisor turn (someone
- * else decides) without re-deriving the policy.
- */
-export function planUserTurn(
-  team: Pick<Team, "members" | "orchestration" | "maxResponses">,
-  members: readonly Character[],
-  userText: string,
-  primaryCharacterId?: string,
-  opts: RouteTurnOptions = {}
-): UserTurnPlan {
-  const targets = routeTurn(team, members, userText, primaryCharacterId, opts)
-  return { targets, held: holdReasonFor(team, targets, opts) }
-}
-
-/**
- * The hold reason for a routing result. Split from `planUserTurn` so the
- * runner can call `routeTurn` itself (its test doubles that one call) and
- * still name why an empty result is silence rather than a supervisor turn.
+ * Why a routing result is empty on purpose: the room's settings held the turn
+ * (`asleep`, `mention_only`, `manual`), as opposed to `null`, which with no
+ * targets means the supervisor loop owns the turn or the roster is empty. The
+ * runner calls `routeTurn` itself and then this, so a held turn is never
+ * mistaken for a supervisor turn.
  */
 export function holdReasonFor(
-  team: Pick<Team, "orchestration">,
-  targets: readonly Character[],
+  team: { orchestration?: Team["orchestration"] },
+  targets: { readonly length: number },
   opts: RouteTurnOptions = {}
 ): TurnHoldReason | null {
   if (targets.length > 0) return null

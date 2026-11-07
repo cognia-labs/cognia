@@ -202,20 +202,3 @@ export async function steerDurableRun(
   })
   return { receiptIds, childCount: children.length }
 }
-
-export async function controlDurableRuns(
-  runIds: string[],
-  action: DurableRunControlAction,
-  options: DurableRunControlOptions = {}
-): Promise<Array<{ runId: string; error?: string }>> {
-  return Promise.all(
-    [...new Set(runIds)].map(async (runId) => {
-      try {
-        await controlDurableRun(runId, action, options)
-        return { runId }
-      } catch (error) {
-        return { runId, error: error instanceof Error ? error.message : String(error) }
-      }
-    })
-  )
-}

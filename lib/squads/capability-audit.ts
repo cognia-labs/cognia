@@ -15,12 +15,13 @@
  *   - nativeAnthropicToolIds → plugin native-tool registry
  *   - characterPackIds    → plugin character-pack registry
  *   - externalAgentPresetIds → built-in presets ∪ plugin presets
- *   - subagentIds         → built-in dispatchers ∪ plugin subagents (namespaced)
+ *   - subagentIds         → the team surface's built-ins ∪ plugin subagents (bare and namespaced, `knownSubagentIds`)
  *
  * Warnings are *derived*, never persisted (per CLAUDE.md: derived data must
  * not be persisted). `refreshAllInstanceCapabilityWarnings` recomputes a
- * sidecar map the UI reads via `getInstanceCapabilityWarnings` /
- * `getTeammateCapabilityWarnings`.
+ * sidecar map the UI reads through `useSquadCapabilityWarnings`
+ * (`subscribeCapabilityWarnings` + `getInstanceCapabilityWarnings`, narrowed
+ * to one teammate with `teammateWarningsIn`).
  */
 
 import type { AgentTeam, AgentTeammate, TeamCapabilityBundle } from "@/types/agent/agent-team"
@@ -29,23 +30,12 @@ import { listSkillIds } from "@/lib/plugin/registries/skill-registry"
 import { listMcpServerPresetIds } from "@/lib/plugin/registries/mcp-server-preset-registry"
 import { listNativeAnthropicToolIds } from "@/lib/plugin/registries/native-anthropic-tool-registry"
 import { listCharacterPackIds } from "@/lib/plugin/registries/character-pack-registry"
-import { listSubagentEntries } from "@/lib/plugin/registries/subagent-registry"
+import { knownSubagentIds } from "@/lib/claude/agents/subagents"
 import { getAvailablePresets } from "@/lib/ai/agent/external/config/presets"
 import { listSharedMemoryAdapterIds } from "@/lib/plugin/registries/shared-memory-adapter-registry"
 import { listSkills } from "@/lib/db/skills"
 import { listMcpServers } from "@/lib/db/mcp-servers"
 import { listTemplates as listA2uiTemplates } from "@/lib/db/a2ui-templates"
-
-/**
- * Built-in subagent dispatcher names always available in the team runtime.
- * Kept in sync with `agent-team-template-registry.ts:BUILT_IN_SUBAGENT_IDS`.
- */
-const BUILT_IN_SUBAGENT_IDS: readonly string[] = [
-  "workflow-designer",
-  "workflow-debugger",
-  "workflow-refactorer",
-  "workflow-doc-writer",
-]
 
 export type CapabilityAuditWarningCode =
   | "missing-mcp-preset"
@@ -113,11 +103,7 @@ export async function buildKnownCapabilityIds(): Promise<KnownCapabilityIds> {
     listA2uiTemplates(),
   ])
 
-  const subagentIds = new Set<string>(BUILT_IN_SUBAGENT_IDS)
-  for (const entry of listSubagentEntries()) {
-    subagentIds.add(entry.id)
-    if (entry.pluginId) subagentIds.add(`${entry.pluginId}:${entry.id}`)
-  }
+  const subagentIds = new Set<string>(knownSubagentIds("team"))
 
   return {
     skillIds: new Set<string>([...listSkillIds(), ...skills.map((s) => s.id)]),
@@ -190,18 +176,6 @@ export function validateInstanceCapabilitiesWith(
   return warnings
 }
 
-/**
- * Async convenience wrapper — builds the known-id snapshot then validates a
- * single team (and optional teammate).
- */
-export async function validateInstanceCapabilities(
-  team: AgentTeam,
-  teammate?: AgentTeammate
-): Promise<CapabilityAuditWarning[]> {
-  const known = await buildKnownCapabilityIds()
-  return validateInstanceCapabilitiesWith(known, team, teammate)
-}
-
 export interface AgentTeamsAuditResult {
   warningsByTeamId: Record<string, CapabilityAuditWarning[]>
   totalWarnings: number
@@ -211,6 +185,8 @@ export interface AgentTeamsAuditResult {
  * Sweep every team + teammate in the store against a single known-id
  * snapshot. Returns warnings grouped by team id (teammate warnings are folded
  * into their owning team's array, carrying a teammate scope).
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export async function auditAllAgentTeamsCapabilities(): Promise<AgentTeamsAuditResult> {
   const known = await buildKnownCapabilityIds()
@@ -241,6 +217,13 @@ export async function auditAllAgentTeamsCapabilities(): Promise<AgentTeamsAuditR
 // ============================================================================
 
 let warningsByTeamId: Record<string, CapabilityAuditWarning[]> = {}
+const warningListeners = new Set<() => void>()
+const NO_WARNINGS: readonly CapabilityAuditWarning[] = []
+
+function publishWarnings(next: Record<string, CapabilityAuditWarning[]>): void {
+  warningsByTeamId = next
+  for (const listener of warningListeners) listener()
+}
 
 /**
  * Recompute the sidecar capability-warning map for every team. Fire-and-forget
@@ -249,26 +232,39 @@ let warningsByTeamId: Record<string, CapabilityAuditWarning[]> = {}
  */
 export async function refreshAllInstanceCapabilityWarnings(): Promise<AgentTeamsAuditResult> {
   const result = await auditAllAgentTeamsCapabilities()
-  warningsByTeamId = result.warningsByTeamId
+  publishWarnings(result.warningsByTeamId)
   return result
+}
+
+/**
+ * Listen for a recomputed warning map. `getInstanceCapabilityWarnings` keeps
+ * returning the same array until the next refresh, so it is a stable
+ * `useSyncExternalStore` snapshot.
+ */
+export function subscribeCapabilityWarnings(listener: () => void): () => void {
+  warningListeners.add(listener)
+  return () => {
+    warningListeners.delete(listener)
+  }
 }
 
 /** Read the cached warnings for a team (team-scope + teammate-scope folded in). */
 export function getInstanceCapabilityWarnings(teamId: string): readonly CapabilityAuditWarning[] {
-  return warningsByTeamId[teamId] ?? []
+  return warningsByTeamId[teamId] ?? NO_WARNINGS
 }
 
-/** Read the cached warnings scoped to a single teammate. */
-export function getTeammateCapabilityWarnings(
-  teamId: string,
+/** The warnings in a team's list that belong to one teammate's own overlay. */
+export function teammateWarningsIn(
+  teamWarnings: readonly CapabilityAuditWarning[],
   teammateId: string
 ): readonly CapabilityAuditWarning[] {
-  return (warningsByTeamId[teamId] ?? []).filter(
+  const own = teamWarnings.filter(
     (w) => w.scope.kind === "teammate" && w.scope.teammateId === teammateId
   )
+  return own.length > 0 ? own : NO_WARNINGS
 }
 
 /** Test-only: clear the cached warning map. */
 export function __resetCapabilityWarningsForTesting(): void {
-  warningsByTeamId = {}
+  publishWarnings({})
 }

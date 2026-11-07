@@ -95,8 +95,7 @@ switch (type) {
 | 符号 | 位置 | 用途 |
 |---|---|---|
 | delegateToBackground | delegation-orchestrator.ts:121 | 创建记录、触发 start 钩子、注册一个 abort 信号、运行 executeAgent。返回一个同步记录外加一个异步完成 promise。 |
-| delegateToExternal | delegation-orchestrator.ts:194 | 为外部 agent 创建一条记录并持久化它；结算在进程外发生。 |
-| completeExternalDelegation | delegation-orchestrator.ts:222 | 一旦外部运行时返回就结算（状态外加结果）；触发 complete 钩子。 |
+| delegateToExternal | delegation-orchestrator.ts:194 | 为外部 agent 创建一条记录并持久化，经外部 agent 管理器在看门狗超时之内运行，并自行结算（completed、failed 或 timeout）；触发 complete 钩子。 |
 | approveDelegation | delegation-orchestrator.ts:243 | 把 awaiting_approval 转为 active 并重新派发后台运行。 |
 | cancelDelegation | delegation-orchestrator.ts:256 | 中止后台信号、置为 cancelled、触发 complete 钩子。 |
 

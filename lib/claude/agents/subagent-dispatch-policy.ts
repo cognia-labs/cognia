@@ -26,6 +26,8 @@ function specificity(glob: string): number {
 /**
  * Resolve the dispatch verdict for a projected subagent id against the
  * user's `agentPermissions.subagentRules`.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function resolveSubagentDispatchVerdict(
   rules: ToolRules | undefined,

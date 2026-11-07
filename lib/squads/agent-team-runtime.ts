@@ -226,7 +226,12 @@ const inflightControllers = new Map<
   { controller: AbortController; runId: string; settled: Promise<void> }
 >()
 
-export function getInflightController(teamId: string): AbortController | undefined {
+/**
+ * The team's in-flight run controller. A test seam only: the lifecycle suites
+ * assert that a run leaves none behind and that a stale stop does not abort
+ * the current one. No production code reads it.
+ */
+export function __getInflightControllerForTesting(teamId: string): AbortController | undefined {
   return inflightControllers.get(teamId)?.controller
 }
 
@@ -612,7 +617,12 @@ export async function runTeamLifecycle(
             ...(team.projectId ? { projectId: team.projectId } : {}),
             kind: "capability_audit",
             instance: "pre-run",
-            subject: { staleCount: auditWarnings.length },
+            // The review form lists these ids (`squad-review-form.tsx`). Ids
+            // only: they name installed capabilities, never run content.
+            subject: {
+              staleCount: auditWarnings.length,
+              missingCapabilities: [...new Set(auditWarnings.map((w) => w.missingId))],
+            },
             signal: ac.signal,
           }).then((outcome) => ({
             outcome: outcome.outcome === "approve" ? ("approve" as const) : ("reject" as const),

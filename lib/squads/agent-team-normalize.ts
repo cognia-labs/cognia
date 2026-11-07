@@ -1,5 +1,5 @@
 /**
- * agent-team-compat
+ * agent-team-normalize (was `agent-team-compat`; renamed for what it holds, ADR-0252 P2)
  *
  * Lightly normalizes Squad config and task inputs so they do not carry
  * obviously-invalid values into the store. The store calls both of these on

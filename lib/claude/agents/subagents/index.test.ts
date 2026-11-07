@@ -1,4 +1,4 @@
-import { resolveAllSubagents, getDispatchableSubagentDef } from "./index"
+import { resolveAllSubagents, getDispatchableSubagentDef, knownSubagentIds } from "./index"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import {
   registerSubagent,
@@ -186,4 +186,35 @@ it("carries external template roles when its pinned configuration supplies the p
   } finally {
     useSubagentRuntimeStore.getState().deleteTemplate("pinned-models")
   }
+})
+
+describe("knownSubagentIds", () => {
+  it("offers each surface's catalog built-ins, so no caller keeps its own copy", () => {
+    expect([...knownSubagentIds("workflow-editor")]).toEqual([
+      "workflow-designer",
+      "workflow-debugger",
+      "workflow-refactorer",
+      "workflow-doc-writer",
+    ])
+    // The team surface has more built-ins than the four workflow agents; the
+    // old hand-kept lists did not, so a Squad requiring one read as missing.
+    expect(knownSubagentIds("team").has("general-purpose")).toBe(true)
+    expect(knownSubagentIds("workflow-editor").has("general-purpose")).toBe(false)
+  })
+
+  it("names a plugin subagent both bare and namespaced, enabled or not", () => {
+    registerSubagent(
+      "scout",
+      { id: "scout", name: "Scout", description: "finds", prompt: "find", disabled: true },
+      { pluginId: "known-ids-test" }
+    )
+    try {
+      const ids = knownSubagentIds("team")
+      expect(ids.has("scout")).toBe(true)
+      expect(ids.has("known-ids-test:scout")).toBe(true)
+    } finally {
+      unregisterSubagentsByPlugin("known-ids-test")
+    }
+    expect(knownSubagentIds("team").has("known-ids-test:scout")).toBe(false)
+  })
 })

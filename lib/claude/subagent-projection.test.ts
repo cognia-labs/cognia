@@ -1,23 +1,4 @@
-import { createSubAgentNode, indeterminateSubagentProgress } from "./subagent-projection"
-
-describe("indeterminateSubagentProgress", () => {
-  it("is 0 for no tools and rises 10% per tool", () => {
-    expect(indeterminateSubagentProgress(0)).toBe(0)
-    expect(indeterminateSubagentProgress(1)).toBe(10)
-    expect(indeterminateSubagentProgress(5)).toBe(50)
-  })
-
-  it("caps at 95 and floors at 0", () => {
-    expect(indeterminateSubagentProgress(99)).toBe(95)
-    expect(indeterminateSubagentProgress(-3)).toBe(0)
-  })
-
-  it("is monotonic", () => {
-    expect(indeterminateSubagentProgress(9)).toBeGreaterThanOrEqual(
-      indeterminateSubagentProgress(3)
-    )
-  })
-})
+import { createSubAgentNode } from "./subagent-projection"
 
 describe("createSubAgentNode", () => {
   it("seeds a fresh running node with synchronized timestamps", () => {

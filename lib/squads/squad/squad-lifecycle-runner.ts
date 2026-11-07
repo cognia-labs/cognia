@@ -61,7 +61,7 @@ export function __resetAgentTeamRuntimeForTesting(): void {
   configuredDeps = null
 }
 
-export async function ensureConfiguredSquadRuntimeDeps(): Promise<ConfiguredSquadRuntimeDeps> {
+async function ensureConfiguredSquadRuntimeDeps(): Promise<ConfiguredSquadRuntimeDeps> {
   if (configuredDeps) return configuredDeps
   const { buildAgentTeamRuntimeDeps } = await import("../agent-team-runtime-deps")
   configuredDeps = buildAgentTeamRuntimeDeps()
@@ -72,7 +72,7 @@ export async function ensureConfiguredSquadRuntimeDeps(): Promise<ConfiguredSqua
   return configuredDeps
 }
 
-export function bindSquadStoreReader(
+function bindSquadStoreReader(
   constraints?: AgentTeamExecutionConstraints
 ): RunTeamLifecycleDeps["storeReader"] {
   return {
@@ -93,7 +93,7 @@ export function bindSquadStoreReader(
   }
 }
 
-export function bindSquadStoreWriter(): RunTeamLifecycleDeps["storeWriter"] {
+function bindSquadStoreWriter(): RunTeamLifecycleDeps["storeWriter"] {
   return {
     addMessage: (input: SendMessageInput) => useAgentTeamStore.getState().addMessage(input),
     setTaskStatus: (taskId: string, status: TeamTaskStatus, result?: string, error?: string) =>
@@ -113,7 +113,7 @@ export function bindSquadStoreWriter(): RunTeamLifecycleDeps["storeWriter"] {
  * Task statuses a resume does NOT re-dispatch: finished and dropped work stays
  * so, and `review` awaits a human verdict on the board.
  */
-export const RESUME_SKIP_STATUSES: ReadonlySet<TeamTaskStatus> = new Set([
+const RESUME_SKIP_STATUSES: ReadonlySet<TeamTaskStatus> = new Set([
   "completed",
   "cancelled",
   "review",
@@ -134,7 +134,7 @@ export const resumeTaskFilter: NonNullable<RunTeamLifecycleDeps["taskFilter"]> =
  * Returns how many tasks are still runnable, so the caller can settle a team
  * with nothing left instead of entering a lifecycle that fails on it.
  */
-export const SQUAD_NOT_READY_REASON = "squad_not_ready"
+const SQUAD_NOT_READY_REASON = "squad_not_ready"
 
 export interface GuardSquadResumeDeps {
   evaluate?: (

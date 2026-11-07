@@ -577,18 +577,6 @@ describe("useTeamChat — actions", () => {
     )
   })
 
-  it("stopMember() asks the host runner to stop one member of the named room", async () => {
-    const { result } = renderHook(() => useTeamChat())
-    await flush()
-    await act(async () => {
-      await result.current.stopMember("alice", "team-1")
-    })
-    // No sub-session of Alice is live, so the request is what the next
-    // round reads; a live one would also be interrupted (runner.test.ts).
-    expect(uiState.requestStopMember).toHaveBeenCalledWith("team-1", "alice")
-    expect(interruptSessionMock).not.toHaveBeenCalled()
-  })
-
   it("stop() interrupts active sub-sessions and clears member statuses", async () => {
     const { result } = renderHook(() => useTeamChat())
     await flush()
@@ -3542,6 +3530,39 @@ describe("remote room mutation rejection", () => {
       }
     }
   )
+})
+
+describe("companion stop", () => {
+  /**
+   * The host runs the turn, so `room_stop` stops it there; this device must
+   * still show the stopped room the way a local stop does, member statuses
+   * and pending member stops included (ADR-0252 P2).
+   */
+  it("releases the room here the way a local stop does, then asks the host to stop", async () => {
+    isTauriMock.mockReturnValue(false)
+    const pairing = jest.requireMock("@/lib/platform/web-companion")
+      .hasWebCompanionTarget as jest.Mock
+    pairing.mockReturnValue(true)
+    const stopRoomTurn = jest.requireMock("@/lib/companion/room-send-client")
+      .stopRoomTurn as jest.Mock
+    stopRoomTurn.mockResolvedValue(undefined)
+    try {
+      const { result, unmount } = renderHook(() => useTeamChat())
+      await act(async () => {
+        await result.current.stop("team-1")
+      })
+      expect(chatState.clearSteerQueue).toHaveBeenCalledWith("team-1")
+      expect(chatState.setSessionStatus).toHaveBeenCalledWith("team-1", "idle", {
+        turnOutcome: "interrupted",
+      })
+      expect(uiState.clearMemberStatusFor).toHaveBeenCalledWith("team-1")
+      expect(uiState.clearStopRequestsFor).toHaveBeenCalledWith("team-1")
+      expect(stopRoomTurn).toHaveBeenCalledWith("team-1")
+      unmount()
+    } finally {
+      pairing.mockReturnValue(false)
+    }
+  })
 })
 
 describe("companion steer admission", () => {

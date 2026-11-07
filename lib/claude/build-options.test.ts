@@ -332,7 +332,7 @@ import {
   HOST_FALLBACK_RUNTIME_REF,
   sandboxSessionRuntime,
 } from "@/lib/sandbox/session-runtime"
-import { listCharactersByIds, resolveCharacterById } from "@/lib/db/characters"
+import { resolveCharacterById } from "@/lib/db/characters"
 import {
   buildMcpServerMapResolved,
   listEnabledMcpServers,
@@ -372,12 +372,7 @@ import {
   __getActiveSpanForTesting,
   __resetAgentTraceEmitterForTesting,
 } from "@cognia/agent-trace/emitter"
-import {
-  _resetImPromptMemosForTest,
-  listTeamMembers,
-  resolveMemberConfig,
-  resolveSendOptions,
-} from "./build-options"
+import { _resetImPromptMemosForTest, resolveSendOptions } from "./build-options"
 import type { BuildOptionsContext } from "./build-options"
 import {
   EXTERNAL_AGENT_PROVIDER_ID,
@@ -391,13 +386,11 @@ import {
   type ChatSession,
   type Skill,
   type Team,
-  type TeamMember,
 } from "@cognia/agent-config-types"
 import { RESOLVED_SPEC_VERSION } from "@cognia/agent-config-types/agent-execution"
 import type { Project } from "@/types"
 
 const mGetCharacter = resolveCharacterById as jest.Mock
-const mListCharsByIds = listCharactersByIds as jest.Mock
 const mListSkills = listEnabledSkillsByIds as jest.Mock
 const mListSkillsByIds = listSkillsByIds as jest.Mock
 const mRecordUsage = recordSkillUsage as jest.Mock
@@ -644,49 +637,6 @@ describe("resolveSendOptions — Cognia Support safety", () => {
     expect(opts).not.toHaveProperty("builtinTools")
     expect(opts).not.toHaveProperty("pluginTools")
     expect(opts).not.toHaveProperty("lsp")
-  })
-})
-
-describe("resolveMemberConfig", () => {
-  const team = { id: "t1", mcpServerIds: ["t-mcp-1"] } as Team
-  const character = makeChar({
-    id: "c1",
-    systemPrompt: "char prompt",
-    model: "char-model",
-    allowedTools: ["A"],
-    mcpServerIds: ["c-mcp-1"],
-  })
-
-  it("uses overrides where provided", () => {
-    const member: TeamMember = {
-      characterId: "c1",
-      systemPromptOverride: "override prompt",
-      modelOverride: "override-model",
-      allowedToolsOverride: ["B"],
-      mcpServerIdsOverride: ["m-mcp-1"],
-    }
-    expect(resolveMemberConfig(team, member, character)).toEqual({
-      systemPrompt: "override prompt",
-      model: "override-model",
-      allowedTools: ["B"],
-      mcpServerIds: ["m-mcp-1"],
-    })
-  })
-
-  it("falls back to the character defaults when no override is set", () => {
-    const member: TeamMember = { characterId: "c1" }
-    expect(resolveMemberConfig(team, member, character)).toEqual({
-      systemPrompt: "char prompt",
-      model: "char-model",
-      allowedTools: ["A"],
-      mcpServerIds: ["c-mcp-1"],
-    })
-  })
-
-  it("falls through to team mcp when neither override nor character has any", () => {
-    const member: TeamMember = { characterId: "c1" }
-    const charNoMcp = makeChar({ id: "c1" })
-    expect(resolveMemberConfig(team, member, charNoMcp).mcpServerIds).toEqual(["t-mcp-1"])
   })
 })
 
@@ -5484,15 +5434,6 @@ describe("resolveSendOptions — reasoning effort (thinking level)", () => {
       appSettings: { id: "singleton", defaultProvider: "anthropic" } as AppSettings,
     })
     expect(opts.droppedCapabilityWarning).toBeUndefined()
-  })
-})
-
-describe("listTeamMembers", () => {
-  it("delegates to listCharactersByIds", async () => {
-    mListCharsByIds.mockResolvedValueOnce([makeChar({ id: "c1" })])
-    const out = await listTeamMembers(["c1"])
-    expect(mListCharsByIds).toHaveBeenCalledWith(["c1"])
-    expect(out).toHaveLength(1)
   })
 })
 

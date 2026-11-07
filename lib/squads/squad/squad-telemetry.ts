@@ -73,10 +73,6 @@ export function startSquadRunSpan(input: SquadRunSpanInput): { traceId: string; 
   return handle
 }
 
-export function squadRunTraceId(runId: string): string | undefined {
-  return roots.get(runId)?.traceId
-}
-
 export interface EndSquadRunSpanInput {
   runId: string
   /** `completed` / `failed` / `cancelled` / `needs_input` / `paused`. */

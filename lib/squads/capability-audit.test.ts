@@ -29,7 +29,8 @@ import {
   auditAllAgentTeamsCapabilities,
   refreshAllInstanceCapabilityWarnings,
   getInstanceCapabilityWarnings,
-  getTeammateCapabilityWarnings,
+  teammateWarningsIn,
+  subscribeCapabilityWarnings,
   __resetCapabilityWarningsForTesting,
   type KnownCapabilityIds,
 } from "./capability-audit"
@@ -148,6 +149,19 @@ describe("auditAllAgentTeamsCapabilities + sidecar", () => {
     )
   })
 
+  /** The audit reads the catalog's team surface, not a hand-kept copy of four names. */
+  it("knows every team-surface built-in subagent", async () => {
+    const team = useAgentTeamStore.getState().createTeam({ name: "Built-ins", task: "t" })
+    useAgentTeamStore
+      .getState()
+      .updateTeamCapabilities(team.id, { subagentIds: ["general-purpose", "workflow-designer"] })
+
+    const result = await auditAllAgentTeamsCapabilities()
+    expect(result.warningsByTeamId[team.id] ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "missing-subagent" })])
+    )
+  })
+
   it("refreshAllInstanceCapabilityWarnings populates the readable sidecar map", async () => {
     const team = useAgentTeamStore.getState().createTeam({ name: "Sidecar", task: "t" })
     useAgentTeamStore.getState().updateTeamCapabilities(team.id, { skillIds: ["ghost-skill"] })
@@ -157,7 +171,7 @@ describe("auditAllAgentTeamsCapabilities + sidecar", () => {
     expect(warnings.map((w) => w.missingId)).toContain("ghost-skill")
   })
 
-  it("getTeammateCapabilityWarnings narrows to a single teammate", async () => {
+  it("teammateWarningsIn narrows a team's warnings to a single teammate", async () => {
     const team = useAgentTeamStore.getState().createTeam({ name: "Member", task: "t" })
     const teammate = useAgentTeamStore.getState().addTeammate({
       teamId: team.id,
@@ -169,8 +183,33 @@ describe("auditAllAgentTeamsCapabilities + sidecar", () => {
       .updateTeammateCapabilities(teammate.id, { characterPackIds: { add: ["ghost-pack"] } })
 
     await refreshAllInstanceCapabilityWarnings()
-    const tmWarnings = getTeammateCapabilityWarnings(team.id, teammate.id)
+    const tmWarnings = teammateWarningsIn(getInstanceCapabilityWarnings(team.id), teammate.id)
     expect(tmWarnings.map((w) => w.missingId)).toContain("ghost-pack")
     expect(tmWarnings.every((w) => w.scope.kind === "teammate")).toBe(true)
+  })
+
+  it("notifies subscribers and keeps one snapshot per refresh", async () => {
+    const team = useAgentTeamStore.getState().createTeam({ name: "Live", task: "t" })
+    useAgentTeamStore.getState().updateTeamCapabilities(team.id, { skillIds: ["ghost-skill"] })
+    const listener = jest.fn()
+    const unsubscribe = subscribeCapabilityWarnings(listener)
+
+    expect(getInstanceCapabilityWarnings(team.id)).toBe(getInstanceCapabilityWarnings(team.id))
+    await refreshAllInstanceCapabilityWarnings()
+    expect(listener).toHaveBeenCalledTimes(1)
+    const first = getInstanceCapabilityWarnings(team.id)
+    expect(getInstanceCapabilityWarnings(team.id)).toBe(first)
+
+    unsubscribe()
+    await refreshAllInstanceCapabilityWarnings()
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it("teammateWarningsIn ignores team-scope warnings", () => {
+    const team = mkTeam({
+      config: { capabilities: { skillIds: ["team-ghost"] } },
+    } as Partial<AgentTeam>)
+    const warnings = validateInstanceCapabilitiesWith(emptyKnown(), team)
+    expect(teammateWarningsIn(warnings, "tm-1")).toEqual([])
   })
 })

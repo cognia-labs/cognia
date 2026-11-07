@@ -42,6 +42,8 @@ export interface DispatchAgentToolRequest {
  * Resolve the fan-out width for one call. A finite token budget forces
  * serial fan-out (see below). Otherwise the user's concurrency cap applies,
  * and `0` (unset) keeps the historical fully-parallel behaviour.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function resolveDispatchWidth(caller: {
   budgetRoot: string
@@ -209,6 +211,8 @@ async function resumeDispatchRun(
  * accounting), so it can only be dropped at session teardown — call this from
  * the chat session-close path. Without it, `getOrCreateDispatchBudget` leaks
  * one guard per distinct session id for the renderer's lifetime.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function releaseDispatchBudgetForSession(sessionId: string): void {
   releaseDispatchBudget(`dispatch:${sessionId}`)

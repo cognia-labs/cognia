@@ -108,6 +108,8 @@ function clamp01(value: unknown, fallback: number): number {
  * Deterministic fallback used when the model fails or is unavailable. Scores
  * the objective by length + a few hard keywords so the result is stable and
  * test-pinnable. Never throws.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function heuristicAssessment(objective: string, now: Date): TeamRoutingAssessment {
   const text = objective.toLowerCase()

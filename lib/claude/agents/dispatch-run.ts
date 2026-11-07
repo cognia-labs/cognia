@@ -125,6 +125,7 @@ function normalizeMaxConcurrent(raw: unknown): number {
   return Math.floor(raw)
 }
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export async function loadNesting(): Promise<NestingSettings> {
   try {
     const { getSettings } = await import("@/lib/db/settings")

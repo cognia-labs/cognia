@@ -54,7 +54,7 @@ import {
 import type { RoomRunner } from "@/lib/chat/room/runner"
 import { withMetadata } from "@/lib/chat/room/runner"
 import { roomSendRefusalOf, sendRoomTurn, stopRoomTurn } from "@/lib/companion/room-send-client"
-import { maybeDrainSteer, putBackPendingSteers, steerArmed } from "./steer-runtime"
+import { maybeDrainSteer, putBackPendingSteers } from "./steer-runtime"
 import { useChatStore } from "@/stores/chat"
 import { isCompanionShell } from "@/lib/chat/room/shell"
 import { isTauri } from "@/lib/tauri"
@@ -284,9 +284,7 @@ export function useTeamChat() {
           .catch((error) => console.error("steer put-back on stop failed", error))
       }
       if (engine.projector) {
-        useChatStore.getState().clearSteerQueue(sessionId)
-        steerArmed.delete(sessionId)
-        useChatStore.getState().setSessionStatus(sessionId, "idle", { turnOutcome: "interrupted" })
+        engine.projector.markStopped(sessionId)
         putBack()
         await stopRoomTurn(sessionId).catch((err) => console.error("room_stop failed", err))
         return
@@ -296,25 +294,6 @@ export function useTeamChat() {
       await stopping
     },
     [engine, tSteer]
-  )
-
-  /**
-   * Stop one member without stopping the room (ADR-0177 batch 3). The rest
-   * of the round goes on, on whichever host runs it.
-   */
-  const stopMember = useCallback(
-    async (characterId: string, targetSessionId?: string) => {
-      const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
-      if (!sessionId) return
-      if (engine.projector) {
-        await stopRoomTurn(sessionId, characterId).catch((err) =>
-          console.error("room_stop (member) failed", err)
-        )
-        return
-      }
-      await engine.runner.stopMember(sessionId, characterId)
-    },
-    [engine]
   )
 
   /** Cut the running turn short so its settle replays the queued steer. */
@@ -426,7 +405,6 @@ export function useTeamChat() {
   return {
     send,
     stop,
-    stopMember,
     regenerate,
     editAndResend,
     respondToApproval,

@@ -13,6 +13,24 @@
   "autoShutdown": "Auto-shutdown on completion",
   "awaitingExternalPickup": "Awaiting external pickup",
   "cancel": "Cancel",
+  "capabilityWarnings": {
+    "buckets": {
+      "a2uiTemplateIds": "A2UI templates",
+      "characterPackIds": "Character packs",
+      "externalAgentPresetIds": "External agents",
+      "mcpServerIds": "MCP servers",
+      "nativeAnthropicToolIds": "Built-in tools",
+      "sharedMemoryAdapterId": "Shared memory adapter",
+      "skillIds": "Skills",
+      "subagentIds": "Subagents"
+    },
+    "description": "The plugin that contributed them may be disabled or uninstalled. A run asks before continuing without them. Re-enable the plugin, or remove the ids under Plugins & capabilities or in the teammate's overlay.",
+    "entryContext": "{owner} · {bucket}",
+    "listLabel": "Capability ids that no longer resolve",
+    "teamScope": "Squad",
+    "teammateScope": "Teammate {name}",
+    "title": "{count, plural, one {# capability no longer resolves} other {# capabilities no longer resolve}}"
+  },
   "confirm": {
     "cancelLabel": "Cancel",
     "clearMemory": {

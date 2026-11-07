@@ -22,8 +22,6 @@ description: resolveSendOptions — the single convergence point that collapses 
 | Export | Line | Role |
 | --- | --- | --- |
 | **`resolveSendOptions(ctx)`** | `:336-1380` | The pipeline. Async; returns the full `SendOptions`. |
-| `resolveMemberConfig(team, member, character)` | `:307-323` | Pure per-teammate override resolution (`systemPrompt`/`model`/`allowedTools`/`mcpServerIds`). Reused by UI preview. |
-| `listTeamMembers(ids)` | `:1387-1389` | Pre-resolve teammate character rows. |
 
 The input is `BuildOptionsContext` (`:105-221`): `session`, `character`, `appSettings`, `activeProject` (cwd chain), `memberOverride`, `referencedPaths`, `agentMode`, `twinDeps`/`twinUserMessage`, `memoryDeps`/`memoryUserMessage`, `activeGoal`, `conversationKey`, `platformBinding`, `inboxPolicy`. The output `SendOptions` is declared in `lib/claude/types.ts:73`.
 

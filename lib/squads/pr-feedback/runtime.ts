@@ -221,8 +221,3 @@ export function buildTeamPrFeedback(params: BuildTeamPrFeedbackParams): TeamPrFe
     dispose: () => controller.dispose(),
   }
 }
-
-/** Ensure the Dexie schema is open before the first observation write. */
-export async function ensureTeamPrObservationsReady(): Promise<void> {
-  await getDb().open()
-}

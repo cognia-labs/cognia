@@ -5,11 +5,20 @@ import type {
   TeamReplyConcurrency,
 } from "@cognia/agent-config-types"
 import { getDb } from "./schema"
-import { MAX_AUTO_ROUNDS } from "@/lib/claude/team-primary-router"
 
 function newId() {
   return "team_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)
 }
+
+/**
+ * Ceiling on `Team.maxAutoRounds`. A room that continues on its own spends
+ * real money per round with nobody watching, so the editor and `saveTeam`
+ * refuse a number large enough for that to be a surprise, and the room runner
+ * never runs past it (`resolveAutoRoundBudget`, `lib/chat/room/settings.ts`).
+ * It lives with the other team field bounds so the data layer can enforce it
+ * without importing the room module above it.
+ */
+export const MAX_AUTO_ROUNDS = 5
 
 export const TEAM_ORCHESTRATIONS: TeamOrchestration[] = [
   "mention_round_robin",

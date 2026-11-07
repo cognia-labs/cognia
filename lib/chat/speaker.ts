@@ -108,6 +108,8 @@ const LEADING_MARKDOWN_RE = /^[#>*\-+=|`~\s]+/
 /**
  * Strip everything that could forge structure, collapse whitespace, and cap
  * the length. Returns `""` when nothing usable survives.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function sanitizeSpeakerLabel(raw: string): string {
   const flattened = raw.replace(STRUCTURE_BREAKING_RE, " ")
@@ -122,6 +124,8 @@ export function sanitizeSpeakerLabel(raw: string): string {
  * A stable, prompt-safe pseudonym for `id`. Deterministic and stateless, so
  * the same participant reads the same way across turns, devices and hosts
  * without anything having to remember an index.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function speakerHandle(kind: SpeakerKind, id: string): string {
   return `${handlePrefix(kind)}-${stableSuffix(id)}`

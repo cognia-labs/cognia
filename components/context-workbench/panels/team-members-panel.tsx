@@ -517,7 +517,6 @@ function MemberRow({
   const t = useTranslations("desktop.memberList")
   const router = useRouter()
   const pathname = usePathname() ?? "/"
-  const requestStop = useUIStore((s) => s.requestStopMember)
 
   // The member override is what actually runs; the character's model is the
   // fallback, and "no model" means the session default rather than "none".
@@ -541,9 +540,15 @@ function MemberRow({
     log.info("team-members mention", { teamSessionId, characterId: character.id })
     requestComposerMention(character.name)
   }
+  // The one member stop (`stop-member.ts`): it interrupts the member's live
+  // reply, not only the next round, and reaches the Host from a companion.
   const stop = () => {
     log.info("team-members stop request", { teamSessionId, characterId: character.id })
-    requestStop(teamSessionId, character.id)
+    void import("@/lib/chat/room/stop-member")
+      .then(({ stopRoomMember }) => stopRoomMember(teamSessionId, character.id))
+      .catch((error: unknown) => {
+        log.warn("team-members stop failed", { error: String(error) })
+      })
   }
 
   return (

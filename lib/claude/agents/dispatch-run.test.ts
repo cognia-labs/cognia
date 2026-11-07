@@ -30,7 +30,10 @@ import {
   __clearAllDispatchContextsForTesting,
 } from "./dispatch-context-registry"
 import { __clearAllDispatchBudgetsForTesting, getOrCreateDispatchBudget } from "./dispatch-budget"
-import { requestCancelSubagentRun, liveSubagentRunCount } from "./subagent-cancel-registry"
+import {
+  requestCancelSubagentRun,
+  __liveSubagentRunCountForTesting,
+} from "./subagent-cancel-registry"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { PluginSubagentDispatchResult } from "@/types/plugin/plugin-agent-sdk"
 import {
@@ -343,7 +346,7 @@ describe("startDispatchRun — success + terminal records", () => {
     expect(handle.text).toContain("ownership lost")
     expect(handle.text).not.toContain("late success")
     expect(runs()).toEqual([expect.objectContaining({ status: "failed" })])
-    expect(liveSubagentRunCount()).toBe(0)
+    expect(__liveSubagentRunCountForTesting()).toBe(0)
   })
 
   it("runs a foreground dispatch, records completed, journals the run, and renders the outcome", async () => {
@@ -379,7 +382,7 @@ describe("startDispatchRun — success + terminal records", () => {
       expect.objectContaining({ onLeaseLost: expect.any(Function) })
     )
     expect(mockStartBackground).not.toHaveBeenCalled()
-    expect(liveSubagentRunCount()).toBe(0)
+    expect(__liveSubagentRunCountForTesting()).toBe(0)
   })
 
   it("threads resume lineage into the journal meta", async () => {
@@ -572,7 +575,7 @@ describe("startDispatchRun — retry loop", () => {
     expect(mockDispatch).toHaveBeenCalledTimes(1)
     expect(handle.text).toBe("[coder] cancelled.")
     expect(runs()[0].status).toBe("cancelled")
-    expect(liveSubagentRunCount()).toBe(0)
+    expect(__liveSubagentRunCountForTesting()).toBe(0)
   })
 
   it("skips the retry when the subtree deadline cannot fit the backoff", async () => {
@@ -935,7 +938,7 @@ describe("durable background admission", () => {
     expect(result.error).toBe("journal unavailable")
     expect(mockDispatch).not.toHaveBeenCalled()
     expect(mockStartBackground).not.toHaveBeenCalled()
-    expect(liveSubagentRunCount()).toBe(0)
+    expect(__liveSubagentRunCountForTesting()).toBe(0)
   })
 
   it("waits for the durable dispatch marker before starting the runtime", async () => {

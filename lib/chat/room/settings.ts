@@ -10,6 +10,7 @@
  */
 
 import type { ChatSession } from "@cognia/agent-config-types"
+import { MAX_AUTO_ROUNDS } from "@/lib/db/teams"
 import { roomKindOf, isMultiHumanRoom, type RoomKindSource } from "./kind"
 import type { ResolvedRoomSettings, RoomReplyMode, RoomSettings } from "./types"
 
@@ -18,6 +19,18 @@ export const ROOM_REPLY_MODES: readonly RoomReplyMode[] = ["auto", "mention_only
 
 /** Longest instructions block injected into a prompt. */
 export const MAX_ROOM_INSTRUCTIONS_CHARS = 4_000
+
+/**
+ * The rounds a room may run on its own: `Team.maxAutoRounds` as a whole number
+ * from 0 through `MAX_AUTO_ROUNDS`. The editor and `lib/db/teams.ts` refuse
+ * anything else on write, but a row written before the ceiling, or by an
+ * import, still reaches the runner, which must not pay for more rounds than
+ * the editor would have allowed.
+ */
+export function resolveAutoRoundBudget(maxAutoRounds: number | undefined): number {
+  if (maxAutoRounds === undefined || !Number.isFinite(maxAutoRounds)) return 0
+  return Math.min(MAX_AUTO_ROUNDS, Math.max(0, Math.trunc(maxAutoRounds)))
+}
 
 export type RoomSettingsSource = RoomKindSource &
   Pick<ChatSession, "roomSettings" | "memoryUse" | "memoryLearn">
@@ -53,7 +66,7 @@ export function resolveRoomSettings(
   return { kind, replyMode, instructions, memory, mutedMemberIds, memoryDefaulted }
 }
 
-export function clampInstructions(text: string | undefined): string {
+function clampInstructions(text: string | undefined): string {
   const trimmed = (text ?? "").trim()
   if (trimmed.length <= MAX_ROOM_INSTRUCTIONS_CHARS) return trimmed
   return trimmed.slice(0, MAX_ROOM_INSTRUCTIONS_CHARS)

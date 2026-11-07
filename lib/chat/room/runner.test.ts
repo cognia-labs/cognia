@@ -878,6 +878,32 @@ describe("stopping and steering", () => {
     expect(w.drained).toEqual([])
   })
 
+  /**
+   * The companion stops a room the host runs: nothing to interrupt here, but
+   * the device must show the same stopped room a local stop would.
+   */
+  it("releaseStoppedTurn clears what this device shows without interrupting anything", () => {
+    const w = createWorld()
+    w.status.set(ROOM, "streaming")
+    w.steerQueues.set(ROOM, [{ id: "q1", text: "later" } as never])
+    w.armed.add(ROOM)
+    w.memberStatus.set(`${ROOM}::a`, "speaking" as never)
+    w.memberActivity.set(`${ROOM}::a`, "thinking" as never)
+    w.stopRequests.add(`${ROOM}::b`)
+    w.memberStatus.set("other-room::a", "speaking" as never)
+
+    w.runner.releaseStoppedTurn(ROOM)
+
+    expect(w.status.get(ROOM)).toBe("idle")
+    expect(w.statusLog).toContain("outcome:interrupted")
+    expect(w.steerQueues.has(ROOM)).toBe(false)
+    expect(w.armed.has(ROOM)).toBe(false)
+    expect([...w.memberStatus.keys()]).toEqual(["other-room::a"])
+    expect(w.memberActivity.size).toBe(0)
+    expect(w.stopRequests.size).toBe(0)
+    expect(w.calls.interrupt).toEqual([])
+  })
+
   it("queues a turn typed while the room is streaming instead of orchestrating twice", async () => {
     const w = createWorld()
     w.status.set(ROOM, "streaming")

@@ -101,6 +101,21 @@ export class CompanionRoomProjector {
     this.markBusy(roomId)
   }
 
+  /**
+   * The user stopped the room here and `room_stop` is on its way to the host.
+   * Forget what this device was projecting, so a room whose first member never
+   * started does not stay "active", and release the turn the way a local stop
+   * does.
+   */
+  markStopped(roomId: string): void {
+    const timer = this.idleTimers.get(roomId)
+    if (timer) clearTimeout(timer)
+    this.idleTimers.delete(roomId)
+    this.active.delete(roomId)
+    this.awaitingFirstMember.delete(roomId)
+    this.runner.releaseStoppedTurn(roomId)
+  }
+
   private markBusy(roomId: string): void {
     const timer = this.idleTimers.get(roomId)
     if (timer) clearTimeout(timer)

@@ -92,6 +92,15 @@ jest.mock("@/stores/agent/external-agent-store", () => ({
     selector({ agents: mockExternalAgents.current }),
 }))
 
+// Mutable warning list so a test can seed a stale overlay id. The roster
+// audits as overlays change (`audit: true`); the hook itself is tested apart.
+const mockCapabilityWarnings: { current: unknown[] } = { current: [] }
+const mockUseSquadCapabilityWarnings = jest.fn(() => mockCapabilityWarnings.current)
+jest.mock("@/hooks/squads/use-squad-capability-warnings", () => ({
+  useSquadCapabilityWarnings: (...args: unknown[]) =>
+    mockUseSquadCapabilityWarnings(...(args as [])),
+}))
+
 import { AgentTeamMembers } from "./members"
 import { buildTeam } from "@/lib/storybook/fixtures/agent-team"
 import type { AgentTeammate } from "@/types/agent/agent-team"
@@ -118,6 +127,8 @@ beforeEach(() => {
   removeTeammateMock.mockClear()
   updateTeammateMock.mockClear()
   mockPrStatus.current = new Map()
+  mockCapabilityWarnings.current = []
+  mockUseSquadCapabilityWarnings.mockClear()
   mockExternalAgents.current = {
     strict: {
       id: "strict",
@@ -167,6 +178,30 @@ describe("AgentTeamMembers", () => {
     )
     const status = screen.getByTestId("member-tm_1-status")
     expect(status.textContent ?? "").toMatch(/Executing/i)
+  })
+
+  it("flags a member whose own overlay names stale capabilities, and audits the roster", () => {
+    mockCapabilityWarnings.current = [
+      {
+        code: "missing-skill",
+        bucket: "skillIds",
+        missingId: "team-ghost",
+        scope: { kind: "team", teamId: "team_x" },
+      },
+      {
+        code: "missing-skill",
+        bucket: "skillIds",
+        missingId: "tm-ghost",
+        scope: { kind: "teammate", teamId: "team_x", teammateId: "tm_1" },
+      },
+    ]
+    const stale = teammate({ id: "tm_1", name: "Stale", role: "teammate" })
+    const clean = teammate({ id: "tm_2", name: "Clean", role: "teammate" })
+    render(<AgentTeamMembers teamId="team_x" teammates={[stale, clean]} leadId="" />)
+    expect(mockUseSquadCapabilityWarnings).toHaveBeenCalledWith("team_x", { audit: true })
+    const badge = screen.getByTestId("member-tm_1-stale-capabilities")
+    expect(badge).toHaveAttribute("title", "tm-ghost")
+    expect(screen.queryByTestId("member-tm_2-stale-capabilities")).not.toBeInTheDocument()
   })
 
   it("renders a PR status badge with a PR link when the teammate has an observed PR", () => {

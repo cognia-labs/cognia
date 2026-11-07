@@ -57,7 +57,7 @@ import {
 } from "@/types/execution/run"
 
 /** The channel each review kind is audited under. */
-export const SQUAD_REVIEW_CHANNELS: Record<SquadReviewKind, ActionReviewChannel> = {
+const SQUAD_REVIEW_CHANNELS: Record<SquadReviewKind, ActionReviewChannel> = {
   plan: "agent-team-plan",
   capability_audit: "agent-team-gate",
   budget_extension: "agent-team-budget",
@@ -129,14 +129,11 @@ export function __setSquadReviewTestHooksForTesting(
 }
 
 /** Deterministic per gate instance, so a restart re-arms the same row. */
-export function squadReviewRequestId(
-  runId: string,
-  kind: SquadReviewKind,
-  instance: string
-): string {
+function squadReviewRequestId(runId: string, kind: SquadReviewKind, instance: string): string {
   return `squad-review:${runId}:${kind}:${instance}`
 }
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export function squadReviewInterruptIdFor(
   runId: string,
   kind: SquadReviewKind,
@@ -374,6 +371,8 @@ export interface SettleSquadReviewSource {
  * Settle a review from a source other than the control plane (an IM delegate,
  * a headless policy). Writes the decision onto the row, resolves the interrupt
  * and records the receipt. Idempotent on an already-settled row.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export async function settleSquadReview(
   target: SettleSquadReviewTarget,
@@ -421,6 +420,8 @@ async function teamIdForRun(runId: string): Promise<string | undefined> {
 /**
  * Strip and redact before anything is persisted. Only `feedback` is free
  * text. Everything else is ids, numbers and closed-vocabulary codes.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function sanitizeDecision(
   outcome: SquadReviewOutcome,

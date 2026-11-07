@@ -28,11 +28,12 @@ import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
  * # What batch 3 added
  *
  * The room's settings steer the turn: `replyMode` and `mutedMemberIds` go
- * into `planUserTurn`, a composer pick arrives as `targetMemberIds`, the
- * last speaker is sticky for an unaddressed follow-up, a member's
- * `handoffTargets` and `talkativeness` shape the auto rounds, one member can
- * be stopped without stopping the room (`stopMember`), and an auto round
- * waits while the human is typing and stands down once they send.
+ * into `routeTurn` and `holdReasonFor`, a composer pick arrives as
+ * `targetMemberIds`, the last speaker is sticky for an unaddressed
+ * follow-up, a member's `handoffTargets` and `talkativeness` shape the auto
+ * rounds, one member can be stopped without stopping the room
+ * (`stopMember`), and an auto round waits while the human is typing and
+ * stands down once they send.
  */
 
 import type { ChatTemplateRun } from "@/lib/chat/template/run"
@@ -129,7 +130,11 @@ import { SessionCoalescingRegistry } from "@/hooks/chat/stream-coalescing"
 import { renderWorkingSetForCompaction } from "@/lib/chat/working-set"
 import { RoutingAttemptController } from "@cognia/provider-routing"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
-import { resolveRoomSettings, buildRoomInstructionsSection } from "./settings"
+import {
+  resolveRoomSettings,
+  buildRoomInstructionsSection,
+  resolveAutoRoundBudget,
+} from "./settings"
 import { isLocallyOrchestratedRoom, roomKindOf } from "./kind"
 import type { ResolvedRoomSettings, RoomTurnRefusal } from "./types"
 import { RoomStreamRegistry } from "./runner-streaming"
@@ -814,14 +819,24 @@ export class RoomRunner {
   /** Cancel an in-flight room turn. Aborts the current sub-session and stops issuing new ones. */
   async stop(sessionId: string): Promise<void> {
     this.interrupted.add(sessionId)
-    // Plain stop discards any queued steer, the user is taking over.
+    // Release the visible state before waiting for every interrupt ack.
+    this.releaseStoppedTurn(sessionId)
+    await this.interruptTurn(sessionId)
+  }
+
+  /**
+   * The local half of a stop: what this device shows of the room's turn. A
+   * plain stop discards any queued steer (the user is taking over), and the
+   * room reads idle with no member speaking. `stop` calls it before
+   * interrupting its own sub-sessions; a companion calls it through
+   * `CompanionRoomProjector.markStopped` while the host stops the turn.
+   */
+  releaseStoppedTurn(sessionId: string): void {
     this.sinks.steer.clear(sessionId)
     this.sinks.steer.armed.delete(sessionId)
-    // Release the visible state before waiting for every interrupt ack.
     this.sinks.status.set(sessionId, "idle", { turnOutcome: "interrupted" })
     this.sinks.members.clearFor(sessionId)
     this.sinks.members.clearStopRequestsFor(sessionId)
-    await this.interruptTurn(sessionId)
   }
 
   /**
@@ -1228,7 +1243,7 @@ export class RoomRunner {
   ): Promise<void> {
     const { sessionId, team, members, firstRoundTargets } = args
     const stopRequests = args.stopRequests ?? new Set<string>()
-    const maxAutoRounds = Math.max(0, Math.trunc(team.maxAutoRounds ?? 0))
+    const maxAutoRounds = resolveAutoRoundBudget(team.maxAutoRounds)
     if (maxAutoRounds === 0) return
 
     const responseCap = resolveTeamResponseCap(team.maxResponses)

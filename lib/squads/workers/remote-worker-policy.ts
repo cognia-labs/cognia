@@ -47,6 +47,7 @@ export function encodeRemoteWorkerPolicy(
   }
 }
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export function decodeRemoteWorkerPolicy(
   policy: HandoffPolicyV1,
   workspaceRoot: string

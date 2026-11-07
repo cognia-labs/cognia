@@ -16,50 +16,13 @@
  */
 
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
-import type { TeamExecutionPattern } from "@/types/agent/agent-team"
+import type { TeamNodeParams } from "@/lib/workflow/nodes/teams/team-runtime-port"
 
-export interface TeamComposeParams {
-  objective?: string
-  name?: string
-  maxRoster?: number
-  preferredPattern?: TeamExecutionPattern
-  /** Start the team lifecycle right after materialization (waits for terminal). */
-  autoStart?: boolean
-  ultracode?: boolean
-}
-
-export interface TeamStatusParams {
-  teamId?: string
-  includeTasks?: boolean
-  includeTeammates?: boolean
-  includeDelegations?: boolean
-}
-
-export interface TeamDelegateParams {
-  teamId?: string
-  target?: "twin" | "background" | "external" | "team"
-  /** Existing team task id; a tracking task is created when omitted. */
-  taskId?: string
-  prompt?: string
-  systemPrompt?: string
-  reason?: string
-  twinId?: string
-  targetTeamId?: string
-  targetAgentId?: string
-  /** Await the delegation's terminal state (default true). */
-  awaitCompletion?: boolean
-  /** Launch even inside the team's quiet-hours window. */
-  force?: boolean
-  ultracode?: boolean
-}
-
-export interface TeamMessageParams {
-  teamId?: string
-  content?: string
-  senderId?: string
-  recipientId?: string
-  taskId?: string
-}
+// Each node's params come from its `PARAMS_SCHEMAS` entry (ADR-0252 P2).
+type TeamComposeParams = TeamNodeParams<"action.team.compose">
+type TeamStatusParams = TeamNodeParams<"action.team.status">
+type TeamDelegateParams = TeamNodeParams<"action.team.delegate">
+type TeamMessageParams = TeamNodeParams<"action.team.message">
 
 // ── action.team.compose ─────────────────────────────────────────────────────
 

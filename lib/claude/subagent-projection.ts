@@ -4,25 +4,14 @@
  * Concept A (SDK-native `Task`, projected by `sdk-subagent-bridge.ts`) and
  * Concept B (`dispatch_agent`, projected by `dispatch-runtime.ts`) run in
  * different places but both fold their runs into the SAME
- * `subagent-runtime-store` as `SubAgent` nodes. The node seed and the
- * indeterminate-progress heuristic were previously duplicated verbatim in both
- * bridges; this module is the single source so a `SubAgent`-shape change or a
- * heuristic tweak lands in one place.
+ * `subagent-runtime-store` as `SubAgent` nodes. The node seed was previously
+ * duplicated verbatim in both bridges; this module is the single source so a
+ * `SubAgent`-shape change lands in one place.
  *
  * Pure — no React, no store. Both bridges import from here.
  */
 
 import type { SubAgent } from "@/types/agent/sub-agent"
-
-/**
- * Indeterminate progress from the number of tool calls a run has made so far.
- * A real subagent has no completion percentage, so this rises monotonically and
- * is capped below 100 (only an explicit "completed" transition reaches 100).
- * 10% per tool call, capped at 95%.
- */
-export function indeterminateSubagentProgress(toolCount: number): number {
-  return Math.min(95, Math.max(0, toolCount) * 10)
-}
 
 /** Fields a caller supplies; everything else gets the shared "fresh run" seed. */
 export interface SubAgentNodeSeed {

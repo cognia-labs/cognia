@@ -5,9 +5,11 @@ import {
   buildRoomInstructionsSection,
   defaultRoomMemory,
   initialRoomMemoryFields,
+  resolveAutoRoundBudget,
   resolveRoomSettings,
   roomSettingsPatch,
 } from "./settings"
+import { MAX_AUTO_ROUNDS } from "@/lib/db/teams"
 
 const team = { kind: "team" as const, teamId: "t" }
 const im = {
@@ -61,7 +63,7 @@ describe("resolveRoomSettings", () => {
   })
 
   it("resolves replyMode and mutedMemberIds for the router (live since batch 3)", () => {
-    // The runner reads both through `planUserTurn` and `planAutoRound`; the
+    // The runner reads both through `routeTurn` and `planAutoRound`; the
     // pin from batch 1 that said they were inert is gone with the label.
     const resolved = resolveRoomSettings({
       ...team,
@@ -105,5 +107,21 @@ describe("prompt and row helpers", () => {
     expect(initialRoomMemoryFields("shared")).toEqual({ memoryUse: false, memoryLearn: false })
     expect(initialRoomMemoryFields("team")).toEqual({})
     expect(initialRoomMemoryFields(null)).toEqual({})
+  })
+})
+
+describe("resolveAutoRoundBudget", () => {
+  it.each([
+    [undefined, 0],
+    [0, 0],
+    [-2, 0],
+    [Number.NaN, 0],
+    [2.7, 2],
+    [MAX_AUTO_ROUNDS, MAX_AUTO_ROUNDS],
+    // A row written before the ceiling, or imported, never buys more rounds.
+    [99, MAX_AUTO_ROUNDS],
+    [Number.POSITIVE_INFINITY, 0],
+  ])("%p rounds → %p", (stored, budget) => {
+    expect(resolveAutoRoundBudget(stored)).toBe(budget)
   })
 })

@@ -211,12 +211,23 @@ export function resolveAllSubagents(opts: {
 }
 
 /**
- * Enumerate every subagent id visible in a team context. Used by the
- * agent-team-template-registry to validate `requires.subagentIds[]`
- * lookups without loading the full def map.
+ * Every subagent id a `requires.subagentIds[]` may name on `surface`: the
+ * catalog's built-ins offered there, and each plugin-registered subagent both
+ * bare and as `<pluginId>:<id>`.
+ *
+ * The one set the workflow template registry and the Squad capability audit
+ * check against, so neither keeps its own copy of the built-in names. It asks
+ * whether the id exists, not whether it is dispatchable natively: a disabled
+ * or provider-pinned subagent still counts, because the settings and
+ * `dispatch_agent` decide those, not a template's requirement check.
  */
-export function listAllTeamSubagentIds(): string[] {
-  return Object.keys(resolveAllSubagents({ context: "team" }))
+export function knownSubagentIds(surface: "workflow-editor" | "team"): ReadonlySet<string> {
+  const ids = new Set<string>(builtinAgentsForSurface(surface).map((entry) => entry.id))
+  for (const entry of listSubagentEntries()) {
+    ids.add(entry.id)
+    if (entry.pluginId) ids.add(`${entry.pluginId}:${entry.id}`)
+  }
+  return ids
 }
 
 /**

@@ -394,6 +394,7 @@ const TeamComposeParams = z.object({
   name: optionalString,
   maxRoster: numberRange(1, 16).optional(),
   preferredPattern: z.enum(TEAM_EXECUTION_PATTERNS).optional(),
+  /** Start the team lifecycle right after materialization (waits for terminal). */
   autoStart: z.boolean().optional(),
   ultracode: z.boolean().optional(),
 })
@@ -414,6 +415,7 @@ const TeamStatusParams = z.object({
 const TeamDelegateParams = z.object({
   teamId: requiredString("required"),
   target: z.enum(["twin", "background", "external", "team"]),
+  /** Existing team task id; a tracking task is created when omitted. */
   taskId: optionalString,
   prompt: optionalString,
   systemPrompt: optionalString,
@@ -421,7 +423,9 @@ const TeamDelegateParams = z.object({
   twinId: optionalString,
   targetTeamId: optionalString,
   targetAgentId: optionalString,
+  /** Await the delegation's terminal state (default true). */
   awaitCompletion: z.boolean().optional(),
+  /** Launch even inside the team's quiet-hours window. */
   force: z.boolean().optional(),
   ultracode: z.boolean().optional(),
 })

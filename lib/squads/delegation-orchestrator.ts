@@ -14,8 +14,6 @@
  *     `ExternalAgentManager`. Mirrors `delegateToBackground`: persists the
  *     record, fires the start hook, then awaits `manager.execute` behind a
  *     watchdog timeout and self-settles (`completed` / `failed` / `timeout`).
- *     `completeExternalDelegation` remains as a manual escape hatch for
- *     out-of-band runtimes that settle themselves.
  *   - `approveDelegation`: releases an `awaiting_approval` delegation and
  *     RE-DISPATCHES the original run (background or external) using the run
  *     params stashed at create time, so a quiet-hours / approval-gated
@@ -277,7 +275,7 @@ export class DelegationDepthExceededError extends Error {
  * `{ depth, chain }`: how many active team→team hops sit above it (a root
  * team is depth 0) and the team-id chain root→…→teamId.
  */
-export function activeTeamDelegationDepth(teamId: string): { depth: number; chain: string[] } {
+function activeTeamDelegationDepth(teamId: string): { depth: number; chain: string[] } {
   const delegations = Object.values(useAgentTeamStore.getState().delegations).filter(
     (d) =>
       d.targetType === "team" &&
@@ -302,7 +300,7 @@ export function activeTeamDelegationDepth(teamId: string): { depth: number; chai
  * its child past the source team's `maxTeamDelegationDepth` (default 2).
  * Returns the child depth + root chain for envelope construction.
  */
-export function assertTeamDelegationDepth(sourceTeamId: string): {
+function assertTeamDelegationDepth(sourceTeamId: string): {
   childDepth: number
   chain: string[]
 } {
@@ -584,8 +582,7 @@ export function delegateToTwin(input: DelegateToTwinInput): {
  * `delegateToBackground`: persists the record, fires the start hook, then
  * awaits `manager.execute` behind a watchdog timeout and self-settles. When
  * deferred by quiet hours, stays `awaiting_approval` and is re-dispatched by
- * `approveDelegation`. `completeExternalDelegation` remains as a manual escape
- * hatch for runtimes that settle out-of-band.
+ * `approveDelegation`.
  *
  * Returns the initial record synchronously; callers await `completionPromise`
  * for the final state.
@@ -656,6 +653,8 @@ export interface DelegateToTeamInput {
  * team-delegation graph (target already reaches source, or target === source).
  * Walks only `team`-typed delegations in a non-terminal status, so resolved
  * delegations never block a fresh one.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function wouldCreateTeamCycle(sourceTeamId: string, targetTeamId: string): boolean {
   if (sourceTeamId === targetTeamId) return true
@@ -809,21 +808,6 @@ function settleTeamDelegation(
   store.updateDelegationStatus(delegationId, status, result)
   getPluginLifecycleHooks().dispatchOnTeamDelegationComplete({ delegationId, status })
   return useAgentTeamStore.getState().delegations[delegationId]
-}
-
-/**
- * Settle an external delegation once the external runtime returns. The
- * external manager / UI calls this when the run completes; we update the
- * store and fire `onTeamDelegationComplete`. A cancelled delegation stays
- * cancelled, as with a self-running delegation's own settle.
- */
-export function completeExternalDelegation(
-  delegationId: string,
-  status: "completed" | "failed" | "cancelled" | "timeout",
-  result?: string
-): TeamDelegationRecord | undefined {
-  if (!useAgentTeamStore.getState().delegations[delegationId]) return undefined
-  return settleTeamDelegation(delegationId, status, result)
 }
 
 /**

@@ -100,12 +100,17 @@ export const executionRunTeamJournal: TeamRunJournal = {
   },
 }
 
-/** Redacted text, or `undefined` when it still leaks after redaction. */
+/**
+ * Redacted text, or `undefined` when it still leaks after redaction.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function redactTeamTextForPersistence(text: string): string | undefined {
   const redacted = redactText(text).redacted
   return hasNoLeakingPii(redacted) ? redacted : undefined
 }
 
+/** @internal Test seam: exported for its unit tests, not for production callers. */
 export const appTeamPathPolicy: TeamPathPolicy = {
   normalize: normalizeFsPath,
   isWithinRoot: isPathWithinRoot,
@@ -118,7 +123,7 @@ export const appTeamPathPolicy: TeamPathPolicy = {
   },
 }
 
-export const fleetTeamRemoteSessions: TeamRemoteSessions = {
+const fleetTeamRemoteSessions: TeamRemoteSessions = {
   async release(remoteSessionId) {
     const { removeManagedFleetSession } = await import("@/lib/fleet/managed-session-projection")
     // The child is already terminated in the store; a projection that could
@@ -127,7 +132,11 @@ export const fleetTeamRemoteSessions: TeamRemoteSessions = {
   },
 }
 
-/** The coordinator's view of an app team. */
+/**
+ * The coordinator's view of an app team.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function durableTeamSpec(team: AgentTeam): DurableTeamSpec {
   const { config } = team
   return {

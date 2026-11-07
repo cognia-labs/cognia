@@ -104,12 +104,6 @@ export function stripLegacyRuntimeSelector<T extends object>(
   return { config: next as T, stripped: true }
 }
 
-/** Whether a config-shaped object still carries a retired selector. */
-export function carriesLegacyRuntimeSelector(config: unknown): boolean {
-  if (!config || typeof config !== "object") return false
-  return RETIRED_CONFIG_KEYS.some((key) => key in (config as Record<string, unknown>))
-}
-
 /**
  * Upgrade one config to the current contract.
  *
@@ -249,12 +243,4 @@ export function migrateSquadTemplate(template: AgentTeamTemplate): {
   const { config, stripped } = stripLegacyRuntimeSelector(template.config)
   if (!stripped) return { template, changed: false }
   return { template: { ...template, config }, changed: true }
-}
-
-/** Whether a definition is already on the current contract (no work to do). */
-export function isOnCurrentSquadContract(config: Partial<AgentTeamConfig> | undefined): boolean {
-  return (
-    config?.contractVersion === SQUAD_DEFINITION_CONTRACT_VERSION &&
-    !carriesLegacyRuntimeSelector(config)
-  )
 }

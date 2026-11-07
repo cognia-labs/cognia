@@ -103,7 +103,11 @@ export interface AgentTeamIntegrationResult {
   changesets: Record<string, string>
 }
 
-/** `agent/<run>/integrated`, suffixed per repository when the run has several. */
+/**
+ * `agent/<run>/integrated`, suffixed per repository when the run has several.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function integrationBranchName(
   runId: string,
   logicalRootId: string,
@@ -117,6 +121,8 @@ export function integrationBranchName(
  * Candidates in an order where every task comes after the tasks it depends
  * on. A cycle is not broken here: its members keep their input order and the
  * host's analysis reports the cycle.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function orderByDependencies(
   candidates: readonly TeamIntegrationCandidate[],

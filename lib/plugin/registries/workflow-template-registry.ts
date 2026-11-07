@@ -15,7 +15,7 @@ import { createValidatingOverlayRegistry } from "./createValidatingOverlayRegist
 import { listSkillIds } from "./skill-registry"
 import { listMcpServerPresetIds } from "./mcp-server-preset-registry"
 import { listNativeAnthropicToolIds } from "./native-anthropic-tool-registry"
-import { listSubagentEntries } from "./subagent-registry"
+import { knownSubagentIds } from "@/lib/claude/agents/subagents"
 import { getPluginCatalogSnapshot } from "@/lib/workflow/nodes/catalog"
 import type {
   PluginWorkflowTemplateWarning,
@@ -27,17 +27,6 @@ export type {
   WorkflowTemplateValidationResult,
 } from "@cognia/plugin-contract/lib/plugin/registries/workflow-template-registry"
 
-/**
- * Built-in subagent dispatcher names always available — kept in sync with
- * `lib/claude/agents/subagents/index.ts:workflowEditorSubagents`.
- */
-const BUILT_IN_SUBAGENT_IDS: readonly string[] = [
-  "workflow-designer",
-  "workflow-debugger",
-  "workflow-refactorer",
-  "workflow-doc-writer",
-]
-
 const registry = createValidatingOverlayRegistry<
   PluginWorkflowTemplateDef,
   PluginWorkflowTemplateWarning
@@ -46,14 +35,9 @@ const registry = createValidatingOverlayRegistry<
   validate: (template) => validateWorkflowTemplateRequires(template).warnings,
 })
 
-/** Resolve a subagent id (bare or `<pluginId>:<id>`) against built-ins + overlay. */
+/** Resolve a subagent id (bare or `<pluginId>:<id>`) against the editor's built-ins + overlay. */
 function subagentIdExists(id: string): boolean {
-  if (BUILT_IN_SUBAGENT_IDS.includes(id)) return true
-  for (const entry of listSubagentEntries()) {
-    if (entry.id === id) return true
-    if (entry.pluginId && `${entry.pluginId}:${entry.id}` === id) return true
-  }
-  return false
+  return knownSubagentIds("workflow-editor").has(id)
 }
 
 /** True when a plugin-contributed node/trigger kind is present in the catalog. */

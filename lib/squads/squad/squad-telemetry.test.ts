@@ -13,7 +13,6 @@ import {
   recordSquadDuplicateControl,
   recordSquadRecoveryOutcome,
   squadDuplicateControlCount,
-  squadRunTraceId,
   startSquadRunSpan,
 } from "./squad-telemetry"
 
@@ -41,7 +40,6 @@ describe("squad telemetry", () => {
     const first = startSquadRunSpan({ runId: "r1", teamId: "t1", origin: "chat", now })
     const second = startSquadRunSpan({ runId: "r1", teamId: "t1", now })
     expect(second).toEqual(first)
-    expect(squadRunTraceId("r1")).toBe(first.traceId)
     expect(written).toEqual([])
   })
 

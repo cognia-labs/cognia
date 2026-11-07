@@ -26,9 +26,9 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { listCharacters } from "@/lib/db/characters"
-import { MAX_AUTO_ROUNDS } from "@/lib/claude/team-primary-router"
 import { listMcpServers } from "@/lib/db/mcp-servers"
 import {
+  MAX_AUTO_ROUNDS,
   TEAM_ORCHESTRATIONS,
   TEAM_REPLY_CONCURRENCIES,
   createTeam,

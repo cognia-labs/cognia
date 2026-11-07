@@ -128,6 +128,8 @@ export function textFromParts(parts: readonly unknown[]): string {
  * agents build on each other's work and one where they repeat it. The markers
  * are deliberately terse, since a full tool result would blow the budget above
  * on its own.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function nonTextPartMarkers(parts: readonly unknown[]): string[] {
   const markers: string[] = []
@@ -167,7 +169,11 @@ const HANDOFF_PROTOCOL =
   "run. The tag is removed before anyone reads the message, so write your answer normally " +
   "around it. Do not use it to end your own turn early, only to end the group's work."
 
-/** The protocol, plus the member's own transition graph when the team declares one. */
+/**
+ * The protocol, plus the member's own transition graph when the team declares one.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function handoffParagraph(targetNames: readonly string[] | undefined): string {
   if (targetNames === undefined) return HANDOFF_PROTOCOL
   if (targetNames.length === 0) {

@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent, act } from "@testing-library/react"
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react"
 import type { Character, Team } from "@cognia/agent-config-types"
 
 jest.mock("next-intl", () => {
@@ -87,7 +87,10 @@ let scratchpadCollapsed: Record<string, boolean> = {}
 const setScratchpadCollapsed = jest.fn((id: string, value: boolean) => {
   scratchpadCollapsed = { ...scratchpadCollapsed, [id]: value }
 })
-const requestStopMember = jest.fn()
+const stopRoomMember = jest.fn(async () => undefined)
+jest.mock("@/lib/chat/room/stop-member", () => ({
+  stopRoomMember: (...args: unknown[]) => stopRoomMember(...(args as [])),
+}))
 jest.mock("@/stores/ui", () => ({
   useUIStore: <T,>(selector: (s: Record<string, unknown>) => T): T =>
     selector({
@@ -95,7 +98,6 @@ jest.mock("@/stores/ui", () => ({
       memberActivity,
       scratchpadCollapsed,
       setScratchpadCollapsed,
-      requestStopMember,
     }),
 }))
 
@@ -109,7 +111,7 @@ beforeEach(() => {
   missingMessageKeys.clear()
   openCharacterChat.mockClear()
   requestComposerMention.mockClear()
-  requestStopMember.mockClear()
+  stopRoomMember.mockClear()
   setScratchpadCollapsed.mockClear()
   updateSession.mockClear()
   memberStatus = {}
@@ -352,6 +354,19 @@ describe("room settings (ADR-0177)", () => {
     expect(updateSession).toHaveBeenCalledWith("s-1", {
       roomSettings: { mutedMemberIds: [], replyMode: "asleep" },
     })
+  })
+
+  /**
+   * The menu's stop used to only mark a request the next round reads, so a
+   * member that was speaking kept speaking. It is the one member stop now.
+   */
+  it("stops a speaking member through the room's member stop", async () => {
+    memberStatus = { "s-1::c-1": "thinking" }
+    render(<TeamMembersPanel teamSessionId="s-1" teamId="t-1" />)
+    fireEvent.contextMenu(screen.getByTestId("team-member-c-1"))
+    const menu = await screen.findByTestId("team-member-menu-c-1")
+    fireEvent.click(within(menu).getByText("desktop.memberList.stopMember"))
+    await waitFor(() => expect(stopRoomMember).toHaveBeenCalledWith("s-1", "c-1"))
   })
 
   it("mutes a member from its context menu without touching the other settings", async () => {

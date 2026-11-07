@@ -54,6 +54,8 @@ export function squadTemplateDefinitionId(
  * plugin bridge stamps: a pre-release suffix sorts below the same numbers
  * without one, which is what semver says, and what keeps a compat row from
  * outranking a real release that happens to share its numbers.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
  */
 export function compareTemplateVersions(left: string, right: string): number {
   const parse = (value: string) => {
@@ -73,7 +75,11 @@ export function compareTemplateVersions(left: string, right: string): number {
   return a.pre < b.pre ? -1 : 1
 }
 
-/** Every catalog row carrying this definition id, whatever its source. */
+/**
+ * Every catalog row carrying this definition id, whatever its source.
+ *
+ * @internal Test seam: exported for its unit tests, not for production callers.
+ */
 export function catalogRowsFor(
   definitionId: string,
   catalog: TemplateCatalog = templateCatalog

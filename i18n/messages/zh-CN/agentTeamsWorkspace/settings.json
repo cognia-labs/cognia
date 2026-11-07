@@ -13,6 +13,24 @@
   "autoShutdown": "完成后自动关闭",
   "awaitingExternalPickup": "等待外部认领",
   "cancel": "取消",
+  "capabilityWarnings": {
+    "buckets": {
+      "a2uiTemplateIds": "A2UI 模板",
+      "characterPackIds": "角色包",
+      "externalAgentPresetIds": "外部代理",
+      "mcpServerIds": "MCP 服务器",
+      "nativeAnthropicToolIds": "内置工具",
+      "sharedMemoryAdapterId": "共享记忆适配器",
+      "skillIds": "技能",
+      "subagentIds": "子代理"
+    },
+    "description": "提供它们的插件可能已被停用或卸载。运行前会先询问是否在缺少它们的情况下继续。可以重新启用插件，或在“插件与能力”或队员的覆盖配置里移除这些 id。",
+    "entryContext": "{owner} · {bucket}",
+    "listLabel": "已无法解析的能力 id",
+    "teamScope": "小队",
+    "teammateScope": "队员 {name}",
+    "title": "{count} 项能力已无法解析"
+  },
   "confirm": {
     "cancelLabel": "取消",
     "clearMemory": {

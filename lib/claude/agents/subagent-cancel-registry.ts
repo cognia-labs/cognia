@@ -70,7 +70,11 @@ export async function requestCancelSubagentRunAndWait(
   }
 }
 
-/** Test/diagnostic helper — number of live registered subagent runs. */
-export function liveSubagentRunCount(): number {
+/**
+ * How many subagent runs are registered right now. A test seam only: the
+ * dispatch suites assert that every run they start deregisters itself. No
+ * production code reads it.
+ */
+export function __liveSubagentRunCountForTesting(): number {
   return subagentCancellations.size
 }

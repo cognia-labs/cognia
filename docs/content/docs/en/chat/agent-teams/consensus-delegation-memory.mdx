@@ -98,8 +98,7 @@ Bridges a team task into either the background-agent runtime or an external-agen
 | Symbol | Location | Purpose |
 |---|---|---|
 | delegateToBackground | delegation-orchestrator.ts:121 | Creates the record, fires the start hook, registers an abort signal, runs executeAgent. Returns a sync record plus an async completion promise. |
-| delegateToExternal | delegation-orchestrator.ts:194 | Creates a record for an external agent and persists it; settlement happens out-of-process. |
-| completeExternalDelegation | delegation-orchestrator.ts:222 | Settles once the external runtime returns (status plus result); fires the complete hook. |
+| delegateToExternal | delegation-orchestrator.ts:194 | Creates a record for an external agent, persists it, runs it through the external-agent manager behind a watchdog timeout and settles it itself (completed, failed or timeout); fires the complete hook. |
 | approveDelegation | delegation-orchestrator.ts:243 | Transitions awaiting_approval to active and re-dispatches the background run. |
 | cancelDelegation | delegation-orchestrator.ts:256 | Aborts the background signal, sets cancelled, fires the complete hook. |
 
