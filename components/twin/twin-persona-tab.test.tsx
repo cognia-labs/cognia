@@ -6,8 +6,15 @@ import React from "react"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
-jest.mock("@/lib/ai/eval/twin-benchmark", () => ({
-  createTwinBenchmark: jest.fn(async () => ({ datasetId: "dataset-1", caseCount: 3 })),
+const mockCreateTwinBenchmark = jest.fn(async (_twinId: string) => ({
+  datasetId: "dataset-1",
+  caseCount: 3,
+}))
+let mockBenchmarks: { createTwinBenchmark: typeof mockCreateTwinBenchmark } | null = {
+  createTwinBenchmark: mockCreateTwinBenchmark,
+}
+jest.mock("@/hooks/modules/use-port", () => ({
+  usePort: (id: string) => (id === "eval-benchmarks" ? mockBenchmarks : undefined),
 }))
 
 // Radix Tabs needs pointer / scroll APIs that jsdom doesn't expose; stub it
@@ -54,7 +61,6 @@ jest.mock("@/components/ui/tabs", () => {
 })
 
 import { TwinPersonaTab } from "./twin-persona-tab"
-import { createTwinBenchmark } from "@/lib/ai/eval/twin-benchmark"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { addEntity, appendPlaybooks, appendStyleSamples } from "@/lib/db/twin-profile"
 import {
@@ -71,6 +77,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   clearAllMockExtensions()
+  mockBenchmarks = { createTwinBenchmark: mockCreateTwinBenchmark }
 })
 
 describe("TwinPersonaTab", () => {
@@ -101,7 +108,13 @@ describe("TwinPersonaTab", () => {
   it("creates an editable Eval benchmark from the current Twin", async () => {
     render(<TwinPersonaTab twinId="twin_empty" />)
     await userEvent.click(screen.getByTestId("generate-twin-benchmark"))
-    await waitFor(() => expect(createTwinBenchmark).toHaveBeenCalledWith("twin_empty"))
+    await waitFor(() => expect(mockCreateTwinBenchmark).toHaveBeenCalledWith("twin_empty"))
+  })
+
+  it("offers no benchmark without the eval module", () => {
+    mockBenchmarks = null
+    render(<TwinPersonaTab twinId="twin_empty" />)
+    expect(screen.queryByTestId("generate-twin-benchmark")).toBeNull()
   })
 
   it("reflects live counts after entities + playbooks + styleSamples land", async () => {

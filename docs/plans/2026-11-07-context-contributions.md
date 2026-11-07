@@ -369,3 +369,14 @@ interface ContextSection {
 - `build-options`：收集后若有 `identity` 就替换 `baseSystem` 并抑制 persona（persona 段的计算移到收集之后）。分身仍在内核运行，`identityTexts` 暂时取自 `opts.twinContext`，行为不变。
 - 门禁 G5：各模块的上下文文件里出现 `slot: "identity"` 的不超过一个。
 - 测试：`context-contributions.test.ts` 加 7 例和 2 种不合格的 `after`；`build-options.test.ts` 加 1 例（替换、抑制 persona、尾部顺序、缓存关时整段）；`check-modules.test.mjs` 加 1 例。
+
+## 19. C6b 实施记录：twin 成为 manifest 模块（2026-11-07）
+
+- `lib/twin/module.ts`：`dependsOn` connectors、modules、plugin、rag、share；`requires` `ocr?`、`memory-namespaces?`、`eval-benchmarks?`；`api` 在原来 11 个文件之外补 7 个（`components/twin/{source-content-preview,twin-source-preview-dialog}`、`lib/twin/{export-provenance,outbound-disclosure,profile-summary}`、`ingest/{persist,url-fetcher}`）。过渡表删掉 twin 行；share 行补 `lib/share/types.ts`，connectors 行补 `lib/skills/built-in/lark/exec-lark-cli.ts`。
+- 提示词贡献 `lib/twin/prompts.ts`：15 个定义（6 个蒸馏、2 个重排、7 个系统模板），顺序与目录原来一致；还清 `lib/prompts/catalog.ts -> twin`。
+- 环：twin → memory（`lifecycle.ts` 删除分身时让 `twin:<id>` 命名空间的记忆失效）和 twin → eval（人设页的基准按钮）各成一个环，因为 memory、eval 都依赖分身。改成端口：
+  - `memory-namespaces`（`types/modules/ports/memory-namespaces.ts`），memory 经 `lib/memory/namespaces-port.ts` 提供；`lib/memory/twin-lifecycle.ts` 不再是 memory 的 `api`。
+  - `eval-benchmarks`（`types/modules/ports/eval-benchmarks.ts`），eval 经 `lib/eval/benchmarks-port.ts` 提供；`lib/ai/eval/twin-benchmark.ts` 不再是 eval 的 `api`。人设页用 `usePort`，没有提供方时不显示按钮。
+- CLI 桥的分身处理器改为导入 `lib/twin/runtime/apply-twin-context`（汇总导出不能做 `api`）。
+- `squads` 提供的 `twin-answer` 端口按其注释应在 twin 有 manifest 后迁来；它属于多 agent 那条线，这里不动。
+- 测试：`lib/twin/{module,prompts}.test.ts`、`lib/memory/namespaces-port.test.ts`、`lib/eval/benchmarks-port.test.ts` 新增；人设页测试改 mock `usePort`，加「没有 eval 时不显示按钮」一例。

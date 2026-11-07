@@ -48,14 +48,6 @@ import {
 import { TERMINAL_COMPLETION_PROMPT } from "@/lib/terminal/completion/prompt"
 import { AI_SHELL_PLAN_PROMPT } from "@/lib/terminal/ai-shell/plan-generator"
 import { AI_SHELL_ERROR_ADVISOR_PROMPT } from "@/lib/terminal/ai-shell/error-advisor"
-import {
-  ENTITY_MERGE_AGENT_PROMPT,
-  EVALUATOR_PROMPT,
-  KNOWLEDGE_AGENT_PROMPT,
-  PLAYBOOK_AGENT_PROMPT,
-  STYLE_AGENT_PROMPT,
-  SYNTHESIZER_PROMPT,
-} from "@/lib/twin/distill/prompts"
 import { WIKI_SYSTEM_VOICE_PROMPT } from "@/lib/wiki/prompts"
 import {
   COMPACT_HANDOFF_PROMPT,
@@ -82,8 +74,6 @@ import {
 } from "@/lib/ai/generation/template-assist"
 import { TURN_LABEL_PROMPT } from "@/lib/ai/generation/turn-label"
 import { VISUAL_OUTPUT_PROMPTS } from "@/lib/ai/prompts/visual-output-prompts"
-import { LLM_RERANK_REQUEST_PROMPT, LLM_RERANK_SYSTEM_PROMPT } from "@/lib/twin/runtime/reranker"
-import { TWIN_SYSTEM_TEMPLATE_PROMPTS } from "@/lib/twin/runtime/system-prompt-template"
 import {
   RUN_RETROSPECTIVE_PROMPT,
   RUN_RETROSPECTIVE_REPLY_FORMAT_PROMPT,
@@ -227,16 +217,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   ENHANCE_SYSTEM_PROMPT,
   ...Object.values(ENHANCE_STYLE_PROMPTS),
   TERMINAL_COMPLETION_PROMPT,
-  // twin
-  STYLE_AGENT_PROMPT,
-  PLAYBOOK_AGENT_PROMPT,
-  KNOWLEDGE_AGENT_PROMPT,
-  SYNTHESIZER_PROMPT,
-  EVALUATOR_PROMPT,
-  ENTITY_MERGE_AGENT_PROMPT,
-  LLM_RERANK_SYSTEM_PROMPT,
-  LLM_RERANK_REQUEST_PROMPT,
-  ...Object.values(TWIN_SYSTEM_TEMPLATE_PROMPTS),
   // knowledge
   WIKI_SYSTEM_VOICE_PROMPT,
   FETCH_EXTRACT_PROMPT,

@@ -16,7 +16,7 @@ jest.mock("@/lib/twin/runtime/build-deps", () => ({
 }))
 
 const applyTwinContextMock = jest.fn()
-jest.mock("@/lib/twin/runtime", () => ({
+jest.mock("@/lib/twin/runtime/apply-twin-context", () => ({
   applyTwinContext: (...args: unknown[]) => applyTwinContextMock(...args),
 }))
 

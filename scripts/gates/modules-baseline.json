@@ -865,7 +865,6 @@
     "lib/prompts/catalog.ts -> skill-recorder",
     "lib/prompts/catalog.ts -> slash-commands",
     "lib/prompts/catalog.ts -> terminal",
-    "lib/prompts/catalog.ts -> twin",
     "lib/prompts/catalog.ts -> wiki",
     "lib/prompts/catalog.ts -> workflow",
     "lib/queue/outbound-queue.ts -> bot",

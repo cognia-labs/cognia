@@ -7,7 +7,7 @@ import { syncTwinCronToScheduler } from "@/lib/twin/cron/cron-bridge"
 import { buildTwinRuntimeAdapters } from "@/lib/twin/runtime/build-deps"
 import { vectorCollectionName } from "@/lib/twin/ingest/persist"
 import type { IVectorStore } from "@cognia/vector/store"
-import { invalidateTwinMemoryNamespace } from "@/lib/memory/twin-lifecycle"
+import { loadPort } from "@/lib/modules/ports"
 import { enqueueIngestJob } from "@/lib/twin/ingest"
 import { loadTwinEmbeddingPlan } from "@/lib/twin/runtime/twin-embedding-status"
 import { TWIN_EMBEDDING_UNCONFIGURED } from "@/lib/twin/runtime/twin-embedding"
@@ -32,7 +32,7 @@ interface TwinLifecycleDeps {
   listActiveJobs: typeof listActiveJobsByTwin
   cancelJob: typeof cancelJob
   syncCron: typeof syncTwinCronToScheduler
-  invalidateMemories: typeof invalidateTwinMemoryNamespace
+  invalidateMemories: (twinId: string) => Promise<number>
   deleteTwinRows: typeof deleteTwin
   resolveEmbeddingPlan: typeof loadTwinEmbeddingPlan
   resetIndexRows: typeof resetTwinEmbeddingIndex
@@ -50,7 +50,9 @@ const defaultDeps: TwinLifecycleDeps = {
   listActiveJobs: listActiveJobsByTwin,
   cancelJob,
   syncCron: syncTwinCronToScheduler,
-  invalidateMemories: invalidateTwinMemoryNamespace,
+  // The memory module retires the twin's namespace; without it there is none.
+  invalidateMemories: async (twinId) =>
+    (await loadPort("memory-namespaces"))?.invalidateTwinNamespace(twinId) ?? 0,
   deleteTwinRows: deleteTwin,
   resolveEmbeddingPlan: loadTwinEmbeddingPlan,
   resetIndexRows: resetTwinEmbeddingIndex,

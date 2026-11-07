@@ -79,7 +79,7 @@ export async function twinContextGet(payload: Record<string, unknown>): Promise<
       }
     }
 
-    const { applyTwinContext } = await import("@/lib/twin/runtime")
+    const { applyTwinContext } = await import("@/lib/twin/runtime/apply-twin-context")
     const result = await applyTwinContext({
       character,
       userMessage: message,

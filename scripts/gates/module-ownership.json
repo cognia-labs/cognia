@@ -269,7 +269,8 @@
         "lib/connectors/circuit-breaker.ts",
         "lib/connectors/hitl/approval-registry.ts",
         "lib/connectors/outbound-runner.ts",
-        "lib/connectors/permission-resolve.ts"
+        "lib/connectors/permission-resolve.ts",
+        "lib/skills/built-in/lark/exec-lark-cli.ts"
       ]
     },
     "constants": {
@@ -843,7 +844,8 @@
         "lib/share/config.ts",
         "lib/share/file-selection.ts",
         "lib/share/hash.ts",
-        "lib/share/payload.ts"
+        "lib/share/payload.ts",
+        "lib/share/types.ts"
       ]
     },
     "shared": {
@@ -996,22 +998,6 @@
     },
     "tray-panel": {
       "class": "module"
-    },
-    "twin": {
-      "class": "module",
-      "api": [
-        "lib/twin/distill/llm.ts",
-        "lib/twin/ingest/chunk.ts",
-        "lib/twin/ingest/embed.ts",
-        "lib/twin/ingest/lark-doc-fetcher.ts",
-        "lib/twin/ingest/ocr-fallback.ts",
-        "lib/twin/ingest/parse.ts",
-        "lib/twin/ingest/redaction-key.ts",
-        "lib/twin/runtime/apply-twin-context.ts",
-        "lib/twin/runtime/build-deps.ts",
-        "lib/twin/runtime/inject-log.ts",
-        "lib/twin/runtime/reranker.ts"
-      ]
     },
     "types-root": {
       "class": "foundation"

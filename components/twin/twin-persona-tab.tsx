@@ -24,7 +24,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { getTwinProfile } from "@/lib/db/twin-profile"
-import { createTwinBenchmark } from "@/lib/ai/eval/twin-benchmark"
+import { usePort } from "@/hooks/modules/use-port"
 import type { TwinProfile } from "@/types/twin"
 import { EntitiesSubtab } from "./persona/entities-subtab"
 import { PlaybooksSubtab } from "./persona/playbooks-subtab"
@@ -50,6 +50,8 @@ export function TwinPersonaTab({ twinId }: { twinId: string }) {
   const router = useRouter()
   const [sub, setSub] = useState<SubTab>("entities")
   const [generatingBenchmark, setGeneratingBenchmark] = useState(false)
+  // The eval module builds the benchmark; without it there is no button.
+  const benchmarks = usePort("eval-benchmarks")
   // Live-query the profile; treat both "loading" and "no row yet" as an empty
   // profile so the subtabs always mount. CRUD helpers call `ensureTwinProfile`
   // on first write, so "+ Add" works even before a distill has run.
@@ -57,9 +59,10 @@ export function TwinPersonaTab({ twinId }: { twinId: string }) {
   const safeProfile: TwinProfile = profile ?? { ...EMPTY_PROFILE, id: twinId, twinId }
 
   const generateBenchmark = async () => {
+    if (!benchmarks) return
     setGeneratingBenchmark(true)
     try {
-      const result = await createTwinBenchmark(twinId)
+      const result = await benchmarks.createTwinBenchmark(twinId)
       toast.success(t("benchmark.created", { count: result.caseCount }))
       router.push(`/eval?dataset=${encodeURIComponent(result.datasetId)}`)
     } catch (error) {
@@ -88,20 +91,22 @@ export function TwinPersonaTab({ twinId }: { twinId: string }) {
           {t("countDecisions", { count: safeProfile.decisions.length })}
         </Badge>
         <div className="flex-1" />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={generatingBenchmark}
-          onClick={() => void generateBenchmark()}
-          data-testid="generate-twin-benchmark"
-        >
-          {generatingBenchmark ? (
-            <Spinner className="size-4" />
-          ) : (
-            <FlaskConicalIcon className="size-4" />
-          )}
-          {t("benchmark.generate")}
-        </Button>
+        {benchmarks ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={generatingBenchmark}
+            onClick={() => void generateBenchmark()}
+            data-testid="generate-twin-benchmark"
+          >
+            {generatingBenchmark ? (
+              <Spinner className="size-4" />
+            ) : (
+              <FlaskConicalIcon className="size-4" />
+            )}
+            {t("benchmark.generate")}
+          </Button>
+        ) : null}
       </header>
 
       <Tabs value={sub} onValueChange={(v) => setSub(v as SubTab)} className="flex flex-col gap-3">

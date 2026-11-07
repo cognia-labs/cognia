@@ -48,10 +48,11 @@ export default defineHostModule({
     "lib/memory/run-turn-memory.ts",
     "lib/memory/runtime/apply-memory-context.ts",
     "lib/memory/runtime/build-deps.ts",
-    "lib/memory/twin-lifecycle.ts",
     "lib/memory/write/remember-fact.ts",
   ],
   prompts: () => import("./prompts"),
+  // Retiring a deleted twin's memories, for the twin module.
+  provides: [{ port: "memory-namespaces", load: () => import("./namespaces-port") }],
   // The deep path of project continuity, on the same switch as the section.
   tools: {
     declare: {
