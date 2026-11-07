@@ -21,6 +21,7 @@ import { hasNoLeakingPii } from "@cognia/redact"
 import { applyCapabilityIdDelta } from "@cognia/agent-config-types/agent-capability-grant"
 import type { ContextContribution, ContextTurnContext } from "@/lib/modules/manifest-types"
 import type { KnowledgeBaseChunk, KnowledgeBaseSource } from "@/types/knowledge-base"
+import type { AgentKnowledgeRetrievalSources } from "@/types/knowledge-base/context-sources"
 import {
   getKnowledgeBaseDocumentSnapshot,
   getKnowledgeBaseSourcesByIds,
@@ -178,7 +179,7 @@ export const contributions: readonly ContextContribution[] = [
                 failures: result.failures,
                 budget: result.budget,
                 degraded: result.degraded,
-              },
+              } satisfies AgentKnowledgeRetrievalSources,
             }
           : {}),
       }

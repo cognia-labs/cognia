@@ -144,9 +144,3 @@ export interface AgentKnowledgeRetrievalSources {
   budget: { limit: number; used: number; truncated: boolean }
   degraded: boolean
 }
-
-declare module "@/lib/modules/manifest-types" {
-  interface ContextSourcesMap {
-    "knowledge-base.retrieval": AgentKnowledgeRetrievalSources
-  }
-}

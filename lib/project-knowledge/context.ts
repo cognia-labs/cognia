@@ -14,6 +14,7 @@ import { hasNoLeakingPii } from "@cognia/redact"
 import type { TwinRuntimeDepsForBuild } from "@/lib/claude/build-options"
 import type { ContextContribution } from "@/lib/modules/manifest-types"
 import { resolveProjectKnowledgeSettings } from "@/types/project-knowledge"
+import type { ProjectKnowledgeRetrievalSources } from "@/types/project-knowledge/context-sources"
 import {
   applyProjectKnowledgeContext,
   type AppliedProjectChunk,
@@ -72,7 +73,12 @@ export const contributions: readonly ContextContribution[] = [
       return {
         text: result.systemPromptSection ?? "",
         ...(reported
-          ? { sources: { retrievedChunks: result.retrievedChunks, degraded: result.degraded } }
+          ? {
+              sources: {
+                retrievedChunks: result.retrievedChunks,
+                degraded: result.degraded,
+              } satisfies ProjectKnowledgeRetrievalSources,
+            }
           : {}),
       }
     },

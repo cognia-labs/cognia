@@ -111,9 +111,3 @@ export interface ProjectKnowledgeRetrievalSources {
   retrievedChunks: Array<{ fileId: string; fileName?: string; content: string; score: number }>
   degraded: boolean
 }
-
-declare module "@/lib/modules/manifest-types" {
-  interface ContextSourcesMap {
-    "project-knowledge.retrieval": ProjectKnowledgeRetrievalSources
-  }
-}
