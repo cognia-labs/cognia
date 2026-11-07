@@ -430,7 +430,8 @@ export const EXECUTION_FILTER_KINDS = [
   //
   // Both are journal-only kinds — no broker leg carries them — and both became
   // reachable here once their bridges started projecting: `delegation` from
-  // `delegation-bridge.ts`, `job` from `job-bridge.ts`. Before this they fell
+  // `delegation-bridge.ts`, `job` from the child-run launcher
+  // (`launch-child-run.ts`, which replaced `job-bridge.ts`). Before this they fell
   // through `executionRowFilterKind`'s cast and were counted under a kind that
   // does not exist, which is why neither could be filtered out.
   "delegation",

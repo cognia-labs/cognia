@@ -20,10 +20,11 @@
  *              launcher hands it the parent instead of writing a row first.
  *
  * Order: the row is written, and only then is the engine started or the run
- * registered with the background-agent manager. That registration writes a
- * `backgroundTasks` row which `job-bridge.ts` projects onto the same id; with
- * the row already there, the projection finds it and leaves the parent link
- * alone.
+ * registered with the background-agent manager (its `backgroundTasks` entry
+ * carries the result to deliver, never the run's identity or parent). The
+ * launcher is the only writer of these rows: no bridge projects them back.
+ * A run whose host stopped before it settled is settled `cancelled` by the
+ * renderer's boot reconciliation (`interruptRendererBackgroundTasksOnBoot`).
  *
  * Capability grants (ADR-0198) customise the run. Each engine says which grant
  * fields it applies. A grant that sets a field the engine would ignore is

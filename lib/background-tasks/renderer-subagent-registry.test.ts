@@ -426,6 +426,50 @@ describe("renderer subagent background registry", () => {
     })
     expect(flipped).toEqual([expect.objectContaining({ runId: "stale", status: "interrupted" })])
   })
+
+  // The launcher that would have settled the run's row died with its host.
+  it("settles an interrupted run's child run as cancelled, unknown owners included", async () => {
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const { getExecutionRun } = await import("@/lib/db/execution-runs")
+    await startToolExecutionRun("ses_1", { runId: "execution:job:stale" })
+    await startToolExecutionRun("ses_1", { runId: "execution:job:ownerless" })
+    await startToolExecutionRun("ses_1", { runId: "execution:job:alive" })
+    const base = {
+      kind: "subagent" as const,
+      subagentId: "reviewer",
+      prompt: "check this",
+      sessionId: "ses_1",
+      host: "renderer" as const,
+      status: "running" as const,
+      startedAt: 1000,
+    }
+    await getDb().backgroundTasks.bulkPut([
+      {
+        ...base,
+        runId: "stale",
+        ownerLease: { ownerId: "closed-window", epoch: 1, expiresAt: 2000 },
+      },
+      { ...base, runId: "ownerless" },
+      // Another window still holds this one.
+      {
+        ...base,
+        runId: "alive",
+        ownerLease: { ownerId: "other-window", epoch: 1, expiresAt: 9000 },
+      },
+    ])
+
+    await interruptRendererBackgroundTasksOnBoot({ now: () => 3000 })
+
+    await expect(getExecutionRun("execution:job:stale")).resolves.toMatchObject({
+      status: "cancelled",
+    })
+    await expect(getExecutionRun("execution:job:ownerless")).resolves.toMatchObject({
+      status: "cancelled",
+    })
+    await expect(getExecutionRun("execution:job:alive")).resolves.toMatchObject({
+      status: "running",
+    })
+  })
 })
 
 describe("journalRendererForegroundRun", () => {

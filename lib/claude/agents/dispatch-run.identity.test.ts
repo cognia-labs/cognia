@@ -3,7 +3,7 @@ import "fake-indexeddb/auto"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { getExecutionRun } from "@/lib/db/execution-runs"
-import { admitBackgroundDispatch, getBackgroundTaskRecord } from "@/lib/db/background-tasks"
+import { getBackgroundTaskRecord } from "@/lib/db/background-tasks"
 import { redispatchBackgroundRun } from "@/lib/background-tasks/redispatch"
 import { startAcceptedRendererBackgroundRun } from "@/lib/background-tasks/renderer-subagent-registry"
 import {
@@ -20,15 +20,8 @@ import {
   __clearAllDispatchContextsForTesting,
 } from "./dispatch-context-registry"
 import { getSettings } from "@/lib/db/settings"
-import { syncJobExecutionRun } from "@/lib/execution/job-bridge"
 
 jest.mock("@/lib/plugin/agent-sdk/dispatch", () => ({ dispatchSubagent: jest.fn() }))
-jest.mock("@/lib/db/background-tasks", () => {
-  const actual = jest.requireActual<typeof import("@/lib/db/background-tasks")>(
-    "@/lib/db/background-tasks"
-  )
-  return { ...actual, admitBackgroundDispatch: jest.fn(actual.admitBackgroundDispatch) }
-})
 jest.mock("./subagents", () => ({
   getDispatchableSubagentDef: () => ({ id: "reader", name: "Reader", prompt: "Read", tools: [] }),
 }))
@@ -148,20 +141,14 @@ it("keeps a finished local parent's identity on recovery during an automated tur
   expect(personalChecks.get("original")).toBe(true)
 })
 
-it("refuses the personal lane when the job bridge projects the admitted row before dispatch starts", async () => {
+// The child's row is the launcher's, written from the admission pin: a local
+// run that started in the session since cannot become its parent.
+it("keeps the admitted automated parent when a local run starts before dispatch", async () => {
   await startToolExecutionRun("desktop", { runId: "automated-root" })
   await finishToolExecutionRun("automated-root")
   await startToolExecutionRun("desktop", {
     runId: "new-local",
     localAuthorization: LOCAL_PERSON_RUN,
-  })
-  jest.mocked(admitBackgroundDispatch).mockImplementationOnce(async (...args) => {
-    const actual = jest.requireActual<typeof import("@/lib/db/background-tasks")>(
-      "@/lib/db/background-tasks"
-    )
-    const admission = await actual.admitBackgroundDispatch(...args)
-    await syncJobExecutionRun(args[0])
-    return admission
   })
   const child = await admit(true, "automated-root")
   expect(await getExecutionRun(`execution:job:${child.runId}`)).toMatchObject({

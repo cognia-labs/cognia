@@ -95,6 +95,29 @@ describe("background task journal table", () => {
     ])
   })
 
+  it("hands every row it interrupted to the caller once the flip has committed", async () => {
+    const db = getDb()
+    await db.backgroundTasks.bulkPut([
+      row({ runId: "leased", status: "running", ownerLease: expiredLease }),
+      row({ runId: "unowned", status: "running" }),
+      row({ runId: "done", status: "done", settledAt: 1500 }),
+    ])
+    const seen: string[] = []
+    const onInterrupted = jest.fn(async (rows: { runId: string }[]) => {
+      // Committed: the caller reads the flipped rows.
+      for (const flipped of rows)
+        expect((await getBackgroundTaskRecord(flipped.runId))?.status).toBe("interrupted")
+      seen.push(...rows.map((flipped) => flipped.runId))
+    })
+
+    await interruptBackgroundTasksOnBoot({ now: () => 3000, onInterrupted })
+
+    expect(seen.sort()).toEqual(["leased", "unowned"])
+    // Nothing flipped, nothing reported.
+    await interruptBackgroundTasksOnBoot({ now: () => 4000, onInterrupted })
+    expect(onInterrupted).toHaveBeenCalledTimes(1)
+  })
+
   it("persists the optional journal extensions (mode/delivery/resume lineage)", async () => {
     const journal = createDexieBackgroundTaskJournal()
 

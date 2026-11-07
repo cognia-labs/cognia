@@ -156,13 +156,13 @@ export async function attemptBackgroundResultDelivery(sessionId: string): Promis
     )
     if (!batch) return
     const runIds = new Set(batch.runIds)
-    const { jobExecutionRunId } = await import("@/lib/execution/job-bridge")
+    const { childJobExecutionRunId } = await import("@/lib/execution/launch-child-run")
     const accepted = await send(
       frameBackgroundResults(entries.filter((entry) => runIds.has(entry.runId))),
       sessionId,
       batch.deliveryId,
       backgroundResultRunIds(entries.filter((entry) => runIds.has(entry.runId))).map(
-        jobExecutionRunId
+        childJobExecutionRunId
       )
     )
     if (!accepted) return

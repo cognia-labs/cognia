@@ -3,7 +3,8 @@
  * `runPluginAgentStreamed` (async-iterable). Both adapt the typed
  * {@link PluginAgentRunOptions} onto the executor's `ExecuteAgentConfig`
  * (`lib/ai/agent/agent-executor.ts`), register the run with the
- * background-agent-manager for cancellation, and reuse the structured-output /
+ * background-agent-manager for cancellation, run it as a child run so it has
+ * its `executionRuns` row (`launchChildRun`), and reuse the structured-output /
  * `canUseTool` / streaming plumbing the executor already threads.
  *
  * Permission gating (the `agent:control` check for tool-enabled runs) lives in
@@ -266,6 +267,57 @@ function executeWithRobustness(
   return runOnce().catch(() => runOnce(fallbackModel))
 }
 
+/**
+ * Run `body` as a child run (ADR-0252 §3): `launchChildRun` writes, settles
+ * and traces the run's `execution:job:<agentId>` row; `body` is its engine and
+ * keeps its own result and thrown error. A plugin run has no parent run or
+ * conversation, so the row stands alone. A stop before the run started (the
+ * caller's signal, or a cancel from the Job Center) starts nothing.
+ */
+async function runAsChildRun<T>(
+  agentId: string,
+  meta: RunPluginAgentMeta,
+  signal: AbortSignal,
+  body: (runSignal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const { launchChildRun } = await import("@/lib/execution/launch-child-run")
+  let value: { result: T } | undefined
+  let thrown: { error: unknown } | undefined
+  const label = meta.label ?? agentId
+  const launched = await launchChildRun({
+    title: label,
+    childId: agentId,
+    surface: "plugin",
+    signal,
+    target: {
+      kind: "agent",
+      label,
+      engine: {
+        run: async (runSignal) => {
+          try {
+            value = { result: await body(runSignal) }
+          } catch (error) {
+            thrown = { error }
+            throw error
+          }
+          return { status: "completed" }
+        },
+      },
+    },
+  })
+  if (!launched.started) {
+    if (launched.reason === "cancelled")
+      throw signal.reason ?? new Error("Plugin agent run cancelled before it started")
+    throw new Error(
+      `Plugin agent run could not start (${launched.reason}${launched.detail ? `: ${launched.detail}` : ""})`
+    )
+  }
+  const settled = await launched.outcome
+  if (thrown) throw thrown.error
+  if (value) return value.result
+  throw new Error(settled.error ?? "Plugin agent run ended without a result")
+}
+
 /** Run a single agent turn and resolve with the typed result. */
 export async function runPluginAgent(
   prompt: string,
@@ -285,23 +337,26 @@ export async function runPluginAgent(
     : managedSignal
 
   try {
-    await runInputGuardrails(prompt, options.guardrails, signal)
-    const opts = await withContextContributions(prompt, options, meta.pluginId)
-    const result = await executeWithRobustness(
-      prompt,
-      opts,
-      signal,
-      { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
-      undefined,
-      true
-    )
-    const withId = { ...result, agentId }
-    await runOutputGuardrails(prompt, result.text, options.guardrails, signal)
-    fireStopHook(options, withId, signal)
+    const withId = await runAsChildRun(agentId, meta, signal, async (runSignal) => {
+      await runInputGuardrails(prompt, options.guardrails, runSignal)
+      const opts = await withContextContributions(prompt, options, meta.pluginId)
+      const result = await executeWithRobustness(
+        prompt,
+        opts,
+        runSignal,
+        { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
+        undefined,
+        true
+      )
+      const withId = { ...result, agentId }
+      await runOutputGuardrails(prompt, result.text, options.guardrails, runSignal)
+      fireStopHook(options, withId, runSignal)
+      return withId
+    })
     // Settle with the real outcome so the journal row carries text/usage.
     manager.finishAgent(agentId, {
-      text: result.text,
-      ...(result.usage ? { usage: result.usage } : {}),
+      text: withId.text,
+      ...(withId.usage ? { usage: withId.usage } : {}),
     })
     return withId
   } catch (err) {
@@ -338,33 +393,36 @@ export function runPluginAgentStreamed(
 
   void (async () => {
     try {
-      await runInputGuardrails(prompt, options.guardrails, signal)
-      const opts = await withContextContributions(prompt, options, meta.pluginId)
-      const result = await executeWithRobustness(
-        prompt,
-        opts,
-        signal,
-        { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
-        (event) => {
-          // The plugin agent stream surfaces only text/tool events — capture-only
-          // events (thinking-delta, usage, compact) have no PluginAgentStreamEvent
-          // counterpart, so they're dropped here.
-          if (
-            event.type === "text-delta" ||
-            event.type === "tool-call" ||
-            event.type === "tool-result"
-          ) {
-            controller.push(event)
-          }
-        },
-        false
-      )
-      const withId = { ...result, agentId }
-      await runOutputGuardrails(prompt, result.text, options.guardrails, signal)
-      fireStopHook(options, withId, signal)
+      const withId = await runAsChildRun(agentId, meta, signal, async (runSignal) => {
+        await runInputGuardrails(prompt, options.guardrails, runSignal)
+        const opts = await withContextContributions(prompt, options, meta.pluginId)
+        const result = await executeWithRobustness(
+          prompt,
+          opts,
+          runSignal,
+          { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
+          (event) => {
+            // The plugin agent stream surfaces only text/tool events — capture-only
+            // events (thinking-delta, usage, compact) have no PluginAgentStreamEvent
+            // counterpart, so they're dropped here.
+            if (
+              event.type === "text-delta" ||
+              event.type === "tool-call" ||
+              event.type === "tool-result"
+            ) {
+              controller.push(event)
+            }
+          },
+          false
+        )
+        const withId = { ...result, agentId }
+        await runOutputGuardrails(prompt, result.text, options.guardrails, runSignal)
+        fireStopHook(options, withId, runSignal)
+        return withId
+      })
       manager.finishAgent(agentId, {
-        text: result.text,
-        ...(result.usage ? { usage: result.usage } : {}),
+        text: withId.text,
+        ...(withId.usage ? { usage: withId.usage } : {}),
       })
       controller.close(withId)
     } catch (err) {

@@ -222,10 +222,17 @@ export async function interruptBackgroundTasksOnBoot(
     host?: BackgroundTaskJournalRow["host"]
     isLive?: (runId: string) => boolean
     recoverInterrupted?: boolean
+    /**
+     * Every row this pass flipped to `interrupted`, unknown owners included,
+     * once the flip has committed. The caller settles what else the rows stood
+     * for (the renderer: each run's `executionRuns` row).
+     */
+    onInterrupted?: (rows: BackgroundTaskJournalRow[]) => Promise<void>
   } = {}
 ): Promise<BackgroundTaskJournalRow[]> {
   const db = getDb()
-  return db.transaction("rw", db.backgroundTasks, async () => {
+  let flipped: BackgroundTaskJournalRow[] = []
+  const result = await db.transaction("rw", db.backgroundTasks, async () => {
     const at = (options.now ?? Date.now)()
     const rows = (await db.backgroundTasks.toArray()).filter(
       (row) =>
@@ -253,6 +260,7 @@ export async function interruptBackgroundTasksOnBoot(
       },
       options
     )
+    flipped = interrupted
     return [
       ...interrupted.filter((row) => row.host !== "renderer" || row.ownerLease),
       ...(options.recoverInterrupted
@@ -267,6 +275,8 @@ export async function interruptBackgroundTasksOnBoot(
         : []),
     ]
   })
+  if (flipped.length > 0) await options.onInterrupted?.(flipped)
+  return result
 }
 
 /** Default retention for settled journal rows (age + cap; running rows never pruned). */

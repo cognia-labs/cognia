@@ -24,7 +24,7 @@ import {
 import { redispatchBackgroundRun } from "@/lib/background-tasks/redispatch"
 import { getBackgroundAgentManager } from "@/lib/ai/agent/background-agent-manager"
 import { cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
-import { jobExecutionRunId } from "@/lib/execution/job-bridge"
+import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import { resolveScheduledTaskNames } from "@/lib/scheduler/task-processes"
 import { clearSettledBackgroundTasks, listBackgroundTaskRecords } from "@/lib/db/background-tasks"
 import {
@@ -739,7 +739,7 @@ function TaskRow({ record, now }: { record: BackgroundTaskJournalRecord; now: nu
               data-testid={`job-open-run-${record.runId}`}
               onClick={() =>
                 router.push(
-                  `/agent-runs?run=${encodeURIComponent(jobExecutionRunId(record.runId))}`
+                  `/agent-runs?run=${encodeURIComponent(childJobExecutionRunId(record.runId))}`
                 )
               }
             >

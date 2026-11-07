@@ -42,7 +42,7 @@ import {
 } from "@/components/chat/message-parts/tool-activity-group"
 import { ToolCallRow } from "@/components/chat/message-parts/tool-call-row"
 import { toToolActivityEntries } from "@/lib/claude/subagent-tool-parts"
-import { jobExecutionRunId } from "@/lib/execution/job-bridge"
+import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
 import { cn, formatDurationShort } from "@/lib/utils"
@@ -255,12 +255,12 @@ const SubagentLogBody = memo(function SubagentLogBody({
         // Into the run cockpit, on the EXECUTION run id. This used to point at
         // `/agent-teams?focus=subagent:<id>`, a param that page never read — so
         // the link on every sub-agent card in every transcript just dropped the
-        // operator on the team list. `job-bridge` projects the run's journal row
-        // (written for foreground and background dispatches alike) onto
-        // `execution:job:<runId>`, and `part.subagentId` is that same runId, so
+        // operator on the team list. The launcher writes the dispatch's run row
+        // (foreground and background alike) as `execution:job:<runId>`, and
+        // `part.subagentId` is that same runId, so
         // the target survives a reload — unlike the ephemeral runtime store.
         <Link
-          href={`/agent-runs?run=${encodeURIComponent(jobExecutionRunId(subagentId))}`}
+          href={`/agent-runs?run=${encodeURIComponent(childJobExecutionRunId(subagentId))}`}
           className="inline-flex items-center gap-1 text-xs underline"
           data-testid="subagent-open"
         >

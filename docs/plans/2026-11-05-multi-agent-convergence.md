@@ -218,7 +218,7 @@ interface LaunchChildRunInput {
 ### 6.3 追踪器收敛
 
 - `lib/background-tasks/`：`BackgroundTaskKind` 的 run-backed 条目不再保存状态，读 `executionRuns`；条目只保留投递字段（父会话、批次身份、投递状态）。
-- 删除 `lib/execution/job-bridge.ts` 及测试；它的父运行解析逻辑（admission pin、`parentSubagentId`）移入 `launchChildRun`。
+- 已删除 `lib/execution/job-bridge.ts` 及测试。桥原来独占的两件事已迁走：插件 `ctx.agent.run` / `runStreamed`（`lib/plugin/agent-sdk/run.ts`）改为启动器的调用方引擎（独立行，标题为 label 或 agent id，Job Center 登记保留用于取消）；启动时被中断的渲染端任务，由启动对账（`interruptBackgroundTasksOnBoot` 的 `onInterrupted`）把对应 `execution:job:<runId>` 行落定为 `cancelled`，所有者未知的也算。父运行解析：admission pin 早已经 `dispatch_agent` 传给启动器；桥对非 subagent 行按会话推断父运行的逻辑从未生效（这些行都不带会话），不迁移。遗留：没有 `backgroundTasks` 条目的启动器行（调用方引擎、非后台 twin/external）在宿主重启后不会对账（X10，6.5）。
 - `stores/agent/subagent-runtime-store`：改为读模型，持久化部分只保留 `templates`（现状），运行记录从 `executionRuns` + 实时进度事件派生。
 - `TeamDelegationRecord`：改为子运行投影 + 小队策略字段，改名（见 P9 命名表）。`delegations-panel.tsx` 改读投影。
 - best-of-N：候选写子运行行，分组运行为父（已在 6.2 完成）。

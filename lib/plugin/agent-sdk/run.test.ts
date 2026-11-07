@@ -28,6 +28,55 @@ jest.mock("@/lib/ai/agent/execution/agent-execution-service", () => ({
   executeAgentTurnFromRenderer: (...a: unknown[]) => mockRendererTurn(...(a as [])),
 }))
 
+// The Job Center's manager without its Dexie journal (none in this
+// environment): registration hands out the run's cancel signal.
+jest.mock("@/lib/ai/agent/background-agent-manager", () => {
+  const live = new Map<string, AbortController>()
+  return {
+    getBackgroundAgentManager: () => ({
+      registerAgent: (id: string) => {
+        const controller = new AbortController()
+        live.set(id, controller)
+        return controller.signal
+      },
+      finishAgent: (id: string) => live.delete(id),
+      cancelAgent: (id: string) => {
+        live.get(id)?.abort()
+        return live.delete(id)
+      },
+    }),
+    __resetBackgroundAgentManagerForTesting: () => live.clear(),
+  }
+})
+
+// The launcher as a passthrough that keeps its stop contract: a stop before
+// the start starts nothing, a later stop aborts the engine's signal.
+interface MockLaunchInput {
+  childId: string
+  title: string
+  surface: string
+  signal?: AbortSignal
+  target: { label: string; engine: { run: (signal: AbortSignal) => Promise<unknown> } }
+}
+const mockLaunchChildRun = jest.fn(async (input: MockLaunchInput) => {
+  if (input.signal?.aborted) return { started: false as const, reason: "cancelled" }
+  const engine = new AbortController()
+  input.signal?.addEventListener("abort", () => engine.abort(input.signal?.reason), {
+    once: true,
+  })
+  return {
+    started: true as const,
+    childId: input.childId,
+    executionRunId: `execution:job:${input.childId}`,
+    outcome: input.target.engine
+      .run(engine.signal)
+      .catch((error: unknown) => ({ status: "failed", error: String(error) })),
+  }
+})
+jest.mock("@/lib/execution/launch-child-run", () => ({
+  launchChildRun: (...a: unknown[]) => mockLaunchChildRun(...(a as [MockLaunchInput])),
+}))
+
 const mockExecute = executeAgent as jest.MockedFunction<typeof executeAgent>
 
 const baseResult = {
@@ -336,14 +385,76 @@ describe("runPluginAgentStreamed", () => {
 
   it("cancel() aborts the underlying run signal", async () => {
     let seenSignal: AbortSignal | undefined
+    let started!: () => void
+    const running = new Promise<void>((resolve) => {
+      started = resolve
+    })
     mockExecute.mockImplementation(async (_p, cfg) => {
       seenSignal = cfg?.abortSignal
-      return { ...baseResult } as never
+      started()
+      await new Promise((resolve) => cfg?.abortSignal?.addEventListener("abort", resolve))
+      throw new Error("aborted")
     })
     const run = runPluginAgentStreamed("hi", {})
+    await running
     run.cancel()
     await run.result.catch(() => undefined)
     expect(seenSignal?.aborted).toBe(true)
+  })
+
+  it("cancel() before the run starts runs nothing", async () => {
+    const run = runPluginAgentStreamed("hi", {})
+    run.cancel()
+    await expect(run.result).rejects.toThrow()
+    expect(mockExecute).not.toHaveBeenCalled()
+  })
+})
+
+describe("child runs (ADR-0252 §3)", () => {
+  it("runs a one-shot plugin agent as a standalone child run named by its label", async () => {
+    await runPluginAgent("hi", {}, { pluginId: "p", label: "Summarizer", agentId: "agent-1" })
+    expect(mockLaunchChildRun).toHaveBeenCalledTimes(1)
+    const [input] = mockLaunchChildRun.mock.calls[0]
+    expect(input).toMatchObject({
+      childId: "agent-1",
+      title: "Summarizer",
+      surface: "plugin",
+      target: { kind: "agent", label: "Summarizer" },
+    })
+    // A plugin run has no parent run or conversation.
+    expect(input).not.toHaveProperty("parentRunId")
+    expect(input).not.toHaveProperty("sessionId")
+    // Never the prompt.
+    expect(input.title).not.toContain("hi")
+  })
+
+  it("names an unlabelled run by its agent id", async () => {
+    await runPluginAgent("hi", {}, { agentId: "agent-2" })
+    expect(mockLaunchChildRun.mock.calls[0][0]).toMatchObject({ title: "agent-2" })
+  })
+
+  it("streams a plugin agent as a child run too", async () => {
+    const run = runPluginAgentStreamed("hi", {}, { agentId: "stream-2" })
+    await run.result
+    expect(mockLaunchChildRun.mock.calls[0][0]).toMatchObject({
+      childId: "stream-2",
+      surface: "plugin",
+    })
+  })
+
+  it("keeps the engine's own error when the run fails", async () => {
+    mockExecute.mockRejectedValue(new Error("provider down"))
+    await expect(runPluginAgent("hi")).rejects.toThrow("provider down")
+  })
+
+  it("fails without running when the child run is refused", async () => {
+    mockLaunchChildRun.mockResolvedValueOnce({
+      started: false,
+      reason: "journal_failed",
+      detail: "no database",
+    } as never)
+    await expect(runPluginAgent("hi")).rejects.toThrow("journal_failed: no database")
+    expect(mockExecute).not.toHaveBeenCalled()
   })
 })
 

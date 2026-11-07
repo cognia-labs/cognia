@@ -249,13 +249,32 @@ export function cancelRendererBackgroundRunAndWait(runId: string): Promise<boole
   return registry.cancelAndWait(runId)
 }
 
+/**
+ * Interrupt the renderer's orphaned runs and settle each one's child run as
+ * `cancelled`: the work did not go wrong, its host went away. The run row is
+ * the launcher's (`execution:job:<runId>`), and the launcher that would have
+ * settled it died with its host, so nothing else will.
+ */
 export async function interruptRendererBackgroundTasksOnBoot(options: { now?: () => number } = {}) {
   return interruptBackgroundTasksOnBoot({
     ...options,
     host: "renderer",
     isLive: (runId) => registry.has(runId),
     recoverInterrupted: true,
+    onInterrupted: settleInterruptedChildRuns,
   })
+}
+
+async function settleInterruptedChildRuns(rows: readonly { runId: string }[]): Promise<void> {
+  const [{ finishToolExecutionRun }, { childJobExecutionRunId }] = await Promise.all([
+    import("@/lib/execution/acting-authority"),
+    import("@/lib/execution/launch-child-run"),
+  ])
+  await Promise.all(
+    rows.map((row) =>
+      finishToolExecutionRun(childJobExecutionRunId(row.runId), "cancelled").catch(() => undefined)
+    )
+  )
 }
 
 export function __clearRendererBackgroundRunsForTesting(): void {

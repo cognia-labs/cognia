@@ -95,7 +95,6 @@ import type { DailyScheduleHandle } from "@/lib/connectors/daily-schedule"
 import { connectorVendors, type ConnectorVendorService } from "@/lib/connectors/vendor-contribution"
 import { startSlaEscalationSweep } from "@/lib/connectors/escalation/schedule"
 import { startWorkflowExecutionBridge } from "@/lib/execution/workflow-bridge"
-import { startJobExecutionBridge } from "@/lib/execution/job-bridge"
 import { startExecutionRunPresentationRunner } from "@/lib/connectors/run-presentation/runner"
 import { startNotificationDeliveryWorker } from "@/lib/notifications/delivery/worker"
 import { primeNotificationScope, cachedNotificationAccountPrefix } from "@/lib/notifications/scope"
@@ -349,7 +348,6 @@ export function installConnectorRuntime(
   let heartbeatSweep: HeartbeatSweepHandle | null = null
   let resumeReconnect: ResumeReconnectHandle | null = null
   let stopWorkflowExecutionBridge: (() => void) | null = null
-  let stopJobExecutionBridge: (() => void) | null = null
   let stopDelegationBridge: (() => void) | null = null
   let stopExecutionRunPresentationRunner: (() => void) | null = null
   let stopNotificationWorker: (() => void) | null = null
@@ -503,8 +501,6 @@ export function installConnectorRuntime(
       resumeReconnect = null
       stopWorkflowExecutionBridge?.()
       stopWorkflowExecutionBridge = null
-      stopJobExecutionBridge?.()
-      stopJobExecutionBridge = null
       stopDelegationBridge?.()
       stopDelegationBridge = null
       stopExecutionRunPresentationRunner?.()
@@ -866,11 +862,9 @@ export function installConnectorRuntime(
     // runner owns native projection, coalescing, cursor commits, and fallback.
     if (!cancelled) {
       stopWorkflowExecutionBridge = startWorkflowExecutionBridge()
-      // Renderer background tasks (subagent / plugin-agent / team-delegation)
-      // project as `kind: "job"`. Lease-gated with the other source bridges on
-      // purpose: it WRITES to the journal, and the runtime's Web Lock is what
-      // keeps a second tab from duplicating every event.
-      stopJobExecutionBridge = startJobExecutionBridge()
+      // Background child runs (subagent / plugin-agent / team-delegation) need
+      // no bridge: `launchChildRun` writes and settles their `kind: "job"` row
+      // itself (ADR-0252 §3).
       // A delegation's children report through the delegation, not beside it.
       // Installed here rather than lazily because the interesting case is the
       // one where the process that would have watched a child settle was not
