@@ -411,6 +411,14 @@
     "title": "Terminal command completion",
     "description": "Predicts the full command line you are typing in the integrated terminal."
   },
+  "developer__ai-shell__error-advisor": {
+    "title": "AI Shell error advisor",
+    "description": "Instructions that diagnose a failed AI Shell step and suggest one fix command, which runs only after you accept it."
+  },
+  "developer__ai-shell__plan": {
+    "title": "AI Shell planner",
+    "description": "Instructions that turn what you ask the AI Shell for into a step-by-step plan of shell commands, marking risky steps for confirmation."
+  },
   "developer__bootstrap__bash": {
     "title": "Environment setup agent (Bash)",
     "description": "System message of the Bash bootstrap agent that prepares a workspace environment before its checks run."

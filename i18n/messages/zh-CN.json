@@ -56195,6 +56195,14 @@
         "description": "在集成终端中预测你正在输入的完整命令。",
         "title": "终端命令补全"
       },
+      "developer__ai-shell__error-advisor": {
+        "description": "诊断 AI Shell 中失败的步骤，并给出一条修复命令；修复命令需你确认后才会执行。",
+        "title": "AI Shell 错误诊断"
+      },
+      "developer__ai-shell__plan": {
+        "description": "把你对 AI Shell 的请求拆成逐步执行的 shell 命令计划，并把有风险的步骤标记为需要确认。",
+        "title": "AI Shell 规划器"
+      },
       "developer__bootstrap__bash": {
         "description": "Bash 初始化智能体的系统消息，在工作区环境检查运行前准备环境。",
         "title": "环境初始化智能体（Bash）"
