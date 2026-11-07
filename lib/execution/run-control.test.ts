@@ -3,13 +3,17 @@ import "fake-indexeddb/auto"
 
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createExecutionRun, runEventJournal } from "@/lib/db/execution-runs"
+import type { ExecutionRun, RunControlCommand } from "@/types/execution/run"
 import {
   createRunInterrupt,
   executeRunControlCommand,
   recoverPendingRunInterrupts,
   registerRunControlHandler,
+  RUNTIME_STOP_ACTOR,
+  stopRunTree,
 } from "./run-control"
 import { __resetRunRetryHandlersForTesting, registerRunRetryHandler } from "./run-retry-registry"
+import { registerRunStop } from "./run-stops"
 
 describe("execution run controls", () => {
   beforeEach(async () => {
@@ -317,6 +321,182 @@ describe("execution run controls", () => {
     expect(await getDb().executionRuns.get("run-1")).toMatchObject({
       status: "recovery_required",
     })
+  })
+})
+
+describe("tree stop (ADR-0252 §3)", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+
+  function row(id: string, patch: Partial<ExecutionRun> = {}): ExecutionRun {
+    return {
+      id,
+      kind: "job",
+      sourceId: id,
+      title: id,
+      status: "running",
+      initiator: { remoteUserId: "owner" },
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      ...patch,
+    }
+  }
+
+  /** root(team) → a(job) → a1(job); root → b(job, settled); root → c(workflow). */
+  async function seedTree(rootPatch: Partial<ExecutionRun> = {}): Promise<void> {
+    await createExecutionRun(row("root", { kind: "team", ...rootPatch }))
+    await createExecutionRun(row("a", { parentRunId: "root", startedAt: 2 }))
+    await createExecutionRun(row("a1", { parentRunId: "a", startedAt: 3 }))
+    await createExecutionRun(row("b", { parentRunId: "root", status: "completed", startedAt: 4 }))
+    await createExecutionRun(row("c", { kind: "workflow", parentRunId: "root", startedAt: 5 }))
+  }
+
+  function record() {
+    const stopped: string[] = []
+    const handler = (fail?: string) =>
+      jest.fn(async (command: RunControlCommand) => {
+        stopped.push(command.runId)
+        if (command.runId === fail) throw new Error("wedged")
+      })
+    return { stopped, handler }
+  }
+
+  it("stops the root through its kind, then every live run under it, parents first", async () => {
+    await seedTree()
+    const { stopped, handler } = record()
+    const team = handler()
+    const job = handler()
+    const workflow = handler()
+    const off = [
+      registerRunControlHandler("team", team),
+      registerRunControlHandler("job", job),
+      registerRunControlHandler("workflow", workflow),
+    ]
+
+    const result = await stopRunTree("root")
+
+    expect(result).toEqual({ stopped: true, descendantsStopped: 3 })
+    // The settled child is skipped; a child's child is reached after its parent.
+    expect(stopped).toEqual(["root", "a", "a1", "c"])
+    expect(team.mock.calls[0][0]).toMatchObject({
+      action: "stop",
+      runId: "root",
+      expectedRevision: 0,
+      actor: RUNTIME_STOP_ACTOR,
+    })
+    off.forEach((unregister) => unregister())
+  })
+
+  it("keeps stopping the rest when one child refuses", async () => {
+    await seedTree()
+    const { stopped, handler } = record()
+    const off = [
+      registerRunControlHandler("team", handler()),
+      registerRunControlHandler("job", handler("a")),
+      registerRunControlHandler("workflow", handler()),
+    ]
+    const result = await stopRunTree("root")
+    expect(result.descendantsStopped).toBe(2)
+    expect(stopped).toEqual(["root", "a", "a1", "c"])
+    off.forEach((unregister) => unregister())
+  })
+
+  it("still stops the live runs under a settled root", async () => {
+    await seedTree({ status: "cancelled" })
+    const { stopped, handler } = record()
+    const off = [
+      registerRunControlHandler("team", handler()),
+      registerRunControlHandler("job", handler()),
+      registerRunControlHandler("workflow", handler()),
+    ]
+    const result = await stopRunTree("root")
+    expect(result).toEqual({ stopped: false, reason: "terminal", descendantsStopped: 3 })
+    expect(stopped).toEqual(["a", "a1", "c"])
+    off.forEach((unregister) => unregister())
+  })
+
+  it("reports a root its kind refused, or that nothing handles", async () => {
+    await createExecutionRun(row("lonely", { kind: "goal" }))
+    await expect(stopRunTree("lonely")).resolves.toEqual({
+      stopped: false,
+      reason: "unsupported",
+      descendantsStopped: 0,
+    })
+    const off = registerRunControlHandler("goal", async () => {
+      throw new Error("engine said no")
+    })
+    await expect(stopRunTree("lonely")).resolves.toMatchObject({
+      stopped: false,
+      reason: "source_rejected",
+    })
+    off()
+    await expect(stopRunTree("missing")).resolves.toEqual({
+      stopped: false,
+      reason: "run_not_found",
+      descendantsStopped: 0,
+    })
+    // A child running here still stops when its row cannot be read.
+    const stop = jest.fn()
+    const unregister = registerRunStop("unreadable", stop)
+    await expect(stopRunTree("unreadable")).resolves.toEqual({
+      stopped: true,
+      descendantsStopped: 0,
+    })
+    expect(stop).toHaveBeenCalledWith("execution_run_stopped")
+    unregister()
+  })
+
+  it("stops a child through its registered stop without any handler installed", async () => {
+    await createExecutionRun(row("solo"))
+    await createExecutionRun(row("solo-child", { parentRunId: "solo" }))
+    const rootStop = jest.fn()
+    const childStop = jest.fn()
+    const off = [registerRunStop("solo", rootStop), registerRunStop("solo-child", childStop)]
+    await expect(stopRunTree("solo")).resolves.toEqual({ stopped: true, descendantsStopped: 1 })
+    expect(rootStop).toHaveBeenCalled()
+    expect(childStop).toHaveBeenCalled()
+    off.forEach((unregister) => unregister())
+  })
+
+  it("cascades an operator's stop through the control gate to the live tree", async () => {
+    await seedTree()
+    const { stopped, handler } = record()
+    const off = [
+      registerRunControlHandler("team", handler()),
+      registerRunControlHandler("job", handler()),
+      registerRunControlHandler("workflow", handler()),
+    ]
+    const result = await executeRunControlCommand({
+      runId: "root",
+      action: "stop",
+      idempotencyKey: "cockpit:root:stop:0",
+      expectedRevision: 0,
+      actor: { remoteUserId: "owner" },
+    })
+    expect(result.accepted).toBe(true)
+    expect(stopped).toEqual(["root", "a", "a1", "c"])
+    off.forEach((unregister) => unregister())
+  })
+
+  it("does not cascade a control other than stop", async () => {
+    await seedTree()
+    const { stopped, handler } = record()
+    const off = [
+      registerRunControlHandler("team", handler()),
+      registerRunControlHandler("job", handler()),
+    ]
+    await executeRunControlCommand({
+      runId: "root",
+      action: "pause",
+      idempotencyKey: "cockpit:root:pause:0",
+      expectedRevision: 0,
+      actor: { remoteUserId: "owner" },
+    })
+    expect(stopped).toEqual(["root"])
+    off.forEach((unregister) => unregister())
   })
 })
 

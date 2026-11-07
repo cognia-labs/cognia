@@ -924,11 +924,14 @@ export function approveDelegation(delegationId: string): TeamDelegationRecord | 
 }
 
 /**
- * Cancel an in-flight delegation. Stops the child run behind it through the
- * launcher (the background or twin agent, the external agent's session, or a
- * run-control stop of the target team's run), transitions
- * status to `cancelled` and fires the complete hook so consumers can clean up.
- * The aborted run's own late settle is ignored (`settleTeamDelegation`).
+ * Cancel an in-flight delegation. A launched one is stopped with the one tree
+ * stop (`stopRunTree`): its child run through its kind (the background or
+ * twin agent, the external agent's session, the target Squad's control) and
+ * every live run under it, so a delegated Squad's own delegations stop too.
+ * One still launching is stopped through its launch's signal, before or as
+ * its engine starts. Transitions status to `cancelled` and fires the complete
+ * hook so consumers can clean up. The stopped run's own late settle is
+ * ignored (`settleTeamDelegation`).
  */
 export function cancelDelegation(delegationId: string): TeamDelegationRecord | undefined {
   const store = useAgentTeamStore.getState()
@@ -938,8 +941,23 @@ export function cancelDelegation(delegationId: string): TeamDelegationRecord | u
   // Drop any stashed run params so a cancelled (esp. deferred) delegation can
   // never be re-dispatched by a later approval.
   pendingRuns.delete(delegationId)
-  // The launcher stops whichever engine the child runs on.
-  runControllers.get(delegationId)?.abort(new Error("team delegation cancelled"))
+  const childRunId = delegationExecutionRunId(current)
+  if (childRunId) {
+    const abortLaunch = () =>
+      runControllers.get(delegationId)?.abort(new Error("team delegation cancelled"))
+    // A child the tree stop cannot reach (its row is gone) still has the
+    // launch's own signal.
+    void import("@/lib/execution/run-control")
+      .then(({ stopRunTree }) => stopRunTree(childRunId))
+      .then((result) => {
+        if (!result.stopped) abortLaunch()
+      })
+      .catch(abortLaunch)
+  } else {
+    // Not linked yet: the launch in flight sees its signal and starts nothing,
+    // or stops the engine it just started.
+    runControllers.get(delegationId)?.abort(new Error("team delegation cancelled"))
+  }
   store.updateDelegationStatus(delegationId, "cancelled")
   getPluginLifecycleHooks().dispatchOnTeamDelegationComplete({
     delegationId,

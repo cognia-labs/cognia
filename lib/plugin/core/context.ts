@@ -1134,9 +1134,18 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
     },
 
     cancelAgent: (agentId: string) => {
-      void import("@/lib/ai/agent/background-agent-manager")
-        .then(({ getBackgroundAgentManager }) => {
-          const cancelled = getBackgroundAgentManager().cancelAgent(agentId)
+      void Promise.all([
+        import("@/lib/ai/agent/background-agent-manager"),
+        import("@/lib/claude/agents/cancel-subagent"),
+      ])
+        .then(async ([{ getBackgroundAgentManager }, { cancelChildRun }]) => {
+          // Only an agent the Job Center tracks, as before: the one stop below
+          // also reaches subagent runs, which a plugin's id never named.
+          const tracked = getBackgroundAgentManager()
+            .list()
+            .some((entry) => entry.id === agentId)
+          // Through the one stop: the agent's run and every run under it.
+          const cancelled = tracked && (await cancelChildRun(agentId))
           if (!cancelled) {
             loggers.agent.warn(`No active background agent to cancel: ${agentId}`)
           }

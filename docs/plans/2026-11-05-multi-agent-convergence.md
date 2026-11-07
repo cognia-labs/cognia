@@ -225,8 +225,9 @@ interface LaunchChildRunInput {
 
 ### 6.4 单一嵌套规则与单一停止
 
-- 已新增 `lib/execution/run-tree.ts`（随 6.3 的委派投影一起落地）：通用的 `buildTree` / `flattenTree`（缺父成根，环被打断，每项只放一次），行上的 `childrenOf`、`buildRunTree`，以及按 `parentRunId` 索引读取的 `readRunAncestors`（近到远，遇缺失父行、环或 `MAX_RUN_TREE_DEPTH` 停止）和 `readRunSubtree`。规则只有 `parentRunId`。委派的深度和环检测已在用它。剩余：`lib/claude/subagent-tree.ts`、`components/settings/subagents/runtime-tree.ts` 和 SDK 桥的嵌套改用 `buildTree`（SDK 轮内 `Task` 仍按 owner 关联投影成消息 part，但子树形状共用同一模块）。
-- 停止：`cancel-subagent.ts`、`background-agent-manager.cancelAgent`、`cancelDelegation`、`control-handlers.ts` 的 `job` 分支合并为 run-control `stop` 按类型分派。SDK `stopTask` 是引擎实现，保留在分派目标里。
+- 已新增 `lib/execution/run-tree.ts`（随 6.3 的委派投影一起落地）：通用的 `buildTree` / `flattenTree`（缺父成根，环被打断，每项只放一次），行上的 `childrenOf`、`buildRunTree`，以及按 `parentRunId` 索引读取的 `readRunAncestors`（近到远，遇缺失父行、环或 `MAX_RUN_TREE_DEPTH` 停止）和 `readRunSubtree`。规则只有 `parentRunId`。委派的深度和环检测在用它；`lib/claude/subagent-tree.ts`（聊天记录的子 agent 树）和 `components/settings/subagents/runtime-tree.ts`（设置里的运行时树）已改用 `buildTree`，各自只保留自己的排序和深度约定（聊天记录从 1 起、part 自带的 `depth` 优先）。SDK 桥只负责给轮内 `Task` 连上 `parentSubagentId` 边，树的形状由前者统一构建。
+- 停止已合并为一个：`lib/execution/run-stops.ts` 是进程内子运行的停止登记表，启动器在引擎运行期间把每个 `job` 子运行的停止登记在其运行 id 下（默认是引擎自己的停止；Job Center 登记的子运行走后台 agent 管理器的取消；调用方可传自己的 `stop`：`dispatch_agent` 先在后台投递箱记下取消意图再中止，插件 agent 走管理器的取消），引擎结束时注销。`run-control.ts` 新增 `stopRunTree`：根运行先停（有登记的停止直接调用，否则按类型交给 handler：小队走 Squad 控制、工作流走取消……），再按父先子后的顺序停掉其下所有仍在运行的运行；某个子运行拒绝不影响其余；根已结束时仍会停掉还活着的后代；行读不到但本进程有登记时照样能停。控制门的 `stop` 同样级联到整棵树。`control-handlers.ts` 的 `job` 分支改为调用登记表（不再找渲染端后台登记表）。调用方：`cancel-subagent.ts` 的 `cancelChildRun` / `cancelSubagentRun`（聊天卡片、Job Center、设置运行时页、模型的 `dispatch_agent({cancel})`）在有登记时走 `stopRunTree`；尚未启动的派发（还在解析定义、路由审批）用它自己的取消登记，轮内 SDK `Task` 用 `stopTask`（`sdk-subagent-bridge`），尚未登记停止的 Job Center agent 走管理器。插件 `ctx.agent.cancelAgent` 只取消 Job Center 跟踪的 agent（与原来范围相同），经 `cancelChildRun`；插件流式运行的 `cancel()` 在启动后走 `stopRunTree`，启动前仍同步走管理器。`cancelDelegation` 对已链接子运行的委派走 `stopRunTree`（委派出去的小队自己的委派也一并停止），仍在启动中的走启动信号；`stopRunTree` 停不到时退回启动信号。
+- 遗留：本进程外执行的运行（配对主机、常驻 Host）的停止仍走控制门转发到该主机；登记表只覆盖本进程启动的子运行（设计如此）。
 
 ### 6.5 验收
 

@@ -596,6 +596,9 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
       childId: childRunId,
       surface: "chat",
       signal: abort.signal,
+      // A run-control stop cancels the way a chat card's Abort does: the
+      // background outbox records the intent before the dispatch aborts.
+      stop: requestCancellation,
       target: {
         kind: "agent",
         label: p.subagentId,

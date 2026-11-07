@@ -19,6 +19,11 @@
  *              in the transaction that writes its durable record, so the
  *              launcher hands it the parent instead of writing a row first.
  *
+ * Stop: while its engine runs, a `job` child's stop is registered under its
+ * run id (`run-stops.ts`), which the `job` run-control handler and the tree
+ * stop (`stopRunTree`) reach. A Squad child is a `team` run, stopped by the
+ * `team` handler like any Squad run.
+ *
  * Order: the row is written, and only then is the engine started or the run
  * registered with the background-agent manager (its `backgroundTasks` entry
  * carries the result to deliver, never the run's identity or parent). The
@@ -44,6 +49,7 @@ import type { BackgroundAgentKind } from "@/lib/ai/agent/background-agent-manage
 import { getExecutionRun } from "@/lib/db/execution-runs"
 import { loadPort } from "@/lib/modules/ports"
 import { finishToolExecutionRun, startToolExecutionRun } from "./acting-authority"
+import { registerRunStop, type RunStop } from "./run-stops"
 
 /** Registers the child in the Job Center, where a person can see and cancel it. */
 export interface ChildRunBackgroundRegistration {
@@ -137,6 +143,14 @@ export interface LaunchChildRunInput {
   surface?: SpanSurface
   /** Stops the child. Before the engine starts, nothing starts. */
   signal?: AbortSignal
+  /**
+   * How a run-control stop of this child stops it, when that is more than
+   * aborting `signal` (`dispatch_agent` records the cancellation in its
+   * background outbox first). Registered under the child's run id for as long
+   * as its engine runs (`run-stops.ts`). Defaults to the engine's own stop, or
+   * the background-agent manager's cancel for a child registered there.
+   */
+  stop?: RunStop
 }
 
 export type LaunchChildRunRefusal =
@@ -549,10 +563,25 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
   // A stop from the caller, or a cancel from the Job Center.
   const detachCaller = onAbort(input.signal, engine.stop)
   const detachBackground = onAbort(backgroundSignal, engine.stop)
+  // A run-control stop (the Job Center, a chat card, a tree stop). A child the
+  // Job Center tracks is cancelled through the manager, which also settles its
+  // entry at once; its abort reaches the engine through `backgroundSignal`.
+  const unregisterStop = registerRunStop(
+    executionRunId,
+    input.stop ??
+      (backgroundSignal
+        ? async () => {
+            const { getBackgroundAgentManager } =
+              await import("@/lib/ai/agent/background-agent-manager")
+            getBackgroundAgentManager().cancelAgent(childId)
+          }
+        : engine.stop)
+  )
 
   const outcome = engine.outcome
     .catch((error: unknown): ChildRunOutcome => ({ status: "failed", error: errorText(error) }))
     .then(async (settled) => {
+      unregisterStop()
       detachCaller()
       detachBackground()
       if (backgroundSignal) {

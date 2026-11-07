@@ -1,15 +1,21 @@
 /**
- * In-memory registry mapping an in-flight subagent `runId` to the cancellation
- * handler owned by its runtime, so every UI surface uses one cancellation
- * entry point without assuming every runtime is backed by AbortController.
+ * In-memory registry mapping a subagent `runId` to the cancellation handler
+ * owned by its runtime, for the subagents that have no run row to stop yet.
  *
- * The producer is `dispatch-agent-handler.ts`: it registers a controller right
- * after `recordDispatchStart` and unregisters on every terminal path. The
- * controller's `signal` is threaded into `dispatchSubagent`, whose loop observes
- * the abort and stops scheduling work.
+ * A launched child is stopped through its run (`stopRunTree`, with the stop
+ * the launcher registered in `lib/execution/run-stops.ts`). Two producers fill
+ * this registry for what comes before or instead of that:
  *
- * Mirrors `lib/workflow/runtime/run-cancel-registry.ts` — one process-wide map,
- * no React/Zustand coupling, safe to import from any runtime module.
+ *   - `dispatch-run.ts`, from the dispatch's start until it is launched (its
+ *     definition is being resolved, an approval routed), and on every
+ *     terminal path it unregisters. The same cancellation is handed to the
+ *     launcher as the run's stop, so both reach one adapter.
+ *   - `sdk-subagent-bridge.ts`, for an in-turn SDK `Task`, which never gets a
+ *     run row: its handler is the SDK's `stopTask`.
+ *
+ * `cancelChildRun` (`cancel-subagent.ts`) picks between the two. Mirrors
+ * `lib/workflow/runtime/run-cancel-registry.ts` — one process-wide map, no
+ * React/Zustand coupling, safe to import from any runtime module.
  */
 
 export type SubagentCancellationHandler = (reason?: string) => void | Promise<void>

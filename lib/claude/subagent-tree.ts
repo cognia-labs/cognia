@@ -3,11 +3,13 @@
 //
 // PURE function (no React, no store) so the renderer can call it inside a
 // `useMemo` over `message.parts` — derived selection, never set-state-in-effect.
-// The tree edges come from `parentSubagentId`; depth falls back to `part.depth`.
-// Cycles (which the runtime guards against, but which a corrupt transcript could
-// still contain) are broken defensively so the walk always terminates and every
-// node renders exactly once.
+// The tree edges come from `parentSubagentId`; a part's own `depth` wins over
+// the computed one. The nesting itself is the run tree's one rule
+// (`buildTree`): cycles (which the runtime guards against, but which a corrupt
+// transcript could still contain) are broken so the walk always terminates and
+// every node renders exactly once.
 
+import { buildTree, type TreeNode } from "@/lib/execution/run-tree"
 import type { SubagentPart } from "./parts-extensions"
 import { isSubagentPart } from "./parts-extensions"
 
@@ -18,11 +20,8 @@ export interface SubagentTreeNode {
   depth: number
 }
 
-function stableSort(a: SubagentTreeNode, b: SubagentTreeNode): number {
-  return (
-    (a.part.startedAt ?? 0) - (b.part.startedAt ?? 0) ||
-    a.part.subagentId.localeCompare(b.part.subagentId)
-  )
+function stableSort(a: SubagentPart, b: SubagentPart): number {
+  return (a.startedAt ?? 0) - (b.startedAt ?? 0) || a.subagentId.localeCompare(b.subagentId)
 }
 
 /**
@@ -33,52 +32,18 @@ function stableSort(a: SubagentTreeNode, b: SubagentTreeNode): number {
 export function buildSubagentTree(parts: readonly unknown[] | undefined): SubagentTreeNode[] {
   const subagentParts = (Array.isArray(parts) ? parts : []).filter(isSubagentPart)
   if (subagentParts.length === 0) return []
-
-  const nodeById = new Map<string, SubagentTreeNode>()
-  for (const p of subagentParts) {
-    nodeById.set(p.subagentId, { part: p, children: [], depth: p.depth ?? 0 })
+  // The shape is the run tree's (`lib/execution/run-tree.ts`): a missing or
+  // self parent makes a root, a cycle is broken so every part renders once.
+  const tree = buildTree(subagentParts, {
+    id: (p) => p.subagentId,
+    parent: (p) => p.parentSubagentId,
+    compare: stableSort,
+  })
+  // Transcript depth is 1-based and a part's own `depth` wins; a child sits
+  // one below its parent's resolved depth.
+  const toNode = (node: TreeNode<SubagentPart>, parentDepth: number): SubagentTreeNode => {
+    const depth = node.item.depth ?? parentDepth + 1
+    return { part: node.item, depth, children: node.children.map((c) => toNode(c, depth)) }
   }
-
-  // Resolve a parent only when it exists in this set and isn't the node itself.
-  const parentOf = new Map<string, string>()
-  for (const p of subagentParts) {
-    const pid = p.parentSubagentId
-    if (pid && pid !== p.subagentId && nodeById.has(pid)) parentOf.set(p.subagentId, pid)
-  }
-
-  const roots: SubagentTreeNode[] = []
-  const visited = new Set<string>()
-
-  const attach = (node: SubagentTreeNode, path: Set<string>, depth: number): void => {
-    visited.add(node.part.subagentId)
-    node.depth = node.part.depth ?? depth
-    const childNodes: SubagentTreeNode[] = []
-    for (const p of subagentParts) {
-      if (parentOf.get(p.subagentId) !== node.part.subagentId) continue
-      if (path.has(p.subagentId)) continue // cycle — don't re-enter
-      const child = nodeById.get(p.subagentId)!
-      childNodes.push(child)
-      attach(child, new Set([...path, node.part.subagentId]), node.depth + 1)
-    }
-    childNodes.sort(stableSort)
-    node.children = childNodes
-  }
-
-  for (const p of subagentParts) {
-    if (parentOf.has(p.subagentId)) continue // not a root
-    const node = nodeById.get(p.subagentId)!
-    attach(node, new Set([p.subagentId]), p.depth ?? 1)
-    roots.push(node)
-  }
-  // Nodes trapped in a pure cycle were never reached — surface them as roots so
-  // they still render rather than silently vanishing.
-  for (const p of subagentParts) {
-    if (visited.has(p.subagentId)) continue
-    const node = nodeById.get(p.subagentId)!
-    attach(node, new Set([p.subagentId]), p.depth ?? 1)
-    roots.push(node)
-  }
-
-  roots.sort(stableSort)
-  return roots
+  return tree.map((node) => toNode(node, 0)).sort((a, b) => stableSort(a.part, b.part))
 }

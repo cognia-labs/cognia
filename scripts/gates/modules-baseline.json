@@ -635,7 +635,6 @@
     "lib/diagnostics/notification-commands.ts -> support-report",
     "lib/execution/acting-authority.ts -> connectors",
     "lib/execution/cockpit-model.ts -> agent-runs",
-    "lib/execution/control-handlers.ts -> background-tasks",
     "lib/execution/control-handlers.ts -> bot",
     "lib/execution/control-handlers.ts -> connectors",
     "lib/execution/control-handlers.ts -> goal",

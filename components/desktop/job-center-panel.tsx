@@ -17,13 +17,9 @@ import type {
   BackgroundTaskJournalRecord,
   BackgroundTaskStatus,
 } from "@/lib/background-tasks/registry-core"
-import {
-  cancelRendererBackgroundRunAndWait,
-  collectRendererBackgroundResult,
-} from "@/lib/background-tasks/renderer-subagent-registry"
+import { collectRendererBackgroundResult } from "@/lib/background-tasks/renderer-subagent-registry"
 import { redispatchBackgroundRun } from "@/lib/background-tasks/redispatch"
-import { getBackgroundAgentManager } from "@/lib/ai/agent/background-agent-manager"
-import { cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
+import { cancelChildRun, cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import { resolveScheduledTaskNames } from "@/lib/scheduler/task-processes"
 import { clearSettledBackgroundTasks, listBackgroundTaskRecords } from "@/lib/db/background-tasks"
@@ -646,17 +642,12 @@ function TaskRow({ record, now }: { record: BackgroundTaskJournalRecord; now: nu
   const cancel = async () => {
     setCancelling(true)
     try {
-      // Route cancellation by kind/mode: background subagent runs through the
-      // background registry; foreground subagent runs through the cancel
-      // registry; plugin-agent / team-delegation rows through the manager.
-      let cancelled = false
-      if (isSubagent && isForeground) {
-        cancelled = await cancelSubagentRun(record.runId)
-      } else if (isSubagent) {
-        cancelled = await cancelRendererBackgroundRunAndWait(record.runId)
-      } else {
-        cancelled = getBackgroundAgentManager().cancelAgent(record.runId)
-      }
+      // One stop for every kind of row: a launched child through its run's
+      // tree stop, anything not launched yet through its own registry. A
+      // subagent's card also learns it was cancelled.
+      const cancelled = isSubagent
+        ? await cancelSubagentRun(record.runId, { backgrounded: !isForeground })
+        : await cancelChildRun(record.runId)
       if (cancelled) toast.success(t("toast.cancelled"))
       else toast.error(t("toast.cancelUnavailable"))
     } finally {

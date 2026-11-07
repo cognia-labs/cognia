@@ -83,6 +83,18 @@ const launchMock = jest.fn(async (input: LaunchChildRunInput) => {
 jest.mock("@/lib/execution/launch-child-run", () => ({
   launchChildRun: (input: LaunchChildRunInput) => launchMock(input),
 }))
+// The one tree stop: it stops a launched fake child as its kind's handler
+// would (its outcome settles `cancelled`), unless a test says it missed.
+let treeStopMisses = false
+const stopRunTreeMock = jest.fn(async (runId: string) => {
+  const child = children.find((c) => c.executionRunId === runId)
+  if (treeStopMisses || !child) return { stopped: false, descendantsStopped: 0 }
+  child.settle({ status: "cancelled", error: "Cancelled." })
+  return { stopped: true, descendantsStopped: 0 }
+})
+jest.mock("@/lib/execution/run-control", () => ({
+  stopRunTree: (runId: string) => stopRunTreeMock(runId),
+}))
 
 import type { LaunchChildRunInput } from "@/lib/execution/launch-child-run"
 import type { ChildRunOutcome } from "@/types/execution/child-run"
@@ -111,6 +123,8 @@ function resetLauncher() {
   launchRefusal = undefined
   launchGate = undefined
   rows.clear()
+  stopRunTreeMock.mockClear()
+  treeStopMisses = false
   for (const key of Object.keys(liveRuns)) delete liveRuns[key]
   for (const key of Object.keys(squadOfRun)) delete squadOfRun[key]
 }
@@ -480,7 +494,7 @@ describe("delegation-orchestrator", () => {
   })
 
   describe("cancelDelegation", () => {
-    it("stops the running child, flips the record to cancelled and fires one hook", async () => {
+    it("stops the running child's tree, flips the record to cancelled and fires one hook", async () => {
       autoOutcome = null
       const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
@@ -489,19 +503,35 @@ describe("delegation-orchestrator", () => {
         reason: "y",
       })
       await flush()
-      const { input } = lastLaunch()
-      expect(input.signal?.aborted).toBe(false)
+      const { input, executionRunId } = lastLaunch()
 
       const after = cancelDelegation(delegation.id)
 
       expect(after?.status).toBe("cancelled")
-      expect(input.signal?.aborted).toBe(true)
       expect((await completionPromise).status).toBe("cancelled")
+      // The one stop, on the child's run; the launch signal is not used.
+      expect(stopRunTreeMock).toHaveBeenCalledWith(executionRunId)
+      expect(input.signal?.aborted).toBe(false)
       expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
       expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({
         delegationId: delegation.id,
         status: "cancelled",
       })
+    })
+
+    it("falls back to the launch signal when the tree stop cannot reach the child", async () => {
+      autoOutcome = null
+      treeStopMisses = true
+      const { delegation, completionPromise } = delegateToBackground({
+        sourceTeamId: "team-1",
+        sourceTaskId: "task-1",
+        prompt: "x",
+        reason: "y",
+      })
+      await flush()
+      cancelDelegation(delegation.id)
+      expect((await completionPromise).status).toBe("cancelled")
+      expect(lastLaunch().input.signal?.aborted).toBe(true)
     })
 
     it("stops a child still being launched, and it never runs", async () => {
@@ -801,9 +831,10 @@ describe("delegateToTeam (team → team)", () => {
     })
     await flush()
     cancelDelegation(delegation.id)
-    expect(lastLaunch().input.signal?.aborted).toBe(true)
 
     const settled = await completionPromise
+    // The Squad child is stopped with the one tree stop, as any run is.
+    expect(stopRunTreeMock).toHaveBeenCalledWith(lastLaunch().executionRunId)
     expect(settled.status).toBe("cancelled")
     expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledTimes(1)
     expect(dispatchOnTeamDelegationComplete).toHaveBeenCalledWith({

@@ -19,11 +19,7 @@ import {
 import { executeRunControlCommand } from "./run-control"
 import { registerRunRetryHandler } from "./run-retry-registry"
 
-const mockCancelRendererBackgroundRun = jest.fn((_runId: string) => true)
-jest.mock("@/lib/background-tasks/renderer-subagent-registry", () => ({
-  cancelRendererBackgroundRun: (...args: unknown[]) =>
-    mockCancelRendererBackgroundRun(...(args as [string])),
-}))
+import { __resetRunStopsForTesting, registerRunStop } from "./run-stops"
 
 const mockCancelWorkflowRun = jest.fn(async (_runId: string) => ({
   cancelled: true,
@@ -1330,9 +1326,17 @@ describe("job control", () => {
       updatedAt: 1_000,
     })
 
-  it("cancels the background run by its SOURCE id, not the execution run id", async () => {
+  afterEach(() => __resetRunStopsForTesting())
+
+  it("stops the child through the stop its launcher registered, and awaits it", async () => {
     const installed = installExecutionRunControlHandlers()
     await seedJob()
+    let persisted = false
+    const stop = jest.fn(async (_reason?: string) => {
+      await Promise.resolve()
+      persisted = true
+    })
+    registerRunStop("job-run", stop)
 
     await installed.job({
       runId: "job-run",
@@ -1342,12 +1346,12 @@ describe("job control", () => {
       actor: {},
     })
 
-    expect(mockCancelRendererBackgroundRun).toHaveBeenCalledWith("bg-run-1")
+    expect(stop).toHaveBeenCalledWith("execution_run_stopped")
+    expect(persisted).toBe(true)
     installed.dispose()
   })
 
   it("reports a task this process is not running rather than claiming success", async () => {
-    mockCancelRendererBackgroundRun.mockReturnValueOnce(false)
     const installed = installExecutionRunControlHandlers()
     await seedJob("job-gone")
 
@@ -1360,6 +1364,24 @@ describe("job control", () => {
         actor: {},
       })
     ).rejects.toThrow(/not active in this process/)
+    installed.dispose()
+  })
+
+  it("reports a stop that failed", async () => {
+    const installed = installExecutionRunControlHandlers()
+    await seedJob("job-wedged")
+    registerRunStop("job-wedged", async () => {
+      throw new Error("outbox write failed")
+    })
+    await expect(
+      installed.job({
+        runId: "job-wedged",
+        action: "stop",
+        idempotencyKey: "stop-job-3",
+        expectedRevision: 0,
+        actor: {},
+      })
+    ).rejects.toThrow(/could not be stopped/)
     installed.dispose()
   })
 
@@ -1395,7 +1417,6 @@ describe("job control", () => {
         actor: {},
       })
     ).resolves.toBeUndefined()
-    expect(mockCancelRendererBackgroundRun).not.toHaveBeenCalled()
     installed.dispose()
   })
 })

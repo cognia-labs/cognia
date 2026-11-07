@@ -56,6 +56,7 @@ interface MockLaunchInput {
   title: string
   surface: string
   signal?: AbortSignal
+  stop?: () => void | Promise<void>
   target: { label: string; engine: { run: (signal: AbortSignal) => Promise<unknown> } }
 }
 const mockLaunchChildRun = jest.fn(async (input: MockLaunchInput) => {
@@ -64,15 +65,32 @@ const mockLaunchChildRun = jest.fn(async (input: MockLaunchInput) => {
   input.signal?.addEventListener("abort", () => engine.abort(input.signal?.reason), {
     once: true,
   })
+  const executionRunId = `execution:job:${input.childId}`
+  // Registered like the launcher does, for the run-control stop.
+  const { registerRunStop } = jest.requireActual<typeof import("@/lib/execution/run-stops")>(
+    "@/lib/execution/run-stops"
+  )
+  const unregister = registerRunStop(executionRunId, input.stop ?? (() => engine.abort()))
   return {
     started: true as const,
     childId: input.childId,
-    executionRunId: `execution:job:${input.childId}`,
+    executionRunId,
     outcome: input.target.engine
       .run(engine.signal)
-      .catch((error: unknown) => ({ status: "failed", error: String(error) })),
+      .catch((error: unknown) => ({ status: "failed", error: String(error) }))
+      .finally(unregister),
   }
 })
+// The tree stop as the run-control kernel runs it for a `job` child.
+const mockStopRunTree = jest.fn(async (runId: string) => {
+  const { stopRegisteredRun } = jest.requireActual<typeof import("@/lib/execution/run-stops")>(
+    "@/lib/execution/run-stops"
+  )
+  return { stopped: await stopRegisteredRun(runId), descendantsStopped: 0 }
+})
+jest.mock("@/lib/execution/run-control", () => ({
+  stopRunTree: (runId: string) => mockStopRunTree(runId),
+}))
 jest.mock("@/lib/execution/launch-child-run", () => ({
   launchChildRun: (...a: unknown[]) => mockLaunchChildRun(...(a as [MockLaunchInput])),
 }))
@@ -399,6 +417,27 @@ describe("runPluginAgentStreamed", () => {
     await running
     run.cancel()
     await run.result.catch(() => undefined)
+    expect(seenSignal?.aborted).toBe(true)
+  })
+
+  it("cancel() after launch stops the run's tree through its registered stop", async () => {
+    let started!: () => void
+    const running = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    let seenSignal: AbortSignal | undefined
+    mockExecute.mockImplementation(async (_p, cfg) => {
+      seenSignal = cfg?.abortSignal
+      started()
+      await new Promise((resolve) => cfg?.abortSignal?.addEventListener("abort", resolve))
+      throw new Error("aborted")
+    })
+    const run = runPluginAgentStreamed("hi", {}, { agentId: "stream-tree" })
+    await running
+    run.cancel()
+    await run.result.catch(() => undefined)
+    expect(mockStopRunTree).toHaveBeenCalledWith("execution:job:stream-tree")
+    // The registered stop is the Job Center's cancel, whose abort reached the run.
     expect(seenSignal?.aborted).toBe(true)
   })
 

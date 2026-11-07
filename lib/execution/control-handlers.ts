@@ -28,6 +28,7 @@ import {
 } from "./run-retry-registry"
 import { currentDelegationAttempts, recordDelegationRetry } from "./delegation"
 import { isLiveRunStatus } from "./run-status"
+import { hasRunStop, stopRegisteredRun } from "./run-stops"
 
 /**
  * The action exists in the vocabulary but this run kind cannot perform it.
@@ -627,22 +628,24 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
   }
 
   /**
-   * A background task can be stopped and inspected, and nothing else. There is
-   * no live input lane to steer and no coordinator to pause — `allowedActions`
-   * already reflects that, so anything other than `stop` arriving here is a
-   * caller bypassing the projection, not a user pressing a real button.
+   * A child run (`execution:job:`) can be stopped and inspected, and nothing
+   * else. There is no live input lane to steer and no coordinator to pause —
+   * `allowedActions` already reflects that, so anything other than `stop`
+   * arriving here is a caller bypassing the projection, not a user pressing a
+   * real button.
+   *
+   * The stop is whatever its launcher registered for the run's engine
+   * (`run-stops.ts`): a dispatched subagent's cancellation (outbox intent
+   * first), a Job Center agent's cancel, an external agent's session abort, a
+   * caller engine's signal. Awaited, so an accepted stop is one whose intent
+   * is already recorded.
    */
   const job: RunControlHandler = async (command) => {
     if (command.action === "open_details") return
     if (command.action !== "stop") throw new UnsupportedForKindError(command.action, "job")
-    const run = await getExecutionRun(command.runId)
-    if (!run) throw new Error("Background task is not known to this process")
-    const { cancelRendererBackgroundRun } =
-      await import("@/lib/background-tasks/renderer-subagent-registry")
-    // `sourceId` is the background journal's own runId — the execution run id
-    // is a projection and the registry has never heard of it.
-    if (!cancelRendererBackgroundRun(run.sourceId)) {
-      throw new Error("Background task is not active in this process")
+    if (!hasRunStop(command.runId)) throw new Error("Child run is not active in this process")
+    if (!(await stopRegisteredRun(command.runId, "execution_run_stopped"))) {
+      throw new Error("Child run could not be stopped")
     }
   }
 

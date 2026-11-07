@@ -8,6 +8,8 @@ import {
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
 import { reduceRunEvents } from "./run-reducer"
+import { flattenTree, readRunSubtree } from "./run-tree"
+import { hasRunStop, stopRegisteredRun } from "./run-stops"
 import { safeToolActivityMetadata } from "./run-activity"
 import { getRunRetryHandler } from "./run-retry-registry"
 import { validateSquadReviewDecision } from "./squad-review-decision"
@@ -120,6 +122,135 @@ export function registerRunControlHandler(
   return () => {
     if (handlers.get(kind) === handler) handlers.delete(kind)
   }
+}
+
+/**
+ * The actor on a stop no person pressed: a Squad cancelling its delegation, a
+ * model cancelling the subagent it dispatched, a chat card's Stop. It
+ * authorizes nothing: `stopRunTree` runs inside the process that owns the
+ * runs and never passes the control gate, whose `operatorIds` it is not in.
+ */
+export const RUNTIME_STOP_ACTOR: ExecutionRunInitiator = Object.freeze({
+  platformIdentityId: "cognia:runtime",
+})
+
+function stopCommand(
+  run: ExecutionRun,
+  idempotencyKey: string,
+  actor: ExecutionRunInitiator
+): RunControlCommand {
+  return {
+    runId: run.id,
+    action: "stop",
+    idempotencyKey,
+    expectedRevision: run.currentRevision,
+    actor,
+  }
+}
+
+/**
+ * Stop one run of a tree. A child whose launcher registered a stop in this
+ * process is stopped through it directly, which is all the `job` handler does
+ * too, so a tree stop works wherever the child runs, with or without the
+ * control handlers installed. Anything else goes to its kind's handler.
+ * `false` when nothing here can stop it.
+ */
+async function stopOneRun(
+  run: ExecutionRun,
+  idempotencyKey: string,
+  actor: ExecutionRunInitiator
+): Promise<boolean> {
+  if (hasRunStop(run.id)) {
+    if (!(await stopRegisteredRun(run.id, "execution_run_stopped"))) {
+      throw new Error("Child run could not be stopped")
+    }
+    return true
+  }
+  const handler = handlers.get(run.kind)
+  if (!handler) return false
+  await handler(stopCommand(run, idempotencyKey, actor))
+  return true
+}
+
+/**
+ * Stop every live run under `rootRunId` (ADR-0252 §2: stopping a tree stops
+ * all of it), parents before their children so a stopping parent does not
+ * launch more. Each run is stopped through its own kind's handler, as a
+ * delegation forwards to its children: the authorization that matters
+ * happened on the root. A run that settled meanwhile is skipped, and one that
+ * refuses does not keep the rest running. Resolves how many it reached.
+ */
+async function stopLiveDescendants(
+  rootRunId: string,
+  idempotencyKey: string,
+  actor: ExecutionRunInitiator
+): Promise<number> {
+  const tree = await readRunSubtree(rootRunId)
+  if (!tree) return 0
+  let stopped = 0
+  for (const node of flattenTree(tree.children)) {
+    const current = await getExecutionRun(node.item.id).catch(() => undefined)
+    if (!current || TERMINAL_RUN_STATUSES.has(current.status)) continue
+    try {
+      if (await stopOneRun(current, `${idempotencyKey}:tree:${current.id}`, actor)) stopped += 1
+    } catch {
+      // Best-effort per run, like a delegation's own forwarding.
+    }
+  }
+  return stopped
+}
+
+export interface RunTreeStopResult {
+  /** The root's own handler accepted the stop. */
+  stopped: boolean
+  /** Why the root was not stopped. Its live descendants are stopped regardless. */
+  reason?: "run_not_found" | "terminal" | "unsupported" | "unsupported_for_kind" | "source_rejected"
+  /** Live runs under the root that a stop reached. */
+  descendantsStopped: number
+}
+
+/**
+ * The one stop for a run this process owns (ADR-0252 §3): the root (a child
+ * through the stop its launcher registered, anything else through its kind's
+ * handler: a Squad through its control, a workflow through its cancel), then
+ * every live run under it. A settled root still has its live descendants stopped: a
+ * child that outlived its parent is exactly what a tree stop is for.
+ *
+ * In-process, without the control gate: the caller is the run's owner (a
+ * Squad's delegation, the conversation that dispatched a subagent, a chat
+ * card on this host). An operator's press from a surface that may sit on
+ * another host goes through `executeRunControlCommand`, whose `stop` cascades
+ * the same way.
+ */
+export async function stopRunTree(
+  runId: string,
+  options: { actor?: ExecutionRunInitiator; idempotencyKey?: string } = {}
+): Promise<RunTreeStopResult> {
+  const actor = options.actor ?? RUNTIME_STOP_ACTOR
+  const idempotencyKey = options.idempotencyKey ?? `stop-tree:${runId}:${Date.now()}`
+  const run = await getExecutionRun(runId).catch(() => undefined)
+  if (!run) {
+    // A child this process is running still stops when its row cannot be
+    // read; with no row there is no tree to walk under it.
+    if (!hasRunStop(runId))
+      return { stopped: false, reason: "run_not_found", descendantsStopped: 0 }
+    const stopped = await stopRegisteredRun(runId, "execution_run_stopped")
+    return { stopped, ...(stopped ? {} : { reason: "source_rejected" }), descendantsStopped: 0 }
+  }
+  let result: Omit<RunTreeStopResult, "descendantsStopped">
+  if (TERMINAL_RUN_STATUSES.has(run.status)) {
+    result = { stopped: false, reason: "terminal" }
+  } else {
+    try {
+      result = (await stopOneRun(run, idempotencyKey, actor))
+        ? { stopped: true }
+        : { stopped: false, reason: "unsupported" }
+    } catch (error) {
+      result = { stopped: false, reason: handlerRefusalReason(error) }
+    }
+  }
+  const descendantsStopped = await stopLiveDescendants(run.id, idempotencyKey, actor).catch(() => 0)
+  return { ...result, descendantsStopped }
 }
 
 export async function createRunInterrupt(
@@ -465,6 +596,11 @@ async function executeRunControlCommandUnlocked(
   let outcome: void | RunControlHandlerOutcome
   try {
     outcome = await handler(command)
+    // Stopping a run stops the tree under it. A child that refuses does not
+    // undo the stop the person asked for.
+    if (command.action === "stop") {
+      await stopLiveDescendants(run.id, command.idempotencyKey, command.actor).catch(() => 0)
+    }
   } catch (error) {
     // A handler that refuses because the KIND cannot do this action says so,
     // instead of every throw collapsing into a generic engine refusal the user

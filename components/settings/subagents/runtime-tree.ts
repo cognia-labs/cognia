@@ -8,10 +8,11 @@
  *
  * `components/chat/message-parts/subagent-tree.tsx` renders the same hierarchy
  * for the chat transcript, but consumes message *parts*; this operates on the
- * store's `SubAgent` records. The nesting rule is shared, the input type is
- * not, so only the rule is reused here.
+ * store's `SubAgent` records. The nesting rule is shared (`buildTree` in
+ * `lib/execution/run-tree.ts`), the input type is not.
  */
 
+import { buildTree, type TreeNode } from "@/lib/execution/run-tree"
 import type { SubAgent, SubAgentStatus } from "@/types/agent/sub-agent"
 
 export interface RuntimeNode {
@@ -52,45 +53,21 @@ function createdTime(run: SubAgent): number {
  * Build the forest. A run whose parent is not in the set becomes a root rather
  * than disappearing — the registry is ephemeral and a parent may already have
  * been cleared, and silently dropping its children would under-report what ran.
+ * The nesting is the run tree's one rule (`buildTree`), which also breaks a
+ * parent cycle so each run is placed once.
  */
 export function buildRuntimeTree(runs: readonly SubAgent[]): RuntimeNode[] {
-  const byId = new Map(runs.map((r) => [r.id, r]))
-  const childrenOf = new Map<string, SubAgent[]>()
-  const roots: SubAgent[] = []
-
-  for (const run of runs) {
-    const parentId = run.parentSubagentId
-    if (parentId && parentId !== run.id && byId.has(parentId)) {
-      const bucket = childrenOf.get(parentId)
-      if (bucket) bucket.push(run)
-      else childrenOf.set(parentId, [run])
-    } else {
-      roots.push(run)
-    }
-  }
-
-  // A parent cycle would otherwise recurse forever; each id is placed once.
-  const placed = new Set<string>()
-
-  const toNode = (run: SubAgent, depth: number): RuntimeNode => {
-    placed.add(run.id)
-    const kids = (childrenOf.get(run.id) ?? [])
-      .filter((child) => !placed.has(child.id))
-      .sort((a, b) => createdTime(a) - createdTime(b))
-    return { run, depth, children: kids.map((child) => toNode(child, depth + 1)) }
-  }
-
-  const forest = roots
-    .sort((a, b) => activityTime(b) - activityTime(a))
-    .filter((r) => !placed.has(r.id))
-    .map((r) => toNode(r, 0))
-
-  // Anything stranded by a cycle still gets surfaced, at the root.
-  for (const run of runs) {
-    if (!placed.has(run.id)) forest.push(toNode(run, 0))
-  }
-
-  return forest
+  const toNode = (node: TreeNode<SubAgent>): RuntimeNode => ({
+    run: node.item,
+    depth: node.depth,
+    children: node.children.map(toNode),
+  })
+  return buildTree(runs, {
+    id: (run) => run.id,
+    parent: (run) => run.parentSubagentId,
+    compare: (a, b) => createdTime(a) - createdTime(b),
+    compareRoots: (a, b) => activityTime(b) - activityTime(a),
+  }).map(toNode)
 }
 
 /** Flatten depth-first — the order the rows render in. */

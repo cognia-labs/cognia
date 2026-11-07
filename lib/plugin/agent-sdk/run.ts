@@ -18,6 +18,7 @@ import type {
   AgentTool,
 } from "@/lib/ai/agent/agent-executor"
 import { getBackgroundAgentManager } from "@/lib/ai/agent/background-agent-manager"
+import { hasRunStop } from "@/lib/execution/run-stops"
 import { createPluginAgentRun } from "./stream"
 import { runInputGuardrails, runOutputGuardrails } from "./guardrails"
 import { resolveContextContributions } from "./context-providers"
@@ -278,7 +279,9 @@ async function runAsChildRun<T>(
   agentId: string,
   meta: RunPluginAgentMeta,
   signal: AbortSignal,
-  body: (runSignal: AbortSignal) => Promise<T>
+  body: (runSignal: AbortSignal) => Promise<T>,
+  /** Told the child's run id once its engine has started. */
+  onLaunched?: (executionRunId: string) => void
 ): Promise<T> {
   const { launchChildRun } = await import("@/lib/execution/launch-child-run")
   let value: { result: T } | undefined
@@ -289,6 +292,11 @@ async function runAsChildRun<T>(
     childId: agentId,
     surface: "plugin",
     signal,
+    // A run-control stop cancels the Job Center entry, as its own Cancel
+    // does; that abort reaches this run through `signal`.
+    stop: () => {
+      getBackgroundAgentManager().cancelAgent(agentId)
+    },
     target: {
       kind: "agent",
       label,
@@ -312,6 +320,7 @@ async function runAsChildRun<T>(
       `Plugin agent run could not start (${launched.reason}${launched.detail ? `: ${launched.detail}` : ""})`
     )
   }
+  onLaunched?.(launched.executionRunId)
   const settled = await launched.outcome
   if (thrown) throw thrown.error
   if (value) return value.result
@@ -389,37 +398,58 @@ export function runPluginAgentStreamed(
     ? AbortSignal.any([options.abortSignal, managedSignal])
     : managedSignal
 
-  const controller = createPluginAgentRun(agentId, () => manager.cancelAgent(agentId))
+  // Once launched, the stream's cancel is the one tree stop: this run and
+  // every run under it. Before that, the manager's cancel aborts it at once,
+  // so nothing starts.
+  let launchedRunId: string | undefined
+  const controller = createPluginAgentRun(agentId, () => {
+    const runId = launchedRunId
+    if (!runId || !hasRunStop(runId)) {
+      manager.cancelAgent(agentId)
+      return
+    }
+    void import("@/lib/execution/run-control")
+      .then(({ stopRunTree }) => stopRunTree(runId))
+      .catch(() => manager.cancelAgent(agentId))
+  })
 
   void (async () => {
     try {
-      const withId = await runAsChildRun(agentId, meta, signal, async (runSignal) => {
-        await runInputGuardrails(prompt, options.guardrails, runSignal)
-        const opts = await withContextContributions(prompt, options, meta.pluginId)
-        const result = await executeWithRobustness(
-          prompt,
-          opts,
-          runSignal,
-          { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
-          (event) => {
-            // The plugin agent stream surfaces only text/tool events — capture-only
-            // events (thinking-delta, usage, compact) have no PluginAgentStreamEvent
-            // counterpart, so they're dropped here.
-            if (
-              event.type === "text-delta" ||
-              event.type === "tool-call" ||
-              event.type === "tool-result"
-            ) {
-              controller.push(event)
-            }
-          },
-          false
-        )
-        const withId = { ...result, agentId }
-        await runOutputGuardrails(prompt, result.text, options.guardrails, runSignal)
-        fireStopHook(options, withId, runSignal)
-        return withId
-      })
+      const withId = await runAsChildRun(
+        agentId,
+        meta,
+        signal,
+        async (runSignal) => {
+          await runInputGuardrails(prompt, options.guardrails, runSignal)
+          const opts = await withContextContributions(prompt, options, meta.pluginId)
+          const result = await executeWithRobustness(
+            prompt,
+            opts,
+            runSignal,
+            { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
+            (event) => {
+              // The plugin agent stream surfaces only text/tool events — capture-only
+              // events (thinking-delta, usage, compact) have no PluginAgentStreamEvent
+              // counterpart, so they're dropped here.
+              if (
+                event.type === "text-delta" ||
+                event.type === "tool-call" ||
+                event.type === "tool-result"
+              ) {
+                controller.push(event)
+              }
+            },
+            false
+          )
+          const withId = { ...result, agentId }
+          await runOutputGuardrails(prompt, result.text, options.guardrails, runSignal)
+          fireStopHook(options, withId, runSignal)
+          return withId
+        },
+        (executionRunId) => {
+          launchedRunId = executionRunId
+        }
+      )
       manager.finishAgent(agentId, {
         text: withId.text,
         ...(withId.usage ? { usage: withId.usage } : {}),

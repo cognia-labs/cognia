@@ -25,10 +25,15 @@ const registerAgentMock = jest.fn((id: string, _options: unknown) => {
   return controller.signal
 })
 const finishAgentMock = jest.fn((id: string, _outcome: unknown) => registered.delete(id))
+const cancelAgentMock = jest.fn((id: string) => {
+  registered.get(id)?.abort()
+  return true
+})
 jest.mock("@/lib/ai/agent/background-agent-manager", () => ({
   getBackgroundAgentManager: () => ({
     registerAgent: (id: string, options: unknown) => registerAgentMock(id, options),
     finishAgent: (id: string, outcome: unknown) => finishAgentMock(id, outcome),
+    cancelAgent: (id: string) => cancelAgentMock(id),
   }),
 }))
 
@@ -37,6 +42,7 @@ jest.mock("@/lib/modules/ports", () => ({
   loadPort: async (id: string) => ports.get(id) ?? null,
 }))
 
+import { hasRunStop, stopRegisteredRun } from "./run-stops"
 import {
   __resetAgentTraceEmitterForTesting,
   setAgentTraceWriter,
@@ -106,6 +112,7 @@ beforeEach(async () => {
   placeDispatchedAgentMock.mockImplementation(async () => undefined)
   registerAgentMock.mockClear()
   finishAgentMock.mockClear()
+  cancelAgentMock.mockClear()
   registered.clear()
   ports.clear()
   __resetAgentTraceEmitterForTesting()
@@ -673,6 +680,81 @@ describe("launchChildRun: squad", () => {
     await expect(launched.outcome).resolves.toEqual({ status: "cancelled" })
     expect(stop).toHaveBeenCalled()
     expect(await getDb().executionRuns.where("kind").equals("job").count()).toBe(0)
+  })
+})
+
+describe("launchChildRun: run-control stop", () => {
+  const hanging = (signal: AbortSignal) =>
+    new Promise<ChildRunOutcome>((resolve) =>
+      signal.addEventListener("abort", () => resolve({ status: "cancelled" }))
+    )
+
+  it("registers the engine's stop under the child's run id while it runs", async () => {
+    let seen: AbortSignal | undefined
+    const launched = started(
+      await launchChildRun({
+        target: {
+          kind: "agent",
+          label: "coder",
+          engine: {
+            run: (signal) => {
+              seen = signal
+              return hanging(signal)
+            },
+          },
+        },
+        title: "coder",
+      })
+    )
+    expect(hasRunStop(launched.executionRunId)).toBe(true)
+    await expect(stopRegisteredRun(launched.executionRunId)).resolves.toBe(true)
+    await expect(launched.outcome).resolves.toEqual({ status: "cancelled" })
+    expect(seen?.aborted).toBe(true)
+    // Gone once the engine settled: a later stop finds nothing.
+    expect(hasRunStop(launched.executionRunId)).toBe(false)
+  })
+
+  it("registers the caller's own stop when it hands one", async () => {
+    const controller = new AbortController()
+    const persisted: string[] = []
+    const launched = started(
+      await launchChildRun({
+        target: { kind: "agent", label: "coder", engine: { run: hanging } },
+        title: "coder",
+        signal: controller.signal,
+        stop: async () => {
+          persisted.push("intent")
+          controller.abort()
+        },
+      })
+    )
+    await stopRegisteredRun(launched.executionRunId)
+    expect(persisted).toEqual(["intent"])
+    await expect(launched.outcome).resolves.toEqual({ status: "cancelled" })
+  })
+
+  it("cancels a Job Center child through the manager, whose abort stops the engine", async () => {
+    executeAgentMock.mockImplementation(
+      (_prompt: string, config: { abortSignal: AbortSignal }) =>
+        new Promise((_resolve, reject) =>
+          config.abortSignal.addEventListener("abort", () => reject(new Error("aborted")))
+        )
+    )
+    const launched = started(
+      await launchChildRun({
+        target: {
+          kind: "agent",
+          prompt: "p",
+          background: { label: "team-delegation:d3", kind: "team-delegation" },
+        },
+        title: "t",
+        childId: "bg_3",
+      })
+    )
+    await stopRegisteredRun(launched.executionRunId)
+    expect(cancelAgentMock).toHaveBeenCalledWith("bg_3")
+    await expect(launched.outcome).resolves.toMatchObject({ status: "cancelled" })
+    expect((await getExecutionRun(launched.executionRunId))?.status).toBe("cancelled")
   })
 })
 

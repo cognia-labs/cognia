@@ -12,10 +12,8 @@ jest.mock("@/hooks/data", () => ({
 }))
 
 const collectRendererBackgroundResult = jest.fn()
-const cancelRendererBackgroundRunAndWait = jest.fn()
 jest.mock("@/lib/background-tasks/renderer-subagent-registry", () => ({
   collectRendererBackgroundResult: (runId: string) => collectRendererBackgroundResult(runId),
-  cancelRendererBackgroundRunAndWait: (runId: string) => cancelRendererBackgroundRunAndWait(runId),
 }))
 
 const clearSettledBackgroundTasks = jest.fn()
@@ -28,13 +26,13 @@ const redispatchBackgroundRun = jest.fn()
 jest.mock("@/lib/background-tasks/redispatch", () => ({
   redispatchBackgroundRun: (...args: unknown[]) => redispatchBackgroundRun(...args),
 }))
+// Every row cancels through the one stop (`cancel-subagent.ts`): a subagent
+// through `cancelSubagentRun`, any other child through `cancelChildRun`.
 const cancelSubagentRun = jest.fn()
+const cancelChildRun = jest.fn()
 jest.mock("@/lib/claude/agents/cancel-subagent", () => ({
   cancelSubagentRun: (...args: unknown[]) => cancelSubagentRun(...args),
-}))
-const managerCancelAgent = jest.fn()
-jest.mock("@/lib/ai/agent/background-agent-manager", () => ({
-  getBackgroundAgentManager: () => ({ cancelAgent: (id: string) => managerCancelAgent(id) }),
+  cancelChildRun: (...args: unknown[]) => cancelChildRun(...args),
 }))
 let liveSubAgent: Record<string, unknown> | undefined
 jest.mock("@/stores/agent/subagent-runtime-store", () => ({
@@ -107,7 +105,6 @@ beforeEach(() => {
   pushMock.mockReset()
   useClientLiveQuery.mockReset()
   collectRendererBackgroundResult.mockReset()
-  cancelRendererBackgroundRunAndWait.mockReset()
   clearSettledBackgroundTasks.mockReset()
   toastSuccess.mockReset()
   toastError.mockReset()
@@ -134,14 +131,13 @@ beforeEach(() => {
     toolsAvailable: false,
     runId: "run-done",
   })
-  cancelRendererBackgroundRunAndWait.mockReturnValue(true)
   clearSettledBackgroundTasks.mockResolvedValue(undefined)
   redispatchBackgroundRun.mockReset()
   redispatchBackgroundRun.mockResolvedValue({ ok: true, runId: "new-run" })
   cancelSubagentRun.mockReset()
   cancelSubagentRun.mockResolvedValue(true)
-  managerCancelAgent.mockReset()
-  managerCancelAgent.mockReturnValue(true)
+  cancelChildRun.mockReset()
+  cancelChildRun.mockResolvedValue(true)
   liveSubAgent = undefined
   runningCount = 0
   selectTask.mockReset()
@@ -260,7 +256,7 @@ it("collects, cancels, and clears settled renderer tasks", async () => {
 
   await user.click(screen.getByTestId("status-job-center"))
   await user.click(screen.getByTestId("job-cancel-run-live"))
-  expect(cancelRendererBackgroundRunAndWait).toHaveBeenCalledWith("run-live")
+  expect(cancelSubagentRun).toHaveBeenCalledWith("run-live", { backgrounded: true })
   expect(toastSuccess).toHaveBeenCalled()
 
   await user.click(screen.getByRole("tab", { name: /History/ }))
@@ -295,7 +291,7 @@ it("surfaces collect and cancel failure states", async () => {
     row({ runId: "run-error", subagentId: "qa", status: "error", error: "stored error" }),
     row({ runId: "run-throw", subagentId: "ops", status: "done", resultText: "throws" }),
   ])
-  cancelRendererBackgroundRunAndWait.mockReturnValueOnce(false)
+  cancelSubagentRun.mockResolvedValueOnce(false)
   collectRendererBackgroundResult
     .mockResolvedValueOnce(undefined)
     .mockResolvedValueOnce({
@@ -481,11 +477,11 @@ it("routes cancellation by kind and mode", async () => {
   await user.click(screen.getByTestId("status-job-center"))
 
   await user.click(screen.getByTestId("job-cancel-run-fg"))
-  expect(cancelSubagentRun).toHaveBeenCalledWith("run-fg")
-  expect(cancelRendererBackgroundRunAndWait).not.toHaveBeenCalled()
+  expect(cancelSubagentRun).toHaveBeenCalledWith("run-fg", { backgrounded: false })
+  expect(cancelChildRun).not.toHaveBeenCalled()
 
   await user.click(screen.getByTestId("job-cancel-run-plugin"))
-  expect(managerCancelAgent).toHaveBeenCalledWith("run-plugin")
+  expect(cancelChildRun).toHaveBeenCalledWith("run-plugin")
 })
 
 it("hides Collect for foreground rows and shows kind/mode badges", async () => {
@@ -622,7 +618,7 @@ describe("polling is scoped to the sheet", () => {
 
 it("waits for durable cancellation before showing a success toast", async () => {
   let resolve!: (value: boolean) => void
-  cancelRendererBackgroundRunAndWait.mockReturnValueOnce(
+  cancelSubagentRun.mockReturnValueOnce(
     new Promise<boolean>((done) => {
       resolve = done
     })
