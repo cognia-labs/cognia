@@ -301,3 +301,42 @@ describe("decideProbeToolCall", () => {
     })
   })
 })
+
+const DECLARED_MODULE_TOOLS = [
+  {
+    module: "crate",
+    stage: "stable",
+    declare: {
+      crate_list: { consent: "allow", effect: "read" },
+      crate_tidy: { consent: "ask", effect: "write" },
+      Crate_Send: { consent: "per-call", effect: "outbound", cancellable: false },
+      crate_unlock: { consent: "ask", effect: "read", secrets: true },
+    },
+    load: async () => ({}),
+  },
+]
+
+/** Load `load()` against a registry in which a module declares tools (ADR-0250 §14 amendment). */
+async function withDeclaredModuleTools<T>(load: () => Promise<T>): Promise<T> {
+  let loaded!: T
+  await jest.isolateModulesAsync(async () => {
+    jest.doMock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: DECLARED_MODULE_TOOLS }))
+    loaded = await load()
+  })
+  jest.dontMock("@/lib/modules/generated/tools")
+  return loaded
+}
+
+describe("module-contributed tools", () => {
+  it("denies a probe every declared tool that is not read-only, under both spellings", async () => {
+    const { PROBE_DENIED_TOOLS: denied } = await withDeclaredModuleTools(
+      () => import("./probe-policy")
+    )
+    for (const name of ["crate_tidy", "Crate_Send"]) {
+      expect(denied).toContain(name)
+      expect(denied).toContain(`mcp__cognia-plugin-tools__${name}`)
+    }
+    expect(denied).not.toContain("crate_list")
+    expect(denied).not.toContain("crate_unlock")
+  })
+})

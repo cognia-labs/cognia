@@ -27,6 +27,9 @@
  * - `capabilityContributions` produce `AgentCapabilityGrantV1` only
  *   (ADR-0198), applied stage by stage by the resolver chain. There is no
  *   ordering number and no `SendOptions` patching.
+ * - `tools` declare each tool's consent, effect and dispatch order as data,
+ *   and load the family that offers and runs them; the kernel derives the
+ *   ruleset and every name list from the declaration (ADR-0250 §14 amendment).
  * - `tables` only declare ownership; the schema stays in `CURRENT_SCHEMA`.
  *
  * The registries generated from these fields arrive registry by registry
@@ -34,9 +37,10 @@
  * `nav`, `runtimes`, `slots` and `effects` (M2) are generated
  * (`scripts/build/gen-module-registry.mjs`) and read by their shells and hosts;
  * `provides` and `requires` (M3) are read by `lib/modules/ports.ts` from the
- * host registry, and `prompts` and `capabilityContributions` (M3) by the
- * prompt catalog and the send resolver, each from its own generated registry. Every other field is shape-checked by the gate and read by
- * nothing yet.
+ * host registry, and `prompts`, `capabilityContributions` and `tools` (M3) by
+ * the prompt catalog, the send resolver and the tool dispatcher, each from its
+ * own generated registry. Every other field is shape-checked by the gate and
+ * read by nothing yet.
  */
 
 import type { ComponentType } from "react"
@@ -50,6 +54,7 @@ import type { GlobalSearchProvider } from "@/lib/global-search/types"
 import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import type { PromptDefinitionV1, PromptResolutionContext } from "@/lib/prompts/types"
 import type { Goal } from "@/types/goal"
+import type { Project } from "@/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type {
   CanonicalExtensionPoint,
@@ -245,6 +250,116 @@ export interface ModuleCapabilityContributionsEntry {
   load: LazyModule<ModuleCapabilityContributionsModule>
 }
 
+/**
+ * How a contributed tool is consented to (ADR-0250 §14 amendment). The kernel
+ * turns it into the lowest ruleset layer: `"allow"` and `"ask"` as named,
+ * `"per-call"` as `"ask"` plus `requiresApproval` on the manifest entry, which
+ * with the sidecar's `PER_CALL_PLUGIN_TOOL_NAMES` means no remembered grant,
+ * mode or auto-answer skips the question.
+ */
+export type ModuleToolConsent = "allow" | "ask" | "per-call"
+
+/**
+ * What a call does. `"read"` reads; `"write"` changes the app's or the
+ * person's own state; `"outbound"` gives or sends something to someone else
+ * (the `outbound` permission class, the risk classifier's `external-send`, the
+ * outbound policy engine's review). A harness probe is denied every tool that
+ * is not `"read"`.
+ */
+export type ModuleToolEffect = "read" | "write" | "outbound"
+
+/** One tool as its manifest declares it: data, read without loading the module. */
+export interface ModuleToolDeclaration {
+  consent: ModuleToolConsent
+  effect: ModuleToolEffect
+  /** The call reads or writes stored credentials: the `secrets` permission class. */
+  secrets?: true
+  /**
+   * The runner does not honour `ToolCallContext.signal`, so a cancelled call
+   * may keep going. Live voice does not advertise such a tool.
+   */
+  cancellable?: false
+  /**
+   * Dispatched after the plugin registry rather than before it: the tool is a
+   * stand-in for one a plugin normally registers under the same name.
+   */
+  precedence?: "fallback"
+}
+
+/** Where a run is being resolved, for a family that offers different tools per host. */
+export type ToolSurfaceHost = "desktop" | "web" | "mobile" | "cli" | "brain"
+
+/** What a tool family reads to decide what to offer a run. Read-only, no `SendOptions`. */
+export interface ToolSurfaceContext extends CapabilityContributionContext {
+  host: ToolSurfaceHost
+  /** The run's workspace (`resolveSessionWorkspace`), not whichever one is on screen. */
+  activeProject: Readonly<Project> | null
+}
+
+/** One tool a family offers a run, as the model sees it. */
+export interface ModuleToolEntry {
+  /** A name the module's `tools.declare` lists. */
+  name: string
+  description: string
+  jsonSchema: Record<string, unknown>
+  /** Relay round-trip ceiling (ms); omitted means the sidecar's default. */
+  timeoutMs?: number
+  /** Parameters whose values are filesystem paths, for workspace confinement. */
+  pathParams?: readonly string[]
+  /** Filesystem access class, for workspace confinement. */
+  access?: "read" | "write"
+}
+
+/** What a family offers one run. */
+export interface ToolSurface {
+  tools: readonly ModuleToolEntry[]
+  /**
+   * Session-stable guidance for these tools, appended to the system prompt
+   * inside the cached prefix. Text that changes from turn to turn does not
+   * belong here.
+   */
+  instructions?: string
+}
+
+/** The call a family's `run` executes. */
+export interface ToolCallContext {
+  /** The calling conversation; never whatever happens to be open. */
+  sessionId: string
+  toolUseId: string
+  turnId?: string
+  executionRunId: string
+  signal?: AbortSignal
+  sandboxRuntimeRef?: string
+  /** What an outbound delivery made during the call names as its authority (ADR-0239). */
+  outboundAuthorization: { kind: "tool-call"; sessionId: string; toolUseId: string }
+}
+
+/**
+ * A module's in-process tools (ADR-0250 §14 amendment). `surface` decides
+ * which declared tools a run is offered, or `null` for none; the kernel
+ * derives their consent tier from the declaration of exactly those, so a tier
+ * is never offered apart from its tools. `run` executes one call and reports
+ * a failure in its result rather than throwing.
+ */
+export interface ModuleToolFamily {
+  surface(ctx: ToolSurfaceContext): ToolSurface | null | Promise<ToolSurface | null>
+  run(name: string, args: Record<string, unknown>, call: ToolCallContext): Promise<unknown>
+}
+
+/** What a module's `tools.load` resolves to. */
+export interface ModuleToolsModule {
+  toolFamily: ModuleToolFamily
+}
+
+/** One module's tools as `lib/modules/generated/tools.ts` lists them. */
+export interface ModuleToolsEntry {
+  /** The contributing module, and its stage: an `experimental` one offers nothing. */
+  module: string
+  stage: ModuleStage
+  declare: Readonly<Record<string, ModuleToolDeclaration>>
+  load: LazyModule<ModuleToolsModule>
+}
+
 /** What a port provision's `load` resolves to: the implementation, as `port`. */
 export interface ModulePortModule {
   port: unknown
@@ -338,8 +453,14 @@ export interface HostModuleManifest {
   }
   /** `CORE_TABLE_NAMES` tables this module owns; its files access each, and no other module claims one (G4). */
   tables?: readonly string[]
-  /** Built-in tools together with their permission rules. */
-  tools?: ModuleContribution
+  /**
+   * In-process tools: each one's consent and effect as data, and the family
+   * that offers and runs them (ADR-0250 §14 amendment).
+   */
+  tools?: {
+    declare: Readonly<Record<string, ModuleToolDeclaration>>
+    load: LazyModule<ModuleToolsModule>
+  }
   /** Grants applied to every run the module customises (ADR-0198 amendment). */
   capabilityContributions?: { load: LazyModule<ModuleCapabilityContributionsModule> }
   /** Scheduler executors declared together with their task sources. */

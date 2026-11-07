@@ -111,3 +111,38 @@ describe("mayWriteToGithub (ADR-0239 phase 2)", () => {
     expect(mayBeOutboundCall("Read")).toBe(false)
   })
 })
+
+const DECLARED_MODULE_TOOLS = [
+  {
+    module: "crate",
+    stage: "stable",
+    declare: {
+      crate_list: { consent: "allow", effect: "read" },
+      crate_tidy: { consent: "ask", effect: "write" },
+      Crate_Send: { consent: "per-call", effect: "outbound", cancellable: false },
+      crate_unlock: { consent: "ask", effect: "read", secrets: true },
+    },
+    load: async () => ({}),
+  },
+]
+
+/** Load `load()` against a registry in which a module declares tools (ADR-0250 §14 amendment). */
+async function withDeclaredModuleTools<T>(load: () => Promise<T>): Promise<T> {
+  let loaded!: T
+  await jest.isolateModulesAsync(async () => {
+    jest.doMock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: DECLARED_MODULE_TOOLS }))
+    loaded = await load()
+  })
+  jest.dontMock("@/lib/modules/generated/tools")
+  return loaded
+}
+
+describe("module-contributed tools", () => {
+  it("counts a tool declared outbound in both sets, by its normalized name", async () => {
+    const outbound = await withDeclaredModuleTools(() => import("./outbound-tools"))
+    expect(outbound.RISK_EXTERNAL_SEND_TOOL_IDS.has("crate_send")).toBe(true)
+    expect(outbound.isOutboundToolId("mcp__cognia-plugin-tools__Crate_Send")).toBe(true)
+    expect(outbound.isOutboundToolId("crate_tidy")).toBe(false)
+    expect(outbound.isOutboundToolId("crate_list")).toBe(false)
+  })
+})

@@ -54,7 +54,9 @@
  *                  `components/modules/generated/ui.ts` equal what
  *                  scripts/build/gen-module-registry.mjs writes, so nothing is
  *                  hand-added to them. Since M1, for settings sections, search
- *                  providers and slash commands.
+ *                  providers and slash commands. Since M3, a tool name is
+ *                  declared by one module, and every per-call tool is on the
+ *                  sidecar's `PER_CALL_PLUGIN_TOOL_NAMES`.
  *   G6 cycles      `dependsOn` across manifests is acyclic (blocking), and the
  *                  largest strongly connected component of the lib/ owner
  *                  graph may only shrink.
@@ -243,6 +245,7 @@ function collectManifests(ctx, files) {
             ...provisionExportErrors(ctx, file, value),
             ...promptsExportErrors(ctx, file, value),
             ...contributionsExportErrors(ctx, file, value),
+            ...toolsExportErrors(ctx, file, value),
           ]
         : []
     for (const message of [...readErrors, ...shapeErrors, ...lazyErrors, ...adapterErrors])
@@ -278,6 +281,16 @@ function collectManifests(ctx, files) {
     ),
     ...duplicateContributions(host, (manifest) => manifest.nav, "id", "navigation entry "),
     ...duplicateContributions(host, (manifest) => manifest.runtimes, "name", "runtime "),
+    // A tool name routes to one module: the dispatcher looks it up by name.
+    ...duplicateContributions(
+      host,
+      (manifest) =>
+        manifest.tools?.declare && typeof manifest.tools.declare === "object"
+          ? Object.keys(manifest.tools.declare).map((name) => ({ name }))
+          : [],
+      "name",
+      "tool "
+    ),
     // One provider per port: `lib/modules/ports.ts` refuses two at runtime. A
     // collection port takes one member from every providing module.
     ...duplicateContributions(
@@ -397,6 +410,79 @@ function contributionsExportErrors(ctx, file, manifest) {
   return target && !exportsName(ctx.ast(target), "contributions")
     ? [`capabilityContributions: ${target} exports no \`contributions\``]
     : []
+}
+
+/** A module's `tools.load` file exports its family as `toolFamily`. */
+function toolsExportErrors(ctx, file, manifest) {
+  const spec = manifest.tools?.load?.$lazy
+  if (typeof spec !== "string") return []
+  const target = resolveModule(ctx, spec, file)
+  return target && !exportsName(ctx.ast(target), "toolFamily")
+    ? [`tools: ${target} exports no \`toolFamily\``]
+    : []
+}
+
+/** The sidecar's per-call list, which no manifest can extend (ADR-0250 §14 amendment). */
+export const SIDECAR_PER_CALL_FILE = "sidecar/src/policy/permission/ladder.ts"
+const SIDECAR_PER_CALL_LIST = "PER_CALL_PLUGIN_TOOL_NAMES"
+
+/**
+ * The string literals of `export const <name> … = new Set([ … ])` in `file`,
+ * or undefined when the file or the set is absent (a fixture tree) or holds
+ * anything but string literals.
+ */
+export function constStringSet(ctx, file, name) {
+  if (!ctx.exists(file)) return undefined
+  const sourceFile = ctx.ast(file)
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== name) continue
+      const init = declaration.initializer && unwrap(declaration.initializer)
+      if (
+        !init ||
+        !ts.isNewExpression(init) ||
+        !ts.isIdentifier(init.expression) ||
+        init.expression.text !== "Set" ||
+        init.arguments?.length !== 1
+      )
+        return undefined
+      const list = unwrap(init.arguments[0])
+      if (!ts.isArrayLiteralExpression(list)) return undefined
+      const names = list.elements.map((element) =>
+        ts.isStringLiteralLike(element) ? element.text : null
+      )
+      return names.includes(null) ? undefined : new Set(names)
+    }
+  }
+  return undefined
+}
+
+/**
+ * G5: every tool a manifest declares `consent: "per-call"` is in the sidecar's
+ * `PER_CALL_PLUGIN_TOOL_NAMES`. The sidecar is a separate project and cannot
+ * read the registry, and it trusts a manifest entry's `requiresApproval` only
+ * for names on that list, so a per-call tool missing from it would be asked
+ * once and then remembered.
+ */
+export function perCallToolErrors(ctx, manifests) {
+  const declared = []
+  for (const [, { file, manifest }] of manifests.host) {
+    const declare = manifest.tools?.declare
+    if (!declare || typeof declare !== "object") continue
+    for (const [name, declaration] of Object.entries(declare))
+      if (declaration?.consent === "per-call") declared.push({ file, name })
+  }
+  if (declared.length === 0 || !ctx.exists(SIDECAR_PER_CALL_FILE)) return []
+  const listed = constStringSet(ctx, SIDECAR_PER_CALL_FILE, SIDECAR_PER_CALL_LIST)
+  if (!listed)
+    return [`${SIDECAR_PER_CALL_FILE}: ${SIDECAR_PER_CALL_LIST} is not a Set of string literals`]
+  return declared
+    .filter(({ name }) => !listed.has(name))
+    .map(
+      ({ file, name }) =>
+        `${file}: per-call tool ${name} is missing from ${SIDECAR_PER_CALL_LIST} (${SIDECAR_PER_CALL_FILE})`
+    )
 }
 
 /** Whether a file defines a code-owned prompt: it calls `definePrompt(…)`. */
@@ -1141,6 +1227,7 @@ export function computeModules(ctx) {
     ...registryErrors(ctx, manifests),
     ...portErrors(ctx, manifests, owners),
     ...promptContributionErrors(ctx, manifests, owners),
+    ...perCallToolErrors(ctx, manifests),
   ]
 
   for (const [id, files] of moduleApi)

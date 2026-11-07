@@ -4,6 +4,9 @@
  */
 
 import { hostCommandExecution } from "@/lib/plugin/core/invocation-identity"
+import { MODULE_TOOLS } from "@/lib/modules/generated/tools"
+import type { ModuleToolsEntry } from "@/lib/modules/manifest-types"
+import { __resetContributedToolsForTests } from "./tool-contributions"
 import {
   __setPluginToolResolverForTesting,
   __setWebToolDepsForTesting,
@@ -183,6 +186,8 @@ jest.mock("./acceptance-builtin-tools", () => {
   }
 })
 const mockRunWorkingSetTool = jest.fn()
+// Module-contributed tools (ADR-0250 §14 amendment): none unless a test adds one.
+jest.mock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: [] }))
 jest.mock("./working-set-tool", () => ({
   isWorkingSetTool: (name: string) => name === "working_set",
   runWorkingSetTool: (...args: unknown[]) => mockRunWorkingSetTool(...args),
@@ -1927,5 +1932,73 @@ describe("attachment built-in relay", () => {
     )
     expect(response.error).toBe("Plugin tool result blocked by the PII redaction gate")
     expect(response.result).toBeUndefined()
+  })
+})
+
+describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
+  // The instances the dispatcher imported: other suites here reset the module registry.
+  const registry = () => MODULE_TOOLS as ModuleToolsEntry[]
+  const run = jest.fn()
+
+  beforeEach(() => {
+    __resetContributedToolsForTests()
+    run.mockReset().mockResolvedValue({ ok: true, from: "module" })
+    registry().push({
+      module: "crate",
+      stage: "stable",
+      declare: {
+        crate_list: { consent: "allow", effect: "read" },
+        crate_stand_in: { consent: "allow", effect: "read", precedence: "fallback" },
+      },
+      load: async () => ({ toolFamily: { surface: () => null, run } }),
+    })
+  })
+  afterEach(() => {
+    registry().length = 0
+    __setPluginToolResolverForTesting(null)
+  })
+
+  it("runs a declared tool through its module ahead of the plugin registry", async () => {
+    const execute = jest.fn().mockResolvedValue({ from: "plugin" })
+    __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "shadow", execute }) })
+    const response = await handlePluginToolExec(
+      makeRequest({ name: "crate_list", args: { limit: 2 }, turnId: "turn-1" })
+    )
+    expect(response.result).toEqual({ ok: true, from: "module" })
+    expect(execute).not.toHaveBeenCalled()
+    expect(run).toHaveBeenCalledWith(
+      "crate_list",
+      { limit: 2 },
+      expect.objectContaining({
+        sessionId: "session-1",
+        toolUseId: "use-1",
+        turnId: "turn-1",
+        executionRunId: expect.any(String),
+        outboundAuthorization: { kind: "tool-call", sessionId: "session-1", toolUseId: "use-1" },
+      })
+    )
+  })
+
+  it("lets the plugin registry answer a fallback tool first", async () => {
+    const execute = jest.fn().mockResolvedValue({ from: "plugin" })
+    __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "workflow", execute }) })
+    const served = await handlePluginToolExec(makeRequest({ name: "crate_stand_in" }))
+    expect(served.result).toEqual({ from: "plugin" })
+    expect(run).not.toHaveBeenCalled()
+
+    __setPluginToolResolverForTesting({ getTool: () => undefined })
+    const fallback = await handlePluginToolExec(makeRequest({ name: "crate_stand_in" }))
+    expect(fallback.result).toEqual({ ok: true, from: "module" })
+  })
+
+  it("holds a module's result to the PII gate and reports a thrown run as an error", async () => {
+    run.mockResolvedValueOnce({ text: "Contact alice@example.com" })
+    expect((await handlePluginToolExec(makeRequest({ name: "crate_list" }))).error).toMatch(
+      /PII redaction gate/
+    )
+    run.mockRejectedValueOnce(new Error("crate host unavailable"))
+    expect((await handlePluginToolExec(makeRequest({ name: "crate_list" }))).error).toContain(
+      "crate host unavailable"
+    )
   })
 })

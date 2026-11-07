@@ -20,9 +20,15 @@
  * engine's shadow mode shows how many runs it touches. The gap is
  * {@link OUTBOUND_TOOLS_OUTSIDE_RISK}, pinned by `outbound-tools.test.ts`.
  *
- * Leaf module: no imports, so the classifier, the permission options and the
- * engine can all depend on it.
+ * A module-contributed tool declared `effect: "outbound"` (ADR-0250 §14
+ * amendment) is counted by both, from its declaration.
+ *
+ * Near-leaf module: it reads only the module tool declarations, which are
+ * data, so the classifier, the permission options and the engine can all
+ * depend on it.
  */
+
+import { moduleToolNamesWhere } from "@/lib/modules/tool-declarations"
 
 /**
  * A tool id reduced to the name the tool was registered under: the last `__`
@@ -49,6 +55,9 @@ export const RISK_EXTERNAL_SEND_TOOL_IDS: ReadonlySet<string> = new Set([
   // tools only read or take access away, and are deliberately absent.
   "filespace_share",
   "filespace_enable_webdav",
+  ...moduleToolNamesWhere((declaration) => declaration.effect === "outbound").map((name) =>
+    name.toLowerCase()
+  ),
 ])
 
 /**

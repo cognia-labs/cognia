@@ -20,6 +20,7 @@
 import type { PermissionClass, SandboxAttestationV1, SendOptions } from "@cognia/agent-config-types"
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 import { resolvePermissionProfile } from "@cognia/agent-config-types"
+import { moduleToolPermissionClasses } from "@/lib/modules/tool-declarations"
 
 import { UNATTENDED_SIDECAR_APPROVAL_TTL_MS } from "./unattended-park"
 
@@ -90,7 +91,11 @@ export function classesForPluginTool(
   tool: Pick<PluginTool, "name" | "access">,
   declaredPermissions: readonly string[]
 ): PermissionClass[] {
-  const classes = new Set<PermissionClass>(HOST_TOOL_CLASSES[tool.name] ?? [])
+  const classes = new Set<PermissionClass>([
+    ...(HOST_TOOL_CLASSES[tool.name] ?? []),
+    // A module-contributed tool's classes follow from its declared effect.
+    ...moduleToolPermissionClasses(tool.name),
+  ])
   const has = (set: ReadonlySet<string>) => declaredPermissions.some((p) => set.has(p))
   if (has(SECRET_PLUGIN_PERMISSIONS)) classes.add("secrets")
   if (tool.access !== "read") {

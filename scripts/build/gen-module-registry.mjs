@@ -6,7 +6,8 @@
  * writes `lib/modules/generated/host.ts`, one runtime registry per host
  * (`lib/modules/generated/{brain,desktop,mobile}.ts`), the prompt catalog's
  * registry (`lib/modules/generated/prompts.ts`), the send resolver's
- * (`lib/modules/generated/capabilities.ts`) and
+ * (`lib/modules/generated/capabilities.ts`), the tool registry
+ * (`lib/modules/generated/tools.ts`) and
  * `components/modules/generated/ui.ts` (see
  * `scripts/gates/lib/module-manifests.mjs` for their shape). Both files
  * are gitignored, so every entry point that compiles the app runs this first:

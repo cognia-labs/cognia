@@ -32,6 +32,7 @@
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 import { splitCommandSegments } from "@/lib/claude/permissions/command-parse"
 import { classifyCommand, normalizePosixPath } from "@/lib/claude/permissions/command-safety"
+import { moduleToolNamesWhere } from "@/lib/modules/tool-declarations"
 import type {
   HarnessIsolationKind,
   HarnessProbePolicy,
@@ -284,6 +285,8 @@ const DENIED_PLUGIN_TOOLS = [
   "perform_action",
   "click_text",
   "SlashCommand",
+  // Every module-contributed tool that is not declared read-only.
+  ...moduleToolNamesWhere((declaration) => declaration.effect !== "read"),
 ]
 
 /** The A2UI bridge call that injects inbound IM input. */

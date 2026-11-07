@@ -29,6 +29,7 @@ import {
   PROJECT_COORDINATOR_TOOL_NAMES,
   PROJECT_THREAD_TOOL_NAMES,
 } from "@/lib/claude/project-coordinator-builtin-tools"
+import { moduleToolNamesWhere } from "@/lib/modules/tool-declarations"
 
 export interface LiveVoiceRuntimeDeps {
   listMessages(sessionId: string): Promise<UIMessage[]>
@@ -94,6 +95,8 @@ const NON_CANCELLABLE_LIVE_VOICE_TOOLS = new Set([
   "team_propose_decision",
   ...Object.values(PROJECT_COORDINATOR_TOOL_NAMES),
   ...Object.values(PROJECT_THREAD_TOOL_NAMES),
+  // Module-contributed tools whose runner does not honour the signal.
+  ...moduleToolNamesWhere((declaration) => declaration.cancellable === false),
 ])
 
 function liveVoiceToolIsCancellable(entry: PluginToolEntry): boolean {

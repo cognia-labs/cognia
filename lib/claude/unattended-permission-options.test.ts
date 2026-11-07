@@ -97,3 +97,39 @@ describe("applyUnattendedPermissionProfile", () => {
     expect(opts.permissionProfile?.workspace).toBe("sandbox")
   })
 })
+
+const DECLARED_MODULE_TOOLS = [
+  {
+    module: "crate",
+    stage: "stable",
+    declare: {
+      crate_list: { consent: "allow", effect: "read" },
+      crate_tidy: { consent: "ask", effect: "write" },
+      Crate_Send: { consent: "per-call", effect: "outbound", cancellable: false },
+      crate_unlock: { consent: "ask", effect: "read", secrets: true },
+    },
+    load: async () => ({}),
+  },
+]
+
+/** Load `load()` against a registry in which a module declares tools (ADR-0250 §14 amendment). */
+async function withDeclaredModuleTools<T>(load: () => Promise<T>): Promise<T> {
+  let loaded!: T
+  await jest.isolateModulesAsync(async () => {
+    jest.doMock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: DECLARED_MODULE_TOOLS }))
+    loaded = await load()
+  })
+  jest.dontMock("@/lib/modules/generated/tools")
+  return loaded
+}
+
+describe("module-contributed tools", () => {
+  it("classes a declared tool from its effect and secrets, whatever its plugin declares", async () => {
+    const { classesForPluginTool: classes } = await withDeclaredModuleTools(
+      () => import("./unattended-permission-options")
+    )
+    expect(classes(tool("Crate_Send", "cognia-crate-builtin"), [])).toEqual(["outbound"])
+    expect(classes(tool("crate_unlock", "cognia-crate-builtin"), [])).toEqual(["secrets"])
+    expect(classes(tool("crate_list", "cognia-crate-builtin"), [])).toEqual([])
+  })
+})

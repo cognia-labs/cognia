@@ -130,14 +130,27 @@ export const GENERATED_RUNTIMES = {
 export const GENERATED_PROMPTS = "lib/modules/generated/prompts.ts"
 /** Every module's `capabilityContributions` file, lazily: the send resolver's only route to one. */
 export const GENERATED_CAPABILITIES = "lib/modules/generated/capabilities.ts"
+/**
+ * Every module's tool declarations as data, with a lazy import of its family:
+ * the send resolver's and the tool dispatcher's only route to one.
+ */
+export const GENERATED_TOOLS = "lib/modules/generated/tools.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
   GENERATED_PROMPTS,
   GENERATED_CAPABILITIES,
+  GENERATED_TOOLS,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
+
+/** Fields of `ModuleToolDeclaration`, and the values each takes. */
+export const TOOL_DECLARATION_FIELDS = ["consent", "effect", "secrets", "cancellable", "precedence"]
+export const TOOL_CONSENTS = ["allow", "ask", "per-call"]
+export const TOOL_EFFECTS = ["read", "write", "outbound"]
+/** A bare tool name as the model and the sidecar see it; `__` is the MCP separator. */
+const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
 
 const HOST_MANIFEST = /^lib\/([^/]+)\/module\.ts$/
 const UI_MANIFEST = /^components\/([^/]+)\/module\.ui\.ts$/
@@ -283,6 +296,41 @@ function unknownFields(entry, fields, at) {
   return Object.keys(entry)
     .filter((key) => !fields.includes(key))
     .map((key) => `${at}: unknown field "${key}"`)
+}
+
+/** `tools`: `{ declare, load }`, every declaration complete and nothing else in it. */
+export function toolsErrors(tools) {
+  if (!tools || typeof tools !== "object" || Array.isArray(tools))
+    return ["tools is { declare, load }"]
+  const errors = unknownFields(tools, ["declare", "load"], "tools")
+  if (!isLazy(tools.load)) errors.push('tools.load is a lazy entry `() => import("…")`')
+  const declare = tools.declare
+  if (!declare || typeof declare !== "object" || Array.isArray(declare)) {
+    errors.push("tools.declare maps each tool name to its declaration")
+    return errors
+  }
+  if (Object.keys(declare).length === 0) errors.push("tools.declare names at least one tool")
+  for (const [name, declaration] of Object.entries(declare)) {
+    const at = `tools.declare.${name}`
+    if (!TOOL_NAME.test(name) || name.includes("__"))
+      errors.push(`${at}: a tool name is a letter then letters, digits or single underscores`)
+    if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) {
+      errors.push(`${at} is { consent, effect }`)
+      continue
+    }
+    errors.push(...unknownFields(declaration, TOOL_DECLARATION_FIELDS, at))
+    if (!TOOL_CONSENTS.includes(declaration.consent))
+      errors.push(`${at}.consent is one of ${TOOL_CONSENTS.join(", ")}`)
+    if (!TOOL_EFFECTS.includes(declaration.effect))
+      errors.push(`${at}.effect is one of ${TOOL_EFFECTS.join(", ")}`)
+    if (declaration.secrets !== undefined && declaration.secrets !== true)
+      errors.push(`${at}.secrets is true or absent`)
+    if (declaration.cancellable !== undefined && declaration.cancellable !== false)
+      errors.push(`${at}.cancellable is false or absent`)
+    if (declaration.precedence !== undefined && declaration.precedence !== "fallback")
+      errors.push(`${at}.precedence is "fallback" or absent`)
+  }
+  return errors
 }
 
 function slashCommandErrors(commands) {
@@ -620,6 +668,7 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
       for (const key of Object.keys(contributions))
         if (key !== "load") errors.push(`capabilityContributions: unknown field "${key}"`)
   }
+  if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
   if (manifest.nav !== undefined) errors.push(...navErrors(manifest.nav, vocabulary))
@@ -800,6 +849,52 @@ export function lazyRegistryEntries(registry, modules) {
     }))
 }
 
+/** The modules that declare tools, in module id order, with their declarations. */
+export function toolEntries(modules) {
+  return [...modules]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .filter(({ value }) => typeof value?.tools?.load?.$lazy === "string")
+    .map(({ id, file, value }) => ({
+      module: id,
+      stage: value.stage,
+      declare: value.tools.declare ?? {},
+      load: adapterImport(file, value.tools.load.$lazy),
+    }))
+}
+
+/**
+ * The tool registry: each module's declarations as data, which the satellite
+ * lists and the dispatcher read without loading anything, and one lazy import
+ * of its family.
+ */
+function renderTools(modules) {
+  const rows = toolEntries(modules).map((entry) =>
+    [
+      "  {",
+      `    module: ${JSON.stringify(entry.module)},`,
+      `    stage: ${JSON.stringify(entry.stage)},`,
+      `    declare: ${JSON.stringify(entry.declare)},`,
+      `    load: () => import(${JSON.stringify(entry.load)}),`,
+      "  },",
+    ].join("\n")
+  )
+  return [
+    `${HEADER("lib/<id>/module.ts")}`,
+    "//",
+    "// Every module's `tools`: the declarations as data and a lazy import of the",
+    "// family, read by the send resolver and the tool dispatcher",
+    "// (`lib/claude/tool-contributions.ts`) and by the derived name lists",
+    "// (`lib/modules/tool-declarations.ts`).",
+    "",
+    'import type { ModuleToolsEntry } from "@/lib/modules/manifest-types"',
+    "",
+    rows.length
+      ? `export const MODULE_TOOLS: readonly ModuleToolsEntry[] = [\n${rows.join("\n")}\n]`
+      : "export const MODULE_TOOLS: readonly ModuleToolsEntry[] = []",
+    "",
+  ].join("\n")
+}
+
 /** The modules that contribute prompts, in module id order. */
 export function promptEntries(modules) {
   return lazyRegistryEntries("prompts", modules)
@@ -852,6 +947,7 @@ export function renderRegistries({ host, ui }) {
     ),
     [GENERATED_PROMPTS]: renderLazyRegistry("prompts", host),
     [GENERATED_CAPABILITIES]: renderLazyRegistry("capabilities", host),
+    [GENERATED_TOOLS]: renderTools(host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

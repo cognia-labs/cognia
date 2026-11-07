@@ -32,6 +32,8 @@ import {
   endOutboundToolExecution,
 } from "@/lib/policy/action-review/authorized-tool-calls"
 import { WORKFLOW_RUNNER_TOOL_NAME } from "@/lib/workflow/publish/runner-tool"
+import { findContributedTool, runContributedTool } from "./tool-contributions"
+import type { DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { ASK_USER_TOOL_NAME } from "./ask-user-tool"
 import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "./agents/dispatch-agent-tool"
 import { isWebBuiltinTool, runWebBuiltinTool, type WebToolRunDeps } from "./web-builtin-tools"
@@ -726,6 +728,26 @@ function toolCallAuthorization(request: PluginToolExecRequest) {
   }
 }
 
+/** Run a module-contributed tool (ADR-0250 §14 amendment) for this call. */
+async function runModuleToolCall(
+  tool: DeclaredModuleTool,
+  request: PluginToolExecRequest
+): Promise<unknown> {
+  const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+  return runContributedTool(tool, request.args, {
+    sessionId: request.sessionId,
+    toolUseId: request.toolUseId,
+    ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+    executionRunId:
+      toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
+    ...(request.abortSignal ? { signal: request.abortSignal } : {}),
+    ...(request.sandboxRuntimeRef !== undefined
+      ? { sandboxRuntimeRef: request.sandboxRuntimeRef }
+      : {}),
+    outboundAuthorization: toolCallAuthorization(request),
+  })
+}
+
 async function runPluginToolExec(
   request: PluginToolExecRequest,
   hostDeps: PluginToolExecHostDeps
@@ -737,6 +759,15 @@ async function runPluginToolExec(
   }
   try {
     request.abortSignal?.throwIfAborted()
+    // ── Module-contributed tools (ADR-0250 §14 amendment) ──────────────────
+    // Routed by declared name ahead of every built-in and the plugin
+    // registry, so a plugin cannot shadow one; a `precedence: "fallback"`
+    // tool waits until the registry has had its turn (below).
+    const contributed = findContributedTool(request.name)
+    if (contributed && contributed.declaration.precedence !== "fallback") {
+      const result = await runModuleToolCall(contributed, request)
+      return { ...baseResponse, result: assertSafePluginToolResult(result) }
+    }
     if (isKnowledgeBuiltinTool(request.name)) {
       const result = await runKnowledgeBuiltinTool(request.name, request.args, request)
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
@@ -1071,6 +1102,13 @@ async function runPluginToolExec(
           invocationProject.dispose()
         }
       }
+    }
+    // ── Module-contributed fallbacks ───────────────────────────────────
+    // A tool a plugin normally registers under the same name, which the
+    // registry did not resolve: run the module's own.
+    if (contributed) {
+      const result = await runModuleToolCall(contributed, request)
+      return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── Typed workflow runner fallback ─────────────────────────────────
     // Graph-bodied skills (`kind:"workflow"`) point the model at the shared

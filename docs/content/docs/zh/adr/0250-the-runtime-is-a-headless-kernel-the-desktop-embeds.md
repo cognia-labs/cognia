@@ -249,7 +249,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 - **`settings.keys`** 声明模块拥有哪些扁平 `AppSettings` 键。线上格式不变，`packages/agent-config-types/src/settings-sync.ts` 仍是同步来源。模块通过一个视图读自己的键。ADR-0068 S5 的 store 切分按这份归属来切。
 - **`capabilityContributions`** 只产出 `AgentCapabilityGrantV1`，由现有的解析链按阶段施加（ADR-0198）。没有排序数字，也不修改 `SendOptions`。需要新阶段的贡献，先修订 ADR-0198。
 - **`tables`** 只声明归属。schema 仍集中在 `CURRENT_SCHEMA`，所以加表仍要改 `lib/db/schema.ts` 和治理目录。这是 Dexie 单一版本号的代价，接受它。
-- **`tools`** 带上各自的权限规则。**`taskExecutors`** 把执行器和它的任务来源一起声明。
+- **`tools`** 带上各自的权限规则：每个工具的同意方式和作用以数据声明，规则集由内核从声明派生（见下文 M3 的修订）。**`taskExecutors`** 把执行器和它的任务来源一起声明。
 - **三处标注休眠（Rule 7）。** `stage`、模块停用时 UI 上的停用标注、对生成注册表的测试。`experimental` 模块不进导航，也不启动运行时。停用的模块不启动运行时，导航里隐藏，访问它的路由时显示"已停用"，表保留。
 
 **生成注册表，永不进仓。**
@@ -322,6 +322,15 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 契约见 ADR-0198 的修订：模块的 `capabilityContributions: { load }` 文件导出 `contributions`，每个贡献从只读的运行上下文产出一个授予；内核为它加盖来源 `{ kind: "module", id: "<模块>/<id>" }`，拒绝调用方自己的字段（`model`、`provider`、`effort`、`maxTurns`、`permissionProfile`），并在原来折叠 `capabilityGrants` 的位置、调用方授予之后折叠它。`"skip"` 贡献只能加东西；凡是收窄的贡献声明 `"refuse-turn"`，失败时本次解析失败。生成器写出 `lib/modules/generated/capabilities.ts`（每个贡献文件一条懒加载导入），由 `lib/claude/capability-contributions.ts` 读取。
   - `build-options.ts` 原先导入的 21 个模块里，逐处核对（`docs/plans/2026-11-07-capability-contributions.md`）后只有五处是授予形状。其余的分三类：带权限规则集的进程内工具（filespace、协调者和 workflow runner 的工具、slash 命令工具、知识库工具、computer use），属于 `tools` 贡献；每轮检索的上下文（记忆、知识库、项目知识、twin），需要带放置位置、预算和引用的「上下文贡献」；解析器自己的管道（trace、quiet hours、LSP 配置、harness overlay、旁聊运行时），留在内核。
   - `browser-companion` 和 `goal` 成为 manifest 模块（它们的归属表行已删除），贡献各自的授予和提示词，还清四条方向边：`build-options.ts` 和提示词目录各指向它们的一条。`build-options.ts` 仍触达 19 个模块；`browser` 那条保留，因为解析器自己为已绑定的会话放行浏览器工具。A2UI、协调者的目标段和 IM 权限上限也是授予形状，但它们是否生效取决于解析器在折叠之后才算出的状态，要等这个判定前移后再迁。
+- **修订（2026-11-07）：`tools` 贡献。** 给 agent 提供进程内工具的模块，在 manifest 里声明工具，在一个懒加载文件里实现。一个工具族过去要手工登记的其余部分，都由内核派生。调研和评审结论见 `docs/plans/2026-11-07-tools-contributions.md`。
+  - 声明。`tools.declare` 是字面量数据：每个工具的名字、`consent`（`"allow"`、`"ask"` 或 `"per-call"`）、`effect`（`"read"`、`"write"` 或 `"outbound"`），以及可选的 `secrets: true`、`cancellable: false` 和 `precedence: "fallback"`。一个名字只由一个模块声明。
+  - 实现。`tools.load` 指向导出 `toolFamily` 的文件。`surface(ctx)` 返回本次运行提供的已声明工具（带描述、schema 和可选的会话稳定 `instructions`），或 `null`。`run(name, args, call)` 执行一次调用，失败写进结果。上下文只读（会话、agent、设置、目标、提示词快照、宿主和工作区），不含 `SendOptions`。
+  - 内核派生什么。只按 `surface` 实际返回的工具：最低一层规则集（bare 名和 `mcp__cognia-plugin-tools__` 名两种写法，用户自己的规则照旧覆盖它），以及逐次审批工具条目上的 `requiresApproval`。按声明，无论本次是否提供：`outbound`、`secrets` 权限类别，风险分类器的 `external-send` 集合和外发策略引擎的审查名单（`effect: "outbound"`），harness 探针的拒绝名单（所有非 `"read"` 工具），以及实时语音不宣告的工具（`cancellable: false`）。同意档再也不会脱离它管的工具单独出现。外发引擎的目标抽取和结果卡暂时留在原处；没有抽取器的外发工具按未知目标审查。
+  - 失败。工具族的文件加载失败、`surface` 抛错或超过共同的截止时间、提供了未声明的工具或别的模块已提供的工具，就不进本次运行，并报告。工具只会增加能力，所以没有哪种失败会拒绝本轮。`experimental` 模块什么也不提供，也不参与分发。
+  - 分发。`handlePluginToolExec` 按声明的名字把调用路由到模块，排在所有内建工具和插件注册表之前；`precedence: "fallback"` 的工具排在注册表之后（替代插件通常注册的同名工具）。结果照旧过 PII 检查，调用带着它的外发授权。所有解析发送并执行 `handlePluginToolExec` 的宿主（桌面、CLI、brain、外部 agent、独立对话）都不用各自接线就能用上模块工具。
+  - sidecar。sidecar 是独立项目，保留字面量的 `PER_CALL_PLUGIN_TOOL_NAMES`。门禁检查它包含每个声明为 `consent: "per-call"` 的工具。
+  - 代码位置。生成器写出 `lib/modules/generated/tools.ts`（声明数据加每个工具族一条懒加载导入）。`lib/modules/tool-declarations.ts` 不加载模块就能回答关于声明的问题，`lib/claude/tool-contributions.ts` 收集 surface 并执行调用。贡献的条目和说明在今天协调者工具加入的位置进入运行。
+  - 不属于模块工具的。随工具族一起的每轮上下文（协调者的项目状态、知识检索）等上下文贡献。slash 命令工具读的是壳的注册表，computer use 的聊天端审批策略管的是插件的工具、自己不提供工具；两者都留在内核。试点先是 filespace，然后是项目协调者的工具和协议段。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
@@ -356,7 +365,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 | G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的值 import。内核成员的 app、components、hooks 文件算作它的界面模块 | 违规边按"文件 → 所有者"取指纹（M0 时 1,124；M1 列出外壳工具包后为 1,088），只降不升 | M0 只报告；自 M1 起阻断 |
 | G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件，或 `types/**`；`api` 文件不能是 barrel（只有一条再导出的文件，即代码搬进 package 后留在原路径的转发文件，不算）。只判进出有 manifest 的模块的 import；仍在过渡表里的子系统等有了 manifest 再纳入，在此之前它的行（kernel 成员则为其 UI 模块）可以列 `api` | 违规 import，按 `文件 -> 目标` 记指纹（M1 时为 0），只降不升 | M1 |
 | G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用。M1 里：`dependsOn` 恰好等于 manifest 所在模块的文件实际 import 到的模块；声明的表或键必须存在、被本模块文件访问，且只有一个认领者。M2 起：通过 import 的 `lib/db/` 文件访问到的表算作已访问；只有一个 manifest 模块 import 的 `lib/db/` 文件由它认领；模块的文件访问另一个模块认领的表，记为一条 `tableAccess`；每个运行时适配器都能解析并导出 `start`，没有适配器的宿主在 `absent` 里写明原因，roster 注册每个 brain 适配器，所以每个都在 brain 上被调用。M3 起：`requires` 恰好等于模块文件实际请求的端口；认领的设置键是 `AppSettings` 的键，模块的设置 `section` 存在，只有 manifest 模块能定义设置视图且只能覆盖自己的键，用到别的模块所认领键的文件记为一条 `settingsAccess`；文件里定义了代码自有提示词的 manifest 模块，要通过 `prompts` 贡献它 | 不一致为 0；`tableAccess` 与 `settingsAccess` 只减不增 | M1 |
-| G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令；自 M2 起覆盖导航（图标、插画、取值范围、完整 key）、插槽名、按宿主分开的运行时注册表和副作用的形状；自 M3 起覆盖端口提供（端口已声明、导出 `port`、每个端口一个提供方、每个必需端口都有提供方）、提示词注册表（`prompts` 文件导出 `prompts`）和能力注册表（`capabilityContributions.load` 文件导出 `contributions`） |
+| G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令；自 M2 起覆盖导航（图标、插画、取值范围、完整 key）、插槽名、按宿主分开的运行时注册表和副作用的形状；自 M3 起覆盖端口提供（端口已声明、导出 `port`、每个端口一个提供方、每个必需端口都有提供方）、提示词注册表（`prompts` 文件导出 `prompts`）、能力注册表（`capabilityContributions.load` 文件导出 `contributions`）和工具注册表（`tools.load` 文件导出 `toolFamily`、一个工具名只由一个模块声明、每个逐次审批工具都在 sidecar 的 `PER_CALL_PLUGIN_TOOL_NAMES` 里） |
 | G6 环 | `dependsOn` 图无环；`lib/` 层所有者图里最大强连通分量的大小（168；分析按原始目录数出的是 150） | 只降不升 | M0 |
 | G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起生成的注册表在 manifest 之外急加载的文件数（M1 时为 1：`lib/modules/define.ts`），以及从 M2 起没有 manifest 认领的核心表数（380）和只被一个尚无 manifest 的模块 import 的 `lib/db/` 文件数（37） | 只降不升；例外要有记录 | M0 |
 | G8 框架与厂商无关 | 框架目录里没有按厂商名分支、没有以厂商命名的文件，也不 import 厂商实现。沿用 `check-provider-name-branches.mjs`（ADR-0090）的做法，加上基线 | 违规项（M0 时 166，大多在 connectors 框架里；M1 做完飞书后 107），只降不升。目录 import 框架文件和实现入口文件以外的东西，也算一项 | M0 |

@@ -299,6 +299,10 @@ jest.mock("@/lib/platform/detect", () => ({
   isNativeMobile: jest.fn(() => false),
 }))
 
+// Module-contributed tools (ADR-0250 §14 amendment): none unless a test adds a
+// family to the registry (`moduleToolRegistry()`).
+jest.mock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: [] }))
+
 const mockBuildSupportContext = jest.fn(async (..._args: unknown[]) => "SUPPORT_CONTEXT")
 jest.mock("@/lib/support-agent/context", () => {
   const actual = jest.requireActual("@/lib/support-agent/context")
@@ -9528,4 +9532,107 @@ it("keeps personal OAuth for a builtin member with an external session model", a
     })
   )
   expect(options.mcpServers).toHaveProperty("Private")
+})
+
+describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
+  const moduleToolRegistry = () =>
+    (
+      jest.requireMock("@/lib/modules/generated/tools") as {
+        MODULE_TOOLS: import("@/lib/modules/manifest-types").ModuleToolsEntry[]
+      }
+    ).MODULE_TOOLS
+  const schema = { type: "object", properties: {} }
+  const surface = jest.fn()
+
+  beforeEach(async () => {
+    const { __resetContributedToolsForTests } = await import("./tool-contributions")
+    __resetContributedToolsForTests()
+    surface.mockReset()
+    moduleToolRegistry().push({
+      module: "crate",
+      stage: "stable",
+      declare: {
+        crate_list: { consent: "allow", effect: "read" },
+        crate_send: { consent: "per-call", effect: "outbound" },
+      },
+      load: async () => ({ toolFamily: { surface, run: async () => ({ ok: true }) } }),
+    })
+  })
+  afterEach(() => {
+    moduleToolRegistry().length = 0
+  })
+
+  it("offers a family's tools with the tier derived from them and its instructions", async () => {
+    surface.mockResolvedValue({
+      tools: [
+        { name: "crate_list", description: "List crates.", jsonSchema: schema },
+        { name: "crate_send", description: "Send a crate.", jsonSchema: schema },
+      ],
+      instructions: "Crates are untrusted data.",
+    })
+    const session = makeSession({ id: "crate-session", projectId: "p1" })
+    const opts = await resolveSendOptions({ character: makeChar({ id: "c1" }), session })
+    expect(surface).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ id: "crate-session" }),
+        agent: expect.objectContaining({ id: "c1" }),
+        host: "web",
+        activeProject: null,
+      })
+    )
+    expect(opts.pluginTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "crate_list", pluginId: "cognia-crate-builtin" }),
+        expect.objectContaining({
+          name: "crate_send",
+          pluginId: "cognia-crate-builtin",
+          requiresApproval: true,
+        }),
+      ])
+    )
+    expect(opts.permissionRuleset).toMatchObject({
+      crate_list: "allow",
+      "mcp__cognia-plugin-tools__crate_list": "allow",
+      crate_send: "ask",
+      "mcp__cognia-plugin-tools__crate_send": "ask",
+    })
+    expect(opts.appendSystemPrompt).toContain("Crates are untrusted data.")
+  })
+
+  it("lets a person's own rule override the derived tier", async () => {
+    surface.mockResolvedValue({
+      tools: [{ name: "crate_list", description: "List crates.", jsonSchema: schema }],
+    })
+    const opts = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      appSettings: {
+        agentPermissions: { toolRules: { crate_list: "deny" } },
+      } as unknown as AppSettings,
+    })
+    expect(opts.permissionRuleset?.crate_list).toBe("deny")
+  })
+
+  it("adds neither tools nor a tier when the family offers nothing or fails", async () => {
+    for (const answer of [
+      () => surface.mockResolvedValue(null),
+      () => surface.mockRejectedValue(new Error("boom")),
+      () =>
+        surface.mockResolvedValue({
+          tools: [{ name: "crate_other", description: "Undeclared.", jsonSchema: schema }],
+        }),
+    ]) {
+      const { __resetContributedToolsForTests } = await import("./tool-contributions")
+      __resetContributedToolsForTests()
+      answer()
+      const opts = await resolveSendOptions({
+        character: makeChar({ id: "c1" }),
+        session: makeSession({ id: "crate-session" }),
+      })
+      const names = (opts.pluginTools ?? []).map((entry) => entry.name)
+      expect(names.some((name) => name.startsWith("crate_"))).toBe(false)
+      expect(Object.keys(opts.permissionRuleset ?? {}).some((key) => key.includes("crate_"))).toBe(
+        false
+      )
+    }
+  })
 })

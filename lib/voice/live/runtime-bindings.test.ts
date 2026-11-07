@@ -219,3 +219,50 @@ describe("buildLiveVoiceRuntimeBindings", () => {
     expect(bindings.contextTranscript).toContain("User: who won")
   })
 })
+
+const DECLARED_MODULE_TOOLS = [
+  {
+    module: "crate",
+    stage: "stable",
+    declare: {
+      crate_list: { consent: "allow", effect: "read" },
+      crate_tidy: { consent: "ask", effect: "write" },
+      Crate_Send: { consent: "per-call", effect: "outbound", cancellable: false },
+      crate_unlock: { consent: "ask", effect: "read", secrets: true },
+    },
+    load: async () => ({}),
+  },
+]
+
+/** Load `load()` against a registry in which a module declares tools (ADR-0250 §14 amendment). */
+async function withDeclaredModuleTools<T>(load: () => Promise<T>): Promise<T> {
+  let loaded!: T
+  await jest.isolateModulesAsync(async () => {
+    jest.doMock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: DECLARED_MODULE_TOOLS }))
+    loaded = await load()
+  })
+  jest.dontMock("@/lib/modules/generated/tools")
+  return loaded
+}
+
+describe("module-contributed tools", () => {
+  it("does not advertise a module tool declared non-cancellable", async () => {
+    const { buildLiveVoiceRuntimeBindings: build } = await withDeclaredModuleTools(
+      () => import("./runtime-bindings")
+    )
+    const entry = (name: string) => ({
+      name,
+      description: name,
+      jsonSchema: {},
+      pluginId: "cognia-crate-builtin",
+    })
+    const bindings = await build(
+      options({
+        deps: deps({
+          buildPluginToolsManifest: jest.fn(async () => [entry("Crate_Send"), entry("crate_list")]),
+        }),
+      })
+    )
+    expect(bindings.tools?.map((tool) => tool.name)).toEqual(["crate_list"])
+  })
+})

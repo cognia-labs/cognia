@@ -25,6 +25,7 @@ import {
   tableAccesses,
   validateHostManifest,
   validateUiManifest,
+  SIDECAR_PER_CALL_FILE,
 } from "./check-modules.mjs"
 import {
   BRAIN_PROFILES,
@@ -32,11 +33,15 @@ import {
   GENERATED_CAPABILITIES,
   GENERATED_HOST,
   GENERATED_PROMPTS,
+  GENERATED_TOOLS,
   GENERATED_UI,
   MODULE_HOSTS,
   PORT_PROVISION_FIELDS,
   RUNTIME_BOOTS,
   RUNTIME_FIELDS,
+  TOOL_CONSENTS,
+  TOOL_DECLARATION_FIELDS,
+  TOOL_EFFECTS,
   declaredPorts,
   renderRegistries,
 } from "./lib/module-manifests.mjs"
@@ -146,6 +151,7 @@ test("the gate's field lists match lib/modules/manifest-types.ts", () => {
   assert.deepEqual([...RUNTIME_FIELDS].sort(), fields("ModuleRuntime"))
   assert.deepEqual([...EFFECT_FIELDS].sort(), fields("ModuleEffect"))
   assert.deepEqual([...PORT_PROVISION_FIELDS].sort(), fields("ModulePortProvision"))
+  assert.deepEqual([...TOOL_DECLARATION_FIELDS].sort(), fields("ModuleToolDeclaration"))
   // The string unions the runtime vocabulary mirrors.
   const union = (text, name) =>
     [
@@ -156,6 +162,8 @@ test("the gate's field lists match lib/modules/manifest-types.ts", () => {
       .map((match) => match[1])
       .sort()
   assert.deepEqual([...MODULE_HOSTS].sort(), union(source, "ModuleHost"))
+  assert.deepEqual([...TOOL_CONSENTS].sort(), union(source, "ModuleToolConsent"))
+  assert.deepEqual([...TOOL_EFFECTS].sort(), union(source, "ModuleToolEffect"))
   const headless = readFileSync(join(REPO_ROOT, "lib/headless/types.ts"), "utf8")
   assert.deepEqual([...BRAIN_PROFILES].sort(), union(headless, "HeadlessHost"))
   const boot = /type ModuleRuntimeBoot = Extract<[\s\S]*?>/.exec(source)[0]
@@ -1120,6 +1128,149 @@ test("the capability registry lazily imports each contributing module's file, by
   assert.ok(registry.includes('load: () => import("@/lib/goal/context-injector")'))
   assert.ok(registry.includes('load: () => import("@/lib/browser-companion/agent-grant")'))
   assert.ok(!registry.includes("crew"))
+})
+
+test("validateHostManifest wants tools as { declare, load } with complete declarations", () => {
+  const base = { id: "crate", kind: "module", stage: "beta" }
+  const errors = (tools) => validateHostManifest({ ...base, tools }, "crate")
+  assert.deepEqual(
+    errors({
+      declare: {
+        crate_list: { consent: "allow", effect: "read" },
+        crate_send: { consent: "per-call", effect: "outbound", cancellable: false },
+        crate_stand_in: { consent: "ask", effect: "write", secrets: true, precedence: "fallback" },
+      },
+      load: { $lazy: "./agent-tools" },
+    }),
+    []
+  )
+  assert.ok(errors("./agent-tools").includes("tools is { declare, load }"))
+  const broken = errors({
+    declare: {
+      mcp__x__y: { consent: "allow", effect: "read" },
+      "9lives": { consent: "allow", effect: "read" },
+      crate_a: { consent: "maybe", effect: "send", order: 1 },
+      crate_b: { consent: "allow", effect: "read", secrets: false, cancellable: true },
+      crate_c: { consent: "allow", effect: "read", precedence: "first" },
+      crate_d: "allow",
+    },
+    load: "./agent-tools",
+    rules: {},
+  })
+  for (const expected of [
+    'tools: unknown field "rules"',
+    'tools.load is a lazy entry `() => import("…")`',
+    "tools.declare.mcp__x__y: a tool name is a letter then letters, digits or single underscores",
+    "tools.declare.9lives: a tool name is a letter then letters, digits or single underscores",
+    'tools.declare.crate_a: unknown field "order"',
+    "tools.declare.crate_a.consent is one of allow, ask, per-call",
+    "tools.declare.crate_a.effect is one of read, write, outbound",
+    "tools.declare.crate_b.secrets is true or absent",
+    "tools.declare.crate_b.cancellable is false or absent",
+    'tools.declare.crate_c.precedence is "fallback" or absent',
+    "tools.declare.crate_d is { consent, effect }",
+  ])
+    assert.ok(broken.includes(expected), expected)
+  assert.ok(
+    errors({ declare: {}, load: { $lazy: "./t" } }).includes(
+      "tools.declare names at least one tool"
+    )
+  )
+})
+
+test("tools: the family file exports `toolFamily`, a name has one module, and per-call names are on the sidecar's list", () => {
+  const tools = (declare) =>
+    `tools: { declare: ${JSON.stringify(declare)}, load: () => import("./agent-tools") }`
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crate/module.ts": hostManifest(
+      "crate",
+      tools({
+        crate_list: { consent: "allow", effect: "read" },
+        crate_send: { consent: "per-call", effect: "outbound" },
+        crate_hand: { consent: "per-call", effect: "outbound" },
+      })
+    ),
+    "lib/crate/agent-tools.ts": "export const toolFamily = {}\n",
+    "lib/box/module.ts": hostManifest(
+      "box",
+      tools({ crate_list: { consent: "ask", effect: "read" } })
+    ),
+    "lib/box/agent-tools.ts": "export const family = {}\n",
+    [SIDECAR_PER_CALL_FILE]:
+      'export const PER_CALL_PLUGIN_TOOL_NAMES: ReadonlySet<string> = new Set([\n  "browser_fill_credential",\n  "crate_send",\n])\n',
+  })
+  const errors = result.errors.filter((error) => !error.startsWith("lib/modules/generated/"))
+  assert.ok(
+    errors.includes("lib/box/module.ts: tools: lib/box/agent-tools.ts exports no `toolFamily`")
+  )
+  assert.ok(
+    errors.some((error) => /tool crate_list is also contributed by "(box|crate)"/.test(error))
+  )
+  assert.ok(
+    errors.includes(
+      `lib/crate/module.ts: per-call tool crate_hand is missing from PER_CALL_PLUGIN_TOOL_NAMES (${SIDECAR_PER_CALL_FILE})`
+    )
+  )
+  assert.ok(!errors.some((error) => error.includes("crate_send is missing")))
+})
+
+test("tools: an unreadable sidecar list is an error, an absent one (a fixture) is not", () => {
+  const files = (sidecar) => ({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crate/module.ts": hostManifest(
+      "crate",
+      'tools: { declare: { crate_send: { consent: "per-call", effect: "outbound" } }, load: () => import("./agent-tools") }'
+    ),
+    "lib/crate/agent-tools.ts": "export const toolFamily = {}\n",
+    ...(sidecar ? { [SIDECAR_PER_CALL_FILE]: sidecar } : {}),
+  })
+  const own = (result) => result.errors.filter((error) => !/\/modules\/generated\//.test(error))
+  assert.deepEqual(own(run(files())), [])
+  assert.deepEqual(own(run(files("export const PER_CALL_PLUGIN_TOOL_NAMES = new Set(NAMES)\n"))), [
+    `${SIDECAR_PER_CALL_FILE}: PER_CALL_PLUGIN_TOOL_NAMES is not a Set of string literals`,
+  ])
+})
+
+test("the tool registry carries each module's declarations and lazily imports its family", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "filespace",
+        file: "lib/filespace/module.ts",
+        value: {
+          stage: "stable",
+          tools: {
+            declare: { filespace_list: { consent: "allow", effect: "read" } },
+            load: { $lazy: "./agent-tools" },
+          },
+        },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "coordinator",
+        file: "lib/coordinator/module.ts",
+        value: {
+          stage: "beta",
+          tools: {
+            declare: { spawn_thread: { consent: "allow", effect: "write" } },
+            load: { $lazy: "@/lib/coordinator/agent-tools" },
+          },
+        },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_TOOLS]
+  assert.match(registry, /export const MODULE_TOOLS: readonly ModuleToolsEntry\[\]/)
+  assert.ok(registry.indexOf('module: "coordinator"') < registry.indexOf('module: "filespace"'))
+  assert.ok(registry.includes('declare: {"filespace_list":{"consent":"allow","effect":"read"}},'))
+  assert.ok(registry.includes('load: () => import("@/lib/filespace/agent-tools")'))
+  assert.ok(registry.includes('load: () => import("@/lib/coordinator/agent-tools")'))
+  assert.ok(!registry.includes("crew"))
+  assert.ok(!files[GENERATED_HOST].includes("generated/tools"))
 })
 
 test("ports: a collection port takes a member from every module, and its framework asks without requires", () => {

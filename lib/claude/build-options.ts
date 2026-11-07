@@ -3237,6 +3237,19 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   })
   const { buildFilespaceToolRuleset } =
     await import("@/lib/claude/permissions/filespace-tool-rules")
+  // In-process tools feature modules contribute (ADR-0250 §14 amendment). One
+  // answer per family gates both its manifest entries below and the tier
+  // derived from their declarations here, so neither appears without the other.
+  const { collectContributedTools, toolSurfaceHost } = await import("./tool-contributions")
+  const contributedTools = await collectContributedTools({
+    session: session ?? null,
+    agent: character,
+    settings: appSettings ?? null,
+    activeGoal: ctx.activeGoal ?? null,
+    prompts: { snapshot: promptSnapshot, context: promptContext },
+    host: toolSurfaceHost(),
+    activeProject: ctx.activeProject ?? null,
+  })
   const mergedRuleset = mergeRulesets(
     editorWriteToolsSurfaced ? buildEditorToolRuleset() : undefined,
     sitesToolsSurfaced ? buildSiteToolRuleset() : undefined,
@@ -3251,6 +3264,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     filespaceTools.surfaced
       ? buildFilespaceToolRuleset({ sharing: filespaceTools.sharing })
       : undefined,
+    contributedTools.ruleset,
     commandRules && Object.keys(commandRules).length > 0 ? { Bash: commandRules } : undefined,
     toolRules
   )
@@ -4475,6 +4489,20 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     } catch (err) {
       loggers.app.warn("failed to append vector built-in tools", { error: String(err) })
     }
+  }
+  // Module-contributed tools (ADR-0250 §14 amendment): the entries and the
+  // session-stable instructions of the families that offered this run
+  // anything, gated on the same answer as their tier above.
+  if (contributedTools.tools.length > 0) {
+    const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
+    opts.pluginTools = [
+      ...(opts.pluginTools ?? []),
+      ...contributedTools.tools.filter((entry) => !existing.has(entry.name)),
+    ]
+    if (contributedTools.instructions.length > 0)
+      opts.appendSystemPrompt = [opts.appendSystemPrompt?.trim(), ...contributedTools.instructions]
+        .filter(Boolean)
+        .join("\n\n")
   }
   // Project coordination (ADR-0204): the coordinator's routing tools + per-turn
   // project status, or a thread's report tool. Same gate as the ruleset above.
