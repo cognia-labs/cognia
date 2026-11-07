@@ -31,7 +31,6 @@ export default defineHostModule({
     "review",
     "source-control",
     "task-workspace",
-    "tasks",
     "terminal",
     "workspace",
   ],

@@ -48,12 +48,10 @@ import {
   GlobeIcon,
   CornerUpLeftIcon,
   ListChecksIcon,
-  ListTodoIcon,
   PlusIcon,
   UsersIcon,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useLiveQuery } from "dexie-react-hooks"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -65,7 +63,6 @@ import {
   usePanelInputs,
   type PanelInputs,
 } from "@/hooks/context-workbench/use-panel-inputs"
-import { SIDECHAT_PANEL_ID } from "@/lib/tasks/spawn-task-core"
 import { selectVisibleMessages, useChatStore, useSessionMessages } from "@/stores/chat"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
 import { useContextWorkbenchStore } from "@/stores/context-workbench/context-workbench-store"
@@ -86,7 +83,7 @@ import { ArtifactPanelContent, type ArtifactPanelMode } from "./artifact-panel-c
 import { ArtifactList } from "./artifact-list"
 import {
   SESSION_ARTIFACT_LIST_PANEL_ID,
-  SESSION_TASKS_PANEL_ID,
+  SIDECHAT_PANEL_ID,
 } from "@/lib/artifacts/session-workbench-scope-key"
 import { ArtifactReviewView } from "./artifact-review-view"
 import { DockNewTabPage } from "./dock-new-tab-page"
@@ -118,9 +115,6 @@ import {
   TeamMembersPanel,
 } from "@/components/context-workbench/panels/team-members-panel"
 import { RunContextPanel } from "@/components/context-workbench/panels/run-context-panel"
-import { SessionTasksPanel } from "@/components/tasks/session-tasks-panel"
-import { useSessionOpenTaskCount } from "@/hooks/chat/use-session-tasks"
-import { listPlansBySession } from "@/lib/db/plans"
 import type {
   ContextPanelDefinition,
   ContextPanelMode,
@@ -787,11 +781,6 @@ function SessionNewTabRenderer({ inputs }: Inputs<SessionPanelInputs>) {
   )
 }
 
-function SessionPlanRenderer({ inputs }: Inputs<SessionPanelInputs>) {
-  const activeSessionId = usePanelInput(inputs, (input) => input.activeSessionId)
-  return activeSessionId ? <SessionTasksPanel sessionId={activeSessionId} /> : null
-}
-
 function SessionUsageRenderer({ inputs }: Inputs<SessionPanelInputs>) {
   const session = usePanelInput(inputs, (input) => input.session)
   const sessionMessages = useSessionMessages(session?.id ?? null)
@@ -843,17 +832,6 @@ export function useSessionSurfacePanels({
   const { requestedUrl, requestId, revealBrowserPanel } = useSideBrowserRequest(scopeKey)
   const sandboxDesktop = useSessionSandboxDesktop(activeSessionId)
   const hasSandboxDesktop = Boolean(sandboxDesktop)
-  // The Tasks panel claims its rail slot only when the session has a task list
-  // or a plan. Its badge counts plans awaiting a decision first, else the
-  // agent's open tasks.
-  const sessionPlans = useLiveQuery(
-    () => (activeSessionId ? listPlansBySession(activeSessionId) : Promise.resolve([])),
-    [activeSessionId]
-  )
-  const openTaskCount = useSessionOpenTaskCount(activeSessionId)
-  const hasTasks = (sessionPlans?.length ?? 0) > 0 || openTaskCount !== null
-  const pendingPlanCount = sessionPlans?.filter((p) => p.status === "awaiting_approval").length ?? 0
-  const tasksBadge = pendingPlanCount > 0 ? pendingPlanCount : (openTaskCount ?? 0)
   const inputs = usePanelInputs<SessionPanelInputs>({
     activeSessionId,
     session,
@@ -886,7 +864,6 @@ export function useSessionSurfacePanels({
       bestOfN: () => <DockBestOfNPanel key={key} inputs={inputs} />,
       comments: () => <SessionCommentsRenderer key={key} inputs={inputs} />,
       runContext: () => <DockRunContextPanel key={key} inputs={inputs} />,
-      plan: () => <SessionPlanRenderer key={key} inputs={inputs} />,
       sources: () => <SessionSourcesRenderer key={key} inputs={inputs} />,
       usage: () => <SessionUsageRenderer key={key} inputs={inputs} />,
       memory: () => <DockMemoryPanel key={key} inputs={inputs} />,
@@ -930,21 +907,9 @@ export function useSessionSurfacePanels({
         retention: "stateful",
         renderer: renderers.artifactList,
       },
-      {
-        // Tasks: the agent's current task list, the open plan (approval or
-        // live tracker) and earlier plans (the GUI counterpart of the CLI's
-        // `/plan list`). Sits beside the artifact list: both are the
-        // session's reviewable outputs. The id stays `plan` for stored layouts.
-        id: SESSION_TASKS_PANEL_ID,
-        activity: "review",
-        labelKey: "contextWorkbench.planPanel.title",
-        icon: ListTodoIcon,
-        order: 12,
-        appliesTo: (resource) => resource.kind === "session" && hasTasks,
-        retention: "stateful",
-        getBadge: () => tasksBadge,
-        renderer: renderers.plan,
-      },
+      // The Tasks panel (order 12) is the tasks module's, registered with the
+      // context panel registry from its UI manifest
+      // (`components/tasks/tasks-dock-panel.tsx`).
       {
         // Sidechat belongs on the session surface: it is an aside to the main
         // conversation, not a property of whichever artifact happens to be
@@ -1187,9 +1152,7 @@ export function useSessionSurfacePanels({
       hasProjectRoots,
       isTeamSession,
       newTab,
-      hasTasks,
       pendingRunLearningCount,
-      tasksBadge,
       renderers,
       sourceCount,
       uncommittedChangeCount,

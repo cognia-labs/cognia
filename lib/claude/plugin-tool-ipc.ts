@@ -62,11 +62,6 @@ import {
   type TemplateToolDeps,
 } from "./template-builtin-tools"
 import {
-  isSpawnTaskBuiltinTool,
-  runSpawnTaskBuiltinTool,
-  type SpawnTaskToolRunDeps,
-} from "./spawn-task-builtin-tools"
-import {
   isSessionPeerBuiltinTool,
   runSessionPeerBuiltinTool,
   type SessionPeerToolRunDeps,
@@ -168,22 +163,8 @@ let resolverOverride: PluginToolResolver | null = null
  */
 let webToolDepsOverride: (() => Promise<WebToolRunDeps> | WebToolRunDeps) | null = null
 
-let spawnTaskDepsOverride: (() => Promise<SpawnTaskToolRunDeps> | SpawnTaskToolRunDeps) | null =
-  null
 let sessionPeerDepsOverride:
   (() => Promise<SessionPeerToolRunDeps> | SessionPeerToolRunDeps) | null = null
-
-export function __setSpawnTaskToolDepsForTesting(
-  fn: (() => Promise<SpawnTaskToolRunDeps> | SpawnTaskToolRunDeps) | null
-): void {
-  spawnTaskDepsOverride = fn
-}
-
-async function resolveSpawnTaskToolDeps(): Promise<SpawnTaskToolRunDeps> {
-  if (spawnTaskDepsOverride) return spawnTaskDepsOverride()
-  const { dispatchSpawnTask } = await import("@/lib/tasks/spawn-task-dispatch")
-  return { gate: hasNoLeakingPiiDeep, dispatch: dispatchSpawnTask }
-}
 
 export function __setSessionPeerToolDepsForTesting(
   fn: (() => Promise<SessionPeerToolRunDeps> | SessionPeerToolRunDeps) | null
@@ -587,16 +568,6 @@ async function runPluginToolExec(
           ? AbortSignal.any([request.abortSignal, webDeps.signal])
           : (request.abortSignal ?? webDeps.signal)
       const result = await runWebBuiltinTool(request.name, request.args, { ...webDeps, signal })
-      return { ...baseResponse, result: assertSafePluginToolResult(result) }
-    }
-    // ── Promoted spawn_task built-in — stage a user-started sidechat ──────
-    if (isSpawnTaskBuiltinTool(request.name)) {
-      const result = await runSpawnTaskBuiltinTool(
-        request.name,
-        request.args,
-        await resolveSpawnTaskToolDeps(),
-        { sessionId: request.sessionId }
-      )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── Independent-session discovery and messaging ──────────────────────

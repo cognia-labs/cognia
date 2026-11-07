@@ -32,7 +32,6 @@ import {
   InfoIcon,
   LibraryIcon,
   ListChecksIcon,
-  ListTodoIcon,
   MessageSquareIcon,
   MessagesSquareIcon,
   MonitorPlayIcon,
@@ -66,7 +65,6 @@ export interface DockPanelMeta {
 export const DOCK_SESSION_PANEL_META: Readonly<Record<string, DockPanelMeta>> = {
   [NEW_TAB_PANEL_ID]: { labelKey: "contextWorkbench.newTab.title", icon: PlusIcon },
   artifacts: { labelKey: "artifacts.dock.browseArtifacts", icon: LibraryIcon },
-  plan: { labelKey: "contextWorkbench.planPanel.title", icon: ListTodoIcon },
   "session-sidechat": { labelKey: "contextWorkbench.sessionSidechat", icon: MessagesSquareIcon },
   "squad-context": { labelKey: "contextWorkbench.squadPanel.title", icon: AgentTeamIcon },
   "team-members": { labelKey: "contextWorkbench.teamMembersPanel.title", icon: UsersIcon },

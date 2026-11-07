@@ -1,5 +1,4 @@
 export const SPAWN_TASK_TOOL_NAME = "spawn_task"
-export const SIDECHAT_PANEL_ID = "session-sidechat"
 export type SpawnTaskMode = "aside" | "inherit"
 
 export interface SpawnedTaskBrief {

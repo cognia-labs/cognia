@@ -7610,7 +7610,7 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     // whichever runs first and the rest see `false`.
     const mobile = isNativeMobile as jest.Mock
     mobile.mockReturnValue(true)
-    // The artifact module's tool family reads the host from the detected
+    // The tasks and artifact modules' tool families read the host from the detected
     // platform (`toolSurfaceHost`).
     const platform = detectPlatform as jest.Mock
     platform.mockReturnValue("mobile")

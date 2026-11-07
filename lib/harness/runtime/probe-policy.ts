@@ -216,7 +216,6 @@ const DENIED_PLUGIN_TOOLS = [
   "team_post_to_chat",
   "team_delegate",
   "dispatch_agent",
-  "spawn_task",
   "send_session_message",
   "scheduler_create_task",
   "scheduler_update_task",

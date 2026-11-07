@@ -33,6 +33,12 @@ export const NEW_TAB_PANEL_ID = "new-tab"
  */
 export const SESSION_TASKS_PANEL_ID = "plan"
 
+/**
+ * The session surface's sidechat panel, where a `spawn_task` handoff lands
+ * (`lib/tasks/spawn-task-dispatch.ts`).
+ */
+export const SIDECHAT_PANEL_ID = "session-sidechat"
+
 export function sessionWorkbenchScopeKey(
   workbenchInstanceId: string,
   activeSessionId: string | null

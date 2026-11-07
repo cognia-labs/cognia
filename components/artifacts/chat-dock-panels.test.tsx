@@ -41,11 +41,9 @@ jest.mock("next-intl", () => ({
   useTranslations: (namespace: string) => (key: string) => `${namespace}.${key}`,
 }))
 
-// The plan panel reads the session's plans through a live query — controlled
-// here so the catalogue tests can exercise the panel's `appliesTo` gate.
-let sessionPlans: Array<{ id: string; status: string }> = []
+// Live queries the rendered panels make resolve to an empty list here.
 jest.mock("dexie-react-hooks", () => ({
-  useLiveQuery: () => sessionPlans,
+  useLiveQuery: () => [],
 }))
 // The sandbox desktop panel follows the session's resolved GUI binding.
 let mockSessionSandboxDesktop: {
@@ -64,17 +62,8 @@ jest.mock("@/components/settings/automation/sandbox-desktop-viewer", () => ({
   ),
 }))
 jest.mock("@/lib/db/plans", () => ({
-  listPlansBySession: jest.fn(async () => sessionPlans),
+  listPlansBySession: jest.fn(async () => []),
   listPlanEvents: jest.fn(async () => []),
-}))
-let mockOpenTaskCount: number | null = null
-jest.mock("@/hooks/chat/use-session-tasks", () => ({
-  useSessionOpenTaskCount: () => mockOpenTaskCount,
-}))
-jest.mock("@/components/tasks/session-tasks-panel", () => ({
-  SessionTasksPanel: ({ sessionId }: { sessionId: string }) => (
-    <div data-testid="plan-panel" data-session={sessionId} />
-  ),
 }))
 
 let workbenchLayouts: Record<string, unknown> = {}
@@ -458,7 +447,6 @@ beforeEach(() => {
   jumpToMessage = null
   browserRequestUrl = null
   browserRequestId = 0
-  sessionPlans = []
 })
 
 describe("useArtifactSurfacePanels", () => {
@@ -745,7 +733,6 @@ describe("useSessionSurfacePanels", () => {
     expect(panels.map((p) => [p.id, p.activity, p.order])).toEqual([
       ["new-tab", "preview-run", 0],
       ["artifacts", "review", 10],
-      ["plan", "review", 12],
       ["session-sidechat", "ai", 15],
       ["browser", "preview-run", 20],
       ["cloud-document", "preview-run", 21],
@@ -767,9 +754,8 @@ describe("useSessionSurfacePanels", () => {
   })
 
   it("claims session resources and nothing else", () => {
-    // Team members and plan are the conditional entries — see the tests below.
-    // Give the plan query a record so the panel claims its slot.
-    sessionPlans = [{ id: "p1", status: "completed" }]
+    // Team members is the conditional entry — see the tests below. The Tasks
+    // panel is the tasks module's (`components/tasks/tasks-dock-panel.tsx`).
     mockSessionSandboxDesktop = { connectionId: "c1", containerId: "k1", enabled: true }
     const panels = collect(
       useSessionSurfacePanels,
@@ -831,7 +817,6 @@ describe("useSessionSurfacePanels", () => {
   })
 
   it("names every session panel exactly as the dock's tab strip does", () => {
-    sessionPlans = [{ id: "p1", status: "completed" }]
     const panels = collect(
       useSessionSurfacePanels,
       sessionInput({ session: teamSession, newTab: true })
@@ -940,42 +925,6 @@ describe("useSessionSurfacePanels", () => {
     renderPanel(team, SESSION_RESOURCE)
     expect(screen.getByTestId("team-members-panel")).toHaveAttribute("data-team", "t1")
     expect(screen.getByTestId("team-members-panel")).toHaveAttribute("data-session", "s1")
-  })
-
-  it("claims a rail slot for tasks only when the session has a plan or a task list", () => {
-    sessionPlans = []
-    const noPlan = panelById(collect(useSessionSurfacePanels, sessionInput()), "plan")
-    expect(noPlan.appliesTo(SESSION_RESOURCE)).toBe(false)
-    expect(noPlan.appliesTo(ARTIFACT_RESOURCE)).toBe(false)
-    expect(noPlan.getBadge?.(SESSION_RESOURCE)).toBe(0)
-
-    sessionPlans = [
-      { id: "p1", status: "awaiting_approval" },
-      { id: "p2", status: "completed" },
-    ]
-    const withPlans = panelById(collect(useSessionSurfacePanels, sessionInput()), "plan")
-    expect(withPlans.appliesTo(SESSION_RESOURCE)).toBe(true)
-    expect(withPlans.appliesTo(ARTIFACT_RESOURCE)).toBe(false)
-    // Only plans waiting on a decision count toward the badge.
-    expect(withPlans.getBadge?.(SESSION_RESOURCE)).toBe(1)
-    renderPanel(withPlans, SESSION_RESOURCE)
-    expect(screen.getByTestId("plan-panel")).toHaveAttribute("data-session", "s1")
-  })
-
-  it("claims the slot for the agent's task list alone and badges its open tasks", () => {
-    sessionPlans = []
-    mockOpenTaskCount = 3
-    try {
-      const tasks = panelById(collect(useSessionSurfacePanels, sessionInput()), "plan")
-      expect(tasks.appliesTo(SESSION_RESOURCE)).toBe(true)
-      expect(tasks.getBadge?.(SESSION_RESOURCE)).toBe(3)
-      // A plan awaiting a decision outranks the open-task count.
-      sessionPlans = [{ id: "p1", status: "awaiting_approval" }]
-      const pending = panelById(collect(useSessionSurfacePanels, sessionInput()), "plan")
-      expect(pending.getBadge?.(SESSION_RESOURCE)).toBe(1)
-    } finally {
-      mockOpenTaskCount = null
-    }
   })
 
   it("keeps sidechat off an embedded resource workbench", () => {

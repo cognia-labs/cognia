@@ -20,7 +20,12 @@
       "api": [
         "components/agent/external-agent/cognia-model-picker.tsx",
         "components/agent/external-agent/external-agent-config-pin-field.tsx",
-        "components/agent/team/teammate-execution-binding-field.tsx"
+        "components/agent/plan/plan-approval-card.tsx",
+        "components/agent/plan/plan-document.tsx",
+        "components/agent/plan/plan-run-section.tsx",
+        "components/agent/plan/write-plan-button.tsx",
+        "components/agent/team/teammate-execution-binding-field.tsx",
+        "hooks/agent/use-session-plan.ts"
       ]
     },
     "agent-config": {
@@ -177,6 +182,7 @@
         "components/chat/message-parts/file-part-preview.tsx",
         "components/chat/message-parts/kept-copy-source-badge.tsx",
         "components/chat/message-parts/mcp-renderers/common.tsx",
+        "components/chat/message-parts/tool-row.tsx",
         "components/chat/motion/motion-reveal.tsx",
         "components/chat/renderers/code-block.tsx",
         "components/chat/renderers/math-block.tsx",
@@ -930,10 +936,6 @@
     "task-workspace": {
       "class": "kernel",
       "api": ["hooks/task-workspace/use-port-lease-resolve.ts"]
-    },
-    "tasks": {
-      "class": "module",
-      "api": ["components/tasks/session-tasks-panel.tsx", "lib/tasks/spawn-task-core.ts"]
     },
     "tauri": {
       "class": "foundation"

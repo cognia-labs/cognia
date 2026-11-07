@@ -5,7 +5,7 @@
     "largestLibComponent": 166
   },
   "size": {
-    "modules": 137,
+    "modules": 138,
     "experimental": 0,
     "tables": 401,
     "unclaimedTables": 370,
@@ -444,14 +444,12 @@
     "lib/claude/permissions/command-judge.ts -> twin",
     "lib/claude/plugin-tool-ipc.ts -> connectors",
     "lib/claude/plugin-tool-ipc.ts -> slash-commands",
-    "lib/claude/plugin-tool-ipc.ts -> tasks",
     "lib/claude/plugin-tool-ipc.ts -> terminal",
     "lib/claude/plugin-tool-ipc.ts -> workflow",
     "lib/claude/project-history-tool.ts -> external-bridge",
     "lib/claude/run-and-capture.ts -> a2ui",
     "lib/claude/run-and-capture.ts -> chat:ui",
     "lib/claude/run-and-capture.ts -> connectors",
-    "lib/claude/spawn-task-builtin-tools.ts -> tasks",
     "lib/claude/team-builtin-tools.ts -> connectors",
     "lib/claude/team-builtin-tools.ts -> squads",
     "lib/claude/team-builtin-tools.ts -> twin",

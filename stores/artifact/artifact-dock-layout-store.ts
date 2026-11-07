@@ -22,7 +22,7 @@ import {
   CONTEXT_WORKBENCH_DRAWER_SNAP_POINTS,
   type ContextPanelMode,
 } from "@/types/context-workbench"
-import { SIDECHAT_PANEL_ID } from "@/lib/tasks/spawn-task-core"
+import { SIDECHAT_PANEL_ID } from "@/lib/artifacts/session-workbench-scope-key"
 import type { ReviewScopeChoice } from "@/types/review"
 
 /**

@@ -1,9 +1,12 @@
+import type { AppSettings } from "@cognia/agent-config-types"
+import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import {
+  __setSpawnTaskToolDepsForTesting,
   buildSpawnTaskManifestEntries,
-  isSpawnTaskBuiltinTool,
   runSpawnTaskBuiltinTool,
+  toolFamily,
   type SpawnTaskToolRunDeps,
-} from "./spawn-task-builtin-tools"
+} from "./agent-tools"
 
 const args = {
   title: "Fix retry cleanup",
@@ -27,17 +30,14 @@ function deps(overrides: Partial<SpawnTaskToolRunDeps> = {}): SpawnTaskToolRunDe
   }
 }
 
-describe("spawn-task-builtin-tools", () => {
+describe("the spawn_task tool", () => {
   it("exposes one strict spawn_task manifest entry", () => {
     const entries = buildSpawnTaskManifestEntries()
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({
       name: "spawn_task",
-      pluginId: "cognia-spawn-task-builtin",
       jsonSchema: expect.objectContaining({ additionalProperties: false }),
     })
-    expect(isSpawnTaskBuiltinTool("spawn_task")).toBe(true)
-    expect(isSpawnTaskBuiltinTool("dispatch_agent")).toBe(false)
   })
 
   it("validates and dispatches against the calling session", async () => {
@@ -73,5 +73,45 @@ describe("spawn-task-builtin-tools", () => {
     await expect(
       runSpawnTaskBuiltinTool("spawn_task", args, undefined, { sessionId: "parent-1" })
     ).resolves.toEqual({ ok: false, error: "spawn_task host dependencies are unavailable" })
+  })
+})
+
+describe("toolFamily", () => {
+  const optedIn = { selfInvokeTools: { spawnTask: true } } as unknown as AppSettings
+  const ctx = (overrides: Partial<ToolSurfaceContext> = {}): ToolSurfaceContext => ({
+    session: null,
+    agent: null,
+    settings: optedIn,
+    activeGoal: null,
+    prompts: { snapshot: null, context: {} },
+    host: "desktop",
+    activeProject: null,
+    ...overrides,
+  })
+
+  it("offers spawn_task once opted in, everywhere but the native mobile shell", async () => {
+    for (const host of ["desktop", "web", "cli", "brain"] as const) {
+      const surface = await toolFamily.surface(ctx({ host }))
+      expect(surface?.tools.map((tool) => tool.name)).toEqual(["spawn_task"])
+    }
+    expect(await toolFamily.surface(ctx({ host: "mobile" }))).toBeNull()
+    expect(await toolFamily.surface(ctx({ settings: null }))).toBeNull()
+  })
+
+  it("dispatches against the calling session", async () => {
+    const d = deps()
+    __setSpawnTaskToolDepsForTesting(() => d)
+    try {
+      const call: ToolCallContext = {
+        sessionId: "parent-9",
+        toolUseId: "u1",
+        executionRunId: "run-1",
+        outboundAuthorization: { kind: "tool-call", sessionId: "parent-9", toolUseId: "u1" },
+      }
+      await expect(toolFamily.run("spawn_task", args, call)).resolves.toMatchObject({ ok: true })
+      expect(d.dispatch).toHaveBeenCalledWith("parent-9", expect.anything())
+    } finally {
+      __setSpawnTaskToolDepsForTesting(null)
+    }
   })
 })

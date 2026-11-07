@@ -4182,20 +4182,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       loggers.app.warn("failed to append SlashCommand built-in tool", { error: String(err) })
     }
   }
-  // User-started sidechat handoff. Native mobile has no sidechat host, so do
-  // not advertise a tool that could only create an unreachable embedded row.
-  if (appSettings?.selfInvokeTools?.spawnTask === true) {
-    try {
-      const { isNativeMobile } = await import("@/lib/platform/detect")
-      if (!isNativeMobile()) {
-        const { buildSpawnTaskManifestEntries } =
-          await import("@/lib/claude/spawn-task-builtin-tools")
-        opts.pluginTools = [...(opts.pluginTools ?? []), ...buildSpawnTaskManifestEntries()]
-      }
-    } catch (err) {
-      loggers.app.warn("failed to append spawn_task built-in tool", { error: String(err) })
-    }
-  }
   if (appSettings?.selfInvokeTools?.sessionMessaging === true) {
     try {
       const { buildSessionPeerManifestEntries } =

@@ -1,6 +1,6 @@
 # 工具贡献（ADR-0250 §14 `tools`）契约草案
 
-状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）、T5（Sites + vector）、T6（验收 + 编辑器）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§13。创建：2026-11-07（Asia/Shanghai）。
+状态：T0、T1、T2 已实施，T3（宠物）、T4（artifact/canvas + 视频生成）、T5（Sites + vector）、T6（验收 + 编辑器）、T7（Tasks 面板贡献点 + spawn_task）追加实施（2026-11-07）。评审结论见 §6，实施记录见 §7–§14。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -283,3 +283,18 @@ interface ToolSurface {
 - 删除：两个同意档文件（及测试）、`build-options` 的验收门槛和追加段、编辑器追加段和 `proIdeWriteToolsAvailable`、`plugin-tool-ipc` 的验收和编辑器分支与编辑器依赖解析、探针名单 5 个名字、实时语音名单 1 个名字。
 - 还清方向边 2 条：`acceptance-builtin-tools -> automation`、`plugin-tool-ipc -> codeserver`。收敛清单 `lib-store-imperative`：编辑器依赖解析读 project store，随文件搬走，新增一个成员（`plugin-tool-ipc` 去掉 `stores/project/project-store.ts`，仍是成员），附例外记录 `2026-11-07-codeserver-agent-tools-stores.json`。
 - 既有失败（未改，不属本次）：`lib/claude/agents/dispatch-run.identity.test.ts` 7 例（多智能体那条线的派发改动）、`lib/claude/usage.test.ts` 目录对照 1 例。
+
+## 14. T7 实施记录：Tasks 面板贡献点与 spawn_task（2026-11-07）
+
+- 先拆环（T6 撤回的原因）：照 Files 面板的做法，聊天停靠栏不再自己定义 Tasks 面板。
+  - 新增 `components/tasks/tasks-dock-panel.tsx`：在上下文面板注册表里注册 `SESSION_TASKS_PANEL_ID`（review 活动、顺序 12、有状态保留），由 `components/tasks/module.ui.ts` 的 `effects` 挂载。
+  - 注册表的 `appliesTo` / `getBadge` 是同步的，所以面板维护一个最多 8 个会话的观察缓存：计划用 dexie `liveQuery(listPlansBySession)`，变化时 `refresh()`；未完成任务数从聊天 store 的消息折叠（`sessionTaskTimeline`），数变化时 `refresh()`。可见：有计划或有任务列表；徽标：待审批计划数，否则未完成任务数。
+  - `chat-dock-panels.tsx` 删掉 Tasks 定义、渲染器、计划 live query 和任务计数；`dock-panel-meta.ts` 删掉 `plan` 项；`lib/shell/workbench-panels.ts` 的静态目录删掉 `plan`（注册表面板由目录合并进来）。行为差别：Tasks 面板在自定义器里排到注册表面板一侧，不再在静态目录的固定位置。
+  - `SIDECHAT_PANEL_ID` 从 `lib/tasks/spawn-task-core.ts` 移到 `lib/artifacts/session-workbench-scope-key.ts`，停靠栏和布局 store 改从这里引用。`artifact` 的 `dependsOn` 去掉 `tasks`。
+- 再迁 spawn_task（套用 `~/.cognia-briefs/patches/spawn-task-tools-wip.patch`，两处冲突手工改）：
+  - `tasks` 成为 manifest 模块（归属表行删除）：`dependsOn` agent、artifact、chat、context-workbench；`api` 为门禁报的被引用文件（任务行、图标、进度条/徽标、`task-view`、`spawn-task-dispatch`、Tasks 面板）加工具族。agent 行补计划视图的 4 个组件和 `use-session-plan`，chat 行补 `tool-row`。
+  - 工具族 `lib/claude/spawn-task-builtin-tools.ts` → `lib/tasks/agent-tools.ts`：设置 `selfInvokeTools.spawnTask` 开启且宿主不是手机时提供；运行前过 PII 闸。插件 id 随模块变成 `cognia-tasks-builtin`（源码里没有按旧 id 判断的地方）。
+  - 声明：`spawn_task` default/write，不可取消。它以前没有同意档，按 T6 的约定用 `"default"`，不写规则，与迁移前一致。
+- 删除：`build-options` 的 spawn_task 追加段、`plugin-tool-ipc` 的分支与依赖解析、探针名单 1 个名字、实时语音名单 1 个名字。
+- 还清方向边 2 条：`plugin-tool-ipc -> tasks`、`spawn-task-builtin-tools -> tasks`。
+- 既有失败（未改）：`lib/shell/workbench-panels.test.ts` 对照 2 例，因为 `SANDBOX_DESKTOP_PANEL_ID` 未映射，HEAD 上就有。

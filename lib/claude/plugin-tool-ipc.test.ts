@@ -15,7 +15,6 @@ import {
   __setSkillToolDepsForTesting,
   __setSlashToolDepsForTesting,
   __setProjectHistoryToolDepsForTesting,
-  __setSpawnTaskToolDepsForTesting,
   __setSessionPeerToolDepsForTesting,
   __setTemplateToolDepsForTesting,
   handlePluginToolExec,
@@ -29,6 +28,10 @@ import {
   toolFamily as mediaToolFamily,
 } from "@/lib/media/agent-tools"
 import { toolFamily as artifactToolFamily } from "@/lib/artifacts/agent-tools"
+import {
+  __setSpawnTaskToolDepsForTesting,
+  toolFamily as spawnTaskToolFamily,
+} from "@/lib/tasks/agent-tools"
 import {
   __setVectorToolDepsForTesting,
   toolFamily as vectorToolFamily,
@@ -226,6 +229,7 @@ describe("handlePluginToolExec", () => {
     __setPluginToolResolverForTesting(null)
     __setWebToolDepsForTesting(null)
     __setSpawnTaskToolDepsForTesting(null)
+    ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
     __setSessionPeerToolDepsForTesting(null)
     __setTemplateToolDepsForTesting(null)
     __setProjectCoordinatorToolDepsForTesting(null)
@@ -434,7 +438,8 @@ describe("handlePluginToolExec", () => {
     expect(response.error ?? "").not.toMatch(/not found/)
   })
 
-  it("routes spawn_task before the plugin registry and preserves the calling session", async () => {
+  it("routes spawn_task to its module before the plugin registry and preserves the calling session", async () => {
+    useModuleTools("tasks", spawnTaskToolFamily)
     const dispatch = jest.fn(async () => ({ ok: true, taskSessionId: "task-1" }))
     const execute = jest.fn()
     __setSpawnTaskToolDepsForTesting(() => ({ gate: () => true, dispatch }))

@@ -5,7 +5,7 @@ import {
   NEW_TAB_PANEL_ID as NEW_TAB_PANEL_ID_FROM_LIB,
   SESSION_ARTIFACT_LIST_PANEL_ID,
 } from "@/lib/artifacts/session-workbench-scope-key"
-import { SIDECHAT_PANEL_ID } from "@/lib/tasks/spawn-task-core"
+import { SIDECHAT_PANEL_ID } from "@/lib/artifacts/session-workbench-scope-key"
 
 // Every session panel's label, icon and width against its live definition is
 // pinned in `chat-dock-panels.test.tsx`, which mounts the definitions; this
