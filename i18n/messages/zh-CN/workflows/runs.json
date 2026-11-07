@@ -14,6 +14,12 @@
       "title": "步骤明细",
       "tokens": "Token"
     },
+    "budget": {
+      "exhausted": "已停止：预算用尽",
+      "inherited": "上级运行剩余的额度",
+      "line": "预算：已用 {spent}，上限 {limit}",
+      "uncovered": "预算未覆盖：{steps}"
+    },
     "export": "导出",
     "formalRetryUnavailable": "该草稿时期的运行没有不可变版本，只能在本地调试模式重放。",
     "lineage": {

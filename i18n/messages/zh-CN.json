@@ -66216,6 +66216,11 @@
         "hint": "单次运行内并行的节点数。",
         "label": "运行内最大节点数"
       },
+      "maxCostUsd": {
+        "hint": "单次运行的模型花费达到此金额即停止。无法计价的步骤标记为「预算未覆盖」，不会因此停止运行。",
+        "label": "运行预算（美元）",
+        "placeholder": "不限"
+      },
       "onFailure": {
         "hint": "当运行终态失败（重试耗尽、未画错误分支）时的兜底行为。",
         "notify": {
@@ -73093,6 +73098,12 @@
           "step": "步骤",
           "title": "步骤明细",
           "tokens": "Token"
+        },
+        "budget": {
+          "exhausted": "已停止：预算用尽",
+          "inherited": "上级运行剩余的额度",
+          "line": "预算：已用 {spent}，上限 {limit}",
+          "uncovered": "预算未覆盖：{steps}"
         },
         "export": "导出",
         "formalRetryUnavailable": "该草稿时期的运行没有不可变版本，只能在本地调试模式重放。",

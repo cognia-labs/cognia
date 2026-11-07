@@ -58,6 +58,7 @@ const messages = {
       timeoutMs: { label: "Run timeout", hint: "ceiling" },
       concurrency: { label: "Concurrent runs", hint: "h" },
       maxConcurrency: { label: "Max in-run nodes", hint: "h" },
+      maxCostUsd: { label: "Run budget (USD)", hint: "h", placeholder: "No limit" },
       retry: {
         title: "Retry defaults",
         attempts: "Attempts",
@@ -317,6 +318,17 @@ describe("SettingsTab", () => {
         maxMs: 2000,
       },
     })
+  })
+
+  it("writes the run budget through setSettings and clears it when emptied", () => {
+    const store = mount()
+    const budget = screen.getByLabelText("Run budget (USD)")
+    expect(budget).toHaveValue(null)
+
+    fireEvent.change(budget, { target: { value: "2.5" } })
+    expect(store.getState().baseWorkflow.settings.maxCostUsd).toBe(2.5)
+    fireEvent.change(budget, { target: { value: "" } })
+    expect(store.getState().baseWorkflow.settings.maxCostUsd).toBeUndefined()
   })
 
   it("toggling onFailure switches writes through setSettings", () => {

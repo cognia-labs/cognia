@@ -5,7 +5,7 @@
  */
 
 import type { StepUsage, WorkflowRunEventRow } from "@/types/workflow/visual"
-import { estimateCostFromTotals } from "@/lib/usage/session-analytics"
+import { stepCostUsd, stepUsageFromPayload } from "./step-cost"
 
 export interface RunUsageSummary {
   /** Latest usage per step (retries overwrite earlier attempts). */
@@ -19,27 +19,11 @@ export interface RunUsageSummary {
   hasUnknownCost: boolean
 }
 
-function asUsage(payload: unknown): StepUsage | null {
-  if (!payload || typeof payload !== "object") return null
-  const p = payload as Record<string, unknown>
-  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
-  return {
-    inputTokens: num(p.inputTokens),
-    outputTokens: num(p.outputTokens),
-    totalTokens: num(p.totalTokens) || num(p.inputTokens) + num(p.outputTokens),
-    cacheReadTokens: num(p.cacheReadTokens),
-    cacheCreationTokens: num(p.cacheCreationTokens),
-    providerId: typeof p.providerId === "string" ? p.providerId : undefined,
-    modelId: typeof p.modelId === "string" ? p.modelId : undefined,
-    costUsd: typeof p.costUsd === "number" && Number.isFinite(p.costUsd) ? p.costUsd : undefined,
-  }
-}
-
 export function aggregateRunUsage(events: WorkflowRunEventRow[]): RunUsageSummary {
   const perStep: Record<string, StepUsage> = {}
   for (const e of events) {
     if (e.type !== "step_usage" || !e.stepId) continue
-    const usage = asUsage(e.payload)
+    const usage = stepUsageFromPayload(e.payload)
     // Events arrive in ts order; the last usage for a step (latest retry) wins.
     if (usage) perStep[e.stepId] = usage
   }
@@ -51,28 +35,12 @@ export function aggregateRunUsage(events: WorkflowRunEventRow[]): RunUsageSummar
   for (const usage of Object.values(perStep)) {
     totalInputTokens += usage.inputTokens
     totalOutputTokens += usage.outputTokens
-    if (typeof usage.costUsd === "number") {
-      totalCostUsd = (totalCostUsd ?? 0) + usage.costUsd
-    } else {
-      // The node didn't report a cost (the ai-sdk / non-Anthropic path often
-      // can't): back-fill from the model's pricing tables so runs on priced
-      // models still total up. Only truly-unpriced models stay "unknown".
-      const estimated = estimateCostFromTotals(
-        {
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-          cacheReadInputTokens: usage.cacheReadTokens ?? 0,
-          cacheCreationInputTokens: usage.cacheCreationTokens ?? 0,
-        },
-        usage.modelId,
-        usage.providerId
-      )
-      if (estimated > 0) {
-        totalCostUsd = (totalCostUsd ?? 0) + estimated
-      } else {
-        hasUnknownCost = true
-      }
-    }
+    // A node that didn't report a cost (the ai-sdk / non-Anthropic path often
+    // can't) is priced from the model's pricing table, so runs on priced
+    // models still total up. Only truly-unpriced models stay "unknown".
+    const cost = stepCostUsd(usage)
+    if (cost === undefined) hasUnknownCost = true
+    else totalCostUsd = (totalCostUsd ?? 0) + cost
   }
 
   return {

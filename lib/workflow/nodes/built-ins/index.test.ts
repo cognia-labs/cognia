@@ -2487,6 +2487,41 @@ describe("flow.subworkflow", () => {
     })
   })
 
+  it("hands a budgeted parent's remaining budget down to the child run", async () => {
+    const { createWorkflow } = await import("@/lib/db/workflows")
+    const { getDb } = await import("@/lib/db/schema")
+    const { publishWorkflow } = await import("@/lib/workflow/publish/publish-workflow")
+    const { createRunBudget, registerRunBudget, unregisterRunBudget } =
+      await import("@/lib/workflow/runtime/run-budget")
+    const sub = await createWorkflow({ name: "Budget child", nodes: [], edges: [] })
+    await publishWorkflow(sub.id, 1)
+    const ctx = makeCtx("flow.subworkflow", { workflowId: sub.id })
+    const budget = createRunBudget({
+      runId: ctx.runId,
+      limitUsd: 2,
+      logger: { log: async () => undefined, stepUsage: async () => undefined } as never,
+      nodeKindOf: () => undefined,
+      onExhausted: () => undefined,
+    })
+    budget.logger.stepUsage("earlier", {
+      inputTokens: 1,
+      outputTokens: 1,
+      totalTokens: 2,
+      costUsd: 0.5,
+    })
+    registerRunBudget(budget)
+    try {
+      const r = await exec("flow.subworkflow", ctx)
+      const childRun = await getDb().workflowRuns.get((r.output as { runId: string }).runId)
+      expect(childRun?.lineage).toMatchObject({
+        parentRunId: ctx.runId,
+        budgetCeilingUsd: 1.5,
+      })
+    } finally {
+      unregisterRunBudget(ctx.runId)
+    }
+  })
+
   it("uses loop iteration provenance in the child invocation identity", async () => {
     const { createWorkflow } = await import("@/lib/db/workflows")
     const { getDb } = await import("@/lib/db/schema")

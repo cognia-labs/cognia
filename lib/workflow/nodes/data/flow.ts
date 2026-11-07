@@ -1,5 +1,6 @@
 import { registerNodeExecutor } from "../registry"
 import { iterationCacheKey } from "@/lib/workflow/runtime/idempotency"
+import { getRunBudget } from "@/lib/workflow/runtime/run-budget"
 import { respondToWebhook } from "@/lib/workflow/runtime/tauri-bridge"
 import {
   evaluateConditionGroup,
@@ -670,6 +671,7 @@ registerNodeExecutor({
     // Lazy-imports avoid a circular dep through the node registry.
     const { executeDeployedWorkflow, WorkflowAdmissionError } =
       await import("@/lib/workflow/runtime/execution-authority")
+    const parentBudget = getRunBudget(ctx.runId)
     let execution: Awaited<ReturnType<typeof executeDeployedWorkflow>>
     try {
       const lockedDependency = ctx.executionBinding?.dependencyLock?.workflows[ctx.stepId]
@@ -694,6 +696,8 @@ registerNodeExecutor({
           rootRunId: ctx.lineage?.rootRunId ?? ctx.runId,
           parentRunId: ctx.runId,
           parentStepId: ctx.stepId,
+          // A budgeted parent hands down what it has left (ADR-0254 §6).
+          ...(parentBudget ? { budgetCeilingUsd: parentBudget.remainingUsd() } : {}),
         },
         securityContext: ctx.securityContext,
       })

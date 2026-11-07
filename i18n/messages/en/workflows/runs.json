@@ -14,6 +14,12 @@
       "title": "Step breakdown",
       "tokens": "Tokens"
     },
+    "budget": {
+      "exhausted": "Stopped: budget spent",
+      "inherited": "what the parent run had left",
+      "line": "Budget: {spent} of {limit}",
+      "uncovered": "Not covered by the budget: {steps}"
+    },
     "export": "Export",
     "formalRetryUnavailable": "This draft-era run has no immutable version and can only be replayed in local debug mode.",
     "lineage": {

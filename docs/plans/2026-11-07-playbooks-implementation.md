@@ -123,6 +123,7 @@
 
 - `WorkflowSettings.maxCostUsd`（契约，和 WP2 一起重建 kit）；`runWorkflow` 内按使用量账本累计，超限停止并标记原因；子工作流继承剩余额度。
 - 测试：超限停止、未知成本的处理（拒绝还是放行要在 WP 开始时对照 `quota-service.ts` 的「成本未知即拒绝」规则定）。changeset：minor。
+- 已定（2026-11-07）：已上报成本和能按模型估价的用量都计入；无法计价的步骤不停止运行，在运行日志和运行摘要里标「预算未覆盖」（ADR-0254 §6）。子工作流的上限经 `WorkflowRunLineage.budgetCeilingUsd` 传下，花费在同进程内实时记到上级。编辑器设置页加了「运行预算」字段。
 
 ### WP6 调度器初始状态
 

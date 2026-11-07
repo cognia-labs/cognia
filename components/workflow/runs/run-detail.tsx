@@ -41,6 +41,7 @@ import { RunTimeline } from "./run-timeline"
 import { RunStepDetail } from "./run-step-detail"
 import { RunStepBreakdown } from "./run-step-breakdown"
 import { RunDurationSparkline } from "./run-duration-sparkline"
+import { RunBudgetLine } from "./run-budget-line"
 import { formatDurationMs, formatRunStartedAt } from "./format"
 import { aggregateRunUsage, formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
 import { formatTokens } from "@/types/system/usage"
@@ -214,6 +215,7 @@ function RunDetailInner({
               </span>
             ) : null}
           </p>
+          <RunBudgetLine run={run} events={events} />
         </div>
         <div className="hidden sm:block">
           <RunDurationSparkline workflowId={run.workflowId} />

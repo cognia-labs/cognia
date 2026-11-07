@@ -66216,6 +66216,11 @@
         "hint": "Parallel nodes per run.",
         "label": "Max in-run nodes"
       },
+      "maxCostUsd": {
+        "hint": "Stop a run once its model spend reaches this amount. Steps whose cost can't be priced are marked as not covered and don't stop the run.",
+        "label": "Run budget (USD)",
+        "placeholder": "No limit"
+      },
       "onFailure": {
         "hint": "What happens when a run fails terminally (retries exhausted, no error branch).",
         "notify": {
@@ -73093,6 +73098,12 @@
           "step": "Step",
           "title": "Step breakdown",
           "tokens": "Tokens"
+        },
+        "budget": {
+          "exhausted": "Stopped: budget spent",
+          "inherited": "what the parent run had left",
+          "line": "Budget: {spent} of {limit}",
+          "uncovered": "Not covered by the budget: {steps}"
         },
         "export": "Export",
         "formalRetryUnavailable": "This draft-era run has no immutable version and can only be replayed in local debug mode.",

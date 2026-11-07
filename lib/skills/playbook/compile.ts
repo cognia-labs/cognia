@@ -41,9 +41,8 @@
  * step's output is its reply text, or the parsed object when the step declares
  * `outputSchema`; only the latter has fields to read.
  *
- * Limits: `maxBudgetUsd` becomes the workflow's `maxCostUsd` budget (recorded
- * only: no run enforces it until plan WP5),
- * `maxFanout` caps in-run concurrency and each loop's parallel iterations.
+ * Limits: `maxBudgetUsd` becomes the workflow's `maxCostUsd` run budget,
+ * which `runWorkflow` enforces; `maxFanout` caps in-run concurrency and each loop's parallel iterations.
  * `maxSubagents` bounds pattern fan-out, which nothing in a workflow runs
  * until F1b. A called playbook's limits do not apply; the caller's do.
  *

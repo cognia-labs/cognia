@@ -33,6 +33,7 @@ import { WorkflowVariablesEditor } from "./settings/workflow-variables-editor"
 import { WorkflowCredentialsList } from "./settings/workflow-credentials-list"
 import { WorkflowPublishSection } from "./settings/workflow-publish-section"
 import { PluginCapabilitiesSection } from "./settings/plugin-capabilities-section"
+import { RunBudgetField } from "./settings/run-budget-field"
 import { FanoutSubscriptionsPanel } from "@/components/workflow/library/fanout-subscriptions-panel"
 import { getDb } from "@/lib/db/schema"
 import { requireHostFeature } from "@/lib/devices/placement-directory"
@@ -230,6 +231,11 @@ export function SettingsTab({ useStore }: { useStore: EditorStore }) {
                 onChange={(ms) => setSettings({ timeoutMs: ms })}
               />
             </Field>
+            <RunBudgetField
+              key={workflowId}
+              value={settings.maxCostUsd}
+              onChange={(maxCostUsd) => setSettings({ maxCostUsd })}
+            />
             <FieldRow className="gap-2">
               <Field
                 label={t("concurrency.label")}

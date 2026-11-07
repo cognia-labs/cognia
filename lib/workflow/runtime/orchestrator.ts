@@ -43,7 +43,16 @@ import type {
 } from "@/types/workflow/visual"
 // Importing the built-ins triggers their registration side effect.
 import "@/lib/workflow/nodes/built-ins"
-import { createRunLogger } from "./event-log"
+import { createRunLogger, listRunEvents } from "./event-log"
+import { effectiveBudgetLimitUsd } from "@/lib/workflow/runs/budget-summary"
+import {
+  createRunBudget,
+  getRunBudget,
+  registerRunBudget,
+  unregisterRunBudget,
+  WorkflowBudgetExhaustedError,
+  type RunBudget,
+} from "./run-budget"
 import {
   CAPABILITY_MISSING_CODE_PREFIX,
   formatPreflightFailures,
@@ -109,6 +118,7 @@ async function releaseRunResources(runId: string): Promise<void> {
   } catch {
     // best-effort cleanup
   }
+  unregisterRunBudget(runId)
   // Lease teardown (ADR 0061 P4) — stop renewing, then free the claim so a
   // resume/replay elsewhere isn't blocked for a full TTL.
   stopLeaseHeartbeat(runId)
@@ -448,6 +458,35 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     createConcurrencyController(validated.settings.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY)
   const workflowGraph = createWorkflowGraphIndex(validated as VisualWorkflow)
 
+  // Run budget (ADR-0254 §6, playbooks plan WP5). Steps log through the
+  // budget's wrapped logger so the usage they report is counted; a resumed run
+  // starts from what its earlier events spent. A budgeted parent that started
+  // this run (lineage.budgetCeilingUsd) caps it and is charged as it spends.
+  const budgetLimitUsd = effectiveBudgetLimitUsd(
+    validated.settings.maxCostUsd,
+    lineage.budgetCeilingUsd
+  )
+  let budget: RunBudget | undefined
+  if (budgetLimitUsd !== undefined) {
+    const parentBudget =
+      lineage.budgetCeilingUsd !== undefined && lineage.parentRunId
+        ? getRunBudget(lineage.parentRunId)
+        : undefined
+    budget = createRunBudget({
+      runId,
+      limitUsd: budgetLimitUsd,
+      logger,
+      nodeKindOf: (stepId) => workflowGraph.nodeById.get(stepId)?.type,
+      onExhausted: (error) => ac.abort(error),
+      ...(parentBudget && lineage.parentStepId
+        ? { parent: parentBudget, parentStepId: lineage.parentStepId }
+        : {}),
+    })
+    registerRunBudget(budget)
+    if (existingRow) budget.hydrate(await listRunEvents(runId))
+  }
+  const stepLogger = budget?.logger ?? logger
+
   // Loop-container bodies (schemaVersion 2): nodes whose parent is a flow.loop
   // container belong to that container's sub-canvas and are executed by the
   // loop runtime — they must NEVER be scheduled at the top level.
@@ -745,7 +784,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
                 cache,
                 retryPolicy,
                 secretResolver,
-                logger,
+                logger: stepLogger,
                 honorPinData: input.honorPinData,
                 traceId,
                 lineage,
@@ -764,7 +803,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
                 cache,
                 retryPolicy,
                 secretResolver,
-                logger,
+                logger: stepLogger,
                 honorPinData: input.honorPinData,
                 traceId,
                 lineage,
@@ -879,6 +918,14 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           markSkipped(stepId)
           return
         }
+        // The budget stopped the run: whatever this step threw, no error
+        // policy may turn it into a handled failure and keep spending.
+        if (ac.signal.reason instanceof WorkflowBudgetExhaustedError) {
+          if (!firstFailure) {
+            firstFailure = { stepId, err: ac.signal.reason, code: ac.signal.reason.code }
+          }
+          return
+        }
         const errorObj = err instanceof Error ? err : new Error(String(err))
         // A recovery gate owns the next execution. Error branches and fallback
         // values must not turn an unresolved human decision into completion.
@@ -979,6 +1026,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // Main scheduling loop. Continue while there is more work and no failure.
   while (completed.size + skipped.size < topLevelNodeCount) {
     if (firstFailure) break
+    // Spent: start nothing more, and let the drain below settle what runs.
+    if (ac.signal.reason instanceof WorkflowBudgetExhaustedError) break
     if (ac.signal.aborted && inflight.size === 0) break
 
     let scheduledThisTick = 0
@@ -1042,6 +1091,19 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     )
   }
 
+  // The budget stopped the run. The abort also stopped the step whose usage
+  // reached the limit, so the run fails even when that was its last step.
+  const budgetStop =
+    ac.signal.reason instanceof WorkflowBudgetExhaustedError ? ac.signal.reason : undefined
+  if (budgetStop) {
+    const pendingStepId = order.find((stepId) => !completed.has(stepId) && !skipped.has(stepId))
+    firstFailure = {
+      stepId: budgetStop.stepId ?? firstFailure?.stepId ?? pendingStepId ?? "unknown",
+      err: budgetStop,
+      code: budgetStop.code,
+    }
+  }
+
   if (firstFailure) {
     if (timeoutHandle) clearTimeout(timeoutHandle)
     const { stepId, err, code } = firstFailure
@@ -1061,13 +1123,15 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
       return { runId, status: "waiting", error }
     }
     const baseMessage = err instanceof Error ? err.message : String(err)
-    const message = wallClockExpired
+    // The wall clock only names the failure when it, not the budget, stopped the run.
+    const timedOut = wallClockExpired && !budgetStop
+    const message = timedOut
       ? `Wall-clock timeout (${wallClockTimeoutMs}ms) exceeded — aborted at ${stepId}`
       : baseMessage
     // `RunStatus` does not (yet) carry a dedicated "timed_out" variant — we
     // surface the wall-clock expiry through `error.code` so consumers can
     // discriminate without parsing the message string.
-    const errorCode = wallClockExpired ? "timeout" : code
+    const errorCode = timedOut ? "timeout" : code
     await logger.runFailed({ message, nodeId: stepId, code: errorCode })
     runRow = {
       ...runRow,

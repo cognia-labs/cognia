@@ -118,6 +118,35 @@ describe("RunDetail", () => {
     expect(screen.getByTestId("run-usage-pill").textContent).toContain("$0.020 est.")
   })
 
+  it("shows the run budget under the header when the workflow set one", async () => {
+    await getDb().workflowRuns.put({
+      id: "run1",
+      workflowId: "wf1",
+      status: "failed",
+      triggerKind: "trigger.manual",
+      triggerPayload: {},
+      startedAt: 100,
+      completedAt: 200,
+      workflowSnapshot: { ...snapshot, settings: { ...snapshot.settings, maxCostUsd: 0.01 } },
+      error: { message: "spent", nodeId: "n1", code: "budget_exhausted" },
+    })
+    await getDb().workflowRunEvents.bulkPut([
+      {
+        id: "e1",
+        runId: "run1",
+        ts: 110,
+        type: "step_usage",
+        stepId: "n1",
+        payload: { inputTokens: 1000, outputTokens: 500, totalTokens: 1500, costUsd: 0.02 },
+      },
+    ])
+
+    wrap()
+    await waitFor(() => expect(screen.getByTestId("run-budget")).toBeInTheDocument())
+    expect(screen.getByTestId("run-budget")).toHaveTextContent("Budget: $0.020 of $0.010")
+    expect(screen.getByTestId("run-budget-exhausted")).toBeInTheDocument()
+  })
+
   it("omits the pill when no step reported usage", async () => {
     await getDb().workflowRuns.put({
       id: "run1",
