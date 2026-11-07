@@ -121,6 +121,7 @@ describe("the draft context contribution", () => {
     query: { text: null, embedding: null },
     hostDeps: {},
     grant: null,
+    kernelRetrieval: { twinChunkTexts: [] },
   })
 
   it("is a turn section with no slot, so it always goes to the dynamic tail", () => {

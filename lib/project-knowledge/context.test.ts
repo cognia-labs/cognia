@@ -25,6 +25,7 @@ function turn(fields: Partial<ContextTurnContext> = {}): ContextTurnContext {
     query: { text: "how do we release?", embedding: [0.25] },
     hostDeps: { projectKnowledge: { vectorBackend: "native" } as never },
     grant: null,
+    kernelRetrieval: { twinChunkTexts: [] },
     ...fields,
   }
 }

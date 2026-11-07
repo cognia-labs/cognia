@@ -20,6 +20,7 @@ const ctx: ContextTurnContext = {
   query: { text: "what changed?", embedding: null },
   hostDeps: {},
   grant: null,
+  kernelRetrieval: { twinChunkTexts: [] },
 }
 
 function entry(
@@ -139,6 +140,117 @@ describe("side outputs", () => {
   })
 })
 
+describe("after", () => {
+  it("runs a contribution after the one it names, with that one's handoff as prior", async () => {
+    const order: string[] = []
+    const seen: unknown[] = []
+    const entries = [
+      entry("mem", [
+        {
+          id: "continuity",
+          cache: "turn",
+          slot: "continuity",
+          after: "recall",
+          produce: (turnCtx) => {
+            order.push("continuity")
+            seen.push(turnCtx.prior)
+            return { text: "claims" }
+          },
+        },
+        {
+          id: "recall",
+          cache: "turn",
+          slot: "memory",
+          produce: async () => {
+            await Promise.resolve()
+            order.push("recall")
+            return { text: "facts", handoff: { used: 120 } }
+          },
+        },
+        section("other", "other"),
+      ]),
+    ]
+    const result = await collectContextContributions(ctx, { cacheOptimization: true }, entries)
+    expect(order).toEqual(["recall", "continuity"])
+    expect(seen).toEqual([{ used: 120 }])
+    // Placement stays by slot, whatever order they ran in.
+    expect(result.tail).toEqual(["facts", "claims", "other"])
+    // A handoff stays inside the resolution.
+    expect(result.sources).toEqual({})
+    expect([...result.sessionState]).toEqual([])
+  })
+
+  it.each([
+    ["throws", () => Promise.reject(new Error("down"))],
+    ["answers null", () => null],
+    ["answers without text", () => ({ handoff: { used: 1 } }) as never],
+    ["hands nothing over", () => ({ text: "facts" })],
+  ])("gives no prior when the one waited for %s, and still runs", async (_label, produce) => {
+    const prior = jest.fn()
+    await collectContextContributions(ctx, { cacheOptimization: true }, [
+      entry("mem", [
+        { id: "recall", cache: "turn", produce: produce as ContextContribution["produce"] },
+        {
+          id: "continuity",
+          cache: "turn",
+          after: "recall",
+          produce: (turnCtx) => {
+            prior("prior" in turnCtx ? turnCtx.prior : "absent")
+            return null
+          },
+        },
+      ]),
+    ])
+    expect(prior).toHaveBeenCalledWith("absent")
+  })
+
+  it("gives no prior after the one waited for misses its deadline, and starts its own then", async () => {
+    jest.useFakeTimers()
+    try {
+      const prior = jest.fn()
+      const pending = collectContextContributions(
+        ctx,
+        { cacheOptimization: true },
+        [
+          entry("mem", [
+            { id: "recall", cache: "turn", produce: () => new Promise<never>(() => {}) },
+            {
+              id: "continuity",
+              cache: "turn",
+              after: "recall",
+              deadlineMs: 30,
+              produce: (turnCtx) => {
+                prior(turnCtx.prior)
+                return new Promise<never>(() => {})
+              },
+            },
+          ]),
+        ],
+        20
+      )
+      await jest.advanceTimersByTimeAsync(20)
+      expect(prior).toHaveBeenCalledWith(undefined)
+      await jest.advanceTimersByTimeAsync(30)
+      const result = await pending
+      expect(result.skipped.map((s) => [s.key, String(s.error)])).toEqual([
+        ["mem.recall", "Error: no answer within 20 ms"],
+        ["mem.continuity", "Error: no answer within 30 ms"],
+      ])
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("passes the run's kernel retrieval to every contribution", async () => {
+    const produce = jest.fn(() => null)
+    const withTwin = { ...ctx, kernelRetrieval: { twinChunkTexts: ["twin chunk"] } }
+    await collectContextContributions(withTwin, { cacheOptimization: true }, [
+      entry("mem", [{ id: "recall", cache: "turn", produce }]),
+    ])
+    expect(produce).toHaveBeenCalledWith(withTwin)
+  })
+})
+
 describe("PII gate", () => {
   const leaking = "Contact jane.doe@example.com for access."
 
@@ -242,6 +354,17 @@ describe("failure", () => {
       [{ id: "a", cache: "turn", pii: "maybe", produce: () => null }],
       [{ id: "a", cache: "turn", deadlineMs: 0, produce: () => null }],
       [{ id: "a", cache: "turn" }],
+      [{ id: "a", cache: "turn", after: "a", produce: () => null }],
+      [{ id: "a", cache: "turn", after: "missing", produce: () => null }],
+      [
+        { id: "a", cache: "turn", produce: () => null },
+        { id: "b", cache: "turn", after: "a", produce: () => null },
+        { id: "c", cache: "turn", after: "b", produce: () => null },
+      ],
+      [
+        { id: "a", cache: "turn", after: "b", produce: () => null },
+        { id: "b", cache: "turn", after: "a", produce: () => null },
+      ],
     ]
     for (const contributions of lists) {
       __resetContextContributionsForTests()

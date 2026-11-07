@@ -42,6 +42,7 @@ function turn(fields: Partial<ContextTurnContext> = {}): ContextTurnContext {
     query: { text: "how do refunds work?", embedding: [0.5, 0.25] },
     hostDeps: { projectKnowledge: { vectorBackend: "native" } as never },
     grant: null,
+    kernelRetrieval: { twinChunkTexts: [] },
     ...fields,
   }
 }

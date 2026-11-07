@@ -396,6 +396,19 @@ export interface ContextTurnContext extends Omit<ToolSurfaceContext, "sessionSta
   hostDeps: Readonly<Partial<ContextHostDepsMap>>
   /** The run's folded capability grant (knowledge bases and the rest), or `null`. */
   grant: Readonly<AgentCapabilityGrantV1> | null
+  /**
+   * What the send path already retrieved this turn before collecting context,
+   * so a contribution can leave out what the prompt holds anyway. Today the
+   * twin's chunks (their redacted text), which memory recall deduplicates
+   * against; empty when the twin did not run.
+   */
+  kernelRetrieval: { twinChunkTexts: readonly string[] }
+  /**
+   * For a contribution that names `after`: the `handoff` the contribution it
+   * waits for returned. `undefined` when that one failed, missed its deadline,
+   * answered `null` or handed nothing over, and for every other contribution.
+   */
+  prior?: unknown
 }
 
 /** What a contribution adds to one run. */
@@ -409,6 +422,12 @@ export interface ContextSection {
    * (`ToolCallContext.sessionState`). Replaced on every resolution.
    */
   sessionState?: unknown
+  /**
+   * What a later contribution of the same module that names this one in
+   * `after` reads as `ctx.prior` (a budget it may borrow, say). Kept for this
+   * resolution only: never in the prompt, the sources or the session state.
+   */
+  handoff?: unknown
 }
 
 /**
@@ -425,6 +444,11 @@ export interface ContextSection {
  *   already redacted; every other section passes the kernel's PII gate and is
  *   dropped when it leaks.
  *
+ * - `after` names another contribution of the same module that this one
+ *   waits for, reading what it handed over as `ctx.prior`. One level only:
+ *   the one waited for names no `after` itself. Everything else runs
+ *   concurrently.
+ *
  * Context only adds, so a failure (a throw, the deadline, malformed text)
  * leaves the section out and is reported; it never refuses the turn.
  */
@@ -439,6 +463,11 @@ export interface ContextContribution {
    * network; the kernel's default otherwise. Capped by the kernel.
    */
   deadlineMs?: number
+  /**
+   * The id of the contribution of the same module this one runs after; its
+   * own deadline starts when that one settles.
+   */
+  after?: string
   produce(ctx: ContextTurnContext): ContextSection | null | Promise<ContextSection | null>
 }
 

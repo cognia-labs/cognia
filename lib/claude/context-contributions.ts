@@ -16,6 +16,9 @@
  *   keeps the position its kernel branch gave it.
  * - every section passes the PII gate unless its contribution declares the
  *   text redacted at the source; one that leaks is dropped with its sources.
+ * - a contribution that names `after` runs once the one it waits for (same
+ *   module, one level) settles, reading its `handoff` as `ctx.prior`; its own
+ *   deadline starts then.
  * - context only adds: a contribution file that does not load, a throw, the
  *   deadline or a malformed section leaves that part out and is reported.
  *
@@ -30,6 +33,7 @@ import { loggers } from "@cognia/logging"
 import { MODULE_CONTEXT_CONTRIBUTIONS } from "@/lib/modules/generated/context"
 import type {
   ContextContribution,
+  ContextSection,
   ContextSlot,
   ContextTurnContext,
   ModuleContextEntry,
@@ -80,7 +84,7 @@ const loading = new Map<string, Promise<readonly LoadedContribution[]>>()
 function checkShape(module: string, list: unknown): readonly LoadedContribution[] {
   if (!Array.isArray(list)) throw new Error(`${module}: \`contributions\` is not a list`)
   const ids = new Set<string>()
-  return list.map((item: ContextContribution) => {
+  const checked = list.map((item: ContextContribution): LoadedContribution => {
     if (!item || typeof item.id !== "string" || item.id.length === 0)
       throw new Error(`${module}: a contribution has no id`)
     if (ids.has(item.id)) throw new Error(`${module}: contribution "${item.id}" is listed twice`)
@@ -99,9 +103,24 @@ function checkShape(module: string, list: unknown): readonly LoadedContribution[
       !(typeof item.deadlineMs === "number" && item.deadlineMs > 0)
     )
       throw new Error(`${name}: deadlineMs is a positive number`)
+    if (item.after !== undefined && (typeof item.after !== "string" || item.after === item.id))
+      throw new Error(`${name}: after names another contribution of the module`)
     if (typeof item.produce !== "function") throw new Error(`${name}: produce is not a function`)
     return { key: name, contribution: item }
   })
+  // `after` is one level within the module, so it can never form a cycle.
+  const byId = new Map(checked.map((entry) => [entry.contribution.id, entry.contribution]))
+  for (const { key, contribution } of checked) {
+    if (contribution.after === undefined) continue
+    const waited = byId.get(contribution.after)
+    if (!waited)
+      throw new Error(`${key}: after names "${contribution.after}", which the module does not list`)
+    if (waited.after !== undefined)
+      throw new Error(
+        `${key}: after names "${contribution.after}", which waits itself; one level only`
+      )
+  }
+  return checked
 }
 
 /** A module's contributions, loaded once; a failed load is retried by the next resolution. */
@@ -131,6 +150,15 @@ function withDeadline<T>(work: () => T | Promise<T>, ms: number): Promise<T> {
   return Promise.race([Promise.resolve().then(work), deadline]).finally(() => {
     if (timer !== undefined) clearTimeout(timer)
   })
+}
+
+/** What a settled section handed over; nothing from a malformed one. */
+function handoffOf(section: unknown): unknown {
+  return section !== null &&
+    typeof section === "object" &&
+    typeof (section as ContextSection).text === "string"
+    ? (section as ContextSection).handoff
+    : undefined
 }
 
 function deadlineOf(contribution: ContextContribution, fallbackMs: number): number {
@@ -174,11 +202,33 @@ export async function collectContextContributions(
     else report(result, active[index].module, outcome.reason)
   })
 
-  const produced = await Promise.allSettled(
-    contributions.map(({ contribution }) =>
-      withDeadline(() => contribution.produce(ctx), deadlineOf(contribution, deadlineMs))
-    )
-  )
+  // Independent contributions start together; one that names `after` starts
+  // when the one it waits for settles, with that one's handoff as `prior`.
+  const running = new Map<string, Promise<ContextSection | null>>()
+  const start = ({ key, contribution }: LoadedContribution): Promise<ContextSection | null> => {
+    const known = running.get(key)
+    if (known) return known
+    const run = (prior: unknown) =>
+      withDeadline(
+        () => contribution.produce(prior === undefined ? ctx : { ...ctx, prior }),
+        deadlineOf(contribution, deadlineMs)
+      )
+    let pending: Promise<ContextSection | null>
+    if (contribution.after === undefined) pending = run(undefined)
+    else {
+      const owner = key.slice(0, key.length - contribution.id.length - 1)
+      const waited = contributions.find(
+        (entry) => entry.key === `${owner}.${contribution.after}`
+      ) as LoadedContribution
+      pending = start(waited).then(
+        (section) => run(handoffOf(section)),
+        () => run(undefined)
+      )
+    }
+    running.set(key, pending)
+    return pending
+  }
+  const produced = await Promise.allSettled(contributions.map(start))
   const tail: { rank: number; text: string }[] = []
   produced.forEach((outcome, index) => {
     const { key, contribution } = contributions[index]

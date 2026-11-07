@@ -7736,6 +7736,38 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
       if (at >= 0) mockContextEntries.splice(at, 1)
     })
 
+    it("hands every contribution the twin's retrieved text, or nothing without a twin", async () => {
+      const seen: unknown[] = []
+      contribute([
+        {
+          id: "probe",
+          cache: "turn",
+          produce: (turnCtx) => {
+            seen.push(turnCtx.kernelRetrieval)
+            return null
+          },
+        },
+      ])
+      mApplyTwinContext.mockResolvedValueOnce({
+        applied: { systemPrompt: "TWIN PROMPT" },
+        retrievedChunks: [
+          {
+            chunk: { id: "t1", contentRedacted: "redacted twin text", vectorDocId: "v1" },
+            score: 1,
+          },
+        ],
+        selectedStyleSamples: [],
+        degraded: false,
+      })
+      await resolveSendOptions({
+        character: makeChar({ id: "c1", systemPrompt: "base", twinId: "twin1" }),
+        twinDeps: {} as never,
+        twinUserMessage: "hello",
+      })
+      await resolveSendOptions({ character: makeChar({ id: "c1" }) })
+      expect(seen).toEqual([{ twinChunkTexts: ["redacted twin text"] }, { twinChunkTexts: [] }])
+    })
+
     it("puts a turn section in the dynamic tail and a session section in its slot", async () => {
       contribute([
         {

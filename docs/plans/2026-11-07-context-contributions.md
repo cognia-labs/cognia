@@ -1,6 +1,6 @@
 # 上下文贡献（ADR-0250 §14 `context`）契约草案
 
-状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），待实施 C5a–C5c。创建：2026-11-07（Asia/Shanghai）。
+状态：评审通过（2026-11-07），结论见 §6；C0–C4 已实施，记录见 §7–§11。§12 记忆与连续性的契约增补已评审（结论见 §12.5），C5a 已实施（§13），C5b–C5c 待做。创建：2026-11-07（Asia/Shanghai）。
 
 上游：
 
@@ -284,3 +284,12 @@ interface ContextSection {
 2. 分身去重：内核只读字段 `kernelRetrieval.twinChunkTexts`。
 3. 记忆专属输入：走 `hostDeps.memoryQuery`、`hostDeps.memoryScope`，`query.text` 不动。
 4. 截止时间：`recall`、`continuity` 各 15 s，内核上限不变。
+
+## 13. C5a 实施记录：内核的先后与内核检索（2026-11-07）
+
+- 类型（`lib/modules/manifest-types.ts`）：`ContextContribution.after?`、`ContextSection.handoff?`、`ContextTurnContext.prior?` 和必填的 `kernelRetrieval: { twinChunkTexts }`。
+- 读取方 `lib/claude/context-contributions.ts`：
+  - 加载时检查：`after` 不能指向自己，必须是本模块列出的 id，被等的那条自己不能再有 `after`（一层，因此无环）；不合格就跳过整个模块并上报，与其他形状错误相同。
+  - 运行：没有 `after` 的照旧一起启动；有 `after` 的在被等的那条结束后启动，`prior` 取它的 `handoff`。对方失败、超时、返回 `null`、段没有文字或没交 handoff 时，等待方拿到的上下文里没有 `prior` 键。等待方的截止时间从这时算起。放置、PII 闸、来源和会话状态都不变；handoff 不进任何输出。
+- `build-options`：收集时传 `kernelRetrieval.twinChunkTexts`，取自上面分身段写好的 `opts.twinContext`（`contentRedacted`），没有分身时是空数组。
+- 测试：`context-contributions.test.ts` 加 7 例（先后与 handoff、对方 4 种失败、对方超时后自己的截止、kernelRetrieval 透传）和 4 种不合格的 `after` 列表；`build-options.test.ts` 加 1 例（有、无分身时贡献读到的 `kernelRetrieval`）；其余四个模块的上下文测试补上 `kernelRetrieval` 字段。目前没有贡献声明 `after`，运行时行为不变。

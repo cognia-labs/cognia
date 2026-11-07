@@ -2878,6 +2878,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         }).filter(([, value]) => value !== undefined)
       ) as ContextTurnContext["hostDeps"],
       grant: grant ?? null,
+      // The twin ran above; contributions may leave out what it retrieved.
+      kernelRetrieval: {
+        twinChunkTexts: opts.twinContext?.retrievedChunks.map((c) => c.chunk.contentRedacted) ?? [],
+      },
     },
     { cacheOptimization: cacheOptimizationEnabled }
   )
