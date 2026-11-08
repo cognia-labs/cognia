@@ -608,3 +608,12 @@ interface ToolSurface {
 - 还清：43 条路由主体 → mobile；`app/page.tsx` 的五条（shell、chat、chat:ui、collab、filespace）；`app/source-control/page.tsx -> global-search`。
 - 门禁：module gate 通过（839 条方向边），baseline-growth、`check-modules.test.mjs`（83 项）通过。
 - 仍在基线里、形状不同的 app 边：`app/fleet/page.tsx`、`app/remote-sessions/page.tsx`、`app/search/page.tsx` 直接渲染 mobile 组件；`app/inbox/layout.tsx` 挂载 mobile 的访问追踪；`app/e2e/plugin-ui-surfaces/` 的测试夹具导入 shell。
+
+## 31. T22：app 下剩余五条指向壳的边（2026-11-08）
+
+- 做法（8ae26d62e1，还清 13 条）：
+  - `app/fleet/`、`app/search/` 新增 `paths` 行归 mobile；`app/remote-sessions/` 原有一行归 companion，改为归 mobile。三者都是仅手机端的页面，直接由 mobile 组件拼成。
+  - `app/e2e/plugin-ui-surfaces/` 新增一行归 shell：夹具按 shell 的方式挂载插件界面（含 `PluginViewContainerPanel`）。原 `e2e` 归属行因此不再拥有任何文件，按门禁要求删除。夹具指向 chat、context-workbench、plugin、settings-store 等的 9 条边随之还清。
+  - `InboxVisitTracker`（含测试）用 `git mv` 从 `components/mobile/` 移到 `components/inbox/`：写入 `lastInboxViewedAt` 的是收件箱，移动端标签栏只经 `lib/inbox/unread-count.ts` 读取。`app/inbox/layout.tsx` 改为从新位置导入。
+- 结果：基线里不再有 `app/` 文件指向 mobile、shell 或 desktop 的边；方向边共 826 条。
+- 门禁：module gate、baseline-growth、colocated-tests、`check-modules.test.mjs`（83 项）通过；收件箱、搜索、e2e 夹具与 mobile 壳的相关测试（89 项）通过。

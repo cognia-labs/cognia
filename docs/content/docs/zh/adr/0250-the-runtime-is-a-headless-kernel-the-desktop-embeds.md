@@ -469,6 +469,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 平台壳及其 Capacitor 变体移到 `components/shell/`，并标为客户端模块，因为服务端布局要导入它们。根布局归 shell 所有。
   - 还清平台壳的三条边，以及根布局指向模块的三条边。基础层与内核不再有文件导入桌面壳。
 - **修订（2026-11-08）：挑选移动端或桌面视图的路由归 shell。** 有 22 个路由的路由主体在紧凑布局下渲染移动端主体、否则渲染模块的桌面视图，与 `app/route-body.tsx` 对 `/` 做的事相同。它们的路由主体（含 `.mobile.tsx` 变体）以及渲染它们的页面经 `paths` 行归 shell，`app/page.tsx` 同样如此。还清 49 条边（其中 43 条是路由主体 → mobile）。实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §30。
+- **修订（2026-11-08）：app 下最后几条指向壳的边。** `/fleet`、`/remote-sessions`、`/search` 是仅手机端的页面，归 mobile 壳。插件 UI 界面的 e2e 夹具按 shell 的方式挂载插件界面，归 shell。`InboxVisitTracker` 移到 `components/inbox/`：记录访问的是收件箱，移动端标签栏只读未读数。还清 13 条边；`app/` 下不再有低于壳层的文件导入壳。实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §31。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
