@@ -455,10 +455,19 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 仍未还清：
     - `lib/sync/handlers/bot-installations.ts -> bot`：bot 还没有 manifest。
     - 六个内核文件仍导入桌面壳（路由主体、移动端应用壳、项目编辑器工作台、平台壳、glance 日程钩子与 UI store）。
+- **修订（2026-11-08）：bot 成为模块；五个内核文件不再导入桌面壳。** 实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §28。
+  - bot 控制面有了 manifest（`lib/bot/module.ts`）。它的三张同步表（`botInstallations`、`botEventDeliveries`、`botDefinitions`）作为 `syncHandlers` 贡献，处理器移到 `lib/bot/sync/`。还清 `lib/sync/handlers/bot-installations.ts -> bot`。
+  - bot 依赖 connectors 与 workflow，而二者原先直接调用 `lib/bot` 把事件分发给 bot，会成环。现在它们改问 `bot-dispatch` 端口（`types/modules/ports/bot-dispatch.ts`），没有提供方时什么也不做。端口有四个方法：连接器入站、桌面事件、工作流完成、取消某个会话的投递。
+  - 还清五条内核 → 桌面壳的边：
+    - UI store 经基础层接缝（`stores/ui/sidebar-gesture.ts`）执行侧栏手势，桌面壳加载时装上它的 View Transition 执行器。
+    - `canHearInvalidations` 移到设备在线注册表，`activePairedDevices` 移到 `lib/db/paired-devices.ts`，glance 日程不再导入状态栏。
+    - `menu-focus-claims` 移到 `lib/shortcuts/`，`JobCenterPanel` 移到 `components/shell/`。
+    - `/` 路由主体负责挑选平台壳，归 shell 所有。
+  - 仍未还清：`components/runtime/platform-shell.tsx -> desktop`。`AppRuntime` 在 provider 树深处渲染平台壳，而它的轻量分支与访客分支渲染子节点时不经过平台壳。把该文件改归 shell 只会新增一条 `app-runtime -> shell` 边。等 `AppRuntime` 拆成贡献，或根布局把壳作为参数传入时，这条边才会消失。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
-- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`、`a2ui-system-prompt`、`interactive-page`、`inbound-jobs`，集合端口 `docs-provider`、`conversation-channel` 和 `identity-principal-links`，沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
+- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`、`a2ui-system-prompt`、`interactive-page`、`inbound-jobs`、`bot-dispatch`，集合端口 `docs-provider`、`conversation-channel` 和 `identity-principal-links`，沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
 - **类型化事件。** 需要反转依赖时，用内核的事件总线，事件类型由发布方在 `types/<id>/events.ts` 中声明。
 - **贡献点。** 外壳和内核只通过 manifest 字段收集各模块的东西。
 

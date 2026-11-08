@@ -449,10 +449,19 @@ Where an existing rule already owns a field, the field follows that rule:
   - Still open:
     - `lib/sync/handlers/bot-installations.ts -> bot`: bot has no manifest yet.
     - Six kernel files still import the desktop shell (the route body, the mobile app shell, the project editor workbench, the platform shell, the glance agenda hook and the UI store).
+- **Amendment (2026-11-08): bot becomes a module; five kernel files stop importing the desktop shell.** The record is §28 of `docs/plans/2026-11-07-tools-contributions.md`.
+  - The bot control plane has a manifest (`lib/bot/module.ts`). Its three sync tables (`botInstallations`, `botEventDeliveries`, `botDefinitions`) are a `syncHandlers` contribution, so the handlers moved to `lib/bot/sync/`. This repays `lib/sync/handlers/bot-installations.ts -> bot`.
+  - Bot depends on the connectors and workflow, which used to call `lib/bot` to fan events into bots. That would have been a cycle. They now ask the `bot-dispatch` port (`types/modules/ports/bot-dispatch.ts`) and do nothing when it has no provider. The port has four methods: connector inbound, desktop event, workflow completed, and cancelling a conversation's deliveries.
+  - Five kernel → desktop edges are repaid:
+    - The UI store runs sidebar gestures through a foundation seam (`stores/ui/sidebar-gesture.ts`). The desktop shell installs its View Transition runner when it loads.
+    - `canHearInvalidations` moved to the device presence registry and `activePairedDevices` to `lib/db/paired-devices.ts`, so the glance agenda no longer imports the status bar.
+    - `menu-focus-claims` moved to `lib/shortcuts/`, and `JobCenterPanel` to `components/shell/`.
+    - The `/` route body picks the platform shell, so the shell owns it.
+  - Still open: `components/runtime/platform-shell.tsx -> desktop`. `AppRuntime` renders the platform shell deep inside its provider tree, while its lightweight and guest branches render the children without it. Re-owning the file would only add an `app-runtime -> shell` edge. The edge goes away when `AppRuntime` is dissolved into contributions, or when the root layout passes the shell in.
 
 **How modules talk.**
 - **Public API files.** A module imports another module only through the concrete files listed in its `api`, plus `types/<id>/**`. There are no barrels, as `check-root-loading-boundaries` already requires. The target must be in `dependsOn`, and the `dependsOn` graph has no cycle.
-- **Capability ports.** The kernel defines a port, a module or plugin `provides` an implementation and a consumer `requires` it. Ports so far: `ocr`, `speech`, `web-reader`, `web-search`, `docs-provider`, `forge`, `remote-desktop`, `knowledge-base-revisions`, `workflow-editor-session`, `a2ui-system-prompt`, `interactive-page`, `inbound-jobs`, the collection ports `docs-provider`, `conversation-channel` and `identity-principal-links`, sandbox backends, IM adapters, and subscription, balance and model-catalog. A port follows the shape of ADR-0246's granted connections.
+- **Capability ports.** The kernel defines a port, a module or plugin `provides` an implementation and a consumer `requires` it. Ports so far: `ocr`, `speech`, `web-reader`, `web-search`, `docs-provider`, `forge`, `remote-desktop`, `knowledge-base-revisions`, `workflow-editor-session`, `a2ui-system-prompt`, `interactive-page`, `inbound-jobs`, `bot-dispatch`, the collection ports `docs-provider`, `conversation-channel` and `identity-principal-links`, sandbox backends, IM adapters, and subscription, balance and model-catalog. A port follows the shape of ADR-0246's granted connections.
 - **Typed events.** For an inverted dependency, the kernel's event bus carries events the publisher declares in `types/<id>/events.ts`.
 - **Contribution points.** The shell and the kernel collect from modules only through manifest fields.
 

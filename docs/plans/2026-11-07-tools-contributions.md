@@ -560,3 +560,22 @@ interface ToolSurface {
 - 未做：author-types 未重新生成（重新生成会带进别的会话未提交的类型改动），授权套件 pin 也因契约源改动而失效，二者留待从干净检出重建。
 - 仍未还清：`lib/sync/handlers/bot-installations.ts -> bot`（bot 还没有 manifest）；六个内核文件指向桌面壳（`app/route-body`、`app-shell-mobile`、`editor/project-editor-workbench`、`runtime/platform-shell`、`glance/use-glance-agenda`、`ui-store`）。
 - 待做的桌面冒烟：配对手机拉取会话覆盖、记忆与宠物数据；从收件箱恢复一次崩溃的 IM 运行；在配对设备上批准草稿；插件使用 `ctx.connectors` 与 `ctx.a2ui`（含注册 A2UI 组件后卸载）。
+
+## 28. T19：bot 的 manifest 与内核 → 桌面壳的边（2026-11-08）
+
+- 目标：给 bot 建 manifest，还清 `lib/sync/handlers/bot-installations.ts -> bot`；再处理六条指向桌面壳的内核边。
+- bot manifest（67b7d02e8e，还清 1 条）：
+  - `lib/bot/module.ts`，替换 `module-ownership.json` 里的 `bot` 行。`dependsOn` 为 agent、agent-runs、connectors、integrations、outbound、remote-host、share、squads、usage、workflow；`api` 列出 console catalog、生命周期写入、`installed-bot.ts`、`run-cost.ts`、`run.ts` 与 `integration-event.ts`。
+  - 三张同步表作为 `syncHandlers` 贡献：`lib/sync/handlers/bot-{installations,event-deliveries,definitions}.ts` 用 `git mv` 移到 `lib/bot/sync/`，`sync-handlers.ts` 导出它们；`companion-sync.ts` 改为 `moduleSyncPull`。
+  - 成环问题：connectors（`bus.ts` 的 `dispatchBotFanOut`、`automation-control.ts` 的取消投递）与 workflow（`desktop-event-trigger.ts`、`workflow-completion-fanout.ts`）原先直接导入 `lib/bot`。新增单一提供方端口 `bot-dispatch`（`types/modules/ports/bot-dispatch.ts`）：`connectorInbound`、`desktopEvent`、`workflowCompleted`、`cancelConversationDeliveries`。bot 在 `lib/bot/ports/bot-dispatch.ts` 提供，每个方法按需加载对应的 source；取消投递在没有匹配行时不加载运行时。connectors 与 workflow 去掉对 bot 的 `dependsOn`，`requires` 加上 `bot-dispatch?`。
+  - G3 要求补的 `api`：remote-host（新条目放置、运行于宿主徽章、`use-place-new-item`）、agent（无人值守权限字段）、outbound（收件人编辑器、已知会话与仓库钩子）、integrations（`registry.ts`）。
+- 桌面壳的边（2a1329e364，还清 5 条）：
+  - `stores/ui/ui-store.ts`：基础层接缝 `stores/ui/sidebar-gesture.ts`（`installSidebarGestureRunner` / `runSidebarGesture`，默认立即应用）；`desktop-app-shell.tsx` 在模块加载时装上 `lib/desktop/sidebar-edge-transition.ts` 的执行器。
+  - `hooks/glance/use-glance-agenda.ts`：`canHearInvalidations` 移到 `lib/companion/device-presence-registry.ts`，`activePairedDevices` 移到 `lib/db/paired-devices.ts`，测试随之移动。
+  - `components/editor/project/project-editor-workbench.tsx`：`menu-focus-claims` 用 `git mv` 移到 `lib/shortcuts/`。
+  - `components/app-shell-mobile.tsx`：`JobCenterPanel`（含测试与 story）用 `git mv` 移到 `components/shell/`。
+  - `app/route-body.tsx`：它负责挑选平台壳，新增 `paths` 行归 shell。
+- 仍未还清：`components/runtime/platform-shell.tsx -> desktop`。`app/layout.tsx`（服务端组件）渲染 `AppRuntime`，后者在 provider 树深处渲染 `<PlatformShell>`，轻量与访客分支则不经过它。把 platform-shell 改归 shell 会新增 `app-runtime.tsx -> shell`（G2 错误）。可选做法：根布局把壳作为元素参数传入并改归 shell（需真实静态构建验证 RSC 序列化），或等 `AppRuntime` 拆成贡献。
+- 门禁：module gate 通过（894 条方向边），只删自己的 6 行基线；baseline-growth、colocated-tests、data-governance、`check-modules.test.mjs`（83 项）通过；全量类型检查只有已知的外来错误。
+- 已有、与本次无关的失败：`lib/sync/host-state-service.test.ts`（别的会话的 external-agent 改动）。
+- 待做的桌面冒烟：侧栏折叠/展开动画；IM 入站分发给 bot；桌面事件与工作流完成触发 bot；会话暂停时取消已接受的 bot 投递。
