@@ -173,27 +173,34 @@ async function openScheduledWritableBundle(
   sourceRoot: string,
   agentKind: string,
   base: NonNullable<BeginTaskWorkspaceTurn["base"]> = { kind: "remoteDefault" },
-  sessionId: string = task.id
+  sessionId: string = task.id,
+  // The run's cancel. Aborting it while the worktree is being created cancels
+  // the checkout on the host (keyed by this task as its owner), which kills the
+  // git it waits on instead of letting a cancelled run finish its checkout.
+  signal?: AbortSignal
 ) {
   const primaryLogicalRootId = "primary"
   // A scheduled run gets a fresh worktree with no `node_modules` every time it
   // fires. Whatever the workspace provisions its chat worktrees with applies
   // here for the same reason and by the same consent.
   const provisioning = await provisioningForWorkspaceRoot(sourceRoot).catch(() => undefined)
-  const bundle = await acquireWorkspaceBundle({
-    ownerType: "scheduled",
-    ownerRef: task.id,
-    environmentKind: "managed",
-    base,
-    roots: [
-      {
-        logicalRootId: primaryLogicalRootId,
-        role: "primary",
-        sourceRoot,
-      },
-    ],
-    ...(provisioning ? { provisioning } : {}),
-  })
+  const bundle = await acquireWorkspaceBundle(
+    {
+      ownerType: "scheduled",
+      ownerRef: task.id,
+      environmentKind: "managed",
+      base,
+      roots: [
+        {
+          logicalRootId: primaryLogicalRootId,
+          role: "primary",
+          sourceRoot,
+        },
+      ],
+      ...(provisioning ? { provisioning } : {}),
+    },
+    signal ? { signal } : {}
+  )
   const lease = await openWorkspaceBundleTurnLease(bundle, primaryLogicalRootId, {
     taskId: `scheduled:${task.id}`,
     sessionId,
@@ -864,7 +871,8 @@ async function runChatPrompt(
               boundWorkspaceRoot!,
               "scheduled-chat",
               canonicalExecution?.base,
-              sessionId
+              sessionId,
+              options.signal
             ).catch(() => null)
       )
     : null
@@ -1308,7 +1316,15 @@ async function executeScriptTask(
   }
 
   const workspaceLease = payload.working_dir
-    ? await openScheduledWritableBundle(task, execution, payload.working_dir, "scheduled-script")
+    ? await openScheduledWritableBundle(
+        task,
+        execution,
+        payload.working_dir,
+        "scheduled-script",
+        undefined,
+        undefined,
+        signal
+      )
     : null
   let result: Awaited<ReturnType<typeof executeScript>>
   try {
@@ -1396,7 +1412,15 @@ async function executeExternalAgentTask(
       cwd = await hostWorkingDirectory({ cwd, project })
     }
     workspaceLease = cwd
-      ? await openScheduledWritableBundle(task, execution, cwd, "scheduled-external-agent")
+      ? await openScheduledWritableBundle(
+          task,
+          execution,
+          cwd,
+          "scheduled-external-agent",
+          undefined,
+          undefined,
+          signal
+        )
       : null
     // An always-on Host starts the agent in the project's runtime environment
     // (ADR-0224 A8); a refusal fails the run before anything starts.

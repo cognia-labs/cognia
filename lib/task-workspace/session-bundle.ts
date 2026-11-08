@@ -86,6 +86,12 @@ export async function ensureSessionExecutionBundle(input: {
   context: SessionExecutionContext
   project: Pick<Project, "id" | "roots" | "workspaceProvisioning">
   /**
+   * The turn's Stop. Aborting it while the bundle is being created cancels the
+   * checkout on the host (it is keyed by this session as its owner), which
+   * kills the git it is waiting on and rolls the worktree back.
+   */
+  signal?: AbortSignal
+  /**
    * Test seam. Production resolves it from the repository's approved
    * `.cognia/workspace.json` plus what this device accepted — see
    * `provisioningForProject`.
@@ -124,6 +130,7 @@ export async function ensureSessionExecutionBundle(input: {
     undefined,
     input.credentialContext
   )
+  input.signal?.throwIfAborted()
 
   let bundle = context.execution?.bundleId
     ? await getWorkspaceBundle(context.execution.bundleId)
@@ -138,21 +145,31 @@ export async function ensureSessionExecutionBundle(input: {
     // `task_workspace_bundle_acquire` is `approval: "interactive"`. This is the
     // one call that happens before the turn lease exists, so it carries its own
     // one-shot approval rather than the turn scope opened in `run-lease.ts`.
+    // Passed only when there is a signal, so a caller without one makes the
+    // same one-argument call it always made.
+    const acquireOptions: [] | [{ signal: AbortSignal }] = input.signal
+      ? [{ signal: input.signal }]
+      : []
     bundle = await runWorkspaceUserAction("task_workspace_bundle_acquire", () =>
-      acquireWorkspaceBundle({
-        ownerType: "session",
-        ownerRef: sessionId,
-        projectId: project.id,
-        environmentKind: context.execution?.mode === "permanent" ? "permanent" : "managed",
-        base: resolvedBase,
-        roots: roots.map((root) => ({
-          logicalRootId: root.id,
-          role: root.id === primaryRoot.id ? ("primary" as const) : ("additional" as const),
-          sourceRoot: root.path,
-        })),
-        ...(provisioning ? { provisioning } : {}),
-        ...(context.requestedWorktreeName ? { requestedName: context.requestedWorktreeName } : {}),
-      })
+      acquireWorkspaceBundle(
+        {
+          ownerType: "session",
+          ownerRef: sessionId,
+          projectId: project.id,
+          environmentKind: context.execution?.mode === "permanent" ? "permanent" : "managed",
+          base: resolvedBase,
+          roots: roots.map((root) => ({
+            logicalRootId: root.id,
+            role: root.id === primaryRoot.id ? ("primary" as const) : ("additional" as const),
+            sourceRoot: root.path,
+          })),
+          ...(provisioning ? { provisioning } : {}),
+          ...(context.requestedWorktreeName
+            ? { requestedName: context.requestedWorktreeName }
+            : {}),
+        },
+        ...acquireOptions
+      )
     )
   }
   if (bundle.state !== "active") {

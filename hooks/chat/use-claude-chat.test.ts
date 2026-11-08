@@ -2785,6 +2785,99 @@ describe("useClaudeChat — actions", () => {
       )
     })
 
+    it("cancels the checkout when Stop is pressed while it runs, and ends the turn quietly", async () => {
+      // A large repository's worktree can take minutes. Stop aborts the signal
+      // the bundle seam hands to the host acquisition; the host kills the git
+      // and rejects. Stop has already settled the turn as cancelled, so the
+      // rejection must not refuse it again as a failure.
+      let checkoutSignal: AbortSignal | undefined
+      ensureSessionExecutionBundleMock.mockImplementationOnce(
+        (input: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            checkoutSignal = input.signal
+            input.signal?.addEventListener("abort", () =>
+              reject(new Error("git worktree add failed: the acquisition was cancelled"))
+            )
+          })
+      )
+      getSessionMock.mockResolvedValue({
+        id: "sess-1",
+        title: "New chat",
+        model: "sonnet",
+        projectId: "project-1",
+        executionContext: unmaterializedManagedContext,
+      })
+
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      let sending: Promise<void> | undefined
+      act(() => {
+        sending = result.current.send("hello")
+      })
+      await flush()
+      expect(checkoutSignal).toBeDefined()
+      expect(checkoutSignal!.aborted).toBe(false)
+
+      await act(async () => {
+        await result.current.stop("sess-1")
+        await sending
+      })
+
+      expect(checkoutSignal!.aborted).toBe(true)
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(runStandaloneTurnMock).not.toHaveBeenCalled()
+      const codes = chatState.setSessionDiagnostic.mock.calls.map(
+        (call) => (call[1] as { code?: string } | null)?.code
+      )
+      expect(codes).not.toContain("workspaceBundleFailed")
+      expect(settleChatTurnForSessionMock).not.toHaveBeenCalledWith(
+        "sess-1",
+        expect.objectContaining({ outcome: "failed" })
+      )
+      expect(settleChatTurnForSessionMock).toHaveBeenCalledWith(
+        "sess-1",
+        expect.objectContaining({ outcome: "cancelled" })
+      )
+    })
+
+    it("leaves a checkout alone when Stop fails before it commits", async () => {
+      let checkoutSignal: AbortSignal | undefined
+      let finishCheckout!: () => void
+      ensureSessionExecutionBundleMock.mockImplementationOnce(
+        (input: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            checkoutSignal = input.signal
+            finishCheckout = () => reject(new Error("registry unavailable"))
+          })
+      )
+      getSessionMock.mockResolvedValue({
+        id: "sess-1",
+        title: "New chat",
+        model: "sonnet",
+        projectId: "project-1",
+        executionContext: unmaterializedManagedContext,
+      })
+
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      let sending: Promise<void> | undefined
+      act(() => {
+        sending = result.current.send("hello")
+      })
+      await flush()
+      expect(checkoutSignal).toBeDefined()
+      enqueueHostStateIntentMock.mockRejectedValueOnce(new Error("outbox down"))
+      await act(async () => {
+        await result.current.stop("sess-1")
+      })
+      // The turn is still running, so its checkout must keep going too.
+      expect(checkoutSignal!.aborted).toBe(false)
+      await act(async () => {
+        finishCheckout()
+        await sending
+      })
+    })
+
     it("keeps the gate for an external lane, which the standalone engine does not run", async () => {
       // The gate follows the executor, not the shell: a turn routed to an
       // external agent never reaches the in-webview engine.

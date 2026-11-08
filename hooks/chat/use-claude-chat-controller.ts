@@ -1199,6 +1199,10 @@ export function useClaudeChat() {
   // `interruptSession` instead).
   const standaloneAbortRef = useRef<Map<string, AbortController>>(new Map())
   const externalGatewayAbortRef = useRef<Map<string, AbortController>>(new Map())
+  // Per-session abort for the turn's working-copy checkout (ADR-0176 A1). Stop
+  // aborts it, which cancels the checkout on the host: the git it waits on is
+  // killed and the worktree rolled back, instead of Stop waiting it out.
+  const checkoutAbortRef = useRef<Map<string, AbortController>>(new Map())
   // Sessions whose running turn belongs to a paired Host (HostState). That
   // turn's end never reaches `handleEvent` here — the Host's projection just
   // flips the session's status — so the steer queue such a turn leaves behind
@@ -4318,6 +4322,23 @@ export function useClaudeChat() {
           )
         }
       }
+      // The checkout is the one step before the turn lease that can run for
+      // minutes on a large repository. Stop has already settled the turn as
+      // cancelled by the time an aborted checkout returns, so that return ends
+      // the send quietly instead of refusing the turn a second time.
+      const checkoutAbort = new AbortController()
+      checkoutAbortRef.current.set(sessionId, checkoutAbort)
+      const forgetCheckoutAbort = () => {
+        if (checkoutAbortRef.current.get(sessionId) === checkoutAbort) {
+          checkoutAbortRef.current.delete(sessionId)
+        }
+      }
+      const endStoppedCheckout = () => {
+        forgetCheckoutAbort()
+        releaseSkillLoadContext(sessionId)
+        stopAssemblyHeartbeat()
+        finishBehaviorTurn(sessionId)
+      }
       let bundlePrimaryRootId: string | undefined
       let managedBundle: SessionBundleBinding["bundle"] | undefined
       let managedAliasesBySource: SessionBundleBinding["aliasesBySource"] | undefined
@@ -4344,6 +4365,7 @@ export function useClaudeChat() {
               : { sessionId, executionRunId: turnIdentity.runId },
             context: executionContext,
             project,
+            signal: checkoutAbort.signal,
           })
           executionContext = binding.context
           bundlePrimaryRootId = binding.primaryLogicalRootId
@@ -4352,6 +4374,10 @@ export function useClaudeChat() {
           sendOptions = redirectSendToBundleAliases(sendOptions, binding, binding.aliasesBySource)
           await updateSession(sessionId, { executionContext })
         } catch (error) {
+          if (checkoutAbort.signal.aborted) {
+            endStoppedCheckout()
+            return
+          }
           console.error("managed workspace bundle acquisition failed", error)
           await refuseTurn({
             errorCode: "workspace_bundle_unavailable",
@@ -4509,22 +4535,33 @@ export function useClaudeChat() {
               const provisioning = await provisioningForWorkspaceRoot(workspaceRoot).catch(
                 () => undefined
               )
-              return acquireWorkspaceBundle({
-                ownerType: "session",
-                ownerRef: sessionId,
-                environmentKind: "managed",
-                base: { kind: "workingState" },
-                roots: [
-                  {
-                    logicalRootId: "primary",
-                    role: "primary",
-                    sourceRoot: workspaceRoot,
-                  },
-                ],
-                ...(provisioning ? { provisioning } : {}),
-              })
+              return acquireWorkspaceBundle(
+                {
+                  ownerType: "session",
+                  ownerRef: sessionId,
+                  environmentKind: "managed",
+                  base: { kind: "workingState" },
+                  roots: [
+                    {
+                      logicalRootId: "primary",
+                      role: "primary",
+                      sourceRoot: workspaceRoot,
+                    },
+                  ],
+                  ...(provisioning ? { provisioning } : {}),
+                },
+                { signal: checkoutAbort.signal }
+              )
             })().catch(() => null)
           : null
+        // A failed legacy checkout falls back to the folder itself, which is
+        // right for a failure and wrong for a Stop: the stopped turn must not
+        // go on to run, isolated or not.
+        if (checkoutAbort.signal.aborted) {
+          endStoppedCheckout()
+          return
+        }
+        forgetCheckoutAbort()
         // Caught, unlike every other await in this block, because a throw here
         // escaped the send entirely: the composer's own catch logged it, the
         // session stayed `streaming` forever, and the status edge that settles
@@ -7107,6 +7144,10 @@ export function useClaudeChat() {
             chat.markApprovalInterrupted(approval.requestId, approval.sessionId, "aborted")
           }
         }
+        // Only once Stop is committed: an earlier failure returns with the
+        // turn still running, and a cancelled checkout would strand it.
+        checkoutAbortRef.current.get(sessionId)?.abort()
+        checkoutAbortRef.current.delete(sessionId)
         const endingRunId = chat.sessions[sessionId]?.runId
         if (typeof endingRunId === "number") {
           markTaskWorkspaceTurnCancelled(sessionId, endingRunId)

@@ -453,3 +453,54 @@ describe("repository-declared provisioning", () => {
     expect(loadProvisioning).not.toHaveBeenCalled()
   })
 })
+
+describe("a turn stopped while its bundle is being created", () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    acquireWorkspaceBundle.mockResolvedValue(bundle)
+    getWorkspaceBundle.mockResolvedValue(null)
+  })
+
+  it("hands the turn's signal to the acquisition so Stop can cancel the checkout", async () => {
+    const controller = new AbortController()
+    await ensureSessionExecutionBundle({
+      sessionId: "session-1",
+      context,
+      project,
+      signal: controller.signal,
+      loadProvisioning: async () => undefined,
+    })
+
+    expect(acquireWorkspaceBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerType: "session", ownerRef: "session-1" }),
+      { signal: controller.signal }
+    )
+  })
+
+  it("does not start a checkout for a turn stopped before it began", async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(
+      ensureSessionExecutionBundle({
+        sessionId: "session-1",
+        context,
+        project,
+        signal: controller.signal,
+        loadProvisioning: async () => undefined,
+      })
+    ).rejects.toThrow()
+    expect(acquireWorkspaceBundle).not.toHaveBeenCalled()
+  })
+
+  it("keeps the one-argument call for a caller without a signal", async () => {
+    await ensureSessionExecutionBundle({
+      sessionId: "session-1",
+      context,
+      project,
+      loadProvisioning: async () => undefined,
+    })
+
+    expect(acquireWorkspaceBundle.mock.calls[0]).toHaveLength(1)
+  })
+})

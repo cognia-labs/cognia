@@ -100,8 +100,14 @@ jest.mock("@/lib/task-workspace/run-lease", () => ({
 }))
 const getWorkspaceBundleMock = jest.fn()
 const acquireWorkspaceBundleMock = jest.fn()
+// The call options, apart from the input, so the input assertions stay as
+// they are: what carries the run's cancel to the host acquisition.
+const acquireWorkspaceBundleOptionsMock = jest.fn()
 jest.mock("@/lib/task-workspace/client", () => ({
-  acquireWorkspaceBundle: (input: unknown) => acquireWorkspaceBundleMock(input),
+  acquireWorkspaceBundle: (input: unknown, options?: unknown) => {
+    acquireWorkspaceBundleOptionsMock(options)
+    return acquireWorkspaceBundleMock(input)
+  },
   getWorkspaceBundle: (bundleId: string) => getWorkspaceBundleMock(bundleId),
 }))
 
@@ -327,6 +333,7 @@ beforeEach(() => {
       },
     ],
   })
+  acquireWorkspaceBundleOptionsMock.mockReset()
   acquireWorkspaceBundleMock.mockReset().mockResolvedValue({
     bundleId: "scheduled-bundle-1",
     leases: [
@@ -792,6 +799,25 @@ describe("executeChatTask", () => {
     )
     expect(settleTaskWorkspaceMock).toHaveBeenCalledWith("ready")
     expect(result.success).toBe(true)
+  })
+
+  it("hands the run's cancel to the worktree checkout", async () => {
+    const executionContext = {
+      location: "managedWorktree" as const,
+      projectId: "project-1",
+      projectRoot: "/repo",
+      taskWorkspace: { taskId: "task-workspace:session-1", workspaceKey: "session-1" },
+      baseRef: "main",
+    }
+    emitTerminalResult()
+    const signal = makeSignal()
+    await executeChatTask(
+      makeTask({ payload: { prompt: "hi", executionContext } }),
+      { ...makeExecution(), id: "execution-1" },
+      signal
+    )
+
+    expect(acquireWorkspaceBundleOptionsMock).toHaveBeenCalledWith({ signal })
   })
 
   it("captures wrapped SDK terminal events and assistant text", async () => {
@@ -2490,6 +2516,27 @@ describe("executeScriptTask", () => {
       })
     )
     expect(settleTaskWorkspaceMock).toHaveBeenCalledWith("ready")
+    // A cancelled run cancels its checkout instead of waiting it out.
+    expect(acquireWorkspaceBundleOptionsMock).toHaveBeenCalledWith({
+      signal: expect.any(AbortSignal),
+    })
+  })
+  it("does not run a script whose checkout was cancelled with its run", async () => {
+    const controller = new AbortController()
+    acquireWorkspaceBundleMock.mockImplementationOnce(async () => {
+      controller.abort()
+      throw new Error("git worktree add failed: the acquisition was cancelled")
+    })
+
+    await expect(
+      executeScriptTask(
+        makeTask({ payload: { language: "bash", code: "pwd", working_dir: "/tmp" } }),
+        makeExecution(),
+        controller.signal
+      )
+    ).rejects.toThrow("the acquisition was cancelled")
+    expect(acquireWorkspaceBundleOptionsMock).toHaveBeenCalledWith({ signal: controller.signal })
+    expect(executeScriptMock).not.toHaveBeenCalled()
   })
   it("reflects errors from executeScript", async () => {
     executeScriptMock.mockResolvedValueOnce({
