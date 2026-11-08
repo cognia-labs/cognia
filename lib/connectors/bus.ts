@@ -48,7 +48,7 @@ import type {
   AdapterInstanceRow,
   ConnectorInboundJobRow,
 } from "@/lib/db/connector-types"
-import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
+import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { readForResolution, setStatus, setSlaDue } from "@/lib/db/conversation-overrides"
 import { computeDueAt } from "@/lib/connectors/sla"
 import { findSessionByConversationKey, findActiveSessionForConversation } from "./session-bindings"
@@ -135,12 +135,6 @@ import {
   type AutomatedRoomTurnInput,
 } from "./room/automated-room-turn"
 import { classifySiblingSender, type SiblingClassification } from "./sibling-bots"
-import {
-  findRespondViaEcho,
-  personaVoiceRoomOf,
-  type PersonaVoiceDeps,
-  type RespondViaEchoDeps,
-} from "./room/persona-voices"
 import { applyMediaModelGate, resolveMediaModelPolicy } from "./media-model-gate"
 import { consumeSiblingInterplayBudget, DEFAULT_BOT_INTERPLAY_BUDGET } from "./at-gate"
 import { observeUnmentionedDeliveryProbe } from "./at-gate"
@@ -248,23 +242,6 @@ const RATE_BUCKET_WINDOW_MS = 60_000
  */
 const MAX_TURN_QUEUE_DEPTH = 100
 const INBOUND_JOB_LEASE_MS = 20 * 60_000
-
-/** What the persona-voice hold reads (`lib/connectors/room/persona-voices.ts`). */
-const PERSONA_VOICE_DEPS: PersonaVoiceDeps = {
-  listAdapters: listAdapterInstancesByType,
-  readOverride: (conversationKey) => readForResolution(conversationKey),
-}
-
-/** What the respond-via echo check reads: a sibling conversation's recent outbound jobs. */
-const RESPOND_VIA_ECHO_DEPS: RespondViaEchoDeps = {
-  listJobs: (conversationKey, since) =>
-    getDb()
-      .outboundQueue.where("[conversationKey+createdAt]")
-      .between([conversationKey, since], [conversationKey, Number.MAX_SAFE_INTEGER])
-      .toArray(),
-  now: () => Date.now(),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-}
 
 /**
  * The `connectors.inbound` topic's sequence. Per window, not per bus: a bus
@@ -1226,23 +1203,6 @@ export class ConnectorBus {
     // about to be enqueued. In the old placement a sibling posting into a
     // blocked chat, or one whose trigger matched nothing, burned budget anyway.
     if (decision !== "drop" && !evalResult.blocked && (!event.kind || event.kind === "create")) {
-      // A bot that is a room member's voice answers only as that member, so
-      // its own conversation in the same chat runs no turn (ADR-0252 P7).
-      const voiceRoom = await personaVoiceRoomOf(event, adapterRow, PERSONA_VOICE_DEPS).catch(
-        () => undefined
-      )
-      if (voiceRoom) {
-        await markConnectorInboundJobHistoryOnly(inboundJob.id, "persona_voice", { now })
-        await appendAudit({
-          adapterId: event.adapterId,
-          kind: "inbound.persona_voice_held",
-          at: now,
-          conversationKey: event.conversationKey,
-          fields: { roomConversationKey: voiceRoom },
-        }).catch(() => undefined)
-        return
-      }
-
       const classification = await classifySiblingSender(event).catch(
         (): SiblingClassification => ({ kind: "identity_unknown", unverifiedAdapterIds: [] })
       )
@@ -1282,25 +1242,6 @@ export class ConnectorBus {
           return
         }
         if (policy === "respond") {
-          // Our own reply coming back through the bot that carried it is
-          // already in this conversation: answering it would be talking to
-          // ourselves. (Under "ignore" it is history only anyway.)
-          const echo = await findRespondViaEcho(
-            event,
-            classification.row.id,
-            RESPOND_VIA_ECHO_DEPS
-          ).catch(() => undefined)
-          if (echo) {
-            await markConnectorInboundJobHistoryOnly(inboundJob.id, "respond_via_echo", { now })
-            await appendAudit({
-              adapterId: event.adapterId,
-              kind: "inbound.respond_via_echo",
-              at: now,
-              conversationKey: event.conversationKey,
-              fields: { siblingAdapterId: classification.row.id, outboundJobId: echo.id },
-            }).catch(() => undefined)
-            return
-          }
           const budget = adapterRow.botInterplayBudget ?? DEFAULT_BOT_INTERPLAY_BUDGET
           const chatId = event.channel.platformChannelId ?? event.channel.id
           if (!consumeSiblingInterplayBudget(event.adapterId, chatId, budget, now)) {
