@@ -4193,8 +4193,8 @@ export interface AppSettings {
     /**
      * Expose the team-collaboration tools (`team_send_message`,
      * `team_publish_memory`, `team_request_consensus`, `team_delegate`, …) to a
-     * teammate during a team dispatch turn. Only takes effect on team sessions.
-     * Default false.
+     * teammate during a team dispatch turn. Only takes effect on a teammate's
+     * own dispatch session, never on a character-team room. Default false.
      */
     teamCollaboration?: boolean
     /**

@@ -11,8 +11,9 @@
  *
  * Host-routed because the work reaches the Zustand agent-team store and the
  * consensus / delegation / shared-memory orchestrators — TS the sidecar can't
- * import. {@link teamToolFamily} offers them on a team dispatch session once
- * `selfInvokeTools.teamCollaboration` is on (opt-in), with
+ * import. {@link teamToolFamily} offers them on a team dispatch session (never
+ * a character-team room) once `selfInvokeTools.teamCollaboration` is on
+ * (opt-in), with
  * {@link TEAM_MESSAGING_PROTOCOL} as their instructions, and binds every call
  * to the teammate that issued it through the per-session team-dispatch
  * registry (`lib/claude/agents/dispatch-context-registry.ts`).
@@ -1025,11 +1026,18 @@ export function __setTeamToolDepsForTesting(
  * turned `selfInvokeTools.teamCollaboration` on. A call is bound to the
  * teammate the session was dispatched as; from any other session it is
  * refused rather than mis-attributed.
+ *
+ * A character-team room is a `kind: "team"` session too, but no teammate is
+ * dispatched in it, so it is offered none of them (ADR-0252 §4): every call
+ * would be refused. A room member hands work over with
+ * `room_handoff_to_squad` instead.
  */
 export const teamToolFamily: ModuleToolFamily = {
   async surface(ctx: ToolSurfaceContext) {
     if (ctx.session?.kind !== "team") return null
     if (ctx.settings?.selfInvokeTools?.teamCollaboration !== true) return null
+    // Registered by `dispatchTeammate` before it resolves the run's options.
+    if (!getTeamDispatchContext(ctx.session.id)) return null
     const includeTwinKnowledgeSearch = await teamHasKnowledgeTwins(
       ctx.session.id,
       ctx.agent?.twinId

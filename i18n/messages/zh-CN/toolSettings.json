@@ -51,7 +51,7 @@
   "slashToolTitle": "SlashCommand 工具",
   "spawnTaskToolDesc": "允许 Agent 将明确范围的后续工作暂存到命名侧聊中，供你检查并启动。",
   "spawnTaskToolTitle": "派生任务",
-  "teamCollabToolDesc": "让队友在团队运行期间协作——给同伴发消息、共享黑板、发起或参与共识投票、委派子任务。仅对 Agent 团队会话生效。",
+  "teamCollabToolDesc": "让小队成员在小队运行期间协作——给同伴发消息、共享黑板、发起或参与共识投票、委派子任务。只在小队成员自己的轮次中生效，不用于角色团队房间。",
   "teamCollabToolTitle": "团队协作工具",
   "templateToolsDesc": "允许 Agent 浏览你的模板目录、已保存的会话模板与小队，并实例化模板或把小队存为模板。每次写入都会先征求你的同意，与插件使用的同一个确认提示。",
   "templateToolsTitle": "模板与小队工具",

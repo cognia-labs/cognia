@@ -2,6 +2,10 @@ import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest
 import { TEAM_MESSAGING_PROTOCOL, TEAM_TOOL_NAMES, teamToolFamily } from "./collaboration-tools"
 import { SQUAD_TOOL_NAMES, templateToolFamily } from "./template-tools"
 import { toolFamily } from "./agent-tools"
+import {
+  clearTeamDispatchContext,
+  registerTeamDispatchContext,
+} from "@/lib/claude/agents/dispatch-context-registry"
 
 function surfaceCtx(selfInvokeTools: Record<string, boolean>): ToolSurfaceContext {
   return {
@@ -22,7 +26,14 @@ const call: ToolCallContext = {
   outboundAuthorization: { kind: "tool-call", sessionId: "team-sess", toolUseId: "use-1" },
 }
 
-afterEach(() => jest.restoreAllMocks())
+// A teammate's own dispatch session: the collaboration half is offered only there.
+beforeEach(() =>
+  registerTeamDispatchContext("team-sess", { teamId: "t", teammateId: "m", teammateName: "M" })
+)
+afterEach(() => {
+  clearTeamDispatchContext("team-sess")
+  jest.restoreAllMocks()
+})
 
 describe("the squads tool family", () => {
   it("offers each half under its own switch, the protocol only with the collaboration tools", async () => {

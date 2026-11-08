@@ -1048,7 +1048,15 @@ describe("teamToolFamily", () => {
     clearTeamDispatchContext("team-sess")
   })
 
-  it("offers the tools with the messaging protocol on a team session once opted in", async () => {
+  const dispatched = () =>
+    registerTeamDispatchContext("team-sess", {
+      teamId: "team-1",
+      teammateId: "tm-a",
+      teammateName: "Ada",
+    })
+
+  it("offers the tools with the messaging protocol to a dispatched teammate once opted in", async () => {
+    dispatched()
     const surface = await teamToolFamily.surface(surfaceCtx())
     expect(surface?.instructions).toBe(TEAM_MESSAGING_PROTOCOL)
     const names = surface!.tools.map((t) => t.name)
@@ -1058,13 +1066,20 @@ describe("teamToolFamily", () => {
   })
 
   it("offers twin_knowledge_search to a twin-bound teammate", async () => {
+    dispatched()
     const surface = await teamToolFamily.surface(
       surfaceCtx({ agent: { id: "c1", twinId: "tw-1" } as ToolSurfaceContext["agent"] })
     )
     expect(surface?.tools.map((t) => t.name)).toContain(TEAM_TOOL_NAMES.twinKnowledgeSearch)
   })
 
+  it("offers nothing to a character-team room, where no teammate is dispatched", async () => {
+    // A room is a `kind: "team"` session too; every call there would be refused.
+    expect(await teamToolFamily.surface(surfaceCtx())).toBeNull()
+  })
+
   it("offers nothing off a team session or with the switch off", async () => {
+    dispatched()
     expect(
       await teamToolFamily.surface(
         surfaceCtx({ session: { id: "s", kind: "direct" } as ToolSurfaceContext["session"] })

@@ -7,6 +7,7 @@ jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   recordRunAuthority: jest.fn(async () => undefined),
 }))
+import * as dispatchContextRegistry from "@/lib/claude/agents/dispatch-context-registry"
 import { recordRunAuthority } from "@/lib/execution/acting-authority"
 // Mock every database / store / agent-mode dependency so build-options can be
 // exercised as a pure function. We never want to touch Dexie or Zustand here.
@@ -8003,15 +8004,39 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     })
   })
 
-  it("appends team-collaboration tools only on a team session with the flag on", async () => {
+  it("appends team-collaboration tools only on a teammate's dispatch session with the flag on", async () => {
     const teamSession = makeSession({ id: "s1", characterId: "c1", kind: "team" })
+    // A teammate's own dispatch session (`dispatchTeammate` registers it first).
+    const registry = dispatchContextRegistry
+    registry.registerTeamDispatchContext("s1", {
+      teamId: "t1",
+      teammateId: "m1",
+      teammateName: "M",
+    })
+    try {
+      const opts = await resolveSendOptions({
+        session: teamSession,
+        character: makeChar({ id: "c1" }),
+        appSettings: { selfInvokeTools: { teamCollaboration: true } } as AppSettings,
+      })
+      expect(toolNames(opts)).toContain("team_send_message")
+      expect(toolNames(opts)).toContain("team_delegate")
+    } finally {
+      registry.clearTeamDispatchContext("s1")
+    }
+  })
+
+  it("does NOT append team-collaboration tools in a character-team room (ADR-0252 §4)", async () => {
+    // Also `kind: "team"`, but no teammate is dispatched there: every call
+    // would be refused, so none is offered.
+    const room = makeSession({ id: "room-1", characterId: "c1", kind: "team" })
     const opts = await resolveSendOptions({
-      session: teamSession,
+      session: room,
       character: makeChar({ id: "c1" }),
       appSettings: { selfInvokeTools: { teamCollaboration: true } } as AppSettings,
     })
-    expect(toolNames(opts)).toContain("team_send_message")
-    expect(toolNames(opts)).toContain("team_delegate")
+    expect(toolNames(opts)).not.toContain("team_send_message")
+    expect(toolNames(opts)).not.toContain("team_delegate")
   })
 
   it("does NOT append team-collaboration tools on a non-team session even with the flag", async () => {
@@ -8106,24 +8131,46 @@ describe("anthropic-managed (container) skills", () => {
     // A twin-bound teammate is a sufficient signal — teamHasKnowledgeTwins
     // short-circuits on character.twinId without needing a dispatch context.
     const teamSession = makeSession({ id: "s1", characterId: "c1", kind: "team" })
-    const opts = await resolveSendOptions({
-      session: teamSession,
-      character: makeChar({ id: "c1", twinId: "twX" }),
-      appSettings: { selfInvokeTools: { teamCollaboration: true } } as AppSettings,
+    // A teammate's own dispatch session (`dispatchTeammate` registers it first).
+    const registry = dispatchContextRegistry
+    registry.registerTeamDispatchContext("s1", {
+      teamId: "t1",
+      teammateId: "m1",
+      teammateName: "M",
     })
-    expect(toolNames(opts)).toContain("twin_knowledge_search")
+    try {
+      const opts = await resolveSendOptions({
+        session: teamSession,
+        character: makeChar({ id: "c1", twinId: "twX" }),
+        appSettings: { selfInvokeTools: { teamCollaboration: true } } as AppSettings,
+      })
+      expect(toolNames(opts)).toContain("twin_knowledge_search")
+    } finally {
+      registry.clearTeamDispatchContext("s1")
+    }
   })
 
   it("omits twin_knowledge_search when the team exposes no knowledge twins", async () => {
-    // No character twinId and no resolvable team dispatch context → false leg.
+    // No character twinId, and a team with no knowledge twins → false leg.
     const teamSession = makeSession({ id: "s1", characterId: "c1", kind: "team" })
-    const opts = await resolveSendOptions({
-      session: teamSession,
-      character: makeChar({ id: "c1" }),
-      appSettings: { selfInvokeTools: { teamCollaboration: true } } as AppSettings,
+    // A teammate's own dispatch session (`dispatchTeammate` registers it first).
+    const registry = dispatchContextRegistry
+    registry.registerTeamDispatchContext("s1", {
+      teamId: "t1",
+      teammateId: "m1",
+      teammateName: "M",
     })
-    expect(toolNames(opts)).toContain("team_send_message")
-    expect(toolNames(opts)).not.toContain("twin_knowledge_search")
+    try {
+      const opts = await resolveSendOptions({
+        session: teamSession,
+        character: makeChar({ id: "c1" }),
+        appSettings: { selfInvokeTools: { teamCollaboration: true } } as AppSettings,
+      })
+      expect(toolNames(opts)).toContain("team_send_message")
+      expect(toolNames(opts)).not.toContain("twin_knowledge_search")
+    } finally {
+      registry.clearTeamDispatchContext("s1")
+    }
   })
   it("warns and does NOT set containerSkillIds — the SDK cannot attach uploaded skill_ids", async () => {
     const char = makeChar({ id: "c1", pluginSkillIds: ["plg-managed"] })
