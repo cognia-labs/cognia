@@ -199,10 +199,6 @@ export async function recordDeviceCapabilities(
 }
 
 /**
- * Return all paired devices, newest-first by `lastSeenAt`. Includes revoked
- * rows so the settings UI can show "Revoked 3d ago" tombstones.
- */
-/**
  * Paired, not revoked, not paused: the devices this Host still serves.
  *
  * A paired browser extension is not one of them. It holds only `browser.submit`
@@ -215,6 +211,10 @@ export function activePairedDevices(rows: readonly PairedDeviceRow[]): PairedDev
   )
 }
 
+/**
+ * Return all paired devices, newest-first by `lastSeenAt`. Includes revoked
+ * rows so the settings UI can show "Revoked 3d ago" tombstones.
+ */
 export async function listPairedDevices(): Promise<PairedDeviceRow[]> {
   return getDb().pairedDevices.orderBy("lastSeenAt").reverse().toArray()
 }

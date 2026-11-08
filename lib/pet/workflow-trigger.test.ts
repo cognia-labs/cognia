@@ -137,7 +137,7 @@ describe("pet events for Bots", () => {
     expect(desktopEvent).toHaveBeenCalledTimes(1)
     expect(desktopEvent).toHaveBeenCalledWith({
       type: "desktop.pet.levelUp",
-      sourceRecordId: "pet:levelUp:1000",
+      sourceRecordId: "pet:levelUp:1000:5",
       payload: { kind: "levelUp", at: 1000, level: 5 },
       occurredAt: 1000,
     })
@@ -150,6 +150,19 @@ describe("pet events for Bots", () => {
     await flush()
     expect(desktopEvent).toHaveBeenCalledTimes(1)
     expect(dispatchTrigger).toHaveBeenCalledTimes(1)
+  })
+
+  it("gives achievements unlocked in one handling their own Bot events", async () => {
+    await _injectPetEventForTest(event("achievementUnlocked", { achievementId: "well-fed" }))
+    await _injectPetEventForTest(event("achievementUnlocked", { achievementId: "first-chat" }))
+    await flush()
+    const ids = desktopEvent.mock.calls.map(
+      ([input]) => (input as { sourceRecordId: string }).sourceRecordId
+    )
+    expect(ids).toEqual([
+      "pet:achievementUnlocked:1000:well-fed",
+      "pet:achievementUnlocked:1000:first-chat",
+    ])
   })
 
   it("keeps non-lifecycle kinds from the Bots too", async () => {

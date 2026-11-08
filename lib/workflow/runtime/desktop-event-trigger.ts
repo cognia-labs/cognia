@@ -93,6 +93,9 @@ interface RunnerState {
 
 let state: RunnerState | null = null
 
+/** Tells apart UI automation events the backend stamps with the same millisecond. */
+let uiaSequence = 0
+
 async function defaultSubscribe(filter: EventFilter): Promise<number> {
   const { desktop } = await import("@/lib/automation/client")
   return desktop.subscribeEvents(filter)
@@ -178,7 +181,14 @@ async function reconcileNow(s: RunnerState, rows: WorkflowRow[]): Promise<void> 
   }
 
   if (desired.size > 0 && !s.uiaUnlisten) {
-    s.uiaUnlisten = await s.deps.listen((payload) => void onUiaEvent(payload))
+    const unlisten = await s.deps.listen((payload) => void onUiaEvent(payload))
+    // Disposed (or replaced) while the listener was being attached: a listener
+    // kept now would feed every later event to the next runner a second time.
+    if (!s.active || state !== s) {
+      unlisten()
+      return
+    }
+    s.uiaUnlisten = unlisten
   }
 
   for (const [key, wanted] of desired) {
@@ -254,7 +264,7 @@ async function onUiaEvent(payload: DesktopUiaEvent): Promise<void> {
         const bots = await loadPort("bot-dispatch")
         await bots?.desktopEvent({
           type: `desktop.${payload.kind}`,
-          sourceRecordId: `uia:${payload.kind}:${now}`,
+          sourceRecordId: `uia:${payload.kind}:${payload.at}:${++uiaSequence}`,
           payload: { kind: payload.kind, ...(safeName ? { name: safeName } : {}) },
           occurredAt: now,
         })

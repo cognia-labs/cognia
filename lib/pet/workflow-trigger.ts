@@ -56,6 +56,17 @@ interface RunnerState {
 
 let state: RunnerState | null = null
 
+/**
+ * The Bot event id of one pet occurrence. The controller emits every
+ * achievement one handling unlocks with the same `at`, so the id carries what
+ * tells them apart (the achievement, level or stage); two occurrences sharing
+ * an id would be one delivery.
+ */
+export function petSourceRecordId(kind: string, payload: Record<string, unknown>): string {
+  const detail = payload.achievementId ?? payload.level ?? payload.stage
+  return `pet:${kind}:${String(payload.at)}${detail === undefined ? "" : `:${String(detail)}`}`
+}
+
 async function onPetEvent(event: PetEvent): Promise<void> {
   const s = state
   if (!s || !s.active) return
@@ -75,7 +86,7 @@ async function onPetEvent(event: PetEvent): Promise<void> {
     const bots = await loadPort("bot-dispatch")
     await bots?.desktopEvent({
       type: `desktop.pet.${event.kind}`,
-      sourceRecordId: `pet:${event.kind}:${event.at}`,
+      sourceRecordId: petSourceRecordId(event.kind, payload),
       payload: { ...payload },
       occurredAt: event.at,
     })

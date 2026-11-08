@@ -58,6 +58,20 @@ describe("dispatchDesktopEventToBots", () => {
     expect(result.enqueued).toHaveLength(1)
   })
 
+  it("leaves an installation mirrored from a Host this desktop drives to that Host", async () => {
+    await seed(["desktop.focus-changed"])
+    await getDb().botInstallations.update("boti_1", { syncedFromHost: true })
+
+    const result = await dispatchDesktopEventToBots({
+      type: "desktop.focus-changed",
+      sourceRecordId: "uia:focus-changed:1",
+      payload: { kind: "focus-changed" },
+    })
+
+    expect(result.enqueued).toHaveLength(0)
+    expect(await listBotDeliveries({ installationId: "boti_1" })).toHaveLength(0)
+  })
+
   it("carries exactly the payload it was handed, and nothing more", async () => {
     // The producer redacts. This module must not look inside, or it becomes a
     // second place the rules for a window title live.

@@ -93,6 +93,15 @@ describe("listDesktopEventTypes", () => {
     expect(await listDesktopEventTypes()).toEqual(new Set())
   })
 
+  it("leaves out an installation mirrored from a Host this desktop drives", async () => {
+    register("acme", [
+      { id: "screen", kind: "event", source: "desktop", types: ["desktop.focus-changed"] },
+    ])
+    await install("boti_1", "acme")
+    await getDb().botInstallations.update("boti_1", { syncedFromHost: true })
+    expect(await listDesktopEventTypes()).toEqual(new Set())
+  })
+
   it("follows a per-installation trigger override", async () => {
     register("acme", [
       { id: "screen", kind: "event", source: "desktop", types: ["desktop.focus-changed"] },
@@ -134,6 +143,26 @@ describe("watchDesktopEventTypes", () => {
     await install("boti_2", "other")
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(reports).toHaveLength(count)
+  })
+
+  it("settles on the final types after a burst of writes", async () => {
+    register("acme", [
+      { id: "screen", kind: "event", source: "desktop", types: ["desktop.focus-changed"] },
+    ])
+    const reports: Array<ReadonlySet<string>> = []
+    const stop = watchDesktopEventTypes((types) => reports.push(types))
+    await nextReport(reports, [])
+
+    await Promise.all([install("boti_1", "acme"), install("boti_2", "acme")])
+    for (let i = 0; i < 10; i++)
+      await updateBotInstallation("boti_1", { config: { note: String(i) } })
+    await uninstallBot("boti_2")
+    await nextReport(reports, ["desktop.focus-changed"])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Unchanged sets are never reported twice in a row.
+    for (let i = 1; i < reports.length; i++)
+      expect([...reports[i]!].sort()).not.toEqual([...reports[i - 1]!].sort())
+    stop()
   })
 
   it("does not report an unchanged set again", async () => {

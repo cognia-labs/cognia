@@ -21,9 +21,14 @@ export const port: BotDispatchPort = {
   watchDesktopEventTypes: (listener) => {
     let stopped = false
     let stop: (() => void) | undefined
-    void import("../sources/desktop-event-types").then(({ watchDesktopEventTypes }) => {
-      if (!stopped) stop = watchDesktopEventTypes(listener)
-    })
+    void import("../sources/desktop-event-types")
+      .then(({ watchDesktopEventTypes }) => {
+        if (!stopped) stop = watchDesktopEventTypes(listener)
+      })
+      // A chunk that fails to load leaves the Bots without desktop events
+      // until the runner starts again; it must not surface as an unhandled
+      // rejection.
+      .catch(() => undefined)
     return () => {
       stopped = true
       stop?.()

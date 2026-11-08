@@ -12,9 +12,13 @@
 import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
 import { dispatchBotEvent, type DispatchBotEventResult } from "@/lib/bot/events/dispatch"
 import { externalProvenance } from "@/lib/bot/events/provenance"
+import { listBotInstallations } from "@/lib/db/bot-installations"
 
 export interface DispatchDesktopEventToBotsInput {
-  /** Dotted type, for example `desktop.uia` or `desktop.pet`. */
+  /**
+   * Dotted type: `desktop.<UI automation kind>` (`desktop.focus-changed`) or
+   * `desktop.pet.<kind>` (`desktop.pet.levelUp`). Triggers match it exactly.
+   */
   type: string
   /** A stable id for this occurrence, so a redelivery is the same event. */
   sourceRecordId: string
@@ -28,10 +32,21 @@ export interface DispatchDesktopEventToBotsInput {
   occurredAt?: number
 }
 
-/** Project one desktop occurrence onto the Bot plane. */
+/**
+ * Project one desktop occurrence onto the Bot plane, for this machine's own
+ * installations only. A row mirrored from a Host this desktop drives belongs
+ * to that Host, whose own desktop and pet produce its events; a delivery made
+ * here for it would be a local row the runner could claim once the remote
+ * session ends.
+ */
 export async function dispatchDesktopEventToBots(
   input: DispatchDesktopEventToBotsInput
 ): Promise<DispatchBotEventResult> {
+  const local = (await listBotInstallations({ status: "enabled" }))
+    .filter((installation) => !installation.syncedFromHost)
+    .map((installation) => installation.id)
+  if (local.length === 0) return { enqueued: [], rejected: [], unresolved: [], retryable: [] }
+
   const now = Date.now()
   const envelope = buildBotEventEnvelope({
     source: "desktop",
@@ -52,6 +67,7 @@ export async function dispatchDesktopEventToBots(
   return dispatchBotEvent({
     envelope: routable,
     query: { source: "desktop", type: input.type },
+    installationIds: local,
     now,
   })
 }

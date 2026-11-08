@@ -326,11 +326,41 @@ describe("Bot desktop events", () => {
     expect(desktopEvent).toHaveBeenCalledTimes(1)
     expect(desktopEvent).toHaveBeenCalledWith({
       type: "desktop.focus-changed",
-      sourceRecordId: "uia:focus-changed:100000",
+      sourceRecordId: expect.stringMatching(/^uia:focus-changed:1:\d+$/),
       payload: { kind: "focus-changed", name: "Inbox" },
       occurredAt: 100_000,
     })
     expect(dispatchTriggerMock).not.toHaveBeenCalled()
+  })
+
+  it("gives two events stamped with the same millisecond their own Bot events", async () => {
+    initDesktopEventTrigger(makeDeps())
+    await flush()
+    await botsWant(["desktop.focus-changed"])
+
+    await _injectUiaEventForTest({ subscriptionId: 7, kind: "focus-changed", at: 5 })
+    await _injectUiaEventForTest({ subscriptionId: 7, kind: "focus-changed", at: 5 })
+    await flush()
+    const ids = desktopEvent.mock.calls.map(([input]) => input.sourceRecordId)
+    expect(new Set(ids).size).toBe(2)
+  })
+
+  it("drops a listener attached after the runner was disposed", async () => {
+    const deps = makeDeps()
+    const unlisten = jest.fn()
+    let attach: ((fn: () => void) => void) | undefined
+    deps.listen.mockImplementation(
+      () => new Promise<() => void>((resolve) => (attach = resolve)) as never
+    )
+    initDesktopEventTrigger(deps)
+    await flush()
+    await botsWant(["desktop.focus-changed"])
+    expect(attach).toBeDefined()
+
+    disposeDesktopEventTrigger()
+    attach!(unlisten)
+    await flush()
+    expect(unlisten).toHaveBeenCalledTimes(1)
   })
 
   it("hands the Bots the redacted name only", async () => {

@@ -23,13 +23,15 @@ import { bindingsForInstalledBot } from "@/lib/bot/events/dispatch"
 const log = loggers.scheduler
 
 /**
- * The `desktop` event types the enabled, runnable installations' armed
- * triggers name. An installation that does not resolve (its plugin is not
- * loaded) or cannot run listens for nothing, exactly as the router skips it.
+ * The `desktop` event types this machine's enabled, runnable installations'
+ * armed triggers name. An installation that does not resolve (its plugin is
+ * not loaded) or cannot run listens for nothing, exactly as the router skips
+ * it; one mirrored from a Host this desktop drives listens there, not here.
  */
 export async function listDesktopEventTypes(): Promise<Set<string>> {
   const types = new Set<string>()
   for (const installation of await listBotInstallations({ status: "enabled" })) {
+    if (installation.syncedFromHost) continue
     const resolved = await resolveInstalledBot(installation)
     if (!resolved || !isRunnableBot(resolved)) continue
     for (const { trigger } of bindingsForInstalledBot(resolved)) {
@@ -43,30 +45,40 @@ export async function listDesktopEventTypes(): Promise<Set<string>> {
 /**
  * Call `listener` with the current types once they are known, then again
  * whenever they change: on any write to the installations or the local Bot
- * definitions, and on any plugin Bot registering or leaving. Recomputations
- * run one at a time and an unchanged set is not reported again. Returns the
- * unsubscribe.
+ * definitions, and on any plugin Bot registering or leaving. One recompute
+ * runs at a time, changes during it fold into one more, and an unchanged set
+ * is not reported again. Returns the unsubscribe.
  */
 export function watchDesktopEventTypes(listener: (types: ReadonlySet<string>) => void): () => void {
   let active = true
   let reported: string | undefined
-  let chain = Promise.resolve()
+  let running = false
+  let dirty = false
 
+  // At most one recompute runs, and a burst of changes while it runs (a Bot
+  // run stamps `lastFiredAt`, a poll writes its cursor) is folded into one
+  // more, so a busy installation table costs two passes, not one per write.
   const refresh = () => {
-    chain = chain
-      .then(async () => {
-        if (!active) return
-        const types = await listDesktopEventTypes()
-        const key = JSON.stringify([...types].sort())
-        if (!active || key === reported) return
-        reported = key
-        listener(types)
-      })
-      .catch((error: unknown) =>
-        log.warn?.("bot desktop event types: recompute failed", {
-          error: error instanceof Error ? error.message : String(error),
-        })
-      )
+    dirty = true
+    if (running) return
+    running = true
+    void (async () => {
+      while (dirty && active) {
+        dirty = false
+        try {
+          const types = await listDesktopEventTypes()
+          const key = JSON.stringify([...types].sort())
+          if (!active || key === reported) continue
+          reported = key
+          listener(types)
+        } catch (error) {
+          log.warn?.("bot desktop event types: recompute failed", {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+      running = false
+    })()
   }
 
   // `Dexie.liveQuery` rather than a named import: see the note in
