@@ -358,6 +358,7 @@ describe("ArtifactWorkspaceDock", () => {
         content: "old",
         language: "javascript",
         type: "code",
+        createdBy: "user",
       })
       render(
         <ArtifactWorkspaceDock>

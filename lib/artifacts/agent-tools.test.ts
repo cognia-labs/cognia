@@ -140,7 +140,7 @@ describe("artifact_create", () => {
       const canvas = state.canvasDocuments[canvasResult.documentId]
       expect(artifact.sessionId).toBe("")
       expect(canvas.sessionId).toBe(STANDALONE_CANVAS_SESSION_ID)
-      state.setArtifactWorkspaceScope("all")
+      state.setArtifactWorkspaceScope("recent")
       expect(useArtifactStore.getState().getArtifactsForWorkspace()).toContainEqual(artifact)
       expect(state.getCanvasDocumentsForWorkspace()).toContainEqual(canvas)
       state.setArtifactWorkspaceScope("session", "s1")

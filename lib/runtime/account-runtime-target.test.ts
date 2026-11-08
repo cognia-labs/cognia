@@ -188,7 +188,6 @@ describe("pending writes during runtime target transitions", () => {
             getActiveTarget: async () => standalone,
             ensureStandaloneTarget: async () => standalone,
             activateTarget: async () => companion,
-            upsertAndActivateCompanionTarget: async () => companion,
             listTargets: async () => [standalone, companion],
             deleteTarget: async () => {},
             deleteAccountTargets: async () => {},

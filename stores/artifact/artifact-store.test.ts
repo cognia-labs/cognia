@@ -142,6 +142,7 @@ describe("proposal attention ownership (B10)", () => {
       content: "old",
       language: "javascript",
       type: "code",
+      createdBy: "user",
     })
     store.proposeArtifactUpdate(artifact.id, "new")
     store.proposeCanvasReview(canvas, "new")

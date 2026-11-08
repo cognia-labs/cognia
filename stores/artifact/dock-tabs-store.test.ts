@@ -70,7 +70,9 @@ describe("conversation routing memory", () => {
     store.setReviewAttention("b", true)
     store.setReviewAttention("b", false)
     expect(useDockTabsStore.getState().bySession.a.reviewAttention).toBe(true)
-    const persisted = useDockTabsStore.persist.getOptions().partialize!(useDockTabsStore.getState())
+    const persisted = useDockTabsStore.persist.getOptions().partialize!(
+      useDockTabsStore.getState()
+    ) as { bySession: Record<string, Record<string, unknown>> }
     expect(persisted.bySession.a.pendingBrowserRequests).toBeUndefined()
     expect(persisted.bySession.a.reviewDestination).toBeUndefined()
     expect(persisted.bySession.a.reviewAttention).toBeUndefined()

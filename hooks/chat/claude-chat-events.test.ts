@@ -1083,7 +1083,7 @@ describe("artifact turn-complete policy", () => {
       expect.objectContaining({ label: "artifacts.autoCreatedOpen|null" })
     )
     expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
-    const action = options?.action as { onClick: () => void }
+    const action = options?.action as unknown as { onClick: () => void }
     action.onClick()
     expect(useArtifactStore.getState().activeArtifactIdBySession[sessionId]).toBe(artifacts[0].id)
     expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(false)
@@ -1105,7 +1105,9 @@ describe("artifact turn-complete policy", () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
     const artifact = Object.values(useArtifactStore.getState().artifacts)[0]
     useArtifactStore.getState().updateArtifact(artifact.id, { content: "revised content" })
-    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as { onClick: () => void }
+    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as unknown as {
+      onClick: () => void
+    }
     action.onClick()
     expect(useArtifactDockLayoutStore.getState().revealIntent?.panelId).toBe("preview")
     expect(useArtifactStore.getState().getArtifact(artifact.id)?.content).toBe("revised content")
@@ -1135,7 +1137,9 @@ describe("artifact turn-complete policy", () => {
   it("ignores a notification's open action after the conversation loses focus", async () => {
     await seal()
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
-    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as { onClick: () => void }
+    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as unknown as {
+      onClick: () => void
+    }
     useChatStore.getState().setActiveSession("foreground")
     activeRef.current = "foreground"
     action.onClick()
@@ -1147,7 +1151,9 @@ describe("artifact turn-complete policy", () => {
     await seal()
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
     const artifact = Object.values(useArtifactStore.getState().artifacts)[0]
-    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as { onClick: () => void }
+    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as unknown as {
+      onClick: () => void
+    }
     activateArtifactAccountStorage("notification-other")
     useArtifactStore.setState({ artifacts: { [artifact.id]: { ...artifact } } })
     action.onClick()
