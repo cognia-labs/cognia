@@ -39,6 +39,7 @@ import { validateOutboundFeatures } from "./outbound-features"
 import type { AdapterSendOptions } from "@/types/connectors/adapter"
 import type { PlatformAdapter } from "@/types/connectors"
 import { createMutex, computeBackoffDelay } from "@cognia/primitives"
+import { isInQuietRange, msUntilQuietRangeEnd } from "@/lib/notifications/policy/quiet-hours"
 import { placeMessage } from "./message-placement"
 import {
   deleteOutboundJob,
@@ -105,95 +106,6 @@ import {
 } from "@cognia/agent-config-types/action-review"
 import type { AdapterRuntimeStateSnapshot } from "@cognia/plugin-contract/lib/connectors/outbound-runner"
 export type { AdapterRuntimeStateSnapshot } from "@cognia/plugin-contract/lib/connectors/outbound-runner"
-
-// ── Quiet hours helpers ────────────────────────────────────────────────────────
-
-/**
- * Return true if the given wall-clock timestamp (ms) falls within the quiet
- * window `[from, to]` in the specified IANA timezone. The window is expressed
- * as "HH:MM" strings (24-h). Supports cross-midnight windows (e.g. 22:00–06:00).
- */
-export function isInQuietHours(nowMs: number, from: string, to: string, tz: string): boolean {
-  // Parse HH:MM strings into total-minutes-since-midnight
-  const toMins = (hhmm: string): number => {
-    const [h, m] = hhmm.split(":").map(Number)
-    return (h ?? 0) * 60 + (m ?? 0)
-  }
-
-  // Get current local time in target timezone
-  const localStr = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(nowMs))
-
-  // "24:00" can appear for midnight in some locales — normalise to 0:00
-  const [rawH, rawM] = localStr.split(":").map(Number)
-  const currentMins = (rawH % 24) * 60 + (rawM ?? 0)
-
-  const fromMins = toMins(from)
-  const toMins2 = toMins(to)
-
-  if (fromMins <= toMins2) {
-    // Same-day window (e.g. 09:00–17:00)
-    return currentMins >= fromMins && currentMins < toMins2
-  } else {
-    // Cross-midnight window (e.g. 22:00–06:00)
-    return currentMins >= fromMins || currentMins < toMins2
-  }
-}
-
-/**
- * Return the ms duration until the quiet window's `to` time next occurs in
- * the supplied timezone.
- *
- * O(1) implementation: we ask the platform's Intl.DateTimeFormat for the
- * current wall-clock (hour:minute:second) in `tz`, compute the delta to
- * the target `to` time on the same wall-clock day, and roll over by 24h
- * when the target is already past. Avoids the prior 1440-iteration
- * minute-stepping loop and its "should never happen" 24h fallback.
- *
- * DST: across a "spring forward" boundary the wall-clock gap can be off
- * by an hour, but quiet-hours wakeups are coarse enough that the runner
- * simply re-evaluates `isInQuietHours` after the deferral; an extra check
- * is much cheaper than handling DST exactly. Across "fall back" the same
- * tolerance applies — at most a one-hour delay before next attempt.
- */
-export function msUntilQuietEnd(nowMs: number, to: string, tz: string): number {
-  const [rawToH, rawToM] = to.split(":").map(Number)
-  const toH = rawToH ?? 0
-  const toM = rawToM ?? 0
-
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date(nowMs))
-
-  let curH = 0
-  let curM = 0
-  let curS = 0
-  for (const p of parts) {
-    if (p.type === "hour") curH = parseInt(p.value, 10) % 24
-    else if (p.type === "minute") curM = parseInt(p.value, 10)
-    else if (p.type === "second") curS = parseInt(p.value, 10)
-  }
-
-  const SECOND = 1_000
-  const DAY = 86_400
-  const curTotal = curH * 3600 + curM * 60 + curS
-  const targetTotal = toH * 3600 + toM * 60
-  let deltaSec = targetTotal - curTotal
-  // If the target is already past today (or exactly now), roll over.
-  // Strict `<= 0` matches the prior loop's "round up to next minute"
-  // behaviour — the quiet window has closed; the runner should fire
-  // again at the next occurrence, not zero-defer in an infinite loop.
-  if (deltaSec <= 0) deltaSec += DAY
-  return deltaSec * SECOND
-}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -1158,8 +1070,8 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       const effectiveQuietHours = convOverride?.quietHours ?? adapterRow.quietHours
       if (effectiveQuietHours) {
         const { from, to, tz } = effectiveQuietHours
-        if (isInQuietHours(now, from, to, tz)) {
-          const deferMs = msUntilQuietEnd(now, to, tz)
+        if (isInQuietRange(now, from, to, tz)) {
+          const deferMs = msUntilQuietRangeEnd(now, to, tz)
           await markFailed(job.id, "quiet_hours", "Within quiet hours window", now + deferMs)
           await appendAudit({
             adapterId,

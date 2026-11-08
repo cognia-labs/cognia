@@ -22,11 +22,11 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
   })),
 }))
 
-jest.mock("@/lib/connectors/outbound-runner", () => ({
-  isInQuietHours: jest.fn(() => false),
+jest.mock("@/lib/notifications/policy/quiet-hours", () => ({
+  isInQuietRange: jest.fn(() => false),
 }))
-import { isInQuietHours } from "@/lib/connectors/outbound-runner"
-const isInQuietHoursMock = isInQuietHours as unknown as jest.Mock
+import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
+const isInQuietHoursMock = isInQuietRange as unknown as jest.Mock
 
 // Rows that exist in the ledger (the run tree walks their `parentRunId`), the
 // live Squad run of each team, and the Squad each `team` row runs.

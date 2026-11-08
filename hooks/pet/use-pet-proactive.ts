@@ -44,7 +44,7 @@ import { getLastActivityAtMs, markActivity } from "@/lib/pet/llm/proactive/activ
 import { patchPetProfile } from "@/lib/db/pet"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { resolvePreferences } from "@/lib/notifications/preferences"
-import { isInQuietHours } from "@/lib/connectors/outbound-runner"
+import { isInQuietHours } from "@/lib/notifications/policy/quiet-hours"
 import { resolveUserTimeZone } from "@/lib/profile/timezone"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
@@ -128,9 +128,7 @@ export function usePetProactive({ profile, view, enabled }: UsePetProactiveArgs)
 
       const prefs = resolvePreferences(current.appSettings?.notificationPreferences)
       const tz = resolveUserTimeZone(current.appSettings?.profile)
-      const dndActive =
-        prefs.quietHours.enabled &&
-        isInQuietHours(now, prefs.quietHours.start, prefs.quietHours.end, tz)
+      const dndActive = isInQuietHours(now, prefs.quietHours, tz)
       const state = normalizeProactiveState(current.profile?.proactiveState)
       const gate = canSpeak({
         nowMs: now,

@@ -44,7 +44,7 @@ import type { ChildRunOutcome } from "@/types/execution/child-run"
 import type { ExecutionRun } from "@/types/execution/run"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
-import { isInQuietHours } from "@/lib/connectors/outbound-runner"
+import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 import { getExecutionRun } from "@/lib/db/execution-runs"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { readRunAncestors } from "@/lib/execution/run-tree"
@@ -63,7 +63,7 @@ function isDelegationQuietGated(sourceTeamId: string, nowMs: number = Date.now()
   const quietHours =
     useAgentTeamStore.getState().teams[sourceTeamId]?.config.governancePolicy?.delivery?.quietHours
   if (!quietHours) return false
-  return isInQuietHours(nowMs, quietHours.from, quietHours.to, quietHours.tz)
+  return isInQuietRange(nowMs, quietHours.from, quietHours.to, quietHours.tz)
 }
 
 /**

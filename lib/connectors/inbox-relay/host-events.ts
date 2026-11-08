@@ -73,10 +73,10 @@ export interface HostEventsDeps {
  */
 async function defaultIsSilenced(event: NormalizedInboundEvent): Promise<boolean> {
   try {
-    const [{ readForResolution }, { getAdapterInstance }, { isInQuietHours }] = await Promise.all([
+    const [{ readForResolution }, { getAdapterInstance }, { isInQuietRange }] = await Promise.all([
       import("@/lib/db/conversation-overrides"),
       import("@/lib/db/adapter-instances"),
-      import("@/lib/connectors/outbound-runner"),
+      import("@/lib/notifications/policy/quiet-hours"),
     ])
     const override = await readForResolution(event.conversationKey)
     if (override?.muted) return true
@@ -84,7 +84,7 @@ async function defaultIsSilenced(event: NormalizedInboundEvent): Promise<boolean
     if (adapter?.muted) return true
     const quietHours = override?.quietHours ?? adapter?.quietHours
     if (!quietHours) return false
-    return isInQuietHours(Date.now(), quietHours.from, quietHours.to, quietHours.tz)
+    return isInQuietRange(Date.now(), quietHours.from, quietHours.to, quietHours.tz)
   } catch {
     return false
   }

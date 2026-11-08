@@ -5,6 +5,8 @@
 
 import {
   isInQuietHours,
+  isInQuietRange,
+  msUntilQuietRangeEnd,
   quietHoursReleaseAt,
   evaluateQuietHours,
   type QuietHoursWindow,
@@ -106,6 +108,23 @@ describe("quietHoursReleaseAt", () => {
   })
 })
 
+describe("quietHoursReleaseAt across a DST change", () => {
+  it("releases the same morning when the window opened the night before spring-forward", () => {
+    // 2026-03-08 is New York's spring-forward day: 23:00 EST on the 7th is
+    // released at 08:00 EDT on the 8th, not a day later.
+    expect(quietHoursReleaseAt(nyInstant("2026-03-07", "23:00"), wrap, TZ)).toBe(
+      nyInstant("2026-03-08", "08:00")
+    )
+  })
+
+  it("releases the same morning when the window opened the night before fall-back", () => {
+    // 2026-11-01 is New York's fall-back day.
+    expect(quietHoursReleaseAt(nyInstant("2026-10-31", "23:00"), wrap, TZ)).toBe(
+      nyInstant("2026-11-01", "08:00")
+    )
+  })
+})
+
 describe("evaluateQuietHours", () => {
   it("defers a non-critical fact inside the window", () => {
     const instant = nyInstant("2026-03-10", "23:30")
@@ -154,5 +173,71 @@ describe("evaluateQuietHours", () => {
       allowCritical: true,
     })
     expect(r.deferred).toBe(false)
+  })
+})
+
+// The range shape IM adapters, goals and Squad policies store. These vectors
+// were the connectors outbound runner's own copy of the evaluator, which this
+// file replaced; they hold against the one implementation.
+describe("isInQuietRange", () => {
+  const at = (iso: string) => new Date(iso).getTime()
+
+  it("is inside a same-day range and outside after it", () => {
+    expect(isInQuietRange(at("2024-05-01T14:00:00Z"), "09:00", "17:00", "UTC")).toBe(true)
+    expect(isInQuietRange(at("2024-05-01T18:00:00Z"), "09:00", "17:00", "UTC")).toBe(false)
+  })
+
+  it("wraps past midnight on both sides", () => {
+    expect(isInQuietRange(at("2024-05-01T23:00:00Z"), "22:00", "06:00", "UTC")).toBe(true)
+    expect(isInQuietRange(at("2024-05-02T03:00:00Z"), "22:00", "06:00", "UTC")).toBe(true)
+    expect(isInQuietRange(at("2024-05-01T12:00:00Z"), "22:00", "06:00", "UTC")).toBe(false)
+  })
+
+  it("reads the wall clock in the range's zone", () => {
+    // 14:00 UTC is 09:00 in New York in January (EST, UTC-5).
+    const ts = at("2024-01-15T14:00:00Z")
+    expect(isInQuietRange(ts, "08:00", "10:00", "America/New_York")).toBe(true)
+    expect(isInQuietRange(ts, "08:00", "10:00", "UTC")).toBe(false)
+  })
+
+  it("includes the start minute and excludes the end minute", () => {
+    expect(isInQuietRange(at("2024-05-01T22:00:00Z"), "22:00", "06:00", "UTC")).toBe(true)
+    expect(isInQuietRange(at("2024-05-02T06:00:00Z"), "22:00", "06:00", "UTC")).toBe(false)
+  })
+
+  it("quiets nothing for an empty or malformed range", () => {
+    expect(isInQuietRange(at("2024-05-01T22:30:00Z"), "22:00", "22:00", "UTC")).toBe(false)
+    expect(isInQuietRange(at("2024-05-01T22:30:00Z"), "22:00", "nope", "UTC")).toBe(false)
+  })
+
+  it("follows the zone across a DST change", () => {
+    // 2026-03-08: New York springs forward. 23:30 local on the 8th is EDT.
+    expect(isInQuietRange(nyInstant("2026-03-08", "23:30"), "22:00", "08:00", TZ)).toBe(true)
+    expect(isInQuietRange(nyInstant("2026-03-09", "09:00"), "22:00", "08:00", TZ)).toBe(false)
+  })
+})
+
+describe("msUntilQuietRangeEnd", () => {
+  const at = (iso: string) => new Date(iso).getTime()
+  const HOUR = 60 * 60 * 1000
+
+  it("waits for the next occurrence of the end", () => {
+    expect(msUntilQuietRangeEnd(at("2024-05-01T23:00:00Z"), "06:00", "UTC")).toBe(7 * HOUR)
+    expect(msUntilQuietRangeEnd(at("2024-05-01T10:00:00Z"), "17:00", "UTC")).toBe(7 * HOUR)
+  })
+
+  it("rolls over a day when the end is exactly now", () => {
+    expect(msUntilQuietRangeEnd(at("2024-05-01T06:00:00Z"), "06:00", "UTC")).toBe(24 * HOUR)
+  })
+
+  it("lands on the wall-clock end across a DST change", () => {
+    // 23:00 EST on March 7 to 08:00 EDT on March 8 is eight real hours.
+    const from = nyInstant("2026-03-07", "23:00")
+    expect(from + msUntilQuietRangeEnd(from, "08:00", TZ)).toBe(nyInstant("2026-03-08", "08:00"))
+    expect(msUntilQuietRangeEnd(from, "08:00", TZ)).toBe(8 * HOUR)
+  })
+
+  it("is zero for a malformed end", () => {
+    expect(msUntilQuietRangeEnd(at("2024-05-01T23:00:00Z"), "6am", "UTC")).toBe(0)
   })
 })

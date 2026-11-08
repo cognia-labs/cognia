@@ -17,12 +17,12 @@
  * (mobile diagnostics, Slack `/cognia status`, …) can reuse the same
  * derivation without duplicating the rules.
  *
- * Reuses `isInQuietHours` and `msUntilQuietEnd` from `outbound-runner.ts`
+ * Reuses `isInQuietRange` and `msUntilQuietRangeEnd` from `lib/notifications/policy/quiet-hours.ts`
  * — the same helpers the runner uses when deferring jobs — so the UI and
  * runtime always agree on the live state.
  */
 
-import { isInQuietHours, msUntilQuietEnd } from "./outbound-runner"
+import { isInQuietRange, msUntilQuietRangeEnd } from "@/lib/notifications/policy/quiet-hours"
 import type { OutboundJobRow } from "@/lib/db/connector-types"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 
@@ -35,7 +35,7 @@ export interface DerivedJobBadge {
   reason: "muted" | "quiet_hours" | "circuit_open" | null
   /**
    * Estimated ms until the suppression lifts. Set only for
-   * `"paused-quiet-hours"` (uses `msUntilQuietEnd`). `null` otherwise —
+   * `"paused-quiet-hours"` (uses `msUntilQuietRangeEnd`). `null` otherwise —
    * the muted switch is operator-controlled with no natural ETA; circuit
    * cool-down lives in runner memory and isn't worth surfacing on each
    * row.
@@ -92,11 +92,11 @@ export function deriveJobBadge(inputs: DeriveJobBadgeInputs): DerivedJobBadge {
   }
 
   const qh = adapter.quietHours
-  if (qh && qh.from && qh.to && qh.tz && isInQuietHours(now, qh.from, qh.to, qh.tz)) {
+  if (qh && qh.from && qh.to && qh.tz && isInQuietRange(now, qh.from, qh.to, qh.tz)) {
     return {
       kind: "paused-quiet-hours",
       reason: "quiet_hours",
-      etaMs: msUntilQuietEnd(now, qh.to, qh.tz),
+      etaMs: msUntilQuietRangeEnd(now, qh.to, qh.tz),
     }
   }
 

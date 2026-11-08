@@ -31,7 +31,7 @@
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { AdapterHealthState } from "@/types/connectors/adapter"
 import { getDb } from "@/lib/db/schema"
-import { isInQuietHours } from "@/lib/connectors/outbound-runner"
+import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 import { connectorsHealth } from "@/lib/connectors/tauri/commands"
 import { connectorVendor } from "@/lib/connectors/vendor-contribution"
 import { getRunningAdapter } from "@/lib/connectors/lifecycle"
@@ -45,8 +45,8 @@ export interface PassiveProbeOverrides {
   vendorPing?: (row: AdapterInstanceRow) => Promise<boolean>
   onebotPing?: () => Promise<boolean>
   gatewayPing?: (row: AdapterInstanceRow) => Promise<boolean>
-  /** Override `isInQuietHours` to make tests deterministic. */
-  isInQuietHours?: (nowMs: number, from: string, to: string, tz: string) => boolean
+  /** Override `isInQuietRange` to make tests deterministic. */
+  isInQuietRange?: (nowMs: number, from: string, to: string, tz: string) => boolean
 }
 
 /**
@@ -152,7 +152,7 @@ export async function deriveHeartbeat(
 
   // Quiet hours silence is expected; mark as running but annotate so the
   // Health view can hint at the cause.
-  const quietCheck = options.probeOverrides?.isInQuietHours ?? isInQuietHours
+  const quietCheck = options.probeOverrides?.isInQuietRange ?? isInQuietRange
   if (
     row.quietHours &&
     quietCheck(now, row.quietHours.from, row.quietHours.to, row.quietHours.tz)

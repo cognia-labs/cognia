@@ -15,7 +15,7 @@
  */
 
 import type { ContinuationGate, Goal } from "@/types/goal"
-import { isInQuietHours, msUntilQuietEnd } from "@/lib/connectors/outbound-runner"
+import { isInQuietRange, msUntilQuietRangeEnd } from "@/lib/notifications/policy/quiet-hours"
 
 /** Bounds for the model-suggested delay (adaptive pacing). */
 export const MIN_SUGGESTED_DELAY_MS = 60_000
@@ -49,8 +49,8 @@ export function gateContinuation(
 
   // 2) Quiet hours — defer until the window's end.
   const qh = cfg.quietHours
-  if (qh?.from && qh.to && qh.tz && isInQuietHours(nowMs, qh.from, qh.to, qh.tz)) {
-    const untilMs = nowMs + Math.max(0, msUntilQuietEnd(nowMs, qh.to, qh.tz))
+  if (qh?.from && qh.to && qh.tz && isInQuietRange(nowMs, qh.from, qh.to, qh.tz)) {
+    const untilMs = nowMs + Math.max(0, msUntilQuietRangeEnd(nowMs, qh.to, qh.tz))
     return { kind: "defer", untilMs, reason: "quiet_hours" }
   }
 

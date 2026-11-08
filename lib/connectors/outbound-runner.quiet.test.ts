@@ -2,14 +2,14 @@
 /**
  * Quiet hours + global mute tests for outbound-runner — Task 109.
  *
- * Tests the isInQuietHours and msUntilQuietEnd pure functions,
- * plus integration tests for the muted/quiet-hours deferral paths.
+ * Integration tests for the muted/quiet-hours deferral paths. The quiet-hours
+ * evaluation itself is `lib/notifications/policy/quiet-hours.ts`'s, tested there.
  */
 
 import "fake-indexeddb/auto"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { enqueueOutboundMany } from "@/lib/db/outbound-jobs"
-import { startOutboundRunner, isInQuietHours, msUntilQuietEnd } from "./outbound-runner"
+import { startOutboundRunner } from "./outbound-runner"
 import type { PlatformAdapter, OutboundResult } from "@/types/connectors"
 
 // ── Module mocks (hoisted) ───────────────────────────────────────────────────
@@ -101,64 +101,6 @@ beforeEach(async () => {
   await __resetDbForTesting()
   adapterInstanceOverride = null
   jest.clearAllMocks()
-})
-
-// ── isInQuietHours unit tests ──────────────────────────────────────────────────
-
-describe("isInQuietHours", () => {
-  it("returns true when current time is within same-day window", () => {
-    const ts = new Date("2024-05-01T14:00:00Z").getTime()
-    expect(isInQuietHours(ts, "09:00", "17:00", "UTC")).toBe(true)
-  })
-
-  it("returns false when current time is outside same-day window", () => {
-    const ts = new Date("2024-05-01T18:00:00Z").getTime()
-    expect(isInQuietHours(ts, "09:00", "17:00", "UTC")).toBe(false)
-  })
-
-  it("returns true when current time is within cross-midnight window (before midnight)", () => {
-    const ts = new Date("2024-05-01T23:00:00Z").getTime()
-    expect(isInQuietHours(ts, "22:00", "06:00", "UTC")).toBe(true)
-  })
-
-  it("returns true when current time is within cross-midnight window (after midnight)", () => {
-    const ts = new Date("2024-05-02T03:00:00Z").getTime()
-    expect(isInQuietHours(ts, "22:00", "06:00", "UTC")).toBe(true)
-  })
-
-  it("returns false when current time is outside cross-midnight window", () => {
-    const ts = new Date("2024-05-01T12:00:00Z").getTime()
-    expect(isInQuietHours(ts, "22:00", "06:00", "UTC")).toBe(false)
-  })
-
-  it("uses timezone correctly", () => {
-    // 14:00 UTC = ~09:00 America/New_York (UTC-5 in winter)
-    const ts = new Date("2024-01-15T14:00:00Z").getTime()
-    // 09:00 NY is inside 08:00–10:00 NY window
-    expect(isInQuietHours(ts, "08:00", "10:00", "America/New_York")).toBe(true)
-    // 14:00 UTC is outside 08:00–10:00 UTC window
-    expect(isInQuietHours(ts, "08:00", "10:00", "UTC")).toBe(false)
-  })
-})
-
-// ── msUntilQuietEnd unit tests ────────────────────────────────────────────────
-
-describe("msUntilQuietEnd", () => {
-  it("returns positive ms to next window-close time (~7h ahead at 23:00)", () => {
-    const ts = new Date("2024-05-01T23:00:00Z").getTime()
-    const ms = msUntilQuietEnd(ts, "06:00", "UTC")
-    // 06:00 next day = ~7h ahead
-    expect(ms).toBeGreaterThan(6 * 60 * 60 * 1000)
-    expect(ms).toBeLessThan(8 * 60 * 60 * 1000)
-  })
-
-  it("returns approximately correct ms for same-day window end", () => {
-    const ts = new Date("2024-05-01T10:00:00Z").getTime()
-    const ms = msUntilQuietEnd(ts, "17:00", "UTC")
-    // 17:00 today = 7h ahead
-    expect(ms).toBeGreaterThan(6 * 60 * 60 * 1000)
-    expect(ms).toBeLessThan(8 * 60 * 60 * 1000)
-  })
 })
 
 // ── muted adapter integration test ────────────────────────────────────────────

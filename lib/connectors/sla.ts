@@ -7,7 +7,7 @@
  */
 
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
-import { isInQuietHours, msUntilQuietEnd } from "@/lib/connectors/outbound-runner"
+import { isInQuietRange, msUntilQuietRangeEnd } from "@/lib/notifications/policy/quiet-hours"
 import { readForResolution, setSlaDue } from "@/lib/db/conversation-overrides"
 
 export interface QuietHours {
@@ -30,8 +30,8 @@ export function computeDueAt(
 ): number {
   const naive = fromMs + Math.max(0, targetMinutes) * 60_000
   if (!quietHours) return naive
-  if (!isInQuietHours(naive, quietHours.from, quietHours.to, quietHours.tz)) return naive
-  return naive + msUntilQuietEnd(naive, quietHours.to, quietHours.tz)
+  if (!isInQuietRange(naive, quietHours.from, quietHours.to, quietHours.tz)) return naive
+  return naive + msUntilQuietRangeEnd(naive, quietHours.to, quietHours.tz)
 }
 
 /**

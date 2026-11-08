@@ -70,10 +70,12 @@ function zoneParts(instant: number, timezone: string): ZoneParts {
 
 /**
  * The UTC instant of "the next `hh:mm` wall-clock at-or-after `fromInstant`"
- * in `timezone`. Uses a convergent guess-and-check: estimate the offset,
- * compute the candidate UTC instant, then correct once for the true offset
- * at that instant (handles the rare case where the offset differs between
- * `fromInstant` and the candidate — a DST boundary inside the window).
+ * in `timezone`. Walks the zone's local calendar days from the one
+ * `fromInstant` falls on: each candidate is that day's `hh:mm` read as UTC and
+ * shifted by the zone's offset at `fromInstant`, then refined for the true
+ * offset at the candidate (a DST change in between). Stepping by calendar day,
+ * not by 24 real hours, keeps the short spring-forward day from being skipped:
+ * from 23:00 on the night before it, the next 08:00 is that morning's.
  */
 function nextWallClockInstant(
   fromInstant: number,
@@ -81,15 +83,20 @@ function nextWallClockInstant(
   timezone: string,
   allowSameMinute: boolean
 ): number {
-  // Search a 48h window: candidate = each local day at hh:mm in the zone.
+  const start = zoneParts(fromInstant, timezone)
+  const wholeSecond = fromInstant - (((fromInstant % 1000) + 1000) % 1000)
+  const offsetMs =
+    Date.UTC(start.year, start.month - 1, start.day, start.hour, start.minute, start.second) -
+    wholeSecond
   for (let dayOffset = 0; dayOffset <= 2; dayOffset += 1) {
-    const probe = zoneParts(fromInstant + dayOffset * 24 * 60 * 60 * 1000, timezone)
-    // Local midnight for that probe day, as a UTC estimate.
-    const localMidnightUtc =
-      fromInstant + dayOffset * 24 * 60 * 60 * 1000 - (probe.minuteOfDay * 60 + probe.second) * 1000
-    const estimate = localMidnightUtc + hhmm * 60 * 1000
-    // Refine into the real wall-clock instant (exact across a DST fold).
-    const instant = refineInstant(estimate, hhmm, timezone)
+    const wallAsUtc = Date.UTC(
+      start.year,
+      start.month - 1,
+      start.day + dayOffset,
+      Math.floor(hhmm / 60),
+      hhmm % 60
+    )
+    const instant = refineInstant(wallAsUtc - offsetMs, hhmm, timezone)
     if (instant > fromInstant || (allowSameMinute && instant === fromInstant)) {
       return instant
     }
@@ -168,4 +175,29 @@ export function evaluateQuietHours(input: {
     deferred: true,
     releaseAt: quietHoursReleaseAt(input.instant, input.window, input.timezone),
   }
+}
+
+/**
+ * Is `instant` inside the quiet range `from`–`to` (each "HH:mm", the range
+ * may wrap past midnight) in `timezone`? The shape IM adapters, conversation
+ * overrides, goals and Squad policies store quiet hours in; the same
+ * evaluation as {@link isInQuietHours}, which is the one implementation.
+ */
+export function isInQuietRange(
+  instant: number,
+  from: string,
+  to: string,
+  timezone: string
+): boolean {
+  return isInQuietHours(instant, { enabled: true, start: from, end: to }, timezone)
+}
+
+/**
+ * Milliseconds from `instant` until the range's `to` next occurs in
+ * `timezone` (the next wall-clock `to` strictly after `instant`, DST-exact).
+ * Zero for a malformed `to`, which {@link isInQuietRange} never reports as
+ * quiet, so a caller that checks first never waits on one.
+ */
+export function msUntilQuietRangeEnd(instant: number, to: string, timezone: string): number {
+  return quietHoursReleaseAt(instant, { enabled: true, start: to, end: to }, timezone) - instant
 }

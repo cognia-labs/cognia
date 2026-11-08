@@ -104,7 +104,7 @@ describe("deriveJobBadge — quiet hours", () => {
     })
     expect(badge.kind).toBe("paused-quiet-hours")
     expect(badge.reason).toBe("quiet_hours")
-    // Allow a small range — msUntilQuietEnd rounds to whole seconds.
+    // Allow a small range — msUntilQuietRangeEnd lands on the wall-clock end.
     expect(badge.etaMs).toBeGreaterThan(10_700_000)
     expect(badge.etaMs).toBeLessThan(10_900_000)
   })

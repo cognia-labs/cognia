@@ -1,8 +1,8 @@
 // Channel routing (ADR-0042). Pure: given an input, resolved preferences, and
 // the current time, decide which fan-out channels fire. `center` is always
 // kept (durable record). `critical` bypasses per-source mute, level gates, and
-// DND (Novu `readOnly` semantics). DND reuses `isInQuietHours` from the
-// connector outbound-runner (the project's quiet-hours evaluator).
+// DND (Novu `readOnly` semantics). DND uses `isInQuietHours`
+// from `./policy/quiet-hours` (the project's one quiet-hours evaluator).
 
 import {
   NOTIFICATION_LEVEL_RANK,
@@ -11,7 +11,7 @@ import {
   type NotificationPreferences,
   type NotificationSource,
 } from "@/types/notifications"
-import { isInQuietHours } from "@/lib/connectors/outbound-runner"
+import { isInQuietHours } from "./policy/quiet-hours"
 import { deviceTimeZone } from "@/lib/profile/timezone"
 import { resolveProjectPref, resolveSourcePref } from "./preferences"
 
@@ -86,10 +86,7 @@ export function resolveChannels(
 
   // Do-Not-Disturb (quiet hours) — strip interruptive channels, keep center.
   let suppressedByDnd = false
-  if (
-    prefs.quietHours.enabled &&
-    isInQuietHours(now, prefs.quietHours.start, prefs.quietHours.end, tz)
-  ) {
+  if (isInQuietHours(now, prefs.quietHours, tz)) {
     suppressedByDnd = true
     channels.delete("toast")
     channels.delete("os")

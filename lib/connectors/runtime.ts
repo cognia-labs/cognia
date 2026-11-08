@@ -51,7 +51,7 @@ import { inboundReplyLookupIds, resolveInboundReplyTo } from "@/lib/connectors/i
 import type { RouteDecision } from "./mode-router"
 import type { LiveSteerHandler } from "./bus"
 import { resolveInboxSuppression, type ResolvedBinding } from "./policy-resolve"
-import { isInQuietHours } from "./outbound-runner"
+import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 import { matchDispatchRule } from "./dispatch-rules"
 import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"
 import { resolveImEffectiveConfig } from "./effective-config"
@@ -1612,7 +1612,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             ? "manual_mode_override"
             : suppression.muted
               ? "muted"
-              : quiet && isInQuietHours(now, quiet.from, quiet.to, quiet.tz)
+              : quiet && isInQuietRange(now, quiet.from, quiet.to, quiet.tz)
                 ? "quiet_hours"
                 : undefined
         if (suppressedReason) {

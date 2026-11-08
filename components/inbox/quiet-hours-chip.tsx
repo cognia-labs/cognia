@@ -7,7 +7,7 @@
  * override quiet hours take precedence over the adapter-level window (matching
  * the outbound-runner's resolution order). Shows a "Quiet until HH:MM" warning
  * state while the window is active, otherwise the configured window. Reuses the
- * runner's `isInQuietHours` so the UI and the delivery gate agree.
+ * runner's `isInQuietRange` so the UI and the delivery gate agree.
  */
 
 import { useEffect, useState } from "react"
@@ -16,7 +16,7 @@ import { InboxChip } from "./inbox-chip"
 import { MoonIcon } from "lucide-react"
 import { useAdapterInstance } from "@/hooks/connectors/use-adapter-instance"
 import { useConversationOverride } from "@/hooks/connectors/use-conversation-overrides"
-import { isInQuietHours } from "@/lib/connectors/outbound-runner"
+import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 
 interface QuietHoursChipProps {
   adapterId: string
@@ -38,7 +38,7 @@ export function QuietHoursChip({ adapterId, conversationKey }: QuietHoursChipPro
   const quiet = override?.quietHours ?? adapter?.quietHours
   if (!quiet) return null
 
-  const active = isInQuietHours(now, quiet.from, quiet.to, quiet.tz)
+  const active = isInQuietRange(now, quiet.from, quiet.to, quiet.tz)
 
   return (
     <InboxChip

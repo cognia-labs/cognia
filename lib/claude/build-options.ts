@@ -111,7 +111,7 @@ import {
 import { normalizeToolPermissionRules } from "@/lib/mcp/tool-rules"
 import { getTeam } from "@/lib/db/teams"
 import type { ConversationOverrideRow, AdapterInstanceRow } from "@/lib/db/connector-types"
-import { isInQuietHours } from "@/lib/connectors/outbound-runner"
+import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 import { isOcrToolAllowed } from "@/lib/claude/ocr-tool-gate"
 import {
   adapterAllowsHostCapability,
@@ -4315,7 +4315,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       opts.suppressedReason = "muted"
     } else if (policy.quietHours) {
       const { from, to, tz } = policy.quietHours
-      if (isInQuietHours(Date.now(), from, to, tz)) {
+      if (isInQuietRange(Date.now(), from, to, tz)) {
         opts.suppressedReason = "quiet_hours"
       }
     }

@@ -14,8 +14,8 @@ jest.mock("@/hooks/connectors/use-adapter-instance", () => ({
 jest.mock("@/hooks/connectors/use-conversation-overrides", () => ({
   useConversationOverride: () => mockOverride(),
 }))
-jest.mock("@/lib/connectors/outbound-runner", () => ({
-  isInQuietHours: (...args: unknown[]) => mockIsInQuietHours(...args),
+jest.mock("@/lib/notifications/policy/quiet-hours", () => ({
+  isInQuietRange: (...args: unknown[]) => mockIsInQuietHours(...args),
 }))
 jest.mock("@/components/ui/tooltip")
 

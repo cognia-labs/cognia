@@ -33,8 +33,8 @@ jest.mock("@/lib/db/schema", () => ({
   })),
 }))
 
-jest.mock("@/lib/connectors/outbound-runner", () => ({
-  isInQuietHours: jest.fn(() => false),
+jest.mock("@/lib/notifications/policy/quiet-hours", () => ({
+  isInQuietRange: jest.fn(() => false),
 }))
 
 jest.mock("@/lib/connectors/tauri/commands", () => ({
@@ -151,7 +151,7 @@ describe("deriveHeartbeat", () => {
       now,
       probeOverrides: {
         lastInboundAt: async () => now - 10 * 60_000, // 10 minutes ago
-        isInQuietHours: () => true,
+        isInQuietRange: () => true,
       },
     })
     expect(derived.state).toBe("running")
@@ -265,7 +265,7 @@ describe("recordPassiveProbe", () => {
     await recordPassiveProbe(row, 1_000_000_000, 5 * 60_000, {
       lastInboundAt: async () => 1_000_000_000 - 10 * 60_000, // 10 min ago
       vendorPing: async () => false,
-      isInQuietHours: () => false,
+      isInQuietRange: () => false,
     })
     expect(mockHeartbeatPut).toHaveBeenCalledTimes(1)
     const call = mockHeartbeatPut.mock.calls[0][0] as {
