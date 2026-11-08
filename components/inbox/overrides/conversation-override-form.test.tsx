@@ -369,6 +369,48 @@ describe("ConversationOverrideForm", () => {
     expect((await row())?.characterTeamId).toBe("ct_launch")
   })
 
+  it("gives a member of the group's character team a bot of its own", async () => {
+    const user = userEvent.setup()
+    const onDone = jest.fn()
+    await getDb().characters.bulkPut([
+      { id: "c_ana", name: "Ana", createdAt: 0, updatedAt: 0 },
+      { id: "c_ben", name: "Ben", createdAt: 0, updatedAt: 0 },
+    ] as never)
+    await getDb().teams.put({
+      id: "ct_launch",
+      name: "Launch crew",
+      members: [{ characterId: "c_ana" }, { characterId: "c_ben" }],
+    } as never)
+    await getDb().adapterInstances.bulkPut([
+      { id: "lark-1", type: "lark", displayName: "Room bot", enabled: true },
+      { id: "lark-2", type: "lark", displayName: "Ana bot", enabled: true },
+      { id: "tg-1", type: "telegram", displayName: "Other platform", enabled: true },
+    ] as never)
+    renderForm(
+      <ConversationOverrideForm
+        adapterId="lark-1"
+        conversationKey="lark:lark-1:oc_room"
+        sessionId="s_room"
+        initialRow={
+          { characterTeamId: "ct_launch", memberBotAdapterIds: { c_gone: "lark-2" } } as never
+        }
+        onDone={onDone}
+      />
+    )
+    const anaVoice = await screen.findByTestId("conv-override-member-voice-c_ana")
+    await user.click(anaVoice)
+    expect(screen.queryByRole("option", { name: "Other platform" })).toBeNull()
+    await user.click(await screen.findByRole("option", { name: "Ana bot" }))
+    fireEvent.click(screen.getByTestId("conv-override-save"))
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+    const row = await getDb()
+      .conversationOverrides.where("conversationKey")
+      .equals("lark:lark-1:oc_room")
+      .first()
+    // A member no longer on the team loses its entry.
+    expect(row?.memberBotAdapterIds).toEqual({ c_ana: "lark-2" })
+  })
+
   it("shows a bound character team that no longer exists, so it can be cleared", async () => {
     renderForm(
       <ConversationOverrideForm

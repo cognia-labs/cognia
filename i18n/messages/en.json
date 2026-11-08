@@ -22924,9 +22924,11 @@
         "inboundWelcomeSent": "Welcome card sent",
         "notifyImPiiBlocked": "Notification blocked — PII",
         "overrideComputerUseChanged": "Computer Use changed",
+        "personaVoiceHeld": "Not answered: this bot is a member's voice in another bot's room",
         "pluginInboundBlocked": "Blocked by plugin",
         "pluginRateBlocked": "Rate-limited by plugin",
         "pluginTransformPiiBlocked": "Plugin transform blocked — PII",
+        "respondViaEcho": "Own reply echoed back by a sibling bot, not handled again",
         "siblingBotBudgetExhausted": "Sibling bot reply budget exhausted",
         "siblingBotIgnored": "Sibling bot message ignored",
         "slaEscalated": "SLA escalated",
@@ -23292,6 +23294,13 @@
         },
         "liveActivity": "Live activity card",
         "liveActivityHint": "Show a live progress card in chat while the assistant is working (tool count, elapsed time, current action, file edits). On by default; turn off for noisy channels.",
+        "memberVoices": {
+          "help": "Each member answers through this bot with its name leading the reply, or through another bot of this platform that is in the group, as the member's own voice. A bot used as a voice no longer answers the group by itself.",
+          "label": "Member voices",
+          "missing": "Missing bot ({id})",
+          "noSiblings": "Each member answers through this bot with its name leading the reply. Connect another bot of this platform and add it to the group to give a member a voice of its own.",
+          "ownBot": "This bot, signed with the member's name"
+        },
         "mode": "Mode",
         "modeOptions": {
           "auto": "Auto-reply",

@@ -50,6 +50,8 @@
       "pluginTransformPiiBlocked": "Plugin transform blocked — PII",
       "siblingBotBudgetExhausted": "Sibling bot reply budget exhausted",
       "siblingBotIgnored": "Sibling bot message ignored",
+      "personaVoiceHeld": "Not answered: this bot is a member's voice in another bot's room",
+      "respondViaEcho": "Own reply echoed back by a sibling bot, not handled again",
       "slaEscalated": "SLA escalated",
       "slaEscalationActionFailed": "SLA escalation action failed",
       "taskDispatched": "Task dispatched",
@@ -432,6 +434,13 @@
       },
       "characterTeamBinding": "Character team in a group",
       "characterTeamBindingHelp": "In a group chat, this team answers member by member, each reply signed with its name, and it outranks the Agent Team and workflow above; a member can still hand work to the Agent Team, once someone in the group confirms. Leave it empty for one voice. A one-to-one chat always keeps its single character.",
+      "memberVoices": {
+        "label": "Member voices",
+        "help": "Each member answers through this bot with its name leading the reply, or through another bot of this platform that is in the group, as the member's own voice. A bot used as a voice no longer answers the group by itself.",
+        "noSiblings": "Each member answers through this bot with its name leading the reply. Connect another bot of this platform and add it to the group to give a member a voice of its own.",
+        "ownBot": "This bot, signed with the member's name",
+        "missing": "Missing bot ({id})"
+      },
       "characterTeamBindingPlaceholder": "(none — one voice answers)",
       "teamBinding": "Agent Team (id)",
       "teamBindingHelp": "When set, inbound messages dispatch to this Agent Team instead of a single character; progress streams back to the conversation.",

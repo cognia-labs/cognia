@@ -82,6 +82,7 @@ import {
   storedReplyText,
   type ImRoomReplyMetadata,
 } from "./room/im-room-member"
+import { memberVoiceAdapterId, voiceNeedsSignature } from "./room/persona-voices"
 import type { AgentExecutionSendSpec } from "@cognia/agent-config-types/agent-execution"
 import type { AuditKind } from "@/types/connectors/audit"
 import type { InboxSendPolicy } from "@/lib/claude/build-options"
@@ -2516,8 +2517,13 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           // bot must not stream partial frames it will never finalize (the
           // sibling posts the final — the user would otherwise see an orphaned
           // duplicate preview).
+          // A member mapped to a bot of its own speaks through it, the same
+          // reroute and the same fallback (ADR-0252 P7).
+          const memberVoice = member
+            ? memberVoiceAdapterId(override, member.step.character.id)
+            : undefined
           const outboundTarget = await resolveRespondViaTarget(
-            routing.respondViaAdapterId,
+            memberVoice ?? routing.respondViaAdapterId,
             event,
             adapterRow
           )
@@ -3119,10 +3125,18 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               ? `${answerText}\n\n${limitStop.note}`
               : limitStop.note
             : answerText
-          // Every member answers through the same bot, so its name leads the reply.
-          const deliveredText = member
-            ? signImRoomReply(member.step.character.name, recoveredText)
-            : recoveredText
+          // A member answering through a shared bot leads with its name; one
+          // whose own bot carries the reply is already known by it.
+          const deliveredText =
+            member &&
+            voiceNeedsSignature(
+              override,
+              member.step.character.id,
+              outboundTarget.adapterId,
+              event.adapterId
+            )
+              ? signImRoomReply(member.step.character.name, recoveredText)
+              : recoveredText
           let outboundSegments: MessageSegment[] = assistantReplyToSegments({
             text: deliveredText,
             a2uiSurfaces: captured.a2uiSurfaces,

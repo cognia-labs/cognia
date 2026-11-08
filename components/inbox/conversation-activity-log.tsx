@@ -63,6 +63,9 @@ const KIND_LABEL_KEY: Partial<Record<AuditKind, string>> = {
   // Sibling-bot guard + multi-identity team posting (W5 multi-bot same-group).
   "inbound.sibling_bot_ignored": "siblingBotIgnored",
   "inbound.sibling_bot_budget_exhausted": "siblingBotBudgetExhausted",
+  // Member voices (ADR-0252 P7): a voice bot's own turns, and our own reply echoed back.
+  "inbound.persona_voice_held": "personaVoiceHeld",
+  "inbound.respond_via_echo": "respondViaEcho",
   "team.posted_as_bot": "teamPostedAsBot",
 }
 

@@ -46,7 +46,7 @@ import { MediaGrantEditor } from "./media-grant-editor"
 import type { MediaModelGrant } from "@/lib/connectors/media-model-gate"
 import { updateAdapterConfigSection, type AdapterInstancePatch } from "@/lib/db/adapter-instances"
 import { getDb } from "@/lib/db/schema"
-import type { ConversationOverrideRow } from "@/lib/db/connector-types"
+import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type {
   ActiveRunDispatchMode,
   ConnectorMode,
@@ -62,6 +62,7 @@ import type { ImConfigSource, ImExecutionTarget } from "@/lib/connectors/effecti
 import { EntityPicker } from "@/components/settings/connections/forms/_shared/entity-picker"
 import { TeamPicker } from "@/components/settings/connections/forms/_shared/team-picker"
 import { collectOptions } from "@/components/inbox/provider-model-switcher"
+import { MemberVoicesEditor, memberVoicesForTeam } from "./member-voices-editor"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 type SkillAllowMode = "inherit" | "all" | "whitelist"
@@ -141,6 +142,7 @@ export interface ConversationOverrideFormProps {
 /** Typed empty default — a bare `[]` infers `never[]` and poisons every read. */
 const EMPTY_CHARACTERS: Character[] = []
 const EMPTY_TEAMS: Team[] = []
+const EMPTY_ADAPTERS: AdapterInstanceRow[] = []
 
 export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
   const {
@@ -219,6 +221,10 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
   // A group's character team. Outranks the Squad and the workflow in a group;
   // a one-to-one chat ignores it.
   const [characterTeamId, setCharacterTeamId] = useState(initialRow?.characterTeamId ?? "")
+  // The bot each member of that team speaks through; absent → this bot, signed.
+  const [memberVoices, setMemberVoices] = useState<Record<string, string>>(
+    initialRow?.memberBotAdapterIds ?? {}
+  )
   const [targetKind, setTargetKind] = useState<"inherit" | "direct" | "team" | "workflow">(
     initialRow?.squadId
       ? "team"
@@ -298,6 +304,27 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
       return undefined
     }
   }, [conversationKey])
+  // The bound character team's members and the platform's bots, for the
+  // member voices. The members follow the team's order; a deleted one is left out.
+  const boundCharacterTeam = (characterTeams ?? []).find(
+    (team) => team.id === characterTeamId.trim()
+  )
+  const characterTeamMembers = useMemo(
+    () =>
+      (boundCharacterTeam?.members ?? []).flatMap((slot) => {
+        const character = characters.find((candidate) => candidate.id === slot.characterId)
+        return character ? [character] : []
+      }),
+    [boundCharacterTeam, characters]
+  )
+  const platformBots = useLiveQuery(
+    () =>
+      typeof window === "undefined" || !platform
+        ? Promise.resolve<AdapterInstanceRow[]>([])
+        : getDb().adapterInstances.where("type").equals(platform).toArray(),
+    [platform],
+    EMPTY_ADAPTERS
+  )
   const [saving, setSaving] = useState(false)
 
   // Quiet hours — toggle + three inputs. The "enabled" boolean tracks
@@ -408,6 +435,12 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
           squadDisabled: nextTeamDisabled,
           workflowId: targetKind === "workflow" ? workflowId.trim() || undefined : undefined,
           characterTeamId: characterTeamId.trim() || undefined,
+          memberBotAdapterIds: boundCharacterTeam
+            ? memberVoicesForTeam(
+                memberVoices,
+                characterTeamMembers.map((member) => member.id)
+              )
+            : undefined,
           workflowDisabled: targetKind === "team" || targetKind === "direct" ? true : undefined,
           proactivePush: proactivePush ? true : undefined,
           liveActivity: liveActivity ? undefined : false,
@@ -787,6 +820,15 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
                     {t("fields.characterTeamBindingHelp")}
                   </p>
                 </div>
+                {boundCharacterTeam ? (
+                  <MemberVoicesEditor
+                    adapterId={adapterId}
+                    members={characterTeamMembers}
+                    bots={platformBots ?? EMPTY_ADAPTERS}
+                    value={memberVoices}
+                    onChange={setMemberVoices}
+                  />
+                ) : null}
               </>
             ),
           },

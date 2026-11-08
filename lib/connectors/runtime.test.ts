@@ -3895,6 +3895,69 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
     expect(audit?.fields).toMatchObject({ characterTeamId: "ct_launch", steps: 2, end: "done" })
   })
 
+  describe("a member with a bot of its own (ADR-0252 P7)", () => {
+    const answer = (call: Call) =>
+      call.sessionId.includes("c_ana") ? "Ship the beta." : "Agreed, the beta."
+    const jobs = async () =>
+      (await getDb().outboundQueue.toArray()).sort((a, b) => a.createdAt - b.createdAt)
+
+    it("speaks through its bot unsigned, while the others sign through this one", async () => {
+      await seedRoom({ override: { memberBotAdapterIds: { c_ana: "adapter_2" } } })
+      await putInstance("adapter_2")
+      capture(answer)
+
+      await callHandler(roomEvent(), "ai-run")
+
+      const queued = await jobs()
+      expect(queued.map((job) => [job.adapterId, job.conversationKey])).toEqual([
+        ["adapter_2", "telegram:adapter_2:g_room"],
+        ["adapter_1", KEY],
+      ])
+      expect(await outboundTexts()).toEqual(["Ship the beta.", "**Ben**\n\nAgreed, the beta."])
+      // The reply answers this conversation: that is what lets its echo be recognised.
+      expect(queued[0]!.authorizationProvenance?.authorization).toMatchObject({
+        kind: "origin-reply",
+        inboundConversationKey: KEY,
+      })
+      // The room keeps the member's reply as its own row either way.
+      const replies = (await getDb().messages.where("sessionId").equals("s_room").toArray())
+        .filter((row) => row.role === "assistant")
+        .sort((a, b) => a.createdAt - b.createdAt)
+      expect(replies.map((row) => row.senderId)).toEqual(["c_ana", "c_ben"])
+    })
+
+    it("signs when two members share a bot, or when the bot cannot carry the reply", async () => {
+      await seedRoom({
+        override: { memberBotAdapterIds: { c_ana: "adapter_2", c_ben: "adapter_2" } },
+      })
+      await putInstance("adapter_2")
+      capture(answer)
+      await callHandler(roomEvent(), "ai-run")
+      expect((await jobs()).map((job) => job.adapterId)).toEqual(["adapter_2", "adapter_2"])
+      expect(await outboundTexts()).toEqual([
+        "**Ana**\n\nShip the beta.",
+        "**Ben**\n\nAgreed, the beta.",
+      ])
+    })
+
+    it("falls back to this bot, signed, when its own bot is disabled", async () => {
+      await seedRoom({ override: { memberBotAdapterIds: { c_ana: "adapter_2" } } })
+      await putInstance("adapter_2", { enabled: false })
+      capture(answer)
+      await callHandler(roomEvent(), "ai-run")
+      expect((await jobs()).map((job) => job.adapterId)).toEqual(["adapter_1", "adapter_1"])
+      expect((await outboundTexts())[0]).toBe("**Ana**\n\nShip the beta.")
+      const audit = (await getDb().connectorAudit.toArray()).find(
+        (row) => row.kind === "dispatch.respond_via"
+      )
+      expect(audit?.fields).toMatchObject({
+        targetAdapterId: "adapter_2",
+        applied: false,
+        reason: "disabled",
+      })
+    })
+  })
+
   describe("a member's hand-off to a Squad (ADR-0177 batch 5)", () => {
     const decide = jest.fn()
     beforeEach(async () => {

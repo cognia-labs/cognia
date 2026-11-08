@@ -59,6 +59,7 @@ jest.mock("@/lib/connectors/hitl/media-grant", () => ({
 
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { createAdapterInstance } from "@/lib/db/adapter-instances"
+import { upsertByConversationKey } from "@/lib/db/conversation-overrides"
 import { listRecent } from "@/lib/db/connector-audit"
 import { createPlatformSession } from "./session-bindings"
 import { getBus, __resetBusForTesting } from "./bus"
@@ -361,6 +362,81 @@ describe("sibling guard — the interplay budget is only spent on a real respons
     // under the old placement this message had already consumed it.
     expect(await auditKinds()).not.toContain("inbound.sibling_bot_budget_exhausted")
     expect(await auditKinds()).toContain("inbound.routing_dropped")
+  })
+})
+
+describe("member voices (ADR-0252 P7)", () => {
+  it("keeps a bot that is a member's voice in a sibling's room from answering the group", async () => {
+    const voiceId = await seedAdapter()
+    const roomBotId = await seedAdapter({ displayName: "Room Bot" })
+    await upsertByConversationKey({
+      conversationKey: `telegram:${roomBotId}:ch_chatA`,
+      sessionId: "s_room",
+      characterTeamId: "ct_launch",
+      memberBotAdapterIds: { c_ana: voiceId },
+    })
+    const bus = getBus()
+    const handler = jest.fn()
+    bus.routeHandler = handler
+
+    await bus.dispatchInboundFull(groupEvent(voiceId, "m_human"))
+    await bus.flushInboundTurns()
+
+    expect(handler).not.toHaveBeenCalled()
+    expect(await historyOnlyReasons()).toEqual(["persona_voice"])
+    const audit = (await listRecent(undefined, 50)).find(
+      (row) => row.kind === "inbound.persona_voice_held"
+    )
+    expect(audit?.fields).toEqual({ roomConversationKey: `telegram:${roomBotId}:ch_chatA` })
+
+    // The room's own bot still answers the same message.
+    await bus.dispatchInboundFull(groupEvent(roomBotId, "m_human"))
+    await bus.flushInboundTurns()
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not answer its own reply that a sibling bot carried back", async () => {
+    const adapterId = await seedAdapter({ siblingBotPolicy: "respond", botInterplayBudget: 5 })
+    const bus = getBus()
+    const handler = jest.fn()
+    bus.routeHandler = handler
+    classification = { kind: "sibling", row: { id: "tg-sibling" } as AdapterInstanceRow }
+    await getDb().outboundQueue.put({
+      id: "job_voice",
+      adapterId: "tg-sibling",
+      conversationKey: "telegram:tg-sibling:ch_chatA",
+      request: { conversationRef: {}, segments: [], metadata: { idempotencyKey: "airun:a" } },
+      status: "sent",
+      platformMessageId: "m_echo",
+      attempts: 1,
+      createdAt: Date.now(),
+      nextAttemptAt: 0,
+      idempotencyKey: "airun:a",
+      source: "ai-run",
+      authorizationProvenance: {
+        schemaVersion: 1,
+        mode: "shadow",
+        plan: "allow",
+        policyVersion: "1",
+        plannedAt: 0,
+        authorization: {
+          kind: "origin-reply",
+          inboundConversationKey: `telegram:${adapterId}:chatA`,
+        },
+      },
+    } as never)
+
+    await bus.dispatchInboundFull(groupEvent(adapterId, "m_echo"))
+    // A sibling's message of its own is still answered under "respond".
+    await bus.dispatchInboundFull(groupEvent(adapterId, "m_sibling_own"))
+    await bus.flushInboundTurns()
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(await historyOnlyReasons()).toEqual(["respond_via_echo"])
+    const audit = (await listRecent(undefined, 50)).find(
+      (row) => row.kind === "inbound.respond_via_echo"
+    )
+    expect(audit?.fields).toEqual({ siblingAdapterId: "tg-sibling", outboundJobId: "job_voice" })
   })
 })
 

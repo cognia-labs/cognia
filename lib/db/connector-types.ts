@@ -352,6 +352,20 @@ export interface ConversationOverrideRow {
    */
   characterTeamId?: string
   /**
+   * The bot each member of `characterTeamId` speaks through (ADR-0177 batch
+   * 4, ADR-0252 P7), keyed by character id. A member without an entry
+   * answers through this conversation's own bot with its name leading the
+   * reply; one with an entry answers through that sibling bot of the same
+   * platform in the same chat, unsigned when the bot speaks for that member
+   * alone (`lib/connectors/room/persona-voices.ts`). A bot named here does
+   * not answer the group on its own while it is a voice, and its posts
+   * coming back to this bot are not new messages. An entry that names a
+   * missing, disabled, muted or cross-platform bot falls back to this one, as
+   * a respond-via rule does. Ignored without a character team and in a
+   * one-to-one chat. Non-indexed additive.
+   */
+  memberBotAdapterIds?: Record<string, string>
+  /**
    * Per-conversation Visual Workflow binding (workflow⇄IM parity). When set
    * (and `squadId` is NOT set — `squadId` wins routing), an inbound AI-run
    * dispatches to the workflow orchestrator (`startWorkflowFromIM`) via

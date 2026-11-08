@@ -50,6 +50,8 @@
       "pluginTransformPiiBlocked": "插件改写被拦截——PII",
       "siblingBotBudgetExhausted": "同群机器人回复额度已用尽",
       "siblingBotIgnored": "已忽略同群机器人消息",
+      "personaVoiceHeld": "未回答：这个机器人在另一个机器人的群房间里担任成员的声音",
+      "respondViaEcho": "同群机器人回传的是我们自己的回复，未再处理",
       "slaEscalated": "SLA 已升级",
       "slaEscalationActionFailed": "SLA 升级动作失败",
       "taskDispatched": "任务已派发",
@@ -432,6 +434,13 @@
       },
       "characterTeamBinding": "群聊中的角色团队",
       "characterTeamBindingHelp": "在群聊中，由这个团队的成员逐个回答，每条回复都署上成员的名字，并且优先于上面的智能体团队和工作流；成员仍可在群里有人确认后把工作交给该智能体团队。留空则由一个角色回答。一对一聊天始终使用其单一角色。",
+      "memberVoices": {
+        "label": "成员的声音",
+        "help": "每个成员可以通过这个机器人回答（回复开头署上成员名字），也可以通过同平台、已在群里的另一个机器人回答，作为该成员自己的声音。被用作声音的机器人不再独自回答这个群。",
+        "noSiblings": "每个成员都通过这个机器人回答，回复开头署上成员名字。连接同平台的另一个机器人并把它加进群，就能让某个成员拥有自己的声音。",
+        "ownBot": "这个机器人，署上成员名字",
+        "missing": "机器人已不存在（{id}）"
+      },
       "characterTeamBindingPlaceholder": "（无——由一个角色回答）",
       "teamBinding": "Agent 团队 (id)",
       "teamBindingHelp": "设置后，入站消息将派发给该 Agent 团队而非单个角色；进度会回流到会话中。",

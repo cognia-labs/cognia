@@ -22924,9 +22924,11 @@
         "inboundWelcomeSent": "已发送欢迎卡片",
         "notifyImPiiBlocked": "通知被拦截——PII",
         "overrideComputerUseChanged": "电脑操作权限变更",
+        "personaVoiceHeld": "未回答：这个机器人在另一个机器人的群房间里担任成员的声音",
         "pluginInboundBlocked": "被插件拦截",
         "pluginRateBlocked": "被插件限流",
         "pluginTransformPiiBlocked": "插件改写被拦截——PII",
+        "respondViaEcho": "同群机器人回传的是我们自己的回复，未再处理",
         "siblingBotBudgetExhausted": "同群机器人回复额度已用尽",
         "siblingBotIgnored": "已忽略同群机器人消息",
         "slaEscalated": "SLA 已升级",
@@ -23292,6 +23294,13 @@
         },
         "liveActivity": "实时活动卡片",
         "liveActivityHint": "助手工作时在对话中显示实时进度卡片（工具数、用时、当前操作、文件编辑）。默认开启；频道消息过多时可关闭。",
+        "memberVoices": {
+          "help": "每个成员可以通过这个机器人回答（回复开头署上成员名字），也可以通过同平台、已在群里的另一个机器人回答，作为该成员自己的声音。被用作声音的机器人不再独自回答这个群。",
+          "label": "成员的声音",
+          "missing": "机器人已不存在（{id}）",
+          "noSiblings": "每个成员都通过这个机器人回答，回复开头署上成员名字。连接同平台的另一个机器人并把它加进群，就能让某个成员拥有自己的声音。",
+          "ownBot": "这个机器人，署上成员名字"
+        },
         "mode": "模式",
         "modeOptions": {
           "auto": "自动回复",

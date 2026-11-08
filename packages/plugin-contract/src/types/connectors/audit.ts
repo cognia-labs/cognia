@@ -80,6 +80,16 @@ export type AuditKind =
   // `fields.unverifiedAdapterIds` — the instances whose identity is missing,
   // which is exactly the list an operator has to fix.
   | "inbound.sibling_identity_unknown"
+  // A bot that speaks for a member of a sibling bot's room in the same chat
+  // (`memberBotAdapterIds`, ADR-0252 P7) does not answer the group itself:
+  // the message stays in history and no AI turn runs. Carries
+  // `fields.roomConversationKey`, the room that names this bot.
+  | "inbound.persona_voice_held"
+  // A sibling bot's message was this conversation's own reply, sent through
+  // that bot (a member's voice or a respond-via rule) and delivered back by
+  // the platform. The room already holds it, so it is neither stored again nor
+  // answered. Carries `fields.siblingAdapterId` and `fields.outboundJobId`.
+  | "inbound.respond_via_echo"
   // The event was admitted and passed policy, but the resolved trigger matched
   // no rule, so it became history-only. Previously indistinguishable from
   // every other history-only outcome, which made "why did the bot not answer?"
