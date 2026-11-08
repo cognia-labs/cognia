@@ -381,9 +381,6 @@
       "class": "module",
       "api": ["lib/durable/idempotency.ts"]
     },
-    "e2e": {
-      "class": "foundation"
-    },
     "editor": {
       "class": "module",
       "api": [
@@ -1103,11 +1100,6 @@
       "why": "Route shell owned by its module (analysis §11.3 C)."
     },
     {
-      "prefix": "app/remote-sessions/",
-      "owner": "companion",
-      "why": "Route shell owned by its module (analysis §11.3 C)."
-    },
-    {
       "prefix": "app/deep-link/",
       "owner": "navigation",
       "why": "Route shell owned by the deep-link navigation shell (analysis §11.3 C)."
@@ -1341,6 +1333,26 @@
       "prefix": "app/page.",
       "owner": "shell",
       "why": "The `/` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/fleet/",
+      "owner": "mobile",
+      "why": "`/fleet` is a phone-only screen that renders the mobile fleet view, so the mobile shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/remote-sessions/",
+      "owner": "mobile",
+      "why": "`/remote-sessions` is a phone-only screen built from the mobile remote-session list and detail, so the mobile shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/search/",
+      "owner": "mobile",
+      "why": "`/search` is the phone's standalone search page inside the mobile sub-page frame, so the mobile shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/e2e/plugin-ui-surfaces/",
+      "owner": "shell",
+      "why": "The plugin UI surface harness mounts plugin surfaces the way the shell does, including its plugin view container, so the shell owns it (ADR-0250 §14)."
     },
     {
       "prefix": "app/route-body.",

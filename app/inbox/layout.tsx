@@ -13,7 +13,7 @@
  * unhandled render error inside the Inbox subtree surfaces the v49
  * StateCard.Error fallback instead of blanking the page.
  */
-import { InboxVisitTracker } from "@/components/mobile/inbox-visit-tracker"
+import { InboxVisitTracker } from "@/components/inbox/inbox-visit-tracker"
 import { InboxErrorBoundary } from "@/components/inbox/inbox-error-boundary"
 
 export default function InboxLayout({ children }: { children: React.ReactNode }) {

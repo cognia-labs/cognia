@@ -1,11 +1,13 @@
 "use client"
 
 /**
- * Inbox visit tracker (mobile).
+ * Inbox visit tracker.
  *
  * Mounted from `app/inbox/layout.tsx`; bumps `settings.lastInboxViewedAt`
- * to `Date.now()` once on mount so the bottom Tab Bar's Chat-tab unread
- * badge clears as soon as the user opens any /inbox/* route.
+ * to `Date.now()` once on mount so the unread count the mobile Tab Bar's
+ * Chat-tab badge reads (`lib/inbox/unread-count.ts`) clears as soon as the
+ * user opens any /inbox/* route. It belongs to the inbox, which records the
+ * visit; the shell only reads it.
  *
  * Renders nothing.
  */
