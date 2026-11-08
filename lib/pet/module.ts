@@ -27,14 +27,14 @@ export default defineHostModule({
     "lib/tauri/pet-window.ts",
   ],
   // The event sources the pet reacts to (attention, background tasks,
-  // capture, connectors, git, terminal), what it remembers with (memory,
-  // twin), the console's plugin slots, and the share hash its paired-phone
-  // client signs with. G4 checks this equals what it imports.
+  // capture, git, terminal; inbound IM messages arrive on the
+  // `connectors.inbound` topic), what it remembers with (memory, twin), the
+  // console's plugin slots, and the share hash its paired-phone client signs
+  // with. G4 checks this equals what it imports.
   dependsOn: [
     "attention",
     "background-tasks",
     "capture",
-    "connectors",
     "git",
     "memory",
     "plugin",

@@ -437,6 +437,19 @@ describe("ConnectorBus — passive inbound observers", () => {
     expect(seen).toEqual(["m1"]) // no longer notified after dispose
   })
 
+  it("announces each processed inbound message on the connectors.inbound topic", async () => {
+    const { readTopic, subscribeTopic } = await import("@/lib/runtime/topics")
+    const bus = getBus()
+    bus.setInboundHandler(jest.fn().mockResolvedValue(undefined))
+    const seqs: number[] = []
+    const off = subscribeTopic("connectors.inbound", (v) => v && seqs.push(v.seq))
+    const before = readTopic("connectors.inbound")?.seq ?? 0
+    await bus.dispatchInbound(makeEvent("a1", "t1"))
+    await bus.dispatchInbound(makeEvent("a1", "t2"))
+    off()
+    expect(seqs).toEqual([before + 1, before + 2])
+  })
+
   it("a throwing observer never breaks inbound routing", async () => {
     const bus = getBus()
     const handler = jest.fn().mockResolvedValue(undefined)

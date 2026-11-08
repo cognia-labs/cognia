@@ -1,4 +1,5 @@
 import { connectorRequester, recordAbsorbedRequester } from "@/lib/execution/acting-authority"
+import { publishTopic } from "@/lib/runtime/topics"
 import { conversationAutomationState, waitForConversationAutomation } from "./automation-control"
 import {
   captureSystemDeliveryContext,
@@ -236,6 +237,13 @@ const RATE_BUCKET_WINDOW_MS = 60_000
 const MAX_TURN_QUEUE_DEPTH = 100
 const INBOUND_JOB_LEASE_MS = 20 * 60_000
 
+/**
+ * The `connectors.inbound` topic's sequence. Per window, not per bus: a bus
+ * rebuilt after an account switch keeps counting, so a reader never sees a
+ * sequence number it already handled.
+ */
+let inboundSeq = 0
+
 export class ConnectorBus {
   private adapters = new Map<string, PlatformAdapter>()
   private inboundHandler: BusInboundHandler | null = null
@@ -362,6 +370,10 @@ export class ConnectorBus {
   }
 
   private notifyInboundObservers(event: NormalizedInboundEvent): void {
+    // Readers that must not import the connectors (the pet's activity nudge)
+    // hear inbound traffic through the `connectors.inbound` topic.
+    inboundSeq += 1
+    publishTopic("connectors.inbound", { seq: inboundSeq, at: Date.now() })
     for (const observer of this.inboundObservers) {
       try {
         observer(structuredClone(event))
