@@ -11,7 +11,16 @@ import {
 import { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } from "./registry"
 import type { BuiltInSkill } from "./types"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
-import { __setLarkCliCapabilityDiagnosticsForTests } from "./lark/capabilities"
+import { __setModuleBuiltInSkillsForTesting, loadModuleBuiltInSkills } from "./module-skills"
+
+// A contributing module's availability gate (the connectors' lark-cli probe
+// in the app) over every `lark.*` skill, answering from `available`.
+let available = true
+const gate = {
+  governs: (skillId: string) => skillId.startsWith("lark."),
+  isAvailable: jest.fn((_skillId: string) => available),
+  settle: async () => "test",
+}
 
 const hitlSurface = () => ({
   components: { btn: { component: "Button" } },
@@ -46,32 +55,32 @@ function mkOverride(fields: Partial<ConversationOverrideRow> = {}): Conversation
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   __resetSharedBuiltInSkillRegistry()
-  __setLarkCliCapabilityDiagnosticsForTests({
-    certifiedVersion: "1.0.98",
-    detectedVersion: "1.0.98",
-    ready: true,
-    missingCommands: [],
-    missingFlags: {},
-    affectedSkillIds: [],
-  })
+  available = true
+  gate.isAvailable.mockClear()
+  __setModuleBuiltInSkillsForTesting([
+    {
+      module: "connectors",
+      stage: "stable",
+      load: async () => ({ builtInSkillFamilies: [], availability: gate }),
+    },
+  ])
+  await loadModuleBuiltInSkills()
 })
 
-describe("buildBuiltInSkillManifest — platform filter", () => {
-  it("fails closed for certified Lark skills when the CLI capability probe is blocked", () => {
-    __setLarkCliCapabilityDiagnosticsForTests({
-      certifiedVersion: "1.0.98",
-      detectedVersion: "1.0.99",
-      ready: false,
-      missingCommands: [],
-      missingFlags: {},
-      affectedSkillIds: ["lark.calendar.list_events"],
-      message: "version mismatch",
-    })
-    registerBuiltInSkill(mkSkill())
+afterAll(() => __setModuleBuiltInSkillsForTesting(null))
 
-    expect(buildBuiltInSkillManifest({})).toEqual([])
+describe("buildBuiltInSkillManifest — platform filter", () => {
+  it("fails closed for a skill a module's availability gate finds unavailable", () => {
+    available = false
+    registerBuiltInSkill(mkSkill())
+    registerBuiltInSkill(
+      mkSkill({ id: "x.any", family: "x", platforms: "any", mcpToolName: "x_any" })
+    )
+
+    expect(buildBuiltInSkillManifest({}).map((entry) => entry.skillId)).toEqual(["x.any"])
+    expect(gate.isAvailable).toHaveBeenCalledWith("lark.calendar.list_events")
   })
 
   it("includes 'any' skills on every platform", () => {
@@ -314,6 +323,13 @@ describe("buildBuiltInSkillManifest — manifest shape", () => {
 })
 
 describe("summariseSkillCapabilities", () => {
+  it("leaves out a family whose every skill a gate finds unavailable", () => {
+    available = false
+    registerBuiltInSkill(mkSkill({ id: "lark.calendar.list", mutation: "read" }))
+    registerBuiltInSkill(mkSkill({ id: "im.list", family: "im", mcpToolName: "im_list" }))
+    expect(summariseSkillCapabilities("lark")).toEqual([{ family: "im", mutations: ["read"] }])
+  })
+
   it("groups mutations per family in stable order", () => {
     registerBuiltInSkill(mkSkill({ id: "lark.calendar.list", mutation: "read" }))
     registerBuiltInSkill(
@@ -374,49 +390,25 @@ describe("buildBuiltInSkillManifest · families", () => {
     expect(entries.map((entry) => entry.skillId)).toEqual(["schedule.list"])
   })
 
-  it("never consults the Lark CLI for a family it is about to drop", () => {
-    // A fresh module graph with the probe replaced, so the test can see
-    // whether the Lark gate ran at all (a namespace export cannot be spied).
-    const probe = jest.fn()
-    jest.isolateModules(() => {
-      jest.doMock("./lark/capabilities", () => ({
-        ...jest.requireActual<typeof import("./lark/capabilities")>("./lark/capabilities"),
-        getCachedLarkCliCapabilityDiagnostics: () => null,
-        probeLarkCliCapabilities: probe,
-      }))
-      const manifest = jest.requireActual<typeof import("./manifest")>("./manifest")
-      const registry = jest.requireActual<typeof import("./registry")>("./registry")
-      registry.registerBuiltInSkill(mkSkill({ platforms: "any" }))
+  it("never asks a gate about a family it is about to drop", () => {
+    registerBuiltInSkill(mkSkill({ platforms: "any" }))
 
-      manifest.buildBuiltInSkillManifest({ families: ["schedule"] })
-      expect(probe).not.toHaveBeenCalled()
+    buildBuiltInSkillManifest({ families: ["schedule"] })
+    expect(gate.isAvailable).not.toHaveBeenCalled()
 
-      // Control: without the family filter the same Lark skill does reach it.
-      manifest.buildBuiltInSkillManifest({})
-      expect(probe).toHaveBeenCalled()
-    })
-    jest.dontMock("./lark/capabilities")
+    // Control: without the family filter the same Lark skill does reach it.
+    buildBuiltInSkillManifest({})
+    expect(gate.isAvailable).toHaveBeenCalled()
   })
 
-  it("never consults the Lark CLI for a platform it cannot serve", () => {
-    const probe = jest.fn()
-    jest.isolateModules(() => {
-      jest.doMock("./lark/capabilities", () => ({
-        ...jest.requireActual<typeof import("./lark/capabilities")>("./lark/capabilities"),
-        getCachedLarkCliCapabilityDiagnostics: () => null,
-        probeLarkCliCapabilities: probe,
-      }))
-      const manifest = jest.requireActual<typeof import("./manifest")>("./manifest")
-      const registry = jest.requireActual<typeof import("./registry")>("./registry")
-      registry.registerBuiltInSkill(mkSkill())
+  it("never asks a gate about a platform it cannot serve", () => {
+    registerBuiltInSkill(mkSkill())
 
-      expect(
-        manifest.buildBuiltInSkillManifest({
-          imBinding: { platform: "telegram", adapterId: "tg-1", conversationKey: "k" },
-        })
-      ).toEqual([])
-      expect(probe).not.toHaveBeenCalled()
-    })
-    jest.dontMock("./lark/capabilities")
+    expect(
+      buildBuiltInSkillManifest({
+        imBinding: { platform: "telegram", adapterId: "tg-1", conversationKey: "k" },
+      })
+    ).toEqual([])
+    expect(gate.isAvailable).not.toHaveBeenCalled()
   })
 })

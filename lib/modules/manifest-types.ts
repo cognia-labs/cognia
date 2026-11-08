@@ -57,6 +57,7 @@ import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import type { PromptDefinitionV1, PromptResolutionContext } from "@/lib/prompts/types"
 import type { Goal } from "@/types/goal"
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
+import type { BuiltInSkillAvailability } from "@/lib/skills/built-in/types"
 import type { Project } from "@/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type {
@@ -510,6 +511,29 @@ export interface ModuleWorkflowNodesModule {
   workflowNodeKinds: readonly WorkflowNodeKind[]
 }
 
+/**
+ * What a module's `builtinSkills.load` resolves to. Importing the file
+ * registers the module's built-in skill families (`registerBuiltInSkill`,
+ * ADR-0026), as every family does, and `register`, when present, loads
+ * the families that need more code; `builtInSkillFamilies` names them all,
+ * and the loader checks each registered at least one skill. `availability`
+ * gates the skills that need something outside the host to run.
+ */
+export interface ModuleBuiltinSkillsModule {
+  builtInSkillFamilies: readonly string[]
+  availability?: BuiltInSkillAvailability
+  /** Load what registers the rest of the families; the loader awaits it before checking. */
+  register?(): Promise<void>
+}
+
+/** One module's skill families as `lib/modules/generated/builtin-skills.ts` lists them. */
+export interface ModuleBuiltinSkillsEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  load: LazyModule<ModuleBuiltinSkillsModule>
+}
+
 /** One module's node executors as `lib/modules/generated/workflow-nodes.ts` lists them. */
 export interface ModuleWorkflowNodesEntry {
   /** The contributing module, and its stage: an `experimental` one contributes nothing. */
@@ -647,7 +671,11 @@ export interface HostModuleManifest {
   context?: { load: LazyModule<ModuleContextModule> }
   /** Scheduler executors declared together with their task sources. */
   taskExecutors?: ModuleContribution
-  builtinSkills?: ModuleContribution
+  /**
+   * The built-in skill families this module registers (ADR-0026, ADR-0250
+   * §14 `builtinSkills`), loaded before the skill registry is read.
+   */
+  builtinSkills?: { load: LazyModule<ModuleBuiltinSkillsModule> }
   /** Plugin host API namespaces this module owns (ADR-0250 §9). */
   pluginApi?: { namespaces: readonly string[]; load: LazyModule }
   /**

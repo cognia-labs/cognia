@@ -33,6 +33,7 @@ import {
   GENERATED_CAPABILITIES,
   GENERATED_CONTEXT,
   GENERATED_WORKFLOW_NODES,
+  GENERATED_BUILTIN_SKILLS,
   GENERATED_HOST,
   GENERATED_PROMPTS,
   GENERATED_TOOLS,
@@ -1274,6 +1275,55 @@ test("the workflow-node registry lazily imports each contributing module's file,
   )
   assert.ok(registry.indexOf('module: "goal"') < registry.indexOf('module: "sites"'))
   assert.ok(registry.includes('load: () => import("@/lib/sites/workflow-nodes")'))
+  assert.ok(!registry.includes("crew"))
+})
+
+test("validateHostManifest wants builtinSkills as { load } with a lazy entry", () => {
+  const base = { id: "connectors", kind: "module", stage: "stable" }
+  assert.ok(
+    validateHostManifest({ ...base, builtinSkills: "./builtin-skills" }, "connectors").includes(
+      'builtinSkills.load is a lazy entry `() => import("…")`'
+    )
+  )
+  assert.ok(
+    validateHostManifest(
+      { ...base, builtinSkills: { load: { $lazy: "./builtin-skills" }, families: [] } },
+      "connectors"
+    ).includes('builtinSkills: unknown field "families"')
+  )
+  assert.deepEqual(
+    validateHostManifest(
+      { ...base, builtinSkills: { load: { $lazy: "./builtin-skills" } } },
+      "connectors"
+    ),
+    []
+  )
+})
+
+test("the built-in skill registry lazily imports each contributing module's file, by module id", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "connectors",
+        file: "lib/connectors/module.ts",
+        value: { stage: "stable", builtinSkills: { load: { $lazy: "./builtin-skills" } } },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "bot",
+        file: "lib/bot/module.ts",
+        value: { stage: "experimental", builtinSkills: { load: { $lazy: "./skills" } } },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_BUILTIN_SKILLS]
+  assert.match(
+    registry,
+    /export const MODULE_BUILTIN_SKILLS: readonly ModuleBuiltinSkillsEntry\[\]/
+  )
+  assert.ok(registry.indexOf('module: "bot"') < registry.indexOf('module: "connectors"'))
+  assert.ok(registry.includes('load: () => import("@/lib/connectors/builtin-skills")'))
   assert.ok(!registry.includes("crew"))
 })
 

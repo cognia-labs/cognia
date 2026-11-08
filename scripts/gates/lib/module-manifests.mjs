@@ -142,6 +142,8 @@ export const GENERATED_TOOLS = "lib/modules/generated/tools.ts"
 export const GENERATED_CONTEXT = "lib/modules/generated/context.ts"
 /** Every module's `workflowNodes` file, lazily: the workflow engine's only route to one. */
 export const GENERATED_WORKFLOW_NODES = "lib/modules/generated/workflow-nodes.ts"
+/** Every module's `builtinSkills` file, lazily: the built-in skill registry's only route to one. */
+export const GENERATED_BUILTIN_SKILLS = "lib/modules/generated/builtin-skills.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
@@ -150,6 +152,7 @@ export const GENERATED_FILES = [
   GENERATED_TOOLS,
   GENERATED_CONTEXT,
   GENERATED_WORKFLOW_NODES,
+  GENERATED_BUILTIN_SKILLS,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -693,6 +696,14 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
       for (const key of Object.keys(nodes))
         if (key !== "load") errors.push(`workflowNodes: unknown field "${key}"`)
   }
+  if (manifest.builtinSkills !== undefined) {
+    const skills = manifest.builtinSkills
+    if (!skills || typeof skills !== "object" || !isLazy(skills.load))
+      errors.push('builtinSkills.load is a lazy entry `() => import("…")`')
+    else
+      for (const key of Object.keys(skills))
+        if (key !== "load") errors.push(`builtinSkills: unknown field "${key}"`)
+  }
   if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
@@ -882,6 +893,15 @@ const LAZY_REGISTRIES = {
       "// the workflow engine before it looks one up (`lib/workflow/nodes/module-nodes.ts`).",
     ],
   },
+  builtinSkills: {
+    spec: (value) => value?.builtinSkills?.load?.$lazy,
+    constName: "MODULE_BUILTIN_SKILLS",
+    type: "ModuleBuiltinSkillsEntry",
+    reader: [
+      "// Every module's `builtinSkills`: the skill families it registers, read by the",
+      "// built-in skill tier before its registry is (`lib/skills/built-in/module-skills.ts`).",
+    ],
+  },
 }
 
 /** The modules that contribute to `registry`, in module id order. */
@@ -998,6 +1018,7 @@ export function renderRegistries({ host, ui }) {
     [GENERATED_TOOLS]: renderTools(host),
     [GENERATED_CONTEXT]: renderLazyRegistry("context", host),
     [GENERATED_WORKFLOW_NODES]: renderLazyRegistry("workflowNodes", host),
+    [GENERATED_BUILTIN_SKILLS]: renderLazyRegistry("builtinSkills", host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

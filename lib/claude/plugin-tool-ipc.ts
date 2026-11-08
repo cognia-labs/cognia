@@ -639,7 +639,7 @@ async function resolveBuiltInSkillByMcpName(
   mcpToolName: string
 ): Promise<{ id: string } | undefined> {
   try {
-    await import("@/lib/skills/built-in")
+    await (await import("@/lib/skills/built-in")).whenBuiltInSkillsRegistered()
     const { getSharedBuiltInSkillRegistry } = await import("@/lib/skills/built-in/registry")
     const reg = getSharedBuiltInSkillRegistry()
     for (const skill of reg.list()) {

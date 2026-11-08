@@ -1,4 +1,4 @@
-import "@/lib/skills/built-in"
+import { whenBuiltInSkillsRegistered } from "@/lib/skills/built-in"
 
 import { resolveBuiltInSkillContext } from "@/lib/skills/built-in/context"
 import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
@@ -36,6 +36,9 @@ export function createSkillsAPI(
           label: skill.label,
         })),
     invokeBuiltIn: async (skillId, args, options) => {
+      // A module's family (the connectors' Lark and IM skills) may still be
+      // loading on the first call after start.
+      await whenBuiltInSkillsRegistered()
       const skill = registry.get(skillId)
       if (!skill || !matchesAllowlist(skill.id, skill.family, allowlist)) {
         throw new Error(`built-in skill is not allowlisted for plugin ${pluginId}: ${skillId}`)

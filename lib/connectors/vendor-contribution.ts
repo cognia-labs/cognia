@@ -25,6 +25,7 @@ import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
 import type { RunProjectionSnapshot } from "@/types/execution/run"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
+import type { BuiltInSkillAvailability } from "@/lib/skills/built-in/types"
 import type { AvatarSource, PlatformAvatarTarget } from "./platform-avatar"
 import type { StatusView } from "./commands/render"
 import type { ApprovalCardState } from "./hitl/approval-card-state"
@@ -153,6 +154,16 @@ export interface ConnectorVendorContribution {
       resolution: Exclude<PrincipalResolution, { status: "legacy" | "resolved" }>,
       inboundJobId: string
     ): Promise<void>
+  }
+  /**
+   * The built-in skill families this vendor's conversations serve (ADR-0026),
+   * which the connectors contribute to the skill tier (`../builtin-skills.ts`).
+   * `load` imports the files that register them and hands over the gate for
+   * skills that need something outside the host.
+   */
+  readonly builtInSkills?: {
+    readonly families: readonly string[]
+    load(): Promise<{ availability?: BuiltInSkillAvailability }>
   }
   /** Run cards for the generic presentation runner (`run-presentation/runner.ts`). */
   readonly runPresentation?: {

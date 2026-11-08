@@ -84,7 +84,7 @@ export async function buildImPermissionCeiling(input: {
 }): Promise<AgentPermissionCeiling> {
   const [{ buildBuiltInSkillManifest }, { getSharedBuiltInSkillRegistry }] =
     await Dexie.ignoreTransaction(async () => {
-      await import("@/lib/skills/built-in")
+      await (await import("@/lib/skills/built-in")).whenBuiltInSkillsRegistered()
       return Promise.all([
         import("@/lib/skills/built-in/manifest"),
         import("@/lib/skills/built-in/registry"),

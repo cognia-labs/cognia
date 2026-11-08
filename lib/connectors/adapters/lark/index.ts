@@ -1742,9 +1742,11 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     resolveContacts: chatMgmt.resolveContacts,
     a2uiCapability: () => LARK_A2UI_CAPABILITY,
     platformSkillCapabilities: () => {
-      // Lazy ESM import via the synchronous bundler entry. The barrel
-      // self-registers every Lark skill family; `summariseSkillCapabilities`
-      // just walks the registry — zero I/O, safe in adapter start.
+      // Lazy ESM import via the synchronous bundler entry. The runtime
+      // installer awaits `whenBuiltInSkillsRegistered()` before it asks, so
+      // the Lark families and their lark-cli gate are loaded;
+      // `summariseSkillCapabilities` just walks the registry — zero I/O,
+      // safe in adapter start.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       require("@/lib/skills/built-in")
       // eslint-disable-next-line @typescript-eslint/no-require-imports

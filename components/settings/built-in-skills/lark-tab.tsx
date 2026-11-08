@@ -37,12 +37,15 @@ export function LarkTab() {
   const [diagnostics, setDiagnostics] = useState<LarkCliCapabilityDiagnostics | null>(null)
 
   useEffect(() => {
-    // Trigger the family barrel side-effects on mount so the registry
-    // is populated even if no upstream module pulled it in first.
-    import("@/lib/skills/built-in").then(() => {
-      const reg = getSharedBuiltInSkillRegistry()
-      setSkills(reg.listByPlatform("lark"))
-    })
+    // Wait for every family on mount (the Lark ones are the connectors'
+    // contribution) so the registry is populated even if no upstream module
+    // loaded it first.
+    import("@/lib/skills/built-in")
+      .then((skills) => skills.whenBuiltInSkillsRegistered())
+      .then(() => {
+        const reg = getSharedBuiltInSkillRegistry()
+        setSkills(reg.listByPlatform("lark"))
+      })
     import("@/lib/skills/built-in/lark/capabilities")
       .then(({ probeLarkCliCapabilities }) => probeLarkCliCapabilities())
       .then(setDiagnostics)

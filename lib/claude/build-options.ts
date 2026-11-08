@@ -2897,25 +2897,22 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
               })
             : { capabilities: [], fingerprint: "unclaimed" }
           : undefined
-      let larkCliCapabilityKey = "not-applicable"
-      if (
-        builtInSkillsRequested &&
-        (!session?.platformBinding?.adapterId || session.platformBinding.platform === "lark")
-      ) {
-        const { probeLarkCliCapabilities } = await import("@/lib/skills/built-in/lark/capabilities")
-        // The manifest is synchronous: wait for its CLI prerequisite before
-        // caching the first result, otherwise a cold probe caches no Lark tools.
-        const diagnostics = await probeLarkCliCapabilities()
-        larkCliCapabilityKey = JSON.stringify({
-          certifiedVersion: diagnostics.certifiedVersion,
-          detectedVersion: diagnostics.detectedVersion,
-          ready: diagnostics.ready,
-          affectedSkillIds: [...diagnostics.affectedSkillIds].sort(),
-        })
-      }
+      // The manifest is synchronous: let every module's availability gate
+      // (the connectors' lark-cli probe) settle before caching the first
+      // result, otherwise a cold probe caches no Lark tools. A family-only
+      // build asks no gate.
+      const availabilityKey = builtInSkillsRequested
+        ? await (
+            await import("@/lib/skills/built-in/module-skills")
+          ).builtInSkillAvailabilityKey(
+            session?.platformBinding?.adapterId
+              ? { platform: session.platformBinding.platform }
+              : {}
+          )
+        : "not-applicable"
       // Memo key: every input that shapes the manifest. Platform + isImSession
       // gate the platform/access/requires filters; the override's `updatedAt`
-      // bumps whenever its `allowedBuiltInSkillIds` change. CLI diagnostics
+      // bumps whenever its `allowedBuiltInSkillIds` change. The availability key
       // keep a refreshed capability result from reusing an unavailable manifest.
       //
       // Channel capabilities used to be static per platform and were left out
@@ -2928,14 +2925,14 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         session?.platformBinding?.adapterId
       )}:${imOverrideRow?.id ?? "none"}:${imOverrideRow?.updatedAt ?? 0}:${capabilityKey}:${
         schedulerFamilyOnly ? "family:schedule" : "all"
-      }:${larkCliCapabilityKey}`
+      }:${availabilityKey}`
       const cachedManifest = builtInSkillsManifestCache.get(skillsCacheKey)
       if (cachedManifest !== undefined) {
         builtInSkillsManifest = cachedManifest
       } else {
-        // Side-effect import so every family's registerBuiltInSkill() runs
-        // before the manifest builder walks the registry.
-        await import("@/lib/skills/built-in")
+        // Every family registered (the kernel's on import, the modules'
+        // contributions awaited) before the manifest builder walks the registry.
+        await (await import("@/lib/skills/built-in")).whenBuiltInSkillsRegistered()
         const { buildBuiltInSkillManifest } = await import("@/lib/skills/built-in/manifest")
         builtInSkillsManifest = buildBuiltInSkillManifest({
           imBinding: session?.platformBinding?.adapterId

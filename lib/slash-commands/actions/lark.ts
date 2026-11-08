@@ -110,9 +110,9 @@ export async function dispatchLarkSubcommand(input: SlashLarkInput): Promise<Sla
   } catch (err) {
     return { system: errorBlock(err), errorCode: "parse_error" }
   }
-  // Ensure the family barrel is loaded — `index` is a no-op import once
-  // the registry is populated, so subsequent calls are zero-cost.
-  await import("@/lib/skills/built-in")
+  // Ensure every family is registered (the Lark ones are the connectors'
+  // contribution); a no-op once the registry is populated.
+  await (await import("@/lib/skills/built-in")).whenBuiltInSkillsRegistered()
   let run: Awaited<ReturnType<typeof startToolExecutionRun>> | undefined
   let failed = true
   try {

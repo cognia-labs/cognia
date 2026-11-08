@@ -412,6 +412,9 @@ export function installConnectorRuntime(
         // failure therefore leaves both prior values intact, while an absent
         // platform-skill probe is an authoritative empty capability list.
         const lastKnownCapabilities = adapter.a2uiCapability()
+        // Every skill family registered first, the modules' included, so the
+        // summary sees them and their availability gates.
+        await (await import("@/lib/skills/built-in")).whenBuiltInSkillsRegistered()
         const lastKnownSkillCapabilities = adapter.platformSkillCapabilities?.() ?? []
         const { getDb } = await import("@/lib/db/schema")
         await getDb().adapterInstances.update(row.id, {

@@ -1,13 +1,15 @@
 /**
  * Built-in skill tier — public surface (ADR-0026).
  *
- * Importing this module triggers registration of every skill in the
- * tier via the per-family side-effect imports below. The build-options
- * resolver imports this module so the registry is fully populated
- * before the first manifest build.
+ * Importing this module registers the kernel's own families through the
+ * side-effect imports below and starts loading the families feature modules
+ * contribute through their manifests (`builtinSkills`, ADR-0250 §14: the IM
+ * and Lark families are the connectors module's). Every reader of the
+ * registry awaits `whenBuiltInSkillsRegistered()` before it lists or runs a
+ * skill, so a module's family is never missing from a manifest or a call.
  *
- * Add new skills under `lib/skills/built-in/<family>/<skill>.ts` and
- * `import "./<family>/<skill>"` here.
+ * A kernel family lives under `lib/skills/built-in/<family>/` and is
+ * imported here; a module's family is its manifest's `builtinSkills`.
  */
 
 // Re-exports — the only entry points consumers should use.
@@ -34,18 +36,24 @@ export {
 } from "./manifest"
 export type { BuildBuiltInSkillManifestInput, BuiltInSkillManifestEntry } from "./manifest"
 export { runBuiltInSkill } from "./dispatcher"
+import { loadModuleBuiltInSkills } from "./module-skills"
+
+/**
+ * Resolves once every family is registered: the kernel's (imported below,
+ * so already) and every module's `builtinSkills` contribution.
+ */
+export function whenBuiltInSkillsRegistered(): Promise<void> {
+  return loadModuleBuiltInSkills()
+}
 
 // ---- Module-load registration side-effects --------------------------------
 //
 // Each per-family module calls `registerBuiltInSkill()` at module load.
-// Add new families here as they ship. Order is irrelevant — the registry
-// is map-backed.
+// Add new kernel families here as they ship. Order is irrelevant — the
+// registry is map-backed. A module's families load from its manifest, started
+// here so they register about as early as these do.
+void loadModuleBuiltInSkills()
 
-// Lark family — wired in A3.
-import "./lark"
-// Platform-neutral im.* chat-management family — W2 multi-bot. Gated by
-// adapter capability flags (`chat.create` …) via each skill's `requires`.
-import "./im"
 // Desktop-only, workspace-confined plugin conversion tools.
 import "./plugin-conversion"
 // Issue tracker (ADR-0132): read and work the board, its containers and its

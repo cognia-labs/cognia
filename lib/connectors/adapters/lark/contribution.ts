@@ -28,6 +28,10 @@ function cardStatus(status: string): "done" | "interrupted" | "error" {
 export const larkContribution: ConnectorVendorContribution = {
   platform: "lark",
   capabilities: LARK_CAPS,
+  builtInSkills: {
+    families: ["lark.base", "lark.calendar", "lark.doc", "lark.sheets", "lark.task", "lark.wiki"],
+    load: () => import("./builtin-skills"),
+  },
   buildAdapter: async (row) => (await import("./build")).buildLarkAdapter(row),
   loadIdentityProbe: async () => (await import("./whoami")).probeBotIdentity,
   completeOAuth: async (code, state) => {

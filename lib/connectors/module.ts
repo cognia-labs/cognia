@@ -120,5 +120,8 @@ export default defineHostModule({
   prompts: () => import("./prompts"),
   // Send, draft, react to, delete and forward IM messages, and wait for a
   // reply, as workflow nodes.
+  // The Lark and IM built-in skill families, with the lark-cli availability
+  // gate, registered when the skill tier loads them.
+  builtinSkills: { load: () => import("./builtin-skills") },
   workflowNodes: { load: () => import("./workflow-nodes") },
 })

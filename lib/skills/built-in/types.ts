@@ -222,3 +222,27 @@ export interface BuiltInSkill<Args extends ZodTypeAny = ZodTypeAny> {
    */
   hitlSurface?: (args: z.infer<Args>) => A2UISegmentContent
 }
+
+/**
+ * Whether skills that need something outside the host can run now (a CLI at
+ * a certified version, say). A module contributing a skill family through
+ * its manifest (`builtinSkills`) may hand one over; the manifest builder and
+ * the capability summary drop a skill a gate governs and finds unavailable.
+ */
+export interface BuiltInSkillAvailability {
+  /** Whether this gate decides for the skill. Synchronous and deterministic. */
+  governs(skillId: string): boolean
+  /**
+   * The verdict from what the gate last learned. Never blocks: a gate that
+   * has learned nothing yet starts learning in the background and answers
+   * from what it has, which may be "not available".
+   */
+  isAvailable(skillId: string): boolean
+  /**
+   * Learn what a manifest for `scope` depends on, waiting for it, and name
+   * it: a key that changes whenever a verdict could, for caching a manifest.
+   * `null` when no skill the gate governs can be offered in that scope (a
+   * conversation on another platform), so nothing needs learning.
+   */
+  settle(scope: { platform?: PlatformKind }): Promise<string | null>
+}

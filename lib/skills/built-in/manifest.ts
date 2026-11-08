@@ -23,6 +23,10 @@
  *      channels that can't show cards). Non-IM (desktop) sessions skip
  *      this gate — A2UI renders confirm surfaces natively.
  *
+ * Skills a contributing module's availability gate finds unavailable (a
+ * Lark skill whose lark-cli command is missing) drop after the platform
+ * filter (`./module-skills.ts`).
+ *
  * Mutation tier does NOT filter at the manifest level — write and
  * destructive skills are still exposed to the assistant; the dispatcher
  * decides whether to render a confirm card at invocation time.
@@ -37,12 +41,7 @@ import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/conne
 import { adapterAllowsBuiltInSkill } from "./channel-ceiling"
 import { getSharedBuiltInSkillRegistry, platformAllows } from "./registry"
 import type { BuiltInSkill } from "./types"
-import {
-  getCachedLarkCliCapabilityDiagnostics,
-  isLarkSkillCapabilityAvailable,
-  LARK_CLI_CAPABILITY_MANIFEST,
-  probeLarkCliCapabilities,
-} from "./lark/capabilities"
+import { isBuiltInSkillAvailable } from "./module-skills"
 
 /**
  * Synthetic plugin id the sidecar uses to group built-in skill tools.
@@ -80,8 +79,9 @@ export interface BuildBuiltInSkillManifestInput {
   channelCapabilities?: readonly Capability[]
   /**
    * Restrict the manifest to these families (`skill.family`). Checked before
-   * anything else, the Lark CLI probe included, so a family-only build (the
-   * scheduler family offered to desktop chat) never spawns lark-cli or renders
+   * anything else, the modules' availability gates included (the Lark CLI
+   * probe is one), so a family-only build (the scheduler family offered to
+   * desktop chat) never spawns lark-cli or renders
    * JSON Schema for skills it is about to drop.
    */
   families?: readonly string[]
@@ -98,10 +98,7 @@ export function buildBuiltInSkillManifest(
   for (const skill of registry.list()) {
     if (families && !families.has(skill.family)) continue
     if (!passPlatformFilter(skill, input.imBinding?.platform, isImSession)) continue
-    if (skill.id in LARK_CLI_CAPABILITY_MANIFEST) {
-      if (!getCachedLarkCliCapabilityDiagnostics()) void probeLarkCliCapabilities()
-      if (!isLarkSkillCapabilityAvailable(skill.id)) continue
-    }
+    if (!isBuiltInSkillAvailable(skill.id)) continue
     if (!passImAccessFilter(skill, isImSession, input.imOverrideRow)) continue
     if (!passAllowedListFilter(skill, input.imOverrideRow?.allowedBuiltInSkillIds)) continue
     if (!adapterAllowsBuiltInSkill(input.imAdapterRow, skill)) continue
@@ -129,10 +126,7 @@ export function summariseSkillCapabilities(
 ): readonly PlatformSkillCapability[] {
   const byFamily = new Map<string, Set<BuiltInSkill["mutation"]>>()
   for (const skill of getSharedBuiltInSkillRegistry().listByPlatform(platform)) {
-    if (skill.id in LARK_CLI_CAPABILITY_MANIFEST) {
-      if (!getCachedLarkCliCapabilityDiagnostics()) void probeLarkCliCapabilities()
-      if (!isLarkSkillCapabilityAvailable(skill.id)) continue
-    }
+    if (!isBuiltInSkillAvailable(skill.id)) continue
     let bucket = byFamily.get(skill.family)
     if (!bucket) {
       bucket = new Set()
