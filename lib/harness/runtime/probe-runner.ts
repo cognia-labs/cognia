@@ -198,7 +198,8 @@ export async function runProbe(input: ProbeInput, deps: ProbeRunnerDeps): Promis
     workspace = await prepareRolloutWorkspace(
       task,
       { runId: run.id, label, sessionId: session.id, characterId: input.baseCharacter.id },
-      deps.isolation
+      deps.isolation,
+      input.signal
     )
     input.signal.throwIfAborted()
     const materialized = materializeHarnessRun(

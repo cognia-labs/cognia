@@ -89,6 +89,8 @@ export interface IsolationGitDeps {
     characterId: string
     runId: string
     label: string
+    /** The probe's stop: aborting it while the worktree is created cancels that checkout. */
+    signal?: AbortSignal
   }): Promise<GitWorkspaceHandle>
 }
 
@@ -184,7 +186,8 @@ async function readDeliverables(
 export async function prepareRolloutWorkspace(
   task: HarnessEvolutionTask,
   ids: { runId: string; label: string; sessionId: string; characterId: string },
-  deps: IsolationDeps
+  deps: IsolationDeps,
+  signal?: AbortSignal
 ): Promise<RolloutWorkspace> {
   if (task.isolation === "none") {
     return {
@@ -195,7 +198,7 @@ export async function prepareRolloutWorkspace(
   }
 
   if (task.isolation === "git") {
-    const handle = await deps.git.acquire({ task, ...ids })
+    const handle = await deps.git.acquire({ task, ...ids, ...(signal ? { signal } : {}) })
     let changed: string[] | null = null
     let released = false
     const settle = async (state: "ready" | "failed" | "cancelled") => {
@@ -325,6 +328,7 @@ async function acquireGitProbeWorkspace(input: {
   characterId: string
   runId: string
   label: string
+  signal?: AbortSignal
 }): Promise<GitWorkspaceHandle> {
   const git = input.task.git
   if (!git?.resolvedBaseSha) throw new Error("A git rollout needs the run's resolved base commit")
@@ -334,15 +338,21 @@ async function acquireGitProbeWorkspace(input: {
     import("@/lib/task-workspace/user-action"),
   ])
   const logicalRootId = "harness-probe"
+  const acquireOptions: [] | [{ signal: AbortSignal }] = input.signal
+    ? [{ signal: input.signal }]
+    : []
   const bundle = await userAction.runWorkspaceUserAction("task_workspace_bundle_acquire", () =>
-    client.acquireWorkspaceBundle({
-      ownerType: "session",
-      ownerRef: input.sessionId,
-      ...(git.projectId ? { projectId: git.projectId } : {}),
-      environmentKind: "managed",
-      base: { kind: "gitRef", gitRef: git.resolvedBaseSha as string },
-      roots: [{ logicalRootId, role: "primary", sourceRoot: git.sourceRoot }],
-    })
+    client.acquireWorkspaceBundle(
+      {
+        ownerType: "session",
+        ownerRef: input.sessionId,
+        ...(git.projectId ? { projectId: git.projectId } : {}),
+        environmentKind: "managed",
+        base: { kind: "gitRef", gitRef: git.resolvedBaseSha as string },
+        roots: [{ logicalRootId, role: "primary", sourceRoot: git.sourceRoot }],
+      },
+      ...acquireOptions
+    )
   )
   const primary = bundle.leases.find((l) => l.role === "primary")
   if (!primary || bundle.leases.length !== 1 || bundle.state !== "active") {

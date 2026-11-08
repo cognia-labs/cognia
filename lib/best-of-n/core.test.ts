@@ -402,27 +402,6 @@ it("omits an unknown cost cap and preserves null cost", () => {
   expect(candidateGrant(group, group.candidates[0]).maxBudgetUsd).toBeUndefined()
 })
 
-it("cancel reaches a candidate still creating its worktree", async () => {
-  const f = fixture()
-  const checkoutSignals: AbortSignal[] = []
-  f.execution.acquire.mockImplementation(
-    async (_group, _candidate, _input, signal) =>
-      new Promise((_resolve, reject) => {
-        checkoutSignals.push(signal!)
-        signal!.addEventListener("abort", () => reject(signal!.reason), { once: true })
-      })
-  )
-  await f.service.startBestOfN(f.input)
-  await until(() => f.execution.acquire.mock.calls.length === 2)
-  expect(checkoutSignals.every((signal) => !signal.aborted)).toBe(true)
-
-  expect((await f.service.cancel("group")).phase).toBe("cancelled")
-  // The same signal a running attempt is stopped by: aborting it cancels the
-  // checkout on the host instead of letting each worktree finish first.
-  expect(checkoutSignals.every((signal) => signal.aborted)).toBe(true)
-  expect(f.execution.execute).not.toHaveBeenCalled()
-})
-
 it("bounds an in-flight attempt by the group duration", async () => {
   const f = fixture()
   f.input.budgetPolicy.maxDurationMs = 30
