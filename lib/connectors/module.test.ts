@@ -6,10 +6,12 @@ describe("the connectors manifest", () => {
     expect(connectors.acceptance).toEqual({ realSmoke: "pending" })
   })
 
-  it("asks for OCR and speech through ports and provides the IM conversation channel", async () => {
-    expect(connectors.requires).toEqual(["ocr", "speech"])
+  it("asks for OCR, speech and the room hand-off through ports, and provides its own", async () => {
+    expect(connectors.requires).toEqual(["ocr", "speech", "room-squad-handoff?"])
     expect(connectors.provides?.map((provision) => provision.port)).toEqual([
       "conversation-channel",
+      "identity-principal-links",
+      "inbound-jobs",
     ])
     const { port } = (await connectors.provides![0]!.load()) as {
       port: { claimsBinding: unknown }
@@ -28,5 +30,17 @@ describe("the connectors manifest", () => {
     expect(connectors.syncHandlers?.tables).toEqual(["conversationOverrides"])
     const { syncHandlers } = await connectors.syncHandlers!.load()
     expect(Object.keys(syncHandlers).sort()).toEqual(["conversationOverrides"])
+  })
+
+  it("owns the inbound job store and provides it to recovery and the testing API", async () => {
+    expect(connectors.owns).toContain("lib/db/connector-inbound-jobs.ts")
+    expect(connectors.api).toContain("lib/db/connector-inbound-jobs.ts")
+    const inboundJobs = connectors.provides!.find((provision) => provision.port === "inbound-jobs")
+    const { port } = (await inboundJobs!.load()) as {
+      port: { findJobForRun: unknown; continueJob: unknown; seedRunningJob: unknown }
+    }
+    expect(typeof port.findJobForRun).toBe("function")
+    expect(typeof port.continueJob).toBe("function")
+    expect(typeof port.seedRunningJob).toBe("function")
   })
 })

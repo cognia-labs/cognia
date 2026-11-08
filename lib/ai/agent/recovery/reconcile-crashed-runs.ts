@@ -23,7 +23,8 @@ import type {
   AgentExecutionSendSpec,
 } from "@cognia/agent-config-types/agent-execution"
 import type { CanonicalPermissionEvent } from "@cognia/agent-config-types/canonical-session"
-import type { ConnectorInboundJobRow } from "@/lib/db/connector-types"
+import { loadPort } from "@/lib/modules/ports"
+import type { RecoverableInboundJob } from "@/types/modules/ports/inbound-jobs"
 
 import {
   candidateFromEnvelopes,
@@ -181,8 +182,6 @@ function permissionEvents(envelopes: readonly AgentEventEnvelope[]): CanonicalPe
   return [...byRequest.values()]
 }
 
-type RecoverableInboundJob = Pick<ConnectorInboundJobRow, "id" | "status" | "executionRunId">
-
 export interface ResumeCrashedAgentRunDeps {
   findInboundJob?: (runId: string) => Promise<RecoverableInboundJob | undefined>
   readSdkSessionId?: (sessionId: string) => Promise<string | undefined>
@@ -227,12 +226,15 @@ export async function resumeCrashedAgentRun(
   if (!candidate) return { resumed: false, reason: "no-candidates" }
 
   try {
-    const findInboundJob =
-      deps.findInboundJob ??
-      (async (id: string) =>
-        getDb()
-          .connectorInboundJobs.filter((job) => job.executionRunId === id)
-          .first())
+    // The job store is the connectors', reached through the `inbound-jobs`
+    // port; tests inject both halves instead.
+    const inboundJobs =
+      deps.findInboundJob && deps.continueInboundJob ? null : await loadPort("inbound-jobs")
+    const findInboundJob = deps.findInboundJob ?? inboundJobs?.findJobForRun
+    const continueInboundJob = deps.continueInboundJob ?? inboundJobs?.continueJob
+    if (!findInboundJob || !continueInboundJob) {
+      return { resumed: false, reason: "inbound-jobs-unavailable" }
+    }
     const job = await findInboundJob(runId)
     if (!job || job.id !== anchor.inboundJobId || job.status !== "recovery_required") {
       return { resumed: false, reason: "inbound-job-not-recoverable" }
@@ -253,13 +255,6 @@ export async function resumeCrashedAgentRun(
       restoredPermissions: restored,
       ...(partialOutput ? { partialOutput } : {}),
     }
-    const continueInboundJob =
-      deps.continueInboundJob ??
-      (async (id: string, options: { recoveryAnchor: Record<string, unknown> }) => {
-        const { continueConnectorInboundJobSafely } =
-          await import("@/lib/db/connector-inbound-jobs")
-        return continueConnectorInboundJobSafely(id, options)
-      })
     const changed = await continueInboundJob(job.id, { recoveryAnchor: { ...nextAnchor } })
     if (!changed) {
       return { resumed: false, reason: "inbound-job-not-recoverable" }

@@ -29,6 +29,11 @@ jest.mock("@/lib/db/execution-runs", () => ({
   }),
 }))
 
+const mockLoadPort = jest.fn()
+jest.mock("@/lib/modules/ports", () => ({
+  loadPort: (...a: unknown[]) => mockLoadPort(...a),
+}))
+
 import {
   buildAgentRunRecoveryAnchor,
   parseAgentRunRecoveryAnchor,
@@ -102,6 +107,49 @@ const anchor: AgentRunRecoveryAnchorV1 = {
 }
 
 describe("explicit crashed-run resume", () => {
+  beforeEach(() => mockLoadPort.mockReset())
+
+  it("finds and continues the job through the inbound-jobs port by default", async () => {
+    replayJournal.mockResolvedValueOnce([
+      { type: "run.started", payload: { recoveryAnchor: anchor } },
+    ])
+    await appendCanonicalEnvelopes("run-port", [
+      envelope("run-port", 0, { kind: "text-delta", delta: "partial" }),
+    ])
+    const port = {
+      findJobForRun: jest.fn(async () => ({ id: "job-1", status: "recovery_required" })),
+      continueJob: jest.fn(async () => true),
+      seedRunningJob: jest.fn(),
+    }
+    mockLoadPort.mockResolvedValue(port)
+
+    await expect(
+      resumeCrashedAgentRun("run-port", { readSdkSessionId: async () => "sdk-1" })
+    ).resolves.toEqual({ resumed: true, inboundJobId: "job-1" })
+    expect(mockLoadPort).toHaveBeenCalledWith("inbound-jobs")
+    expect(port.findJobForRun).toHaveBeenCalledWith("run-port")
+    expect(port.continueJob).toHaveBeenCalledWith("job-1", {
+      recoveryAnchor: expect.objectContaining({ partialOutput: "partial" }),
+    })
+  })
+
+  it("refuses when no module provides inbound jobs, and releases the lease", async () => {
+    replayJournal.mockResolvedValueOnce([
+      { type: "run.started", payload: { recoveryAnchor: anchor } },
+    ])
+    await appendCanonicalEnvelopes("run-no-port", [
+      envelope("run-no-port", 0, { kind: "text-delta", delta: "partial" }),
+    ])
+    mockLoadPort.mockResolvedValue(null)
+    releaseLease.mockClear()
+
+    await expect(resumeCrashedAgentRun("run-no-port")).resolves.toEqual({
+      resumed: false,
+      reason: "inbound-jobs-unavailable",
+    })
+    expect(releaseLease).toHaveBeenCalledWith("run-no-port")
+  })
+
   it("continues a text-interrupted run through the durable inbound job", async () => {
     replayJournal.mockResolvedValueOnce([
       { type: "run.started", payload: { recoveryAnchor: anchor } },

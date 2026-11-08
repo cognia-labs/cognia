@@ -448,7 +448,6 @@
     "lib/db/chat-templates.ts -> chat",
     "lib/db/collab-run-mirror.ts -> issues",
     "lib/db/connector-drafts.ts -> sync",
-    "lib/db/connector-inbound-jobs.ts -> connectors",
     "lib/db/conversation-overrides.ts -> sync",
     "lib/db/encrypted-content-middleware.ts -> account",
     "lib/db/execution-runs.ts -> execution",

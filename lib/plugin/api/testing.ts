@@ -13,6 +13,8 @@
  */
 
 import { getDb } from "@/lib/db/schema"
+import { loadPort } from "@/lib/modules/ports"
+import type { SeedRunningInboundJobInput } from "@/types/modules/ports/inbound-jobs"
 
 export { createDbTestFixture, DB_TEST_TIMEOUT_MS } from "@/lib/db/test-fixture"
 export type { DbTestFixture, DbTestFixtureOptions } from "@/lib/db/test-fixture"
@@ -75,13 +77,7 @@ export async function listCallbackBindings(): Promise<
   }>
 }
 
-export interface SeedRunningInboundJobInput {
-  adapterId: string
-  conversationKey: string
-  platform: string
-  /** The verified sender whose message is driving the turn. */
-  sender: { id: string; remoteUserId: string; displayName?: string }
-}
+export type { SeedRunningInboundJobInput }
 
 /**
  * Seed a conversation with a message currently being processed.
@@ -89,37 +85,13 @@ export interface SeedRunningInboundJobInput {
  * This is what makes an approval scoped: the running inbound job carries the
  * VERIFIED sender, and that sender becomes the only person (besides operators)
  * the callback guard will accept a tap from. A test that wants to prove its
- * approval is not tappable by the wrong person needs one of these.
+ * approval is not tappable by the wrong person needs one of these. The job
+ * store is the connectors', reached through the `inbound-jobs` port.
  */
 export async function seedRunningInboundJob(
   input: SeedRunningInboundJobInput
 ): Promise<{ id: string }> {
-  const { claimConnectorInboundJob, enqueueConnectorInboundJob } =
-    await import("@/lib/db/connector-inbound-jobs")
-  const job = await enqueueConnectorInboundJob(
-    {
-      platform: input.platform,
-      adapterId: input.adapterId,
-      selfId: "bot",
-      messageId: `m_${input.sender.remoteUserId}`,
-      conversationRef: { platform: input.platform, adapterId: input.adapterId },
-      conversationKey: input.conversationKey,
-      sender: {
-        id: input.sender.id,
-        platform: input.platform,
-        adapterId: input.adapterId,
-        remoteUserId: input.sender.remoteUserId,
-        ...(input.sender.displayName ? { displayName: input.sender.displayName } : {}),
-      },
-      channel: { id: input.conversationKey, kind: "group" },
-      segments: [{ type: "text", text: "run it" }],
-      plainText: "run it",
-      mentions: { selfMentioned: false, users: [] },
-      timestamp: Date.now(),
-      raw: {},
-    } as never,
-    "queue"
-  )
-  await claimConnectorInboundJob(job.id, { leaseOwner: "test", leaseMs: 60_000 })
-  return { id: job.id }
+  const inboundJobs = await loadPort("inbound-jobs")
+  if (!inboundJobs) throw new Error("seedRunningInboundJob: no module provides inbound jobs")
+  return inboundJobs.seedRunningJob(input)
 }

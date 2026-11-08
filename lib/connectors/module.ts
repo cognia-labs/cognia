@@ -16,6 +16,7 @@ export default defineHostModule({
   owns: [
     "app/lark/",
     "lib/db/connector-cleanup-jobs.ts",
+    "lib/db/connector-inbound-jobs.ts",
     "lib/db/conversation-labels.ts",
     "lib/db/feishu-principals.ts",
     "lib/db/lark-chat-surfaces.ts",
@@ -111,15 +112,20 @@ export default defineHostModule({
     "lib/connectors/session-bindings.ts",
     "lib/connectors/sla.ts",
     "lib/connectors/trigger-policy-draft.ts",
+    "lib/db/connector-inbound-jobs.ts",
   ],
   // Inbound images are read and voice notes transcribed through ports.
   // `room-squad-handoff`: the IM room hand-off card decides through it.
   requires: ["ocr", "speech", "room-squad-handoff?"],
-  // The IM channel (`./ports/conversation-channel.ts`), and the vendors'
-  // principal registries a sign-in reaches (`./ports/identity-principal-links.ts`).
+  // The IM channel (`./ports/conversation-channel.ts`), the vendors' principal
+  // registries a sign-in reaches (`./ports/identity-principal-links.ts`), and
+  // the inbound job store.
   provides: [
     { port: "conversation-channel", load: () => import("./ports/conversation-channel") },
     { port: "identity-principal-links", load: () => import("./ports/identity-principal-links") },
+    // The inbound job store crash recovery continues and the plugin testing
+    // API seeds (`./ports/inbound-jobs.ts`).
+    { port: "inbound-jobs", load: () => import("./ports/inbound-jobs") },
   ],
   // The per-channel capability wording an IM-bound run is told.
   prompts: () => import("./prompts"),
