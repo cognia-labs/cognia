@@ -3,11 +3,93 @@ import {
   assertNetworkRequestAllowed,
   evaluateEgress,
   evaluateNetworkRequest,
+  hasNetworkAccessWidened,
   hostFromUrl,
   matchHost,
   PluginEgressError,
   PluginNetworkPolicyError,
+  type NetworkAllowlist,
 } from "./network-allowlist"
+
+describe("hasNetworkAccessWidened", () => {
+  const scoped: NetworkAllowlist = {
+    rules: [{ domain: "api.example.com", methods: ["GET"], paths: ["/v1/*"] }],
+  }
+
+  it.each<[NetworkAllowlist | undefined, NetworkAllowlist | undefined, boolean]>([
+    [undefined, { allowedDomains: ["example.com"] }, true],
+    [{ allowedDomains: ["api.example.com"] }, { allowedDomains: ["example.com"] }, true],
+    [{ allowedDomains: ["example.com"] }, { allowedDomains: ["*"] }, true],
+    [{ allowedDomains: ["example.com"] }, { allowedDomains: ["other.com"] }, true],
+    [{ allowedDomains: ["*"] }, { allowedDomains: ["example.com"] }, false],
+    [{ allowedDomains: [" .EXAMPLE.com "] }, { allowedDomains: ["api.example.com"] }, false],
+    [scoped, undefined, false],
+    [undefined, { allowedDomains: [".*", "example.com.", "none", " "] }, false],
+    [scoped, { allowedDomains: ["api.example.com"] }, true],
+    [scoped, { rules: [] }, false],
+    [scoped, { ...scoped, reasoning: "New explanation" }, false],
+    [scoped, { rules: [{ ...scoped.rules![0], paths: ["/v1/items/*"] }] }, false],
+    [scoped, { rules: [{ ...scoped.rules![0], domain: "example.com" }] }, true],
+    [scoped, { rules: [{ ...scoped.rules![0], methods: ["GET", "POST"] }] }, true],
+    [scoped, { rules: [{ ...scoped.rules![0], paths: ["/*"] }] }, true],
+    [scoped, { rules: [{ ...scoped.rules![0], protocols: ["http", "https"] }] }, true],
+    [scoped, { rules: [{ ...scoped.rules![0], ports: [443, 8443] }] }, true],
+    [scoped, { rules: [{ ...scoped.rules![0], protocols: ["https"], ports: [443] }] }, false],
+    [scoped, { allowedDomains: [], rules: [{ ...scoped.rules![0], domain: "*" }] }, false],
+    [{ allowedDomains: ["api.example.com"] }, scoped, false],
+  ])("compares effective authority %#", (current, next, widened) => {
+    expect(hasNetworkAccessWidened(current, next)).toBe(widened)
+  })
+
+  it("combines old rules and compares path globs without treating narrowing as expansion", () => {
+    const current: NetworkAllowlist = {
+      rules: [
+        { domain: "example.com", methods: ["GET"], paths: ["/v*/*"] },
+        { domain: "example.com", methods: ["POST"], paths: ["/v*/*"] },
+      ],
+    }
+    expect(
+      hasNetworkAccessWidened(current, {
+        rules: [{ domain: "api.example.com", methods: ["POST", "GET"], paths: ["/v1/items*"] }],
+      })
+    ).toBe(false)
+    expect(
+      hasNetworkAccessWidened(current, {
+        rules: [{ domain: "api.example.com", methods: ["GET"], paths: ["/v1*"] }],
+      })
+    ).toBe(true)
+  })
+
+  it("reviews domain-only authority even when request rules are unchanged", () => {
+    const current = { ...scoped, allowedDomains: ["api.example.com"] }
+    expect(hasNetworkAccessWidened(current, { ...current, allowedDomains: ["*"] })).toBe(true)
+    expect(
+      hasNetworkAccessWidened(scoped, { ...scoped, allowedDomains: ["api.example.com"] })
+    ).toBe(true)
+    expect(
+      hasNetworkAccessWidened(scoped, { ...scoped, allowedDomains: ["other.example.com"] })
+    ).toBe(true)
+    expect(hasNetworkAccessWidened({ ...scoped, allowedDomains: ["*"] }, current)).toBe(false)
+  })
+
+  it.each(["observe", undefined] as const)(
+    "reviews literal credential policy loosening to %s",
+    (literalCredentials) => {
+      expect(
+        hasNetworkAccessWidened(
+          { ...scoped, literalCredentials: "inspect" },
+          { ...scoped, literalCredentials }
+        )
+      ).toBe(true)
+      expect(
+        hasNetworkAccessWidened(
+          { ...scoped, literalCredentials },
+          { ...scoped, literalCredentials: "inspect" }
+        )
+      ).toBe(false)
+    }
+  )
+})
 
 describe("matchHost (mirrors Rust network_host_allowed)", () => {
   it("matches an exact host", () => {

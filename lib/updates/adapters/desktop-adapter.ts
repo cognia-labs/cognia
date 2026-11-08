@@ -26,7 +26,7 @@ import type {
   UpdateApplyResult,
   UpdateCheckContext,
 } from "../adapter"
-import { bestCandidate } from "../catalog-lookup"
+import { bestCandidate, isCatalogReleaseExcluded, type LookupOptions } from "../catalog-lookup"
 
 export const DESKTOP_ASSET_ID = "app"
 
@@ -38,6 +38,7 @@ export interface DesktopAdapterDeps {
   downloadAndInstallUpdate?: typeof import("@/lib/tauri/updater").downloadAndInstallUpdate
   downloadUpdate?: typeof import("@/lib/tauri/updater").downloadUpdate
   installUpdate?: typeof import("@/lib/tauri/updater").installUpdate
+  relaunchApp?: typeof import("@/lib/tauri/updater").relaunchApp
   openExternal?: (url: string) => Promise<void>
   /** Platform triple used to filter catalog entries. */
   target?: string
@@ -57,6 +58,11 @@ export function desktopTarget(os: OsFamily): string {
   }
 }
 
+/** Only these desktop platforms use the native in-place installer. */
+export function desktopInstallsInPlace(os: OsFamily): boolean {
+  return os === "windows" || os === "linux"
+}
+
 export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapter {
   const tauri = deps.isTauri ?? isTauri
   const os = () => deps.osFamily?.() ?? detectOsFamily()
@@ -69,7 +75,7 @@ export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapt
 
     async check(context: UpdateCheckContext): Promise<UpdateCandidate[]> {
       const family = os()
-      const fromCatalog = bestCandidate(context.catalog, {
+      const options: LookupOptions = {
         kind: "desktop",
         assetId: DESKTOP_ASSET_ID,
         executor: "tauri",
@@ -77,7 +83,8 @@ export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapt
         channel: context.channel,
         target: deps.target ?? desktopTarget(family),
         appVersion,
-      })
+      }
+      const fromCatalog = bestCandidate(context.catalog, options)
       if (fromCatalog) {
         return [withMacHandoff(fromCatalog, family)]
       }
@@ -87,6 +94,12 @@ export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapt
       const check = deps.checkForUpdate ?? (await import("@/lib/tauri/updater")).checkForUpdate
       const update = await check()
       if (!update) return []
+      if (
+        (context.catalogStatus === "ok" ||
+          (context.catalogStatus === undefined && context.catalog !== null)) &&
+        isCatalogReleaseExcluded(context.catalog, options, update.version)
+      )
+        return []
       const candidate: UpdateCandidate = {
         assetId: DESKTOP_ASSET_ID,
         kind: "desktop",
@@ -98,7 +111,7 @@ export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapt
         releaseNotes: update.body,
         releasedAt: update.date,
         source: "tauri-endpoint",
-        // The Tauri updater verified minisign before handing us this handle.
+        // The native updater verifies package bytes when they are downloaded.
         provenance: "verified",
       }
       return [withMacHandoff(candidate, family)]
@@ -108,6 +121,13 @@ export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapt
       candidate: UpdateCandidate,
       context: UpdateApplyContext
     ): Promise<UpdateApplyResult> {
+      if (
+        context.downloadOnly &&
+        (candidate.action === "open-store" || !desktopInstallsInPlace(os()))
+      ) {
+        return { state: "awaiting-consent" }
+      }
+      if (!context.consented && !context.downloadOnly) return { state: "awaiting-consent" }
       if (candidate.action === "open-store") {
         const url = candidate.externalUrl
         if (!url) {
@@ -128,25 +148,35 @@ export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapt
       const mod = await import("@/lib/tauri/updater")
       const downloadAndInstall = deps.downloadAndInstallUpdate ?? mod.downloadAndInstallUpdate
       const download = deps.downloadUpdate ?? mod.downloadUpdate
-      const install = deps.installUpdate ?? mod.installUpdate
-
-      if (!context.consented) {
-        // Background download leg. Bytes only, never the installer.
-        const result = await download((p) => context.onProgress?.(p.downloaded, p.total))
-        if (result === "noLongerAvailable") return { state: "current" }
-        return { state: "awaiting-consent" }
+      const options = { expectedVersion: candidate.targetVersion }
+      let result
+      try {
+        result = context.downloadOnly
+          ? await download((p) => context.onProgress?.(p.downloaded, p.total), options)
+          : await downloadAndInstall((p) => context.onProgress?.(p.downloaded, p.total), options)
+      } catch (error) {
+        if (!mod.isUpdateErrorPhase(error, "relaunch")) throw error
+        return {
+          state: "awaiting-restart",
+          failure: { kind: "unknown", code: "relaunch", recoveryActionKey: "retry" },
+        }
       }
-
-      const result = await downloadAndInstall((p) => context.onProgress?.(p.downloaded, p.total))
       if (result === "noLongerAvailable") return { state: "current" }
+      if (result === "versionMismatch") {
+        return {
+          state: "failed",
+          failure: { kind: "unknown", code: "candidate_changed", recoveryActionKey: "retry" },
+        }
+      }
       if (result === "web") {
         return { state: "failed", failure: { kind: "unsupported", code: "not_desktop" } }
       }
-      // `relaunching` and `installed` both mean the bytes are on disk and this
-      // process is the stale one. `install` is referenced so the injected dep
-      // stays part of the contract for callers that pre-downloaded.
-      void install
-      return { state: "awaiting-restart" }
+      return { state: context.downloadOnly ? "awaiting-consent" : "awaiting-restart" }
+    },
+
+    async restart(): Promise<void> {
+      const relaunch = deps.relaunchApp ?? (await import("@/lib/tauri/updater")).relaunchApp
+      await relaunch()
     },
   }
 }

@@ -49,6 +49,7 @@ jest.mock("@/lib/updates/open-update-center", () => ({
 const coordinator = {
   restore: jest.fn(async () => {}),
   check: jest.fn(async () => [] as unknown[]),
+  isSweepDue: jest.fn(() => true),
 }
 const center = { notifyCritical: true }
 jest.mock("@/lib/updates/runtime", () => ({
@@ -65,6 +66,10 @@ jest.mock("@/stores/settings/settings-store", () => ({
 }))
 
 import { UpdateCenterInitializer, __resetUpdateSweepThrottle } from "./update-center-initializer"
+import {
+  setActiveRuntimeTargetContext,
+  clearActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 const ORIGINAL_ENV = process.env.NODE_ENV
 
@@ -77,6 +82,7 @@ function row(criticality: "routine" | "critical", key = "desktop:app") {
 }
 
 beforeEach(() => {
+  clearActiveRuntimeTargetContext()
   nativeMobile.mockReturnValue(false)
   osFamily.mockReturnValue("android")
   playStatus.mockReset().mockResolvedValue({ available: true })
@@ -89,6 +95,7 @@ beforeEach(() => {
   coordinator.restore.mockClear()
   coordinator.check.mockClear()
   coordinator.check.mockResolvedValue([])
+  coordinator.isSweepDue.mockReturnValue(true)
   toastSuccess.mockClear()
   toastWarning.mockClear()
   openUpdateCenter.mockClear()
@@ -102,6 +109,21 @@ afterAll(() => {
 })
 
 describe("UpdateCenterInitializer", () => {
+  it("starts a fresh account sweep despite the previous account's throttle (U10)", async () => {
+    setActiveRuntimeTargetContext("acct_alpha", "local-host")
+    coordinator.check.mockResolvedValue([row("routine")])
+    render(<UpdateCenterInitializer />)
+    await waitFor(() => expect(coordinator.check).toHaveBeenCalledTimes(1))
+    act(() => setActiveRuntimeTargetContext("acct_beta", "local-host"))
+    await waitFor(() => expect(coordinator.check).toHaveBeenCalledTimes(2))
+    expect(toastSuccess).toHaveBeenCalledTimes(2)
+  })
+  it("honors the coordinator's automatic backoff gate (U12)", async () => {
+    coordinator.isSweepDue.mockReturnValue(false)
+    render(<UpdateCenterInitializer />)
+    await waitFor(() => expect(coordinator.restore).toHaveBeenCalled())
+    expect(coordinator.check).not.toHaveBeenCalled()
+  })
   it("rechecks downloaded updates on resume and native completion without installing", async () => {
     nativeMobile.mockReturnValue(true)
     updateSettings.autoCheck = false

@@ -165,7 +165,7 @@ export function UpdateRow({
       )}
 
       <div className="flex flex-wrap gap-2">
-        {item.action && candidate && (
+        {item.action && (candidate || item.action === "restart-desktop") && (
           <Button
             size="sm"
             disabled={working}
@@ -180,7 +180,7 @@ export function UpdateRow({
             {t(`action.${item.action}`)}
           </Button>
         )}
-        {candidate && item.state !== "deferred" && (
+        {candidate && item.state !== "deferred" && item.state !== "awaiting-restart" && (
           <Button
             size="sm"
             variant="ghost"
@@ -192,7 +192,7 @@ export function UpdateRow({
             {t("defer")}
           </Button>
         )}
-        {candidate && !critical && (
+        {candidate && !critical && item.state !== "awaiting-restart" && (
           <Button
             size="sm"
             variant="ghost"

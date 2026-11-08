@@ -1,4 +1,6 @@
 import { fireEvent, render, waitFor } from "@testing-library/react"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 
 const attachMock = jest.fn(() => jest.fn())
 jest.mock("@/lib/pwa/install-state", () => ({
@@ -81,6 +83,29 @@ beforeEach(() => {
 })
 
 describe("<PwaLifecycleInitializer />", () => {
+  it("reloads only the static offline fallback when connectivity returns (U25)", () => {
+    const html = readFileSync(join(process.cwd(), "public/offline.html"), "utf8")
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
+    const offlineWindow = new EventTarget()
+    const reload = jest.fn()
+    new Function("window", "location", "navigator", "document", script)(
+      offlineWindow,
+      { reload },
+      { language: "en" },
+      {}
+    )
+    offlineWindow.dispatchEvent(new Event("online"))
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+  it("does not attach a reload handler to online events in the app shell (U25)", () => {
+    const addListener = jest.spyOn(window, "addEventListener")
+    stubServiceWorker(null)
+    render(<PwaLifecycleInitializer />)
+    fireEvent(window, new Event("online"))
+    expect(addListener.mock.calls.filter(([event]) => event === "online")).toEqual([])
+    addListener.mockRestore()
+  })
+
   it("attaches the install capture on the web shell and renders nothing", () => {
     stubServiceWorker(null)
     const { container } = render(<PwaLifecycleInitializer />)

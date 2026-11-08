@@ -29,9 +29,14 @@ import {
   type UpdateState,
 } from "@cognia/agent-config-types"
 
-import type { UpdateAdapter, UpdateApplyContext, UpdateItem } from "./adapter"
+import {
+  UpdateCheckError,
+  type CatalogFetchResult,
+  type UpdateAdapter,
+  type UpdateApplyContext,
+  type UpdateItem,
+} from "./adapter"
 import { backoffDelayMs, isCheckDue } from "./backoff"
-import type { CatalogEntry } from "./catalog-types"
 import { normalizeRolloutBucket, rolloutVerdict } from "./rollout"
 import {
   newAttemptId,
@@ -54,22 +59,20 @@ export interface UpdatePersistence {
   read(): UpdateCenterSettings
   /** Persist a patch. Failures must not take the coordinator down. */
   write(patch: Partial<UpdateCenterSettings>): Promise<void>
+  /** Merge only these keys into the latest persisted snapshot map. */
+  writeSnapshots(patches: Record<string, UpdateSnapshot>): Promise<void>
 }
 
-export interface CatalogFetchResult {
-  entries: readonly CatalogEntry[]
-  /** Server-requested hold in milliseconds, if the response carried one. */
-  retryAfterMs?: number
-}
+export type { CatalogFetchResult } from "./adapter"
 
 export interface CoordinatorDeps {
   adapters: readonly UpdateAdapter[]
   persistence: UpdatePersistence
-  /** Resolve the verified catalog. Returning null means "unavailable". */
+  /** Resolve verified entries, missing configuration, or a source failure. */
   fetchCatalog: (options: {
     channel: UpdateChannel
     signal?: AbortSignal
-  }) => Promise<CatalogFetchResult | null>
+  }) => Promise<CatalogFetchResult>
   now?: () => number
   random?: () => number
   checkIntervalMs?: () => number
@@ -91,6 +94,7 @@ interface InternalRow extends UpdateItem {
 }
 
 function classify(error: unknown): UpdateFailure {
+  if (error instanceof UpdateCheckError) return error.failure
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase()
   if (message.includes("abort") || message.includes("cancel")) {
     return { kind: "cancelled", code: "aborted" }
@@ -147,6 +151,10 @@ export class UpdateCoordinator {
   private cachedView: UpdateItem[] = []
   private viewDirty = true
   private restored = false
+  private disposed = false
+  private bucket: number | undefined
+  private readonly lifetime = new AbortController()
+  private readonly adapterNextCheckAt = new Map<UpdateAssetKind, number>()
 
   constructor(deps: CoordinatorDeps) {
     this.deps = deps as UpdateCoordinator["deps"]
@@ -173,11 +181,13 @@ export class UpdateCoordinator {
   }
 
   private emit(): void {
+    if (this.disposed) return
     this.viewDirty = true
     for (const listener of this.listeners) listener()
   }
 
   private track(event: UpdateTelemetryEvent): void {
+    if (this.disposed) return
     try {
       this.deps.telemetry?.(sanitizeTelemetryEvent(event))
     } catch (error) {
@@ -186,10 +196,9 @@ export class UpdateCoordinator {
   }
 
   private async persistSnapshot(row: InternalRow): Promise<void> {
-    const settings = this.settings()
-    const snapshots = { ...(settings.snapshots ?? {}), [row.key]: row.snapshot }
+    if (this.disposed) return
     try {
-      await this.deps.persistence.write({ snapshots })
+      await this.deps.persistence.writeSnapshots({ [row.key]: row.snapshot })
     } catch (error) {
       this.deps.onError?.("persist", error)
     }
@@ -207,6 +216,7 @@ export class UpdateCoordinator {
   }
 
   subscribe(listener: () => void): () => void {
+    if (this.disposed) return () => {}
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
@@ -226,9 +236,11 @@ export class UpdateCoordinator {
 
   /** Rollout bucket for this device, generated and persisted on first use. */
   rolloutBucket(): number {
+    if (this.bucket !== undefined) return this.bucket
     const settings = this.settings()
     const normalized = normalizeRolloutBucket(settings.rolloutBucket, () => this.random())
-    if (normalized !== settings.rolloutBucket) {
+    this.bucket = normalized
+    if (!this.disposed && normalized !== settings.rolloutBucket) {
       void this.deps.persistence
         .write({ rolloutBucket: normalized })
         .catch((error) => this.deps.onError?.("persist", error))
@@ -266,15 +278,38 @@ export class UpdateCoordinator {
     return row
   }
 
-  private setState(row: InternalRow, next: UpdateState, patch: Partial<InternalRow> = {}): void {
+  private setState(row: InternalRow, next: UpdateState, patch: Partial<InternalRow> = {}): boolean {
+    if (this.disposed) return false
     if (!canTransitionUpdateState(row.state, next)) {
       this.deps.onError?.("transition", new Error(`illegal ${row.state} to ${next} for ${row.key}`))
-      return
+      return false
     }
     row.state = next
     row.snapshot = { ...row.snapshot, state: next }
     Object.assign(row, patch)
     this.emit()
+    return true
+  }
+
+  private isApplying(row: InternalRow): boolean {
+    return (
+      this.applyInFlight.has(row.key) || row.state === "installing" || row.state === "downloading"
+    )
+  }
+
+  private isAwaitingRestart(row: InternalRow): boolean {
+    return row.state === "awaiting-restart"
+  }
+
+  private adapterDue(adapter: UpdateAdapter, now: number): boolean {
+    const rows = [...this.rows.values()].filter((row) => row.kind === adapter.kind)
+    return rows.length > 0
+      ? rows.some((row) => isCheckDue(now, row.snapshot.nextCheckAt))
+      : isCheckDue(now, this.adapterNextCheckAt.get(adapter.kind))
+  }
+
+  private signal(signal?: AbortSignal): AbortSignal {
+    return signal ? AbortSignal.any([this.lifetime.signal, signal]) : this.lifetime.signal
   }
 
   /**
@@ -283,7 +318,7 @@ export class UpdateCoordinator {
    * running, which is the only honest way to tell "installed" from "died".
    */
   async restore(): Promise<void> {
-    if (this.restored) return
+    if (this.disposed || this.restored) return
     this.restored = true
     const settings = this.settings()
     const snapshots = settings.snapshots ?? {}
@@ -346,9 +381,9 @@ export class UpdateCoordinator {
       patched[key] = row.snapshot
     }
 
-    if (Object.keys(patched).length > 0) {
+    if (!this.disposed && Object.keys(patched).length > 0) {
       try {
-        await this.deps.persistence.write({ snapshots: { ...snapshots, ...patched } })
+        await this.deps.persistence.writeSnapshots(patched)
       } catch (error) {
         this.deps.onError?.("persist", error)
       }
@@ -361,6 +396,7 @@ export class UpdateCoordinator {
    * boot check and a user tapping Check cannot double-hit the endpoint.
    */
   check(options: CheckOptions = {}): Promise<UpdateItem[]> {
+    if (this.disposed) return Promise.resolve(this.getItems())
     if (this.sweepInFlight && !options.manual) return this.sweepInFlight
     if (this.sweepInFlight) return this.sweepInFlight
     const task = this.runCheck(options).finally(() => {
@@ -372,35 +408,38 @@ export class UpdateCoordinator {
 
   private async runCheck(options: CheckOptions): Promise<UpdateItem[]> {
     await this.restore()
+    if (this.disposed) return this.getItems()
     const manual = options.manual ?? false
     const settings = this.settings()
-    const bucket = this.rolloutBucket()
     const now = this.now()
+    const adapters = this.supportedAdapters().filter(
+      (adapter) =>
+        (!options.kind || adapter.kind === options.kind) &&
+        (manual || this.adapterDue(adapter, now))
+    )
+    if (adapters.length === 0) return this.getItems()
+    const bucket = this.rolloutBucket()
+    const signal = this.signal(options.signal)
 
-    let catalog: readonly CatalogEntry[] | null = null
-    let retryAfterMs: number | undefined
+    let outcome: CatalogFetchResult
     try {
-      const result = await this.deps.fetchCatalog({
+      outcome = await this.deps.fetchCatalog({
         channel: settings.channel,
-        signal: options.signal,
+        signal,
       })
-      catalog = result?.entries ?? null
-      retryAfterMs = result?.retryAfterMs
     } catch (error) {
       this.deps.onError?.("catalog", error)
-      catalog = null
+      outcome = { status: "unavailable", error }
     }
-
-    const adapters = this.supportedAdapters().filter(
-      (a) => !options.kind || a.kind === options.kind
-    )
+    if (this.disposed) return this.getItems()
+    const retryAfterMs = outcome.status === "unconfigured" ? undefined : outcome.retryAfterMs
 
     // Mark known rows as checking so the UI can show progress. New rows appear
     // only once the adapter answers, which is why this cannot be the only way
     // into `available`.
     for (const row of this.rows.values()) {
-      if (options.kind && row.kind !== options.kind) continue
-      if (row.state === "installing" || row.state === "downloading") continue
+      if (!adapters.some((adapter) => adapter.kind === row.kind)) continue
+      if (this.isApplying(row) || this.isAwaitingRestart(row)) continue
       this.setState(row, "checking")
     }
 
@@ -411,12 +450,16 @@ export class UpdateCoordinator {
             channel: settings.channel,
             rolloutBucket: bucket,
             manual,
-            catalog,
-            signal: options.signal,
+            catalog: outcome.status === "ok" ? outcome.entries : null,
+            catalogStatus: outcome.status,
+            catalogError: outcome.status === "unavailable" ? outcome.error : undefined,
+            signal,
           })
-          this.absorb(adapter, candidates, { manual, bucket, now, settings })
+          if (this.disposed) return
+          this.absorb(adapter, candidates, { manual, bucket, now: this.now(), settings })
         } catch (error) {
-          this.recordCheckFailure(adapter, error, { now, retryAfterMs })
+          if (this.disposed) return
+          this.recordCheckFailure(adapter, error, { now: this.now(), retryAfterMs })
         }
       })
     )
@@ -431,12 +474,14 @@ export class UpdateCoordinator {
     candidates: readonly UpdateCandidate[],
     context: { manual: boolean; bucket: number; now: number; settings: UpdateCenterSettings }
   ): void {
+    if (this.disposed) return
     const { manual, bucket, now, settings } = context
     const seen = new Set<string>()
 
     for (const candidate of candidates) {
       const row = this.ensureRow(candidate.kind, candidate.assetId, candidate.executor)
       seen.add(row.key)
+      if (this.isApplying(row) || this.isAwaitingRestart(row)) continue
       if (candidate.displayName) row.displayName = candidate.displayName
       row.currentVersion = candidate.currentVersion
       row.lastCheckedAt = now
@@ -492,6 +537,8 @@ export class UpdateCoordinator {
       const backgroundEligible =
         candidate.kind === "desktop" &&
         candidate.executor === "tauri" &&
+        isInAppExecutor(candidate.executor) &&
+        candidate.action !== "open-store" &&
         settings.backgroundDownloadDesktop &&
         !candidate.permissionsExpanded
       if (backgroundEligible) {
@@ -503,14 +550,32 @@ export class UpdateCoordinator {
 
     // An asset the adapter no longer reports is current again.
     for (const row of this.rows.values()) {
-      if (row.kind !== adapter.kind || seen.has(row.key)) continue
-      if (row.state === "installing" || row.state === "downloading") continue
+      if (row.kind !== adapter.kind || this.isApplying(row)) continue
+      if (this.isAwaitingRestart(row)) {
+        row.lastCheckedAt = now
+        row.snapshot = {
+          ...row.snapshot,
+          lastCheckedAt: now,
+          consecutiveFailures: 0,
+          nextCheckAt: now + this.intervalMs(),
+        }
+        continue
+      }
+      if (seen.has(row.key)) continue
       row.candidate = null
       row.action = null
       row.lastCheckedAt = now
-      row.snapshot = { ...row.snapshot, lastCheckedAt: now, consecutiveFailures: 0 }
+      row.failure = undefined
+      row.snapshot = {
+        ...row.snapshot,
+        lastCheckedAt: now,
+        consecutiveFailures: 0,
+        nextCheckAt: now + this.intervalMs(),
+        failure: undefined,
+      }
       this.setState(row, "current")
     }
+    this.adapterNextCheckAt.set(adapter.kind, now + this.intervalMs())
   }
 
   private recordCheckFailure(
@@ -518,11 +583,13 @@ export class UpdateCoordinator {
     error: unknown,
     context: { now: number; retryAfterMs?: number }
   ): void {
+    if (this.disposed) return
     const failure = classify(error)
     const rows = [...this.rows.values()].filter((row) => row.kind === adapter.kind)
     const targets =
       rows.length > 0 ? rows : [this.ensureRow(adapter.kind, adapter.kind, adapter.executor)]
     for (const row of targets) {
+      if (this.isApplying(row)) continue
       const consecutiveFailures = (row.snapshot.consecutiveFailures ?? 0) + 1
       const delay = backoffDelayMs({
         consecutiveFailures,
@@ -530,15 +597,16 @@ export class UpdateCoordinator {
         retryAfterMs: context.retryAfterMs,
         random: () => this.random(),
       })
-      row.failure = failure
       row.snapshot = {
         ...row.snapshot,
         consecutiveFailures,
         lastCheckedAt: context.now,
         nextCheckAt: context.now + delay,
-        failure,
+        failure: this.isAwaitingRestart(row) ? row.failure : failure,
       }
       row.lastCheckedAt = context.now
+      if (this.isAwaitingRestart(row)) continue
+      row.failure = failure
       this.setState(row, "failed")
     }
     this.deps.onError?.(`check:${adapter.kind}`, error)
@@ -546,20 +614,17 @@ export class UpdateCoordinator {
 
   /** True when the automatic sweep is allowed to run right now. */
   isSweepDue(): boolean {
-    const now = this.now()
-    const rows = [...this.rows.values()]
-    if (rows.length === 0) return true
-    return rows.some((row) => isCheckDue(now, row.snapshot.nextCheckAt))
+    return (
+      !this.disposed &&
+      this.supportedAdapters().some((adapter) => this.adapterDue(adapter, this.now()))
+    )
   }
 
   /**
    * Act on one row. `consented` is required for anything that is not a
    * first-party desktop package with unchanged permissions.
    */
-  apply(
-    key: string,
-    options: UpdateApplyContext & { downloadOnly?: boolean } = { consented: false }
-  ): Promise<UpdateItem> {
+  apply(key: string, options: UpdateApplyContext = { consented: false }): Promise<UpdateItem> {
     const inFlight = this.applyInFlight.get(key)
     if (inFlight) return inFlight
     const task = this.runApply(key, options).finally(() => this.applyInFlight.delete(key))
@@ -567,12 +632,27 @@ export class UpdateCoordinator {
     return task
   }
 
-  private async runApply(
-    key: string,
-    options: UpdateApplyContext & { downloadOnly?: boolean }
-  ): Promise<UpdateItem> {
+  private async runApply(key: string, options: UpdateApplyContext): Promise<UpdateItem> {
     const row = this.rows.get(key)
     if (!row) throw new Error(`unknown update row ${key}`)
+    if (this.disposed) return row
+    if (row.state === "awaiting-restart") {
+      const desktop = this.supportedAdapters().find((adapter) => adapter.kind === "desktop")
+      try {
+        if (!desktop?.restart) throw new Error("desktop restart unavailable")
+        await desktop.restart()
+        if (this.disposed) return row
+        row.failure = undefined
+      } catch (error) {
+        if (this.disposed) return row
+        row.failure = { kind: "unknown", code: "relaunch", recoveryActionKey: "retry" }
+        this.deps.onError?.("relaunch", error)
+      }
+      row.snapshot = { ...row.snapshot, failure: row.failure }
+      this.emit()
+      await this.persistSnapshot(row)
+      return row
+    }
     const candidate = row.candidate
     if (!candidate) return row
 
@@ -604,6 +684,8 @@ export class UpdateCoordinator {
       return row
     }
 
+    const nextState: UpdateState = options.downloadOnly ? "downloading" : "installing"
+    if (!this.setState(row, nextState, { progress: undefined })) return row
     const attemptId = row.snapshot.attemptId ?? newAttemptId()
     const startedAt = this.now()
     row.snapshot = {
@@ -613,10 +695,9 @@ export class UpdateCoordinator {
       targetVersion: candidate.targetVersion,
       startedAt,
     }
-    const nextState: UpdateState = options.downloadOnly ? "downloading" : "installing"
-    this.setState(row, nextState, { progress: undefined })
     // Written before any bytes move so a crash mid-install is recognisable.
     await this.persistSnapshot(row)
+    if (this.disposed) return row
 
     this.track({
       attemptId,
@@ -633,26 +714,46 @@ export class UpdateCoordinator {
       let downloadedBytes: number | undefined
       const result = await adapter.apply(candidate, {
         consented: options.consented || !requiresConsent,
-        signal: options.signal,
+        downloadOnly: options.downloadOnly,
+        signal: this.signal(options.signal),
         onProgress: (downloaded, total) => {
+          if (this.disposed) return
           downloadedBytes = downloaded
           row.progress = { downloaded, total }
           options.onProgress?.(downloaded, total)
           this.emit()
         },
       })
+      if (this.disposed) return row
       row.progress = undefined
+      if (!this.setState(row, result.state)) {
+        throw new UpdateCheckError({
+          kind: "unknown",
+          code: "illegal_result_state",
+          recoveryActionKey: "retry",
+        })
+      }
       row.command = result.command
       row.externalUrl = result.externalUrl ?? row.externalUrl
       row.failure = result.failure
       row.snapshot = { ...row.snapshot, failure: result.failure }
-      if (result.state === "verified" || result.state === "current") {
+      if (result.state === "verified") {
         row.candidate = null
         row.action = null
         row.currentVersion = candidate.targetVersion
         row.snapshot = { ...row.snapshot, attemptId: undefined }
       }
-      this.setState(row, result.state)
+      if (result.state === "current") {
+        row.candidate = null
+        row.action = null
+        row.snapshot = { ...row.snapshot, attemptId: undefined }
+      }
+      if (result.state === "awaiting-restart") {
+        row.action = this.supportedAdapters().some((adapter) => adapter.kind === "desktop")
+          ? "restart-desktop"
+          : null
+      }
+      this.emit()
       await this.persistSnapshot(row)
       this.track({
         attemptId,
@@ -676,6 +777,7 @@ export class UpdateCoordinator {
       })
       return row
     } catch (error) {
+      if (this.disposed) return row
       const failure = classify(error)
       row.progress = undefined
       row.failure = failure
@@ -704,6 +806,7 @@ export class UpdateCoordinator {
    * which may only be deferred.
    */
   async skip(key: string): Promise<boolean> {
+    if (this.disposed) return false
     const row = this.rows.get(key)
     if (!row?.candidate) return false
     if (row.candidate.criticality === "critical") return false
@@ -718,6 +821,7 @@ export class UpdateCoordinator {
 
   /** Postpone. Critical updates come back sooner than routine ones. */
   async defer(key: string, durationMs?: number): Promise<boolean> {
+    if (this.disposed) return false
     const row = this.rows.get(key)
     if (!row?.candidate) return false
     const critical = row.candidate.criticality === "critical"
@@ -736,6 +840,7 @@ export class UpdateCoordinator {
 
   /** Undo a skip or a defer so the row is offered on the next check. */
   async clearHold(key: string): Promise<void> {
+    if (this.disposed) return
     const row = this.rows.get(key)
     if (!row) return
     row.snapshot = {
@@ -752,14 +857,23 @@ export class UpdateCoordinator {
   }
 
   private async flushSnapshots(): Promise<void> {
-    const settings = this.settings()
-    const snapshots: Record<string, UpdateSnapshot> = { ...(settings.snapshots ?? {}) }
+    if (this.disposed) return
+    const snapshots: Record<string, UpdateSnapshot> = {}
     for (const row of this.rows.values()) snapshots[row.key] = row.snapshot
     try {
-      await this.deps.persistence.write({ snapshots })
+      await this.deps.persistence.writeSnapshots(snapshots)
     } catch (error) {
       this.deps.onError?.("persist", error)
     }
+  }
+
+  /** Retire this account lifetime, including work whose backend ignores abort. */
+  dispose(): void {
+    this.disposed = true
+    this.lifetime.abort()
+    this.listeners.clear()
+    this.rows.clear()
+    this.viewDirty = true
   }
 
   /** Test-only reset of in-memory state. */

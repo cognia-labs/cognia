@@ -6311,6 +6311,167 @@ describe("PluginManager", () => {
       })
     })
 
+    it("exposes unresolved activation resources to package replacement callers", async () => {
+      mockGetState.mockReturnValue({ plugins: {} })
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      expect(manager.hasUnresolvedActivationResources("pending-package")).toBe(false)
+      const scope = manager.getPluginDisposableScope("pending-package")
+      scope.track(() => Promise.reject(new Error("worker still alive")), "worker")
+      await scope.dispose()
+      expect(manager.hasUnresolvedActivationResources("pending-package")).toBe(true)
+    })
+
+    it("discovers an interrupted host-state restore and completes it through Retry Cleanup", async () => {
+      const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+      const cells = new Map<string, string>()
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key: string) => cells.get(key) ?? null,
+          setItem: (key: string, value: string) => void cells.set(key, value),
+        },
+      })
+      const { resetPluginBackupManager, getPluginBackupManager } =
+        await import("../lifecycle/backup")
+      resetPluginBackupManager()
+      try {
+        cells.set(
+          "plugin:backup:index:~/.cognia/backups/plugins",
+          JSON.stringify({
+            "owed-restore": [
+              {
+                id: "owed-restore-backup",
+                pluginId: "owed-restore",
+                version: "1.0.0",
+                createdAt: new Date(),
+                reason: "pre-update",
+                path: "/backup",
+                size: 1,
+                metadata: {
+                  transactionId: "owed-txn",
+                  targetVersion: "2.0.0",
+                  hostStateRestorePending: true,
+                },
+              },
+            ],
+          })
+        )
+        const plugin = {
+          manifest: {
+            id: "owed-restore",
+            name: "Owed restore",
+            version: "1.0.0",
+            type: "frontend",
+            capabilities: [],
+            main: "index.js",
+          },
+          source: "builtin",
+          path: "/plugins/owed-restore",
+          status: "installed",
+          config: {},
+        } as unknown as Plugin
+        const store = {
+          plugins: { [plugin.manifest.id]: plugin },
+          unloadPlugin: jest.fn(async () => {
+            plugin.status = "installed"
+          }),
+          setPluginError: jest.fn(),
+          setPluginStatus: jest.fn(),
+        }
+        mockGetState.mockReturnValue(store)
+        const lifecycleState = new InMemoryPluginLifecycleStateAdapter()
+        const manager = new PluginManager({
+          pluginDirectory: "/plugins",
+          lifecycleStateAdapter: lifecycleState,
+        })
+        jest.spyOn(manager, "scanPlugins").mockResolvedValue([])
+        jest.spyOn(manager, "syncRuntimeState").mockResolvedValue(undefined)
+        await expect(manager.getPluginLifecycleSnapshot(plugin.manifest.id)).resolves.toMatchObject(
+          { actual: "dirty", lastError: expect.stringContaining("owed-restore-backup") }
+        )
+        await expect(lifecycleState.read(plugin.manifest.id)).resolves.toMatchObject({
+          actual: "dirty",
+        })
+        await expect(manager.enablePlugin(plugin.manifest.id)).rejects.toMatchObject({
+          name: "PluginDirtyRuntimeError",
+        })
+        let hostState = "v2"
+        let rejectRestore = true
+        mockInvoke.mockImplementation(async (command) => {
+          if (command === "plugin_backup_restore") {
+            if (rejectRestore) throw new Error("restore unavailable")
+            hostState = "v1"
+          }
+        })
+        expect(await manager.recoverPluginRuntime(plugin.manifest.id)).toBe(false)
+        expect(getPluginBackupManager().getPendingUpdateRestore(plugin.manifest.id)).toBeDefined()
+        rejectRestore = false
+        expect(await manager.recoverPluginRuntime(plugin.manifest.id)).toBe(true)
+        expect(hostState).toBe("v1")
+        expect(getPluginBackupManager().getPendingUpdateRestore(plugin.manifest.id)).toBeUndefined()
+        await expect(manager.getPluginLifecycleState(plugin.manifest.id)).resolves.toMatchObject({
+          actual: "inactive",
+        })
+      } finally {
+        resetPluginBackupManager()
+        if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage)
+        else delete (globalThis as { localStorage?: unknown }).localStorage
+      }
+    })
+
+    it("serializes package mutation against runtime loading (U18)", async () => {
+      mockGetState.mockReturnValue({ plugins: {} })
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      let finish!: () => void
+      let started!: () => void
+      const entered = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const mutation = manager.withPluginPackageMutation("package-lock", async () => {
+        started()
+        await gate
+      })
+      await entered
+      let loadFinished = false
+      const load = manager.loadPlugin("package-lock").catch((error: Error) => {
+        loadFinished = true
+        return error.message
+      })
+      await Promise.resolve()
+      expect(loadFinished).toBe(false)
+      finish()
+      await mutation
+      expect(await load).toContain("Plugin not found")
+    })
+
+    it("fences another manager during package I/O and releases the lease on failure", async () => {
+      mockGetState.mockReturnValue({ plugins: {} })
+      const coordinator = new PluginLifecycleCoordinator()
+      const first = new PluginManager({
+        pluginDirectory: "/plugins",
+        lifecycleCoordinator: coordinator,
+      })
+      const second = new PluginManager({
+        pluginDirectory: "/plugins",
+        lifecycleCoordinator: coordinator,
+      })
+      await expect(
+        first.withPluginPackageMutation("shared-package", async () => {
+          expect(() => coordinator.acquire("other-manager", "shared-package")).toThrow(
+            "already active"
+          )
+          await expect(
+            second.withPluginPackageMutation("shared-package", async () => {})
+          ).rejects.toThrow("already active")
+          throw new Error("rename failed")
+        })
+      ).rejects.toThrow("rename failed")
+      expect(coordinator.get("shared-package")).toBeUndefined()
+    })
+
     it("classifies unresolved window and webview handles as native dirty resources", async () => {
       mockGetState.mockReturnValue({ plugins: {} })
       const manager = new PluginManager({ pluginDirectory: "/plugins" })

@@ -91,14 +91,24 @@ jest.mock("./backup", () => ({
     backup: { id: "plugin-a-before-update", pluginId: "plugin-a", version: "1.0.0" },
   }),
   __restoreBackupSpy: jest.fn().mockResolvedValue({ success: true }),
+  __beginRecoverySpy: jest.fn(),
+  __completeRecoverySpy: jest.fn(),
+  __endRecoveryAttemptSpy: jest.fn(),
   getPluginBackupManager() {
     const mockedBackup = jest.requireMock("./backup") as {
       __createBackupSpy: jest.Mock
       __restoreBackupSpy: jest.Mock
+      __beginRecoverySpy: jest.Mock
+      __completeRecoverySpy: jest.Mock
+      __endRecoveryAttemptSpy: jest.Mock
     }
     return {
       createBackup: mockedBackup.__createBackupSpy,
       restore: mockedBackup.__restoreBackupSpy,
+      beginUpdateRecovery: mockedBackup.__beginRecoverySpy,
+      completeUpdateRecovery: mockedBackup.__completeRecoverySpy,
+      endUpdateRecoveryAttempt: mockedBackup.__endRecoveryAttemptSpy,
+      getPendingUpdateRestore: () => undefined,
     }
   },
 }))
@@ -109,6 +119,7 @@ jest.mock("../core/manager", () => ({
   __scanPluginsSpy: jest.fn().mockResolvedValue([]),
   __syncRuntimeStateSpy: jest.fn().mockResolvedValue(undefined),
   __enablePluginSpy: jest.fn().mockResolvedValue(undefined),
+  __hasUnresolvedActivationResourcesSpy: jest.fn(() => false),
   __reservePluginRuntimeGraphSpy: jest.fn(() => ({
     managerId: "manager",
     pluginId: "plugin-a",
@@ -123,6 +134,9 @@ jest.mock("../core/manager", () => ({
       scanPlugins: mockedManager.__scanPluginsSpy,
       syncRuntimeState: mockedManager.__syncRuntimeStateSpy,
       enablePlugin: mockedManager.__enablePluginSpy,
+      hasUnresolvedActivationResources: mockedManager.__hasUnresolvedActivationResourcesSpy,
+      withPluginPackageMutation: (_id: string, operation: () => Promise<unknown>) => operation(),
+      getPluginLifecycleState: async () => ({ actual: "inactive" }),
       reservePluginRuntimeGraph: mockedManager.__reservePluginRuntimeGraphSpy,
       releasePluginRuntimeGraph: mockedManager.__releasePluginRuntimeGraphSpy,
     }
@@ -170,6 +184,9 @@ const proxyManagerModule = jest.requireMock("../ide/proxy-manager") as {
 const backupModule = jest.requireMock("./backup") as {
   __createBackupSpy: jest.Mock
   __restoreBackupSpy: jest.Mock
+  __beginRecoverySpy: jest.Mock
+  __completeRecoverySpy: jest.Mock
+  __endRecoveryAttemptSpy: jest.Mock
 }
 const managerModule = jest.requireMock("../core/manager") as {
   __disablePluginSpy: jest.Mock
@@ -177,6 +194,7 @@ const managerModule = jest.requireMock("../core/manager") as {
   __scanPluginsSpy: jest.Mock
   __syncRuntimeStateSpy: jest.Mock
   __enablePluginSpy: jest.Mock
+  __hasUnresolvedActivationResourcesSpy: jest.Mock
   __reservePluginRuntimeGraphSpy: jest.Mock
   __releasePluginRuntimeGraphSpy: jest.Mock
 }
@@ -229,7 +247,15 @@ describe("PluginUpdater", () => {
       },
     })
     backupModule.__restoreBackupSpy.mockReset().mockResolvedValue({ success: true })
+    backupModule.__beginRecoverySpy.mockReset()
+    backupModule.__completeRecoverySpy.mockReset()
+    backupModule.__endRecoveryAttemptSpy.mockReset()
     managerModule.__enablePluginSpy.mockReset().mockResolvedValue(undefined)
+    managerModule.__hasUnresolvedActivationResourcesSpy.mockReset().mockReturnValue(false)
+    managerModule.__unloadPluginSpy.mockReset().mockImplementation(async () => {
+      const state = mockGetStoreState()
+      state.plugins["plugin-a"].status = "installed"
+    })
     managerModule.__reservePluginRuntimeGraphSpy.mockImplementation(() => ({
       managerId: "manager",
       pluginId: "plugin-a",
@@ -535,6 +561,204 @@ describe("PluginUpdater", () => {
   })
 
   describe("Update Installation", () => {
+    it.each(["domain-only", "literal-credentials"])(
+      "requires review for %s authority widening with unchanged request rules",
+      async (kind) => {
+        const current = mockGetStoreState().plugins["plugin-a"].manifest
+        current.networkAccess = {
+          allowedDomains: ["api.example.com"],
+          literalCredentials: "inspect",
+          rules: [{ domain: "api.example.com", methods: ["GET"], paths: ["/v1/*"] }],
+        }
+        stagePluginUpdate.mockResolvedValueOnce({
+          transactionId: "authority-update",
+          pluginId: "plugin-a",
+          version: "2.0.0",
+          stagedPath: "/staged",
+          manifest: {
+            ...current,
+            version: "2.0.0",
+            networkAccess: {
+              ...current.networkAccess,
+              ...(kind === "domain-only"
+                ? { allowedDomains: ["*"] }
+                : { literalCredentials: undefined }),
+            },
+          },
+        })
+        expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({
+          success: false,
+          error: expect.stringContaining("PLUGIN_UPDATE_PERMISSION_REVIEW_REQUIRED"),
+        })
+        expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+      }
+    )
+    it("refuses package mutation if the durable recovery obligation cannot be armed", async () => {
+      backupModule.__beginRecoverySpy.mockImplementationOnce(() => {
+        throw new Error("recovery record unavailable")
+      })
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({
+        success: false,
+        error: expect.stringContaining("recovery record unavailable"),
+      })
+      expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+    })
+
+    it("arms recovery before commit and clears it only after finalization", async () => {
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        mockGetStoreState().plugins["plugin-a"].manifest.version = "2.0.0"
+      })
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: true })
+      expect(backupModule.__beginRecoverySpy).toHaveBeenCalledWith("plugin-a-before-update")
+      expect(backupModule.__beginRecoverySpy.mock.invocationCallOrder[0]).toBeLessThan(
+        commitStagedPluginUpdate.mock.invocationCallOrder[0]
+      )
+      expect(finalizeStagedPluginUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+        backupModule.__completeRecoverySpy.mock.invocationCallOrder[0]
+      )
+    })
+    it("refuses network widening before backup or mutation (U15)", async () => {
+      const state = mockGetStoreState()
+      state.plugins["plugin-a"].manifest.networkAccess = { allowedDomains: ["api.example.com"] }
+      stagePluginUpdate.mockImplementationOnce(async () => ({
+        transactionId: "network-update",
+        pluginId: "plugin-a",
+        version: "2.0.0",
+        stagedPath: "/staged",
+        manifest: {
+          ...state.plugins["plugin-a"].manifest,
+          version: "2.0.0",
+          networkAccess: { allowedDomains: ["*"] },
+        },
+      }))
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({
+        success: false,
+        error: expect.stringContaining("PLUGIN_UPDATE_PERMISSION_REVIEW_REQUIRED"),
+      })
+      expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+      expect(backupModule.__createBackupSpy).not.toHaveBeenCalled()
+      expect(discardStagedPluginUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(["enabled", "disabled", "error"] as const)(
+      "never commits over a dirty %s runtime (U16)",
+      async (status) => {
+        mockGetStoreState().plugins["plugin-a"].status = status
+        managerModule.__hasUnresolvedActivationResourcesSpy.mockReturnValue(true)
+        const result = await updater.installUpdate("plugin-a", "2.0.0")
+        expect(result).toMatchObject({
+          success: false,
+          requiresRestart: true,
+          error: expect.stringMatching(/restart/i),
+        })
+        expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+        expect(discardStagedPluginUpdate).toHaveBeenCalledTimes(1)
+        expect(backupModule.__restoreBackupSpy).not.toHaveBeenCalled()
+      }
+    )
+
+    it("checks unresolved resources after a resolved teardown (U16)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "enabled"
+      managerModule.__unloadPluginSpy.mockImplementationOnce(async () => {
+        mockGetStoreState().plugins["plugin-a"].status = "disabled"
+        managerModule.__hasUnresolvedActivationResourcesSpy.mockReturnValue(true)
+      })
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({
+        success: false,
+        requiresRestart: true,
+      })
+      expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+      expect(discardStagedPluginUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    it("tears down a plugin enabled during staging before committing (U18)", async () => {
+      const state = mockGetStoreState()
+      backupModule.__createBackupSpy.mockImplementationOnce(async () => {
+        state.plugins["plugin-a"].status = "enabled"
+        return { success: true, backup: { id: "before-enable" } }
+      })
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        expect(state.plugins["plugin-a"].status).toBe("installed")
+        state.plugins["plugin-a"].manifest.version = "2.0.0"
+      })
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({ success: true })
+      expect(managerModule.__unloadPluginSpy).toHaveBeenCalledTimes(1)
+      expect(managerModule.__enablePluginSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it("aborts if activation moved back to a live state before commit (U18)", async () => {
+      managerModule.__unloadPluginSpy.mockImplementationOnce(async () => {
+        mockGetStoreState().plugins["plugin-a"].status = "enabling"
+      })
+      mockGetStoreState().plugins["plugin-a"].status = "enabled"
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({
+        success: false,
+        requiresRestart: true,
+      })
+      expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+    })
+
+    it("leaves a dirty rollback pending with its transaction and backup intact (U17)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "enabled"
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        mockGetStoreState().plugins["plugin-a"].manifest.version = "2.0.0"
+      })
+      managerModule.__enablePluginSpy.mockImplementationOnce(async () => {
+        managerModule.__hasUnresolvedActivationResourcesSpy.mockReturnValue(true)
+        throw new Error("Activation left a worker alive")
+      })
+      const result = await updater.installUpdate("plugin-a", "2.0.0")
+      expect(result).toMatchObject({
+        success: false,
+        requiresRestart: true,
+        rollback: {
+          attempted: true,
+          succeeded: false,
+          error: expect.stringMatching(/pending restore.*plugin-a-before-update/i),
+        },
+      })
+      expect(backupModule.__restoreBackupSpy).not.toHaveBeenCalled()
+      expect(finalizeStagedPluginUpdate).not.toHaveBeenCalled()
+      expect(discardStagedPluginUpdate).not.toHaveBeenCalled()
+    })
+
+    it("fails an unavailable explicit version instead of substituting the new pending version (U19)", async () => {
+      await updater.checkForUpdates(["plugin-a"])
+      expect(await updater.update("plugin-a", { version: "1.5.0" })).toMatchObject({
+        success: false,
+        newVersion: "1.5.0",
+        error: expect.stringContaining("Version 1.5.0 is not available"),
+      })
+      expect(stagePluginUpdate).not.toHaveBeenCalled()
+    })
+
+    it("keeps the requested version when the pending offer changes from A to B (U19)", async () => {
+      const [reviewed] = await updater.checkForUpdates(["plugin-a"])
+      cogniaGetPlugin.mockResolvedValueOnce({ latestVersion: "3.0.0" })
+      await updater.checkForUpdates(["plugin-a"])
+      expect(updater.getPendingUpdates()[0].latestVersion).toBe("3.0.0")
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        mockGetStoreState().plugins["plugin-a"].manifest.version = "2.0.0"
+      })
+      expect(await updater.update("plugin-a", { version: reviewed.latestVersion })).toMatchObject({
+        success: true,
+        newVersion: "2.0.0",
+      })
+      expect(stagePluginUpdate).toHaveBeenCalledWith(
+        "plugin-a",
+        expect.objectContaining({ version: "2.0.0" })
+      )
+    })
+
+    it("rejects staged bytes labeled with a different version (U19)", async () => {
+      stagePluginUpdate.mockResolvedValueOnce({ version: "3.0.0", manifest: { version: "3.0.0" } })
+      expect(await updater.installUpdate("plugin-a", "2.0.0")).toMatchObject({
+        success: false,
+        error: expect.stringContaining("requested version 2.0.0"),
+      })
+      expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+      expect(discardStagedPluginUpdate).toHaveBeenCalledTimes(1)
+    })
     it("should attempt to update a plugin", async () => {
       const result = await updater.update("plugin-a", { force: true, version: "2.0.0" })
 
@@ -809,7 +1033,14 @@ describe("PluginUpdater", () => {
         rollback: { attempted: true, succeeded: true },
         requiresRestart: true,
       })
-      expect(backupModule.__restoreBackupSpy).toHaveBeenCalledWith("plugin-a-before-update")
+      expect(backupModule.__restoreBackupSpy).toHaveBeenCalledWith(
+        "plugin-a-before-update",
+        expect.objectContaining({ withPluginPackageMutation: expect.any(Function) })
+      )
+      // Native journal/backup ordering is covered by backup.test.ts; the
+      // updater retains the durable obligation until restoration succeeds.
+      expect(backupModule.__beginRecoverySpy).toHaveBeenCalledWith("plugin-a-before-update")
+      expect(finalizeStagedPluginUpdate).not.toHaveBeenCalled()
       expect(managerModule.__enablePluginSpy).toHaveBeenCalledTimes(1)
       expect(state.plugins["plugin-a"].manifest.version).toBe("1.0.0")
     })

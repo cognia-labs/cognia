@@ -41,6 +41,7 @@ export interface RollbackResult {
   error?: string
   migrationApplied: boolean
   requiresRestart: boolean
+  rollback?: { attempted: boolean; succeeded: boolean; error?: string }
 }
 
 export interface RollbackPlan {
@@ -115,7 +116,8 @@ export class PluginRollbackManager {
           source: "backup",
           date: backup.createdAt,
           size: backup.size,
-          canRollback: backup.version !== currentVersion,
+          canRollback:
+            backup.version !== currentVersion || backup.metadata?.hostStateRestorePending === true,
         })
       }
     }
@@ -274,10 +276,11 @@ export class PluginRollbackManager {
     const startTime = Date.now()
     const info = await this.getRollbackInfo(pluginId)
     const fromVersion = info.currentVersion
-    const initialStatus = usePluginStore.getState().plugins[pluginId]?.status
+    let initialStatus = usePluginStore.getState().plugins[pluginId]?.status
     const lifecycle = getPluginManager()
     let reservation: PluginGraphReservation | undefined
     let migrationApplied = false
+    let pendingRestore = false
 
     try {
       // Step 1: Create backup if configured
@@ -296,6 +299,7 @@ export class PluginRollbackManager {
       // The TS manager owns frontend modules, contributions and graph leases.
       // Native status changes alone leave the old UI and commands alive.
       reservation = lifecycle.reservePluginRuntimeGraph(pluginId)
+      initialStatus = usePluginStore.getState().plugins[pluginId]?.status
       if (initialStatus === "enabled" || initialStatus === "suspended") {
         await lifecycle.disablePlugin(pluginId, "rollback")
       }
@@ -304,14 +308,39 @@ export class PluginRollbackManager {
       // Step 3: Restore target version
       const versionInfo = info.availableVersions.find((v) => v.version === targetVersion)
 
-      if (versionInfo?.source === "backup") {
-        // Restore from backup
-        const backupManager = getPluginBackupManager()
-        const restoreResult = await backupManager.restoreToVersion(pluginId, targetVersion)
-        if (!restoreResult.success) {
-          throw new Error(`Restore failed: ${restoreResult.error}`)
+      const assertStopped = async () => {
+        const state = await lifecycle.getPluginLifecycleState(pluginId, {
+          ignorePendingUpdateRestore: versionInfo?.source === "backup",
+        })
+        if (
+          lifecycle.hasUnresolvedActivationResources(pluginId) ||
+          ["active", "activating", "stopping", "dirty"].includes(state.actual) ||
+          ["loading", "loaded", "enabling", "enabled", "disabling", "suspended"].includes(
+            usePluginStore.getState().plugins[pluginId]?.status ?? ""
+          )
+        ) {
+          pendingRestore = true
+          throw new Error(
+            `Pending restore of ${pluginId} to ${targetVersion}; a restart is required, then retry rollback after cleanup`
+          )
         }
+      }
+      if (versionInfo?.source === "backup") {
+        await lifecycle.withPluginPackageMutation(pluginId, async () => {
+          await assertStopped()
+          // Restore from backup
+          const backupManager = getPluginBackupManager()
+          const restoreResult = await backupManager.restoreToVersion(
+            pluginId,
+            targetVersion,
+            lifecycle
+          )
+          if (!restoreResult.success) {
+            throw new Error(`Restore failed: ${restoreResult.error}`)
+          }
+        })
       } else {
+        await assertStopped()
         // Download and install from marketplace
         const installResult = await getPluginMarketplace().installPlugin(pluginId, targetVersion)
         if (!installResult.success) {
@@ -370,15 +399,25 @@ export class PluginRollbackManager {
       this.recordRollback(result)
       return result
     } catch (error) {
+      pendingRestore ||=
+        lifecycle.hasUnresolvedActivationResources(pluginId) ||
+        (error instanceof Error && error.name === "PluginActivationConflictError")
+      const message = error instanceof Error ? error.message : String(error)
+      const errorMessage = pendingRestore
+        ? `Pending restore of ${pluginId} to ${targetVersion}; a restart is required, then retry rollback after cleanup: ${message}`
+        : message
       const result: RollbackResult = {
         success: false,
         pluginId,
         fromVersion,
         toVersion: targetVersion,
         duration: Date.now() - startTime,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
         migrationApplied,
-        requiresRestart: false,
+        requiresRestart: pendingRestore,
+        ...(pendingRestore
+          ? { rollback: { attempted: true, succeeded: false, error: errorMessage } }
+          : {}),
       }
 
       this.recordRollback(result)

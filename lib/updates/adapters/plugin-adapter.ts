@@ -41,9 +41,9 @@ export interface PluginUpdateResultLike {
 
 export interface PluginAdapterDeps {
   checkForUpdates?: () => Promise<PluginUpdateInfoLike[]>
-  update?: (pluginId: string) => Promise<PluginUpdateResultLike>
+  update?: (pluginId: string, options: { version: string }) => Promise<PluginUpdateResultLike>
   /** True when applying this version widens the plugin's granted permissions. */
-  permissionsExpanded?: (pluginId: string, version: string) => Promise<boolean>
+  permissionsExpanded?: (pluginId: string, version: string) => Promise<boolean | undefined>
   isSupported?: () => boolean
 }
 
@@ -99,11 +99,11 @@ export function createPluginAdapter(deps: PluginAdapterDeps = {}): UpdateAdapter
     ): Promise<UpdateApplyResult> {
       const update =
         deps.update ??
-        (async (pluginId: string) => {
+        (async (pluginId: string, options: { version: string }) => {
           const { getPluginUpdater } = await import("@/lib/plugin/lifecycle/updater")
-          return getPluginUpdater().update(pluginId) as unknown as PluginUpdateResultLike
+          return getPluginUpdater().update(pluginId, options) as unknown as PluginUpdateResultLike
         })
-      const result = await update(candidate.assetId)
+      const result = await update(candidate.assetId, { version: candidate.targetVersion })
       if (!result.success) {
         return {
           state: "failed",

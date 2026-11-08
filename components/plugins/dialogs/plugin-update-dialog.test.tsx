@@ -2,7 +2,8 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
+import type { UpdateResult } from "@/lib/plugin/lifecycle/updater"
 
 jest.mock("next-intl", () => ({
   useLocale: () => "en",
@@ -29,13 +30,98 @@ function makeClient(
 ) {
   return {
     checkForUpdates: jest.fn(async () => updates),
-    installUpdate: jest.fn(async () => undefined),
+    installUpdate: jest.fn(async (pluginId: string, newVersion: string): Promise<UpdateResult> => ({
+      success: true,
+      pluginId,
+      previousVersion: "1.0.0",
+      newVersion,
+      duration: 0,
+    })),
     cancelUpdate: jest.fn(),
     onProgress: jest.fn(() => () => undefined),
   }
 }
 
 describe("PluginUpdateDialog", () => {
+  it("clears the previous error as soon as a retry starts", async () => {
+    const client = makeClient([
+      { pluginId: "retry", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+    ])
+    const result: UpdateResult = {
+      success: false,
+      pluginId: "retry",
+      previousVersion: "1.0.0",
+      newVersion: "2.0.0",
+      duration: 0,
+      error: "Old failure",
+    }
+    client.installUpdate.mockResolvedValueOnce(result)
+    let finish!: (value: UpdateResult) => void
+    client.installUpdate.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    __resetPluginUpdateClientForTests(client)
+    render(<PluginUpdateDialog open onClose={() => {}} />)
+    const button = await screen.findByRole("button", { name: "install" })
+    fireEvent.click(button)
+    expect(await screen.findByRole("alert")).toHaveTextContent("Old failure")
+    fireEvent.click(button)
+    await waitFor(() => expect(client.installUpdate).toHaveBeenCalledTimes(2))
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    await act(async () => finish({ ...result, success: true, error: undefined }))
+  })
+  it("keeps a refused single update and shows the error (U22)", async () => {
+    const client = makeClient([
+      { pluginId: "refused", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+    ])
+    client.installUpdate.mockResolvedValue({
+      success: false,
+      pluginId: "refused",
+      previousVersion: "1.0.0",
+      newVersion: "2.0.0",
+      duration: 0,
+      error: "Restart required",
+    })
+    __resetPluginUpdateClientForTests(client)
+    render(<PluginUpdateDialog open onClose={() => {}} />)
+    fireEvent.click(await screen.findByRole("button", { name: "install" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("Restart required")
+    expect(screen.getByText("refused")).toBeInTheDocument()
+    expect(screen.getByText("availableCount:1")).toBeInTheDocument()
+  })
+
+  it("removes only succeeded rows from install-all (U22)", async () => {
+    const client = makeClient([
+      { pluginId: "succeeded", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+      { pluginId: "refused", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+    ])
+    client.installUpdate
+      .mockResolvedValueOnce({
+        success: true,
+        pluginId: "succeeded",
+        previousVersion: "1.0.0",
+        newVersion: "2.0.0",
+        duration: 0,
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        pluginId: "refused",
+        previousVersion: "1.0.0",
+        newVersion: "2.0.0",
+        duration: 0,
+        error: "Permission review required",
+      })
+    __resetPluginUpdateClientForTests(client)
+    render(<PluginUpdateDialog open onClose={() => {}} />)
+    await screen.findByText("succeeded")
+    fireEvent.click(screen.getByRole("button", { name: "installAll" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("Permission review required")
+    expect(screen.queryByText("succeeded")).not.toBeInTheDocument()
+    expect(screen.getByText("refused")).toBeInTheDocument()
+  })
   it("shows the up-to-date message when no updates are available", async () => {
     const client = makeClient([])
     __resetPluginUpdateClientForTests(client)
@@ -70,17 +156,20 @@ describe("PluginUpdateDialog", () => {
     await waitFor(() => expect(client.installUpdate).toHaveBeenCalledWith("alpha", "1.1.0"))
   })
 
-  it("close button invokes onClose", () => {
-    __resetPluginUpdateClientForTests(makeClient([]))
+  it("close button invokes onClose", async () => {
+    const client = makeClient([])
+    __resetPluginUpdateClientForTests(client)
     const onClose = jest.fn()
     render(<PluginUpdateDialog open onClose={onClose} />)
+    await waitFor(() => expect(screen.getByRole("button", { name: "recheck" })).toBeEnabled())
     fireEvent.click(screen.getByText("close"))
     expect(onClose).toHaveBeenCalled()
   })
 
-  it("applies mobile-first w-[95vw] width to DialogContent", () => {
+  it("applies mobile-first w-[95vw] width to DialogContent", async () => {
     __resetPluginUpdateClientForTests(makeClient([]))
     render(<PluginUpdateDialog open onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByRole("button", { name: "recheck" })).toBeEnabled())
     const dialog = screen.getByRole("dialog")
     expect(dialog.className).toContain("w-[95vw]")
   })
@@ -124,7 +213,10 @@ describe("PluginUpdateDialog", () => {
     const client = makeClient([])
     __resetPluginUpdateClientForTests(client)
     render(<PluginUpdateDialog open pluginId="gamma" onClose={() => {}} />)
-    await waitFor(() => expect(client.checkForUpdates).toHaveBeenCalledWith("gamma"))
+    await waitFor(() => expect(client.checkForUpdates).toHaveBeenCalledWith(["gamma"]))
+    fireEvent.click(screen.getByRole("button", { name: "recheck" }))
+    await waitFor(() => expect(client.checkForUpdates).toHaveBeenCalledTimes(2))
+    expect(client.checkForUpdates).toHaveBeenLastCalledWith(["gamma"])
     expect(screen.getByText("titleSingle:gamma")).toBeInTheDocument()
     expect(screen.getByText("descriptionSingle")).toBeInTheDocument()
     expect(screen.getByText("upToDateSingle")).toBeInTheDocument()

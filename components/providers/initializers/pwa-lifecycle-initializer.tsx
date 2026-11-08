@@ -37,8 +37,6 @@ export function PwaLifecycleInitializer() {
         error: error instanceof Error ? error.message : String(error),
       })
     })
-    const onOnline = () => window.location.reload()
-    window.addEventListener("online", onOnline)
 
     const onInstalled = () => void trackEvent("app.pwa.installed", {})
     window.addEventListener("appinstalled", onInstalled)
@@ -58,7 +56,6 @@ export function PwaLifecycleInitializer() {
     return () => {
       detach()
       window.removeEventListener("appinstalled", onInstalled)
-      window.removeEventListener("online", onOnline)
       container?.removeEventListener("controllerchange", onControllerChange)
     }
   }, [])

@@ -59,6 +59,41 @@ export interface LookupOptions {
   appVersion?: string
 }
 
+function matchesAsset(entry: CatalogEntry, options: LookupOptions): boolean {
+  return (
+    entry.kind === options.kind &&
+    entry.assetId === options.assetId &&
+    (!options.target || !entry.target || entry.target === options.target)
+  )
+}
+
+function isEligibleRelease(entry: CatalogEntry, options: LookupOptions): boolean {
+  if (entry.revoked || !visibleChannels(options.channel).includes(entry.channel)) return false
+  if (!isNewerVersion(entry.version, options.currentVersion)) return false
+  const min = entry.compatibility?.minAppVersion
+  if (min && options.appVersion && compareVersions(options.appVersion, min) < 0) return false
+  const max = entry.compatibility?.maxAppVersion
+  if (max && options.appVersion && compareVersions(options.appVersion, max) > 0) return false
+  return true
+}
+
+/** Refuse known catalog exclusions without treating catalog lag as a veto. */
+export function isCatalogReleaseExcluded(
+  entries: readonly CatalogEntry[] | null,
+  options: LookupOptions,
+  version: string
+): boolean {
+  if (isRevokedRelease(entries, options.kind, options.assetId, version)) return true
+  return (
+    entries?.some(
+      (entry) =>
+        matchesAsset(entry, options) &&
+        entry.version === version &&
+        !isEligibleRelease(entry, options)
+    ) ?? false
+  )
+}
+
 /**
  * Best candidate for one asset, or null when the catalog offers nothing this
  * device may install. Revoked entries are dropped before any comparison so a
@@ -69,21 +104,12 @@ export function bestCandidate(
   options: LookupOptions
 ): UpdateCandidate | null {
   if (!entries || entries.length === 0) return null
-  const allowed = new Set(visibleChannels(options.channel))
-
-  const matches = entries.filter((entry) => {
-    if (entry.revoked) return false
-    if (entry.kind !== options.kind) return false
-    if (entry.assetId !== options.assetId) return false
-    if (!allowed.has(entry.channel)) return false
-    if (options.target && entry.target && entry.target !== options.target) return false
-    if (!isNewerVersion(entry.version, options.currentVersion)) return false
-    const min = entry.compatibility?.minAppVersion
-    if (min && options.appVersion && compareVersions(options.appVersion, min) < 0) return false
-    const max = entry.compatibility?.maxAppVersion
-    if (max && options.appVersion && compareVersions(options.appVersion, max) > 0) return false
-    return true
-  })
+  const matches = entries.filter(
+    (entry) =>
+      matchesAsset(entry, options) &&
+      isEligibleRelease(entry, options) &&
+      !isRevokedRelease(entries, options.kind, options.assetId, entry.version)
+  )
 
   if (matches.length === 0) return null
   const best = matches.reduce((a, b) => (compareVersions(b.version, a.version) > 0 ? b : a))

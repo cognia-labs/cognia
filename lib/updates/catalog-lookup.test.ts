@@ -3,6 +3,7 @@ import {
   compareVersions,
   isNewerVersion,
   isRevokedRelease,
+  isCatalogReleaseExcluded,
   releaseProvenance,
   visibleChannels,
 } from "./catalog-lookup"
@@ -141,5 +142,39 @@ describe("revocation and provenance", () => {
 
   it("treats an unavailable catalog as unsigned, never as verified", () => {
     expect(releaseProvenance(null, "plugin", "acme.tool", "1.0.0")).toBe("unsigned")
+  })
+})
+
+describe("native fallback exclusions (U03)", () => {
+  const options = {
+    kind: "desktop" as const,
+    assetId: "app",
+    executor: "tauri" as const,
+    currentVersion: "1.0.0",
+    appVersion: "1.0.0",
+    channel: "stable" as const,
+    target: "windows",
+  }
+  it.each([
+    { revoked: true },
+    { version: "*", revoked: true },
+    { channel: "beta" as const },
+    { compatibility: { minAppVersion: "2.0.0" } },
+    { compatibility: { maxAppVersion: "0.9.0" } },
+  ])("shares catalog filtering for %j", (patch) => {
+    const entries = [entry(patch)]
+    expect(isCatalogReleaseExcluded(entries, options, "1.1.0")).toBe(true)
+    expect(bestCandidate(entries, options)).toBeNull()
+  })
+  it("allows catalog lag and ignores exclusions for other assets or targets", () => {
+    expect(isCatalogReleaseExcluded(null, options, "1.1.0")).toBe(false)
+    expect(isCatalogReleaseExcluded([], options, "1.1.0")).toBe(false)
+    expect(
+      isCatalogReleaseExcluded([entry({ target: "darwin", channel: "beta" })], options, "1.1.0")
+    ).toBe(false)
+    expect(
+      isCatalogReleaseExcluded([entry({ assetId: "other", revoked: true })], options, "1.1.0")
+    ).toBe(false)
+    expect(isCatalogReleaseExcluded([entry()], options, "1.1.0")).toBe(false)
   })
 })

@@ -28,6 +28,7 @@ export interface NetworkAllowlist {
   allowedDomains?: string[]
   reasoning?: string
   rules?: NetworkAccessRule[]
+  literalCredentials?: "observe" | "inspect"
 }
 
 export type NetworkHttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
@@ -74,6 +75,163 @@ export function matchHost(host: string, patterns: string[]): boolean {
   return patterns.some((entry) => {
     const e = entry.trim().replace(/^\.+/, "").toLowerCase()
     return e.length > 0 && e !== "none" && (h === e || h.endsWith(`.${e}`))
+  })
+}
+
+/** Whether a pathname admitted by `next` escapes the union of `previous` globs. */
+function pathScopeWidened(next: string[], previous: string[]): boolean {
+  // A glob is a small NFA: '*' consumes any character or advances without
+  // consuming one. Walk pairs of state sets to test language containment.
+  const patterns = [...next, ...previous]
+  const offsets: number[] = []
+  const tokens: Array<string | undefined> = []
+  for (const pattern of patterns) {
+    offsets.push(tokens.length)
+    tokens.push(...pattern, undefined)
+  }
+  const closure = (states: Iterable<number>): number[] => {
+    const result = new Set(states)
+    for (const state of result) if (tokens[state] === "*") result.add(state + 1)
+    return [...result].sort((a, b) => a - b)
+  }
+  const advance = (states: number[], char: string): number[] =>
+    closure(
+      states.flatMap((state) =>
+        tokens[state] === "*" ? [state] : tokens[state] === char ? [state + 1] : []
+      )
+    )
+  const accepts = (states: number[]) => states.some((state) => tokens[state] === undefined)
+  const alphabet = [
+    ...new Set(tokens.filter((token): token is string => token !== undefined && token !== "*")),
+  ]
+  let other = "\u0000"
+  while (alphabet.includes(other)) other += "\u0000"
+  alphabet.push(other)
+  // URL pathnames always begin with '/'.
+  const pending = [
+    [
+      advance(closure(offsets.slice(0, next.length)), "/"),
+      advance(closure(offsets.slice(next.length)), "/"),
+    ],
+  ]
+  const visited = new Set<string>()
+  for (const [offered, granted] of pending) {
+    const key = `${offered.join(",")}|${granted.join(",")}`
+    if (visited.has(key)) continue
+    visited.add(key)
+    if (accepts(offered) && !accepts(granted)) return true
+    for (const char of alphabet) {
+      const following = advance(offered, char)
+      if (following.length) pending.push([following, advance(granted, char)])
+    }
+  }
+  return false
+}
+
+interface NetworkGrant {
+  domain: string
+  method: NetworkHttpMethod
+  protocol: "http" | "https"
+  port?: number
+  paths: string[]
+}
+
+function normalizeNetworkDomain(domain: string): string {
+  const trimmed = domain.trim()
+  const normalized = trimmed.replace(/^\.+/, "").toLowerCase()
+  // Only a literal '*' grants every host; trailing-dot entries cannot
+  // match a hostname after matchHost strips that hostname's trailing dots.
+  return (normalized === "*" && trimmed !== "*") || normalized.endsWith(".") ? "" : normalized
+}
+
+function hostScopeWidened(current: string[] | undefined, next: string[] | undefined): boolean {
+  const domains = (current ?? [])
+    .map(normalizeNetworkDomain)
+    .filter((domain) => domain && domain !== "none")
+  return (next ?? [])
+    .map(normalizeNetworkDomain)
+    .some(
+      (domain) =>
+        domain &&
+        domain !== "none" &&
+        (domain === "*" ? !domains.includes("*") : !matchHost(domain, domains))
+    )
+}
+
+function networkGrants(access: NetworkAllowlist | undefined): NetworkGrant[] {
+  const domains = (access?.allowedDomains ?? access?.rules?.map((rule) => rule.domain) ?? [])
+    .map(normalizeNetworkDomain)
+    .filter((domain) => domain && domain !== "none")
+  const methods: NetworkHttpMethod[] = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+  const rules: NetworkAccessRule[] =
+    access?.rules ??
+    domains.map((domain) => ({
+      domain,
+      methods,
+      paths: ["*"],
+      protocols: ["http", "https"],
+    }))
+  const grants: NetworkGrant[] = []
+  for (const rule of rules) {
+    const domain = normalizeNetworkDomain(rule.domain)
+    if (!domain || domain === "none") continue
+    for (const clamp of domains) {
+      const intersection =
+        domain === "*" || matchHost(clamp, [domain])
+          ? clamp
+          : clamp === "*" || matchHost(domain, [clamp])
+            ? domain
+            : undefined
+      if (!intersection) continue
+      for (const method of rule.methods) {
+        for (const protocol of rule.protocols ?? ["https"]) {
+          const ports =
+            access?.rules === undefined
+              ? [undefined]
+              : (rule.ports ?? [protocol === "https" ? 443 : 80])
+          for (const port of ports)
+            grants.push({ domain: intersection, method, protocol, port, paths: rule.paths })
+        }
+      }
+    }
+  }
+  return grants
+}
+
+/** Compare effective domain, method, path, protocol and port authority. */
+export function hasNetworkAccessWidened(
+  current: NetworkAllowlist | undefined,
+  next: NetworkAllowlist | undefined
+): boolean {
+  if (
+    current?.literalCredentials === "inspect" &&
+    (next?.literalCredentials ?? "observe") === "observe"
+  )
+    return true
+  // Host tools use the effective domain list without request rules. Webview
+  // CSP uses only the explicit list, so gaining one is a separate authority.
+  if (
+    hostScopeWidened(current?.allowedDomains, next?.allowedDomains) ||
+    hostScopeWidened(
+      current?.allowedDomains ?? current?.rules?.map((rule) => rule.domain),
+      next?.allowedDomains ?? next?.rules?.map((rule) => rule.domain)
+    )
+  )
+    return true
+  const granted = networkGrants(current)
+  return networkGrants(next).some((offer) => {
+    const covering = granted.filter(
+      (prior) =>
+        (prior.domain === "*" ||
+          (offer.domain !== "*" && matchHost(offer.domain, [prior.domain]))) &&
+        prior.method === offer.method &&
+        prior.protocol === offer.protocol &&
+        (prior.port === undefined || prior.port === offer.port)
+    )
+    return pathScopeWidened(
+      offer.paths,
+      covering.flatMap((prior) => prior.paths)
+    )
   })
 }
 

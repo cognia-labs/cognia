@@ -24,6 +24,46 @@ const CONTEXT = {
   catalog: null as readonly CatalogEntry[] | null,
 }
 
+describe("catalog-only discovery (U11)", () => {
+  it.each(["mobile-ios", "mobile-android"] as const)(
+    "fails %s honestly when the catalog cannot answer",
+    async (kind) => {
+      const adapter = createMobileAdapter(kind, {
+        playAvailable: async () => false,
+        playCore: playCore(),
+      })
+      await expect(
+        adapter.check({ ...CONTEXT, catalogStatus: "unavailable" })
+      ).rejects.toMatchObject({
+        failure: { kind: "network", code: "catalog_unavailable" },
+      })
+      await expect(
+        adapter.check({ ...CONTEXT, catalogStatus: "unconfigured" })
+      ).rejects.toMatchObject({
+        failure: { kind: "unsupported", code: "catalog_unconfigured" },
+      })
+    }
+  )
+
+  it("still uses Play's own source during a catalog outage", async () => {
+    const adapter = createMobileAdapter("mobile-android", { playCore: playCore() })
+    expect((await adapter.check({ ...CONTEXT, catalogStatus: "unavailable" }))[0].source).toBe(
+      "store"
+    )
+  })
+
+  it("reports failure when Play is unsupported and the fallback catalog is unavailable", async () => {
+    const adapter = createMobileAdapter("mobile-android", {
+      playCore: playCore({ getAppUpdateInfo: async () => ({ kind: "unsupported" }) }),
+    })
+    await expect(adapter.check({ ...CONTEXT, catalogStatus: "unavailable" })).rejects.toMatchObject(
+      {
+        failure: { code: "catalog_unavailable" },
+      }
+    )
+  })
+})
+
 function playCore(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     getAppUpdateInfo: async () => ({
@@ -285,8 +325,11 @@ describe("current Play capability and download readiness", () => {
         write: async (patch) => {
           Object.assign(settings, patch)
         },
+        writeSnapshots: async (patches) => {
+          settings.snapshots = { ...settings.snapshots, ...patches }
+        },
       },
-      fetchCatalog: async () => ({ entries: [] }),
+      fetchCatalog: async () => ({ status: "ok", entries: [] }),
       random: () => 0,
       appVersion: "1.0.0",
     })

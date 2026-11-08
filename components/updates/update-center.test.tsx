@@ -1,7 +1,13 @@
 /**
  * @jest-environment jsdom
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { DEFAULT_UPDATE_CENTER_SETTINGS } from "@cognia/agent-config-types"
+import { UpdateCoordinator } from "@/lib/updates/coordinator"
+import {
+  setActiveRuntimeTargetContext,
+  clearActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
 
@@ -35,8 +41,14 @@ const hookState: {
   clearHold: jest.fn(async () => {}),
 }
 
+let useRealUpdateHook = false
+let runtimeCoordinator: UpdateCoordinator
+jest.mock("@/lib/updates/runtime", () => ({ getUpdateCoordinator: () => runtimeCoordinator }))
 jest.mock("@/hooks/updates/use-update-center", () => ({
-  useUpdateCenter: () => hookState,
+  useUpdateCenter: () =>
+    useRealUpdateHook
+      ? jest.requireActual("@/hooks/updates/use-update-center").useUpdateCenter()
+      : hookState,
 }))
 
 import { openUpdateCenter, __resetUpdateCenterOpen } from "@/lib/updates/open-update-center"
@@ -70,6 +82,8 @@ function item(overrides: Partial<UpdateItem> = {}): UpdateItem {
 }
 
 beforeEach(() => {
+  useRealUpdateHook = false
+  clearActiveRuntimeTargetContext()
   __resetUpdateCenterOpen()
   hookState.checking = false
   hookState.items = []
@@ -80,6 +94,45 @@ beforeEach(() => {
 })
 
 describe("UpdateCenter", () => {
+  it("moves mounted subscribers and actions to the new account coordinator (U10)", async () => {
+    const create = (name: string) =>
+      new UpdateCoordinator({
+        adapters: [
+          {
+            kind: "desktop",
+            executor: "tauri",
+            isSupported: () => true,
+            check: async () => [{ ...item().candidate!, displayName: name }],
+            apply: async () => ({ state: "verified" }),
+          },
+        ],
+        persistence: {
+          read: () => ({ ...DEFAULT_UPDATE_CENTER_SETTINGS, rolloutBucket: 0 }),
+          write: async () => {},
+          writeSnapshots: async () => {},
+        },
+        fetchCatalog: async () => ({ status: "unconfigured" }),
+      })
+    useRealUpdateHook = true
+    runtimeCoordinator = create("Private account A")
+    await runtimeCoordinator.check({ manual: true })
+    setActiveRuntimeTargetContext("acct_alpha", "local-host")
+    render(<UpdateCenter />)
+    expect(screen.getByText("Private account A")).toBeInTheDocument()
+    const first = runtimeCoordinator
+    const second = create("Account B")
+    await second.check({ manual: true })
+    act(() => {
+      first.dispose()
+      runtimeCoordinator = second
+      setActiveRuntimeTargetContext("acct_beta", "local-host")
+    })
+    expect(screen.queryByText("Private account A")).not.toBeInTheDocument()
+    expect(screen.getByText("Account B")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Install" }))
+    await waitFor(() => expect(second.getItems()[0].state).toBe("verified"))
+    expect(first.getItems()).toEqual([])
+  })
   it("explains an empty list instead of showing a blank panel", () => {
     render(<UpdateCenter />)
     expect(screen.getByText("Nothing here can be updated on this device.")).toBeInTheDocument()
@@ -139,6 +192,46 @@ describe("UpdateCenter", () => {
     await waitFor(() => expect(hookState.apply).toHaveBeenCalledWith("desktop:app", true))
   })
 
+  it("restarts a plugin through the real coordinator apply path (U06)", async () => {
+    const restart = jest.fn(async () => {})
+    const plugin = {
+      ...item().candidate!,
+      kind: "plugin" as const,
+      executor: "plugin-runtime" as const,
+    }
+    runtimeCoordinator = new UpdateCoordinator({
+      adapters: [
+        {
+          kind: "desktop",
+          executor: "tauri",
+          isSupported: () => true,
+          check: async () => [],
+          apply: async () => ({ state: "verified" }),
+          restart,
+        },
+        {
+          kind: "plugin",
+          executor: "plugin-runtime",
+          isSupported: () => true,
+          check: async () => [plugin],
+          apply: async () => ({ state: "awaiting-restart" }),
+        },
+      ],
+      persistence: {
+        read: () => ({ ...DEFAULT_UPDATE_CENTER_SETTINGS, rolloutBucket: 0 }),
+        write: async () => {},
+        writeSnapshots: async () => {},
+      },
+      fetchCatalog: async () => ({ status: "unconfigured" }),
+    })
+    await runtimeCoordinator.check({ manual: true })
+    await runtimeCoordinator.apply("plugin:app", { consented: true })
+    useRealUpdateHook = true
+    render(<UpdateCenter />)
+    fireEvent.click(screen.getByRole("button", { name: "Restart now" }))
+    await waitFor(() => expect(restart).toHaveBeenCalledTimes(1))
+  })
+
   it("opens the pack diff instead of installing a character pack", async () => {
     const pack = item({
       key: "character-pack:c1",
@@ -160,7 +253,7 @@ describe("UpdateCenter", () => {
     hookState.items = [item()]
     hookState.groups = [{ group: "apps-and-runtimes", items: [item()] }]
     render(<UpdateCenter />)
-    openUpdateCenter({ focusKey: "desktop:app" })
+    act(() => openUpdateCenter({ focusKey: "desktop:app" }))
     await waitFor(() =>
       expect(screen.getByTestId("update-row-desktop:app").className).toContain("ring-2")
     )

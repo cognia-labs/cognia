@@ -93,14 +93,14 @@ afterEach(() => {
 })
 
 describe("fetchVerifiedCatalog", () => {
-  it("returns null when the build ships no trust root", async () => {
+  it("reports unconfigured when the build ships no trust root", async () => {
     delete process.env.NEXT_PUBLIC_UPDATE_TRUST_ROOT
     const fetchImpl = jest.fn()
     const result = await fetchVerifiedCatalog(
       { channel: "stable", rolloutBucket: 0 },
       { fetchImpl: fetchImpl as unknown as typeof fetch }
     )
-    expect(result).toBeNull()
+    expect(result).toEqual({ status: "unconfigured" })
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
@@ -116,7 +116,7 @@ describe("fetchVerifiedCatalog", () => {
           new Response(JSON.stringify(catalog), { status: 200 })) as unknown as typeof fetch,
       }
     )
-    expect(result?.entries).toHaveLength(1)
+    expect(result.status === "ok" ? result.entries : undefined).toHaveLength(1)
     expect(store.current()?.seenVersions.targets).toBe(3)
   })
 
@@ -158,7 +158,7 @@ describe("fetchVerifiedCatalog", () => {
         fetchImpl: (async () => new Response("", { status: 204 })) as unknown as typeof fetch,
       }
     )
-    expect(result?.entries).toEqual([])
+    expect(result.status === "ok" ? result.entries : undefined).toEqual([])
   })
 
   it("surfaces Retry-After so the coordinator can back off", async () => {
@@ -176,11 +176,48 @@ describe("fetchVerifiedCatalog", () => {
           })) as unknown as typeof fetch,
       }
     )
-    expect(result?.retryAfterMs).toBe(120_000)
-    expect(result?.entries).toEqual([])
+    expect(result).toMatchObject({ status: "unavailable", retryAfterMs: 120_000 })
   })
 
-  it("returns null rather than trusting a bundle that fails verification", async () => {
+  it.each([304, 503])(
+    "reports HTTP %s without a verified body as unavailable (U11)",
+    async (status) => {
+      const { root } = await buildSignedCatalog()
+      process.env.NEXT_PUBLIC_UPDATE_TRUST_ROOT = JSON.stringify(root)
+      const result = await fetchVerifiedCatalog(
+        { channel: "stable", rolloutBucket: 0 },
+        {
+          trustStore: memoryStore(),
+          fetchImpl: (async () => new Response("", { status })) as typeof fetch,
+        }
+      )
+      expect(result).toMatchObject({
+        status: "unavailable",
+        error: new Error(`catalog fetch http ${status}`),
+      })
+    }
+  )
+
+  it("keeps Retry-After when a successful HTTP response fails verification (U11)", async () => {
+    const { catalog, root } = await buildSignedCatalog()
+    process.env.NEXT_PUBLIC_UPDATE_TRUST_ROOT = JSON.stringify(root)
+    catalog.targets.signed.entries[0].version = "9.9.9"
+    expect(
+      await fetchVerifiedCatalog(
+        { channel: "stable", rolloutBucket: 0 },
+        {
+          trustStore: memoryStore(),
+          fetchImpl: (async () =>
+            new Response(JSON.stringify(catalog), {
+              status: 200,
+              headers: { "retry-after": "120" },
+            })) as typeof fetch,
+        }
+      )
+    ).toMatchObject({ status: "unavailable", retryAfterMs: 120_000 })
+  })
+
+  it("reports unavailable rather than trusting a bundle that fails verification", async () => {
     const { catalog, root } = await buildSignedCatalog()
     process.env.NEXT_PUBLIC_UPDATE_TRUST_ROOT = JSON.stringify(root)
     catalog.targets.signed.entries[0].version = "9.9.9"
@@ -194,7 +231,7 @@ describe("fetchVerifiedCatalog", () => {
           new Response(JSON.stringify(catalog), { status: 200 })) as unknown as typeof fetch,
       }
     )
-    expect(result).toBeNull()
+    expect(result).toMatchObject({ status: "unavailable" })
     expect(errors).toHaveLength(1)
   })
 
@@ -213,10 +250,10 @@ describe("fetchVerifiedCatalog", () => {
           new Response(JSON.stringify(catalog), { status: 200 })) as unknown as typeof fetch,
       }
     )
-    expect(result?.entries).toHaveLength(1)
+    expect(result.status === "ok" ? result.entries : undefined).toHaveLength(1)
   })
 
-  it("returns null when the network throws", async () => {
+  it("reports unavailable when the network throws", async () => {
     const { root } = await buildSignedCatalog()
     process.env.NEXT_PUBLIC_UPDATE_TRUST_ROOT = JSON.stringify(root)
     const result = await fetchVerifiedCatalog(
@@ -228,7 +265,7 @@ describe("fetchVerifiedCatalog", () => {
         }) as unknown as typeof fetch,
       }
     )
-    expect(result).toBeNull()
+    expect(result).toMatchObject({ status: "unavailable" })
   })
 })
 

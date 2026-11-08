@@ -25,6 +25,7 @@ import { listSkills, deleteSkill, upsertSkillByCanonicalId } from "@/lib/db/skil
 import { fetchRegistrySkillContent } from "./marketplace-registry"
 import { fetchSkillsShDetail, fetchSkillsShSkillContent } from "./marketplace-skillssh"
 import type { MarketplaceItem } from "./marketplace-types"
+import { computeSkillsShFilesHash } from "./skillssh-install"
 
 const mockedParse = parseSkillMarkdown as unknown as jest.Mock
 const mockedList = listSkills as unknown as jest.Mock
@@ -225,6 +226,36 @@ describe("installMarketplaceItem — skills.sh multi-file branch", () => {
       sourceId: "o/r/s",
       name: "find-skills",
     })
+
+  it("refuses changed content before writing any skill or resources (U20)", async () => {
+    const files = [{ path: "SKILL.md", contents: "---\nname: f\n---\nreviewed" }]
+    const expectedHash = await computeSkillsShFilesHash(files)
+    mockedShDetail.mockResolvedValue({
+      files: [...files, { path: "scripts/new.sh", contents: "changed" }],
+    })
+    await expect(installMarketplaceItem(shItem(), { expectedHash })).rejects.toMatchObject({
+      code: "skill_content_changed",
+    })
+    expect(mockedUpsert).not.toHaveBeenCalled()
+  })
+
+  it("installs exactly the hash computed by the update checker", async () => {
+    const files = [{ path: "SKILL.md", contents: "---\nname: f\n---\nreviewed" }]
+    const expectedHash = await computeSkillsShFilesHash(files)
+    mockedShDetail.mockResolvedValue({ files, hash: "untrusted-server-hash" })
+    mockedParse.mockReturnValue({
+      draft: { name: "f", content: "reviewed" },
+      warnings: [],
+      portabilityIssues: [],
+    })
+    mockedUpsert.mockResolvedValue({ skill: { id: "sh-1" }, created: false })
+    await installMarketplaceItem(shItem(), { expectedHash })
+    expect(mockedUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({ marketplaceHash: expectedHash }),
+      })
+    )
+  })
 
   it("installs the full snapshot as skill + resources with a content hash", async () => {
     mockedShDetail.mockResolvedValue({

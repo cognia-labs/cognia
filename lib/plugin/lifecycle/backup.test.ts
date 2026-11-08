@@ -24,6 +24,19 @@ jest.mock("@/stores/plugin-runtime", () => ({
   },
 }))
 
+jest.mock("../core/manager", () => ({
+  getPluginManager: () => {
+    const runtime = {
+      withPluginPackageMutation: jest.fn((_id: string, operation: () => Promise<unknown>) =>
+        operation()
+      ),
+      getPluginLifecycleState: jest.fn(async () => ({ actual: "inactive" })),
+      hasUnresolvedActivationResources: jest.fn(() => false),
+    }
+    return runtime
+  },
+}))
+
 import { invoke } from "@tauri-apps/api/core"
 const mockInvoke = invoke as jest.MockedFunction<typeof invoke>
 
@@ -138,6 +151,166 @@ describe("PluginBackupManager", () => {
       expect(mockInvoke).toHaveBeenLastCalledWith("plugin_backup_restore", {
         pluginId: "plugin-a",
         backupId: "plugin-a-20260728T120000",
+      })
+    })
+  })
+
+  describe("durable update recovery", () => {
+    const key = "plugin:backup:index:~/.cognia/backups/plugins"
+    let previous: PropertyDescriptor | undefined
+    let cells: Map<string, string>
+    const pendingBackup = () => ({
+      id: "plugin-a-before-update",
+      pluginId: "plugin-a",
+      version: "1.0.0",
+      createdAt: new Date(),
+      reason: "pre-update",
+      size: 1,
+      path: "/backup",
+      metadata: {
+        transactionId: "update-txn",
+        targetVersion: "2.0.0",
+        hostStateRestorePending: true,
+      },
+    })
+
+    beforeEach(() => {
+      cells = new Map()
+      previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (name: string) => cells.get(name) ?? null,
+          setItem: (name: string, value: string) => void cells.set(name, value),
+        },
+      })
+    })
+
+    afterEach(() => {
+      if (previous) Object.defineProperty(globalThis, "localStorage", previous)
+      else delete (globalThis as { localStorage?: unknown }).localStorage
+    })
+
+    it("arms a persisted obligation before mutation and discovers it in a fresh manager", async () => {
+      const backup = pendingBackup()
+      backup.metadata.hostStateRestorePending = false
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      await manager.initialize()
+      manager.beginUpdateRecovery(backup.id)
+      expect(manager.getPendingUpdateRestore("plugin-a")).toBeUndefined()
+      manager.endUpdateRecoveryAttempt(backup.id)
+      expect(new PluginBackupManager().getPendingUpdateRestore("plugin-a")).toMatchObject({
+        id: backup.id,
+      })
+    })
+
+    it("retains the obligation after journal discard and a failed host-state restore", async () => {
+      const backup = pendingBackup()
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      mockInvoke.mockImplementation(async (command) => {
+        if (command === "plugin_backup_restore") throw new Error("restore interrupted")
+        return undefined
+      })
+      expect(await manager.restore(backup.id)).toMatchObject({ success: false })
+      expect(mockInvoke.mock.calls.map(([command]) => command)).toEqual([
+        "plugin_discard_staged_update",
+        "plugin_backup_restore",
+      ])
+      expect(new PluginBackupManager().getPendingUpdateRestore("plugin-a")).toMatchObject({
+        id: backup.id,
+      })
+      mockInvoke.mockResolvedValue(undefined)
+      expect(await new PluginBackupManager().restore(backup.id)).toMatchObject({ success: true })
+      expect(new PluginBackupManager().getPendingUpdateRestore("plugin-a")).toBeUndefined()
+    })
+
+    it("preserves the obligation at the discard-to-restore interruption point", async () => {
+      const backup = pendingBackup()
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      let release!: () => void
+      let started!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const entered = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      mockInvoke.mockImplementation(async (command) => {
+        if (command === "plugin_backup_restore") {
+          started()
+          await gate
+        }
+      })
+      const restore = manager.restore(backup.id)
+      await entered
+      expect(new PluginBackupManager().getPendingUpdateRestore("plugin-a")).toMatchObject({
+        id: backup.id,
+      })
+      release()
+      expect(await restore).toMatchObject({ success: true })
+    })
+
+    it("refuses direct pending recovery over unresolved runtime resources", async () => {
+      const backup = pendingBackup()
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      const { getPluginManager } = await import("../core/manager")
+      const runtime = getPluginManager()
+      jest.spyOn(runtime, "hasUnresolvedActivationResources").mockReturnValue(true)
+      expect(await manager.restore(backup.id, runtime)).toMatchObject({
+        success: false,
+        error: expect.stringContaining("cleanup first"),
+      })
+      expect(mockInvoke).not.toHaveBeenCalled()
+      expect(manager.getPendingUpdateRestore("plugin-a")).toBeDefined()
+    })
+
+    it("retains the obligation if journal recovery fails before restoring host state", async () => {
+      const backup = pendingBackup()
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      mockInvoke.mockRejectedValueOnce(new Error("journal recovery failed"))
+      expect(await manager.restore(backup.id)).toMatchObject({ success: false })
+      expect(mockInvoke).not.toHaveBeenCalledWith("plugin_backup_restore", expect.anything())
+      expect(new PluginBackupManager().getPendingUpdateRestore("plugin-a")).toBeDefined()
+    })
+
+    it("retains a retry record if clearing it fails after restoring package and host state", async () => {
+      const backup = pendingBackup()
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      let restored = false
+      mockInvoke.mockImplementation(async (command) => {
+        if (command === "plugin_backup_restore") restored = true
+      })
+      localStorage.setItem = () => {
+        throw new Error("cannot clear recovery record")
+      }
+      expect(await manager.restore(backup.id)).toMatchObject({
+        success: false,
+        error: "cannot clear recovery record",
+      })
+      expect(restored).toBe(true)
+      expect(new PluginBackupManager().getPendingUpdateRestore("plugin-a")).toBeDefined()
+    })
+
+    it("fails closed when the recovery obligation cannot be persisted", async () => {
+      const backup = pendingBackup()
+      backup.metadata.hostStateRestorePending = false
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      await manager.initialize()
+      localStorage.setItem = () => {
+        throw new Error("storage full")
+      }
+      expect(() => manager.beginUpdateRecovery(backup.id)).toThrow("storage full")
+    })
+
+    it("does not delete or prune a backup that still owes host-state restoration", async () => {
+      const backup = pendingBackup()
+      cells.set(key, JSON.stringify({ "plugin-a": [backup] }))
+      await manager.initialize()
+      expect(await manager.deleteBackup(backup.id)).toBe(false)
+      expect(await manager.cleanupOldBackups("plugin-a", 0)).toBe(0)
+      expect(mockInvoke).not.toHaveBeenCalledWith("plugin_backup_delete", expect.anything())
+      expect(new PluginBackupManager().getPendingUpdateRestore("plugin-a")).toMatchObject({
+        id: backup.id,
       })
     })
   })

@@ -1,5 +1,10 @@
 /** @jest-environment jsdom */
-import { createDesktopAdapter, desktopTarget, macReleaseUrl } from "./desktop-adapter"
+import {
+  createDesktopAdapter,
+  desktopInstallsInPlace,
+  desktopTarget,
+  macReleaseUrl,
+} from "./desktop-adapter"
 import type { CatalogEntry } from "../catalog-types"
 
 const CONTEXT = {
@@ -24,6 +29,12 @@ function entry(overrides: Partial<CatalogEntry> = {}): CatalogEntry {
 }
 
 describe("desktopTarget", () => {
+  it("shares the in-place platform policy with About (U13)", () => {
+    expect(desktopInstallsInPlace("macos")).toBe(false)
+    expect(desktopInstallsInPlace("windows")).toBe(true)
+    expect(desktopInstallsInPlace("linux")).toBe(true)
+    expect(macReleaseUrl("v2.0.0")).toBe(macReleaseUrl("2.0.0"))
+  })
   it("maps OS families onto catalog targets", () => {
     expect(desktopTarget("macos")).toBe("darwin")
     expect(desktopTarget("windows")).toBe("windows")
@@ -78,6 +89,41 @@ describe("check", () => {
     expect(await adapter.check(CONTEXT)).toEqual([])
   })
 
+  it.each([
+    { revoked: true },
+    { version: "*", revoked: true },
+    { channel: "beta" as const },
+    { compatibility: { minAppVersion: "3.0.0" } },
+    { compatibility: { maxAppVersion: "0.5.0" } },
+  ])("refuses verified catalog exclusions in the native fallback: %j (U03)", async (excluded) => {
+    const adapter = createDesktopAdapter({
+      osFamily: () => "windows",
+      appVersion: "1.0.0",
+      checkForUpdate: async () => ({ version: "2.0.0" }),
+    })
+    expect(
+      await adapter.check({ ...CONTEXT, catalogStatus: "ok", catalog: [entry(excluded)] })
+    ).toEqual([])
+  })
+
+  it.each(["ok", "unconfigured", "unavailable"] as const)(
+    "keeps native fallback for an unknown release with catalog %s (U03)",
+    async (catalogStatus) => {
+      const adapter = createDesktopAdapter({
+        osFamily: () => "windows",
+        appVersion: "1.0.0",
+        checkForUpdate: async () => ({ version: "2.0.0" }),
+      })
+      expect(
+        await adapter.check({
+          ...CONTEXT,
+          catalogStatus,
+          catalog: catalogStatus === "ok" ? [entry({ target: "darwin", channel: "beta" })] : null,
+        })
+      ).toEqual([expect.objectContaining({ targetVersion: "2.0.0" })])
+    }
+  )
+
   it("hands macOS off to a signed download instead of installing in place", async () => {
     const adapter = createDesktopAdapter({
       isTauri: () => true,
@@ -115,6 +161,13 @@ describe("apply", () => {
     provenance: "verified" as const,
   }
 
+  it("delegates a desktop restart to the platform updater (U06)", async () => {
+    const relaunchApp = jest.fn(async () => {})
+    const adapter = createDesktopAdapter({ relaunchApp })
+    await adapter.restart!()
+    expect(relaunchApp).toHaveBeenCalledTimes(1)
+  })
+
   it("opens the release page for a macOS handoff", async () => {
     const opened: string[] = []
     const adapter = createDesktopAdapter({
@@ -139,7 +192,7 @@ describe("apply", () => {
     expect(result.failure?.code).toBe("no_download_url")
   })
 
-  it("downloads only, without installing, when consent has not been given", async () => {
+  it("downloads only with the explicit flag even when consent has been given (U01)", async () => {
     let installed = false
     const adapter = createDesktopAdapter({
       isTauri: () => true,
@@ -151,10 +204,58 @@ describe("apply", () => {
       },
       installUpdate: async () => "installed",
     })
-    const result = await adapter.apply(candidate, { consented: false })
+    const result = await adapter.apply(candidate, { consented: true, downloadOnly: true })
     expect(result.state).toBe("awaiting-consent")
     expect(installed).toBe(false)
   })
+
+  it("does not infer a background download from missing consent", async () => {
+    const download = jest.fn()
+    const install = jest.fn()
+    const adapter = createDesktopAdapter({
+      osFamily: () => "windows",
+      downloadUpdate: download,
+      downloadAndInstallUpdate: install,
+    })
+    expect(await adapter.apply(candidate, { consented: false })).toEqual({
+      state: "awaiting-consent",
+    })
+    expect(download).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
+  })
+
+  it("never opens a handoff page for a download-only request (U01)", async () => {
+    const openExternal = jest.fn()
+    const adapter = createDesktopAdapter({ osFamily: () => "macos", openExternal })
+    await adapter.apply(
+      { ...candidate, action: "open-store", externalUrl: macReleaseUrl("1.5.0") },
+      {
+        consented: true,
+        downloadOnly: true,
+      }
+    )
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])(
+    "binds apply to the candidate version (downloadOnly=%s, U02)",
+    async (downloadOnly) => {
+      const download = jest.fn(async () => "versionMismatch" as const)
+      const install = jest.fn(async () => "versionMismatch" as const)
+      const adapter = createDesktopAdapter({
+        osFamily: () => "windows",
+        downloadUpdate: download,
+        downloadAndInstallUpdate: install,
+      })
+      expect(await adapter.apply(candidate, { consented: true, downloadOnly })).toMatchObject({
+        state: "failed",
+        failure: { code: "candidate_changed", recoveryActionKey: "retry" },
+      })
+      expect(downloadOnly ? download : install).toHaveBeenCalledWith(expect.any(Function), {
+        expectedVersion: "1.5.0",
+      })
+    }
+  )
 
   it("lands in awaiting-restart after a consented install", async () => {
     const adapter = createDesktopAdapter({
@@ -176,5 +277,18 @@ describe("apply", () => {
       installUpdate: async () => "noLongerAvailable",
     })
     expect((await adapter.apply(candidate, { consented: true })).state).toBe("current")
+  })
+
+  it("keeps an installed update restartable when automatic relaunch fails (U06)", async () => {
+    const { AppUpdateError } = await import("@/lib/tauri/updater")
+    const adapter = createDesktopAdapter({
+      downloadAndInstallUpdate: async () => {
+        throw new AppUpdateError("relaunch", "relaunch", "restart denied", null)
+      },
+    })
+    expect(await adapter.apply(candidate, { consented: true })).toMatchObject({
+      state: "awaiting-restart",
+      failure: { code: "relaunch" },
+    })
   })
 })

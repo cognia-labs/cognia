@@ -35,6 +35,7 @@ import { getPluginMarketplace } from "../package/marketplace"
 import { loggers } from "../core/logger"
 import { getPluginBackupManager } from "./backup"
 import { getPluginManager } from "../core/manager"
+import { hasNetworkAccessWidened } from "../security/network-allowlist"
 import { getDb } from "@/lib/db/schema"
 import { baselinePluginMigrationVersion, getPluginDexieMeta } from "@/lib/plugin/dexie/meta"
 import { assertPluginDataVersion } from "@/lib/plugin/dexie/migration-runner"
@@ -484,10 +485,8 @@ export class PluginUpdater {
     const currentVersion = updateInfo?.currentVersion || this.getPluginVersion(pluginId) || ""
     let targetVersion = options.version || updateInfo?.latestVersion || ""
     const installedManifest = usePluginStore.getState().plugins[pluginId]?.manifest
-    const initialStatus = usePluginStore.getState().plugins[pluginId]?.status
-    const shouldReactivate = new Set(["loading", "loaded", "enabling", "enabled", "suspended"]).has(
-      initialStatus || ""
-    )
+    let shouldReactivate = false
+    let restartRequired = false
     let backupId: string | undefined
     let packageMutationStarted = false
     let stagedUpdate: StagedPluginUpdate | undefined
@@ -519,6 +518,12 @@ export class PluginUpdater {
         throw new Error(`Version ${targetVersion} is not available in marketplace`)
       }
       stagedUpdate = await marketplace.stagePluginUpdate(pluginId, matchedVersion)
+      if (
+        stagedUpdate.version !== targetVersion ||
+        stagedUpdate.manifest.version !== targetVersion
+      ) {
+        throw new Error(`Staged plugin does not match requested version ${targetVersion}`)
+      }
       this.validateUpdatePreflight(
         usePluginStore.getState().plugins[pluginId]?.manifest,
         stagedUpdate.manifest
@@ -555,8 +560,12 @@ export class PluginUpdater {
       const manager = getPluginManager()
       lifecycleManager = manager
       graphReservation = manager.reservePluginRuntimeGraph(pluginId)
+      const liveStatus = usePluginStore.getState().plugins[pluginId]?.status
+      shouldReactivate = ["loading", "loaded", "enabling", "enabled", "suspended"].includes(
+        liveStatus || ""
+      )
       if (shouldReactivate) {
-        if (initialStatus === "enabled" || initialStatus === "suspended") {
+        if (liveStatus === "enabled" || liveStatus === "suspended") {
           await manager.disablePlugin(pluginId, "transactional-update")
         }
         await manager.unloadPlugin(pluginId)
@@ -579,8 +588,18 @@ export class PluginUpdater {
           Number.parseInt(installedManifest.version.split(".")[0], 10)
         )
       }
-      packageMutationStarted = true
-      await marketplace.commitStagedPluginUpdate(stagedUpdate)
+      const staged = stagedUpdate
+      await manager.withPluginPackageMutation(pluginId, async () => {
+        if (!(await this.isRuntimeStopped(manager, pluginId))) {
+          restartRequired = true
+          throw new Error(
+            `Plugin ${pluginId} still has live or unresolved runtime resources; a restart is required before updating`
+          )
+        }
+        getPluginBackupManager().beginUpdateRecovery(backupId!)
+        packageMutationStarted = true
+        await marketplace.commitStagedPluginUpdate(staged)
+      })
 
       await this.refreshRuntimePlugins()
 
@@ -607,6 +626,7 @@ export class PluginUpdater {
         await manager.enablePlugin(pluginId)
       }
       await marketplace.finalizeStagedPluginUpdate(stagedUpdate)
+      getPluginBackupManager().completeUpdateRecovery(backupId)
 
       // Complete
       this.emitProgress({
@@ -633,11 +653,18 @@ export class PluginUpdater {
       const originalError = error instanceof Error ? error.message : String(error)
       let errorMessage = originalError
       let rollback: UpdateResult["rollback"]
-      let requiresRestart = false
+      let requiresRestart =
+        restartRequired ||
+        (error instanceof Error && error.name === "PluginActivationConflictError") ||
+        Boolean(lifecycleManager?.hasUnresolvedActivationResources(pluginId))
+
+      if (requiresRestart && !packageMutationStarted) {
+        errorMessage = `${originalError}; a restart is required before updating ${pluginId}`
+      }
 
       if (!packageMutationStarted && stagedUpdate) {
         await marketplace.discardStagedPluginUpdate(stagedUpdate).catch((discardError) => {
-          errorMessage = `${originalError}; discard staged update: ${String(discardError)}`
+          errorMessage = `${errorMessage}; discard staged update: ${String(discardError)}`
         })
       } else if (packageMutationStarted && backupId) {
         rollback = { attempted: true, succeeded: false }
@@ -658,7 +685,17 @@ export class PluginUpdater {
             .catch((rollbackError) =>
               failures.push(`unload updated runtime: ${String(rollbackError)}`)
             )
-          const restored = await getPluginBackupManager().restore(backupId)
+          const restored = await manager.withPluginPackageMutation(pluginId, async () => {
+            if (!(await this.isRuntimeStopped(manager, pluginId))) {
+              requiresRestart = true
+              throw new Error(
+                `Pending restore from backup ${backupId} for ${pluginId}; a restart is required, then retry rollback or cleanup`
+              )
+            }
+            // Backup restoration owns journal cleanup and retains the durable
+            // obligation until both package and host state have been restored.
+            return getPluginBackupManager().restore(backupId!, manager)
+          })
           if (!restored.success) {
             failures.push(restored.error || "host backup restore failed")
           } else {
@@ -687,7 +724,17 @@ export class PluginUpdater {
             requiresRestart = shouldReactivate
           }
         } catch (rollbackError) {
-          failures.push(String(rollbackError))
+          if (
+            rollbackError instanceof Error &&
+            rollbackError.name === "PluginActivationConflictError"
+          ) {
+            requiresRestart = true
+            failures.push(
+              `Pending restore from backup ${backupId} for ${pluginId}; a restart is required: ${rollbackError.message}`
+            )
+          } else {
+            failures.push(String(rollbackError))
+          }
         }
         rollback = {
           attempted: true,
@@ -696,17 +743,6 @@ export class PluginUpdater {
         }
         if (failures.length > 0) {
           errorMessage = `${originalError}; rollback: ${failures.join("; ")}`
-        }
-        if (stagedUpdate) {
-          await marketplace.finalizeStagedPluginUpdate(stagedUpdate).catch((finalizeError) => {
-            const cleanup = `finalize rolled-back transaction: ${String(finalizeError)}`
-            rollback = {
-              attempted: true,
-              succeeded: false,
-              error: rollback?.error ? `${rollback.error}; ${cleanup}` : cleanup,
-            }
-            errorMessage = `${errorMessage}; ${cleanup}`
-          })
         }
       }
 
@@ -732,6 +768,15 @@ export class PluginUpdater {
       this.updateHistory.push(result)
       return result
     } finally {
+      if (backupId) {
+        const backups = getPluginBackupManager()
+        backups.endUpdateRecoveryAttempt(backupId)
+        if (lifecycleManager && backups.getPendingUpdateRestore(pluginId)) {
+          await lifecycleManager.getPluginLifecycleState(pluginId).catch((recoveryError) => {
+            loggers.manager.error("[Updater] Failed to publish pending restore", recoveryError)
+          })
+        }
+      }
       if (graphReservation && lifecycleManager) {
         lifecycleManager.releasePluginRuntimeGraph(graphReservation)
       }
@@ -778,15 +823,30 @@ export class PluginUpdater {
     return this.getPluginVersion(pluginId) === expectedVersion
   }
 
+  private async isRuntimeStopped(
+    manager: ReturnType<typeof getPluginManager>,
+    pluginId: string
+  ): Promise<boolean> {
+    const lifecycle = await manager.getPluginLifecycleState(pluginId)
+    return (
+      !manager.hasUnresolvedActivationResources(pluginId) &&
+      !["active", "activating", "stopping", "dirty"].includes(lifecycle.actual) &&
+      !["loading", "loaded", "enabling", "enabled", "disabling", "suspended"].includes(
+        usePluginStore.getState().plugins[pluginId]?.status ?? ""
+      )
+    )
+  }
+
   private validateUpdatePreflight(current: PluginManifest | undefined, next: PluginManifest): void {
     if (!current) throw new Error(`Installed plugin manifest is unavailable for ${next.id}`)
     const currentPermissions = new Set(current.permissions || [])
     const addedPermissions = (next.permissions || []).filter(
       (permission) => !currentPermissions.has(permission)
     )
-    if (addedPermissions.length > 0) {
+    const networkExpanded = hasNetworkAccessWidened(current.networkAccess, next.networkAccess)
+    if (addedPermissions.length > 0 || networkExpanded) {
       throw new Error(
-        `PLUGIN_UPDATE_PERMISSION_REVIEW_REQUIRED: ${addedPermissions.sort().join(", ")}`
+        `PLUGIN_UPDATE_PERMISSION_REVIEW_REQUIRED: ${[...addedPermissions.sort(), ...(networkExpanded ? ["networkAccess"] : [])].join(", ")}`
       )
     }
 

@@ -141,29 +141,30 @@ export function PluginBatchActionsBar({ className }: PluginBatchActionsBarProps 
     if (updatable.length === 0) return
     setUpdating(true)
     try {
-      const mod = (await import("@/lib/plugin/lifecycle/updater")) as unknown as {
-        getPluginUpdater: () => {
-          checkForUpdates: (
-            ids?: string[]
-          ) => Promise<{ pluginId: string; latestVersion: string }[]>
-          installUpdate: (pluginId: string, version: string) => Promise<unknown>
-        }
-      }
+      const mod = await import("@/lib/plugin/lifecycle/updater")
       const updater = mod.getPluginUpdater()
       const updates = await updater.checkForUpdates(updatable.map((r) => r.id))
       let ok = 0
       let failed = 0
+      const errors: string[] = []
       await Promise.all(
         updates.map(async (u) => {
           try {
-            await updater.installUpdate(u.pluginId, u.latestVersion)
-            ok++
-          } catch {
+            const result = await updater.installUpdate(u.pluginId, u.latestVersion)
+            if (result.success) ok++
+            else {
+              failed++
+              if (result.error) errors.push(result.error)
+            }
+          } catch (error) {
             failed++
+            errors.push(error instanceof Error ? error.message : String(error))
           }
         })
       )
-      toast(t("updateResult", { ok, failed }))
+      const summary = t("updateResult", { ok, failed })
+      if (failed > 0) toast.error(summary, { description: errors.join("; ") || undefined })
+      else toast(summary)
     } finally {
       setUpdating(false)
     }

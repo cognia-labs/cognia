@@ -8,7 +8,7 @@
  * updated by the browser, and plugins and content are ours.
  */
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 import { RefreshCwIcon } from "lucide-react"
 
@@ -17,6 +17,10 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { useUpdateCenter } from "@/hooks/updates/use-update-center"
 import { subscribeUpdateCenterOpen } from "@/lib/updates/open-update-center"
+import {
+  getRuntimeTargetScopeKey,
+  subscribeRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 import { UpdateRow } from "./update-row"
 
@@ -26,6 +30,8 @@ export interface UpdateCenterProps {
 }
 
 export function UpdateCenter({ autoCheck = false }: UpdateCenterProps) {
+  // The hook resolves the singleton on each render, including account changes.
+  useSyncExternalStore(subscribeRuntimeTargetContext, getRuntimeTargetScopeKey, () => "null")
   const t = useTranslations("updates")
   const { groups, items, checking, check, apply, skip, defer, clearHold } = useUpdateCenter()
   const [busyKey, setBusyKey] = useState<string | null>(null)
@@ -60,7 +66,7 @@ export function UpdateCenter({ autoCheck = false }: UpdateCenterProps) {
   const applyRow = useCallback(
     async (key: string) => {
       const row = items.find((item) => item.key === key)
-      if (row?.kind === "character-pack") {
+      if (row?.kind === "character-pack" && row.action !== "restart-desktop") {
         setPackDiff({ id: row.assetId, name: row.displayName ?? row.assetId })
         return
       }

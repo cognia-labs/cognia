@@ -146,6 +146,32 @@ describe("UpdateRow", () => {
     )
   })
 
+  it("renders an unfamiliar catalog failure code through its existing kind message (U11)", () => {
+    renderRow({ state: "failed", failure: { kind: "unsupported", code: "catalog_unconfigured" } })
+    expect(screen.getByText("This device cannot install this update.")).toBeInTheDocument()
+    expect(screen.queryByText("catalog_unconfigured")).not.toBeInTheDocument()
+  })
+
+  it("labels the unwired extension bridge as a store-only handoff (U23)", () => {
+    renderRow({
+      kind: "browser-chrome",
+      executor: "browser-store",
+      externallyInstalled: true,
+      currentVersion: null,
+      action: "open-store",
+      candidate: {
+        ...item().candidate!,
+        kind: "browser-chrome",
+        executor: "browser-store",
+        currentVersion: null,
+      },
+    })
+    expect(screen.getByRole("button", { name: "Open store" })).toBeInTheDocument()
+    expect(screen.getByText("Installed by your browser")).toBeInTheDocument()
+    expect(screen.getByText("Not connected. The store lists version 1.1.0.")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Reload extension" })).not.toBeInTheDocument()
+  })
+
   it("explains an interrupted install rather than silently offering it again", () => {
     renderRow({
       state: "failed",
@@ -189,5 +215,17 @@ describe("UpdateRow", () => {
   it("labels the state", () => {
     renderRow({ state: "awaiting-restart" })
     expect(screen.getByText("Restart to finish")).toBeInTheDocument()
+  })
+
+  it("offers restart without another install or version hold (U06)", () => {
+    const handlers = renderRow({
+      state: "awaiting-restart",
+      action: "restart-desktop",
+      candidate: null,
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Restart now" }))
+    expect(handlers.onApply).toHaveBeenCalledWith("desktop:app")
+    expect(screen.queryByRole("button", { name: "Install" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Skip this version" })).not.toBeInTheDocument()
   })
 })

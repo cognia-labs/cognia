@@ -85,7 +85,10 @@ jest.mock("sonner", () => ({
 const checkForUpdatesMock = jest.fn(async (_ids?: string[]) => [
   { pluginId: "a", latestVersion: "2.0.0" },
 ])
-const installUpdateMock = jest.fn(async (_id: string, _v: string) => undefined)
+const installUpdateMock = jest.fn(async (_id: string, _v: string) => ({
+  success: true,
+  error: undefined as string | undefined,
+}))
 jest.mock("@/lib/plugin/lifecycle/updater", () => ({
   getPluginUpdater: () => ({
     checkForUpdates: (ids?: string[]) => checkForUpdatesMock(ids),
@@ -110,6 +113,7 @@ beforeEach(() => {
   mockRows[1].enabled = true
   checkForUpdatesMock.mockClear()
   installUpdateMock.mockClear()
+  installUpdateMock.mockResolvedValue({ success: true, error: undefined })
   // Reset the update flag mutated by the batch-update tests.
   mockRows[0].manifest = { id: "a" }
   usePluginsStore.setState({
@@ -245,6 +249,18 @@ describe("PluginBatchActionsBar", () => {
   it("hides the update button when no selected plugin has an update", () => {
     render(<PluginBatchActionsBar />)
     expect(screen.queryByLabelText(/updateAll/)).not.toBeInTheDocument()
+  })
+
+  it("counts a fulfilled refusal as failed and shows its error (U22)", async () => {
+    mockRows[0].manifest = { id: "a", updateAvailable: true }
+    installUpdateMock.mockResolvedValueOnce({ success: false, error: "Restart required" })
+    render(<PluginBatchActionsBar />)
+    fireEvent.click(screen.getByRole("button", { name: "updateAll:1" }))
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith('updateResult:{"ok":0,"failed":1}', {
+        description: "Restart required",
+      })
+    )
   })
 
   it("shows the update button and applies updates to updatable selected plugins", async () => {

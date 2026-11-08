@@ -23,6 +23,7 @@ import type {
   UpdateCheckContext,
 } from "../adapter"
 import { bestCandidate, isNewerVersion } from "../catalog-lookup"
+import { requireCatalog } from "../adapter"
 
 export const BROWSER_EXTENSION_ASSET_ID = "companion-extension"
 
@@ -37,6 +38,11 @@ export interface PairedExtension {
   updatePending?: boolean
 }
 
+/**
+ * Version/reload callbacks are dormant in production: no companion frame
+ * reports extension version, update readiness or reload; PairedBrowser has no
+ * browser kind to route it. Until wired, the UI offers only the store handoff.
+ */
 export interface BrowserExtensionAdapterDeps {
   /** The paired extension for this browser, or null when nothing is paired. */
   pairedExtension?: () => Promise<PairedExtension | null>
@@ -68,7 +74,10 @@ export function createBrowserExtensionAdapter(
 
     async check(context: UpdateCheckContext): Promise<UpdateCandidate[]> {
       const paired = (await deps.pairedExtension?.()) ?? null
-      const published = bestCandidate(context.catalog, {
+      // A pending reload has its own browser source; store discovery does not.
+      const catalog =
+        paired?.updatePending && deps.requestReload ? context.catalog : requireCatalog(context)
+      const published = bestCandidate(catalog, {
         kind,
         assetId: BROWSER_EXTENSION_ASSET_ID,
         executor: "browser-store",
@@ -80,7 +89,12 @@ export function createBrowserExtensionAdapter(
       if (!paired) {
         if (!published) return []
         return [
-          { ...published, currentVersion: null, externalUrl: published.externalUrl ?? storeUrl() },
+          {
+            ...published,
+            currentVersion: null,
+            action: "open-store",
+            externalUrl: published.externalUrl ?? storeUrl(),
+          },
         ]
       }
 
@@ -90,13 +104,13 @@ export function createBrowserExtensionAdapter(
             ...published,
             currentVersion: paired.version,
             // A reload only helps once the browser has fetched the new build.
-            action: paired.updatePending ? "reload-extension" : "open-store",
+            action: paired.updatePending && deps.requestReload ? "reload-extension" : "open-store",
             externalUrl: published.externalUrl ?? storeUrl(),
           },
         ]
       }
 
-      if (paired.updatePending) {
+      if (paired.updatePending && deps.requestReload) {
         return [
           {
             assetId: BROWSER_EXTENSION_ASSET_ID,

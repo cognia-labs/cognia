@@ -249,6 +249,16 @@ function startCheck(): Promise<AvailableUpdate | null> {
     try {
       const { check } = await import("@tauri-apps/plugin-updater")
       const update = (await check(requestOptions().check)) as UpdateHandle | null
+      if (
+        pendingUpdate &&
+        (downloadInFlight ||
+          installInFlight ||
+          (pendingDownloaded && update?.version === pendingUpdate.version))
+      ) {
+        const kept = pendingUpdate
+        if (update !== kept) await closeHandle(update)
+        return availableFromHandle(kept)
+      }
       await replacePendingUpdate(update)
       return availableFromHandle(update)
     } catch (error) {
@@ -270,7 +280,7 @@ export function checkForUpdate(): Promise<AvailableUpdate | null> {
   return startCheck()
 }
 
-async function ensurePendingUpdate(): Promise<UpdateHandle | null> {
+async function ensurePendingUpdate(expectedVersion?: string): Promise<UpdateHandle | null> {
   // A check that started just before a download/install owns pendingUpdate.
   // Let it finish before reading the handle so it cannot replace and close a
   // resource while that resource is being downloaded or installed.
@@ -278,6 +288,7 @@ async function ensurePendingUpdate(): Promise<UpdateHandle | null> {
   if (installedVersionAwaitingRestart) return null
   if (
     pendingUpdate &&
+    (!expectedVersion || pendingUpdate.version === expectedVersion) &&
     (pendingDownloaded || Date.now() - pendingUpdateAt <= PENDING_UPDATE_TTL_MS)
   ) {
     return pendingUpdate
@@ -311,19 +322,37 @@ function progressListener(onProgress?: UpdateProgressHandler): (event: DownloadE
   }
 }
 
-export type DownloadUpdateResult = "downloaded" | "noLongerAvailable" | "web"
+export interface UpdateTargetOptions {
+  /** Exact version the caller offered; another release requires a new offer. */
+  expectedVersion?: string
+}
+
+function versionMatches(version: string | undefined | null, options: UpdateTargetOptions): boolean {
+  return !options.expectedVersion || version === options.expectedVersion
+}
+
+export type DownloadUpdateResult = "downloaded" | "noLongerAvailable" | "versionMismatch" | "web"
 
 /** Download and verify the pending package without installing it. */
-export function downloadUpdate(onProgress?: UpdateProgressHandler): Promise<DownloadUpdateResult> {
+export function downloadUpdate(
+  onProgress?: UpdateProgressHandler,
+  options: UpdateTargetOptions = {}
+): Promise<DownloadUpdateResult> {
   if (!isTauri()) return Promise.resolve("web")
   if (installedVersionAwaitingRestart) return Promise.resolve("noLongerAvailable")
-  if (pendingDownloaded) return Promise.resolve("downloaded")
-  if (downloadInFlight) return downloadInFlight
+  if (downloadInFlight)
+    return downloadInFlight.then((result) =>
+      result === "downloaded" &&
+      !versionMatches(pendingUpdate?.version ?? installedVersionAwaitingRestart, options)
+        ? "versionMismatch"
+        : result
+    )
 
   const task = (async () => {
     try {
-      const handle = await ensurePendingUpdate()
+      const handle = await ensurePendingUpdate(options.expectedVersion)
       if (!handle) return "noLongerAvailable" as const
+      if (!versionMatches(handle.version, options)) return "versionMismatch" as const
       if (pendingDownloaded) return "downloaded" as const
       await handle.download(progressListener(onProgress), requestOptions().download)
       if (pendingUpdate === handle) pendingDownloaded = true
@@ -338,9 +367,10 @@ export function downloadUpdate(onProgress?: UpdateProgressHandler): Promise<Down
   return task
 }
 
-export type InstallUpdateResult = "relaunching" | "installed" | "noLongerAvailable" | "web"
+export type InstallUpdateResult =
+  "relaunching" | "installed" | "noLongerAvailable" | "versionMismatch" | "web"
 
-export interface InstallUpdateOptions {
+export interface InstallUpdateOptions extends UpdateTargetOptions {
   /** Defaults to the persisted `updates.relaunchAfterInstall` preference. */
   relaunch?: boolean
 }
@@ -375,14 +405,26 @@ export async function relaunchApp(): Promise<void> {
 /** Install an already-downloaded update, downloading first when necessary. */
 export function installUpdate(options: InstallUpdateOptions = {}): Promise<InstallUpdateResult> {
   if (!isTauri()) return Promise.resolve("web")
-  if (installedVersionAwaitingRestart) return Promise.resolve("installed")
-  if (installInFlight) return installInFlight
+  if (installInFlight)
+    return installInFlight.then((result) =>
+      (result === "installed" || result === "relaunching") &&
+      !versionMatches(installedVersionAwaitingRestart, options)
+        ? "versionMismatch"
+        : result
+    )
+  if (installedVersionAwaitingRestart)
+    return Promise.resolve(
+      versionMatches(installedVersionAwaitingRestart, options) ? "installed" : "versionMismatch"
+    )
 
   const task = (async () => {
-    const downloadResult = await downloadUpdate()
+    if (checkInFlight) await checkInFlight
+    const downloadResult = await downloadUpdate(undefined, options)
     if (downloadResult !== "downloaded") return downloadResult
+    if (checkInFlight) await checkInFlight
     const handle = pendingUpdate
     if (!handle) return "noLongerAvailable" as const
+    if (!versionMatches(handle.version, options)) return "versionMismatch" as const
 
     // The Windows NSIS installer terminates this process as part of the
     // install, so anything after `await install()` may simply never run. Mark
@@ -420,8 +462,12 @@ export async function downloadAndInstallUpdate(
   onProgress?: UpdateProgressHandler,
   options: InstallUpdateOptions = {}
 ): Promise<InstallUpdateResult> {
-  if (installedVersionAwaitingRestart) return "installed"
-  const downloadResult = await downloadUpdate(onProgress)
+  if (installInFlight) return installUpdate(options)
+  if (installedVersionAwaitingRestart)
+    return versionMatches(installedVersionAwaitingRestart, options)
+      ? "installed"
+      : "versionMismatch"
+  const downloadResult = await downloadUpdate(onProgress, options)
   if (downloadResult !== "downloaded") return downloadResult
   return installUpdate(options)
 }

@@ -16,10 +16,11 @@ import { APP_VERSION } from "@/lib/app-version"
 import { createPlatformFetch } from "@/lib/network/platform-fetch"
 import { detectOsFamily } from "@/lib/platform/os"
 
-import type { CatalogEntry, CatalogTrustState, SignedCatalog } from "./catalog-types"
+import type { CatalogTrustState, SignedCatalog } from "./catalog-types"
 import { verifySignedCatalog } from "./catalog-verify"
 import { parseRetryAfter } from "./backoff"
 import { compiledTrustRoot, initialTrustState } from "./trust-root"
+import type { CatalogFetchResult } from "./adapter"
 
 export const DEFAULT_CATALOG_URL = "https://update.cognia.cn"
 
@@ -70,10 +71,7 @@ export interface CatalogClientDeps {
   onError?: (error: unknown) => void
 }
 
-export interface CatalogResponse {
-  entries: readonly CatalogEntry[]
-  retryAfterMs?: number
-}
+export type CatalogResponse = CatalogFetchResult
 
 function currentPlatform(): string {
   const family = detectOsFamily()
@@ -81,16 +79,15 @@ function currentPlatform(): string {
 }
 
 /**
- * Fetch and verify the catalog. Returns null when the control plane is
- * unavailable or the response fails verification, which every adapter treats
- * as "fall back to my own source", never as "assume nothing changed".
+ * Fetch and verify the catalog. Missing configuration and source failures are
+ * distinct from an authoritative empty answer, so neither can claim currency.
  */
 export async function fetchVerifiedCatalog(
   options: { channel: UpdateChannel; rolloutBucket: number; signal?: AbortSignal },
   deps: CatalogClientDeps = {}
-): Promise<CatalogResponse | null> {
+): Promise<CatalogResponse> {
   const root = compiledTrustRoot()
-  if (!root) return null
+  if (!root) return { status: "unconfigured" }
 
   const trustStore = deps.trustStore ?? localStorageTrustStore()
   const stored = trustStore.read()
@@ -112,11 +109,14 @@ export async function fetchVerifiedCatalog(
   // that carries the user's configured proxy, and in the Capacitor shell it is
   // the only leg that reaches a non-CORS host at all.
   const fetchImpl = deps.fetchImpl ?? createPlatformFetch()
-  if (!fetchImpl) return null
+  if (!fetchImpl) return { status: "unavailable", error: new Error("catalog fetch unavailable") }
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? 30_000)
-  options.signal?.addEventListener("abort", () => controller.abort(), { once: true })
+  const abort = () => controller.abort()
+  if (options.signal?.aborted) abort()
+  else options.signal?.addEventListener("abort", abort, { once: true })
+  let retryAfterMs: number | undefined
 
   try {
     const response = await fetchImpl(url.toString(), {
@@ -129,20 +129,22 @@ export async function fetchVerifiedCatalog(
       cache: "no-store",
     })
     const now = (deps.now ?? Date.now)()
-    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"), now)
-    if (response.status === 304 || response.status === 204) return { entries: [], retryAfterMs }
+    retryAfterMs = parseRetryAfter(response.headers.get("retry-after"), now)
+    if (response.status === 204) return { status: "ok", entries: [], retryAfterMs }
     if (!response.ok) {
-      deps.onError?.(new Error(`catalog http ${response.status}`))
-      return retryAfterMs === undefined ? null : { entries: [], retryAfterMs }
+      const error = new Error(`catalog fetch http ${response.status}`)
+      deps.onError?.(error)
+      return { status: "unavailable", error, retryAfterMs }
     }
     const payload = (await response.json()) as SignedCatalog
     const verified = await verifySignedCatalog(payload, trust, now)
     trustStore.write(verified.trust)
-    return { entries: verified.targets.entries, retryAfterMs }
+    return { status: "ok", entries: verified.targets.entries, retryAfterMs }
   } catch (error) {
     deps.onError?.(error)
-    return null
+    return { status: "unavailable", error, retryAfterMs }
   } finally {
     clearTimeout(timeout)
+    options.signal?.removeEventListener("abort", abort)
   }
 }

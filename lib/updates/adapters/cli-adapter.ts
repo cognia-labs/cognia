@@ -18,6 +18,7 @@ import type {
   UpdateCheckContext,
 } from "../adapter"
 import { bestCandidate } from "../catalog-lookup"
+import { requireCatalog } from "../adapter"
 
 export const CLI_ASSET_ID = "@cognia/agent-cli"
 
@@ -63,7 +64,7 @@ export function createCliAdapter(deps: CliAdapterDeps = {}): UpdateAdapter {
       // Nothing installed is not an update. Offering one would be an install
       // pitch dressed as maintenance.
       if (!current) return []
-      const candidate = bestCandidate(context.catalog, {
+      const candidate = bestCandidate(requireCatalog(context), {
         kind: "cli",
         assetId: CLI_ASSET_ID,
         executor: "package-manager",

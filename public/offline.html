@@ -87,6 +87,7 @@
       </button>
     </main>
     <script>
+      window.addEventListener("online", () => location.reload())
       if (navigator.language && navigator.language.toLowerCase().indexOf("zh") === 0) {
         document.getElementById("en").hidden = true
         document.getElementById("zh").hidden = false

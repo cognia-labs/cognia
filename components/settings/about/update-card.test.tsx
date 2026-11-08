@@ -1,7 +1,10 @@
 /**
  * @jest-environment jsdom
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+
+jest.mock("@/lib/platform/os", () => ({ detectOsFamily: jest.fn(() => "windows") }))
+jest.mock("@/lib/tauri/opener", () => ({ openExternal: jest.fn(async () => {}) }))
 
 const isTauriMock = jest.fn<boolean, []>(() => true)
 jest.mock("@/lib/tauri", () => ({ isTauri: () => isTauriMock() }))
@@ -41,7 +44,9 @@ jest.mock("@/stores/settings/settings-store", () => ({
 }))
 
 import { toast } from "sonner"
-import { __resetPendingUpdate } from "@/lib/tauri/updater"
+import { __resetPendingUpdate, checkForUpdate } from "@/lib/tauri/updater"
+import { detectOsFamily } from "@/lib/platform/os"
+import { openExternal } from "@/lib/tauri/opener"
 import { UpdateCard } from "./update-card"
 
 const toastMock = toast as unknown as {
@@ -53,6 +58,7 @@ const toastMock = toast as unknown as {
 beforeEach(() => {
   jest.clearAllMocks()
   isTauriMock.mockReturnValue(true)
+  jest.mocked(detectOsFamily).mockReturnValue("windows")
   settingsState.settings = { updates: { ...defaultUpdateSettings } }
   saveUpdateSettingsMock.mockImplementation(async (patch: Record<string, unknown>) => {
     const current = settingsState.settings.updates as Record<string, unknown>
@@ -64,6 +70,64 @@ beforeEach(() => {
 })
 
 describe("<UpdateCard />", () => {
+  it("hands macOS off to the displayed release without auto-downloading (U13)", async () => {
+    jest.mocked(detectOsFamily).mockReturnValue("macos")
+    settingsState.settings = { updates: { ...defaultUpdateSettings, autoDownload: true } }
+    const update = { version: "2.0.0", download: jest.fn(), install: jest.fn() }
+    checkMock.mockResolvedValueOnce(update)
+    render(<UpdateCard />)
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }))
+    await waitFor(() => expect(screen.getByTestId("update-alert")).toHaveTextContent("2.0.0"))
+    expect(update.download).not.toHaveBeenCalled()
+    expect(screen.queryByTestId("download-update")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("install-update")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Open the release page" }))
+    await waitFor(() =>
+      expect(openExternal).toHaveBeenCalledWith(
+        "https://github.com/cognia-labs/cognia/releases/tag/v2.0.0"
+      )
+    )
+    expect(update.install).not.toHaveBeenCalled()
+    expect(relaunchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(["download", "install", "downloaded-install"])(
+    "refuses a different version from another surface during %s (U02)",
+    async (operation) => {
+      const offered = {
+        version: "2.0.0",
+        download: jest.fn(async () => {}),
+        install: jest.fn(async () => {}),
+      }
+      const changed = {
+        version: "3.0.0",
+        download: jest.fn(async () => {}),
+        install: jest.fn(async () => {}),
+      }
+      checkMock.mockResolvedValueOnce(offered)
+      render(<UpdateCard />)
+      fireEvent.click(screen.getByTestId("check-updates"))
+      await waitFor(() => expect(screen.getByTestId("update-alert")).toHaveTextContent("2.0.0"))
+      if (operation === "downloaded-install") {
+        fireEvent.click(screen.getByTestId("download-update"))
+        await waitFor(() => expect(screen.getByTestId("update-downloaded")).toBeInTheDocument())
+      }
+      checkMock.mockResolvedValue(changed)
+      await act(async () => {
+        await checkForUpdate()
+      })
+      fireEvent.click(
+        screen.getByTestId(operation === "download" ? "download-update" : "install-update")
+      )
+      await waitFor(() => expect(toastMock.info).toHaveBeenCalled())
+      expect(changed.download).not.toHaveBeenCalled()
+      expect(changed.install).not.toHaveBeenCalled()
+      expect(offered.install).not.toHaveBeenCalled()
+      expect(screen.queryByTestId("update-alert")).not.toBeInTheDocument()
+      expect(relaunchMock).not.toHaveBeenCalled()
+    }
+  )
+
   it("disables checking and explains on web", () => {
     isTauriMock.mockReturnValue(false)
     render(<UpdateCard />)

@@ -7,6 +7,8 @@ import {
   getPluginRollbackManager,
   resetPluginRollbackManager,
 } from "./rollback"
+import { PluginServiceRegistry } from "../core/service-registry"
+import { InMemoryPluginLifecycleStateAdapter } from "../core/lifecycle-state"
 
 const mockInvoke = jest.fn()
 const mockGetBackups = jest.fn()
@@ -26,6 +28,9 @@ const mockManager = {
   suspendPlugin: jest.fn(),
   reservePluginRuntimeGraph: jest.fn(),
   releasePluginRuntimeGraph: jest.fn(),
+  hasUnresolvedActivationResources: jest.fn(),
+  getPluginLifecycleState: jest.fn(),
+  withPluginPackageMutation: jest.fn(),
 }
 
 jest.mock("../core/manager", () => ({ getPluginManager: () => mockManager }))
@@ -39,6 +44,7 @@ jest.mock("./backup", () => ({
     getBackups: (...args: unknown[]) => mockGetBackups(...args),
     createBackup: (...args: unknown[]) => mockCreateBackup(...args),
     restoreToVersion: (...args: unknown[]) => mockRestoreToVersion(...args),
+    getPendingUpdateRestore: () => undefined,
   }),
 }))
 
@@ -114,6 +120,9 @@ describe("PluginRollbackManager", () => {
     mockInvoke.mockResolvedValue(null)
     for (const mock of Object.values(mockManager)) mock.mockReset()
     mockManager.reservePluginRuntimeGraph.mockReturnValue({ pluginId: "plugin-a" })
+    mockManager.hasUnresolvedActivationResources.mockReturnValue(false)
+    mockManager.getPluginLifecycleState.mockResolvedValue({ actual: "inactive" })
+    mockManager.withPluginPackageMutation.mockImplementation((_id, operation) => operation())
     mockManager.scanPlugins.mockImplementation(async () => {
       storeState.plugins["plugin-a"].manifest.version = "1.0.0"
     })
@@ -137,6 +146,20 @@ describe("PluginRollbackManager", () => {
   })
 
   describe("getRollbackInfo", () => {
+    it("offers an owed host-state restore even after boot already restored the package version", async () => {
+      storeState.plugins["plugin-a"].manifest.version = "1.0.0"
+      mockGetBackups.mockReturnValue([
+        {
+          id: "owed",
+          pluginId: "plugin-a",
+          version: "1.0.0",
+          metadata: { hostStateRestorePending: true },
+        },
+      ])
+      expect((await manager.getRollbackInfo("plugin-a")).availableVersions[0].canRollback).toBe(
+        true
+      )
+    })
     it("should get rollback info with backups", async () => {
       mockGetBackups.mockReturnValue([
         { pluginId: "plugin-a", version: "1.0.0", createdAt: new Date(), size: 1000 },
@@ -193,6 +216,79 @@ describe("PluginRollbackManager", () => {
   })
 
   describe("rollback", () => {
+    it("reinstalls a service provider dependency without re-entering the consumer mutation queue", async () => {
+      const { PluginManager } = jest.requireActual(
+        "../core/manager"
+      ) as typeof import("../core/manager")
+      const consumer = {
+        ...storeState.plugins["plugin-a"].manifest,
+        requiresServices: { "rollback.service": "^1.0.0" },
+      }
+      storeState.plugins["plugin-a"].manifest = consumer
+      storeState.plugins.provider = {
+        manifest: {
+          id: "provider",
+          version: "1.0.0",
+          providesServices: { "rollback.service": "1.0.0" },
+        } as unknown as typeof consumer,
+        status: "installed",
+        config: {},
+      }
+      const serviceRegistry = new PluginServiceRegistry()
+      serviceRegistry.beginProvider("provider", 1, { "rollback.service": "1.0.0" })
+      serviceRegistry.publishProvider("provider", 1)
+      const runtime = new PluginManager({
+        pluginDirectory: "/plugins",
+        lifecycleFeatures: { runtimeServices: true },
+        serviceRegistry,
+        lifecycleStateAdapter: new InMemoryPluginLifecycleStateAdapter(),
+      })
+      mockManager.withPluginPackageMutation.mockImplementation((id, operation) =>
+        runtime.withPluginPackageMutation(id, operation)
+      )
+      const internals = runtime as unknown as {
+        quiesceServiceConsumers(id: string): Promise<void>
+        disablePluginInner(id: string): Promise<void>
+      }
+      jest.spyOn(internals, "disablePluginInner").mockResolvedValue(undefined)
+      mockInstallPlugin.mockImplementationOnce(async () => {
+        await internals.quiesceServiceConsumers("provider")
+        return { success: true }
+      })
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const result = await Promise.race([
+          manager.rollback("plugin-a", "1.0.0"),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve("deadlocked"), 500)
+          }),
+        ])
+        expect(result).toMatchObject({ success: true })
+        await expect(
+          runtime.withPluginPackageMutation("plugin-a", async () => "queue usable")
+        ).resolves.toBe("queue usable")
+        expect(internals.disablePluginInner).toHaveBeenCalledWith("plugin-a", "service-draining")
+      } finally {
+        clearTimeout(timer)
+      }
+    })
+    it("keeps a dirty restore pending and allows explicit retry after cleanup (U17)", async () => {
+      mockGetBackups.mockReturnValue([
+        { id: "old-backup", version: "1.0.0", createdAt: new Date() },
+      ])
+      mockManager.hasUnresolvedActivationResources.mockReturnValue(true)
+      expect(await manager.rollback("plugin-a", "1.0.0")).toMatchObject({
+        success: false,
+        requiresRestart: true,
+        error: expect.stringMatching(/pending restore.*1.0.0/i),
+        rollback: { attempted: true, succeeded: false },
+      })
+      expect(mockRestoreToVersion).not.toHaveBeenCalled()
+      expect(mockInstallPlugin).not.toHaveBeenCalled()
+      mockManager.hasUnresolvedActivationResources.mockReturnValue(false)
+      expect(await manager.rollback("plugin-a", "1.0.0")).toMatchObject({ success: true })
+      expect(mockRestoreToVersion).toHaveBeenCalledWith("plugin-a", "1.0.0", mockManager)
+    })
     it("should attempt rollback with backup available", async () => {
       mockGetBackups.mockReturnValue([
         {

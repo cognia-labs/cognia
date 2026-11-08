@@ -65,6 +65,10 @@ type UpdateHandleFixture = {
   close?: jest.Mock<Promise<void>, []>
 }
 
+import { DEFAULT_UPDATE_CENTER_SETTINGS } from "@cognia/agent-config-types"
+import { UpdateCoordinator } from "@/lib/updates/coordinator"
+import { createDesktopAdapter } from "@/lib/updates/adapters/desktop-adapter"
+
 import {
   checkForUpdate,
   downloadAndInstallUpdate,
@@ -80,6 +84,7 @@ import {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  checkMock.mockReset()
   isTauriMock.mockReturnValue(true)
   settingsState.settings.updates = {
     autoCheck: true,
@@ -108,6 +113,252 @@ async function waitForMockCall(mock: jest.Mock): Promise<void> {
   }
   expect(mock).toHaveBeenCalled()
 }
+
+function handle(version = "2.0.0"): UpdateHandleFixture {
+  return {
+    version,
+    download: jest.fn(async () => {}),
+    install: jest.fn(async () => {}),
+    close: jest.fn(async () => {}),
+  }
+}
+
+describe("offered version and resource ownership (U02, U08)", () => {
+  it.each(["install", "combined"] as const)(
+    "joins a running installer before reporting %s success",
+    async (operation) => {
+      const update = handle()
+      let fail!: (error: Error) => void
+      update.install.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            fail = reject
+          })
+      )
+      checkMock.mockResolvedValueOnce(update)
+      const options = { expectedVersion: "2.0.0", relaunch: false }
+      const first = installUpdate(options).catch((error: unknown) => error)
+      await waitForMockCall(update.install)
+      const second =
+        operation === "install"
+          ? installUpdate(options)
+          : downloadAndInstallUpdate(undefined, options)
+      let reportedSuccess = false
+      const secondOutcome = second.then(
+        (result) => {
+          reportedSuccess = true
+          return result
+        },
+        (error: unknown) => error
+      )
+      for (let tick = 0; tick < 5; tick += 1) await Promise.resolve()
+      const reportedBeforeCompletion = reportedSuccess
+      fail(new Error("disk write failed"))
+      const [firstError, secondError] = await Promise.all([first, secondOutcome])
+      expect(reportedBeforeCompletion).toBe(false)
+      expect(firstError).toMatchObject({ phase: "install" })
+      expect(secondError).toBe(firstError)
+      expect(getInstalledVersionAwaitingRestart()).toBeNull()
+    }
+  )
+  it.each(["windows", "linux"] as const)(
+    "downloads background bytes on %s and installs that native handle only after a click (U01)",
+    async (os) => {
+      settingsState.settings.updates.relaunchAfterInstall = false
+      const update = handle()
+      const sameVersion = handle()
+      checkMock.mockResolvedValueOnce(update).mockResolvedValueOnce(sameVersion)
+      const coordinator = new UpdateCoordinator({
+        adapters: [createDesktopAdapter({ osFamily: () => os, appVersion: "1.0.0" })],
+        persistence: {
+          read: () => ({
+            ...DEFAULT_UPDATE_CENTER_SETTINGS,
+            rolloutBucket: 0,
+            backgroundDownloadDesktop: true,
+          }),
+          write: async () => {},
+          writeSnapshots: async () => {},
+        },
+        fetchCatalog: async () => ({ status: "unconfigured" }),
+      })
+      await coordinator.check()
+      // Join the background operation already started by the sweep.
+      await coordinator.apply("desktop:app", { consented: true, downloadOnly: true })
+      expect(update.download).toHaveBeenCalledTimes(1)
+      expect(update.install).not.toHaveBeenCalled()
+      expect(relaunchMock).not.toHaveBeenCalled()
+      expect(coordinator.getItem("desktop:app")?.state).toBe("awaiting-consent")
+      await checkForUpdate()
+      await coordinator.apply("desktop:app", { consented: true })
+      expect(update.download).toHaveBeenCalledTimes(1)
+      expect(update.install).toHaveBeenCalledTimes(1)
+      expect(sameVersion.download).not.toHaveBeenCalled()
+      expect(sameVersion.install).not.toHaveBeenCalled()
+      expect(getInstalledVersionAwaitingRestart()).toBe("2.0.0")
+    }
+  )
+  it.each(["download", "install", "combined"] as const)(
+    "refuses a changed native version during %s",
+    async (operation) => {
+      const cached = handle("3.0.0")
+      const fresh = handle("4.0.0")
+      checkMock.mockResolvedValueOnce(cached).mockResolvedValueOnce(fresh)
+      await checkForUpdate()
+      const options = { expectedVersion: "2.0.0", relaunch: false }
+      const result =
+        operation === "download"
+          ? await downloadUpdate(undefined, options)
+          : operation === "install"
+            ? await installUpdate(options)
+            : await downloadAndInstallUpdate(undefined, options)
+      expect(result).toBe("versionMismatch")
+      expect(cached.close).toHaveBeenCalledTimes(1)
+      expect(checkMock).toHaveBeenCalledTimes(2)
+      for (const update of [cached, fresh]) {
+        expect(update.download).not.toHaveBeenCalled()
+        expect(update.install).not.toHaveBeenCalled()
+      }
+      expect(relaunchMock).not.toHaveBeenCalled()
+      expect(getInstalledVersionAwaitingRestart()).toBeNull()
+    }
+  )
+
+  it("rechecks a mismatched cache and installs only the offered version", async () => {
+    const cached = handle("3.0.0")
+    const offered = handle()
+    checkMock.mockResolvedValueOnce(cached).mockResolvedValueOnce(offered)
+    await checkForUpdate()
+    expect(
+      await downloadAndInstallUpdate(undefined, {
+        expectedVersion: "2.0.0",
+        relaunch: false,
+      })
+    ).toBe("installed")
+    expect(cached.close).toHaveBeenCalledTimes(1)
+    expect(cached.download).not.toHaveBeenCalled()
+    expect(offered.download).toHaveBeenCalledTimes(1)
+    expect(offered.install).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(["2.0.0", "3.0.0"])(
+    "waits for a preceding recheck without installing its undownloaded %s handle (U08)",
+    async (version) => {
+      const downloaded = handle()
+      const replacement = handle(version)
+      replacement.install.mockRejectedValue(new Error("called before download"))
+      checkMock.mockResolvedValueOnce(downloaded)
+      await downloadUpdate()
+      let finish!: (value: UpdateHandleFixture) => void
+      checkMock.mockReturnValueOnce(
+        new Promise<UpdateHandleFixture>((resolve) => {
+          finish = resolve
+        })
+      )
+      const checking = checkForUpdate()
+      const installing = installUpdate({ relaunch: false, expectedVersion: "2.0.0" })
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve()
+      const startedBeforeCheck = downloaded.install.mock.calls.length
+      finish(replacement)
+      expect(await checking).toMatchObject({ version: "2.0.0" })
+      expect(await installing).toBe("installed")
+      expect(startedBeforeCheck).toBe(0)
+      expect(downloaded.install).toHaveBeenCalledTimes(1)
+      expect(replacement.install).not.toHaveBeenCalled()
+      expect(replacement.download).not.toHaveBeenCalled()
+      expect(replacement.close).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("keeps an already downloaded handle when a same-version check resolves (U08)", async () => {
+    const downloaded = handle()
+    const replacement = handle()
+    checkMock.mockResolvedValueOnce(downloaded).mockResolvedValueOnce(replacement)
+    await downloadUpdate()
+    await checkForUpdate()
+    expect(downloaded.close).not.toHaveBeenCalled()
+    expect(replacement.close).toHaveBeenCalledTimes(1)
+    expect(await installUpdate({ relaunch: false, expectedVersion: "2.0.0" })).toBe("installed")
+    expect(downloaded.download).toHaveBeenCalledTimes(1)
+    expect(downloaded.install).toHaveBeenCalledTimes(1)
+    expect(replacement.download).not.toHaveBeenCalled()
+  })
+
+  it("keeps the selected resource when an earlier check resolves during a download request (U08)", async () => {
+    const selected = handle()
+    const replacement = handle("3.0.0")
+    checkMock.mockResolvedValueOnce(selected)
+    await checkForUpdate()
+    let finish!: (value: UpdateHandleFixture) => void
+    checkMock.mockReturnValueOnce(
+      new Promise<UpdateHandleFixture>((resolve) => {
+        finish = resolve
+      })
+    )
+    const checking = checkForUpdate()
+    const downloading = downloadUpdate(undefined, { expectedVersion: "2.0.0" })
+    finish(replacement)
+    expect(await checking).toMatchObject({ version: "2.0.0" })
+    expect(await downloading).toBe("downloaded")
+    expect(selected.close).not.toHaveBeenCalled()
+    expect(selected.download).toHaveBeenCalledTimes(1)
+    expect(replacement.close).toHaveBeenCalledTimes(1)
+    expect(replacement.download).not.toHaveBeenCalled()
+  })
+
+  it("does not close the downloaded resource while its installer is running (U08)", async () => {
+    const downloaded = handle()
+    const replacement = handle()
+    let finishInstall!: () => void
+    downloaded.install.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInstall = resolve
+        })
+    )
+    checkMock.mockResolvedValueOnce(downloaded)
+    await downloadUpdate()
+    let finishCheck!: (value: UpdateHandleFixture) => void
+    checkMock.mockReturnValueOnce(
+      new Promise<UpdateHandleFixture>((resolve) => {
+        finishCheck = resolve
+      })
+    )
+    const checking = checkForUpdate()
+    const installing = installUpdate({ relaunch: false })
+    finishCheck(replacement)
+    await checking
+    await waitForMockCall(downloaded.install)
+    const closedDuringInstall = downloaded.close!.mock.calls.length
+    finishInstall()
+    expect(await installing).toBe("installed")
+    expect(closedDuringInstall).toBe(0)
+    expect(replacement.close).toHaveBeenCalledTimes(1)
+    expect(replacement.install).not.toHaveBeenCalled()
+  })
+
+  it("does not report another caller's download or installed marker as the expected version", async () => {
+    const update = handle()
+    let finish!: () => void
+    update.download.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        })
+    )
+    checkMock.mockResolvedValueOnce(update)
+    const first = downloadUpdate(undefined, { expectedVersion: "2.0.0" })
+    await waitForMockCall(update.download)
+    const second = downloadUpdate(undefined, { expectedVersion: "3.0.0" })
+    finish()
+    expect(await first).toBe("downloaded")
+    expect(await second).toBe("versionMismatch")
+    expect(await installUpdate({ expectedVersion: "2.0.0", relaunch: false })).toBe("installed")
+    expect(await installUpdate({ expectedVersion: "3.0.0" })).toBe("versionMismatch")
+    expect(await downloadAndInstallUpdate(undefined, { expectedVersion: "3.0.0" })).toBe(
+      "versionMismatch"
+    )
+  })
+})
 
 describe("resolveUpdateSettings", () => {
   it("merges defaults for an older settings row", () => {

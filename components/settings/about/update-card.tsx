@@ -27,6 +27,8 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { loggers } from "@cognia/logging"
 import { isTauri } from "@/lib/tauri"
+import { detectOsFamily } from "@/lib/platform/os"
+import { openExternal } from "@/lib/tauri/opener"
 import {
   checkForUpdate,
   downloadAndInstallUpdate,
@@ -41,6 +43,7 @@ import {
   type UpdateProgress,
 } from "@/lib/tauri/updater"
 import { openUpdateCenter } from "@/lib/updates/open-update-center"
+import { desktopInstallsInPlace, macReleaseUrl } from "@/lib/updates/adapters/desktop-adapter"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 
 import { AboutCard } from "./about-card"
@@ -98,6 +101,7 @@ export function UpdateCard() {
   const [progress, setProgress] = useState<UpdateProgress | null>(null)
 
   const desktop = isTauri()
+  const installsInPlace = desktopInstallsInPlace(detectOsFamily())
 
   const persistUpdateSettings = async (patch: Partial<typeof updateSettings>) => {
     try {
@@ -119,12 +123,13 @@ export function UpdateCard() {
     }
   }
 
-  const runDownload = async () => {
+  const runDownload = async (version: string) => {
+    if (!installsInPlace) return false
     setDownloading(true)
     setProgress(null)
     try {
-      const result = await downloadUpdate(setProgress)
-      if (result === "noLongerAvailable") {
+      const result = await downloadUpdate(setProgress, { expectedVersion: version })
+      if (result === "noLongerAvailable" || result === "versionMismatch") {
         setAvailable(null)
         setDownloaded(false)
         toast.info(t("updates.updateNoLongerAvailable"))
@@ -161,7 +166,7 @@ export function UpdateCard() {
       loggers.app.info("about.updateCheck", { status: "available", version: update.version })
       setAvailable(update)
       toast.success(t("updates.updateAvailableToast", { version: update.version }))
-      if (updateSettings.autoDownload) await runDownload()
+      if (updateSettings.autoDownload && installsInPlace) await runDownload(update.version)
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error)
       loggers.app.error("about.updateCheckFailed", error)
@@ -176,15 +181,25 @@ export function UpdateCard() {
     setInstalling(true)
     setProgress(null)
     try {
+      if (!installsInPlace) {
+        await openExternal(macReleaseUrl(available.version))
+        setInstalling(false)
+        return
+      }
       loggers.app.info("about.updateInstall", { status: "starting", version: available.version })
-      const options = { relaunch: updateSettings.relaunchAfterInstall }
+      const options = {
+        relaunch: updateSettings.relaunchAfterInstall,
+        expectedVersion: available.version,
+      }
       const result = downloaded
         ? await installUpdate(options)
         : await downloadAndInstallUpdate(setProgress, options)
-      if (result === "noLongerAvailable") {
+      if (result === "noLongerAvailable" || result === "versionMismatch") {
         loggers.app.info("about.updateInstall", { status: "noLongerAvailable" })
         toast.info(t("updates.updateNoLongerAvailable"))
         setAvailable(null)
+        setDownloaded(false)
+        setInstalling(false)
         return
       }
       if (result === "installed") {
@@ -264,10 +279,10 @@ export function UpdateCard() {
           <RefreshCwIcon className={`mr-2 size-4 ${checking ? "animate-spin" : ""}`} />
           {checking ? t("updates.checking") : t("updates.checkUpdates")}
         </Button>
-        {available && !downloaded && (
+        {available && installsInPlace && !downloaded && (
           <Button
             variant="outline"
-            onClick={() => void runDownload()}
+            onClick={() => void runDownload(available.version)}
             disabled={busy}
             data-testid="download-update"
           >
@@ -276,11 +291,17 @@ export function UpdateCard() {
           </Button>
         )}
         {available && (
-          <Button onClick={handleInstall} disabled={busy} data-testid="install-update">
+          <Button
+            onClick={handleInstall}
+            disabled={busy}
+            data-testid={installsInPlace ? "install-update" : "open-release-page"}
+          >
             <DownloadIcon className={`mr-2 size-4 ${installing ? "animate-pulse" : ""}`} />
-            {installing
-              ? t("updates.installing")
-              : t("updates.install", { version: available.version })}
+            {!installsInPlace
+              ? tUpdates("recovery.openReleasePage")
+              : installing
+                ? t("updates.installing")
+                : t("updates.install", { version: available.version })}
           </Button>
         )}
         {restartRequired && (
@@ -382,6 +403,7 @@ export function UpdateCard() {
               <Switch
                 id="settings-auto-download-updates"
                 checked={updateSettings.autoDownload}
+                disabled={!installsInPlace}
                 onCheckedChange={(autoDownload) => void persistUpdateSettings({ autoDownload })}
                 aria-label={t("updates.autoDownloadLabel")}
                 data-testid="auto-download-updates-toggle"
@@ -395,6 +417,7 @@ export function UpdateCard() {
               <Switch
                 id="settings-relaunch-after-update"
                 checked={updateSettings.relaunchAfterInstall}
+                disabled={!installsInPlace}
                 onCheckedChange={(relaunchAfterInstall) =>
                   void persistUpdateSettings({ relaunchAfterInstall })
                 }

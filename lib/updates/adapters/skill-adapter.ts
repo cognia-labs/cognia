@@ -36,7 +36,7 @@ export interface SkillAdapterDeps {
   /** Re-check every remotely installed skill. */
   checkAll?: () => Promise<SkillUpdateRow[]>
   /** Re-install one skill from its source. */
-  updateOne?: (skillId: string) => Promise<void>
+  updateOne?: (skillId: string, options: { expectedHash: string }) => Promise<void>
   isSupported?: () => boolean
 }
 
@@ -51,6 +51,9 @@ export function skillVersionLabel(hash: string | undefined): string {
 }
 
 export function createSkillAdapter(deps: SkillAdapterDeps = {}): UpdateAdapter {
+  const checkedHashes = new Map<string, string | null>()
+  const hashKey = (assetId: string, targetVersion: string) =>
+    JSON.stringify([assetId, targetVersion])
   return {
     kind: "skill",
     executor: "skill-runtime",
@@ -60,9 +63,16 @@ export function createSkillAdapter(deps: SkillAdapterDeps = {}): UpdateAdapter {
       const rows = (await deps.checkAll?.()) ?? []
       const candidates: UpdateCandidate[] = []
       for (const row of rows) {
-        if (!row.hasUpdate || row.error) continue
+        if (!row.hasUpdate || row.error || !row.remoteHash) continue
         const target = skillVersionLabel(row.remoteHash)
         if (isRevokedRelease(context.catalog, "skill", row.canonicalId, target)) continue
+        const key = hashKey(row.skillId, target)
+        const previous = checkedHashes.get(key)
+        // A shortened-label collision must never rebind an earlier review.
+        checkedHashes.set(
+          key,
+          previous === undefined || previous === row.remoteHash ? row.remoteHash : null
+        )
         candidates.push({
           assetId: row.skillId,
           kind: "skill",
@@ -89,7 +99,29 @@ export function createSkillAdapter(deps: SkillAdapterDeps = {}): UpdateAdapter {
       if (!deps.updateOne) {
         return { state: "failed", failure: { kind: "unsupported", code: "no_skill_installer" } }
       }
-      await deps.updateOne(candidate.assetId)
+      const expectedHash = checkedHashes.get(hashKey(candidate.assetId, candidate.targetVersion))
+      if (!expectedHash) {
+        return {
+          state: "failed",
+          failure: { kind: "unknown", code: "skill_check_required", recoveryActionKey: "retry" },
+        }
+      }
+      try {
+        await deps.updateOne(candidate.assetId, { expectedHash })
+      } catch (error) {
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "skill_content_changed"
+        ) {
+          return {
+            state: "failed",
+            failure: { kind: "unknown", code: "skill_content_changed", recoveryActionKey: "retry" },
+          }
+        }
+        throw error
+      }
       return { state: "verified" }
     },
   }

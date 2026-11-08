@@ -19,6 +19,19 @@ import type {
 
 import type { CatalogEntry } from "./catalog-types"
 
+export type CatalogFetchResult =
+  | { status: "ok"; entries: readonly CatalogEntry[]; retryAfterMs?: number }
+  | { status: "unconfigured" }
+  | { status: "unavailable"; error: unknown; retryAfterMs?: number }
+
+/** A source failure whose recovery classification is already known. */
+export class UpdateCheckError extends Error {
+  constructor(readonly failure: UpdateFailure) {
+    super(failure.code)
+    this.name = "UpdateCheckError"
+  }
+}
+
 export interface UpdateCheckContext {
   channel: UpdateChannel
   /** Stable device cohort, already normalized. */
@@ -28,15 +41,38 @@ export interface UpdateCheckContext {
   /**
    * Verified catalog entries, or null when the control plane was unreachable
    * or failed verification. Adapters that can still answer from a local or
-   * registry source may do so. Adapters that cannot must return [].
+   * registry source may do so. Catalog-only adapters must report the failure.
    */
   catalog: readonly CatalogEntry[] | null
+  /** Omitted only by older injected callers; production always supplies it. */
+  catalogStatus?: CatalogFetchResult["status"]
+  catalogError?: unknown
   signal?: AbortSignal
+}
+
+/** Refuse to turn a missing catalog into an authoritative empty answer. */
+export function requireCatalog(context: UpdateCheckContext): readonly CatalogEntry[] {
+  if (context.catalogStatus === "unconfigured") {
+    throw new UpdateCheckError({ kind: "unsupported", code: "catalog_unconfigured" })
+  }
+  if (context.catalogStatus === "unavailable" || context.catalog === null) {
+    throw (
+      context.catalogError ??
+      new UpdateCheckError({
+        kind: "network",
+        code: "catalog_unavailable",
+        recoveryActionKey: "retry",
+      })
+    )
+  }
+  return context.catalog
 }
 
 export interface UpdateApplyContext {
   /** The user has seen and accepted whatever this candidate changes. */
   consented: boolean
+  /** Download and verify bytes only; installation still requires a user action. */
+  downloadOnly?: boolean
   /** Report download progress in bytes. */
   onProgress?: (downloaded: number, total?: number) => void
   signal?: AbortSignal
@@ -70,6 +106,8 @@ export interface UpdateAdapter {
    * install.
    */
   apply(candidate: UpdateCandidate, context: UpdateApplyContext): Promise<UpdateApplyResult>
+  /** Desktop host restart, also used by assets whose runtime requires it. */
+  restart?: () => Promise<void>
 }
 
 /** Per-asset row the Update Center renders. */

@@ -33,6 +33,7 @@ describe("unpaired", () => {
     const [candidate] = await adapter.check(CONTEXT)
     expect(candidate.currentVersion).toBeNull()
     expect(candidate.targetVersion).toBe("1.4.0")
+    expect(candidate.action).toBe("open-store")
   })
 
   it("reports nothing when the store has nothing published", async () => {
@@ -56,6 +57,7 @@ describe("paired", () => {
   it("offers a reload only once the browser has the new build", async () => {
     const adapter = createBrowserExtensionAdapter("browser-chrome", {
       pairedExtension: async () => ({ version: "1.2.0", updatePending: true }),
+      requestReload: async () => true,
     })
     const [candidate] = await adapter.check(CONTEXT)
     expect(candidate.action).toBe("reload-extension")
@@ -71,9 +73,18 @@ describe("paired", () => {
   it("still offers a reload when the browser signalled one with no catalog entry", async () => {
     const adapter = createBrowserExtensionAdapter("browser-chrome", {
       pairedExtension: async () => ({ version: "1.4.0", updatePending: true }),
+      requestReload: async () => true,
     })
     const [candidate] = await adapter.check({ ...CONTEXT, catalog: [] })
     expect(candidate.action).toBe("reload-extension")
+  })
+
+  it("offers only a store handoff when reload is not wired (U23)", async () => {
+    const adapter = createBrowserExtensionAdapter("browser-chrome", {
+      pairedExtension: async () => ({ version: "1.2.0", updatePending: true }),
+    })
+    expect((await adapter.check(CONTEXT))[0].action).toBe("open-store")
+    expect(await adapter.check({ ...CONTEXT, catalog: [] })).toEqual([])
   })
 })
 

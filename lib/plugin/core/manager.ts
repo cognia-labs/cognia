@@ -16,6 +16,7 @@ import {
 } from "./invocation-identity"
 import type { SlashCommandContext } from "@/lib/slash-commands/registry"
 import { usePluginStore } from "@/stores/plugin-runtime"
+import { getPluginBackupManager } from "../lifecycle/backup"
 import stagedPluginCatalog from "@/lib/plugin/distribution/bundled-plugins.generated.json"
 import type {
   ExtensionCompatibilityDiagnostic,
@@ -311,6 +312,7 @@ import {
   type PluginLifecycleStateAdapter,
 } from "./lifecycle-state"
 import {
+  PluginActivationConflictError,
   PluginLifecycleCoordinator,
   pluginLifecycleCoordinator,
   type PluginActivationLease,
@@ -1530,14 +1532,36 @@ export class PluginManager {
     return !lease || this.lifecycleCoordinator.isCurrent(lease)
   }
 
-  async getPluginLifecycleState(pluginId: string): Promise<PluginLifecycleRecord> {
-    return this.lifecycleState.read(pluginId)
+  async getPluginLifecycleState(
+    pluginId: string,
+    options: { ignorePendingUpdateRestore?: boolean } = {}
+  ): Promise<PluginLifecycleRecord> {
+    const lifecycle = await this.lifecycleState.read(pluginId)
+    const pending = options.ignorePendingUpdateRestore
+      ? undefined
+      : getPluginBackupManager().getPendingUpdateRestore(pluginId)
+    if (!pending) return lifecycle
+    const label = `update-host-state-restore:${pending.id}`
+    if (lifecycle.actual === "dirty" && lifecycle.dirty?.labels?.includes(label)) return lifecycle
+    const message = `Pending host-state restore from backup ${pending.id}; use Retry Cleanup to complete recovery`
+    return this.setActualState(pluginId, "dirty", {
+      lastError: message,
+      dirty: {
+        runtime: "frontend",
+        reason: "unconfirmed",
+        at: Date.now(),
+        hostEpoch: PLUGIN_HOST_EPOCH,
+        ...lifecycle.dirty,
+        message: lifecycle.dirty ? `${message}; ${lifecycle.dirty.message}` : message,
+        labels: [...(lifecycle.dirty?.labels ?? []), label],
+      },
+    })
   }
 
   async getPluginLifecycleSnapshot(
     pluginId: string
   ): Promise<PluginLifecycleCoordinatorSnapshot | undefined> {
-    const lifecycle = await this.lifecycleState.read(pluginId)
+    const lifecycle = await this.getPluginLifecycleState(pluginId)
     this.publishLifecycleSnapshot(pluginId, lifecycle)
     return this.lifecycleCoordinator.getSnapshot(pluginId)
   }
@@ -1558,6 +1582,30 @@ export class PluginManager {
 
   releasePluginRuntimeGraph(reservation: PluginGraphReservation): boolean {
     return this.lifecycleCoordinator.releaseProviderDrain(reservation)
+  }
+
+  /**
+   * Serialize the caller's stopped-runtime check and package I/O with activation.
+   * The operation must not call lifecycle-locked manager methods, including
+   * installers that drain service consumers: those can re-enter this queue.
+   */
+  withPluginPackageMutation<T>(pluginId: string, operation: () => Promise<T>): Promise<T> {
+    return this.withLifecycleLock(pluginId, async () => {
+      const current = this.lifecycleCoordinator.get(pluginId)
+      if (current && current.managerId !== this.managerId) {
+        throw new PluginActivationConflictError(pluginId, current.managerId)
+      }
+      // The queue fences this manager; a temporary host-global lease fences
+      // another manager from starting code while the package I/O is pending.
+      const mutationLease = current
+        ? undefined
+        : this.lifecycleCoordinator.acquire(this.managerId, pluginId)
+      try {
+        return await operation()
+      } finally {
+        if (mutationLease) this.lifecycleCoordinator.release(mutationLease)
+      }
+    })
   }
 
   async reloadPlugin(pluginId: string, reason = "hot-reload"): Promise<void> {
@@ -1734,7 +1782,7 @@ export class PluginManager {
     return "frontend"
   }
 
-  private hasUnresolvedActivationResources(pluginId: string): boolean {
+  hasUnresolvedActivationResources(pluginId: string): boolean {
     return Boolean(
       this.disposableScopes.get(pluginId)?.hasUnresolvedResources() ||
       this.loader.getDirtyTeardown(pluginId) ||
@@ -1868,6 +1916,34 @@ export class PluginManager {
   }
 
   async recoverPluginRuntime(pluginId: string): Promise<boolean> {
+    const backups = getPluginBackupManager()
+    const pending = backups.getPendingUpdateRestore(pluginId)
+    if (pending) {
+      // Lifecycle work must finish outside the package mutation callback.
+      await this.unloadPlugin(pluginId)
+      if (!(await this.withLifecycleLock(pluginId, () => this.recoverPluginRuntimeInner(pluginId))))
+        return false
+      const restored = await this.withPluginPackageMutation(pluginId, async () => {
+        const lifecycle = await this.lifecycleState.read(pluginId)
+        if (
+          this.hasUnresolvedActivationResources(pluginId) ||
+          ["active", "activating", "stopping", "dirty"].includes(lifecycle.actual) ||
+          ["loading", "loaded", "enabling", "enabled", "disabling", "suspended"].includes(
+            usePluginStore.getState().plugins[pluginId]?.status ?? ""
+          )
+        )
+          return false
+        return (await backups.restore(pending.id, this)).success
+      })
+      if (!restored) {
+        await this.getPluginLifecycleState(pluginId)
+        return false
+      }
+      await this.setActualState(pluginId, "inactive", { dirty: undefined, lastError: undefined })
+      await this.scanPlugins()
+      await this.syncRuntimeState()
+      return true
+    }
     return this.withLifecycleLock(pluginId, () => this.recoverPluginRuntimeInner(pluginId))
   }
 
@@ -1885,6 +1961,7 @@ export class PluginManager {
     pluginId: string,
     lifecycle: PluginLifecycleRecord
   ): Promise<boolean> {
+    if (getPluginBackupManager().getPendingUpdateRestore(pluginId)) return false
     const epoch = lifecycle.dirty?.hostEpoch
     if (!epoch || epoch === PLUGIN_HOST_EPOCH) return false
     try {
@@ -1900,7 +1977,7 @@ export class PluginManager {
 
   private async recoverPluginRuntimeInner(pluginId: string): Promise<boolean> {
     {
-      const lifecycle = await this.getPluginLifecycleState(pluginId)
+      const lifecycle = await this.lifecycleState.read(pluginId)
       if (lifecycle.actual !== "dirty") return true
 
       // A different host epoch retires host-scoped resources after the
@@ -2256,6 +2333,7 @@ export class PluginManager {
     for (const pluginId of Object.keys(usePluginStore.getState().plugins)) {
       const lifecycle = await this.lifecycleState.read(pluginId)
       if (lifecycle.actual !== "dirty") continue
+      if (getPluginBackupManager().getPendingUpdateRestore(pluginId)) continue
       try {
         await this.recoverPluginRuntime(pluginId)
       } catch (error) {
@@ -6168,6 +6246,12 @@ export class PluginManager {
    */
   async syncRuntimeState(): Promise<void> {
     const store = usePluginStore.getState()
+    // Persist the existing dirty/recovery projection even for disabled plugins,
+    // so their detail header offers Retry Cleanup after an interrupted update.
+    for (const pluginId of Object.keys(store.plugins)) {
+      if (getPluginBackupManager().getPendingUpdateRestore(pluginId))
+        await this.getPluginLifecycleState(pluginId)
+    }
 
     // Only the Tauri shell has a backend status ledger to sync from; browser
     // and mobile have no native invoke bridge.

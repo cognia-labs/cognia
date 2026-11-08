@@ -21,44 +21,19 @@ import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { usePluginDisplayName } from "@/hooks/plugins/use-plugin-display-name"
+import type { PluginUpdater, UpdateInfo } from "@/lib/plugin/lifecycle/updater"
 
-// Mirrors the `UpdateInfo` shape returned by `PluginUpdater.checkForUpdates`
-// (`lib/plugin/lifecycle/updater.ts`). The fields are `currentVersion` /
-// `latestVersion` — an earlier `fromVersion` / `toVersion` guess never matched,
-// so the dialog rendered "v undefined → v undefined" and installed `undefined`.
-interface UpdateInfo {
-  pluginId: string
-  currentVersion: string
-  latestVersion: string
-  changelog?: string
-}
-
-interface UpdaterClient {
-  checkForUpdates: (pluginId?: string) => Promise<UpdateInfo[]>
-  installUpdate: (pluginId: string, version: string) => Promise<unknown>
-  cancelUpdate: (pluginId: string) => void
-  onProgress: (handler: (progress: { pluginId: string; progress: number }) => void) => () => void
-}
+type UpdaterClient = Pick<
+  PluginUpdater,
+  "checkForUpdates" | "installUpdate" | "cancelUpdate" | "onProgress"
+>
 
 let cachedClient: UpdaterClient | null = null
 
 async function loadUpdaterClient(): Promise<UpdaterClient> {
   if (cachedClient) return cachedClient
-  const mod = (await import("@/lib/plugin/lifecycle/updater")) as unknown as {
-    getPluginUpdater?: () => UpdaterClient
-  }
-  if (typeof mod.getPluginUpdater === "function") {
-    cachedClient = mod.getPluginUpdater()
-    return cachedClient
-  }
-  // Fall back to a no-op client when the updater module isn't wired up; the
-  // dialog still renders an empty list rather than crashing.
-  cachedClient = {
-    checkForUpdates: async () => [],
-    installUpdate: async () => undefined,
-    cancelUpdate: () => undefined,
-    onProgress: () => () => undefined,
-  }
+  const { getPluginUpdater } = await import("@/lib/plugin/lifecycle/updater")
+  cachedClient = getPluginUpdater()
   return cachedClient
 }
 
@@ -78,23 +53,32 @@ interface Props {
 
 export function PluginUpdateDialog({ open, onClose, pluginId = null }: Props) {
   const t = useTranslations("plugins.update")
+  const tErrors = useTranslations("plugins.errors")
   const [updates, setUpdates] = useState<UpdateInfo[]>([])
   const [progress, setProgress] = useState<Record<string, number>>({})
   const [busyId, setBusyId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [checkError, setCheckError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
     let unsubscribe: (() => void) | undefined
     void (async () => {
       setRefreshing(true)
-      const client = await loadUpdaterClient()
-      const list = await client.checkForUpdates(pluginId ?? undefined)
-      setUpdates(list)
-      unsubscribe = client.onProgress((p) =>
-        setProgress((prev) => ({ ...prev, [p.pluginId]: p.progress }))
-      )
-      setRefreshing(false)
+      setCheckError(null)
+      try {
+        const client = await loadUpdaterClient()
+        const list = await client.checkForUpdates(pluginId ? [pluginId] : undefined)
+        setUpdates(list)
+        unsubscribe = client.onProgress((p) =>
+          setProgress((prev) => ({ ...prev, [p.pluginId]: p.progress }))
+        )
+      } catch (error) {
+        setCheckError(error instanceof Error ? error.message : String(error))
+      } finally {
+        setRefreshing(false)
+      }
     })()
     return () => {
       unsubscribe?.()
@@ -103,9 +87,12 @@ export function PluginUpdateDialog({ open, onClose, pluginId = null }: Props) {
 
   const refresh = async () => {
     setRefreshing(true)
+    setCheckError(null)
     try {
       const client = await loadUpdaterClient()
-      setUpdates(await client.checkForUpdates(pluginId ?? undefined))
+      setUpdates(await client.checkForUpdates(pluginId ? [pluginId] : undefined))
+    } catch (error) {
+      setCheckError(error instanceof Error ? error.message : String(error))
     } finally {
       setRefreshing(false)
     }
@@ -113,26 +100,36 @@ export function PluginUpdateDialog({ open, onClose, pluginId = null }: Props) {
 
   const installOne = async (info: UpdateInfo) => {
     setBusyId(info.pluginId)
+    setErrors((prev) => {
+      const next = { ...prev }
+      delete next[info.pluginId]
+      return next
+    })
     try {
       const client = await loadUpdaterClient()
-      await client.installUpdate(info.pluginId, info.latestVersion)
-      setUpdates((prev) => prev.filter((u) => u.pluginId !== info.pluginId))
+      const result = await client.installUpdate(info.pluginId, info.latestVersion)
+      if (result.success) {
+        setUpdates((prev) => prev.filter((u) => u.pluginId !== info.pluginId))
+      } else {
+        setErrors((prev) => ({
+          ...prev,
+          [info.pluginId]: result.error || tErrors("install", { pluginName: info.pluginId }),
+        }))
+      }
+    } catch (error) {
+      setErrors((prev) => ({
+        ...prev,
+        [info.pluginId]: error instanceof Error ? error.message : String(error),
+      }))
     } finally {
       setBusyId(null)
     }
   }
 
   const installAll = async () => {
-    const client = await loadUpdaterClient()
     for (const info of updates) {
-      setBusyId(info.pluginId)
-      try {
-        await client.installUpdate(info.pluginId, info.latestVersion)
-      } finally {
-        setBusyId(null)
-      }
+      await installOne(info)
     }
-    setUpdates([])
   }
 
   return (
@@ -163,6 +160,12 @@ export function PluginUpdateDialog({ open, onClose, pluginId = null }: Props) {
           </Button>
         </div>
 
+        {checkError && (
+          <p role="alert" className="text-sm text-destructive">
+            {checkError}
+          </p>
+        )}
+
         {/* A divided list between two hairlines, not a card inside the dialog:
             the dialog is already the frame. */}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-y">
@@ -185,6 +188,11 @@ export function PluginUpdateDialog({ open, onClose, pluginId = null }: Props) {
                       </div>
                       {busyId === info.pluginId && (
                         <Progress value={progress[info.pluginId] ?? 0} className="mt-2 h-1.5" />
+                      )}
+                      {errors[info.pluginId] && (
+                        <p role="alert" className="mt-2 text-sm text-destructive">
+                          {errors[info.pluginId]}
+                        </p>
                       )}
                     </div>
                     <Button

@@ -83,6 +83,49 @@ describe("check", () => {
 })
 
 describe("apply", () => {
+  it("retains the full checked hash across a later check (U20)", async () => {
+    let remoteHash = "bbbbbbbbbbbb2222"
+    const updateOne = jest.fn(async () => {})
+    const adapter = createSkillAdapter({ checkAll: async () => [row({ remoteHash })], updateOne })
+    const [reviewed] = await adapter.check(CONTEXT)
+    remoteHash = "cccccccccccc3333"
+    await adapter.check(CONTEXT)
+    await adapter.apply(reviewed, { consented: true })
+    expect(updateOne).toHaveBeenCalledWith("s1", { expectedHash: "bbbbbbbbbbbb2222" })
+  })
+
+  it("fails closed on a shortened-label collision without rebinding consent", async () => {
+    let remoteHash = "sha256:aaaaa1111"
+    const updateOne = jest.fn(async () => {})
+    const adapter = createSkillAdapter({ checkAll: async () => [row({ remoteHash })], updateOne })
+    const [candidate] = await adapter.check(CONTEXT)
+    remoteHash = "sha256:aaaaa2222"
+    await adapter.check(CONTEXT)
+    expect(await adapter.apply(candidate, { consented: true })).toMatchObject({ state: "failed" })
+    expect(updateOne).not.toHaveBeenCalled()
+  })
+
+  it("fails a changed download instead of verifying the reviewed hash (U20)", async () => {
+    const adapter = createSkillAdapter({
+      checkAll: async () => [row()],
+      updateOne: async () => {
+        throw Object.assign(new Error("Changed"), { code: "skill_content_changed" })
+      },
+    })
+    const [candidate] = await adapter.check(CONTEXT)
+    expect(await adapter.apply(candidate, { consented: true })).toMatchObject({
+      state: "failed",
+      failure: { code: "skill_content_changed" },
+    })
+  })
+
+  it("requires a fresh check after its in-memory candidate binding is lost", async () => {
+    const [candidate] = await createSkillAdapter({ checkAll: async () => [row()] }).check(CONTEXT)
+    const updateOne = jest.fn(async () => {})
+    const adapter = createSkillAdapter({ updateOne })
+    expect(await adapter.apply(candidate, { consented: true })).toMatchObject({ state: "failed" })
+    expect(updateOne).not.toHaveBeenCalled()
+  })
   it("refuses to replace skill content without consent", async () => {
     let installed = false
     const adapter = createSkillAdapter({

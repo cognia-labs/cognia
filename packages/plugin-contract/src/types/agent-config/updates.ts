@@ -396,7 +396,17 @@ export const UPDATE_STATE_TRANSITIONS: Record<UpdateState, readonly UpdateState[
     "cancelled",
   ],
   deferred: ["checking", "available", "current", "failed"],
-  downloading: ["awaiting-consent", "installing", "failed", "cancelled"],
+  // The desktop apply path can hand off to a store, lose its candidate, or
+  // finish installing even when the attempt began as a download.
+  downloading: [
+    "awaiting-consent",
+    "awaiting-store",
+    "current",
+    "awaiting-restart",
+    "installing",
+    "failed",
+    "cancelled",
+  ],
   "awaiting-consent": ["installing", "downloading", "deferred", "cancelled", "failed"],
   "awaiting-store": ["checking", "verified", "current", "available", "deferred", "failed"],
   "awaiting-reload": ["checking", "verified", "current", "available", "deferred", "failed"],
@@ -404,6 +414,10 @@ export const UPDATE_STATE_TRANSITIONS: Record<UpdateState, readonly UpdateState[
   // The host reports back on the next check: updated, still going, or failed.
   "awaiting-host": ["checking", "verified", "current", "available", "deferred", "failed"],
   installing: [
+    // Store handoffs and review dialogs do not mean an update was installed.
+    "awaiting-store",
+    "current",
+    "available",
     "awaiting-restart",
     "awaiting-reload",
     "awaiting-host",
@@ -413,7 +427,8 @@ export const UPDATE_STATE_TRANSITIONS: Record<UpdateState, readonly UpdateState[
   ],
   verified: ["checking", "current", "available"],
   failed: ["checking", "available", "deferred", "cancelled", "installing", "downloading"],
-  cancelled: ["checking", "available", "deferred", "current"],
+  // Cancellation keeps the candidate so the user can retry the same attempt.
+  cancelled: ["checking", "available", "deferred", "current", "installing", "downloading"],
 }
 
 export function canTransitionUpdateState(from: UpdateState, to: UpdateState): boolean {

@@ -13,7 +13,7 @@
  * away from someone mid-task is worse than the bug it fixes.
  */
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -27,6 +27,10 @@ import { detectOsFamily } from "@/lib/platform/os"
 import { subscribeResume } from "@/lib/capacitor/app"
 import { getAppUpdateInfo, subscribeFlexibleUpdateDownloaded } from "@/lib/capacitor/app-update"
 import { getGooglePlayServicesStatus } from "@/lib/capacitor/google-play-services"
+import {
+  getRuntimeTargetScopeKey,
+  subscribeRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 /**
  * Squash the boot storm. Settings hydration, locale load and StrictMode's
@@ -35,13 +39,20 @@ import { getGooglePlayServicesStatus } from "@/lib/capacitor/google-play-service
  */
 const MIN_SWEEP_GAP_MS = 60 * 1000
 let lastSweepAt = 0
+let lastSweepScope: string | null = null
 
 /** Test-only: clear the boot-storm throttle between cases. */
 export function __resetUpdateSweepThrottle(): void {
   lastSweepAt = 0
+  lastSweepScope = null
 }
 
 export function UpdateCenterInitializer() {
+  const scope = useSyncExternalStore(
+    subscribeRuntimeTargetContext,
+    getRuntimeTargetScopeKey,
+    () => "null"
+  )
   const rawUpdateSettings = useSettingsStore((s) => s.settings?.updates)
   const updateSettings = resolveUpdateSettings(rawUpdateSettings)
   const t = useTranslations("updates")
@@ -119,12 +130,13 @@ export function UpdateCenterInitializer() {
       cancelled = true
       for (const remove of subscriptions) remove()
     }
-  }, [])
+  }, [scope])
 
   useEffect(() => {
     if (process.env.NODE_ENV === "development") return
     const coordinator = getUpdateCoordinator()
     let cancelled = false
+    notified.current = null
 
     const announce = (count: number, critical: boolean) => {
       const message = critical
@@ -140,14 +152,17 @@ export function UpdateCenterInitializer() {
 
     const run = async (manual: boolean) => {
       const now = Date.now()
-      if (!manual && now - lastSweepAt < MIN_SWEEP_GAP_MS) return
+      if (!manual && lastSweepScope === scope && now - lastSweepAt < MIN_SWEEP_GAP_MS) return
       lastSweepAt = now
+      lastSweepScope = scope
       try {
         // A critical announcement is promised even when polling is off, so the
         // restore pass runs unconditionally and the sweep is what gets gated.
         await coordinator.restore()
+        if (cancelled) return
         const center = readUpdateCenterSettings()
         if (!updateSettings.autoCheck && !center.notifyCritical) return
+        if (!manual && !coordinator.isSweepDue()) return
         const items = await coordinator.check({ manual: false })
         if (cancelled) return
         const actionable = items.filter(
@@ -176,7 +191,7 @@ export function UpdateCenterInitializer() {
       cancelled = true
       clearInterval(id)
     }
-  }, [updateSettings.autoCheck, updateSettings.checkIntervalMinutes])
+  }, [scope, updateSettings.autoCheck, updateSettings.checkIntervalMinutes])
 
   return null
 }

@@ -91,6 +91,19 @@ describe("check", () => {
 })
 
 describe("apply", () => {
+  it("applies the reviewed version even when another check has offered a newer one (U19)", async () => {
+    let latestVersion = "2.0.0"
+    const update = jest.fn(async () => ({ success: true }))
+    const adapter = createPluginAdapter({
+      checkForUpdates: async () => [{ ...INFO, latestVersion }],
+      update,
+    })
+    const [reviewed] = await adapter.check(CONTEXT)
+    latestVersion = "3.0.0"
+    await adapter.check(CONTEXT)
+    await adapter.apply(reviewed, { consented: true })
+    expect(update).toHaveBeenCalledWith("acme.tool", { version: "2.0.0" })
+  })
   it("delegates to the existing plugin installer", async () => {
     const updated: string[] = []
     const adapter = createPluginAdapter({

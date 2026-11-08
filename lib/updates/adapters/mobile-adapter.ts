@@ -27,6 +27,7 @@ import type {
   UpdateCheckContext,
 } from "../adapter"
 import { bestCandidate } from "../catalog-lookup"
+import { requireCatalog } from "../adapter"
 
 export const MOBILE_ASSET_ID = "app"
 
@@ -109,7 +110,7 @@ export function createMobileAdapter(
         // still learns a newer build exists.
       }
 
-      const candidate = bestCandidate(context.catalog, {
+      const candidate = bestCandidate(requireCatalog(context), {
         kind,
         assetId: MOBILE_ASSET_ID,
         executor,

@@ -9,6 +9,7 @@ import { loggers } from "../core/logger"
 import { recordSilentFailure } from "../contracts/diagnostics-store"
 import { canUseTauriInvoke } from "@/lib/native/utils"
 import { usePluginStore } from "@/stores/plugin-runtime"
+import type { PluginManager } from "../core/manager"
 
 // =============================================================================
 // Types
@@ -78,6 +79,7 @@ export class PluginBackupManager {
   private config: BackupConfig
   private backups: Map<string, PluginBackup[]> = new Map()
   private autoBackupInterval: ReturnType<typeof setInterval> | null = null
+  private activeUpdateRecoveries = new Set<string>()
 
   constructor(config: Partial<BackupConfig> = {}) {
     this.config = {
@@ -108,13 +110,15 @@ export class PluginBackupManager {
     }
   }
 
-  private writeIndexToStorage(index: Record<string, PluginBackup[]>): void {
+  private writeIndexToStorage(index: Record<string, PluginBackup[]>, required = false): void {
     try {
       if (typeof localStorage === "undefined") {
+        if (required) throw new Error("Plugin update recovery storage is unavailable")
         return
       }
       localStorage.setItem(this.getIndexStorageKey(), JSON.stringify(index))
     } catch (error) {
+      if (required) throw error
       recordSilentFailure(
         "<backup-index>",
         {
@@ -125,6 +129,55 @@ export class PluginBackupManager {
         error
       )
     }
+  }
+
+  /** Persist before package commit; only this live update may suppress recovery UI. */
+  beginUpdateRecovery(backupId: string): void {
+    const backup = this.getBackup(backupId)
+    if (!backup || typeof backup.metadata?.transactionId !== "string") {
+      throw new Error("Update backup has no transaction identity")
+    }
+    const pending = this.getPendingUpdateRestore(backup.pluginId, true)
+    if (pending && pending.id !== backupId)
+      throw new Error(`Pending restore from backup ${pending.id}`)
+    this.writeUpdateRecoveryMarker(backup, true)
+    this.activeUpdateRecoveries.add(backupId)
+  }
+
+  endUpdateRecoveryAttempt(backupId: string): void {
+    this.activeUpdateRecoveries.delete(backupId)
+  }
+
+  completeUpdateRecovery(backupId: string): void {
+    const backup = this.getBackup(backupId)
+    if (!backup) throw new Error(`Update backup ${backupId} is unavailable`)
+    this.writeUpdateRecoveryMarker(backup, false)
+    this.activeUpdateRecoveries.delete(backupId)
+  }
+
+  getPendingUpdateRestore(pluginId: string, includeActive = false): PluginBackup | undefined {
+    return this.getBackups(pluginId).find(
+      (backup) =>
+        backup.metadata?.hostStateRestorePending === true &&
+        (includeActive || !this.activeUpdateRecoveries.has(backup.id))
+    )
+  }
+
+  private writeUpdateRecoveryMarker(backup: PluginBackup, pending: boolean): void {
+    const index = this.readIndexFromStorage() ?? Object.fromEntries(this.backups)
+    const updated = {
+      ...backup,
+      metadata: { ...backup.metadata, hostStateRestorePending: pending },
+    }
+    const backups = index[backup.pluginId] ?? this.backups.get(backup.pluginId) ?? []
+    index[backup.pluginId] = [updated, ...backups.filter((item) => item.id !== backup.id)]
+    // A best-effort write is insufficient here: without it package mutation
+    // would leave no durable owner for a later host-state restore.
+    this.writeIndexToStorage(index, true)
+    this.backups.set(
+      backup.pluginId,
+      index[backup.pluginId].map((item) => ({ ...item, createdAt: new Date(item.createdAt) }))
+    )
   }
 
   private getPluginRuntime(pluginId: string) {
@@ -338,15 +391,15 @@ export class PluginBackupManager {
   // Backup Restoration
   // ===========================================================================
 
-  async restore(backupId: string): Promise<RestoreResult> {
+  /**
+   * Queue owners pass their stopped runtime to avoid re-entering its lifecycle
+   * queue. Direct pending-recovery callers acquire that package fence here.
+   */
+  async restore(backupId: string, stoppedRuntime?: PluginManager): Promise<RestoreResult> {
     const startTime = Date.now()
 
     // Find backup
-    let backup: PluginBackup | undefined
-    for (const backups of this.backups.values()) {
-      backup = backups.find((b) => b.id === backupId)
-      if (backup) break
-    }
+    const backup = this.getBackup(backupId)
 
     if (!backup) {
       return {
@@ -360,14 +413,47 @@ export class PluginBackupManager {
     }
 
     try {
+      if (backup.metadata?.hostStateRestorePending === true && !stoppedRuntime) {
+        const { getPluginManager } = await import("../core/manager")
+        const manager = getPluginManager()
+        return await manager.withPluginPackageMutation(backup.pluginId, () =>
+          this.restore(backupId, manager)
+        )
+      }
+      if (stoppedRuntime) {
+        const lifecycle = await stoppedRuntime.getPluginLifecycleState(backup.pluginId, {
+          ignorePendingUpdateRestore: true,
+        })
+        if (
+          stoppedRuntime.hasUnresolvedActivationResources(backup.pluginId) ||
+          ["active", "activating", "stopping", "dirty"].includes(lifecycle.actual) ||
+          ["loading", "loaded", "enabling", "enabled", "disabling", "suspended"].includes(
+            this.getPluginRuntime(backup.pluginId)?.status ?? ""
+          )
+        ) {
+          throw new Error(
+            `Pending restore from backup ${backupId}; stop the plugin and complete runtime cleanup first`
+          )
+        }
+      }
       // Restore via Tauri
       if (!this.getPluginRuntime(backup.pluginId)?.path) {
         throw new Error(`Plugin path not found for ${backup.pluginId}`)
+      }
+      if (backup.metadata?.hostStateRestorePending === true) {
+        // The update journal owns the promoted package. Recover it before the
+        // backup replaces package + host state; keep the metadata obligation
+        // through both native operations and any interruption between them.
+        await invoke("plugin_discard_staged_update", {
+          pluginId: backup.pluginId,
+          transactionId: backup.metadata.transactionId,
+        })
       }
       await invoke("plugin_backup_restore", {
         pluginId: backup.pluginId,
         backupId: backup.id,
       })
+      if (backup.metadata?.hostStateRestorePending === true) this.completeUpdateRecovery(backup.id)
 
       return {
         success: true,
@@ -404,9 +490,15 @@ export class PluginBackupManager {
     return this.restore(backups[0].id)
   }
 
-  async restoreToVersion(pluginId: string, version: string): Promise<RestoreResult> {
-    const backups = this.backups.get(pluginId)
-    const backup = backups?.find((b) => b.version === version)
+  async restoreToVersion(
+    pluginId: string,
+    version: string,
+    stoppedRuntime?: PluginManager
+  ): Promise<RestoreResult> {
+    const backups = this.getBackups(pluginId)
+    const backup =
+      backups.find((b) => b.version === version && b.metadata?.hostStateRestorePending === true) ??
+      backups.find((b) => b.version === version)
 
     if (!backup) {
       return {
@@ -419,7 +511,7 @@ export class PluginBackupManager {
       }
     }
 
-    return this.restore(backup.id)
+    return this.restore(backup.id, stoppedRuntime)
   }
 
   // ===========================================================================
@@ -447,6 +539,7 @@ export class PluginBackupManager {
       const index = backups.findIndex((b) => b.id === backupId)
       if (index !== -1) {
         const backup = backups[index]
+        if (this.getBackup(backup.id)?.metadata?.hostStateRestorePending === true) return false
 
         try {
           await invoke("plugin_backup_delete", {
@@ -489,7 +582,11 @@ export class PluginBackupManager {
     let deleted = 0
 
     while (backups.length > maxToKeep) {
-      const oldest = backups.pop()
+      const index = backups.findLastIndex(
+        (backup) => this.getBackup(backup.id)?.metadata?.hostStateRestorePending !== true
+      )
+      if (index === -1) break
+      const [oldest] = backups.splice(index, 1)
       if (oldest) {
         try {
           // The host deletes a backup by identity, never by path:
@@ -567,10 +664,17 @@ export class PluginBackupManager {
   // ===========================================================================
 
   getBackups(pluginId: string): PluginBackup[] {
-    return this.backups.get(pluginId) || []
+    const persisted = this.readIndexFromStorage()?.[pluginId]
+    return persisted
+      ? persisted.map((backup) => ({ ...backup, createdAt: new Date(backup.createdAt) }))
+      : this.backups.get(pluginId) || []
   }
 
   getBackup(backupId: string): PluginBackup | undefined {
+    const persisted = Object.values(this.readIndexFromStorage() ?? {})
+      .flat()
+      .find((backup) => backup.id === backupId)
+    if (persisted) return { ...persisted, createdAt: new Date(persisted.createdAt) }
     for (const backups of this.backups.values()) {
       const backup = backups.find((b) => b.id === backupId)
       if (backup) return backup

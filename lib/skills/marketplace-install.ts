@@ -14,6 +14,8 @@ import type { Skill, SkillStatus, SkillValidationError } from "@cognia/agent-con
 
 /** Options for a marketplace install. */
 export interface MarketplaceInstallOptions {
+  /** Full client-computed snapshot hash accepted during update review. */
+  expectedHash?: string
   /**
    * When true, a clean install lands `disabled` instead of `enabled` — the
    * caller passes `!autoEnableNew` so the "auto-enable new skills" preference
@@ -21,6 +23,15 @@ export interface MarketplaceInstallOptions {
    * issues force `error`; portability findings remain runnable but not exportable.
    */
   disabledByDefault?: boolean
+}
+
+export class SkillContentChangedError extends Error {
+  readonly code = "skill_content_changed"
+
+  constructor() {
+    super("Skill content changed since it was checked; check for updates and review it again")
+    this.name = "SkillContentChangedError"
+  }
 }
 
 /** Resolve the initial status for a freshly-installed marketplace row. */
@@ -56,8 +67,11 @@ async function installSkillsShItem(
   opts?: MarketplaceInstallOptions
 ): Promise<{ skill: Skill; created: boolean; validationErrors: SkillValidationError[] }> {
   const detail = await fetchSkillsShDetail(item)
-  const bundled = filesToBundleResult(detail.files, item.name)
   const marketplaceHash = await computeSkillsShFilesHash(detail.files)
+  if (opts?.expectedHash !== undefined && marketplaceHash !== opts.expectedHash) {
+    throw new SkillContentChangedError()
+  }
+  const bundled = filesToBundleResult(detail.files, item.name)
   const validationErrors = bundled.nonFatalValidationErrors
   const status: SkillStatus = resolveInstallStatus(validationErrors, opts)
   const canonicalId = `skillssh:${item.sourceId}`
@@ -97,6 +111,9 @@ export async function installMarketplaceItem(
   // skills.sh installs carry the full file set (multi-file bundle path).
   if (item.source === "skillssh") {
     return installSkillsShItem(item, opts)
+  }
+  if (opts?.expectedHash !== undefined) {
+    throw new Error("Content-hash-bound updates are only supported for skills.sh installs")
   }
   const fetched = await fetchMarketplaceContent(item)
   const { draft } = parseSkillMarkdown(fetched.content, {

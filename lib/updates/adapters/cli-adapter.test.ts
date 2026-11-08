@@ -44,6 +44,15 @@ describe("cliUpgradeCommand", () => {
 })
 
 describe("createCliAdapter", () => {
+  it("fails catalog-only discovery when the service is unavailable (U11)", async () => {
+    const adapter = createCliAdapter({ installedVersion: async () => "0.4.0" })
+    await expect(
+      adapter.check({ ...CONTEXT, catalog: null, catalogStatus: "unavailable" })
+    ).rejects.toMatchObject({ failure: { kind: "network", code: "catalog_unavailable" } })
+    await expect(
+      adapter.check({ ...CONTEXT, catalog: null, catalogStatus: "unconfigured" })
+    ).rejects.toMatchObject({ failure: { kind: "unsupported", code: "catalog_unconfigured" } })
+  })
   it("reports nothing when the CLI is not installed", async () => {
     const adapter = createCliAdapter({ installedVersion: async () => null })
     expect(await adapter.check(CONTEXT)).toEqual([])
