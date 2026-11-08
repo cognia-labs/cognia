@@ -85278,8 +85278,28 @@
             "type": "string",
             "default": "managed"
           },
+          "flatLayout": {
+            "description": "Why a layout-2 bundle put its roots side by side, named after their directories, instead of keeping their relative layout; a relative path from one root to another may then not resolve. Null when the layout was kept.",
+            "enum": [
+              "shallowParent",
+              "spansVolumes",
+              "nestedRoots",
+              "unportableName",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "lastUsedAt": {
             "format": "int64",
+            "type": "integer"
+          },
+          "layoutVersion": {
+            "description": "1: each root under a storage key (bundles created before the ADR-0111 2026-11-08 amendment). 2: each root at its path relative to the roots' nearest common parent, or side by side when flatLayout says why.",
+            "format": "uint32",
+            "minimum": 0,
             "type": "integer"
           },
           "leases": {
@@ -85357,7 +85377,9 @@
           "bundleId",
           "createdAt",
           "environmentKind",
+          "flatLayout",
           "lastUsedAt",
+          "layoutVersion",
           "leases",
           "ownerRef",
           "ownerType",
@@ -85918,8 +85940,28 @@
                 "type": "string",
                 "default": "managed"
               },
+              "flatLayout": {
+                "description": "Why a layout-2 bundle put its roots side by side, named after their directories, instead of keeping their relative layout; a relative path from one root to another may then not resolve. Null when the layout was kept.",
+                "enum": [
+                  "shallowParent",
+                  "spansVolumes",
+                  "nestedRoots",
+                  "unportableName",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "lastUsedAt": {
                 "format": "int64",
+                "type": "integer"
+              },
+              "layoutVersion": {
+                "description": "1: each root under a storage key (bundles created before the ADR-0111 2026-11-08 amendment). 2: each root at its path relative to the roots' nearest common parent, or side by side when flatLayout says why.",
+                "format": "uint32",
+                "minimum": 0,
                 "type": "integer"
               },
               "leases": {
@@ -85997,7 +86039,9 @@
               "bundleId",
               "createdAt",
               "environmentKind",
+              "flatLayout",
               "lastUsedAt",
+              "layoutVersion",
               "leases",
               "ownerRef",
               "ownerType",
@@ -86599,8 +86643,28 @@
               "type": "string",
               "default": "managed"
             },
+            "flatLayout": {
+              "description": "Why a layout-2 bundle put its roots side by side, named after their directories, instead of keeping their relative layout; a relative path from one root to another may then not resolve. Null when the layout was kept.",
+              "enum": [
+                "shallowParent",
+                "spansVolumes",
+                "nestedRoots",
+                "unportableName",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "lastUsedAt": {
               "format": "int64",
+              "type": "integer"
+            },
+            "layoutVersion": {
+              "description": "1: each root under a storage key (bundles created before the ADR-0111 2026-11-08 amendment). 2: each root at its path relative to the roots' nearest common parent, or side by side when flatLayout says why.",
+              "format": "uint32",
+              "minimum": 0,
               "type": "integer"
             },
             "leases": {
@@ -86678,7 +86742,9 @@
             "bundleId",
             "createdAt",
             "environmentKind",
+            "flatLayout",
             "lastUsedAt",
+            "layoutVersion",
             "leases",
             "ownerRef",
             "ownerType",
@@ -103770,8 +103836,28 @@
             "type": "string",
             "default": "managed"
           },
+          "flatLayout": {
+            "description": "Why a layout-2 bundle put its roots side by side, named after their directories, instead of keeping their relative layout; a relative path from one root to another may then not resolve. Null when the layout was kept.",
+            "enum": [
+              "shallowParent",
+              "spansVolumes",
+              "nestedRoots",
+              "unportableName",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "lastUsedAt": {
             "format": "int64",
+            "type": "integer"
+          },
+          "layoutVersion": {
+            "description": "1: each root under a storage key (bundles created before the ADR-0111 2026-11-08 amendment). 2: each root at its path relative to the roots' nearest common parent, or side by side when flatLayout says why.",
+            "format": "uint32",
+            "minimum": 0,
             "type": "integer"
           },
           "leases": {
@@ -103849,7 +103935,9 @@
           "bundleId",
           "createdAt",
           "environmentKind",
+          "flatLayout",
           "lastUsedAt",
+          "layoutVersion",
           "leases",
           "ownerRef",
           "ownerType",
@@ -112579,5 +112667,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "4418ab61861db2092754ecb37e3c73bb6877e2c09865d9324fdc624a95ef734c"
+  "catalogHash": "42ac4ccbf39c21b4aec7f35efad1b68c9547446dd0ef6069ccd291b92603cb6f"
 }

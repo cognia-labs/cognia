@@ -149,7 +149,23 @@ export interface WorkspaceBundle {
   lastUsedAt: number
   pinned: boolean
   createdAt: number
+  /**
+   * How the bundle lays out its roots (ADR-0111, 2026-11-08 amendment). `1`:
+   * each root under a storage key, as bundles created before the amendment
+   * keep until they end. `2`: each root at its path relative to the roots'
+   * nearest common parent, so `file:../sdk` still resolves, or side by side
+   * when {@link flatLayout} says why.
+   */
+  layoutVersion: number
+  /**
+   * Why the roots were put side by side instead of keeping their relative
+   * layout; `null` when it was kept. Shown once, when the bundle is created.
+   */
+  flatLayout: FlatBundleLayout | null
 }
+
+/** `cognia_task_workspace::FlatBundleLayout`. */
+export type FlatBundleLayout = "shallowParent" | "spansVolumes" | "nestedRoots" | "unportableName"
 
 export interface WorkspaceBundleOutcome {
   bundleId: string

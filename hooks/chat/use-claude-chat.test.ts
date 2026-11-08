@@ -2283,6 +2283,43 @@ describe("useClaudeChat — actions", () => {
       )
     })
 
+    it.each([
+      { acquired: true, flatLayout: "spansVolumes", warns: true },
+      { acquired: false, flatLayout: "spansVolumes", warns: false },
+      { acquired: true, flatLayout: null, warns: false },
+    ])(
+      "says why a new bundle could not keep its repositories' layout (%o)",
+      async ({ acquired, flatLayout, warns }) => {
+        getSessionMock.mockResolvedValue({
+          id: "sess-1",
+          projectId: "project-1",
+          executionContext: { ...localContext, location: "managedWorktree" },
+        })
+        openWorkspaceBundleTurnLeaseMock.mockResolvedValue({
+          bundleTurnId: "turn-1",
+          run: { runId: "run-1", executionRoot: "/physical/workspace-1" },
+          primaryAlias: "/managed/sess-1",
+          additionalAliases: [],
+        })
+        const binding = ensureSessionExecutionBundleMock.getMockImplementation()!
+        ensureSessionExecutionBundleMock.mockImplementation(async (input: unknown) => {
+          const bound = await binding(input)
+          return { ...bound, acquired, bundle: { ...bound.bundle, flatLayout } }
+        })
+        const { result } = renderHook(() => useClaudeChat())
+        await flush()
+        await act(async () => {
+          await result.current.send("hello", { model: "sonnet" })
+        })
+        const warned = toastWarning.mock.calls.filter(([message]) =>
+          String(message).includes("side by side")
+        )
+        expect(warned).toHaveLength(warns ? 1 : 0)
+        if (warns) expect(String(warned[0]![0])).toContain("different disks")
+        expect(sendPromptMock).toHaveBeenCalled()
+      }
+    )
+
     it.each(["builtin", "external"])(
       "refuses %s launch visibly and settles acquired resources on port allocation failure",
       async (runtime) => {

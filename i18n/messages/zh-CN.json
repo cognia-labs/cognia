@@ -11166,6 +11166,15 @@
         "title": "需要你处理"
       }
     },
+    "workspaceLayout": {
+      "flat": "任务副本把这些仓库平铺放置，因为{reason}。仓库之间的相对路径（例如 file:../sdk）在副本里可能无法解析。",
+      "reasons": {
+        "nestedRoots": "一个仓库位于另一个仓库内",
+        "shallowParent": "它们只共享主目录或更上层的目录",
+        "spansVolumes": "它们位于不同的磁盘上",
+        "unportableName": "路径上有目录名无法在副本中重建，或有两个仓库路径仅大小写不同"
+      }
+    },
     "workspaceRestricted": {
       "body": "此工作区尚未受信任。智能体以只读方式运行——Bash、编辑、写入与计算机操作已禁用。",
       "rootsLabel": "未受信任的文件夹",

@@ -9,6 +9,8 @@ function bundle(id: string, primaryId: string): WorkspaceBundle {
   return {
     bundleId: id,
     environmentKind: "managed",
+    layoutVersion: 2,
+    flatLayout: null,
     ownerType: "team",
     ownerRef: "run-1",
     state: "active",

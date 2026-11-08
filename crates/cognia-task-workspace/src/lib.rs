@@ -51,8 +51,9 @@ pub use ports::{
 };
 
 pub use bundle::{
-    execute_bundle_apply, plan_bundle_apply, plan_bundle_composition, ApplyStep, BundleApplier,
-    BundleApplyPlan, BundleError, PhysicalLeaseGroup, RootRequest,
+    execute_bundle_apply, plan_bundle_apply, plan_bundle_composition, plan_bundle_layout,
+    ApplyStep, BundleApplier, BundleApplyPlan, BundleError, BundleLayoutPlan, PhysicalLeaseGroup,
+    RootRequest,
 };
 pub use changeset::{
     capture_changeset_core, changeset_eligibility, validate_changeset_transition, ChangesetError,
@@ -147,19 +148,19 @@ pub use types::{
     AcquireWorkspaceBundle, AppliedFile, ApplyOutcome, BeginTaskRun, BeginWorkspaceBundleTurn,
     BundleHandoffOutcome, BundleHandoffRequest, BundleHandoffRootSelection,
     BundleHandoffUndoOutcome, ChangeKind, ConflictResolution, ContributionOrigin,
-    EnsureSessionScratchWorkspace, IsolationKind,
-    PatchConflict, PatchFile, PatchHunk, PatchSelection, PatchSet, PatchState, PruneOutcome,
-    ResourceCaptureClass, ResourceChange, ResourceEvent, ResourceEventCounts,
-    ResourceEventEvidence, ResourceKind, ResourceTimelineCompleteness, ResourceTrackingPolicy,
-    RunState, TaskResourceManifest, TaskResourceSummary, TaskRun, TaskWorkspace,
-    TaskWorkspaceState, WorkspaceBaseKind, WorkspaceBaseSpec, WorkspaceBundle,
-    WorkspaceBundleOutcome, WorkspaceBundleRootInput, WorkspaceBundleTurnLease,
-    WorkspaceBundleTurnOutcome, WorkspaceBundleTurnRunLease, WorkspaceBundleTurnRunOutcome,
-    WorkspaceCacheLink, WorkspaceEnvironmentAction, WorkspaceEnvironmentKind,
-    WorkspaceEnvironmentOwnership, WorkspaceEnvironmentSummary, WorkspaceLifecyclePolicy,
-    WorkspaceMaintenanceEvent, WorkspaceMaintenanceEventKind, WorkspaceMaintenanceRequest,
-    WorkspaceMaintenanceResult, WorkspaceOwnerType, WorkspaceProvisioning, WorkspaceRecord,
-    WorkspaceRootLease, WorkspaceRootRole, WorkspaceSourceBinding, WorkspaceState,
+    EnsureSessionScratchWorkspace, FlatBundleLayout, IsolationKind, PatchConflict, PatchFile,
+    PatchHunk, PatchSelection, PatchSet, PatchState, PruneOutcome, ResourceCaptureClass,
+    ResourceChange, ResourceEvent, ResourceEventCounts, ResourceEventEvidence, ResourceKind,
+    ResourceTimelineCompleteness, ResourceTrackingPolicy, RunState, TaskResourceManifest,
+    TaskResourceSummary, TaskRun, TaskWorkspace, TaskWorkspaceState, WorkspaceBaseKind,
+    WorkspaceBaseSpec, WorkspaceBundle, WorkspaceBundleOutcome, WorkspaceBundleRootInput,
+    WorkspaceBundleTurnLease, WorkspaceBundleTurnOutcome, WorkspaceBundleTurnRunLease,
+    WorkspaceBundleTurnRunOutcome, WorkspaceCacheLink, WorkspaceEnvironmentAction,
+    WorkspaceEnvironmentKind, WorkspaceEnvironmentOwnership, WorkspaceEnvironmentSummary,
+    WorkspaceLifecyclePolicy, WorkspaceMaintenanceEvent, WorkspaceMaintenanceEventKind,
+    WorkspaceMaintenanceRequest, WorkspaceMaintenanceResult, WorkspaceOwnerType,
+    WorkspaceProvisioning, WorkspaceRecord, WorkspaceRootLease, WorkspaceRootRole,
+    WorkspaceSourceBinding, WorkspaceState, BUNDLE_LAYOUT_RELATIVE, BUNDLE_LAYOUT_STORAGE_KEY,
 };
 pub use watcher::{
     ResourceEventChange, ResourceEventKind, TaskWorkspaceEventSink, TaskWorkspaceResourceEvent,

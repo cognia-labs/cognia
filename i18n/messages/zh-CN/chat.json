@@ -3261,5 +3261,14 @@
     "keptLocally": "已保留在此设备上。可复制文字后重试。",
     "notSent": "消息未发送",
     "unknownReason": "Host 拒绝了这条消息。"
+  },
+  "workspaceLayout": {
+    "flat": "任务副本把这些仓库平铺放置，因为{reason}。仓库之间的相对路径（例如 file:../sdk）在副本里可能无法解析。",
+    "reasons": {
+      "nestedRoots": "一个仓库位于另一个仓库内",
+      "shallowParent": "它们只共享主目录或更上层的目录",
+      "spansVolumes": "它们位于不同的磁盘上",
+      "unportableName": "路径上有目录名无法在副本中重建，或有两个仓库路径仅大小写不同"
+    }
   }
 }

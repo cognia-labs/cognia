@@ -770,11 +770,18 @@ impl TaskWorkspaceService {
             .get(&lease.workspace_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "scratch workspace registry record is missing".to_string())?;
-        let expected_root = self
+        let bundle_dir = self
             .execution_dir
             .join("bundles")
-            .join(storage_key(&bundle.bundle_id))
-            .join(storage_key(&lease.workspace_id));
+            .join(storage_key(&bundle.bundle_id));
+        // The layout the bundle was created with, not today's: a scratch
+        // bundle from before the relative layout keeps its storage-key path.
+        let expected_root = if bundle.layout_version == crate::BUNDLE_LAYOUT_STORAGE_KEY {
+            bundle_dir.join(storage_key(&lease.workspace_id))
+        } else {
+            let layout = crate::plan_bundle_layout(&[seed.to_path_buf()], &[None], None);
+            bundle_root_in(&bundle_dir, &layout.relative[0])?
+        };
         if record.owner_type != WorkspaceOwnerType::Session
             || record.owner_ref.as_deref() != Some(session_id)
             || record.environment_kind != crate::WorkspaceEnvironmentKind::Managed
@@ -3076,8 +3083,41 @@ impl TaskWorkspaceService {
         .map_err(|error| error.to_string())?;
         self.enforce_managed_workspace_capacity(groups.len() as u32)?;
 
+        // ADR-0111 2026-11-08 amendment: the roots keep their layout relative
+        // to one another, so a sibling repository is still `../sdk` inside
+        // the bundle. Planned over the physical groups, one directory each.
+        let group_roots = groups
+            .iter()
+            .map(|group| {
+                let logical_id = group
+                    .logical_root_ids
+                    .first()
+                    .ok_or_else(|| "bundle planner returned an empty physical group".to_string())?;
+                let root = inspected
+                    .iter()
+                    .find(|root| &root.logical_root_id == logical_id)
+                    .ok_or_else(|| {
+                        format!("bundle root disappeared during layout: {logical_id}")
+                    })?;
+                Ok(root
+                    .repository_root
+                    .clone()
+                    .unwrap_or_else(|| root.source_root.clone()))
+            })
+            .collect::<Result<Vec<PathBuf>, String>>()?;
+        let devices = group_roots
+            .iter()
+            .map(|root| volume_of(root))
+            .collect::<Vec<_>>();
+        let layout = crate::plan_bundle_layout(&group_roots, &devices, home_dir().as_deref());
+        bundle.flat_layout = layout.flat;
+        let bundle_dir = self
+            .execution_dir
+            .join("bundles")
+            .join(storage_key(&bundle.bundle_id));
+
         let mut acquired = Vec::with_capacity(groups.len());
-        for group in &groups {
+        for (index, group) in groups.iter().enumerate() {
             let _perf_root = cognia_instrument::guard("workspace.acquire_root");
             let logical_id = group
                 .logical_root_ids
@@ -3094,11 +3134,7 @@ impl TaskWorkspaceService {
                 .workspace_id
                 .clone()
                 .ok_or_else(|| "bundle planner omitted workspace identity".to_string())?;
-            let execution_root = self
-                .execution_dir
-                .join("bundles")
-                .join(storage_key(&bundle.bundle_id))
-                .join(storage_key(&workspace_id));
+            let execution_root = bundle_root_in(&bundle_dir, &layout.relative[index])?;
             let provisioned = (|| {
                 let tracking_policy = crate::ResourceTrackingPolicy::default();
                 let (mut baseline, blobs) = capture_with_policy(source_root, &tracking_policy)?;
@@ -4077,6 +4113,7 @@ impl TaskWorkspaceService {
                     .map_err(|error| error.to_string())?;
             }
             remove_managed_execution(&record)?;
+            self.prune_empty_bundle_dirs(Path::new(&record.execution_root));
         } else if self
             .store
             .lock()
@@ -4345,6 +4382,21 @@ impl TaskWorkspaceService {
         ))
     }
 
+    /// Remove the directories a bundle root left above itself once they are
+    /// empty, up to the bundles directory. A relative layout nests a root
+    /// (`bundles/<id>/libs/sdk`); its empty parents are the bundle's, not the
+    /// user's, and nothing else is ever created there.
+    fn prune_empty_bundle_dirs(&self, execution_root: &Path) {
+        let bundles = self.execution_dir.join("bundles");
+        let mut current = execution_root.parent();
+        while let Some(dir) = current {
+            if dir == bundles || !dir.starts_with(&bundles) || fs::remove_dir(dir).is_err() {
+                break;
+            }
+            current = dir.parent();
+        }
+    }
+
     fn discard_managed_workspace(&self, record: &WorkspaceRecord, now: i64) {
         // Only an Active worktree was ever announced as created; a discard
         // during provisioning rollback has no `WorktreeCreate` to pair with.
@@ -4362,6 +4414,7 @@ impl TaskWorkspaceService {
             WorkspaceState::Removing,
             now,
         );
+        self.prune_empty_bundle_dirs(Path::new(&record.execution_root));
         if transitioned.is_ok() {
             let reason = crate::registry::compose_lock_reason(&record.workspace_id);
             let removed = self
@@ -6523,10 +6576,13 @@ fn create_execution(
         if let Some(commit) = base_commit.as_deref() {
             backfill_derived_base(mirrors, workspace_root, commit, sparse_paths, budget)?;
         }
-        if let Some(parent) = execution_root.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("create {}: {error}", parent.display()))?;
-        }
+        // The worktree's own directory too, empty (`worktree add` accepts an
+        // empty one): with roots at their relative paths, a sibling root's
+        // archive prunes empty parents in this bundle, and one it could see
+        // empty between this and git writing the worktree would be removed
+        // under the add.
+        fs::create_dir_all(execution_root)
+            .map_err(|error| format!("create {}: {error}", execution_root.display()))?;
         // A caller-named worktree takes `-b <name>` instead of `--detach`: the
         // branch IS the user-facing name they asked for, so the ADR-0111
         // stale-branch objection does not apply — the branch was the request,
@@ -7490,6 +7546,44 @@ fn inspect_workspace_source(source_root: &Path) -> Result<InspectedWorkspaceSour
         git_common_dir,
         repository_fingerprint: format!("sha256:{}", hex::encode(digest.finalize())),
     })
+}
+
+/// `relative` under `bundle_dir`, refused unless every component is a plain
+/// name: the planner guarantees it, and this is where it becomes a path.
+fn bundle_root_in(bundle_dir: &Path, relative: &Path) -> Result<PathBuf, String> {
+    let plain = relative.components().count() > 0
+        && relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !plain {
+        return Err(format!(
+            "bundle layout produced an unsafe root path: {}",
+            relative.display()
+        ));
+    }
+    Ok(bundle_dir.join(relative))
+}
+
+/// The volume `path` is on, where the platform says.
+fn volume_of(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        fs::metadata(path).ok().map(|metadata| metadata.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// The user's home directory, resolved like the roots are.
+fn home_dir() -> Option<PathBuf> {
+    let raw = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    // Canonical or nothing: the roots it is compared with are canonical, and a
+    // raw `C:\Users\me` never matches `\\?\C:\Users\me`.
+    PathBuf::from(raw).canonicalize().ok()
 }
 
 fn inspect_bundle_root(
@@ -16005,6 +16099,233 @@ mod tests {
             );
         }
         assert_eq!(git_lines(&root, &["rev-parse", "relative-ref"]), parent);
+    }
+
+    /// ADR-0111 2026-11-08 amendment: sibling repositories stay siblings in
+    /// a bundle, so a relative path from one to the other still resolves, and
+    /// the bundle's directories are gone once its roots are.
+    #[test]
+    fn sibling_repositories_keep_their_relative_layout_inside_a_bundle() {
+        let data = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        let app = parent.path().join("app");
+        let sdk = parent.path().join("libs").join("sdk");
+        for repository in [&app, &sdk] {
+            fs::create_dir_all(repository).unwrap();
+            git2::Repository::init(repository).unwrap();
+            seed_git_repository(repository);
+        }
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let bundle = service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                requested_name: None,
+                provisioning: None,
+                project_id: None,
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("session-layout".into()),
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                base: WorkspaceBaseSpec::LocalHead,
+                roots: vec![
+                    crate::WorkspaceBundleRootInput {
+                        logical_root_id: "app".into(),
+                        role: crate::WorkspaceRootRole::Primary,
+                        source_root: app.to_string_lossy().into_owned(),
+                    },
+                    crate::WorkspaceBundleRootInput {
+                        logical_root_id: "sdk".into(),
+                        role: crate::WorkspaceRootRole::Additional,
+                        source_root: sdk.to_string_lossy().into_owned(),
+                    },
+                ],
+            })
+            .unwrap();
+        assert_eq!(bundle.layout_version, crate::BUNDLE_LAYOUT_RELATIVE);
+        assert_eq!(bundle.flat_layout, None);
+        let alias = |id: &str| {
+            PathBuf::from(
+                &bundle
+                    .leases
+                    .iter()
+                    .find(|lease| lease.logical_root_id == id)
+                    .unwrap()
+                    .alias_path,
+            )
+        };
+        let (app_alias, sdk_alias) = (alias("app"), alias("sdk"));
+        assert!(app_alias.ends_with("app"), "{}", app_alias.display());
+        assert!(sdk_alias.ends_with("libs/sdk"), "{}", sdk_alias.display());
+        assert_eq!(
+            app_alias
+                .join("../libs/sdk/README.md")
+                .canonicalize()
+                .unwrap(),
+            sdk_alias.join("README.md").canonicalize().unwrap(),
+            "file:../libs/sdk resolves inside the bundle"
+        );
+        let stored = service
+            .get_workspace_bundle(&bundle.bundle_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.layout_version, crate::BUNDLE_LAYOUT_RELATIVE);
+
+        let bundle_dir = service
+            .execution_dir
+            .join("bundles")
+            .join(storage_key(&bundle.bundle_id));
+        let workspaces = bundle
+            .leases
+            .iter()
+            .map(|lease| lease.workspace_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let lease_of = |id: &str| {
+            bundle
+                .leases
+                .iter()
+                .find(|lease| lease.logical_root_id == id)
+                .unwrap()
+                .workspace_id
+                .clone()
+        };
+        assert_eq!(workspaces.len(), 2);
+        // Archiving the app leaves the SDK and the directories above it.
+        service.archive_managed_workspace(&lease_of("app")).unwrap();
+        assert!(!app_alias.exists());
+        assert!(sdk_alias.join("README.md").exists());
+        service.archive_managed_workspace(&lease_of("sdk")).unwrap();
+        assert!(!sdk_alias.exists());
+        assert!(!bundle_dir.exists(), "empty bundle directories are pruned");
+        assert!(
+            service.execution_dir.join("bundles").is_dir(),
+            "never above `bundles/`"
+        );
+    }
+
+    /// A bundle that fails on its second root leaves no directories of the
+    /// relative layout behind.
+    #[test]
+    fn a_failed_root_leaves_no_bundle_directories_behind() {
+        let data = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        let app = parent.path().join("app");
+        let empty = parent.path().join("libs").join("empty");
+        fs::create_dir_all(&app).unwrap();
+        git2::Repository::init(&app).unwrap();
+        seed_git_repository(&app);
+        fs::create_dir_all(&empty).unwrap();
+        // A repository without a commit has no base to check out.
+        git2::Repository::init(&empty).unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let result = service.acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+            requested_name: None,
+            provisioning: None,
+            project_id: None,
+            owner_type: WorkspaceOwnerType::Session,
+            owner_ref: Some("session-rollback".into()),
+            environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+            base: WorkspaceBaseSpec::LocalHead,
+            roots: vec![
+                crate::WorkspaceBundleRootInput {
+                    logical_root_id: "app".into(),
+                    role: crate::WorkspaceRootRole::Primary,
+                    source_root: app.to_string_lossy().into_owned(),
+                },
+                crate::WorkspaceBundleRootInput {
+                    logical_root_id: "empty".into(),
+                    role: crate::WorkspaceRootRole::Additional,
+                    source_root: empty.to_string_lossy().into_owned(),
+                },
+            ],
+        });
+        assert!(result.is_err());
+        let bundles = service.execution_dir.join("bundles");
+        let left: Vec<_> = fs::read_dir(&bundles)
+            .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+            .unwrap_or_default();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    /// ADR-0111 (2026-11-08 amendment), V5: a bundle made before the relative
+    /// layout keeps its storage-key path. A scratch session validates against
+    /// the layout it was made with, survives a restart (which reconciles), and
+    /// releases its directories like a new one.
+    #[test]
+    fn a_scratch_bundle_from_the_storage_key_layout_is_reused_and_released() {
+        let data = TempDir::new().unwrap();
+        let config = ServiceConfig::new(data.path().into());
+        let service = TaskWorkspaceService::open(config.clone()).unwrap();
+        let mut bundle = service
+            .ensure_session_scratch_workspace(&scratch_input("session-old"))
+            .unwrap();
+        assert_eq!(bundle.layout_version, crate::BUNDLE_LAYOUT_RELATIVE);
+        let workspace_id = bundle.leases[0].workspace_id.clone();
+        let bundle_dir = service
+            .execution_dir
+            .join("bundles")
+            .join(storage_key(&bundle.bundle_id));
+        let legacy_root = bundle_dir.join(storage_key(&workspace_id));
+        let current_root = PathBuf::from(&bundle.leases[0].alias_path);
+        assert_ne!(current_root, legacy_root);
+        fs::write(current_root.join("keep.txt"), "retained").unwrap();
+        // Put the bundle back the way the storage-key layout left it.
+        fs::rename(&current_root, &legacy_root).unwrap();
+        let legacy = legacy_root.to_string_lossy().into_owned();
+        bundle.leases[0].alias_path = legacy.clone();
+        {
+            let store = service.store.lock();
+            store.put_workspace_bundle(&bundle).unwrap();
+            store
+                .connection
+                .execute(
+                    "UPDATE workspace_bundles SET layout_version = 1 WHERE bundle_id = ?1",
+                    [&bundle.bundle_id],
+                )
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "UPDATE workspace_registry SET execution_root = ?1 WHERE workspace_id = ?2",
+                    [&legacy, &workspace_id],
+                )
+                .unwrap();
+        }
+        // A relative-layout expectation refuses the legacy path...
+        let mut relative = service
+            .get_workspace_bundle(&bundle.bundle_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(relative.layout_version, crate::BUNDLE_LAYOUT_STORAGE_KEY);
+        relative.layout_version = crate::BUNDLE_LAYOUT_RELATIVE;
+        let seed = PathBuf::from(
+            &service
+                .registry
+                .get(&workspace_id)
+                .unwrap()
+                .unwrap()
+                .source_root,
+        );
+        assert!(service
+            .validate_session_scratch_bundle(&relative, "session-old", &seed)
+            .unwrap_err()
+            .contains("managed path"));
+        // ...and the recorded layout accepts it, across a restart.
+        drop(service);
+        let service = TaskWorkspaceService::open(config).unwrap();
+        let again = service
+            .ensure_session_scratch_workspace(&scratch_input("session-old"))
+            .unwrap();
+        assert_eq!(again.bundle_id, bundle.bundle_id);
+        assert_eq!(again.layout_version, crate::BUNDLE_LAYOUT_STORAGE_KEY);
+        assert_eq!(again.leases[0].alias_path, legacy);
+        assert_eq!(
+            fs::read_to_string(legacy_root.join("keep.txt")).unwrap(),
+            "retained"
+        );
+        service.archive_managed_workspace(&workspace_id).unwrap();
+        assert!(!legacy_root.exists());
+        assert!(
+            !bundle_dir.exists(),
+            "the legacy bundle directory is pruned"
+        );
     }
 
     /// ADR-0176 A2, D29: a worktree over a supplied checkout no longer depends

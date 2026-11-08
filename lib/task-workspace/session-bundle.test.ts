@@ -38,6 +38,8 @@ const project = {
 const bundle = {
   bundleId: "bundle-1",
   environmentKind: "managed" as const,
+  layoutVersion: 2,
+  flatLayout: null,
   ownerType: "session" as const,
   ownerRef: "session-1",
   state: "active" as const,
@@ -253,18 +255,21 @@ describe("ensureSessionExecutionBundle", () => {
     expect(binding.context).not.toHaveProperty("worktreePath")
     expect(binding.context).not.toHaveProperty("branch")
     expect(binding.context).not.toHaveProperty("baseRef")
+    expect(binding.acquired).toBe(true)
   })
 
   it("reuses a persisted active bundle without provisioning again", async () => {
     getWorkspaceBundle.mockResolvedValue(bundle)
 
-    await ensureSessionExecutionBundle({
+    const binding = await ensureSessionExecutionBundle({
       sessionId: "session-1",
       context: { ...context, execution: { ...context.execution!, bundleId: "bundle-1" } },
       project,
     })
 
     expect(acquireWorkspaceBundle).not.toHaveBeenCalled()
+    // A reused bundle already told the person about its layout once.
+    expect(binding.acquired).toBe(false)
   })
 
   it("forwards the caller-chosen worktree name into the acquisition", async () => {

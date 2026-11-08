@@ -600,6 +600,8 @@ describe("headless session scratch workspace", () => {
       ownerType: "session",
       ownerRef: row.id,
       environmentKind: "managed",
+      layoutVersion: 2,
+      flatLayout: null,
       state: "active",
       leases: [
         {

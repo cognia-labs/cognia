@@ -33,13 +33,15 @@
 
 use crate::{
     types::{
-        PatchConflict, WorkspaceBundle, WorkspaceBundleOutcome, WorkspaceOwnerType,
-        WorkspaceRootLease, WorkspaceRootRole, WorkspaceState,
+        FlatBundleLayout, PatchConflict, WorkspaceBundle, WorkspaceBundleOutcome,
+        WorkspaceOwnerType, WorkspaceRootLease, WorkspaceRootRole, WorkspaceState,
+        BUNDLE_LAYOUT_RELATIVE,
     },
     IsolationKind, PatchSet,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
 /// A logical root the caller wants to compose into a bundle.
@@ -193,6 +195,8 @@ pub fn plan_bundle_composition(
             last_used_at: now,
             pinned: false,
             created_at: now,
+            layout_version: BUNDLE_LAYOUT_RELATIVE,
+            flat_layout: None,
         },
         groups,
     ))
@@ -472,11 +476,345 @@ pub fn execute_bundle_apply(
     }
 }
 
+/// Where each physical root of a bundle sits inside the bundle directory
+/// ([`BUNDLE_LAYOUT_RELATIVE`], ADR-0111 2026-11-08 amendment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleLayoutPlan {
+    /// One directory per root, relative to the bundle directory, in the order
+    /// the roots were given. Every component is a plain name.
+    pub relative: Vec<PathBuf>,
+    /// Set when the roots were laid side by side and that loses a relative
+    /// path between them.
+    pub flat: Option<FlatBundleLayout>,
+}
+
+/// Lay out a bundle's physical roots.
+///
+/// `roots` are the roots' absolute, canonical directories, `devices` each
+/// root's volume when known (same order), `home` the user's home directory.
+/// Each root goes at its path relative to the roots' nearest common parent,
+/// so sibling repositories stay siblings and `file:../sdk` still resolves.
+/// When that parent is the filesystem root, the home directory or above it,
+/// the roots span volumes, one root holds another, or a directory name on the
+/// way cannot be recreated safely, the roots go side by side under their own
+/// names (a numeric suffix on a clash), and `flat` says why, unless that flat
+/// layout happens to be the relative one. A single root goes under its own
+/// name: there is no other root to keep a relation to.
+pub fn plan_bundle_layout(
+    roots: &[PathBuf],
+    devices: &[Option<u64>],
+    home: Option<&Path>,
+) -> BundleLayoutPlan {
+    if roots.len() < 2 {
+        return BundleLayoutPlan {
+            relative: flat_names(roots),
+            flat: None,
+        };
+    }
+    let relative = keep_relative_layout(roots, devices, home);
+    match relative {
+        Ok(relative) => BundleLayoutPlan {
+            relative,
+            flat: None,
+        },
+        Err((reason, kept)) => {
+            let flat = flat_names(roots);
+            // Siblings directly under a shallow parent come out the same
+            // either way, and lose nothing.
+            let lossless = kept.as_ref().is_some_and(|kept| kept == &flat);
+            BundleLayoutPlan {
+                relative: flat,
+                flat: (!lossless).then_some(reason),
+            }
+        }
+    }
+}
+
+/// The relative layout, or why it cannot be kept (with the relative paths
+/// when they could at least be computed).
+fn keep_relative_layout(
+    roots: &[PathBuf],
+    devices: &[Option<u64>],
+    home: Option<&Path>,
+) -> Result<Vec<PathBuf>, (FlatBundleLayout, Option<Vec<PathBuf>>)> {
+    let known: HashSet<u64> = devices.iter().flatten().copied().collect();
+    if known.len() > 1 {
+        return Err((FlatBundleLayout::SpansVolumes, None));
+    }
+    for (index, root) in roots.iter().enumerate() {
+        if roots
+            .iter()
+            .enumerate()
+            .any(|(other, candidate)| other != index && root.starts_with(candidate))
+        {
+            return Err((FlatBundleLayout::NestedRoots, None));
+        }
+    }
+    let Some(parent) = common_parent(roots) else {
+        return Err((FlatBundleLayout::SpansVolumes, None));
+    };
+    let relative = roots
+        .iter()
+        .map(|root| root.strip_prefix(&parent).map(Path::to_path_buf))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| (FlatBundleLayout::SpansVolumes, None))?;
+    let shallow = parent.parent().is_none() || home.is_some_and(|home| home.starts_with(&parent));
+    if shallow {
+        return Err((FlatBundleLayout::ShallowParent, Some(relative)));
+    }
+    if relative
+        .iter()
+        .any(|path| !path.components().all(is_portable_component))
+    {
+        return Err((FlatBundleLayout::UnportableName, None));
+    }
+    // A bundle may sit on a case-insensitive volume even when the sources do
+    // not: two roots whose paths differ only in case would share a directory.
+    let folded: Vec<PathBuf> = relative
+        .iter()
+        .map(|path| PathBuf::from(path.to_string_lossy().to_lowercase()))
+        .collect();
+    for (index, path) in folded.iter().enumerate() {
+        if folded
+            .iter()
+            .enumerate()
+            .any(|(other, candidate)| other != index && path.starts_with(candidate))
+        {
+            return Err((FlatBundleLayout::UnportableName, None));
+        }
+    }
+    Ok(relative)
+}
+
+/// The deepest directory every root is under.
+fn common_parent(roots: &[PathBuf]) -> Option<PathBuf> {
+    let mut parent = roots.first()?.parent()?.to_path_buf();
+    for root in &roots[1..] {
+        while !root.starts_with(&parent) {
+            parent = parent.parent()?.to_path_buf();
+        }
+    }
+    Some(parent)
+}
+
+fn is_portable_component(component: Component<'_>) -> bool {
+    match component {
+        Component::Normal(name) => name.to_str().is_some_and(|name| {
+            !name.is_empty()
+                && !name.chars().any(char::is_control)
+                && (!cfg!(windows) || is_windows_name(name))
+        }),
+        _ => false,
+    }
+}
+
+/// Whether Windows recreates `name` as itself under an ordinary path.
+///
+/// Roots arrive canonical (`\\?\C:\...`), and through such a path a folder
+/// can be called `foo.` or `con`; the bundle is written through an ordinary
+/// path, where a trailing dot or space is dropped and a device name is a
+/// device, so `foo.` and `foo` would land in one directory.
+fn is_windows_name(name: &str) -> bool {
+    const RESERVED: [&str; 4] = ["con", "prn", "aux", "nul"];
+    if name.ends_with(['.', ' ']) || name.contains(['<', '>', ':', '"', '|', '?', '*']) {
+        return false;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end()
+        .to_ascii_lowercase();
+    let device = RESERVED.contains(&stem.as_str())
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.as_bytes()[3].is_ascii_digit());
+    !device
+}
+
+/// Each root's own directory name, made safe and unique (case-insensitively,
+/// for case-insensitive volumes).
+fn flat_names(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut taken = HashSet::new();
+    roots
+        .iter()
+        .map(|root| {
+            let raw = root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let cleaned: String = raw
+                .chars()
+                .map(|c| {
+                    if c.is_control() || c == '/' || c == '\\' {
+                        '_'
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            let base = match cleaned.as_str() {
+                "" | "." | ".." => "root".to_string(),
+                _ if cfg!(windows) && !is_windows_name(&cleaned) => {
+                    let safe: String = cleaned
+                        .trim_end_matches(['.', ' '])
+                        .chars()
+                        .map(|c| if "<>:\"|?*".contains(c) { '_' } else { c })
+                        .collect();
+                    if safe.is_empty() || !is_windows_name(&safe) {
+                        format!("_{safe}")
+                    } else {
+                        safe
+                    }
+                }
+                _ => cleaned,
+            };
+            let mut name = base.clone();
+            let mut suffix = 2;
+            while !taken.insert(name.to_lowercase()) {
+                name = format!("{base}-{suffix}");
+                suffix += 1;
+            }
+            PathBuf::from(name)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{types::WorkspaceRootRole, ChangeKind, PatchState, ResourceKind};
     use std::cell::RefCell;
+
+    fn paths(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn sibling_repositories_keep_their_relative_layout() {
+        let plan = plan_bundle_layout(
+            &paths(&["/work/team/app", "/work/team/libs/sdk"]),
+            &[Some(1), Some(1)],
+            Some(Path::new("/Users/me")),
+        );
+        assert_eq!(plan.relative, paths(&["app", "libs/sdk"]));
+        assert_eq!(plan.flat, None);
+    }
+
+    #[test]
+    fn a_single_root_goes_under_its_own_name() {
+        let plan = plan_bundle_layout(
+            &paths(&["/Users/me/app"]),
+            &[None],
+            Some(Path::new("/Users/me")),
+        );
+        assert_eq!(plan.relative, paths(&["app"]));
+        assert_eq!(plan.flat, None);
+    }
+
+    #[test]
+    fn roots_that_cannot_keep_their_layout_go_side_by_side_and_say_why() {
+        let home = Some(Path::new("/Users/me"));
+        let cases = [
+            (
+                paths(&["/Users/me/work/app", "/Users/me/oss/sdk"]),
+                vec![Some(1), Some(1)],
+                FlatBundleLayout::ShallowParent,
+            ),
+            (
+                paths(&["/app", "/srv/sdk"]),
+                vec![None, None],
+                FlatBundleLayout::ShallowParent,
+            ),
+            (
+                paths(&["/work/app", "/work/sdk"]),
+                vec![Some(1), Some(2)],
+                FlatBundleLayout::SpansVolumes,
+            ),
+            (
+                paths(&["/work/app", "/work/app/vendor/sdk"]),
+                vec![None, None],
+                FlatBundleLayout::NestedRoots,
+            ),
+            (
+                paths(&["/work/a\nb/app", "/work/sdk"]),
+                vec![None, None],
+                FlatBundleLayout::UnportableName,
+            ),
+        ];
+        for (roots, devices, reason) in cases {
+            let plan = plan_bundle_layout(&roots, &devices, home);
+            assert_eq!(plan.flat, Some(reason), "{roots:?}");
+            assert_eq!(plan.relative.len(), roots.len());
+            assert!(plan
+                .relative
+                .iter()
+                .all(|path| path.components().count() == 1));
+        }
+    }
+
+    #[test]
+    fn siblings_directly_under_the_home_directory_lose_nothing_when_flat() {
+        let plan = plan_bundle_layout(
+            &paths(&["/Users/me/app", "/Users/me/sdk"]),
+            &[Some(1), Some(1)],
+            Some(Path::new("/Users/me")),
+        );
+        assert_eq!(plan.relative, paths(&["app", "sdk"]));
+        assert_eq!(plan.flat, None);
+    }
+
+    #[test]
+    fn flat_names_are_unique_case_insensitively_and_never_escape() {
+        let plan = plan_bundle_layout(
+            &paths(&["/a/App", "/b/app", "/c/app", "/"]),
+            &[Some(1), Some(2), Some(3), Some(4)],
+            None,
+        );
+        assert_eq!(plan.relative, paths(&["App", "app-2", "app-3", "root"]));
+        assert_eq!(plan.flat, Some(FlatBundleLayout::SpansVolumes));
+    }
+
+    #[test]
+    fn relative_names_keep_unicode_and_never_share_a_directory_by_case() {
+        let unicode = plan_bundle_layout(
+            &paths(&["/work/项目/app", "/work/項目-é/sdk"]),
+            &[Some(1), Some(1)],
+            None,
+        );
+        assert_eq!(unicode.flat, None);
+        assert_eq!(unicode.relative, paths(&["项目/app", "項目-é/sdk"]));
+        // Distinct on a case-sensitive source, one directory on a
+        // case-insensitive bundle volume: side by side instead.
+        for roots in [["/work/App", "/work/app"], ["/work/Libs", "/work/libs/sdk"]] {
+            let plan = plan_bundle_layout(&paths(&roots), &[Some(1), Some(1)], None);
+            assert_eq!(
+                plan.flat,
+                Some(FlatBundleLayout::UnportableName),
+                "{roots:?}"
+            );
+            let folded: HashSet<String> = plan
+                .relative
+                .iter()
+                .map(|path| path.to_string_lossy().to_lowercase())
+                .collect();
+            assert_eq!(folded.len(), 2, "{:?}", plan.relative);
+        }
+    }
+
+    #[test]
+    fn windows_names_that_would_not_survive_an_ordinary_path_are_caught() {
+        for name in [
+            "foo.", "foo ", "con", "CON.txt", "nul", "com1", "LPT9.log", "a:b", "a?b",
+        ] {
+            assert!(!is_windows_name(name), "{name}");
+        }
+        for name in [
+            "foo", "console", "com", "com10", "lpt", ".git", "项目", "a.b",
+        ] {
+            assert!(is_windows_name(name), "{name}");
+        }
+    }
 
     fn root(id: &str, role: WorkspaceRootRole, common_dir: Option<&str>) -> RootRequest {
         RootRequest {

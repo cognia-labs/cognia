@@ -177,6 +177,8 @@ describe("safeSendPrompt", () => {
       ownerType: "session" as const,
       ownerRef: "sess_1",
       environmentKind: "managed" as const,
+      layoutVersion: 2,
+      flatLayout: null,
       state: "active" as const,
       leases: [
         {
@@ -574,6 +576,8 @@ describe("safeSendPrompt", () => {
     const bundle = {
       bundleId: "bundle-connector",
       environmentKind: "managed" as const,
+      layoutVersion: 2,
+      flatLayout: null,
       ownerType: "session" as const,
       ownerRef: "sess_1",
       state: "active" as const,
@@ -751,6 +755,8 @@ describe("safeSendPrompt", () => {
     mockAcquireWorkspaceBundle.mockResolvedValueOnce({
       bundleId: "bundle-connector",
       environmentKind: "managed",
+      layoutVersion: 2,
+      flatLayout: null,
       ownerType: "session",
       ownerRef: "sess_1",
       state: "active",
@@ -774,6 +780,8 @@ describe("safeSendPrompt", () => {
     mockAcquireWorkspaceBundle.mockResolvedValueOnce({
       bundleId: "bundle-connector",
       environmentKind: "managed",
+      layoutVersion: 2,
+      flatLayout: null,
       ownerType: "session",
       ownerRef: "sess_1",
       state: "active",

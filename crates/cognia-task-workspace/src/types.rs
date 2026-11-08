@@ -905,6 +905,48 @@ pub struct WorkspaceBundle {
     pub last_used_at: i64,
     pub pinned: bool,
     pub created_at: i64,
+    /// How the bundle lays out its physical roots (ADR-0111, 2026-11-08
+    /// amendment). [`BUNDLE_LAYOUT_STORAGE_KEY`]: each root under a storage
+    /// key, as every bundle created before the amendment does until it ends.
+    /// [`BUNDLE_LAYOUT_RELATIVE`]: each root at its path relative to the roots'
+    /// nearest common parent, or side by side when [`Self::flat_layout`] says
+    /// why not.
+    #[serde(default = "storage_key_layout")]
+    pub layout_version: u32,
+    /// Why a [`BUNDLE_LAYOUT_RELATIVE`] bundle put its roots side by side,
+    /// named after their directories, instead of keeping their relative
+    /// layout. A relative path from one root to another (`file:../sdk`) may
+    /// then not resolve. Absent when the layout was kept.
+    #[serde(default)]
+    pub flat_layout: Option<FlatBundleLayout>,
+}
+
+/// The layout every bundle had before the ADR-0111 2026-11-08 amendment.
+pub const BUNDLE_LAYOUT_STORAGE_KEY: u32 = 1;
+/// Roots keep their relative layout (ADR-0111, 2026-11-08 amendment).
+pub const BUNDLE_LAYOUT_RELATIVE: u32 = 2;
+
+fn storage_key_layout() -> u32 {
+    BUNDLE_LAYOUT_STORAGE_KEY
+}
+
+/// Why a bundle's roots could not keep their relative layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FlatBundleLayout {
+    /// The roots' nearest common parent is the filesystem root, the home
+    /// directory, or above it: keeping that layout would copy a home
+    /// directory's worth of path into the bundle.
+    ShallowParent,
+    /// The roots are on different volumes, so they share no parent to keep.
+    SpansVolumes,
+    /// One root lies inside another, so its worktree would sit inside the
+    /// other's checkout.
+    NestedRoots,
+    /// A directory on the way has a name that cannot be recreated safely
+    /// inside the bundle, or two roots' paths differ only in letter case
+    /// (the bundle's volume may be case-insensitive).
+    UnportableName,
 }
 
 /// Outcome of a `WorkspaceBundle` apply. On compensation failure the bundle
@@ -1356,6 +1398,53 @@ mod tests {
             serde_json::to_string(&WorkspaceEnvironmentAction::MakePermanent).unwrap(),
             "\"makePermanent\""
         );
+    }
+
+    #[test]
+    fn bundle_layout_matches_the_companion_response_schema() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/companion-response-schemas.json"
+        ))
+        .unwrap();
+        let schema = &catalog["$defs"]["WorkspaceBundle"];
+        // A payload from before the amendment reads as the storage-key layout.
+        let mut bundle: WorkspaceBundle = serde_json::from_value(serde_json::json!({
+            "bundleId": "b", "ownerType": "session", "ownerRef": null, "state": "active",
+            "leases": [], "lastUsedAt": 1, "pinned": false, "createdAt": 1
+        }))
+        .unwrap();
+        assert_eq!(bundle.layout_version, BUNDLE_LAYOUT_STORAGE_KEY);
+        assert_eq!(bundle.flat_layout, None);
+        let reasons = schema["properties"]["flatLayout"]["enum"]
+            .as_array()
+            .unwrap();
+        for reason in [
+            FlatBundleLayout::ShallowParent,
+            FlatBundleLayout::SpansVolumes,
+            FlatBundleLayout::NestedRoots,
+            FlatBundleLayout::UnportableName,
+        ] {
+            assert!(
+                reasons.contains(&serde_json::to_value(reason).unwrap()),
+                "{reason:?}"
+            );
+            bundle.layout_version = BUNDLE_LAYOUT_RELATIVE;
+            bundle.flat_layout = Some(reason);
+            let value = serde_json::to_value(&bundle).unwrap();
+            let object = value.as_object().unwrap();
+            assert!(
+                object
+                    .keys()
+                    .all(|key| schema["properties"].get(key).is_some()),
+                "{object:?}"
+            );
+            assert!(schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|key| object.contains_key(key.as_str().unwrap())));
+        }
+        assert!(reasons.contains(&serde_json::Value::Null));
     }
 
     #[test]

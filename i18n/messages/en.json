@@ -11166,6 +11166,15 @@
         "title": "Needs your attention"
       }
     },
+    "workspaceLayout": {
+      "flat": "The task copy puts the repositories side by side because {reason}. A relative path from one repository to another, such as file:../sdk, may not resolve there.",
+      "reasons": {
+        "nestedRoots": "one repository is inside another",
+        "shallowParent": "they only share your home folder or a folder above it",
+        "spansVolumes": "they are on different disks",
+        "unportableName": "a folder name along the path cannot be recreated there, or two repository paths differ only in letter case"
+      }
+    },
     "workspaceRestricted": {
       "body": "This workspace isn't trusted yet. Agents run read-only — Bash, Edit, Write and Computer-Use are disabled.",
       "rootsLabel": "Untrusted folders",

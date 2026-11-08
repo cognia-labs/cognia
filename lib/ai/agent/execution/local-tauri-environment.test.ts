@@ -240,6 +240,8 @@ describe("local Tauri AgentTeam execution environment", () => {
     const acquireWorkspaceBundle = jest.fn(async () => ({
       bundleId: "bundle-1",
       environmentKind: "managed" as const,
+      layoutVersion: 2,
+      flatLayout: null,
       ownerType: "team" as const,
       ownerRef: "run-1",
       state: "active" as const,
@@ -385,6 +387,8 @@ describe("local Tauri AgentTeam execution environment", () => {
         ({
           bundleId: "bundle-1",
           environmentKind: "managed",
+          layoutVersion: 2,
+          flatLayout: null,
           ownerType: "team",
           ownerRef: "run-1",
           state: "active",

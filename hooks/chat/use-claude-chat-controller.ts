@@ -949,6 +949,7 @@ export function useClaudeChat() {
   }, [tCollab])
   const tSteer = useTranslations("chat.steer")
   const tCaptureBusy = useTranslations("chat.restorePoint")
+  const tWorkspaceLayout = useTranslations("chat.workspaceLayout")
   const refuseCapturedTurn = useCallback(
     (sessionId: string) => {
       if (!isSessionCaptured(sessionId)) return false
@@ -4371,6 +4372,13 @@ export function useClaudeChat() {
           bundlePrimaryRootId = binding.primaryLogicalRootId
           managedBundle = binding.bundle
           managedAliasesBySource = binding.aliasesBySource
+          if (binding.acquired && binding.bundle.flatLayout) {
+            toast.warning(
+              tWorkspaceLayout("flat", {
+                reason: tWorkspaceLayout(`reasons.${binding.bundle.flatLayout}`),
+              })
+            )
+          }
           sendOptions = redirectSendToBundleAliases(sendOptions, binding, binding.aliasesBySource)
           await updateSession(sessionId, { executionContext })
         } catch (error) {
@@ -6510,6 +6518,7 @@ export function useClaudeChat() {
       refuseCapturedTurn,
       tRouting,
       tInlineErr,
+      tWorkspaceLayout,
       tAside,
       tDiagnostics,
       tPiPackages,

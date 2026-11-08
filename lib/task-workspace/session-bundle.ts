@@ -21,6 +21,8 @@ export interface SessionBundleBinding {
    * learns which alias inherits it. Input for `remapExactRoots`.
    */
   aliasesBySource: ReadonlyMap<string, string>
+  /** True when this call created the bundle, false when it reused one. */
+  acquired: boolean
 }
 
 /** The single logical root of a session-scoped managed workspace, if it has one. */
@@ -135,6 +137,7 @@ export async function ensureSessionExecutionBundle(input: {
   let bundle = context.execution?.bundleId
     ? await getWorkspaceBundle(context.execution.bundleId)
     : null
+  const acquired = !bundle
   if (!bundle) {
     // Sparse checkout, cache links and gitignored includes, applied by the
     // native provisioner as part of CREATING the worktree — a half-provisioned
@@ -240,5 +243,6 @@ export async function ensureSessionExecutionBundle(input: {
     aliasesBySource: new Map(
       roots.map((root) => [root.path.trim(), leasesByRoot.get(root.id)!.aliasPath] as const)
     ),
+    acquired,
   }
 }

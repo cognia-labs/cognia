@@ -673,6 +673,31 @@ impl WorkspaceStore {
                 )
                 .map_err(|error| format!("add workspace environment kind: {error}"))?;
         }
+        // ADR-0111 2026-11-08 amendment: an existing bundle keeps the
+        // storage-key layout it was created with, so the default is 1. Each
+        // column is checked on its own: an open stopped between the two adds
+        // must finish the second next time rather than skip it for good.
+        for (column, definition) in [
+            ("layout_version", "INTEGER NOT NULL DEFAULT 1"),
+            ("flat_layout", "TEXT"),
+        ] {
+            let present: bool = self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('workspace_bundles') WHERE name=?1)",
+                    [column],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("inspect workspace bundle layout: {error}"))?;
+            if !present {
+                self.connection
+                    .execute(
+                        &format!("ALTER TABLE workspace_bundles ADD COLUMN {column} {definition}"),
+                        [],
+                    )
+                    .map_err(|error| format!("add workspace bundle {column}: {error}"))?;
+            }
+        }
         // Nullable with no default: an existing row's owning workspace is not
         // knowable here (the Project table lives in the frontend), so it stays
         // NULL until a reconcile pass matches its `source_root` to a project.
@@ -1713,12 +1738,17 @@ impl WorkspaceStore {
         let environment_kind = serialize_enum(&bundle.environment_kind, "environment kind")?;
         let owner_type = serialize_enum(&bundle.owner_type, "owner type")?;
         let state = serialize_enum(&bundle.state, "workspace state")?;
+        let flat_layout = bundle
+            .flat_layout
+            .as_ref()
+            .map(|reason| serialize_enum(reason, "flat bundle layout"))
+            .transpose()?;
         self.connection
             .execute(
                 "INSERT INTO workspace_bundles (
                    bundle_id, environment_kind, owner_type, owner_ref, state,
-                   last_used_at, pinned, created_at
-                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+                   last_used_at, pinned, created_at, layout_version, flat_layout
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
                  ON CONFLICT(bundle_id) DO UPDATE SET
                    environment_kind=excluded.environment_kind,
                    owner_type=excluded.owner_type,
@@ -1735,6 +1765,8 @@ impl WorkspaceStore {
                     bundle.last_used_at,
                     bundle.pinned as i64,
                     bundle.created_at,
+                    bundle.layout_version,
+                    flat_layout,
                 ],
             )
             .map_err(|error| format!("put workspace bundle {}: {error}", bundle.bundle_id))?;
@@ -1752,31 +1784,34 @@ impl WorkspaceStore {
             .connection
             .query_row(
                 "SELECT environment_kind, owner_type, owner_ref, state,
-                        last_used_at, pinned, created_at
+                        last_used_at, pinned, created_at, layout_version, flat_layout
                    FROM workspace_bundles WHERE bundle_id=?1",
                 [bundle_id],
                 |row| {
                     Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
+                        (
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, String>(3)?,
+                        ),
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, i64>(6)?,
+                        row.get::<_, u32>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
             .optional()
             .map_err(|error| format!("get workspace bundle {bundle_id}: {error}"))?;
         let Some((
-            environment_kind,
-            owner_type,
-            owner_ref,
-            state,
+            (environment_kind, owner_type, owner_ref, state),
             last_used_at,
             pinned,
             created_at,
+            layout_version,
+            flat_layout,
         )) = row
         else {
             return Ok(None);
@@ -1791,6 +1826,11 @@ impl WorkspaceStore {
             last_used_at,
             pinned: pinned != 0,
             created_at,
+            layout_version,
+            flat_layout: flat_layout
+                .as_deref()
+                .map(|reason| deserialize_enum(reason, "flat bundle layout"))
+                .transpose()?,
         }))
     }
 
@@ -3456,12 +3496,49 @@ mod tests {
             last_used_at: 200,
             pinned: true,
             created_at: 100,
+            layout_version: crate::BUNDLE_LAYOUT_RELATIVE,
+            flat_layout: Some(crate::FlatBundleLayout::ShallowParent),
         };
         store.put_workspace_bundle(&bundle).unwrap();
         assert_eq!(
             store.get_workspace_bundle("bundle-1").unwrap(),
             Some(bundle)
         );
+    }
+
+    #[test]
+    fn a_bundle_from_before_the_layout_column_reads_as_the_storage_key_layout() {
+        let dir = TempDir::new().unwrap();
+        let store = WorkspaceStore::open(dir.path(), 1024 * 1024).unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO workspace_bundles (
+                   bundle_id, environment_kind, owner_type, owner_ref, state,
+                   last_used_at, pinned, created_at
+                 ) VALUES ('old', 'managed', 'session', 's', 'active', 1, 0, 1)",
+                [],
+            )
+            .unwrap();
+        let bundle = store.get_workspace_bundle("old").unwrap().unwrap();
+        assert_eq!(bundle.layout_version, crate::BUNDLE_LAYOUT_STORAGE_KEY);
+        assert_eq!(bundle.flat_layout, None);
+        // A second open runs the migration again and changes nothing.
+        drop(store);
+        let reopened = WorkspaceStore::open(dir.path(), 1024 * 1024).unwrap();
+        assert_eq!(
+            reopened.get_workspace_bundle("old").unwrap(),
+            Some(bundle.clone())
+        );
+        // An open stopped between the two adds left only the first column;
+        // the next one adds the second instead of skipping the pair.
+        reopened
+            .connection
+            .execute("ALTER TABLE workspace_bundles DROP COLUMN flat_layout", [])
+            .unwrap();
+        drop(reopened);
+        let repaired = WorkspaceStore::open(dir.path(), 1024 * 1024).unwrap();
+        assert_eq!(repaired.get_workspace_bundle("old").unwrap(), Some(bundle));
     }
 
     #[test]
