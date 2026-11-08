@@ -9,6 +9,10 @@ import {
   pickArtifactComponent,
   type ArtifactShellScope,
 } from "./artifact-shell-entry"
+import { createContext, runInContext } from "node:vm"
+import * as React from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { act } from "@testing-library/react"
 
 describe("pickArtifactComponent", () => {
   const fn = () => null
@@ -29,6 +33,23 @@ describe("pickArtifactComponent", () => {
 })
 
 describe("buildArtifactModuleSource", () => {
+  it.each([
+    'const App = () => "revision"',
+    'function App(){return "revision"}',
+    'let Component = () => "revision"',
+    'class Main { static revision = "revision" }',
+  ])("isolates repeated classic declarations: %s", (code) => {
+    const picked: unknown[] = []
+    const context = createContext({
+      __cogniaArtifactPick: (...candidates: unknown[]) =>
+        picked.push(pickArtifactComponent(...(candidates as [unknown, unknown, unknown, unknown]))),
+    })
+    runInContext(buildArtifactModuleSource(code.replace("revision", "one"), false), context)
+    runInContext(buildArtifactModuleSource(code.replace("revision", "two"), false), context)
+    expect(picked).toHaveLength(2)
+    expect(picked[1]).not.toBe(picked[0])
+  })
+
   it("hands classic code the three global names verbatim", () => {
     const source = buildArtifactModuleSource("const App = () => null", false)
     expect(source).toContain("const App = () => null")
@@ -40,6 +61,25 @@ describe("buildArtifactModuleSource", () => {
     const source = buildArtifactModuleSource('var _react = require("react")', true)
     expect(source).toContain("function (module, exports, require)")
     expect(source).toContain("__cogniaArtifactModule.exports")
+  })
+
+  it("keeps each queued module's exports local to its execution", () => {
+    const picked: Array<() => string> = []
+    const context = createContext({
+      __cogniaArtifactModule: { exports: {} },
+      __cogniaArtifactRequire: () => undefined,
+      __cogniaArtifactPick: (
+        _app: unknown,
+        _component: unknown,
+        _main: unknown,
+        exports: unknown
+      ) => {
+        picked.push(pickArtifactComponent(null, null, null, exports) as () => string)
+      },
+    })
+    runInContext(buildArtifactModuleSource('exports.App = () => "one"', true), context)
+    runInContext(buildArtifactModuleSource('exports.Component = () => "two"', true), context)
+    expect(picked.map((component) => component())).toEqual(["one", "two"])
   })
 })
 
@@ -66,24 +106,25 @@ describe("installArtifactShellRuntime", () => {
     dispatch: (data: unknown) => void
     rendered: unknown[]
     blobs: string[]
+    emit: (type: string, event: Event) => void
     dispose: () => void
     pick: (app: unknown, component: unknown, main: unknown, moduleExports: unknown) => void
   }
 
-  function harness(options: { withReact?: boolean } = {}): Harness {
+  function harness(options: { withReact?: boolean; realReact?: boolean } = {}): Harness {
     document.body.innerHTML = '<div id="root"></div>'
     // jsdom keeps one document across tests; the bootstrap appends to <head>.
     document.head.querySelectorAll("script").forEach((tag) => tag.remove())
     const posted: unknown[] = []
     const rendered: unknown[] = []
     const blobs: string[] = []
-    const inbox: { listener?: (event: MessageEvent) => void } = {}
+    const events = new EventTarget()
+    let reactRoot: Root | undefined
     const scope = {
       document,
       parent: { postMessage: (message: unknown) => void posted.push(message) },
-      addEventListener: (_type: "message", handler: (event: MessageEvent) => void) => {
-        inbox.listener = handler
-      },
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
       URL: {
         createObjectURL: (blob: Blob) => {
           blobs.push(String((blob as unknown as { __source?: string }).__source ?? ""))
@@ -99,9 +140,11 @@ describe("installArtifactShellRuntime", () => {
       } as unknown as typeof Blob,
     } as unknown as ArtifactShellScope
     if (options.withReact !== false) {
-      ;(scope as Record<string, unknown>).React = { createElement: (type: unknown) => ({ type }) }
+      ;(scope as Record<string, unknown>).React = React
       ;(scope as Record<string, unknown>).ReactDOM = {
-        createRoot: () => ({ render: (node: unknown) => void rendered.push(node) }),
+        createRoot: options.realReact
+          ? (host: Element) => (reactRoot = createRoot(host))
+          : () => ({ render: (node: unknown) => void rendered.push(node) }),
       }
     }
     const dispose = installArtifactShellRuntime(scope)
@@ -111,8 +154,14 @@ describe("installArtifactShellRuntime", () => {
       posted,
       rendered,
       blobs,
-      dispose,
-      dispatch: (data: unknown) => inbox.listener?.({ data } as MessageEvent),
+      dispose: () => {
+        if (reactRoot) act(() => reactRoot?.unmount())
+        dispose()
+      },
+      dispatch: (data: unknown) => events.dispatchEvent(new MessageEvent("message", { data })),
+      emit: (_type, event) => {
+        events.dispatchEvent(event)
+      },
     }
   }
 
@@ -151,15 +200,172 @@ describe("installArtifactShellRuntime", () => {
     h.dispose()
   })
 
-  it("reports ready exactly once, on the first successful render", () => {
+  it.each([
+    'const App = () => React.createElement("p", null, "revision")',
+    'function App(){return React.createElement("p", null, "revision")}',
+  ])("replaces revision one with revision two using generated classic code: %s", async (code) => {
+    const h = harness({ realReact: true })
+    const context = createContext({ React, __cogniaArtifactPick: h.pick })
+    try {
+      for (const [revision, label] of [
+        [1, "one"],
+        [2, "two"],
+      ] as const) {
+        await act(async () => {
+          h.dispatch({ type: "render-component", revision, code: code.replace("revision", label) })
+          runInContext(h.blobs.at(-1)!, context)
+        })
+        expect(document.getElementById("root")).toHaveTextContent(label)
+        expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision })
+      }
+      expect(document.getElementById("root")).not.toHaveTextContent("one")
+    } finally {
+      h.dispose()
+    }
+  })
+
+  it("ignores a queued older blob's picker after a newer revision starts", () => {
     const h = harness()
+    h.dispatch({ type: "render-component", code: "function App(){}", revision: 1 })
+    h.dispatch({ type: "render-component", code: "function App(){}", revision: 2 })
+    const script = document.head.querySelector("script")!
+    jest.spyOn(document, "currentScript", "get").mockReturnValueOnce(script)
     h.pick(() => null, null, null, null)
+    expect(h.rendered).toHaveLength(0)
     h.pick(() => null, null, null, null)
-    expect(
-      h.posted.filter((m) => (m as { type: string }).type === "artifact-preview-ready")
-    ).toHaveLength(1)
+    expect(h.rendered).toHaveLength(1)
+    jest.restoreAllMocks()
     h.dispose()
   })
+
+  it("reports ready only after the component committed, once per revision", async () => {
+    const h = harness({ realReact: true })
+    const Component = () => React.createElement("p", null, "committed")
+    await act(async () => {
+      h.dispatch({ type: "render-component", code: "", revision: 1 })
+      h.pick(Component, null, null, null)
+      expect(h.posted).not.toContainEqual(
+        expect.objectContaining({ type: "artifact-preview-ready" })
+      )
+    })
+    expect(document.getElementById("root")).toHaveTextContent("committed")
+    await act(async () => {
+      h.dispatch({ type: "render-component", code: "", revision: 2 })
+      h.pick(() => React.createElement("p", null, "updated"), null, null, null)
+    })
+    expect(document.getElementById("root")).toHaveTextContent("updated")
+    expect(
+      h.posted.filter((m) => (m as { type: string }).type === "artifact-preview-ready")
+    ).toEqual([
+      { type: "artifact-preview-ready", revision: 1 },
+      { type: "artifact-preview-ready", revision: 2 },
+    ])
+    h.dispose()
+  })
+
+  it("reports a throwing component without ready, then recovers on the next revision", async () => {
+    const logged = jest.spyOn(console, "error").mockImplementation(() => undefined)
+    const h = harness({ realReact: true })
+    try {
+      await act(async () => {
+        h.dispatch({ type: "render-component", code: "", revision: 1 })
+        h.pick(
+          () => {
+            throw new Error("render exploded")
+          },
+          null,
+          null,
+          null
+        )
+      })
+      expect(h.posted).toContainEqual({
+        type: "artifact-preview-error",
+        revision: 1,
+        message: "render exploded",
+      })
+      expect(h.posted).not.toContainEqual(
+        expect.objectContaining({ type: "artifact-preview-ready" })
+      )
+      await act(async () => {
+        h.dispatch({ type: "render-component", code: "", revision: 2 })
+        h.pick(() => React.createElement("p", null, "fixed"), null, null, null)
+      })
+      expect(document.getElementById("root")).toHaveTextContent("fixed")
+      expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision: 2 })
+    } finally {
+      h.dispose()
+      logged.mockRestore()
+    }
+  })
+
+  it("does not announce ready when a component throws during its layout effect", async () => {
+    const logged = jest.spyOn(console, "error").mockImplementation(() => undefined)
+    const h = harness({ realReact: true })
+    function ThrowOnCommit() {
+      React.useLayoutEffect(() => {
+        throw new Error("commit exploded")
+      }, [])
+      return React.createElement("p", null, "never ready")
+    }
+    try {
+      await act(async () => {
+        h.dispatch({ type: "render-component", revision: 1, code: "" })
+        h.pick(ThrowOnCommit, null, null, null)
+      })
+      expect(h.posted).toContainEqual({
+        type: "artifact-preview-error",
+        revision: 1,
+        message: "commit exploded",
+      })
+      expect(h.posted).not.toContainEqual(
+        expect.objectContaining({ type: "artifact-preview-ready" })
+      )
+    } finally {
+      h.dispose()
+      logged.mockRestore()
+    }
+  })
+
+  it.each([false, true])(
+    "relays owned script errors and rejections (module=%s), ignoring shell and old-run errors",
+    (module) => {
+      const h = harness()
+      h.dispatch({
+        type: "run-scripts",
+        revision: 1,
+        scripts: [{ code: "throw new Error('boom')", module }],
+      })
+      h.emit("error", new ErrorEvent("error", { message: "boom", filename: "blob:test-1" }))
+      expect(h.posted).toContainEqual({
+        type: "artifact-preview-error",
+        revision: 1,
+        message: "boom",
+      })
+      document.head.querySelector("script")!.dispatchEvent(new Event("load"))
+      expect(h.posted).not.toContainEqual(
+        expect.objectContaining({ type: "artifact-preview-ready" })
+      )
+      h.dispatch({ type: "run-scripts", revision: 2, scripts: [{ code: "next", module }] })
+      const count = h.posted.length
+      h.emit("error", new ErrorEvent("error", { message: "shell", filename: "/artifact-shell.js" }))
+      h.emit("error", new ErrorEvent("error", { message: "old", filename: "blob:test-1" }))
+      expect(h.posted).toHaveLength(count)
+      const reason = new Error("async exploded")
+      reason.stack = "Error: async exploded\n at blob:test-2:1:1"
+      const rejection = new Event("unhandledrejection")
+      Object.defineProperty(rejection, "reason", { value: reason })
+      h.emit("unhandledrejection", rejection)
+      expect(h.posted).toContainEqual({
+        type: "artifact-preview-error",
+        revision: 2,
+        message: "async exploded",
+      })
+      h.dispose()
+      const afterDispose = h.posted.length
+      h.emit("error", new ErrorEvent("error", { message: "disposed", filename: "blob:test-2" }))
+      expect(h.posted).toHaveLength(afterDispose)
+    }
+  )
 
   it("says the runtime failed when React never loaded", () => {
     const h = harness({ withReact: false })
@@ -243,8 +449,9 @@ describe("theme variables over the parent-context channel", () => {
       document,
       parent: { postMessage: () => undefined },
       addEventListener: (_t: "message", h: (event: MessageEvent) => void) => {
-        inbox.listener = h
+        if (_t === "message") inbox.listener = h
       },
+      removeEventListener: () => undefined,
       URL: { createObjectURL: () => "blob:x", revokeObjectURL: () => undefined },
       Blob,
     } as unknown as ArtifactShellScope
@@ -267,8 +474,9 @@ describe("capture-snapshot", () => {
       document,
       parent: { postMessage: (message: unknown) => posted.push(message) },
       addEventListener: (_t: "message", h: (event: MessageEvent) => void) => {
-        inbox.listener = h
+        if (_t === "message") inbox.listener = h
       },
+      removeEventListener: () => undefined,
       URL: { createObjectURL: () => "blob:x", revokeObjectURL: () => undefined },
       Blob,
     }) as unknown as ArtifactShellScope

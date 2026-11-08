@@ -34,6 +34,7 @@
  * imported relatively so esbuild inlines the same module into this bundle.
  */
 import { PICKER_NODE_ATTRIBUTE, installElementPicker } from "./element-pick"
+import type { ComponentType, ReactNode } from "react"
 
 /** Strings the host hands the frame; the frame never hard-codes user-facing text. */
 export interface ArtifactShellMessages {
@@ -51,8 +52,8 @@ export interface ArtifactShellScript {
 /** Messages the host may send into the frame. */
 export type ArtifactShellInboundMessage =
   | { type: "artifact-shell-config"; messages: ArtifactShellMessages }
-  | { type: "render-component"; code: string; isModule?: boolean }
-  | { type: "run-scripts"; scripts: ArtifactShellScript[] }
+  | { type: "render-component"; code: string; isModule?: boolean; revision?: number }
+  | { type: "run-scripts"; scripts: ArtifactShellScript[]; revision?: number }
   | { type: "artifact-preview-parent-context"; themeVariables?: Record<string, string> }
   | { type: "capture-snapshot"; requestId: string }
   | { type: "artifact-set-select-mode"; on: boolean; originLabel?: string }
@@ -62,7 +63,7 @@ interface ArtifactRoot {
 }
 
 interface ArtifactReactGlobals {
-  React: { createElement(type: unknown, props?: unknown): unknown }
+  React: Pick<typeof import("react"), "createElement" | "useLayoutEffect" | "Component">
   ReactDOM: { createRoot(container: Element): ArtifactRoot }
   ReactJSXRuntime?: unknown
 }
@@ -74,7 +75,14 @@ interface ArtifactReactGlobals {
 export interface ArtifactShellScope {
   document: Document
   parent: { postMessage(message: unknown, targetOrigin: string): void }
-  addEventListener(type: "message", listener: (event: MessageEvent) => void): void
+  addEventListener<K extends keyof WindowEventMap>(
+    type: K,
+    listener: (event: WindowEventMap[K]) => void
+  ): void
+  removeEventListener<K extends keyof WindowEventMap>(
+    type: K,
+    listener: (event: WindowEventMap[K]) => void
+  ): void
   URL: { createObjectURL(blob: Blob): string; revokeObjectURL(url: string): void }
   Blob: typeof Blob
   [key: string]: unknown
@@ -91,11 +99,11 @@ const DEFAULT_MESSAGES: ArtifactShellMessages = {
 export function buildArtifactModuleSource(code: string, isModule: boolean): string {
   if (isModule) {
     // Babel downleveled ESM to CommonJS, so the code expects module/exports/require.
-    return `(function (module, exports, require) {\n${code}\n})(__cogniaArtifactModule, __cogniaArtifactModule.exports, __cogniaArtifactRequire);\n__cogniaArtifactPick(null, null, null, __cogniaArtifactModule.exports);\n`
+    return `(function () {\nconst __cogniaArtifactModule = { exports: {} };\n(function (module, exports, require) {\n${code}\n})(__cogniaArtifactModule, __cogniaArtifactModule.exports, __cogniaArtifactRequire);\n__cogniaArtifactPick(null, null, null, __cogniaArtifactModule.exports);\n})();\n`
   }
-  // Classic script semantics — top-level `const`/`let` land in the global
-  // lexical scope, so `typeof` sees them from this same script.
-  return `${code}\n;__cogniaArtifactPick(typeof App !== "undefined" ? App : null, typeof Component !== "undefined" ? Component : null, typeof Main !== "undefined" ? Main : null, null);\n`
+  // Each revision owns its declarations; the picker stays in the same scope
+  // so both lexical bindings and hoisted function declarations are visible.
+  return `(function () {\n${code}\n;__cogniaArtifactPick(typeof App !== "undefined" ? App : null, typeof Component !== "undefined" ? Component : null, typeof Main !== "undefined" ? Main : null, null);\n})();\n`
 }
 
 /**
@@ -148,10 +156,21 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
   const doc = scope.document
   let messages = DEFAULT_MESSAGES
   let root: ArtifactRoot | null = null
-  let announcedReady = false
+  interface Run {
+    revision?: number
+    failed: boolean
+    ready: boolean
+  }
+  let activeRun: Run = { failed: false, ready: false }
   /** The armed picker's disposer, or null when select mode is off. */
   let disposePicker: (() => void) | null = null
   const objectUrls: string[] = []
+  const scriptRuns = new Map<string, Run>()
+  const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+  const beginRun = (revision?: number) => {
+    activeRun = { revision, failed: false, ready: false }
+    return activeRun
+  }
 
   const post = (message: unknown) => {
     try {
@@ -164,7 +183,9 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
   const container = () => doc.getElementById("root")
 
   const showText = (text: string, tone: "error" | "muted") => {
-    const host = container() ?? doc.body
+    // Once React owns #root, never replace its DOM behind its back. A script
+    // error can arrive between commits; keep that diagnostic outside the root.
+    const host = root ? doc.body : (container() ?? doc.body)
     if (!host) return
     const box = doc.createElement("div")
     box.setAttribute("data-artifact-shell", tone)
@@ -178,15 +199,37 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
     else host.appendChild(box)
   }
 
-  const fail = (message: string) => {
-    showText(message, "error")
-    post({ type: "artifact-preview-error", message })
+  const fail = (message: string, run = activeRun, display = true) => {
+    if (run !== activeRun || run.failed) return
+    run.failed = true
+    if (display) showText(message, "error")
+    post({
+      type: "artifact-preview-error",
+      message,
+      ...(run.revision === undefined ? {} : { revision: run.revision }),
+    })
   }
 
-  const announceReady = () => {
-    if (announcedReady) return
-    announcedReady = true
-    post({ type: "artifact-preview-ready" })
+  const announceReady = (run = activeRun) => {
+    if (run !== activeRun || run.failed || run.ready) return
+    run.ready = true
+    post({
+      type: "artifact-preview-ready",
+      ...(run.revision === undefined ? {} : { revision: run.revision }),
+    })
+  }
+
+  const ownsError = (filename: string, error: unknown) => {
+    const stack = error && typeof error === "object" && "stack" in error ? String(error.stack) : ""
+    return Array.from(scriptRuns).some(
+      ([url, run]) => run === activeRun && (filename === url || stack.includes(`${url}:`))
+    )
+  }
+  const onExecutionError = (event: ErrorEvent) => {
+    if (ownsError(event.filename, event.error)) fail(event.message || errorText(event.error))
+  }
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    if (ownsError("", event.reason)) fail(errorText(event.reason))
   }
 
   /**
@@ -195,6 +238,7 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
    * second `<script>` can run before its first.
    */
   const runBlobScript = (source: string, asModule: boolean, onDone?: () => void) => {
+    const run = activeRun
     let url: string
     try {
       url = scope.URL.createObjectURL(new scope.Blob([source], { type: "text/javascript" }))
@@ -203,22 +247,28 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
       return
     }
     objectUrls.push(url)
+    scriptRuns.set(url, run)
     const script = doc.createElement("script")
     if (asModule) script.type = "module"
     else script.async = false
     script.src = url
     script.addEventListener("error", () => {
-      // A blocked blob: script is the CSP saying no — the only way this fails
-      // once the shell itself has loaded.
-      fail(messages.runtimeInitFailed)
+      // Load/CSP failures use this event; execution failures use window.error.
+      fail(messages.runtimeInitFailed, run)
     })
-    if (onDone) script.addEventListener("load", onDone)
+    if (onDone)
+      script.addEventListener("load", () => {
+        if (run === activeRun && !run.failed) onDone()
+      })
     doc.head.appendChild(script)
   }
 
   const renderComponent = (candidate: unknown) => {
+    const run = activeRun
+    if (run.failed) return
     if (typeof candidate !== "function") {
       showText(messages.noComponentFound, "muted")
+      fail(messages.noComponentFound, run, false)
       return
     }
     if (!root) {
@@ -229,8 +279,39 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
       }
       root = globals.ReactDOM.createRoot(host)
     }
-    root.render(globals.React.createElement(candidate))
-    announceReady()
+    doc.querySelectorAll("[data-artifact-shell]").forEach((box) => {
+      if (!container()?.contains(box)) box.remove()
+    })
+    const React = globals.React
+    // The effect cannot run for an aborted render. The boundary also pins a
+    // delayed render failure to the revision that actually threw.
+    function CommittedArtifact() {
+      React.useLayoutEffect(() => {
+        // Let commit-phase errors reach the boundary before publishing ready.
+        queueMicrotask(() => announceReady(run))
+      }, [])
+      return React.createElement(candidate as ComponentType)
+    }
+    class ArtifactErrorBoundary extends React.Component<
+      { children?: ReactNode },
+      { message: string | null }
+    > {
+      state = { message: null as string | null }
+      static getDerivedStateFromError(error: unknown) {
+        return { message: errorText(error) }
+      }
+      componentDidCatch(error: unknown) {
+        fail(errorText(error), run, false)
+      }
+      render() {
+        return this.state.message === null
+          ? this.props.children
+          : React.createElement("div", { "data-artifact-shell": "error" }, this.state.message)
+      }
+    }
+    root.render(
+      React.createElement(ArtifactErrorBoundary, null, React.createElement(CommittedArtifact))
+    )
   }
 
   scope.__cogniaArtifactPick = (
@@ -239,6 +320,8 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
     main: unknown,
     moduleExports: unknown
   ) => {
+    const scriptRun = scriptRuns.get((doc.currentScript as HTMLScriptElement | null)?.src ?? "")
+    if (scriptRun && scriptRun !== activeRun) return
     try {
       renderComponent(pickArtifactComponent(app, component, main, moduleExports))
     } catch (error) {
@@ -264,11 +347,11 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
         return
       }
       if (data.type === "render-component") {
+        beginRun(data.revision)
         if (!globals.React || typeof globals.ReactDOM?.createRoot !== "function") {
           fail(messages.runtimeInitFailed)
           return
         }
-        scope.__cogniaArtifactModule = { exports: {} }
         runBlobScript(
           buildArtifactModuleSource(String(data.code ?? ""), data.isModule === true),
           false
@@ -322,9 +405,10 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
         return
       }
       if (data.type === "run-scripts") {
+        const run = beginRun(data.revision)
         const scripts = Array.isArray(data.scripts) ? data.scripts : []
         if (scripts.length === 0) {
-          announceReady()
+          announceReady(run)
           return
         }
         scripts.forEach((script, index) => {
@@ -332,7 +416,7 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
           runBlobScript(
             String(script.code ?? ""),
             script.module === true,
-            last ? announceReady : undefined
+            last ? () => announceReady(run) : undefined
           )
         })
       }
@@ -350,9 +434,15 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
   }
 
   scope.addEventListener("message", onMessage)
+  scope.addEventListener("error", onExecutionError)
+  scope.addEventListener("unhandledrejection", onUnhandledRejection)
   post({ type: "artifact-shell-ready" })
 
   return () => {
+    activeRun = { failed: true, ready: false }
+    scope.removeEventListener("message", onMessage)
+    scope.removeEventListener("error", onExecutionError)
+    scope.removeEventListener("unhandledrejection", onUnhandledRejection)
     disposePicker?.()
     disposePicker = null
     for (const url of objectUrls.splice(0)) {
@@ -364,6 +454,6 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
     }
     delete scope.__cogniaArtifactPick
     delete scope.__cogniaArtifactRequire
-    delete scope.__cogniaArtifactModule
+    scriptRuns.clear()
   }
 }

@@ -103,6 +103,167 @@ beforeEach(() => {
   delete mockSettings.artifacts
 })
 
+function dispatchFrame(iframe: HTMLIFrameElement, data: Record<string, unknown>) {
+  const event = new MessageEvent("message", { data })
+  Object.defineProperty(event, "source", { value: iframe.contentWindow })
+  act(() => window.dispatchEvent(event))
+}
+
+async function bootFrame(iframe: HTMLIFrameElement) {
+  await waitFor(() => expect(iframe.srcdoc).toContain("artifact-shell.js"))
+  const post = jest.fn()
+  iframe.contentWindow!.postMessage = post
+  dispatchFrame(iframe, { type: "artifact-shell-ready" })
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "render-component" }), "*")
+  )
+  return post
+}
+
+function latestRender(post: jest.Mock): { revision: number } {
+  return post.mock.calls.filter(([message]) => message.type === "render-component").at(-1)![0]
+}
+
+describe("scripted preview recovery", () => {
+  it("B14 settles initial loading when the frame reports an execution error", async () => {
+    const { container } = render(<ArtifactPreview artifact={dummy({ type: "react" })} />)
+    const iframe = container.querySelector("iframe")!
+    const post = await bootFrame(iframe)
+    dispatchFrame(iframe, {
+      ...latestRender(post),
+      type: "artifact-preview-error",
+      message: "execution failed",
+    })
+    expect(screen.getByRole("alert")).toHaveTextContent("execution failed")
+    expect(container.querySelector(".absolute.inset-0.backdrop-blur-sm")).toBeNull()
+  })
+
+  it("B15 reboots a replacement frame on Retry and posts the current code", async () => {
+    const { container } = render(
+      <ArtifactPreview artifact={dummy({ type: "react", content: "revision one" })} />
+    )
+    const first = container.querySelector("iframe")!
+    const post = await bootFrame(first)
+    dispatchFrame(first, {
+      ...latestRender(post),
+      type: "artifact-preview-error",
+      message: "broken",
+    })
+    fireEvent.click(screen.getByRole("alert").querySelector("button")!)
+    const second = container.querySelector("iframe")!
+    expect(second).not.toBe(first)
+    const repost = await bootFrame(second)
+    expect(latestRender(repost)).toMatchObject({ code: "revision one" })
+    dispatchFrame(second, { ...latestRender(repost), type: "artifact-preview-ready" })
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(container.querySelector(".backdrop-blur-sm")).toBeNull()
+  })
+
+  it("B16 retries the loader after an initial runtime failure", async () => {
+    loadArtifactReactRuntime.mockRejectedValueOnce(new Error("temporarily missing"))
+    const { container } = render(<ArtifactPreview artifact={dummy({ type: "react" })} />)
+    await screen.findByRole("alert")
+    fireEvent.click(screen.getByRole("alert").querySelector("button")!)
+    await waitFor(() => expect(loadArtifactReactRuntime).toHaveBeenCalledTimes(2))
+    const iframe = container.querySelector("iframe")!
+    const post = await bootFrame(iframe)
+    dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(container.querySelector(".backdrop-blur-sm")).toBeNull()
+  })
+
+  it("B17 clears the error and capture refusal only when the corrected revision commits", async () => {
+    transformArtifactJsx.mockRejectedValueOnce(new Error("bad syntax"))
+    const artifact = dummy({ type: "react", content: "bad" })
+    const { container, rerender } = render(<ArtifactPreview artifact={artifact} />)
+    const iframe = container.querySelector("iframe")!
+    await waitFor(() => expect(iframe.srcdoc).toContain("artifact-shell.js"))
+    const post = jest.fn()
+    iframe.contentWindow!.postMessage = post
+    dispatchFrame(iframe, { type: "artifact-shell-ready" })
+    await screen.findByRole("alert")
+    await expect(captureArtifactFrame(artifact.id)).rejects.toThrow("bad syntax")
+    rerender(<ArtifactPreview artifact={{ ...artifact, content: "fixed" }} />)
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "render-component", code: "fixed" }),
+        "*"
+      )
+    )
+    expect(screen.getByRole("alert")).toHaveTextContent("bad syntax")
+    dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.queryByTestId("runtime-health-badge")).toBeNull()
+    const capture = captureArtifactFrame(artifact.id)
+    const request = post.mock.calls.find(([message]) => message.type === "capture-snapshot")![0]
+    dispatchFrame(iframe, {
+      type: "artifact-capture-result",
+      requestId: request.requestId,
+      html: "<p>fixed</p>",
+      width: 10,
+      height: 10,
+    })
+    await expect(capture).resolves.toMatchObject({ html: "<p>fixed</p>" })
+  })
+
+  it("B17 ignores an older ready/error after a newer revision fails", async () => {
+    const artifact = dummy({ type: "react", content: "one" })
+    const { container, rerender } = render(<ArtifactPreview artifact={artifact} />)
+    const iframe = container.querySelector("iframe")!
+    const post = await bootFrame(iframe)
+    const old = latestRender(post)
+    rerender(<ArtifactPreview artifact={{ ...artifact, content: "two" }} />)
+    await waitFor(() => expect(transformArtifactJsx).toHaveBeenCalledTimes(2))
+    dispatchFrame(iframe, {
+      ...latestRender(post),
+      type: "artifact-preview-error",
+      message: "new failure",
+    })
+    dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+    dispatchFrame(iframe, { ...old, type: "artifact-preview-ready" })
+    dispatchFrame(iframe, { ...old, type: "artifact-preview-error", message: "old failure" })
+    expect(screen.getByRole("alert")).toHaveTextContent("new failure")
+    await expect(captureArtifactFrame(artifact.id)).rejects.toThrow("new failure")
+  })
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores an obsolete compilation that later %ss",
+    async (outcome) => {
+      let resolveOld!: (value: { code: string; isModule: boolean }) => void
+      let rejectOld!: (reason: Error) => void
+      transformArtifactJsx.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveOld = resolve
+            rejectOld = reject
+          })
+      )
+      const artifact = dummy({ type: "react", content: "old" })
+      const { container, rerender } = render(<ArtifactPreview artifact={artifact} />)
+      const iframe = container.querySelector("iframe")!
+      await waitFor(() => expect(iframe.srcdoc).toContain("artifact-shell.js"))
+      const post = jest.fn()
+      iframe.contentWindow!.postMessage = post
+      dispatchFrame(iframe, { type: "artifact-shell-ready" })
+      await waitFor(() => expect(transformArtifactJsx).toHaveBeenCalledTimes(1))
+      rerender(<ArtifactPreview artifact={{ ...artifact, content: "current" }} />)
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "render-component", code: "current" }),
+          "*"
+        )
+      )
+      dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+      await act(async () => {
+        if (outcome === "resolve") resolveOld({ code: "obsolete", isModule: false })
+        else rejectOld(new Error("obsolete error"))
+      })
+      expect(screen.queryByRole("alert")).toBeNull()
+      expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ code: "obsolete" }), "*")
+    }
+  )
+})
+
 describe("ArtifactPreview", () => {
   it("delegates to a built-in renderer for code", () => {
     render(<ArtifactPreview artifact={dummy({ type: "code" })} />)

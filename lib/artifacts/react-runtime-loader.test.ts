@@ -79,6 +79,20 @@ describe("loadArtifactReactRuntime", () => {
     mockFetch(MANIFEST)
     await expect(loadArtifactReactRuntime()).resolves.toMatchObject({ reactVersion: "19.2.8" })
   })
+
+  it("retries a shared rejected manifest request once, then shares the successful runtime", async () => {
+    const failedFetch = mockFetch(null, false)
+    const first = loadArtifactReactRuntime()
+    expect(loadArtifactReactRuntime()).toBe(first)
+    await expect(first).rejects.toBeInstanceOf(ArtifactRuntimeUnavailableError)
+    expect(failedFetch).toHaveBeenCalledTimes(1)
+    const recoveredFetch = mockFetch(MANIFEST)
+    const retry = loadArtifactReactRuntime()
+    expect(retry).not.toBe(first)
+    expect(loadArtifactReactRuntime()).toBe(retry)
+    await expect(retry).resolves.toMatchObject({ reactVersion: "19.2.8" })
+    expect(recoveredFetch).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("transformArtifactJsx", () => {

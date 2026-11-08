@@ -507,6 +507,16 @@ export function ArtifactPreview({
   } | null>(null)
   /** True once the in-frame bootstrap has announced itself for THIS document. */
   const shellReadyRef = useRef(false)
+  const scriptedRevisionRef = useRef(0)
+  const failedScriptedRevisionRef = useRef(-1)
+  useEffect(() => {
+    // Invalidate pending transforms and frame replies as soon as their input
+    // or frame instance changes, including a Retry with identical content.
+    scriptedRevisionRef.current += 1
+    return () => {
+      scriptedRevisionRef.current += 1
+    }
+  }, [artifact.id, artifact.content, frameMode, key])
   /**
    * A scripted frame that never announces itself is the shape a CSP refusal
    * takes: the bundles are served, the frame loads, and nothing runs. Without
@@ -539,7 +549,7 @@ export function ArtifactPreview({
     return () => {
       cancelled = true
     }
-  }, [setError, artifact.id, artifact.type, needsRuntime])
+  }, [setError, artifact.id, artifact.type, needsRuntime, key])
 
   // Compiled once per (artifact, content) and read back when the frame reports
   // ready — the markup goes into `srcdoc`, the scripts go over postMessage.
@@ -559,20 +569,26 @@ export function ArtifactPreview({
   const pushScriptedContent = useCallback(async () => {
     const target = iframeRef.current?.contentWindow
     if (!target) return
+    const revision = ++scriptedRevisionRef.current
+    const isCurrent = () =>
+      revision === scriptedRevisionRef.current && target === iframeRef.current?.contentWindow
     try {
       if (frameMode === "react") {
         const { transformArtifactJsx } = await import("@/lib/artifacts/react-runtime-loader")
         const { code, isModule } = await transformArtifactJsx(artifact.content)
-        target.postMessage({ type: "render-component", code, isModule }, "*")
+        if (!isCurrent()) return
+        target.postMessage({ type: "render-component", code, isModule, revision }, "*")
         return
       }
       if (frameMode === "interactive") {
         target.postMessage(
-          { type: "run-scripts", scripts: interactiveProgramRef.current?.scripts ?? [] },
+          { type: "run-scripts", scripts: interactiveProgramRef.current?.scripts ?? [], revision },
           "*"
         )
       }
     } catch (err) {
+      if (!isCurrent()) return
+      failedScriptedRevisionRef.current = revision
       loggers.ui.error("artifacts.preview.scripted-push-failed", err, {
         artifactId: artifact.id,
         frameMode,
@@ -598,7 +614,7 @@ export function ArtifactPreview({
     // `key` is the manual-refresh counter; a refresh must re-render even when
     // the content is byte-identical, which is the whole point of the button.
     if (unchanged && lastRenderedKeyRef.current === key) return
-    lastRenderedKeyRef.current = key
+    const frameChanged = lastRenderedKeyRef.current !== key
 
     // Re-rendering INTO a live document does not need the loading curtain: the
     // frame already has something on screen, and raising it made every
@@ -607,7 +623,9 @@ export function ArtifactPreview({
       last === null ||
       last.id !== artifact.id ||
       last.type !== artifact.type ||
-      last.mode !== frameMode
+      last.mode !== frameMode ||
+      frameChanged
+    if (isFreshFrame) shellReadyRef.current = false
 
     // A React frame that is already up takes new code over postMessage. That is
     // what makes an edit repaint in place instead of re-navigating the iframe —
@@ -617,7 +635,7 @@ export function ArtifactPreview({
     const rafId =
       isFreshFrame && !canRenderInPlace
         ? requestAnimationFrame(() => {
-            setError(null)
+            if (!needsRuntime) setError(null)
             setIsLoading(true)
           })
         : null
@@ -690,6 +708,7 @@ export function ArtifactPreview({
         rendererProfile: artifact.metadata?.rendererProfile,
         content: artifact.content,
       }
+      lastRenderedKeyRef.current = key
       // A scripted frame is still booting; it drops the curtain itself when the
       // bootstrap reports `artifact-preview-ready`.
       if (frameMode !== "react" && frameMode !== "interactive") {
@@ -744,13 +763,22 @@ export function ArtifactPreview({
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (event.source !== iframeRef.current?.contentWindow) return
+      if (
+        (event.data?.type === "artifact-preview-error" ||
+          event.data?.type === "artifact-preview-ready") &&
+        event.data.revision !== undefined &&
+        event.data.revision !== scriptedRevisionRef.current
+      )
+        return
       if (event.data?.type === "artifact-preview-error") {
+        failedScriptedRevisionRef.current = scriptedRevisionRef.current
         loggers.ui.warn("artifacts.preview.iframe-error", {
           artifactId: artifact.id,
           artifactType: artifact.type,
           message: event.data.message,
         })
         setError(event.data.message || t("previewError"))
+        setIsLoading(false)
         return
       }
       if (event.data?.type === "artifact-shell-ready") {
@@ -806,6 +834,9 @@ export function ArtifactPreview({
         return
       }
       if (event.data?.type === "artifact-preview-ready") {
+        if (needsRuntime && event.data.revision !== scriptedRevisionRef.current) return
+        if (needsRuntime && event.data.revision <= failedScriptedRevisionRef.current) return
+        setError(null)
         setIsLoading(false)
         syncParentContext()
         // The frame just (re)painted, so a still-armed select mode has to be
@@ -833,6 +864,7 @@ export function ArtifactPreview({
     setError,
     artifact.id,
     artifact.type,
+    needsRuntime,
     pushScriptedContent,
     syncParentContext,
     t,
