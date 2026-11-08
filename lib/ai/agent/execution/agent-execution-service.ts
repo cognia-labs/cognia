@@ -311,20 +311,29 @@ export async function executeAgentTurn(
         ? ({ kind: "workingState" } as const)
         : ({ kind: "remoteDefault" } as const)
     const provisioning = await provisioningForWorkspaceRoot(config.cwd).catch(() => undefined)
-    const bundle = await acquireWorkspaceBundle({
-      ownerType: "session",
-      ownerRef: spec.identity.sessionId,
-      environmentKind: "managed",
-      base,
-      roots: [
-        {
-          logicalRootId: primaryLogicalRootId,
-          role: "primary",
-          sourceRoot: config.cwd,
-        },
-      ],
-      ...(provisioning ? { provisioning } : {}),
-    })
+    // The turn's abort cancels its checkout, which the host keys by owner. A
+    // turn with no session of its own shares the "session-unbound" owner with
+    // every other such turn, so its abort would reach their checkouts too; it
+    // stays bounded by the host's acquisition deadline instead.
+    const acquireOptions: [] | [{ signal: AbortSignal }] =
+      config.abortSignal && config.sessionId ? [{ signal: config.abortSignal }] : []
+    const bundle = await acquireWorkspaceBundle(
+      {
+        ownerType: "session",
+        ownerRef: spec.identity.sessionId,
+        environmentKind: "managed",
+        base,
+        roots: [
+          {
+            logicalRootId: primaryLogicalRootId,
+            role: "primary",
+            sourceRoot: config.cwd,
+          },
+        ],
+        ...(provisioning ? { provisioning } : {}),
+      },
+      ...acquireOptions
+    )
     const lease = await openWorkspaceBundleTurnLease(bundle, primaryLogicalRootId, {
       taskId: tracking.taskId ?? `agent:${spec.identity.sessionId}`,
       sessionId: spec.identity.sessionId,

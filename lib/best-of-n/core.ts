@@ -52,10 +52,15 @@ export class BestOfNCandidateStoppedError extends BestOfNAttemptError {
 }
 export interface BestOfNExecution {
   prepare(group: BestOfNGroup, input: BestOfNInput): Promise<void>
+  /**
+   * `signal` is the group's stop and duration budget: aborting it while the
+   * candidate's worktree is being created cancels that checkout on the host.
+   */
   acquire(
     group: BestOfNGroup,
     candidate: BestOfNCandidate,
-    input: BestOfNInput
+    input: BestOfNInput,
+    signal?: AbortSignal
   ): Promise<CandidateWorkspace>
   execute(input: {
     group: BestOfNGroup
@@ -217,7 +222,7 @@ export function createBestOfNService(deps: {
           let workspace: CandidateWorkspace | undefined
           try {
             abort.signal.throwIfAborted()
-            workspace = await execution.acquire(group, candidate, input)
+            workspace = await execution.acquire(group, candidate, input, abort.signal)
             await progress(group.groupId, {
               candidateId: candidate.candidateId,
               status: "running",

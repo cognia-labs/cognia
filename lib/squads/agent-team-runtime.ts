@@ -435,6 +435,8 @@ export async function runTeamLifecycle(
       workspaceController = new AgentTeamRegistryWorkspaceController({
         runId,
         roots: configuredRoots,
+        // Stopping the run cancels a dispatch's checkout still in progress.
+        signal: ac.signal,
         // `select` rolls back the branches it made when a later one fails.
         deleteBranch: async (workspaceId, branch) => {
           await deleteWorkspaceBranch(workspaceId, branch)

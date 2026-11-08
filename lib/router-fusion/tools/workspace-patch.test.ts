@@ -42,9 +42,13 @@ jest.mock("@/lib/git/commands", () => ({
 }))
 const mockSettleTaskWorkspaceRun = jest.fn()
 const mockApplyTaskWorkspace = jest.fn()
+const mockBeginTaskWorkspaceTurn = jest.fn()
 jest.mock("@/lib/task-workspace/client", () => ({
   settleTaskWorkspaceRun: (...args: unknown[]) => mockSettleTaskWorkspaceRun(...args),
   applyTaskWorkspace: (...args: unknown[]) => mockApplyTaskWorkspace(...args),
+  beginTaskWorkspaceTurn: (...args: unknown[]) => mockBeginTaskWorkspaceTurn(...args),
+  taskIdForMessage: (messageId: string) => `task:${messageId}`,
+  runIdForTurn: (sessionId: string, runId: number) => `${sessionId}:${runId}`,
 }))
 
 const webModeRefusal = (name: string) => new Error(`tauri-only command from web mode: ${name}`)
@@ -309,6 +313,50 @@ describe("isUnknownWorkspaceCommand", () => {
     ]) {
       expect(isUnknownWorkspaceCommand(new Error(refusal), get)).toBe(false)
     }
+  })
+})
+
+describe("a stopped run's staging worktrees", () => {
+  it("hands the run's stop to each staging checkout", async () => {
+    const world = fakeHost(FILES)
+    const open = world.host.openStaging
+    const seen: Array<AbortSignal | undefined> = []
+    const run = new AbortController()
+    const workspace = createDelegateWorkspacePort({
+      runId: "run-1",
+      workspaceRoot: WORK,
+      host: {
+        ...world.host,
+        openStaging: async (request) => {
+          seen.push(request.signal)
+          return open(request)
+        },
+      },
+      signal: run.signal,
+    })
+    const revision = await workspace.currentRevision()
+    await workspace.readFile({ path: "README.md", revision, maxBytes: 100 })
+    expect(seen).toEqual([run.signal, run.signal])
+  })
+
+  it("cancels the host checkout through the begin's own options", async () => {
+    mockBeginTaskWorkspaceTurn.mockResolvedValueOnce({ executionRoot: "/staged", runId: "tr-1" })
+    const run = new AbortController()
+    await expect(
+      defaultDelegateWorkspaceHost().openStaging({
+        runId: "run-1",
+        logicalStepId: "delegate:snapshot:base",
+        workspaceRoot: WORK,
+        baseRevision: "wsrev1:base",
+        purpose: "base",
+        signal: run.signal,
+      })
+    ).resolves.toEqual({ root: "/staged", taskRunId: "tr-1" })
+    expect(mockBeginTaskWorkspaceTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: "router-fusion-delegate" }),
+      undefined,
+      { signal: run.signal }
+    )
   })
 })
 

@@ -188,6 +188,8 @@ export interface DelegateWorkspaceHost {
     workspaceRoot: string
     baseRevision: string
     purpose: "base" | "staging"
+    /** The run's stop: aborting it cancels the worktree checkout in progress. */
+    signal?: AbortSignal
   }): Promise<{ root: string; taskRunId: string | null }>
   /** Give a provisioned worktree back at the end of the run. */
   disposeStaging(input: { taskRunId: string | null; root: string }): Promise<void>
@@ -222,6 +224,11 @@ export interface DelegateWorkspacePortInput {
   listLimit?: number
   /** Bytes of one base file the staging tree may restore. */
   restoreMaxBytes?: number
+  /**
+   * The run's stop. Its two worktrees are cut lazily, on the first read or
+   * patch; a stop while one is being created cancels that checkout on the host.
+   */
+  signal?: AbortSignal
 }
 
 /** A revision this run staged, and the patch that produces it from the base. */
@@ -434,7 +441,7 @@ export function defaultDelegateWorkspaceHost(): DelegateWorkspaceHost {
       const { beginTaskWorkspaceTurn, runIdForTurn, taskIdForMessage } =
         await import("@/lib/task-workspace/client")
       const taskId = taskIdForMessage(`fusion-delegate-${input.runId}`)
-      const run = await beginTaskWorkspaceTurn({
+      const turn: Parameters<typeof beginTaskWorkspaceTurn>[0] = {
         taskId,
         sessionId: `fusion:${input.runId}`,
         // Two worktrees per run, and the same ids on a replay: the pristine
@@ -445,7 +452,11 @@ export function defaultDelegateWorkspaceHost(): DelegateWorkspaceHost {
         workspaceRoot: input.workspaceRoot,
         base: { kind: "workingState" },
         surface: "router-fusion-delegate",
-      })
+      }
+      // The run's stop cancels this begin's checkout on the host.
+      const run = input.signal
+        ? await beginTaskWorkspaceTurn(turn, undefined, { signal: input.signal })
+        : await beginTaskWorkspaceTurn(turn)
       if (!run) {
         throw new Error("the host would not provision an isolated worktree for this run")
       }
@@ -610,6 +621,7 @@ export function createDelegateWorkspacePort(
           workspaceRoot: input.workspaceRoot,
           baseRevision: pinned,
           purpose,
+          ...(input.signal ? { signal: input.signal } : {}),
         })
       base = await open("base")
       staging = await open("staging")

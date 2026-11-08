@@ -224,7 +224,13 @@ async function openConnectorWorkspaceTurn(
     roots,
     ...(provisioning ? { provisioning } : {}),
   }
-  const bundle = scratchBundle ?? (await acquireWorkspaceBundle(acquire))
+  // The turn's own stop cancels the checkout, which the host keys by its
+  // owner. A room member's owner is the room, so its signal would also cancel
+  // a sibling member's checkout in flight under the same key; those stay
+  // bounded by the host's acquisition deadline instead.
+  const acquireOptions: [] | [{ signal: AbortSignal }] =
+    opts.signal && ownerSessionId === sessionId ? [{ signal: opts.signal }] : []
+  const bundle = scratchBundle ?? (await acquireWorkspaceBundle(acquire, ...acquireOptions))
   const turnId =
     options?.turnId?.trim() || `connector-${Date.now()}-${(connectorTurnSequence += 1)}`
   const taskId = connectorBoundaryId("task:connector:", ownerSessionId)

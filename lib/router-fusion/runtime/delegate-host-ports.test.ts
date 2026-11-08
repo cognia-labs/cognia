@@ -437,6 +437,38 @@ function completed(outcome: DelegateRunOutcome) {
 const readFixture = (root: string) => readFileSync(join(root, "src/users/list.ts"), "utf8")
 
 describe("createDelegateHostPorts end to end", () => {
+  it("hands the run's stop to the workspace port's staging checkouts", async () => {
+    const root = fixtureRepo()
+    const host = nodeWorkspaceHost(root)
+    const seen: Array<AbortSignal | undefined> = []
+    const run = new AbortController()
+    const name = `fusion-d3-signal-${++counter}`
+    const ports = createDelegateHostPorts({
+      runId: "run-delegate-signal",
+      projectId: "project-1",
+      workspaceRoot: root,
+      acceptanceProfileId: "unit",
+      store: new FusionLedgerStore({
+        db: new FusionDB(name),
+        codec: fusionContentCodec(name),
+        now: () => NOW,
+      }),
+      now: () => NOW,
+      workspaceHost: {
+        ...host,
+        openStaging: async (request) => {
+          seen.push(request.signal)
+          return host.openStaging(request)
+        },
+      },
+      signal: run.signal,
+    })
+    const revision = await ports.workspace.currentRevision()
+    await ports.workspace.readFile({ path: "README.md", revision, maxBytes: 100 })
+    expect(seen).toEqual([run.signal, run.signal])
+    await ports.workspace.dispose()
+  })
+
   it("runs a delegate turn against a real checkout: verified in a sandbox, delivered as a patch", async () => {
     const root = fixtureRepo()
     const w = world(root)

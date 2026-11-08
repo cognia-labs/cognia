@@ -205,6 +205,8 @@ interface World {
   workspace: MemoryWorkspace
   acceptance: MemoryAcceptancePort
   deps: AgentFusionRunDeps
+  /** The stop each run handed its ports: it cancels a staging checkout in progress. */
+  portSignals: Array<AbortSignal | undefined>
 }
 
 function world(steps: Record<string, FakeStep[]>): World {
@@ -217,7 +219,13 @@ function world(steps: Record<string, FakeStep[]>): World {
   const acceptance = new MemoryAcceptancePort(passing, newId)
   const journalStore = createFusionDelegateStepStore(db, store.contentCodec)
   const ports = new Map<string, DelegateHostPorts>()
-  const delegatePorts = async (_store: FusionLedgerStore, run: { runId: string }) => {
+  const portSignals: Array<AbortSignal | undefined> = []
+  const delegatePorts = async (
+    _store: FusionLedgerStore,
+    run: { runId: string },
+    signal?: AbortSignal
+  ) => {
+    portSignals.push(signal)
     // One set per run, reused across the park: a resumed run verifies the
     // very trees it staged before it asked.
     let existing = ports.get(run.runId)
@@ -243,6 +251,7 @@ function world(steps: Record<string, FakeStep[]>): World {
     store,
     workspace,
     acceptance,
+    portSignals,
     deps: {
       store,
       routeHost: routeHost(),
@@ -374,6 +383,8 @@ describe("an agentsWorkflows delegate run", () => {
     // `patch_only`: nothing asked, and the checkout never moved.
     expect(w.workspace.applied).toHaveLength(0)
     expect(await getDb().executionRunInterrupts.count()).toBe(0)
+    // The run's own stop reaches the ports that cut its staging worktrees.
+    expect(w.portSignals[0]).toBeInstanceOf(AbortSignal)
   })
 
   it("parks on a person, asks on the workflow's own run, and answers the step once approved", async () => {

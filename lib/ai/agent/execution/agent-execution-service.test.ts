@@ -399,6 +399,42 @@ it("runs managed filesystem work through one Registry Bundle Turn", async () => 
   expect(result.trackingUnavailable).toBeUndefined()
 })
 
+it("cancels a session's checkout when its turn is aborted", async () => {
+  const controller = new AbortController()
+  await executeAgentTurn(
+    "p",
+    { sessionId: "session-1", cwd: "/repo", toolsEnabled: true, abortSignal: controller.signal },
+    { isTauri: true, isHeadlessHost: false },
+    {
+      surface: "workflow-agent-turn",
+      identity: { runId: "execution-1", attemptId: "attempt-1", turnId: "turn-1" },
+      taskWorkspace: { enabled: true, agentId: "workflow-agent", agentKind: "workflow" },
+    }
+  )
+
+  expect(acquireWorkspaceBundle).toHaveBeenCalledWith(
+    expect.objectContaining({ ownerRef: "session-1" }),
+    { signal: controller.signal }
+  )
+})
+
+it("leaves an unbound turn's checkout to the deadline, since its owner is shared", async () => {
+  await executeAgentTurn(
+    "p",
+    { cwd: "/repo", toolsEnabled: true, abortSignal: new AbortController().signal },
+    { isTauri: true, isHeadlessHost: false },
+    {
+      surface: "workflow-agent-turn",
+      identity: { runId: "execution-1", attemptId: "attempt-1", turnId: "turn-1" },
+      taskWorkspace: { enabled: true, agentId: "workflow-agent", agentKind: "workflow" },
+    }
+  )
+
+  const calls = acquireWorkspaceBundle.mock.calls as unknown[][]
+  expect(calls.at(-1)?.[0]).toEqual(expect.objectContaining({ ownerRef: "session-unbound" }))
+  expect(calls.at(-1)).toHaveLength(1)
+})
+
 it("fails closed before agent execution when the Registry cannot open a Bundle Turn", async () => {
   openWorkspaceBundleTurnLease.mockResolvedValueOnce(null)
 

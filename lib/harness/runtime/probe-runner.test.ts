@@ -359,6 +359,31 @@ describe("runProbe", () => {
     expect(out.evidence.delivered).toBe(true)
   })
 
+  it("hands the probe's stop to a git workspace's checkout", async () => {
+    const h = harness(async () => reply())
+    const acquire = jest.fn(async () => {
+      throw new Error("git worktree add failed: the acquisition was cancelled")
+    })
+    h.deps.isolation.git.acquire = acquire
+    const controller = new AbortController()
+    await expect(
+      runProbe(
+        input({
+          run: makeRun({
+            task: makeTask({
+              isolation: "git",
+              git: { sourceRoot: "/repo", resolvedBaseSha: "abc123", projectId: "proj" },
+            }),
+          }),
+          signal: controller.signal,
+        }),
+        h.deps
+      )
+    ).rejects.toThrow("cancelled")
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }))
+    expect(h.deleted).toEqual(["s1"])
+  })
+
   it("cleans up when the workspace cannot be prepared", async () => {
     const h = harness(async () => reply())
     h.deps.isolation.fs.readHostFileBase64 = async () => {

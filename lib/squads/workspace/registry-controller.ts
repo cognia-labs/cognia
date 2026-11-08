@@ -40,7 +40,10 @@ export interface OpenAgentTeamWorkspaceDispatch {
   traceSpanId?: string
 }
 
-type AcquireBundle = (input: AcquireWorkspaceBundle) => Promise<WorkspaceBundle>
+type AcquireBundle = (
+  input: AcquireWorkspaceBundle,
+  options?: { signal?: AbortSignal }
+) => Promise<WorkspaceBundle>
 type CreateBranch = typeof createWorkspaceBranch
 type ResolveProvisioning = (sourceRoot: string) => Promise<WorkspaceProvisioning | undefined>
 type OpenTurn = (
@@ -63,6 +66,12 @@ export interface AgentTeamRegistryWorkspaceControllerOptions {
    * reconcile fails. Without it a partial reconcile leaves stray branches.
    */
   deleteBranch?: DeleteBranch
+  /**
+   * The team run's stop. Aborting it while a dispatch's worktrees are being
+   * created cancels that checkout on the host: every acquisition here is keyed
+   * by this run as its owner, and a stopped run wants none of them.
+   */
+  signal?: AbortSignal
 }
 
 export type AgentTeamWorkspaceReconcileMode = "manual" | "merge-all" | "select" | "pipeline"
@@ -123,6 +132,7 @@ export class AgentTeamRegistryWorkspaceController {
   private readonly createBranch: CreateBranch
   private readonly resolveProvisioning: ResolveProvisioning
   private readonly deleteBranch: DeleteBranch | undefined
+  private readonly signal: AbortSignal | undefined
   private readonly bundles = new Map<string, Promise<WorkspaceBundle>>()
   private readonly attempts = new Map<string, number>()
   private readonly candidates = new Map<string, DispatchCandidate>()
@@ -146,6 +156,7 @@ export class AgentTeamRegistryWorkspaceController {
     this.createBranch = options.createBranch ?? createWorkspaceBranch
     this.resolveProvisioning = options.resolveProvisioning ?? provisioningForWorkspaceRoot
     this.deleteBranch = options.deleteBranch
+    this.signal = options.signal
   }
 
   async openDispatch(input: OpenAgentTeamWorkspaceDispatch): Promise<WorkspaceBundleTurnLease> {
@@ -165,20 +176,26 @@ export class AgentTeamRegistryWorkspaceController {
       // it since the declaration landed; this one had not.
       bundlePromise = this.resolveProvisioning(primary.sourceRoot)
         .catch(() => undefined)
-        .then((provisioning) =>
-          this.acquireBundle({
-            ownerType: "team",
-            ownerRef: this.runId,
-            environmentKind: "managed",
-            base: this.base,
-            roots: this.roots.map((root) => ({
-              logicalRootId: root.logicalRootId,
-              role: root.logicalRootId === primary.logicalRootId ? "primary" : "additional",
-              sourceRoot: root.sourceRoot,
-            })),
-            ...(provisioning ? { provisioning } : {}),
-          })
-        )
+        .then((provisioning) => {
+          const acquireOptions: [] | [{ signal: AbortSignal }] = this.signal
+            ? [{ signal: this.signal }]
+            : []
+          return this.acquireBundle(
+            {
+              ownerType: "team",
+              ownerRef: this.runId,
+              environmentKind: "managed",
+              base: this.base,
+              roots: this.roots.map((root) => ({
+                logicalRootId: root.logicalRootId,
+                role: root.logicalRootId === primary.logicalRootId ? "primary" : "additional",
+                sourceRoot: root.sourceRoot,
+              })),
+              ...(provisioning ? { provisioning } : {}),
+            },
+            ...acquireOptions
+          )
+        })
       this.bundles.set(allocationKey, bundlePromise)
       bundlePromise.catch(() => {
         if (this.bundles.get(allocationKey) === bundlePromise) this.bundles.delete(allocationKey)

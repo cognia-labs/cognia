@@ -290,6 +290,38 @@ describe("AgentTeamRegistryWorkspaceController", () => {
     expect(acquireBundle).toHaveBeenCalledTimes(2)
   })
 
+  it("hands the team run's stop to every dispatch checkout", async () => {
+    const run = new AbortController()
+    const acquireBundle = jest.fn(
+      async (_input: AcquireWorkspaceBundle, options?: { signal?: AbortSignal }) =>
+        new Promise<ReturnType<typeof bundle>>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () =>
+            reject(new Error("git worktree add failed: the acquisition was cancelled"))
+          )
+        })
+    )
+    const controller = new AgentTeamRegistryWorkspaceController({
+      runId: "run-1",
+      base: { kind: "localHead" },
+      roots: [{ logicalRootId: "app", sourceRoot: "/repo/app" }],
+      acquireBundle,
+      openTurn: jest.fn(async () => null),
+      signal: run.signal,
+    })
+    const dispatch = controller.openDispatch({
+      taskId: "build",
+      teammateId: "alice",
+      repositoryId: "app",
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(acquireBundle).toHaveBeenCalledWith(expect.objectContaining({ ownerType: "team" }), {
+      signal: run.signal,
+    })
+
+    run.abort()
+    await expect(dispatch).rejects.toThrow(/cancelled/)
+  })
+
   it("fails closed when the host returns no Bundle Turn lease", async () => {
     const controller = new AgentTeamRegistryWorkspaceController({
       runId: "run-1",

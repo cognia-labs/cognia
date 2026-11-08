@@ -80,6 +80,8 @@ export interface DelegateHostPortsInput {
   workspaceRoot: string
   /** The `.cognia/workspace.json` profile the run verifies with. */
   acceptanceProfileId: string
+  /** The run's stop; it cancels a staging worktree checkout still in progress. */
+  signal?: AbortSignal
   store: FusionLedgerStore
   now?: () => number
   newId?: () => string
@@ -138,6 +140,7 @@ export function createDelegateHostPorts(input: DelegateHostPortsInput): Delegate
     runId: input.runId,
     workspaceRoot: input.workspaceRoot,
     ...(input.workspaceHost ? { host: input.workspaceHost } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
   })
 
   const acceptance = createDelegateAcceptancePort({

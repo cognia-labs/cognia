@@ -680,6 +680,49 @@ describe("safeSendPrompt", () => {
     expect(mockRun).not.toHaveBeenCalled()
   })
 
+  it("cancels its own checkout when the turn is stopped", async () => {
+    mockAcquireWorkspaceBundle.mockRejectedValueOnce(
+      new Error("git worktree add failed: the acquisition was cancelled")
+    )
+    const controller = new AbortController()
+
+    await expect(
+      safeSendPrompt(
+        "sess_1",
+        "clean",
+        { cwd: "/repo" },
+        { ...auditCtx, signal: controller.signal }
+      )
+    ).rejects.toThrow("cancelled")
+
+    expect(mockAcquireWorkspaceBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerRef: "sess_1" }),
+      { signal: controller.signal }
+    )
+    expect(mockRun).not.toHaveBeenCalled()
+  })
+
+  it("leaves a room member's shared checkout to the deadline, not to its own stop", async () => {
+    // The checkout is keyed by the room, so a member's stop would also cancel
+    // a sibling member's checkout in flight under the same key.
+    mockAcquireWorkspaceBundle.mockRejectedValueOnce(new Error("registry unavailable"))
+    const member = "sess_1::char::c-1::im.m-1.reply-1"
+
+    await expect(
+      safeSendPrompt(
+        member,
+        "clean",
+        { cwd: "/repo" },
+        { ...auditCtx, signal: new AbortController().signal }
+      )
+    ).rejects.toThrow("registry unavailable")
+
+    expect(mockAcquireWorkspaceBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerRef: "sess_1" })
+    )
+    expect(mockAcquireWorkspaceBundle.mock.calls.at(-1)).toHaveLength(1)
+  })
+
   it("stands down — without failing the turn — when a sandbox runtime is already bound", async () => {
     // `resolveSendOptions` stamps `sandboxRuntimeRef` for EVERY session with the
     // sandbox or Computer Use enabled, so refusing here failed every inbound

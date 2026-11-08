@@ -858,6 +858,10 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     expect((observed[0] as { options: { deleteBranch?: unknown } }).options.deleteBranch).toEqual(
       expect.any(Function)
     )
+    // Stopping the run cancels a dispatch checkout still in progress.
+    const runSignal = (observed[0] as { options: { signal?: AbortSignal } }).options.signal
+    expect(runSignal).toBeInstanceOf(AbortSignal)
+    expect(runSignal!.aborted).toBe(false)
   })
 
   it("omits triggeredBy for non-IM (UI/API) runs", async () => {

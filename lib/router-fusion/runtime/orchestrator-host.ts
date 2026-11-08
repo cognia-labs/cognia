@@ -106,7 +106,11 @@ export interface OrchestratorDeps {
    * substitutes a fake filesystem and sandbox here; production builds them
    * from the run's project.
    */
-  delegatePorts?: (store: FusionLedgerStore, run: FusionRunRow) => Promise<DelegateHostPorts>
+  delegatePorts?: (
+    store: FusionLedgerStore,
+    run: FusionRunRow,
+    signal?: AbortSignal
+  ) => Promise<DelegateHostPorts>
   /** A reason the deployment may not be called now (AUTH-07), or null. */
   liveRefusal?: (run: FusionRunRow, deploymentId: string) => string | null
   now?: () => number
@@ -280,7 +284,8 @@ export async function hostDelegatePorts(
   store: FusionLedgerStore,
   run: FusionRunRow,
   now: () => number,
-  newId: () => string
+  newId: () => string,
+  signal?: AbortSignal
 ): Promise<DelegateHostPorts> {
   const context = delegateRunContext(run)
   const [{ createDelegateHostPorts }, { createFusionDelegateStepStore }] = await Promise.all([
@@ -297,6 +302,7 @@ export async function hostDelegatePorts(
     newId,
     configRoot: context.workspaceRoot,
     journalStore: createFusionDelegateStepStore(store.db, store.contentCodec),
+    ...(signal ? { signal } : {}),
   })
 }
 
@@ -686,9 +692,10 @@ export async function executeFusionRun(
         // Throws with the field that is missing rather than running a graph
         // that could never verify anything.
         const context = delegateRunContext(run)
+        // The run's stop reaches its staging worktrees while they are cut.
         const hostPorts = await (
-          deps.delegatePorts ?? ((s, r) => hostDelegatePorts(s, r, now, newId))
-        )(store, run)
+          deps.delegatePorts ?? ((s, r, signal) => hostDelegatePorts(s, r, now, newId, signal))
+        )(store, run, controller.signal)
         delegateWorkspace = hostPorts.workspace
         const tools = await (deps.tools ?? ((s, r, a) => hostRunTools(s, r, a, now, hostPorts)))(
           store,

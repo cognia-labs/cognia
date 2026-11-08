@@ -119,18 +119,23 @@ export function createBestOfNExecution(): BestOfNExecution {
       })
       await coordinator.prepareRun(bestOfNTeam(group, request), group.teamRunId)
     },
-    async acquire(group, candidate, request) {
+    async acquire(group, candidate, request, signal) {
+      // Keyed by the candidate's own session, so a stop cancels only its checkout.
+      const acquireOptions: [] | [{ signal: AbortSignal }] = signal ? [{ signal }] : []
       const bundle = await runWorkspaceUserAction("task_workspace_bundle_acquire", () =>
-        acquireWorkspaceBundle({
-          ownerType: "session",
-          ownerRef: candidate.childSessionId,
-          ...(request.projectId ? { projectId: request.projectId } : {}),
-          environmentKind: "managed",
-          base: { kind: "gitRef", gitRef: group.baseSha },
-          roots: [
-            { logicalRootId: group.repositoryId, role: "primary", sourceRoot: group.sourceRoot },
-          ],
-        })
+        acquireWorkspaceBundle(
+          {
+            ownerType: "session",
+            ownerRef: candidate.childSessionId,
+            ...(request.projectId ? { projectId: request.projectId } : {}),
+            environmentKind: "managed",
+            base: { kind: "gitRef", gitRef: group.baseSha },
+            roots: [
+              { logicalRootId: group.repositoryId, role: "primary", sourceRoot: group.sourceRoot },
+            ],
+          },
+          ...acquireOptions
+        )
       )
       const root = bundle.leases.find((lease) => lease.role === "primary")
       if (

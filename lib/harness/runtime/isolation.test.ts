@@ -105,6 +105,18 @@ describe("probeDirectory", () => {
 })
 
 describe("prepareRolloutWorkspace", () => {
+  it("passes the rollout's stop to a git workspace's acquisition", async () => {
+    const acquire = jest.fn(async () => {
+      throw new Error("git worktree add failed: the acquisition was cancelled")
+    })
+    const deps = { ...fakeDeps({}), git: { acquire } }
+    const controller = new AbortController()
+    await expect(
+      prepareRolloutWorkspace(makeTask({ isolation: "git" }), ids, deps, controller.signal)
+    ).rejects.toThrow("cancelled")
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }))
+  })
+
   it("is text-only without isolation", async () => {
     const ws = await prepareRolloutWorkspace(makeTask({ isolation: "none" }), ids, fakeDeps({}))
     expect(ws.root).toBeUndefined()
@@ -284,6 +296,21 @@ describe("defaultIsolationDeps", () => {
 
     await handle.archive()
     expect(workspaceClient.archiveManagedWorkspace).toHaveBeenCalledWith("w1")
+  })
+
+  it("hands the probe's stop to the worktree checkout", async () => {
+    const { defaultIsolationDeps } = await import("./isolation")
+    const deps = await defaultIsolationDeps()
+    const task = makeTask({
+      isolation: "git",
+      git: { sourceRoot: "/repo", resolvedBaseSha: "abc123", projectId: "proj" },
+    })
+    const controller = new AbortController()
+    await deps.git.acquire({ task, ...ids, signal: controller.signal })
+    expect(workspaceClient.acquireWorkspaceBundle).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ownerRef: "s1" }),
+      { signal: controller.signal }
+    )
   })
 
   it("needs a resolved base and archives when the turn cannot be leased", async () => {
