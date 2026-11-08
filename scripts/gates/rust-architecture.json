@@ -79,6 +79,7 @@
     "cognia-server": "app"
   },
   "allowedSameLayer": [
+    "cognia-git-mirror -> cognia-instrument",
     "cognia-automation -> cognia-task-workspace",
     "cognia-core -> cognia-problem",
     "cognia-companion-rpc -> cognia-companion",
