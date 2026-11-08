@@ -127,7 +127,13 @@ import {
   listConnectorInboundMutationJobs,
   acknowledgeConnectorInboundMutation,
 } from "@/lib/db/connector-inbound-jobs"
-import { admitConversationEvent } from "./conversation-admission"
+import { admitConversationEvent, resolveInboundActivationPolicy } from "./conversation-admission"
+import {
+  automatedRoomTurnOf,
+  buildAutomatedRoomTurnEvent,
+  claimsAutomatedRoomTurn,
+  type AutomatedRoomTurnInput,
+} from "./room/automated-room-turn"
 import { classifySiblingSender, type SiblingClassification } from "./sibling-bots"
 import { applyMediaModelGate, resolveMediaModelPolicy } from "./media-model-gate"
 import { consumeSiblingInterplayBudget, DEFAULT_BOT_INTERPLAY_BUDGET } from "./at-gate"
@@ -295,6 +301,9 @@ export class ConnectorBus {
    * conversations with in-flight turns.
    */
   private turnQueues = new Map<string, { tail: Promise<void>; depth: number }>()
+
+  /** Told when a conversation's last queued turn settles (`onConversationTurnsIdle`). */
+  private readonly turnIdleListeners = new Set<(conversationKey: string) => void>()
 
   /**
    * Per-conversation FIFO of workflow fan-outs — the same shape as
@@ -647,6 +656,29 @@ export class ConnectorBus {
     context: { admissionNow?: number } = {}
   ): Promise<void> {
     const now = Date.now()
+
+    // An automated room turn is this host's own (`enqueueAutomatedRoomTurn`):
+    // it skips admission, observers and commands, and only runs from the
+    // durable job that wrote it. One a transport delivers is refused.
+    if (claimsAutomatedRoomTurn(event)) {
+      if (recoveredJob && automatedRoomTurnOf(event)) {
+        await this.runAutomatedRoomTurn(event, recoveredJob)
+        return
+      }
+      await appendAudit({
+        adapterId: event.adapterId,
+        kind: "inbound.policy_blocked",
+        at: now,
+        conversationKey: event.conversationKey,
+        reason: "automated_turn_from_transport",
+      }).catch(() => undefined)
+      if (recoveredJob) {
+        await markConnectorInboundJobHistoryOnly(recoveredJob.id, "automated_turn_invalid", {
+          now,
+        })
+      }
+      return
+    }
 
     // Capture provider authority before untrusted observers run. Each observer
     // receives an isolated copy and cannot change another consumer's event.
@@ -1513,6 +1545,109 @@ export class ConnectorBus {
   }
 
   /**
+   * Start a turn this host owes an IM room (ADR-0249, ADR-0177 batch 5): a
+   * Squad's result for the member that handed it the work. It is queued
+   * behind whatever the group sent before it, on the conversation's own turn
+   * queue, and the route handler answers it as a room turn addressed to
+   * `targetMemberIds`. `true` once the room has the turn, which a second send
+   * of the same delivery also is: the delivery id is the turn's message id.
+   * `false` when the conversation's bot is off or no responder runs here.
+   *
+   * Nobody in the group wrote it, so it passes no admission and no trigger:
+   * the result is owed. A room the conversation put to sleep stores it and
+   * answers nobody, as an asleep desktop room does.
+   */
+  async enqueueAutomatedRoomTurn(input: AutomatedRoomTurnInput): Promise<boolean> {
+    // The bot's own id, as the conversation's newest platform message named it.
+    const jobs = await getDb()
+      .connectorInboundJobs.where("conversationKey")
+      .equals(input.binding.conversationKey)
+      .filter(
+        (job) => job.adapterId === input.binding.adapterId && !claimsAutomatedRoomTurn(job.event)
+      )
+      .toArray()
+      .catch(() => [] as ConnectorInboundJobRow[])
+    const latest = jobs.reduce<ConnectorInboundJobRow | undefined>(
+      (newest, job) => (!newest || job.receivedAt > newest.receivedAt ? job : newest),
+      undefined
+    )
+    const event = buildAutomatedRoomTurnEvent(input, latest?.event.selfId ?? "", Date.now())
+    return this.runAutomatedRoomTurn(event)
+  }
+
+  /** Whether no turn of the conversation is running or queued on this host. */
+  isConversationTurnIdle(conversationKey: string): boolean {
+    return !this.turnQueues.has(conversationKey)
+  }
+
+  /**
+   * Hear when a conversation's last queued turn settles: its turn boundary,
+   * where a result owed to the room may start the next turn. Returns an
+   * unsubscribe.
+   */
+  onConversationTurnsIdle(listener: (conversationKey: string) => void): () => void {
+    this.turnIdleListeners.add(listener)
+    return () => {
+      this.turnIdleListeners.delete(listener)
+    }
+  }
+
+  private async runAutomatedRoomTurn(
+    event: NormalizedInboundEvent,
+    recoveredJob?: ConnectorInboundJobRow
+  ): Promise<boolean> {
+    const now = Date.now()
+    const adapterRow = await getAdapterInstance(event.adapterId)
+    if (!adapterRow?.enabled || !this.routeHandler) return false
+    let job = recoveredJob
+    if (!job) {
+      const ensured = await ensureConnectorInboundJob(event, "queue", { now })
+      // Sent before: that turn is this delivery's.
+      if (!ensured.inserted) return true
+      job = ensured.job
+    }
+    const override = (await readForResolution(event.conversationKey)) ?? null
+    const charId = override?.characterDisabled
+      ? undefined
+      : (override?.characterId ?? adapterRow.defaultCharacterId)
+    const character = charId ? ((await getCharacter(charId)) ?? null) : null
+    const resolved = resolveBinding({ adapter: adapterRow, character, override })
+    let decision: RouteDecision = "manual-store"
+    if (resolveInboundActivationPolicy(adapterRow, override ?? undefined) !== "off") {
+      const axes = resolveImEffectiveConfig({
+        adapter: adapterRow,
+        override,
+        rule: null,
+        system: {
+          mode: resolved.mode,
+          characterId: resolved.characterId,
+          modeSource:
+            resolved.modeSource === "conversation-override" ? undefined : resolved.modeSource,
+        },
+        scope: event.channel.kind,
+      })
+      decision = toRouteDecision(
+        routeInboundFromComposition({
+          engagement: axes.engagement.effective,
+          autonomy: axes.autonomy.effective,
+          evalResult: { matched: true, blocked: false },
+          storeUnmatchedInDraftMode: resolved.trigger.storeUnmatchedInDraftMode,
+        })
+      )
+    }
+    if (decision === "drop") decision = "manual-store"
+    await appendAudit({
+      adapterId: event.adapterId,
+      kind: "inbound.received",
+      at: now,
+      conversationKey: event.conversationKey,
+      reason: "automated_room_turn",
+      fields: { inboundJobId: job.id, decision },
+    }).catch(() => undefined)
+    return this.enqueueRouteHandlerTurn(job.id, event, decision, resolved, override, adapterRow)
+  }
+
+  /**
    * Chain a route-handler turn onto the conversation's FIFO. Depth is capped
    * at {@link MAX_TURN_QUEUE_DEPTH}; beyond it the turn is dropped with an
    * `adapter.error` / `turn_queue_overflow` audit. Queue entries are deleted
@@ -1627,7 +1762,16 @@ export class ConnectorBus {
       // the mapped tail — a later enqueue must not lose its queue.
       if (this.turnQueues.get(key) !== queue) return
       queue.depth -= 1
-      if (queue.depth === 0 && queue.tail === step) this.turnQueues.delete(key)
+      if (queue.depth === 0 && queue.tail === step) {
+        this.turnQueues.delete(key)
+        for (const listener of this.turnIdleListeners) {
+          try {
+            listener(key)
+          } catch (err) {
+            console.error("[connector-bus] turn idle listener failed", err)
+          }
+        }
+      }
     })
     queue.tail = step
     // For the head turn, wait only until the durable claim has completed and

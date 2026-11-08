@@ -10,6 +10,7 @@ import {
   onBackgroundRunSettled,
   registerBackgroundDeliveryLane,
   registerBackgroundResultNotifyStrings,
+  registerImRoomDeliveryLane,
   registerRoomDeliveryLane,
   type BackgroundReplaySend,
 } from "./result-delivery"
@@ -820,6 +821,43 @@ describe("a character-team room's results (ADR-0252 §4)", () => {
     await settleHandoff(handoffEnd("execution:team:r9", "cancelled"))
     await advance(WAKE_COALESCE_MS)
     expect(roomSend).not.toHaveBeenCalled()
+  })
+
+  it("brings an IM group's result back into the group, and keeps it while no IM lane runs here", async () => {
+    getSession.mockResolvedValue({
+      id: "room-1",
+      platformBinding: {
+        platform: "lark",
+        adapterId: "a1",
+        conversationKey: "lark:a1:oc_1",
+        scopeKind: "group",
+      },
+    })
+    const { chat, roomSend } = lanes()
+    await settleHandoff(handoffEnd())
+    await advance(WAKE_COALESCE_MS)
+    // Neither the chat lane (a desktop turn nobody in the group sees) nor the
+    // desktop room's.
+    expect(chat).not.toHaveBeenCalled()
+    expect(roomSend).not.toHaveBeenCalled()
+    expect(journal[0]?.deliveryState).toBe("pending")
+
+    const imSend = jest.fn().mockResolvedValue(true)
+    registerImRoomDeliveryLane({
+      isReachable: () => true,
+      isIdle: () => true,
+      send: imSend,
+      consumerId: () => "im-room:db",
+    })
+    maybeDrainBackgroundResults("room-1", { turnSettled: true })
+    await advance(WAKE_COALESCE_MS)
+    expect(imSend).toHaveBeenCalledTimes(1)
+    const [framed, sessionId, , , targets] = imSend.mock.calls[0]
+    expect(sessionId).toBe("room-1")
+    expect(framed).toContain("hello.sh written")
+    expect(targets).toEqual({ memberIds: ["ava"] })
+    expect(chat).not.toHaveBeenCalled()
+    expect(journal.every((row) => row.deliveryState === "delivered")).toBe(true)
   })
 
   it("waits for a busy room's turn boundary", async () => {

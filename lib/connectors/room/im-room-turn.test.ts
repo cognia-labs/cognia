@@ -90,6 +90,34 @@ describe("ImRoomTurn: who answers", () => {
     ).toEqual(["reply:Ben"])
   })
 
+  it("answers a turn addressed to members with them, muted or not, whatever the routing", () => {
+    expect(
+      who(drive(turn({ targetMemberIds: [ben.id], mutedMemberIds: [ben.id] }), () => "Done."))
+    ).toEqual(["reply:Ben"])
+    expect(
+      who(
+        drive(
+          turn({ team: team({ orchestration: "manual" }), targetMemberIds: [cy.id, ana.id] }),
+          () => "Done."
+        )
+      )
+    ).toEqual(["reply:Cy", "reply:Ana"])
+    // A supervisor team hands the floor to the member, not to its supervisor.
+    expect(
+      who(
+        drive(
+          turn({
+            team: team({ orchestration: "supervisor", supervisorCharacterId: ana.id }),
+            targetMemberIds: [ben.id],
+          }),
+          () => "Done."
+        )
+      )
+    ).toEqual(["reply:Ben"])
+    // A target that is no member leaves the room to route the turn itself.
+    expect(who(drive(turn({ targetMemberIds: ["c-gone"] }), () => "Hi"))).toEqual(["reply:Ana"])
+  })
+
   it("names its steps so a replay can find them", () => {
     const steps = drive(turn({ team: team({ orchestration: "round_robin" }) }), () => "Hi")
     expect(steps.map((step) => step.stepKey)).toEqual(["reply-1", "reply-2", "reply-3"])
@@ -213,5 +241,6 @@ describe("primaryRoutingOf", () => {
     expect(primaryRoutingOf({ ...base, userText: "@Ben hi" })).toBeNull()
     expect(primaryRoutingOf({ ...base, team: team({ orchestration: "round_robin" }) })).toBeNull()
     expect(primaryRoutingOf({ ...base, mutedMemberIds: [ana.id, ben.id, cy.id] })).toBeNull()
+    expect(primaryRoutingOf({ ...base, targetMemberIds: [ben.id] })).toBeNull()
   })
 })

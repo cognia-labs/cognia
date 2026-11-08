@@ -108,6 +108,8 @@ export interface BackgroundDeliveryLane {
 let lane: BackgroundDeliveryLane | undefined
 /** The lane for character-team rooms this host orchestrates. */
 let roomLane: BackgroundDeliveryLane | undefined
+/** The lane for IM groups whose connector runs on this host (ADR-0177 batch 5). */
+let imRoomLane: BackgroundDeliveryLane | undefined
 let notifyStrings: BackgroundResultNotifyStrings | undefined
 /** In-memory pending queue: parentSessionId → runId → entry. */
 const pendingBySession = new Map<string, Map<string, BackgroundResultDeliveryEntry>>()
@@ -173,6 +175,20 @@ export function registerRoomDeliveryLane(next: BackgroundDeliveryLane): () => vo
   }
 }
 
+/**
+ * Register this host's lane for IM groups (returns an unregister): the
+ * connector runtime's, which answers a Squad's result as a turn in the group
+ * the work came from. Such a result never goes through the chat lane, which
+ * would answer it in a desktop turn nobody in the group sees; with no IM lane
+ * here it waits.
+ */
+export function registerImRoomDeliveryLane(next: BackgroundDeliveryLane): () => void {
+  imRoomLane = next
+  return () => {
+    if (imRoomLane === next) imRoomLane = undefined
+  }
+}
+
 /** Register localized notification copy (boot initializer). */
 export function registerBackgroundResultNotifyStrings(
   strings: BackgroundResultNotifyStrings
@@ -186,6 +202,7 @@ export function registerBackgroundResultNotifyStrings(
 export function __resetBackgroundResultRuntimeForTesting(): void {
   lane = undefined
   roomLane = undefined
+  imRoomLane = undefined
   notifyStrings = undefined
   pendingBySession.clear()
   deliveryLocks.clear()
@@ -295,8 +312,14 @@ export async function attemptBackgroundResultDelivery(sessionId: string): Promis
       return
     }
 
-    const { isLocallyOrchestratedRoom } = await import("@/lib/chat/room/kind")
-    const current = isLocallyOrchestratedRoom(session) ? roomLane : lane
+    const { isLocallyOrchestratedRoom, roomKindOf } = await import("@/lib/chat/room/kind")
+    // A room's results go to the room: a desktop room's through its runner,
+    // an IM group's hand-off results back into the group.
+    const current = isLocallyOrchestratedRoom(session)
+      ? roomLane
+      : roomKindOf(session) === "im" && entries.some((entry) => entry.squadHandoff)
+        ? imRoomLane
+        : lane
     if (!current) return
     if (!(await current.isReachable(sessionId)) || !(await current.isIdle(sessionId))) return
     const send = current.send

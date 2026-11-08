@@ -354,6 +354,7 @@ export function installConnectorRuntime(
   let stopWorkflowApprovalRecovery: (() => void) | null = null
   let disposeExecutionRunControlHandlers: (() => void) | null = null
   let stopResumeOnRunResumed: (() => void) | null = null
+  let stopImRoomDelivery: (() => void) | null = null
   let teardownPromise: Promise<void> | null = null
 
   /**
@@ -515,6 +516,8 @@ export function installConnectorRuntime(
       disposeExecutionRunControlHandlers = null
       stopResumeOnRunResumed?.()
       stopResumeOnRunResumed = null
+      stopImRoomDelivery?.()
+      stopImRoomDelivery = null
       // A window that never acquired the singleton runtime owns none of the
       // shared adapter transports below.
       if (!ownsRuntime) return
@@ -701,6 +704,11 @@ export function installConnectorRuntime(
           conversationKey: cap?.conversationKey ?? "",
         }),
       liveSteerCoordinator,
+    })
+    // A Squad's result for an IM room comes back into the group as the
+    // room's own turn (ADR-0177 batch 5), through this runtime's bus.
+    void import("../room/im-room-delivery-lane").then(({ installImRoomDelivery }) => {
+      if (!cancelled) stopImRoomDelivery = installImRoomDelivery({ bus })
     })
 
     // Wire the connector callback handler so inbound interactive events

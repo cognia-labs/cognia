@@ -236,6 +236,14 @@ jest.mock("@/lib/execution/workflow-bridge", () => ({
   startWorkflowExecutionBridge: () => mockStartWorkflowBridge(),
 }))
 
+// The IM room delivery lane has its own tests (`room/im-room-delivery-lane.test.ts`).
+// Bootstrap owns installing it on this runtime's bus and tearing it down.
+const mockStopImRoomDelivery = jest.fn()
+const mockInstallImRoomDelivery = jest.fn((_deps: unknown) => mockStopImRoomDelivery)
+jest.mock("@/lib/connectors/room/im-room-delivery-lane", () => ({
+  installImRoomDelivery: (deps: unknown) => mockInstallImRoomDelivery(deps),
+}))
+
 const makeTelegramRow = (id = "cai_tg_1") => ({
   id,
   type: "telegram" as const,
@@ -349,6 +357,16 @@ describe("installConnectorRuntime", () => {
     await waitFor(() => expect(mockStartWorkflowBridge).toHaveBeenCalledTimes(1))
     await dispose()
     expect(mockStopWorkflowBridge).toHaveBeenCalledTimes(1)
+  })
+
+  it("installs and tears down the IM room delivery lane on this runtime's bus", async () => {
+    mockedIsTauri.mockReturnValue(true)
+    mockListEnabled.mockResolvedValue([])
+    const dispose = install()
+    await waitFor(() => expect(mockInstallImRoomDelivery).toHaveBeenCalledTimes(1))
+    expect(mockInstallImRoomDelivery.mock.calls[0]?.[0]).toEqual({ bus: expect.anything() })
+    await dispose()
+    expect(mockStopImRoomDelivery).toHaveBeenCalledTimes(1)
   })
 
   it("does nothing in web mode", async () => {

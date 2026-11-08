@@ -30,6 +30,7 @@ export default defineHostModule({
     "a2ui",
     "account-sync",
     "audio",
+    "background-tasks",
     "bot",
     "collab",
     "device",

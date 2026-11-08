@@ -11,6 +11,7 @@
  */
 
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import { claimsAutomatedRoomTurn } from "./room/automated-room-turn"
 
 /**
  * Only "create" message events with real text are user-meaningful.
@@ -22,9 +23,12 @@ import type { NormalizedInboundEvent } from "@/types/connectors/event"
  *   operator sends buzz their own phone.
  * - Attachment-only events carry nothing to preview, and the relay push
  *   deliberately never ships media.
+ * - An automated room turn (a Squad's result for an IM room) is the host's
+ *   own, not a message from the group.
  */
 export function isNotifiableInboundEvent(event: NormalizedInboundEvent): boolean {
   if (event.kind && event.kind !== "create") return false
+  if (claimsAutomatedRoomTurn(event)) return false
   if (event.sender?.remoteUserId && event.sender.remoteUserId === event.selfId) return false
   return Boolean(event.plainText && event.plainText.trim())
 }

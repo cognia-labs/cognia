@@ -4000,6 +4000,61 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
     })
   })
 
+  describe("a turn the host owes the room (a Squad's result, ADR-0177 batch 5)", () => {
+    const owedTurn = async () => {
+      const { buildAutomatedRoomTurnEvent } = await import("./room/automated-room-turn")
+      const session = (await getDb().sessions.get("s_room"))!
+      return buildAutomatedRoomTurnEvent(
+        {
+          binding: session.platformBinding!,
+          text: "<background-results>Builders finished: the checklist is done.</background-results>",
+          deliveryId: "d-1",
+          producer: "background-result",
+          targetMemberIds: ["c_ben"],
+        },
+        "bot_1",
+        Date.now()
+      )
+    }
+
+    it("answers with the member it is owed to, stored as no person's message", async () => {
+      await seedRoom()
+      const before = (await getDb().sessions.get("s_room"))!.platformBinding
+      const { calls } = capture(() => "Builders finished the checklist.")
+      await callHandler(await owedTurn(), "ai-run")
+
+      // Only Ben, whom the result is owed to, answers; no router picks.
+      expect(calls.map((call) => call.sessionId)).toEqual([
+        expect.stringMatching(/^s_room::char::c_ben::im\./),
+      ])
+      expect(await outboundTexts()).toEqual(["**Ben**\n\nBuilders finished the checklist."])
+      const owed = (await getDb().messages.toArray()).find((row) => row.role === "user")!
+      expect(owed.metadata?.automatedTurn).toEqual({ producer: "background-result" })
+      expect(owed.platformMessageId).toBe("cognia-automated:d-1")
+      // Not a platform event: the binding's delivery target stays as it was.
+      expect((await getDb().sessions.get("s_room"))!.platformBinding).toEqual(before)
+      // A second delivery of the same turn answers nothing again.
+      await callHandler(await owedTurn(), "ai-run")
+      expect(calls).toHaveLength(1)
+    })
+
+    it("never starts a conversation of its own", async () => {
+      await seedRoom()
+      const event = await owedTurn()
+      await getDb().sessions.clear()
+      await getDb().conversationOverrides.clear()
+      const { calls } = capture(() => "Hi.")
+      await callHandler(event, "ai-run")
+      expect(calls).toHaveLength(0)
+      expect(await getDb().sessions.count()).toBe(0)
+      expect(
+        (await getDb().connectorAudit.toArray()).some(
+          (row) => row.reason === "automated_room_turn_no_session"
+        )
+      ).toBe(true)
+    })
+  })
+
   it("answers as the team when a Squad is bound too: the Squad is the hand-off target", async () => {
     await seedRoom({ override: { squadId: "squad_x" } })
     const { calls } = capture(() => "On it.")

@@ -58,4 +58,12 @@ describe("isNotifiableInboundEvent", () => {
       true
     )
   })
+
+  it("rejects an automated room turn: the host wrote it, not the group", () => {
+    expect(
+      isNotifiableInboundEvent(
+        event({ channelData: { cogniaAutomatedTurn: { producer: "background-result" } } })
+      )
+    ).toBe(false)
+  })
 })

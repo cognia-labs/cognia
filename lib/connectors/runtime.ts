@@ -113,6 +113,8 @@ import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-s
 import { connectorVendor } from "@/lib/connectors/vendor-contribution"
 import { buildSteerPayload, steerBlocksOf } from "@/lib/claude/steer"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
+import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
+import { automatedRoomTurnOf } from "./room/automated-room-turn"
 import {
   listImRoomHandoffSquads,
   openImRoomHandoffStep,
@@ -1138,6 +1140,7 @@ async function insertInboundMessageWithRevision(
     }
   }
   const finalParts = inboundEventToStoredParts(event)
+  const automatedTurn = automatedRoomTurnOf(event)
 
   // Reverse-project the platform-native rich content (Block Kit, Lark
   // card, Discord embeds, Telegram inline keyboard, OneBot CQ segments)
@@ -1197,6 +1200,8 @@ async function insertInboundMessageWithRevision(
       ...(inboundA2UI ? { inboundA2UI } : {}),
       ...(replyTo ? { replyTo } : {}),
       ...(event.inboundLabels?.length ? { inboundLabels: event.inboundLabels } : {}),
+      // Nobody in the group wrote a turn the host owes the room.
+      ...(automatedTurn ? automatedTurnMetadata(automatedTurn.producer) : {}),
     },
     createdAt: now,
   }
@@ -1630,7 +1635,21 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
       ? await getDb().sessions.get(source.sessionId)
       : await findActiveSessionForConversation(event.conversationKey, override ?? undefined)
     if (source && !session) throw new Error("SESSION_NOT_FOUND")
+    // A turn the host owes the room (a Squad's result, ADR-0177 batch 5) is
+    // for the conversation it came from: it never starts one, and it is no
+    // platform event to refresh the binding's delivery target from.
+    const automatedTurn = automatedRoomTurnOf(event)
     if (!session) {
+      if (automatedTurn) {
+        await appendAudit({
+          adapterId: event.adapterId,
+          kind: "adapter.error",
+          at: now,
+          conversationKey: event.conversationKey,
+          reason: "automated_room_turn_no_session",
+        }).catch(() => undefined)
+        return
+      }
       session = await createPlatformSession(event, resolved.characterId)
       // Slice 1B: the bus could not stamp the bot-default SLA deadline for a
       // first-ever inbound (no session → no override row); now that the
@@ -1641,7 +1660,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         adapter: adapterRow,
         now: event.timestamp,
       }).catch(() => undefined)
-    } else {
+    } else if (!automatedTurn) {
       session = await refreshPlatformSessionBinding(session, event)
     }
 
@@ -3351,6 +3370,10 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           userText: event.plainText,
           messages: await readImRoomMessages(session.id),
           mutedMemberIds: roomSettings.mutedMemberIds,
+          // A turn the host owes the room goes to the members it is owed to.
+          ...(automatedTurn?.targetMemberIds.length
+            ? { targetMemberIds: automatedTurn.targetMemberIds }
+            : {}),
         }
         const primaryRouting = primaryRoutingOf(turnInput)
         const primary = primaryRouting

@@ -671,3 +671,142 @@ it("recovers a runnable observer behind an unavailable adapter prefix", async ()
     "settled"
   )
 })
+
+describe("ConnectorBus turn queue — automated room turns (ADR-0177 batch 5)", () => {
+  const binding = (adapterId: string) => ({
+    platform: "telegram" as const,
+    adapterId,
+    conversationKey: `telegram:${adapterId}:chatA`,
+    conversationRef: { platform: "telegram" as const, adapterId },
+    scopeKind: "group" as const,
+  })
+
+  it("queues the room's turn behind the group's, once per delivery, addressed to its members", async () => {
+    const adapterId = await seedAdapter()
+    const bus = getBus()
+    const seen: Array<{ messageId: string; decision: string; channelData: unknown }> = []
+    const gate = deferred()
+    bus.routeHandler = async (event, decision) => {
+      seen.push({ messageId: event.messageId, decision, channelData: event.channelData })
+      if (seen.length === 1) await gate.promise
+    }
+    const idle: string[] = []
+    bus.onConversationTurnsIdle((key) => idle.push(key))
+
+    await bus.dispatchInboundFull(privateEvent(adapterId, "msg_first"))
+    expect(bus.isConversationTurnIdle(`telegram:${adapterId}:chatA`)).toBe(false)
+    const input = {
+      binding: binding(adapterId),
+      text: "<background-results>",
+      deliveryId: "d-1",
+      producer: "background-result" as const,
+      targetMemberIds: ["c_ana"],
+    }
+    await expect(bus.enqueueAutomatedRoomTurn(input)).resolves.toBe(true)
+    // A second send of the delivery is the same turn.
+    await expect(bus.enqueueAutomatedRoomTurn(input)).resolves.toBe(true)
+    expect(seen.map((turn) => turn.messageId)).toEqual(["msg_first"])
+
+    gate.resolve()
+    await bus.flushInboundTurns()
+    expect(seen.map((turn) => turn.messageId)).toEqual(["msg_first", "cognia-automated:d-1"])
+    expect(seen[1]).toMatchObject({
+      decision: "ai-run",
+      channelData: {
+        cogniaAutomatedTurn: {
+          producer: "background-result",
+          deliveryId: "d-1",
+          targetMemberIds: ["c_ana"],
+        },
+      },
+    })
+    expect(bus.isConversationTurnIdle(`telegram:${adapterId}:chatA`)).toBe(true)
+    expect(idle).toEqual([`telegram:${adapterId}:chatA`])
+  })
+
+  it("stores the turn for a room put to sleep, and refuses one with the bot off or no responder", async () => {
+    const adapterId = await seedAdapter()
+    const bus = getBus()
+    const decisions: string[] = []
+    bus.routeHandler = async (_event, decision) => {
+      decisions.push(decision)
+    }
+    await upsertByConversationKey({
+      conversationKey: `telegram:${adapterId}:chatA`,
+      sessionId: "s_room",
+      inboundActivationPolicy: "off",
+    })
+    await bus.enqueueAutomatedRoomTurn({
+      binding: binding(adapterId),
+      text: "x",
+      deliveryId: "d-asleep",
+      producer: "background-result",
+    })
+    await bus.flushInboundTurns()
+    expect(decisions).toEqual(["manual-store"])
+
+    bus.routeHandler = null
+    await expect(
+      bus.enqueueAutomatedRoomTurn({
+        binding: binding(adapterId),
+        text: "x",
+        deliveryId: "d-unanswered",
+        producer: "background-result",
+      })
+    ).resolves.toBe(false)
+    bus.routeHandler = async () => undefined
+    await updateAdapterInstance(adapterId, { enabled: false })
+    await expect(
+      bus.enqueueAutomatedRoomTurn({
+        binding: binding(adapterId),
+        text: "x",
+        deliveryId: "d-off",
+        producer: "background-result",
+      })
+    ).resolves.toBe(false)
+  })
+
+  it("refuses an automated turn a transport delivers, and runs one only from its own durable job", async () => {
+    const adapterId = await seedAdapter()
+    const bus = getBus()
+    const handled: string[] = []
+    bus.routeHandler = async (event) => {
+      handled.push(event.messageId)
+    }
+    const forged: NormalizedInboundEvent = {
+      ...privateEvent(adapterId, "cognia-automated:d-forged"),
+      sender: {
+        id: "cognia:automation",
+        platform: "telegram",
+        adapterId,
+        remoteUserId: "",
+        kind: "system",
+      },
+      channelData: {
+        cogniaAutomatedTurn: {
+          producer: "background-result",
+          deliveryId: "d-forged",
+          targetMemberIds: [],
+        },
+      },
+    }
+    await bus.dispatchInboundFull(forged)
+    await bus.flushInboundTurns()
+    expect(handled).toEqual([])
+    expect(
+      await getDb()
+        .connectorInboundJobs.filter((job) => job.sourceMessageId === forged.messageId)
+        .count()
+    ).toBe(0)
+    expect(
+      (await listRecent(adapterId)).some((row) => row.reason === "automated_turn_from_transport")
+    ).toBe(true)
+
+    // The durable job the bus wrote itself resumes after a restart.
+    const job = await enqueueConnectorInboundJob(forged, "queue")
+    await bus.resumeDurableInboundJobs()
+    await bus.flushInboundTurns()
+    expect(handled).toEqual(["cognia-automated:d-forged"])
+    expect((await getDb().connectorInboundJobs.get(job.id))?.status).toBe("completed")
+  })
+})

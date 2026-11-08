@@ -89,6 +89,13 @@ export interface ImRoomTurnInput {
    * most talkative, else the first.
    */
   primaryCharacterId?: string
+  /**
+   * The members this turn is addressed to, a pick that wins over mentions,
+   * routing and the supervisor (`routeTurn`'s explicit targets): a turn the
+   * host owes the room, such as a Squad's result for the member that handed
+   * it the work. A muted member still gets it, as a composer pick does.
+   */
+  targetMemberIds?: readonly string[]
   now: () => number
   random?: () => number
 }
@@ -113,8 +120,12 @@ export function visibleRoomReplyText(step: Pick<ImRoomStep, "kind">, text: strin
  * round-robin team, or a message that `@`-names a member.
  */
 export function primaryRoutingOf(
-  input: Pick<ImRoomTurnInput, "team" | "characters" | "userText" | "messages" | "mutedMemberIds">
+  input: Pick<
+    ImRoomTurnInput,
+    "team" | "characters" | "userText" | "messages" | "mutedMemberIds" | "targetMemberIds"
+  >
 ): { candidates: Character[]; sticky: Character | undefined } | null {
+  if (addressedMembers(input).length > 0) return null
   const members = orderedMembers(input.team, input.characters)
   if (
     input.team.orchestration !== "mention_round_robin" &&
@@ -127,6 +138,15 @@ export function primaryRoutingOf(
   const candidates = members.filter((member) => !muted.has(member.id))
   if (candidates.length === 0) return null
   return { candidates, sticky: stickyResponderOf(input.messages, candidates) }
+}
+
+/** The members a turn's explicit targets name (they answer in the pick's order). */
+function addressedMembers(
+  input: Pick<ImRoomTurnInput, "team" | "characters" | "targetMemberIds">
+): Character[] {
+  const ids = new Set(input.targetMemberIds ?? [])
+  if (ids.size === 0) return []
+  return orderedMembers(input.team, input.characters).filter((member) => ids.has(member.id))
 }
 
 function orderedMembers(
@@ -227,7 +247,18 @@ export class ImRoomTurn {
   }
 
   private start(): void {
-    const { team, userText, mutedMemberIds } = this.input
+    const { team, userText, mutedMemberIds, targetMemberIds } = this.input
+    // A turn addressed to members runs linear for them, whatever the team's
+    // routing: they are the ones it is owed to.
+    if (addressedMembers(this.input).length > 0) {
+      const targets = routeTurn(team, this.members, userText, undefined, {
+        mutedMemberIds,
+        replyMode: "auto",
+        explicitTargetIds: targetMemberIds,
+      })
+      this.pushRound(targets, "reply")
+      return
+    }
     if (team.orchestration === "supervisor") {
       if (!this.supervisor) {
         this.ended = { kind: "no-supervisor" }
