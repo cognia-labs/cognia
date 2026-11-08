@@ -24,6 +24,7 @@ import type { Capability } from "@/types/connectors/capability"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
 import type { RunProjectionSnapshot } from "@/types/execution/run"
+import type { IdentityPrincipalLinks } from "@/types/modules/ports/identity-principal-links"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { BuiltInSkillAvailability } from "@/lib/skills/built-in/types"
 import type { AvatarSource, PlatformAvatarTarget } from "./platform-avatar"
@@ -155,6 +156,11 @@ export interface ConnectorVendorContribution {
       inboundJobId: string
     ): Promise<void>
   }
+  /**
+   * What a sign-in, a sign-out and a profile takeover do to this vendor's
+   * principals (`ports/identity-principal-links.ts`).
+   */
+  readonly principalLinks?: IdentityPrincipalLinks
   /**
    * The built-in skill families this vendor's conversations serve (ADR-0026),
    * which the connectors contribute to the skill tier (`../builtin-skills.ts`).

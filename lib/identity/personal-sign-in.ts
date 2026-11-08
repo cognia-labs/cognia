@@ -35,7 +35,7 @@ import {
 import { assertSignedInIdentityOwner, type SignedInIdentity } from "./sign-in"
 import type { UserBindingRegistry } from "./user-binding"
 
-import { attachSignInToFeishuPrincipals } from "@/lib/connectors/adapters/lark/principal/login-link"
+import { attachSignInToPrincipals } from "./principal-links"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { signInToLogto } from "@/lib/logto/app-session"
 
@@ -54,7 +54,7 @@ export interface PersonalSignInDeps {
     identities: readonly CollabExternalIdentity[]
     assertCurrent?: () => void
   }) => Promise<LinkSignedInIdentitiesReport>
-  attachPrincipals?: typeof attachSignInToFeishuPrincipals
+  attachPrincipals?: typeof attachSignInToPrincipals
   now?: () => number
 }
 
@@ -99,7 +99,7 @@ export async function settlePersonalSignIn(
       }
       const logtoSubject = identity.binding.logtoSubject
       if (logtoSubject && report.linked.length > 0) {
-        const attached = await (deps.attachPrincipals ?? attachSignInToFeishuPrincipals)({
+        const attached = await (deps.attachPrincipals ?? attachSignInToPrincipals)({
           userId: identity.user.id,
           logtoSubject,
           identities: report.linked,

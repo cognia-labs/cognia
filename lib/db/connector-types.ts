@@ -867,7 +867,7 @@ export interface FeishuPrincipalRow {
    * The person's Logto subject (P1.3). Written when the principal is created
    * for a person whose login is already known (bind approval, the signed-in
    * owner's self-bind), and back-filled onto matching principals when that
-   * person signs in later (`lib/connectors/principal/login-link.ts`). Never
+   * person signs in later (`lib/connectors/adapters/lark/principal/login-link.ts`). Never
    * written for a principal that belongs to somebody else.
    */
   logtoSubject?: string

@@ -34,7 +34,7 @@ import {
   type IdentityConflict,
   type LinkSignedInIdentitiesReport,
 } from "./link-signed-in-identities"
-import { attachSignInToFeishuPrincipals } from "@/lib/connectors/adapters/lark/principal/login-link"
+import { attachSignInToPrincipals } from "./principal-links"
 import { UserBindingRegistry } from "./user-binding"
 import { assertSignedInIdentityOwner } from "./sign-in"
 
@@ -111,7 +111,7 @@ export interface CloudSignInDeps {
     assertCurrent?: () => void
   }) => Promise<LinkSignedInIdentitiesReport>
   /** Writes the login's subject onto the Feishu principals the person holds. */
-  attachPrincipals?: typeof attachSignInToFeishuPrincipals
+  attachPrincipals?: typeof attachSignInToPrincipals
   refreshPlane?: (localAccountId: string) => Promise<unknown>
   operationId?: () => string
   now?: () => number
@@ -395,7 +395,7 @@ export async function adoptOrganization(
             // principal of theirs whose union_id matches a linked Feishu identity
             // records the login's subject.
             if (logtoSubject && report.linked.length > 0) {
-              const attached = await (deps.attachPrincipals ?? attachSignInToFeishuPrincipals)({
+              const attached = await (deps.attachPrincipals ?? attachSignInToPrincipals)({
                 userId: target.userId,
                 logtoSubject,
                 identities: report.linked,

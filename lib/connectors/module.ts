@@ -114,8 +114,12 @@ export default defineHostModule({
   ],
   // Inbound images are read and voice notes transcribed through ports.
   requires: ["ocr", "speech"],
-  // The IM channel (`./ports/conversation-channel.ts`).
-  provides: [{ port: "conversation-channel", load: () => import("./ports/conversation-channel") }],
+  // The IM channel (`./ports/conversation-channel.ts`), and the vendors'
+  // principal registries a sign-in reaches (`./ports/identity-principal-links.ts`).
+  provides: [
+    { port: "conversation-channel", load: () => import("./ports/conversation-channel") },
+    { port: "identity-principal-links", load: () => import("./ports/identity-principal-links") },
+  ],
   // The per-channel capability wording an IM-bound run is told.
   prompts: () => import("./prompts"),
   // Send, draft, react to, delete and forward IM messages, and wait for a

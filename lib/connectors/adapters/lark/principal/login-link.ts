@@ -26,7 +26,11 @@ import {
   setFeishuPrincipalStatus,
 } from "@/lib/db/feishu-principals"
 import { getDb } from "@/lib/db/schema"
-import type { ExternalIdentity } from "@/types/identity"
+import type {
+  PrincipalSelfBoundUnlinkInput,
+  PrincipalSignInAttachInput,
+  PrincipalSignInAttachReport,
+} from "@/types/modules/ports/identity-principal-links"
 
 /**
  * The Logto subject a person signed in with, when exactly one is known.
@@ -47,23 +51,11 @@ export async function logtoSubjectForUser(
   return subjects.size === 1 ? [...subjects][0] : undefined
 }
 
-export interface AttachSignInInput {
-  assertCurrent?: () => void
-  /** The signed-in person. */
-  userId: string
-  /** Their Logto subject, from the user binding. */
-  logtoSubject: string
-  /** The external identities the sign-in just linked onto `userId`. */
-  identities: readonly ExternalIdentity[]
-  now?: number
-}
-
-export interface AttachSignInReport {
-  /** Principals that now carry the login's subject. */
-  attached: string[]
-  /** Principals whose union id matched but which belong to another person. */
-  foreign: string[]
-}
+// The identity plane reaches these through the `identity-principal-links`
+// port (`types/modules/ports/identity-principal-links.ts`), which Lark's
+// contribution answers with the two functions below.
+export type AttachSignInInput = PrincipalSignInAttachInput
+export type AttachSignInReport = PrincipalSignInAttachReport
 
 export interface AttachSignInDeps {
   listByUnionId?: typeof listFeishuPrincipalsByUnionId
@@ -123,13 +115,7 @@ export async function attachSignInToFeishuPrincipals(
   return settled
 }
 
-export interface UnlinkSelfBoundInput {
-  assertCurrent?: () => void
-  localAccountId: string
-  /** The person the profile was bound to before the sign-out or takeover. */
-  userId: string
-  now?: number
-}
+export type UnlinkSelfBoundInput = PrincipalSelfBoundUnlinkInput
 
 /**
  * Unlink every principal this path admitted for a person on a profile.

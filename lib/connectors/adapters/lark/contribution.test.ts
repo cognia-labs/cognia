@@ -48,6 +48,10 @@ jest.mock("./principal/resolve", () => ({ resolveLarkPrincipal: jest.fn(async ()
 jest.mock("./principal/inbound", () => ({
   resolveLarkInboundPrincipal: jest.fn(async () => "inbound"),
 }))
+jest.mock("./principal/login-link", () => ({
+  attachSignInToFeishuPrincipals: jest.fn(async () => ({ attached: ["fp_1"], foreign: [] })),
+  unlinkSelfBoundPrincipals: jest.fn(async () => ["fp_2"]),
+}))
 jest.mock("./principal/unbound", () => ({
   handleUnresolvedPrincipal: jest.fn(async () => undefined),
 }))
@@ -73,6 +77,7 @@ import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { resolveLarkPrincipal } from "./principal/resolve"
 import { resolveLarkInboundPrincipal } from "./principal/inbound"
 import { handleUnresolvedPrincipal } from "./principal/unbound"
+import { attachSignInToFeishuPrincipals, unlinkSelfBoundPrincipals } from "./principal/login-link"
 import type { RunProjectionSnapshot } from "@/types/execution/run"
 import type { StatusView } from "@/lib/connectors/commands/render"
 
@@ -271,5 +276,15 @@ describe("larkContribution", () => {
     const unbound = { status: "unbound" as const, openIdHash: "h" }
     await principals.handleUnresolved(event({}), row(), unbound, "job-1")
     expect(handleUnresolvedPrincipal).toHaveBeenCalledWith(event({}), row(), unbound, "job-1")
+  })
+
+  it("links sign-ins to Feishu principals through the login-link module", async () => {
+    const links = larkContribution.principalLinks!
+    const attach = { userId: "u1", logtoSubject: "sub", identities: [] }
+    await expect(links.attachSignIn(attach)).resolves.toEqual({ attached: ["fp_1"], foreign: [] })
+    expect(attachSignInToFeishuPrincipals).toHaveBeenCalledWith(attach)
+    const unlink = { localAccountId: "acct", userId: "u1" }
+    await expect(links.unlinkSelfBound(unlink)).resolves.toEqual(["fp_2"])
+    expect(unlinkSelfBoundPrincipals).toHaveBeenCalledWith(unlink)
   })
 })

@@ -146,6 +146,14 @@ export const larkContribution: ConnectorVendorContribution = {
         inboundJobId
       ),
   },
+  // A Feishu sign-in records its subject on the person's principals; a
+  // sign-out or takeover unlinks the ones the binding admitted.
+  principalLinks: {
+    attachSignIn: async (input) =>
+      (await import("./principal/login-link")).attachSignInToFeishuPrincipals(input),
+    unlinkSelfBound: async (input) =>
+      (await import("./principal/login-link")).unlinkSelfBoundPrincipals(input),
+  },
   runPresentation: {
     // The milestone is a result card (state header, elapsed / details footer)
     // rather than a bare markdown bubble. The projected snapshot is already
