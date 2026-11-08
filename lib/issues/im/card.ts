@@ -1,7 +1,7 @@
 /**
  * A2UI surfaces for the issue tracker's IM side (ADR-0132 slice ③).
  *
- * Two PURE builders, mirroring `lib/connectors/a2ui-bridge/workflow-to-a2ui.ts`:
+ * Two PURE builders, mirroring `lib/claude/hitl/workflow-approval-surface.ts`:
  *
  *   1. `buildIssueCardSurface` — one issue as an interactive card: status,
  *      assignee, priority, and a Row of Buttons for every LEGAL human move

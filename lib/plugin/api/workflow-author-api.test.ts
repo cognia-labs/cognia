@@ -1,54 +1,11 @@
-import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
-import { serializeOutboundAsync as serializeLark } from "@/lib/connectors/adapters/lark/serialize"
-import { serializeOutboundAsync as serializeTelegram } from "@/lib/connectors/adapters/telegram/serialize"
-import { createDbTestFixture } from "@/lib/db/test-fixture"
-import type { ConversationDeliveryTarget } from "@/types/connectors/event"
-jest.mock("@/lib/skills/built-in/context", () => ({ resolveBuiltInSkillSessionBinding: jest.fn() }))
-const dbFixture = createDbTestFixture()
-beforeAll(dbFixture.initialize)
-afterAll(dbFixture.dispose)
-
-function target(platform: "lark" | "telegram", threaded = false): ConversationDeliveryTarget {
-  return {
-    address: {
-      platform,
-      adapterId: "ad",
-      conversationKey: `${platform}:ad:chat`,
-      containerId: "chat",
-      scopeKind: threaded ? "thread" : "group",
-      ...(threaded ? { topicId: "123" } : {}),
-    },
-    conversationRef:
-      platform === "lark"
-        ? {
-            platform,
-            adapterId: "ad",
-            channelId: "oc_chat",
-            ...(threaded ? { threadTs: "123", threadRootMessageId: "om_anchor" } : {}),
-          }
-        : { platform, adapterId: "ad", chatId: "chat" },
-    sourceMessageId: "42",
-    refreshedAt: 1,
-  }
-}
+const mockChannelFor = jest.fn()
+const mockRecordInConversation = jest.fn()
+jest.mock("@/lib/chat/conversation-channel", () => ({
+  conversationChannelFor: (binding: unknown) => mockChannelFor(binding),
+  recordConversationCallbackBinding: (binding: unknown) => mockRecordInConversation(binding),
+}))
 
 import { createWorkflowAuthorAPI } from "./workflow-author-api"
-
-// Exercise host copy without the global React next-intl mock.
-jest.mock("@/lib/i18n/runtime-translator", () => ({
-  getRuntimeTranslator: jest.fn(async (namespace: string) => {
-    if (namespace !== "workflows.approvals") throw new Error(`Unexpected namespace: ${namespace}`)
-    const { getSettings } = await import("@/lib/db/settings")
-    const locale = (await getSettings())?.language === "zh-CN" ? "zh-CN" : "en"
-    const messages = jest.requireActual(`@/i18n/messages/${locale}/workflows/approvals.json`)
-    return (key: string, values?: Record<string, unknown>) => {
-      const template = key.split(".").reduce((value, part) => value[part], messages)
-      return template.replace(/\{(\w+)\}/g, (_: string, name: string) =>
-        String(values?.[name] ?? "")
-      )
-    }
-  }),
-}))
 
 import { getEditorStore, listEditorStores } from "@/lib/workflow/editor/store-registry"
 import { useProposalStore } from "@/lib/workflow/editor/proposal-store"
@@ -76,29 +33,8 @@ import {
   approvalActorScope,
   resolveWorkflowTriggerOrigin,
 } from "@/lib/workflow/runtime/trigger-origin"
-import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
-import { buildApprovalSurface } from "@/lib/connectors/a2ui-bridge/workflow-to-a2ui"
+import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
 import { createWorkflowWaitEvent, emitWorkflowWaitEvent } from "@/lib/db/workflow-waitpoints"
-import { holdWorkflowDispatchForApproval } from "@/lib/connectors/hitl/workflow-run-approval"
-
-import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
-import { getSettings } from "@/lib/db/settings"
-
-jest.mock("@/lib/connectors/delivery-gateway", () => ({
-  enqueueGoverned: jest.fn(async () => ({})),
-}))
-jest.mock("@/lib/db/settings", () => ({ getSettings: jest.fn(async () => ({ language: "en" })) }))
-
-jest.mock("@/lib/connectors/hitl/workflow-run-approval", () => ({
-  holdWorkflowDispatchForApproval: jest.fn(),
-}))
-jest.mock("@/lib/db/adapter-instances", () => ({
-  getAdapterInstance: jest.fn(async () => ({ id: "ad" })),
-}))
-jest.mock("@/lib/db/conversation-overrides", () => ({ readForResolution: jest.fn() }))
-jest.mock("@/lib/connectors/im-permission-ceiling", () => ({
-  buildImPermissionCeiling: jest.fn(async () => ({})),
-}))
 
 jest.mock("@/lib/workflow/editor/store-registry", () => ({
   getEditorStore: jest.fn(),
@@ -140,11 +76,7 @@ jest.mock("@/lib/workflow/runtime/trigger-origin", () => ({
   approvalActorScope: jest.fn(),
   resolveWorkflowTriggerOrigin: jest.fn(),
 }))
-jest.mock("@/lib/connectors/adapters/_shared/a2ui-mapper", () => ({
-  ...jest.requireActual("@/lib/connectors/adapters/_shared/a2ui-mapper"),
-  recordCallbackBinding: jest.fn(),
-}))
-jest.mock("@/lib/connectors/a2ui-bridge/workflow-to-a2ui", () => ({
+jest.mock("@/lib/claude/hitl/workflow-approval-surface", () => ({
   buildApprovalSurface: jest.fn(),
 }))
 jest.mock("@/lib/db/workflow-waitpoints", () => ({
@@ -156,6 +88,12 @@ const mockPinPublication = jest.fn()
 jest.mock("@/lib/workflow/runtime/execution-authority", () => ({
   createPublishedWorkflowDependencyBinding: (...args: unknown[]) => mockPinPublication(...args),
 }))
+
+const card = { surfaceId: "wfsurf:1", workflowName: "Daily", surface: { rootId: "root" } }
+const channel = {
+  approveWorkflowRun: jest.fn(async () => card),
+  approveWorkflowFanout: jest.fn(async () => card),
+}
 
 const mockGetEditorStore = jest.mocked(getEditorStore)
 const mockListEditorStores = jest.mocked(listEditorStores)
@@ -209,19 +147,8 @@ function installEditor(state = createState()) {
 
 beforeEach(() => {
   jest.clearAllMocks()
-  jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValue({
-    personalRunOnly: false,
-    rootSessionId: "root",
-    personalLane: "unverified",
-    session: undefined,
-    binding: {
-      platform: "lark",
-      adapterId: "ad",
-      conversationKey: "lark:ad:chat",
-      conversationRef: target("lark").conversationRef,
-      deliveryTarget: target("lark"),
-    },
-  })
+  mockChannelFor.mockResolvedValue(channel)
+  mockRecordInConversation.mockResolvedValue(true)
   mockGetEditorStore.mockReturnValue(null)
   mockListEditorStores.mockReturnValue([])
   jest.mocked(resolveWorkflowTriggerOrigin).mockResolvedValue({
@@ -233,96 +160,67 @@ beforeEach(() => {
   })
 })
 
-it("asks the host hold to deliver the card to its IM conversation and reports success only after delivery", async () => {
-  jest.mocked(holdWorkflowDispatchForApproval).mockResolvedValue({
-    held: true,
-    surfaceId: "workflow:prepared",
-    workflowName: "Daily",
-    surface: {} as never,
-  })
-  const input = {
-    workflowId: "wf",
-    triggeredFrom: {
-      source: "im" as const,
-      sessionId: "root",
-      adapterId: "ad",
-      conversationKey: "lark:ad:chat",
-    },
+describe("workflow approval cards", () => {
+  const origin = {
+    source: "im" as const,
+    sessionId: "root",
+    adapterId: "ad",
+    conversationKey: "lark:ad:chat",
   }
-  expect(await createWorkflowAuthorAPI().prepareWorkflowApproval(input)).toMatchObject({
-    sent: true,
-    surfaceId: "workflow:prepared",
-  })
-  expect(holdWorkflowDispatchForApproval).toHaveBeenCalledWith(
-    expect.objectContaining({ deliverCard: true, adapterId: "ad", conversationKey: "lark:ad:chat" })
-  )
-  jest
-    .mocked(holdWorkflowDispatchForApproval)
-    .mockResolvedValue({ held: false, reason: "card_delivery_failed", message: "hold failed" })
-  await expect(createWorkflowAuthorAPI().prepareWorkflowApproval(input)).rejects.toThrow(
-    "hold failed"
-  )
-})
-
-describe("host fan-out approval delivery", () => {
-  const input = {
-    workflowId: "wf",
-    workflowName: "Daily",
-    triggeredFrom: {
-      source: "im" as const,
-      sessionId: "root",
-      adapterId: "ad",
-      conversationKey: "lark:ad:chat",
-      initiator: { platformIdentityId: "requester", remoteUserId: "requester" },
-    },
+  const input = { workflowId: "wf", workflowName: "Daily", triggeredFrom: origin }
+  // What the Host recorded for the session, initiator included.
+  const resolved = {
+    ...origin,
+    initiator: { platformIdentityId: "requester", remoteUserId: "requester" },
   }
 
-  it("records both bindings before sending a governed notice to the triggering conversation", async () => {
+  it("asks the origin's channel to hold the run, and reports what it posted", async () => {
+    expect(
+      await createWorkflowAuthorAPI().prepareWorkflowApproval({
+        workflowId: "wf",
+        runParams: { a: 1 },
+        triggeredFrom: origin,
+      })
+    ).toEqual({ sent: true, ...card })
+    expect(mockChannelFor).toHaveBeenCalledWith({
+      conversationKey: "lark:ad:chat",
+      adapterId: "ad",
+    })
+    expect(channel.approveWorkflowRun).toHaveBeenCalledWith({
+      workflowId: "wf",
+      runParams: { a: 1 },
+      triggeredFrom: resolved,
+    })
+    channel.approveWorkflowRun.mockRejectedValueOnce(new Error("hold failed"))
+    await expect(createWorkflowAuthorAPI().prepareWorkflowApproval(input)).rejects.toThrow(
+      "hold failed"
+    )
+  })
+
+  it("asks the origin's channel to post the fan-out card for the Host's initiator", async () => {
     const scope = { mode: "initiator" as const, allowedUserIds: ["requester"] }
     jest.mocked(approvalActorScope).mockReturnValue(scope)
-    const result = await createWorkflowAuthorAPI().prepareFanoutApproval(input)
-    expect(result.sent).toBe(true)
-    const calls = jest.mocked(recordCallbackBinding).mock.calls.map(([binding]) => binding)
-    expect(calls).toHaveLength(2)
-    expect(calls.map((binding) => binding.kind)).toEqual(["wf_fanout_approve", "wf_fanout_cancel"])
-    for (const binding of calls) {
-      expect(binding).toMatchObject({
-        adapterId: "ad",
-        surfaceId: result.surfaceId,
-        conversationKey: "lark:ad:chat",
-        actorScope: scope,
-        allowedActions: ["approve", "cancel"],
-        payload: {
-          workflowId: "wf",
-          workflowName: "Daily",
-          target: { adapterId: "ad", conversationKey: "lark:ad:chat" },
-          createdBy: "claude-tool",
-        },
-      })
-      expect(result.surface.components[binding.componentId!]).toHaveProperty(
-        "value",
-        binding.actionId
-      )
+    const forged = {
+      ...input,
+      triggeredFrom: {
+        ...origin,
+        initiator: { platformIdentityId: "forged", remoteUserId: "forged" },
+      },
     }
-    expect(enqueueGoverned).toHaveBeenCalledWith(
-      expect.objectContaining({
-        adapterId: "ad",
-        conversationKey: "lark:ad:chat",
-        source: "ai-run",
-        authorization: { kind: "system-notice", inboundConversationKey: "lark:ad:chat" },
-        request: expect.objectContaining({
-          segments: [
-            expect.objectContaining({
-              type: "a2ui",
-              surfaceId: result.surfaceId,
-              content: result.surface,
-            }),
-          ],
-        }),
-      })
-    )
-    expect(jest.mocked(recordCallbackBinding).mock.invocationCallOrder[1]).toBeLessThan(
-      jest.mocked(enqueueGoverned).mock.invocationCallOrder[0]
+    expect(await createWorkflowAuthorAPI().prepareFanoutApproval(forged)).toEqual({
+      sent: true,
+      ...card,
+    })
+    expect(approvalActorScope).toHaveBeenCalledWith(resolved)
+    expect(channel.approveWorkflowFanout).toHaveBeenCalledWith({
+      workflowId: "wf",
+      workflowName: "Daily",
+      triggeredFrom: resolved,
+      actorScope: scope,
+    })
+    await createWorkflowAuthorAPI().prepareWorkflowApproval(forged)
+    expect(channel.approveWorkflowRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ triggeredFrom: resolved })
     )
   })
 
@@ -336,44 +234,9 @@ describe("host fan-out approval delivery", () => {
         conversationKey: "lark:other:chat",
       })
       await expect(createWorkflowAuthorAPI()[method](input)).rejects.toThrow("no longer matches")
-      expect(enqueueGoverned).not.toHaveBeenCalled()
-      expect(holdWorkflowDispatchForApproval).not.toHaveBeenCalled()
-      expect(recordCallbackBinding).not.toHaveBeenCalled()
+      expect(mockChannelFor).not.toHaveBeenCalled()
     }
   )
-
-  it("uses only the Host's live initiator for both card types", async () => {
-    const forged = {
-      ...input,
-      triggeredFrom: {
-        ...input.triggeredFrom,
-        initiator: { platformIdentityId: "forged", remoteUserId: "forged" },
-      },
-    }
-    await createWorkflowAuthorAPI().prepareFanoutApproval(forged)
-    expect(approvalActorScope).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        initiator: { platformIdentityId: "requester", remoteUserId: "requester" },
-      })
-    )
-    jest.mocked(holdWorkflowDispatchForApproval).mockResolvedValueOnce({
-      held: true,
-      surfaceId: "sent",
-      workflowName: "Daily",
-      surface: {} as never,
-    })
-    await createWorkflowAuthorAPI().prepareWorkflowApproval(forged)
-    expect(holdWorkflowDispatchForApproval).toHaveBeenLastCalledWith(
-      expect.objectContaining({ initiatorUserId: "requester" })
-    )
-  })
-
-  it("does not claim success if governed delivery fails", async () => {
-    jest.mocked(enqueueGoverned).mockRejectedValueOnce(new Error("delivery refused"))
-    await expect(createWorkflowAuthorAPI().prepareFanoutApproval(input)).rejects.toThrow(
-      "delivery refused"
-    )
-  })
 
   it.each([{ source: "ui" as const }, { source: "im" as const, adapterId: "ad" }])(
     "refuses an origin without an IM conversation: %j",
@@ -381,17 +244,19 @@ describe("host fan-out approval delivery", () => {
       await expect(
         createWorkflowAuthorAPI().prepareFanoutApproval({ ...input, triggeredFrom })
       ).rejects.toThrow("requires an IM origin")
-      expect(enqueueGoverned).not.toHaveBeenCalled()
-      expect(recordCallbackBinding).not.toHaveBeenCalled()
+      expect(mockChannelFor).not.toHaveBeenCalled()
     }
   )
 
-  it("uses Chinese host copy when selected", async () => {
-    jest.mocked(getSettings).mockResolvedValueOnce({ language: "zh-CN" } as never)
-    const result = await createWorkflowAuthorAPI().prepareFanoutApproval(input)
-    expect(result.surface.title).toBe("订阅「Daily」")
-    expect(result.surface.widget?.fallbackText).toContain("回复 1 同意 / 2 取消")
-  })
+  it.each(["prepareWorkflowApproval", "prepareFanoutApproval"] as const)(
+    "%s refuses a conversation no channel serves",
+    async (method) => {
+      mockChannelFor.mockResolvedValueOnce(null)
+      await expect(createWorkflowAuthorAPI()[method](input)).rejects.toThrow("delivery target")
+      expect(channel.approveWorkflowRun).not.toHaveBeenCalled()
+      expect(channel.approveWorkflowFanout).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe("createWorkflowAuthorAPI", () => {
@@ -556,7 +421,6 @@ describe("createWorkflowAuthorAPI", () => {
     jest.mocked(findWorkflowById).mockResolvedValue(summaries[0] as never)
     jest.mocked(resolveWorkflowTriggerOrigin).mockResolvedValue(trigger as never)
     jest.mocked(approvalActorScope).mockReturnValue(actor as never)
-    jest.mocked(recordCallbackBinding).mockResolvedValue(undefined)
     jest.mocked(buildApprovalSurface).mockReturnValue(surface as never)
     jest.mocked(createWorkflowWaitEvent).mockReturnValue(waitEvent as never)
     jest.mocked(emitWorkflowWaitEvent).mockResolvedValue(waitEvent as never)
@@ -584,7 +448,7 @@ describe("createWorkflowAuthorAPI", () => {
       actorScope: actor,
     }
     await api.recordCallbackBinding(binding as never)
-    expect(recordCallbackBinding).toHaveBeenCalledWith(binding)
+    expect(mockRecordInConversation).toHaveBeenCalledWith(binding)
     expect(api.buildApprovalSurface({ bindingId: "binding", workflowName: "Workflow" })).toBe(
       surface
     )
@@ -611,7 +475,7 @@ it("pins host-resolved publications for plugin-created workflow approval binding
   }
   await createWorkflowAuthorAPI().recordCallbackBinding(input)
   expect(mockPinPublication).toHaveBeenCalledWith("wf")
-  expect(recordCallbackBinding).toHaveBeenLastCalledWith({
+  expect(mockRecordInConversation).toHaveBeenLastCalledWith({
     ...input,
     payload: { ...input.payload, lockedDependency: lock },
   })
@@ -630,111 +494,19 @@ it("refuses plugin registration of dispatcher-only skill confirmations", async (
       skillConfirmationNonce: "0123456789abcdef0123456789abcdef",
     } as never)
   ).rejects.toThrow("Only the built-in skill dispatcher")
-  expect(recordCallbackBinding).not.toHaveBeenCalled()
+  expect(mockRecordInConversation).not.toHaveBeenCalled()
 })
 
-it.each(["prepareWorkflowApproval", "prepareFanoutApproval"] as const)(
-  "%s refuses a session with no complete delivery address",
-  async (method) => {
-    jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValueOnce({
-      personalRunOnly: false,
-      rootSessionId: "root",
-      session: undefined,
-      binding: undefined,
-      personalLane: "unverified",
+it("refuses a callback binding no conversation channel serves", async () => {
+  mockRecordInConversation.mockResolvedValueOnce(false)
+  await expect(
+    createWorkflowAuthorAPI().recordCallbackBinding({
+      adapterId: "gone",
+      actionId: "action",
+      kind: "callback_query",
+      surfaceId: "s",
+      payload: {},
+      actorScope: { mode: "operators" },
     })
-    await expect(
-      createWorkflowAuthorAPI()[method]({
-        workflowId: "wf",
-        workflowName: "Daily",
-        triggeredFrom: {
-          source: "im",
-          sessionId: "root",
-          adapterId: "ad",
-          conversationKey: "lark:ad:chat",
-        },
-      })
-    ).rejects.toThrow("delivery target")
-    expect(enqueueGoverned).not.toHaveBeenCalled()
-    expect(holdWorkflowDispatchForApproval).not.toHaveBeenCalled()
-  }
-)
-
-it.each(["lark", "telegram"] as const)(
-  "sends both host approval cards through the real %s serializer with a recipient and thread anchor",
-  async (platform) => {
-    for (const threaded of [false, true]) {
-      const deliveryTarget = target(platform, threaded)
-      jest.mocked(resolveWorkflowTriggerOrigin).mockResolvedValue({
-        source: "im",
-        sessionId: "root",
-        adapterId: "ad",
-        conversationKey: deliveryTarget.address.conversationKey,
-      })
-      jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValue({
-        personalRunOnly: false,
-        rootSessionId: "root",
-        session: undefined,
-        personalLane: "unverified",
-        binding: {
-          platform,
-          adapterId: "ad",
-          conversationKey: deliveryTarget.address.conversationKey,
-          conversationRef: deliveryTarget.conversationRef,
-          deliveryTarget,
-        },
-      })
-      const input = {
-        workflowId: "wf",
-        workflowName: "Daily",
-        triggeredFrom: {
-          source: "im" as const,
-          sessionId: "root",
-          adapterId: "ad",
-          conversationKey: deliveryTarget.address.conversationKey,
-        },
-      }
-      await createWorkflowAuthorAPI().prepareFanoutApproval(input)
-      const fanoutRequest = jest.mocked(enqueueGoverned).mock.calls.at(-1)![0].request
-      jest
-        .mocked(buildApprovalSurface)
-        .mockImplementation(
-          jest.requireActual("@/lib/connectors/a2ui-bridge/workflow-to-a2ui").buildApprovalSurface
-        )
-      jest.mocked(holdWorkflowDispatchForApproval).mockImplementationOnce((args) =>
-        jest
-          .requireActual("@/lib/connectors/hitl/workflow-run-approval")
-          .holdWorkflowDispatchForApproval({
-            ...args,
-            enqueue: enqueueGoverned,
-            recordBinding: jest.fn(),
-            audit: jest.fn(),
-            readWorkflow: async () => ({ name: "Daily" }),
-            resolveDependency: async () => ({
-              workflowId: "wf",
-              versionId: "v1",
-              deploymentId: "d1",
-              deploymentRevision: 1,
-            }),
-          })
-      )
-      await createWorkflowAuthorAPI().prepareWorkflowApproval(input)
-      const workflowRequest = jest.mocked(enqueueGoverned).mock.calls.at(-1)![0].request
-      for (const request of [fanoutRequest, workflowRequest]) {
-        expect(request.deliveryTarget).toEqual(deliveryTarget)
-        expect(request.conversationRef).toEqual(deliveryTarget.conversationRef)
-        if (platform === "lark") {
-          const call = await serializeLark(request, "ad")
-          if (threaded) {
-            expect(call.url).toContain("/messages/om_anchor/reply")
-            expect(call.payload.reply_in_thread).toBe(true)
-          } else expect(call.payload.receive_id).toBe("oc_chat")
-        } else {
-          const calls = await serializeTelegram(request, "ad")
-          expect(calls[0].payload.chat_id).toBe("chat")
-          if (threaded) expect(calls[0].payload.message_thread_id).toBe(123)
-        }
-      }
-    }
-  }
-)
+  ).rejects.toThrow("No conversation channel serves this callback binding")
+})

@@ -41,11 +41,8 @@ import type { WorkflowDependencyBinding } from "@/types/workflow/deployment"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { appendAudit } from "@/lib/connectors/audit"
 import { buildA2UISegment } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
-import {
-  WF_APPROVE_PREFIX,
-  WF_CANCEL_PREFIX,
-  buildApprovalSurface,
-} from "@/lib/connectors/a2ui-bridge/workflow-to-a2ui"
+import { WF_APPROVE_PREFIX, WF_CANCEL_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
+import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
 import { getDb } from "@/lib/db/schema"

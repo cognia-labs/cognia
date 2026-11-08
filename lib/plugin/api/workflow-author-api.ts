@@ -1,13 +1,17 @@
-import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
-import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
-import {
-  WF_FANOUT_APPROVE_PREFIX,
-  WF_FANOUT_CANCEL_PREFIX,
-} from "@/lib/claude/hitl/callback-prefixes"
-/** Host-governed workflow authoring and execution façade for plugins. */
+/**
+ * Host-governed workflow authoring and execution façade for plugins.
+ *
+ * The approval cards a plugin asks for go to the conversation its run was
+ * triggered from, through that conversation's channel (the
+ * `conversation-channel` port): the façade checks the origin against its
+ * session and never draws or delivers a channel's card itself.
+ */
 
-import { getResolvedPermissionCeiling } from "@/lib/claude/agents/dispatch-context-registry"
-import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
+import {
+  conversationChannelFor,
+  recordConversationCallbackBinding,
+} from "@/lib/chat/conversation-channel"
+import type { ConversationWorkflowOrigin } from "@/types/modules/ports/conversation-channel"
 import type { WorkflowTriggeredFrom, WorkflowNodeKind } from "@/types/workflow/visual"
 import type { NodeCatalogEntry } from "@/lib/workflow/nodes/catalog"
 
@@ -39,8 +43,7 @@ import {
   approvalActorScope,
   resolveWorkflowTriggerOrigin,
 } from "@/lib/workflow/runtime/trigger-origin"
-import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
-import { buildApprovalSurface } from "@/lib/connectors/a2ui-bridge/workflow-to-a2ui"
+import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
 import { createWorkflowWaitEvent, emitWorkflowWaitEvent } from "@/lib/db/workflow-waitpoints"
 import type {
   PluginWorkflowAuthorAPI,
@@ -82,16 +85,13 @@ function requireEditor(workflowId: string) {
   return store
 }
 
-async function resolveApprovalOrigin(requested: WorkflowTriggeredFrom): Promise<
-  WorkflowTriggeredFrom & {
-    source: "im"
-    sessionId: string
-    adapterId: string
-    conversationKey: string
-    conversationRef: ConversationReference
-    deliveryTarget: ConversationDeliveryTarget
-  }
-> {
+/**
+ * The IM origin a plugin names, checked against the session it names: the
+ * Host's record of that session's trigger is authoritative.
+ */
+async function resolveApprovalOrigin(
+  requested: WorkflowTriggeredFrom
+): Promise<ConversationWorkflowOrigin> {
   if (
     requested.source !== "im" ||
     !requested.sessionId ||
@@ -107,36 +107,23 @@ async function resolveApprovalOrigin(requested: WorkflowTriggeredFrom): Promise<
     resolved.conversationKey !== requested.conversationKey
   )
     throw new Error("Workflow approval origin no longer matches its IM session")
-  const [{ resolveBuiltInSkillSessionBinding }, { getImElicitationContext }] = await Promise.all([
-    import("@/lib/skills/built-in/context"),
-    import("@/lib/connectors/hitl/im-elicitation-context"),
-  ])
-  const { binding, rootSessionId } = await resolveBuiltInSkillSessionBinding(requested.sessionId)
-  const live = getImElicitationContext(rootSessionId)
-  const origin = live ?? binding
-  const deliveryTarget = origin?.deliveryTarget
-  const conversationRef = deliveryTarget?.conversationRef
-  if (
-    origin?.adapterId !== requested.adapterId ||
-    origin.conversationKey !== requested.conversationKey ||
-    live?.drafting ||
-    !deliveryTarget?.address.containerId?.trim() ||
-    deliveryTarget.address.adapterId !== requested.adapterId ||
-    deliveryTarget.address.conversationKey !== requested.conversationKey ||
-    conversationRef?.adapterId !== requested.adapterId ||
-    conversationRef.platform !== deliveryTarget.address.platform
-  )
-    throw new Error("Workflow approval delivery target is unavailable or incomplete")
-  // The Host's live sender and conversation are authoritative, never a plugin's copy.
   return {
     ...resolved,
     source: "im",
     sessionId: requested.sessionId,
     adapterId: requested.adapterId,
     conversationKey: requested.conversationKey,
-    conversationRef,
-    deliveryTarget,
   }
+}
+
+/** The channel the origin's conversation is bound to. Throws when none serves it. */
+async function approvalChannel(origin: ConversationWorkflowOrigin) {
+  const channel = await conversationChannelFor({
+    conversationKey: origin.conversationKey,
+    adapterId: origin.adapterId,
+  })
+  if (!channel) throw new Error("Workflow approval delivery target is unavailable or incomplete")
+  return channel
 }
 
 export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
@@ -259,136 +246,22 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
     approvalActorScope,
     prepareWorkflowApproval: async ({ workflowId, runParams, triggeredFrom: requestedOrigin }) => {
       const triggeredFrom = await resolveApprovalOrigin(requestedOrigin)
-      const [
-        { holdWorkflowDispatchForApproval },
-        { getAdapterInstance },
-        { readForResolution },
-        { buildImPermissionCeiling },
-        { parseConversationKey },
-      ] = await Promise.all([
-        import("@/lib/connectors/hitl/workflow-run-approval"),
-        import("@/lib/db/adapter-instances"),
-        import("@/lib/db/conversation-overrides"),
-        import("@/lib/connectors/im-permission-ceiling"),
-        import("@/types/connectors/event"),
-      ])
-      const adapter = await getAdapterInstance(triggeredFrom.adapterId)
-      if (!adapter) throw new Error("Workflow approval adapter not found")
-      const override = (await readForResolution(triggeredFrom.conversationKey)) ?? null
-      const { platform } = parseConversationKey(triggeredFrom.conversationKey)
-      const currentCeiling = await buildImPermissionCeiling({
-        adapter,
-        override,
-        platform,
-        target: "workflow",
-      })
-      const parentCeiling = triggeredFrom.sessionId
-        ? getResolvedPermissionCeiling(triggeredFrom.sessionId)
-        : undefined
-      const permissionCeiling = deriveExternalSessionPermission(parentCeiling ?? {}, currentCeiling)
-      const result = await holdWorkflowDispatchForApproval({
-        workflowId,
-        runParams: runParams ?? {},
-        triggeredFrom,
-        adapterId: adapter.id,
-        conversationKey: triggeredFrom.conversationKey,
-        conversationRef: triggeredFrom.conversationRef,
-        deliveryTarget: triggeredFrom.deliveryTarget,
-        initiatorUserId: triggeredFrom.initiator?.remoteUserId,
-        permissionCeiling,
-        deliverCard: true,
-      })
-      if (!result.held) throw new Error(result.message)
-      return {
-        sent: true,
-        surfaceId: result.surfaceId,
-        workflowName: result.workflowName,
-        surface: result.surface,
-      }
+      const card = await (
+        await approvalChannel(triggeredFrom)
+      ).approveWorkflowRun({ workflowId, ...(runParams ? { runParams } : {}), triggeredFrom })
+      return { sent: true, ...card }
     },
     prepareFanoutApproval: async ({ workflowId, workflowName, triggeredFrom: requestedOrigin }) => {
       const triggeredFrom = await resolveApprovalOrigin(requestedOrigin)
-      const { adapterId, conversationKey } = triggeredFrom
-      const [{ enqueueGoverned }, { buildA2UISegment }] = await Promise.all([
-        import("@/lib/connectors/delivery-gateway"),
-        import("@/lib/connectors/a2ui-bridge/a2ui-to-segments"),
-      ])
-      const bindingId = crypto.randomUUID()
-      const surfaceId = `wffanout:${bindingId}`
-      const payload = {
+      const card = await (
+        await approvalChannel(triggeredFrom)
+      ).approveWorkflowFanout({
         workflowId,
         workflowName,
-        target: { adapterId, conversationKey },
-        createdBy: "claude-tool",
-      }
-      for (const [prefix, kind, componentId] of [
-        [WF_FANOUT_APPROVE_PREFIX, "wf_fanout_approve", "approve"],
-        [WF_FANOUT_CANCEL_PREFIX, "wf_fanout_cancel", "cancel"],
-      ] as const) {
-        await recordCallbackBinding({
-          adapterId,
-          actionId: prefix + bindingId,
-          kind,
-          surfaceId,
-          componentId,
-          conversationKey,
-          payload,
-          actorScope: approvalActorScope(triggeredFrom),
-          allowedActions: ["approve", "cancel"],
-        })
-      }
-      const t = await getRuntimeTranslator("workflows.approvals")
-      const title = t("fanout.title", { name: workflowName })
-      const summary = t("fanout.summary")
-      const approve = t("fanout.approve")
-      const cancel = t("fanout.cancel")
-      const surface = {
-        rootId: "root",
-        surfaceType: "inline" as const,
-        title,
-        dataModel: {},
-        components: {
-          root: { component: "Card", title, children: ["summary", "actions"] },
-          summary: { component: "Text", text: summary },
-          actions: { component: "Row", children: ["approve", "cancel"] },
-          approve: {
-            component: "Button",
-            text: approve,
-            action: "approve",
-            value: WF_FANOUT_APPROVE_PREFIX + bindingId,
-          },
-          cancel: {
-            component: "Button",
-            text: cancel,
-            action: "cancel",
-            value: WF_FANOUT_CANCEL_PREFIX + bindingId,
-          },
-        },
-        widget: {
-          fallbackText: [
-            `# ${title}`,
-            summary,
-            `[${approve}] [${cancel}]`,
-            t("fanout.replyHint"),
-          ].join("\n"),
-        },
-      }
-      await enqueueGoverned({
-        adapterId,
-        conversationKey,
-        source: "ai-run",
-        authorization: { kind: "system-notice", inboundConversationKey: conversationKey },
-        request: {
-          conversationRef: triggeredFrom.conversationRef,
-          deliveryTarget: triggeredFrom.deliveryTarget,
-          ...(triggeredFrom.deliveryTarget.address.topicId
-            ? { threadId: triggeredFrom.deliveryTarget.address.topicId }
-            : {}),
-          segments: [buildA2UISegment(surfaceId, surface)],
-          metadata: { idempotencyKey: surfaceId },
-        },
+        triggeredFrom,
+        actorScope: approvalActorScope(triggeredFrom),
       })
-      return { sent: true, surfaceId, workflowName, surface }
+      return { sent: true, ...card }
     },
     recordCallbackBinding: async (input) => {
       if (input.kind === "skill_invoke")
@@ -402,14 +275,22 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
         const lockedDependency = await createPublishedWorkflowDependencyBinding(
           input.payload.workflowId
         )
-        await recordCallbackBinding({ ...input, payload: { ...input.payload, lockedDependency } })
+        await recordInChannel({ ...input, payload: { ...input.payload, lockedDependency } })
         return
       }
-      await recordCallbackBinding(input)
+      await recordInChannel(input)
     },
     buildApprovalSurface,
     emitWaitEvent: (input) => emitWorkflowWaitEvent(createWorkflowWaitEvent(input)),
   }
+}
+
+/** Record a plugin's card choice with the channel that serves it. Throws when none does. */
+async function recordInChannel(
+  input: Parameters<typeof recordConversationCallbackBinding>[0]
+): Promise<void> {
+  if (!(await recordConversationCallbackBinding(input)))
+    throw new Error("No conversation channel serves this callback binding")
 }
 
 /** Keep inspector presentation schemas separate from the versioned authoring contract. */

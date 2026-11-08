@@ -12,6 +12,9 @@ const mockGetImElicitationContext = jest.fn()
 const mockRunImAskUser = jest.fn()
 const mockPostSkillConfirmation = jest.fn()
 const mockBuildCapabilityPromptSection = jest.fn()
+const mockPostWorkflowRunApproval = jest.fn()
+const mockPostWorkflowFanoutApproval = jest.fn()
+const mockRecordCallbackBinding = jest.fn()
 
 jest.mock("@/lib/db/conversation-overrides", () => ({
   readForResolution: (key: string) => mockReadForResolution(key),
@@ -41,6 +44,14 @@ jest.mock("../a2ui-bridge/capability-evaluator", () => ({
 }))
 jest.mock("../hitl/skill-confirmation", () => ({
   postSkillConfirmation: (input: unknown) => mockPostSkillConfirmation(input),
+}))
+
+jest.mock("../hitl/workflow-approval-cards", () => ({
+  postWorkflowRunApproval: (input: unknown) => mockPostWorkflowRunApproval(input),
+  postWorkflowFanoutApproval: (input: unknown) => mockPostWorkflowFanoutApproval(input),
+}))
+jest.mock("../adapters/_shared/a2ui-mapper", () => ({
+  recordCallbackBinding: (input: unknown) => mockRecordCallbackBinding(input),
 }))
 
 const KEY = "lark:adp_1:oc_chat"
@@ -194,6 +205,53 @@ describe("the IM conversation channel", () => {
       bindingId: "b",
     })
     expect(mockPostSkillConfirmation).toHaveBeenCalledWith(input)
+  })
+
+  it("posts workflow run and fan-out approvals through the approval cards", async () => {
+    const card = { surfaceId: "wfsurf:1", workflowName: "Digest", surface: { rootId: "root" } }
+    mockPostWorkflowRunApproval.mockResolvedValue(card)
+    mockPostWorkflowFanoutApproval.mockResolvedValue(card)
+    const triggeredFrom = {
+      source: "im" as const,
+      sessionId: "s_1",
+      adapterId: "adp_1",
+      conversationKey: KEY,
+    }
+    const run = { workflowId: "wf_1", runParams: { a: 1 }, triggeredFrom }
+    await expect(port.approveWorkflowRun(run)).resolves.toBe(card)
+    expect(mockPostWorkflowRunApproval).toHaveBeenCalledWith(run)
+    const fanout = {
+      workflowId: "wf_1",
+      workflowName: "Digest",
+      triggeredFrom,
+      actorScope: { mode: "operators" as const },
+    }
+    await expect(port.approveWorkflowFanout(fanout)).resolves.toBe(card)
+    expect(mockPostWorkflowFanoutApproval).toHaveBeenCalledWith(fanout)
+  })
+
+  it("records a plugin's callback binding only in a conversation or adapter it serves", async () => {
+    const binding = {
+      adapterId: "adp_1",
+      actionId: "wfapp:1",
+      kind: "wf_approve" as const,
+      surfaceId: "wfsurf:1",
+      payload: {},
+      actorScope: { mode: "operators" as const },
+    }
+    await expect(port.recordCallbackBinding({ ...binding, conversationKey: KEY })).resolves.toBe(
+      true
+    )
+    expect(mockRecordCallbackBinding).toHaveBeenCalledWith({ ...binding, conversationKey: KEY })
+    await expect(
+      port.recordCallbackBinding({ ...binding, conversationKey: "workflow:wf_1" })
+    ).resolves.toBe(false)
+    mockGetAdapterInstance.mockResolvedValueOnce(undefined)
+    await expect(port.recordCallbackBinding(binding)).resolves.toBe(false)
+    expect(mockGetAdapterInstance).toHaveBeenCalledWith("adp_1")
+    mockGetAdapterInstance.mockResolvedValueOnce({ id: "adp_1" })
+    await expect(port.recordCallbackBinding(binding)).resolves.toBe(true)
+    expect(mockRecordCallbackBinding).toHaveBeenCalledTimes(2)
   })
 
   it("words what the conversation can render once the adapter has learned it", async () => {

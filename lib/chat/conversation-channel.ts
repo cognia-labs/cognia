@@ -45,6 +45,19 @@ export async function askUserInConversation(
   return null
 }
 
+/**
+ * Record a choice on a card a plugin drew with the channel it belongs to.
+ * Channels are asked in module order and the first that serves the binding
+ * records it; `false` when none does.
+ */
+export async function recordConversationCallbackBinding(
+  binding: Parameters<ConversationChannel["recordCallbackBinding"]>[0]
+): Promise<boolean> {
+  for (const member of await loadChannels())
+    if (await member.port.recordCallbackBinding(binding)) return true
+  return false
+}
+
 async function loadChannels() {
   const { members, failures } = await loadPortCollection("conversation-channel")
   for (const failure of failures)

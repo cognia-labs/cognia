@@ -727,7 +727,6 @@
     "lib/plugin/api/theme-api.ts -> theme",
     "lib/plugin/api/tray-api.ts -> tray",
     "lib/plugin/api/vector-api.ts -> vector",
-    "lib/plugin/api/workflow-author-api.ts -> connectors",
     "lib/plugin/api/workflow-author-api.ts -> workflow",
     "lib/plugin/api/workspace-api.ts -> github",
     "lib/plugin/auth/callback-acceptor.ts -> external-services",

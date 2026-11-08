@@ -20,7 +20,7 @@ import {
 import { PiiGateBlocked } from "@/lib/connectors/ai-loop/safe-send-prompt"
 import { getConnectorDeliveryGateway } from "./delivery-gateway"
 import { getBus, __resetBusForTesting } from "./bus"
-import { buildApprovalSurface } from "./a2ui-bridge/workflow-to-a2ui"
+import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
 
 // ── module mocks (hoisted) ──────────────────────────────────────────────────
 

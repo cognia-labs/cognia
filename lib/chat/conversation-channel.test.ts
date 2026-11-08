@@ -2,16 +2,24 @@ import { loggers } from "@cognia/logging"
 import type { HostModuleManifest } from "@/lib/modules/manifest-types"
 import { __resetPortsForTesting, __setPortModulesForTesting } from "@/lib/modules/ports"
 import type { ConversationChannel } from "@/types/modules/ports/conversation-channel"
-import { askUserInConversation, conversationChannelFor } from "./conversation-channel"
+import {
+  askUserInConversation,
+  conversationChannelFor,
+  recordConversationCallbackBinding,
+} from "./conversation-channel"
 
 function channel(
   claims: (key: string) => boolean,
-  askUser: ConversationChannel["askUser"] = jest.fn(async () => null)
+  askUser: ConversationChannel["askUser"] = jest.fn(async () => null),
+  recordCallbackBinding: ConversationChannel["recordCallbackBinding"] = jest.fn(async () => false)
 ): ConversationChannel {
   return {
     claimsBinding: (binding) => claims(binding.conversationKey),
     askUser,
     confirmSkill: jest.fn(),
+    approveWorkflowRun: jest.fn(),
+    approveWorkflowFanout: jest.fn(),
+    recordCallbackBinding,
     hostCapabilities: jest.fn(),
     capabilityPrompt: jest.fn(),
     channelCapabilities: jest.fn(),
@@ -132,5 +140,41 @@ describe("askUserInConversation", () => {
       module: "bot",
       error: "Error: chunk failed",
     })
+  })
+})
+
+describe("recordConversationCallbackBinding", () => {
+  const binding = {
+    adapterId: "adp_1",
+    actionId: "wfapp:1",
+    kind: "wf_approve" as const,
+    surfaceId: "wfsurf:1",
+    payload: {},
+    actorScope: { mode: "operators" as const },
+  }
+
+  it("goes to the first channel that serves the binding", async () => {
+    const other = jest.fn(async () => false)
+    const owner = jest.fn(async () => true)
+    const later = jest.fn(async () => true)
+    __setPortModulesForTesting([
+      moduleProviding("bot", async () => ({ port: channel(() => false, undefined, other) })),
+      moduleProviding("connectors", async () => ({ port: channel(() => true, undefined, owner) })),
+      moduleProviding("browser", async () => ({ port: channel(() => false, undefined, later) })),
+    ])
+    expect(await recordConversationCallbackBinding(binding)).toBe(true)
+    expect(other).toHaveBeenCalledWith(binding)
+    expect(owner).toHaveBeenCalledWith(binding)
+    expect(later).not.toHaveBeenCalled()
+  })
+
+  it("is false when no active channel serves it", async () => {
+    __setPortModulesForTesting([
+      moduleProviding("connectors", async () => ({ port: channel(() => true) })),
+    ])
+    expect(await recordConversationCallbackBinding(binding)).toBe(false)
+    __resetPortsForTesting()
+    __setPortModulesForTesting([])
+    expect(await recordConversationCallbackBinding(binding)).toBe(false)
   })
 })

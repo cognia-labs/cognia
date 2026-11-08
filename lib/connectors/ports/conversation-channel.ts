@@ -2,8 +2,9 @@
 // collection port (`types/modules/ports/conversation-channel.ts`, ADR-0250
 // §14). It claims every connector conversation (a key `parseConversationKey`
 // reads) and answers from the connectors' own policy, automation controls,
-// session bindings, delivery gateway and audit log. Its turns' questions and
-// skill confirmations become interactive cards in the conversation.
+// session bindings, delivery gateway and audit log. Its turns' questions,
+// skill confirmations and workflow approvals become interactive cards in the
+// conversation.
 
 import { parseConversationKey } from "@/types/connectors/event"
 import { newIdempotencyKey } from "@/types/connectors/outbound"
@@ -133,6 +134,30 @@ export const port: ConversationChannel = {
   async confirmSkill(input) {
     const { postSkillConfirmation } = await import("../hitl/skill-confirmation")
     return postSkillConfirmation(input)
+  },
+
+  async approveWorkflowRun(input) {
+    const { postWorkflowRunApproval } = await import("../hitl/workflow-approval-cards")
+    return postWorkflowRunApproval(input)
+  },
+
+  async approveWorkflowFanout(input) {
+    const { postWorkflowFanoutApproval } = await import("../hitl/workflow-approval-cards")
+    return postWorkflowFanoutApproval(input)
+  },
+
+  async recordCallbackBinding(binding) {
+    // A binding in a conversation is this channel's when the conversation is;
+    // one without a conversation is when its adapter is one of ours.
+    if (binding.conversationKey !== undefined) {
+      if (!isConnectorConversation({ conversationKey: binding.conversationKey })) return false
+    } else {
+      const { getAdapterInstance } = await import("@/lib/db/adapter-instances")
+      if (!(await getAdapterInstance(binding.adapterId))) return false
+    }
+    const { recordCallbackBinding } = await import("../adapters/_shared/a2ui-mapper")
+    await recordCallbackBinding(binding)
+    return true
   },
 
   async appendAudit(entry) {

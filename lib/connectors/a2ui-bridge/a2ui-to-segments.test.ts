@@ -7,7 +7,7 @@ import {
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
 import { CALLBACK_PREFIXES } from "@/lib/claude/hitl/callback-prefixes"
-import { buildApprovalSurface } from "./workflow-to-a2ui"
+import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
 jest.mock("@/lib/telemetry/inbox-events", () => ({ trackInboxEvent: jest.fn() }))
 
 const SURFACE: A2UISegmentContent = {

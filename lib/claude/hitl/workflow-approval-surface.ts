@@ -17,13 +17,13 @@
  * `workflow-progress-runner` module (2026-08-18).
  *
  * This is a PURE function over its input; the caller owns Dexie I/O +
- * `recordCallbackBinding` calls.
+ * `recordCallbackBinding` calls. It sits in the kernel with the prefixes
+ * because the plugin workflow-author API hands it to plugins synchronously;
+ * the IM channel that posts the card (`lib/connectors/hitl/`) builds on it.
  */
 
-import { WF_APPROVE_PREFIX, WF_CANCEL_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
+import { WF_APPROVE_PREFIX, WF_CANCEL_PREFIX } from "./callback-prefixes"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
-
-export { WF_APPROVE_PREFIX, WF_CANCEL_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
 
 export interface ApprovalSurfaceInput {
   /** Stable id for the binding pair — used in both Approve + Cancel action ids. */

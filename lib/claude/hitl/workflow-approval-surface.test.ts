@@ -1,4 +1,5 @@
-import { WF_APPROVE_PREFIX, WF_CANCEL_PREFIX, buildApprovalSurface } from "./workflow-to-a2ui"
+import { WF_APPROVE_PREFIX, WF_CANCEL_PREFIX } from "./callback-prefixes"
+import { buildApprovalSurface } from "./workflow-approval-surface"
 
 describe("buildApprovalSurface", () => {
   it("emits Card root with summary + actions when summary is non-empty", () => {

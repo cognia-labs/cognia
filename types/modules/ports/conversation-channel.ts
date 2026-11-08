@@ -23,7 +23,13 @@ import type {
 } from "@/lib/skills/built-in/types"
 import type { AuditKind } from "@/types/connectors/audit"
 import type { Capability } from "@/types/connectors/capability"
+import type {
+  CallbackActorScope,
+  ConnectorCallbackBindingKind,
+} from "@/types/connectors/interaction"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
+import type { A2UISegmentContent } from "@/types/connectors/segment"
+import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 
 /** A conversation as a run or session names it. */
 export interface ConversationChannelBinding {
@@ -36,6 +42,38 @@ export interface ConversationChannelSibling {
   adapterId: string
   conversationKey: string
   sessionId: string
+}
+
+/**
+ * A workflow trigger origin the caller has checked against the session it
+ * names (`resolveWorkflowTriggerOrigin`): an IM origin with every field a
+ * channel needs to find the conversation.
+ */
+export type ConversationWorkflowOrigin = WorkflowTriggeredFrom & {
+  source: "im"
+  sessionId: string
+  adapterId: string
+  conversationKey: string
+}
+
+/** A workflow approval card the channel posted. */
+export interface ConversationWorkflowApproval {
+  surfaceId: string
+  workflowName: string
+  surface: A2UISegmentContent
+}
+
+/** One choice on a card a plugin drew, routed back when a person picks it. */
+export interface ConversationCallbackBinding {
+  adapterId: string
+  actionId: string
+  kind: ConnectorCallbackBindingKind
+  surfaceId: string
+  componentId?: string
+  conversationKey?: string
+  payload: Record<string, unknown>
+  actorScope: CallbackActorScope
+  allowedActions?: string[]
 }
 
 export interface ConversationChannel {
@@ -121,6 +159,36 @@ export interface ConversationChannel {
     args: unknown
     now: number
   }): Promise<BuiltInSkillResult>
+  /**
+   * Ask the conversation to approve running a workflow before it starts: post
+   * the Approve / Cancel card for the published version the run will execute,
+   * under the conversation's permission ceiling, and hold the dispatch until a
+   * person answers. Throws when the card cannot reach the conversation (no
+   * live delivery target, the adapter is gone, the hold was refused).
+   */
+  approveWorkflowRun(input: {
+    workflowId: string
+    runParams?: Record<string, unknown>
+    triggeredFrom: ConversationWorkflowOrigin
+  }): Promise<ConversationWorkflowApproval>
+  /**
+   * Ask the conversation to approve fanning a workflow's output out to the
+   * conversation: post the Approve / Cancel card, answerable by `actorScope`.
+   * Throws when the card cannot reach the conversation.
+   */
+  approveWorkflowFanout(input: {
+    workflowId: string
+    workflowName: string
+    triggeredFrom: ConversationWorkflowOrigin
+    actorScope: CallbackActorScope
+  }): Promise<ConversationWorkflowApproval>
+  /**
+   * Record a choice on a card a plugin drew in one of this channel's
+   * conversations, so a person's pick reaches its handler. `false` when the
+   * binding is not this channel's (its conversation, or without one its
+   * adapter, belongs to no conversation the channel serves).
+   */
+  recordCallbackBinding(binding: ConversationCallbackBinding): Promise<boolean>
   /** Append a row to the channel's audit log. Best-effort: never throws. */
   appendAudit(entry: {
     adapterId: string

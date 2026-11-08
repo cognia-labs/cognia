@@ -26,7 +26,7 @@
  * owns persistence. Strings default to Chinese (the product's primary
  * locale) and are fully overridable via `labels` so a locale-aware caller
  * can pass translated copy; this mirrors the existing connector-surface
- * builders in `workflow-to-a2ui.ts`, which run in the headless connector
+ * builders in `lib/claude/hitl/workflow-approval-surface.ts`, which run in the headless connector
  * runtime where `next-intl` context is unavailable.
  */
 
