@@ -331,6 +331,7 @@ interface LaunchChildRunInput {
 - **一个回复模式旋钮。** 收件箱的激活策略（`triage-controls.tsx:86`）与 `roomSettings.replyMode` 合并为一个设置，双向映射写在一处；房间设置编辑器覆盖 IM 和共享房间。
 - **共享房间。** 删除 `NEXT_PUBLIC_SHARED_CHAT_ENABLED`（`lib/collab/shared-chat-feature.ts`）；以协作服务器已配置且 `/health` 报告受支持协议为可用条件；不可用时入口显示原因（三轴标注）；本机偏好保留。共享房间读取 `roomSettings`；静默判定写入审计；追赶卡片上线。
 - **验收。** 单测覆盖每种绑定组合（只角色团队、只小队、两者、都无）；headless 冒烟用 IM 测试适配器跑一个两角色群聊回合；飞书真机冒烟放到收尾。
+- **实施偏差（2026-11-08）。** IM 房间由连接器运行时而非 `RoomRunner` 运行，普通群保留单一声音，成员依次回答；共享房间的“被叫到”即请求 AI，`auto` 由作者客户端触发，休眠只在入队时拒绝；追赶在本地按读者生成；“角色→bot”映射复用 respond-via 改道。逐条见台账 D45–D54，残余风险 X31–X37。
 
 ## 11. P8：ADR-0247
 

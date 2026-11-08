@@ -173,5 +173,18 @@ description: "角色团队房间、共享会话与 IM 群组统一为房间抽�
 - **私聊不是房间。** 平台绑定记录自己的范围（`PlatformBinding.scopeKind`，取自入站频道），`roomKindOf` 对 `private` 返回 `null`。字段出现之前写下的绑定先回退到投递目标的范围，再回退到引用；范围未知时仍算房间。收件箱按会话类型分组（群组、私聊）。IM 房间和共享房间默认关闭记忆。
 - **成员名单来自平台。** `readRoomMembers` 是可选的适配器方法，与已有的 `chat.members.read` 能力配对，返回 `full` 或 `partial`（只有人数和管理员，或在调用方上限处截断的名单）。`lib/connectors/room-roster.ts` 在群消息入站且名单超过 6 小时时读取，从不阻塞回复，一次尝试后 30 分钟内不再重试，最多 500 人，结果保存在会话的覆盖行上，该行本来就同步到配对设备。投影按平台用户 id 把名单成员和发言者对上（发言者自己的 id 是本地身份行），`partial` 名单时徽章按整个房间计数并说明名单不完整，固定的角色标记按读者语言显示。
 - **IM 房间只有一个回复模式开关。** 批次 3 有两个：会话的 `roomSettings.replyMode` 和会话覆盖行的 `inboundActivationPolicy`，准入取两者中更严格的一个，于是收件箱可能显示"每条消息"而房间显示"休眠"。现在 IM 房间的回复模式就是会话的激活策略，别无其他。策略新增 `off`（只在单个会话上提供；放到整个机器人上它只是重复 `direct_only`），不回复任何人，@ 也不会。`lib/connectors/room-reply-mode.ts` 是唯一的换算：`asleep` 写 `off`，`mention_only` 写 `mention_each`，`auto` 在会话已有的更细策略对当前范围本来就算自动时保留它，适配器的策略算自动时跟随适配器，否则写 `always`。`mention_activates` 只在话题里开启追问，所以在普通群里读作仅 @ 时回复。准入不再读取会话；帮助卡片读会话的策略，休眠的房间不会对 `@` 承诺回复。团队房间保留 `roomSettings.replyMode` 给自己的路由，共享房间留待自己的批次。没有数据需要迁移：团队面板是 `roomSettings.replyMode` 唯一的写入者，团队房间的值仍然决定成员路由。
-- **每种房间都有房间设置。** 设置区移到 `room-settings-section.tsx`，只显示有代码读取的控件：团队房间保留全部五项，IM 房间显示回复模式和记忆开关，共享房间显示记忆开关。桌面停靠栏的房间位置和手机的面板会为 IM 和共享房间打开它。
+- **每种房间都有房间设置。** 设置区移到 `room-settings-section.tsx`，只显示有代码读取的控件：团队房间保留全部五项，IM 房间显示回复模式和记忆开关，共享房间显示回复模式、房间说明和记忆开关。桌面停靠栏的房间位置和手机的面板会为 IM 和共享房间打开它。
+- **绑定角色团队的群作为房间回答。** 会话覆盖行指定团队（`characterTeamId`）；在群组、频道或话题中它优先于绑定的智能体团队和工作流，一对一聊天保留单一角色。`lib/connectors/room/im-room-turn.ts` 用 `RoomRunner` 的同一组函数（`routeTurn`、粘性与智能主答者、带消息守卫的 `planAutoRound`、主管分派后汇总）决定谁发言，本身是纯游标。每一步都走连接器自己的回复路径（运行卡片、群内审批、草稿、流式、投递），运行在全新的 `imRoomMemberSessionId` 子会话下；提示词带房间说明和团队记录，每行都经过注入与 PII 检查。回复存为该成员自己的行（`senderId`、`senderKind` 为列，时间戳严格晚于房间最新一行）。每条入站消息写一条 `room.turn` 审计，记录执行的步数和结束方式。
+- **成员可以有自己的机器人。** `memberBotAdapterIds` 把成员映射到同平台、同一个群里的另一个机器人。它的回复经 respond-via 改道从那个机器人发出，失效时同样回退到房间的机器人；当这个机器人只代表该成员时不署名（`lib/connectors/room/persona-voices.ts`）。作为声音的机器人在该群里不单独回答（`inbound.persona_voice_held`）；在 `respond` 同群机器人策略下，它回传的我们自己的回复会按承载它的出站任务识别出来，不再回答（`inbound.respond_via_echo`）；在 `ignore` 下它本来就只记入历史。映射在收件箱的会话设置里编辑。
+
+## 实现更新（2026-11-08，批次 5，ADR-0252 P7）
+
+- **IM 成员把工作交给智能体团队，在群里确认。** 成员这一步打开期间可以调用 `room_handoff_to_squad`；没指定时由会话的智能体团队代替。提议是该成员回复行上的工具片段，群里收到确认/拒绝卡片（未指定时每个智能体团队一个按钮）；按下按钮的人通过 `room-squad-handoff` 端口作出决定。回复需要签核的会话里，`auto` 也会等待。智能体团队的结果经 IM 投递通道（`lib/connectors/room/im-room-delivery-lane.ts`）以自动房间回合的形式回到会话自己的队列，指向提议者；总线拒绝由传输层送来的自动回合，只从自己的持久任务恢复。
+- **共享房间靠探测，不靠开关。** 删除 `NEXT_PUBLIC_SHARED_CHAT_ENABLED`。`lib/collab/shared-chat-availability.ts` 按账号探测协作服务器的 `/health`（5 分钟，暂时性原因 30 秒），不可用时每个入口仍然可见并显示原因，但不可操作。
+- **共享房间的回复模式和说明由服务器保存。** 协作服务器保存 `reply_mode`（默认 `mention_only`）、`room_instructions` 及其独立的 revision，所有者和维护者可以修改。被叫到就是"请求 AI"；`auto` 由作者的客户端在一次没有引导任何运行的发送之后请求；`asleep` 在入队时拒绝请求，并为每个被静默的人类发言和请求写一条 `room.silence` 审计。房间说明会带到每次共享运行。
+- **追赶。** 读者回来看到多条未读消息时，可以获得一份摘要，每个要点引用来源消息（`lib/collab/shared-room-catch-up.ts`）：在本地、按读者生成，一次经过脱敏与 PII 检查的模型调用，引用只接受提示词中出现过的 id。
+
+### 与 ADR-0252 §6 的差异
+
+IM 房间不由 `RoomRunner` 运行，而由连接器运行时运行，因为投递、签核草稿、恢复锚点和运行卡片都在连接器的回复路径上。因此普通群保留单一声音（带房间说明），成员依次回答且关闭实时引导，成员行只保留文字和交接片段，`isLocallyOrchestratedRoom` 不变。证据和残余风险见 `docs/evidence/2026-11-05-multi-agent-convergence.md`（D45–D54，X31–X37）。
 

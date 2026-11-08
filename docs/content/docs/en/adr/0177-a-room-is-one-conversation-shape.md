@@ -404,6 +404,72 @@ waiting for the 1 s stored corrections. Nothing in "Later" changes.
 - **Room settings for every room.** The section moved to
   `room-settings-section.tsx` and shows a control only where something reads
   it: a team room keeps all five, an IM room shows its reply mode and the
-  memory switch, a shared room the memory switch. The dock's room slot and
+  memory switch, a shared room its reply mode, instructions and the
+  memory switch. The dock's room slot and
   the phone's sheet open it for IM and shared rooms.
+- **A group bound to a character team answers as a room.** A conversation
+  override names the team (`characterTeamId`); in a group, channel or thread
+  it outranks a bound Squad and workflow, and a one-to-one chat keeps its
+  single character. `lib/connectors/room/im-room-turn.ts` decides who speaks
+  with the functions `RoomRunner` uses (`routeTurn`, the sticky and smart
+  primary, `planAutoRound` with its message guard, supervisor dispatch then
+  synthesis) as a pure cursor. Each step runs through the connector's own
+  reply path (run card, approvals in the group, drafts, streaming,
+  delivery) under a fresh `imRoomMemberSessionId` sub-session; its prompt
+  carries the room instructions and the team transcript, each line gated for
+  injection and PII. The reply is stored as the member's own row
+  (`senderId` and `senderKind` as columns, stamped after the room's newest
+  row). One `room.turn` audit row records the steps and how the turn ended.
+- **A member can have a bot of its own.** `memberBotAdapterIds` maps a member
+  to a sibling bot of the same platform in the same chat. Its reply leaves
+  through that bot by the respond-via reroute, with the same fallback to the
+  room's bot, and goes unsigned when the bot voices that member alone
+  (`lib/connectors/room/persona-voices.ts`). A voice bot runs no turns of its
+  own in that chat (`inbound.persona_voice_held`), and under the `respond`
+  sibling policy its post of our own reply, coming back, is matched to the
+  outbound job that carried it and is not answered
+  (`inbound.respond_via_echo`); under `ignore` it is history only anyway. The
+  Inbox conversation settings edit the mapping.
+
+## Implementation update (2026-11-08, batch 5, ADR-0252 P7)
+
+- **An IM member hands work to a Squad, confirmed in the group.** While its
+  step is open a member is offered `room_handoff_to_squad`; the
+  conversation's Squad stands in when it names none. The proposal is a tool
+  part on its reply row and the group gets a Confirm/Decline card (one
+  button per Squad when none is named); a press decides through the
+  `room-squad-handoff` port as the person who pressed. Where replies wait
+  for sign-off, `auto` waits too. The Squad's result comes back through an
+  IM delivery lane (`lib/connectors/room/im-room-delivery-lane.ts`) as an
+  automated room turn on the conversation's own queue, addressed to the
+  proposer; the bus refuses one a transport delivers and resumes one only
+  from its own durable job.
+- **Shared rooms are detected, not flagged.** `NEXT_PUBLIC_SHARED_CHAT_ENABLED`
+  is gone. `lib/collab/shared-chat-availability.ts` probes the collab
+  server's `/health` per account (5 min, 30 s for a transient reason) and
+  every entry point stays visible and inert with the reason when it is
+  unavailable.
+- **A shared room's reply mode and instructions are the server's.** The
+  collab server holds `reply_mode` (default `mention_only`),
+  `room_instructions` and their own revision; owners and maintainers change
+  them. Being addressed is Request AI; `auto` is requested by the author's
+  client after a send that steered nothing; `asleep` refuses a request at
+  enqueue and writes a `room.silence` audit verdict for every silenced human
+  turn and request. The room's instructions reach every shared run.
+- **Catching up.** A reader coming back to several unread messages is offered
+  one summary whose points cite the messages they come from
+  (`lib/collab/shared-room-catch-up.ts`): local, per reader, one model call
+  through the redaction and PII gate, citations checked against the ids in
+  the prompt.
+
+### Where this differs from ADR-0252 §6
+
+An IM room is not run by `RoomRunner`: the connector runtime runs it, because
+delivery, acceptance drafts, recovery anchors and the run card live on the
+connector's reply path. A plain group therefore keeps its single voice (with
+the room's instructions), members answer one after another with live steer
+off, a member's row keeps its text and hand-off parts only, and
+`isLocallyOrchestratedRoom` is unchanged. The evidence and the residual
+risks are in `docs/evidence/2026-11-05-multi-agent-convergence.md` (D45–D54,
+X31–X37).
 
