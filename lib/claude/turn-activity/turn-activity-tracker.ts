@@ -7,13 +7,11 @@
  * machine separate from its callers makes the throttle/fold semantics
  * unit-testable in isolation.
  *
- * Owner note: it lives under `lib/connectors/activity/` for historical
- * reasons and has no connector consumer left. Its one caller today is
- * `lib/squads/teammate/teammate-progress-coalescer.ts`. It stays here because
- * it depends on `./diff-types` and `./diff-producer`, which have no consumer
- * outside this folder either, so moving one of the three would replace a
- * misleading path with a worse import edge. Move the cluster together, or not
- * at all.
+ * It folds the kernel's capture events, so it is the kernel's, beside
+ * `run-and-capture`. Its caller is the Squad teammate progress coalescer
+ * (`lib/squads/teammate/teammate-progress-coalescer.ts`). The edit-diff
+ * producer it uses sits here with it (shared-session projections read that
+ * one too); the diff shapes are `@/types/execution/turn-activity-diff`.
  *
  * Throttle contract (user spec): emit when
  *   `force` (turn-end) OR `isToolBoundary` (a tool started/finished) OR
@@ -23,7 +21,7 @@
  * single-tool turns (a 30s bash command).
  */
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
-import type { DiffHunk } from "./diff-types"
+import type { DiffHunk } from "@/types/execution/turn-activity-diff"
 import { extractEditInput, isFileEditTool } from "./diff-producer"
 
 /** Minimum gap between heartbeat (time-based) emits. Tool boundaries bypass this. */

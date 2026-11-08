@@ -42,7 +42,7 @@ import { normalizeProjectPaths } from "@cognia/memory/extract/project-path-norma
 import { safeToolActivityMetadata, workspaceRelativePath } from "@/lib/execution/run-activity"
 import { bareToolName } from "@/lib/chat/tool-summary"
 import { shellCommandOf } from "@/lib/chat/shell-command"
-import { extractEditInput } from "@/lib/connectors/activity/diff-producer"
+import { extractEditInput } from "@/lib/claude/turn-activity/diff-producer"
 import { parseUnifiedPatch, patchFilePath } from "@/lib/git/unified-patch"
 import { redactCredentialText, redactCredentialUrl } from "@/lib/security/redact-credentials"
 import type { SharedToolDetail } from "@cognia/agent-config-types"

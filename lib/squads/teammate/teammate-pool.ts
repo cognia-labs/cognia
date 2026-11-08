@@ -14,7 +14,7 @@ import {
   createCircuitBreaker,
   type CircuitBreaker,
   type CircuitBreakerOptions,
-} from "@/lib/connectors/circuit-breaker"
+} from "@cognia/plugin-contract/lib/connectors/circuit-breaker"
 import type { AgentTeammate } from "@/types/agent/agent-team"
 
 export type TeammateFailureKind =

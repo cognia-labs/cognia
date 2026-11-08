@@ -90,7 +90,10 @@ import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { parseConversationKey, buildConversationKey } from "@/types/connectors/event"
 import { isReauthCode } from "@/types/connectors/outbound"
 import type { MessageSegment } from "@/types/connectors/segment"
-import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker"
+import {
+  createCircuitBreaker,
+  type CircuitBreaker,
+} from "@cognia/plugin-contract/lib/connectors/circuit-breaker"
 import { createTokenBucket, type TokenBucket } from "./rate-limit"
 import { recordDeliveredMessage } from "./delivered-messages"
 import { createDraft, prepareDraftRow } from "@/lib/db/connector-drafts"

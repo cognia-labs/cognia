@@ -12,7 +12,7 @@
  */
 
 import { combineAbortSignals } from "@/lib/connectivity/capacitor-http"
-import type { CircuitBreaker } from "@/lib/connectors/circuit-breaker"
+import type { CircuitBreaker } from "@cognia/plugin-contract/lib/connectors/circuit-breaker"
 import { backoffDelayMs } from "@/lib/queue/retry-policy"
 import { withTimeout } from "@cognia/primitives"
 

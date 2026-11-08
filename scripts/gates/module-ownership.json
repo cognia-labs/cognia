@@ -281,11 +281,9 @@
     "connectors": {
       "class": "module",
       "api": [
-        "lib/connectors/activity/turn-activity-tracker.ts",
         "lib/connectors/audit.ts",
         "lib/connectors/automation-control.ts",
         "lib/connectors/bus.ts",
-        "lib/connectors/circuit-breaker.ts",
         "lib/connectors/delivery-gateway.ts",
         "lib/connectors/outbound-runner.ts",
         "lib/connectors/permission-resolve.ts",

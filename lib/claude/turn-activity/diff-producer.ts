@@ -16,7 +16,7 @@
  * `old_string`/`new_string`, `edits[]`, `content`/`contents`) so the two
  * surfaces agree on which tool inputs are file edits.
  */
-import type { DiffHunk, DiffLine, DiffStats } from "./diff-types"
+import type { DiffHunk, DiffLine, DiffStats } from "@/types/execution/turn-activity-diff"
 
 /** Inputs above this many bytes skip the LCS pass (fallback to rough stats). */
 export const MAX_DIFF_BYTES = 100 * 1024

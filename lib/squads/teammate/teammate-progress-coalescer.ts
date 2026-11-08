@@ -23,7 +23,7 @@ import {
   shouldEmit,
   summarizeForCard,
   type TurnActivityState,
-} from "@/lib/connectors/activity/turn-activity-tracker"
+} from "@/lib/claude/turn-activity/turn-activity-tracker"
 
 export type TeammateProgressPhase = "start" | "running" | "done" | "failed"
 

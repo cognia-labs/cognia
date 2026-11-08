@@ -1,4 +1,7 @@
-import type { CircuitBreaker, CircuitBreakerSnapshot } from "@/lib/connectors/circuit-breaker"
+import type {
+  CircuitBreaker,
+  CircuitBreakerSnapshot,
+} from "@cognia/plugin-contract/lib/connectors/circuit-breaker"
 import { CircuitOpenError, runResilient } from "@/lib/plugin/resilience/run-resilient"
 import { TimeoutError } from "@cognia/primitives"
 

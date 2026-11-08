@@ -790,7 +790,6 @@
     "lib/plugin/messaging/glance-visibility-hook-source.ts -> glance",
     "lib/plugin/messaging/hooks-system.ts -> connectors",
     "lib/plugin/messaging/hooks-system.ts -> slash-commands",
-    "lib/plugin/messaging/ipc.ts -> connectors",
     "lib/plugin/messaging/workflow-registry-hook-source.ts -> workflow",
     "lib/plugin/origin/install-origin.ts -> cogsets",
     "lib/plugin/package/conflict-detector.ts -> slash-commands",

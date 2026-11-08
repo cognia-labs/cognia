@@ -14,7 +14,10 @@ import { assertLibraryAccess, authorizeLibraryAccess, PluginLibraryError } from 
 import { cloneLibraryJson, validateLibraryValue } from "../library/schema"
 import { getPermissionGuard } from "../security/permission-guard"
 import { withTimeout } from "@cognia/primitives"
-import { createCircuitBreaker, type CircuitBreaker } from "@/lib/connectors/circuit-breaker"
+import {
+  createCircuitBreaker,
+  type CircuitBreaker,
+} from "@cognia/plugin-contract/lib/connectors/circuit-breaker"
 import { recordSilentFailure } from "../contracts/diagnostics-store"
 import { loggers } from "../core/logger"
 import { pluginHasApiPermission } from "@/lib/plugin/api/permission-api"

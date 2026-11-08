@@ -13,7 +13,7 @@
  * existing Audit panel via the manager's `recordSilentFailure`.
  */
 
-import type { CircuitBreakerSnapshot } from "@/lib/connectors/circuit-breaker"
+import type { CircuitBreakerSnapshot } from "@cognia/plugin-contract/lib/connectors/circuit-breaker"
 import {
   activationBreakerKey,
   loadBreakerKey,

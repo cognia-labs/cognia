@@ -104,7 +104,6 @@
     "lib/claude/computer-use-tools.ts",
     "lib/claude/subagent-importers/types.ts",
     "lib/connectivity/lan-classify.ts",
-    "lib/connectors/activity/diff-types.ts",
     "lib/data-hooks/context.tsx",
     "lib/db/a2ui-event-history.ts",
     "lib/db/a2ui-surfaces.ts",
