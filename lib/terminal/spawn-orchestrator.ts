@@ -481,7 +481,8 @@ export async function killFromDock(
  */
 export async function detachFromDock(
   sessionId: string,
-  store: Pick<TerminalStoreLike, "removeSession">
+  store: Pick<TerminalStoreLike, "removeSession">,
+  hooks: ReturnType<typeof getPluginEventHooks> = getPluginEventHooks()
 ): Promise<void> {
   const session = getLiveSession(sessionId)
   if (session) {
@@ -490,6 +491,16 @@ export async function detachFromDock(
     } catch (err) {
       console.warn(`spawn-orchestrator: detach threw for ${sessionId}:`, err)
       throw err
+    }
+    // A session nothing can reattach to (a serial port) closes on detach, so
+    // plugins see the same lifecycle as an explicit kill.
+    if (session.reattachable === false) {
+      hooks.dispatchTerminalLifecycle({
+        kind: "killed",
+        sessionId,
+        projectId: session.info.projectId,
+        extensionId: session.info.extensionId,
+      })
     }
   }
   unregisterLiveSession(sessionId)

@@ -1,6 +1,9 @@
 import {
   __clearRunSessionsForTesting,
+  abandonRunSessionOpen,
+  beginRunSessionOpen,
   closeRunSessions,
+  finishRunSessionOpen,
   deregisterRunSession,
   listRunSessions,
   registerRunSession,
@@ -75,5 +78,43 @@ describe("headless session registry", () => {
     mockInvoke.mockClear()
     await closeRunSessions("run-1")
     expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The run's cleanup can finish while an open is still awaiting its spawn. A
+   * late success must not land in a run that has already released everything.
+   */
+  it("refuses a late registration into a run released mid-open", async () => {
+    const open = beginRunSessionOpen("run-x")
+    await closeRunSessions("run-x")
+    expect(finishRunSessionOpen(open, "late-1", "headless")).toBe(false)
+    expect(listRunSessions("run-x")).toEqual([])
+  })
+
+  it("registers an open that finished before any release", async () => {
+    const open = beginRunSessionOpen("run-y")
+    expect(finishRunSessionOpen(open, "s-1", "dock")).toBe(true)
+    expect(listRunSessions("run-y")).toEqual([{ sessionId: "s-1", mode: "dock" }])
+    await closeRunSessions("run-y")
+    expect(mockKillFromDock).toHaveBeenCalledWith("s-1", { kind: "store-stub" })
+  })
+
+  /**
+   * A run waiting for input releases its resources and resumes under the same
+   * id. Only opens pending at the release are refused, not the run forever.
+   */
+  it("lets a resumed run open sessions again after a release", async () => {
+    await closeRunSessions("run-z")
+    const open = beginRunSessionOpen("run-z")
+    expect(finishRunSessionOpen(open, "s-2", "headless")).toBe(true)
+    expect(listRunSessions("run-z")).toEqual([{ sessionId: "s-2", mode: "headless" }])
+  })
+
+  it("forgets an abandoned open", async () => {
+    const open = beginRunSessionOpen("run-a")
+    abandonRunSessionOpen(open)
+    abandonRunSessionOpen(open)
+    await closeRunSessions("run-a")
+    expect(open.released).toBe(false)
   })
 })

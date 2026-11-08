@@ -10,7 +10,7 @@
  * serial port IS a byte stream in both directions, which is the entire surface
  * the base class asks for.
  *
- * Three of the base contract's ideas do not apply, and the implementations say
+ * Four of the base contract's ideas do not apply, and the implementations say
  * so rather than pretending:
  *
  *  - **resize** is a no-op. A serial line has no window size to report. xterm
@@ -21,6 +21,16 @@
  *  - **integration** events never arrive. OSC 633 comes from a shell
  *    integration script that a device on the other end of a cable has not
  *    sourced.
+ *  - **detach** closes the port. A PTY detached from the dock lives on in the
+ *    durable host, which lists it for the next reattach; a serial port has no
+ *    such owner, no list and no reattach, so a "detached" port was open with
+ *    no way back to it — and held the device busy for any later open.
+ *
+ * The port is always THIS machine's: `terminal_open_serial` and
+ * `terminal_serial_write` are direct local IPC. Its event topics are therefore
+ * read from the local transport too, not the routing one — a desktop that
+ * selects a remote Host must not move the port's output to that Host while
+ * keystrokes still go to the cable.
  *
  * Inbound bytes arrive base64-encoded on `terminal://serial/<id>/data`, which
  * is what `crates/cognia-terminal/src/serial.rs` publishes. Base64 rather than
@@ -30,7 +40,7 @@
  * Opening is two host calls, not one. See [`SerialTerminalSession.open`].
  */
 
-import { transport } from "@/lib/tauri"
+import { localTransport } from "@/lib/tauri/transport-instance"
 
 import { BaseTerminalSession } from "./base-session"
 import {
@@ -128,15 +138,19 @@ export class SerialTerminalSession extends BaseTerminalSession {
   }
 
   private subscribe(): void {
-    // `transport.subscribe` rather than a bare `listen` import. The direct
+    // A transport's `subscribe` rather than a bare `listen` import. The direct
     // import throws on every host that is not Tauri, and this module is
     // reachable from a companion shell's module graph even though
     // `connectSerialFromDock` refuses to open a port there. The transport
-    // answers for its own host instead of the import failing first.
-    const data = transport.subscribe<SerialDataEvent>(serialDataTopic(this.info.id), (payload) => {
-      this.dispatchData(decodeBase64(payload.base64))
-    })
-    const status = transport.subscribe<SerialStatusEvent>(
+    // answers for its own host instead of the import failing first. The LOCAL
+    // one, never the routing `transport`: see the module comment.
+    const data = localTransport.subscribe<SerialDataEvent>(
+      serialDataTopic(this.info.id),
+      (payload) => {
+        this.dispatchData(decodeBase64(payload.base64))
+      }
+    )
+    const status = localTransport.subscribe<SerialStatusEvent>(
       serialStatusTopic(this.info.id),
       (payload) => {
         this.status = payload.status
@@ -178,8 +192,17 @@ export class SerialTerminalSession extends BaseTerminalSession {
     // nothing to tell the device.
   }
 
+  /**
+   * Close the port. Nothing could reattach to it (see the module comment), so
+   * leaving it open would only strand the device until the app quits.
+   */
   async detach(): Promise<void> {
-    this.teardown()
+    await this.kill()
+  }
+
+  /** A serial port has no host-side owner to come back to. */
+  override get reattachable(): boolean {
+    return false
   }
 
   async takeControl(): Promise<void> {
@@ -191,6 +214,7 @@ export class SerialTerminalSession extends BaseTerminalSession {
   }
 
   async kill(): Promise<void> {
+    if (this.status === "disconnected") return
     this.teardown()
     await closeSerialPort(this.info.id)
     this.status = "disconnected"

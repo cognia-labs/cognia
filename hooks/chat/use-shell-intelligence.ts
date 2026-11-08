@@ -28,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ALL_SPECS } from "@/lib/terminal/completion/spec"
 import { shellBuiltins } from "@/lib/terminal/completion/shell-builtins"
 import {
+  currentTerminalHostKey,
   ensureHostCapabilities,
   getHostCapabilities,
   subscribeHostCapabilities,
@@ -106,15 +107,16 @@ export interface ShellIntelligence {
 }
 
 /**
- * Whether this process has already asked the host to describe itself.
+ * Which host this process has already asked to describe itself.
  *
  * `useShellContext` is mounted more than once per composer — the submit path in
  * `Composer` and the completion panel in `ComposerInner` both need the verdict —
  * so a per-mount probe kicked one request per composer on every chat surface,
  * `!` mode or not. `ensureHostCapabilities` already dedupes concurrent probes,
- * but not the effects that call it; this dedupes the effects.
+ * but not the effects that call it; this dedupes the effects. Keyed by host, so
+ * a desktop that switches the Host it drives asks the new one.
  */
-let capabilitiesProbeStarted = false
+let capabilitiesProbedHost: string | null = null
 
 /**
  * Host capabilities, re-read whenever the host answers.
@@ -132,16 +134,21 @@ function useHostCapabilities(): TerminalHostCapabilities | null {
     // is only ever filled by the async probe below.
     () => null
   )
+  const hostKey = useSyncExternalStore(
+    subscribeHostCapabilities,
+    currentTerminalHostKey,
+    () => "default"
+  )
   useEffect(() => {
-    if (capabilitiesProbeStarted || getHostCapabilities()) return
-    capabilitiesProbeStarted = true
+    if (capabilitiesProbedHost === hostKey || getHostCapabilities()) return
+    capabilitiesProbedHost = hostKey
     void ensureHostCapabilities().then((value) => {
       // A probe that answered nothing must NOT latch. The dedupe is only about
       // the two mounts of one composer racing each other; a Host paired later
       // still has to be askable, which is what a fresh mount did before.
-      if (!value) capabilitiesProbeStarted = false
+      if (!value && capabilitiesProbedHost === hostKey) capabilitiesProbedHost = null
     })
-  }, [])
+  }, [hostKey])
   return capabilities
 }
 

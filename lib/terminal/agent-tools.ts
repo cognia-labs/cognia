@@ -38,13 +38,13 @@ export function buildTerminalDockToolEntries(): ModuleToolEntry[] {
     {
       name: "terminal_dock_spawn",
       description:
-        "Open a new tab in the user's terminal dock. Optionally type a command and wait for it to finish.",
+        "Open a new tab in the user's terminal dock. Optionally type a command, wait for it to finish, and return its exit code and printed output.",
       jsonSchema: TERMINAL_DOCK_SPAWN_SCHEMA,
     },
     {
       name: "terminal_dock_write",
       description:
-        "Type input into an existing dock tab (PTY stdin). Waits for the next command_end event before returning.",
+        "Type input into an existing dock tab (PTY stdin). Waits for the next command_end event, then returns the exit code and the text the command printed.",
       jsonSchema: TERMINAL_DOCK_WRITE_SCHEMA,
     },
     {
@@ -56,7 +56,7 @@ export function buildTerminalDockToolEntries(): ModuleToolEntry[] {
     {
       name: "terminal_dock_wait_for_exit",
       description:
-        "Block until the most-recent command in the named tab emits an OSC 633 D event, then return its exit code.",
+        "Block until the most-recent command in the named tab emits an OSC 633 D event, then return its exit code, its command line and the output printed while waiting.",
       jsonSchema: TERMINAL_DOCK_WAIT_FOR_EXIT_SCHEMA,
     },
   ]

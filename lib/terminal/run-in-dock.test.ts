@@ -31,6 +31,13 @@ jest.mock("./spawn-orchestrator", () => ({
   })),
 }))
 
+// What the Host reported about itself; `null` on the desktop's own PTY.
+const mockEnsureHostCapabilities = jest.fn(async (): Promise<unknown> => null)
+jest.mock("./host-capabilities", () => ({
+  ...jest.requireActual("./host-capabilities"),
+  ensureHostCapabilities: () => mockEnsureHostCapabilities(),
+}))
+
 import {
   getPluginConsentBroker,
   resetPluginConsentBroker,
@@ -45,14 +52,24 @@ import { agentTrustPluginId } from "./agent-trust"
 function broker() {
   return getPluginConsentBroker()
 }
-function grantTrust(chatId: string, tabId: string) {
-  ;(broker() as unknown as { sessionGrants: Set<string> }).sessionGrants.add(
-    `${agentTrustPluginId(chatId, tabId)}:terminal:write`
-  )
+/**
+ * Grant trust through the broker's public flow — a request answered with
+ * "allow for this session" — rather than seeding its private grant set, whose
+ * key format (now scope-qualified) is the broker's business.
+ */
+async function grantTrust(chatId: string, tabId: string) {
+  const request = broker().request({
+    pluginId: agentTrustPluginId(chatId, tabId),
+    permission: "terminal:write",
+  })
+  const pending = (broker() as unknown as { pending: Map<string, unknown> }).pending
+  for (const id of [...pending.keys()]) broker().respond(id, { allow: true, persist: true })
+  await expect(request).resolves.toBe(true)
 }
 
 function makeFakeSession(sid: string) {
   const integrationListeners: Array<(event: unknown) => void> = []
+  const taps: Array<(bytes: Uint8Array) => void> = []
   return {
     id: sid,
     info: {
@@ -66,6 +83,13 @@ function makeFakeSession(sid: string) {
     resize: jest.fn(async () => undefined),
     kill: jest.fn(async () => undefined),
     onData: jest.fn(() => () => undefined),
+    tapData: jest.fn((cb: (bytes: Uint8Array) => void) => {
+      taps.push(cb)
+      return () => {
+        const idx = taps.indexOf(cb)
+        if (idx >= 0) taps.splice(idx, 1)
+      }
+    }),
     onIntegration: jest.fn((cb: (event: unknown) => void) => {
       integrationListeners.push(cb)
       return () => {
@@ -76,6 +100,10 @@ function makeFakeSession(sid: string) {
     onExit: jest.fn(() => () => undefined),
     _fireIntegration: (event: unknown) => {
       for (const l of integrationListeners.slice()) l(event)
+    },
+    _emit: (text: string) => {
+      const bytes = new TextEncoder().encode(text)
+      for (const l of taps.slice()) l(bytes)
     },
     isExited: false,
     lastExitCode: null,
@@ -110,30 +138,69 @@ describe("runInDockTab", () => {
     await expect(pending).resolves.toEqual({ kind: "denied" })
   })
 
-  it("returns ok with exit code on command_end after grant", async () => {
+  it("returns the exit code and the printed output on command_end", async () => {
     const fake = makeFakeSession("s-1")
     registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
     useTerminalStore.getState().registerSession(fake.info)
     // Pre-grant trust so the consent emit short-circuits.
-    grantTrust("c", "s-1")
+    await grantTrust("c", "s-1")
     const pending = runInDockTab({
       chatSessionId: "c",
       tabId: "s-1",
-      command: "ls",
+      command: "echo hello",
       timeoutMs: 1000,
     })
-    // Allow microtasks to run so the session.write call is queued + onIntegration is attached.
+    // Allow microtasks to run so the session.write call is queued + listeners attach.
     await new Promise((r) => setTimeout(r, 0))
-    // Simulate spawn-orchestrator pushing the captured command.
-    useTerminalStore.getState().pushCommand("s-1", { cmd: "ls", exitCode: 0, endedAt: Date.now() })
+    expect(fake.write).toHaveBeenCalledWith("echo hello\r")
+    // The PTY echoes the line, then the pre-exec marker, the output, and — after
+    // the integration event for it — the chunk carrying the end marker.
+    fake._emit("$ echo hello\r\n\u001b]633;C;nonce\u0007hello\r\n")
     fake._fireIntegration({ kind: "command_end", exit_code: 0 })
+    fake._emit("\u001b]633;D;nonce;0\u0007$ ")
     const result = await pending
-    expect(result.kind).toBe("ok")
-    if (result.kind === "ok") {
-      expect(result.exitCode).toBe(0)
-      expect(result.sessionId).toBe("s-1")
-    }
-    expect(fake.write).toHaveBeenCalledWith("ls\r")
+    // The command line is NOT the output: it used to be returned in its place.
+    expect(result).toEqual({
+      kind: "ok",
+      sessionId: "s-1",
+      exitCode: 0,
+      output: "hello",
+      outputTruncated: false,
+    })
+  })
+
+  /**
+   * Regression: the store snapshot was taken before the spawn, so the freshly
+   * spawned tab was never in it and every spawn-with-command returned
+   * `unknown session` — after leaving the new tab open, and before consent or
+   * any write.
+   */
+  it("runs in a freshly spawned tab", async () => {
+    const fake = makeFakeSession("spawned-1")
+    ;(spawnFromDock as jest.Mock).mockImplementationOnce(async () => {
+      registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+      useTerminalStore.getState().registerSession(fake.info)
+      return { kind: "spawned", sessionId: "spawned-1", shell: "/bin/bash" }
+    })
+    await grantTrust("c", "spawned-1")
+    const pending = runInDockTab({
+      chatSessionId: "c",
+      newTab: { req: { shell: "/bin/bash", rows: 24, cols: 80 } },
+      command: "pwd",
+      timeoutMs: 1000,
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fake.write).toHaveBeenCalledWith("pwd\r")
+    fake._emit("\u001b]633;C;n\u0007/work\r\n")
+    fake._fireIntegration({ kind: "command_end", exit_code: 0 })
+    fake._emit("\u001b]633;D;n;0\u0007")
+    await expect(pending).resolves.toMatchObject({
+      kind: "ok",
+      sessionId: "spawned-1",
+      exitCode: 0,
+      output: "/work",
+    })
+    expect(useTerminalStore.getState().sessions["spawned-1"]?.agentTrusted).toBe(true)
   })
 
   it("returns timeout when command_end never fires", async () => {
@@ -141,7 +208,7 @@ describe("runInDockTab", () => {
     registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
     useTerminalStore.getState().registerSession(fake.info)
     // Pre-grant trust to skip prompt.
-    grantTrust("c", "s-1")
+    await grantTrust("c", "s-1")
     const pending = runInDockTab({
       chatSessionId: "c",
       tabId: "s-1",
@@ -162,7 +229,7 @@ describe("runInDockTab", () => {
     const fake = makeFakeSession("s-1")
     registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
     useTerminalStore.getState().registerSession(fake.info)
-    grantTrust("c", "s-1")
+    await grantTrust("c", "s-1")
     const pending = runInDockTab({
       chatSessionId: "c",
       tabId: "s-1",
@@ -186,6 +253,19 @@ describe("runInTerminalDock", () => {
     expect(store.getActiveSession(null)).toBe("spawned-1")
     // Carriage return submits the command in the shell (no command_end wait).
     expect(fake.write).toHaveBeenCalledWith("ssh example.com\r")
+  })
+
+  it("spawns the Host's default shell when nothing more specific is set", async () => {
+    mockEnsureHostCapabilities.mockResolvedValueOnce({
+      platform: "windows",
+      defaultShell: "pwsh.exe",
+      availableShells: [],
+    })
+    const fake = makeFakeSession("spawned-1")
+    registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+    ;(spawnFromDock as jest.Mock).mockClear()
+    await runInTerminalDock("ssh h", "/w", "c")
+    expect((spawnFromDock as jest.Mock).mock.calls[0][0].req.shell).toBe("pwsh.exe")
   })
 
   it("throws when the spawn is denied", async () => {

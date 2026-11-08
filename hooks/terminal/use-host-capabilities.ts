@@ -17,6 +17,7 @@
 import { useEffect, useSyncExternalStore } from "react"
 
 import {
+  currentTerminalHostKey,
   ensureHostCapabilities,
   getHostCapabilities,
   subscribeHostCapabilities,
@@ -28,17 +29,28 @@ function serverSnapshot(): TerminalHostCapabilities | null {
   return null
 }
 
+function serverHostKey(): string {
+  return "default"
+}
+
 export function useHostCapabilities(): TerminalHostCapabilities | null {
   const capabilities = useSyncExternalStore(
     subscribeHostCapabilities,
     getHostCapabilities,
     serverSnapshot
   )
+  // Switching the Host a desktop drives invalidates the answer; keying the
+  // warm-up on the host re-asks the newly selected one.
+  const hostKey = useSyncExternalStore(
+    subscribeHostCapabilities,
+    currentTerminalHostKey,
+    serverHostKey
+  )
   useEffect(() => {
     // Cheap and deduped: returns the cache when warm, and no-ops entirely on
     // the local PTY.
     void ensureHostCapabilities()
-  }, [])
+  }, [hostKey])
   return capabilities
 }
 

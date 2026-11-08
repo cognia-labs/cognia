@@ -5,7 +5,12 @@ jest.mock("@/lib/tauri", () => ({
   isCapacitor: () => false,
 }))
 jest.mock("@/lib/platform/web-companion", () => ({ hasWebCompanionTarget: () => false }))
-jest.mock("@/lib/tauri/transport-routing", () => ({ isRemoteHostActive: () => remoteHostActive }))
+jest.mock("@/lib/tauri/transport-routing", () => ({
+  isRemoteHostActive: () => remoteHostActive,
+  // The host-capability cache keys its answers by the selected remote transport.
+  getActiveRemoteTransport: () => null,
+  subscribeActiveRemoteTransport: () => () => undefined,
+}))
 
 let remoteHostActive = false
 

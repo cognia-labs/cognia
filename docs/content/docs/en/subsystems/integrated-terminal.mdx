@@ -1,6 +1,6 @@
 ---
 title: Integrated Terminal
-description: A real PTY inside the app — transport selection across desktop, mobile and remote hosts, nonce-validated OSC 633 shell integration, SSH sessions, headless exec for agents, and the trust gate an agent must pass before it can type into your shell.
+description: A real PTY inside the app — the durable host, transport selection across desktop, mobile, paired browsers and remote hosts, nonce-validated OSC 633 shell integration, SSH and serial sessions, headless exec, and the trust gate an agent must pass before it can type into your shell.
 ---
 
 # Integrated Terminal
@@ -8,25 +8,28 @@ description: A real PTY inside the app — transport selection across desktop, m
 <Status variant="stable">Stable · ADR-0031 → 0033</Status>
 
 <TLDR>
-  The terminal is a real PTY, not an emulator over a command runner. The transport is selected by
-  `selectTerminalTransport()` (`lib/terminal/pick-transport.ts:31`): a Tauri desktop gets the in-process
-  `tauri-channel`, Capacitor mobile gets `ws` over LAN/mDNS, and a desktop driving a remote Cognia host
-  retargets to the host's `/ws/v1/terminal`. Prompt boundaries, exit codes and cwd changes come from
-  **OSC 633** shell-integration sequences parsed in Rust (`crates/cognia-terminal/src/osc633.rs`), which
-  validates a per-spawn nonce so a hostile process inside the terminal can't fabricate prompt decorations.
-  Agents use a separate entry point — `headless-exec` plus a per-tab trust gate (`lib/terminal/agent-trust.ts`).
+  The terminal is a real PTY, not an emulator over a command runner. On the desktop the PTY is owned by
+  the **durable terminal host** (`crates/cognia-terminal/src/host.rs`), which outlives a renderer reload:
+  the dock reattaches on boot and closing a tab detaches by default. The transport is chosen by
+  `selectTerminalTransportChain()` (`lib/terminal/pick-transport.ts:63`): `tauri-channel` on a plain desktop,
+  and `ws` then `webrtc` for Capacitor mobile, a browser paired to a Cognia server, and a desktop driving a
+  remote Host. Prompt boundaries, exit codes and cwd changes come from **OSC 633** shell-integration sequences
+  parsed in Rust (`crates/cognia-terminal/src/osc633.rs`), which validates a per-spawn nonce so a hostile
+  process inside the terminal can't fabricate prompt decorations. Agents and workflows use the visible dock
+  behind a per-tab trust gate (`lib/terminal/agent-trust.ts`), or a separate headless surface.
 </TLDR>
 
 <StatGrid>
-  <Stat label="Core modules" value="30" hint="lib/terminal — non-test .ts" />
-  <Stat label="UI components" value="17" hint="components/terminal" />
-  <Stat label="Rust modules" value="11" hint="crates/cognia-terminal/src" />
-  <Stat label="Tauri commands" value="9" hint="crates/cognia-terminal/src/commands.rs" />
-  <Stat label="Transports" value="3 + 1" hint="tauri-channel · ws · webrtc (planned) · unsupported" />
+  <Stat label="Core modules" value="106" hint="lib/terminal — non-test .ts, recursive" />
+  <Stat label="UI components" value="27" hint="components/terminal — non-test .tsx" />
+  <Stat label="Rust modules" value="24" hint="crates/cognia-terminal/src" />
+  <Stat label="Tauri commands" value="38" hint="#[tauri::command] entry points in crates/cognia-terminal/src" />
+  <Stat label="Transports" value="3 + 1" hint="tauri-channel · ws · webrtc · unsupported" />
 </StatGrid>
 
 Design rationale: [ADR-0031](../adr/0031-integrated-terminal) and
-[ADR-0033](../adr/0033-integrated-terminal-phase-3). This page documents the current implementation.
+[ADR-0033](../adr/0033-integrated-terminal-phase-3). This page documents the current implementation
+(counts as of 2026-11-08).
 
 ## Transport selection
 
@@ -35,20 +38,31 @@ type TerminalTransportKind = "tauri-channel" | "ws" | "webrtc" | "unsupported"
 ```
 
 Two entry points, deliberately separate. `selectTerminalTransport()` returns the single highest-priority
-transport for callers that don't want fallback logic — the dock's "+ New" button on desktop.
-`selectTerminalTransportChain()` returns an ordered list the spawn orchestrator walks, trying the next
-transport when the previous one returned `null` or threw.
+transport for callers that don't want fallback logic. `selectTerminalTransportChain()` returns an ordered
+list the spawn orchestrator walks, trying the next transport when the previous one returned `null` or threw.
 
-| Shell | Transport | Notes |
+| Shell | Chain | Notes |
 | --- | --- | --- |
-| Tauri desktop | `tauri-channel` | in-process PTY, no remote ambiguity |
-| Desktop → remote host | `ws` | targets the host's `/ws/v1/terminal` ([ADR-0082](../adr/0082-remote-development-remote-host)); inert until a remote host is activated, so a plain desktop is unaffected |
-| Capacitor mobile | `ws` | LAN / mDNS |
-| Browser | `unsupported` | the chain returns `[]` and the dock does not mount |
+| Tauri desktop | `tauri-channel` | local IPC to the durable host on this machine |
+| Desktop → remote Host | `ws`, `webrtc` | the Host's `/ws/terminal` ([ADR-0082](../adr/0082-remote-development-remote-host)); inert until a remote Host is selected, so a plain desktop is unaffected |
+| Capacitor mobile | `ws`, `webrtc` | LAN / mDNS first, then the WAN data channel |
+| Browser paired to a Cognia server | `ws`, `webrtc` | runs on that server's headless host |
+| Standalone browser | `unsupported` | the chain returns `[]` and the dock does not mount |
 
-`webrtc` is declared in the union but is **planned, not wired** — the chain extends to `["ws", "webrtc"]`
-once the Rust desktop peer and the TS client are connected through the rendezvous. `terminalAvailable()`
-(`lib/terminal/pick-transport.ts:66`) is what components use to decide whether to mount the dock at all.
+The `webrtc` leg rides the ordered `cognia.terminal` data channel, which the Host routes into the same
+terminal frames the WebSocket carries. A phone or browser never runs a local shell: it needs a reachable,
+paired Host and a terminal grant. `terminalAvailable()` (`lib/terminal/pick-transport.ts:76`) is what
+components use to decide whether to mount the dock at all.
+
+### What the Host says about itself
+
+A remote Host reports its platform, default shell and available shells in the hello ack and the session
+list (`crates/cognia-terminal/src/host_capabilities.rs`), along with the protocol features it speaks. The
+renderer caches that answer in `lib/terminal/host-capabilities.ts` **per selected Host**: switching the
+Host a desktop drives, or returning to the desktop's own PTY, invalidates it, and an answer that arrives
+for a Host no longer selected is dropped. With no project or user shell set, a new tab — on the desktop
+dock and on the phone alike — spawns the Host's default shell rather than one guessed from the client's
+user agent.
 
 ## Shell integration is nonce-validated
 
@@ -62,34 +76,50 @@ The security property is the per-spawn nonce stamped into `$COGNIA_TERM_NONCE`. 
 a hostile process running *inside* the terminal cannot emit its own OSC 633 sequences to fake prompt
 decorations. Unrecognised sequences are dropped rather than guessed at.
 
+## The durable host
+
+`host.rs` owns the PTYs, their attachment queues, replay buffers and the single controller lease. The
+desktop's native commands are a facade onto it (`src-tauri/src/terminal_host_bridge.rs` re-exports the
+crate bridge), so a webview reload or a closed tab does not end the shell: boot reattaches what is still
+running, and the tab's close button detaches unless you choose **Terminate**. Durable means surviving the
+renderer, not the host process or a reboot. Replay is bounded: 8 MiB per session, 128 MiB in total,
+32 sessions, 8 remote sessions per device.
+
 ## Where it lives
 
 ```
 lib/terminal/
-  pick-transport.ts       # transport selection + fallback chain
-  spawn-orchestrator.ts   # walks the chain, owns retry
-  session.ts              # foreground session; base-session.ts is the shared core
-  session-registry.ts     # live sessions; headless-session-registry.ts for agent runs
-  collaboration/roster.ts # participant roster projection for sharing (ADR-0133)
-  transport-ws.ts         # the ws client
-  command-markers.ts      # OSC 633 consumption on the TS side
-  command-output.ts       # per-command output capture (feeds quick-fix + agent reads)
-  headless-exec.ts        # non-interactive exec surface for agents
-  agent-trust.ts          # per-tab trust gate before an agent may type
+  pick-transport.ts         # transport selection + fallback chain
+  spawn-orchestrator.ts     # walks the chain, owns retry, detach and kill
+  session.ts                # desktop session; base-session.ts is the shared core
+  session-registry.ts       # live sessions; headless-session-registry.ts for workflow runs
+  host-capabilities.ts      # per-Host platform, shells and protocol features
+  collaboration/roster.ts   # participant roster projection for sharing (ADR-0133)
+  transport-ws.ts           # the ws / webrtc client
+  command-markers.ts        # OSC 633 consumption on the TS side
+  command-output.ts         # per-command output: xterm buffer rows, or the OSC 633 window of the stream
+  await-command-end.ts      # wait for a tab's next command and report what it printed
+  run-in-dock.ts            # agent / workflow "run this in a tab"
+  headless-exec.ts          # non-interactive exec surface for agents and workflows
+  agent-trust.ts            # per-tab trust gate before an agent may type
   ssh-session.ts · ssh-connect.ts · ssh-profiles.ts · ssh-credentials.ts
+  serial-session.ts · serial-connect.ts · serial/
   shell-detect.ts · profiles.ts · color-schemes.ts
-  completion/ · quick-fix/    # ghost text, completion popup, error quick-fixes
+  completion/ · quick-fix/ · ai-shell/   # ghost text, completion popup, error quick-fixes, AI Shell
   sticky-scroll.ts · terminal-links.ts · stack-trace.ts
-  backpressure.ts         # flow control on a fast-writing process
-  rehydrate.ts            # restore tabs across reloads
+  backpressure.ts           # flow control on a fast-writing process
+  rehydrate.ts · boot-reattach.ts        # restore tabs across reloads
+  recording/                # asciicast recorder + player (dormant, see below)
+  workflow-nodes/           # the terminal module's workflow node family
 
 crates/cognia-terminal/src/
+  host.rs · host_bridge.rs · host_wire.rs · host_client.rs · host_capabilities.rs
   osc633.rs      # the sequence parser + nonce validation
-  session.rs · exec.rs · headless.rs · replay.rs
-  ssh.rs · complete.rs · path_scan.rs · integration.rs
-  commands.rs    # 9 Tauri commands
+  session.rs · exec.rs · headless.rs · replay.rs · protocol.rs
+  ssh.rs · ssh_forward.rs · sftp.rs · sftp_service.rs · serial.rs · multiplexer.rs
+  complete.rs · path_scan.rs · integration.rs · commands.rs
 
-components/terminal/    # dock · tab strip · instance · search · quick-fix · completion · file viewer
+components/terminal/    # dock · tab strip · panes · instance · search · quick-fix · completion · share
 stores/terminal/        # terminal-store · file-viewer-store
 ```
 
@@ -115,6 +145,43 @@ interactive tab. To drive an *interactive* tab it must first clear `requestAgent
 (`lib/terminal/agent-trust.ts:50`), which is keyed per chat session **and** per tab —
 `agentTrustPluginId(chatSessionId, tabId)` — so trust granted in one tab does not leak into another.
 `isAgentTrusted()` is the read side of that gate.
+
+### What a driven tab reports
+
+`runInDockTab` (the `terminal_dock_spawn` / `terminal_dock_write` tools and the interactive workflow
+nodes) writes the command, waits for its OSC 633 `command_end`, and returns the exit code plus the text the
+command printed: the stream between its `C` and `D` sequences with control sequences stripped, the same
+shape the headless runner returns. `terminal_dock_wait_for_exit` waits for whatever is already running, so
+its `output` is only what was printed while it waited, and its `command` field carries the command line.
+Very long output keeps its tail and sets `outputTruncated`. A shell without integration (cmd, or an
+unknown shell) never reports `command_end`, so these calls time out there.
+
+### Workflow sessions
+
+`action.terminal.session.open` registers what it opens with the run, and the run's end closes whatever is
+left. A cancellation that lands while the open is still waiting for its spawn is honoured: the late
+session is closed rather than registered into a run that has already cleaned up.
+
+## Serial ports
+
+The dock can open a native serial port on the desktop (`serial-session.ts`, `crates/cognia-terminal/src/serial.rs`).
+A port can only be opened while the desktop drives its own PTY (the chain starts with `tauri-channel`).
+It is always the desktop's own device, so an open port keeps reading and writing locally if a remote Host
+is selected afterwards. A serial port has no host-side owner to come back to, so it is not reattachable:
+closing its tab closes the port, and the dock does not offer "detach" for it. Serial is not exposed over
+the paired terminal path.
+
+## Known limits
+
+- **Unattended execution is local on the desktop.** The headless commands (`terminal_headless_exec`,
+  `terminal_headless_run`, `terminal_headless_spawn`) are client-local, so a Tauri desktop runs unattended
+  workflow commands on itself even when a remote Host is selected in the UI. Paired and headless clients
+  route one-shot runs to their Host through `terminal_exec`, which rejects a persistent session, a requested
+  sandbox and a custom shell.
+- **Recording is a library, not a feature.** `lib/terminal/recording/` holds an asciicast v2 recorder and
+  player with unit tests, but no surface records or replays a terminal yet.
+- **Verification.** The terminal module's real-shell smoke is still pending; SSH, serial hardware, WAN and
+  Windows/Linux shells have not been accepted end to end.
 
 ## Related
 

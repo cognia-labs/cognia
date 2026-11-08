@@ -7,15 +7,14 @@
  * Composes existing pieces — no new event pipelines:
  *   1. `requestAgentTrust` opens the consent overlay (or skips if a
  *      session grant already exists).
- *   2. `getLiveSession(tabId).write(cmd + "\r")` pipes the command into
+ *   2. `awaitCommandEnd` taps the session's output and arms the next
+ *      `command_end` integration event BEFORE anything is written —
+ *      `spawn-orchestrator` has already attached the OSC 633 → store wiring.
+ *   3. `getLiveSession(tabId).write(cmd + "\r")` pipes the command into
  *      the PTY.
- *   3. We listen on the next `command_end` integration event for the
- *      exit code — `spawn-orchestrator` has already attached the OSC 633
- *      → store wiring, so we just observe `session.onIntegration`.
- *   4. The captured command and its exit code surface in
- *      `useTerminalStore.sessions[tabId].lastCommands` (Wave 1 store
- *      capture), so callers can read the freshly-pushed row to get the
- *      finalized record.
+ *   4. The result carries the exit code from the integration event and the
+ *      text the command printed between its OSC 633 `C` and `D` sequences.
+ *      Shells without integration never report `command_end` and time out.
  *
  * Timeout default: 60 seconds. Long-running commands can pass a higher
  * limit — but the goal of this API is "send a command and wait for its
@@ -23,6 +22,8 @@
  */
 
 import { requestAgentTrust } from "./agent-trust"
+import { awaitCommandEnd } from "./await-command-end"
+import { ensureHostCapabilities } from "./host-capabilities"
 import { getLiveSession } from "./session-registry"
 import { resolveDefaultShell } from "./shell-detect"
 import { spawnFromDock } from "./spawn-orchestrator"
@@ -45,7 +46,15 @@ export interface RunInDockInput {
 }
 
 export type RunInDockOutcome =
-  | { kind: "ok"; sessionId: string; exitCode: number | null; output: string }
+  | {
+      kind: "ok"
+      sessionId: string
+      exitCode: number | null
+      /** What the command printed (control sequences stripped), not its command line. */
+      output: string
+      /** The head of a very long output was dropped; the tail is kept. */
+      outputTruncated: boolean
+    }
   | { kind: "denied" }
   | { kind: "timeout"; sessionId: string }
   | { kind: "error"; message: string }
@@ -76,7 +85,6 @@ function resolveTimeoutMs(perCallMs: number | undefined): number {
 }
 
 export async function runInDockTab(input: RunInDockInput): Promise<RunInDockOutcome> {
-  const store = useTerminalStore.getState()
   let sessionId = input.tabId ?? null
 
   // 1. Spawn if requested.
@@ -92,7 +100,7 @@ export async function runInDockTab(input: RunInDockInput): Promise<RunInDockOutc
         projectId: input.newTab.req.projectId,
         enableShellIntegration: true,
       },
-      store,
+      store: useTerminalStore.getState(),
       agentSpawner: input.chatSessionId,
       ...spawnerMessage(input.chatSessionId),
     })
@@ -105,7 +113,10 @@ export async function runInDockTab(input: RunInDockInput): Promise<RunInDockOutc
   }
   if (!sessionId) return { kind: "error", message: "no session id resolved" }
 
-  const row = store.sessions[sessionId]
+  // Read the store AFTER the spawn. Zustand replaces `sessions` on every
+  // registration, so a `getState()` taken before the await is a snapshot that
+  // never contains the tab this call just opened.
+  const row = useTerminalStore.getState().sessions[sessionId]
   if (!row) return { kind: "error", message: `unknown session: ${sessionId}` }
 
   // 2. Consent gate. The row's `agentTrusted` flag mirrors the broker's
@@ -119,49 +130,29 @@ export async function runInDockTab(input: RunInDockInput): Promise<RunInDockOutc
     commandPreview: input.command,
   })
   if (!trusted) return { kind: "denied" }
-  store.setAgentTrusted(sessionId, true)
+  useTerminalStore.getState().setAgentTrusted(sessionId, true)
 
-  // 3. Get the live session and arm command_end listener BEFORE writing.
+  // 3. Get the live session; the wait attaches its listeners before `start`
+  // writes, so neither the output nor the `command_end` can be missed.
   const session = getLiveSession(sessionId)
   if (!session) return { kind: "error", message: `session ${sessionId} is not live` }
 
-  const timeoutMs = resolveTimeoutMs(input.timeoutMs)
-  const result = await new Promise<RunInDockOutcome>((resolve) => {
-    let off: (() => void) | null = null
-    const timer = setTimeout(() => {
-      try {
-        off?.()
-      } catch {
-        /* noop */
-      }
-      resolve({ kind: "timeout", sessionId: sessionId! })
-    }, timeoutMs)
-    off = session.onIntegration((event) => {
-      if (event.kind !== "command_end") return
-      clearTimeout(timer)
-      try {
-        off?.()
-      } catch {
-        /* noop */
-      }
-      // Wait one microtask for spawn-orchestrator's pushCommand to land.
-      void Promise.resolve().then(() => {
-        const updated = useTerminalStore.getState().sessions[sessionId!]
-        const last = updated?.lastCommands?.[updated.lastCommands.length - 1]
-        resolve({
-          kind: "ok",
-          sessionId: sessionId!,
-          exitCode: event.exit_code ?? null,
-          output: last?.cmd ?? "",
-        })
-      })
-    })
-    // 4. Pipe the command. Trailing CR triggers shell submit (and OSC 633
-    // C, then D).
-    void session.write(input.command + "\r")
+  const ended = await awaitCommandEnd(session, {
+    timeoutMs: resolveTimeoutMs(input.timeoutMs),
+    // 4. Trailing CR triggers shell submit (and OSC 633 C, then D).
+    start: () => void session.write(input.command + "\r"),
   })
-
-  return result
+  if (ended.kind === "timeout") return { kind: "timeout", sessionId }
+  if (ended.kind === "exited") {
+    return { kind: "error", message: `session ${sessionId} exited before the command finished` }
+  }
+  return {
+    kind: "ok",
+    sessionId,
+    exitCode: ended.exitCode,
+    output: ended.output,
+    outputTruncated: ended.truncated,
+  }
 }
 
 /**
@@ -199,10 +190,14 @@ export async function runInTerminalDock(
     { defaultShell?: string; forceUtf8?: boolean; sandboxed?: boolean } | undefined
 
   // Resolve the shell + spawn options exactly like the dock's "+ New" button so
-  // the interactive command runs in the user's configured shell.
+  // the interactive command runs in the user's configured shell — and, with no
+  // explicit choice, in the shell the *Host* reported rather than one guessed
+  // from this client's user agent (`null`, and so the local guess, on the
+  // desktop's own PTY).
   const shell = resolveDefaultShell({
     projectShell: project?.terminalConfig?.shell,
     settingShell: terminal?.defaultShell,
+    hostDefaultShell: (await ensureHostCapabilities())?.defaultShell,
   })
   const resolvedCwd =
     cwd.trim() || project?.terminalConfig?.cwd?.trim() || project?.rootDir?.trim() || undefined

@@ -18,7 +18,11 @@ import {
   type TerminalErrorCode,
   type TerminalFrame,
 } from "./protocol"
-import { recordHostCapabilities, recordProtocolFeatures } from "./host-capabilities"
+import {
+  currentTerminalHostKey,
+  recordHostCapabilities,
+  recordProtocolFeatures,
+} from "./host-capabilities"
 import { toWebSocketBase } from "@/lib/network/ws-url"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
 import { isCapacitor } from "@/lib/tauri"
@@ -216,16 +220,21 @@ export class RemoteTerminalSession extends BaseTerminalSession {
   }
 
   static async listLan(): Promise<SessionInfo[]> {
+    const hostKey = currentTerminalHostKey()
     const endpoint = await endpointResolver()
     if (!endpoint) throw new TerminalSessionError("unpaired", "terminal host is not paired")
     const remoteHost = endpointHost(endpoint)
-    const infos = await RemoteTerminalSession.listWithConnection(() => openLanConnection(endpoint))
+    const infos = await RemoteTerminalSession.listWithConnection(
+      () => openLanConnection(endpoint),
+      hostKey
+    )
     return infos.map((info) => ({ ...info, remoteHost }))
   }
 
   static async listWan(): Promise<SessionInfo[]> {
+    const hostKey = currentTerminalHostKey()
     const target = await captureWanTarget()
-    const infos = await RemoteTerminalSession.listWithConnection(target.connectionFactory)
+    const infos = await RemoteTerminalSession.listWithConnection(target.connectionFactory, hostKey)
     return infos.map((info) => ({ ...info, remoteHost: target.remoteHost }))
   }
 
@@ -284,10 +293,10 @@ export class RemoteTerminalSession extends BaseTerminalSession {
    * PATH and profile mutations are refused for remote identities anyway) and
    * answers with the ack that carries its description.
    */
-  static async describeHost(): Promise<void> {
+  static async describeHost(hostKey: string = currentTerminalHostKey()): Promise<void> {
     for (const connectionFactory of RemoteTerminalSession.connectionFactoryChain()) {
       try {
-        await RemoteTerminalSession.describeHostWithConnection(connectionFactory)
+        await RemoteTerminalSession.describeHostWithConnection(connectionFactory, hostKey)
         return
       } catch {
         // Fall through to the next transport; the caller treats a fully failed
@@ -297,7 +306,8 @@ export class RemoteTerminalSession extends BaseTerminalSession {
   }
 
   private static async describeHostWithConnection(
-    connectionFactory: RemoteConnectionFactory
+    connectionFactory: RemoteConnectionFactory,
+    hostKey: string
   ): Promise<void> {
     const connection = await connectionFactory()
     const session = new RemoteTerminalSession(
@@ -308,12 +318,14 @@ export class RemoteTerminalSession extends BaseTerminalSession {
     try {
       const response = await session.sendCommand(TerminalFrameKind.Hello, EMPTY_SESSION_ID)
       const ack = decodeTerminalJson<{ host?: unknown; protocolFeatures?: unknown }>(response)
-      recordHostCapabilities(ack.host)
+      // Stamped with the host the probe set out for: a switch while it was in
+      // flight must not file this answer under the newly selected host.
+      recordHostCapabilities(ack.host, hostKey)
       // The hello ack is the only frame that carries the feature list (Rust
       // pins that), so this is the one place it can be learned. Reading it here
       // rather than at each call site means the probe the spawn path already
       // runs doubles as the protocol negotiation `protocol.rs` requires.
-      recordProtocolFeatures(ack.protocolFeatures)
+      recordProtocolFeatures(ack.protocolFeatures, hostKey)
     } finally {
       session.intentionalClose = true
       session.disposeConnectionListeners()
@@ -338,7 +350,8 @@ export class RemoteTerminalSession extends BaseTerminalSession {
   }
 
   private static async listWithConnection(
-    connectionFactory: RemoteConnectionFactory
+    connectionFactory: RemoteConnectionFactory,
+    hostKey: string
   ): Promise<SessionInfo[]> {
     const connection = await connectionFactory()
     const session = new RemoteTerminalSession(
@@ -352,7 +365,7 @@ export class RemoteTerminalSession extends BaseTerminalSession {
       // The snapshot describes the host it snapshots. Recording it here is what
       // makes the reattach-at-mount path double as the capability probe, so the
       // dock's first spawn already knows which shell the host has.
-      recordHostCapabilities(snapshot.host)
+      recordHostCapabilities(snapshot.host, hostKey)
       return snapshot.sessions
     } finally {
       session.intentionalClose = true

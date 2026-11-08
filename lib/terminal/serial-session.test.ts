@@ -1,17 +1,25 @@
 /**
  * @jest-environment jsdom
  *
- * Pins the three places a serial session is NOT a PTY, because each one is a
+ * Pins the places a serial session is NOT a PTY, because each one is a
  * base-class assumption that a cable cannot answer: resize is a no-op, the
- * exit carries no code, and a failed write must throw rather than resolve.
+ * exit carries no code, a failed write must throw rather than resolve, and a
+ * detach closes the port because nothing could reattach to it.
  */
 
 const subscribeMock = jest.fn()
-jest.mock("@/lib/tauri", () => ({
-  transport: {
+const routingSubscribeMock = jest.fn(() => () => undefined)
+// The port is this machine's, so its topics come from the LOCAL transport. The
+// routing one follows whichever Host the desktop selected and must stay unused.
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: {
     subscribe: (topic: string, handler: (payload: unknown) => void) =>
       subscribeMock(topic, handler),
   },
+  transport: { subscribe: () => routingSubscribeMock() },
+}))
+jest.mock("@/lib/tauri", () => ({
+  transport: { subscribe: () => routingSubscribeMock() },
 }))
 
 const openSerialPortMock = jest.fn()
@@ -86,6 +94,17 @@ it("opens, subscribes, and only then attaches", async () => {
   expect(handlers.has(serialStatusTopic("sess-1"))).toBe(true)
   expect(calls).toEqual(["open", "subscribe", "subscribe", "attach"])
   expect(attachSerialPortMock).toHaveBeenCalledWith("sess-1")
+})
+
+/**
+ * Writes are direct local IPC. Subscribing through the routing transport moved
+ * the port's output to a remote Host the moment one was selected, while
+ * keystrokes still went to the cable — a probe sent `ABC` and saw `AC`.
+ */
+it("listens on the local transport, never the Host-routing one", async () => {
+  await SerialTerminalSession.open(config)
+  expect(subscribeMock).toHaveBeenCalledTimes(2)
+  expect(routingSubscribeMock).not.toHaveBeenCalled()
 })
 
 /**
@@ -169,12 +188,28 @@ it("decodes base64 to bytes, including high bytes a text decoder would mangle", 
   expect(Array.from(decodeBase64(btoa("\x00\xff\x7f")))).toEqual([0, 255, 127])
 })
 
-it("detaches its subscriptions without closing the serial port", async () => {
+/**
+ * A detached PTY lives on in the durable host and is listed for reattach. A
+ * serial port has no such owner: detaching used to leave it open with no way
+ * back, holding the device busy for any later open.
+ */
+it("closes the port on detach, since nothing could reattach to it", async () => {
   const session = await SerialTerminalSession.open(config)
+  const exits: (number | null)[] = []
+  session.onExit((code) => exits.push(code))
+  expect(session.reattachable).toBe(false)
   await session.detach()
   expect(handlers.size).toBe(0)
-  expect(closeSerialPortMock).not.toHaveBeenCalled()
-  expect(session.info.alive).toBe(true)
+  expect(closeSerialPortMock).toHaveBeenCalledWith("sess-1")
+  expect(session.connectionStatus).toBe("disconnected")
+  expect(exits).toEqual([null])
+})
+
+it("closes the port once even when detach and kill both run", async () => {
+  const session = await SerialTerminalSession.open(config)
+  await session.detach()
+  await session.kill()
+  expect(closeSerialPortMock).toHaveBeenCalledTimes(1)
 })
 
 it("rejects PTY controller leases for a serial port", async () => {

@@ -759,6 +759,30 @@ describe("detachFromDock", () => {
     expect(store.removed).toEqual(["s-1"])
     expect(hooks.lifecycle.find((event) => event.kind === "killed")).toBeUndefined()
   })
+
+  /**
+   * A serial port closes on detach (nothing could reattach to it), so plugins
+   * must see the same lifecycle as an explicit kill.
+   */
+  it("reports a session nothing can reattach to as killed", async () => {
+    const hooks = makeFakeHooks()
+    const store = makeFakeStore()
+    const fake = Object.assign(makeFakeSession("serial-1"), { reattachable: false })
+    await spawnFromDock({
+      req: baseReq,
+      store,
+      hooks: hooks as never,
+      spawn: async () => fake as never,
+    })
+
+    await detachFromDock("serial-1", store, hooks as never)
+
+    expect(fake.detached).toBe(1)
+    expect(store.removed).toEqual(["serial-1"])
+    expect(hooks.lifecycle.find((event) => event.kind === "killed")).toMatchObject({
+      sessionId: "serial-1",
+    })
+  })
 })
 
 describe("killFromDock", () => {

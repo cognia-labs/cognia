@@ -69,6 +69,7 @@ import { selectSavedSshHosts } from "@/lib/terminal/saved-ssh-hosts"
 import { useSshConnect } from "@/hooks/terminal/use-ssh-connect"
 import { sshHostSettingsHref, terminalSettingsHref } from "@/lib/terminal/terminal-settings-link"
 import { resolveDefaultShell } from "@/lib/terminal/shell-detect"
+import { ensureHostCapabilities } from "@/lib/terminal/host-capabilities"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useTerminalStore, type TerminalSessionRow } from "@/stores/terminal/terminal-store"
@@ -178,11 +179,15 @@ export function MobileTerminalScreen() {
   )
 
   const handleNew = useCallback(async (shell?: string): Promise<string | null> => {
+    // The phone never runs the shell: with no project or user choice, the
+    // Host's own default wins over a guess from this device's user agent
+    // (which asked a Windows Host for `/bin/zsh` from an iPhone).
     const resolved =
       shell ??
       resolveDefaultShell({
         projectShell: project?.terminalConfig?.shell,
         settingShell: settingsShell,
+        hostDefaultShell: (await ensureHostCapabilities())?.defaultShell,
       })
     const cwd = project?.terminalConfig?.cwd?.trim() || project?.rootDir?.trim() || undefined
     const env = project?.terminalConfig?.env

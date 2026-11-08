@@ -49,6 +49,7 @@ import "./session"
 import { getExecutor } from "@/lib/workflow/nodes/registry"
 import {
   __clearRunSessionsForTesting,
+  closeRunSessions,
   listRunSessions,
   registerRunSession,
 } from "@/lib/terminal/headless-session-registry"
@@ -58,7 +59,11 @@ const { __mockUnattended } = jest.requireMock("@/stores/settings") as {
   __mockUnattended: { allowUnattendedExecution: boolean }
 }
 
-function makeCtx(params: Record<string, unknown>, runId = "run-1"): StepExecutionContext {
+function makeCtx(
+  params: Record<string, unknown>,
+  runId = "run-1",
+  signal: AbortSignal = new AbortController().signal
+): StepExecutionContext {
   return {
     runId,
     stepId: "step-1",
@@ -66,7 +71,7 @@ function makeCtx(params: Record<string, unknown>, runId = "run-1"): StepExecutio
     upstream: {},
     trigger: { workflowId: "wf-1", kind: "trigger.manual" as const, payload: null, originAt: 0 },
     params,
-    signal: new AbortController().signal,
+    signal,
     log: jest.fn(),
     resolveSecret: jest.fn(async () => ""),
   } as unknown as StepExecutionContext
@@ -84,6 +89,63 @@ beforeEach(() => {
 describe("action.terminal.session.open", () => {
   it("is registered", () => {
     expect(getExecutor("action.terminal.session.open", 1)).toBeDefined()
+  })
+
+  /**
+   * Cancel while the native spawn is pending: the run's cleanup finishes
+   * first, then the spawn succeeds. The late PTY used to be registered into a
+   * run that had already released everything, and outlived it.
+   */
+  it("closes a headless session whose spawn returned after the run was cancelled", async () => {
+    let resolveSpawn: (value: unknown) => void = () => undefined
+    mockInvoke.mockImplementation((command: string) =>
+      command === "terminal_headless_spawn"
+        ? new Promise((resolve) => {
+            resolveSpawn = resolve
+          })
+        : Promise.resolve(undefined)
+    )
+    const controller = new AbortController()
+    const reg = getExecutor("action.terminal.session.open", 1)!
+    const pending = reg.execute(makeCtx({ unattended: true }, "run-c", controller.signal))
+    await new Promise((r) => setTimeout(r, 0))
+    controller.abort()
+    await closeRunSessions("run-c")
+    resolveSpawn({ sessionId: "late-headless", shell: "bash" })
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(mockInvoke).toHaveBeenCalledWith("terminal_headless_kill", {
+      sessionId: "late-headless",
+    })
+    expect(listRunSessions("run-c")).toEqual([])
+  })
+
+  it("closes a late dock tab when the run released its resources mid-spawn", async () => {
+    let resolveSpawn: (value: unknown) => void = () => undefined
+    mockDock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSpawn = resolve
+        })
+    )
+    const reg = getExecutor("action.terminal.session.open", 1)!
+    // Not aborted: a run that ended some other way still released first.
+    const pending = reg.execute(makeCtx({}, "run-d"))
+    await new Promise((r) => setTimeout(r, 0))
+    await closeRunSessions("run-d")
+    resolveSpawn({ ok: true, sessionId: "late-tab" })
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(mockKillFromDock).toHaveBeenCalledWith("late-tab", {})
+    expect(listRunSessions("run-d")).toEqual([])
+  })
+
+  it("does not spawn at all for a run that is already cancelled", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const reg = getExecutor("action.terminal.session.open", 1)!
+    await expect(
+      reg.execute(makeCtx({ unattended: true }, "run-e", controller.signal))
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(mockInvoke).not.toHaveBeenCalled()
   })
 
   it("dock mode spawns via the dock handler and registers the session", async () => {

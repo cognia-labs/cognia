@@ -15,8 +15,11 @@ jest.mock("./transport-ws", () => ({
   },
 }))
 
+import { __resetRoutingForTests, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import type { Transport } from "@/lib/tauri/transport-types"
 import {
   __resetHostCapabilitiesForTests,
+  currentTerminalHostKey,
   ensureHostCapabilities,
   getHostCapabilities,
   parseHostCapabilities,
@@ -37,7 +40,20 @@ const HOST = {
   homeDir: "/root",
 }
 
+/** A stand-in for the remote transport the routing holder installs per switch. */
+function remoteTransport(): Transport {
+  return { call: jest.fn(), subscribe: jest.fn(() => () => undefined) } as unknown as Transport
+}
+
+const WINDOWS_HOST = {
+  platform: "windows",
+  defaultShell: "pwsh.exe",
+  availableShells: [{ path: "pwsh.exe", kind: "pwsh" }],
+  homeDir: "C:\\Users\\me",
+}
+
 beforeEach(() => {
+  __resetRoutingForTests()
   __resetHostCapabilitiesForTests()
   mockChain = []
   mockDescribeHost.mockReset()
@@ -224,5 +240,89 @@ describe("protocol features", () => {
     recordProtocolFeatures(["history", "sshForwarding"])
     expect(listener).toHaveBeenCalledTimes(2)
     stop()
+  })
+})
+
+/**
+ * A desktop can switch the Host it drives without reloading. Every cached answer
+ * belongs to the host it came from: handing host A's `/bin/bash` to a spawn on
+ * Windows host B, or to the desktop's own PTY, is the exact wrong-shell failure
+ * this cache exists to prevent.
+ */
+describe("host switches", () => {
+  it("does not hand one Host's answer to the next", async () => {
+    mockChain = ["ws"]
+    setActiveRemoteTransport(remoteTransport())
+    recordHostCapabilities(HOST)
+    recordProtocolFeatures(["history"])
+    expect(getHostCapabilities()).toEqual(HOST)
+
+    setActiveRemoteTransport(remoteTransport())
+    expect(getHostCapabilities()).toBeNull()
+    expect(getProtocolFeatures()).toBeNull()
+    // Unknown again, so the feature gate falls back to trying.
+    expect(hostSupportsProtocolFeature("sshForwarding")).toBe(true)
+
+    mockDescribeHost.mockImplementation(async () => {
+      recordHostCapabilities(WINDOWS_HOST)
+    })
+    await expect(ensureHostCapabilities()).resolves.toEqual(WINDOWS_HOST)
+    expect(mockDescribeHost).toHaveBeenCalledTimes(1)
+  })
+
+  it("forgets the remote Host's answer when the desktop returns to its own PTY", async () => {
+    mockChain = ["ws"]
+    setActiveRemoteTransport(remoteTransport())
+    recordHostCapabilities(WINDOWS_HOST)
+    setActiveRemoteTransport(null)
+    mockChain = ["tauri-channel"]
+    expect(getHostCapabilities()).toBeNull()
+    await expect(ensureHostCapabilities()).resolves.toBeNull()
+    expect(mockDescribeHost).not.toHaveBeenCalled()
+  })
+
+  it("drops an answer that arrives for a Host no longer selected", async () => {
+    mockChain = ["ws"]
+    setActiveRemoteTransport(remoteTransport())
+    const keyA = currentTerminalHostKey()
+    setActiveRemoteTransport(remoteTransport())
+    recordHostCapabilities(HOST, keyA)
+    recordProtocolFeatures(["history"], keyA)
+    expect(getHostCapabilities()).toBeNull()
+    expect(getProtocolFeatures()).toBeNull()
+  })
+
+  it("does not let a probe still running for the previous Host answer for the new one", async () => {
+    mockChain = ["ws"]
+    setActiveRemoteTransport(remoteTransport())
+    let finishFirst: () => void = () => undefined
+    mockDescribeHost.mockImplementationOnce((async (key: string) => {
+      await new Promise<void>((resolve) => {
+        finishFirst = resolve
+      })
+      recordHostCapabilities(HOST, key)
+    }) as never)
+    const first = ensureHostCapabilities()
+    // Let the first probe actually reach the host before switching away.
+    while (mockDescribeHost.mock.calls.length < 1) await new Promise((r) => setTimeout(r, 0))
+    setActiveRemoteTransport(remoteTransport())
+    mockDescribeHost.mockImplementationOnce((async (key: string) => {
+      recordHostCapabilities(WINDOWS_HOST, key)
+    }) as never)
+    const second = ensureHostCapabilities()
+    finishFirst()
+    await expect(first).resolves.toBeNull()
+    await expect(second).resolves.toEqual(WINDOWS_HOST)
+    expect(getHostCapabilities()).toEqual(WINDOWS_HOST)
+  })
+
+  it("tells subscribers when the selected Host changes", () => {
+    const listener = jest.fn()
+    const off = subscribeHostCapabilities(listener)
+    setActiveRemoteTransport(remoteTransport())
+    expect(listener).toHaveBeenCalledTimes(1)
+    off()
+    setActiveRemoteTransport(null)
+    expect(listener).toHaveBeenCalledTimes(1)
   })
 })

@@ -273,14 +273,26 @@ describe("action.terminal.waitForExit executor", () => {
   })
 
   it("delegates to wait_for_exit and routes success on exit 0", async () => {
-    mockRun.mockResolvedValue({ ok: true, sessionId: "tab-1", exitCode: 0, output: "pnpm build" })
+    mockRun.mockResolvedValue({
+      ok: true,
+      sessionId: "tab-1",
+      exitCode: 0,
+      output: "built in 3s",
+      command: "pnpm build",
+    })
     const reg = getExecutor("action.terminal.waitForExit", 1)!
     const result = await reg.execute(makeCtx({ params: { tabId: "tab-1", timeoutSec: 120 } }))
     const arg = mockRun.mock.calls[0][0]
     expect(arg.action).toBe("wait_for_exit")
     expect(arg.args).toEqual({ tabId: "tab-1", timeoutSec: 120 })
     expect(result.decision).toBe("success")
-    expect(result.output).toEqual({ exitCode: 0, sessionId: "tab-1", command: "pnpm build" })
+    // The command line and what it printed are separate fields.
+    expect(result.output).toEqual({
+      exitCode: 0,
+      sessionId: "tab-1",
+      command: "pnpm build",
+      output: "built in 3s",
+    })
   })
 
   it("throws by default on non-zero exit and branches with onFailure=branch", async () => {

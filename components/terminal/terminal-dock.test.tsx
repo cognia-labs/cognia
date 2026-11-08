@@ -638,6 +638,32 @@ describe("TerminalDock", () => {
     expect(mockDetachFromDock).not.toHaveBeenCalled()
   })
 
+  /**
+   * A serial port cannot be reattached, so "detach" would really close it.
+   * Closing its tab terminates it directly instead of offering a detach that
+   * names the opposite of what happens.
+   */
+  it("closes a tab that cannot be reattached without offering detach", async () => {
+    const { getLiveSession } = jest.requireMock("@/lib/terminal/session-registry") as {
+      getLiveSession: () => { reattachable?: boolean }
+    }
+    const live = getLiveSession()
+    live.reattachable = false
+    try {
+      seedProjectAndSession({ sessionId: "s-1" })
+      render(<TerminalDock />)
+      const closeBtn = screen.getAllByLabelText("close")[0]!
+      await act(async () => {
+        fireEvent.click(closeBtn)
+      })
+      expect(screen.queryByTestId("terminal-dock-close-confirm")).not.toBeInTheDocument()
+      expect(mockKillFromDock).toHaveBeenCalledWith("s-1", expect.any(Object))
+      expect(mockDetachFromDock).not.toHaveBeenCalled()
+    } finally {
+      delete live.reattachable
+    }
+  })
+
   it("toggles the maximized dock state from the toolbar button", () => {
     seedProjectAndSession({ sessionId: "s-1" })
     render(<TerminalDock />)

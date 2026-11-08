@@ -20,6 +20,64 @@ interface RunSessionEntry {
 
 const byRun = new Map<string, RunSessionEntry[]>()
 
+/**
+ * An `action.terminal.session.open` whose native spawn has not returned yet.
+ *
+ * The run's cleanup can finish while a spawn is still awaiting the backend (a
+ * cancel lands mid-spawn). Without a record of that open, the spawn's late
+ * success was registered into a run whose resources had already been released,
+ * and the PTY outlived the run. `closeRunSessions` marks every pending open of
+ * the run released, and {@link finishRunSessionOpen} refuses to register into
+ * one, so the opener closes what it got instead.
+ *
+ * A token, not a per-run tombstone: a run that pauses for input releases its
+ * resources too and then resumes under the same id, and its later opens must
+ * still register.
+ */
+export interface RunSessionOpen {
+  readonly runId: string
+  released: boolean
+}
+
+const pendingOpens = new Map<string, Set<RunSessionOpen>>()
+
+/** Announce an open about to await its spawn. Pair with finish or abandon. */
+export function beginRunSessionOpen(runId: string): RunSessionOpen {
+  const open: RunSessionOpen = { runId, released: false }
+  const set = pendingOpens.get(runId) ?? new Set<RunSessionOpen>()
+  set.add(open)
+  pendingOpens.set(runId, set)
+  return open
+}
+
+function forgetOpen(open: RunSessionOpen): void {
+  const set = pendingOpens.get(open.runId)
+  if (!set) return
+  set.delete(open)
+  if (set.size === 0) pendingOpens.delete(open.runId)
+}
+
+/**
+ * Register the session an open produced. Returns `false` — and registers
+ * nothing — when the run released its resources while the spawn was in
+ * flight; the caller then owns the session and must close it.
+ */
+export function finishRunSessionOpen(
+  open: RunSessionOpen,
+  sessionId: string,
+  mode: RunSessionMode
+): boolean {
+  forgetOpen(open)
+  if (open.released) return false
+  registerRunSession(open.runId, sessionId, mode)
+  return true
+}
+
+/** The spawn failed; nothing was opened. */
+export function abandonRunSessionOpen(open: RunSessionOpen): void {
+  forgetOpen(open)
+}
+
 /** Record a session opened by `runId`. */
 export function registerRunSession(runId: string, sessionId: string, mode: RunSessionMode): void {
   const list = byRun.get(runId) ?? []
@@ -53,21 +111,17 @@ export function deregisterRunSession(runId: string, sessionId: string): void {
  * and safe to call twice.
  */
 export async function closeRunSessions(runId: string): Promise<void> {
+  const opening = pendingOpens.get(runId)
+  if (opening) {
+    for (const open of opening) open.released = true
+    pendingOpens.delete(runId)
+  }
   const list = byRun.get(runId)
   byRun.delete(runId)
   if (!list || list.length === 0) return
   for (const entry of list) {
     try {
-      if (entry.mode === "headless") {
-        const { invoke } = await import("@tauri-apps/api/core")
-        await invoke("terminal_headless_kill", { sessionId: entry.sessionId })
-      } else {
-        const [{ killFromDock }, { useTerminalStore }] = await Promise.all([
-          import("./spawn-orchestrator"),
-          import("@/stores/terminal/terminal-store"),
-        ])
-        await killFromDock(entry.sessionId, useTerminalStore.getState())
-      }
+      await closeRunSession(entry.sessionId, entry.mode)
     } catch {
       // Best-effort cleanup — a dead backend or an already-closed session
       // must never mask the run's own result.
@@ -75,7 +129,22 @@ export async function closeRunSessions(runId: string): Promise<void> {
   }
 }
 
+/** Close one session the way its mode requires. Throws what the backend threw. */
+export async function closeRunSession(sessionId: string, mode: RunSessionMode): Promise<void> {
+  if (mode === "headless") {
+    const { invoke } = await import("@tauri-apps/api/core")
+    await invoke("terminal_headless_kill", { sessionId })
+    return
+  }
+  const [{ killFromDock }, { useTerminalStore }] = await Promise.all([
+    import("./spawn-orchestrator"),
+    import("@/stores/terminal/terminal-store"),
+  ])
+  await killFromDock(sessionId, useTerminalStore.getState())
+}
+
 /** Test-only: reset the ledger between cases. */
 export function __clearRunSessionsForTesting(): void {
   byRun.clear()
+  pendingOpens.clear()
 }

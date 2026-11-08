@@ -24,6 +24,7 @@
 import { registerNodeExecutor } from "@/lib/workflow/nodes/registry"
 import { registerRunResourceReleaser } from "@/lib/workflow/runtime/run-resources"
 import type { StepExecutionContext } from "@/types/workflow/visual"
+import type { RunSessionMode } from "@/lib/terminal/headless-session-registry"
 
 interface OpenParams {
   cwd?: string
@@ -52,58 +53,82 @@ registerNodeExecutor({
   execute: async (ctx: StepExecutionContext) => {
     const params = ctx.params as OpenParams
     const unattended = params.unattended === true
-    const { registerRunSession } = await import("@/lib/terminal/headless-session-registry")
+    const { beginRunSessionOpen, finishRunSessionOpen, abandonRunSessionOpen, closeRunSession } =
+      await import("@/lib/terminal/headless-session-registry")
+    throwIfAborted(ctx.signal)
 
-    if (unattended) {
-      const { useSettingsStore } = await import("@/stores/settings")
-      if (useSettingsStore.getState().settings?.terminal?.allowUnattendedExecution !== true) {
-        throw nonRetryable(
-          "action.terminal.session.open: unattended terminal execution is disabled " +
-            "(settings.terminal.allowUnattendedExecution)"
-        )
+    // The spawn below awaits a backend, and the run can be cancelled — and its
+    // resources released — before it returns. The open token lets a late
+    // success see that, and this executor then closes what it was handed
+    // rather than leaving a PTY no run owns.
+    const open = beginRunSessionOpen(ctx.runId)
+    const adopt = async (sessionId: string, mode: RunSessionMode): Promise<void> => {
+      if (!ctx.signal.aborted && finishRunSessionOpen(open, sessionId, mode)) return
+      abandonRunSessionOpen(open)
+      try {
+        await closeRunSession(sessionId, mode)
+      } catch {
+        // Best effort, like the run's own cleanup: the cancellation is the
+        // result to report.
       }
-      const { isTauri } = await import("@/lib/tauri")
-      if (!isTauri()) {
-        throw nonRetryable(
-          "action.terminal.session.open: unattended sessions require the desktop app"
-        )
+      throw abortError("action.terminal.session.open: the run ended before the session opened")
+    }
+
+    try {
+      if (unattended) {
+        const { useSettingsStore } = await import("@/stores/settings")
+        if (useSettingsStore.getState().settings?.terminal?.allowUnattendedExecution !== true) {
+          throw nonRetryable(
+            "action.terminal.session.open: unattended terminal execution is disabled " +
+              "(settings.terminal.allowUnattendedExecution)"
+          )
+        }
+        const { isTauri } = await import("@/lib/tauri")
+        if (!isTauri()) {
+          throw nonRetryable(
+            "action.terminal.session.open: unattended sessions require the desktop app"
+          )
+        }
+        const { invoke } = await import("@tauri-apps/api/core")
+        // ADR-0028 Phase 3.3 — honor the global sandbox toggle so an
+        // unattended workflow shell is confined just like the dock terminal.
+        const sandboxed = useSettingsStore.getState().settings?.terminal?.sandboxed ?? false
+        const spawned = (await invoke("terminal_headless_spawn", {
+          cwd: params.cwd,
+          shell: params.shell,
+          sandboxed,
+        })) as { sessionId: string; shell: string }
+        await adopt(spawned.sessionId, "headless")
+        return {
+          output: { sessionId: spawned.sessionId, shell: spawned.shell, mode: "headless" },
+          decision: "success",
+        }
       }
-      const { invoke } = await import("@tauri-apps/api/core")
-      // ADR-0028 Phase 3.3 — honor the global sandbox toggle so an
-      // unattended workflow shell is confined just like the dock terminal.
-      const sandboxed = useSettingsStore.getState().settings?.terminal?.sandboxed ?? false
-      const spawned = (await invoke("terminal_headless_spawn", {
-        cwd: params.cwd,
-        shell: params.shell,
-        sandboxed,
-      })) as { sessionId: string; shell: string }
-      registerRunSession(ctx.runId, spawned.sessionId, "headless")
+
+      const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
+      const result = await runTerminalDockAction({
+        chatSessionId: ctx.runId,
+        action: "spawn",
+        args: {
+          cwd: params.cwd,
+          shell: params.shell,
+          projectId: params.projectId,
+        },
+      })
+      if (!result.ok) {
+        throw nonRetryable(`action.terminal.session.open: ${result.reason}`)
+      }
+      if ("records" in result) {
+        throw nonRetryable("action.terminal.session.open: unexpected dock result shape")
+      }
+      await adopt(result.sessionId, "dock")
       return {
-        output: { sessionId: spawned.sessionId, shell: spawned.shell, mode: "headless" },
+        output: { sessionId: result.sessionId, mode: "dock" },
         decision: "success",
       }
-    }
-
-    const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
-    const result = await runTerminalDockAction({
-      chatSessionId: ctx.runId,
-      action: "spawn",
-      args: {
-        cwd: params.cwd,
-        shell: params.shell,
-        projectId: params.projectId,
-      },
-    })
-    if (!result.ok) {
-      throw nonRetryable(`action.terminal.session.open: ${result.reason}`)
-    }
-    if ("records" in result) {
-      throw nonRetryable("action.terminal.session.open: unexpected dock result shape")
-    }
-    registerRunSession(ctx.runId, result.sessionId, "dock")
-    return {
-      output: { sessionId: result.sessionId, mode: "dock" },
-      decision: "success",
+    } finally {
+      // Idempotent: a finished or adopted open has already left the pending set.
+      abandonRunSessionOpen(open)
     }
   },
 })
@@ -241,6 +266,17 @@ function clampTimeout(value: unknown): number | undefined {
   if (value < 5) return 5
   if (value > 600) return 600
   return Math.floor(value)
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError("action.terminal.session.open: the run was cancelled")
+}
+
+function abortError(message: string): Error {
+  const err = new Error(message) as Error & { retryable?: boolean }
+  err.name = "AbortError"
+  err.retryable = false
+  return err
 }
 
 function nonRetryable(message: string): Error {

@@ -96,7 +96,8 @@ describe("runTerminalDockAction — spawn", () => {
       kind: "ok",
       sessionId: "sess-1",
       exitCode: 0,
-      output: "pnpm test",
+      output: "Tests: 3 passed",
+      outputTruncated: false,
     })
 
     const result = await runTerminalDockAction({
@@ -111,7 +112,13 @@ describe("runTerminalDockAction — spawn", () => {
     expect(call.command).toBe("pnpm test")
     expect(call.timeoutMs).toBe(120_000)
     expect(call.newTab?.req.shell).toBe("/bin/bash")
-    expect(result).toEqual({ ok: true, sessionId: "sess-1", exitCode: 0, output: "pnpm test" })
+    expect(result).toEqual({
+      ok: true,
+      sessionId: "sess-1",
+      exitCode: 0,
+      output: "Tests: 3 passed",
+      outputTruncated: false,
+    })
   })
 
   it("uses spawnFromDock directly when no command is given (idle shell)", async () => {
@@ -150,7 +157,13 @@ describe("runTerminalDockAction — spawn", () => {
     mockedSettings.getState.mockReturnValue({
       settings: { terminal: { exposeDockToAgents: true, runInDockTimeoutSec: 30 } },
     } as never)
-    mockedRunInDock.mockResolvedValue({ kind: "ok", sessionId: "s", exitCode: 0, output: "" })
+    mockedRunInDock.mockResolvedValue({
+      kind: "ok",
+      sessionId: "s",
+      exitCode: 0,
+      output: "",
+      outputTruncated: false,
+    })
     await runTerminalDockAction({
       action: "spawn",
       args: { command: "true" },
@@ -173,13 +186,25 @@ describe("runTerminalDockAction — write", () => {
 
   it("delegates to runInDockTab and maps the ok outcome", async () => {
     withGate(true)
-    mockedRunInDock.mockResolvedValue({ kind: "ok", sessionId: "t1", exitCode: 2, output: "x" })
+    mockedRunInDock.mockResolvedValue({
+      kind: "ok",
+      sessionId: "t1",
+      exitCode: 2,
+      output: "x",
+      outputTruncated: true,
+    })
     const result = await runTerminalDockAction({
       action: "write",
       args: { tabId: "t1", command: "false" },
       chatSessionId: "c",
     })
-    expect(result).toEqual({ ok: true, sessionId: "t1", exitCode: 2, output: "x" })
+    expect(result).toEqual({
+      ok: true,
+      sessionId: "t1",
+      exitCode: 2,
+      output: "x",
+      outputTruncated: true,
+    })
   })
 
   it("maps 'denied' / 'timeout' / 'error' outcomes to the discriminated reasons", async () => {
@@ -324,17 +349,24 @@ describe("runTerminalDockAction — wait_for_exit", () => {
     expect(result).toEqual({ ok: false, reason: "user denied terminal access" })
   })
 
-  it("resolves with the next command_end event and the captured command", async () => {
+  it("resolves on command_end with the printed output, not the command line", async () => {
     withGate(true)
     withSession("tab", [{ cmd: "ls", exitCode: 0, endedAt: 7 }])
     mockedTrust.mockResolvedValue(true)
     let listener: ((ev: { kind: string; exit_code?: number | null }) => void) | null = null
+    let tap: ((bytes: Uint8Array) => void) | null = null
     const off = jest.fn()
+    const offTap = jest.fn()
     mockedGetLive.mockReturnValue({
       onIntegration: (l: (ev: { kind: string; exit_code?: number | null }) => void) => {
         listener = l
         return off
       },
+      tapData: (l: (bytes: Uint8Array) => void) => {
+        tap = l
+        return offTap
+      },
+      onExit: () => () => undefined,
     } as never)
 
     const promise = runTerminalDockAction({
@@ -345,20 +377,28 @@ describe("runTerminalDockAction — wait_for_exit", () => {
     // The handler awaits requestAgentTrust before attaching its
     // integration listener — yield enough microtasks for that to settle.
     for (let i = 0; i < 4; i++) await Promise.resolve()
-    if (!listener) throw new Error("listener not attached")
+    if (!listener || !tap) throw new Error("listeners not attached")
+    const emit = (text: string) =>
+      (tap as (bytes: Uint8Array) => void)(new TextEncoder().encode(text))
+    emit("\u001b]633;C;n\u0007a.txt\r\nb.txt\r\n")
+    // The PTY reader reports a chunk's integration events before the chunk.
     ;(listener as (ev: { kind: string; exit_code?: number | null }) => void)({
       kind: "command_end",
       exit_code: 0,
     })
+    emit("\u001b]633;D;n;0\u0007$ ")
 
     const result = await promise
     expect(result).toEqual({
       ok: true,
       sessionId: "tab",
       exitCode: 0,
-      output: "ls",
+      output: "a.txt\nb.txt",
+      outputTruncated: false,
+      command: "ls",
     })
     expect(off).toHaveBeenCalled()
+    expect(offTap).toHaveBeenCalled()
   })
 
   it("times out when no command_end arrives in window", async () => {
@@ -368,7 +408,11 @@ describe("runTerminalDockAction — wait_for_exit", () => {
       withSession("tab")
       mockedTrust.mockResolvedValue(true)
       const off = jest.fn()
-      mockedGetLive.mockReturnValue({ onIntegration: () => off } as never)
+      mockedGetLive.mockReturnValue({
+        onIntegration: () => off,
+        tapData: () => () => undefined,
+        onExit: () => () => undefined,
+      } as never)
 
       const promise = runTerminalDockAction({
         action: "wait_for_exit",

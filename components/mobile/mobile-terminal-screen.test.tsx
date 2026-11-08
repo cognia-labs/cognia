@@ -104,6 +104,13 @@ jest.mock("@/lib/terminal/pick-transport", () => ({
   selectTerminalTransportChain: () => (mockTransport === "unsupported" ? [] : [mockTransport]),
 }))
 
+// What the Host reported about itself; `null` = it has not introduced itself.
+const mockEnsureHostCapabilities = jest.fn(async (): Promise<unknown> => null)
+jest.mock("@/lib/terminal/host-capabilities", () => ({
+  ...jest.requireActual("@/lib/terminal/host-capabilities"),
+  ensureHostCapabilities: () => mockEnsureHostCapabilities(),
+}))
+
 import userEvent from "@testing-library/user-event"
 
 import { MobileTerminalScreen } from "./mobile-terminal-screen"
@@ -128,6 +135,7 @@ beforeEach(() => {
   useProjectStore.setState({ projects: [], activeProjectId: "proj-a" })
   useSettingsStore.setState({ settings: null })
   mockSpawnFromDock.mockClear()
+  mockEnsureHostCapabilities.mockReset().mockResolvedValue(null)
   mockDetachFromDock.mockClear()
   mockAccessoryInput.mockClear()
   mockAccessoryPaste.mockClear()
@@ -180,10 +188,42 @@ describe("MobileTerminalScreen", () => {
     expect(stub).toHaveAttribute("data-scrollback", "20000")
   })
 
-  it("calls spawnFromDock when + New is tapped", () => {
+  it("calls spawnFromDock when + New is tapped", async () => {
     render(<MobileTerminalScreen />)
     fireEvent.click(screen.getByTestId("mobile-terminal-new"))
-    expect(mockSpawnFromDock).toHaveBeenCalled()
+    await waitFor(() => expect(mockSpawnFromDock).toHaveBeenCalled())
+  })
+
+  /**
+   * The phone never runs the shell. With no project or user choice it used to
+   * guess from its own user agent, so an iPhone asked a Windows Host for
+   * `/bin/zsh`; the Host's reported default now wins over that guess.
+   */
+  it("spawns the Host's default shell when nothing more specific is set", async () => {
+    mockEnsureHostCapabilities.mockResolvedValue({
+      platform: "windows",
+      defaultShell: "pwsh.exe",
+      availableShells: [{ path: "pwsh.exe", kind: "pwsh" }],
+    })
+    render(<MobileTerminalScreen />)
+    fireEvent.click(screen.getByTestId("mobile-terminal-new"))
+    await waitFor(() => expect(mockSpawnFromDock).toHaveBeenCalled())
+    const call = mockSpawnFromDock.mock.calls[0] as unknown as [{ req: { shell: string } }]
+    expect(call[0].req.shell).toBe("pwsh.exe")
+  })
+
+  it("keeps the user's configured shell ahead of the Host's default", async () => {
+    useSettingsStore.setState({ settings: { terminal: { defaultShell: "/usr/bin/fish" } } } as never)
+    mockEnsureHostCapabilities.mockResolvedValue({
+      platform: "windows",
+      defaultShell: "pwsh.exe",
+      availableShells: [],
+    })
+    render(<MobileTerminalScreen />)
+    fireEvent.click(screen.getByTestId("mobile-terminal-new"))
+    await waitFor(() => expect(mockSpawnFromDock).toHaveBeenCalled())
+    const call = mockSpawnFromDock.mock.calls[0] as unknown as [{ req: { shell: string } }]
+    expect(call[0].req.shell).toBe("/usr/bin/fish")
   })
 
   /**
@@ -218,10 +258,10 @@ describe("MobileTerminalScreen", () => {
    * One tap is the primary action on this screen. Collapsing the split into a
    * menu button would trade it for a list the user usually does not need.
    */
-  it("still spawns a default session on the first tap", () => {
+  it("still spawns a default session on the first tap", async () => {
     render(<MobileTerminalScreen />)
     fireEvent.click(screen.getByTestId("mobile-terminal-new"))
-    expect(mockSpawnFromDock).toHaveBeenCalled()
+    await waitFor(() => expect(mockSpawnFromDock).toHaveBeenCalled())
   })
 
   it("back button calls router.back", () => {

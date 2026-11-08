@@ -11,6 +11,9 @@ jest.mock("@/lib/terminal/host-capabilities", () => {
 
 import { render, screen, act } from "@testing-library/react"
 
+import { __resetRoutingForTests, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import type { Transport } from "@/lib/tauri/transport-types"
+
 import {
   __resetHostCapabilitiesForTests,
   recordHostCapabilities,
@@ -31,6 +34,7 @@ const HOST = {
 }
 
 beforeEach(() => {
+  __resetRoutingForTests()
   __resetHostCapabilitiesForTests()
   mockEnsure.mockClear()
 })
@@ -60,5 +64,30 @@ describe("useHostCapabilities", () => {
       recordHostCapabilities(HOST)
     })
     expect(screen.getByTestId("shell")).toHaveTextContent("/bin/bash")
+  })
+
+  /**
+   * A desktop switching the Host it drives: the previous Host's shell must stop
+   * showing, and the newly selected Host must be asked.
+   */
+  it("drops the previous Host's answer and re-asks when the Host switches", () => {
+    const remote = { call: jest.fn(), subscribe: jest.fn(() => () => undefined) }
+    act(() => {
+      setActiveRemoteTransport(remote as unknown as Transport)
+    })
+    render(<Probe />)
+    act(() => {
+      recordHostCapabilities(HOST)
+    })
+    expect(screen.getByTestId("shell")).toHaveTextContent("/bin/bash")
+    mockEnsure.mockClear()
+    act(() => {
+      setActiveRemoteTransport({
+        call: jest.fn(),
+        subscribe: jest.fn(() => () => undefined),
+      } as unknown as Transport)
+    })
+    expect(screen.getByTestId("shell")).toHaveTextContent("unknown")
+    expect(mockEnsure).toHaveBeenCalledTimes(1)
   })
 })

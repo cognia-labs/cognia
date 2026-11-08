@@ -444,11 +444,15 @@ export function TerminalDock({
 
   // A host-owned process is live even when its shell is currently idle. Closing
   // its tab must detach by default instead of destroying it for every client.
+  // Only a session that can be reattached counts: detaching a serial port
+  // closes it (nothing could find it again), so offering "detach" for one
+  // would name the opposite of what happens.
   const groupHasLiveProcess = useCallback((anchorId: string) => {
     const state = useTerminalStore.getState()
-    return state
-      .panesForGroup(anchorId)
-      .some((id) => getLiveSession(id)?.info.alive !== false && !!getLiveSession(id))
+    return state.panesForGroup(anchorId).some((id) => {
+      const live = getLiveSession(id)
+      return !!live && live.info.alive !== false && live.reattachable !== false
+    })
   }, [])
 
   // Close entry point for the × button and the context menu. Routes through a

@@ -531,10 +531,16 @@ describe("TerminalInstance", () => {
     expect(details.querySelector('[data-state-key="readOnly"]')).not.toBeNull()
     expect(details.querySelector('[data-state-key="replayGap"]')).not.toBeNull()
 
-    const confirm = jest.spyOn(window, "confirm").mockReturnValueOnce(true)
+    // Taking control is confirmed in the app's own dialog, not `window.confirm`.
     fireEvent.click(screen.getByTestId("terminal-chip-take-control"))
-    expect(session.takeControl).toHaveBeenCalled()
-    confirm.mockRestore()
+    expect(session.takeControl).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole("alertdialog")
+    const confirmButton = dialog.querySelector(
+      '[data-testid="terminal-chip-take-control-confirm-confirm"]'
+    )
+    expect(confirmButton).not.toBeNull()
+    fireEvent.click(confirmButton!)
+    await waitFor(() => expect(session.takeControl).toHaveBeenCalled())
   })
 
   it("attaches a custom key event handler for clipboard shortcuts", async () => {

@@ -57,6 +57,7 @@ export abstract class BaseTerminalSession {
   abstract readonly info: SessionInfo
 
   protected readonly dataListeners = new Set<DataListener>()
+  private readonly dataTaps = new Set<DataListener>()
   protected readonly integrationListeners = new Set<IntegrationListener>()
   protected readonly exitListeners = new Set<ExitListener>()
   protected readonly controlStateListeners = new Set<ControlStateListener>()
@@ -88,6 +89,17 @@ export abstract class BaseTerminalSession {
   /** Stable session id from the info block. */
   get id(): string {
     return this.info.id
+  }
+
+  /**
+   * Whether this session can be found and reattached after {@link detach}.
+   *
+   * True for host-owned processes (the durable host lists them). A session
+   * that answers `false` closes on detach, and the dock does not offer
+   * "detach" as a way of closing it.
+   */
+  get reattachable(): boolean {
+    return true
   }
 
   /** True once an `exit` event has been observed. */
@@ -132,6 +144,23 @@ export abstract class BaseTerminalSession {
     }
     return () => {
       this.dataListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Observe output without becoming a data subscriber.
+   *
+   * `onData` is the renderer's subscription: the first subscriber drains the
+   * early-data buffer, and while one is attached nothing is buffered for the
+   * xterm that mounts later. A caller that only needs to *read* what a command
+   * printed (`awaitCommandEnd`) must not take either away from the dock, so a
+   * tap sees every chunk from now on, gets no replay, and leaves buffering
+   * exactly as it was.
+   */
+  tapData(listener: DataListener): () => void {
+    this.dataTaps.add(listener)
+    return () => {
+      this.dataTaps.delete(listener)
     }
   }
 
@@ -226,6 +255,13 @@ export abstract class BaseTerminalSession {
 
   protected dispatchData(bytes: Uint8Array): void {
     this.bufferRecentData(bytes)
+    for (const tap of this.dataTaps) {
+      try {
+        tap(bytes)
+      } catch (err) {
+        console.warn(`terminal-session(${this.info.id}): data tap threw:`, err)
+      }
+    }
     if (this.dataListeners.size === 0) {
       this.bufferPendingData(bytes)
       return

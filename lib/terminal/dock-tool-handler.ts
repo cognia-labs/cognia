@@ -20,6 +20,7 @@
  */
 
 import { requestAgentTrust } from "./agent-trust"
+import { awaitCommandEnd } from "./await-command-end"
 import { runInDockTab } from "./run-in-dock"
 import { spawnFromDock } from "./spawn-orchestrator"
 import { useSettingsStore } from "@/stores/settings"
@@ -40,7 +41,17 @@ export interface RunTerminalDockActionInput {
 
 /** Discriminated result the sidecar surfaces back to the model as JSON text. */
 export type DockActionResult =
-  | { ok: true; sessionId: string; exitCode?: number | null; output?: string }
+  | {
+      ok: true
+      sessionId: string
+      exitCode?: number | null
+      /** What the command printed, control sequences stripped. */
+      output?: string
+      /** The head of a very long output was dropped; the tail is kept. */
+      outputTruncated?: boolean
+      /** `wait_for_exit` only: the finished command line, from the tab's command ring. */
+      command?: string
+    }
   | { ok: true; records: Array<{ cmd: string; exitCode: number | null; endedAt: number }> }
   | { ok: false; reason: string }
 
@@ -233,38 +244,25 @@ async function runWaitForExit(input: RunTerminalDockActionInput): Promise<DockAc
   })
   if (!trusted) return { ok: false, reason: "user denied terminal access" }
 
-  const timeoutMs = pickTimeoutMs(args)
-
-  return new Promise<DockActionResult>((resolve) => {
-    let off: (() => void) | null = null
-    const timer = setTimeout(() => {
-      try {
-        off?.()
-      } catch {
-        /* noop */
-      }
-      resolve({ ok: false, reason: "timeout" })
-    }, timeoutMs)
-    off = session.onIntegration((event) => {
-      if (event.kind !== "command_end") return
-      clearTimeout(timer)
-      try {
-        off?.()
-      } catch {
-        /* noop */
-      }
-      void Promise.resolve().then(() => {
-        const updated = useTerminalStore.getState().sessions[tabId]
-        const last = updated?.lastCommands?.[updated.lastCommands.length - 1]
-        resolve({
-          ok: true,
-          sessionId: tabId,
-          exitCode: event.exit_code ?? null,
-          output: last?.cmd ?? "",
-        })
-      })
-    })
-  })
+  // The wait starts after the command did, so `output` is what it printed from
+  // here on — the stream cannot be read backwards.
+  const ended = await awaitCommandEnd(session, { timeoutMs: pickTimeoutMs(args) })
+  if (ended.kind === "timeout") return { ok: false, reason: "timeout" }
+  if (ended.kind === "exited") {
+    return { ok: false, reason: `session ${tabId} exited before the command finished` }
+  }
+  // `spawn-orchestrator` pushes the ring row from the same integration event;
+  // by the time the wait settles (after the end chunk) it has landed.
+  const updated = useTerminalStore.getState().sessions[tabId]
+  const last = updated?.lastCommands?.[updated.lastCommands.length - 1]
+  return {
+    ok: true,
+    sessionId: tabId,
+    exitCode: ended.exitCode,
+    output: ended.output,
+    outputTruncated: ended.truncated,
+    command: last?.cmd ?? "",
+  }
 }
 
 function mapRunInDockOutcome(outcome: Awaited<ReturnType<typeof runInDockTab>>): DockActionResult {
@@ -275,6 +273,7 @@ function mapRunInDockOutcome(outcome: Awaited<ReturnType<typeof runInDockTab>>):
         sessionId: outcome.sessionId,
         exitCode: outcome.exitCode,
         output: outcome.output,
+        outputTruncated: outcome.outputTruncated,
       }
     case "denied":
       return { ok: false, reason: "user denied terminal access" }

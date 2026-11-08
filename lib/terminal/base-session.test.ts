@@ -192,6 +192,55 @@ describe("BaseTerminalSession.onData", () => {
   })
 })
 
+describe("BaseTerminalSession.tapData", () => {
+  it("sees every chunk from the moment it attaches", () => {
+    const session = makeSession()
+    session.pushData(new Uint8Array([1]))
+    const seen: number[][] = []
+    const off = session.tapData((bytes) => seen.push(Array.from(bytes)))
+    session.pushData(new Uint8Array([2]))
+    off()
+    session.pushData(new Uint8Array([3]))
+    // No replay of what came before, nothing after unsubscribing.
+    expect(seen).toEqual([[2]])
+  })
+
+  /**
+   * A reader of command output (`awaitCommandEnd`) taps a tab whose xterm may
+   * not be mounted yet. If the tap counted as a subscriber it would drain the
+   * early-data buffer and the xterm would mount onto a blank screen.
+   */
+  it("leaves the early-data buffer for the next real subscriber", () => {
+    const session = makeSession()
+    const offTap = session.tapData(() => undefined)
+    session.pushData(new Uint8Array([7]))
+    session.pushData(new Uint8Array([8]))
+    offTap()
+    const replayed: number[][] = []
+    session.onData((bytes) => replayed.push(Array.from(bytes)))
+    expect(replayed).toEqual([[7], [8]])
+  })
+
+  it("isolates a throwing tap from subscribers", () => {
+    const session = makeSession()
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+    session.tapData(() => {
+      throw new Error("boom")
+    })
+    const seen: number[] = []
+    session.onData((bytes) => seen.push(bytes[0]))
+    session.pushData(new Uint8Array([5]))
+    expect(seen).toEqual([5])
+    warn.mockRestore()
+  })
+})
+
+describe("BaseTerminalSession.reattachable", () => {
+  it("defaults to reattachable, the durable host's contract", () => {
+    expect(makeSession().reattachable).toBe(true)
+  })
+})
+
 describe("BaseTerminalSession control state", () => {
   it("publishes controller acquisition and release", async () => {
     const session = makeSession()

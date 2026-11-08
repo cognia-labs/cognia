@@ -255,7 +255,13 @@ registerNodeExecutor({
       )
     }
     return {
-      output: { exitCode, sessionId: result.sessionId, command: result.output ?? "" },
+      output: {
+        exitCode,
+        sessionId: result.sessionId,
+        command: result.command ?? "",
+        // Printed from the moment the wait began; the stream is not readable backwards.
+        output: result.output ?? "",
+      },
       decision,
       logs: [
         {
