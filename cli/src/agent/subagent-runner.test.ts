@@ -592,6 +592,13 @@ describe("runCliSubagent", () => {
     expect(await permission({ toolName: "mcp__cognia-tools__bash", input: {} })).toEqual({
       decision: "allow",
     })
+    expect(
+      await permission({
+        toolName: "mcp__cognia-tools__bash",
+        input: {},
+        requiresHumanApproval: true,
+      } as never)
+    ).toEqual({ decision: "deny", message: expect.stringContaining("human") })
     expect(await permission({ toolName: "unapproved", input: {} })).toEqual(
       await gate({ toolName: "unapproved", input: {} } as never)
     )

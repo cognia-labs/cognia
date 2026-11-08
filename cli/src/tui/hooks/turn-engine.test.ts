@@ -201,6 +201,18 @@ describe("createGateController", () => {
 })
 
 describe("createGateController auto-approve", () => {
+  it("queues a human checkpoint for the overlay even when every tool is auto-approved", async () => {
+    const opened = jest.fn()
+    const autoApprove = jest.fn(() => true)
+    const gate = createGateController(opened, undefined, autoApprove)
+    const request = { toolName: "bash", requiresHumanApproval: true } as never
+    const decision = gate.responder(request)
+    expect(opened).toHaveBeenCalledWith(request)
+    expect(autoApprove).not.toHaveBeenCalled()
+    expect(gate.isPending()).toBe(true)
+    gate.resolve({ decision: "allow" })
+    await expect(decision).resolves.toEqual({ decision: "allow" })
+  })
   it("auto-resolves allow without showing the overlay when autoApprove returns true", async () => {
     const requests: string[] = []
     const gate = createGateController(

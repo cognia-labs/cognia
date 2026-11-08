@@ -798,6 +798,10 @@ describe("createAgentSession", () => {
       (await captureOptions.onPermissionRequest({ ...request, requiresPerCallApproval: true }))
         .decision
     ).toBe("deny")
+    expect(
+      (await captureOptions.onPermissionRequest({ ...request, requiresHumanApproval: true }))
+        .decision
+    ).toBe("deny")
   })
 
   it("threads the resolved agent mode into the build context (and folds its permission)", async () => {

@@ -179,6 +179,19 @@ function stubCodexExtension(
 }
 
 describe("external-agent permission adaptation", () => {
+  it("preserves managed human checkpoints and normalizes remembered decisions to once", () => {
+    const human = { ...request, requiresHumanApproval: true }
+    expect(acpPermissionRequestToCli(human, "fallback")).toMatchObject({
+      requiresHumanApproval: true,
+      requiresPerCallApproval: true,
+      suppressAlwaysAllowRule: true,
+    })
+    expect(captureDecisionToAcp(human, { decision: "allow_always" })).toMatchObject({
+      granted: true,
+      rememberChoice: false,
+      scope: "once",
+    })
+  })
   const request: AcpPermissionRequest = {
     id: "permission-1",
     requestId: "request-1",

@@ -381,8 +381,9 @@ export async function runCliSubagent(
       onPermissionRequest: async (request) => {
         deps.signal?.throwIfAborted()
         if (
-          deps.approvedTools.has(request.toolName) ||
-          deps.approvedTools.has(approvalKey(request.toolName, request.input))
+          !request.requiresHumanApproval &&
+          (deps.approvedTools.has(request.toolName) ||
+            deps.approvedTools.has(approvalKey(request.toolName, request.input)))
         )
           return { decision: "allow" }
         const decision = await deps.gate(request, controller.signal)

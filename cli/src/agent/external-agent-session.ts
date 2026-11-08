@@ -432,6 +432,13 @@ export function acpPermissionRequestToCli(
     toolUseID: request.toolCallId ?? request.id,
     toolName: request.toolInfo.name,
     input: request.rawInput ?? {},
+    ...(request.requiresHumanApproval
+      ? {
+          requiresHumanApproval: true,
+          requiresPerCallApproval: true,
+          suppressAlwaysAllowRule: true,
+        }
+      : {}),
     ...(request.title ? { title: request.title } : {}),
     displayName: request.toolInfo.name,
     // The agent's own words about the call, from either field it may use. Pi
@@ -449,7 +456,8 @@ export function captureDecisionToAcp(
   request: AcpPermissionRequest,
   decision: CapturePermissionDecision
 ): AcpPermissionResponse {
-  const requestedRememberChoice = decision.decision === "allow_always"
+  const requestedRememberChoice =
+    decision.decision === "allow_always" && !request.requiresHumanApproval
   const wantedKinds =
     decision.decision !== "deny"
       ? requestedRememberChoice
@@ -463,7 +471,7 @@ export function captureDecisionToAcp(
   const granted =
     decision.decision !== "deny" &&
     (!optionsConstrainChoice || selectedOption?.kind.startsWith("allow") === true)
-  const rememberChoice = selectedOption?.kind === "allow_always"
+  const rememberChoice = !request.requiresHumanApproval && selectedOption?.kind === "allow_always"
   return {
     requestId: request.requestId ?? request.id,
     granted,
@@ -1782,6 +1790,7 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
               // producing TWO user prompts. Native agent tools fall through to
               // Cognia's overlay as before.
               if (
+                !request.requiresHumanApproval &&
                 isCogniaProjectedTool(
                   request.toolInfo?.name,
                   cogniaServers.map((server) => server.name)

@@ -16,6 +16,22 @@ function req(toolName: string): PermissionRequestEvent {
 }
 
 describe("createPermissionGate", () => {
+  it("requires a person for managed checkpoints despite yes, allowlists and safe commands", async () => {
+    const request = {
+      ...req("bash"),
+      input: { command: "git status" },
+      requiresHumanApproval: true,
+    }
+    const prompt = jest.fn(async () => true)
+    expect(await createPermissionGate({ yes: true, allow: ["bash"], prompt })(request)).toEqual({
+      decision: "allow",
+    })
+    expect(prompt).toHaveBeenCalledWith(request)
+    const denied = await createPermissionGate({ yes: true, allow: ["bash"] })(request)
+    expect(denied.decision).toBe("deny")
+    expect(denied.message).toMatch(/human/)
+    expect(denied.message).not.toMatch(/--yes|--allow/)
+  })
   it("allows everything with yes", async () => {
     const gate = createPermissionGate({ yes: true })
     expect(await gate(req("write"))).toEqual({ decision: "allow" })

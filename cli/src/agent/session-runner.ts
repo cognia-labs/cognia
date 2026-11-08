@@ -888,6 +888,7 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
             // answered from a remembered approval.
             if (
               !request.requiresPerCallApproval &&
+              !request.requiresHumanApproval &&
               (approved.has(request.toolName) ||
                 approved.has(approvalKey(request.toolName, request.input)))
             ) {

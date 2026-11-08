@@ -55,6 +55,17 @@ function denyDecision(toolName: string): CapturePermissionDecision {
 export function createPermissionGate(opts: PermissionGateOptions): PermissionResponder {
   const allowSet = new Set(opts.allow ?? [])
   return async (req) => {
+    if (req.requiresHumanApproval) {
+      try {
+        if (opts.prompt && (await opts.prompt(req))) return allowDecision()
+      } catch {
+        // An unavailable or cancelled human prompt cannot grant authority.
+      }
+      return {
+        decision: "deny",
+        message: "This managed checkpoint requires a fresh human approval.",
+      }
+    }
     if (opts.yes) return allowDecision()
     if (allowSet.has(req.toolName)) return allowDecision()
     if (commandIsAutoApprovable(req.toolName, req.input)) return allowDecision()

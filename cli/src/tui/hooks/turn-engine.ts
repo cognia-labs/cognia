@@ -185,7 +185,7 @@ export function createGateController(
         // A silent auto-approve (the live "Allow always" set) still takes its
         // place in the queue. Resolving it on the spot let a pre-approved tool
         // run while the user was still deciding about the one in front of it.
-        const silent = autoApprove?.(req) === true
+        const silent = !req.requiresHumanApproval && autoApprove?.(req) === true
         queue.push({ req, resolve, ...(silent ? { silent: true } : {}) })
         if (queue.length === 1) advance()
       }
