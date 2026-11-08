@@ -156,7 +156,7 @@ the storage of record for what a `kind` means. This ADR deliberately does
 not restate the list per kind: it would be a second copy that drifts.
 
 A 5th A2UI MCP tool `a2ui_handle_connector_action` joins the bridge
-(`lib/a2ui/mcp-tool-schemas.ts`) and is the projection endpoint when a
+(`packages/a2ui-core/src/mcp-tool-schemas.ts`) and is the projection endpoint when a
 custom callback handler wants to inject an action onto a specific surface.
 
 ### Computer-use isolation

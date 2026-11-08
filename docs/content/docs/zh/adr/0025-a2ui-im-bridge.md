@@ -102,7 +102,7 @@ Telegram 文本编辑会合并支持的文本调用及内联键盘；包含媒�
 
 词表本身在 `types/connectors/interaction.ts`，那里才是「一个 `kind` 是什么意思」的真相源。本 ADR 刻意不逐条复述：那会是第二份会漂移的副本。
 
-第五A2UI MCP工具`a2ui_handle_connector_action`加入桥接（`lib/a2ui/mcp-tool-schemas.ts`），是自定义回调处理器想向特定接口注入动作时的投影端点。
+第五A2UI MCP工具`a2ui_handle_connector_action`加入桥接（`packages/a2ui-core/src/mcp-tool-schemas.ts`），是自定义回调处理器想向特定接口注入动作时的投影端点。
 
 ### 计算机使用隔离
 

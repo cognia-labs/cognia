@@ -115,7 +115,7 @@ flowchart LR
 
 ### `processMessage` 路由
 
-`processMessage` (`351-373`) 从 `get()` (`352-358`) 解构相关动作，然后跑一条由五个类型守卫组成的 `if/else` 链（从 `@/lib/a2ui/parser` 导入）：
+`processMessage` (`351-373`) 从 `get()` (`352-358`) 解构相关动作，然后跑一条由五个类型守卫组成的 `if/else` 链（从 `@cognia/a2ui-core/parser` 导入）：
 
 | 守卫 | 行号 | 调用 |
 | --- | --- | --- |
@@ -153,7 +153,7 @@ store 同时也是唯一的出口：用户变更通过 `globalEventEmitter` 流�
 
 ```mermaid
 flowchart LR
-  SV["setDataValue 321"] --> SVP["setValueByPath 326<br/>(@/lib/a2ui/data-model)"]
+  SV["setDataValue 321"] --> SVP["setValueByPath 326<br/>(@cognia/a2ui-core/data-model)"]
   SVP --> EDC["emitDataChange 341"]
   EDC --> CDC["createDataModelChange 440<br/>(@/lib/a2ui/events)"]
   CDC --> EH["push eventHistory 443"]
@@ -165,7 +165,7 @@ flowchart LR
   class CDC,EH,GEE b
 ```
 
-`emitAction` (`426`) 遵循对称路径：`createUserAction` (`427`) → push `eventHistory` 并按 `maxEventHistory` 切片 (`431`) → `globalEventEmitter.emitAction` (`436`)。`updateDataModel` (`298`) 通过 `deepMerge` /`deepClone` (`306`，来自 `@/lib/a2ui/data-model`) 合并。
+`emitAction` (`426`) 遵循对称路径：`createUserAction` (`427`) → push `eventHistory` 并按 `maxEventHistory` 切片 (`431`) → `globalEventEmitter.emitAction` (`436`)。`updateDataModel` (`298`) 通过 `deepMerge` /`deepClone` (`306`，来自 `@cognia/a2ui-core/data-model`) 合并。
 
 ### 选择器
 

@@ -233,7 +233,7 @@ for data — so that data-model churn doesn't re-render action handlers.
 
 The two providers nest: `A2UIActionsCtx.Provider` (L136, value `actionsValue` L108) wraps
 `A2UIDataCtx.Provider` (L137, value `dataValue` L122). Hooks are re-exported (L143-151) from
-`@/hooks/a2ui/use-a2ui-context`. The `resolve*OrPath` helpers come from `@/lib/a2ui/data-model`
+`@/hooks/a2ui/use-a2ui-context`. The `resolve*OrPath` helpers come from `@cognia/a2ui-core/data-model`
 (L13-19) and turn declarative bindings (literal values **or** JSON-Pointer paths) into concrete
 runtime values — see [protocol core](./protocol-core).
 
@@ -332,7 +332,7 @@ Three behaviors make a chat surface usable before and after the turn seals
 
 - **Streaming preview.** While a turn streams, an ` ```a2ui ` fence renders through
   `components/chat/renderers/a2ui-streaming-fence.tsx` (registered in
-  `components/chat/markdown/streaming-fence-renderers.tsx`). `lib/a2ui/streaming-preview.ts` cuts
+  `components/chat/markdown/streaming-fence-renderers.tsx`). `packages/a2ui-core/src/streaming-preview.ts` cuts
   the prefix back to its last structurally complete value, so no string or number is ever shown
   half-written, and draws it into a read-only, `inert` surface under the reserved
   `a2ui-preview:` prefix, which model-written payloads may not use. Computed declarations wait for

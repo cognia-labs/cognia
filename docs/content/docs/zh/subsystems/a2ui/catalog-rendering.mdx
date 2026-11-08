@@ -200,7 +200,7 @@ surface 还订阅 `globalEventEmitter.onAction` / `onDataChange`（L50、L58）�
 | array 绑定 | `resolveArray` | 81 | data-model 辅助 |
 | 子渲染 | `renderChild` | 95 | `components[id]` 未命中 → warn + `null`（L98-101），否则 `renderComponent(component)`（L102） |
 
-两个 provider 嵌套：`A2UIActionsCtx.Provider`（L136，值 `actionsValue` L108）包裹 `A2UIDataCtx.Provider`（L137，值 `dataValue` L122）。Hooks 从 `@/hooks/a2ui/use-a2ui-context` 再导出（L143-151）。`resolve*OrPath` 辅助来自 `@/lib/a2ui/data-model`（L13-19），把声明式绑定（字面值**或** JSON-Pointer 路径）转成具体运行时值——参见 [protocol core](./protocol-core)。
+两个 provider 嵌套：`A2UIActionsCtx.Provider`（L136，值 `actionsValue` L108）包裹 `A2UIDataCtx.Provider`（L137，值 `dataValue` L122）。Hooks 从 `@/hooks/a2ui/use-a2ui-context` 再导出（L143-151）。`resolve*OrPath` 辅助来自 `@cognia/a2ui-core/data-model`（L13-19），把声明式绑定（字面值**或** JSON-Pointer 路径）转成具体运行时值——参见 [protocol core](./protocol-core)。
 
 ## 错误隔离与 Widget Shell
 
@@ -279,7 +279,7 @@ flowchart LR
 
 三项行为让聊天中的 Surface 在回合封存前后都可用（[ADR-0240](/docs/adr/0240-a-generated-surface-streams-answers-and-computes)）：
 
-- **流式预览。** 回合流式输出时，` ```a2ui ` 围栏经 `components/chat/renderers/a2ui-streaming-fence.tsx` 渲染（注册于 `components/chat/markdown/streaming-fence-renderers.tsx`）。`lib/a2ui/streaming-preview.ts` 把前缀回退到最后一个结构完整的值，字符串和数字绝不会显示半截，并绘制到保留前缀 `a2ui-preview:` 下的只读、`inert` Surface，模型写出的负载不得使用该前缀。计算值声明等围栏完整后才生效，在此之前数据更新一律合并。预览每 120 ms 最多解析一次，嵌套超过 64 层即放弃，插件 Surface 钩子会跳过它，它从不持久化，封存后的 `a2ui` part 替换它时即被删除。
+- **流式预览。** 回合流式输出时，` ```a2ui ` 围栏经 `components/chat/renderers/a2ui-streaming-fence.tsx` 渲染（注册于 `components/chat/markdown/streaming-fence-renderers.tsx`）。`packages/a2ui-core/src/streaming-preview.ts` 把前缀回退到最后一个结构完整的值，字符串和数字绝不会显示半截，并绘制到保留前缀 `a2ui-preview:` 下的只读、`inert` Surface，模型写出的负载不得使用该前缀。计算值声明等围栏完整后才生效，在此之前数据更新一律合并。预览每 120 ms 最多解析一次，嵌套超过 64 层即放弃，插件 Surface 钩子会跳过它，它从不持久化，封存后的 `a2ui` part 替换它时即被删除。
 - **源码兜底。** 负载未生成 Surface 时，`A2UIPart` 显示围栏源码并附提示，不再什么都不渲染。
 - **动作回传。** 聊天中渲染的 Surface（`a2ui` part、Markdown 围栏或携带 A2UI 的工具结果）绑定到渲染它的转录列表所属的会话（`components/chat/transcript-session-context.tsx`、`use-a2ui-chat-binding.ts`、`lib/a2ui/chat-action-routing.ts`）；同一 Surface id 在多处渲染时，由最新的存活渲染接收点击。内置动作 provider 把路由器装为兜底处理：不归任何内置迷你应用处理器管的 `Button`、`FormGroup` 提交或 `Link` 动作，会成为该会话的下一条用户消息，内容为控件标签加一个携带动作与 Surface 数据模型的 `a2ui-action` 块。表格、图表、分页、标签页和数据变化从不发送；1.5 秒内的同一手势会被丢弃；未绑定的 Surface（迷你应用、编辑器、预览）保持本地处理。
 

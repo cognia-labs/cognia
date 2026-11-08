@@ -10,7 +10,7 @@ description: A2UI 的 MCP 工具 schema 集合，以及三条跨进程派发路�
 <TLDR>
   A2UI 由**运行在其他进程中的智能体** 产出 —— 外部 CLI、内置的 Claude Agent SDK 会话、ACP 原生工具
   —— 但它必须渲染进**唯一**的 webview React 树。本页描述使其成立的桥接层：MCP **工具 schema**
-  （`lib/a2ui/mcp-tool-schemas.ts`）、独立的 stdio MCP 服务器（`sidecar/a2ui-mcp.mjs`）、进程内 SDK
+  （`packages/a2ui-core/src/mcp-tool-schemas.ts`）、独立的 stdio MCP 服务器（`sidecar/a2ui-mcp.mjs`）、进程内 SDK
   服务器（`sidecar/a2ui-tools/index.mjs`），以及 Rust 本地 IPC 监听器（`src-tauri/src/a2ui_bridge/`）。
   三条相互独立的派发路径汇聚到 `useA2UIStore.getState().processMessage`。传输消息的封装格式固定为
   `{ type: "a2ui_dispatch", message }`；Tauri 通道恒为 `a2ui://dispatch`；工具名恒以
@@ -46,7 +46,7 @@ A2UI 的渲染器、parser 与 store 都活在 **webview** 里。但 A2UI 消息
 
 ## 工具 Schema 集合
 
-`lib/a2ui/mcp-tool-schemas.ts` 是桥接工具的**权威 JSON-Schema 声明**（`A2UI_BRIDGE_TOOLS`，`:53`
+`packages/a2ui-core/src/mcp-tool-schemas.ts` 是桥接工具的**权威 JSON-Schema 声明**（`A2UI_BRIDGE_TOOLS`，`:53`
 处的只读数组）。它声明了**五个**工具。每个工具名都由 `namespacedA2UIToolNames`（`:228`）投射进 MCP
 命名空间，在 `:229` 把每个工具映射为 `` mcp__${A2UI_BRIDGE_SERVER_NAME}__${t.name} ``。
 

@@ -69,7 +69,7 @@ test("exposes the five contracted tool names", () => {
 })
 ```
 
-The renderer keeps a parallel typed copy in `lib/a2ui/mcp-tool-schemas.ts` (`A2UI_BRIDGE_TOOLS`, line 53)
+The renderer keeps a parallel typed copy in `packages/a2ui-core/src/mcp-tool-schemas.ts` (`A2UI_BRIDGE_TOOLS`, line 53)
 used to **seed the built-in `a2ui-bridge` row** (`buildA2UIBridgeMcpRow`, line 197), to detect that row
 (`isA2UIBridgeRow`), and to compute its namespaced tool names for projection to external agents.
 

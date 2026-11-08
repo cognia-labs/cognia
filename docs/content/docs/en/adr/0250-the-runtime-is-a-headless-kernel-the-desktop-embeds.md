@@ -403,7 +403,23 @@ Where an existing rule already owns a field, the field follows that rule:
     - `lib/companion/desktop-write-source.ts`: paired-device write commands.
     - `lib/sync/handlers/conversation-overrides.ts`: sync handlers.
     - `lib/db/connector-inbound-jobs.ts`: crash recovery still resumes connector jobs itself. It can follow the resume listener.
-    - `lib/scheduler/scheduler-db.ts`: its im-push payload sanitizer uses A2UI helpers.
+    - `lib/scheduler/scheduler-db.ts`: its im-push payload sanitizer uses A2UI helpers. Repaid by the next amendment.
+- **Amendment (2026-11-08): the pure A2UI core is a package, `@cognia/a2ui-core`.** The record is §25 of `docs/plans/2026-11-07-tools-contributions.md`.
+  - Why a port could not do it: the scheduler's store strips callback authority from every payload it writes, synchronously, because Radar writes a task inside its own Dexie transaction. A port loaded on first use commits that transaction early, so the store needs the sanitizer as a plain import. The sanitizer reads A2UI data-model paths, and a2ui is a module, so the kernel could not import it.
+  - What moved: `packages/a2ui-core/` (`@cognia/a2ui-core`) now holds the A2UI files that import no host code:
+    - the data model and JSON Pointer bindings (`data-model.ts`);
+    - computed fields (`computed.ts`);
+    - the component tree (`component-tree.ts`);
+    - the message parser (`parser.ts`);
+    - streaming previews (`streaming-preview.ts`);
+    - the a2ui-bridge MCP tool schemas (`mcp-tool-schemas.ts`);
+    - the outbound segment sanitizer (`segment-sanitize.ts`), taken from the connectors' `a2ui-to-segments.ts`.
+  - The package imports only contract types (`@cognia/plugin-contract`, `@cognia/agent-config-types`). It is source-only and outside the pnpm workspace, like `@cognia/feishu-protocol`, and is listed in `HOST_INDEPENDENT_PACKAGES`.
+  - Imports: every importer names `@cognia/a2ui-core/<file>`, and no shims were left behind. a2ui's `api` list dropped the four files that moved.
+  - Four direction edges were repaid: `scheduler-db -> connectors`, and the Claude adapter, `run-and-capture` and `builtin-mcp/resolve` into a2ui.
+  - Still open:
+    - `build-options` and `prompts/catalog` into a2ui: the A2UI prompts and system-prompt section should reach the kernel through a2ui's own `prompts` and `context` contributions. That needs an a2ui manifest and a decision on where the section sits relative to the connector capability prompt.
+    - The plugin API's `agent-turn`, `a2ui-bridge` and `core/context` into a2ui: these need §9 `pluginApi`.
 
 **How modules talk.**
 - **Public API files.** A module imports another module only through the concrete files listed in its `api`, plus `types/<id>/**`. There are no barrels, as `check-root-loading-boundaries` already requires. The target must be in `dependsOn`, and the `dependsOn` graph has no cycle.

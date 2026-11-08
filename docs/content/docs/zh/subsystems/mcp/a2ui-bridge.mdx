@@ -67,7 +67,7 @@ test("exposes the five contracted tool names", () => {
 })
 ```
 
-渲染端在 `lib/a2ui/mcp-tool-schemas.ts` 中保留了一份平行的类型化副本（`A2UI_BRIDGE_TOOLS`，第 53 行），用于**填充内置的 `a2ui-bridge` 行**（`buildA2UIBridgeMcpRow`，第 197 行）、检测该行（`isA2UIBridgeRow`），以及计算其用于投射到外部 agent 的命名空间工具名称。
+渲染端在 `packages/a2ui-core/src/mcp-tool-schemas.ts` 中保留了一份平行的类型化副本（`A2UI_BRIDGE_TOOLS`，第 53 行），用于**填充内置的 `a2ui-bridge` 行**（`buildA2UIBridgeMcpRow`，第 197 行）、检测该行（`isA2UIBridgeRow`），以及计算其用于投射到外部 agent 的命名空间工具名称。
 
 ## 进程内形态
 

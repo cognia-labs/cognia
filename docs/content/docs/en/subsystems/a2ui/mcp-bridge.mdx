@@ -10,7 +10,7 @@ description: The A2UI MCP tool schema set and the three cross-process dispatch p
 <TLDR>
   A2UI is produced by **agents that run in other processes** — external CLIs, the bundled Claude
   Agent SDK session, ACP-native tools — yet it must render in **one** webview React tree. This page
-  documents the bridge that makes that work: the MCP **tool schemas** (`lib/a2ui/mcp-tool-schemas.ts`),
+  documents the bridge that makes that work: the MCP **tool schemas** (`packages/a2ui-core/src/mcp-tool-schemas.ts`),
   the standalone stdio MCP server (`sidecar/a2ui-mcp.mjs`), the in-process SDK server
   (`sidecar/a2ui-tools/index.mjs`), and the Rust local-IPC listener (`src-tauri/src/a2ui_bridge/`).
   Three independent dispatch paths converge on `useA2UIStore.getState().processMessage`. The wire
@@ -49,7 +49,7 @@ It does this with **one envelope shape** and **one Tauri channel**:
 
 ## The Tool Schema Set
 
-`lib/a2ui/mcp-tool-schemas.ts` is the **canonical JSON-Schema declaration** of the bridge tools
+`packages/a2ui-core/src/mcp-tool-schemas.ts` is the **canonical JSON-Schema declaration** of the bridge tools
 (`A2UI_BRIDGE_TOOLS`, a readonly array at `:53`). It declares **five** tools. Each tool name is
 projected into the MCP namespace by `namespacedA2UIToolNames` (`:228`), which maps every tool to
 `` mcp__${A2UI_BRIDGE_SERVER_NAME}__${t.name} `` at `:229`.

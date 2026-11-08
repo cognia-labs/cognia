@@ -26,7 +26,7 @@ description: "Cognia 的 A2UI 早已具备 68 种组件、增量 Surface 更新�
 
 ### 流式预览，与封存后的 Surface 分开
 
-新增 `a2ui` 围栏的流式渲染器（`components/chat/renderers/a2ui-streaming-fence.tsx`），由它解析已经写出的前缀（`lib/a2ui/streaming-preview.ts`）。解析遵循以下规则：
+新增 `a2ui` 围栏的流式渲染器（`components/chat/renderers/a2ui-streaming-fence.tsx`），由它解析已经写出的前缀（`packages/a2ui-core/src/streaming-preview.ts`）。解析遵循以下规则：
 
 - **标量永不截断。** `completePartialJson` 回退到最后一个结构完整的值，再补齐此时尚未闭合的括号。写到一半的字符串、数字或键不会显示出来。对象可以只带部分键，所以组件的属性会随流式输出逐步出现；还没写出 `id` 和 `component` 的组件先不显示。
 - **预览只负责绘制。** 只放行 `createSurface`、`updateComponents`、`dataModelUpdate` 和 `surfaceReady` 四种消息，全部改写到保留的 id 前缀（`a2ui-preview:`）下，并强制为 `inline`。
@@ -59,7 +59,7 @@ Surface 用 `computed: { "<指针>": { op, args } }` 声明计算值，可以写
 - 格式化：`concat`、`currency`、`fixed`；
 - 逻辑：`if`、`eq`、`neq`、`gt`、`gte`、`lt`、`lte`、`and`、`or`、`not`。
 
-**求值**（`lib/a2ui/computed.ts`）：
+**求值**（`packages/a2ui-core/src/computed.ts`）：
 
 - 每条声明编译成一个 `ComputedField`，交给现有的 `resolveComputedFields` 执行。原本无人调用的 helper 由此成为实际的执行路径。
 - 接受声明之前先检查上限：64 个字段、深度 8、32 个参数、256 个节点。

@@ -199,7 +199,7 @@ each result is written to. Operands are literals, `{ path }` or nested `{ op, ar
 a closed set of 30 operators (arithmetic, `sum`/`sumOf`/`count`/`countWhere`/`percentage`,
 `concat`/`currency`/`fixed`, comparisons, `if`/`and`/`or`/`not`).
 
-`lib/a2ui/computed.ts` validates a declaration against fixed bounds (64 fields, depth 8, 32
+`packages/a2ui-core/src/computed.ts` validates a declaration against fixed bounds (64 fields, depth 8, 32
 arguments, 256 nodes), compiles each one into a `ComputedField` and runs them through
 `resolveComputedFields` in declaration order, so a later value can read an earlier one and the pass
 always terminates. A map must be well ordered: a declaration never reads its own target, a later
@@ -273,7 +273,7 @@ flowchart LR
 
 `events.ts` (399 lines) is the in-process egress: user interactions in the renderer flow into the
 `A2UIEventEmitter` and come out formatted for the next agent turn. It holds the cluster's single
-intra-module code import: `getValueByPath` and `parseJsonPointer` from `@/lib/a2ui/data-model`
+code import from the pure A2UI core: `getValueByPath` and `parseJsonPointer` from `@cognia/a2ui-core/data-model`
 (`:12`). It also imports `loggers` from `@/lib/logging` (`:13`), aliased to `log = loggers.ui`
 (`:15`), and `type` declarations from the schema (`:6-11`).
 

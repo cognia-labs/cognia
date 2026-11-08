@@ -463,7 +463,7 @@ interface ToolSurface {
   - `companion/desktop-write-source`：等配对设备写命令的贡献机制；
   - `sync/handlers/conversation-overrides`：等同步处理器的贡献机制；
   - `db/connector-inbound-jobs`：崩溃恢复仍直接续跑连接器任务，可以改用第 2 批的恢复监听器；
-  - `scheduler/scheduler-db`：im-push 载荷清洗。
+  - `scheduler/scheduler-db`：im-push 载荷清洗（已由 §25 还清）。
 - 期间门禁里出现的外来报错：另一会话未提交的 room 工作（`lib/connectors/hitl/room-handoff-card.ts` 的 G4 端口声明，`lib/connectors/runtime.ts -> lib/squads/room-handoff/im-room.ts` 的 G3），以及 4 行 `lib/chat/... -> chat:ui` 已还清但未锁定的基线行。都不属于本轮，保持原样。
 - 未做的桌面冒烟：
   - 飞书里的表情回应镜像；
@@ -472,3 +472,31 @@ interface ToolSurface {
   - 定时 IM 推送；
   - 连接器和文档提供方的 OAuth 深链回调（包括冷启动）；
   - 登录后飞书主体的自动关联，以及登出或接管后的解绑。
+
+## 25. T16：A2UI 纯函数核心抽成 `@cognia/a2ui-core`（2026-11-08）
+
+- 起因：§24 留下的 `scheduler-db -> connectors`。先试过用集合端口 `scheduled-payload-sanitizer`，由存储层在写入前异步加载 connectors 的清洗函数，已撤回，没有提交。
+  - 撤回原因：`lib/radar/suggestions.ts` 会在自己的 Dexie 事务里调用 `schedulerDb.createTask`。端口首次加载要等一次动态 import，事务会提前提交。用 `Dexie.waitFor` 也保不住（测试报 "Transaction committed too early"）。
+  - 结论：清洗必须同步完成。它只依赖 a2ui 的 JSON Pointer 读取，因此把 A2UI 中不依赖宿主的部分抽成包。
+- 包 `packages/a2ui-core`（912b457ad3）：
+  - 从 `lib/a2ui/` 用 `git mv` 移入 `data-model`、`computed`、`component-tree`、`parser`、`streaming-preview`、`mcp-tool-schemas`，测试随文件移动。
+  - 新增 `segment-sanitize.ts`：`withoutBindingHints`、`sanitizeOutboundSegments`、`sanitizeScheduledOutboundPayload`，从 `a2ui-to-segments.ts` 原样搬入。纯清洗用例随之搬到 `segment-sanitize.test.ts`，依赖 `buildA2UISegment` 的集成用例留在 connectors。
+  - `index.ts` 汇总导出所有文件，宿主代码一律按文件导入 `@cognia/a2ui-core/<文件>`。
+  - 注册方式与 `feishu-protocol` 相同：
+    - `tsconfig.json`、`cli/tsconfig.json` 加路径别名；
+    - `jest.config.ts` 加 `moduleNameMapper`；
+    - `pnpm-workspace.yaml` 排除它，避免新增锁文件 importer、使授权工具包 pin 失效；
+    - 列入 `check-package-boundaries` 的 `HOST_INDEPENDENT_PACKAGES`。
+- 导入改写：用脚本把能解析到被移走文件的导入说明符改为包路径，共 101 个文件，`jest.mock` 路径也一并改写。相对导入只改真正指向 `lib/a2ui/` 的那些，例如 `lib/subscription/anthropic/parser` 没有被误改。
+  - `lib/a2ui/index.ts` 的转出改为从包导入。
+  - a2ui 的 `api` 列表去掉已移走的 4 个文件。
+  - 宿主代码、sidecar 注释和 18 篇文档中的旧路径同步更新。`packages/plugin-contract` 的注释不改。
+- 附带：pre-commit 的 i18n 检查扫描整个暂存文件，所以把 `a2ui-interactive-guide.tsx` 原有的两处硬编码文案（"No steps defined"、"Optional"）接入已有的 `learning.guide` 命名空间（新增 `noSteps`、`optional` 两个键，中英文都有），测试的 next-intl 模拟同步更新。
+- 门禁结果：
+  - 还清方向边 4 条：`scheduler-db -> connectors`、`claude/adapter -> a2ui`、`claude/run-and-capture -> a2ui`、`claude/builtin-mcp/resolve -> a2ui`。尺寸度量没有增长。
+  - package-boundaries 通过（22 个包）。
+  - 全量类型检查只有已知的外来错误。
+  - Jest 236 个套件中 234 个通过。另外 2 个失败来自别人的改动：`a2ui-fallback.test.tsx` 受无边框 Alert 改动影响；`protocol-adapter-spec.parity.test.ts` 因为新增了 `chatgpt-siwc` provider 族。
+- 剩余指向 a2ui 的内核边：
+  - `build-options`、`prompts/catalog`：A2UI 协议提示词、生成提示词、执行增强提示词，以及 A2UI 系统提示词段，应作为 a2ui 自己的 `prompts` / `context` 贡献。前提是 a2ui 先成为 manifest 模块，并确定该段相对连接器能力提示词的位置（目前由 build-options 按"A2UI 段在前、能力段在后"拼接）。
+  - `plugin/api/agent-turn`、`plugin/bridge/a2ui-bridge`、`plugin/core/context`：等 `pluginApi`。

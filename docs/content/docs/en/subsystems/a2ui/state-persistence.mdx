@@ -124,7 +124,7 @@ Supporting types and consts: `A2UIHistoryEntry` (`30`, an undo/redo snapshot of 
 ### `processMessage` routing
 
 `processMessage` (`351-373`) destructures the relevant actions from `get()` (`352-358`), then runs an
-`if/else` chain of five type guards (imported from `@/lib/a2ui/parser`):
+`if/else` chain of five type guards (imported from `@cognia/a2ui-core/parser`):
 
 | Guard | Line | Calls |
 | --- | --- | --- |
@@ -162,7 +162,7 @@ The store is also the single egress point: user mutations flow out through `glob
 
 ```mermaid
 flowchart LR
-  SV["setDataValue 321"] --> SVP["setValueByPath 326<br/>(@/lib/a2ui/data-model)"]
+  SV["setDataValue 321"] --> SVP["setValueByPath 326<br/>(@cognia/a2ui-core/data-model)"]
   SVP --> EDC["emitDataChange 341"]
   EDC --> CDC["createDataModelChange 440<br/>(@/lib/a2ui/events)"]
   CDC --> EH["push eventHistory 443"]
@@ -176,7 +176,7 @@ flowchart LR
 
 `emitAction` (`426`) follows the symmetric path: `createUserAction` (`427`) → push `eventHistory`
 sliced to `maxEventHistory` (`431`) → `globalEventEmitter.emitAction` (`436`). `updateDataModel`
-(`298`) merges via `deepMerge` / `deepClone` (`306`, from `@/lib/a2ui/data-model`).
+(`298`) merges via `deepMerge` / `deepClone` (`306`, from `@cognia/a2ui-core/data-model`).
 
 ### Selectors
 

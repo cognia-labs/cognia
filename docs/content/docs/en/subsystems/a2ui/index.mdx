@@ -196,7 +196,7 @@ isolation). The safety boundary is therefore the catalog:
   loads only from `http(s):`, `data:image/`, `blob:` and bundled assets. The renderer passes every
   component's inline `style` through `safeA2UIStyle`, which drops a property whose `url(...)` the
   media policy rejects (and `image-set()`, `src()`, `expression()`, CSS escapes, unclosed `url(`).
-- Computed values are a closed operator set evaluated by the host (`lib/a2ui/computed.ts`); nothing
+- Computed values are a closed operator set evaluated by the host (`packages/a2ui-core/src/computed.ts`); nothing
   a surface declares runs as code.
 - When `widget.hostStrategy` is `sandboxed-html` / `artifact-preview`, content is diverted to an
   iframe-isolated artifact panel instead of inline rendering ([output profiles](./output-profiles)).

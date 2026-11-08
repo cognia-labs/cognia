@@ -26,7 +26,7 @@ Keep the existing store, renderer, persistence, editor and IM projection. Add th
 
 ### A streaming preview, separate from the sealed surface
 
-A streaming renderer for `a2ui` fences (`components/chat/renderers/a2ui-streaming-fence.tsx`) parses the prefix written so far (`lib/a2ui/streaming-preview.ts`). The parse follows these rules:
+A streaming renderer for `a2ui` fences (`components/chat/renderers/a2ui-streaming-fence.tsx`) parses the prefix written so far (`packages/a2ui-core/src/streaming-preview.ts`). The parse follows these rules:
 
 - **No scalar is ever truncated.** `completePartialJson` cuts back to the last structurally complete value and closes the brackets still open at that point. A half-written string, number or key is never shown. An object may arrive with a subset of its keys, so a component gains props as they stream. A component that has not yet named its `id` and `component` is held back.
 - **A preview only draws.** Only `createSurface`, `updateComponents`, `dataModelUpdate` and `surfaceReady` pass through. All of them are retargeted to a reserved id prefix (`a2ui-preview:`) and forced to `inline`.
@@ -59,7 +59,7 @@ A surface declares `computed: { "<pointer>": { op, args } }`. It can appear on `
 - formatting: `concat`, `currency`, `fixed`;
 - logic: `if`, `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `and`, `or`, `not`.
 
-**Evaluation** (`lib/a2ui/computed.ts`):
+**Evaluation** (`packages/a2ui-core/src/computed.ts`):
 
 - Each declaration compiles into a `ComputedField` and runs through the existing `resolveComputedFields`, so the helpers that used to be unreachable are now the execution path.
 - Bounds are checked before a declaration is accepted: 64 fields, depth 8, 32 arguments, 256 nodes.

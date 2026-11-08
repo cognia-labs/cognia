@@ -409,7 +409,23 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
     - `lib/companion/desktop-write-source.ts`：等配对设备写命令的贡献机制；
     - `lib/sync/handlers/conversation-overrides.ts`：等同步处理器的贡献机制；
     - `lib/db/connector-inbound-jobs.ts`：崩溃恢复仍自己续跑连接器任务，可改用恢复监听器；
-    - `lib/scheduler/scheduler-db.ts`：它的 im-push 载荷清洗用到 A2UI 辅助函数。
+    - `lib/scheduler/scheduler-db.ts`：它的 im-push 载荷清洗用到 A2UI 辅助函数。已由下一条修订还清。
+- **修订（2026-11-08）：A2UI 纯函数核心成为包 `@cognia/a2ui-core`。** 实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §25。
+  - 为什么不能用端口：调度器的存储层写入每个载荷时都要同步剥离回调权限，因为 Radar 会在自己的 Dexie 事务里写任务。首次使用时才加载的端口会让那个事务提前提交，所以存储层必须直接导入清洗函数。而清洗函数要读取 A2UI 数据模型的路径，a2ui 又是模块，内核不能导入它。
+  - 移动的内容：`packages/a2ui-core/`（`@cognia/a2ui-core`）现在收纳了不导入任何宿主代码的 A2UI 文件：
+    - 数据模型与 JSON Pointer 绑定（`data-model.ts`）；
+    - 计算字段（`computed.ts`）；
+    - 组件树（`component-tree.ts`）；
+    - 消息解析器（`parser.ts`）；
+    - 流式预览（`streaming-preview.ts`）；
+    - a2ui-bridge 的 MCP 工具 schema（`mcp-tool-schemas.ts`）；
+    - 出站片段清洗（`segment-sanitize.ts`），从 connectors 的 `a2ui-to-segments.ts` 搬入。
+  - 包只导入契约类型（`@cognia/plugin-contract`、`@cognia/agent-config-types`）。与 `@cognia/feishu-protocol` 一样只提供源码、不在 pnpm workspace 内，并列入 `HOST_INDEPENDENT_PACKAGES`。
+  - 导入：所有导入方改为 `@cognia/a2ui-core/<文件>`，不留转出桩。a2ui 的 `api` 列表去掉了已移走的四个文件。
+  - 还清方向边 4 条：`scheduler-db -> connectors`，以及 Claude 适配器、`run-and-capture`、`builtin-mcp/resolve` 指向 a2ui 的边。
+  - 尚未解决：
+    - `build-options`、`prompts/catalog` 指向 a2ui：A2UI 提示词和系统提示词段应经 a2ui 自己的 `prompts` 与 `context` 贡献进入内核。这需要 a2ui 先有 manifest，并决定该段相对连接器能力提示词的位置。
+    - 插件 API 的 `agent-turn`、`a2ui-bridge`、`core/context` 指向 a2ui：等 §9 的 `pluginApi`。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
