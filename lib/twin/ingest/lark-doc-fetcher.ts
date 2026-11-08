@@ -11,7 +11,7 @@
  *     connected user; missing or unrecoverable user authorization fails
  *     closed without selecting the tenant identity.
  *   - `"cli"` — shells to the user's installed lark-cli through the existing
- *     built-in-skill exec path (`lib/skills/built-in/lark/exec-lark-cli`).
+ *     built-in-skill exec path (`lib/auth-providers/feishu/cli/exec-lark-cli`).
  *     Requests Markdown through the native desktop process bridge. Other
  *     hosts fail closed as `larkCliUnavailable`.
  *
@@ -374,7 +374,7 @@ async function fetchViaCli(
   let exec = opts.execImpl
   if (!exec) {
     try {
-      const mod = await import("@/lib/skills/built-in/lark/exec-lark-cli")
+      const mod = await import("@/lib/auth-providers/feishu/cli/exec-lark-cli")
       exec = mod.execLarkCli as ExecLarkCliLike
     } catch {
       throw new LarkIngestError("larkCliUnavailable")

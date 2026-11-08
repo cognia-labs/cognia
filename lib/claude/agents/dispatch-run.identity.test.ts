@@ -11,7 +11,7 @@ import {
   finishToolExecutionRun,
   LOCAL_PERSON_RUN,
 } from "@/lib/execution/acting-authority"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { dispatchSubagent } from "@/lib/plugin/agent-sdk/dispatch"
 import { runDispatchAgentTool } from "./dispatch-agent-handler"
 import { resolveCaller, startDispatchRun } from "./dispatch-run"

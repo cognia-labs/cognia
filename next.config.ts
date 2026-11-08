@@ -253,7 +253,7 @@ const NODE_ONLY_MODULES = [
   "node:events",
   // First-party node-only helper that is statically reachable from the client
   // module graph but only ever executes in the Node sidecar / Tauri main
-  // process — never in the WebView: `lib/skills/built-in/lark/exec-lark-cli`
+  // process — never in the WebView: `lib/auth-providers/feishu/cli/exec-lark-cli`
   // spawns the lark-cli binary and pulls in `util`/`os`/`path` alongside the
   // already-listed `child_process`/`fs`. Webpack tolerates the omission via its
   // default client fallbacks, but Turbopack's `resolveAlias` only stubs modules

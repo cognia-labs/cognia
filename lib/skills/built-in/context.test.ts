@@ -46,8 +46,8 @@ jest.mock("@/lib/db/adapter-instances", () => ({
 }))
 
 import { resolveBuiltInSkillContext } from "./context"
-import { assertLarkActingIdentity } from "./lark/acting-identity"
-import { resolveLarkAuth } from "./lark/auth-bridge"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
+import { resolveLarkAuth } from "@/lib/auth-providers/feishu/cli/auth-bridge"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { larkUserRequest } from "@/lib/connectors/adapters/lark/http"
 import { getDb } from "@/lib/db/schema"

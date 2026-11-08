@@ -10,7 +10,7 @@ jest.mock("@/lib/execution/acting-authority", () => ({
 }))
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 /**
- * Tests for lib/skills/built-in/lark/auth-bridge.ts.
+ * Tests for lib/auth-providers/feishu/cli/auth-bridge.ts.
  *
  * Mocks the three external deps (Dexie adapter row fetch, keyring read,
  * tenant token fetch) so the bridge can be exercised in isolation
@@ -21,7 +21,7 @@ import { resolveLarkAuth } from "./auth-bridge"
 import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken } from "@/lib/auth-providers/feishu/auth"
-import { resolveBuiltInSkillSessionBinding } from "../context"
+import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
 import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
@@ -46,8 +46,8 @@ jest.mock("@/lib/db/schema", () => ({
 }))
 // The personal lane needs the executing run's recorded local identity (ADR-0243 phase 2-0).
 const mockRunIdentity = jest.fn<Promise<unknown>, [string]>()
-jest.mock("../context", () => ({
-  ...jest.requireActual("../context"),
+jest.mock("@/lib/skills/built-in/context", () => ({
+  ...jest.requireActual("@/lib/skills/built-in/context"),
   resolveBuiltInSkillSessionBinding: jest.fn(),
   resolveBuiltInSkillTurnActors: async () => ({ actingSenders: [{ remoteUserId: "alice" }] }),
 }))

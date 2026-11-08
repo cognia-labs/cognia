@@ -10,7 +10,7 @@ export default defineHostModule({
   kind: "module",
   stage: "stable",
   acceptance: { realSmoke: "pending" },
-  dependsOn: ["connectors", "modules", "plugin", "rag", "share"],
+  dependsOn: ["modules", "plugin", "rag", "share"],
   // Scanned sources fall back to OCR, a deleted twin's memories are retired
   // by the memory module and the persona tab's benchmark is built by the
   // eval module. Each copes without a provider.

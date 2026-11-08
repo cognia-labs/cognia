@@ -569,7 +569,7 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
       const { recordedRunMetadata, finishToolExecutionRun, resolveRunActingIdentity } =
         await import("@/lib/execution/acting-authority")
       const { assertLarkActingIdentity } =
-        await import("@/lib/skills/built-in/lark/acting-identity")
+        await import("@/lib/auth-providers/feishu/cli/acting-identity")
       const { z } = await import("zod")
       __resetSharedBuiltInSkillRegistry()
       jest.mocked(connectorsLarkUserAuth).mockClear()

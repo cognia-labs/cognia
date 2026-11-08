@@ -18,8 +18,8 @@ import { getExecutionRun, listExecutionRuns } from "@/lib/db/execution-runs"
 import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/schema", () => ({ getDb: jest.fn() }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
-jest.mock("../context", () => ({
-  ...jest.requireActual("../context"),
+jest.mock("@/lib/skills/built-in/context", () => ({
+  ...jest.requireActual("@/lib/skills/built-in/context"),
   resolveBuiltInSkillTurnActors: jest.fn(),
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
@@ -30,9 +30,9 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 
 import { getDb } from "@/lib/db/schema"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { resolveBuiltInSkillTurnActors } from "../context"
+import { resolveBuiltInSkillTurnActors } from "@/lib/skills/built-in/context"
 import { assertLarkActingIdentity } from "./acting-identity"
-import type { BuiltInSkillActingSenders } from "../types"
+import type { BuiltInSkillActingSenders } from "@/lib/skills/built-in/types"
 import { connectorsLarkUserAuth, connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { larkUserRequest } from "@/lib/connectors/adapters/lark/http"
 import {

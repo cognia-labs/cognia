@@ -28,13 +28,16 @@ import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
-import { resolveBuiltInSkillRunScope, resolveBuiltInSkillSessionBinding } from "../context"
+import {
+  resolveBuiltInSkillRunScope,
+  resolveBuiltInSkillSessionBinding,
+} from "@/lib/skills/built-in/context"
 import {
   assertLarkActingIdentity,
   LarkActingIdentityError,
   resolveLarkRunIdentity,
 } from "./acting-identity"
-import type { BuiltInSkillContext } from "../types"
+import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
 import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 

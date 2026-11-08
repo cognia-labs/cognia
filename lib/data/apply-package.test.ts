@@ -9,7 +9,7 @@ import { getDb, whenSeeded, __resetDbForTesting } from "@/lib/db/schema"
 import type { BackupPackageV3, BackupPayloadV3 } from "./types"
 import { buildBackupPackage } from "./build-package"
 import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 
 function pkg(payload: BackupPayloadV3): BackupPackageV3 {
   return {

@@ -606,7 +606,6 @@
     "lib/execution/control-handlers.ts -> workflow",
     "lib/execution/direct-chat-run.ts -> collab",
     "lib/execution/managed-desktop-results.ts -> automation",
-    "lib/execution/personal-credential.ts -> connectors",
     "lib/execution/run-control.ts -> squads",
     "lib/execution/run-detail-source.ts -> bot",
     "lib/execution/run-learning-materializer.ts -> memory",

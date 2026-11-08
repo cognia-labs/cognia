@@ -16,7 +16,7 @@ import { LarkApiError, extractLarkCode, isLarkPermissionDenied } from "@cognia/f
 import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 import { withTatRefresh, withUserTokenRefresh } from "@/lib/auth-providers/feishu/auth-retry"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
 import { resolveBuiltInSkillRunScope } from "@/lib/skills/built-in/context"
 

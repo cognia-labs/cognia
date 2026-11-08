@@ -1,4 +1,4 @@
-import { runLarkCliProcess } from "./process"
+import { runLarkCliProcess } from "@/lib/auth-providers/feishu/cli/process"
 
 export const CERTIFIED_LARK_CLI_VERSION = "1.0.98"
 

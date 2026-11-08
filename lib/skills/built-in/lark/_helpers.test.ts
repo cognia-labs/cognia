@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { getSharedBuiltInSkillRegistry } from "../registry"
-import { resolveLarkAdapter } from "./auth-bridge"
+import { resolveLarkAdapter } from "@/lib/auth-providers/feishu/cli/auth-bridge"
 import {
   argsToFlags,
   buildConfirmSurface,
@@ -17,14 +17,14 @@ import "./sheets"
 import "./task"
 import "./wiki"
 
-jest.mock("./exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
+jest.mock("@/lib/auth-providers/feishu/cli/exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
 jest.mock("./capabilities", () => ({ assertLarkCliCommandAvailable: jest.fn() }))
 jest.mock("./_helpers", () => ({
   ...jest.requireActual("./_helpers"),
   runLarkCli: jest.fn(),
 }))
-jest.mock("./auth-bridge", () => ({
-  ...jest.requireActual("./auth-bridge"),
+jest.mock("@/lib/auth-providers/feishu/cli/auth-bridge", () => ({
+  ...jest.requireActual("@/lib/auth-providers/feishu/cli/auth-bridge"),
   resolveLarkAdapter: jest.fn(),
 }))
 
@@ -317,7 +317,7 @@ describe("capLarkData", () => {
 })
 
 it("leaves intermediate CLI data unchanged for structured consumers", async () => {
-  const { execLarkCli } = await import("./exec-lark-cli")
+  const { execLarkCli } = await import("@/lib/auth-providers/feishu/cli/exec-lark-cli")
   const execute = jest.mocked(execLarkCli).mockResolvedValue({
     status: "ok",
     adapterId: "app",

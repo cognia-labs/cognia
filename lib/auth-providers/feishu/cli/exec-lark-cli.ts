@@ -32,7 +32,7 @@
 import { resolveLarkAuth, type LarkAuthBridgeResult } from "./auth-bridge"
 import { LarkActingIdentityError, larkPersonalAccessHint } from "./acting-identity"
 import { runLarkCliProcess, type LarkCliProcessResult } from "./process"
-import type { BuiltInSkillContext } from "../types"
+import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 

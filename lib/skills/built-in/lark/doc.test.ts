@@ -3,11 +3,11 @@ import { fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { getSharedBuiltInSkillRegistry } from "../registry"
 import { runLarkCli } from "./_helpers"
 import "./doc"
-import { __setLarkCliProcessRunnerForTests } from "./process"
-import { __setLarkCliBinaryForTests } from "./exec-lark-cli"
-import { resolveLarkAuth } from "./auth-bridge"
+import { __setLarkCliProcessRunnerForTests } from "@/lib/auth-providers/feishu/cli/process"
+import { __setLarkCliBinaryForTests } from "@/lib/auth-providers/feishu/cli/exec-lark-cli"
+import { resolveLarkAuth } from "@/lib/auth-providers/feishu/cli/auth-bridge"
 
-jest.mock("./auth-bridge", () => ({ resolveLarkAuth: jest.fn() }))
+jest.mock("@/lib/auth-providers/feishu/cli/auth-bridge", () => ({ resolveLarkAuth: jest.fn() }))
 jest.mock("./capabilities", () => ({ assertLarkCliCommandAvailable: jest.fn(async () => {}) }))
 
 jest.mock("./_helpers", () => ({

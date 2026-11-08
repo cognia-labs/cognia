@@ -84,7 +84,7 @@ import { ensureExecutionPortLease } from "@/lib/task-workspace/execution-port-le
 import type { WorkspacePortLease } from "@/lib/task-workspace/types"
 import { branchSessionAtMessage } from "@/lib/chat/branch-session"
 import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 
 jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),

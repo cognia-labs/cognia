@@ -6,7 +6,7 @@ import { LOCAL_PERSON_RUN, resolveRunActingIdentity, type LocalPersonRun } from 
 import { markPersonalCredential } from "./personal-marks"
 import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
-import type { VerifiedLarkUserAuthorization } from "@/lib/skills/built-in/lark/acting-identity"
+import type { VerifiedLarkUserAuthorization } from "@/lib/auth-providers/feishu/cli/acting-identity"
 
 export type PersonalCredentialSource =
   | "lark-user"
@@ -98,7 +98,7 @@ export async function admitPersonalCredential(
             ? identity.authorizingPrincipal
             : authorization
               ? (
-                  await import("@/lib/skills/built-in/lark/acting-identity")
+                  await import("@/lib/auth-providers/feishu/cli/acting-identity")
                 ).verifiedLarkAuthorizationPerson(authorization)
               : undefined
         if (!person) return refuse("owner-not-verified")
@@ -126,7 +126,7 @@ export async function admitPersonalCredential(
         )
           return refuse("trigger-not-personal")
         const { verifyLarkImOwnerAuthorization } =
-          await import("@/lib/skills/built-in/lark/acting-identity")
+          await import("@/lib/auth-providers/feishu/cli/acting-identity")
         const authorization = await verifyLarkImOwnerAuthorization(
           credential.person,
           context.larkContext
@@ -136,7 +136,7 @@ export async function admitPersonalCredential(
       }
       if (credential.source === "lark-user" && credential.person && context?.larkContext) {
         const { verifyLarkImOwnerAuthorization } =
-          await import("@/lib/skills/built-in/lark/acting-identity")
+          await import("@/lib/auth-providers/feishu/cli/acting-identity")
         const authorization = await verifyLarkImOwnerAuthorization(
           credential.person,
           context.larkContext

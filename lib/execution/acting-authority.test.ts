@@ -43,7 +43,7 @@ import {
   isBuiltinToolExecutionRun,
 } from "./acting-authority"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { subSessionId } from "@/lib/claude/team-session-id"
 
 const principal = {

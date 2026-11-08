@@ -149,7 +149,7 @@ describe("kept source authority", () => {
   })
 })
 
-jest.mock("@/lib/skills/built-in/lark/exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
+jest.mock("@/lib/auth-providers/feishu/cli/exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
@@ -205,7 +205,7 @@ const WIKI_URL = "https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789"
 const ADAPTER = "cai_test1"
 
 it("never starts CLI execution when cancelled during its lazy import", async () => {
-  const { execLarkCli } = jest.requireMock("@/lib/skills/built-in/lark/exec-lark-cli")
+  const { execLarkCli } = jest.requireMock("@/lib/auth-providers/feishu/cli/exec-lark-cli")
   execLarkCli.mockResolvedValue({ status: "ok", adapterId: ADAPTER, data: "fixture body" })
   const controller = new AbortController()
   const reading = fetchLarkDocAsRawSource(DOCX_URL, {
@@ -729,12 +729,14 @@ describe("fetchLarkDocAsRawSource — api channel edge branches", () => {
 
 describe("fetchLarkDocAsRawSource — cli channel", () => {
   it("resolves the default exec via dynamic import when none is injected", async () => {
-    jest.requireMock("@/lib/skills/built-in/lark/exec-lark-cli").execLarkCli.mockResolvedValue({
-      status: "ok",
-      adapterId: ADAPTER,
-      data: "cli markdown body",
-    })
-    jest.doMock("@/lib/skills/built-in/lark/exec-lark-cli", () => ({
+    jest
+      .requireMock("@/lib/auth-providers/feishu/cli/exec-lark-cli")
+      .execLarkCli.mockResolvedValue({
+        status: "ok",
+        adapterId: ADAPTER,
+        data: "cli markdown body",
+      })
+    jest.doMock("@/lib/auth-providers/feishu/cli/exec-lark-cli", () => ({
       execLarkCli: jest.fn(async () => ({
         status: "ok",
         adapterId: ADAPTER,
@@ -752,7 +754,7 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       })
       expect(doc).toMatchObject({ text: "cli markdown body", channel: "cli" })
     } finally {
-      jest.dontMock("@/lib/skills/built-in/lark/exec-lark-cli")
+      jest.dontMock("@/lib/auth-providers/feishu/cli/exec-lark-cli")
     }
   })
 
@@ -1073,8 +1075,9 @@ it.each(["# Partial Markdown", '{"document":{"content":"partial'])(
   "rejects real executor truncation before ingestion: %s",
   async (stdout) => {
     const { execLarkCli, __setLarkCliBinaryForTests } =
-      await import("@/lib/skills/built-in/lark/exec-lark-cli")
-    const { __setLarkCliProcessRunnerForTests } = await import("@/lib/skills/built-in/lark/process")
+      await import("@/lib/auth-providers/feishu/cli/exec-lark-cli")
+    const { __setLarkCliProcessRunnerForTests } =
+      await import("@/lib/auth-providers/feishu/cli/process")
     const run = jest.fn(async () => ({ stdout, stderr: "", exitCode: 0, truncated: true }))
     __setLarkCliBinaryForTests("/fake/lark-cli")
     __setLarkCliProcessRunnerForTests(run)
@@ -1124,7 +1127,7 @@ it.each(["api", "cli"] as const)(
 it("maps a failing dynamic import to larkCliUnavailable", async () => {
   await jest.isolateModulesAsync(async () => {
     jest.resetModules()
-    jest.doMock("@/lib/skills/built-in/lark/exec-lark-cli", () => {
+    jest.doMock("@/lib/auth-providers/feishu/cli/exec-lark-cli", () => {
       throw new Error("module unavailable in this bundle")
     })
     try {
@@ -1141,7 +1144,7 @@ it("maps a failing dynamic import to larkCliUnavailable", async () => {
         "larkCliUnavailable"
       )
     } finally {
-      jest.dontMock("@/lib/skills/built-in/lark/exec-lark-cli")
+      jest.dontMock("@/lib/auth-providers/feishu/cli/exec-lark-cli")
     }
   })
 })

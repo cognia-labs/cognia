@@ -7,8 +7,8 @@ import {
   resolveBuiltInSkillRunScope,
   resolveBuiltInSkillSessionBinding,
   resolveBuiltInSkillTurnActors,
-} from "../context"
-import type { BuiltInSkillContext } from "../types"
+} from "@/lib/skills/built-in/context"
+import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import {
   observeActingAuthority,

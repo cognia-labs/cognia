@@ -375,11 +375,11 @@ const REVIEWED: Record<string, string[]> = {
     "refreshUserToken",
     "registerHostAuthProviderService",
   ],
-  "lib/skills/built-in/lark/acting-identity.ts": [
+  "lib/auth-providers/feishu/cli/acting-identity.ts": [
     "connectorsLarkUserAuth",
     "connectorsLarkUserAuth",
   ],
-  "lib/skills/built-in/lark/auth-bridge.ts": ["connectorsLarkUserAuth", "getCredentials"],
+  "lib/auth-providers/feishu/cli/auth-bridge.ts": ["connectorsLarkUserAuth", "getCredentials"],
   "lib/google-docs/provider.ts": ["getCredentials", "listGoogleConnections"],
   "lib/auth-providers/google/host-auth.ts": [
     "createGoogleDeviceAuthorization",

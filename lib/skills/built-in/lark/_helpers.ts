@@ -13,8 +13,12 @@
 import { z } from "zod"
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill, BuiltInSkillContext } from "../types"
-import { resolveLarkAdapter } from "./auth-bridge"
-import { execLarkCli, type ExecLarkCliInput, type LarkCliResult } from "./exec-lark-cli"
+import { resolveLarkAdapter } from "@/lib/auth-providers/feishu/cli/auth-bridge"
+import {
+  execLarkCli,
+  type ExecLarkCliInput,
+  type LarkCliResult,
+} from "@/lib/auth-providers/feishu/cli/exec-lark-cli"
 import { assertLarkCliCommandAvailable } from "./capabilities"
 
 // One context per registered skill invocation: internal CLI consumers receive

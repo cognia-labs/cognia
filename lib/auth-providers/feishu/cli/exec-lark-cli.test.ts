@@ -3,7 +3,7 @@ jest.mock("@/lib/i18n/runtime-translator", () => ({
   currentLocale: jest.fn(async () => "en"),
 }))
 /**
- * Tests for lib/skills/built-in/lark/exec-lark-cli.ts.
+ * Tests for lib/auth-providers/feishu/cli/exec-lark-cli.ts.
  *
  * Overrides the bounded process port so the wrapper can be exercised without
  * an actual lark-cli binary on PATH. Auth bridge is bypassed via the

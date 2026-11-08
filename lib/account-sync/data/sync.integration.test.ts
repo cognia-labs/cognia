@@ -25,7 +25,7 @@ import type { AccountSyncCaptureState } from "./types"
 import { SYNC_SCHEMA_VERSION } from "./tables"
 import { getDb } from "@/lib/db/schema"
 import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
 
 jest.mock("@/lib/db/schema", () => {

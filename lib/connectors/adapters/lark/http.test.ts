@@ -28,7 +28,7 @@ import {
 } from "@/lib/auth-providers/feishu/auth"
 import { classifyScopeError, larkTenantRequest, larkUserRequest } from "./http"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { resolveBuiltInSkillRunScope } from "@/lib/skills/built-in/context"
 jest.mock("@/lib/skills/built-in/context", () => ({
   resolveBuiltInSkillRunScope: jest.fn((ctx) => ({
@@ -36,7 +36,7 @@ jest.mock("@/lib/skills/built-in/context", () => ({
     runId: ctx.executionRunId,
   })),
 }))
-jest.mock("@/lib/skills/built-in/lark/acting-identity", () => ({
+jest.mock("@/lib/auth-providers/feishu/cli/acting-identity", () => ({
   assertLarkActingIdentity: jest.fn(),
 }))
 

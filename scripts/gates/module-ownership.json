@@ -287,8 +287,7 @@
         "lib/connectors/delivery-gateway.ts",
         "lib/connectors/outbound-runner.ts",
         "lib/connectors/permission-resolve.ts",
-        "lib/connectors/session-bindings.ts",
-        "lib/skills/built-in/lark/exec-lark-cli.ts"
+        "lib/connectors/session-bindings.ts"
       ]
     },
     "constants": {

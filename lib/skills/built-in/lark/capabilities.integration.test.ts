@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { resolveLarkAuth } from "./auth-bridge"
+import { resolveLarkAuth } from "@/lib/auth-providers/feishu/cli/auth-bridge"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
@@ -35,7 +35,7 @@ import {
   CERTIFIED_LARK_CLI_VERSION,
   probeLarkCliCapabilities,
 } from "./capabilities"
-import { __setLarkCliProcessRunnerForTests } from "./process"
+import { __setLarkCliProcessRunnerForTests } from "@/lib/auth-providers/feishu/cli/process"
 
 const binary = process.env.LARK_CLI_BIN || "lark-cli"
 const detected = spawnSync(binary, ["--version"], { encoding: "utf8" })

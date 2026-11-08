@@ -9,7 +9,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
 import { admitPersonalCredential } from "@/lib/execution/personal-credential"
-import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import {
   registerTeamDispatchContext,
   clearTeamDispatchContext,

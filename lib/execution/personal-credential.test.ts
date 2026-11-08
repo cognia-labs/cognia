@@ -5,7 +5,7 @@ jest.mock("./acting-authority", () => ({
   LOCAL_PERSON_RUN: Symbol("host-local-person-run"),
   resolveRunActingIdentity: jest.fn(),
 }))
-jest.mock("@/lib/skills/built-in/lark/acting-identity", () => ({
+jest.mock("@/lib/auth-providers/feishu/cli/acting-identity", () => ({
   verifyLarkImOwnerAuthorization: jest.fn(),
   verifiedLarkAuthorizationPerson: (authorization: { person?: unknown }) => authorization.person,
 }))
@@ -14,7 +14,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 }))
 import { LOCAL_PERSON_RUN, resolveRunActingIdentity } from "./acting-authority"
 import { admitPersonalCredential } from "./personal-credential"
-import { verifyLarkImOwnerAuthorization } from "@/lib/skills/built-in/lark/acting-identity"
+import { verifyLarkImOwnerAuthorization } from "@/lib/auth-providers/feishu/cli/acting-identity"
 
 const resolve = jest.mocked(resolveRunActingIdentity)
 const local = {

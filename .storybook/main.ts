@@ -42,7 +42,7 @@ const NODE_ONLY_MODULES = [
   // lives in `sidecar/` — a separate Node project with its own lockfile, NOT a
   // pnpm workspace member — webpack resolves those from `sidecar/node_modules`
   // and pulls undici 8.10.x (not the root's 7.x) into the preview graph. Same
-  // shape as the `lib/skills/built-in/lark/exec-lark-cli` case next.config.ts
+  // shape as the `lib/auth-providers/feishu/cli/exec-lark-cli` case next.config.ts
   // documents: statically reachable, never evaluated in a WebView, so it gets
   // stubbed rather than restructured.
   //
