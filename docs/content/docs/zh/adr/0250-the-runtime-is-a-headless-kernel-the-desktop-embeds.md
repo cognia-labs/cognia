@@ -436,9 +436,29 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 公共 API 修正：`resolve-icon` 移到 `lib/icons/`。chat、share、plugins 改为导入具体的 surface 和 store 文件，不再经 `components/a2ui`、`stores/a2ui` 的 barrel。
   - 还清方向边 2 条：`build-options -> a2ui`、`prompts/catalog -> a2ui`。插件 API 指向 a2ui 的三条边仍等 §9 的 `pluginApi`。
 
+- **修订（2026-11-08）：`syncHandlers`、`hostWriteCommands`、`pluginApi` 三个贡献与 `inbound-jobs` 端口。** 内核仍在没有贡献点的地方直接调用模块代码。三个新 manifest 字段加一个端口还清了其中 12 条边，头像徽章移到 `components/shared/` 又还清了 12 条指向桌面壳的边。实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §27。
+  - `syncHandlers: { tables, load }`：模块拥有某张伴随同步表的拉取；行需要模块代码投影时，还可提供宿主侧读取（`serve`）。
+    - 编排器在 `DEFAULT_HANDLERS` 里保留每张表的阶段和顺序，因为渲染路径同步读取它们。只有 `run` 来自模块，经 `lib/sync/module-handlers.ts` 的 `moduleSyncPull(table)`。
+    - 没有归属模块的表以 `not_implemented` 失败，并写出表名。宿主的 `readDexieDelta` 先问归属模块的读取器，再走通用读取。
+    - 贡献者：pet（五张表）、memory（`memories`，含冷启动上限）、squads（Agent Team 定义）与 connectors（`conversationOverrides`）。
+  - `hostWriteCommands: { commands, load }`：模块在宿主上应答配对设备的写命令。
+    - `desktop-write-source.ts` 在自己的 `switch` 之前先问 `moduleHostWriteHandler(command)`。声明了却没有提供的命令抛出带名字的错误。
+    - connectors 在 `lib/connectors/host-writes.ts` 应答六个命令：策略、适配器实例、出站、草稿批准与驳回、会话覆盖。负载解析和错误消息不变。
+    - pet、files、glance、bot 的写命令暂时留在分发器里。
+  - `pluginApi: { namespaces, bridges?, load }`：模块构建插件的 `ctx.<namespace>`（catalog 的 `apiNamespaces` id），并应答模块桥（catalog 的 `capabilities` id），每个只有一个归属模块。
+    - `lib/plugin/core/module-plugin-api.ts` 负责加载。上下文是同步构建的，所以 manager 先 await `preloadModulePluginApis()`。缺失或尚未加载的命名空间抛出带名字的错误。
+    - 桥按需加载。`MODULE_BRIDGE_CAPABILITIES` 里的 `connectors` 键委托给贡献的桥，插件详情页经 `moduleBridgeContributions` 读取插件贡献的连接器类型。
+    - 卸载插件时，每个已加载的模块撤下该插件经其命名空间注册的东西。
+    - 贡献者：connectors（`ctx.connectors` 与适配器桥，`lib/connectors/plugin-api/`）和 a2ui（`ctx.a2ui`，`lib/a2ui/plugin-api/`）。a2ui 为每个 manager 保留一个 A2UI 桥，与原来一样在第一次注册时创建。
+    - 纯函数 `segmentToMessages` 移入 `@cognia/a2ui-core`，插件的 agent turn 不再导入 a2ui 的生成器。
+  - `inbound-jobs` 端口（`types/modules/ports/inbound-jobs.ts`）让崩溃恢复查找并续跑连接器入站任务、让插件测试 API 预置一条入站任务，二者都不必导入 connectors。`lib/db/connector-inbound-jobs.ts` 现在列在 connectors 的 `owns` 里。
+  - 仍未还清：
+    - `lib/sync/handlers/bot-installations.ts -> bot`：bot 还没有 manifest。
+    - 六个内核文件仍导入桌面壳（路由主体、移动端应用壳、项目编辑器工作台、平台壳、glance 日程钩子与 UI store）。
+
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
-- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`，集合端口 `docs-provider`、`conversation-channel` 和 `identity-principal-links`，沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
+- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`、`a2ui-system-prompt`、`interactive-page`、`inbound-jobs`，集合端口 `docs-provider`、`conversation-channel` 和 `identity-principal-links`，沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
 - **类型化事件。** 需要反转依赖时，用内核的事件总线，事件类型由发布方在 `types/<id>/events.ts` 中声明。
 - **贡献点。** 外壳和内核只通过 manifest 字段收集各模块的东西。
 

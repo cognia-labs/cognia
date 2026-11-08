@@ -194,12 +194,12 @@ beforeApprove: async ({ segments: edited }) => {
 
 ## 插件适配器扩展
 
-插件通过在 manifest 中声明 `connectors` 条目加入连接器舰队。渲染端的桥接（`lib/plugin/bridge/connectors-bridge.ts:124`）刻意做得很薄：它只发现 factory 并接线；策略、FIFO 排队与重试全部经由既有的 bus/runner 机制不变地流转。插件适配器运行在渲染端（TypeScript），与内置适配器完全一致，并经由同样的 `lib/connectors/tauri/commands.ts` shim 触达 Rust 传输原语。
+插件通过在 manifest 中声明 `connectors` 条目加入连接器舰队。渲染端的桥接（`lib/connectors/plugin-api/adapters-bridge.ts`）刻意做得很薄：它只发现 factory 并接线；策略、FIFO 排队与重试全部经由既有的 bus/runner 机制不变地流转。插件适配器运行在渲染端（TypeScript），与内置适配器完全一致，并经由同样的 `lib/connectors/tauri/commands.ts` shim 触达 Rust 传输原语。
 
-`registerPluginAdapters(pluginId, manifest, exports)`（`connectors-bridge.ts:61`）读取 `manifest.connectors`，在插件的 `exports` 中查找每个 def 的 `factory`，await 该 factory，并将得到的适配器注册到 bus，把 id 收集到模块级的 `pluginAdapterIds` map（`connectors-bridge.ts:50`）：
+`registerPluginAdapters(pluginId, manifest, exports)`（`adapters-bridge.ts`）读取 `manifest.connectors`，在插件的 `exports` 中查找每个 def 的 `factory`，await 该 factory，并将得到的适配器注册到 bus，把 id 收集到模块级的 `pluginAdapterIds` map（`adapters-bridge.ts`）：
 
 ```ts
-// lib/plugin/bridge/connectors-bridge.ts:72-95
+// lib/connectors/plugin-api/adapters-bridge.ts
 for (const def of defs) {
   const factoryFn = exports[def.factory]
   if (typeof factoryFn !== "function") {
@@ -218,7 +218,7 @@ for (const def of defs) {
 }
 ```
 
-`unregisterPluginAdapters(pluginId)`（`connectors-bridge.ts:102`）对插件拥有的每个 id 执行 `bus.unregisterAdapter` 并删除该 map 条目。两者都经由 `lib/plugin/contracts/module-bridge-map.ts:163-173` 接入插件生命周期，它在插件启用/禁用时将 `connectors` manifest 字段路由到 `register`/`unregister` —— 由于 factory 查找是按导出名而非按 per-entry importer，manager 从 loader 的缓存提供 `moduleExports`。
+`unregisterPluginAdapters(pluginId)`（`adapters-bridge.ts`）对插件拥有的每个 id 执行 `bus.unregisterAdapter` 并删除该 map 条目。两者都经由 `lib/plugin/contracts/module-bridge-map.ts:163-173` 接入插件生命周期，它在插件启用/禁用时将 `connectors` manifest 字段路由到 `register`/`unregister` —— 由于 factory 查找是按导出名而非按 per-entry importer，manager 从 loader 的缓存提供 `moduleExports`。
 
 ### PluginConnectorDef 契约
 

@@ -430,9 +430,29 @@ Where an existing rule already owns a field, the field follows that rule:
   - Public-API fixes: `resolve-icon` moved to `lib/icons/`. Chat, share and plugins import the concrete surface and store files instead of the `components/a2ui` and `stores/a2ui` barrels.
   - Two direction edges were repaid: `build-options -> a2ui` and `prompts/catalog -> a2ui`. The plugin API's three edges into a2ui still wait for §9 `pluginApi`.
 
+- **Amendment (2026-11-08): the `syncHandlers`, `hostWriteCommands` and `pluginApi` contributions and the `inbound-jobs` port.** The kernel still called module code where no contribution point existed. Three new manifest fields and one port repaid 12 of those edges, and moving the avatar badge to `components/shared/` repaid 12 more into the desktop shell. The record is §27 of `docs/plans/2026-11-07-tools-contributions.md`.
+  - `syncHandlers: { tables, load }`. A module owns a companion sync table's pull, and optionally the host-side reader (`serve`) when its rows need the module's code.
+    - The orchestrator keeps each table's stage and ordering in `DEFAULT_HANDLERS`, because render paths read them synchronously. Only `run` comes from the module, through `moduleSyncPull(table)` in `lib/sync/module-handlers.ts`.
+    - A table nobody owns fails as `not_implemented` and names the table. The host's `readDexieDelta` asks the owner's reader before its generic one.
+    - Contributors: pet (five tables), memory (`memories`, with the cold-start limit), squads (the Agent Team definitions) and connectors (`conversationOverrides`).
+  - `hostWriteCommands: { commands, load }`. A module answers paired-device write commands on the host.
+    - `desktop-write-source.ts` asks `moduleHostWriteHandler(command)` before its own `switch`. A declared command the file does not provide throws a named error.
+    - The connectors answer six commands from `lib/connectors/host-writes.ts`: policy, adapter instances, outbound, draft approve and reject, and conversation overrides. Payload parsing and error messages are unchanged.
+    - Pet, files, glance and bot writes stay in the dispatcher for now.
+  - `pluginApi: { namespaces, bridges?, load }`. A module builds plugin `ctx.<namespace>` objects (catalog `apiNamespaces` ids) and answers module bridges (catalog `capabilities` ids), one owner each.
+    - `lib/plugin/core/module-plugin-api.ts` loads them. Contexts are built synchronously, so the manager awaits `preloadModulePluginApis()` first. A namespace that is missing or not loaded throws a named error.
+    - Bridges load on demand. The `connectors` key in `MODULE_BRIDGE_CAPABILITIES` delegates to the contributed bridge, and the plugin detail page reads contributed kinds through `moduleBridgeContributions`.
+    - On unload, every loaded module drops what the plugin registered through its namespaces.
+    - Contributors: connectors (`ctx.connectors` and the adapters bridge, `lib/connectors/plugin-api/`) and a2ui (`ctx.a2ui`, `lib/a2ui/plugin-api/`). a2ui keeps one A2UI bridge per manager, created on the first registration as before.
+    - The pure `segmentToMessages` moved into `@cognia/a2ui-core`, so the plugin agent turn no longer imports the a2ui generator.
+  - The `inbound-jobs` port (`types/modules/ports/inbound-jobs.ts`) lets crash recovery find and continue a connector inbound job, and lets the plugin testing API seed one, without importing the connectors. `lib/db/connector-inbound-jobs.ts` is now in the connectors' `owns`.
+  - Still open:
+    - `lib/sync/handlers/bot-installations.ts -> bot`: bot has no manifest yet.
+    - Six kernel files still import the desktop shell (the route body, the mobile app shell, the project editor workbench, the platform shell, the glance agenda hook and the UI store).
+
 **How modules talk.**
 - **Public API files.** A module imports another module only through the concrete files listed in its `api`, plus `types/<id>/**`. There are no barrels, as `check-root-loading-boundaries` already requires. The target must be in `dependsOn`, and the `dependsOn` graph has no cycle.
-- **Capability ports.** The kernel defines a port, a module or plugin `provides` an implementation and a consumer `requires` it. Ports so far: `ocr`, `speech`, `web-reader`, `web-search`, `docs-provider`, `forge`, `remote-desktop`, `knowledge-base-revisions`, `workflow-editor-session`, the collection ports `docs-provider`, `conversation-channel` and `identity-principal-links`, sandbox backends, IM adapters, and subscription, balance and model-catalog. A port follows the shape of ADR-0246's granted connections.
+- **Capability ports.** The kernel defines a port, a module or plugin `provides` an implementation and a consumer `requires` it. Ports so far: `ocr`, `speech`, `web-reader`, `web-search`, `docs-provider`, `forge`, `remote-desktop`, `knowledge-base-revisions`, `workflow-editor-session`, `a2ui-system-prompt`, `interactive-page`, `inbound-jobs`, the collection ports `docs-provider`, `conversation-channel` and `identity-principal-links`, sandbox backends, IM adapters, and subscription, balance and model-catalog. A port follows the shape of ADR-0246's granted connections.
 - **Typed events.** For an inverted dependency, the kernel's event bus carries events the publisher declares in `types/<id>/events.ts`.
 - **Contribution points.** The shell and the kernel collect from modules only through manifest fields.
 

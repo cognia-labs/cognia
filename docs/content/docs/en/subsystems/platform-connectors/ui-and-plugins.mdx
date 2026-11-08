@@ -291,20 +291,20 @@ runners write the tables; the UI re-renders.
 
 Plugins join the connector fleet by declaring `connectors` entries in their
 manifest. The renderer-side bridge
-(`lib/plugin/bridge/connectors-bridge.ts:124`) is intentionally thin: it only
+(`lib/connectors/plugin-api/adapters-bridge.ts`) is intentionally thin: it only
 discovers factories and wires them; policy, FIFO queuing, and retries all flow
 through the existing bus/runner machinery unchanged. Plugin adapters run in the
 renderer (TypeScript), exactly like built-in adapters, and reach Rust transport
 primitives through the same `lib/connectors/tauri/commands.ts` shims.
 
 `registerPluginAdapters(pluginId, manifest, exports)`
-(`connectors-bridge.ts:61`) reads `manifest.connectors`, looks up each def's
+(`adapters-bridge.ts`) reads `manifest.connectors`, looks up each def's
 `factory` in the plugin's `exports`, awaits the factory, and registers the
 resulting adapter with the bus, collecting the ids into the module-level
-`pluginAdapterIds` map (`connectors-bridge.ts:50`):
+`pluginAdapterIds` map (`adapters-bridge.ts`):
 
 ```ts
-// lib/plugin/bridge/connectors-bridge.ts:72-95
+// lib/connectors/plugin-api/adapters-bridge.ts
 for (const def of defs) {
   const factoryFn = exports[def.factory]
   if (typeof factoryFn !== "function") {
@@ -323,7 +323,7 @@ for (const def of defs) {
 }
 ```
 
-`unregisterPluginAdapters(pluginId)` (`connectors-bridge.ts:102`)
+`unregisterPluginAdapters(pluginId)` (`adapters-bridge.ts`)
 `bus.unregisterAdapter`s every id the plugin owns and deletes the map entry.
 Both are wired into the plugin lifecycle through
 `lib/plugin/contracts/module-bridge-map.ts:163-173`, which routes the

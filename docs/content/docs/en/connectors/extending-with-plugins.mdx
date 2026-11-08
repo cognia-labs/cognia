@@ -6,7 +6,7 @@ description: How to write a cognia-next plugin that contributes a new messaging-
 # Extending Platform Connectors with Plugins
 
 cognia-next includes eleven built-in platform adapters: Telegram, Discord, Slack, Lark, OneBot, DingTalk, WeCom (企业微信), WeChat Official Account, personal WeChat, QQ Official, and Matrix.
-The **Plugin Connector Bridge** (`lib/plugin/bridge/connectors-bridge.ts`) lets installed plugins contribute additional adapters without changing the cognia-next source.
+The **Plugin Connector Bridge** (`lib/connectors/plugin-api/adapters-bridge.ts`) lets installed plugins contribute additional adapters without changing the cognia-next source.
 Examples include Mastodon, Bluesky, and internal messaging systems.
 Email, KOOK, LINE, and Mattermost remain planned and are not available adapters.
 
@@ -57,7 +57,7 @@ Email, KOOK, LINE, and Mattermost remain planned and are not available adapters.
 ```ts
 // dist/index.ts (plugin main entry)
 import type { PlatformAdapter } from "@/types/connectors"
-import type { PluginAdapterContext } from "@/lib/plugin/bridge/connectors-bridge"
+import type { PluginAdapterContext } from "@/lib/connectors/plugin-api/adapters-bridge"
 
 export function createMastodonAdapter(ctx: PluginAdapterContext): PlatformAdapter {
   const { connectorDef } = ctx
@@ -110,7 +110,7 @@ For debugging you can call the bridge directly:
 import {
   registerPluginAdapters,
   unregisterPluginAdapters,
-} from "@/lib/plugin/bridge/connectors-bridge"
+} from "@/lib/connectors/plugin-api/adapters-bridge"
 import manifest from "./manifest.json"
 import * as exports from "./dist/index"
 
@@ -159,7 +159,7 @@ convention.
 ## Reference
 
 - `types/plugin/plugin.ts` — `PluginConnectorDef`, `PluginCapability`
-- `lib/plugin/bridge/connectors-bridge.ts` — `registerPluginAdapters`, `unregisterPluginAdapters`
+- `lib/connectors/plugin-api/adapters-bridge.ts` — `registerPluginAdapters`, `unregisterPluginAdapters`
 - `types/connectors/adapter.ts` — `PlatformAdapter` interface
 - `lib/connectors/bus.ts` — `ConnectorBus` (singleton)
 - ADR-0009 (`docs/content/docs/adr/0009-platform-connectors.md`) — full architecture decision

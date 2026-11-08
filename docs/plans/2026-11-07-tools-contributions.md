@@ -528,3 +528,35 @@ interface ToolSurface {
   - Jest：a2ui、connectors/hitl、bus 回调、install-connector-runtime、run-detail、icons、prompts、build-options、chat/share/plugins 导入方、discover/glance/tray 等套件通过。已有的失败与本次无关：`a2ui-fallback.test.tsx`（无边框 Alert）、`tray-panel-settings.test.tsx`（预设宽度断言，文件里本次只改了导入行），以及 `build-options-cache-opt.test.ts`（twin/memory 段缺失；换回 HEAD 版 build-options、去掉 a2ui manifest 后仍失败）。
 - 剩余指向 a2ui 的内核边：`plugin/api/agent-turn`、`plugin/bridge/a2ui-bridge`、`plugin/core/context`，等 `pluginApi`。
 - 待做：桌面冒烟，确认启用 A2UI 的聊天轮次仍渲染 surface、工作流运行详情仍有"交互页"、IM 卡片回调仍能解析。
+
+## 27. T18：同步表、配对写命令与插件 API 成为贡献点（2026-11-08）
+
+- 目标：还清 T15–T17 剩下的内核 → 模块边。这些边都无法靠移动文件还清，因为内核调用模块代码的地方还没有贡献机制。用户的两个决定：`pluginApi` 在现有契约上增量实现，只覆盖 connectors 与 a2ui；配对写命令只迁 connectors 的，pet、files、glance、bot 暂留分发器。
+- 前置（1500ecb2cd）：`AvatarBadge` 连同测试和 story 用 `git mv` 从 `components/desktop/` 移到 `components/shared/`，导入方同步改，还清 12 条 `-> desktop` 边。
+- P1 `syncHandlers` 贡献（e0e5efe42a，还清 5 条）：
+  - manifest 字段 `syncHandlers: { tables, load }`，文件导出 `syncHandlers: Partial<Record<SyncableTable, { pull, serve? }>>`；生成到 `lib/modules/generated/sync-handlers.ts`。
+  - `lib/sync/module-handlers.ts`：`moduleSyncPull(table)` 惰性加载归属模块（每模块一次，失败下次重试）；没有归属模块，或文件没有提供该表时，返回 `not_implemented` 并写出表名。`serveModuleSyncTable` 供宿主侧读取。
+  - `DEFAULT_HANDLERS` 仍保留表、阶段与 `after`（渲染路径同步读取；数据治理门禁解析其源码），模块表的 `run` 改为 `moduleSyncPull("<table>")`。
+  - 移动：`lib/sync/handlers/pet.ts` → `lib/pet/sync/pet-sync.ts`（连同宿主侧的 `readPet*Delta`）；`memory.ts` → `lib/memory/sync/memory-sync.ts`（连同 `readMemoriesDelta` 与冷启动上限）；`agent-team-definitions.ts` → `lib/squads/sync/`；`conversation-overrides.ts` → `lib/connectors/sync/`。`desktop-sync-source.ts` 的 `contentDeps` 改为通用的 `serveDeps`，memories 的协议版本检查留在内核；`finalizeDelta` 与 `excludeLiveKeys` 抽到 `lib/sync/delta.ts`。rag 行的 `api` 加上 `lib/rag/profile-dek-store.ts`。
+  - 生成器校验表名形状，门禁保证每张表只有一个归属模块，`check-modules.test.mjs` 加三项。
+- P2 `inbound-jobs` 端口（76bb15baa9，还清 1 条）：
+  - 真正的边是 `lib/db/connector-inbound-jobs.ts` 导入 `@/lib/connectors/inbound-revision`，所以它是 connectors 的代码：列入 connectors 的 `owns` 与 `api`。
+  - 端口契约 `types/modules/ports/inbound-jobs.ts`：`findJobForRun`、`continueJob`、`seedRunningJob`；connectors 在 `lib/connectors/ports/inbound-jobs.ts` 提供。
+  - `reconcile-crashed-runs.ts` 默认经 `loadPort("inbound-jobs")`，测试仍可注入；没有提供方时返回 `inbound-jobs-unavailable`。`lib/plugin/api/testing.ts` 的 `seedRunningInboundJob` 也走端口。
+- P3 `hostWriteCommands` 贡献（dead7b2013，还清 1 条）：
+  - manifest 字段 `hostWriteCommands: { commands, load }`，文件导出 `hostWriteCommands: Record<command, (payload, { partition }) => Promise<unknown>>`；生成到 `lib/modules/generated/host-write-commands.ts`。生成器把三个按键注册表合成 `KEYED_REGISTRIES`。
+  - `desktop-write-source.ts` 在 `switch` 前问 `moduleHostWriteHandler(command)`；声明了却没提供的命令抛出带名字的错误。
+  - connectors 的六个命令（`adapter_update_policy`、`adapter_instance_mutate`、`connector_enqueue_outbound`、`connector_approve_draft`、`connector_reject_draft`、`conversation_overrides_update`）连同运行时归属检查移到 `lib/connectors/host-writes.ts`，负载解析与错误消息逐字不变。
+- P4 `pluginApi` 贡献（06831e01a8，还清 5 条）：
+  - manifest 字段 `pluginApi: { namespaces, bridges?, load }`，文件导出 `pluginApi: { namespaces?, bridges?, unload? }`（`types/plugin/module-plugin-api.ts`）；生成到 `lib/modules/generated/plugin-api.ts`。校验：命名空间必须是插件契约 catalog 的 `apiNamespaces` id，桥必须是 `capabilities` id，二者各只有一个归属模块，且至少贡献一项。`check-modules.test.mjs` 加六项（含 P3 补上的三项）。
+  - `lib/plugin/core/module-plugin-api.ts`：`preloadModulePluginApis()` 一次加载全部（失败下次重试）；`buildModulePluginNamespace` 同步构建，缺失、未加载或未提供都抛出带名字的错误；`moduleBridge` 按需加载；`moduleBridgeContributions` 同步读出插件经某个桥贡献了什么；`unloadModulePluginApis` 让每个已加载模块撤下插件的注册，第一条错误最后再抛；`modulePluginApiHostOf(manager)` 每个 manager 一个宿主对象，成员在第一次读取时才访问 manager。
+  - manager 在构建上下文前 await 预加载；去掉 `a2uiBridge` 字段、`ensureA2UIBridge` 与 `getA2UIBridge`，卸载时改为调用 `unloadModulePluginApis`（失败记为静默失败）。`context.ts` 删去 `createA2UIAPI`，两个命名空间都从模块构建。
+  - connectors：`connectors-api.ts` 与 `connectors-bridge.ts` 用 `git mv` 移到 `lib/connectors/plugin-api/`（后者改名 `adapters-bridge.ts`），新文件 `plugin-api.ts` 导出命名空间与 `connectors` 桥。`MODULE_BRIDGE_CAPABILITIES` 的 `connectors` 键保留（契约 catalog 镜像它），改为委托给贡献的桥。`lib/plugin/api/index.ts` 不再转出 `createConnectorsAPI`，类型改从插件契约转出。插件详情页的“贡献”标签经 `moduleBridgeContributions("connectors", id)` 读取。
+  - a2ui：`a2ui-bridge.ts` 移到 `lib/a2ui/plugin-api/plugin-bridge.ts`，`createA2UIAPI` 抽到 `a2ui-api.ts`；`plugin-api.ts` 用以宿主对象为键的 WeakMap 为每个 manager 保留一个桥，仍在第一次注册组件或模板时创建，卸载时撤下该插件的组件与模板。
+  - `segmentToMessages` 是纯函数，移入 `@cognia/a2ui-core/segment-messages`，测试随之移动；`agent-turn.ts` 改为从包导入，不需要新端口。
+  - 契约证据路径（`plugin-capabilities.ts` 的 hostBindings 与 requiredTests、`plugin-points.ts` 的绑定）与 SDK 注释改为新路径。`packages/plugin-sdk/tsconfig.json` 补上 `@cognia/a2ui-core` 路径：T16 之后 author-types 构建因找不到该包而失败。
+- 门禁结果：每个阶段 module gate 都通过并锁定还清的基线行（只删自己的行），baseline-growth、colocated-tests、package-boundaries、`check-modules.test.mjs`（83 项）通过；全量类型检查只有已知的外来错误。
+- 已有、与本次无关的失败：`connectors-api.test.ts` 的 PII 入队断言（HEAD 原路径同样失败，`authorizationProvenance` 字段是别处加的）、`sdk-helper-parity`（`define-remote-desktop-provider.ts`）、`builtin-contributions-flow` 与 `sre-agent-browser-activation`（换回 HEAD 版 manager/context 后仍失败）、`builtin-manifest-shape`、若干 jsdom 集成测试；`check-convergence` 本身已大面积失效。
+- 未做：author-types 未重新生成（重新生成会带进别的会话未提交的类型改动），授权套件 pin 也因契约源改动而失效，二者留待从干净检出重建。
+- 仍未还清：`lib/sync/handlers/bot-installations.ts -> bot`（bot 还没有 manifest）；六个内核文件指向桌面壳（`app/route-body`、`app-shell-mobile`、`editor/project-editor-workbench`、`runtime/platform-shell`、`glance/use-glance-agenda`、`ui-store`）。
+- 待做的桌面冒烟：配对手机拉取会话覆盖、记忆与宠物数据；从收件箱恢复一次崩溃的 IM 运行；在配对设备上批准草稿；插件使用 `ctx.connectors` 与 `ctx.a2ui`（含注册 A2UI 组件后卸载）。

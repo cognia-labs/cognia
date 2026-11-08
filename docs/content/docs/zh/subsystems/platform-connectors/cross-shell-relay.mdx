@@ -62,7 +62,7 @@ import {
 
 在 ADR-0131 之前，手机切换会话模式后写入本地镜像，下一次 `sync_pull` 返回宿主的变更前行并将其覆盖——徽标翻转、翻回、再翻转。
 
-`pending-overrides.ts` 关闭了这一点：存在在途 mutation 的会话 key 会被 `lib/sync/handlers/conversation-overrides.ts` **跳过**。它读两个来源——覆盖"队列行持久化之前"那个窗口的内存引用计数，以及此后的持久化队列本身（后者能跨重载存活）。
+`pending-overrides.ts` 关闭了这一点：存在在途 mutation 的会话 key 会被 `lib/connectors/sync/conversation-overrides.ts` **跳过**。它读两个来源——覆盖"队列行持久化之前"那个窗口的内存引用计数，以及此后的持久化队列本身（后者能跨重载存活）。
 
 ## 两个实时信号
 

@@ -5,7 +5,7 @@ description: 如何编写一个 cognia-next 插件，使其贡献一个新的消
 
 # 用插件扩展平台连接器
 
-cognia-next 内置十一个平台适配器：Telegram、Discord、Slack、Lark、OneBot、钉钉、企业微信、微信公众号、个人微信、QQ 官方机器人和 Matrix。**插件连接器桥**（`lib/plugin/bridge/connectors-bridge.ts`）允许已安装的插件提供额外适配器，例如 Mastodon、Bluesky 或内部消息系统，无需修改 cognia-next 源码。Email、KOOK、LINE 和 Mattermost 仍处于规划阶段，不计入可用适配器。
+cognia-next 内置十一个平台适配器：Telegram、Discord、Slack、Lark、OneBot、钉钉、企业微信、微信公众号、个人微信、QQ 官方机器人和 Matrix。**插件连接器桥**（`lib/connectors/plugin-api/adapters-bridge.ts`）允许已安装的插件提供额外适配器，例如 Mastodon、Bluesky 或内部消息系统，无需修改 cognia-next 源码。Email、KOOK、LINE 和 Mattermost 仍处于规划阶段，不计入可用适配器。
 
 ## 工作原理
 
@@ -52,7 +52,7 @@ cognia-next 内置十一个平台适配器：Telegram、Discord、Slack、Lark�
 ```ts
 // dist/index.ts (plugin main entry)
 import type { PlatformAdapter } from "@/types/connectors"
-import type { PluginAdapterContext } from "@/lib/plugin/bridge/connectors-bridge"
+import type { PluginAdapterContext } from "@/lib/connectors/plugin-api/adapters-bridge"
 
 export function createMastodonAdapter(ctx: PluginAdapterContext): PlatformAdapter {
   const { connectorDef } = ctx
@@ -104,7 +104,7 @@ export function createMastodonAdapter(ctx: PluginAdapterContext): PlatformAdapte
 import {
   registerPluginAdapters,
   unregisterPluginAdapters,
-} from "@/lib/plugin/bridge/connectors-bridge"
+} from "@/lib/connectors/plugin-api/adapters-bridge"
 import manifest from "./manifest.json"
 import * as exports from "./dist/index"
 
@@ -149,7 +149,7 @@ const token = await connectorsKeyringGet(adapterId, "accessToken")
 ## 参考
 
 - `types/plugin/plugin.ts` —— `PluginConnectorDef`、`PluginCapability`
-- `lib/plugin/bridge/connectors-bridge.ts` —— `registerPluginAdapters`、`unregisterPluginAdapters`
+- `lib/connectors/plugin-api/adapters-bridge.ts` —— `registerPluginAdapters`、`unregisterPluginAdapters`
 - `types/connectors/adapter.ts` —— `PlatformAdapter` 接口
 - `lib/connectors/bus.ts` —— `ConnectorBus`（单例）
 - ADR-0009（`docs/content/docs/adr/0009-platform-connectors.md`）—— 完整的架构决策

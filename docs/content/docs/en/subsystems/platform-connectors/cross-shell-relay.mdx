@@ -62,7 +62,7 @@ Every override control — mode switcher, assignee chip, provider/model switcher
 
 Before ADR-0131 a phone flipping conversation mode wrote its local mirror, and the next `sync_pull` handed back the host's pre-change row and overwrote it — the pill flipped, flipped back, then flipped again.
 
-`pending-overrides.ts` closes that: a conversation key with an in-flight mutation is **skipped** by `lib/sync/handlers/conversation-overrides.ts`. It reads two sources — an in-memory refcount covering the window before the queue row is persisted, and the durable queue itself for everything after, which is what survives a reload.
+`pending-overrides.ts` closes that: a conversation key with an in-flight mutation is **skipped** by `lib/connectors/sync/conversation-overrides.ts`. It reads two sources — an in-memory refcount covering the window before the queue row is persisted, and the durable queue itself for everything after, which is what survives a reload.
 
 ## Two realtime signals
 
