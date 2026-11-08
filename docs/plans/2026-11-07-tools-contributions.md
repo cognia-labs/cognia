@@ -500,3 +500,31 @@ interface ToolSurface {
 - 剩余指向 a2ui 的内核边：
   - `build-options`、`prompts/catalog`：A2UI 协议提示词、生成提示词、执行增强提示词，以及 A2UI 系统提示词段，应作为 a2ui 自己的 `prompts` / `context` 贡献。前提是 a2ui 先成为 manifest 模块，并确定该段相对连接器能力提示词的位置（目前由 build-options 按"A2UI 段在前、能力段在后"拼接）。
   - `plugin/api/agent-turn`、`plugin/bridge/a2ui-bridge`、`plugin/core/context`：等 `pluginApi`。
+
+## 26. T17：a2ui 成为 manifest 模块，提示词经贡献进入内核（2026-11-08）
+
+- 目标：还清 `build-options -> a2ui` 与 `prompts/catalog -> a2ui`。两种贡献机制都要求模块有 manifest，而 a2ui 当时还是归属表里的一行。
+- 先用一个临时的空 manifest 跑门禁，看出三类阻碍：
+  - G4：a2ui 实际导入 appearance、artifact、chat、connectors、icons、share、workflow，并且有文件调用 `definePrompt`；
+  - G6 的两个环：a2ui ↔ connectors，以及 a2ui → artifact → workflow → a2ui；
+  - G3：22 处跨模块导入落在非 api 文件或 barrel 上，其中 8 处是 `lib/a2ui/resolve-icon.ts`。
+- 拆环与 G3 修正（与 manifest 同一个代码提交 2b3082f632；`interactive-page` 端口要等 a2ui 有 manifest 才有提供方，分开提交会让运行详情暂时丢掉"交互页"按钮）：
+  - 三个 IM 回调处理器用 `git mv` 移到 `lib/connectors/hitl/`，测试随文件移动。导入方 `install-connector-runtime`、`bus.ts` 的两处动态 import 及注释、`issues/im/callback-handler` 与 `workflow-run-approval` 的注释同步改。a2ui 行的 `api` 去掉这三个文件，connectors 的 `dependsOn` 去掉 `a2ui`。
+  - 新端口 `interactive-page`（`types/modules/ports/interactive-page.ts`）：`{ Dialog }`，props 为页面来源与触发控件。来源类型 `WorkflowRunPageSource`、`ConversationPageSource`、`ExecutionPageSource` 移到 `types/a2ui/execution-page.ts`，`lib/a2ui/from-execution/types.ts` 改为转出。a2ui 由 `lib/a2ui/ports/interactive-page.ts` 提供。`run-detail.tsx` 用 `usePort("interactive-page")`，端口加载中或无提供方时不渲染按钮，并新增两个测试。workflow 的 `dependsOn` 去掉 `a2ui`、加上 `modules`，`requires` 加 `interactive-page?`。
+  - `resolve-icon` 用 `git mv` 移到 `lib/icons/`，列入 icons 行的 `api`；discover、glance、plugins、tray panel 与 a2ui 内部的导入同步改。icons 行还列出了 a2ui 用到的 `lib/icons/lucide-catalog.tsx`。
+  - `a2ui-part.tsx` 改为分别导入 `a2ui-message-renderer` 与 `a2ui-surface`（测试的 mock 拆成两个）；`a2ui-streaming-fence`、`plugin-declarative-context-panel`、`share/payload-view` 改为导入 `stores/a2ui/a2ui-store`。
+  - chat 行的 `api` 加上 a2ui 用到的 `character-picker.tsx` 与 `message-parts/use-a2ui-chat-binding.ts`。
+- manifest `lib/a2ui/module.ts`：
+  - `owns` 三个 A2UI 数据文件，替代归属表 `paths` 里的三条记录；
+  - `dependsOn` 为 appearance、artifact、chat、icons、share、workflow；
+  - `api` 为 9 个具体文件；
+  - `provides` 两个端口：`a2ui-system-prompt` 和 `interactive-page`；
+  - `prompts` 指向 `lib/a2ui/prompts-contribution.ts`，导出 `A2UI_PROTOCOL_PROMPT`、`A2UI_CREATE_APP_PROMPT`、`A2UI_EDIT_APP_PROMPT`、`EXECUTION_ENHANCE_PROMPT`；`lib/prompts/catalog.ts` 删去对应的三条导入与四个条目。
+- 系统提示词段：用户选了端口方案，没有用 context 贡献，因为 context 段进不了 `appendSystemPrompt`，也不知道本轮是否启用 A2UI。端口 `a2ui-system-prompt` 只有 `systemSection({ catalogId })` 一个方法，实现给出与原来完全相同的文本（协议提示词，加上智能体自定义 catalog 的组件段）。build-options 在 `if (a2uiEnabled)` 内 `await loadPort("a2ui-system-prompt")`，追加位置不变，渠道能力提示词仍排在其后；工具白名单不变。
+- 门禁结果：
+  - module gate 通过，还清方向边 2 条；尺寸度量没有增长，因此不需要 baseline 例外。提交时 `settingsStoreImporters` 从 530 变为 531，来自另一会话新增的 `shared-room-catch-up-card.tsx`，与本次无关。
+  - colocated-tests、package-boundaries、`check-modules.test.mjs`（74 项）通过。
+  - 全量类型检查只有已知的外来错误。
+  - Jest：a2ui、connectors/hitl、bus 回调、install-connector-runtime、run-detail、icons、prompts、build-options、chat/share/plugins 导入方、discover/glance/tray 等套件通过。已有的失败与本次无关：`a2ui-fallback.test.tsx`（无边框 Alert）、`tray-panel-settings.test.tsx`（预设宽度断言，文件里本次只改了导入行），以及 `build-options-cache-opt.test.ts`（twin/memory 段缺失；换回 HEAD 版 build-options、去掉 a2ui manifest 后仍失败）。
+- 剩余指向 a2ui 的内核边：`plugin/api/agent-turn`、`plugin/bridge/a2ui-bridge`、`plugin/core/context`，等 `pluginApi`。
+- 待做：桌面冒烟，确认启用 A2UI 的聊天轮次仍渲染 surface、工作流运行详情仍有"交互页"、IM 卡片回调仍能解析。

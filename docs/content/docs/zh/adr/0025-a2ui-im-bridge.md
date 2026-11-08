@@ -86,7 +86,7 @@ Telegram 文本编辑会合并支持的文本调用及内联键盘；包含媒�
 
 `ConnectorBus.dispatchConnectorCallback(event: ConnectorCallbackEvent)`运行四步流水线：去重（`inboundLedger`上的命名空间`"callback"`）→绑定查找（`resolveCallbackBinding`）、→审计（`callback.received` / `callback.deduped` / `callback.unbound`）→ 处理器。
 
-处理器——`lib/a2ui/connector-callback-handler.ts`——将动作附加到`a2uiEventHistory`并从`scheduled-outbound.ts`呼叫`runConnectorDigestTurn`，使助理的下一回合看到点击声，就像渲染器中发生的一样。浏览器端和IM-side用户在同一AI循环中收敛。
+处理器——`lib/connectors/hitl/connector-callback-handler.ts`——将动作附加到`a2uiEventHistory`并从`scheduled-outbound.ts`呼叫`runConnectorDigestTurn`，使助理的下一回合看到点击声，就像渲染器中发生的一样。浏览器端和IM-side用户在同一AI循环中收敛。
 
 #### 修订（2026-08-31）：处理器不再是唯一去向
 
@@ -95,10 +95,10 @@ Telegram 文本编辑会合并支持的文本调用及内联键盘；包含媒�
 | `kind`                | 处理者                                        |
 | --------------------- | --------------------------------------------- |
 | `issue_action`        | `lib/issues/im/callback-handler.ts`            |
-| `wf_approve` / cancel | `lib/a2ui/workflow-approval-handler.ts`        |
-| workflow 扇出         | `lib/a2ui/workflow-fanout-handler.ts`          |
+| `wf_approve` / cancel | `lib/connectors/hitl/workflow-approval-handler.ts`        |
+| workflow 扇出         | `lib/connectors/hitl/workflow-fanout-handler.ts`          |
 | `notification_action` | `lib/connectors/notifications/action-callback.ts` |
-| 其余                  | `lib/a2ui/connector-callback-handler.ts`       |
+| 其余                  | `lib/connectors/hitl/connector-callback-handler.ts`       |
 
 词表本身在 `types/connectors/interaction.ts`，那里才是「一个 `kind` 是什么意思」的真相源。本 ADR 刻意不逐条复述：那会是第二份会漂移的副本。
 

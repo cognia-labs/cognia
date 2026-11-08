@@ -49,9 +49,9 @@ prompt so the model knows which components the platform can render.
   - lib/connectors/adapters/_shared/inbound-a2ui-dispatch.ts — `projectInboundToA2UI`: inbound platform payload → `InboundA2UIBlock`
   - lib/claude/hitl/workflow-approval-surface.ts — PURE approval-surface builder (`buildApprovalSurface`, kernel)
   - lib/connectors/run-presentation/runner.ts — live run cards (not part of the bridge; documented in Platform Connectors)
-  - lib/a2ui/connector-callback-handler.ts — generic callback → AI digest turn
-  - lib/a2ui/workflow-approval-handler.ts — `wf_approve` / `wf_cancel` dispatcher
-  - lib/a2ui/workflow-fanout-handler.ts — `wf_fanout_approve` / `wf_fanout_cancel` dispatcher
+  - lib/connectors/hitl/connector-callback-handler.ts — generic callback → AI digest turn
+  - lib/connectors/hitl/workflow-approval-handler.ts — `wf_approve` / `wf_cancel` dispatcher
+  - lib/connectors/hitl/workflow-fanout-handler.ts — `wf_fanout_approve` / `wf_fanout_cancel` dispatcher
 </Files>
 
 ## Outbound: Surface → Segments

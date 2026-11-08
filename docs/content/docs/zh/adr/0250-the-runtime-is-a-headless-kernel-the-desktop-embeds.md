@@ -426,6 +426,15 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 尚未解决：
     - `build-options`、`prompts/catalog` 指向 a2ui：A2UI 提示词和系统提示词段应经 a2ui 自己的 `prompts` 与 `context` 贡献进入内核。这需要 a2ui 先有 manifest，并决定该段相对连接器能力提示词的位置。
     - 插件 API 的 `agent-turn`、`a2ui-bridge`、`core/context` 指向 a2ui：等 §9 的 `pluginApi`。
+- **修订（2026-11-08）：a2ui 成为 manifest 模块，提示词经贡献进入内核。** 实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §26。
+  - `lib/a2ui/module.ts` 取代 a2ui 在归属表里的行。它拥有三个 A2UI 数据文件，依赖 appearance、artifact、chat、icons、share 和 workflow，`api` 只列具体文件（surface 渲染器、store、聊天动作路由、交互页对话框、应用模板）。
+  - 提示词目录不再导入 A2UI：协议提示词、应用创建/编辑提示词和执行页增强提示词是模块的 `prompts` 贡献（`lib/a2ui/prompts-contribution.ts`）。
+  - A2UI 系统提示词段用端口 `a2ui-system-prompt`（`types/modules/ports/a2ui-system-prompt.ts`），不用 `context` 贡献。context 段只能进 `systemPrompt` 槽位或动态尾部，也看不到本轮是否启用了 A2UI。发送解析器先判断这一点，再把端口给出的段追加到 `appendSystemPrompt` 的原位置，仍在渠道能力提示词之前。没有提供方时本轮不带 A2UI 段。
+  - 打破 manifest 暴露出的环：
+    - a2ui ↔ connectors：三个 IM 回调处理器（`connector-callback-handler`、`workflow-approval-handler`、`workflow-fanout-handler`）本是 connectors 的代码，却放在 `lib/a2ui/`。现移到 `lib/connectors/hitl/`，connectors 不再依赖 a2ui。
+    - a2ui → artifact → workflow → a2ui：工作流的运行详情改经第二个端口 `interactive-page`（`types/modules/ports/interactive-page.ts`）打开运行的交互页，workflow 去掉对 a2ui 的依赖。页面来源类型移到 `types/a2ui/execution-page.ts`。
+  - 公共 API 修正：`resolve-icon` 移到 `lib/icons/`。chat、share、plugins 改为导入具体的 surface 和 store 文件，不再经 `components/a2ui`、`stores/a2ui` 的 barrel。
+  - 还清方向边 2 条：`build-options -> a2ui`、`prompts/catalog -> a2ui`。插件 API 指向 a2ui 的三条边仍等 §9 的 `pluginApi`。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

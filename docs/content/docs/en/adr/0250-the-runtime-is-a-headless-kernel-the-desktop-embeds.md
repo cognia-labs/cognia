@@ -420,6 +420,15 @@ Where an existing rule already owns a field, the field follows that rule:
   - Still open:
     - `build-options` and `prompts/catalog` into a2ui: the A2UI prompts and system-prompt section should reach the kernel through a2ui's own `prompts` and `context` contributions. That needs an a2ui manifest and a decision on where the section sits relative to the connector capability prompt.
     - The plugin API's `agent-turn`, `a2ui-bridge` and `core/context` into a2ui: these need §9 `pluginApi`.
+- **Amendment (2026-11-08): a2ui is a manifest module, and its prompts reach the kernel through contributions.** The record is §26 of `docs/plans/2026-11-07-tools-contributions.md`.
+  - `lib/a2ui/module.ts` replaces the a2ui row. It owns the three A2UI data files, depends on appearance, artifact, chat, icons, share and workflow, and lists concrete files as its `api` (the surface renderers, the store, the chat action routing, the interactive page dialog, the app templates).
+  - The prompt catalog no longer imports A2UI: the protocol, app create/edit and execution-page prompts are the module's `prompts` contribution (`lib/a2ui/prompts-contribution.ts`).
+  - The A2UI system-prompt section is a port, `a2ui-system-prompt` (`types/modules/ports/a2ui-system-prompt.ts`), not a `context` contribution. A context section goes to a `systemPrompt` slot or the dynamic tail, and it cannot see whether the turn has A2UI enabled. The send resolver decides that, then appends the port's section to `appendSystemPrompt` at the same spot as before, ahead of the channel's capability prompt. With no provider the turn carries no A2UI section.
+  - Breaking the cycles the manifest exposed:
+    - a2ui ↔ connectors: the three IM callback handlers (`connector-callback-handler`, `workflow-approval-handler`, `workflow-fanout-handler`) were connectors' code living in `lib/a2ui/`. They moved to `lib/connectors/hitl/`, and connectors no longer depends on a2ui.
+    - a2ui → artifact → workflow → a2ui: workflow's run detail opens a run's interactive page through a second port, `interactive-page` (`types/modules/ports/interactive-page.ts`), and drops its a2ui dependency. The page source types moved to `types/a2ui/execution-page.ts`.
+  - Public-API fixes: `resolve-icon` moved to `lib/icons/`. Chat, share and plugins import the concrete surface and store files instead of the `components/a2ui` and `stores/a2ui` barrels.
+  - Two direction edges were repaid: `build-options -> a2ui` and `prompts/catalog -> a2ui`. The plugin API's three edges into a2ui still wait for §9 `pluginApi`.
 
 **How modules talk.**
 - **Public API files.** A module imports another module only through the concrete files listed in its `api`, plus `types/<id>/**`. There are no barrels, as `check-root-loading-boundaries` already requires. The target must be in `dependsOn`, and the `dependsOn` graph has no cycle.

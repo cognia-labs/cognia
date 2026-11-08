@@ -31,9 +31,9 @@ A2UI 的核心前提是模型能输出**真正的 UI**。这在 webview 里行�
   - lib/connectors/adapters/_shared/inbound-a2ui-dispatch.ts — `projectInboundToA2UI`：入站平台负载 → `InboundA2UIBlock`
   - lib/claude/hitl/workflow-approval-surface.ts — 纯函数审批表面构建器（`buildApprovalSurface`，内核）
   - lib/connectors/run-presentation/runner.ts — 实时运行卡片（不属于桥接层；在平台连接器文档中说明）
-  - lib/a2ui/connector-callback-handler.ts — 通用回调 → AI 摘要轮次
-  - lib/a2ui/workflow-approval-handler.ts — `wf_approve` / `wf_cancel` 派发器
-  - lib/a2ui/workflow-fanout-handler.ts — `wf_fanout_approve` / `wf_fanout_cancel` 派发器
+  - lib/connectors/hitl/connector-callback-handler.ts — 通用回调 → AI 摘要轮次
+  - lib/connectors/hitl/workflow-approval-handler.ts — `wf_approve` / `wf_cancel` 派发器
+  - lib/connectors/hitl/workflow-fanout-handler.ts — `wf_fanout_approve` / `wf_fanout_cancel` 派发器
 </Files>
 
 ## 出站：表面 → 分片

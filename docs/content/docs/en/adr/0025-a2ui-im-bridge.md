@@ -130,7 +130,7 @@ the 4-step pipeline: dedup (namespace `"callback"` on `inboundLedger`) →
 binding lookup (`resolveCallbackBinding`) → audit
 (`callback.received` / `callback.deduped` / `callback.unbound`) → handler.
 
-The handler — `lib/a2ui/connector-callback-handler.ts` — appends the action
+The handler — `lib/connectors/hitl/connector-callback-handler.ts` — appends the action
 to `a2uiEventHistory` and calls `runConnectorDigestTurn` from
 `scheduled-outbound.ts` so the assistant's next turn sees the click as if
 it had happened in the renderer. Browser-side and IM-side users converge
@@ -146,10 +146,10 @@ asking the model to re-interpret it is both slower and less reliable:
 | `kind`                | Handled by                                    |
 | --------------------- | --------------------------------------------- |
 | `issue_action`        | `lib/issues/im/callback-handler.ts`            |
-| `wf_approve` / cancel | `lib/a2ui/workflow-approval-handler.ts`        |
-| workflow fan-out      | `lib/a2ui/workflow-fanout-handler.ts`          |
+| `wf_approve` / cancel | `lib/connectors/hitl/workflow-approval-handler.ts`        |
+| workflow fan-out      | `lib/connectors/hitl/workflow-fanout-handler.ts`          |
 | `notification_action` | `lib/connectors/notifications/action-callback.ts` |
-| everything else       | `lib/a2ui/connector-callback-handler.ts`       |
+| everything else       | `lib/connectors/hitl/connector-callback-handler.ts`       |
 
 The vocabulary itself lives in `types/connectors/interaction.ts`, which is
 the storage of record for what a `kind` means. This ADR deliberately does

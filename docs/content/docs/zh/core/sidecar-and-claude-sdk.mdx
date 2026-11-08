@@ -217,7 +217,7 @@ SDK 边界采用版本化和自动审计，而不是透传任意 JSON。`protoco
 1. **角色系统提示** —— 当前 `Character.systemPrompt`。
 2. **Agent Mode**（`lib/agent/`）—— 内置或自定义模式追加 system prompt、覆盖 model / temperature / maxTokens。
 3. **技能解析** —— 启用的技能 markdown 经 `renderSkillsSection` 追加进系统提示，工具白名单取并（详见[技能子系统](../subsystems/skills/loading-and-injection)）。
-4. **A2UI** —— 当 `Character.a2uiEnabled` 时，注入 `A2UI_SYSTEM_PROMPT` 与 a2ui 工具白名单（`namespacedA2UIToolNames`）。
+4. **A2UI** —— 当 `Character.a2uiEnabled` 时，注入 a2ui 模块经 `a2ui-system-prompt` 端口给出的系统提示词段，并加入 a2ui 工具白名单（`namespacedA2UIToolNames`）。
 5. **孪生上下文（可选）** —— 当活动角色设置了 `twinId` 且 `ctx.twinDeps` + `ctx.twinUserMessage` 提供时，`lib/twin/runtime/apply-twin-context.ts` 包装消息，附加召回片段 + 风格少样本。详见 [employee-twin](../subsystems/employee-twin)。
 6. **MCP 配置** —— 内置 MCP 服务器（`lib/claude/builtin-mcp/`）与用户服务器（`lib/db/mcp-servers.ts`）合并。
 7. **Provider routing** —— `ProviderRoutingEngine` 把 alias（如 `claude-fast`）解析成具体 `provider:model`，并写入 `aliasResolution` / `routingDecision` 字段。
