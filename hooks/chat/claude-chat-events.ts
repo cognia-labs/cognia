@@ -1715,6 +1715,8 @@ export async function handleEvent(
 
       if (turnComplete && isOpen) {
         if (!isCurrentEvent()) return
+        // Idle releases the send lock, so retain this turn's target before any await.
+        const editTarget = useChatStore.getState().pendingArtifactEditTarget?.[sessionId] ?? null
         // Pin the Host-correlated attempt before terminal persistence awaits.
         // An uncorrelated result cannot borrow a newer turn's authority.
         const hookCredentialContext = {
@@ -1835,7 +1837,8 @@ export async function handleEvent(
         // Auto-detect artifacts in the assistant turn that just sealed.
         // Honors the artifacts settings block; off by default for
         // power-users that flip the toggle.
-        if (isCurrentEvent()) {
+        // A newer send may own lastSend now; only transcript invalidation cancels this sealed reply.
+        if (capturedWriteOptions?.shouldPersist?.() !== false) {
           try {
             const settings = useSettingsStore.getState().settings
             const artifactsCfg = settings?.artifacts
@@ -1843,9 +1846,6 @@ export async function handleEvent(
             const text = extractAssistantText(lastAssistant)
             if (text && lastAssistant) {
               const reviewEnabled = artifactsCfg?.reviewBeforeApply !== false
-              const editTarget =
-                useChatStore.getState().pendingArtifactEditTarget?.[sessionId] ?? null
-
               // Codex-style review gate: when the user aimed this turn at an
               // existing artifact (via a selection chip) and review is on, stage
               // the revision as a pending diff proposal instead of auto-creating
@@ -1869,8 +1869,11 @@ export async function handleEvent(
                   targetArtifactType: targetArtifact?.type,
                   detected,
                 })
-                // The target is single-use — consume it regardless of outcome.
-                useChatStore.getState().setPendingArtifactEditTarget(sessionId, null)
+                // Consume this turn's target without clearing a newer send's replacement.
+                const chat = useChatStore.getState()
+                if (chat.pendingArtifactEditTarget?.[sessionId] === editTarget) {
+                  chat.setPendingArtifactEditTarget(sessionId, null)
+                }
                 if (route.action === "propose") {
                   const proposal = useArtifactStore
                     .getState()

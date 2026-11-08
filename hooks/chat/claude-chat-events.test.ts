@@ -843,7 +843,7 @@ describe("artifact turn-complete policy", () => {
     )
   })
 
-  async function seal(content = text, shouldPersist?: () => boolean) {
+  async function seal(content = text, shouldPersist?: () => boolean, turnId?: string) {
     useChatStore.getState().replaceSessionMessages(sessionId, [])
     applySdkEventMock.mockReturnValueOnce({
       messages: [
@@ -858,7 +858,12 @@ describe("artifact turn-complete policy", () => {
     })
     try {
       await handleEvent(
-        { type: "event", sessionId, event: { type: "result" } } as never,
+        {
+          type: "event",
+          sessionId,
+          ...(turnId ? { turnId } : {}),
+          event: { type: "result" },
+        } as never,
         activeRef,
         { current: [] },
         { current: new Map() },
@@ -894,7 +899,22 @@ describe("artifact turn-complete policy", () => {
     expect(toast.success).not.toHaveBeenCalled()
   })
 
-  it("skips only artifact routing when the event becomes stale after sealing", async () => {
+  it("does not route artifacts for an event already stale when handled", async () => {
+    const create = jest.spyOn(useArtifactStore.getState(), "autoCreateFromContent")
+    mockPersistMessages.mockClear()
+    applySdkEventMock.mockClear()
+    try {
+      await seal(text, () => false)
+      expect(create).not.toHaveBeenCalled()
+      expect(applySdkEventMock).not.toHaveBeenCalled()
+      expect(mockPersistMessages).not.toHaveBeenCalled()
+      expect(toast.success).not.toHaveBeenCalled()
+    } finally {
+      applySdkEventMock.mockReset()
+    }
+  })
+
+  it("preserves utility work when transcript invalidation cancels artifact routing", async () => {
     let current = true
     useChatStore.getState().setSessionStatus(sessionId, "streaming")
     const staleSessionReads = jest.fn()
@@ -918,6 +938,96 @@ describe("artifact turn-complete policy", () => {
       unsubscribe()
     }
   })
+
+  it.each(["create", "revise"])(
+    "still routes the completed turn to %s when the next send starts during its session lookup",
+    async (route) => {
+      const original =
+        route === "revise"
+          ? useArtifactStore.getState().createArtifact({
+              sessionId,
+              messageId: "original",
+              type: "code",
+              title: "Original",
+              content: "old code",
+            })
+          : null
+      if (original)
+        useChatStore.getState().setPendingArtifactEditTarget(sessionId, {
+          artifactId: original.id,
+          requestId: "completed-request",
+        })
+      const nextArtifact = useArtifactStore.getState().createArtifact({
+        sessionId,
+        messageId: "next-target",
+        type: "code",
+        title: "Next target",
+        content: "next code",
+      })
+      useChatStore.getState().setLastSend(sessionId, {
+        content: "completed prompt",
+        options: { turnId: "completed-turn" },
+        attemptIndex: 0,
+      })
+      useChatStore.getState().setSessionStatus(sessionId, "streaming")
+      mockPersistMessages.mockClear()
+      let finishLookup!: (value: undefined) => void
+      const lookup = new Promise<undefined>((resolve) => {
+        finishLookup = resolve
+      })
+      let lookupHeld = false
+      mockReadSession.mockImplementation(() => {
+        if (!lookupHeld && useChatStore.getState().sessions[sessionId]?.status === "idle") {
+          lookupHeld = true
+          return lookup
+        }
+        return Promise.resolve(undefined)
+      })
+      const sealing = seal(text, undefined, "completed-turn")
+      const nextTarget = { artifactId: nextArtifact.id, requestId: "next-request" }
+      try {
+        await waitFor(() => expect(lookupHeld).toBe(true))
+        expect(useChatStore.getState().sessions[sessionId]?.status).toBe("idle")
+        expect(mockPersistMessages).toHaveBeenCalledWith(
+          sessionId,
+          expect.arrayContaining([expect.objectContaining({ id: "artifact-answer" })]),
+          undefined
+        )
+        useChatStore.getState().setLastSend(sessionId, {
+          content: "next prompt",
+          options: { turnId: "next-turn" },
+          attemptIndex: 0,
+        })
+        useChatStore.getState().setPendingArtifactEditTarget(sessionId, nextTarget)
+        useChatStore.getState().setSessionStatus(sessionId, "streaming")
+        finishLookup(undefined)
+        await sealing
+        if (original) {
+          expect(useArtifactStore.getState().getPendingReview(original.id)).toEqual(
+            expect.objectContaining({ requestId: "completed-request", proposedContent: code })
+          )
+          expect(Object.values(useArtifactStore.getState().artifacts)).toHaveLength(2)
+        } else {
+          await waitFor(() =>
+            expect(Object.values(useArtifactStore.getState().artifacts)).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({ messageId: "artifact-answer", content: code }),
+              ])
+            )
+          )
+        }
+        expect(useArtifactStore.getState().getPendingReview(nextArtifact.id)).toBeNull()
+        expect(useChatStore.getState().pendingArtifactEditTarget[sessionId]).toBe(nextTarget)
+        expect(useChatStore.getState().lastSendBySession[sessionId]?.options.turnId).toBe(
+          "next-turn"
+        )
+        expect(useChatStore.getState().sessions[sessionId]?.status).toBe("streaming")
+      } finally {
+        finishLookup(undefined)
+        await sealing
+      }
+    }
+  )
 
   it("routes and consumes the background session's edit target without creating a duplicate", async () => {
     const artifact = useArtifactStore.getState().createArtifact({
