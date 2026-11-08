@@ -230,6 +230,7 @@ import {
   getMessagePartRenderersRevision,
 } from "@/lib/plugin/api/message-part-renderers"
 import {
+  getToolResultRenderer,
   subscribeToolResultRenderers,
   getToolResultRenderersRevision,
 } from "@/lib/plugin/api/tool-result-renderers"
@@ -2216,13 +2217,16 @@ function renderToolPart(
   // A failed call and a still-running one open by default (the user needs the
   // trace / the live output); a settled success stays collapsed — except a
   // generated video, whose row IS the result the user asked for (its job card,
-  // then the video), not a trace of how the answer was reached.
+  // then the video), not a trace of how the answer was reached, and a card
+  // registered as the call's purpose (a proposal a person answers).
+  const toolName = toolNameOf(tp)
   const defaultOpen =
     preferenceOpen ??
     (mode === "detailed" ||
       tp.state === "output-error" ||
       tp.state === "input-available" ||
-      toolNameOf(tp) === VIDEO_GENERATE_TOOL_NAME)
+      toolName === VIDEO_GENERATE_TOOL_NAME ||
+      (toolName !== null && getToolResultRenderer(toolName)?.opensRow === true))
 
   // Every tool renders as an inline row (status dot + lead + target + meta +
   // chevron) through the shared `ToolRowShell` chrome: Bash gets the `$`

@@ -10,6 +10,7 @@ import {
   onBackgroundRunSettled,
   registerBackgroundDeliveryLane,
   registerBackgroundResultNotifyStrings,
+  registerRoomDeliveryLane,
   type BackgroundReplaySend,
 } from "./result-delivery"
 import type {
@@ -22,6 +23,7 @@ import {
   outboxRecordFromMonitor,
 } from "@/lib/background-tasks/job-settlement"
 import { WAKE_CAP_PER_HOUR, WAKE_COALESCE_MS } from "@/lib/background-tasks/wake-policy"
+import { squadHandoffOutboxRecord } from "@/lib/background-tasks/squad-handoff-outbox"
 
 const isSessionOpen = jest.fn(() => true)
 const sessionStatusOf = jest.fn(() => "idle")
@@ -579,7 +581,7 @@ describe("background job ends (ADR-0249)", () => {
     await settleJob(jobEnd("job-mine"))
     await settleJob(jobEnd("job-elsewhere"))
     await advance(WAKE_COALESCE_MS)
-    expect(claimDelivery).toHaveBeenCalledWith("job", "job-mine")
+    expect(claimDelivery).toHaveBeenCalledWith("job", "job-mine", "test-consumer")
     expect(send).toHaveBeenCalledTimes(1)
     expect(send.mock.calls[0][0]).toContain("(shellId job-mine)")
     expect(send.mock.calls[0][0]).not.toContain("job-elsewhere")
@@ -701,5 +703,140 @@ describe("the delivery lane", () => {
     onBackgroundRunSettled("run-2", meta(), settle())
     await flush()
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe("a character-team room's results (ADR-0252 §4)", () => {
+  let now = 200_000
+  const timers: Array<{ run: () => void; at: number }> = []
+  let journal: BackgroundTaskJournalRecord[] = []
+  const room = { id: "room-1", kind: "team", teamId: "team-1" }
+
+  const handoffEnd = (
+    squadRunId = "execution:team:r1",
+    outcome: "completed" | "failed" | "cancelled" = "completed",
+    proposerId = "ava"
+  ) =>
+    squadHandoffOutboxRecord({
+      roomId: "room-1",
+      brief: "Write a hello script",
+      startedAt: now - 60_000,
+      settledAt: now,
+      ...(outcome === "completed" ? { resultText: "hello.sh written" } : {}),
+      facts: {
+        proposerId,
+        toolUseId: "tu-1",
+        squadId: "sq-1",
+        squadName: "Builders",
+        delegationRunId: "execution:delegation:room-handoff:tu-1",
+        squadRunId,
+        outcome,
+      },
+    })
+
+  async function settleHandoff(record: BackgroundTaskJournalRecord) {
+    journal = [...journal.filter((row) => row.runId !== record.runId), record]
+    await onBackgroundJobSettled(record)
+    await flush()
+  }
+
+  async function advance(ms: number) {
+    now += ms
+    for (const timer of timers.splice(0).filter((candidate) => candidate.at <= now)) timer.run()
+    await flush()
+  }
+
+  const lanes = () => {
+    const chat = jest.fn().mockResolvedValue(true)
+    const roomSend = jest.fn().mockResolvedValue(true)
+    registerBackgroundReplaySend(chat)
+    const unregister = registerRoomDeliveryLane({
+      isReachable: () => true,
+      isIdle: () => true,
+      send: roomSend,
+      consumerId: () => "room:db",
+    })
+    return { chat, roomSend, unregister }
+  }
+
+  beforeEach(() => {
+    now = 200_000
+    timers.length = 0
+    journal = []
+    getSession.mockResolvedValue(room)
+    listBackgroundTaskRecords.mockImplementation(async () =>
+      journal.filter((row) => row.deliveryState === "pending")
+    )
+    updateBackgroundTaskRecord.mockImplementation((async (runId: string, patch: object) => {
+      journal = journal.map((row) => (row.runId === runId ? { ...row, ...patch } : row))
+    }) as never)
+    __setBackgroundJobDeliveryDepsForTesting({
+      now: () => now,
+      isBudgetExhausted: async () => false,
+      inlineMonitors: async () => new Set(),
+      claimDelivery: async () => true,
+      schedule: (run, ms) => {
+        timers.push({ run, at: now + ms })
+        return timers.length
+      },
+      cancel: () => undefined,
+    })
+  })
+
+  it("wakes the room for the proposers through the room's lane, never the chat lane", async () => {
+    const { chat, roomSend } = lanes()
+    await settleHandoff(handoffEnd("execution:team:r1", "completed", "ava"))
+    await settleHandoff(handoffEnd("execution:team:r2", "failed", "bee"))
+    // A wake: the coalescing window comes first.
+    expect(roomSend).not.toHaveBeenCalled()
+    await advance(WAKE_COALESCE_MS)
+    expect(chat).not.toHaveBeenCalled()
+    expect(roomSend).toHaveBeenCalledTimes(1)
+    const [framed, sessionId, , personalRunIds, targets] = roomSend.mock.calls[0]
+    expect(sessionId).toBe("room-1")
+    expect(framed).toContain('Squad "Builders" (run execution:team:r1) finished')
+    expect(framed).toContain("hello.sh written")
+    expect(framed).toContain("(run execution:team:r2) failed")
+    expect(personalRunIds).toEqual([])
+    expect(targets).toEqual({ memberIds: ["ava", "bee"] })
+    expect(journal.every((row) => row.deliveryState === "delivered")).toBe(true)
+  })
+
+  it("keeps a room's results while it has no lane here, and owes a stopped run nothing", async () => {
+    const { chat, roomSend, unregister } = lanes()
+    unregister()
+    await settleHandoff(handoffEnd())
+    await advance(WAKE_COALESCE_MS)
+    expect(chat).not.toHaveBeenCalled()
+    expect(journal[0]?.deliveryState).toBe("pending")
+
+    journal = []
+    registerRoomDeliveryLane({
+      isReachable: () => true,
+      isIdle: () => true,
+      send: roomSend,
+      consumerId: () => "room:db",
+    })
+    await settleHandoff(handoffEnd("execution:team:r9", "cancelled"))
+    await advance(WAKE_COALESCE_MS)
+    expect(roomSend).not.toHaveBeenCalled()
+  })
+
+  it("waits for a busy room's turn boundary", async () => {
+    let idle = false
+    const roomSend = jest.fn().mockResolvedValue(true)
+    registerRoomDeliveryLane({
+      isReachable: () => true,
+      isIdle: () => idle,
+      send: roomSend,
+      consumerId: () => "room:db",
+    })
+    await settleHandoff(handoffEnd())
+    await advance(WAKE_COALESCE_MS)
+    expect(roomSend).not.toHaveBeenCalled()
+    idle = true
+    maybeDrainBackgroundResults("room-1", { turnSettled: true })
+    await flush()
+    expect(roomSend).toHaveBeenCalledTimes(1)
   })
 })

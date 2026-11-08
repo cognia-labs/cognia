@@ -3,6 +3,11 @@ import { TEAM_MESSAGING_PROTOCOL, TEAM_TOOL_NAMES, teamToolFamily } from "./coll
 import { SQUAD_TOOL_NAMES, templateToolFamily } from "./template-tools"
 import { toolFamily } from "./agent-tools"
 import {
+  ROOM_HANDOFF_INSTRUCTIONS,
+  __setRoomHandoffToolDepsForTesting,
+  roomHandoffToolFamily,
+} from "./room-handoff/tool"
+import {
   clearTeamDispatchContext,
   registerTeamDispatchContext,
 } from "@/lib/claude/agents/dispatch-context-registry"
@@ -32,6 +37,7 @@ beforeEach(() =>
 )
 afterEach(() => {
   clearTeamDispatchContext("team-sess")
+  __setRoomHandoffToolDepsForTesting(null)
   jest.restoreAllMocks()
 })
 
@@ -58,12 +64,33 @@ describe("the squads tool family", () => {
     expect(await toolFamily.surface(surfaceCtx({}))).toBeNull()
   })
 
+  it("offers a room's member the hand-off, with its instructions beside the templates'", async () => {
+    __setRoomHandoffToolDepsForTesting({
+      listSquads: () => [{ id: "sq-1", name: "Builders" }],
+      getSession: async () => undefined,
+      decide: jest.fn(),
+    })
+    const ctx = {
+      ...surfaceCtx({ templates: true }),
+      session: { id: "room-1", kind: "team", teamId: "team-1" },
+      agent: { id: "ava" },
+    } as unknown as ToolSurfaceContext
+    const surface = await toolFamily.surface(ctx)
+    expect(surface!.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["room_handoff_to_squad", SQUAD_TOOL_NAMES.list])
+    )
+    expect(surface!.instructions).toBe(ROOM_HANDOFF_INSTRUCTIONS)
+  })
+
   it("routes a call to the half that declares its name", async () => {
     const team = jest.spyOn(teamToolFamily, "run").mockResolvedValue("team")
     const template = jest.spyOn(templateToolFamily, "run").mockResolvedValue("template")
+    const room = jest.spyOn(roomHandoffToolFamily, "run").mockResolvedValue("room")
     expect(await toolFamily.run(TEAM_TOOL_NAMES.vote, {}, call)).toBe("team")
     expect(await toolFamily.run(SQUAD_TOOL_NAMES.applyTemplate, {}, call)).toBe("template")
+    expect(await toolFamily.run("room_handoff_to_squad", {}, call)).toBe("room")
     expect(team).toHaveBeenCalledWith(TEAM_TOOL_NAMES.vote, {}, call)
     expect(template).toHaveBeenCalledWith(SQUAD_TOOL_NAMES.applyTemplate, {}, call)
+    expect(room).toHaveBeenCalledWith("room_handoff_to_squad", {}, call)
   })
 })

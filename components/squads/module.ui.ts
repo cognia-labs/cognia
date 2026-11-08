@@ -4,6 +4,14 @@ import { defineUiModule } from "@/lib/modules/define"
 // `lib/squads/module.ts`.
 export default defineUiModule({
   id: "squads",
+  effects: [
+    // A room member's hand-off proposal, drawn in place of its tool call
+    // (ADR-0252 §4).
+    {
+      name: "room-handoff-card",
+      load: () => import("./room-handoff/room-handoff-card-effect"),
+    },
+  ],
   settingsSections: [
     {
       id: "squads",

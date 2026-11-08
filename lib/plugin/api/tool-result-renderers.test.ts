@@ -42,6 +42,13 @@ describe("registerToolResultRenderer", () => {
     ])
   })
 
+  it("records that a card opens its row only when the registration says so", () => {
+    registerToolResultRenderer("p1", "my_tool", CardA, { opensRow: true })
+    expect(getToolResultRenderer("my_tool")?.opensRow).toBe(true)
+    registerToolResultRenderer("p2", "other_tool", CardA)
+    expect(getToolResultRenderer("other_tool")).not.toHaveProperty("opensRow")
+  })
+
   it("returns undefined for an unregistered tool", () => {
     expect(getToolResultRenderer("nobody")).toBeUndefined()
   })

@@ -310,6 +310,18 @@ interface LaunchChildRunInput {
 - **分层。** `lib/chat/room` 不再导入 `hooks/`：`steer-runtime` 的纯逻辑已在 P4 移到 `lib/execution/steer-queue.ts`；`stream-coalescing` 和 `use-effective-cwd` 的纯部分移到 `lib/chat/` 下，hook 只留 React 外壳。
 - **验收。** headless 冒烟（真实模型）：角色团队房间里一个成员提议“让小队写一个 hello 脚本”，人确认，小队运行完成，房间里出现折叠结果，成员被唤醒并回应。桌面渲染与手机投影各验证一次卡片显示（手机在收尾阶段真机验证）。
 
+### 9.1 P6 落地设计（2026-11-08）
+
+按上面各条落地时定下的细节，偏离或补充之处都记在证据台账（D35–D44）：
+
+- **IM 确认移到 P7**（用户 2026-11-08 选定）。P6 的确认覆盖桌面、手机和配对 Host（ADR-0253 §9 的配对 Host 通道），三处走同一条命令；IM 卡片与回调随 P7 的 IM 房间绑定一起做。
+- **房间设置。** `RoomSettings.squadHandoff`：`confirm`（默认）或 `auto`，在成员面板的房间设置里切换。
+- **工具归属。** `room_handoff_to_squad` 是 squads 模块工具族的第三部分（`lib/squads/room-handoff/`）。房间属于 `chat` 内核，内核没有清单、不能贡献工具；启动小队本来就是 squads 的事。只在本地编排的角色团队房间（`isLocallyOrchestratedRoom`）里、对房间成员提供，描述里列出最多 20 个小队。权限规则：`consent: "allow"`、`effect: "write"`（偏离上一版的 `default`）：人回答的卡片或房间自己的 `auto` 设置就是同意，再问一次是重复；它启动的小队运行照常走自己的审批门与风险策略。
+- **卡片就是工具调用。** 成员回复里的工具调用部件由专门的渲染器画成提议卡（`components/squads/room-handoff/`），位置天然就在成员提出的地方，随消息同步到手机。渲染器经 squads 的 UI 清单 `effects` 注册（聊天内核不能导入 squads），注册时带 `opensRow`，让这一行默认展开。提议 id = 工具调用 id。决定（拒绝、启动失败，或已启动的委派与小队运行 id 及小队名，加上决定者：本机、配对设备或自动）写在该成员消息的 `metadata.squadHandoffs[<toolUseId>]` 上，只经房间 runner 的 `patchMessage` 写（运行中改流式 base，并在后续折叠里保留；否则写 store 与 Dexie），且只写一次，不覆盖。`auto` 的决定同时写在工具调用自己的输出里，因为工具调用可能先于房间应用这个部件。
+- **确认。** 一个函数 `decideRoomSquadHandoff`，按房间 + 工具调用串行、从不抛错。本机直接调用；配对设备经新的写命令 `room_squad_handoff_decide`（Rust 路由、命令与请求/响应目录、资源 `room.squad_handoff`、Host 表面策略、host-feature-manifest，与 `room_send` 同一套）。伴侣内核经新端口 `room-squad-handoff` 调到 squads，不直接导入模块。确认：`acceptDelegation`（id `room-handoff:<toolUseId>`，父运行是成员这一轮的工具运行，继承其行为身份），再 `launchChildRun({ delegationRunId, target: { kind: "squad", origin: "interactive" } })`；origin 用 `interactive` 而不是 `room`，因为非交互来源按无人值守处理，计划审批会直接失败。一次丢失的写留下的尝试会被复用，不再启动第二个；启动被拒时委派以失败落定并记录原因。`auto` 在工具调用里直接走同一个函数，执行者记为自动。P7 之前房间还没有绑定小队，默认小队来自工具参数，没有时卡片要求选一个。
+- **结果回流。** 没有单独的 `squad-run` 消息：已启动的卡片内嵌 `SquadRunPart`，实时读运行。小队结束后，结果经 ADR-0249 投递：每次尝试一条 `squad-handoff` 类出站记录（`squad-handoff:<squadRunId>`，背景任务日志里的已落定条目，7 天对账窗口），由进程内的结果写入，启动后与重启后的对账补写（只在小队 `completedAt` 与子运行结束相差 60 秒内才取它的 `finalResult`）；被停止的尝试不投递。投递核心按会话选择通道：本地编排的房间走新的房间通道（`lib/background-tasks/room-delivery-lane.ts`），把框定的结果作为自动轮次（`automatedTurn`，消息 id 去重，跳过记忆与标题）只发给提议的成员（`targetMemberIds`），受唤醒限额与预算约束。房间 runner 是内核，不能引用背景任务模块：它公开 `onTurnSettled`、`isIdle`、`readMessages`、`patchMessage`，由背景任务模块的运行时 `room-result-delivery`（brain 与桌面，手机不编排房间）订阅并在轮次结束后排空。
+- **steer 与停止。** 卡片上的输入框和按钮对委派运行走 P4 的 `dispatchRunControl`（surface `room-handoff`），委派处理器再扇出到小队运行；只显示运行快照允许的动作。
+
 ## 10. P7：ADR-0177 第 4、5 批
 
 - **IM 群绑定角色团队。** `ConversationOverrideRow` 新增 `characterTeamId`；`teamId` 改名为 `squadId`（非索引字段，不升 Dexie 版本；读取时兼容旧字段一次）。`lib/connectors/effective-config.ts` 与 inbox 覆盖 UI 同步。

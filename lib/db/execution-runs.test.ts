@@ -17,6 +17,7 @@ import {
   getExecutionRunSnapshot,
   listExecutionRunEvents,
   listExecutionRuns,
+  listExecutionRunsBySourcePrefix,
   type ExecutionRunQuery,
   listVisibleExecutionRunEvents,
   listExecutionRunBindings,
@@ -50,6 +51,26 @@ describe("execution run journal", () => {
     expect(event).toMatchObject({ type: "personal.marked", visibility: "private", seq: 0 })
     expect(await getExecutionRun(run.id)).toEqual(before)
     expect(await listVisibleExecutionRunEvents(run.id)).not.toContainEqual(event)
+  })
+
+  it("lists one kind's runs by source prefix, newest first", async () => {
+    const run = (id: string, kind: ExecutionRun["kind"], sourceId: string, updatedAt: number) =>
+      createExecutionRun({
+        id,
+        kind,
+        sourceId,
+        title: id,
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt,
+      })
+    await run("d1", "delegation", "room-handoff:tu-1", 5)
+    await run("d2", "delegation", "room-handoff:tu-2", 9)
+    await run("d3", "delegation", "inbound:msg-1", 7)
+    await run("t1", "team", "room-handoff:tu-3", 8)
+    const listed = await listExecutionRunsBySourcePrefix("delegation", "room-handoff:")
+    expect(listed.map((row) => row.id)).toEqual(["d2", "d1"])
   })
 
   it("settles a job once and rolls its journal back with the owner's transaction", async () => {

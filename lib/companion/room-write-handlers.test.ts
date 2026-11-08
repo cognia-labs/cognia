@@ -14,7 +14,12 @@ jest.mock("@/lib/db/paired-devices", () => ({
   getPairedDevice: (...args: unknown[]) => getPairedDeviceMock(...args),
 }))
 
-import { resolveRoomAuthor, roomSend, roomStop } from "./room-write-handlers"
+import {
+  resolveRoomAuthor,
+  roomSend,
+  roomSquadHandoffDecide,
+  roomStop,
+} from "./room-write-handlers"
 import { roomSendRefusalOf } from "./room-send-client"
 import type { RoomRunner, RoomSendOptions } from "@/lib/chat/room/runner"
 
@@ -552,5 +557,61 @@ describe("picked members and a single-member stop (ADR-0177 batch 3)", () => {
     await expect(
       roomStop({ sessionId: "room-1", callerDeviceId: "dev-1", characterId: "" }, deps(runner))
     ).rejects.toThrow(/characterId/)
+  })
+})
+
+describe("roomSquadHandoffDecide (ADR-0252 §4)", () => {
+  const decide = jest.fn(async (..._args: unknown[]) => ({
+    ok: true as const,
+    decision: { status: "declined" as const, decidedAt: 1, decidedBy: { kind: "local" as const } },
+  }))
+  const handoffDeps = (port: unknown = { decide }) => ({
+    squadHandoff: async () => port as never,
+  })
+  beforeEach(() => decide.mockClear())
+
+  it("decides as the calling device, through the Squad module's decision", async () => {
+    await expect(
+      roomSquadHandoffDecide(
+        {
+          sessionId: "room-1",
+          toolUseId: "tu-1",
+          decision: "confirm",
+          squadId: "sq-2",
+          callerDeviceId: "dev-1",
+        },
+        handoffDeps()
+      )
+    ).resolves.toMatchObject({ ok: true })
+    expect(decide).toHaveBeenCalledWith(
+      { roomId: "room-1", toolUseId: "tu-1", decision: "confirm", squadId: "sq-2" },
+      { kind: "device", deviceId: "dev-1" }
+    )
+  })
+
+  it("refuses a malformed request before deciding anything", async () => {
+    const base = {
+      sessionId: "room-1",
+      toolUseId: "tu-1",
+      decision: "decline",
+      callerDeviceId: "d",
+    }
+    const { callerDeviceId: _device, ...unverified } = base
+    await expect(roomSquadHandoffDecide(unverified, handoffDeps())).rejects.toThrow(
+      /callerDeviceId is required/
+    )
+    await expect(roomSquadHandoffDecide({ ...base, toolUseId: "" }, handoffDeps())).rejects.toThrow(
+      /toolUseId is required/
+    )
+    await expect(
+      roomSquadHandoffDecide({ ...base, decision: "maybe" }, handoffDeps())
+    ).rejects.toThrow(/must be "confirm" or "decline"/)
+    await expect(roomSquadHandoffDecide({ ...base, squadId: 5 }, handoffDeps())).rejects.toThrow(
+      /squadId must be a Squad id/
+    )
+    await expect(roomSquadHandoffDecide(base, handoffDeps(null))).rejects.toThrow(
+      /no Squads on this host/
+    )
+    expect(decide).not.toHaveBeenCalled()
   })
 })

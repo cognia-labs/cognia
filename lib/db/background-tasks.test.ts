@@ -27,6 +27,10 @@ import {
   outboxRecordFromJobExit,
   outboxRecordFromMonitor,
 } from "@/lib/background-tasks/job-settlement"
+import {
+  SQUAD_HANDOFF_RECONCILE_WINDOW_MS,
+  squadHandoffOutboxRecord,
+} from "@/lib/background-tasks/squad-handoff-outbox"
 
 /**
  * A stored entry. A renderer entry stores no status (its run is the status),
@@ -806,7 +810,9 @@ describe("shell-job and monitor entries (ADR-0249)", () => {
   })
 
   it("refuses an entry that is not a job's", async () => {
-    await expect(upsertBackgroundJobSettlement(started())).rejects.toThrow(/Not a background job/)
+    await expect(upsertBackgroundJobSettlement(started())).rejects.toThrow(
+      /Not a settled outbox entry/
+    )
   })
 
   it("keeps job entries inside the reconciliation window when pruning", async () => {
@@ -819,5 +825,68 @@ describe("shell-job and monitor entries (ADR-0249)", () => {
     expect((await listBackgroundTaskRecords()).map((record) => record.runId)).toEqual([
       "shell-job:job-1",
     ])
+  })
+})
+
+describe("squad-handoff entries (ADR-0252 §4)", () => {
+  const handoff = (squadRunId: string, settledAt: number) =>
+    squadHandoffOutboxRecord({
+      roomId: "room-1",
+      brief: "Write a hello script",
+      startedAt: settledAt - 1_000,
+      settledAt,
+      resultText: "hello.sh written",
+      facts: {
+        proposerId: "ava",
+        toolUseId: "tu-1",
+        squadId: "sq-1",
+        squadName: "Builders",
+        delegationRunId: "execution:delegation:room-handoff:tu-1",
+        squadRunId,
+        outcome: "completed",
+      },
+    })
+
+  it("writes an attempt's end once, keeps its own status, and reserves it for delivery", async () => {
+    await expect(
+      upsertBackgroundJobSettlement(handoff("execution:team:r1", 5_000))
+    ).resolves.toMatchObject({ kind: "created" })
+    await expect(
+      upsertBackgroundJobSettlement(handoff("execution:team:r1", 6_000))
+    ).resolves.toMatchObject({ kind: "known", record: { settledAt: 5_000 } })
+    // No `execution:job:` row stands behind it: the entry's status is its own.
+    await expect(getBackgroundTaskRecord("squad-handoff:execution:team:r1")).resolves.toMatchObject(
+      {
+        status: "done",
+        squadHandoff: { proposerId: "ava" },
+      }
+    )
+    await expect(
+      reserveBackgroundTaskDelivery("room-1", ["squad-handoff:execution:team:r1"], "delivery-1")
+    ).resolves.toEqual({ deliveryId: "delivery-1", runIds: ["squad-handoff:execution:team:r1"] })
+  })
+
+  it("keeps entries inside the hand-off window when pruning, so reconciliation never writes one twice", async () => {
+    const now = 40 * 24 * 60 * 60 * 1000
+    await upsertBackgroundJobSettlement(
+      handoff("execution:team:recent", now - JOB_RECONCILE_WINDOW_MS - 1)
+    )
+    await upsertBackgroundJobSettlement(
+      handoff("execution:team:old", now - SQUAD_HANDOFF_RECONCILE_WINDOW_MS - 1)
+    )
+    await expect(pruneBackgroundTaskRecords({ now, maxAgeMs: 1, maxItems: 0 })).resolves.toBe(1)
+    expect((await listBackgroundTaskRecords()).map((record) => record.runId)).toEqual([
+      "squad-handoff:execution:team:recent",
+    ])
+  })
+
+  it("is never flipped to interrupted at boot", async () => {
+    await upsertBackgroundJobSettlement(handoff("execution:team:r1", 5_000))
+    await interruptBackgroundTasksOnBoot({ host: "renderer" })
+    await expect(getBackgroundTaskRecord("squad-handoff:execution:team:r1")).resolves.toMatchObject(
+      {
+        status: "done",
+      }
+    )
   })
 })

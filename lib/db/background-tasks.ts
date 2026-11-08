@@ -8,6 +8,10 @@ import type {
 } from "@/lib/background-tasks/registry-core"
 import { interruptRunningTasks } from "@/lib/background-tasks/registry-core"
 import { isJobOutboxKind, JOB_RECONCILE_WINDOW_MS } from "@/lib/background-tasks/job-settlement"
+import {
+  isSettledOutboxKind,
+  outboxReconcileWindowMs,
+} from "@/lib/background-tasks/squad-handoff-outbox"
 // The contract package, not the kernel's `types/execution` (foundation).
 import { isTerminalRunStatus, type ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 import { getDb } from "./schema"
@@ -21,9 +25,9 @@ import { assertSessionWritable } from "@/lib/chat/session-write-guard"
  * before it was (`interruptedAt`). It stores no run status: the launcher's
  * `execution:job:<runId>` row is the run, and the read functions below join
  * it back as `status`. CLI-host entries keep storing `status` (the CLI journal
- * has no execution runs, ADR-0252 D13), and so do `shell-job` and `monitor`
- * entries, which are not runs at all (ADR-0249): they are written once, settled,
- * by `upsertBackgroundJobSettlement`.
+ * has no execution runs, ADR-0252 D13), and so do `shell-job`, `monitor` and
+ * `squad-handoff` entries, which are not runs of the outbox's own (ADR-0249,
+ * ADR-0252 §4): they are written once, settled, by `upsertBackgroundJobSettlement`.
  */
 
 export const BACKGROUND_TASK_LEASE_TTL_MS = 60_000
@@ -33,7 +37,7 @@ type LeaseOptions = { ownerId?: string; now?: () => number }
 
 /** Whether the entry keeps its own status instead of reading its run's. */
 function storesOwnStatus(row: Pick<BackgroundTaskJournalRow, "host" | "kind">): boolean {
-  return row.host !== "renderer" || isJobOutboxKind(row.kind)
+  return row.host !== "renderer" || isSettledOutboxKind(row.kind)
 }
 
 /**
@@ -190,16 +194,17 @@ export type JobSettlementUpsert =
   | { kind: "known"; record: BackgroundTaskJournalRecord }
 
 /**
- * Record a `shell-job` or `monitor` entry's end (ADR-0249 §1). Idempotent by
- * job or monitor id: the first report writes the settled entry, a repeat
- * leaves it as it is. One fact may still move: a monitor end first reported
- * as owed and since returned inline by the blocking call becomes `skipped`,
- * as long as no delivery batch has claimed it.
+ * Record a `shell-job`, `monitor` or `squad-handoff` entry's end (ADR-0249 §1,
+ * ADR-0252 §4). Idempotent by entry id (the job, the monitor, the Squad
+ * attempt): the first report writes the settled entry, a repeat leaves it as
+ * it is. One fact may still move: a monitor end first reported as owed and
+ * since returned inline by the blocking call becomes `skipped`, as long as no
+ * delivery batch has claimed it.
  */
 export async function upsertBackgroundJobSettlement(
   record: BackgroundTaskJournalRecord
 ): Promise<JobSettlementUpsert> {
-  if (!isJobOutboxKind(record.kind)) throw new Error("Not a background job entry")
+  if (!isSettledOutboxKind(record.kind)) throw new Error("Not a settled outbox entry")
   const db = getDb()
   return db.transaction("rw", db.backgroundTasks, async () => {
     const current = await db.backgroundTasks.get(record.runId)
@@ -488,15 +493,15 @@ export async function pruneBackgroundTaskRecords(opts: {
   await db.transaction("rw", db.backgroundTasks, async () => {
     // Outbox facts only: this transaction spans `backgroundTasks` alone.
     const rows = await listStoredRows(opts.host)
-    // A job entry inside the reconciliation window stays: dropping it would
-    // let the next reconciliation write it again and deliver it twice.
+    // A job or hand-off entry inside its reconciliation window stays:
+    // dropping it would let the next reconciliation write it again and
+    // deliver it twice.
+    const window = (row: BackgroundTaskJournalRow) =>
+      isJobOutboxKind(row.kind) ? JOB_RECONCILE_WINDOW_MS : outboxReconcileWindowMs(row.kind)
     const settled = rows.filter(
       (row) =>
         !isUnsettled(row) &&
-        !(
-          isJobOutboxKind(row.kind) &&
-          (row.settledAt ?? row.startedAt) > opts.now - JOB_RECONCILE_WINDOW_MS
-        )
+        !(window(row) > 0 && (row.settledAt ?? row.startedAt) > opts.now - window(row))
     )
     const doomed = new Set<string>()
     if (maxAgeMs > 0) {
@@ -708,7 +713,7 @@ export async function reserveBackgroundTaskDelivery(
           row &&
           row.sessionId === sessionId &&
           row.host === "renderer" &&
-          (row.kind === "subagent" || isJobOutboxKind(row.kind)) &&
+          (row.kind === "subagent" || isSettledOutboxKind(row.kind)) &&
           row.deliveryState === "pending" &&
           !isUnsettled(row) &&
           !isInterrupted(row)

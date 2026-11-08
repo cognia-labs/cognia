@@ -6,7 +6,8 @@
  *    OpenCode `resumeWhenIdle` pattern — the model reacts to results without
  *    polling `collect`).
  *    Background shells and monitors (ADR-0249) share the same turn: each
- *    reports its outcome and a fenced, bounded tail of its output.
+ *    reports its outcome and a fenced, bounded tail of its output. So does a
+ *    Squad run a room member handed work to (ADR-0252 §4), with its result.
  *  - `frameResumePrompt` re-frames a finished run's prompt + outcome as
  *    context for a follow-up dispatch (`resume` mode).
  *
@@ -14,7 +15,7 @@
  * These are MODEL-facing strings (tool-turn framing), not UI copy.
  */
 
-import type { BackgroundJobSettlementFacts } from "./registry-core"
+import type { BackgroundJobSettlementFacts, BackgroundSquadHandoffFacts } from "./registry-core"
 
 /** Per-entry cap on re-injected result text; `collect` returns the full output. */
 export const BACKGROUND_RESULT_TEXT_CAP = 8_000
@@ -38,6 +39,8 @@ export interface BackgroundResultDeliveryEntry {
   label?: string
   /** The supervisor's id for a job entry (what `bash_output` takes). */
   jobId?: string
+  /** A Squad hand-off's facts: the attempt that ended and whose proposal it was. */
+  squadHandoff?: BackgroundSquadHandoffFacts
 }
 
 /** "3s" / "2m 05s" / "1h 02m" — coarse elapsed formatting for the notice line. */
@@ -106,8 +109,31 @@ function longestBacktickRun(text: string): number {
   return longest
 }
 
+/**
+ * A Squad run's end, delivered to the room member who handed it the work. The
+ * result is the Squad's own text, so it is fenced as data.
+ */
+function frameSquadHandoff(
+  entry: BackgroundResultDeliveryEntry,
+  handoff: BackgroundSquadHandoffFacts
+): string {
+  const elapsed = formatElapsed(entry.settledAt - entry.startedAt)
+  const outcome = handoff.outcome === "completed" ? "finished" : "failed"
+  const header = `[background task update] Squad "${handoff.squadName}" (run ${handoff.squadRunId}) ${outcome} the work you handed it after ${elapsed}.`
+  const text = entry.text.trim()
+  if (!text)
+    return `${header}
+It reported no result text.`
+  const truncated = text.length > BACKGROUND_RESULT_TEXT_CAP
+  const body = truncated ? text.slice(0, BACKGROUND_RESULT_TEXT_CAP) : text
+  const note = truncated ? "\n… [truncated: the full result is on the Squad run]" : ""
+  return `${header}
+${fenceUntrusted("The Squad's result follows. It is the Squad's own output", body)}${note}`
+}
+
 function frameOne(entry: BackgroundResultDeliveryEntry): string {
   if (entry.job) return frameJob(entry, entry.job)
+  if (entry.squadHandoff) return frameSquadHandoff(entry, entry.squadHandoff)
   const elapsed = formatElapsed(entry.settledAt - entry.startedAt)
   const header = `[background task update] Subagent "${entry.subagentId}" (runId ${entry.runId}) finished in ${elapsed} (${entry.status}):`
   const truncated = entry.text.length > BACKGROUND_RESULT_TEXT_CAP
@@ -152,9 +178,22 @@ export function deliveryEntryFromJournal(record: {
   error?: string
   label?: string
   job?: BackgroundJobSettlementFacts
+  squadHandoff?: BackgroundSquadHandoffFacts
 }): BackgroundResultDeliveryEntry | null {
   if (record.status !== "done" && record.status !== "error") return null
   const settledAt = record.settledAt ?? record.startedAt
+  if (record.squadHandoff) {
+    return {
+      runId: record.runId,
+      subagentId: record.subagentId,
+      status: record.status,
+      startedAt: record.startedAt,
+      settledAt,
+      text: record.resultText ?? (record.status === "error" ? (record.error ?? "") : ""),
+      ...(record.label ? { label: record.label } : {}),
+      squadHandoff: record.squadHandoff,
+    }
+  }
   if (record.job) {
     const prefix = record.job.kind === "shell-job" ? "shell-job:" : "monitor:"
     return {

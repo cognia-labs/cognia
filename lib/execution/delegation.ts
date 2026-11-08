@@ -76,6 +76,13 @@ export interface AcceptDelegationInput {
   milestones?: readonly DelegationMilestoneSeed[]
   /** Binds the delegation to the IM conversation that asked for it. */
   session?: ChatSession
+  /**
+   * The run that asked for it (a room member's turn handing work to a Squad,
+   * ADR-0252 §4). The delegation is that run's child: it is linked to it and
+   * acts with its identity, never with a wider one. A parent without a
+   * readable row is refused.
+   */
+  parentRunId?: string
   now?: number
 }
 
@@ -120,37 +127,44 @@ export async function acceptDelegation(
     if (input.session) await ensureConnectorRunBinding(runId, input.projectId, input.session)
     return { runId, created: false }
   }
+  const parent = input.parentRunId ? await getExecutionRun(input.parentRunId) : undefined
+  if (input.parentRunId && !parent) {
+    throw new Error(`Delegation parent ${input.parentRunId} not found`)
+  }
 
   try {
     await createExecutionRun({
       id: runId,
-      ...recordedRunMetadata(
-        input.session?.origin?.kind === "scheduled-task"
-          ? "schedule"
-          : input.session?.origin?.kind === "gateway-api"
-            ? "external-event"
-            : input.session?.platformBinding
-              ? "requester"
-              : "external-event",
-        {
-          runId,
-          ...(input.session?.platformBinding && input.initiator?.remoteUserId
-            ? {
-                requesters: [
-                  {
-                    kind: "platform",
-                    platform: input.session.platformBinding.platform,
-                    adapterId: input.session.platformBinding.adapterId,
-                    remoteUserId: input.initiator.remoteUserId,
-                    ...(input.initiator.principalId
-                      ? { principalId: input.initiator.principalId }
-                      : {}),
-                  },
-                ],
-              }
-            : {}),
-        }
-      ),
+      ...(parent ? { parentRunId: parent.id } : {}),
+      ...(parent
+        ? recordedRunMetadata("child", { runId, parent })
+        : recordedRunMetadata(
+            input.session?.origin?.kind === "scheduled-task"
+              ? "schedule"
+              : input.session?.origin?.kind === "gateway-api"
+                ? "external-event"
+                : input.session?.platformBinding
+                  ? "requester"
+                  : "external-event",
+            {
+              runId,
+              ...(input.session?.platformBinding && input.initiator?.remoteUserId
+                ? {
+                    requesters: [
+                      {
+                        kind: "platform",
+                        platform: input.session.platformBinding.platform,
+                        adapterId: input.session.platformBinding.adapterId,
+                        remoteUserId: input.initiator.remoteUserId,
+                        ...(input.initiator.principalId
+                          ? { principalId: input.initiator.principalId }
+                          : {}),
+                      },
+                    ],
+                  }
+                : {}),
+            }
+          )),
       kind: "delegation",
       sourceId: input.delegationId,
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),

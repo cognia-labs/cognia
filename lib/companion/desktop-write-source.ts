@@ -95,7 +95,7 @@ import {
   handleTeamTaskMove,
   handleTeamRunStart,
 } from "@/lib/companion/agent-team-write-handlers"
-import { roomSend, roomStop } from "@/lib/companion/room-write-handlers"
+import { roomSend, roomSquadHandoffDecide, roomStop } from "@/lib/companion/room-write-handlers"
 import {
   handleExecutionRunControl,
   handleLegacyTeamRunControl,
@@ -697,6 +697,10 @@ export async function dispatchCommand(
       return roomSend(payload)
     case "room_stop":
       return roomStop(payload)
+    // A room member's hand-off to a Squad (ADR-0252 §4), decided on the
+    // device a person answered its card on.
+    case "room_squad_handoff_decide":
+      return roomSquadHandoffDecide(payload)
     // Remote Session Control — chunked attachment upload (ADR-0005 §4.5). The
     // bytes of a file staged on a phone reach the Host only through these five
     // arms; `message.enqueue` carries the ref they mint and nothing else.

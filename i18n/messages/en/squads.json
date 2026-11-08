@@ -213,5 +213,39 @@
   "settingsSection": {
     "description": "Squads are teams of agents you can hand a conversation to. Manage the ones you have, and start new ones from a template.",
     "label": "Squads"
+  },
+  "roomHandoff": {
+    "title": "Hand off to a Squad",
+    "squadLabel": "Squad",
+    "squadPlaceholder": "Pick a Squad",
+    "noSquads": "There are no Squads yet. Create one on the Squads page, then confirm here.",
+    "gatesNote": "The Squad run still asks for its own approvals.",
+    "confirm": "Start the Squad",
+    "decline": "Decline",
+    "refused": "The hand-off did not start: {reason}",
+    "declined": "Declined by {by}.",
+    "failedToStart": "The Squad run did not start: {reason}",
+    "started": "{squad} took it on. Started by {by}.",
+    "decidedBy": {
+      "local": "a person on the Host",
+      "device": "a paired device",
+      "auto": "the room's setting"
+    },
+    "refusal": {
+      "room_not_found": "This room is not run on this Host any more.",
+      "proposal_not_found": "The room no longer holds this proposal.",
+      "squad_required": "Pick a Squad first.",
+      "squad_not_found": "That Squad no longer exists.",
+      "write_failed": "The decision could not be saved. Try again.",
+      "failed": "The Host could not be reached. Try again."
+    },
+    "steerLabel": "Message to the Squad",
+    "steerPlaceholder": "Tell the Squad something…",
+    "steer": "Send",
+    "stop": "Stop the Squad",
+    "controlFailed": {
+      "steer": "The message did not reach the Squad.",
+      "stop": "The Squad could not be stopped."
+    }
   }
 }

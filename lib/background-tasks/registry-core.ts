@@ -9,9 +9,13 @@ export type BackgroundTaskHost = "renderer" | "cli"
  * (ADR-0249, ADR-0252 §9): an agent-started background shell or watch whose
  * end is owed to the conversation that started it. They store their own
  * status and carry the supervisor's facts in `job`.
+ *
+ * `squad-handoff` is a Squad run a room member handed work to (ADR-0252 §4):
+ * its end is owed to that member, in the room. Written once, settled, by the
+ * squads module, with its facts in `squadHandoff`; it stores its own status.
  */
 export type BackgroundTaskKind =
-  "subagent" | "plugin-agent" | "team-delegation" | "shell-job" | "monitor"
+  "subagent" | "plugin-agent" | "team-delegation" | "shell-job" | "monitor" | "squad-handoff"
 export type BackgroundTaskStatus = "running" | "done" | "error" | "interrupted"
 
 /**
@@ -55,6 +59,21 @@ export type BackgroundJobSettlementFacts =
       /** The blocking `Monitor` call already returned this outcome. */
       deliveredInline: boolean
     }
+
+/** What a `squad-handoff` entry reports: whose hand-off it was, and how its attempt ended. */
+export interface BackgroundSquadHandoffFacts {
+  /** The room member who proposed it; the result is delivered to them. */
+  proposerId: string
+  /** The proposal (the member's `room_handoff_to_squad` call). */
+  toolUseId: string
+  squadId: string
+  squadName: string
+  /** `execution:delegation:room-handoff:<toolUseId>`. */
+  delegationRunId: string
+  /** The attempt's execution run id (`execution:team:<runId>`). */
+  squadRunId: string
+  outcome: "completed" | "failed" | "cancelled"
+}
 
 export interface BackgroundTaskUsage {
   inputTokens?: number
@@ -138,6 +157,8 @@ export interface BackgroundTaskJournalRecord {
   label?: string
   /** The supervisor's facts for a `shell-job` or `monitor` entry. */
   job?: BackgroundJobSettlementFacts
+  /** A `squad-handoff` entry's facts. */
+  squadHandoff?: BackgroundSquadHandoffFacts
 }
 
 /** Journal fields mutable after start (settle + post-settle bookkeeping). */

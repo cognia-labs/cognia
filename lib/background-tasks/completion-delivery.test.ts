@@ -235,3 +235,59 @@ describe("job and monitor framing (ADR-0249 §2)", () => {
     expect(text).toContain("job job-1 exited with 0")
   })
 })
+
+describe("Squad hand-off framing (ADR-0252 §4)", () => {
+  const facts = {
+    proposerId: "ava",
+    toolUseId: "tu-1",
+    squadId: "sq-1",
+    squadName: "Builders",
+    delegationRunId: "execution:delegation:room-handoff:tu-1",
+    squadRunId: "execution:team:r1",
+    outcome: "completed" as const,
+  }
+  const entry = (overrides: Record<string, unknown> = {}) =>
+    deliveryEntryFromJournal({
+      runId: "squad-handoff:execution:team:r1",
+      subagentId: "sq-1",
+      status: "done",
+      startedAt: 1_000,
+      settledAt: 61_000,
+      resultText: "hello.sh written",
+      label: "Builders",
+      squadHandoff: facts,
+      ...overrides,
+    })!
+
+  it("tells the proposer which Squad finished its work, with the result fenced as data", () => {
+    expect(entry()).toMatchObject({ squadHandoff: facts, text: "hello.sh written" })
+    const text = frameBackgroundResults([entry()])
+    expect(text).toContain(
+      '[background task update] Squad "Builders" (run execution:team:r1) finished the work you handed it after 1m 00s.'
+    )
+    expect(text).toContain("The Squad's result follows. It is the Squad's own output")
+    expect(text).toContain("```\nhello.sh written\n```")
+  })
+
+  it("says a failed run failed, with its error, and when it reported nothing", () => {
+    const failed = entry({
+      status: "error",
+      resultText: undefined,
+      error: "budget exhausted",
+      squadHandoff: { ...facts, outcome: "failed" },
+    })
+    expect(frameBackgroundResults([failed])).toContain("failed the work you handed it")
+    expect(frameBackgroundResults([failed])).toContain("budget exhausted")
+    expect(frameBackgroundResults([entry({ resultText: "  " })])).toContain(
+      "It reported no result text."
+    )
+  })
+
+  it("caps an oversized result and says where the rest is", () => {
+    const text = frameBackgroundResults([
+      entry({ resultText: "y".repeat(BACKGROUND_RESULT_TEXT_CAP + 10) }),
+    ])
+    expect(text).toContain("[truncated: the full result is on the Squad run]")
+    expect(text).not.toContain("y".repeat(BACKGROUND_RESULT_TEXT_CAP + 1))
+  })
+})

@@ -1,6 +1,6 @@
 /**
- * `room_send` and `room_stop`: the host side of a companion driving a team
- * room (ADR-0177, batch 1).
+ * `room_send`, `room_stop` and `room_squad_handoff_decide`: the host side of
+ * a companion driving a team room (ADR-0177, batch 1; ADR-0252 §4).
  *
  * Both arms run on whichever host installed `desktop-write-source.ts`, the
  * desktop renderer or the headless brain, against the process-wide runner
@@ -34,12 +34,19 @@ import { roomSendRefusalMessage, type RoomSendResponse } from "./room-send-clien
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { readHostPerson } from "@/lib/identity/host-person"
 import { getPairedDevice } from "@/lib/db/paired-devices"
+import { loadPort } from "@/lib/modules/ports"
+import type {
+  RoomSquadHandoffDecideResult,
+  RoomSquadHandoffPort,
+} from "@/types/modules/ports/room-squad-handoff"
 
 export interface RoomWriteHandlerDeps {
   runner?: () => RoomRunner
   /** The person this host is bound to, or `null` off a bound host. */
   hostUserId?: () => Promise<string | null>
   deviceLabel?: (deviceId: string) => Promise<string | undefined>
+  /** The Squad module's hand-off decision, or `null` on a host without one. */
+  squadHandoff?: () => Promise<RoomSquadHandoffPort | null>
 }
 
 const defaultDeps: Required<RoomWriteHandlerDeps> = {
@@ -52,6 +59,7 @@ const defaultDeps: Required<RoomWriteHandlerDeps> = {
       return null
     }
   },
+  squadHandoff: () => loadPort("room-squad-handoff"),
   deviceLabel: async (deviceId) => {
     try {
       return (await getPairedDevice(deviceId))?.label
@@ -263,4 +271,34 @@ export async function roomStop(
   if (typeof characterId === "string") await runner.stopMember(sessionId, characterId)
   else await runner.stop(sessionId)
   return null
+}
+
+/**
+ * Decide a room member's proposal to hand work to a Squad (ADR-0252 §4) from
+ * a paired device, through the same decision the Host's card makes. The
+ * decider is the calling device, which the Rust layer verified. A refusal is
+ * an answer, not a failure: the card shows why.
+ */
+export async function roomSquadHandoffDecide(
+  payload: Record<string, unknown>,
+  deps: RoomWriteHandlerDeps = {}
+): Promise<RoomSquadHandoffDecideResult> {
+  const command = "room_squad_handoff_decide"
+  const roomId = requireString(payload, "sessionId", command)
+  const toolUseId = requireString(payload, "toolUseId", command)
+  const deviceId = requireString(payload, "callerDeviceId", command)
+  const decision = payload.decision
+  if (decision !== "confirm" && decision !== "decline") {
+    throw new Error(`${command}.decision must be "confirm" or "decline"`)
+  }
+  const squadId = payload.squadId
+  if (squadId !== undefined && (typeof squadId !== "string" || !squadId)) {
+    throw new Error(`${command}.squadId must be a Squad id when present`)
+  }
+  const port = await (deps.squadHandoff ?? defaultDeps.squadHandoff)()
+  if (!port) throw new Error(`${command}: no Squads on this host`)
+  return port.decide(
+    { roomId, toolUseId, decision, ...(typeof squadId === "string" ? { squadId } : {}) },
+    { kind: "device", deviceId }
+  )
 }

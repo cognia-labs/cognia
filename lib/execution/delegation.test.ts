@@ -9,6 +9,7 @@ import {
   getExecutionRun,
   listExecutionRunEvents,
 } from "@/lib/db/execution-runs"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "./acting-authority"
 
 import {
   acceptDelegation,
@@ -50,6 +51,28 @@ describe("delegation runs", () => {
     })
     expect((await getExecutionRun(runId))?.actingIdentity?.trigger).toBe("external-event")
   })
+  it("is the asking run's child, with its identity, and refuses a parent with no row", async () => {
+    const member = await startToolExecutionRun("room-1::char::ava::t1", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const { runId } = await acceptDelegation({
+      delegationId: "room-handoff:tu-1",
+      title: "Builders",
+      sessionId: "room-1",
+      parentRunId: member.id,
+    })
+    const run = await getExecutionRun(runId)
+    expect(run).toMatchObject({ parentRunId: member.id, kind: "delegation", sessionId: "room-1" })
+    expect(run?.actingIdentity).toMatchObject({
+      trigger: member.actingIdentity?.trigger,
+      rootRunId: member.actingIdentity?.rootRunId ?? member.id,
+    })
+    await expect(
+      acceptDelegation({ delegationId: "room-handoff:tu-2", title: "x", parentRunId: "gone" })
+    ).rejects.toThrow(/parent gone not found/)
+    expect(await getExecutionRun(delegationExecutionRunId("room-handoff:tu-2"))).toBeUndefined()
+  })
+
   it("does not infer attempt replacement from timestamps or unrelated obligations", () => {
     const base = { kind: "workflow", currentRevision: 0, startedAt: 1, updatedAt: 1 } as const
     const children: import("@/types/execution/run").ExecutionRun[] = [

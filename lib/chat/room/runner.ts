@@ -38,6 +38,10 @@ import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
 
 import type { ChatTemplateRun } from "@/lib/chat/template/run"
 import type { UIMessage } from "ai"
+import {
+  automatedTurnMetadata,
+  type AutomatedTurnProducer,
+} from "@cognia/agent-config-types/automated-turn"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { createDiagnostic } from "@cognia/diagnostics"
 import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
@@ -137,7 +141,7 @@ import {
 } from "./settings"
 import { isLocallyOrchestratedRoom, roomKindOf } from "./kind"
 import type { ResolvedRoomSettings, RoomTurnRefusal } from "./types"
-import { RoomStreamRegistry } from "./runner-streaming"
+import { RoomStreamRegistry, type RoomMessagePatch } from "./runner-streaming"
 import { deriveMemberActivity } from "./member-activity"
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
 import { contextSourcesOf } from "@/lib/claude/context-sources"
@@ -197,6 +201,15 @@ export interface RoomSendOptions {
   promptPreamble?: PromptPreambleSummary
   /** The records this turn cites, from the composer's sent chips. */
   citations?: readonly ContextRef[]
+  /**
+   * A turn no person typed (ADR-0249 §6): background results delivered into
+   * the room. Its user row is written under `messageId` and stamped
+   * `automatedTurnMetadata(producer)`, so a second delivery of the same batch
+   * finds the row and is accepted without a second turn. Its member runs carry
+   * no person's authority, and it leaves no turn memory and no title. It never
+   * queues as a steer: a busy room refuses it with `ROOM_BUSY`.
+   */
+  automatedTurn?: { producer: AutomatedTurnProducer; messageId: string }
 }
 
 /** Options for `editAndResend`: a send's, plus where to report files left out. */
@@ -316,6 +329,13 @@ export class RoomRunner {
     string,
     { label: string | null; timer: ReturnType<typeof setTimeout> | null }
   >()
+  /** Rooms whose current turn is automated: its member runs carry no person's authority. */
+  private readonly automatedTurns = new Set<string>()
+  /** Rooms whose reserved turn reached its members, so its end is a turn boundary. */
+  private readonly ranTurns = new Set<string>()
+  private readonly turnSettledListeners = new Set<(roomId: string) => void>()
+  /** Transcript writes from outside a turn, serialized per room (`patchMessage`). */
+  private readonly transcriptWrites = new Map<string, Promise<unknown>>()
   private disposed = false
 
   constructor(
@@ -382,6 +402,7 @@ export class RoomRunner {
     if (
       !skipsUserTurn(opts) &&
       !opts.branchTag &&
+      !opts.automatedTurn &&
       (status === "streaming" || status === "awaiting_approval")
     ) {
       return this.sendTurn(content, opts)
@@ -407,7 +428,105 @@ export class RoomRunner {
       this.pendingWebSearch.delete(sessionId)
       this.activeTurns.delete(sessionId)
       if (this.drainAfterTurn.delete(sessionId)) this.drainSteerInto(sessionId)
+      // After the steer drain decided: a person's queued turn goes first.
+      if (this.ranTurns.delete(sessionId)) this.emitTurnSettled(sessionId)
     }
+  }
+
+  // ---- The room as other writers see it (ADR-0252 §4) --------------------
+
+  /**
+   * Called when a room's turn ends, after its steer queue was replayed (a
+   * replay that started a new turn ends it later). The ADR-0249 delivery
+   * path drains a room's background results here. Returns an unsubscribe.
+   */
+  onTurnSettled(listener: (roomId: string) => void): () => void {
+    this.turnSettledListeners.add(listener)
+    return () => {
+      this.turnSettledListeners.delete(listener)
+    }
+  }
+
+  private emitTurnSettled(roomId: string): void {
+    for (const listener of [...this.turnSettledListeners]) {
+      try {
+        listener(roomId)
+      } catch (err) {
+        console.error("room turn-settled listener failed", err)
+      }
+    }
+  }
+
+  /** No turn of the room runs here and no steer waits: an automated turn may start. */
+  isIdle(roomId: string): boolean {
+    return (
+      !this.activeTurns.has(roomId) &&
+      !["streaming", "awaiting_approval"].includes(this.sinks.status.get(roomId) ?? "") &&
+      this.sinks.steer.queue(roomId).length === 0
+    )
+  }
+
+  /** The room's transcript as this host holds it now, a turn's unsaved output included. */
+  async readMessages(roomId: string): Promise<UIMessage[]> {
+    await this.transcriptWrites.get(roomId)
+    if (this.streams.baseOf(roomId) !== null) return this.streams.compose(roomId)
+    return this.sinks.messages.read(roomId) ?? (await this.deps.db.listMessages(roomId))
+  }
+
+  /**
+   * Change one message of the room's transcript from outside a turn, the one
+   * way to do so while this runner writes the room: mid-turn the patch is kept
+   * by the stream registry, so no member's event or fold puts the old message
+   * back. Serialized per room. Resolves `false` when the room holds no such
+   * message.
+   */
+  patchMessage(roomId: string, messageId: string, apply: RoomMessagePatch): Promise<boolean> {
+    const write = (this.transcriptWrites.get(roomId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.applyPatch(roomId, messageId, apply))
+    const tail = write.catch(() => false)
+    this.transcriptWrites.set(roomId, tail)
+    void tail.finally(() => {
+      if (this.transcriptWrites.get(roomId) === tail) this.transcriptWrites.delete(roomId)
+    })
+    return write
+  }
+
+  private async applyPatch(
+    roomId: string,
+    messageId: string,
+    apply: RoomMessagePatch
+  ): Promise<boolean> {
+    const { deps, sinks } = this
+    const isOpen = sinks.messages.isOpen(roomId)
+    // A turn that has not streamed yet seeds its base here, as its first
+    // event would, so the patch is in the base that event reads.
+    if (this.activeTurns.has(roomId) && this.streams.baseOf(roomId) === null) {
+      this.streams.setBase(
+        roomId,
+        isOpen
+          ? (sinks.messages.read(roomId) ?? (await deps.db.listMessages(roomId)))
+          : await deps.db.listMessages(roomId)
+      )
+    }
+    if (this.streams.patch(roomId, messageId, apply)) {
+      const composed = this.streams.compose(roomId)
+      if (!composed.some((message) => message.id === messageId)) return false
+      if (isOpen) sinks.messages.commit(roomId, composed)
+      await deps.db.persistMessages(roomId, composed)
+      return true
+    }
+    const held = sinks.messages.read(roomId)
+    const current = held ?? (await deps.db.listMessages(roomId))
+    const index = current.findIndex((message) => message.id === messageId)
+    if (index < 0) return false
+    const next = apply(current[index]!)
+    if (next === current[index]) return true
+    const list = [...current]
+    list[index] = next
+    if (held) sinks.messages.commit(roomId, list)
+    await deps.db.persistMessages(roomId, list)
+    return true
   }
 
   /**
@@ -452,6 +571,16 @@ export class RoomRunner {
     const arrivedWhile = sinks.status.get(sessionId)
     const session = admitted ?? (await this.admitLocalRoom(sessionId, opts.onRefused))
     if (!session?.teamId) return
+
+    // A delivery already written is accepted again without a second turn.
+    const automated = opts.automatedTurn
+    if (automated) {
+      const held = await this.readMessages(sessionId)
+      if (held.some((message) => message.id === automated.messageId)) {
+        opts.onAccepted?.()
+        return
+      }
+    }
 
     // Steer instead of a concurrent orchestration loop: a fresh user turn
     // while THIS room is still streaming would start a second orchestrator
@@ -567,15 +696,19 @@ export class RoomRunner {
     // 1. Persist the user turn first, tagging it as a "user" sender.
     let instantPreviewTitle: string | undefined
     if (!skipsUserTurn(opts)) {
-      const userMsg = withMetadata(makeUserMessage(content, undefined, opts.attachmentManifest), {
-        senderKind: "user",
-        ...(opts.continuationOf ? { continuationOf: opts.continuationOf } : {}),
-        ...(opts.targetMemberIds?.length ? { targetMemberIds: [...opts.targetMemberIds] } : {}),
-        ...(opts.templateRun ? { templateRun: opts.templateRun } : {}),
-        ...replyMetadata(opts),
-        ...referenceMetadata(content, opts),
-        ...authorMetadata(opts),
-      })
+      const userMsg = withMetadata(
+        makeUserMessage(content, automated?.messageId, opts.attachmentManifest),
+        {
+          senderKind: "user",
+          ...(automated ? automatedTurnMetadata(automated.producer) : {}),
+          ...(opts.continuationOf ? { continuationOf: opts.continuationOf } : {}),
+          ...(opts.targetMemberIds?.length ? { targetMemberIds: [...opts.targetMemberIds] } : {}),
+          ...(opts.templateRun ? { templateRun: opts.templateRun } : {}),
+          ...replyMetadata(opts),
+          ...referenceMetadata(content, opts),
+          ...authorMetadata(opts),
+        }
+      )
       if (opts.branchTag) {
         ;(userMsg as { metadata?: Record<string, unknown> }).metadata = {
           ...((userMsg as { metadata?: Record<string, unknown> }).metadata ?? {}),
@@ -624,6 +757,7 @@ export class RoomRunner {
     // status to idle, so the reverse order would strand the run status.
     sinks.status.setError(sessionId, null)
     sinks.status.set(sessionId, "streaming")
+    if (automated) this.automatedTurns.add(sessionId)
     opts.onAccepted?.()
 
     const turnId = deps.newTurnId()
@@ -721,6 +855,9 @@ export class RoomRunner {
         await this.runAutoRounds({ ...common, content, firstRoundTargets: targets, stopRequests })
       }
 
+      // Nobody said an automated turn's text: it is no memory and no title.
+      if (automated) return
+
       // Long-term memory write parity with direct chat. Only on clean completion.
       const finalMessages =
         sinks.messages.read(sessionId) ?? (await deps.db.listMessages(sessionId))
@@ -808,6 +945,8 @@ export class RoomRunner {
       for (const sub of [...this.memberStops]) {
         if (decodeSubSession(sub)?.teamSessionId === sessionId) this.memberStops.delete(sub)
       }
+      this.automatedTurns.delete(sessionId)
+      this.ranTurns.add(sessionId)
       sinks.status.set(sessionId, "idle")
       sinks.members.clearFor(sessionId)
       sinks.members.clearStopRequestsFor(sessionId)
@@ -1537,7 +1676,9 @@ export class RoomRunner {
     let executionRunId: string | undefined
     let executionFailed = true
     try {
-      executionRunId = await deps.execution.startMemberRun?.(sub)
+      executionRunId = await deps.execution.startMemberRun?.(sub, {
+        automated: this.automatedTurns.has(sessionId),
+      })
       if (executionRunId) {
         opts = { ...opts, turnId: executionRunId }
         ctx.options = { ...ctx.options, turnId: executionRunId }
@@ -1736,6 +1877,10 @@ export class RoomRunner {
         // Seed the committed base once per turn from the store slice (open
         // pane) or Dexie, then read every member's view off the registry so
         // no member ever sees another's half-written slice.
+        if (this.streams.baseOf(teamSessionId) === null) {
+          // A patch written just before this turn streamed is in what it reads.
+          await this.transcriptWrites.get(teamSessionId)
+        }
         if (this.streams.baseOf(teamSessionId) === null) {
           this.streams.setBase(
             teamSessionId,

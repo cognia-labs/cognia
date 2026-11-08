@@ -1,10 +1,10 @@
 import { defineHostModule } from "@/lib/modules/define"
 
 // Background work an agent leaves running (ADR-0249, ADR-0252 §9): the
-// outbox of background subagent runs, shell jobs and monitors, their
-// recovery, and the one delivery path that brings each result back into the
-// conversation owed it as a framed turn, bounded by the wake limiter, the
-// budget and the supervisor's claim.
+// outbox of background subagent runs, shell jobs, monitors and the Squad runs
+// room members handed work to, their recovery, and the one delivery path that
+// brings each result back into the conversation owed it as a framed turn,
+// bounded by the wake limiter, the budget and the supervisor's claim.
 export default defineHostModule({
   id: "background-tasks",
   kind: "module",
@@ -22,6 +22,7 @@ export default defineHostModule({
     "lib/background-tasks/registry-core.ts",
     "lib/background-tasks/renderer-subagent-registry.ts",
     "lib/background-tasks/result-delivery.ts",
+    "lib/background-tasks/squad-handoff-outbox.ts",
     "lib/background-tasks/wake-policy.ts",
   ],
   // Job ends reach a conversation the Host keeps through the Host's own
@@ -40,6 +41,20 @@ export default defineHostModule({
           "A window's consumer runs in BackgroundTaskInitializer, behind the vault unlock and the reachable-supervisor check, and delivers through the chat controller that registers the window's lane; a module runtime here would start a second consumer with no lane of its own.",
         mobile:
           "The phone consumes over its paired Host in the same BackgroundTaskInitializer, delivering through its chat controller's lane.",
+      },
+    },
+    // A character-team room's results (a Squad run a member handed work to)
+    // go through the room's own lane, on each host that orchestrates rooms.
+    {
+      name: "room-result-delivery",
+      criticality: "optional",
+      adapters: {
+        brain: { module: "./runtime-room-lane", hosts: ["brain"] },
+        desktop: "./runtime-room-lane",
+      },
+      absent: {
+        mobile:
+          "A phone never orchestrates a room: its Host runs the room's turns and delivers the room's results.",
       },
     },
   ],

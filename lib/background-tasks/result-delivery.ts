@@ -12,15 +12,19 @@
  * Who starts the turn is a lane, one per host: the renderer's chat
  * controller (`hooks/chat/background-result-runtime.ts`) and the Host
  * brain's automated turn (`./host-delivery-lane.ts`). A lane says whether a
- * conversation can be reached and is idle, and sends.
+ * conversation can be reached and is idle, and sends. A character-team room
+ * this host orchestrates has its own lane (`./room-delivery-lane.ts`): its
+ * turns are the room runner's, and a result goes to the members owed it.
  *
  * A turn taken only for job ends is a wake: a derived input, so a person's
  * queued turn still goes first (the steer drain runs before this one), and
  * it is bounded by the wake limiter (6 an hour, ends within 10 s merged) and
  * by the budget, which it never asks a person to raise. Over either, the
  * ends wait and one notification says so. Results owed alongside a run's
- * result go with it. Every job end is claimed from the supervisor first, so
- * two devices, or a device and the Host brain, never both deliver it.
+ * result go with it. A Squad hand-off's end (ADR-0252 §4) is a wake too: no
+ * turn of the room asked for it. Every job end is claimed from the supervisor
+ * first, so two devices, or a device and the Host brain, never both deliver
+ * it; a hand-off's end is written only on the Host that runs the room.
  *
  * Durable state and reserved batch identity live on the journal row.
  * Delivery completes only after the lane's work ledger acknowledges
@@ -39,16 +43,23 @@ import {
   backgroundResultRunIds,
   type BackgroundResultDeliveryEntry,
 } from "@/lib/background-tasks/completion-delivery"
-import { isJobOutboxKind, supervisorIdOf } from "@/lib/background-tasks/job-settlement"
+import { supervisorIdOf } from "@/lib/background-tasks/job-settlement"
+import { isSettledOutboxKind } from "@/lib/background-tasks/squad-handoff-outbox"
 import { WakeLimiter } from "@/lib/background-tasks/wake-policy"
 import { computeStableDigest } from "@/lib/ai/agent/execution/fingerprint"
+
+/** Who in a room the results are owed to: the members whose hand-offs ended. */
+export interface BackgroundDeliveryTargets {
+  memberIds: readonly string[]
+}
 
 /** The lane's send: inject the framed turn into a session. */
 export type BackgroundReplaySend = (
   framedText: string,
   sessionId: string,
   deliveryId: string,
-  personalRunIds?: readonly string[]
+  personalRunIds?: readonly string[],
+  targets?: BackgroundDeliveryTargets
 ) => Promise<boolean>
 
 /** Localized notification copy, supplied by the registering component. */
@@ -76,7 +87,7 @@ export interface BackgroundJobDeliveryDeps {
    * paired devices (or a window and a Host brain) may both hear one end, each
    * with its own outbox, and only the claimant delivers it.
    */
-  claimDelivery: (kind: "job" | "monitor", id: string) => Promise<boolean>
+  claimDelivery: (kind: "job" | "monitor", id: string, consumer: string) => Promise<boolean>
   schedule: (run: () => void, ms: number) => unknown
   cancel: (handle: unknown) => void
 }
@@ -95,6 +106,8 @@ export interface BackgroundDeliveryLane {
 }
 
 let lane: BackgroundDeliveryLane | undefined
+/** The lane for character-team rooms this host orchestrates. */
+let roomLane: BackgroundDeliveryLane | undefined
 let notifyStrings: BackgroundResultNotifyStrings | undefined
 /** In-memory pending queue: parentSessionId → runId → entry. */
 const pendingBySession = new Map<string, Map<string, BackgroundResultDeliveryEntry>>()
@@ -124,10 +137,8 @@ function defaultJobDeps(): BackgroundJobDeliveryDeps {
           .map((monitor) => monitor.id)
       )
     },
-    claimDelivery: async (kind, id) => {
+    claimDelivery: async (kind, id, consumer) => {
       const { claimBackgroundJobDelivery } = await import("@/lib/jobs/background-jobs")
-      const consumer = lane?.consumerId()
-      if (!consumer) throw new Error("No delivery lane to claim for")
       return claimBackgroundJobDelivery({ kind, id, consumer })
     },
     schedule: (run, ms) => setTimeout(run, ms),
@@ -150,6 +161,18 @@ export function registerBackgroundDeliveryLane(next: BackgroundDeliveryLane): ()
   }
 }
 
+/**
+ * Register this host's lane for the character-team rooms it orchestrates
+ * (returns an unregister). A room's results go through it, never through the
+ * chat lane, whose turns are a single agent's.
+ */
+export function registerRoomDeliveryLane(next: BackgroundDeliveryLane): () => void {
+  roomLane = next
+  return () => {
+    if (roomLane === next) roomLane = undefined
+  }
+}
+
 /** Register localized notification copy (boot initializer). */
 export function registerBackgroundResultNotifyStrings(
   strings: BackgroundResultNotifyStrings
@@ -162,6 +185,7 @@ export function registerBackgroundResultNotifyStrings(
 
 export function __resetBackgroundResultRuntimeForTesting(): void {
   lane = undefined
+  roomLane = undefined
   notifyStrings = undefined
   pendingBySession.clear()
   deliveryLocks.clear()
@@ -206,12 +230,13 @@ export function onBackgroundRunSettled(
 /**
  * A background shell's or monitor's end reached this window (ADR-0249): from
  * `jobs://exited` / `jobs://monitor-fired`, an in-process shell's
- * `background_job_settled` frame, or reconciliation. Records it in the
- * outbox (idempotent by job id, so a repeat changes nothing) and, when the
- * conversation is owed it, opens the session's coalescing window.
+ * `background_job_settled` frame, or reconciliation. Or a Squad hand-off's
+ * attempt ended (ADR-0252 §4). Records it in the outbox (idempotent by entry
+ * id, so a repeat changes nothing) and, when the conversation is owed it,
+ * opens the session's coalescing window.
  */
 export async function onBackgroundJobSettled(record: BackgroundTaskJournalRecord): Promise<void> {
-  if (!isJobOutboxKind(record.kind) || !record.sessionId) return
+  if (!isSettledOutboxKind(record.kind) || !record.sessionId) return
   let stored = record
   try {
     const { upsertBackgroundJobSettlement } = await import("@/lib/db/background-tasks")
@@ -270,17 +295,18 @@ export async function attemptBackgroundResultDelivery(sessionId: string): Promis
       return
     }
 
-    const current = lane
+    const { isLocallyOrchestratedRoom } = await import("@/lib/chat/room/kind")
+    const current = isLocallyOrchestratedRoom(session) ? roomLane : lane
     if (!current) return
     if (!(await current.isReachable(sessionId)) || !(await current.isIdle(sessionId))) return
     const send = current.send
 
     entries = await dropInlineMonitors(sessionId, entries)
     if (entries.length === 0) return
-    entries = await keepClaimedJobEnds(sessionId, entries)
+    entries = await keepClaimedJobEnds(sessionId, entries, current.consumerId())
     if (entries.length === 0) return
-    // Only job ends are owed: taking a turn for them is a wake.
-    const wake = entries.every((entry) => entry.job)
+    // Only job and hand-off ends are owed: taking a turn for them is a wake.
+    const wake = entries.every((entry) => entry.job || entry.squadHandoff)
     if (wake && !(await admitWake(sessionId, entries.length, session))) return
 
     const { reserveBackgroundTaskDelivery } = await import("@/lib/db/background-tasks")
@@ -297,13 +323,18 @@ export async function attemptBackgroundResultDelivery(sessionId: string): Promis
     const runIds = new Set(batch.runIds)
     const { childJobExecutionRunId } = await import("@/lib/execution/launch-child-run")
     const batchEntries = entries.filter((entry) => runIds.has(entry.runId))
-    // A job entry is not a run: only run results name the runs the turn answers.
-    const runResults = batchEntries.filter((entry) => !entry.job)
+    // A job or hand-off entry is not a run of the outbox's own: only run
+    // results name the runs the turn answers.
+    const runResults = batchEntries.filter((entry) => !entry.job && !entry.squadHandoff)
+    const memberIds = [
+      ...new Set(batchEntries.flatMap((entry) => entry.squadHandoff?.proposerId ?? [])),
+    ]
     const accepted = await send(
       frameBackgroundResults(batchEntries),
       sessionId,
       batch.deliveryId,
-      backgroundResultRunIds(runResults).map(childJobExecutionRunId)
+      backgroundResultRunIds(runResults).map(childJobExecutionRunId),
+      memberIds.length > 0 ? { memberIds } : undefined
     )
     if (!accepted) return
     if (wake) {
@@ -400,7 +431,8 @@ async function dropInlineMonitors(
  */
 async function keepClaimedJobEnds(
   sessionId: string,
-  entries: BackgroundResultDeliveryEntry[]
+  entries: BackgroundResultDeliveryEntry[],
+  consumer: string
 ): Promise<BackgroundResultDeliveryEntry[]> {
   const jobs = entries.filter((entry) => entry.job)
   if (jobs.length === 0) return entries
@@ -409,7 +441,7 @@ async function keepClaimedJobEnds(
       const kind = entry.job!.kind === "monitor" ? ("monitor" as const) : ("job" as const)
       const id = entry.jobId ?? supervisorIdOf({ runId: entry.runId, kind: entry.job!.kind })
       try {
-        return { entry, claimed: await jobDeps.claimDelivery(kind, id) }
+        return { entry, claimed: await jobDeps.claimDelivery(kind, id, consumer) }
       } catch {
         return { entry, claimed: null }
       }
@@ -458,7 +490,7 @@ async function readJournalRows(sessionId: string): Promise<BackgroundTaskJournal
     return rows.filter(
       (row) =>
         row.sessionId === sessionId &&
-        (row.kind === "subagent" || isJobOutboxKind(row.kind)) &&
+        (row.kind === "subagent" || isSettledOutboxKind(row.kind)) &&
         (row.status === "done" || row.status === "error")
     )
   } catch {
@@ -468,7 +500,11 @@ async function readJournalRows(sessionId: string): Promise<BackgroundTaskJournal
 
 async function readSession(
   sessionId: string
-): Promise<{ id: string; projectId?: string } | undefined> {
+): Promise<
+  | (Pick<import("@cognia/agent-config-types").ChatSession, "id" | "projectId"> &
+      Partial<import("@/lib/chat/room/kind").RoomKindSource>)
+  | undefined
+> {
   try {
     const { getSession } = await import("@/lib/db/sessions")
     return await getSession(sessionId)

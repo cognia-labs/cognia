@@ -68,4 +68,32 @@ describe("RoomStreamRegistry", () => {
     expect(reg.has("room")).toBe(false)
     expect(reg.compose("room")).toEqual([])
   })
+
+  it("keeps a patch through a stale event, a fold and a later seed, until the room is released", () => {
+    const reg = new RoomStreamRegistry()
+    const decided = (m: UIMessage) =>
+      (m as UIMessage & { metadata?: { decided?: boolean } }).metadata?.decided
+        ? m
+        : ({ ...m, metadata: { decided: true } } as UIMessage)
+    expect(reg.patch("room", "a1", decided)).toBe(false)
+    reg.setBase("room", [msg("u1")])
+    const a = reg.viewOf("room", "sub-a")
+    reg.applySubResult("room", "sub-a", [...a.view, msg("a1")], a.baseLength)
+    expect(reg.patch("room", "a1", decided)).toBe(true)
+    expect(reg.compose("room")[1]).toMatchObject({ metadata: { decided: true } })
+    // An event computed from the list before the patch.
+    reg.applySubResult("room", "sub-a", [msg("u1"), msg("a1")], a.baseLength)
+    expect(reg.compose("room")[1]).toMatchObject({ metadata: { decided: true } })
+    expect(reg.fold("room", "sub-a", [msg("u1"), msg("a1")])[1]).toMatchObject({
+      metadata: { decided: true },
+    })
+    reg.setBase("room", [msg("u1"), msg("a1")])
+    expect(reg.baseOf("room")?.[1]).toMatchObject({ metadata: { decided: true } })
+    // A patch that changes nothing keeps the list as it was.
+    const base = reg.baseOf("room")
+    reg.patch("room", "a1", decided)
+    expect(reg.baseOf("room")).toBe(base)
+    reg.release("room")
+    expect(reg.patch("room", "a1", decided)).toBe(false)
+  })
 })

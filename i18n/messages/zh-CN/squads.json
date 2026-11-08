@@ -213,5 +213,39 @@
   "settingsSection": {
     "description": "小队是可以承接整个会话的 Agent 团队。在这里管理已有小队，或从模板新建。",
     "label": "小队"
+  },
+  "roomHandoff": {
+    "title": "交给小队",
+    "squadLabel": "小队",
+    "squadPlaceholder": "选择小队",
+    "noSquads": "还没有小队。先在小队页面创建一个，再回来确认。",
+    "gatesNote": "小队运行仍会按它自己的审批提问。",
+    "confirm": "启动小队",
+    "decline": "拒绝",
+    "refused": "交接没有启动：{reason}",
+    "declined": "已由{by}拒绝。",
+    "failedToStart": "小队运行没有启动：{reason}",
+    "started": "{squad} 已接手，由{by}启动。",
+    "decidedBy": {
+      "local": "Host 上的人",
+      "device": "配对设备",
+      "auto": "房间设置"
+    },
+    "refusal": {
+      "room_not_found": "这个房间已不在这台 Host 上运行。",
+      "proposal_not_found": "房间里已没有这条提议。",
+      "squad_required": "请先选择一个小队。",
+      "squad_not_found": "这个小队已不存在。",
+      "write_failed": "决定没能保存，请重试。",
+      "failed": "连不上 Host，请重试。"
+    },
+    "steerLabel": "给小队的消息",
+    "steerPlaceholder": "给小队补充一句…",
+    "steer": "发送",
+    "stop": "停止小队",
+    "controlFailed": {
+      "steer": "消息没有送到小队。",
+      "stop": "小队没能停止。"
+    }
   }
 }

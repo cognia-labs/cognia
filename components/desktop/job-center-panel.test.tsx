@@ -193,6 +193,24 @@ it("leaves a shell's or monitor's outbox entry to the supervisor sections", asyn
   expect(screen.queryByText("sleep 5 && echo done")).not.toBeInTheDocument()
 })
 
+it("lists no Squad hand-off's end: its Squad run is listed with the runs", async () => {
+  const user = userEvent.setup()
+  useClientLiveQuery.mockReturnValue([
+    row({
+      runId: "squad-handoff:execution:team:r1",
+      kind: "squad-handoff",
+      subagentId: "squad-1",
+      prompt: "Write the hello script",
+      status: "done",
+      settledAt: Date.now() - 1_000,
+    }),
+  ])
+  render(<JobCenterPanel />)
+  await user.click(screen.getByTestId("status-job-center"))
+  await user.click(screen.getByRole("tab", { name: /History/ }))
+  expect(screen.queryByText("Write the hello script")).not.toBeInTheDocument()
+})
+
 // Compact sits among the mobile app bar's ghost icon buttons, so it takes their
 // tone and box; only the status-bar trigger stays muted.
 it("compact trigger matches the app bar's icon buttons", () => {

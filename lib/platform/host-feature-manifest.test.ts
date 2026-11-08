@@ -104,13 +104,13 @@ describe("host feature manifest", () => {
     })
     expect(manifest.features["room.host-run"]).toEqual({
       version: 1,
-      operations: ["room_send", "room_stop"],
+      operations: ["room_send", "room_stop", "room_squad_handoff_decide"],
     })
     expect(
       buildLocalHostFeatureManifest({ platform: "headless" }).features["room.host-run"]
     ).toEqual({
       version: 1,
-      operations: ["room_send", "room_stop"],
+      operations: ["room_send", "room_stop", "room_squad_handoff_decide"],
     })
     expect(manifest.limits).toMatchObject({
       maxHostStateSnapshotBytes: 512 * 1024,

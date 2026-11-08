@@ -666,10 +666,11 @@ export function buildLocalHostFeatureManifest({
   if (platform === "tauri" || platform === "headless") {
     // Team rooms (ADR-0177). Both hosts install the `room_send` / `room_stop`
     // arms through `lib/companion/desktop-write-source.ts` and run the turn on
-    // the process-wide `RoomRunner`; a companion shell never orchestrates.
+    // the process-wide `RoomRunner`; a companion shell never orchestrates. A
+    // member's hand-off to a Squad is decided there too (ADR-0252 §4).
     features["room.host-run"] = {
       version: 1,
-      operations: ["room_send", "room_stop"],
+      operations: ["room_send", "room_stop", "room_squad_handoff_decide"],
     }
     // The renderer round-trips. A host that runs the sidecar asks whichever
     // client started the turn to execute the tools that live in a renderer

@@ -127,10 +127,13 @@ it("binds the Dexie readers and writers the hook always used", async () => {
 
 it("routes admission through the broker, the lease helper and the slot key", async () => {
   const deps = createProductionRoomDeps()
-  expect(await deps.execution.startMemberRun?.("member")).toBe("member-run")
+  expect(await deps.execution.startMemberRun?.("member", { automated: false })).toBe("member-run")
   expect(startToolExecutionRun).toHaveBeenCalledWith("member", {
     localAuthorization: LOCAL_PERSON_RUN,
   })
+  // An automated room turn's member runs carry no person's authority.
+  await deps.execution.startMemberRun?.("member", { automated: true })
+  expect(startToolExecutionRun).toHaveBeenLastCalledWith("member", { automation: "service" })
   await deps.execution.finishMemberRun?.("member-run", false)
   expect(finishToolExecutionRun).toHaveBeenCalledWith("member-run", false)
   expect(deps.execution.isAtCapacity("ai-turn", "room-1")).toBe(true)

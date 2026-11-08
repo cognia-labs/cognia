@@ -19195,6 +19195,39 @@
       },
       "additionalProperties": false
     },
+    "room_squad_handoff_decide": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "toolUseId",
+        "decision"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The character-team room the proposal is in."
+        },
+        "toolUseId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The proposal: the member's room_handoff_to_squad tool call id (ADR-0252 §4)."
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "confirm",
+            "decline"
+          ]
+        },
+        "squadId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Squad to start, overriding the member's pick. Required when the member named none."
+        }
+      },
+      "additionalProperties": false
+    },
     "room_stop": {
       "type": "object",
       "required": [

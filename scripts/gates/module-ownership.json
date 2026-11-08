@@ -219,6 +219,7 @@
         "components/chat/message-parts/handler-badge.tsx",
         "components/chat/message-parts/kept-copy-source-badge.tsx",
         "components/chat/message-parts/mcp-renderers/common.tsx",
+        "components/chat/message-parts/squad-run-part.tsx",
         "components/chat/message-parts/tool-row.tsx",
         "components/chat/motion/motion-reveal.tsx",
         "components/chat/renderers/code-block.tsx",

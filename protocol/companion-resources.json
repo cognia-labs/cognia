@@ -1380,7 +1380,11 @@
         "trusted": {}
       }
     },
-    "room": {},
+    "room": {
+      "children": {
+        "squad_handoff": {}
+      }
+    },
     "power": {
       "children": {
         "screen_holds": {}

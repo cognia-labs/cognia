@@ -87,8 +87,8 @@ jest.mock("@/lib/claude/adapter", () => {
       }
       return { messages, turnComplete: false }
     },
-    makeUserMessage: (content: SendContent, _id?: string, manifest?: unknown) => ({
-      id: `u-${++userSeq}`,
+    makeUserMessage: (content: SendContent, id?: string, manifest?: unknown) => ({
+      id: id ?? `u-${++userSeq}`,
       role: "user",
       parts:
         typeof content === "string"
@@ -1786,4 +1786,145 @@ it("persists a marked room member's output through the canonical message writer"
   } finally {
     await fixture.dispose()
   }
+})
+
+describe("the room as other writers see it (ADR-0252 §4)", () => {
+  const stamp = (key: string) => (message: UIMessage) => {
+    const metadata = (message as Msg).metadata ?? {}
+    if (metadata[key]) return message
+    return { ...message, metadata: { ...metadata, [key]: true } } as UIMessage
+  }
+
+  it("patches a settled message in the store and Dexie, and says when there is none", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    await w.runner.send("hello", { sessionId: ROOM })
+    await flush()
+    const reply = w.db.get(ROOM)!.find((m) => m.role === "assistant")!
+    await expect(w.runner.patchMessage(ROOM, reply.id, stamp("decided"))).resolves.toBe(true)
+    expect(w.db.get(ROOM)!.find((m) => m.id === reply.id)?.metadata).toMatchObject({
+      decided: true,
+    })
+    expect(w.store.get(ROOM)!.find((m) => m.id === reply.id)?.metadata).toMatchObject({
+      decided: true,
+    })
+    await expect(w.runner.patchMessage(ROOM, "nope", stamp("decided"))).resolves.toBe(false)
+  })
+
+  it("keeps a patch made mid-turn through the member's later events and its fold", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    let patched: Promise<boolean> | undefined
+    w.scripts.set("a", (sub, emit) => {
+      emit(assistantFrame(sub, "r-a", "working"))
+      setTimeout(() => {
+        patched = w.runner.patchMessage(ROOM, "r-a", stamp("decided"))
+        setTimeout(() => {
+          // Computed from the list before the patch, as a stale event would be.
+          emit(assistantFrame(sub, "r-a", "done"))
+          emit(resultFrame(sub))
+          emit(endedFrame(sub))
+        }, 0)
+      }, 0)
+    })
+    await w.runner.send("go", { sessionId: ROOM })
+    await flush(10)
+    await expect(patched).resolves.toBe(true)
+    const reply = w.db.get(ROOM)!.find((m) => m.id === "r-a")!
+    expect(reply.parts).toEqual([{ type: "text", text: "done" }])
+    expect(reply.metadata).toMatchObject({ decided: true })
+  })
+
+  it("reads the transcript a turn is writing, unsaved output included", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    let seen: string[] = []
+    w.scripts.set("a", (sub, emit) => {
+      emit(assistantFrame(sub, "r-a", "partial"))
+      setTimeout(() => {
+        void w.runner.readMessages(ROOM).then((messages) => {
+          seen = messages.map((m) => m.id)
+          emit(resultFrame(sub))
+          emit(endedFrame(sub))
+        })
+      }, 0)
+    })
+    await w.runner.send("go", { sessionId: ROOM })
+    await flush(10)
+    // The person's row is saved; the member's partial reply is not yet.
+    expect(seen).toEqual([w.db.get(ROOM)![0]!.id, "r-a"])
+  })
+
+  it("reports each turn's end after its steer replay, and an idle room only with no steer waiting", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    const settled: string[] = []
+    const off = w.runner.onTurnSettled((roomId) => {
+      settled.push(`${roomId}:${w.drained.length}`)
+    })
+    expect(w.runner.isIdle(ROOM)).toBe(true)
+    const turn = w.runner.send("go", { sessionId: ROOM })
+    expect(w.runner.isIdle(ROOM)).toBe(false)
+    await turn
+    expect(settled).toEqual([`${ROOM}:1`])
+    expect(w.runner.isIdle(ROOM)).toBe(true)
+    w.steerQueues.set(ROOM, [{ id: "q1", text: "later" } as SteerEntry])
+    expect(w.runner.isIdle(ROOM)).toBe(false)
+    off()
+    w.steerQueues.delete(ROOM)
+    await w.runner.send("again", { sessionId: ROOM })
+    expect(settled).toHaveLength(1)
+  })
+
+  it("reports no turn end for a turn refused at the door", async () => {
+    const w = createWorld({ session: { teamId: undefined } })
+    const settled: string[] = []
+    w.runner.onTurnSettled((roomId) => settled.push(roomId))
+    await w.runner.send("go", { sessionId: ROOM })
+    expect(settled).toEqual([])
+  })
+
+  it("writes an automated turn's row once, under its id, with members' runs off a person's authority", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    const started: { sub: string; automated: boolean }[] = []
+    w.deps.execution.startMemberRun = async (sub, options) => {
+      started.push({ sub, automated: options.automated })
+      return `run-${started.length}`
+    }
+    const accepted = jest.fn()
+    await w.runner.send("[background task update] done", {
+      sessionId: ROOM,
+      automatedTurn: { producer: "background-result", messageId: "delivery-1" },
+      targetMemberIds: ["a"],
+      onAccepted: accepted,
+    })
+    const row = w.db.get(ROOM)!.find((m) => m.id === "delivery-1")!
+    expect(row.metadata).toMatchObject({
+      automatedTurn: { producer: "background-result" },
+      targetMemberIds: ["a"],
+    })
+    expect(started).toEqual([{ sub: expect.any(String), automated: true }])
+    expect(accepted).toHaveBeenCalledTimes(1)
+    expect(w.runTurnMemory).not.toHaveBeenCalled()
+
+    await w.runner.send("[background task update] done", {
+      sessionId: ROOM,
+      automatedTurn: { producer: "background-result", messageId: "delivery-1" },
+      onAccepted: accepted,
+    })
+    expect(accepted).toHaveBeenCalledTimes(2)
+    expect(w.db.get(ROOM)!.filter((m) => m.id === "delivery-1")).toHaveLength(1)
+    expect(started).toHaveLength(1)
+
+    await w.runner.send("a person's turn", { sessionId: ROOM })
+    expect(started.at(-1)?.automated).toBe(false)
+  })
+
+  it("refuses an automated turn while the room is busy rather than queueing it as a steer", async () => {
+    const w = createWorld()
+    w.status.set(ROOM, "streaming")
+    await expect(
+      w.runner.send("[background task update] done", {
+        sessionId: ROOM,
+        automatedTurn: { producer: "background-result", messageId: "delivery-2" },
+      })
+    ).rejects.toMatchObject({ code: "ROOM_BUSY" })
+    expect(w.steerQueues.get(ROOM)).toBeUndefined()
+  })
 })

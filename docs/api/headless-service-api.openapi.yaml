@@ -161816,6 +161816,353 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
       x-cognia-response-schema-source: contract
+  /internal/_rpc/room_squad_handoff_decide:
+    post:
+      operationId: internalRpcRoomSquadHandoffDecide
+      tags:
+        - headless-rpc
+      summary: room_squad_handoff_decide (agent.run)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sessionId
+                - toolUseId
+                - decision
+              properties:
+                sessionId:
+                  type: string
+                  minLength: 1
+                  description: The character-team room the proposal is in.
+                toolUseId:
+                  type: string
+                  minLength: 1
+                  description: "The proposal: the member's room_handoff_to_squad tool call id (ADR-0252 §4)."
+                decision:
+                  type: string
+                  enum:
+                    - confirm
+                    - decline
+                squadId:
+                  type: string
+                  minLength: 1
+                  description: The Squad to start, overriding the member's pick. Required when the member named none.
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                description: "The decision, or why there is none. `already`: the proposal was decided before, and this is that
+                  decision."
+                x-cognia-wire-source: lib/companion/room-write-handlers.ts roomSquadHandoffDecide
+                oneOf:
+                  - type: object
+                    required:
+                      - ok
+                      - decision
+                    properties:
+                      ok:
+                        const: true
+                      decision:
+                        description: What was decided about one hand-off proposal, as recorded on the member's reply (`metadata.squadHandoffs`).
+                        x-cognia-wire-source: types/modules/ports/room-squad-handoff.ts RoomSquadHandoffDecision
+                        oneOf:
+                          - type: object
+                            required:
+                              - status
+                              - decidedAt
+                              - decidedBy
+                            properties:
+                              status:
+                                const: declined
+                              decidedAt:
+                                type: number
+                              decidedBy:
+                                oneOf:
+                                  - type: object
+                                    required:
+                                      - kind
+                                    properties:
+                                      kind:
+                                        const: local
+                                    additionalProperties: false
+                                  - type: object
+                                    required:
+                                      - kind
+                                      - deviceId
+                                    properties:
+                                      kind:
+                                        const: device
+                                      deviceId:
+                                        type: string
+                                    additionalProperties: false
+                                  - type: object
+                                    required:
+                                      - kind
+                                    properties:
+                                      kind:
+                                        const: auto
+                                    additionalProperties: false
+                            additionalProperties: false
+                          - type: object
+                            required:
+                              - status
+                              - squadId
+                              - squadName
+                              - delegationRunId
+                              - squadRunId
+                              - decidedAt
+                              - decidedBy
+                            properties:
+                              status:
+                                const: started
+                              squadId:
+                                type: string
+                              squadName:
+                                type: string
+                              delegationRunId:
+                                type: string
+                              squadRunId:
+                                type: string
+                              decidedAt:
+                                type: number
+                              decidedBy:
+                                oneOf:
+                                  - type: object
+                                    required:
+                                      - kind
+                                    properties:
+                                      kind:
+                                        const: local
+                                    additionalProperties: false
+                                  - type: object
+                                    required:
+                                      - kind
+                                      - deviceId
+                                    properties:
+                                      kind:
+                                        const: device
+                                      deviceId:
+                                        type: string
+                                    additionalProperties: false
+                                  - type: object
+                                    required:
+                                      - kind
+                                    properties:
+                                      kind:
+                                        const: auto
+                                    additionalProperties: false
+                            additionalProperties: false
+                          - type: object
+                            required:
+                              - status
+                              - squadId
+                              - reason
+                              - decidedAt
+                              - decidedBy
+                            properties:
+                              status:
+                                const: failed
+                              squadId:
+                                type: string
+                              reason:
+                                type: string
+                              decidedAt:
+                                type: number
+                              decidedBy:
+                                oneOf:
+                                  - type: object
+                                    required:
+                                      - kind
+                                    properties:
+                                      kind:
+                                        const: local
+                                    additionalProperties: false
+                                  - type: object
+                                    required:
+                                      - kind
+                                      - deviceId
+                                    properties:
+                                      kind:
+                                        const: device
+                                      deviceId:
+                                        type: string
+                                    additionalProperties: false
+                                  - type: object
+                                    required:
+                                      - kind
+                                    properties:
+                                      kind:
+                                        const: auto
+                                    additionalProperties: false
+                            additionalProperties: false
+                      already:
+                        type: boolean
+                    additionalProperties: false
+                  - type: object
+                    required:
+                      - ok
+                      - reason
+                    properties:
+                      ok:
+                        const: false
+                      reason:
+                        type: string
+                        enum:
+                          - room_not_found
+                          - proposal_not_found
+                          - squad_required
+                          - squad_not_found
+                          - write_failed
+                    additionalProperties: false
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
   /internal/_rpc/room_stop:
     post:
       operationId: internalRpcRoomStop
@@ -227532,6 +227879,7 @@ components:
           - retrieval_profile_dek_export
           - revoke_push_token
           - room_send
+          - room_squad_handoff_decide
           - room_stop
           - sandbox_preview_context
           - sandbox_preview_create
@@ -228059,10 +228407,10 @@ x-cognia-generated:
     - protocol/headless-command-dispositions.json
     - protocol/companion-command-renames.json
     - scripts/build/companion-request-schema-contracts.mjs
-  internalCommandCount: 997
-  generatedRequestSchemaCount: 997
+  internalCommandCount: 998
+  generatedRequestSchemaCount: 998
   runtimeInferredRequestSchemaCount: 0
-  contractRequestSchemaCount: 997
+  contractRequestSchemaCount: 998
   genericRequestSchemaCount: 0
-  generatedResponseSchemaCount: 997
+  generatedResponseSchemaCount: 998
   loopbackOnly: true

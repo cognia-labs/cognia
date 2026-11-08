@@ -22,6 +22,7 @@ export default defineHostModule({
   dependsOn: [
     "agent",
     "agent-runs",
+    "background-tasks",
     "board",
     "chat",
     "context-workbench",
@@ -105,8 +106,8 @@ export default defineHostModule({
   ],
   searchProviders: () => import("./search-provider"),
   prompts: () => import("./prompts"),
-  // The agent's tools, two kinds in one family (`./agent-tools.ts`). None of
-  // the runners takes a cancel signal.
+  // The agent's tools, three kinds in one family (`./agent-tools.ts`). None
+  // of the runners takes a cancel signal.
   //
   // The collaboration tools a teammate uses during its own dispatch turn,
   // opted in by `selfInvokeTools.teamCollaboration`. They never had a tier,
@@ -121,6 +122,11 @@ export default defineHostModule({
   // template ask the plugin consent broker inside the runner, under the
   // template tools' subject, so the tier allows them rather than asking
   // twice.
+  //
+  // The room hand-off a character-team room's member proposes (ADR-0252 §4).
+  // The card a person answers, or the room's own `auto` setting, is the
+  // consent, so the tier allows the call; the Squad run it starts keeps its
+  // own approval gates and risk policy.
   tools: {
     declare: {
       team_send_message: { consent: "default", effect: "write", cancellable: false },
@@ -138,6 +144,7 @@ export default defineHostModule({
       squad_list: { consent: "allow", effect: "read", cancellable: false },
       squad_apply_template: { consent: "allow", effect: "write", cancellable: false },
       squad_save_as_template: { consent: "allow", effect: "write", cancellable: false },
+      room_handoff_to_squad: { consent: "allow", effect: "write", cancellable: false },
     },
     load: () => import("./agent-tools"),
   },
@@ -148,6 +155,9 @@ export default defineHostModule({
   // through `squad-templates` because squads builds on templates.
   provides: [
     { port: "squad-launch", load: () => import("./ports/squad-launch") },
+    // Deciding a room member's hand-off to a Squad, for the Host's write arm
+    // a paired device decides through (ADR-0252 §4).
+    { port: "room-squad-handoff", load: () => import("./ports/room-squad-handoff") },
     { port: "twin-answer", load: () => import("./ports/twin-answer") },
     { port: "squad-templates", load: () => import("./ports/squad-templates") },
   ],

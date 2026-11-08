@@ -725,9 +725,11 @@ const KNOWN_COMMANDS: &[&str] = &[
     // a device's own read pointer is not remote control.
     "session_mark_read",
     "session_mark_unread",
-    // ADR-0177 team rooms: a companion hands a room turn to the host runner.
+    // ADR-0177 team rooms: a companion hands a room turn to the host runner,
+    // and decides a member's hand-off to a Squad (ADR-0252 §4) on the host.
     "room_send",
     "room_stop",
+    "room_squad_handoff_decide",
     // Remote Session Control — chunked attachment upload (ADR-0005 §4.5). The
     // bytes of a file staged on a phone reach the Host only through these;
     // `message.enqueue` carries the ref they mint and nothing else.
@@ -2450,9 +2452,11 @@ const CALLER_DEVICE_ID_COMMANDS: &[&str] = &[
     "session_detach",
     // ADR-0177 team rooms. The user row a companion's `room_send` persists is
     // attributed to the calling device, and `room_stop` is audited against it;
-    // a payload must not be able to name another device as the author.
+    // a payload must not be able to name another device as the author. A
+    // hand-off decision records the device that decided it.
     "room_send",
     "room_stop",
+    "room_squad_handoff_decide",
     // ADR-0162 file transfer. Every transfer handle is bound to the device that
     // obtained the approval, and every operation is attributed to it in the
     // terminal host's audit ring. Trusting a `deviceId` from the payload would

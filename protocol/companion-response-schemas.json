@@ -9354,6 +9354,112 @@
       },
       "additionalProperties": false
     },
+    "RoomSquadHandoffDecider": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "local" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "deviceId"],
+          "properties": { "kind": { "const": "device" }, "deviceId": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "auto" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RoomSquadHandoffDecision": {
+      "description": "What was decided about one hand-off proposal, as recorded on the member's reply (`metadata.squadHandoffs`).",
+      "x-cognia-wire-source": "types/modules/ports/room-squad-handoff.ts RoomSquadHandoffDecision",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "decidedAt", "decidedBy"],
+          "properties": {
+            "status": { "const": "declined" },
+            "decidedAt": { "type": "number" },
+            "decidedBy": { "$ref": "#/$defs/RoomSquadHandoffDecider" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "squadId",
+            "squadName",
+            "delegationRunId",
+            "squadRunId",
+            "decidedAt",
+            "decidedBy"
+          ],
+          "properties": {
+            "status": { "const": "started" },
+            "squadId": { "type": "string" },
+            "squadName": { "type": "string" },
+            "delegationRunId": { "type": "string" },
+            "squadRunId": { "type": "string" },
+            "decidedAt": { "type": "number" },
+            "decidedBy": { "$ref": "#/$defs/RoomSquadHandoffDecider" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["status", "squadId", "reason", "decidedAt", "decidedBy"],
+          "properties": {
+            "status": { "const": "failed" },
+            "squadId": { "type": "string" },
+            "reason": { "type": "string" },
+            "decidedAt": { "type": "number" },
+            "decidedBy": { "$ref": "#/$defs/RoomSquadHandoffDecider" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RoomSquadHandoffDecideResult": {
+      "description": "The decision, or why there is none. `already`: the proposal was decided before, and this is that decision.",
+      "x-cognia-wire-source": "lib/companion/room-write-handlers.ts roomSquadHandoffDecide",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["ok", "decision"],
+          "properties": {
+            "ok": { "const": true },
+            "decision": { "$ref": "#/$defs/RoomSquadHandoffDecision" },
+            "already": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["ok", "reason"],
+          "properties": {
+            "ok": { "const": false },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "room_not_found",
+                "proposal_not_found",
+                "squad_required",
+                "squad_not_found",
+                "write_failed"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "RouterFusionOutcome": {
       "type": "object",
       "description": "Router + Fusion's value envelope (ADR-0188): every outcome is a value, refusals included. `value` is the Run API answer the command names (RunCreated, RunSnapshotRead, RunEventsPage, RunSnapshot) or the reservation relay verdict; `error` carries the HTTP status and the contract code (403 ROUTER_FUSION_DISABLED while the companion switch is off).",
@@ -20809,6 +20915,9 @@
     },
     "room_stop": {
       "$ref": "#/$defs/NullResult"
+    },
+    "room_squad_handoff_decide": {
+      "$ref": "#/$defs/RoomSquadHandoffDecideResult"
     },
     "claude_session_control": {
       "$ref": "#/$defs/NullResult"

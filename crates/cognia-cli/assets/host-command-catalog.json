@@ -73101,6 +73101,313 @@
       "outputTyped": true
     },
     {
+      "name": "room_squad_handoff_decide",
+      "category": "agents",
+      "resource": "room",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "agent.run",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "room_squad_handoff_decide (agent.run)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "toolUseId",
+          "decision"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The character-team room the proposal is in."
+          },
+          "toolUseId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The proposal: the member's room_handoff_to_squad tool call id (ADR-0252 §4)."
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "confirm",
+              "decline"
+            ]
+          },
+          "squadId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The Squad to start, overriding the member's pick. Required when the member named none."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "description": "The decision, or why there is none. `already`: the proposal was decided before, and this is that decision.",
+        "x-cognia-wire-source": "lib/companion/room-write-handlers.ts roomSquadHandoffDecide",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "ok",
+              "decision"
+            ],
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "decision": {
+                "description": "What was decided about one hand-off proposal, as recorded on the member's reply (`metadata.squadHandoffs`).",
+                "x-cognia-wire-source": "types/modules/ports/room-squad-handoff.ts RoomSquadHandoffDecision",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "status",
+                      "decidedAt",
+                      "decidedBy"
+                    ],
+                    "properties": {
+                      "status": {
+                        "const": "declined"
+                      },
+                      "decidedAt": {
+                        "type": "number"
+                      },
+                      "decidedBy": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "local"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind",
+                              "deviceId"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "device"
+                              },
+                              "deviceId": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "auto"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "status",
+                      "squadId",
+                      "squadName",
+                      "delegationRunId",
+                      "squadRunId",
+                      "decidedAt",
+                      "decidedBy"
+                    ],
+                    "properties": {
+                      "status": {
+                        "const": "started"
+                      },
+                      "squadId": {
+                        "type": "string"
+                      },
+                      "squadName": {
+                        "type": "string"
+                      },
+                      "delegationRunId": {
+                        "type": "string"
+                      },
+                      "squadRunId": {
+                        "type": "string"
+                      },
+                      "decidedAt": {
+                        "type": "number"
+                      },
+                      "decidedBy": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "local"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind",
+                              "deviceId"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "device"
+                              },
+                              "deviceId": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "auto"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "status",
+                      "squadId",
+                      "reason",
+                      "decidedAt",
+                      "decidedBy"
+                    ],
+                    "properties": {
+                      "status": {
+                        "const": "failed"
+                      },
+                      "squadId": {
+                        "type": "string"
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "decidedAt": {
+                        "type": "number"
+                      },
+                      "decidedBy": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "local"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind",
+                              "deviceId"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "device"
+                              },
+                              "deviceId": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "kind"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "const": "auto"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "already": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "ok",
+              "reason"
+            ],
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "room_not_found",
+                  "proposal_not_found",
+                  "squad_required",
+                  "squad_not_found",
+                  "write_failed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
       "name": "room_stop",
       "category": "agents",
       "resource": "room",
@@ -111986,5 +112293,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "4073b9ff6386c900cf5a68e8a8b7e1f6968a873d847da23298790256d366059f"
+  "catalogHash": "af533c5b4473765f36397a63b15fcd7dd78cb0f32dc7171e1507cea9fcf443ad"
 }

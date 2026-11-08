@@ -71,8 +71,14 @@ export function createProductionRoomDeps(opts: ProductionRoomDepsOptions = {}): 
       },
     },
     execution: {
-      startMemberRun: async (sessionId) =>
-        (await startToolExecutionRun(sessionId, { localAuthorization: LOCAL_PERSON_RUN })).id,
+      // Automation never inherits a person's gesture (ADR-0249 §6).
+      startMemberRun: async (sessionId, { automated }) =>
+        (
+          await startToolExecutionRun(
+            sessionId,
+            automated ? { automation: "service" } : { localAuthorization: LOCAL_PERSON_RUN }
+          )
+        ).id,
       finishMemberRun: finishToolExecutionRun,
       isAtCapacity: (kind, sessionId) => getExecutionBroker().isAtCapacity(kind, sessionId),
       runWithExecutionLease: (request, run) => runWithExecutionLease(request as never, run),

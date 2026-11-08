@@ -1,5 +1,11 @@
 import squadsUi from "./module.ui"
 
+jest.mock("./room-handoff/room-handoff-card-effect", () => ({
+  __esModule: true,
+  default: function RoomHandoffCardEffect() {
+    return null
+  },
+}))
 jest.mock("@/components/settings/squads/squads-section", () => ({
   __esModule: true,
   default: function SquadsSection() {
@@ -24,6 +30,12 @@ describe("squads UI manifest", () => {
 
   it("loads the section component lazily, as a default export", async () => {
     const loaded = await squadsUi.settingsSections[0].load()
+    expect(typeof loaded.default).toBe("function")
+  })
+
+  it("contributes the room hand-off card as an effect", async () => {
+    expect(squadsUi.effects.map((effect) => effect.name)).toEqual(["room-handoff-card"])
+    const loaded = await squadsUi.effects[0].load()
     expect(typeof loaded.default).toBe("function")
   })
 })

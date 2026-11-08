@@ -34,6 +34,16 @@ export interface ToolResultRendererEntry {
   /** The normalized (bare) tool name this renderer claims. */
   toolName: string
   component: React.ComponentType<ToolResultRendererProps>
+  /**
+   * The card is what the call is for, not a trace of it (a proposal a person
+   * answers): its tool row opens by default, as a generated video's does.
+   */
+  opensRow?: boolean
+}
+
+export interface ToolResultRendererOptions {
+  /** See `ToolResultRendererEntry.opensRow`. */
+  opensRow?: boolean
 }
 
 const registry = new Map<string, ToolResultRendererEntry>()
@@ -58,11 +68,17 @@ export function toolResultRendererKey(toolName: string): string {
 export function registerToolResultRenderer(
   pluginId: string,
   toolName: string,
-  component: React.ComponentType<ToolResultRendererProps>
+  component: React.ComponentType<ToolResultRendererProps>,
+  options: ToolResultRendererOptions = {}
 ): () => void {
   const key = toolResultRendererKey(toolName)
   const prior = registry.get(key)
-  registry.set(key, { pluginId, toolName: key, component })
+  registry.set(key, {
+    pluginId,
+    toolName: key,
+    component,
+    ...(options.opensRow ? { opensRow: true } : {}),
+  })
   notify()
   return () => {
     const current = registry.get(key)

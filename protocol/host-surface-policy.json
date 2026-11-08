@@ -291,6 +291,7 @@
     "remote_desktop_local_call",
     "remote_desktop_session_open",
     "room_send",
+    "room_squad_handoff_decide",
     "run_agent_hook",
     "sandbox_exec",
     "sandbox_snapshot_create",

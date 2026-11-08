@@ -17,16 +17,30 @@
  * byte-identical to the old mirror. With several it is the parallel-safe
  * shape batch 3 (ADR-0177) needs.
  *
+ * A write from outside the turn (a decision recorded on a member's message
+ * while the room streams, ADR-0252 §4) is a patch: applied to the message
+ * now, and again to every list a member's event or fold hands in until the
+ * room's turn ends, so an event computed from the list before the patch
+ * cannot put the old message back.
+ *
  * Pure: no store, no Dexie, no React.
  */
 
 import type { UIMessage } from "ai"
+
+/**
+ * A change to one message. Applied more than once, so it must be idempotent,
+ * and should return the message itself when it already holds the change.
+ */
+export type RoomMessagePatch = (message: UIMessage) => UIMessage
 
 interface RoomStream {
   /** Committed transcript, or `null` until the first event reads it. */
   base: UIMessage[] | null
   /** New messages each active sub-session has produced, in start order. */
   slices: Map<string, UIMessage[]>
+  /** Patches recorded during this turn, by message id, in the order recorded. */
+  patches: Map<string, RoomMessagePatch[]>
 }
 
 export interface SubSessionView {
@@ -56,7 +70,22 @@ export class RoomStreamRegistry {
   /** Seed the base from the store slice or Dexie before the first event. */
   setBase(roomId: string, base: UIMessage[]): void {
     const room = this.room(roomId)
-    room.base = base
+    room.base = patched(room, base)
+  }
+
+  /**
+   * Patch a message of a room that is mid-turn, wherever it sits (the base or
+   * a member's slice), and keep the patch until the turn ends. Returns `false`
+   * when the room is not streaming here: the caller writes the transcript
+   * itself.
+   */
+  patch(roomId: string, messageId: string, apply: RoomMessagePatch): boolean {
+    const room = this.rooms.get(roomId)
+    if (!room) return false
+    room.patches.set(messageId, [...(room.patches.get(messageId) ?? []), apply])
+    if (room.base) room.base = patched(room, room.base)
+    for (const [sub, slice] of room.slices) room.slices.set(sub, patched(room, slice))
+    return true
   }
 
   /**
@@ -82,6 +111,7 @@ export class RoomStreamRegistry {
    */
   applySubResult(roomId: string, sub: string, next: UIMessage[], baseLength: number): void {
     const room = this.room(roomId)
+    next = patched(room, next)
     const head = next.slice(0, baseLength)
     const base = room.base ?? []
     const baseChanged = head.length !== base.length || head.some((m, i) => m !== base[i])
@@ -107,7 +137,7 @@ export class RoomStreamRegistry {
     const room = this.room(roomId)
     const slice = room.slices.get(sub) ?? []
     room.slices.delete(sub)
-    room.base = final ?? (room.base ?? []).concat(slice)
+    room.base = patched(room, final ?? (room.base ?? []).concat(slice))
     return room.base
   }
 
@@ -128,8 +158,23 @@ export class RoomStreamRegistry {
   private room(roomId: string): RoomStream {
     const existing = this.rooms.get(roomId)
     if (existing) return existing
-    const created: RoomStream = { base: null, slices: new Map() }
+    const created: RoomStream = { base: null, slices: new Map(), patches: new Map() }
     this.rooms.set(roomId, created)
     return created
   }
+}
+
+/** `list` with the room's patches applied; `list` itself when none changed anything. */
+function patched(room: RoomStream, list: UIMessage[]): UIMessage[] {
+  if (room.patches.size === 0) return list
+  let out: UIMessage[] | null = null
+  list.forEach((message, index) => {
+    const patches = room.patches.get(message.id)
+    if (!patches) return
+    const next = patches.reduce((current, apply) => apply(current), message)
+    if (next === message) return
+    out ??= [...list]
+    out[index] = next
+  })
+  return out ?? list
 }

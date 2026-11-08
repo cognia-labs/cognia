@@ -3007,6 +3007,47 @@ describe("a video_generate tool call", () => {
   })
 })
 
+describe("a tool call whose registered card is its purpose", () => {
+  const settledCall = (type: string) =>
+    ({
+      id: `a-${type}`,
+      role: "assistant",
+      parts: [
+        {
+          type,
+          toolCallId: `tc-${type}`,
+          state: "output-available",
+          input: { brief: "Ship it" },
+          output: { status: "proposed" },
+        },
+      ],
+    }) as never
+
+  it("opens its row for a renderer registered with opensRow, and keeps a plain card's settled", () => {
+    const { registerToolResultRenderer } =
+      require("@/lib/plugin/api/tool-result-renderers") as typeof import("@/lib/plugin/api/tool-result-renderers")
+    const Card = () => null
+    const offOpening = registerToolResultRenderer("module:test", "opening_card", Card, {
+      opensRow: true,
+    })
+    const offPlain = registerToolResultRenderer("module:test", "plain_card", Card)
+    try {
+      const { unmount } = render(<MessageRenderer message={settledCall("tool-opening_card")} />)
+      expect(
+        screen.getByTestId("structured-tool-part").querySelector("[aria-expanded]")
+      ).toHaveAttribute("aria-expanded", "true")
+      unmount()
+      render(<MessageRenderer message={settledCall("tool-plain_card")} />)
+      expect(
+        screen.getByTestId("structured-tool-part").querySelector("[aria-expanded]")
+      ).toHaveAttribute("aria-expanded", "false")
+    } finally {
+      offOpening()
+      offPlain()
+    }
+  })
+})
+
 describe("a /video job block", () => {
   it("renders the job's live card from the diagnostics part", () => {
     const message = {

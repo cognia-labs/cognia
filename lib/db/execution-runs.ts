@@ -137,6 +137,21 @@ export async function listExecutionRuns(query: ExecutionRunQuery = {}): Promise<
 }
 
 /**
+ * Every run of `kind` whose source id starts with `prefix`, newest first. Reads
+ * the `[kind+sourceId]` index, so it costs the matching rows only.
+ */
+export async function listExecutionRunsBySourcePrefix(
+  kind: ExecutionRun["kind"],
+  prefix: string
+): Promise<ExecutionRun[]> {
+  const rows = await getDb()
+    .executionRuns.where("[kind+sourceId]")
+    .between([kind, prefix], [kind, `${prefix}\uffff`], true, true)
+    .toArray()
+  return rows.sort((left, right) => right.updatedAt - left.updatedAt)
+}
+
+/**
  * Every run that belongs to `parentRunId`, newest first.
  *
  * Indexed since v176. Before that the column existed but the question cost a
