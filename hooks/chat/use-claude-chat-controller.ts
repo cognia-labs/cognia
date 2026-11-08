@@ -219,7 +219,7 @@ import {
   captureEventFromCanonical,
 } from "@/lib/ai/agent/execution/event-envelope"
 import { openWorkspaceBundleTurnLease } from "@/lib/task-workspace/run-lease"
-import { remapExactRoots } from "@/lib/task-workspace/root-aliases"
+import { remapExactRoots, remapPathsIntoAliases } from "@/lib/task-workspace/root-aliases"
 import {
   ensureSessionExecutionBundle,
   type SessionBundleBinding,
@@ -609,16 +609,33 @@ export function resolveChatTurnAttemptIdentity(input: {
  * the exact source root it checks out; one whose source was not trusted stays
  * unproven. A proof already on the aliases passes through, so a second
  * redirect over the same bundle is a no-op for it.
+ *
+ * The aliases join the directories the send already named instead of
+ * replacing them: `@`-referenced folders, a slash command's `paths` and the
+ * project's extra roots all reach `additionalDirectories` before this runs.
+ * Each one that sits in a checked-out source root moves into its alias, so the
+ * turn never reaches into the source checkout; one outside every aliased root
+ * is kept as it was.
  */
 export function redirectSendToBundleAliases(
   options: SendOptions,
   aliases: { primaryAlias: string; additionalAliases: string[] },
   aliasesBySource: ReadonlyMap<string, string>
 ): SendOptions {
+  const additionalDirectories: string[] = []
+  for (const directory of [
+    ...aliases.additionalAliases,
+    ...remapPathsIntoAliases(options.additionalDirectories ?? [], aliasesBySource),
+  ]) {
+    const trimmed = directory.trim()
+    if (!trimmed || trimmed === aliases.primaryAlias || additionalDirectories.includes(trimmed))
+      continue
+    additionalDirectories.push(trimmed)
+  }
   return {
     ...options,
     cwd: aliases.primaryAlias,
-    additionalDirectories: aliases.additionalAliases,
+    additionalDirectories,
     ...(options.trustedWorkspaceRoots?.length
       ? { trustedWorkspaceRoots: remapExactRoots(options.trustedWorkspaceRoots, aliasesBySource) }
       : {}),

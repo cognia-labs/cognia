@@ -628,6 +628,74 @@ describe("AgentTeamRegistryWorkspaceController", () => {
     )
   })
 
+  it("holds a merge-all candidate whose prerequisite teammate failed", async () => {
+    const controller = dispatchingController()
+    const ok = await controller.openDispatch({
+      taskId: "a",
+      teammateId: "alice",
+      repositoryId: "app",
+    })
+    const failed = await controller.openDispatch({
+      taskId: "b",
+      teammateId: "bob",
+      repositoryId: "app",
+    })
+    controller.recordDispatchResult(ok.bundleTurnId, { ok: true })
+    controller.recordDispatchResult(failed.bundleTurnId, { ok: false })
+    const integrate = jest.fn()
+
+    const result = await controller.reconcile({
+      mode: "merge-all",
+      mergeAll: {
+        config: { target: "branch", strategy: "merge", onConflict: "skip", requiredChecks: [] },
+        // "a" builds on "b", whose teammate did not succeed.
+        dependencies: { a: ["b"] },
+        deps: {
+          host: {
+            captureChangeset: async (input: { workspaceId: string }) => ({
+              changesetId: `cs-${input.workspaceId}`,
+              headSha: "h",
+              dependsOn: [],
+              requiredChecks: [],
+              checks: [],
+              review: null,
+            }),
+          } as never,
+          review: (async (changesetId: string) => ({
+            changeset: {
+              changesetId,
+              headSha: "h",
+              requiredChecks: [],
+              checks: [],
+              dependsOn: [],
+              review: { headSha: "h", verdict: "approve", requiresHumanApproval: false },
+            },
+            policy: null,
+            risk: null,
+            agent: null,
+            checks: [],
+          })) as never,
+          integrate: integrate as never,
+          currentBranch: async () => "main",
+          branchExists: async () => false,
+          createBranch: jest.fn(async () => undefined),
+          signal: new AbortController().signal,
+        },
+      },
+    })
+
+    expect(integrate).not.toHaveBeenCalled()
+    expect(result.integration?.roots[0].holds).toEqual([
+      expect.objectContaining({
+        cause: "provider_failed",
+        provider: { key: null, logicalRootId: null, taskId: "b", changesetId: null },
+      }),
+    ])
+    expect(result.summary).toBe(
+      "0 changeset(s) integrated, 1 awaiting review, across 1 repository(ies)"
+    )
+  })
+
   it("removes the branches a select already made when a later one fails", async () => {
     const createBranch = jest
       .fn()

@@ -101,6 +101,7 @@ export const DEFAULT_HELP_SURFACE_LABELS: HelpSurfaceLabels = {
     mention_each: "在群聊里请 @我 我才会回复；私聊无需 @。",
     mention_activates: "在群聊里 @我 一次即可，之后的追问我也会接着回复；私聊无需 @。",
     direct_only: "请私聊我；群聊中我不会回复。",
+    off: "这个群里我暂时不回复，@我 也不会；私聊不受影响。",
     // Legacy spelling of `mention_each`, kept so a pre-migration row still
     // resolves a label instead of rendering `undefined`.
     mention_only: "在群聊里请 @我 我才会回复；私聊无需 @。",

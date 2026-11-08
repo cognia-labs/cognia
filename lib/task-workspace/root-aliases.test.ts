@@ -1,4 +1,4 @@
-import { remapExactRoots } from "./root-aliases"
+import { remapExactRoots, remapPathsIntoAliases } from "./root-aliases"
 
 describe("remapExactRoots", () => {
   const aliases = new Map([
@@ -30,5 +30,36 @@ describe("remapExactRoots", () => {
 
   it("returns an empty list for no values", () => {
     expect(remapExactRoots([], aliases)).toEqual([])
+  })
+})
+
+describe("remapPathsIntoAliases", () => {
+  const aliases = new Map([
+    ["/repo", "/bundle/primary"],
+    ["/repo/packages/web", "/bundle/web"],
+    ["/docs", "/bundle/docs"],
+  ])
+
+  it("moves a source root and anything inside it into the alias", () => {
+    expect(remapPathsIntoAliases(["/docs", "/repo/src/lib"], aliases)).toEqual([
+      "/bundle/docs",
+      "/bundle/primary/src/lib",
+    ])
+  })
+
+  it("prefers the deepest source root when roots nest", () => {
+    expect(remapPathsIntoAliases(["/repo/packages/web/app"], aliases)).toEqual(["/bundle/web/app"])
+  })
+
+  it("keeps a directory outside every aliased root, and does not match a name prefix", () => {
+    expect(remapPathsIntoAliases(["/elsewhere/notes", "/repository"], aliases)).toEqual([
+      "/elsewhere/notes",
+      "/repository",
+    ])
+  })
+
+  it("joins with the alias's own separator", () => {
+    const windows = new Map([["C:/repo", "D:\\bundle\\primary"]])
+    expect(remapPathsIntoAliases(["C:/repo/src"], windows)).toEqual(["D:\\bundle\\primary\\src"])
   })
 })

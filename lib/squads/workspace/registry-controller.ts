@@ -85,6 +85,8 @@ export interface AgentTeamMergeAllOptions {
   deps: AgentTeamIntegrationDeps
   /** taskId → the taskIds it depends on, from the run's task list. */
   dependencies: Record<string, string[]>
+  /** logicalRootId → the logicalRootIds it depends on, from the team's repository bindings. */
+  repositoryDependencies?: Record<string, string[]>
 }
 
 type DeleteBranch = (workspaceId: string, branch: string) => Promise<void>
@@ -343,8 +345,14 @@ export class AgentTeamRegistryWorkspaceController {
   ): Promise<AgentTeamWorkspaceReconcileResult> {
     const integrationCandidates: TeamIntegrationCandidate[] = []
     const seen = new Set<string>()
+    // A teammate that did not succeed is not a candidate, but whatever
+    // depends on its task must still wait for it.
+    const unsuccessfulTasks = new Set<string>()
     for (const candidate of this.candidates.values()) {
-      if (candidate.ok !== true) continue
+      if (candidate.ok !== true) {
+        unsuccessfulTasks.add(candidate.taskId)
+        continue
+      }
       for (const workspace of candidate.workspaces) {
         if (seen.has(workspace.workspaceId)) continue
         seen.add(workspace.workspaceId)
@@ -365,7 +373,11 @@ export class AgentTeamRegistryWorkspaceController {
       integrationCandidates,
       options.dependencies,
       options.config,
-      options.deps
+      options.deps,
+      {
+        repositoryDependencies: options.repositoryDependencies,
+        unsuccessfulTasks: [...unsuccessfulTasks],
+      }
     )
     this.candidates.clear()
     const branches = integration.roots.map((root) => root.targetRef).filter((ref) => ref.length > 0)

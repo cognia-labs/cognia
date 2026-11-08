@@ -132,6 +132,10 @@ describe("action.team.reconcile executor", () => {
             reconcile: "manual",
             integration: { target: "base", onConflict: "stop", requiredChecks: ["unit"] },
           },
+          repositories: [
+            { id: "sdk", role: "dependency", path: "/repo/sdk", writable: true },
+            { id: "app", role: "primary", path: "/repo/app", writable: true, dependsOn: ["sdk"] },
+          ],
         },
       },
       workspaceController: { reconcile },
@@ -143,7 +147,12 @@ describe("action.team.reconcile executor", () => {
     const [options] = reconcile.mock.calls[0] as unknown as [
       {
         mode: string
-        mergeAll: { config: unknown; dependencies: unknown; deps: Record<string, unknown> }
+        mergeAll: {
+          config: unknown
+          dependencies: unknown
+          repositoryDependencies: unknown
+          deps: Record<string, unknown>
+        }
       },
     ]
     expect(options.mode).toBe("merge-all")
@@ -154,6 +163,8 @@ describe("action.team.reconcile executor", () => {
       requiredChecks: ["unit"],
     })
     expect(options.mergeAll.dependencies).toEqual({ t1: [], t2: ["t1"] })
+    // Repository ids are the logical roots the run acquired.
+    expect(options.mergeAll.repositoryDependencies).toEqual({ app: ["sdk"] })
     for (const port of [
       "host",
       "review",

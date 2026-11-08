@@ -77,6 +77,7 @@
     "label": "Reply",
     "mention_activates": "@mention, then follow-ups",
     "mention_each": "@mention each time",
+    "off": "Not answering in this chat",
     "tooltip": {
       "adapter": "This bot answers in a group when: {strategy}",
       "conversation": "This conversation overrides the bot: {strategy}"

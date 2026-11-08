@@ -289,6 +289,37 @@ describe("redirectSendToBundleAliases", () => {
     expect(leased.trustedWorkspaceRoots).toEqual(["/isolated/app", "/isolated/docs"])
   })
 
+  it("keeps the directories the send named, moving the ones inside a checked-out root into it", () => {
+    const redirected = redirectSendToBundleAliases(
+      {
+        ...sourceSend,
+        // An @-referenced folder elsewhere, one inside the app checkout, a slash
+        // command's path, the docs root itself, and the primary root again.
+        additionalDirectories: ["/notes", "/repo/src", "/docs", "/shared/fixtures", "/repo"],
+      },
+      lease,
+      aliasesBySource
+    )
+
+    expect(redirected.cwd).toBe("/isolated/app")
+    expect(redirected.additionalDirectories).toEqual([
+      "/isolated/docs",
+      "/notes",
+      "/isolated/app/src",
+      "/shared/fixtures",
+    ])
+  })
+
+  it("keeps a project root the bundle did not check out as it was", () => {
+    const redirected = redirectSendToBundleAliases(
+      { ...sourceSend, additionalDirectories: ["/docs"] },
+      { primaryAlias: "/isolated/app", additionalAliases: [] },
+      new Map([["/repo", "/isolated/app"]])
+    )
+
+    expect(redirected.additionalDirectories).toEqual(["/docs"])
+  })
+
   it("adds no proof to a send that carried none", () => {
     const { trustedWorkspaceRoots: _dropped, ...untrusted } = sourceSend
     const redirected = redirectSendToBundleAliases(untrusted, lease, aliasesBySource)

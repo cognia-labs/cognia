@@ -77,6 +77,7 @@
     "label": "回复",
     "mention_activates": "@ 一次后可继续追问",
     "mention_each": "每次都要 @",
+    "off": "此会话暂不回复",
     "tooltip": {
       "adapter": "这个机器人在群里回复的条件：{strategy}",
       "conversation": "本会话覆盖了机器人设置：{strategy}"

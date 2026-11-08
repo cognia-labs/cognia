@@ -575,6 +575,12 @@ async function mergeAllOptions(
   for (const task of useAgentTeamStore.getState().getTeamTasks(team.id)) {
     dependencies[task.id] = [...task.dependencies]
   }
+  // Repository ids are the logical root ids the controller acquired.
+  const repositoryDependencies: Record<string, string[]> = {}
+  for (const repository of team.config.repositories ?? []) {
+    if (repository.dependsOn?.length)
+      repositoryDependencies[repository.id] = [...repository.dependsOn]
+  }
   return {
     config: {
       target: configured.target ?? DEFAULT_AGENT_TEAM_INTEGRATION.target,
@@ -583,6 +589,7 @@ async function mergeAllOptions(
       requiredChecks: configured.requiredChecks ?? [],
     },
     dependencies,
+    repositoryDependencies,
     deps: {
       host: runtime.host,
       review: (changesetId) => runtime.review(changesetId, ctx.signal),
