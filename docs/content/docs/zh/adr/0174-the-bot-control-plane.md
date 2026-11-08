@@ -136,6 +136,10 @@ IM `/automation pause|resume|cancel|status` 控制当前 conversation 的独立 
 
 账户型 trigger 声明 `inputCredentialSlot`，安装可以用 `triggerInputSlots` 覆盖。路由和执行都会将当前选定绑定与保存的来源身份核对；显式绑定缺失、来源错误或存在歧义时拒绝 intake。旧安装仅在输入账户唯一时推断；已经使用显式映射的定义不会从无关输出槽位推断输入。更换凭据或输入槽位会取消已接受工作，避免恢复后换账户执行。Host 和 companion 控制要求明确声明 `bots.automation` feature，并保持 owner/mirror 边界。这些字段均为可选字段，无需新增 Dexie schema 或索引。
 
+## 2026-11-08 修正：桌面与宠物事件独立到达 Bot
+
+过去 `desktop` 来源的触发器，只有在某个工作流订阅了同一种 UI 自动化事件并且匹配上时才能收到事件，宠物事件则根本没有生产者。现在 bot 模块经 `bot-dispatch` 端口的 `watchDesktopEventTypes` 报告已启用安装中已启用的触发器所列的 `desktop.*` 类型，所用的解析与路由器相同。每当安装、本地定义或已注册的插件 Bot 变化，它都会再次报告。桌面端的 UI 自动化运行器为这些类型保持一个不带范围的订阅（与过滤条件相同的工作流组共用），只把这个订阅的事件交给 Bot，每个事件一次，元素名称先经过 PII 闸门。宠物把每个生命周期事件（`levelUp`、`evolved`、`achievementUnlocked`、`unwell`）以 `desktop.pet.<kind>` 交出，投影与它的工作流触发器相同，只含 id。类型为 `desktop.<UI 自动化事件>`（`desktop.focus-changed`）与 `desktop.pet.<kind>`（`desktop.pet.levelUp`）。
+
 ## 已知限制
 
 这些记在这里，而不是留给下一个人去发现。

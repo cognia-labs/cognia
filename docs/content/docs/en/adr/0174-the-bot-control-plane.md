@@ -301,6 +301,23 @@ before it can resume under the new account. Host and companion controls require
 an explicit `bots.automation` feature advertisement and keep owner/mirror fences.
 No new Dexie schema or indexes are required for these optional fields.
 
+## 2026-11-08 amendment: desktop and pet events reach Bots on their own
+
+A trigger on the `desktop` source used to see an event only when a workflow
+subscribed the same UI automation kind and matched it, and nothing handed pet
+events over. Now the bot module reports, through the `bot-dispatch` port's
+`watchDesktopEventTypes`, which `desktop.*` types the enabled installations'
+armed triggers name, using the same resolution the router uses. It reports again
+whenever an installation, a local definition or a registered plugin Bot changes.
+The desktop's UI automation runner keeps one unscoped subscription for those
+kinds (shared with a workflow group of the same filter). It hands only that
+subscription's events to the Bots, once each, with the element name already
+through the PII gate. The pet hands every lifecycle event (`levelUp`, `evolved`,
+`achievementUnlocked`, `unwell`) over as `desktop.pet.<kind>`, with the id-only
+projection its workflow trigger uses. The types are `desktop.<UI automation
+kind>` (`desktop.focus-changed`) and `desktop.pet.<kind>`
+(`desktop.pet.levelUp`).
+
 ## Known limitations
 
 These are recorded here rather than left for the next person to discover.
