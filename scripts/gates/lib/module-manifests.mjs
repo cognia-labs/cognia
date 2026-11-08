@@ -40,6 +40,7 @@ export const HOST_FIELDS = [
   "capabilityContributions",
   "context",
   "taskExecutors",
+  "syncHandlers",
   "builtinSkills",
   "pluginApi",
   "workflowNodes",
@@ -146,6 +147,8 @@ export const GENERATED_WORKFLOW_NODES = "lib/modules/generated/workflow-nodes.ts
 export const GENERATED_BUILTIN_SKILLS = "lib/modules/generated/builtin-skills.ts"
 /** Every module's `taskExecutors` file, lazily, with the task types it owns: the scheduler's only route to one. */
 export const GENERATED_TASK_EXECUTORS = "lib/modules/generated/task-executors.ts"
+/** Every module's `syncHandlers` file, lazily, with the tables it owns: the sync orchestrator's and the host reader's only route to one. */
+export const GENERATED_SYNC_HANDLERS = "lib/modules/generated/sync-handlers.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
@@ -156,6 +159,7 @@ export const GENERATED_FILES = [
   GENERATED_WORKFLOW_NODES,
   GENERATED_BUILTIN_SKILLS,
   GENERATED_TASK_EXECUTORS,
+  GENERATED_SYNC_HANDLERS,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -725,6 +729,24 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
         errors.push("taskExecutors.types names a task type twice")
     }
   }
+  if (manifest.syncHandlers !== undefined) {
+    const handlers = manifest.syncHandlers
+    if (!handlers || typeof handlers !== "object" || !isLazy(handlers.load))
+      errors.push('syncHandlers.load is a lazy entry `() => import("…")`')
+    else {
+      for (const key of Object.keys(handlers))
+        if (key !== "load" && key !== "tables") errors.push(`syncHandlers: unknown field "${key}"`)
+      const tables = handlers.tables
+      if (
+        !Array.isArray(tables) ||
+        tables.length === 0 ||
+        tables.some((table) => typeof table !== "string" || !/^[a-z][A-Za-z0-9]*$/.test(table))
+      )
+        errors.push("syncHandlers.tables lists the companion sync tables the file exports")
+      else if (new Set(tables).size !== tables.length)
+        errors.push("syncHandlers.tables names a table twice")
+    }
+  }
   if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
@@ -1029,6 +1051,46 @@ function renderTaskExecutors(modules) {
   ].join("\n")
 }
 
+/** The modules that own companion sync tables, in module id order, with their tables. */
+export function syncHandlerEntries(modules) {
+  return [...modules]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .filter(({ value }) => typeof value?.syncHandlers?.load?.$lazy === "string")
+    .map(({ id, file, value }) => ({
+      module: id,
+      stage: value.stage,
+      tables: Array.isArray(value.syncHandlers.tables) ? value.syncHandlers.tables : [],
+      load: adapterImport(file, value.syncHandlers.load.$lazy),
+    }))
+}
+
+function renderSyncHandlers(modules) {
+  const rows = syncHandlerEntries(modules).map((entry) =>
+    [
+      "  {",
+      `    module: ${JSON.stringify(entry.module)},`,
+      `    stage: ${JSON.stringify(entry.stage)},`,
+      `    tables: ${JSON.stringify(entry.tables)},`,
+      `    load: () => import(${JSON.stringify(entry.load)}),`,
+      "  },",
+    ].join("\n")
+  )
+  return [
+    `${HEADER("lib/<id>/module.ts")}`,
+    "//",
+    "// Every module's `syncHandlers`: the companion sync tables it owns, and the",
+    "// file that exports their pull and host-side reader, loaded when a sync first",
+    "// needs one (`lib/sync/module-handlers.ts`).",
+    "",
+    'import type { ModuleSyncHandlersEntry } from "@/lib/modules/manifest-types"',
+    "",
+    rows.length
+      ? `export const MODULE_SYNC_HANDLERS: readonly ModuleSyncHandlersEntry[] = [\n${rows.join("\n")}\n]`
+      : "export const MODULE_SYNC_HANDLERS: readonly ModuleSyncHandlersEntry[] = []",
+    "",
+  ].join("\n")
+}
+
 function renderLazyRegistry(registry, modules) {
   const { constName, type, reader } = LAZY_REGISTRIES[registry]
   const rows = lazyRegistryEntries(registry, modules).map((entry) =>
@@ -1081,6 +1143,7 @@ export function renderRegistries({ host, ui }) {
     [GENERATED_WORKFLOW_NODES]: renderLazyRegistry("workflowNodes", host),
     [GENERATED_BUILTIN_SKILLS]: renderLazyRegistry("builtinSkills", host),
     [GENERATED_TASK_EXECUTORS]: renderTaskExecutors(host),
+    [GENERATED_SYNC_HANDLERS]: renderSyncHandlers(host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

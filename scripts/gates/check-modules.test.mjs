@@ -36,6 +36,7 @@ import {
   GENERATED_BUILTIN_SKILLS,
   GENERATED_HOST,
   GENERATED_TASK_EXECUTORS,
+  GENERATED_SYNC_HANDLERS,
   GENERATED_PROMPTS,
   GENERATED_TOOLS,
   GENERATED_UI,
@@ -1410,6 +1411,86 @@ test("a task type has one owning module", () => {
   assert.deepEqual(
     result.errors.filter((error) => error.includes("task executor")),
     ['lib/pet/module.ts: task executor im-push is also contributed by "crew"']
+  )
+})
+
+test("validateHostManifest wants syncHandlers as { tables, load } with distinct tables", () => {
+  const base = { id: "pet", kind: "module", stage: "stable" }
+  const errors = (syncHandlers) => validateHostManifest({ ...base, syncHandlers }, "pet")
+  assert.ok(
+    errors("./sync/sync-handlers").includes('syncHandlers.load is a lazy entry `() => import("…")`')
+  )
+  assert.ok(
+    errors({
+      load: { $lazy: "./sync/sync-handlers" },
+      tables: ["petProfile"],
+      stage: "background",
+    }).includes('syncHandlers: unknown field "stage"')
+  )
+  for (const tables of [undefined, [], ["pet profile"], ["PetProfile"], [3]])
+    assert.ok(
+      errors({ load: { $lazy: "./sync/sync-handlers" }, tables }).includes(
+        "syncHandlers.tables lists the companion sync tables the file exports"
+      )
+    )
+  assert.ok(
+    errors({
+      load: { $lazy: "./sync/sync-handlers" },
+      tables: ["petProfile", "petProfile"],
+    }).includes("syncHandlers.tables names a table twice")
+  )
+  assert.deepEqual(
+    errors({ load: { $lazy: "./sync/sync-handlers" }, tables: ["petProfile", "petActivityLog"] }),
+    []
+  )
+})
+
+test("the sync handler registry lists each owning module's tables and lazy file, by module id", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "pet",
+        file: "lib/pet/module.ts",
+        value: {
+          stage: "stable",
+          syncHandlers: { tables: ["petProfile"], load: { $lazy: "./sync/sync-handlers" } },
+        },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "memory",
+        file: "lib/memory/module.ts",
+        value: {
+          stage: "experimental",
+          syncHandlers: { tables: ["memories"], load: { $lazy: "./sync/sync-handlers" } },
+        },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_SYNC_HANDLERS]
+  assert.match(registry, /export const MODULE_SYNC_HANDLERS: readonly ModuleSyncHandlersEntry\[\]/)
+  assert.ok(registry.indexOf('module: "memory"') < registry.indexOf('module: "pet"'))
+  assert.ok(registry.includes('tables: ["petProfile"],'))
+  assert.ok(registry.includes('stage: "experimental"'))
+  assert.ok(registry.includes('load: () => import("@/lib/pet/sync/sync-handlers")'))
+  assert.ok(!registry.includes("crew"))
+})
+
+test("a sync table has one owning module", () => {
+  const handlers = (table) =>
+    `syncHandlers: { tables: ["${table}"], load: () => import("./sync-handlers") }`
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crew/module.ts": hostManifest("crew", handlers("memories")),
+    "lib/crew/sync-handlers.ts": "export const syncHandlers = {}\n",
+    "lib/pet/module.ts": hostManifest("pet", handlers("memories")),
+    "lib/pet/sync-handlers.ts": "export const syncHandlers = {}\n",
+  })
+  assert.deepEqual(
+    result.errors.filter((error) => error.includes("sync table")),
+    ['lib/pet/module.ts: sync table memories is also contributed by "crew"']
   )
 })
 

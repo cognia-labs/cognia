@@ -14,7 +14,7 @@ import type { SyncableTable } from "@/lib/sync/types"
 import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
 
 /**
- * The pet tables companion sync mirrors (`lib/sync/handlers/pet.ts`). The
+ * The pet tables companion sync mirrors (`lib/pet/sync/pet-sync.ts`). The
  * remote console pulls exactly these when it asks for a fresh copy, rather
  * than re-running every table the shell syncs.
  */

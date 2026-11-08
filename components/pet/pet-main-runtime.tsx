@@ -24,7 +24,7 @@ import { useActiveLive2dModel } from "@/hooks/pet/use-active-live2d-model"
 import { useActiveSpritePack } from "@/hooks/pet/use-active-sprite-pack"
 import { usePetStore } from "@/stores/pet/pet-store"
 import { resolveCharacterSkinSelection } from "@/lib/pet/binding/resolve-skin"
-import { projectPetProfileForSync } from "@/lib/sync/handlers/pet"
+import { projectPetProfileForSync } from "@/lib/pet/sync/pet-sync"
 import { resolveEffectiveSkin, selectionFromEffectiveSkin } from "./skins/resolve-effective-skin"
 
 export interface PetMainRuntimeProps {

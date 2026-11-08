@@ -7,7 +7,7 @@
  * `sync_pull` of `conversationOverrides` would hand back the PRE-mutation row
  * and clobber the optimistic write — the user flips the mode, the pill flips
  * back, then flips again a second later. The sync handler
- * (`lib/sync/handlers/conversation-overrides.ts`) therefore skips rows whose
+ * (`lib/connectors/sync/conversation-overrides.ts`) therefore skips rows whose
  * conversation key has a pending mutation.
  *
  * Two sources are consulted:

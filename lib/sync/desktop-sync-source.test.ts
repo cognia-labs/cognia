@@ -33,7 +33,6 @@ jest.mock("@/stores/project/project-store", () => ({
 
 import {
   __resetInstalledForTests,
-  excludeLiveKeys,
   GOAL_EVENTS_PAGE_SIZE,
   HEARTBEAT_FIRST_SYNC_WINDOW_MS,
   HEARTBEAT_PAGE_SIZE,
@@ -1253,41 +1252,6 @@ describe("readDexieDelta", () => {
 
   it("throws on an unknown table", async () => {
     await expect(readDexieDelta("unknown" as never, 0)).rejects.toThrow(/unknown sync table/)
-  })
-})
-
-describe("excludeLiveKeys", () => {
-  it("drops tombstoned ids whose row is in the same delta, keyed by id", () => {
-    expect(
-      excludeLiveKeys("plugins", [{ id: "back" }, { id: "fresh" }], ["back", "gone", "also-gone"])
-    ).toEqual(["gone", "also-gone"])
-  })
-
-  it("keys templateDefinitions by storageKey rather than id", () => {
-    const rows = [{ id: "def-1", storageKey: "pkg/def-1@2" }]
-    expect(excludeLiveKeys("templateDefinitions", rows, ["pkg/def-1@2", "def-1"])).toEqual([
-      "def-1",
-    ])
-  })
-
-  it("keys templatePackages by key rather than id", () => {
-    const rows = [{ id: "pkg-row", key: "acme/pack" }]
-    expect(excludeLiveKeys("templatePackages", rows, ["acme/pack", "pkg-row"])).toEqual(["pkg-row"])
-  })
-
-  it("returns the ids unchanged (as a copy) when the delta carries no rows", () => {
-    const deleted = ["a", "b"]
-    const result = excludeLiveKeys("sessions", [], deleted)
-    expect(result).toEqual(["a", "b"])
-    expect(result).not.toBe(deleted)
-  })
-
-  it("returns an empty list when nothing was deleted", () => {
-    expect(excludeLiveKeys("sessions", [{ id: "s1" }], [])).toEqual([])
-  })
-
-  it("ignores rows that are null or carry a non-string key", () => {
-    expect(excludeLiveKeys("plugins", [null, { id: 7 }, {}], ["7", "x"])).toEqual(["7", "x"])
   })
 })
 

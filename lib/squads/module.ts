@@ -108,6 +108,12 @@ export default defineHostModule({
   ],
   searchProviders: () => import("./search-provider"),
   prompts: () => import("./prompts"),
+  // The pulls of the team definitions a paired client mirrors, each row run
+  // through the definition contract on the way in.
+  syncHandlers: {
+    tables: ["agentTeams", "agentTeammates", "agentTeamTasks"],
+    load: () => import("./sync/sync-handlers"),
+  },
   // The agent's tools, three kinds in one family (`./agent-tools.ts`). None
   // of the runners takes a cancel signal.
   //

@@ -300,6 +300,16 @@ function collectManifests(ctx, files) {
       "name",
       "task executor "
     ),
+    // A sync table has one owner: the orchestrator and the host reader look it up by table.
+    ...duplicateContributions(
+      host,
+      (manifest) =>
+        Array.isArray(manifest.syncHandlers?.tables)
+          ? manifest.syncHandlers.tables.map((name) => ({ name }))
+          : [],
+      "name",
+      "sync table "
+    ),
     // A tool name routes to one module: the dispatcher looks it up by name.
     ...duplicateContributions(
       host,

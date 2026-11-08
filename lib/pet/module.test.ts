@@ -81,4 +81,22 @@ describe("pet module manifest", () => {
     const { toolFamily } = await petModule.tools!.load()
     expect(typeof toolFamily.surface).toBe("function")
   })
+
+  it("mirrors its five tables through its own sync handlers", async () => {
+    expect(petModule.syncHandlers?.tables).toEqual([
+      "petProfile",
+      "petAchievements",
+      "petInventory",
+      "petCharacterBindings",
+      "petActivityLog",
+    ])
+    const { syncHandlers } = await petModule.syncHandlers!.load()
+    expect(Object.keys(syncHandlers).sort()).toEqual([
+      "petAchievements",
+      "petActivityLog",
+      "petCharacterBindings",
+      "petInventory",
+      "petProfile",
+    ])
+  })
 })

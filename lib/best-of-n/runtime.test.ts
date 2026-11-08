@@ -186,6 +186,14 @@ it("binds a valid durable team without a planning or cross-candidate evidence ga
   )
 })
 
+it("hands the group's stop to the candidate's checkout", async () => {
+  const controller = new AbortController()
+  await createBestOfNExecution().acquire(group, group.candidates[0], request, controller.signal)
+  expect(acquire).toHaveBeenCalledWith(expect.objectContaining({ ownerRef: "session" }), {
+    signal: controller.signal,
+  })
+})
+
 it("acquires the frozen base for the Host-assigned child, reusing its port block", async () => {
   const workspace = await createBestOfNExecution().acquire(group, group.candidates[0], request)
   expect(acquire).toHaveBeenCalledWith(

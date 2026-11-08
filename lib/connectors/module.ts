@@ -131,4 +131,10 @@ export default defineHostModule({
   builtinSkills: { load: () => import("./builtin-skills") },
   // Scheduled pushes into a bound IM conversation.
   taskExecutors: { types: ["im-push"], load: () => import("./scheduler/task-executors") },
+  // The conversation-override pull, which keeps this client's in-flight
+  // relayed mutations from being reverted by an older host row.
+  syncHandlers: {
+    tables: ["conversationOverrides"],
+    load: () => import("./sync/sync-handlers"),
+  },
 })

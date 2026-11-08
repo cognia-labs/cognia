@@ -6,9 +6,12 @@ import "fake-indexeddb/auto"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { Memory } from "@/types/memory/memory"
 import { getDb } from "@/lib/db/schema"
-import { createMemorySyncRowV1, type EncryptedMemorySyncRowV1 } from "../memory-content-protocol"
+import {
+  createMemorySyncRowV1,
+  type EncryptedMemorySyncRowV1,
+} from "@/lib/sync/memory-content-protocol"
 
-import { ensurePairedMemoryDek, pruneMobileMemoryCache, syncMemories } from "./memory"
+import { ensurePairedMemoryDek, pruneMobileMemoryCache, syncMemories } from "./memory-sync"
 
 function makeTransport(
   rows: EncryptedMemorySyncRowV1[],

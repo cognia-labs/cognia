@@ -891,7 +891,7 @@ export const COMPANION_SYNC_DELETE_STRATEGY: Readonly<
   petCharacterBindings: "tombstoned",
   // The ledger is capped at the newest 2000 rows on the host and the client
   // prunes its mirror to the same cap; a reset is recognised on the client by
-  // the profile's new `createdAt` (`lib/sync/handlers/pet.ts`).
+  // the profile's new `createdAt` (`lib/pet/sync/pet-sync.ts`).
   petActivityLog: "retention-pruned",
   // The 90-day prune runs on both sides, but deleting a conversation deletes
   // its usage rows at any age, so that path tombstones them.

@@ -85,4 +85,14 @@ describe("squads module manifest", () => {
     const { port } = (await provided.load()) as { port: { legacyTemplates: unknown } }
     expect(typeof port.legacyTemplates).toBe("function")
   })
+
+  it("owns the team definition pulls through its sync handlers", async () => {
+    expect(squads.syncHandlers?.tables).toEqual(["agentTeams", "agentTeammates", "agentTeamTasks"])
+    const { syncHandlers } = await squads.syncHandlers!.load()
+    expect(Object.keys(syncHandlers).sort()).toEqual([
+      "agentTeamTasks",
+      "agentTeammates",
+      "agentTeams",
+    ])
+  })
 })

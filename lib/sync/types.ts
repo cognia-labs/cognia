@@ -10,6 +10,7 @@ import {
   COMPANION_SYNC_PROTOCOL_TABLE_NAMES,
   type CompanionSyncProtocolTableName,
 } from "@/lib/data-governance/table-catalog"
+import type { Transport } from "@/lib/tauri/transport-types"
 
 /** The catalog is the single TypeScript authority for companion sync tables. */
 export const SYNCABLE_TABLE_NAMES = COMPANION_SYNC_PROTOCOL_TABLE_NAMES
@@ -104,6 +105,33 @@ export interface SyncFailure {
 }
 
 export type SyncOutcome = { ok: true; result: SyncResult } | { ok: false; failure: SyncFailure }
+
+/** A client-side pull: fetch the table's delta from the host and apply it. */
+export type SyncPull = (transport: Transport, cursor: SyncCursor) => Promise<SyncOutcome>
+
+/** What the host passes a contributed reader when a paired client pulls a table. */
+export interface SyncServeContext {
+  /** The content protocol the client speaks, for tables whose rows are encrypted. */
+  contentProtocolVersion?: number
+  /**
+   * Injected dependencies the table's owner reads by name (tests pass the
+   * memory DEK through here); empty in production.
+   */
+  deps: Readonly<Record<string, unknown>>
+}
+
+/** A host-side reader: the table's rows and tombstones since `since`. */
+export type SyncServe = (since: number, context: SyncServeContext) => Promise<SyncDelta<unknown>>
+
+/**
+ * A table a module owns the sync of (ADR-0250 §14 `syncHandlers`): its pull,
+ * and its host-side reader when the rows need the module's code to project.
+ * A table without `serve` is read by the host's generic reader.
+ */
+export interface SyncTableHandler {
+  pull: SyncPull
+  serve?: SyncServe
+}
 
 /**
  * Persisted sync state per table (Dexie `hostSyncCursors`, v130 (was `syncCursors`, v44)).

@@ -78,6 +78,18 @@ export default defineHostModule({
     "petProfile",
     "petSpritePacks",
   ],
+  // The five tables a paired phone mirrors read-only (ADR-0219): their pulls,
+  // and the host-side readers that project each row.
+  syncHandlers: {
+    tables: [
+      "petProfile",
+      "petAchievements",
+      "petInventory",
+      "petCharacterBindings",
+      "petActivityLog",
+    ],
+    load: () => import("./sync/sync-handlers"),
+  },
   slashCommands: [
     {
       // Desktop-app only, like the pet itself (ADR-0058 D9). It stays listed

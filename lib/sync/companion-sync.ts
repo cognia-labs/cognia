@@ -43,14 +43,12 @@ import { syncAgentTaskAttempts, syncAgentTasks } from "./handlers/agent-tasks"
 import { syncAppSettings } from "./handlers/app-settings"
 import { syncCharacters } from "./handlers/characters"
 import { syncChatTemplates } from "./handlers/chat-templates"
-import { syncConversationOverrides } from "./handlers/conversation-overrides"
 import { syncSessionState } from "./handlers/session-state"
 import { syncSessionFolders } from "./handlers/session-folders"
 import { syncExecutionRuns } from "./handlers/execution-runs"
 import { syncGoalEvents, syncGoals } from "./handlers/goals"
 import { syncPlans } from "./handlers/plans"
 import { syncMcpServers } from "./handlers/mcp-servers"
-import { syncMemories } from "./handlers/memory"
 import { syncMessages } from "./handlers/messages"
 import { syncPlugins } from "./handlers/plugins"
 import { syncPluginCogsets, syncPluginCogsetState } from "./handlers/plugin-cogsets"
@@ -79,13 +77,6 @@ import {
   syncLabels,
 } from "./handlers/issues"
 import { syncTwinProfile } from "./handlers/twin-profile"
-import {
-  syncPetAchievements,
-  syncPetActivityLog,
-  syncPetCharacterBindings,
-  syncPetInventory,
-  syncPetProfile,
-} from "./handlers/pet"
 import { syncWorkflows } from "./handlers/workflows"
 import { syncWorkflowRuns } from "./handlers/workflow-runs"
 import {
@@ -93,11 +84,7 @@ import {
   syncTemplateInstances,
   syncTemplatePackages,
 } from "./handlers/template-platform"
-import {
-  syncAgentTeamTasks,
-  syncAgentTeammates,
-  syncAgentTeams,
-} from "./handlers/agent-team-definitions"
+import { moduleSyncPull } from "./module-handlers"
 import type { SyncCursor, SyncFailure, SyncOutcome, SyncableTable } from "./types"
 
 export type SyncFn = (transport: Transport, cursor: SyncCursor) => Promise<SyncOutcome>
@@ -175,7 +162,11 @@ const DEFAULT_HANDLERS: RegisteredHandler[] = [
   // never pulls it and the mobile inbox renders every conversation as
   // unread + unpinned. It is critical for the same reason `sessions` is:
   // the list is wrong, not merely empty, without it.
-  { table: "conversationOverrides", stage: "critical", run: syncConversationOverrides },
+  {
+    table: "conversationOverrides",
+    stage: "critical",
+    run: moduleSyncPull("conversationOverrides"),
+  },
   // Unread pointers are first-screen: the tab bar draws its badge before any
   // conversation is opened, and a wrong zero there is the whole bug.
   { table: "sessionState", stage: "critical", run: syncSessionState },
@@ -307,7 +298,7 @@ const DEFAULT_HANDLERS: RegisteredHandler[] = [
   },
   // Long-term memory. Decrypts row by row against the profile DEK, so it is
   // the most CPU-expensive apply in the pipeline — last, and interruptible.
-  { table: "memories", stage: "background", run: syncMemories },
+  { table: "memories", stage: "background", run: moduleSyncPull("memories") },
   // ADR-0056 (Wave 4) — configured MCP servers. Read-only mirror so the
   // mobile `/me/mcp` page can list the desktop's servers (the phone has no
   // MCP push RPC and the standalone engine runs no MCP).
@@ -331,9 +322,19 @@ const DEFAULT_HANDLERS: RegisteredHandler[] = [
   },
   // v215 — Squad definitions. Background, and after the runs they explain: a
   // roster arriving before its squad is a row with nothing to attach to.
-  { table: "agentTeams", stage: "background", run: syncAgentTeams },
-  { table: "agentTeammates", stage: "background", run: syncAgentTeammates, after: ["agentTeams"] },
-  { table: "agentTeamTasks", stage: "background", run: syncAgentTeamTasks, after: ["agentTeams"] },
+  { table: "agentTeams", stage: "background", run: moduleSyncPull("agentTeams") },
+  {
+    table: "agentTeammates",
+    stage: "background",
+    run: moduleSyncPull("agentTeammates"),
+    after: ["agentTeams"],
+  },
+  {
+    table: "agentTeamTasks",
+    stage: "background",
+    run: moduleSyncPull("agentTeamTasks"),
+    after: ["agentTeams"],
+  },
   // Locally authored Bot definitions. A plugin's are a registry overlay and
   // never cross, so a mirrored device resolves those from its own plugin state
   // or reads the installation as an orphan, which the console already renders.
@@ -342,24 +343,29 @@ const DEFAULT_HANDLERS: RegisteredHandler[] = [
   // screen, and its console reads the live `pet_get` snapshot first; the mirror
   // is what paints offline. The profile leads: the ledger's reset rule reads
   // the profile's birth time, and everything else is a row about that pet.
-  { table: "petProfile", stage: "background", run: syncPetProfile },
+  { table: "petProfile", stage: "background", run: moduleSyncPull("petProfile") },
   {
     table: "petAchievements",
     stage: "background",
-    run: syncPetAchievements,
+    run: moduleSyncPull("petAchievements"),
     after: ["petProfile"],
   },
-  { table: "petInventory", stage: "background", run: syncPetInventory, after: ["petProfile"] },
+  {
+    table: "petInventory",
+    stage: "background",
+    run: moduleSyncPull("petInventory"),
+    after: ["petProfile"],
+  },
   {
     table: "petCharacterBindings",
     stage: "background",
-    run: syncPetCharacterBindings,
+    run: moduleSyncPull("petCharacterBindings"),
     after: ["petProfile"],
   },
   {
     table: "petActivityLog",
     stage: "background",
-    run: syncPetActivityLog,
+    run: moduleSyncPull("petActivityLog"),
     after: ["petProfile"],
   },
   // Per-turn usage behind the welcome dashboard. An org member's turns run on

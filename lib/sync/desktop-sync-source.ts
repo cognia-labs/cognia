@@ -55,22 +55,14 @@ import Dexie from "dexie"
 
 import { readTombstonesSince } from "@/lib/db/tombstones"
 import { PAGED_SYNC_TABLES, type SyncDelta, type SyncableTable } from "./types"
+import { excludeLiveKeys, finalizeDelta, type UpdatedAtRow } from "./delta"
 import { portableExecutionContext } from "@/lib/task-workspace/managed-workspace"
-import { createProfileDekStore, type ProfileDekHandle } from "@/lib/rag/profile-dek-store"
-import { createMemorySyncRowV1, MEMORY_SYNC_PROFILE_ID } from "./memory-content-protocol"
-import {
-  isoMs,
-  projectPetActivityForSync,
-  projectPetBindingForSync,
-  projectPetProfileForSync,
-} from "./handlers/pet"
+import { serveModuleSyncTable } from "./module-handlers"
 import { projectGoalEventForSync } from "./handlers/goals"
 import type { GoalEvent } from "@/types/goal"
 
 /** Page size for paged tables (messages). One round-trip pulls at most this many rows. */
 const MESSAGES_PAGE_SIZE = 500
-export const MEMORY_COLD_START_LIMIT = 500
-
 interface SyncPullRequestEvent {
   request_id: string
   table: SyncableTable | string
@@ -78,11 +70,6 @@ interface SyncPullRequestEvent {
   account_id?: string
   content_protocol_version?: number
   cursor?: string
-}
-
-interface DesktopSyncContentDeps {
-  getMemoryDek: () => Promise<ProfileDekHandle>
-  memoryColdStartLimit?: number
 }
 
 const REQUEST_EVENT = "companion://sync-pull-request"
@@ -166,9 +153,8 @@ export async function readDexieDelta(
   table: SyncableTable | string,
   since: number,
   contentProtocolVersion?: number,
-  contentDeps: DesktopSyncContentDeps = {
-    getMemoryDek: () => createProfileDekStore().getOrCreate(MEMORY_SYNC_PROFILE_ID),
-  },
+  /** Dependencies a module's reader takes by name (`SyncServeContext.deps`); tests inject them. */
+  serveDeps: Readonly<Record<string, unknown>> = {},
   cursor?: string
 ): Promise<SyncDelta<unknown>> {
   if (table === "memories" && contentProtocolVersion !== 1) {
@@ -180,6 +166,13 @@ export async function readDexieDelta(
     }
     return readCursorDelta(table as SyncableTable, since, cursor)
   }
+  // A table a module owns the sync of may read its rows through the module's
+  // own projection (ADR-0250 §14 `syncHandlers`).
+  const contributed = await serveModuleSyncTable(table as SyncableTable, since, {
+    contentProtocolVersion,
+    deps: serveDeps,
+  })
+  if (contributed) return contributed
   switch (table) {
     case "characters":
       return readCharactersDelta(since)
@@ -239,8 +232,6 @@ export async function readDexieDelta(
       return readGoalEventsDelta(since)
     case "plans":
       return readPlansDelta(since)
-    case "memories":
-      return readMemoriesDelta(since, contentDeps)
     case "bestOfNRuns":
       return finalizeDelta(
         "bestOfNRuns",
@@ -289,16 +280,6 @@ export async function readDexieDelta(
       return readExecutionRunBindingsDelta(since)
     case "sessionFolders":
       return readSessionFoldersDelta(since)
-    case "petProfile":
-      return readPetProfileDelta(since)
-    case "petAchievements":
-      return readPetAchievementsDelta(since)
-    case "petInventory":
-      return readPetInventoryDelta(since)
-    case "petCharacterBindings":
-      return readPetCharacterBindingsDelta(since)
-    case "petActivityLog":
-      return readPetActivityLogDelta(since)
     case "sessionUsage":
       return readSessionUsageDelta(since)
     default:
@@ -1296,81 +1277,6 @@ async function readExecutionRunBindingsDelta(
   return finalizeDelta("executionRunBindings", rows, since)
 }
 
-// ── The desktop pet (ADR-0219, remote pet care) ─────────────────────────────
-//
-// A paired phone mirrors these read-only and acts through `pet_*` RPCs. The
-// projections, and the client half that applies them, live together in
-// `lib/sync/handlers/pet.ts`.
-
-/**
- * The profile singleton, as a projection (no account fingerprint, no proactive
- * counters, the host's bones). `updatedAt` is an ISO string, so the cursor is
- * its epoch ms; every writer stamps it (`patchPetProfile`, `applyPetEvent`,
- * the shop, the hatch). A first pull always carries the row, even one whose
- * stamp does not parse, so a cold mirror is never left without its pet.
- */
-async function readPetProfileDelta(since: number): Promise<SyncDelta<unknown>> {
-  const row = await getDb().petProfile.get("global")
-  const rows =
-    row && (since === 0 || isoMs(row.updatedAt) > since) ? [projectPetProfileForSync(row)] : []
-  return finalizeDelta("petProfile", rows as unknown as UpdatedAtRow[], since, false, (r) =>
-    isoMs((r as unknown as { updatedAt?: string }).updatedAt)
-  )
-}
-
-/** Unlocks are written once and never edited, so the indexed `unlockedAt` is the cursor. */
-async function readPetAchievementsDelta(since: number): Promise<SyncDelta<unknown>> {
-  const rows = await getDb().petAchievements.where("unlockedAt").above(since).toArray()
-  return finalizeDelta("petAchievements", rows as unknown as UpdatedAtRow[], since, false, (r) =>
-    Number((r as unknown as { unlockedAt?: number }).unlockedAt ?? 0)
-  )
-}
-
-/**
- * Owned items. `updatedAt` is epoch ms but not indexed; the table holds one
- * row per catalog item at most, so this scans what the shop already scans.
- */
-async function readPetInventoryDelta(since: number): Promise<SyncDelta<unknown>> {
-  const rows = await getDb()
-    .petInventory.filter((row) => Number(row.updatedAt ?? 0) > since)
-    .toArray()
-  return finalizeDelta("petInventory", rows as UpdatedAtRow[], since)
-}
-
-/**
- * Per-character appearance overrides. Keyed by `characterId`, which the wire
- * carries as `id` (tombstones are recorded under the same key); `updatedAt`
- * is an ISO string, so the cursor is its epoch ms. One row per bound
- * character, so a scan.
- */
-async function readPetCharacterBindingsDelta(since: number): Promise<SyncDelta<unknown>> {
-  const rows = (await getDb().petCharacterBindings.toArray())
-    .filter((row) => isoMs(row.updatedAt) > since)
-    .map(projectPetBindingForSync)
-  return finalizeDelta(
-    "petCharacterBindings",
-    rows as unknown as UpdatedAtRow[],
-    since,
-    false,
-    (r) => isoMs((r as unknown as { updatedAt?: string }).updatedAt)
-  )
-}
-
-/**
- * The interaction ledger. Append-only with an auto-increment key, and the key
- * IS the cursor: it only grows, survives `clear()` (IndexedDB key generators
- * are never reset), and orders rows exactly as they were written. Bounded at
- * `PET_ACTIVITY_CAP` rows on the host, so one page carries a cold pull.
- */
-async function readPetActivityLogDelta(since: number): Promise<SyncDelta<unknown>> {
-  const rows = projectPetActivityForSync(
-    await getDb().petActivityLog.where(":id").above(since).toArray()
-  )
-  return finalizeDelta("petActivityLog", rows as unknown as UpdatedAtRow[], since, false, (r) =>
-    Number((r as unknown as { id: string }).id)
-  )
-}
-
 async function readGoalsDelta(since: number): Promise<SyncDelta<unknown>> {
   // chatGoals carries an `updatedAt` index (schema `…, createdAt, updatedAt`),
   // so pull only the rows past the cursor instead of scanning the whole table.
@@ -1418,24 +1324,6 @@ async function readPlansDelta(since: number): Promise<SyncDelta<unknown>> {
   // read rather than a table scan — same shape as `readGoalsDelta`.
   const rows = await getDb().agentPlans.where("updatedAt").above(since).toArray()
   return finalizeDelta("plans", rows as UpdatedAtRow[], since)
-}
-
-async function readMemoriesDelta(
-  since: number,
-  contentDeps: DesktopSyncContentDeps
-): Promise<SyncDelta<unknown>> {
-  const coldStartLimit = contentDeps.memoryColdStartLimit ?? MEMORY_COLD_START_LIMIT
-  if (!Number.isInteger(coldStartLimit) || coldStartLimit < 1) {
-    throw new Error("Memory cold-start limit must be positive")
-  }
-  const rows =
-    since === 0
-      ? await getDb().memories.orderBy("updatedAt").reverse().limit(coldStartLimit).toArray()
-      : await getDb().memories.where("updatedAt").above(since).toArray()
-  if (rows.length === 0) return finalizeDelta("memories", [], since)
-  const dek = await contentDeps.getMemoryDek()
-  const encryptedRows = await Promise.all(rows.map((row) => createMemorySyncRowV1(row, dek)))
-  return finalizeDelta("memories", encryptedRows, since)
 }
 
 async function readAgentTeamBoardDelta(since: number): Promise<SyncDelta<unknown>> {
@@ -1518,80 +1406,6 @@ async function projectMirroredSettings(
     projected.turnServers = [...staticTurnServers, ...provisionedTurnServers]
   }
   return projected as Partial<AppSettings>
-}
-
-interface UpdatedAtRow {
-  id: string
-  updatedAt?: number
-  createdAt?: number
-}
-
-async function finalizeDelta<T extends UpdatedAtRow>(
-  table: SyncableTable,
-  rows: T[],
-  since: number,
-  hasMore = false,
-  /**
-   * How to read a row's cursor watermark. Defaults to `updatedAt ?? createdAt`
-   * — the shape every other table carries. `workflowRuns` has neither, so it
-   * passes `max(startedAt, completedAt)` instead (see readWorkflowRunsDelta).
-   */
-  cursorOf: (row: T) => number = (row) => Number(row.updatedAt ?? row.createdAt ?? 0)
-): Promise<SyncDelta<T>> {
-  // Fold in tombstones recorded since the cursor (v61). The phone applies
-  // `deleted_ids` via `bulkDelete`, so a desktop deletion finally reaches
-  // it. `deletedAt` shares the cursor space with `updatedAt` — both feed
-  // `next_since` so each upsert and each tombstone crosses the wire once.
-  let highestCursor = since
-  for (const row of rows) {
-    const candidate = cursorOf(row)
-    if (candidate > highestCursor) highestCursor = candidate
-  }
-  // Legacy pagination may only acknowledge deletions up to its delivered page.
-  const { ids: deletedIds, maxDeletedAt } = await readTombstonesSince(
-    table,
-    since,
-    hasMore ? highestCursor : undefined
-  )
-  if (maxDeletedAt > highestCursor) highestCursor = maxDeletedAt
-
-  return {
-    rows,
-    deleted_ids: excludeLiveKeys(table, rows, deletedIds),
-    next_since: highestCursor,
-    has_more: hasMore,
-  }
-}
-
-/**
- * The primary key a paired client stores each table under, where it is not
- * `id`. Tombstones are recorded under this key, and the client deletes by it.
- */
-const SYNC_PRIMARY_KEY: Partial<Record<SyncableTable, string>> = {
-  templateDefinitions: "storageKey",
-  templatePackages: "key",
-}
-
-/**
- * Drop every tombstoned key whose row is also in this delta. The rows are read
- * from the live table, so a key present there exists on the Host now: it was
- * deleted and then recreated inside one pull window (a plugin reinstalled under
- * its manifest id, a template re-imported). The client applies rows before
- * deletions, so sending both would delete the live row it had just written.
- */
-export function excludeLiveKeys(
-  table: SyncableTable,
-  rows: readonly unknown[],
-  deletedIds: readonly string[]
-): string[] {
-  if (deletedIds.length === 0 || rows.length === 0) return [...deletedIds]
-  const keyField = SYNC_PRIMARY_KEY[table] ?? "id"
-  const live = new Set<string>()
-  for (const row of rows) {
-    const key = (row as Record<string, unknown> | null)?.[keyField]
-    if (typeof key === "string") live.add(key)
-  }
-  return deletedIds.filter((id) => !live.has(id))
 }
 
 /** Test-only — forget the shared listener. */

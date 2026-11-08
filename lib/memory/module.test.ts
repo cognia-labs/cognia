@@ -19,4 +19,10 @@ describe("the memory manifest", () => {
     const { toolFamily } = await memoryModule.tools!.load()
     expect(typeof toolFamily.run).toBe("function")
   })
+
+  it("owns the encrypted memories mirror through its sync handlers", async () => {
+    expect(memoryModule.syncHandlers?.tables).toEqual(["memories"])
+    const { syncHandlers } = await memoryModule.syncHandlers!.load()
+    expect(Object.keys(syncHandlers).sort()).toEqual(["memories"])
+  })
 })

@@ -6,8 +6,8 @@ import type {
   AgentTeammateRow,
   AgentTeamTaskRow,
 } from "@/lib/db/agent-team-definitions"
-import type { SyncCursor, SyncOutcome, SyncableTable } from "../types"
-import { runSyncHandler } from "./base"
+import type { SyncCursor, SyncOutcome, SyncableTable } from "@/lib/sync/types"
+import { runSyncHandler } from "@/lib/sync/handlers/base"
 
 /**
  * Squad definitions, roster and tasks.

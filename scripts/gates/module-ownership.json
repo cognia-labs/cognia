@@ -772,6 +772,7 @@
         "components/rag/retrieval-control-panel.tsx",
         "lib/rag/chat-grounding.ts",
         "lib/rag/generation-ingest.ts",
+        "lib/rag/profile-dek-store.ts",
         "lib/rag/safe-embedding.ts"
       ]
     },

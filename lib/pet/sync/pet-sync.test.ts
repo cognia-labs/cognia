@@ -22,7 +22,7 @@ import { renamePet } from "@/lib/pet/runtime/rename-pet"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { PetProfile } from "@/types/pet"
 
-import type { SyncDelta } from "../types"
+import type { SyncDelta } from "@/lib/sync/types"
 import {
   PET_MIRROR_FINGERPRINT,
   applyPetActivityRows,
@@ -40,7 +40,7 @@ import {
   syncPetInventory,
   syncPetProfile,
   type PetProfileSyncRow,
-} from "./pet"
+} from "./pet-sync"
 
 function hatched(createdAtMs: number, overrides: Partial<PetProfile> = {}): PetProfile {
   return {

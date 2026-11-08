@@ -13,7 +13,7 @@
  *
  *   - the Dexie definition mirror, on hydration (`stores/agent/.../dexie-bridge.ts`)
  *   - the persisted store's `defaultConfig` and templates (`store.ts` migrate)
- *   - the paired-device sync ingress (`lib/sync/handlers/agent-team-definitions.ts`)
+ *   - the paired-device sync ingress (`lib/squads/sync/agent-team-definitions.ts`)
  *   - the plugin API, the workflow node inputs and the CLI (`stripLegacyRuntimeSelector`)
  *
  * Inference is deliberately conservative. A binding is inferred only when

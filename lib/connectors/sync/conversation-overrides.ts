@@ -2,8 +2,8 @@ import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import { pendingOverrideConversationKeys } from "@/lib/connectors/inbox-writes/pending-overrides"
-import type { SyncCursor, SyncOutcome } from "../types"
-import { runSyncHandler } from "./base"
+import type { SyncCursor, SyncOutcome } from "@/lib/sync/types"
+import { runSyncHandler } from "@/lib/sync/handlers/base"
 
 /**
  * Apply pulled override rows, SKIPPING any conversation that has an in-flight

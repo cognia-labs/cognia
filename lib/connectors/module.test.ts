@@ -23,4 +23,10 @@ describe("the connectors manifest", () => {
     const { workflowNodeKinds } = await connectors.workflowNodes!.load()
     expect(workflowNodeKinds).toContain("action.connector.send")
   })
+
+  it("owns the conversation-override pull through its sync handlers", async () => {
+    expect(connectors.syncHandlers?.tables).toEqual(["conversationOverrides"])
+    const { syncHandlers } = await connectors.syncHandlers!.load()
+    expect(Object.keys(syncHandlers).sort()).toEqual(["conversationOverrides"])
+  })
 })

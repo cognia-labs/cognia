@@ -20,7 +20,7 @@ import { isPetMirrorShell } from "@/lib/pet/remote/mirror"
 import { getDb } from "@/lib/db/schema"
 import { getWindowRole } from "@/lib/platform/window-role"
 import { usePetStore } from "@/stores/pet/pet-store"
-import { projectPetProfileForSync } from "@/lib/sync/handlers/pet"
+import { projectPetProfileForSync } from "@/lib/pet/sync/pet-sync"
 
 const liveQuery = useLiveQuery as jest.Mock
 const emit = emitPetEvent as jest.Mock

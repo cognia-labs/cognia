@@ -51,6 +51,9 @@ export default defineHostModule({
     "lib/memory/write/remember-fact.ts",
   ],
   prompts: () => import("./prompts"),
+  // A paired client's encrypted memories mirror: the pull, and the host-side
+  // reader that encrypts each row under the shared memory DEK.
+  syncHandlers: { tables: ["memories"], load: () => import("./sync/sync-handlers") },
   // Retiring a deleted twin's memories, for the twin module.
   provides: [{ port: "memory-namespaces", load: () => import("./namespaces-port") }],
   // The deep path of project continuity, on the same switch as the section.

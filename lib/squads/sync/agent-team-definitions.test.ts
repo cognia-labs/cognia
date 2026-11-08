@@ -1,5 +1,5 @@
 const runSyncHandler = jest.fn(async () => ({ pulled: 0, applied: 0 }))
-jest.mock("./base", () => ({
+jest.mock("@/lib/sync/handlers/base", () => ({
   runSyncHandler: (...args: unknown[]) => (runSyncHandler as (...a: unknown[]) => unknown)(...args),
 }))
 jest.mock("@/lib/db/schema", () => ({

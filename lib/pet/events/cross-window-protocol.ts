@@ -17,7 +17,7 @@ import type {
   PetSkinSelection,
   PetVisualState,
 } from "@/types/pet"
-import type { PetProfileSyncRow } from "@/lib/sync/handlers/pet"
+import type { PetProfileSyncRow } from "@/lib/pet/sync/pet-sync"
 import { ALL_PET_SPECIES } from "@/lib/pet/skins/species-traits"
 import { isPetConsoleTab, type PetConsoleTab } from "@/lib/pet/console-tabs"
 import { decodePetBubbleAction, type PetBubbleAction } from "@/lib/pet/bubbles/action"

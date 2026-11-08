@@ -7,8 +7,8 @@
  * once. Nothing here ever writes back.
  *
  * Both halves of the wire shape live in this file, so they cannot drift: the
- * host-side projections `lib/sync/desktop-sync-source.ts` calls, and the
- * client-side apply steps.
+ * host-side projections and readers the pet's `syncHandlers` contribution
+ * serves pulls with, and the client-side apply steps.
  *
  *   petProfile            singleton, cursored on its ISO `updatedAt`. Crosses
  *                         as a projection: `accountFingerprint` derives from
@@ -46,8 +46,9 @@ import type {
   PetProfile,
 } from "@/types/pet"
 
-import type { SyncCursor, SyncOutcome } from "../types"
-import { runSyncHandler } from "./base"
+import { finalizeDelta, type UpdatedAtRow } from "@/lib/sync/delta"
+import { runSyncHandler } from "@/lib/sync/handlers/base"
+import type { SyncCursor, SyncDelta, SyncOutcome } from "@/lib/sync/types"
 
 /**
  * What a mirrored profile carries in place of the account fingerprint. Not a
@@ -96,6 +97,80 @@ export function projectPetActivityForSync(rows: PetActivityRow[]): PetActivitySy
   return rows
     .filter((row) => typeof row.id === "number" && Number.isSafeInteger(row.id))
     .map((row) => ({ ...row, id: String(row.id) }))
+}
+
+// ── Host-side readers ─────────────────────────────────────────────────────────
+//
+// What the host answers a paired client's pull with, through the pet's
+// `syncHandlers` contribution (`./sync-handlers.ts`).
+
+/**
+ * The profile singleton, as a projection (no account fingerprint, no proactive
+ * counters, the host's bones). `updatedAt` is an ISO string, so the cursor is
+ * its epoch ms; every writer stamps it (`patchPetProfile`, `applyPetEvent`,
+ * the shop, the hatch). A first pull always carries the row, even one whose
+ * stamp does not parse, so a cold mirror is never left without its pet.
+ */
+export async function readPetProfileDelta(since: number): Promise<SyncDelta<unknown>> {
+  const row = await getDb().petProfile.get("global")
+  const rows =
+    row && (since === 0 || isoMs(row.updatedAt) > since) ? [projectPetProfileForSync(row)] : []
+  return finalizeDelta("petProfile", rows as unknown as UpdatedAtRow[], since, false, (r) =>
+    isoMs((r as unknown as { updatedAt?: string }).updatedAt)
+  )
+}
+
+/** Unlocks are written once and never edited, so the indexed `unlockedAt` is the cursor. */
+export async function readPetAchievementsDelta(since: number): Promise<SyncDelta<unknown>> {
+  const rows = await getDb().petAchievements.where("unlockedAt").above(since).toArray()
+  return finalizeDelta("petAchievements", rows as unknown as UpdatedAtRow[], since, false, (r) =>
+    Number((r as unknown as { unlockedAt?: number }).unlockedAt ?? 0)
+  )
+}
+
+/**
+ * Owned items. `updatedAt` is epoch ms but not indexed; the table holds one
+ * row per catalog item at most, so this scans what the shop already scans.
+ */
+export async function readPetInventoryDelta(since: number): Promise<SyncDelta<unknown>> {
+  const rows = await getDb()
+    .petInventory.filter((row) => Number(row.updatedAt ?? 0) > since)
+    .toArray()
+  return finalizeDelta("petInventory", rows as UpdatedAtRow[], since)
+}
+
+/**
+ * Per-character appearance overrides. Keyed by `characterId`, which the wire
+ * carries as `id` (tombstones are recorded under the same key); `updatedAt`
+ * is an ISO string, so the cursor is its epoch ms. One row per bound
+ * character, so a scan.
+ */
+export async function readPetCharacterBindingsDelta(since: number): Promise<SyncDelta<unknown>> {
+  const rows = (await getDb().petCharacterBindings.toArray())
+    .filter((row) => isoMs(row.updatedAt) > since)
+    .map(projectPetBindingForSync)
+  return finalizeDelta(
+    "petCharacterBindings",
+    rows as unknown as UpdatedAtRow[],
+    since,
+    false,
+    (r) => isoMs((r as unknown as { updatedAt?: string }).updatedAt)
+  )
+}
+
+/**
+ * The interaction ledger. Append-only with an auto-increment key, and the key
+ * IS the cursor: it only grows, survives `clear()` (IndexedDB key generators
+ * are never reset), and orders rows exactly as they were written. Bounded at
+ * `PET_ACTIVITY_CAP` rows on the host, so one page carries a cold pull.
+ */
+export async function readPetActivityLogDelta(since: number): Promise<SyncDelta<unknown>> {
+  const rows = projectPetActivityForSync(
+    await getDb().petActivityLog.where(":id").above(since).toArray()
+  )
+  return finalizeDelta("petActivityLog", rows as unknown as UpdatedAtRow[], since, false, (r) =>
+    Number((r as unknown as { id: string }).id)
+  )
 }
 
 // ── Client-side apply ────────────────────────────────────────────────────────

@@ -58,6 +58,7 @@ import type { PromptDefinitionV1, PromptResolutionContext } from "@/lib/prompts/
 import type { Goal } from "@/types/goal"
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
 import type { ScheduledTaskType } from "@/types/scheduler"
+import type { SyncableTable, SyncTableHandler } from "@/lib/sync/types"
 import type { TaskExecutor } from "@/lib/scheduler/task-scheduler"
 import type { BuiltInSkillAvailability } from "@/lib/skills/built-in/types"
 import type { Project } from "@/types"
@@ -556,6 +557,25 @@ export interface ModuleTaskExecutorsEntry {
   load: LazyModule<ModuleTaskExecutorsModule>
 }
 
+/**
+ * What a module's `syncHandlers.load` resolves to: the pull, and where the rows
+ * need the module's code the host-side reader, of each companion sync table
+ * the manifest's `syncHandlers.tables` names (`lib/sync/module-handlers.ts`).
+ */
+export interface ModuleSyncHandlersModule {
+  syncHandlers: Readonly<Partial<Record<SyncableTable, SyncTableHandler>>>
+}
+
+/** One module's sync handlers as `lib/modules/generated/sync-handlers.ts` lists them. */
+export interface ModuleSyncHandlersEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  /** The tables the module owns the sync of, known before its file loads. */
+  tables: readonly SyncableTable[]
+  load: LazyModule<ModuleSyncHandlersModule>
+}
+
 /** One module's node executors as `lib/modules/generated/workflow-nodes.ts` lists them. */
 export interface ModuleWorkflowNodesEntry {
   /** The contributing module, and its stage: an `experimental` one contributes nothing. */
@@ -699,6 +719,16 @@ export interface HostModuleManifest {
   taskExecutors?: {
     types: readonly ScheduledTaskType[]
     load: LazyModule<ModuleTaskExecutorsModule>
+  }
+  /**
+   * The companion sync tables this module owns the sync of, and the file that
+   * exports their handlers (ADR-0250 §14 `syncHandlers`). The table's stage
+   * and ordering stay in the sync orchestrator's table list; the pull, and the
+   * host-side reader, load from here when a sync first needs them.
+   */
+  syncHandlers?: {
+    tables: readonly SyncableTable[]
+    load: LazyModule<ModuleSyncHandlersModule>
   }
   /**
    * The built-in skill families this module registers (ADR-0026, ADR-0250

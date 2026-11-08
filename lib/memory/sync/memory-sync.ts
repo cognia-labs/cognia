@@ -1,11 +1,21 @@
 import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { Memory } from "@/types/memory/memory"
-import { createProfileDekStore, ProfileDekProtocolError } from "@/lib/rag/profile-dek-store"
+import {
+  createProfileDekStore,
+  ProfileDekProtocolError,
+  type ProfileDekHandle,
+} from "@/lib/rag/profile-dek-store"
 
-import type { SyncCursor, SyncOutcome } from "../types"
-import { runSyncHandler } from "./base"
-import { openMemorySyncRowV1, type EncryptedMemorySyncRowV1 } from "../memory-content-protocol"
+import { finalizeDelta } from "@/lib/sync/delta"
+import { runSyncHandler } from "@/lib/sync/handlers/base"
+import {
+  createMemorySyncRowV1,
+  MEMORY_SYNC_PROFILE_ID,
+  openMemorySyncRowV1,
+  type EncryptedMemorySyncRowV1,
+} from "@/lib/sync/memory-content-protocol"
+import type { SyncCursor, SyncDelta, SyncOutcome, SyncServeContext } from "@/lib/sync/types"
 
 interface ProfileDekPairingResponseV1 {
   protocolVersion: 1
@@ -118,4 +128,45 @@ export function syncMemories(
     transport,
     cursor
   )
+}
+
+// ── Host-side reader ─────────────────────────────────────────────────────────
+
+/** How many memories a paired client's first pull carries, newest first. */
+export const MEMORY_COLD_START_LIMIT = 500
+
+/**
+ * What the host's memory reader takes through `SyncServeContext.deps`; tests
+ * inject the DEK and the cold-start limit, production passes neither.
+ */
+export interface MemorySyncServeDeps {
+  getMemoryDek?: () => Promise<ProfileDekHandle>
+  memoryColdStartLimit?: number
+}
+
+/**
+ * The memories a paired client pulls, encrypted under the shared memory DEK
+ * (retrieval content protocol v1, which the host checks before it gets here).
+ * A first pull carries the newest `MEMORY_COLD_START_LIMIT`; later pulls carry
+ * everything past the cursor.
+ */
+export async function readMemoriesDelta(
+  since: number,
+  context: SyncServeContext
+): Promise<SyncDelta<unknown>> {
+  const deps = context.deps as MemorySyncServeDeps
+  const coldStartLimit = deps.memoryColdStartLimit ?? MEMORY_COLD_START_LIMIT
+  if (!Number.isInteger(coldStartLimit) || coldStartLimit < 1) {
+    throw new Error("Memory cold-start limit must be positive")
+  }
+  const rows =
+    since === 0
+      ? await getDb().memories.orderBy("updatedAt").reverse().limit(coldStartLimit).toArray()
+      : await getDb().memories.where("updatedAt").above(since).toArray()
+  if (rows.length === 0) return finalizeDelta("memories", [], since)
+  const dek = await (
+    deps.getMemoryDek ?? (() => createProfileDekStore().getOrCreate(MEMORY_SYNC_PROFILE_ID))
+  )()
+  const encryptedRows = await Promise.all(rows.map((row) => createMemorySyncRowV1(row, dek)))
+  return finalizeDelta("memories", encryptedRows, since)
 }
