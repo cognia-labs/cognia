@@ -57,6 +57,8 @@ import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import type { PromptDefinitionV1, PromptResolutionContext } from "@/lib/prompts/types"
 import type { Goal } from "@/types/goal"
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
+import type { ScheduledTaskType } from "@/types/scheduler"
+import type { TaskExecutor } from "@/lib/scheduler/task-scheduler"
 import type { BuiltInSkillAvailability } from "@/lib/skills/built-in/types"
 import type { Project } from "@/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
@@ -534,6 +536,26 @@ export interface ModuleBuiltinSkillsEntry {
   load: LazyModule<ModuleBuiltinSkillsModule>
 }
 
+/**
+ * What a module's `taskExecutors.load` resolves to: the executor of each
+ * scheduled task type the manifest's `taskExecutors.types` names. The
+ * scheduler registers them when one of those types first comes due
+ * (`lib/scheduler/module-executors.ts`).
+ */
+export interface ModuleTaskExecutorsModule {
+  taskExecutors: Readonly<Partial<Record<ScheduledTaskType, TaskExecutor>>>
+}
+
+/** One module's task executors as `lib/modules/generated/task-executors.ts` lists them. */
+export interface ModuleTaskExecutorsEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  /** The task types the module owns, known before its file loads. */
+  types: readonly ScheduledTaskType[]
+  load: LazyModule<ModuleTaskExecutorsModule>
+}
+
 /** One module's node executors as `lib/modules/generated/workflow-nodes.ts` lists them. */
 export interface ModuleWorkflowNodesEntry {
   /** The contributing module, and its stage: an `experimental` one contributes nothing. */
@@ -669,8 +691,15 @@ export interface HostModuleManifest {
   capabilityContributions?: { load: LazyModule<ModuleCapabilityContributionsModule> }
   /** System-prompt sections the module adds to the runs it applies to (ADR-0250 §14 `context` amendment). */
   context?: { load: LazyModule<ModuleContextModule> }
-  /** Scheduler executors declared together with their task sources. */
-  taskExecutors?: ModuleContribution
+  /**
+   * The scheduled task types this module owns, and the file that exports
+   * their executors (ADR-0250 §14 `taskExecutors`), loaded by the scheduler
+   * when one comes due.
+   */
+  taskExecutors?: {
+    types: readonly ScheduledTaskType[]
+    load: LazyModule<ModuleTaskExecutorsModule>
+  }
   /**
    * The built-in skill families this module registers (ADR-0026, ADR-0250
    * §14 `builtinSkills`), loaded before the skill registry is read.

@@ -45,7 +45,7 @@ describe("manifest-types", () => {
         }),
       },
       capabilityContributions: { load: async () => ({ contributions: [] }) },
-      taskExecutors: { load: () => import("./define") },
+      taskExecutors: { types: ["im-push"], load: async () => ({ taskExecutors: {} }) },
       builtinSkills: { load: async () => ({ builtInSkillFamilies: [] }) },
       pluginApi: { namespaces: ["pet"], load: () => import("./define") },
       workflowNodes: { load: async () => ({ workflowNodeKinds: [] }) },

@@ -21,7 +21,6 @@
  *   - backup          → builds & writes an encrypted backup (local / WebDAV /
  *                       GitHub / Google Drive).
  *   - workflow        → runs a published visual workflow (`workflow-executor.ts`).
- *   - im-push         → pushes a message into a bound IM conversation.
  *   - test            → diagnostic echo executor (`test-executor.ts`).
  *   - plugin          → routes to the registered plugin handler.
  *   - custom          → user/plugin-supplied executor registered at runtime
@@ -35,6 +34,9 @@
  * mounts) loads this module on demand through `../executor-owners.ts` when a
  * built-in task comes due, which is why the registered types are declared
  * there as `BUILT_IN_EXECUTOR_TASK_TYPES`.
+ *
+ * A feature module's task types (`im-push`, the connectors') arrive through
+ * its manifest's `taskExecutors` and `../module-executors.ts`, not here.
  *
  * Connector task types (`connection:*`) are registered by the `integrations`
  * boot bundle. `provider-diagnostics-refresh` is registered by
@@ -143,7 +145,6 @@ import { loggers } from "@cognia/logging"
 import { assertTaskTypeSupportedOnHost } from "../host-support"
 import { executeTestTask } from "./test-executor"
 import { executeWorkflowTask } from "./workflow-executor"
-import { executeImPushTask } from "./im-push-executor"
 
 const log = loggers.scheduler
 
@@ -1501,7 +1502,6 @@ const BUILT_IN_EXECUTORS = {
   bot: executeBotTask,
   test: executeTestTask,
   workflow: executeWorkflowTask,
-  "im-push": executeImPushTask,
 } satisfies Record<BuiltInExecutorTaskType, TaskExecutor>
 
 let registered = false

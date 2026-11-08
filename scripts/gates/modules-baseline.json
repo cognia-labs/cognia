@@ -848,7 +848,6 @@
     "lib/scheduler/executors/goal-executor.ts -> goal",
     "lib/scheduler/executors/goal-executor.ts -> project-coordinator",
     "lib/scheduler/executors/goal-headless-runner.ts -> goal",
-    "lib/scheduler/executors/im-push-executor.ts -> connectors",
     "lib/scheduler/executors/index.ts -> external-services",
     "lib/scheduler/executors/radar-report-executor.ts -> radar",
     "lib/scheduler/executors/team-executor.ts -> squads",

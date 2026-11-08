@@ -144,6 +144,8 @@ export const GENERATED_CONTEXT = "lib/modules/generated/context.ts"
 export const GENERATED_WORKFLOW_NODES = "lib/modules/generated/workflow-nodes.ts"
 /** Every module's `builtinSkills` file, lazily: the built-in skill registry's only route to one. */
 export const GENERATED_BUILTIN_SKILLS = "lib/modules/generated/builtin-skills.ts"
+/** Every module's `taskExecutors` file, lazily, with the task types it owns: the scheduler's only route to one. */
+export const GENERATED_TASK_EXECUTORS = "lib/modules/generated/task-executors.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
@@ -153,6 +155,7 @@ export const GENERATED_FILES = [
   GENERATED_CONTEXT,
   GENERATED_WORKFLOW_NODES,
   GENERATED_BUILTIN_SKILLS,
+  GENERATED_TASK_EXECUTORS,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -704,6 +707,24 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
       for (const key of Object.keys(skills))
         if (key !== "load") errors.push(`builtinSkills: unknown field "${key}"`)
   }
+  if (manifest.taskExecutors !== undefined) {
+    const executors = manifest.taskExecutors
+    if (!executors || typeof executors !== "object" || !isLazy(executors.load))
+      errors.push('taskExecutors.load is a lazy entry `() => import("…")`')
+    else {
+      for (const key of Object.keys(executors))
+        if (key !== "load" && key !== "types") errors.push(`taskExecutors: unknown field "${key}"`)
+      const types = executors.types
+      if (
+        !Array.isArray(types) ||
+        types.length === 0 ||
+        types.some((type) => typeof type !== "string" || !/^[a-z][a-z0-9:-]*$/.test(type))
+      )
+        errors.push("taskExecutors.types lists the scheduled task types the file exports")
+      else if (new Set(types).size !== types.length)
+        errors.push("taskExecutors.types names a task type twice")
+    }
+  }
   if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
@@ -968,6 +989,46 @@ export function promptEntries(modules) {
   return lazyRegistryEntries("prompts", modules)
 }
 
+/** The modules that own scheduled task executors, in module id order, with their task types. */
+export function taskExecutorEntries(modules) {
+  return [...modules]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .filter(({ value }) => typeof value?.taskExecutors?.load?.$lazy === "string")
+    .map(({ id, file, value }) => ({
+      module: id,
+      stage: value.stage,
+      types: Array.isArray(value.taskExecutors.types) ? value.taskExecutors.types : [],
+      load: adapterImport(file, value.taskExecutors.load.$lazy),
+    }))
+}
+
+function renderTaskExecutors(modules) {
+  const rows = taskExecutorEntries(modules).map((entry) =>
+    [
+      "  {",
+      `    module: ${JSON.stringify(entry.module)},`,
+      `    stage: ${JSON.stringify(entry.stage)},`,
+      `    types: ${JSON.stringify(entry.types)},`,
+      `    load: () => import(${JSON.stringify(entry.load)}),`,
+      "  },",
+    ].join("\n")
+  )
+  return [
+    `${HEADER("lib/<id>/module.ts")}`,
+    "//",
+    "// Every module's `taskExecutors`: the scheduled task types it owns, and the file",
+    "// that exports their executors, loaded by the scheduler when one of them",
+    "// comes due (`lib/scheduler/module-executors.ts`).",
+    "",
+    'import type { ModuleTaskExecutorsEntry } from "@/lib/modules/manifest-types"',
+    "",
+    rows.length
+      ? `export const MODULE_TASK_EXECUTORS: readonly ModuleTaskExecutorsEntry[] = [\n${rows.join("\n")}\n]`
+      : "export const MODULE_TASK_EXECUTORS: readonly ModuleTaskExecutorsEntry[] = []",
+    "",
+  ].join("\n")
+}
+
 function renderLazyRegistry(registry, modules) {
   const { constName, type, reader } = LAZY_REGISTRIES[registry]
   const rows = lazyRegistryEntries(registry, modules).map((entry) =>
@@ -1019,6 +1080,7 @@ export function renderRegistries({ host, ui }) {
     [GENERATED_CONTEXT]: renderLazyRegistry("context", host),
     [GENERATED_WORKFLOW_NODES]: renderLazyRegistry("workflowNodes", host),
     [GENERATED_BUILTIN_SKILLS]: renderLazyRegistry("builtinSkills", host),
+    [GENERATED_TASK_EXECUTORS]: renderTaskExecutors(host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

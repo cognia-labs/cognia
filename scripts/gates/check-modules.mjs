@@ -290,6 +290,16 @@ function collectManifests(ctx, files) {
     ),
     ...duplicateContributions(host, (manifest) => manifest.nav, "id", "navigation entry "),
     ...duplicateContributions(host, (manifest) => manifest.runtimes, "name", "runtime "),
+    // A task type has one executor: the scheduler loads its owner by type.
+    ...duplicateContributions(
+      host,
+      (manifest) =>
+        Array.isArray(manifest.taskExecutors?.types)
+          ? manifest.taskExecutors.types.map((name) => ({ name }))
+          : [],
+      "name",
+      "task executor "
+    ),
     // A tool name routes to one module: the dispatcher looks it up by name.
     ...duplicateContributions(
       host,

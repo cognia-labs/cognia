@@ -15,7 +15,7 @@ import { sanitizeOutboundSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-s
  *   2. the per-conversation proactive-push opt-in
  *      (`ConversationOverrideRow.proactivePush`) is enforced fail-closed,
  *      exactly like the Notification Center's IM channel
- *      (`lib/notifications/im-deliver.ts`) — a customer-facing chat never
+ *      (`../notifications/im-deliver.ts`) — a customer-facing chat never
  *      gets a surprise push;
  *   3. the text passes the PII gate (`hasNoLeakingPii`, the cross-cutting
  *      redaction gate from CLAUDE.md) before it leaves the app;
@@ -41,7 +41,7 @@ import type {
 import type { MessageSegment } from "@/types/connectors/segment"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { loggers } from "@cognia/logging"
-import { assertTaskTypeSupportedOnHost } from "../host-support"
+import { assertTaskTypeSupportedOnHost } from "@/lib/scheduler/host-support"
 
 const log = loggers.scheduler
 

@@ -28,12 +28,17 @@
  *   not running, which the boot grace and `connection-task-orphans.ts` handle.
  * - the deprecated types (`DEPRECATED_TASK_TYPES`): nothing registers them.
  *
+ * A feature module that owns task types declares them in its manifest's
+ * `taskExecutors` (ADR-0250 §14); `./module-executors.ts` turns those into
+ * owners here, so this table names no module.
+ *
  * Pure leaf. The owners load with `import()`, so the scheduler's static graph
  * stays as small as it was and the owner modules' own imports of the scheduler
  * are not cycles.
  */
 
 import type { ScheduledTaskType } from "@/types/scheduler"
+import { moduleTaskExecutorOwners } from "./module-executors"
 
 /**
  * The task types `registerBuiltInExecutors()` (`./executors`) registers. That
@@ -63,7 +68,6 @@ export const BUILT_IN_EXECUTOR_TASK_TYPES = Object.freeze([
   "bot",
   "test",
   "workflow",
-  "im-push",
 ] as const satisfies readonly ScheduledTaskType[])
 
 export type BuiltInExecutorTaskType = (typeof BUILT_IN_EXECUTOR_TASK_TYPES)[number]
@@ -85,6 +89,9 @@ const registerBuiltIns: TaskExecutorOwner = async () => {
 export const TASK_EXECUTOR_OWNERS: Readonly<Partial<Record<ScheduledTaskType, TaskExecutorOwner>>> =
   Object.freeze({
     ...Object.fromEntries(BUILT_IN_EXECUTOR_TASK_TYPES.map((type) => [type, registerBuiltIns])),
+    // The task types feature modules own, from their manifests' `taskExecutors`
+    // (`./module-executors.ts`); the module gate keeps each type to one owner.
+    ...moduleTaskExecutorOwners(),
     "provider-diagnostics-refresh": async () => {
       const { registerProviderDiagnosticsRefreshExecutor } =
         await import("@/lib/provider-diagnostics/refresh")

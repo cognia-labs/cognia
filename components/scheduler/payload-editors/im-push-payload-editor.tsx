@@ -3,7 +3,7 @@
 /**
  * Structured payload editor for `im-push` tasks — push a text (or raw
  * segments) into an already-bound IM conversation on a schedule (executor:
- * `lib/scheduler/executors/im-push-executor.ts`).
+ * `lib/connectors/scheduler/im-push-executor.ts`).
  *
  * The conversation must (a) have a persisted delivery target — the bot has
  * exchanged at least one message with it — and (b) have proactive push
@@ -94,7 +94,9 @@ export function ImPushPayloadEditor({
           value={draft.segmentsJson}
           onChange={(e) => update("segmentsJson", e.target.value)}
           rows={4}
-          placeholder={'[\n  { "type": "text", "text": "…" }\n]'}
+          placeholder={
+            /* i18n-exempt: a literal segments JSON example, identical in every language */ '[\n  { "type": "text", "text": "…" }\n]'
+          }
           disabled={disabled}
           className={cn(
             "font-mono text-xs",

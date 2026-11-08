@@ -35,6 +35,7 @@ import {
   GENERATED_WORKFLOW_NODES,
   GENERATED_BUILTIN_SKILLS,
   GENERATED_HOST,
+  GENERATED_TASK_EXECUTORS,
   GENERATED_PROMPTS,
   GENERATED_TOOLS,
   GENERATED_UI,
@@ -1325,6 +1326,91 @@ test("the built-in skill registry lazily imports each contributing module's file
   assert.ok(registry.indexOf('module: "bot"') < registry.indexOf('module: "connectors"'))
   assert.ok(registry.includes('load: () => import("@/lib/connectors/builtin-skills")'))
   assert.ok(!registry.includes("crew"))
+})
+
+test("validateHostManifest wants taskExecutors as { types, load } with distinct task types", () => {
+  const base = { id: "connectors", kind: "module", stage: "stable" }
+  const errors = (taskExecutors) => validateHostManifest({ ...base, taskExecutors }, "connectors")
+  assert.ok(
+    errors("./scheduler/task-executors").includes(
+      'taskExecutors.load is a lazy entry `() => import("…")`'
+    )
+  )
+  assert.ok(
+    errors({
+      load: { $lazy: "./scheduler/task-executors" },
+      types: ["im-push"],
+      cron: "",
+    }).includes('taskExecutors: unknown field "cron"')
+  )
+  for (const types of [undefined, [], ["Im Push"], [3]])
+    assert.ok(
+      errors({ load: { $lazy: "./scheduler/task-executors" }, types }).includes(
+        "taskExecutors.types lists the scheduled task types the file exports"
+      )
+    )
+  assert.ok(
+    errors({
+      load: { $lazy: "./scheduler/task-executors" },
+      types: ["im-push", "im-push"],
+    }).includes("taskExecutors.types names a task type twice")
+  )
+  assert.deepEqual(
+    errors({ load: { $lazy: "./scheduler/task-executors" }, types: ["im-push", "connection:x"] }),
+    []
+  )
+})
+
+test("the task executor registry lists each owning module's types and lazy file, by module id", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "connectors",
+        file: "lib/connectors/module.ts",
+        value: {
+          stage: "stable",
+          taskExecutors: { types: ["im-push"], load: { $lazy: "./scheduler/task-executors" } },
+        },
+      },
+      { id: "crew", file: "lib/crew/module.ts", value: { stage: "beta" } },
+      {
+        id: "bot",
+        file: "lib/bot/module.ts",
+        value: {
+          stage: "experimental",
+          taskExecutors: { types: ["bot-digest"], load: { $lazy: "./executors" } },
+        },
+      },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_TASK_EXECUTORS]
+  assert.match(
+    registry,
+    /export const MODULE_TASK_EXECUTORS: readonly ModuleTaskExecutorsEntry\[\]/
+  )
+  assert.ok(registry.indexOf('module: "bot"') < registry.indexOf('module: "connectors"'))
+  assert.ok(registry.includes('types: ["im-push"],'))
+  assert.ok(registry.includes('stage: "experimental"'))
+  assert.ok(registry.includes('load: () => import("@/lib/connectors/scheduler/task-executors")'))
+  assert.ok(!registry.includes("crew"))
+})
+
+test("a task type has one owning module", () => {
+  const executors = (type) =>
+    `taskExecutors: { types: ["${type}"], load: () => import("./task-executors") }`
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crew/module.ts": hostManifest("crew", executors("im-push")),
+    "lib/crew/task-executors.ts": "export const taskExecutors = {}\n",
+    "lib/pet/module.ts": hostManifest("pet", executors("im-push")),
+    "lib/pet/task-executors.ts": "export const taskExecutors = {}\n",
+  })
+  assert.deepEqual(
+    result.errors.filter((error) => error.includes("task executor")),
+    ['lib/pet/module.ts: task executor im-push is also contributed by "crew"']
+  )
 })
 
 test("validateHostManifest wants tools as { declare, load } with complete declarations", () => {

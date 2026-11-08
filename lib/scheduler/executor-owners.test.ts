@@ -443,11 +443,13 @@ describe("a scheduler started without initSchedulerSystem", () => {
 })
 
 describe("TASK_EXECUTOR_OWNERS", () => {
-  it("declares the built-ins, provider diagnostics, conversation auto-archive, the Files Trash purge, the harness evolution sweep and issue wakeups, and no connector or deprecated type", () => {
+  it("declares the built-ins, the module-owned types, provider diagnostics, conversation auto-archive, the Files Trash purge, the harness evolution sweep and issue wakeups, and no connector or deprecated type", () => {
     const owned = Object.keys(TASK_EXECUTOR_OWNERS)
     expect([...owned].sort()).toEqual(
       [
         ...BUILT_IN_EXECUTOR_TASK_TYPES,
+        // The connectors' manifest `taskExecutors`.
+        "im-push",
         "provider-diagnostics-refresh",
         "conversation-auto-archive",
         "files-trash-purge",
