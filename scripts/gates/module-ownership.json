@@ -1118,6 +1118,231 @@
       "why": "The root layout wraps every route in the platform shell and hands it to the foundation runtime, so the shell owns it (ADR-0250 §14)."
     },
     {
+      "prefix": "app/agents/page.",
+      "owner": "shell",
+      "why": "The `/agents` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/agents/route-body.",
+      "owner": "shell",
+      "why": "The `/agents` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/agents/evolution/page.",
+      "owner": "shell",
+      "why": "The `/agents/evolution` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/agents/evolution/route-body.",
+      "owner": "shell",
+      "why": "The `/agents/evolution` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/bots/page.",
+      "owner": "shell",
+      "why": "The `/bots` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/bots/route-body.",
+      "owner": "shell",
+      "why": "The `/bots` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/devices/page.",
+      "owner": "shell",
+      "why": "The `/devices` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/devices/route-body.",
+      "owner": "shell",
+      "why": "The `/devices` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/discover/page.",
+      "owner": "shell",
+      "why": "The `/discover` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/discover/route-body.",
+      "owner": "shell",
+      "why": "The `/discover` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/goals/page.",
+      "owner": "shell",
+      "why": "The `/goals` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/goals/route-body.",
+      "owner": "shell",
+      "why": "The `/goals` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/adapter/page.",
+      "owner": "shell",
+      "why": "The `/inbox/adapter` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/adapter/route-body.",
+      "owner": "shell",
+      "why": "The `/inbox/adapter` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/all/page.",
+      "owner": "shell",
+      "why": "The `/inbox/all` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/all/route-body.",
+      "owner": "shell",
+      "why": "The `/inbox/all` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/drafts/page.",
+      "owner": "shell",
+      "why": "The `/inbox/drafts` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/drafts/route-body.",
+      "owner": "shell",
+      "why": "The `/inbox/drafts` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/platform/page.",
+      "owner": "shell",
+      "why": "The `/inbox/platform` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/inbox/platform/route-body.",
+      "owner": "shell",
+      "why": "The `/inbox/platform` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/issues/page.",
+      "owner": "shell",
+      "why": "The `/issues` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/issues/route-body.",
+      "owner": "shell",
+      "why": "The `/issues` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/memory/page.",
+      "owner": "shell",
+      "why": "The `/memory` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/memory/route-body.",
+      "owner": "shell",
+      "why": "The `/memory` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/plugins/page.",
+      "owner": "shell",
+      "why": "The `/plugins` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/plugins/route-body.",
+      "owner": "shell",
+      "why": "The `/plugins` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/projects/page.",
+      "owner": "shell",
+      "why": "The `/projects` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/projects/route-body.",
+      "owner": "shell",
+      "why": "The `/projects` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/servers/page.",
+      "owner": "shell",
+      "why": "The `/servers` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/servers/route-body.",
+      "owner": "shell",
+      "why": "The `/servers` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/servers/detail/page.",
+      "owner": "shell",
+      "why": "The `/servers/detail` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/servers/detail/route-body.",
+      "owner": "shell",
+      "why": "The `/servers/detail` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/source-control/page.",
+      "owner": "shell",
+      "why": "The `/source-control` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/source-control/route-body.",
+      "owner": "shell",
+      "why": "The `/source-control` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/squads/page.",
+      "owner": "shell",
+      "why": "The `/squads` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/squads/route-body.",
+      "owner": "shell",
+      "why": "The `/squads` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/templates/page.",
+      "owner": "shell",
+      "why": "The `/templates` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/templates/route-body.",
+      "owner": "shell",
+      "why": "The `/templates` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/workflows/page.",
+      "owner": "shell",
+      "why": "The `/workflows` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/workflows/route-body.",
+      "owner": "shell",
+      "why": "The `/workflows` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/workflows/editor/page.",
+      "owner": "shell",
+      "why": "The `/workflows/editor` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/workflows/editor/route-body.",
+      "owner": "shell",
+      "why": "The `/workflows/editor` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/workflows/runs/page.",
+      "owner": "shell",
+      "why": "The `/workflows/runs` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/workflows/runs/route-body.",
+      "owner": "shell",
+      "why": "The `/workflows/runs` route body picks the mobile or desktop view, so the shell owns it (ADR-0250 §14)."
+    },
+    {
+      "prefix": "app/page.",
+      "owner": "shell",
+      "why": "The `/` page renders its route body, which picks the mobile or desktop view, so both are the shell's (ADR-0250 §14)."
+    },
+    {
       "prefix": "app/route-body.",
       "owner": "shell",
       "why": "The `/` route body picks the platform shell (the mobile app shell or the desktop chat workspace), so the shell owns it (ADR-0250 §14)."
