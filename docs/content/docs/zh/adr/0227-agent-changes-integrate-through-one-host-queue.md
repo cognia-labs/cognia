@@ -93,3 +93,19 @@ Anthropic 在 2026-10-13 发布的《Redesigning source control》介绍了 Scio
 - `cargo test -p cognia-git query_cache` 与维护相关测试。
 - `lib/scm/**`、风险评估、审查 Agent、编排器（过期重试、罪魁隔离）、Agent Team 控制器（`merge-all`、`select` 回滚）与 UI 的同目录 Jest 测试。
 - 一个多 Agent 并发测试将三个已捕获的 changeset（两个互不相交，一个冲突）送入同一队列，并断言发布后的引用、冲突记录与回滚结果。
+
+
+## 修订 — 2026-11-08（已议定，未实施）：依赖跨越仓库根
+
+状态：设计已议定，尚未实施。计划见`docs/plans/2026-11-08-clone-acquisition-and-multi-repo.md` §2 B1–B2，证据见`docs/evidence/2026-11-08-clone-acquisition-and-multi-repo.md`。
+
+§5 在捕获 changeset 时会「声明任务图依赖」，但 `merge-all` 每次只在一个仓库根内解析这些依赖：任务到 changeset 的映射和扣留集合都是逐根重建的。结果是，app 依赖的 SDK 任务还处于要求修改状态时，app 仍会被集成。这一点已经用协调器源码配合模拟 I/O 复现过。
+
+- **所有根共用一张依赖图。**
+  - 不变的部分：捕获仍按根分组，发布仍是每个目标 ref 一个事务（§2）。
+  - 变化的部分：顺序和扣留改由一张覆盖本次运行所有根的依赖图决定。
+  - 依赖图来源：三者的并集，即任务级 `dependsOn`、消费方仓库声明的 `dependsOn`（见 [ADR-0147](./0147-repository-declared-workspace) 修订）、Agent Team 仓库绑定上的 `dependsOn`。
+  - 扣留规则：消费方依赖的任一提供方处于扣留、失败或要求修改状态时，消费方都会被扣留，原因中写明是哪个提供方。
+- **提供方有改动时，消费方必须验证。**
+  - 本次运行中提供方有改动时，消费方要在包含该改动的集成候选上，运行自己声明的检查（验收档或 `requiredChecks`），以检查结果为准。
+  - 没有声明任何检查的消费方，等待人工处理：状态为 `awaitingApproval`，原因是「依赖已变更，且没有验证检查」。

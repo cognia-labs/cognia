@@ -130,3 +130,10 @@ left in `.git/hooks` while our token is in the environment.
   lock on the repository's common dir, same-repository work already serialises;
   multi-repository bundles are rare enough that parallelising them was more
   risk than benefit.
+
+
+## Amendment — 2026-11-08 (proposed)
+
+Acquisition budgets, failure classes, sparse-before-checkout and per-phase
+acquisition timing are recorded as an amendment to
+[ADR-0176](./0176-every-clone-shares-one-object-cache), which already amends this ADR.

@@ -287,3 +287,61 @@ messages are unchanged.
 | Supply command (loopback only) | `src-tauri/src/companion_api/rpc/service_plane.rs` |
 | Supply client | `lib/task-workspace/client.ts` |
 | Push credential forwarding | `lib/github/workspace.ts::commitAndPush` |
+
+
+## Amendment — 2026-11-08 (proposed): one acquisition budget, classified failures, sparse before checkout
+
+Status: agreed design, not yet implemented. Plan:
+`docs/plans/2026-11-08-clone-acquisition-and-multi-repo.md` §1; evidence:
+`docs/evidence/2026-11-08-clone-acquisition-and-multi-repo.md`.
+
+The 2026-11-08 audit of every checkout acquisition path found that §3 and §10
+stopped at the mirror and the guarded clone. These paths still run unbounded and
+cannot be cancelled: `worktree add` in `create_execution`, the sparse commands,
+`fetch origin`, the pull-request base fetch, the GitHub-workspace network
+fallback clone and its push, and the remote-source refresh. A mirror failure
+throws its stderr away. No span records a failure, because `Guard` defaults to
+`ok`. Sparse is applied after a full checkout, and the mirror backfill fetches
+every blob of the commit before the derive.
+
+1. **One `AcquisitionBudget` for every acquisition git call.** It extends §3's
+   request budget with per-phase ceilings (fetch, clone, derive, backfill,
+   worktree add, sparse, checkout, provisioning), an overall deadline, and a
+   cancel token. Each git call runs for the shorter of its phase ceiling and
+   what is left of the deadline. It lives in `cognia-git-mirror`, beside the
+   runner §10 made kill its child, and every acquisition path, including the
+   sandbox clone, goes through that runner. A cancel from the renderer reaches
+   the blocking call, and both cancel and timeout take the existing failure
+   rollback.
+2. **Failures are classified before anything retries.** `classify_failure`
+   moves down to `cognia-git-mirror` and gains `NotFound` (branch, ref or
+   repository). Only `Network` and `TimedOut` are retried, with capped
+   exponential backoff, jitter and a bounded attempt count inside the deadline.
+   §4 still holds for every other class: a mirror miss is not an error and
+   falls through to the network. The exceptions are `Auth` and `NotFound`,
+   because the network would only repeat the same answer. The class reaches the
+   renderer as an error code.
+3. **Sparse is set before the first checkout.** With `sparsePaths`, a worktree
+   is added with `--no-checkout`, narrowed, then checked out. A mirror derive
+   does the same, and the mirror backfill covers only the sparse paths. Without
+   `sparsePaths`, nothing changes. The resulting tree must be file-for-file the
+   tree today's path produces, including `workingState` overlay entries outside
+   the cone. Two spikes gate this step (equivalence with the overlay; a later,
+   wider task still obtains every blob). `--no-hardlinks` stays, for the reason
+   in §1.
+4. **Every phase is measured.** There are spans for mirror ensure (hit or
+   miss), fetch, backfill, derive, worktree add, sparse, checkout, network clone
+   and sandbox clone, and failures are recorded. Each acquisition writes a phase
+   report to its Registry row, which the perf panel reads. Attributes carry
+   redacted remotes, phase names, durations, counts and classes only.
+5. **`checkout.workers` is measured, not assumed.** A default is set only if a
+   local benchmark shows checkout of a large repository at least 20% faster with
+   no regression on cognia-next. A value the user configured is never
+   overridden.
+
+Not adopted, after review of an external clone-acceleration design: a custom
+`cat-file` tree writer, because it skips `.gitattributes` conversion (observed:
+LF written where Git writes CRLF). Also not adopted: a daily object-store
+archive with ranged download, and a per-commit network-share worktree cache.
+CDN seeds and disk snapshots for remote cold clones wait until the new sandbox
+clone spans show they are frequent and expensive.

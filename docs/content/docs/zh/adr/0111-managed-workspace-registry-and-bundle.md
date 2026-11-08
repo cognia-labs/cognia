@@ -88,3 +88,23 @@ Rust 单元与集成测试（`cargo test`）：状态机迁移与无效迁移拒
 - VS Code Worktrees：[code.visualstudio.com/docs/sourcecontrol/branches-worktrees](https://code.visualstudio.com/docs/sourcecontrol/branches-worktrees)
 - git-worktree：[git-scm.com/docs/git-worktree](https://git-scm.com/docs/git-worktree)
 - 修订：`docs/content/docs/zh/adr/0086-task-scoped-resource-workspaces.md`、`docs/content/docs/zh/adr/0108-codex-inspired-desktop-workflows.md`
+
+
+## 修订 — 2026-11-08（已议定，未实施）：bundle 保留各根的相对布局
+
+状态：设计已议定，尚未实施。计划见`docs/plans/2026-11-08-clone-acquisition-and-multi-repo.md` §2 B2–B3，证据见`docs/evidence/2026-11-08-clone-acquisition-and-multi-repo.md`。
+
+决策 (6) 把每个物理组放在存储键目录下（`bundles/<bundle>/<workspace>`）。结果是同级仓库丢了原来的名字：bundle 里 `file:../sdk` 这样的相对依赖解析不了，放在公共父目录的 `mise.toml` 也读不到。
+
+- **布局。** bundle 目录内，每个根放在它相对于所有根的最近公共父目录的路径上（`bundles/<id>/cognia-next/`、`bundles/<id>/cognia-services/`），存储键只用作 bundle 目录名。
+  - 退化：公共父目录过浅（文件系统根或用户主目录）或各根跨卷时，改为按目录名平铺成同级，重名时加后缀，并提示用户这些根之间的相对依赖不受保证。
+  - 共享同一 Git common dir 的根，仍然共用一个物理 worktree。
+  - 名称在 host 侧清洗、去重，并约束在 bundle 根之内。
+- **记录版本，不做迁移。** bundle 记录 `layoutVersion`。按存储键布局创建的旧 bundle，在生命周期结束前继续按旧布局恢复、释放和 reconcile。
+- **每个根按自己的声明做 provisioning。** 见 [ADR-0147](./0147-repository-declared-workspace) 的修订。
+- **更多入口能看到所有根。**
+  - 通用执行、子 Agent 执行和 Agent Team 子任务，在主执行根之外把附加别名一并传入，confinement 与信任证明和主根相同。
+  - Codex 只在其策略本来就允许写入时，才把附加别名作为 writable roots 收到。
+  - managed 聊天发送时保留 `@` 引用的目录，不再用别名替换掉它们。
+  - SCM 根切换器优先列出本会话 bundle 中的 worktree。
+- **仍然只给主根的入口，要标注清楚。** 远程代码供给和沙箱运行只供给主根；Aider 和 A2A 拒绝附加根。每处限制都在类型上写明、在 UI 上标注，并用测试钉住。

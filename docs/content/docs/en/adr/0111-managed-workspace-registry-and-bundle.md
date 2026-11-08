@@ -122,3 +122,39 @@ Preflight and gates: `test-gap-auditor`, `i18n-reviewer`, `static-export-auditor
 - VS Code Worktrees: [code.visualstudio.com/docs/sourcecontrol/branches-worktrees](https://code.visualstudio.com/docs/sourcecontrol/branches-worktrees)
 - git-worktree: [git-scm.com/docs/git-worktree](https://git-scm.com/docs/git-worktree)
 - Amends: `docs/content/docs/en/adr/0086-task-scoped-resource-workspaces.md`, `docs/content/docs/en/adr/0108-codex-inspired-desktop-workflows.md`
+
+
+## Amendment — 2026-11-08 (proposed): a bundle keeps its roots' relative layout
+
+Status: agreed design, not yet implemented. Plan:
+`docs/plans/2026-11-08-clone-acquisition-and-multi-repo.md` §2 B2–B3; evidence:
+`docs/evidence/2026-11-08-clone-acquisition-and-multi-repo.md`.
+
+Decision (6) placed each physical group under a storage-key directory
+(`bundles/<bundle>/<workspace>`). Sibling repositories therefore lost their
+names, and a relative dependency such as `file:../sdk`, or a `mise.toml` in a
+shared parent, could not resolve inside a bundle.
+
+- **Layout.** Inside the bundle directory, each root sits at its path relative
+  to the nearest common parent of the roots (`bundles/<id>/cognia-next/`,
+  `bundles/<id>/cognia-services/`). The storage key names only the bundle
+  directory. If the common parent is too shallow (the filesystem root or the
+  home directory), or the roots span volumes, roots are laid flat as siblings
+  named after their directories (with a suffix on collision), and the user is
+  told that relative dependencies between them are not guaranteed. Roots that
+  share a Git common dir keep sharing one physical worktree. Names are
+  sanitised, de-duplicated and confined host-side.
+- **Versioned, not migrated.** A bundle records a `layoutVersion`. A bundle
+  created under the storage-key layout restores, releases and reconciles on that
+  layout until it ends.
+- **Every root is provisioned from its own declaration.** See the
+  [ADR-0147](./0147-repository-declared-workspace) amendment.
+- **More entries see every root.** Generic and sub-agent execution and Agent
+  Team children pass the additional aliases alongside the primary execution
+  root, under the same confinement and trust proof. Codex receives them as
+  writable roots only when its policy already grants writes. A managed chat send
+  keeps `@`-referenced directories instead of replacing them with the aliases.
+  The source-control root switcher lists the session's bundle worktrees first.
+- **Still one root, and labelled.** Remote code supply and sandbox runs supply
+  the primary root only. Aider and A2A refuse extra roots. Each limit is stated
+  at the type, labelled in the UI and pinned by a test.

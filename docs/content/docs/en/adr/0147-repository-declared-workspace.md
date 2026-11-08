@@ -166,3 +166,38 @@ Two things this ADR said are now scoped more narrowly:
 
 `canonicalize` moves to `lib/project-environment/canonical-json.ts` and is
 re-exported, so every digest this ADR produced is unchanged.
+
+
+## Amendment — 2026-11-08 (proposed): per-root declarations, cross-repository `dependsOn`, mise
+
+Status: agreed design, not yet implemented. Plan:
+`docs/plans/2026-11-08-clone-acquisition-and-multi-repo.md` §2 B2, B4; evidence:
+`docs/evidence/2026-11-08-clone-acquisition-and-multi-repo.md`.
+
+- **Each root reads its own file.** A multi-root bundle used to resolve one
+  provisioning from the primary root's `.cognia/workspace.json` and apply it to
+  every repository. Each physical group now gets the provisioning its own root
+  declares (and infers), behind its own trust approval. The primary root
+  declares the relationship between repositories and nothing about how another
+  repository is narrowed or linked. An unapproved root is not provisioned, and
+  the user is told.
+- **Sparse moves before the checkout.** "Provisioning is part of creating the
+  tree" and its order still hold. Sparse is now configured on a `--no-checkout`
+  worktree before the first checkout (see the
+  [ADR-0176](./0176-every-clone-shares-one-object-cache) amendment), so
+  `apply_provisioning` keeps only the links and copies.
+- **`dependsOn` names another repository by identity.** `roots` stay confined
+  sub-package paths, so a sibling repository cannot be named there. A consumer
+  declares `"dependsOn": [{ "repository": "github.com/org/sdk" }]`, which is
+  matched by normalised origin (host/owner/name) against the Project's roots. No
+  match, or more than one, is a visible refusal, never a guess. The field is
+  part of the digest, so changing it re-prompts. A file without it keeps its
+  digest, and the file stays `version: 1`. Integration reads the field through
+  the [ADR-0227](./0227-agent-changes-integrate-through-one-host-queue)
+  amendment.
+- **mise is an optional, inferred setup step.** When a root has `mise.toml` (or
+  `.mise.toml`) and `mise` is on `PATH`, setup gains `mise install`. It runs
+  behind the same approval as declared setup, never runs mise tasks, hooks or
+  env directives, and never installs mise. If mise is missing, the step is
+  skipped with a notice. The setup fingerprint covers `mise.toml` and its
+  lockfile. Process Compose and West are not adopted.

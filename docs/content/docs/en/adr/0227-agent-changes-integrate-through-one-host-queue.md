@@ -220,3 +220,31 @@ it created when a later step fails.
 - A multi-agent concurrency test drives three captured changesets — two
   disjoint, one conflicting — through one queue and asserts the published ref,
   the conflict record and the rollback.
+
+
+## Amendment — 2026-11-08 (proposed): dependencies cross repository roots
+
+Status: agreed design, not yet implemented. Plan:
+`docs/plans/2026-11-08-clone-acquisition-and-multi-repo.md` §2 B1–B2; evidence:
+`docs/evidence/2026-11-08-clone-acquisition-and-multi-repo.md`.
+
+§5 captured changesets "declaring task-graph dependencies", but `merge-all`
+resolved those dependencies inside one repository root at a time. Its
+task-to-changeset map and its held set were rebuilt for every root. As a
+result, an app could integrate while the SDK task it depended on was asking for
+changes (reproduced against the coordinator source with mocked I/O).
+
+- **One dependency graph across roots.** Capture is still grouped per root, and
+  publishing is still one transaction per target ref (§2). Ordering and holds,
+  however, come from one graph spanning every root of the run. That graph is the
+  union of task-level `dependsOn`, the consumer repository's declared
+  `dependsOn` (see the [ADR-0147](./0147-repository-declared-workspace)
+  amendment), and the Agent Team repository binding's `dependsOn`. A consumer is
+  held while any provider it depends on is held, failed or has changes
+  requested, and the reason names that provider.
+- **A changed provider obliges the consumer to verify.** When a provider
+  changed in the run, the consumer runs its declared checks (its acceptance
+  profile or `requiredChecks`) on the integration candidate that contains the
+  provider's change. The result decides. A consumer that declares no checks
+  waits for a person (`awaitingApproval`, reason: its dependency changed and it
+  has no verification checks).

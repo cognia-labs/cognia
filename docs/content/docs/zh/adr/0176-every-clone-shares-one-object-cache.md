@@ -144,3 +144,51 @@ PR base 在做镜像时按名字显式请求，并 fetch 进检出，因为 GitH
 | 供给命令（仅回环） | `src-tauri/src/companion_api/rpc/service_plane.rs` |
 | 供给客户端 | `lib/task-workspace/client.ts` |
 | 推送凭据转发 | `lib/github/workspace.ts::commitAndPush` |
+
+
+## 修订 — 2026-11-08（已议定，未实施）：统一获取预算、错误分类、sparse 先于检出
+
+状态：设计已议定，尚未实施。计划见`docs/plans/2026-11-08-clone-acquisition-and-multi-repo.md` §1，证据见`docs/evidence/2026-11-08-clone-acquisition-and-multi-repo.md`。
+
+2026-11-08 盘点了所有检出获取路径，发现 §3 与 §10 只覆盖到 mirror 和 guarded clone，下面这些调用仍然没有时限，也不能取消：
+- `create_execution` 中的 `worktree add`；
+- sparse 命令；
+- `fetch origin`；
+- PR base fetch；
+- GitHub workspace 的网络回退 clone 及 push；
+- 远程供给的 refresh。
+
+另外三个问题：
+- mirror 失败时丢弃 stderr。
+- `Guard` 默认 `ok`，所以没有任何 span 记录过失败。
+- sparse 在完整检出之后才生效，mirror 在派生前还会补齐该 commit 的全部 blob。
+
+1. **一个 `AcquisitionBudget` 覆盖所有获取类 git 调用。** 在 §3 的请求预算基础上，增加三样东西：
+   - 分阶段上限：fetch、clone、derive、backfill、worktree add、sparse、checkout、provisioning；
+   - 总 deadline；
+   - 取消令牌。
+
+   每次调用的实际时限，取阶段上限和 deadline 剩余时间中较小的一个。预算放在 `cognia-git-mirror`，与 §10 中「超时会 kill 子进程」的 runner 放在一起；包括沙箱 clone 在内，所有获取路径都改走这个 runner。渲染端发出的取消能到达阻塞调用。取消和超时都走现有的失败回滚。
+2. **先分类，再决定是否重试。** `classify_failure` 下沉到 `cognia-git-mirror`，并新增 `NotFound`（分支、ref 或仓库不存在）。
+   - 只有 `Network` 和 `TimedOut` 会重试：指数退避有封顶，加 jitter，次数有上限，且总时长不超过 deadline。
+   - 其他类别仍按 §4 处理：mirror 未命中不算错误，回退到网络。
+   - `Auth` 和 `NotFound` 是例外，不回退，因为走网络只会得到同样的结论。
+
+   错误类别以错误码的形式传到渲染端。
+3. **sparse 在首次检出之前设置。**
+   - 有 `sparsePaths` 时：worktree 先以 `--no-checkout` 创建，设好 sparse 后再检出；mirror 派生同理，而且 blob 补齐只覆盖 sparse 路径。
+   - 没有 `sparsePaths` 时：行为完全不变。
+
+   最终的树必须与现有路径产出的逐文件一致，cone 外的 `workingState` overlay 条目也包括在内。实施前先跑两个 spike：一是验证与 overlay 的等价性，二是验证之后范围更大的任务仍能拿到全部 blob。按 §1 的理由，`--no-hardlinks` 保留。
+4. **每个阶段都计时。**
+   - 新增 span：mirror ensure（区分命中与未命中）、fetch、backfill、derive、worktree add、sparse、checkout、网络 clone、沙箱 clone。失败会被记录。
+   - 每次获取都把分段报告写到对应的 Registry 行，性能面板读取这份报告。
+   - span 属性只带脱敏后的 remote、阶段名、时长、计数和错误类别。
+5. **`checkout.workers` 先测再定。** 只有本地基准显示大仓检出快至少 20%、且 cognia-next 不变慢时才设默认值；用户自己配置过的值一律不覆盖。
+
+评审了一份外部的克隆加速方案后，以下几项不采纳：
+- 自定义 `cat-file` 铺树：它跳过了 `.gitattributes` 转换，实测在 Git 应写 CRLF 的地方写成了 LF。
+- 按日打包的对象存储归档 + 分片下载。
+- 按 commit 的网络共享盘工作树缓存。
+
+远程冷 clone 的 CDN seed 和磁盘快照，等新的沙箱 clone span 证明这类 clone 既频繁又昂贵之后再议。
