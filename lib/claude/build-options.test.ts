@@ -5638,7 +5638,7 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
         id: "s1",
         platformBinding: {
           adapterId: "telegram",
-          conversationKey: "tg:123",
+          conversationKey: "telegram:telegram:123",
         },
       } as ChatSession),
       character: makeChar({ enableComputerUse: true }),
@@ -5654,7 +5654,7 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
         id: "s1",
         platformBinding: {
           adapterId: "telegram",
-          conversationKey: "tg:123",
+          conversationKey: "telegram:telegram:123",
         },
       } as ChatSession),
       character: makeChar({ enableComputerUse: true }),
@@ -5666,12 +5666,26 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
     expect(names).toEqual(["bash", "computer_use", "github_pr", "text_editor", "working_set"])
   })
 
+  it("allows nothing on an IM binding no conversation channel claims", async () => {
+    mReadOverride.mockResolvedValueOnce({ allowComputerUse: true, allowScheduleTools: true })
+    const opts = await resolveSendOptions({
+      session: makeSession({
+        id: "s1",
+        platformBinding: { adapterId: "telegram", conversationKey: "not-a-connector-key" },
+      } as ChatSession),
+      character: makeChar({ enableComputerUse: true }),
+    })
+    const names = (opts.pluginTools ?? []).map((tool) => tool.name)
+    expect(names).not.toContain("computer_use")
+    expect(opts.allowedTools ?? []).not.toContain("mcp__cognia__schedule_task")
+  })
+
   it("adapter host ceiling can still deny an opted-in Computer Use session", async () => {
     mReadOverride.mockResolvedValueOnce({ allowComputerUse: true })
     const opts = await resolveSendOptions({
       session: makeSession({
         id: "s1",
-        platformBinding: { adapterId: "telegram", conversationKey: "tg:123" },
+        platformBinding: { adapterId: "telegram", conversationKey: "telegram:telegram:123" },
       } as ChatSession),
       character: makeChar({ enableComputerUse: true }),
       imAdapterRow: { id: "telegram", hostCapabilityCeiling: [] } as unknown as AdapterInstanceRow,
@@ -5686,7 +5700,7 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
     const opts = await resolveSendOptions({
       session: makeSession({
         id: "s1",
-        platformBinding: { adapterId: "telegram", conversationKey: "tg:123" },
+        platformBinding: { adapterId: "telegram", conversationKey: "telegram:telegram:123" },
       } as ChatSession),
       character: makeChar(),
     })
@@ -5698,7 +5712,7 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
     const opts = await resolveSendOptions({
       session: makeSession({
         id: "s1",
-        platformBinding: { adapterId: "telegram", conversationKey: "tg:123" },
+        platformBinding: { adapterId: "telegram", conversationKey: "telegram:telegram:123" },
       } as ChatSession),
       character: makeChar(),
     })
@@ -5716,7 +5730,7 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
     const opts = await resolveSendOptions({
       session: makeSession({
         id: "s1",
-        platformBinding: { adapterId: "telegram", conversationKey: "tg:123" },
+        platformBinding: { adapterId: "telegram", conversationKey: "telegram:telegram:123" },
       } as ChatSession),
       character: makeChar(),
       imAdapterRow: { id: "telegram", hostCapabilityCeiling: [] } as unknown as AdapterInstanceRow,
@@ -5737,7 +5751,7 @@ describe("resolveSendOptions — Computer Use plugin-tool gating", () => {
     const opts = await resolveSendOptions({
       session: makeSession({
         id: "s1",
-        platformBinding: { adapterId: "telegram", conversationKey: "tg:123" },
+        platformBinding: { adapterId: "telegram", conversationKey: "telegram:telegram:123" },
       } as ChatSession),
       character: makeChar(),
       imAdapterRow: { id: "telegram", hostCapabilityCeiling: [] } as unknown as AdapterInstanceRow,
@@ -8527,7 +8541,7 @@ describe("resolveSendOptions — IM prompt-fragment memos", () => {
       platformBinding: {
         adapterId: "tg-cap",
         platform: "telegram",
-        conversationKey: "c-cap",
+        conversationKey: "telegram:tg-cap:7",
         conversationRef: { platform: "telegram", adapterId: "tg-cap", chatId: 7 },
       },
     })

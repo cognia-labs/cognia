@@ -44,6 +44,39 @@ export const port: ConversationChannel = {
     })
   },
 
+  async capabilityPrompt({ adapter, platform, promptSnapshot }) {
+    const matrix = adapter.lastKnownCapabilities
+    if (!matrix || Object.keys(matrix).length === 0) return null
+    const { buildCapabilityPromptSection } = await import("../a2ui-bridge/capability-evaluator")
+    // ADR-0026 — the cached built-in skill capabilities join the matrix, so
+    // the prompt declares which skill families this channel can serve.
+    return buildCapabilityPromptSection(
+      platform,
+      matrix,
+      adapter.lastKnownSkillCapabilities,
+      promptSnapshot
+    )
+  },
+
+  async channelCapabilities({ platform, adapter }) {
+    // Instance-level, from the stored row: a Slack grant without
+    // `files:write` serves no upload skill. Without the row the platform's
+    // own table answers.
+    const { capabilityFingerprint, effectiveCapabilities, effectiveCapabilitiesForRow } =
+      await import("../effective-capabilities")
+    if (!adapter)
+      return { capabilities: effectiveCapabilities({ platform }).capabilities, fingerprint: null }
+    return {
+      capabilities: effectiveCapabilitiesForRow(adapter).capabilities,
+      fingerprint: capabilityFingerprint({
+        platform: adapter.type,
+        settings: adapter.settings,
+        implMetadata: adapter.implMetadata,
+        transportMode: adapter.transportMode,
+      }),
+    }
+  },
+
   async waitForAutomation(binding, acceptedAt, options) {
     const { waitForConversationAutomation } = await import("../automation-control")
     return waitForConversationAutomation(binding.conversationKey, acceptedAt, options)

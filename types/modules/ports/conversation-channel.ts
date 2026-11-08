@@ -1,8 +1,9 @@
 // The `conversation-channel` collection port (ADR-0250 §14): the channel a
 // conversation or run is bound to, answering what only that channel knows.
 // Which host capabilities the conversation allows, whether its automation is
-// paused, which sibling conversations it has, how a message reaches it, and
-// who answers the agent's questions and confirmations while a turn runs there.
+// paused, which sibling conversations it has, how a message reaches it, what
+// it can render and serve, and who answers the agent's questions and
+// confirmations while a turn runs there.
 //
 // It is a collection port: every channel that binds conversations is its own
 // member, and each member says which bindings it claims. The connectors module
@@ -14,12 +15,15 @@
 import type { ImHostCapabilityId } from "@/lib/db/connector-types"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
+import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import type {
   BuiltInSkill,
   BuiltInSkillContext,
   BuiltInSkillResult,
 } from "@/lib/skills/built-in/types"
 import type { AuditKind } from "@/types/connectors/audit"
+import type { Capability } from "@/types/connectors/capability"
+import type { PlatformKind } from "@/types/connectors/platform-kind"
 
 /** A conversation as a run or session names it. */
 export interface ConversationChannelBinding {
@@ -47,6 +51,29 @@ export interface ConversationChannel {
     override?: ConversationOverrideRow | null
     characterComputerUseEnabled?: boolean
   }): Promise<Record<ImHostCapabilityId, boolean>>
+  /**
+   * The system-prompt section telling the model what the conversation can
+   * render (interactive surfaces, built-in skill families), worded through
+   * the turn's Prompt Center snapshot. `null` while the channel has not
+   * learned it yet. Deterministic for one adapter row and snapshot, so a
+   * caller may cache it by both.
+   */
+  capabilityPrompt(input: {
+    binding: ConversationChannelBinding
+    adapter: AdapterInstanceRow
+    platform: PlatformKind
+    promptSnapshot?: PromptOverrideSnapshot | null
+  }): Promise<string | null>
+  /**
+   * What the conversation can actually serve, for filtering the skills a turn
+   * is offered, and a fingerprint of it for caches (`null` without an adapter
+   * row, when the platform's own table answers).
+   */
+  channelCapabilities(input: {
+    binding: ConversationChannelBinding
+    platform: PlatformKind
+    adapter?: AdapterInstanceRow | null
+  }): Promise<{ capabilities: readonly Capability[]; fingerprint: string | null }>
   /**
    * Wait while the conversation's automation is paused. `false` when work
    * accepted at `acceptedAt` was cancelled meanwhile (it must not start).

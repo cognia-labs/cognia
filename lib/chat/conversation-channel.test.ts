@@ -13,6 +13,8 @@ function channel(
     askUser,
     confirmSkill: jest.fn(),
     hostCapabilities: jest.fn(),
+    capabilityPrompt: jest.fn(),
+    channelCapabilities: jest.fn(),
     waitForAutomation: jest.fn(),
     listSiblingConversations: jest.fn(),
     postText: jest.fn(),

@@ -3,23 +3,7 @@ import type {
   ConversationOverrideRow,
   ImHostCapabilityId,
 } from "@/lib/db/connector-types"
-
-export function matchesSkillSelector(skillId: string, family: string, selector: string): boolean {
-  if (selector === skillId) return true
-  if (!selector.endsWith(".*")) return false
-  const prefix = selector.slice(0, -2)
-  return family === prefix || skillId.startsWith(`${prefix}.`)
-}
-
-/** Undefined ceiling means the adapter imposes no additional restriction. */
-export function adapterAllowsBuiltInSkill(
-  adapter: Pick<AdapterInstanceRow, "builtInSkillCeiling"> | null | undefined,
-  skill: { id: string; family: string }
-): boolean {
-  const ceiling = adapter?.builtInSkillCeiling
-  if (ceiling === undefined) return true
-  return ceiling.some((selector) => matchesSkillSelector(skill.id, skill.family, selector))
-}
+import { resolveRequireHitlForWrites } from "@/lib/skills/built-in/channel-ceiling"
 
 /** Undefined ceiling means the adapter imposes no additional restriction. */
 export function adapterAllowsHostCapability(
@@ -28,13 +12,6 @@ export function adapterAllowsHostCapability(
 ): boolean {
   const ceiling = adapter?.hostCapabilityCeiling
   return ceiling === undefined || ceiling.includes(capability)
-}
-
-export function resolveRequireHitlForWrites(
-  adapter: Pick<AdapterInstanceRow, "requireHitlForWrites"> | null | undefined,
-  override: Pick<ConversationOverrideRow, "requireHitlForWrites"> | null | undefined
-): boolean {
-  return override?.requireHitlForWrites ?? adapter?.requireHitlForWrites ?? true
 }
 
 export function resolveImHostCapabilities(input: {

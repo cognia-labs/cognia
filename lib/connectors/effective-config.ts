@@ -1,9 +1,7 @@
 import type { DispatchRuleHit, RoutingSource } from "@/lib/connectors/dispatch-rules"
 import { resolveEffectiveRouting } from "@/lib/connectors/dispatch-rules"
-import {
-  resolveImHostCapabilities,
-  resolveRequireHitlForWrites,
-} from "@/lib/connectors/permission-resolve"
+import { resolveImHostCapabilities } from "@/lib/connectors/permission-resolve"
+import { resolveRequireHitlForWrites } from "@/lib/skills/built-in/channel-ceiling"
 import { projectStoredMode, type ImTargetKind } from "@/lib/connectors/composition/mode-projection"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type {

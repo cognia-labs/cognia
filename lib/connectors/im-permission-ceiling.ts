@@ -7,16 +7,10 @@ import { effectiveCapabilitiesForRow } from "@/lib/connectors/effective-capabili
 import { resolveImHostCapabilities } from "@/lib/connectors/permission-resolve"
 import { resolveImEffectiveConfig } from "@/lib/connectors/effective-config"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
+import { SCHEDULER_AGENT_TOOL_NAMES } from "@/lib/scheduler/agent-tool-names"
 import type { BuiltInSkill } from "@/lib/skills/built-in/types"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
-
-/** Canonical scheduler tool names; kept outside build-options to avoid runtime cycles. */
-export const IM_SCHEDULER_TOOL_NAMES = [
-  "mcp__cognia__schedule_task",
-  "mcp__cognia__list_scheduled_tasks",
-  "mcp__cognia__cancel_scheduled_task",
-] as const
 
 export const IM_OCR_TOOL_NAMES = ["ocr.extract", "mcp__cognia-plugin-tools__ocr.extract"] as const
 
@@ -54,7 +48,7 @@ export function deriveImPermissionCeiling(input: {
     for (const name of IM_OCR_TOOL_NAMES) denied.add(name)
   }
   if (!host.schedule_tools) {
-    for (const name of IM_SCHEDULER_TOOL_NAMES) denied.add(name)
+    for (const name of SCHEDULER_AGENT_TOOL_NAMES) denied.add(name)
   }
 
   const composition =

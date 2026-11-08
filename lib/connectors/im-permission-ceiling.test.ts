@@ -1,8 +1,5 @@
-import {
-  deriveImPermissionCeiling,
-  IM_OCR_TOOL_NAMES,
-  IM_SCHEDULER_TOOL_NAMES,
-} from "./im-permission-ceiling"
+import { deriveImPermissionCeiling, IM_OCR_TOOL_NAMES } from "./im-permission-ceiling"
+import { SCHEDULER_AGENT_TOOL_NAMES } from "@/lib/scheduler/agent-tool-names"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 
 // A real row, not a shorthand. `platform` / `accountLabel` were never fields on
@@ -76,7 +73,7 @@ describe("deriveImPermissionCeiling", () => {
     })
 
     expect(result.disallowedTools).toEqual(
-      expect.arrayContaining([...IM_SCHEDULER_TOOL_NAMES, "perform_action"])
+      expect.arrayContaining([...SCHEDULER_AGENT_TOOL_NAMES, "perform_action"])
     )
     expect(result.disallowedTools).not.toEqual(expect.arrayContaining([...IM_OCR_TOOL_NAMES]))
   })

@@ -44,10 +44,7 @@ import { append as appendAudit } from "@/lib/db/connector-audit"
 import { getSharedBuiltInSkillRegistry } from "./registry"
 import { resolveBuiltInSkillRunScope } from "./context"
 import type { BuiltInSkill, BuiltInSkillContext, BuiltInSkillResult } from "./types"
-import {
-  adapterAllowsBuiltInSkill,
-  resolveRequireHitlForWrites,
-} from "@/lib/connectors/permission-resolve"
+import { adapterAllowsBuiltInSkill, resolveRequireHitlForWrites } from "./channel-ceiling"
 
 /**
  * Run a built-in skill end-to-end.

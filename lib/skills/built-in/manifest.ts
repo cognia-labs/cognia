@@ -34,7 +34,7 @@ import type { Capability } from "@/types/connectors/capability"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import type { PlatformSkillCapability } from "@/types/connectors/skill-capability"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
-import { adapterAllowsBuiltInSkill } from "@/lib/connectors/permission-resolve"
+import { adapterAllowsBuiltInSkill } from "./channel-ceiling"
 import { getSharedBuiltInSkillRegistry, platformAllows } from "./registry"
 import type { BuiltInSkill } from "./types"
 import {

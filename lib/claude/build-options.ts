@@ -110,13 +110,13 @@ import {
 } from "@/lib/mcp/mode-selection"
 import { normalizeToolPermissionRules } from "@/lib/mcp/tool-rules"
 import { getTeam } from "@/lib/db/teams"
-import type { ConversationOverrideRow, AdapterInstanceRow } from "@/lib/db/connector-types"
+import type {
+  ConversationOverrideRow,
+  AdapterInstanceRow,
+  ImHostCapabilityId,
+} from "@/lib/db/connector-types"
 import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 import { isOcrToolAllowed } from "@/lib/claude/ocr-tool-gate"
-import {
-  adapterAllowsHostCapability,
-  resolveImHostCapabilities,
-} from "@/lib/connectors/permission-resolve"
 import { resolveOutputStyleSnippet } from "@/lib/claude/output-styles"
 import {
   COMPACT_HANDOFF_PROMPT,
@@ -1016,8 +1016,15 @@ const NEVER_PRUNE_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 /** Agent scheduler tools are opt-in per IM conversation; never globally offered. */
-export { IM_SCHEDULER_TOOL_NAMES as SCHEDULER_AGENT_TOOL_NAMES } from "@/lib/connectors/im-permission-ceiling"
-import { IM_SCHEDULER_TOOL_NAMES as SCHEDULER_AGENT_TOOL_NAMES } from "@/lib/connectors/im-permission-ceiling"
+import { SCHEDULER_AGENT_TOOL_NAMES } from "@/lib/scheduler/agent-tool-names"
+
+/** What an IM-bound session no conversation channel claims may use: nothing. */
+const NO_IM_HOST_CAPABILITIES: Readonly<Record<ImHostCapabilityId, boolean>> = {
+  computer_use: false,
+  ocr: false,
+  goal_driving: false,
+  schedule_tools: false,
+}
 
 /**
  * The dispatchable-subagent list seeding the `dispatch_agent` enum + discovery.
@@ -1716,6 +1723,34 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // character / app defaults.
   const imDefaultModel = imAdapterRow?.defaultModel?.trim() || undefined
   const imDefaultProvider = imAdapterRow?.defaultProvider?.trim() || undefined
+
+  // The channel the session is bound to (ADR-0250 §14 `conversation-channel`)
+  // answers what the turn may use there: the host capabilities the
+  // conversation opted into under its adapter's ceiling, what it can render
+  // and the skills it can serve. An IM-bound session no channel claims gets
+  // none of them (fail closed).
+  const imBinding = session?.platformBinding?.adapterId
+    ? {
+        conversationKey: session.platformBinding.conversationKey ?? "",
+        adapterId: session.platformBinding.adapterId,
+      }
+    : null
+  const imChannel = imBinding
+    ? await (await import("@/lib/chat/conversation-channel")).conversationChannelFor(imBinding)
+    : null
+  let imHostCapabilities: Readonly<Record<ImHostCapabilityId, boolean>> = NO_IM_HOST_CAPABILITIES
+  if (imChannel && imBinding) {
+    try {
+      imHostCapabilities = await imChannel.hostCapabilities({
+        binding: imBinding,
+        adapter: imAdapterRow,
+        override: imOverrideRow,
+        characterComputerUseEnabled: character?.enableComputerUse,
+      })
+    } catch {
+      // A channel that cannot answer allows nothing.
+    }
+  }
 
   // --- Model: IM channel override > per-session > member override > mode override > bot default > character > app default ------
   // The bot-instance default deliberately BEATS `character.model`: an
@@ -2744,11 +2779,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       // Fail closed: a policy that cannot even be loaded must not be read as
       // the user saying yes to agents reading and changing their schedule.
       .catch(() => false))
-  if (
-    imOverrideRow?.allowScheduleTools === true &&
-    adapterAllowsHostCapability(imAdapterRow, "schedule_tools") &&
-    (await readAgentSchedulerToolsEnabled())
-  ) {
+  if (imHostCapabilities.schedule_tools && (await readAgentSchedulerToolsEnabled())) {
     for (const tool of SCHEDULER_AGENT_TOOL_NAMES) allowed.add(tool)
   }
   // A2UI: when the active scope opts in, fold the 4 bridge tools into the
@@ -2779,40 +2810,33 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // computed below — which is the behaviour that used to be unconditional.
   const imA2uiPreference = imOverrideRow?.a2uiEnabled ?? imAdapterRow?.a2uiEnabled
   let connectorCapabilityPrompt: string | null = null
-  if (session?.platformBinding?.adapterId) {
+  if (imChannel && imBinding && imAdapterRow && session?.platformBinding) {
     try {
       // Reuse the adapter row hoisted next to the imOverrideRow read (one
       // read serves the model/provider/effort chains AND this capability
       // block, whether threaded from the bus or fetched here).
-      const adapterRow = imAdapterRow
-      const matrix = adapterRow?.lastKnownCapabilities
-      if (adapterRow && matrix && Object.keys(matrix).length > 0) {
-        // The snapshot's load time joins the key: a published capability
-        // wording reloads the snapshot, so the next turn re-renders.
-        const capCacheKey = `${adapterRow.id}:${adapterRow.updatedAt}:${session.platformBinding.platform}:${promptSnapshot?.loadedAt ?? 0}`
-        const cachedPrompt = capabilityPromptCache.get(capCacheKey)
-        if (cachedPrompt !== undefined) {
-          connectorCapabilityPrompt = cachedPrompt
-        } else {
-          const { buildCapabilityPromptSection } =
-            await import("@/lib/connectors/a2ui-bridge/capability-evaluator")
-          // ADR-0026 — also pass the cached built-in skill capabilities so
-          // the prompt declares which lark.* (and future) skill families
-          // this channel can serve. Intersected against the per-channel
-          // allowlist below.
-          connectorCapabilityPrompt = buildCapabilityPromptSection(
-            session.platformBinding.platform,
-            matrix,
-            adapterRow.lastKnownSkillCapabilities,
-            promptSnapshot
-          )
+      // The snapshot's load time joins the key: a published capability
+      // wording reloads the snapshot, so the next turn re-renders.
+      const capCacheKey = `${imAdapterRow.id}:${imAdapterRow.updatedAt}:${session.platformBinding.platform}:${promptSnapshot?.loadedAt ?? 0}`
+      const cachedPrompt = capabilityPromptCache.get(capCacheKey)
+      if (cachedPrompt !== undefined) {
+        connectorCapabilityPrompt = cachedPrompt
+      } else {
+        connectorCapabilityPrompt = await imChannel.capabilityPrompt({
+          binding: imBinding,
+          adapter: imAdapterRow,
+          platform: session.platformBinding.platform,
+          promptSnapshot,
+        })
+        // Not cached while the channel has not learned what it can render:
+        // the row's `updatedAt` moves when it does.
+        if (connectorCapabilityPrompt !== null)
           lruSet(
             capabilityPromptCache,
             capCacheKey,
             connectorCapabilityPrompt,
             CAPABILITY_PROMPT_CACHE_CAP
           )
-        }
       }
     } catch {
       // Best-effort — missing adapter row / capability matrix shouldn't
@@ -2857,11 +2881,22 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   > = []
   if (builtInSkillsRequested || schedulerFamilyOnly) {
     try {
-      // Lazily loaded together — resolving the projection pulls in every
-      // adapter's capability const, and a desktop turn with no IM binding
-      // should not pay for that at module load.
-      const { capabilityFingerprint, effectiveCapabilities, effectiveCapabilitiesForRow } =
-        await import("@/lib/connectors/effective-capabilities")
+      // What the bound channel can ACTUALLY serve, so the manifest's
+      // `requires` filter hides skills that would fail (a skill needing
+      // `rich-card.lark` for its HITL confirm card; an upload skill on a
+      // Slack grant without `files:write`). Desktop (no binding) leaves this
+      // undefined; the filter no-ops there. An IM-bound session no channel
+      // claims serves nothing that requires a capability.
+      const channelSurface =
+        imBinding && session?.platformBinding
+          ? imChannel
+            ? await imChannel.channelCapabilities({
+                binding: imBinding,
+                platform: session.platformBinding.platform,
+                adapter: imAdapterRow,
+              })
+            : { capabilities: [], fingerprint: "unclaimed" }
+          : undefined
       let larkCliCapabilityKey = "not-applicable"
       if (
         builtInSkillsRequested &&
@@ -2888,15 +2923,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       // without `files:write` hides the upload skills — so the key carries
       // `capabilityFingerprint`, or two bots on the same platform would share
       // one tool list and the second would inherit the first's permissions.
-      const capabilityKey =
-        session?.platformBinding?.adapterId && imAdapterRow
-          ? capabilityFingerprint({
-              platform: imAdapterRow.type,
-              settings: imAdapterRow.settings,
-              implMetadata: imAdapterRow.implMetadata,
-              transportMode: imAdapterRow.transportMode,
-            })
-          : "none"
+      const capabilityKey = channelSurface?.fingerprint ?? "none"
       const skillsCacheKey = `${session?.platformBinding?.platform ?? "none"}:${Boolean(
         session?.platformBinding?.adapterId
       )}:${imOverrideRow?.id ?? "none"}:${imOverrideRow?.updatedAt ?? 0}:${capabilityKey}:${
@@ -2910,21 +2937,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         // before the manifest builder walks the registry.
         await import("@/lib/skills/built-in")
         const { buildBuiltInSkillManifest } = await import("@/lib/skills/built-in/manifest")
-        // Resolve what the bound channel can ACTUALLY serve, so the manifest's
-        // `requires` filter hides skills that would fail (a skill needing
-        // `rich-card.lark` for its HITL confirm card; an upload skill on a
-        // Slack grant without `files:write`). Instance-level, from the stored
-        // row — no live adapter build needed. Desktop (no binding) leaves this
-        // undefined; the filter no-ops there. Without the row (a lookup that
-        // failed) the projection falls back to the platform table, which is
-        // what this call site used unconditionally before.
-        let channelCapabilities:
-          readonly import("@/types/connectors/capability").Capability[] | undefined
-        if (session?.platformBinding?.adapterId) {
-          channelCapabilities = imAdapterRow
-            ? effectiveCapabilitiesForRow(imAdapterRow).capabilities
-            : effectiveCapabilities({ platform: session.platformBinding.platform }).capabilities
-        }
         builtInSkillsManifest = buildBuiltInSkillManifest({
           imBinding: session?.platformBinding?.adapterId
             ? {
@@ -2935,7 +2947,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
             : undefined,
           imOverrideRow: imOverrideRow ?? undefined,
           imAdapterRow: imAdapterRow ?? undefined,
-          channelCapabilities,
+          channelCapabilities: channelSurface?.capabilities,
           ...(schedulerFamilyOnly ? { families: ["schedule"] } : {}),
         })
         lruSet(
@@ -3262,11 +3274,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
           ).getAdapterInstance(safetyBinding.adapterId)
     opts.contentSafety = { injectionProtection: safetyAdapter?.promptInjectionProtection !== false }
   }
-  const imHostCapabilities = resolveImHostCapabilities({
-    adapter: imAdapterRow,
-    override: imOverrideRow,
-    characterComputerUseEnabled: character?.enableComputerUse,
-  })
   const allowImComputerUse = imHostCapabilities.computer_use
   // Mobile master switch (`AppSettings.mobileComputerUseEnabled`, Settings →
   // Computer Use on the phone). The page documents it as "when off,

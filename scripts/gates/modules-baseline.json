@@ -893,7 +893,6 @@
     "lib/scheduler/webhook-outbound-config.ts -> webhooks",
     "lib/settings/changed-settings.ts -> settings",
     "lib/shortcuts/reserved.ts -> plugin",
-    "lib/skills/built-in/dispatcher.ts -> connectors",
     "lib/skills/built-in/index.ts -> connectors",
     "lib/skills/built-in/index.ts -> issues",
     "lib/skills/built-in/manifest.ts -> connectors",

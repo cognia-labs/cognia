@@ -11,6 +11,7 @@ const mockAppendAudit = jest.fn()
 const mockGetImElicitationContext = jest.fn()
 const mockRunImAskUser = jest.fn()
 const mockPostSkillConfirmation = jest.fn()
+const mockBuildCapabilityPromptSection = jest.fn()
 
 jest.mock("@/lib/db/conversation-overrides", () => ({
   readForResolution: (key: string) => mockReadForResolution(key),
@@ -34,6 +35,9 @@ jest.mock("../hitl/im-elicitation-context", () => ({
 }))
 jest.mock("../hitl/ask-user-question", () => ({
   runImAskUser: (input: unknown) => mockRunImAskUser(input),
+}))
+jest.mock("../a2ui-bridge/capability-evaluator", () => ({
+  buildCapabilityPromptSection: (...args: unknown[]) => mockBuildCapabilityPromptSection(...args),
 }))
 jest.mock("../hitl/skill-confirmation", () => ({
   postSkillConfirmation: (input: unknown) => mockPostSkillConfirmation(input),
@@ -190,5 +194,61 @@ describe("the IM conversation channel", () => {
       bindingId: "b",
     })
     expect(mockPostSkillConfirmation).toHaveBeenCalledWith(input)
+  })
+
+  it("words what the conversation can render once the adapter has learned it", async () => {
+    mockBuildCapabilityPromptSection.mockReturnValue("delivered via lark")
+    const skills = [{ family: "lark.calendar" }]
+    const adapter = {
+      lastKnownCapabilities: { button: "native" },
+      lastKnownSkillCapabilities: skills,
+    } as unknown as AdapterInstanceRow
+    const snapshot = { loadedAt: 3 } as never
+    await expect(
+      port.capabilityPrompt({
+        binding: { conversationKey: KEY },
+        adapter,
+        platform: "lark",
+        promptSnapshot: snapshot,
+      })
+    ).resolves.toBe("delivered via lark")
+    expect(mockBuildCapabilityPromptSection).toHaveBeenCalledWith(
+      "lark",
+      { button: "native" },
+      skills,
+      snapshot
+    )
+    for (const lastKnownCapabilities of [undefined, {}])
+      await expect(
+        port.capabilityPrompt({
+          binding: { conversationKey: KEY },
+          adapter: { lastKnownCapabilities } as unknown as AdapterInstanceRow,
+          platform: "lark",
+        })
+      ).resolves.toBeNull()
+    expect(mockBuildCapabilityPromptSection).toHaveBeenCalledTimes(1)
+  })
+
+  it("serves the adapter instance's capabilities, or the platform's without a row", async () => {
+    const row = {
+      id: "adp_1",
+      type: "slack",
+      settings: {},
+      implMetadata: undefined,
+      transportMode: undefined,
+    } as unknown as AdapterInstanceRow
+    const instance = await port.channelCapabilities({
+      binding: { conversationKey: "slack:adp_1:C1" },
+      platform: "slack",
+      adapter: row,
+    })
+    expect(instance.fingerprint).toEqual(expect.stringContaining("slack"))
+    expect(instance.capabilities.length).toBeGreaterThan(0)
+    const platform = await port.channelCapabilities({
+      binding: { conversationKey: "slack:adp_1:C1" },
+      platform: "slack",
+    })
+    expect(platform.fingerprint).toBeNull()
+    expect(platform.capabilities.length).toBeGreaterThan(0)
   })
 })
