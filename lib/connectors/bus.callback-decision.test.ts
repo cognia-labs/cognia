@@ -16,7 +16,7 @@ import { authorizeConnectorCallback, notifyCallbackDenied } from "./callback-aut
 import { applyToolApprovalCallback } from "./hitl/tool-approval"
 import { applyPlanApprovalCallback } from "./hitl/plan-approval"
 import { applyAskUserCallback } from "./hitl/ask-user-question"
-import { handleWorkflowApprovalCallback } from "@/lib/a2ui/workflow-approval-handler"
+import { handleWorkflowApprovalCallback } from "@/lib/connectors/hitl/workflow-approval-handler"
 import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
 import { executeRunControlCommand } from "@/lib/execution/run-control"
 import { waitFor } from "@testing-library/react"
@@ -62,7 +62,7 @@ jest.mock("./hitl/plan-approval", () => ({ applyPlanApprovalCallback: jest.fn() 
 jest.mock("./hitl/ask-user-question", () => ({ applyAskUserCallback: jest.fn() }))
 jest.mock("./hitl/ask-user-registry", () => ({ getPendingAskUserBySurface: jest.fn() }))
 jest.mock("@/lib/claude/hitl/approval-registry", () => ({ resolveApproval: jest.fn() }))
-jest.mock("@/lib/a2ui/workflow-approval-handler", () => ({
+jest.mock("@/lib/connectors/hitl/workflow-approval-handler", () => ({
   handleWorkflowApprovalCallback: jest.fn(),
 }))
 jest.mock("@/lib/skills/built-in/dispatcher", () => ({ runBuiltInSkill: jest.fn() }))

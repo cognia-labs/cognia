@@ -25,9 +25,8 @@ export default defineHostModule({
   ],
   // What the connectors build on (G4 checks this equals what they import):
   // IM turns run goals, Squads, workflows and slash commands, recall memory
-  // and the twin, and render A2UI. Nothing below imports the connectors back.
+  // and the twin. Nothing below imports the connectors back.
   dependsOn: [
-    "a2ui",
     "account-sync",
     "audio",
     "background-tasks",

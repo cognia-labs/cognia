@@ -46,7 +46,7 @@ import { formatDurationMs, formatRunStartedAt } from "./format"
 import { aggregateRunUsage, formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
 import { formatTokens } from "@/types/system/usage"
 import { downloadRunExport } from "@/lib/workflow/runs/run-export"
-import { InteractivePageDialog } from "@/components/a2ui/from-execution/interactive-page-dialog"
+import { usePort } from "@/hooks/modules/use-port"
 
 export function RunDetail({ workflowId, runId }: { workflowId: string; runId: string }) {
   const t = useTranslations("workflows.runs.detail")
@@ -137,6 +137,9 @@ function RunDetailInner({
 }) {
   const t = useTranslations("workflows.runs.detail")
   const tPage = useTranslations("a2ui.interactivePage")
+  // The page builder is a2ui's (`interactive-page` port); without it the
+  // run detail offers no page.
+  const interactivePage = usePort("interactive-page")
   const tToast = useTranslations("workflows.canvasToast")
   const router = useRouter()
   const totalDuration = useMemo(
@@ -229,15 +232,17 @@ function RunDetailInner({
           <DownloadIcon className="size-4 mr-1.5" />
           {t("export")}
         </Button>
-        <InteractivePageDialog
-          source={{ kind: "workflow-run", run, events, workflowName: run.workflowSnapshot.name }}
-          trigger={
-            <Button variant="outline" size="sm" data-testid="run-detail-interactive-page">
-              <LayoutDashboardIcon className="size-4 mr-1.5" />
-              {tPage("openAction")}
-            </Button>
-          }
-        />
+        {interactivePage ? (
+          <interactivePage.Dialog
+            source={{ kind: "workflow-run", run, events, workflowName: run.workflowSnapshot.name }}
+            trigger={
+              <Button variant="outline" size="sm" data-testid="run-detail-interactive-page">
+                <LayoutDashboardIcon className="size-4 mr-1.5" />
+                {tPage("openAction")}
+              </Button>
+            }
+          />
+        ) : null}
         <Button
           variant="outline"
           size="sm"

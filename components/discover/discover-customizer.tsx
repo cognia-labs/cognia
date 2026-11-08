@@ -17,7 +17,7 @@ import { CompassIcon } from "lucide-react"
 import { CustomizerLists, type CustomizerItem } from "@/components/shell/customizer-list"
 import { useDiscoverLayout } from "@/hooks/discover/use-discover-layout"
 import { DEFAULT_DISCOVER_LAYOUT, type DiscoverCategory } from "@/lib/discover/categories"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 
 export function DiscoverCustomizer(): React.ReactElement {
   const t = useTranslations("discover")

@@ -40,7 +40,7 @@ import { CSS } from "@dnd-kit/utilities"
 import { useReorderAnnouncements } from "@/components/shell/nav-sortable"
 import { NavigationIcon } from "@/components/shell/navigation-icon"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import {
   addEntry,
   hideEntry,

@@ -25,7 +25,7 @@ import {
   A2UI_PREVIEW_SURFACE_PREFIX,
   parseStreamingA2UI,
 } from "@cognia/a2ui-core/streaming-preview"
-import { useA2UIStore } from "@/stores/a2ui"
+import { useA2UIStore } from "@/stores/a2ui/a2ui-store"
 import type { A2UIServerMessage } from "@/types/a2ui/schema"
 
 /** Parse at most this often; each parse re-reads the whole fence. */

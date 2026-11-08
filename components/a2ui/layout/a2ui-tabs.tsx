@@ -6,7 +6,7 @@
  */
 
 import React, { useState, memo } from "react"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import { cn } from "@/lib/utils"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { A2UIComponentProps, A2UITabsComponent } from "@/types/a2ui/schema"

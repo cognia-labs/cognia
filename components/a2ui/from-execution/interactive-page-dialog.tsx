@@ -14,7 +14,7 @@
  * store under an ephemeral id and torn down on close.
  */
 
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useId, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
@@ -40,6 +40,7 @@ import { useSettingsStore } from "@/stores/settings"
 import { createA2UISurface } from "@cognia/a2ui-core/parser"
 import { a2uiPayload } from "@/lib/share/payload"
 import type { GeneratedApp } from "@/lib/a2ui/app-generator"
+import type { InteractivePageDialogProps } from "@/types/modules/ports/interactive-page"
 import {
   applyEnhancement,
   buildExecutionPage,
@@ -86,15 +87,7 @@ function useExecutionPageLabels(): ExecutionPageLabels {
   )
 }
 
-/** A source given directly, or a (possibly async) resolver run lazily on open. */
-type SourceInput = ExecutionPageSource | (() => ExecutionPageSource | Promise<ExecutionPageSource>)
-
-interface Props {
-  source: SourceInput
-  trigger: ReactNode
-}
-
-export function InteractivePageDialog({ source, trigger }: Props) {
+export function InteractivePageDialog({ source, trigger }: InteractivePageDialogProps) {
   const t = useTranslations("a2ui.interactivePage")
   const labels = useExecutionPageLabels()
   const router = useRouter()

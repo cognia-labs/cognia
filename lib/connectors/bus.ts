@@ -280,7 +280,7 @@ export class ConnectorBus {
   liveSteerHandler: LiveSteerHandler | null = null
   /**
    * Optional connector-callback handler. Wired in production to
-   * `lib/a2ui/connector-callback-handler.ts`, which forwards the event
+   * `lib/connectors/hitl/connector-callback-handler.ts`, which forwards the event
    * to the `builtin:a2ui-bridge` MCP server's
    * `a2ui_handle_connector_action` tool. Left null in tests until
    * explicitly assigned.
@@ -3623,7 +3623,8 @@ export class ConnectorBus {
         action: cancelled ? "cancel" : "approve",
       })
       try {
-        const { handleWorkflowFanoutCallback } = await import("@/lib/a2ui/workflow-fanout-handler")
+        const { handleWorkflowFanoutCallback } =
+          await import("@/lib/connectors/hitl/workflow-fanout-handler")
         await handleWorkflowFanoutCallback({
           binding: resolvedBinding,
           cancelled,
@@ -3671,7 +3672,7 @@ export class ConnectorBus {
       })
       try {
         const { handleWorkflowApprovalCallback } =
-          await import("@/lib/a2ui/workflow-approval-handler")
+          await import("@/lib/connectors/hitl/workflow-approval-handler")
         await handleWorkflowApprovalCallback({
           authorizationMode: authDecision.mode,
           binding: resolvedBinding,

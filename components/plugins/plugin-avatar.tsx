@@ -20,7 +20,7 @@
 // letter. `icon` remains supported for callers that only have the raw string.
 
 import { createElement, useMemo } from "react"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import { usePluginIconSrc } from "@/hooks/plugins/use-plugin-icon-src"
 import { resolvePluginIcon } from "@/lib/plugin/utils/icon"
 import { cn } from "@/lib/utils"

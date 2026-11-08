@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Zap, Loader2, Send } from "lucide-react"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import type { FlashAppTabProps } from "@/types/a2ui/app"
 
 export const FlashAppTab = memo(function FlashAppTab({ onGenerate }: FlashAppTabProps) {

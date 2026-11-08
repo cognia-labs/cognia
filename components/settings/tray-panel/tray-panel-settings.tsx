@@ -58,7 +58,7 @@ import {
   SettingsField,
   SettingsStack,
 } from "@/components/settings/common/settings-block"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import { withEditedEntries, withPreset } from "@/lib/glance/layout-edit"
 import { desktopEntriesFromMobile, normalizeGlanceMobileSettings } from "@/lib/glance/mobile-layout"
 import { clampMaxHeight, normalizeGlancePanelSettings } from "@/lib/glance/presets"

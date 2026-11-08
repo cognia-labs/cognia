@@ -27,12 +27,15 @@ async function flush() {
 const mockProcessMessage = jest.fn()
 const mockGetSurface = jest.fn()
 
-jest.mock("@/components/a2ui", () => ({
+jest.mock("@/components/a2ui/a2ui-surface", () => ({
   A2UIInlineSurface: ({ surfaceId }: { surfaceId: string }) => (
     <div data-testid="a2ui-surface" data-surface-id={surfaceId}>
       A2UI Surface
     </div>
   ),
+}))
+
+jest.mock("@/components/a2ui/a2ui-message-renderer", () => ({
   useA2UIMessageIntegration: () => ({
     processMessage: mockProcessMessage,
     getSurface: mockGetSurface,

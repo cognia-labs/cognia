@@ -37,7 +37,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import { loggers } from "@cognia/logging"
 import { toast } from "sonner"
 import { useA2UIAppBuilder } from "@/hooks/a2ui/use-app-builder"

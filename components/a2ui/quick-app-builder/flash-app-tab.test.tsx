@@ -8,7 +8,7 @@ import { FlashAppTab } from "./flash-app-tab"
 
 const mockResolveIcon = jest.fn()
 
-jest.mock("@/lib/a2ui/resolve-icon", () => ({
+jest.mock("@/lib/icons/resolve-icon", () => ({
   resolveIcon: (iconName?: string) => mockResolveIcon(iconName),
 }))
 

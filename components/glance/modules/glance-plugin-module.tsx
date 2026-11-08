@@ -21,7 +21,7 @@ import { PuzzleIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { NavigationIcon } from "@/components/shell/navigation-icon"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import { cn } from "@/lib/utils"
 import type { GlancePluginAction, GlancePluginTone } from "@/lib/glance/plugin-data"
 import type { GlanceModuleSize, GlancePluginEntryId } from "@/types/glance/layout"

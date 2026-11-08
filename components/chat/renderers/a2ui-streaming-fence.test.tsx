@@ -1,13 +1,13 @@
 import { act, render, screen } from "@testing-library/react"
 import { A2UI_PREVIEW_THROTTLE_MS, A2UIStreamingPreview } from "./a2ui-streaming-fence"
 import { isA2UIPreviewSurfaceId } from "@cognia/a2ui-core/streaming-preview"
-import { useA2UIStore } from "@/stores/a2ui"
+import { useA2UIStore } from "@/stores/a2ui/a2ui-store"
 
 // The real surface pulls in the whole renderer catalog; this stand-in shows
 // what the preview surface holds and which props the fence passes.
 jest.mock("@/components/a2ui/a2ui-surface", () => ({
   A2UISurface: ({ surfaceId, readOnly }: { surfaceId: string; readOnly?: boolean }) => {
-    const { useA2UIStore: store } = jest.requireActual("@/stores/a2ui")
+    const { useA2UIStore: store } = jest.requireActual("@/stores/a2ui/a2ui-store")
     const surface = store(
       (state: { surfaces: Record<string, { components: object }> }) => state.surfaces[surfaceId]
     )

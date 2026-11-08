@@ -96,9 +96,6 @@ import { DIFF_EXPLAIN_PROMPT } from "@/lib/git/ai-explain"
 import { CHILDREN_DONE_INSTRUCTION_PROMPT } from "@/lib/issues/wakeups/model"
 import { BOOTSTRAP_SYSTEM_PROMPTS } from "@/lib/project-environment/bootstrap-prompts"
 import { LOOP_ITERATION_PROMPT } from "@/lib/loop/prompts"
-import { A2UI_PROTOCOL_PROMPT } from "@/lib/a2ui/prompts"
-import { A2UI_CREATE_APP_PROMPT, A2UI_EDIT_APP_PROMPT } from "@/lib/a2ui/generate-prompts"
-import { EXECUTION_ENHANCE_PROMPT } from "@/lib/a2ui/from-execution/enhance"
 import { CANVAS_REVIEW_PROMPT, CANVAS_SUGGESTIONS_PROMPT } from "@/lib/canvas/ai/suggestion-prompts"
 import {
   PLAN_APPROVED_EDITED_PROMPT,
@@ -149,7 +146,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   SELECTION_EXPLAIN_PROMPT,
   SELECTION_TRANSLATE_PROMPT,
   SESSION_PEER_FRAME_PROMPT,
-  A2UI_PROTOCOL_PROMPT,
   REPLY_COPILOT_DRAFT_PROMPT,
   REPLY_COPILOT_UNATTRIBUTED_NOTE_PROMPT,
   REPLY_COPILOT_DRAFT_REQUEST_PROMPT,
@@ -192,9 +188,6 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinitionV1[] = [
   CANVAS_SUGGESTIONS_PROMPT,
   CANVAS_REVIEW_PROMPT,
   REMOVE_BACKGROUND_PROMPT,
-  A2UI_CREATE_APP_PROMPT,
-  A2UI_EDIT_APP_PROMPT,
-  EXECUTION_ENHANCE_PROMPT,
   // completion
   GHOST_TEXT_PROMPT,
   STARTER_SUGGESTIONS_PROMPT,

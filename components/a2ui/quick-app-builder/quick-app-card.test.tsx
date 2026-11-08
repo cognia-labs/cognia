@@ -10,7 +10,7 @@ import type { A2UIAppTemplate } from "@/lib/a2ui/templates"
 
 const mockResolveIcon = jest.fn()
 
-jest.mock("@/lib/a2ui/resolve-icon", () => ({
+jest.mock("@/lib/icons/resolve-icon", () => ({
   resolveIcon: (iconName?: string) => mockResolveIcon(iconName),
 }))
 

@@ -60,7 +60,7 @@ jest.mock("@/lib/connectors/ai-loop/safe-send-prompt", () => ({
 const mockStartOutboundRunner = jest.fn().mockResolvedValue(undefined)
 const mockStopApprovalRecovery = jest.fn()
 const mockStartApprovalRecovery = jest.fn((..._args: unknown[]) => mockStopApprovalRecovery)
-jest.mock("@/lib/a2ui/workflow-approval-handler", () => ({
+jest.mock("@/lib/connectors/hitl/workflow-approval-handler", () => ({
   startWorkflowApprovalRecovery: (...args: unknown[]) => mockStartApprovalRecovery(...args),
 }))
 jest.mock("@/lib/connectors/outbound-runner", () => ({

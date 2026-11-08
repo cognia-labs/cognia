@@ -8,7 +8,7 @@
 import React, { memo, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import { Loader2 } from "lucide-react"
 import type { A2UIComponentProps, A2UIButtonComponent } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"

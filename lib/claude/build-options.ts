@@ -155,8 +155,6 @@ import {
 } from "@/lib/agent/agent-profile-policy"
 import { loadAgentEnvSecret } from "@/lib/agent/agent-env-keyring"
 import { namespacedA2UIToolNames } from "@cognia/a2ui-core/mcp-tool-schemas"
-import { A2UI_SYSTEM_PROMPT } from "@/lib/a2ui/prompts"
-import { buildAgentA2UICatalogSection } from "@/lib/a2ui/agent-catalog-prompt"
 import { buildVisualOutputSection } from "@/lib/ai/prompts/visual-output-prompts"
 import { resolveMessageDisplayOptions } from "@/lib/chat/message-display"
 import { finalizeToolSurface } from "@/lib/claude/tool-surface-finalizer"
@@ -3028,13 +3026,15 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   }
 
   if (a2uiEnabled) {
-    const existing = opts.appendSystemPrompt?.trim() ?? ""
-    // The agent's own catalog (`Character.a2uiCatalogId`) can add component
-    // types; name them so the model can use them.
-    const a2uiPrompt = [A2UI_SYSTEM_PROMPT, buildAgentA2UICatalogSection(character?.a2uiCatalogId)]
-      .filter(Boolean)
-      .join("\n\n")
-    opts.appendSystemPrompt = existing ? `${existing}\n\n${a2uiPrompt}` : a2uiPrompt
+    // The a2ui module's section: the protocol, plus the component types the
+    // agent's own catalog (`Character.a2uiCatalogId`) adds.
+    const a2uiPrompt = (await loadPort("a2ui-system-prompt"))?.systemSection({
+      catalogId: character?.a2uiCatalogId,
+    })
+    if (a2uiPrompt) {
+      const existing = opts.appendSystemPrompt?.trim() ?? ""
+      opts.appendSystemPrompt = existing ? `${existing}\n\n${a2uiPrompt}` : a2uiPrompt
+    }
   }
   // G6 — append the connector-capability section after the A2UI prompt so
   // the model knows which kinds will degrade on this channel and avoids

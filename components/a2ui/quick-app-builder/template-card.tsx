@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardDescription, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Sparkles } from "lucide-react"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import type { A2UIAppTemplate } from "@/lib/a2ui/templates"
 
 interface TemplateCardProps {

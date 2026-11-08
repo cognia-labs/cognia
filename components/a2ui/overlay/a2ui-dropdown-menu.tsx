@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import type { A2UIComponentProps, A2UIBaseComponent } from "@/types/a2ui/schema"
 
 export interface A2UIDropdownMenuItem {

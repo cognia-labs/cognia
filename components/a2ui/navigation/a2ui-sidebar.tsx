@@ -1,6 +1,6 @@
 "use client"
 
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import React, { memo } from "react"
 import {
   Sidebar,

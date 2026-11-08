@@ -76,7 +76,7 @@ import {
   PiiGateBlocked,
   safeSendPrompt,
 } from "@/lib/connectors/ai-loop/safe-send-prompt"
-import { defaultConnectorCallbackHandler } from "@/lib/a2ui/connector-callback-handler"
+import { defaultConnectorCallbackHandler } from "@/lib/connectors/hitl/connector-callback-handler"
 import {
   startHeartbeatSweep,
   type HeartbeatSweepHandle,
@@ -104,7 +104,7 @@ import { installExecutionControlPlane } from "@/lib/execution/install-execution-
 import { onAgentRunResumed } from "@/lib/execution/run-resume-listeners"
 import { installDelegationBridge } from "@/lib/execution/delegation-bridge"
 import { recoverPendingRunInterrupts } from "@/lib/execution/run-control"
-import { startWorkflowApprovalRecovery } from "@/lib/a2ui/workflow-approval-handler"
+import { startWorkflowApprovalRecovery } from "@/lib/connectors/hitl/workflow-approval-handler"
 import {
   startResumeReconnect,
   type ResumeReconnectHandle,

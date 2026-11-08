@@ -22,7 +22,7 @@
  * binding kinds already exist for exactly this shape — an Approve/Cancel card
  * whose press starts (or drops) an IM-triggered workflow run — and they are
  * already routed by the bus short-circuit into
- * `lib/a2ui/workflow-approval-handler.ts`. This module only records that pair
+ * `lib/connectors/hitl/workflow-approval-handler.ts`. This module only records that pair
  * of bindings and delivers the card, so the acceptance path and the
  * `wf_run_workflow_by_name` plugin path converge on one dispatcher.
  *

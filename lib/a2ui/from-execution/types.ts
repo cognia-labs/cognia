@@ -7,26 +7,15 @@
  * hub (save/edit) and the zero-knowledge share pipeline (read-only collab).
  */
 
-import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
-import type { VisualWorkflow, WorkflowRunEventRow, WorkflowRunRow } from "@/types/workflow/visual"
+import type { VisualWorkflow } from "@/types/workflow/visual"
 
-/** A completed (or terminal) workflow run plus its event log. */
-export interface WorkflowRunPageSource {
-  kind: "workflow-run"
-  run: WorkflowRunRow
-  events: WorkflowRunEventRow[]
-  /** Falls back to `run.workflowSnapshot.name` when omitted. */
-  workflowName?: string
-}
-
-/** A chat session plus its persisted messages, oldest-first. */
-export interface ConversationPageSource {
-  kind: "conversation"
-  session: ChatSession
-  messages: StoredMessage[]
-}
-
-export type ExecutionPageSource = WorkflowRunPageSource | ConversationPageSource
+// The sources live in `types/a2ui/execution-page.ts`, which the
+// `interactive-page` port's contract shares with the modules that open a page.
+export type {
+  ConversationPageSource,
+  ExecutionPageSource,
+  WorkflowRunPageSource,
+} from "@/types/a2ui/execution-page"
 
 /** Localized strings the projectors need (kept injectable for i18n + tests). */
 export interface ExecutionPageLabels {

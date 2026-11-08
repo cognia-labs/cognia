@@ -79,7 +79,7 @@ jest.mock("@/stores/artifact/artifact-store", () => ({
 }))
 
 const existingSurfaces = new Set<string>()
-jest.mock("@/stores/a2ui", () => ({
+jest.mock("@/stores/a2ui/a2ui-store", () => ({
   useA2UIStore: (selector: (state: { surfaces: Record<string, unknown> }) => unknown) =>
     selector({
       surfaces: Object.fromEntries([...existingSurfaces].map((id) => [id, {}])),

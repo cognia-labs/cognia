@@ -14,6 +14,11 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 import { RunDetail } from "./run-detail"
 
 jest.mock("./run-graph", () => ({ RunGraph: () => <div aria-label="Workflow map" /> }))
+// The interactive page is a2ui's, reached through the `interactive-page` port.
+let mockInteractivePage: unknown = null
+jest.mock("@/hooks/modules/use-port", () => ({
+  usePort: (id: string) => (id === "interactive-page" ? mockInteractivePage : undefined),
+}))
 
 const routerPush = jest.fn()
 jest.mock("next/navigation", () => ({
@@ -36,6 +41,7 @@ beforeEach(async () => {
   await whenSeeded()
   retryWorkflowRunMock.mockClear()
   routerPush.mockClear()
+  mockInteractivePage = null
 })
 
 const snapshot: VisualWorkflow = {
@@ -292,5 +298,43 @@ describe("RunDetail", () => {
     expect(await screen.findByTestId("run-detail-export")).toBeInTheDocument()
     // The breakdown table surfaces the step by its node label ("Ask").
     expect(await screen.findByTestId("breakdown-row-n1")).toHaveTextContent("Ask")
+  })
+
+  async function seedFinishedRun() {
+    await getDb().workflowRuns.put({
+      id: "run1",
+      workflowId: "wf1",
+      status: "succeeded",
+      triggerKind: "trigger.manual",
+      triggerPayload: {},
+      startedAt: 100,
+      completedAt: 200,
+      workflowSnapshot: snapshot,
+    })
+  }
+
+  it("offers the interactive page through the port, with the run as its source", async () => {
+    const sources: unknown[] = []
+    mockInteractivePage = {
+      Dialog: ({ source, trigger }: { source: unknown; trigger: React.ReactNode }) => {
+        sources.push(source)
+        return <>{trigger}</>
+      },
+    }
+    await seedFinishedRun()
+    wrap()
+    expect(await screen.findByTestId("run-detail-interactive-page")).toBeInTheDocument()
+    expect(sources.at(-1)).toMatchObject({
+      kind: "workflow-run",
+      run: { id: "run1" },
+      workflowName: "Usage workflow",
+    })
+  })
+
+  it("offers no interactive page when no module provides one", async () => {
+    await seedFinishedRun()
+    wrap()
+    expect(await screen.findByTestId("run-detail-export")).toBeInTheDocument()
+    expect(screen.queryByTestId("run-detail-interactive-page")).not.toBeInTheDocument()
   })
 })

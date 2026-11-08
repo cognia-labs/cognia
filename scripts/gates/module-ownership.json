@@ -5,16 +5,6 @@
     "_platform": {
       "class": "foundation"
     },
-    "a2ui": {
-      "class": "module",
-      "api": [
-        "components/a2ui/from-execution/interactive-page-dialog.tsx",
-        "lib/a2ui/connector-callback-handler.ts",
-        "lib/a2ui/templates/index.ts",
-        "lib/a2ui/workflow-approval-handler.ts",
-        "lib/a2ui/workflow-fanout-handler.ts"
-      ]
-    },
     "account": {
       "class": "kernel"
     },
@@ -203,6 +193,7 @@
     "chat": {
       "class": "kernel",
       "api": [
+        "components/chat/character-picker.tsx",
         "components/chat/chat-scope-provider.tsx",
         "components/chat/chat-view.tsx",
         "components/chat/composer-trigger.ts",
@@ -217,6 +208,7 @@
         "components/chat/message-parts/mcp-renderers/common.tsx",
         "components/chat/message-parts/squad-run-part.tsx",
         "components/chat/message-parts/tool-row.tsx",
+        "components/chat/message-parts/use-a2ui-chat-binding.ts",
         "components/chat/motion/motion-reveal.tsx",
         "components/chat/renderers/code-block.tsx",
         "components/chat/renderers/math-block.tsx",
@@ -544,7 +536,11 @@
     },
     "icons": {
       "class": "module",
-      "api": ["components/icons/brand-icon.tsx"]
+      "api": [
+        "components/icons/brand-icon.tsx",
+        "lib/icons/lucide-catalog.tsx",
+        "lib/icons/resolve-icon.ts"
+      ]
     },
     "identity": {
       "class": "kernel"
@@ -1326,21 +1322,6 @@
       "prefix": "lib/remote-host/github-runner/",
       "owner": "github",
       "why": "The GitHub runner belongs to the GitHub module (analysis §11.1 remote-host)."
-    },
-    {
-      "prefix": "lib/db/a2ui-apps.ts",
-      "owner": "a2ui",
-      "why": "Single-user data file (ADR-0250 M2): only `a2ui` imports it."
-    },
-    {
-      "prefix": "lib/db/a2ui-event-history.ts",
-      "owner": "a2ui",
-      "why": "Single-user data file (ADR-0250 M2). Only the Settings A2UI debugger reads and writes it; a shell does not own data, so it goes to the table's module."
-    },
-    {
-      "prefix": "lib/db/a2ui-surfaces.ts",
-      "owner": "a2ui",
-      "why": "Single-user data file (ADR-0250 M2): only `a2ui` imports it."
     },
     {
       "prefix": "lib/db/agent-activity.ts",

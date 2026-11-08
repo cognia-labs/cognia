@@ -1,7 +1,7 @@
 /**
  * Bus-side dispatcher for `issue_action` callback bindings (ADR-0132 slice ③).
  *
- * Companion to `lib/a2ui/workflow-approval-handler.ts`: `ConnectorBus.
+ * Companion to `lib/connectors/hitl/workflow-approval-handler.ts`: `ConnectorBus.
  * runConnectorCallback` short-circuits `issue_action` bindings here so the
  * click is applied directly and answered with a tight reply / refreshed card,
  * never a model digest turn.

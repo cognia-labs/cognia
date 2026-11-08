@@ -37,7 +37,7 @@ import {
   type DiscoverGroup,
   type DiscoverView,
 } from "@/lib/discover/categories"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import { cn } from "@/lib/utils"
 
 export interface DiscoverCategorySidebarProps {

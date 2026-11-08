@@ -21,7 +21,6 @@ export default defineHostModule({
   // What the engine, the editor and the built-in node families build on (G4
   // checks this equals what they import).
   dependsOn: [
-    "a2ui",
     "automation",
     "bot",
     "browser",
@@ -37,6 +36,7 @@ export default defineHostModule({
     "issues",
     "media",
     "memory",
+    "modules",
     "playbooks",
     "plugin",
     "rag",
@@ -99,8 +99,9 @@ export default defineHostModule({
   ],
   // The OCR node reads through the `ocr` port; pinning a deployment to
   // knowledge-base generations goes through `knowledge-base-revisions`, which
-  // fails the deployment when no module provides it.
-  requires: ["ocr", "knowledge-base-revisions?"],
+  // fails the deployment when no module provides it. A run's interactive page
+  // opens through `interactive-page`; without it the run detail offers none.
+  requires: ["ocr", "knowledge-base-revisions?", "interactive-page?"],
   // The Workflow Copilot a conversation in the editor runs as, which the send
   // resolver asks for by the session kind.
   provides: [{ port: "workflow-editor-session", load: () => import("./ports/editor-session") }],

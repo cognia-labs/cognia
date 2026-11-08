@@ -27,7 +27,7 @@ import {
   Mail,
   MessageCircle,
 } from "lucide-react"
-import { resolveIcon } from "@/lib/a2ui/resolve-icon"
+import { resolveIcon } from "@/lib/icons/resolve-icon"
 import type { QuickAppCardProps as AppCardProps } from "@/types/a2ui/app"
 
 export const QuickAppCard = memo(function QuickAppCard({
