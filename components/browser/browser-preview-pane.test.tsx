@@ -44,8 +44,13 @@ jest.mock("@/stores/settings/settings-store", () => ({
     }),
 }))
 jest.mock("@/stores/chat/chat-store", () => ({
-  useChatStore: (selector: (state: unknown) => unknown) =>
-    selector({ activeSessionId: mockActiveChatSessionId }),
+  useChatStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({ activeSessionId: mockActiveChatSessionId }),
+    {
+      getState: () => ({ activeSessionId: mockActiveChatSessionId }),
+    }
+  ),
 }))
 jest.mock("@/stores/project/project-store", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) =>
@@ -126,6 +131,10 @@ jest.mock("@/lib/tauri", () => ({ isTauri: () => mockTauri }))
 const mockSetLocalChromiumInstalled = jest.fn()
 const mockPrimeLocalBrowserRouting = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/browser/agent-engine", () => ({
+  agentPageOwner: (sessionId: string | undefined) =>
+    jest
+      .requireActual<typeof import("@/lib/browser/agent-engine")>("@/lib/browser/agent-engine")
+      .agentPageOwner(sessionId),
   setLocalChromiumInstalled: (...args: unknown[]) => mockSetLocalChromiumInstalled(...args),
   primeLocalBrowserRouting: () => mockPrimeLocalBrowserRouting(),
 }))
@@ -195,6 +204,8 @@ jest.mock("@/lib/tauri/opener", () => ({
   openExternal: (...args: unknown[]) => mockOpenExternal(...args),
 }))
 let mockOnRectChange: ((r: ElementRect) => void) | undefined
+const mockNativeNavigations = jest.fn()
+const mockNativeRequests = jest.fn()
 jest.mock("@/lib/browser/pane-rect", () => ({ setActivePaneRect: jest.fn() }))
 jest.mock("@/hooks/browser/use-browser-pane-webview", () => ({
   useBrowserPaneWebview: (
@@ -209,6 +220,12 @@ jest.mock("@/hooks/browser/use-browser-pane-webview", () => ({
     }
   ) => {
     const onReady = opts.onReady
+    useEffect(() => {
+      if (opts.url) mockNativeNavigations(opts.url)
+    }, [opts.url])
+    useEffect(() => {
+      if (opts.url) mockNativeRequests(opts.url, opts.navigateNonce)
+    }, [opts.url, opts.navigateNonce])
     mockWebviewVisible = opts?.visible
     mockPaneUrl = opts?.url
     mockPaneNavigateNonce = opts?.navigateNonce
@@ -340,6 +357,7 @@ import { toast } from "sonner"
 import { listActionableBrowserAnnotations } from "@/lib/db/browser-annotations"
 import { browserClient } from "@/lib/browser/client"
 import { requestBrowserUrl } from "@/lib/browser/open-url-request"
+import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { addressDisplayParts, BrowserPreviewPane } from "./browser-preview-pane"
 import { __resetRoutingForTests, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 import type { Transport } from "@/lib/tauri/transport-types"
@@ -392,7 +410,10 @@ const commitUrl = (value: string) => {
 
 beforeEach(() => {
   window.localStorage.clear()
+  useDockTabsStore.setState({ bySession: {} })
   mockLocalInstalled = false
+  mockNativeNavigations.mockClear()
+  mockNativeRequests.mockClear()
   mockUserChrome = []
   mockDefaultBackend = undefined
   mockServeLocalFile.mockReset()
@@ -2005,6 +2026,152 @@ describe("local files in the address bar", () => {
 })
 
 describe("agent open requests (browser_open)", () => {
+  it("keeps the queued web address when saving its backend preference (B09)", async () => {
+    mockTauri = false
+    mockRemoteBrowserEnabled = true
+    useDockTabsStore
+      .getState()
+      .queueBrowserRequest("active-chat", { url: "https://queued.example/", backend: "remote" })
+    renderPane(
+      <BrowserPreviewPane
+        sessionId="active-chat"
+        initialUrl="https://previous.example/"
+        onRequestReveal={() => true}
+      />
+    )
+    await waitFor(() =>
+      expect(useDockTabsStore.getState().bySession["active-chat"].pendingBrowserRequests).toEqual(
+        []
+      )
+    )
+    expect(mockRemoteProps.requestedUrl).toBe("https://queued.example/")
+  })
+  it("acknowledges a host token arriving for the same queued request without navigating twice (B09)", async () => {
+    useDockTabsStore
+      .getState()
+      .queueBrowserRequest("active-chat", { url: "https://queued.example/", backend: "embedded" })
+    const reveal = () => true
+    const pane = renderPane(<BrowserPreviewPane sessionId="active-chat" onRequestReveal={reveal} />)
+    pane.rerender(
+      <TooltipProvider>
+        <BrowserPreviewPane
+          sessionId="active-chat"
+          onRequestReveal={reveal}
+          requestedUrl="https://queued.example/"
+          requestId={1}
+        />
+      </TooltipProvider>
+    )
+    await waitFor(() =>
+      expect(useDockTabsStore.getState().bySession["active-chat"].pendingBrowserRequests).toEqual(
+        []
+      )
+    )
+    expect(mockNativeRequests).toHaveBeenCalledTimes(1)
+  })
+  it("delivers queued addresses with their own engines in order without replaying a stale host URL (B09)", async () => {
+    mockLocalInstalled = true
+    mockDefaultBackend = "embedded"
+    const store = useDockTabsStore.getState()
+    store.queueBrowserRequest("active-chat", {
+      url: "https://first.example/",
+      backend: "local-chromium",
+    })
+    store.queueBrowserRequest("active-chat", {
+      url: "https://second.example/",
+      backend: "embedded",
+    })
+    renderPane(
+      <BrowserPreviewPane
+        sessionId="active-chat"
+        requestedUrl="https://first.example/"
+        onRequestReveal={() => true}
+      />
+    )
+    await waitFor(() =>
+      expect(useDockTabsStore.getState().bySession["active-chat"].pendingBrowserRequests).toEqual(
+        []
+      )
+    )
+    expect(urlBar()).toHaveValue("https://second.example/")
+    expect(mockNativeNavigations).not.toHaveBeenCalledWith("https://first.example/")
+    expect(mockNativeNavigations).toHaveBeenCalledWith("https://second.example/")
+  })
+  it("selects the queued backend before the URL can navigate in the default engine (B09)", async () => {
+    mockLocalInstalled = true
+    mockDefaultBackend = "embedded"
+    useDockTabsStore.getState().queueBrowserRequest("active-chat", {
+      url: "https://queued.example/",
+      backend: "local-chromium",
+      source: "agent",
+    })
+    renderPane(
+      <BrowserPreviewPane
+        sessionId="active-chat"
+        requestedUrl="https://queued.example/"
+        onRequestReveal={() => true}
+      />
+    )
+    await waitFor(() =>
+      expect(useDockTabsStore.getState().bySession["active-chat"].pendingBrowserRequests).toEqual(
+        []
+      )
+    )
+    expect(mockNativeNavigations).not.toHaveBeenCalledWith("https://queued.example/")
+    expect(screen.getByTestId("local-chromium-preview")).toBeInTheDocument()
+  })
+  it("does not let an outgoing pane claim after focus changes before React rerenders (B09)", () => {
+    const reveal = jest.fn(() => true)
+    renderPane(<BrowserPreviewPane sessionId="active-chat" onRequestReveal={reveal} />)
+    mockActiveChatSessionId = "next-chat"
+    act(() => {
+      expect(
+        requestBrowserUrl("https://outgoing.example/", {
+          source: "agent",
+          chatSessionId: "active-chat",
+        })
+      ).toBe(false)
+    })
+    expect(reveal).not.toHaveBeenCalled()
+    expect(urlBar()).toHaveValue("")
+  })
+  it("delivers the queued narrow request with its backend on mount (B09)", async () => {
+    mockLocalInstalled = true
+    useDockTabsStore.getState().queueBrowserRequest("active-chat", {
+      url: "https://queued.example/",
+      backend: "embedded",
+      source: "agent",
+    })
+    renderPane(
+      <BrowserPreviewPane
+        sessionId="active-chat"
+        requestedUrl="https://queued.example/"
+        onRequestReveal={() => true}
+      />
+    )
+    await waitFor(() =>
+      expect(useDockTabsStore.getState().bySession["active-chat"].pendingBrowserRequests).toEqual(
+        []
+      )
+    )
+    expect(screen.queryByTestId("local-chromium-preview")).not.toBeInTheDocument()
+    expect(urlBar()).toHaveValue("https://queued.example/")
+  })
+  it("declines a request for another conversation before revealing or navigating (B09)", () => {
+    const reveal = jest.fn(() => true)
+    renderPane(<BrowserPreviewPane sessionId="active-chat" onRequestReveal={reveal} />)
+    act(() => {
+      expect(
+        requestBrowserUrl("https://background.example/", {
+          source: "agent",
+          chatSessionId: "background",
+          backend: "local-chromium",
+        })
+      ).toBe(false)
+    })
+    expect(reveal).not.toHaveBeenCalled()
+    expect(urlBar()).toHaveValue("")
+  })
   const request = (
     url: string,
     backend?: "embedded" | "local-chromium" | "user-chrome" | "remote"

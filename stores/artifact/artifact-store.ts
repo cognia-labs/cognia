@@ -23,6 +23,7 @@ import { useCanvasLayoutStore } from "@/stores/canvas/canvas-layout-store"
 import { disposeCanvasDocument } from "@/lib/canvas/document-disposal"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useChatStore } from "@/stores/chat"
+import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { registerProjectBucketPurger } from "@/lib/project/project-bucket-purge"
 import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
 // Pure diff → hunk → apply engine (no `ai`/provider imports — safe for this
@@ -1543,6 +1544,8 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         })
         if (review.items.length === 0) return null
 
+        useDockTabsStore.getState().setReviewAttention(artifact.sessionId, true)
+
         set((state) => ({
           pendingReviews: { ...state.pendingReviews, [id]: review },
           activeArtifactIdBySession: {
@@ -1684,6 +1687,8 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
           proposedContent,
         })
         if (review.items.length === 0) return null
+
+        if (doc.sessionId) useDockTabsStore.getState().setReviewAttention(doc.sessionId, true)
 
         set((state) => ({
           pendingReviews: { ...state.pendingReviews, [documentId]: review },

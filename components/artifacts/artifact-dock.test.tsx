@@ -341,6 +341,21 @@ beforeEach(() => {
 })
 
 describe("ArtifactDock — converged workbench shell", () => {
+  it("hands a tablet sidechat reveal from the artifact to the session surface (B11)", () => {
+    activateArtifact()
+    render(
+      <ArtifactContextWorkbench
+        artifactId="artifact-1"
+        mobile={{
+          open: true,
+          onOpenChange: jest.fn(),
+          panelMode: "tablet",
+        }}
+      />
+    )
+    act(() => useArtifactDockLayoutStore.getState().revealSidechat())
+    expect(useArtifactStore.getState().activeArtifactIdBySession["sess-1"]).toBeNull()
+  })
   it("renders the artifact workbench with the shared content in desktop mode", () => {
     activateArtifact()
     render(<ArtifactDock />)

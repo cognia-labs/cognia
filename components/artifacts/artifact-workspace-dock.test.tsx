@@ -277,6 +277,7 @@ const RECT = { x: 0, y: 0, width: 400, height: 600 }
 
 beforeEach(() => {
   localStorage.clear()
+  useDockTabsStore.setState({ bySession: {} })
   mockRowBudget = null
   mockDockMounts.mockClear()
   useBreakpointMock.mockReturnValue("desktop")
@@ -295,11 +296,115 @@ beforeEach(() => {
       openArtifactIdsBySession: {},
       panelOpen: false,
       panelView: "artifact",
+      pendingReviews: {},
     })
   })
 })
 
 describe("ArtifactWorkspaceDock", () => {
+  it("queues a narrow browser request for its conversation with the requested backend (B09)", () => {
+    useBreakpointMock.mockReturnValue("tablet")
+    render(
+      <ArtifactWorkspaceDock>
+        <div />
+      </ArtifactWorkspaceDock>
+    )
+    act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(true))
+    act(() => {
+      expect(
+        requestBrowserUrl("https://background.example/", {
+          source: "agent",
+          chatSessionId: "background",
+          backend: "local-chromium",
+        })
+      ).toBe(true)
+    })
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(false)
+    expect(useArtifactDockLayoutStore.getState().browserRequestUrl).toBeNull()
+    expect(
+      useDockTabsStore.getState().bySession.background.pendingBrowserRequests?.[0]
+    ).toMatchObject({
+      url: "https://background.example/",
+      backend: "local-chromium",
+      source: "agent",
+    })
+    act(() => useChatStore.setState({ activeSessionId: "background" }))
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
+    expect(useArtifactDockLayoutStore.getState().browserRequestUrl).toBe(
+      "https://background.example/"
+    )
+  })
+
+  it.each([
+    ["desktop", "artifact"],
+    ["tablet", "artifact"],
+    ["desktop", "canvas"],
+    ["tablet", "canvas"],
+  ] as const)(
+    "keeps background %s/%s proposals out of the foreground dock (B10)",
+    (breakpoint, kind) => {
+      useBreakpointMock.mockReturnValue(breakpoint)
+      const store = useArtifactStore.getState()
+      const artifact = store.createArtifact({
+        sessionId: "background",
+        messageId: "m",
+        type: "code",
+        title: "background",
+        content: "old",
+      })
+      const canvas = store.createCanvasDocument({
+        sessionId: "background",
+        title: "canvas",
+        content: "old",
+        language: "javascript",
+        type: "code",
+      })
+      render(
+        <ArtifactWorkspaceDock>
+          <div />
+        </ArtifactWorkspaceDock>
+      )
+      act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(true))
+      act(() => {
+        if (kind === "artifact") store.proposeArtifactUpdate(artifact.id, "new")
+        else store.proposeCanvasReview(canvas, "new")
+      })
+      expect(useArtifactDockLayoutStore.getState()).toMatchObject({
+        dockCollapsed: true,
+        mobileSheetOpen: false,
+        unreadArtifact: false,
+      })
+      act(() => useChatStore.setState({ activeSessionId: "background" }))
+      expect(useArtifactDockLayoutStore.getState().unreadArtifact).toBe(true)
+      act(() => useChatStore.setState({ activeSessionId: SESSION }))
+      expect(useArtifactDockLayoutStore.getState().unreadArtifact).toBe(false)
+      act(() => useChatStore.setState({ activeSessionId: "background" }))
+      expect(useArtifactDockLayoutStore.getState().unreadArtifact).toBe(true)
+      act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(false))
+      expect(useArtifactDockLayoutStore.getState().unreadArtifact).toBe(false)
+    }
+  )
+
+  it("clears a remembered review when the user leaves the workspace surface (DG06)", () => {
+    render(
+      <ArtifactWorkspaceDock>
+        <div />
+      </ArtifactWorkspaceDock>
+    )
+    act(() => {
+      useDockTabsStore.getState().setReviewDestination(SESSION, {
+        id: "review",
+        kind: "review",
+        sessionId: SESSION,
+        rootPath: "/repo",
+        scope: { scope: "commit", commitSha: "abc" },
+      })
+      useArtifactDockLayoutStore.getState().setWorkspaceSurfaceActive(true)
+    })
+    act(() => useArtifactDockLayoutStore.getState().setWorkspaceSurfaceActive(false))
+    expect(useDockTabsStore.getState().bySession[SESSION].reviewDestination).toBeNull()
+  })
+
   it("installs and releases document cache/account lifecycle listeners", () => {
     ;(subscribeDockDocumentLifecycle as jest.Mock).mockClear()
     const { unmount } = render(

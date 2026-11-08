@@ -1,3 +1,5 @@
+/** @jest-environment jsdom */
+
 import { dispatchSideChat, openSideChat } from "./side-chat"
 import type { SlashContext } from "../builtin"
 import { useSideChatRequestStore } from "@/stores/chat/side-chat-request-store"
@@ -96,6 +98,29 @@ it("does not nest asides", async () => {
   expect(mockEnsure).not.toHaveBeenCalled()
   expect(mockReveal).not.toHaveBeenCalled()
 })
+
+it.each([767, 768, 1023])(
+  "keeps the viewport boundary at phone width (%ipx, B11)",
+  async (width) => {
+    const matchMedia = jest.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      matches: query === "(max-width: 767.98px)" && width < 768,
+      media: query,
+      onchange: null,
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    }))
+    try {
+      await dispatchSideChat(ctx())
+      expect(mockReveal).toHaveBeenCalledTimes(width < 768 ? 0 : 1)
+      if (width < 768) expect(toast.info).toHaveBeenCalledWith("desktopOnly")
+    } finally {
+      matchMedia.mockRestore()
+    }
+  }
+)
 
 it("reports an opening failure", async () => {
   mockEnsure.mockRejectedValueOnce(new Error("database unavailable"))

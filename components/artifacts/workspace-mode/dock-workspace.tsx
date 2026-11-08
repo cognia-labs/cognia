@@ -35,6 +35,7 @@ import { resolveSessionExecutionRoot } from "@/lib/workspace/session-root"
 import { resolvePanelRoot } from "@/lib/workspace/panel-follow"
 import { PanelRootChip } from "@/components/workspace/panel-root-chip"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
+import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { useProjectEditorSessionStore } from "@/stores/editor/project-editor-session-store"
 import { useGitStore } from "@/stores/git/git-store"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -74,6 +75,9 @@ export function DockWorkspace({ activeSessionId, layout = "desktop" }: DockWorks
   const t = useTranslations("artifacts.workspace")
   const request = useArtifactDockLayoutStore((state) => state.workspaceRevealRequest)
   const workspaceContext = useArtifactDockLayoutStore((state) => state.workspaceContext)
+  const reviewDestination = useDockTabsStore((state) =>
+    activeSessionId ? state.bySession[activeSessionId]?.reviewDestination : null
+  )
 
   const session = useClientLiveQuery<ChatSession | undefined>(
     () => (activeSessionId ? getSession(activeSessionId) : Promise.resolve(undefined)),
@@ -92,15 +96,12 @@ export function DockWorkspace({ activeSessionId, layout = "desktop" }: DockWorks
     )
   }
 
-  // A reveal deliberately outranks the session's own root — it can name a
-  // background or split pane's conversation, and the card that fired it belongs
-  // to that conversation. Dropping it once the user navigates elsewhere is
-  // therefore a *session-switch* concern, and it lives in
-  // `session-focus-initializer`: the ref-based guard that used to sit here
-  // could never work, because switching conversations changes the workbench
-  // scope key and remounts this component with the ref already holding the new
-  // id — so conversation B kept rendering conversation A's file.
-  const revealContext = request ?? workspaceContext
+  // Only this conversation's reveal may outrank its execution root. A saved
+  // review also carries the root needed to restore it after a cold unmount.
+  const revealContext =
+    (request?.sessionId === activeSessionId ? request : null) ??
+    (workspaceContext?.sessionId === activeSessionId ? workspaceContext : null) ??
+    reviewDestination
   if (revealContext) {
     return (
       <WorkspaceEditorBody
@@ -193,9 +194,14 @@ function WorkspaceEditorBody({
   const editorLabels = useTranslations("projectEditor")
   const request = useArtifactDockLayoutStore((state) => state.workspaceRevealRequest)
   const clearRequest = useArtifactDockLayoutStore((state) => state.clearWorkspaceRevealRequest)
+  const setReviewDestination = useDockTabsStore((state) => state.setReviewDestination)
+  const [restoredReview] = useState(() => {
+    const destination = useDockTabsStore.getState().bySession[sessionId]?.reviewDestination
+    return destination?.rootPath === workingDir ? destination : null
+  })
   const addContextSelection = useChatStore((state) => state.addContextSelection)
-  const [surface, setSurface] = useState<"file" | "review">("file")
-  const [scope, setScope] = useState<"task" | "workspace">("task")
+  const [surface, setSurface] = useState<"file" | "review">(restoredReview ? "review" : "file")
+  const [scope, setScope] = useState<"task" | "workspace">(restoredReview ? "workspace" : "task")
   /**
    * The file a reveal asked a phone to show. Mobile only: the desktop dock
    * opens the editable editor directly, while a phone gets the focused
@@ -213,21 +219,32 @@ function WorkspaceEditorBody({
   const [reviewFocus, setReviewFocus] = useState<{
     id: string
     file: { path: string; staged: boolean }
-  } | null>(null)
+  } | null>(restoredReview?.focus ? { id: restoredReview.id, file: restoredReview.focus } : null)
   /** The last review reveal that named a scope (WorkspaceReview `scopeRequest`). */
   const [reviewScopeRequest, setReviewScopeRequest] = useState<{
     id: string
     choice: ReviewScopeChoice
     relPath?: string
-  } | null>(null)
+  } | null>(
+    restoredReview?.scope
+      ? {
+          id: restoredReview.id,
+          choice: restoredReview.scope,
+          relPath: restoredReview.relPath,
+        }
+      : null
+  )
   // Any editor open has to land on a surface the user can see. Task scope
   // replaces the editor with the task ledger, so an open that only flipped the
   // Editor/Review switch — a chat file link, a terminal path, a search hit —
   // loaded the file into an editor hidden behind the ledger and showed nothing.
   const showFileSurface = useCallback(() => {
+    setReviewDestination(sessionId, null)
+    setReviewFocus(null)
+    setReviewScopeRequest(null)
     setSurface("file")
     setScope("workspace")
-  }, [])
+  }, [sessionId, setReviewDestination])
   const scopeKey = `session:${sessionId}`
 
   // Pro IDE (code-server) is a native child webview pinned over this pane, so it
@@ -415,6 +432,7 @@ function WorkspaceEditorBody({
       // synchronously inside the effect body.
       queueMicrotask(() => {
         if (processedRequest.current === request.id) {
+          setReviewDestination(sessionId, { ...request, focus: side })
           if (side) setReviewFocus({ id: request.id, file: side })
           if (request.scope) {
             setReviewScopeRequest({
@@ -432,6 +450,9 @@ function WorkspaceEditorBody({
       })
       return
     }
+    queueMicrotask(() => {
+      if (processedRequest.current === request.id) showFileSurface()
+    })
     // A phone gets the read-only preview rather than the editor: one Host read,
     // a full-height text view with its own loading/error/empty states, and no
     // virtual keyboard. "Edit" from there runs the desktop path below.
@@ -481,6 +502,8 @@ function WorkspaceEditorBody({
     status,
     gotoLine,
     clearRequest,
+    setReviewDestination,
+    showFileSurface,
   ])
 
   const visibleSurface = hasReview ? surface : "file"
@@ -580,7 +603,10 @@ function WorkspaceEditorBody({
         <ProjectRootSwitcher
           roots={roots}
           rootKey={rootKey}
-          onSelect={selectRoot}
+          onSelect={(key) => {
+            if (key !== rootKey) showFileSurface()
+            selectRoot(key)
+          }}
           followedRoot={followedRoot}
           density={touch ? "touch" : "compact"}
         />
@@ -614,7 +640,8 @@ function WorkspaceEditorBody({
                 // Radix lets the pressed item deselect itself, which would leave
                 // the dock showing nothing — an empty value is ignored instead.
                 onValueChange={(next) => {
-                  if (next === "file" || next === "review") setSurface(next)
+                  if (next === "file") showFileSurface()
+                  else if (next === "review") setSurface(next)
                 }}
                 aria-label={t("surfaceLabel")}
                 className={toggleGroupClass}
@@ -677,6 +704,7 @@ function WorkspaceEditorBody({
                 size="sm"
                 value={visibleScope}
                 onValueChange={(next) => {
+                  if (next === "task") showFileSurface()
                   if (next === "task" || next === "workspace") setScope(next)
                 }}
                 aria-label={t("scopeLabel")}

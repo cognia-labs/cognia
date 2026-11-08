@@ -61,6 +61,7 @@ import {
 } from "./artifact-store"
 import { useCanvasSettingsStore } from "@/stores/canvas/canvas-settings-store"
 import { useCanvasLayoutStore } from "@/stores/canvas/canvas-layout-store"
+import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { MAX_CANVAS_ACTION_HISTORY } from "@/stores/artifact/artifact-store"
 import {
   registerCanvasDocumentDisposer,
@@ -115,12 +116,39 @@ const activeTab = (sessionId: string | null = "s1") =>
 
 beforeEach(() => {
   localStorage.clear()
+  useDockTabsStore.setState({ bySession: {} })
   useArtifactStore.setState(initial)
   jest.clearAllMocks()
   resetPluginRateLimiter()
   mockActiveProjectId = null
   mockActiveSessionId = null
   jest.mocked(getSession).mockReset().mockResolvedValue(undefined)
+})
+
+describe("proposal attention ownership (B10)", () => {
+  it("records artifact and Canvas proposals only against their owning conversations", () => {
+    mockActiveSessionId = "foreground"
+    const store = useArtifactStore.getState()
+    const artifact = store.createArtifact({
+      sessionId: "artifact-session",
+      messageId: "m",
+      type: "code",
+      title: "a",
+      content: "old",
+    })
+    const canvas = store.createCanvasDocument({
+      sessionId: "canvas-session",
+      title: "c",
+      content: "old",
+      language: "javascript",
+      type: "code",
+    })
+    store.proposeArtifactUpdate(artifact.id, "new")
+    store.proposeCanvasReview(canvas, "new")
+    expect(useDockTabsStore.getState().bySession["artifact-session"].reviewAttention).toBe(true)
+    expect(useDockTabsStore.getState().bySession["canvas-session"].reviewAttention).toBe(true)
+    expect(useDockTabsStore.getState().bySession.foreground).toBeUndefined()
+  })
 })
 
 it("registers the live artifact store with project bucket purge", () => {

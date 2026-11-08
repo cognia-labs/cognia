@@ -34,6 +34,53 @@ const B = artifactTabKey("a2")
 const P = panelTabKey("browser")
 const N = panelTabKey("new-tab")
 
+describe("conversation routing memory", () => {
+  it("consumes only the matching request and keeps other conversations queued (B09)", () => {
+    const store = useDockTabsStore.getState()
+    store.queueBrowserRequest("a", { url: "https://a.example/", backend: "embedded" })
+    const first = useDockTabsStore.getState().bySession.a.pendingBrowserRequests![0]
+    store.queueBrowserRequest("b", { url: "https://b.example/", backend: "remote" })
+    store.queueBrowserRequest("a", { url: "https://new.example/", backend: "local-chromium" })
+    expect(
+      useDockTabsStore.getState().bySession.a.pendingBrowserRequests?.map((request) => request.url)
+    ).toEqual(["https://a.example/", "https://new.example/"])
+    store.consumeBrowserRequest("a", "stale-request")
+    expect(useDockTabsStore.getState().bySession.a.pendingBrowserRequests).toHaveLength(2)
+    store.consumeBrowserRequest("a", first.id)
+    const latest = useDockTabsStore.getState().bySession.a.pendingBrowserRequests![0]
+    expect(latest.url).toBe("https://new.example/")
+    store.consumeBrowserRequest("a", latest.id)
+    expect(useDockTabsStore.getState().bySession.a.pendingBrowserRequests).toEqual([])
+    expect(useDockTabsStore.getState().bySession.b.pendingBrowserRequests?.[0]?.backend).toBe(
+      "remote"
+    )
+  })
+
+  it("keeps review destinations and attention per conversation, but does not persist requests (B10/DG06)", () => {
+    const store = useDockTabsStore.getState()
+    store.setReviewDestination("a", {
+      id: "review-1",
+      kind: "review",
+      sessionId: "a",
+      rootPath: "/a",
+      scope: { scope: "commit", commitSha: "abc" },
+    })
+    store.setReviewAttention("a", true)
+    store.queueBrowserRequest("a", { url: "https://a.example/", backend: "embedded" })
+    store.setReviewAttention("b", true)
+    store.setReviewAttention("b", false)
+    expect(useDockTabsStore.getState().bySession.a.reviewAttention).toBe(true)
+    const persisted = useDockTabsStore.persist.getOptions().partialize!(useDockTabsStore.getState())
+    expect(persisted.bySession.a.pendingBrowserRequests).toBeUndefined()
+    expect(persisted.bySession.a.reviewDestination?.scope).toEqual({
+      scope: "commit",
+      commitSha: "abc",
+    })
+    store.setReviewDestination("a", null)
+    expect(useDockTabsStore.getState().bySession.a.reviewDestination).toBeNull()
+  })
+})
+
 beforeEach(() => {
   window.localStorage.clear()
   useDockTabsStore.setState({ bySession: {} })

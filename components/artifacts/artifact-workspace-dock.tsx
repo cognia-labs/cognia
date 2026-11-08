@@ -53,6 +53,7 @@ import {
 } from "@/components/shell/title-bar-outlets"
 import { useBreakpoint } from "@/hooks/ui"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { useActiveArtifactId, useArtifactSessionId } from "@/hooks/artifacts/use-session-artifacts"
 import { useSessionOpenTaskCount } from "@/hooks/chat/use-session-tasks"
 import {
@@ -240,12 +241,33 @@ function useDockAttentionSignal({
   // session must not raise the dock over the one the user is reading.
   const sessionId = useArtifactSessionId()
   const activeArtifactId = useActiveArtifactId()
-  const pendingReviewCount = useArtifactStore((s) => Object.keys(s.pendingReviews).length)
-  const previousRef = useRef({ sessionId, activeArtifactId, pendingReviewCount })
+  const pendingReviewCount = useArtifactStore(
+    (s) =>
+      Object.keys(s.pendingReviews).filter(
+        (id) => (s.artifacts[id]?.sessionId ?? s.canvasDocuments[id]?.sessionId) === sessionId
+      ).length
+  )
+  const reviewAttention = useDockTabsStore((s) =>
+    sessionId ? s.bySession[sessionId]?.reviewAttention === true : false
+  )
+  const dockCollapsed = useArtifactDockLayoutStore((s) => s.dockCollapsed)
+  const previousRef = useRef({
+    sessionId,
+    activeArtifactId,
+    pendingReviewCount,
+    reviewAttention,
+    initialized: false,
+  })
 
   useEffect(() => {
     const previous = previousRef.current
-    previousRef.current = { sessionId, activeArtifactId, pendingReviewCount }
+    previousRef.current = {
+      sessionId,
+      activeArtifactId,
+      pendingReviewCount,
+      reviewAttention,
+      initialized: true,
+    }
     // A different conversation coming on screen is not a new artifact: its
     // parked one (`activeArtifactIdBySession` is persisted) merely became
     // visible. That includes app launch, where the restored session moves
@@ -254,19 +276,36 @@ function useDockAttentionSignal({
     // on every single launch. The desktop dock keeps its long-standing
     // behaviour of following the conversation; its open state is a persisted
     // preference there, where the Sheet's is deliberately runtime-only.
+    if (sessionId !== previous.sessionId) {
+      useArtifactDockLayoutStore.setState({ unreadArtifact: false })
+    }
+    if ((!previous.initialized || sessionId !== previous.sessionId) && reviewAttention) {
+      // A background proposal is news for this conversation's toggle, not a
+      // reason to throw its Sheet over the conversation on focus.
+      useArtifactDockLayoutStore.getState().flagDockUnread()
+      return
+    }
     if (sessionId !== previous.sessionId && !raiseOnConversationChange) return
     // Keyed on the id so it only reacts to a *new* artifact, not every render.
     const freshArtifact =
       Boolean(activeArtifactId) && activeArtifactId !== previous.activeArtifactId
-    const freshReview = pendingReviewCount > previous.pendingReviewCount
+    const freshReview =
+      pendingReviewCount > previous.pendingReviewCount ||
+      (reviewAttention && !previous.reviewAttention)
     if (freshArtifact || freshReview) notifyNewArtifact()
   }, [
     activeArtifactId,
     notifyNewArtifact,
     pendingReviewCount,
     raiseOnConversationChange,
+    reviewAttention,
     sessionId,
   ])
+  useEffect(() => {
+    if (sessionId && reviewAttention && !dockCollapsed) {
+      useDockTabsStore.getState().setReviewAttention(sessionId, false)
+    }
+  }, [dockCollapsed, reviewAttention, sessionId])
 }
 
 /**
@@ -402,13 +441,24 @@ function useDockBodyPhase(
  */
 function useSideBrowserReveal({ pageTabs }: { pageTabs: boolean }): void {
   const openBrowser = useArtifactDockLayoutStore((state) => state.openBrowser)
+  const sessionId = useChatStore((state) => state.activeSessionId)
+  const pending = useDockTabsStore((state) =>
+    sessionId ? state.bySession[sessionId]?.pendingBrowserRequests?.[0] : null
+  )
+  useEffect(() => {
+    if (!sessionId || !pending) return
+    if (pageTabs) {
+      openDockPage(sessionId, pending.url, pending)
+      useDockTabsStore.getState().consumeBrowserRequest(sessionId, pending.id)
+    } else {
+      // Keep the backend with the queued address until the mounted pane takes
+      // it. The layout's URL alone cannot carry an engine preference.
+      openBrowser(pending.url)
+    }
+  }, [openBrowser, pageTabs, pending, sessionId])
   useEffect(
     () =>
       onBrowserUrlReveal((url, request) => {
-        if (!pageTabs) {
-          openBrowser(url)
-          return true
-        }
         // The desktop dock shows pages as tabs of the conversation they belong
         // to (ADR-0214): an agent's request goes to its own conversation — an
         // External Bridge client's to the one it was pinned to — and only the
@@ -417,8 +467,16 @@ function useSideBrowserReveal({ pageTabs }: { pageTabs: boolean }): void {
         const target =
           request.source === "agent"
             ? (chatSessionOfOwner(agentPageOwner(request.chatSessionId)) ?? active)
-            : active
+            : (request.chatSessionId ?? active)
         if (!target) return false
+        if (!pageTabs) {
+          useDockTabsStore.getState().queueBrowserRequest(target, {
+            url,
+            ...(request.source ? { source: request.source } : {}),
+            ...(request.backend ? { backend: request.backend } : {}),
+          })
+          return true
+        }
         openDockPage(target, url, {
           ...(request.source ? { source: request.source } : {}),
           ...(request.backend ? { backend: request.backend } : {}),
@@ -432,6 +490,15 @@ function useSideBrowserReveal({ pageTabs }: { pageTabs: boolean }): void {
 
 export function ArtifactWorkspaceDock({ children }: { children: ReactNode }) {
   useEffect(() => subscribeDockDocumentLifecycle(), [])
+  useEffect(
+    () =>
+      useArtifactDockLayoutStore.subscribe((state, previous) => {
+        if (!previous.workspaceSurfaceActive || state.workspaceSurfaceActive) return
+        const sessionId = useChatStore.getState().activeSessionId
+        if (sessionId) useDockTabsStore.getState().setReviewDestination(sessionId, null)
+      }),
+    []
+  )
   const breakpoint = useBreakpoint()
   useArtifactDockShortcuts()
   useDockAttentionSignal({ raiseOnConversationChange: breakpoint === "desktop" })

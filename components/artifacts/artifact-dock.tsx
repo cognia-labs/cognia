@@ -415,7 +415,6 @@ export function ArtifactContextWorkbench({
   // session surface comes up and takes the reveal as its own.
   const revealIntent = useArtifactDockLayoutStore((state) => state.revealIntent)
   const revealTargetsSessionTab =
-    !mobile &&
     revealIntent !== null &&
     !panels.some((panel) => panel.id === revealIntent.panelId) &&
     // A first-party session panel, or one a module or plugin registered (the

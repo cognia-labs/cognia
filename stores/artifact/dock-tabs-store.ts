@@ -38,6 +38,15 @@ import { persistLocalStorage } from "@/stores/persist-storage"
 import { pruneByLastUsed } from "@/stores/context-workbench/context-workbench-store"
 import { isBrowserErrorUrl } from "@/lib/browser/protocol"
 import { isSandboxPreviewBootstrapUrl } from "@/lib/security/redact-credentials"
+import type { BrowserOpenUrlRequest } from "@/lib/browser/open-url-request"
+import type { WorkspaceRevealRequest } from "@/stores/artifact/artifact-dock-layout-store"
+
+export type DockBrowserRequest = Omit<BrowserOpenUrlRequest, "claimed" | "chatSessionId"> & {
+  id: string
+}
+export type DockReviewDestination = Extract<WorkspaceRevealRequest, { kind: "review" }> & {
+  focus?: { path: string; staged: boolean } | null
+}
 
 /** A tab's identity across kinds: `panel:<panelId>`, `artifact:<artifactId>` or `page:<tabId>`. */
 export type DockTabKey =
@@ -109,6 +118,12 @@ export interface SessionDockTabs {
   activePageTabId: string | null
   /** The comparison currently shown in this session's best-of-N panel. */
   bestOfNGroupId?: string | null
+  /** A narrow host delivers these in order when its conversation is shown. Runtime-only. */
+  pendingBrowserRequests?: DockBrowserRequest[]
+  /** A proposal arrived in this conversation and has not been seen in its dock. */
+  reviewAttention?: boolean
+  /** The consumed review reveal, retained across the dock body's cold unmount. */
+  reviewDestination?: DockReviewDestination | null
   lastUsedAt: number
 }
 
@@ -141,6 +156,10 @@ export function orderDockTabs(
 }
 
 interface DockTabsState {
+  queueBrowserRequest: (sessionId: string, request: Omit<DockBrowserRequest, "id">) => void
+  consumeBrowserRequest: (sessionId: string, id: string) => void
+  setReviewAttention: (sessionId: string, unread: boolean) => void
+  setReviewDestination: (sessionId: string, destination: DockReviewDestination | null) => void
   setBestOfNGroup: (sessionId: string, groupId: string) => void
   bySession: Record<string, SessionDockTabs>
   /**
@@ -232,6 +251,49 @@ export const useDockTabsStore = create<DockTabsState>()(
   persist(
     (set) => ({
       bySession: {},
+      queueBrowserRequest: (sessionId, request) =>
+        set((state) => ({
+          bySession: touch(state.bySession, sessionId, (entry) => ({
+            ...entry,
+            pendingBrowserRequests: [
+              ...(entry.pendingBrowserRequests ?? []),
+              { ...request, id: newPageTabId() },
+            ],
+          })),
+        })),
+      consumeBrowserRequest: (sessionId, id) =>
+        set((state) =>
+          state.bySession[sessionId]?.pendingBrowserRequests?.[0]?.id !== id
+            ? state
+            : {
+                bySession: touch(state.bySession, sessionId, (entry) => ({
+                  ...entry,
+                  pendingBrowserRequests: entry.pendingBrowserRequests?.slice(1),
+                })),
+              }
+        ),
+      setReviewAttention: (sessionId, unread) =>
+        set((state) =>
+          Boolean(state.bySession[sessionId]?.reviewAttention) === unread
+            ? state
+            : {
+                bySession: touch(state.bySession, sessionId, (entry) => ({
+                  ...entry,
+                  reviewAttention: unread,
+                })),
+              }
+        ),
+      setReviewDestination: (sessionId, destination) =>
+        set((state) =>
+          (state.bySession[sessionId]?.reviewDestination ?? null) === destination
+            ? state
+            : {
+                bySession: touch(state.bySession, sessionId, (entry) => ({
+                  ...entry,
+                  reviewDestination: destination,
+                })),
+              }
+        ),
       setBestOfNGroup: (sessionId, groupId) =>
         set((state) => ({
           bySession: touch(state.bySession, sessionId, (entry) => ({
@@ -355,6 +417,7 @@ export const useDockTabsStore = create<DockTabsState>()(
             id,
             {
               ...entry,
+              pendingBrowserRequests: undefined,
               pages: entry.pages.map((page) =>
                 isSandboxPreviewBootstrapUrl(page.url) ? { ...page, url: "", title: "" } : page
               ),

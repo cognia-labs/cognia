@@ -11,6 +11,7 @@ import { resolveLinkPath } from "@/lib/terminal/terminal-links"
 import { resolveSessionExecutionRoot } from "@/lib/workspace/session-root"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import { useProjectStore } from "@/stores/project/project-store"
+import { useChatStore } from "@/stores/chat"
 
 /**
  * Whether the workbench review action can be offered at all. Gated on a
@@ -52,7 +53,18 @@ async function locateInSessionRoot(
   sessionId: string,
   path: string
 ): Promise<{ root: string; relPath: string } | null> {
-  const session = await getSession(sessionId)
+  if (useChatStore.getState().activeSessionId !== sessionId) return null
+  let focusChanged = false
+  const unsubscribe = useChatStore.subscribe((state, previous) => {
+    if (state.activeSessionId !== previous.activeSessionId) focusChanged = true
+  })
+  let session: Awaited<ReturnType<typeof getSession>>
+  try {
+    session = await getSession(sessionId)
+    if (focusChanged) return null
+  } finally {
+    unsubscribe()
+  }
   if (!session) return null
   const { root } = resolveSessionExecutionRoot(session, useProjectStore.getState().projects)
   if (!root) return null
@@ -73,7 +85,7 @@ export async function openEditInWorkbenchReview({
 }: OpenEditReviewArgs): Promise<boolean> {
   if (!hasWorkspaceFsBackend()) return false
   const located = await locateInSessionRoot(sessionId, absolutePath)
-  if (!located) return false
+  if (!located || useChatStore.getState().activeSessionId !== sessionId) return false
 
   // Open the dock's existing source-control review surface and preselect the
   // touched working-tree file. This path does not depend on the project Context
@@ -120,7 +132,7 @@ export async function openFileInWorkbenchWorkspace({
 }: OpenWorkbenchFileArgs): Promise<boolean> {
   if (!hasWorkspaceFsBackend()) return false
   const located = await locateInSessionRoot(sessionId, path)
-  if (!located) return false
+  if (!located || useChatStore.getState().activeSessionId !== sessionId) return false
 
   useArtifactDockLayoutStore.getState().revealWorkspaceFile({
     sessionId,

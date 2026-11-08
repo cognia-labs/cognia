@@ -387,6 +387,10 @@ jest.mock("@/hooks/git/use-conversation-changed-paths", () => ({
   useConversationChangedPaths: () => ({ paths: new Set<string>(), ready: true }),
 }))
 jest.mock("@/lib/git/load", () => ({ refreshGitStatus: jest.fn() }))
+jest.mock("@/lib/review/scope", () => ({
+  ...jest.requireActual("@/lib/review/scope"),
+  listReviewScopeFiles: jest.fn(async () => ({ files: [], unavailable: [] })),
+}))
 jest.mock("@/components/source-control/changes-view", () => ({
   ChangesView: ({
     onSelectFile,
@@ -432,12 +436,17 @@ jest.mock("@/components/source-control/diff-pane", () => ({
 }))
 
 import { DockWorkspace } from "./dock-workspace"
+import { listReviewScopeFiles } from "@/lib/review/scope"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
+import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { useProjectEditorSessionStore } from "@/stores/editor/project-editor-session-store"
 import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
 import { PROJECT_EDITOR_GOTO_EVENT } from "@/components/editor/project/editor-events"
+const clearWorkspaceRevealRequest =
+  useArtifactDockLayoutStore.getState().clearWorkspaceRevealRequest
 
 beforeEach(() => {
+  useDockTabsStore.setState({ bySession: {} })
   setInTauri(true)
   backendAvailable = true
   session = { id: "session-1", projectId: "project-1" }
@@ -456,7 +465,7 @@ beforeEach(() => {
     selectFile: jest.fn(),
   }
   openFile.mockClear()
-  clearReveal.mockClear()
+  clearReveal.mockClear().mockImplementation(clearWorkspaceRevealRequest)
   selectRoot.mockClear()
   closeFile.mockClear()
   setActivePath.mockClear()
@@ -482,6 +491,63 @@ beforeEach(() => {
 })
 
 describe("DockWorkspace", () => {
+  it("ignores another conversation's retained workspace context (B08)", () => {
+    useArtifactDockLayoutStore.getState().revealWorkspaceFile({
+      sessionId: "background",
+      rootPath: "/background",
+      relPath: "secret.ts",
+    })
+    render(<DockWorkspace activeSessionId="session-1" />)
+    expect(mockUseProjectEditor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeKey: "session:session-1",
+        workingDir: "/repo",
+      })
+    )
+    expect(openFile).not.toHaveBeenCalledWith("secret.ts")
+  })
+  it.each([
+    { scope: "lastTurn" as const, runId: "run:session-1:3" },
+    { scope: "commit" as const, commitSha: "abc123" },
+  ])("restores a consumed $scope review after cold remount (DG06)", async (scope) => {
+    act(() =>
+      useArtifactDockLayoutStore.getState().revealWorkspaceReview({
+        sessionId: "session-1",
+        rootPath: "/repo",
+        relPath: "src/a.ts",
+        scope,
+      })
+    )
+    const first = render(<DockWorkspace activeSessionId="session-1" />)
+    expect(await screen.findByTestId("snapshot-review")).toHaveAttribute("data-scope", scope.scope)
+    await waitFor(() =>
+      expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toBeNull()
+    )
+    first.unmount()
+    jest.mocked(listReviewScopeFiles).mockClear()
+    const second = render(<DockWorkspace activeSessionId="session-1" />)
+    expect(await screen.findByTestId("snapshot-review")).toHaveAttribute("data-scope", scope.scope)
+    expect(listReviewScopeFiles).toHaveBeenCalledWith({
+      scope: scope.scope,
+      repositoryRoots: ["/repo"],
+      defaults:
+        scope.scope === "lastTurn"
+          ? { lastTurnRunId: scope.runId }
+          : { commitSha: scope.commitSha },
+    })
+    expect(useDockTabsStore.getState().bySession["session-1"].reviewDestination).toMatchObject({
+      sessionId: "session-1",
+      rootPath: "/repo",
+      scope,
+      relPath: "src/a.ts",
+    })
+    fireEvent.click(screen.getByRole("radio", { name: "editorTab" }))
+    expect(screen.queryByTestId("workspace-review-layout")).not.toBeInTheDocument()
+    expect(useDockTabsStore.getState().bySession["session-1"].reviewDestination).toBeNull()
+    second.unmount()
+    render(<DockWorkspace activeSessionId="session-1" />)
+    expect(screen.queryByTestId("workspace-review-layout")).not.toBeInTheDocument()
+  })
   it("shows an explicit unavailable empty state without a filesystem backend", () => {
     backendAvailable = false
     render(<DockWorkspace activeSessionId="session-1" />)
@@ -607,7 +673,7 @@ describe("DockWorkspace", () => {
       })
     })
 
-    render(<DockWorkspace activeSessionId="session-1" />)
+    render(<DockWorkspace activeSessionId="split-session" />)
 
     await waitFor(() => expect(openFile).toHaveBeenCalledWith("src/a.ts"))
     await waitFor(() =>

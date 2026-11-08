@@ -70,7 +70,13 @@ import {
   toBrowserNavIntent,
 } from "@/lib/browser/protocol"
 import { resolveDesktopBackend, type BrowserBackend } from "@/lib/browser/backend-availability"
-import { primeLocalBrowserRouting, setLocalChromiumInstalled } from "@/lib/browser/agent-engine"
+import {
+  agentPageOwner,
+  primeLocalBrowserRouting,
+  setLocalChromiumInstalled,
+} from "@/lib/browser/agent-engine"
+import { chatSessionOfOwner } from "@/lib/browser/shared-local-browser"
+import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { localPathFromAddress, serveLocalFile } from "@/lib/browser/local-content-client"
 import type { UserChromeBrowser } from "@/lib/browser/local-client"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
@@ -180,6 +186,26 @@ export function BrowserPreviewPane({
   const t = useTranslations("browser")
   const tCdp = useTranslations("browserCdp")
   const tLocal = useTranslations("browserLocal")
+  const activeChatSessionId = useChatStore((state) => state.activeSessionId)
+  /**
+   * The chat session this pane's annotations, CDP grants and Adjust drafts
+   * belong to.
+   *
+   * `useSelectionToChat` already falls back to the focused session for every
+   * write it performs, so a pane that read only the `sessionId` prop disagreed
+   * with the code it called: on `/browser` and in the sites publish tab —
+   * neither of which passes one — "Add to queue" happily wrote an annotation
+   * under the active session while the queue that displays it stayed pinned to
+   * `undefined`, stranding the row for its full 30-day retention. The developer
+   * panel and Browser Adjust were simply unreachable there for the same reason.
+   * One derived id keeps writer and reader in agreement.
+   */
+  const effectiveSessionId = sessionId ?? activeChatSessionId ?? undefined
+  const pendingBrowserRequest = useDockTabsStore((state) =>
+    !dockPage && onRequestReveal && effectiveSessionId && effectiveSessionId === activeChatSessionId
+      ? state.bySession[effectiveSessionId]?.pendingBrowserRequests?.[0]
+      : null
+  )
   const normalizedInitialUrl = initialUrl ? normalizePreviewUrl(initialUrl) : null
   const reservedRef = useRef<HTMLDivElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
@@ -214,22 +240,34 @@ export function BrowserPreviewPane({
    * click a no-op whenever the user had browsed elsewhere in between — the very
    * case where re-opening it is the whole point.
    */
-  const normalizedRequestedUrl = requestedUrl ? normalizePreviewUrl(requestedUrl) : null
-  const requestKey = normalizedRequestedUrl ? `${requestId ?? 0}:${normalizedRequestedUrl}` : null
+  const normalizedHostUrl = requestedUrl ? normalizePreviewUrl(requestedUrl) : null
+  const normalizedRequestedUrl = pendingBrowserRequest
+    ? normalizePreviewUrl(pendingBrowserRequest.url)
+    : normalizedHostUrl
+  const requestKey = normalizedHostUrl ? `${requestId ?? 0}:${normalizedHostUrl}` : null
   const [consumedRequestKey, setConsumedRequestKey] = useState<string | null>(null)
+  const [consumedQueuedRequestId, setConsumedQueuedRequestId] = useState<string | null>(null)
+  if (pendingBrowserRequest && requestKey !== consumedRequestKey) setConsumedRequestKey(requestKey)
   // Applied during render rather than from an effect: the address is a prop and
   // this state is derived from it. An effect would paint one frame of the
   // previous page first, which on the native branch is a real navigation.
-  if (normalizedRequestedUrl && requestKey !== consumedRequestKey) {
-    setLoadError(null)
-    setLoadingUrl(normalizedRequestedUrl)
+  if (
+    pendingBrowserRequest
+      ? pendingBrowserRequest.id !== consumedQueuedRequestId
+      : normalizedRequestedUrl && requestKey !== consumedRequestKey
+  ) {
+    if (pendingBrowserRequest) setConsumedQueuedRequestId(pendingBrowserRequest.id)
     setConsumedRequestKey(requestKey)
-    setUrlInput(normalizedRequestedUrl)
-    setCommittedUrl(normalizedRequestedUrl)
-    setSurfaceRequest((previous) => ({
-      url: normalizedRequestedUrl,
-      nonce: (previous?.nonce ?? 0) + 1,
-    }))
+    if (normalizedRequestedUrl) {
+      setLoadError(null)
+      setLoadingUrl(normalizedRequestedUrl)
+      setUrlInput(normalizedRequestedUrl)
+      setCommittedUrl(normalizedRequestedUrl)
+      setSurfaceRequest((previous) => ({
+        url: normalizedRequestedUrl,
+        nonce: (previous?.nonce ?? 0) + 1,
+      }))
+    }
   }
   const [capturing, setCapturing] = useState(false)
   const [detailLevel, setDetailLevel] = useState<OutputDetailLevel>(() => {
@@ -269,22 +307,6 @@ export function BrowserPreviewPane({
       if (!cleared) toast.error(t("history.clearFailed"))
     })
   }, [clearRecentPages, t])
-  const activeChatSessionId = useChatStore((state) => state.activeSessionId)
-  /**
-   * The chat session this pane's annotations, CDP grants and Adjust drafts
-   * belong to.
-   *
-   * `useSelectionToChat` already falls back to the focused session for every
-   * write it performs, so a pane that read only the `sessionId` prop disagreed
-   * with the code it called: on `/browser` and in the sites publish tab —
-   * neither of which passes one — "Add to queue" happily wrote an annotation
-   * under the active session while the queue that displays it stayed pinned to
-   * `undefined`, stranding the row for its full 30-day retention. The developer
-   * panel and Browser Adjust were simply unreachable there for the same reason.
-   * One derived id keeps writer and reader in agreement.
-   */
-  const effectiveSessionId = sessionId ?? activeChatSessionId ?? undefined
-
   // The committed url mirrored into a ref so the rect callback (which fires on
   // every scroll/resize frame) can gate pane-rect publishing without being
   // re-created per commit.
@@ -342,7 +364,7 @@ export function BrowserPreviewPane({
   const [paneBackendPreference, setPaneBackendPreference] = useState<BrowserBackend | null>(null)
   const settingsPreference = defaultBackendPreference(settingsDefaultBackend)
   // A dock page tab carries its own engine; `auto` is the Settings default.
-  const backendPreference = dockPage
+  const storedBackendPreference = dockPage
     ? dockPage.engine === "auto"
       ? settingsPreference
       : dockPage.engine
@@ -388,19 +410,27 @@ export function BrowserPreviewPane({
   // with it the engine choice) until something unrelated re-rendered the pane.
   const remoteHostActive = useRemoteHostActive()
   const runtimeSnapshot = useRuntimeSnapshot()
-  const backend = resolveDesktopBackend(
-    {
-      tauri: isTauri(),
-      remoteBrowserEnabled,
-      remoteHostActive,
-      webCompanionTarget: hasWebCompanionTarget(),
-      localChromiumInstalled: localInstalled,
-      userChromeAvailable: userChromeCandidate?.available ?? false,
-      ...(targetUrl ? { targetTier: resolveTrustTier(targetUrl) } : {}),
-      idle: !targetUrl,
-    },
-    backendPreference
-  )
+  const backendInputs = {
+    tauri: isTauri(),
+    remoteBrowserEnabled,
+    remoteHostActive,
+    webCompanionTarget: hasWebCompanionTarget(),
+    localChromiumInstalled: localInstalled,
+    userChromeAvailable: userChromeCandidate?.available ?? false,
+    ...(targetUrl ? { targetTier: resolveTrustTier(targetUrl) } : {}),
+    idle: !targetUrl,
+  }
+  // Resolve a queued request's engine in the same render as its address. An
+  // effect is too late: the native pane may already navigate on that commit.
+  const queuedBackend = pendingBrowserRequest?.backend
+  const queuedResolution = queuedBackend
+    ? resolveDesktopBackend(backendInputs, queuedBackend)
+    : null
+  const backendPreference =
+    queuedBackend && queuedResolution?.backend === queuedBackend
+      ? queuedBackend
+      : storedBackendPreference
+  const backend = resolveDesktopBackend(backendInputs, backendPreference)
   const embeddedActive = isTauri() && backend.backend === "embedded"
   /** Whether a requested engine can be served right now (for URL requests). */
   const canServeBackendRef = useRef<(wanted: BrowserBackend) => boolean>(() => false)
@@ -683,6 +713,13 @@ export function BrowserPreviewPane({
   useEffect(() => {
     if (docked) return
     return onBrowserUrlRequest((url, request) => {
+      if (effectiveSessionId && effectiveSessionId !== useChatStore.getState().activeSessionId)
+        return false
+      const target =
+        request.source === "agent"
+          ? chatSessionOfOwner(agentPageOwner(request.chatSessionId))
+          : request.chatSessionId
+      if (target && target !== effectiveSessionId) return false
       // An empty address is `browser_open` without a URL: show the pane on
       // whatever it has open. Anything else must be a navigable address.
       const normalized = url ? normalizePreviewUrl(url) : null
@@ -695,7 +732,37 @@ export function BrowserPreviewPane({
       if (normalized) openQuickUrl(normalized)
       return true
     })
-  }, [openQuickUrl, docked, setBackendPreference])
+  }, [effectiveSessionId, openQuickUrl, docked, setBackendPreference])
+
+  useEffect(() => {
+    if (
+      docked ||
+      !pendingBrowserRequest ||
+      !effectiveSessionId ||
+      effectiveSessionId !== activeChatSessionId
+    )
+      return
+    const targetSessionId = effectiveSessionId
+    let cancelled = false
+    queueMicrotask(() => {
+      const store = useDockTabsStore.getState()
+      if (
+        cancelled ||
+        useChatStore.getState().activeSessionId !== targetSessionId ||
+        store.bySession[targetSessionId]?.pendingBrowserRequests?.[0]?.id !==
+          pendingBrowserRequest.id
+      )
+        return
+      const wanted = pendingBrowserRequest.backend
+      // The queue already supplied the address and engine together above.
+      // Saving the preference must not replay the previously displayed URL.
+      if (wanted && canServeBackendRef.current(wanted)) setPaneBackendPreference(wanted)
+      store.consumeBrowserRequest(targetSessionId, pendingBrowserRequest.id)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [activeChatSessionId, docked, effectiveSessionId, pendingBrowserRequest])
 
   const reloadAfterCookieImport = useCallback(async () => {
     beginLoad()

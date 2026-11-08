@@ -109,6 +109,20 @@ function makeArtifact(type: "code" | "html" = "code") {
 }
 
 describe("ArtifactPanel", () => {
+  it("consumes a tablet sidechat intent while an artifact is active (B11)", () => {
+    const artifact = makeArtifact()
+    useArtifactStore.getState().setActiveArtifact(artifact.id, "s")
+    render(<ArtifactPanel />)
+    act(() => useArtifactDockLayoutStore.getState().revealSidechat())
+    expect(useArtifactStore.getState().activeArtifactIdBySession.s).toBeNull()
+    expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
+    expect(useArtifactDockLayoutStore.getState().mobileSheetOpen).toBe(true)
+    expect(
+      Object.entries(useContextWorkbenchStore.getState().layouts).some(
+        ([key, value]) => key.endsWith("::session:s") && value.activePanelId === "session-sidechat"
+      )
+    ).toBe(true)
+  })
   it("hosts the session workbench when no artifact is active", async () => {
     render(<ArtifactPanel />)
 

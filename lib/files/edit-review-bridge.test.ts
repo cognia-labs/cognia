@@ -1,5 +1,14 @@
-const revealWorkspaceReview = jest.fn()
-const revealWorkspaceFile = jest.fn()
+/** @jest-environment jsdom */
+
+import { getSession } from "@/lib/db/sessions"
+import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
+import { useChatStore } from "@/stores/chat"
+
+const revealWorkspaceReview = jest.spyOn(
+  useArtifactDockLayoutStore.getState(),
+  "revealWorkspaceReview"
+)
+const revealWorkspaceFile = jest.spyOn(useArtifactDockLayoutStore.getState(), "revealWorkspaceFile")
 
 let backend = true
 let session: { projectId?: string; executionContext?: Record<string, unknown> } | undefined
@@ -10,9 +19,6 @@ jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(async () => session)
 jest.mock("@/stores/project/project-store", () => ({
   useProjectStore: { getState: () => ({ projects }) },
 }))
-jest.mock("@/stores/artifact/artifact-dock-layout-store", () => ({
-  useArtifactDockLayoutStore: { getState: () => ({ revealWorkspaceReview, revealWorkspaceFile }) },
-}))
 
 import {
   canOfferWorkbenchReview,
@@ -21,11 +27,57 @@ import {
 } from "./edit-review-bridge"
 
 beforeEach(() => {
+  useArtifactDockLayoutStore.getState().resetLayout()
+  useChatStore.setState({ activeSessionId: "s1" })
+  jest.mocked(getSession).mockImplementation(async () => session as never)
   revealWorkspaceReview.mockClear()
   revealWorkspaceFile.mockClear()
   backend = true
   session = { projectId: "p1" }
   projects = [{ id: "p1", roots: [{ id: "r1", path: "/repo", isPrimary: true }] }]
+})
+
+describe("conversation switches during lookup (B08)", () => {
+  it("drops a click even if focus returns before its lookup resolves", async () => {
+    let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
+    jest.mocked(getSession).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSession = resolve
+        })
+    )
+    const pending = openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
+    useChatStore.setState({ activeSessionId: "s2" })
+    useChatStore.setState({ activeSessionId: "s1" })
+    resolveSession(session as never)
+    expect(await pending).toBe(false)
+    expect(revealWorkspaceFile).not.toHaveBeenCalled()
+  })
+  it.each(["file", "review"] as const)(
+    "drops a late %s reveal after focus changes",
+    async (kind) => {
+      let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
+      jest.mocked(getSession).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSession = resolve
+          })
+      )
+      const pending =
+        kind === "file"
+          ? openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
+          : openEditInWorkbenchReview({ sessionId: "s1", absolutePath: "/repo/a.ts" })
+      useChatStore.setState({ activeSessionId: "s2" })
+      useArtifactDockLayoutStore.getState().clearSessionScopedReveals()
+      resolveSession(session as never)
+
+      expect(await pending).toBe(false)
+      expect(useArtifactDockLayoutStore.getState().workspaceContext).toBeNull()
+      expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toBeNull()
+      expect(revealWorkspaceFile).not.toHaveBeenCalled()
+      expect(revealWorkspaceReview).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe("canOfferWorkbenchReview", () => {
