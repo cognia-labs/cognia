@@ -818,7 +818,6 @@
     "lib/prompts/adapters/team-templates.ts -> squads",
     "lib/prompts/catalog.ts -> a2ui",
     "lib/prompts/catalog.ts -> canvas",
-    "lib/prompts/catalog.ts -> connectors",
     "lib/prompts/catalog.ts -> creator",
     "lib/prompts/catalog.ts -> git",
     "lib/prompts/catalog.ts -> images",

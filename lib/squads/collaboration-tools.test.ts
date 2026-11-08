@@ -1002,7 +1002,11 @@ describe("defaultTeamToolDeps — team_post_to_chat wiring", () => {
     const deps = await defaultTeamToolDeps()
     expect(await deps.listSiblingConversations("lark:bot-a:chat-1")).toHaveLength(1)
     expect(listSiblingConversationsDbMock).toHaveBeenCalledWith("lark:bot-a:chat-1")
-    await deps.appendAuditEntry({ adapterId: "bot-b", kind: "team.posted_as_bot" })
+    await deps.appendAuditEntry({
+      adapterId: "bot-b",
+      kind: "team.posted_as_bot",
+      conversationKey: "lark:bot-b:chat-1",
+    })
     expect(appendAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({ adapterId: "bot-b", kind: "team.posted_as_bot" })
     )

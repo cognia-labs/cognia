@@ -7,7 +7,7 @@ export default defineHostModule({
   kind: "module",
   stage: "stable",
   acceptance: { realSmoke: "pending" },
-  dependsOn: ["artifact", "chat", "connectors", "data", "plugin", "twin", "usage", "workflow"],
+  dependsOn: ["artifact", "chat", "data", "plugin", "twin", "usage", "workflow"],
   // The goal runtime and its turn driver, judge and pacing (chat, connectors,
   // loops, compaction, workflow nodes), the templates and analytics the
   // workflow goal nodes use, and the composer's status pill.

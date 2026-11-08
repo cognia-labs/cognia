@@ -55,7 +55,7 @@ import { getDb } from "@/lib/db/schema"
 import { getActiveLoopForSession } from "@/lib/db/loops"
 import { readForResolution } from "@/lib/db/conversation-overrides"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { adapterAllowsHostCapability } from "@/lib/connectors/permission-resolve"
+import { conversationChannelFor } from "@/lib/chat/conversation-channel"
 import { append as appendConnectorAudit } from "@/lib/db/connector-audit"
 import { resolveCharacterById } from "@/lib/db/characters"
 import { classifyRisk } from "@/lib/policy/risk/classify-risk"
@@ -350,8 +350,13 @@ class GoalRuntime {
         readForResolution(platformBinding.conversationKey).catch(() => undefined),
         getAdapterInstance(platformBinding.adapterId).catch(() => undefined),
       ])
+      // The channel decides (adapter ceiling and the conversation's opt-in);
+      // a conversation no active channel claims cannot drive goals.
+      const channel = await conversationChannelFor(platformBinding)
       const allowed =
-        override?.allowGoalDriving === true && adapterAllowsHostCapability(adapter, "goal_driving")
+        channel !== null &&
+        (await channel.hostCapabilities({ binding: platformBinding, adapter, override }))
+          .goal_driving
       const auditAt = Date.now()
       if (!allowed) {
         try {

@@ -31,6 +31,7 @@ import type {
   SharedMemoryEntry,
 } from "@/types/agent/agent-team"
 import type { AuditKind } from "@/types/connectors/audit"
+import { conversationChannelFor } from "@/lib/chat/conversation-channel"
 import type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
 import type {
   ModuleToolEntry,
@@ -195,11 +196,14 @@ export interface TeamToolDeps {
     text: string
     authorization: OutboundAuthorization
   }) => Promise<"queued" | "drafted">
-  /** Append a connector audit row (best-effort; failures must not throw). */
+  /**
+   * Append an audit row to the conversation's channel (best-effort; failures
+   * must not throw). Every team audit row names the conversation it is about.
+   */
   appendAuditEntry: (entry: {
     adapterId: string
     kind: AuditKind
-    conversationKey?: string
+    conversationKey: string
     reason?: string
     fields?: Record<string, unknown>
   }) => Promise<void>
@@ -646,48 +650,30 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
         ? { adapterId: tf.adapterId, conversationKey: tf.conversationKey }
         : null
     },
+    // The run's conversation channel (`conversation-channel` port) lists its
+    // siblings, delivers the post through its durable outbound queue and
+    // keeps the audit row; a run whose conversation no active channel claims
+    // has none to post to.
     listSiblingConversations: async (conversationKey) => {
-      const { listSiblingConversations } = await import("@/lib/connectors/session-bindings")
-      return listSiblingConversations(conversationKey)
+      const channel = await conversationChannelFor({ conversationKey })
+      return channel ? [...(await channel.listSiblingConversations({ conversationKey }))] : []
     },
     messagePassesPiiGate: async (message) => {
       const { hasNoLeakingPiiDeep } = await import("@cognia/redact")
       return hasNoLeakingPiiDeep(message)
     },
     postToConversation: async (input) => {
-      // Mirrors the `im.broadcast` enqueue path: durable outbound queue with a
-      // fresh idempotency key; per-adapter rate limit / circuit breaker /
-      // quiet-hours all apply automatically downstream.
-      const [{ parseConversationKey }, bindings, { enqueueAuthorized }, { newIdempotencyKey }] =
-        await Promise.all([
-          import("@/types/connectors/event"),
-          import("@/lib/connectors/session-bindings"),
-          import("@/lib/connectors/delivery-gateway"),
-          import("@/types/connectors/outbound"),
-        ])
-      const parsed = parseConversationKey(input.conversationKey)
-      const session = await bindings.findSessionByConversationKey(input.conversationKey)
-      const conversationRef = session?.platformBinding?.conversationRef ?? {
-        platform: parsed.platform,
-        adapterId: input.adapterId,
-        channelId: parsed.remoteChatId,
-      }
-      const result = await enqueueAuthorized({
-        adapterId: input.adapterId,
-        conversationKey: input.conversationKey,
-        request: {
-          conversationRef,
-          segments: [{ type: "text", text: input.text }],
-          metadata: { idempotencyKey: newIdempotencyKey() },
-        },
-        source: "skill",
-        authorization: input.authorization,
-      })
-      return result.kind
+      const binding = { adapterId: input.adapterId, conversationKey: input.conversationKey }
+      const channel = await conversationChannelFor(binding)
+      if (!channel) throw new Error("no channel delivers to this conversation")
+      return channel.postText({ binding, text: input.text, authorization: input.authorization })
     },
     appendAuditEntry: async (entry) => {
-      const { appendAudit } = await import("@/lib/connectors/audit")
-      await appendAudit({ ...entry, at: Date.now() }).catch(() => undefined)
+      const channel = await conversationChannelFor({
+        adapterId: entry.adapterId,
+        conversationKey: entry.conversationKey,
+      })
+      await channel?.appendAudit(entry)
     },
   }
 }

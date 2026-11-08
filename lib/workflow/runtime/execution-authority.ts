@@ -37,6 +37,27 @@ import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/
 import type { WorkflowCompletedPayload } from "./workflow-completion-fanout"
 import { assertWorkflowRunCapacity, WorkflowRunCapacityError } from "./run-admission"
 
+/**
+ * Wait while the triggering conversation's automation is paused; `false` when
+ * the run was cancelled meanwhile. The conversation's channel owns the
+ * control (`conversation-channel` port); one no active channel claims has
+ * none to wait on.
+ */
+async function waitForTriggerConversation(
+  binding: { conversationKey?: string; adapterId?: string } | undefined,
+  acceptedAt: number,
+  options: { signal?: AbortSignal; runId?: string }
+): Promise<boolean> {
+  if (!binding?.conversationKey) return true
+  const target = {
+    conversationKey: binding.conversationKey,
+    ...(binding.adapterId ? { adapterId: binding.adapterId } : {}),
+  }
+  const { conversationChannelFor } = await import("@/lib/chat/conversation-channel")
+  const channel = await conversationChannelFor(target)
+  return channel ? channel.waitForAutomation(target, acceptedAt, options) : true
+}
+
 export class WorkflowAdmissionError extends Error {
   constructor(
     readonly code: string,
@@ -483,10 +504,9 @@ export async function executeDeployedWorkflow(
       input.triggerKind.startsWith("trigger.connector.") &&
       input.triggerBinding?.conversationKey
     ) {
-      const { waitForConversationAutomation } = await import("@/lib/connectors/automation-control")
       if (
-        !(await waitForConversationAutomation(
-          input.triggerBinding.conversationKey,
+        !(await waitForTriggerConversation(
+          input.triggerBinding,
           input.triggerOriginAt ?? Date.now(),
           { signal: input.signal, runId }
         ))
@@ -571,12 +591,14 @@ async function executeLegacyPublishedWorkflow(
     ? await getRunStepOutputs(input.retry.seedRunId)
     : undefined
   if (input.triggerKind.startsWith("trigger.connector.") && input.triggerBinding?.conversationKey) {
-    const { waitForConversationAutomation } = await import("@/lib/connectors/automation-control")
     if (
-      !(await waitForConversationAutomation(
-        input.triggerBinding.conversationKey,
+      !(await waitForTriggerConversation(
+        input.triggerBinding,
         input.triggerOriginAt ?? Date.now(),
-        { signal: input.signal, runId }
+        {
+          signal: input.signal,
+          runId,
+        }
       ))
     ) {
       const { cancelWorkflowRun } = await import("./cancel-run")
@@ -742,11 +764,9 @@ async function reuseInvocation(
         existingRun.triggerKind.startsWith("trigger.connector.") &&
         existingRun.triggerBinding?.conversationKey
       ) {
-        const { waitForConversationAutomation } =
-          await import("@/lib/connectors/automation-control")
         if (
-          !(await waitForConversationAutomation(
-            existingRun.triggerBinding.conversationKey,
+          !(await waitForTriggerConversation(
+            existingRun.triggerBinding,
             existingRun.triggerOriginAt ?? existingRun.startedAt,
             { signal, runId }
           ))

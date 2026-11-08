@@ -9,7 +9,14 @@
       "class": "module",
       "api": [
         "components/a2ui/from-execution/interactive-page-dialog.tsx",
-        "lib/a2ui/templates/index.ts"
+        "lib/a2ui/component-tree.ts",
+        "lib/a2ui/computed.ts",
+        "lib/a2ui/connector-callback-handler.ts",
+        "lib/a2ui/data-model.ts",
+        "lib/a2ui/parser.ts",
+        "lib/a2ui/templates/index.ts",
+        "lib/a2ui/workflow-approval-handler.ts",
+        "lib/a2ui/workflow-fanout-handler.ts"
       ]
     },
     "account": {
@@ -17,7 +24,7 @@
     },
     "account-sync": {
       "class": "module",
-      "api": ["lib/account-sync/enrollment/platform.ts"]
+      "api": ["lib/account-sync/data/stable-json.ts", "lib/account-sync/enrollment/platform.ts"]
     },
     "agent": {
       "class": "kernel",
@@ -102,7 +109,8 @@
       "api": ["lib/attention/attention-store.ts", "lib/attention/types.ts"]
     },
     "audio": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/audio/transcode.ts"]
     },
     "auth-providers": {
       "class": "kernel"
@@ -130,7 +138,12 @@
     },
     "bot": {
       "class": "module",
-      "api": ["lib/bot/sources/desktop-event.ts", "lib/bot/sources/workflow-completed.ts"]
+      "api": [
+        "lib/bot/runtime/run.ts",
+        "lib/bot/sources/connector-inbound.ts",
+        "lib/bot/sources/desktop-event.ts",
+        "lib/bot/sources/workflow-completed.ts"
+      ]
     },
     "browser": {
       "class": "module",
@@ -252,6 +265,7 @@
         "lib/collab/client.ts",
         "lib/collab/file-host.ts",
         "lib/collab/file-sharing-policy.ts",
+        "lib/collab/refresh.ts",
         "lib/collab/runtime-client.ts",
         "lib/collab/shared-session-access.ts"
       ]
@@ -277,18 +291,6 @@
     },
     "connectivity": {
       "class": "kernel"
-    },
-    "connectors": {
-      "class": "module",
-      "api": [
-        "lib/connectors/audit.ts",
-        "lib/connectors/automation-control.ts",
-        "lib/connectors/bus.ts",
-        "lib/connectors/delivery-gateway.ts",
-        "lib/connectors/outbound-runner.ts",
-        "lib/connectors/permission-resolve.ts",
-        "lib/connectors/session-bindings.ts"
-      ]
     },
     "constants": {
       "class": "foundation"
@@ -507,7 +509,11 @@
     },
     "governance": {
       "class": "module",
-      "api": ["lib/governance/producers/memory.ts", "lib/governance/producers/workflow.ts"]
+      "api": [
+        "lib/governance/producers/connector.ts",
+        "lib/governance/producers/memory.ts",
+        "lib/governance/producers/workflow.ts"
+      ]
     },
     "guide": {
       "class": "shell"
@@ -526,7 +532,8 @@
       "class": "module"
     },
     "host-consent": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/host-consent/client.ts"]
     },
     "host-installer": {
       "class": "module"
@@ -559,7 +566,11 @@
     },
     "inbox": {
       "class": "module",
-      "api": ["lib/inbox/extract-plain-text.ts"]
+      "api": [
+        "lib/inbox/extract-plain-text.ts",
+        "lib/inbox/notice-dismiss.ts",
+        "stores/inbox/active-conversation-store.ts"
+      ]
     },
     "initializers": {
       "class": "shell"
@@ -584,6 +595,7 @@
         "lib/issues/editor-links.ts",
         "lib/issues/event-bus.ts",
         "lib/issues/hrefs.ts",
+        "lib/issues/im/callback-handler.ts",
         "lib/issues/run/agent-task-adapter.ts",
         "lib/issues/service.ts",
         "lib/issues/sync/apply.ts"
@@ -764,6 +776,7 @@
       "class": "module",
       "api": [
         "components/rag/retrieval-control-panel.tsx",
+        "lib/rag/chat-grounding.ts",
         "lib/rag/generation-ingest.ts",
         "lib/rag/safe-embedding.ts"
       ]
@@ -1022,7 +1035,8 @@
       "class": "foundation"
     },
     "updates": {
-      "class": "module"
+      "class": "module",
+      "api": ["lib/updates/backoff.ts"]
     },
     "usage": {
       "class": "kernel",
@@ -1067,6 +1081,9 @@
       "api": [
         "components/workspace/panel-root-chip.tsx",
         "components/workspace/port-lease-badge.tsx",
+        "components/workspace/workspace-activity.tsx",
+        "components/workspace/workspace-members.tsx",
+        "components/workspace/workspace-picker-list.tsx",
         "hooks/workspace/use-session-execution-context.ts"
       ]
     }
@@ -1116,11 +1133,6 @@
       "prefix": "app/logs/",
       "owner": "logging",
       "why": "Route shell owned by its module (analysis §11.3 C)."
-    },
-    {
-      "prefix": "app/lark/",
-      "owner": "connectors",
-      "why": "Route shell owned by the IM platform module (analysis §11.3 C)."
     },
     {
       "prefix": "components/extensions/",
@@ -1181,16 +1193,6 @@
       "prefix": "lib/connectors/oauth-scope-audit.ts",
       "owner": "oauth",
       "why": "Granted-scope audit written at OAuth completion by auth providers and IM OAuth (ADR-0250 §14; Feishu auth layer, M1)."
-    },
-    {
-      "prefix": "lib/skills/built-in/lark/",
-      "owner": "connectors",
-      "why": "Built-in skill of its feature (analysis §11.1 skills)."
-    },
-    {
-      "prefix": "lib/skills/built-in/im/",
-      "owner": "connectors",
-      "why": "Built-in skill of its feature (analysis §11.1 skills)."
     },
     {
       "prefix": "lib/skills/marketplace-",
@@ -1368,24 +1370,9 @@
       "why": "Single-user data file (ADR-0250 M2): only `collab` imports it."
     },
     {
-      "prefix": "lib/db/connector-cleanup-jobs.ts",
-      "owner": "connectors",
-      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
-    },
-    {
-      "prefix": "lib/db/conversation-labels.ts",
-      "owner": "connectors",
-      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
-    },
-    {
       "prefix": "lib/db/external-agent-configs.ts",
       "owner": "ai",
       "why": "Single-user data file (ADR-0250 M2): only `ai` imports it."
-    },
-    {
-      "prefix": "lib/db/feishu-principals.ts",
-      "owner": "connectors",
-      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
     },
     {
       "prefix": "lib/db/files-library-folders.ts",
@@ -1396,16 +1383,6 @@
       "prefix": "lib/db/harness-evolution.ts",
       "owner": "harness",
       "why": "Single-user data file (ADR-0250 M2): only `harness` imports it."
-    },
-    {
-      "prefix": "lib/db/lark-chat-surfaces.ts",
-      "owner": "connectors",
-      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
-    },
-    {
-      "prefix": "lib/db/lark-message-imports.ts",
-      "owner": "connectors",
-      "why": "Single-user data file (ADR-0250 M2): only `connectors` imports it."
     },
     {
       "prefix": "lib/db/memory-operations.ts",

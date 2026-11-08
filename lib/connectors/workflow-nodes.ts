@@ -1,4 +1,10 @@
-import { registerNodeExecutor } from "../registry"
+// The connectors' workflow nodes (ADR-0250 §14 `workflowNodes`): send,
+// draft, react to, delete and forward IM messages, and wait for a reply.
+// Importing this file registers them; the workflow engine loads it through
+// the connectors' manifest and never imports it itself.
+
+import type { ModuleWorkflowNodesModule } from "@/lib/modules/manifest-types"
+import { registerNodeExecutor } from "@/lib/workflow/nodes/registry"
 import { guardWorkflowEgress, WorkflowPiiBlockedError } from "@/lib/workflow/runtime/egress-guard"
 import {
   CONNECTOR_DELIVERY_DENIED_CODE,
@@ -6,7 +12,7 @@ import {
   forwardGoverned,
 } from "@/lib/connectors/delivery-gateway"
 import { createDraft } from "@/lib/db/connector-drafts"
-import { nonRetryable } from "../shared/executor-support"
+import { nonRetryable } from "@/lib/workflow/nodes/shared/executor-support"
 
 // ── action.connector.send ─────────────────────────────────────────────────
 // Enqueue an outbound message via the existing `outboundQueue`. The queue
@@ -478,3 +484,13 @@ registerNodeExecutor({
     }
   },
 })
+
+/** The kinds this file registers, checked by the engine's loader. */
+export const workflowNodeKinds: ModuleWorkflowNodesModule["workflowNodeKinds"] = [
+  "action.connector.send",
+  "action.connector.draft",
+  "action.connector.reaction",
+  "action.connector.delete",
+  "action.connector.forward",
+  "action.connector.waitReply",
+]

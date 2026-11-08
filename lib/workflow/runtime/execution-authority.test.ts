@@ -40,7 +40,7 @@ async function pausedConnectorInput() {
   await publishWorkflow(workflow.id, 10)
   await getDb().conversationOverrides.put({
     id: "cancel-control",
-    conversationKey: "cancel-chat",
+    conversationKey: "lark:adapter:cancel-chat",
     sessionId: "s",
     automationPaused: true,
     createdAt: 1,
@@ -52,7 +52,7 @@ async function pausedConnectorInput() {
     caller: "im",
     triggerKind: "trigger.connector.inbound" as const,
     triggerId: "in",
-    triggerBinding: { conversationKey: "cancel-chat", adapterId: "adapter" },
+    triggerBinding: { conversationKey: "lark:adapter:cancel-chat", adapterId: "adapter" },
     triggerOriginAt: 10,
     payload: {},
     idempotencyKey: "cancel-paused",
@@ -211,7 +211,7 @@ describe("ExecutionAuthority", () => {
     await publishWorkflow(workflow.id, 10)
     await getDb().conversationOverrides.put({
       id: "control",
-      conversationKey: "chat",
+      conversationKey: "lark:adapter:chat",
       sessionId: "s",
       automationPaused: true,
       createdAt: 1,
@@ -223,7 +223,7 @@ describe("ExecutionAuthority", () => {
       caller: "im",
       triggerKind: "trigger.connector.inbound" as const,
       triggerId: "in",
-      triggerBinding: { conversationKey: "chat", adapterId: "adapter" },
+      triggerBinding: { conversationKey: "lark:adapter:chat", adapterId: "adapter" },
       triggerOriginAt: 10,
       payload: {},
       idempotencyKey: "paused-event",

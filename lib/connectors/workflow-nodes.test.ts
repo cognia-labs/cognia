@@ -10,8 +10,8 @@ jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({ workflowRuns: { get: (id: string) => mockWorkflowRun(id) } }),
 }))
 
-import "."
-import { getExecutor } from "../registry"
+import { workflowNodeKinds } from "./workflow-nodes"
+import { getExecutor } from "@/lib/workflow/nodes/registry"
 
 describe("connector-nodes registration", () => {
   it.each([
@@ -23,6 +23,17 @@ describe("connector-nodes registration", () => {
     ["action.connector.waitReply", 1],
   ])("registers %s@%s", (kind, version) => {
     expect(getExecutor(kind as never, version)).toBeDefined()
+  })
+
+  it("declares exactly the kinds this file registers", () => {
+    expect([...workflowNodeKinds].sort()).toEqual([
+      "action.connector.delete",
+      "action.connector.draft",
+      "action.connector.forward",
+      "action.connector.reaction",
+      "action.connector.send",
+      "action.connector.waitReply",
+    ])
   })
 })
 

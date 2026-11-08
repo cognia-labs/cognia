@@ -24,7 +24,6 @@ export default defineHostModule({
     "agent-runs",
     "board",
     "chat",
-    "connectors",
     "context-workbench",
     "data",
     "fleet",
