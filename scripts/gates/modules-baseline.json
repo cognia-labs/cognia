@@ -201,7 +201,6 @@
     "components/runtime/app-runtime.tsx -> appearance",
     "components/runtime/app-runtime.tsx -> capture",
     "components/runtime/app-runtime.tsx -> chat:ui",
-    "components/runtime/app-runtime.tsx -> connectors",
     "components/runtime/app-runtime.tsx -> dev",
     "components/runtime/app-runtime.tsx -> editor",
     "components/runtime/app-runtime.tsx -> host-consent",

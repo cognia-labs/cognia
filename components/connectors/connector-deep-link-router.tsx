@@ -14,6 +14,9 @@
  * Listens on the Tauri deep-link plugin on desktop and on Capacitor's
  * `appUrlOpen` (incl. cold-start launch URL) on the mobile shell — the
  * URL format and handler pipeline are identical. No-op in web mode.
+ *
+ * Mounted in every window as the connectors' UI effect `deep-link-router`
+ * (`./module.ui.ts`, ADR-0250 §14); it renders nothing.
  */
 
 import { useCallback, useEffect } from "react"
@@ -158,7 +161,7 @@ async function handleOAuthUrl(raw: string, t: OAuthToastT): Promise<void> {
   }
 }
 
-export function ConnectorDeepLinkRouter({ children }: { children: React.ReactNode }) {
+export function ConnectorDeepLinkRouter(): null {
   const tDocs = useTranslations("docsProviders")
   const tOAuth = useTranslations("connectors.oauth")
 
@@ -255,5 +258,7 @@ export function ConnectorDeepLinkRouter({ children }: { children: React.ReactNod
     return
   }, [dispatchUrl])
 
-  return <>{children}</>
+  return null
 }
+
+export default ConnectorDeepLinkRouter

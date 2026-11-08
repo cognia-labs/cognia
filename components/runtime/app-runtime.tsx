@@ -66,7 +66,6 @@ import { HookTrustSyncProvider } from "@/components/providers/hook-trust-sync-pr
 import { A2UIDispatchProvider } from "@/components/providers/a2ui-dispatch-provider"
 import { A2UIBuiltInActionsProvider } from "@/components/providers/a2ui-built-in-actions-provider"
 import { PluginToolDispatchProvider } from "@/components/providers/plugin-tool-dispatch-provider"
-import { ConnectorDeepLinkRouter } from "@/components/connectors/connector-deep-link-router"
 import { PluginModalRoot } from "@/components/plugins/dialogs/plugin-modal-root"
 import { PluginConsentOverlay } from "@/components/plugins/dialogs/plugin-consent-overlay"
 import { PluginPermissionRequestHost } from "@/components/plugins/plugin-permission-request-host"
@@ -359,41 +358,39 @@ export function AppRuntime({ children }: { children: React.ReactNode }) {
                               exclusive with CustomThemeApplier's inline
                               vars (see plugin-theme-applier.tsx). */}
                                               <PluginThemeApplier />
-                                              <ConnectorDeepLinkRouter>
-                                                <SubscriptionUsageProvider>
-                                                  <McpLogProvider>
-                                                    <SidecarSpanProvider>
-                                                      <CompanionBootProvider>
-                                                        <WebCompanionBootProvider>
-                                                          <PlatformDesktopSources>
-                                                            {/* id="app" is the scope root for user
-                                                    custom CSS when `customCssScope` is
-                                                    "app" (see lib/appearance/custom-css/apply).
-                                                    display:contents keeps it box-less but
-                                                    still a valid @scope (#app) root. */}
-                                                            <AgentExecutionHandleProvider>
-                                                              <ClaudeChatRuntimeProvider>
-                                                                <ProjectCoordinatorHost />
-                                                                <div
-                                                                  id="app"
-                                                                  data-bg-target="global"
-                                                                  className="contents"
-                                                                >
-                                                                  <PlatformShell>
-                                                                    <SurfaceAvailabilityBoundary>
-                                                                      {children}
-                                                                    </SurfaceAvailabilityBoundary>
-                                                                  </PlatformShell>
-                                                                </div>
-                                                              </ClaudeChatRuntimeProvider>
-                                                            </AgentExecutionHandleProvider>
-                                                          </PlatformDesktopSources>
-                                                        </WebCompanionBootProvider>
-                                                      </CompanionBootProvider>
-                                                    </SidecarSpanProvider>
-                                                  </McpLogProvider>
-                                                </SubscriptionUsageProvider>
-                                              </ConnectorDeepLinkRouter>
+                                              <SubscriptionUsageProvider>
+                                                <McpLogProvider>
+                                                  <SidecarSpanProvider>
+                                                    <CompanionBootProvider>
+                                                      <WebCompanionBootProvider>
+                                                        <PlatformDesktopSources>
+                                                          {/* id="app" is the scope root for user
+                                                  custom CSS when `customCssScope` is
+                                                  "app" (see lib/appearance/custom-css/apply).
+                                                  display:contents keeps it box-less but
+                                                  still a valid @scope (#app) root. */}
+                                                          <AgentExecutionHandleProvider>
+                                                            <ClaudeChatRuntimeProvider>
+                                                              <ProjectCoordinatorHost />
+                                                              <div
+                                                                id="app"
+                                                                data-bg-target="global"
+                                                                className="contents"
+                                                              >
+                                                                <PlatformShell>
+                                                                  <SurfaceAvailabilityBoundary>
+                                                                    {children}
+                                                                  </SurfaceAvailabilityBoundary>
+                                                                </PlatformShell>
+                                                              </div>
+                                                            </ClaudeChatRuntimeProvider>
+                                                          </AgentExecutionHandleProvider>
+                                                        </PlatformDesktopSources>
+                                                      </WebCompanionBootProvider>
+                                                    </CompanionBootProvider>
+                                                  </SidecarSpanProvider>
+                                                </McpLogProvider>
+                                              </SubscriptionUsageProvider>
                                             </DataAdapterProvider>
                                           </PluginToolDispatchProvider>
                                         </A2UIDispatchProvider>

@@ -105,11 +105,7 @@ describe("ConnectorDeepLinkRouter", () => {
     mockedIsTauri.mockReturnValue(true)
     const completion = jest.fn(async () => undefined)
     registerDocsOAuthCompletion("google", completion)
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
     capturedDeepLinkHandler!([
       "cognia://docs-provider/oauth/google?code=c&state=s&executionRunId=forged",
@@ -123,22 +119,14 @@ describe("ConnectorDeepLinkRouter", () => {
   })
   it("does nothing in web mode", async () => {
     mockedIsTauri.mockReturnValue(false)
-    render(
-      <ConnectorDeepLinkRouter>
-        <div>child</div>
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await new Promise((r) => setTimeout(r, 30))
     expect(mockOnDeepLink).not.toHaveBeenCalled()
   })
 
   it("registers deep-link listener in Tauri mode", async () => {
     mockedIsTauri.mockReturnValue(true)
-    render(
-      <ConnectorDeepLinkRouter>
-        <div>child</div>
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => {
       expect(mockOnDeepLink).toHaveBeenCalledTimes(1)
     })
@@ -146,11 +134,7 @@ describe("ConnectorDeepLinkRouter", () => {
 
   it("ignores URLs that don't match the OAuth pattern", async () => {
     mockedIsTauri.mockReturnValue(true)
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
 
     capturedDeepLinkHandler!(["cognia://some/other/path"])
@@ -163,11 +147,7 @@ describe("ConnectorDeepLinkRouter", () => {
   it("toasts error on OAuth state mismatch", async () => {
     mockedIsTauri.mockReturnValue(true)
     setOAuthState("correct-state")
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
 
     capturedDeepLinkHandler!(["cognia://connector/oauth/telegram?code=abc123&state=wrong-state"])
@@ -179,11 +159,7 @@ describe("ConnectorDeepLinkRouter", () => {
   it("toasts error when state is missing", async () => {
     mockedIsTauri.mockReturnValue(true)
     // No state stored in sessionStorage
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
 
     capturedDeepLinkHandler!(["cognia://connector/oauth/telegram?code=abc123&state=any-state"])
@@ -195,11 +171,7 @@ describe("ConnectorDeepLinkRouter", () => {
   it("toasts error for unknown adapterType (not in PlatformKind)", async () => {
     mockedIsTauri.mockReturnValue(true)
     setOAuthState("my-state")
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
 
     capturedDeepLinkHandler!(["cognia://connector/oauth/unknownplatform?code=abc&state=my-state"])
@@ -212,11 +184,7 @@ describe("ConnectorDeepLinkRouter", () => {
     mockedIsTauri.mockReturnValue(true)
     setOAuthState("my-state")
     // oauthRegistry is empty — no handler for "slack"
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
 
     capturedDeepLinkHandler!(["cognia://connector/oauth/slack?code=abc&state=my-state"])
@@ -232,11 +200,7 @@ describe("ConnectorDeepLinkRouter", () => {
     const fakeHandler = jest.fn().mockResolvedValue(undefined)
     oauthRegistry.set("slack", fakeHandler)
 
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
 
     capturedDeepLinkHandler!([
@@ -257,11 +221,7 @@ describe("ConnectorDeepLinkRouter", () => {
     const fakeHandler = jest.fn().mockRejectedValue(new Error("token exchange failed"))
     oauthRegistry.set("slack", fakeHandler)
 
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
 
     capturedDeepLinkHandler!(["cognia://connector/oauth/slack?code=bad-code&state=valid-state"])
@@ -281,11 +241,7 @@ describe("ConnectorDeepLinkRouter", () => {
       "cognia://connector/oauth/lark?code=cold-code&state=valid-state",
     ])
 
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
 
     await waitFor(() => {
       expect(fakeHandler).toHaveBeenCalledWith("cold-code", "valid-state")
@@ -304,11 +260,7 @@ describe("ConnectorDeepLinkRouter", () => {
     const fakeHandler = jest.fn().mockResolvedValue(undefined)
     oauthRegistry.set("slack", fakeHandler)
 
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedCapHandler).not.toBeNull())
 
     const raw = "cognia://connector/oauth/slack?code=exchange-code&state=valid-state"
@@ -336,11 +288,7 @@ describe("ConnectorDeepLinkRouter", () => {
       raw: "cognia://connector/oauth/slack?code=cold-code&state=valid-state",
     })
 
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => {
       expect(fakeHandler).toHaveBeenCalledWith("cold-code", "valid-state")
     })
@@ -349,11 +297,7 @@ describe("ConnectorDeepLinkRouter", () => {
   it("ignores non-connector routes on Capacitor (pair / share / oauth/<provider>)", async () => {
     mockedIsTauri.mockReturnValue(false)
     setCapacitor(true)
-    render(
-      <ConnectorDeepLinkRouter>
-        <div />
-      </ConnectorDeepLinkRouter>
-    )
+    render(<ConnectorDeepLinkRouter />)
     await waitFor(() => expect(capturedCapHandler).not.toBeNull())
 
     capturedCapHandler!({ raw: "cognia://oauth/claude?code=x" })
@@ -364,13 +308,9 @@ describe("ConnectorDeepLinkRouter", () => {
     expect(mockCapBrowserClose).not.toHaveBeenCalled()
   })
 
-  it("renders children", () => {
+  it("renders nothing", () => {
     mockedIsTauri.mockReturnValue(false)
-    const { getByText } = render(
-      <ConnectorDeepLinkRouter>
-        <span>content</span>
-      </ConnectorDeepLinkRouter>
-    )
-    expect(getByText("content")).toBeTruthy()
+    const { container } = render(<ConnectorDeepLinkRouter />)
+    expect(container).toBeEmptyDOMElement()
   })
 })

@@ -11,5 +11,8 @@ export default defineUiModule({
       name: "inbound-notification-bridge",
       load: () => import("./inbound-notification-bridge"),
     },
+    // Completes connector and document-provider OAuth from `cognia://` deep
+    // links (desktop and the mobile shell, cold start included).
+    { name: "deep-link-router", load: () => import("./connector-deep-link-router") },
   ],
 })
