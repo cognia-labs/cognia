@@ -16,8 +16,6 @@
   "interactiveHtmlLabel": "允许交互式 HTML 预览",
   "minLinesHint": "始终创建的类型（HTML、React、SVG、Mermaid、图表、Jupyter）只需 3 行。",
   "minLinesLabel": "代码 / 文档的最小行数",
-  "persistAcrossSessionsHint": "开启后 Artifact 通过 localStorage 持久化；关闭则随会话清理。",
-  "persistAcrossSessionsLabel": "跨会话保留",
   "resetDefaults": "恢复默认",
   "reviewBeforeApplyHint": "开启后，助手对已有 Artifact 的修改会先暂存为差异提案，由你逐块（hunk）审阅后再应用；关闭则直接覆盖 Artifact。",
   "reviewBeforeApplyLabel": "应用前审阅 AI 修改",

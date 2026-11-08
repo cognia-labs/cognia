@@ -33,17 +33,30 @@ describe("ArtifactsSection", () => {
     fireEvent.click(toggle)
     expect(saveMock.mock.calls[0][0].artifacts.showNotification).toBe(false)
   })
-  it("renders all 9 control rows", () => {
+  it("renders the supported control rows", () => {
     render(<ArtifactsSection />)
     expect(screen.getByText("autoCreateLabel")).toBeInTheDocument()
     expect(screen.getByText("minLinesLabel")).toBeInTheDocument()
     expect(screen.getByText("enabledTypesLabel")).toBeInTheDocument()
     expect(screen.getByText("showNotificationLabel")).toBeInTheDocument()
     expect(screen.getByText("defaultPanelModeLabel")).toBeInTheDocument()
-    expect(screen.getByText("persistAcrossSessionsLabel")).toBeInTheDocument()
     expect(screen.getByText("reviewBeforeApplyLabel")).toBeInTheDocument()
     expect(screen.getByText("interactiveHtmlLabel")).toBeInTheDocument()
     expect(screen.getByText("resetDefaults")).toBeInTheDocument()
+  })
+
+  it.each([true, false])("ignores a legacy persistence setting of %s", (persistAcrossSessions) => {
+    mockedSettings = { artifacts: { persistAcrossSessions } }
+    render(<ArtifactsSection />)
+    expect(screen.queryByText("persistAcrossSessionsLabel")).not.toBeInTheDocument()
+    expect(screen.queryByText("persistAcrossSessionsHint")).not.toBeInTheDocument()
+
+    const row = screen.getByText("autoCreateLabel").closest(".justify-between")!
+    fireEvent.click(within(row as HTMLElement).getByRole("switch"))
+    expect(saveMock.mock.calls[0][0].artifacts).not.toHaveProperty("persistAcrossSessions")
+
+    fireEvent.click(screen.getByRole("button", { name: "resetDefaults" }))
+    expect(saveMock.mock.calls[1][0].artifacts).not.toHaveProperty("persistAcrossSessions")
   })
 
   it("toggling review-before-apply persists the patch", () => {
@@ -119,7 +132,6 @@ describe("ArtifactsSection", () => {
         ],
         showNotification: true,
         defaultPanelMode: "code",
-        persistAcrossSessions: true,
       },
     }
     render(<ArtifactsSection />)

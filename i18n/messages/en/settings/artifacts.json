@@ -16,8 +16,6 @@
   "interactiveHtmlLabel": "Allow interactive HTML previews",
   "minLinesHint": "Always-create types (HTML, React, SVG, Mermaid, charts, Jupyter) ignore this — they only need 3 lines.",
   "minLinesLabel": "Minimum lines for code / document",
-  "persistAcrossSessionsHint": "When on, artifacts survive restarts via localStorage. When off, they’re cleared with the session.",
-  "persistAcrossSessionsLabel": "Persist across sessions",
   "resetDefaults": "Reset to defaults",
   "reviewBeforeApplyHint": "When on, the assistant's edits to an existing artifact are staged as a diff proposal you review hunk-by-hunk before they apply. When off, edits overwrite the artifact directly.",
   "reviewBeforeApplyLabel": "Review AI edits before applying",

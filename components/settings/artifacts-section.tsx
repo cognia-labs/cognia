@@ -27,7 +27,6 @@ type ArtifactSettingsShape = {
   /** Notify only for auto-created artifacts in the focused conversation; background turns stay quiet. */
   showNotification: boolean
   defaultPanelMode: "code" | "preview"
-  persistAcrossSessions: boolean
   reviewBeforeApply: boolean
   agentAuthoring: boolean
   interactiveHtml: boolean
@@ -39,7 +38,6 @@ const DEFAULTS: ArtifactSettingsShape = {
   enabledTypes: DEFAULT_ENABLED_TYPES,
   showNotification: true,
   defaultPanelMode: "code",
-  persistAcrossSessions: true,
   reviewBeforeApply: true,
   agentAuthoring: true,
   // Off by default: turning it on is what lets a preview run author-written
@@ -59,7 +57,6 @@ export function ArtifactsSection() {
   const enabledTypes = cfg.enabledTypes ?? DEFAULTS.enabledTypes
   const showNotification = cfg.showNotification ?? DEFAULTS.showNotification
   const defaultPanelMode = cfg.defaultPanelMode ?? DEFAULTS.defaultPanelMode
-  const persistAcrossSessions = cfg.persistAcrossSessions ?? DEFAULTS.persistAcrossSessions
   const reviewBeforeApply = cfg.reviewBeforeApply ?? DEFAULTS.reviewBeforeApply
   const agentAuthoring = cfg.agentAuthoring ?? DEFAULTS.agentAuthoring
   const interactiveHtml = cfg.interactiveHtml ?? DEFAULTS.interactiveHtml
@@ -72,7 +69,6 @@ export function ArtifactsSection() {
         enabledTypes,
         showNotification,
         defaultPanelMode,
-        persistAcrossSessions,
         reviewBeforeApply,
         // Every field the section owns has to be listed: `save` replaces the
         // whole `artifacts` object, so an omitted key is a silent reset of
@@ -180,17 +176,6 @@ export function ArtifactsSection() {
           </label>
         </RadioGroup>
         <p className="text-xs text-muted-foreground">{t("defaultPanelModeHint")}</p>
-      </div>
-
-      <div className="flex items-start justify-between gap-4 border-t pt-4">
-        <div className="space-y-1">
-          <Label className="text-sm">{t("persistAcrossSessionsLabel")}</Label>
-          <p className="text-xs text-muted-foreground">{t("persistAcrossSessionsHint")}</p>
-        </div>
-        <Switch
-          checked={persistAcrossSessions}
-          onCheckedChange={(checked) => update({ persistAcrossSessions: checked })}
-        />
       </div>
 
       <div className="flex items-start justify-between gap-4 border-t pt-4">

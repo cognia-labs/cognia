@@ -6,7 +6,7 @@ import { useSettingsStore } from "@/stores/settings"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 // `ArtifactsSection` reads `settings.artifacts` (auto-create, min-lines slider,
-// enabled-types grid, default panel mode, persistence/review toggles), falling
+// enabled-types grid, default panel mode, review toggles), falling
 // back to its own `DEFAULTS` per field.
 function seedSettings(patch: Partial<AppSettings>) {
   return () => {
@@ -45,7 +45,6 @@ export const PreviewFirst: Story = {
       minLines: 25,
       defaultPanelMode: "preview",
       showNotification: false,
-      persistAcrossSessions: true,
       reviewBeforeApply: false,
     },
   } as unknown as Partial<AppSettings>),
