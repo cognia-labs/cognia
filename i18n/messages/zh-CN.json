@@ -4895,6 +4895,7 @@
       "png": "导出为 PNG",
       "svg": "导出为 SVG"
     },
+    "exportFailed": "导出失败。请打开预览，确认内容正常显示后，重新保存到可写入的位置。",
     "filterByRuntime": "按运行时筛选",
     "filterByType": "按类型筛选",
     "fullscreen": "全屏",

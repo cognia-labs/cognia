@@ -12,7 +12,9 @@
 
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, type SetStateAction } from "react"
+import { usePathname, useRouter } from "next/navigation"
+import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 import { useTranslations } from "next-intl"
 import { useMediaQuery } from "@/hooks/ui"
@@ -32,6 +34,14 @@ import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layo
 import { saveGeneratedDocument, type DocFormat } from "@/lib/files/document-writer"
 import { writeText as clipboardWriteText } from "@/lib/capacitor/clipboard"
 import { canPreview, resolveRegisteredArtifactRenderer } from "@/lib/artifacts"
+import { revealCanvasDocument } from "@/lib/artifacts/reveal"
+import { createArtifactTabDocument } from "@/lib/artifacts/open-in-new-tab"
+import { waitForArtifactPreview } from "@/lib/artifacts/capture"
+import { pdfNeedsMountedPreview } from "@/lib/artifacts/export/pdf"
+import {
+  isArtifactPreviewRequested,
+  onArtifactPreviewRequest,
+} from "@/lib/artifacts/preview-view-request"
 import { loggers } from "@cognia/logging"
 import {
   getArtifactExportFormats,
@@ -69,6 +79,8 @@ export type ArtifactViewMode = "code" | "preview" | "edit" | "review" | "split"
 export function useArtifactPanelState() {
   const t = useTranslations("artifacts")
   const tCommon = useTranslations("common")
+  const router = useRouter()
+  const pathname = usePathname()
 
   // Store state - using useShallow for optimized subscriptions
   const { panelOpen, panelView, artifacts, artifactWorkspace } = useArtifactStore(
@@ -93,8 +105,6 @@ export function useArtifactPanelState() {
     updateArtifact,
     saveArtifactVersion,
     createCanvasDocument,
-    setActiveCanvas,
-    openPanel,
     setArtifactWorkspaceReturnContext,
   } = useArtifactStore(
     useShallow((state) => ({
@@ -102,8 +112,6 @@ export function useArtifactPanelState() {
       updateArtifact: state.updateArtifact,
       saveArtifactVersion: state.saveArtifactVersion,
       createCanvasDocument: state.createCanvasDocument,
-      setActiveCanvas: state.setActiveCanvas,
-      openPanel: state.openPanel,
       setArtifactWorkspaceReturnContext: state.setArtifactWorkspaceReturnContext,
     }))
   )
@@ -111,17 +119,51 @@ export function useArtifactPanelState() {
   const canvasDocuments = useArtifactStore((state) => state.canvasDocuments)
   const activeArtifact = activeArtifactId ? artifacts[activeArtifactId] : null
   const theme = useSettingsStore((state) => state.settings?.theme)
+  const defaultPanelMode = useSettingsStore((state) => state.settings?.artifacts?.defaultPanelMode)
+  const isPreviewable = activeArtifact ? canPreview(activeArtifact.type) : false
+  const initialViewMode = defaultPanelMode === "preview" && isPreviewable ? "preview" : "code"
   const isDesktop = isTauri()
   const isMobileViewport = useMediaQuery("(max-width: 639px)")
   const isTabletViewport = useMediaQuery("(min-width: 640px) and (max-width: 1023px)")
   // Local state
-  const [viewMode, setViewMode] = useState<ArtifactViewMode>("code")
+  const [viewState, setViewState] = useState({
+    artifactId: activeArtifactId,
+    panelOpen,
+    mode: initialViewMode as ArtifactViewMode,
+  })
+  // Reset synchronously so a previous artifact's Preview/Edit never paints for
+  // the newly selected artifact. A user's tab choice survives ordinary renders.
+  if (viewState.artifactId !== activeArtifactId || viewState.panelOpen !== panelOpen) {
+    setViewState({
+      artifactId: activeArtifactId,
+      panelOpen,
+      mode:
+        viewState.artifactId !== activeArtifactId || panelOpen ? initialViewMode : viewState.mode,
+    })
+  }
+  const viewMode = viewState.mode
+  const setViewMode = useCallback((next: SetStateAction<ArtifactViewMode>) => {
+    setViewState((state) => ({
+      ...state,
+      mode: typeof next === "function" ? next(state.mode) : next,
+    }))
+  }, [])
   const [copied, setCopied] = useState(false)
   const [editContent, setEditContent] = useState("")
   const [hasChanges, setHasChanges] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [showVersionHistory, setShowVersionHistory] = useState(false)
   const [lastDownloadPath, setLastDownloadPath] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!panelOpen || panelView !== "artifact" || !activeArtifactId || !isPreviewable) return
+    const showRequestedPreview = (id: string) => {
+      if (id === activeArtifactId) setViewMode("preview")
+    }
+    const unsubscribe = onArtifactPreviewRequest(showRequestedPreview)
+    if (isArtifactPreviewRequested(activeArtifactId)) showRequestedPreview(activeArtifactId)
+    return unsubscribe
+  }, [activeArtifactId, isPreviewable, panelOpen, panelView, setViewMode])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -172,6 +214,7 @@ export function useArtifactPanelState() {
     updateArtifact,
     saveArtifactVersion,
     t,
+    setViewMode,
   ])
 
   // Auto-enter the review surface when a fresh AI-revision proposal appears,
@@ -181,13 +224,16 @@ export function useArtifactPanelState() {
   const lastReviewIdRef = useRef<string | null>(null)
   useEffect(() => {
     const reviewId = pendingReview?.id ?? null
-    if (reviewId && reviewId !== lastReviewIdRef.current && viewMode !== "edit") {
+    if (activeArtifactId && isArtifactPreviewRequested(activeArtifactId)) {
+      lastReviewIdRef.current = reviewId
+      return
+    } else if (reviewId && reviewId !== lastReviewIdRef.current && viewMode !== "edit") {
       setViewMode("review")
     } else if (!reviewId && lastReviewIdRef.current && viewMode === "review") {
       setViewMode("code")
     }
     lastReviewIdRef.current = reviewId
-  }, [pendingReview, viewMode])
+  }, [activeArtifactId, pendingReview, viewMode, setViewMode])
 
   const buildReturnContext = useCallback(
     (authoringOrigin: ArtifactAuthoringOrigin): ArtifactWorkspaceReturnContext | null => {
@@ -222,8 +268,7 @@ export function useArtifactPanelState() {
       // deleted document falls through to creating a new one.
       const existingId = activeArtifact.metadata?.derivedFromCanvasDocumentId
       if (existingId && canvasDocuments[existingId]) {
-        setActiveCanvas(existingId)
-        openPanel("canvas")
+        if (revealCanvasDocument(existingId) && pathname !== "/") router.push("/")
         loggers.ui.info("artifacts.action.open-in-canvas", {
           artifactId: activeArtifact.id,
           canvasId: existingId,
@@ -242,8 +287,7 @@ export function useArtifactPanelState() {
         authoringOrigin: "artifact-panel",
         createdBy: "user",
       })
-      setActiveCanvas(docId)
-      openPanel("canvas")
+      if (revealCanvasDocument(docId) && pathname !== "/") router.push("/")
       loggers.ui.info("artifacts.action.open-in-canvas", {
         artifactId: activeArtifact.id,
         canvasId: docId,
@@ -254,8 +298,8 @@ export function useArtifactPanelState() {
     buildReturnContext,
     canvasDocuments,
     createCanvasDocument,
-    openPanel,
-    setActiveCanvas,
+    pathname,
+    router,
     setArtifactWorkspaceReturnContext,
   ])
 
@@ -265,7 +309,7 @@ export function useArtifactPanelState() {
       setHasChanges(false)
       setViewMode("edit")
     }
-  }, [activeArtifact])
+  }, [activeArtifact, setViewMode])
 
   const handleSaveEdit = useCallback(() => {
     if (activeArtifact && hasChanges) {
@@ -275,12 +319,12 @@ export function useArtifactPanelState() {
       setViewMode("code")
       loggers.ui.info("artifacts.action.save-edit", { artifactId: activeArtifact.id })
     }
-  }, [activeArtifact, editContent, hasChanges, updateArtifact, saveArtifactVersion, t])
+  }, [activeArtifact, editContent, hasChanges, updateArtifact, saveArtifactVersion, t, setViewMode])
 
   const handleCancelEdit = useCallback(() => {
     setViewMode("code")
     setHasChanges(false)
-  }, [])
+  }, [setViewMode])
 
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
@@ -332,7 +376,7 @@ export function useArtifactPanelState() {
       loggers.ui.error("artifacts.action.download-failed", error, {
         artifactId: activeArtifact.id,
       })
-      throw error
+      toast.error(t("exportFailed"))
     }
   }
 
@@ -348,7 +392,11 @@ export function useArtifactPanelState() {
 
   /** Every format the active artifact's adapter actually offers. */
   const exportFormats = activeArtifact
-    ? getArtifactExportFormats(activeArtifact, { pluginOwnsContent })
+    ? getArtifactExportFormats(activeArtifact, { pluginOwnsContent }).filter(
+        (format) =>
+          isPreviewable ||
+          (format !== "png" && (format !== "pdf" || !pdfNeedsMountedPreview(activeArtifact)))
+      )
     : []
 
   /** Whether "Download as Word" can turn the content into a document. */
@@ -361,6 +409,11 @@ export function useArtifactPanelState() {
   const handleExportAs = async (format: ArtifactExportFormat) => {
     if (!activeArtifact) return
     try {
+      if (format === "png" || (format === "pdf" && pdfNeedsMountedPreview(activeArtifact))) {
+        if (!isPreviewable) return
+        setViewMode("preview")
+        await waitForArtifactPreview(activeArtifact.id)
+      }
       const outcome = await exportArtifact(activeArtifact, format)
       if (outcome.kind === "error") throw new Error(outcome.message)
       if (outcome.kind === "saved" && isDesktop) setLastDownloadPath(outcome.location)
@@ -370,7 +423,7 @@ export function useArtifactPanelState() {
         artifactId: activeArtifact.id,
         format,
       })
-      throw error
+      toast.error(t("exportFailed"))
     }
   }
 
@@ -380,17 +433,17 @@ export function useArtifactPanelState() {
   const handleDownloadAs = async (format: DocFormat) => {
     if (!activeArtifact || !canDownloadAsDocument) return
     try {
-      // `pdf` goes through the artifact exporter so there is exactly one PDF
-      // path (it decides text-layout vs raster by artifact type). `docx` is not
-      // an `ArtifactExportFormat` and keeps the document writer directly.
-      const outcome =
-        format === "pdf"
-          ? await exportArtifact(activeArtifact, "pdf")
-          : await saveGeneratedDocument({
-              title: activeArtifact.title,
-              markdown: activeArtifact.content,
-              format,
-            })
+      if (format === "pdf") {
+        await handleExportAs("pdf")
+        return
+      }
+      // Word keeps the document writer; PDF uses the same format-specific
+      // preparation and error feedback as the export menu above.
+      const outcome = await saveGeneratedDocument({
+        title: activeArtifact.title,
+        markdown: activeArtifact.content,
+        format,
+      })
       if (outcome.kind === "error") throw new Error(outcome.message)
       if (outcome.kind === "saved" && isDesktop) setLastDownloadPath(outcome.location)
       loggers.ui.info("artifacts.action.download-as", { artifactId: activeArtifact.id, format })
@@ -398,26 +451,35 @@ export function useArtifactPanelState() {
       loggers.ui.error("artifacts.action.download-as-failed", error, {
         artifactId: activeArtifact.id,
       })
-      throw error
+      toast.error(t("exportFailed"))
     }
   }
 
-  // Codex-style "open in new tab": pop a runnable html/svg artifact into a full
-  // browser tab via a Blob URL. Static-export safe (no api route). Revoked after
-  // a grace period so the opened tab has time to load.
+  // The Blob document is a scriptless host for an opaque-origin sandbox.
   const handleOpenInNewTab = useCallback(() => {
-    if (!activeArtifact) return
-    const mimeType = activeArtifact.type === "svg" ? "image/svg+xml" : "text/html"
+    if (!activeArtifact || (activeArtifact.type !== "html" && activeArtifact.type !== "svg")) return
+    let document: ReturnType<typeof createArtifactTabDocument> | undefined
+    let url: string | undefined
     try {
-      const blob = new Blob([activeArtifact.content], { type: mimeType })
-      const url = URL.createObjectURL(blob)
+      document = createArtifactTabDocument(
+        activeArtifact,
+        useSettingsStore.getState().settings?.artifacts?.interactiveHtml === true
+      )
+      const blob = new Blob([document.html], { type: "text/html" })
+      url = URL.createObjectURL(blob)
       window.open(url, "_blank", "noopener,noreferrer")
-      setTimeout(() => URL.revokeObjectURL(url), 10000)
+      const openedUrl = url
+      setTimeout(() => {
+        URL.revokeObjectURL(openedUrl)
+        document?.dispose()
+      }, 10000)
       loggers.ui.info("artifacts.action.open-in-new-tab", {
         artifactId: activeArtifact.id,
         type: activeArtifact.type,
       })
     } catch (error) {
+      if (url) URL.revokeObjectURL(url)
+      document?.dispose()
       loggers.ui.error("artifacts.action.open-in-new-tab-failed", error, {
         artifactId: activeArtifact.id,
       })
@@ -492,9 +554,10 @@ export function useArtifactPanelState() {
   const handleRevealInExplorer = async () => {
     if (!isDesktop || !lastDownloadPath) return
     try {
-      const { downloadDir } = await import("@tauri-apps/api/path")
-      const downloadsPath = await downloadDir()
-      const fullPath = `${downloadsPath}${lastDownloadPath}`
+      const { downloadDir, isAbsolute, join } = await import("@tauri-apps/api/path")
+      const fullPath = (await isAbsolute(lastDownloadPath))
+        ? lastDownloadPath
+        : await join(await downloadDir(), lastDownloadPath)
       await revealInExplorer(fullPath)
     } catch (revealError) {
       loggers.ui.warn("artifacts.reveal.failed", {
@@ -515,7 +578,6 @@ export function useArtifactPanelState() {
     }
   }
 
-  const isPreviewable = activeArtifact ? canPreview(activeArtifact.type) : false
   // Only html/svg render directly in a bare browser tab (react needs the
   // sandboxed bundler; other types aren't standalone documents).
   const isOpenableInNewTab = activeArtifact?.type === "html" || activeArtifact?.type === "svg"

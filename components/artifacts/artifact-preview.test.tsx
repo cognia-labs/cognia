@@ -16,6 +16,7 @@ import {
   canPickArtifactElements,
 } from "@/lib/artifacts/element-pick-registry"
 import { PICKER_NODE_ATTRIBUTE } from "@/lib/artifacts/runtime/element-pick"
+import { isInteractiveHtmlGranted } from "@/lib/artifacts/interactive-grant"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -462,6 +463,53 @@ describe("ArtifactPreview", () => {
         type: "html",
         content: `<html><body><button onclick="go()">go</button><script>function go(){}</script></body></html>`,
       })
+
+    it("B01 shares the live grant and releases it when the granting preview closes", () => {
+      mockSettings.artifacts = { interactiveHtml: true }
+      const artifact = scripted()
+      const view = render(<ArtifactPreview artifact={artifact} />)
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(false)
+      fireEvent.click(screen.getByRole("button", { name: "interactiveRunAction" }))
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(true)
+      view.unmount()
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(false)
+    })
+
+    it("B01 keeps the per-artifact grant across live content revisions", () => {
+      mockSettings.artifacts = { interactiveHtml: true }
+      const artifact = scripted()
+      const view = render(<ArtifactPreview artifact={artifact} />)
+      fireEvent.click(screen.getByRole("button", { name: "interactiveRunAction" }))
+      const revised = { ...artifact, content: "<script>changed()</script>" }
+      view.rerender(<ArtifactPreview artifact={revised} />)
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(true)
+      expect(isInteractiveHtmlGranted(revised, true)).toBe(true)
+      expect(view.container.querySelector("iframe")).toHaveAttribute("sandbox", "allow-scripts")
+      const passive = { ...artifact, content: "<p>Static revision</p>" }
+      view.rerender(<ArtifactPreview artifact={passive} />)
+      expect(isInteractiveHtmlGranted(passive, true)).toBe(false)
+      view.rerender(<ArtifactPreview artifact={artifact} />)
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(true)
+      expect(view.container.querySelector("iframe")).toHaveAttribute("sandbox", "allow-scripts")
+    })
+
+    it("B01 revokes the grant when switching artifacts or disabling the setting", () => {
+      mockSettings.artifacts = { interactiveHtml: true }
+      const artifact = scripted()
+      const view = render(<ArtifactPreview artifact={artifact} />)
+      fireEvent.click(screen.getByRole("button", { name: "interactiveRunAction" }))
+      view.rerender(<ArtifactPreview artifact={{ ...artifact, id: "other-html" }} />)
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(false)
+      view.rerender(<ArtifactPreview artifact={artifact} />)
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(false)
+      fireEvent.click(screen.getByRole("button", { name: "interactiveRunAction" }))
+      mockSettings.artifacts = { interactiveHtml: false }
+      view.rerender(<ArtifactPreview artifact={artifact} />)
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(false)
+      mockSettings.artifacts = { interactiveHtml: true }
+      view.rerender(<ArtifactPreview artifact={artifact} />)
+      expect(isInteractiveHtmlGranted(artifact, true)).toBe(false)
+    })
 
     it("offers nothing while the setting is off", () => {
       render(<ArtifactPreview artifact={scripted()} />)

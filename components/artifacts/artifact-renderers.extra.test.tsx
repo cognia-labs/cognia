@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render } from "@testing-library/react"
+import { render, waitFor } from "@testing-library/react"
 
 jest.mock("@/components/chat/renderers/code-block", () => ({
   CodeBlock: () => null,
@@ -37,7 +37,7 @@ const dummy: Artifact = {
 }
 
 describe("PluginArtifactRendererHost", () => {
-  it("mounts the renderer and reports 'ready'", () => {
+  it("mounts the renderer and reports 'ready'", async () => {
     const onState = jest.fn()
     const mount = jest.fn(() => ({ dispose: jest.fn() }))
     const r: PluginArtifactRenderer = {
@@ -49,7 +49,8 @@ describe("PluginArtifactRendererHost", () => {
       <PluginArtifactRendererHost artifact={dummy} renderer={r} onRuntimeStateChange={onState} />
     )
     expect(mount).toHaveBeenCalledWith(dummy, expect.any(HTMLElement))
-    expect(onState).toHaveBeenCalledWith("ready")
+    // Readiness is reported after the handle's (optional) `ready` settles.
+    await waitFor(() => expect(onState).toHaveBeenCalledWith("ready"))
   })
 
   it("captures errors thrown by renderer.mount and surfaces an alert", async () => {
@@ -69,7 +70,7 @@ describe("PluginArtifactRendererHost", () => {
         onRuntimeStateChange={onState}
       />
     )
-    expect(onState).toHaveBeenCalledWith("error", "kaboom")
+    await waitFor(() => expect(onState).toHaveBeenCalledWith("error", "kaboom"))
     // setRenderError is queued via queueMicrotask; wait for the fallback to mount.
     await findByTestId("fallback")
     expect(container.textContent).toMatch(/kaboom/)

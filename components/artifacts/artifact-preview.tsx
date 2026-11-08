@@ -13,7 +13,15 @@
  * as a same-origin bundle plus a `blob:` script.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, Component } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  Component,
+} from "react"
 import { useTranslations } from "next-intl"
 import { AlertCircle, RefreshCw, Loader2, PlayIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -30,7 +38,13 @@ import {
   escapeHtml,
 } from "@/lib/artifacts"
 import type { ArtifactFrameRuntime } from "@/lib/artifacts/preview-utils"
-import { compileInteractiveHtml, hasInteractiveContent } from "@/lib/artifacts/interactive-html"
+import { compileInteractiveHtml } from "@/lib/artifacts/interactive-html"
+import {
+  grantInteractiveHtml,
+  isInteractiveHtmlGranted,
+  offersInteractiveHtml,
+  subscribeInteractiveGrants,
+} from "@/lib/artifacts/interactive-grant"
 import { useSettingsStore } from "@/stores/settings"
 import { useThemeCssVars } from "@/lib/appearance/use-theme-css-vars"
 import { loggers } from "@cognia/logging"
@@ -257,14 +271,22 @@ export function ArtifactPreview({
   const interactiveHtmlEnabled = useSettingsStore(
     (state) => state.settings?.artifacts?.interactiveHtml === true
   )
-  // Authorisation is PER ARTIFACT: the grant is the artifact's own id, so
-  // moving the panel to a different artifact silently un-grants it without any
-  // reset effect. The setting says "you may offer this"; the button says "run
-  // this one".
-  const [interactiveArtifactId, setInteractiveArtifactId] = useState<string | null>(null)
-  const offersInteractive =
-    artifact.type === "html" && interactiveHtmlEnabled && hasInteractiveContent(artifact.content)
-  const interactiveActive = offersInteractive && interactiveArtifactId === artifact.id
+  // Only the granting preview owns this per-artifact permission. Unmount,
+  // artifact switch, or disabling the setting releases it for every consumer.
+  const releaseInteractiveGrant = useRef<(() => void) | null>(null)
+  useEffect(
+    () => () => {
+      releaseInteractiveGrant.current?.()
+      releaseInteractiveGrant.current = null
+    },
+    [artifact.id, interactiveHtmlEnabled]
+  )
+  const offersInteractive = offersInteractiveHtml(artifact, interactiveHtmlEnabled)
+  const interactiveActive = useSyncExternalStore(
+    subscribeInteractiveGrants,
+    () => isInteractiveHtmlGranted(artifact, interactiveHtmlEnabled),
+    () => false
+  )
   const frameMode: "html" | "svg" | "react" | "interactive" | "text" =
     artifact.type === "react"
       ? "react"
@@ -993,7 +1015,10 @@ export function ArtifactPreview({
               variant="outline"
               className="shrink-0"
               data-testid="artifact-interactive-run"
-              onClick={() => setInteractiveArtifactId(artifact.id)}
+              onClick={() => {
+                releaseInteractiveGrant.current?.()
+                releaseInteractiveGrant.current = grantInteractiveHtml(artifact)
+              }}
             >
               <PlayIcon className="mr-1 size-3" />
               {t("interactiveRunAction")}

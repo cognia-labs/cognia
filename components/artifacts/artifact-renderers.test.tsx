@@ -105,6 +105,130 @@ describe("resolveArtifactRenderPlan", () => {
 })
 
 describe("ArtifactRenderer", () => {
+  it.each(["resolve", "reject"])("DG05 ignores %s from a replaced handle", async (outcome) => {
+    let resolveReady!: () => void
+    let rejectReady!: (error: Error) => void
+    const firstReady = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
+    })
+    let resolveNext!: () => void
+    const nextReady = new Promise<void>((resolve) => {
+      resolveNext = resolve
+    })
+    const callback = jest.fn()
+    const dispose = jest.fn()
+    const renderer: PluginArtifactRenderer = {
+      id: "replace",
+      kind: "replace",
+      mount: jest
+        .fn()
+        .mockReturnValueOnce({ dispose, ready: () => firstReady })
+        .mockReturnValueOnce({ dispose: jest.fn(), ready: () => nextReady }),
+    }
+    const artifact = dummy()
+    const view = render(
+      <PluginArtifactRendererHost
+        artifact={artifact}
+        renderer={renderer}
+        onRuntimeStateChange={callback}
+      />
+    )
+    await flushRendererState()
+    view.rerender(
+      <PluginArtifactRendererHost
+        artifact={{ ...artifact, content: "revision" }}
+        renderer={renderer}
+        onRuntimeStateChange={callback}
+      />
+    )
+    await flushRendererState()
+    callback.mockClear()
+    await act(async () => {
+      if (outcome === "resolve") resolveReady()
+      else rejectReady(new Error("stale paint"))
+    })
+    expect(callback).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[aria-busy="true"]')).not.toBeNull()
+    expect(dispose).toHaveBeenCalledTimes(1)
+    await act(async () => resolveNext())
+    expect(callback).toHaveBeenCalledWith("ready")
+  })
+
+  it("DG05 stays loading until the plugin's first complete paint", async () => {
+    let resolveReady!: () => void
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve
+    })
+    const callback = jest.fn()
+    const renderer: PluginArtifactRenderer = {
+      id: "async",
+      kind: "async",
+      mount: () => ({ dispose: jest.fn(), ready: () => ready }),
+    }
+    const view = render(
+      <PluginArtifactRendererHost
+        artifact={dummy()}
+        renderer={renderer}
+        onRuntimeStateChange={callback}
+      />
+    )
+    await flushRendererState()
+    expect(callback).not.toHaveBeenCalledWith("ready")
+    expect(view.container.querySelector('[aria-busy="true"]')).not.toBeNull()
+    await act(async () => resolveReady())
+    expect(callback).toHaveBeenCalledWith("ready")
+    expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull()
+  })
+
+  it("DG05 reports a rejected readiness promise as a preview error", async () => {
+    const callback = jest.fn()
+    const renderer: PluginArtifactRenderer = {
+      id: "async-error",
+      kind: "async-error",
+      mount: () => ({ dispose: jest.fn(), ready: () => Promise.reject(new Error("paint failed")) }),
+    }
+    render(
+      <PluginArtifactRendererHost
+        artifact={dummy()}
+        renderer={renderer}
+        onRuntimeStateChange={callback}
+      />
+    )
+    expect(await screen.findByRole("alert")).toHaveTextContent("paint failed")
+    expect(callback).toHaveBeenCalledWith("error", "paint failed")
+    expect(callback).not.toHaveBeenCalledWith("ready")
+  })
+
+  it.each(["resolve", "reject"])("DG05 ignores %s from an unmounted handle", async (outcome) => {
+    let resolveReady!: () => void
+    let rejectReady!: (error: Error) => void
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
+    })
+    const callback = jest.fn()
+    const renderer: PluginArtifactRenderer = {
+      id: "old",
+      kind: "old",
+      mount: () => ({ dispose: jest.fn(), ready: () => ready }),
+    }
+    const view = render(
+      <PluginArtifactRendererHost
+        artifact={dummy()}
+        renderer={renderer}
+        onRuntimeStateChange={callback}
+      />
+    )
+    view.unmount()
+    callback.mockClear()
+    await act(async () => {
+      if (outcome === "resolve") resolveReady()
+      else rejectReady(new Error("stale"))
+    })
+    expect(callback).not.toHaveBeenCalled()
+  })
+
   it("dispatches to MermaidBlock for mermaid type", () => {
     render(<ArtifactRenderer type="mermaid" content="graph TD" />)
     expect(screen.getByTestId("mermaid")).toBeInTheDocument()

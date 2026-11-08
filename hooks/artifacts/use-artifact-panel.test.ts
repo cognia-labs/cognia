@@ -2,7 +2,20 @@
  * @jest-environment jsdom
  */
 
-import { renderHook, act } from "@testing-library/react"
+import { renderHook, act, waitFor } from "@testing-library/react"
+import { useEffect } from "react"
+
+jest.mock("sonner", () => ({ toast: { error: jest.fn() } }))
+
+jest.mock("@/lib/artifacts/export/raster", () => ({
+  ...jest.requireActual("@/lib/artifacts/export/raster"),
+  renderArtifactToPngBlob: jest.fn(async () => new Blob(["png"], { type: "image/png" })),
+  captureArtifactToPngBlob: jest.fn(),
+}))
+jest.mock("@/lib/artifacts/export/pdf", () => ({
+  ...jest.requireActual("@/lib/artifacts/export/pdf"),
+  renderArtifactToPdfBlob: jest.fn(async () => new Blob(["pdf"], { type: "application/pdf" })),
+}))
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -52,9 +65,27 @@ import { useArtifactPanelState } from "./use-artifact-panel"
 import { registerArtifactRenderer } from "@/lib/artifacts/renderer-registry"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useChatStore } from "@/stores/chat"
+import {
+  renderArtifactToPngBlob,
+  captureArtifactToPngBlob,
+  ArtifactPreviewNotMountedError,
+} from "@/lib/artifacts/export/raster"
+import { renderArtifactToPdfBlob } from "@/lib/artifacts/export/pdf"
+import {
+  registerArtifactPreviewNode,
+  getArtifactPreviewNode,
+} from "@/lib/artifacts/preview-registry"
+import { toast } from "sonner"
+import { captureArtifactImage } from "@/lib/artifacts/capture"
+import { isArtifactPreviewRequested } from "@/lib/artifacts/preview-view-request"
+import {
+  registerArtifactFrameCapturer,
+  hasArtifactFrameCapturer,
+} from "@/lib/artifacts/frame-capture-registry"
 
 beforeEach(() => {
   localStorage.clear()
+  jest.mocked(toast.error).mockClear()
   // The active artifact is bucketed per conversation, so the panel only
   // resolves one once a conversation is on screen.
   useChatStore.setState({ activeSessionId: "s" })
@@ -91,6 +122,133 @@ function makeArtifact() {
 }
 
 describe("useArtifactPanelState", () => {
+  it("B18 agent capture reveals a closed Code panel and mounts the React capturer", async () => {
+    const a = makeArtifact()
+    useArtifactStore.getState().updateArtifact(a.id, { type: "react" })
+    useArtifactStore.setState({ panelOpen: false })
+    const artifact = useArtifactStore.getState().artifacts[a.id]
+    jest.mocked(captureArtifactToPngBlob).mockImplementation(async () => {
+      if (!hasArtifactFrameCapturer(a.id)) throw new ArtifactPreviewNotMountedError(a.id)
+      return new Blob(["png"], { type: "image/png" })
+    })
+    const { result } = renderHook(() => {
+      const panel = useArtifactPanelState()
+      useEffect(() => {
+        if (!panel.panelOpen || panel.viewMode !== "preview") return
+        return registerArtifactFrameCapturer(a.id, async () => ({
+          html: "<p>Painted</p>",
+          width: 100,
+          height: 100,
+        }))
+      }, [panel.panelOpen, panel.viewMode])
+      return panel
+    })
+    expect(result.current.viewMode).toBe("code")
+    let capturing!: ReturnType<typeof captureArtifactImage>
+    act(() => {
+      capturing = captureArtifactImage(artifact)
+    })
+    await waitFor(() => expect(result.current.viewMode).toBe("preview"))
+    await act(async () => {
+      await expect(capturing).resolves.toMatchObject({ data: "cG5n" })
+    })
+    expect(result.current.panelOpen).toBe(true)
+    expect(captureArtifactToPngBlob).toHaveBeenCalledTimes(2)
+    expect(isArtifactPreviewRequested(a.id)).toBe(false)
+  })
+
+  it("B18 reports a mount timeout and releases its pending Preview request", async () => {
+    jest.useFakeTimers()
+    const a = makeArtifact()
+    const { result } = renderHook(() => useArtifactPanelState())
+    let exporting!: Promise<void>
+    act(() => {
+      exporting = result.current.handleExportAs("png")
+    })
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(5_000)
+      await exporting
+    })
+    expect(toast.error).toHaveBeenCalledWith("exportFailed")
+    expect(isArtifactPreviewRequested(a.id)).toBe(false)
+    jest.useRealTimers()
+  })
+
+  it.each(["png", "pdf"] as const)("B18 mounts Preview before exporting %s", async (format) => {
+    const a = makeArtifact()
+    const render = format === "png" ? renderArtifactToPngBlob : renderArtifactToPdfBlob
+    const mountedAtExport: boolean[] = []
+    jest.mocked(render).mockImplementationOnce(async () => {
+      mountedAtExport.push(getArtifactPreviewNode(a.id) !== null)
+      return new Blob([format])
+    })
+    const { result } = renderHook(() => {
+      const panel = useArtifactPanelState()
+      useEffect(() => {
+        if (panel.viewMode !== "preview") return
+        const node = document.createElement("div")
+        let unregister: (() => void) | undefined
+        const mounting = setTimeout(() => {
+          document.body.appendChild(node)
+          unregister = registerArtifactPreviewNode(a.id, node)
+        }, 20)
+        return () => {
+          clearTimeout(mounting)
+          unregister?.()
+          node.remove()
+        }
+      }, [panel.viewMode])
+      return panel
+    })
+    let exporting!: Promise<void>
+    act(() => {
+      exporting = result.current.handleExportAs(format)
+    })
+    await act(async () => {
+      await exporting
+    })
+    expect(result.current.viewMode).toBe("preview")
+    expect(mountedAtExport).toEqual([true])
+    expect(render).toHaveBeenCalledWith(expect.objectContaining({ id: a.id }))
+  })
+
+  it("B18 surfaces an actionable localized export failure without an unhandled rejection", async () => {
+    makeArtifact()
+    saveExportMock.mockResolvedValueOnce({ kind: "error", message: "disk full" })
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await expect(result.current.handleExportAs("html")).resolves.toBeUndefined()
+    })
+    expect(toast.error).toHaveBeenCalledWith("exportFailed")
+  })
+
+  it.each(["code", "document", "jupyter"] as const)(
+    "B18 exports %s PDF without requesting or mounting Preview",
+    async (type) => {
+      const artifact = makeArtifact()
+      useArtifactStore.getState().updateArtifact(artifact.id, { type })
+      const { result } = renderHook(() => useArtifactPanelState())
+      const previewRequest = jest.fn()
+      window.addEventListener("cognia:artifact-preview:request", previewRequest)
+      jest.mocked(renderArtifactToPdfBlob).mockClear()
+      try {
+        expect(result.current.exportFormats).toContain("pdf")
+        expect(result.current.exportFormats).not.toContain("png")
+        expect(getArtifactPreviewNode(artifact.id)).toBeNull()
+        await act(async () => {
+          await result.current.handleExportAs("pdf")
+          await result.current.handleDownloadAs("pdf")
+        })
+        expect(result.current.viewMode).toBe("code")
+        expect(previewRequest).not.toHaveBeenCalled()
+        expect(renderArtifactToPdfBlob).toHaveBeenCalledTimes(2)
+        expect(toast.error).not.toHaveBeenCalled()
+      } finally {
+        window.removeEventListener("cognia:artifact-preview:request", previewRequest)
+      }
+    }
+  )
+
   it("derives isPreviewable / panelMode for an HTML artifact", () => {
     makeArtifact()
     const { result } = renderHook(() => useArtifactPanelState())

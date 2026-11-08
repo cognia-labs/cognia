@@ -120,6 +120,7 @@ export function PluginArtifactRendererHost({
   const latestArtifactRef = useRef(artifact)
   const translationsRef = useRef(t)
   const runtimeStateCallbackRef = useRef(onRuntimeStateChange)
+  const renderGenerationRef = useRef(0)
   const renderContextKey = `${renderer.id}:${artifact.id}`
   const [renderState, setRenderState] = useState<{
     key: string
@@ -133,20 +134,48 @@ export function PluginArtifactRendererHost({
     runtimeStateCallbackRef.current = onRuntimeStateChange
   }, [artifact, onRuntimeStateChange, t])
 
-  const reportReady = useCallback(() => {
-    queueMicrotask(() => {
-      setRenderState({ key: renderContextKey, status: "ready" })
-    })
-    runtimeStateCallbackRef.current?.("ready")
-  }, [renderContextKey])
+  const reportReady = useCallback(
+    (generation: number) => {
+      queueMicrotask(() => {
+        if (renderGenerationRef.current !== generation) return
+        setRenderState({ key: renderContextKey, status: "ready" })
+        runtimeStateCallbackRef.current?.("ready")
+      })
+    },
+    [renderContextKey]
+  )
 
   const reportError = useCallback(
-    (error: unknown) => {
+    (error: unknown, generation: number) => {
       const message = error instanceof Error ? error.message : translationsRef.current("failed")
       queueMicrotask(() => {
+        if (renderGenerationRef.current !== generation) return
         setRenderState({ key: renderContextKey, status: "error", message })
+        runtimeStateCallbackRef.current?.("error", message)
       })
-      runtimeStateCallbackRef.current?.("error", message)
+    },
+    [renderContextKey]
+  )
+
+  const awaitReady = useCallback(
+    async (handle: ReturnType<PluginArtifactRenderer["mount"]>, generation: number) => {
+      try {
+        await handle.ready?.()
+        if (handleRef.current === handle) reportReady(generation)
+      } catch (error) {
+        if (handleRef.current === handle) reportError(error, generation)
+      }
+    },
+    [reportError, reportReady]
+  )
+
+  const reportLoading = useCallback(
+    (generation: number) => {
+      queueMicrotask(() => {
+        if (renderGenerationRef.current !== generation) return
+        setRenderState({ key: renderContextKey, status: "loading" })
+        runtimeStateCallbackRef.current?.("loading")
+      })
     },
     [renderContextKey]
   )
@@ -157,6 +186,8 @@ export function PluginArtifactRendererHost({
       return
     }
 
+    const generation = ++renderGenerationRef.current
+    reportLoading(generation)
     try {
       container.replaceChildren()
       const artifactToMount = latestArtifactRef.current
@@ -166,12 +197,13 @@ export function PluginArtifactRendererHost({
       }
       handleRef.current = handle
       mountedArtifactRef.current = artifactToMount
-      reportReady()
+      void awaitReady(handle, generation)
     } catch (error) {
-      reportError(error)
+      reportError(error, generation)
     }
 
     return () => {
+      renderGenerationRef.current += 1
       try {
         handleRef.current?.dispose()
       } catch (error) {
@@ -184,13 +216,15 @@ export function PluginArtifactRendererHost({
       mountedArtifactRef.current = null
       container.replaceChildren()
     }
-  }, [renderContextKey, renderer, reportError, reportReady])
+  }, [renderContextKey, renderer, reportError, reportLoading, awaitReady])
 
   useEffect(() => {
     if (mountedArtifactRef.current === artifact) return
     const container = containerRef.current
     const currentHandle = handleRef.current
     if (!container || !currentHandle) return
+    const generation = ++renderGenerationRef.current
+    reportLoading(generation)
     try {
       if (currentHandle.update) {
         currentHandle.update(artifact)
@@ -205,11 +239,11 @@ export function PluginArtifactRendererHost({
         handleRef.current = nextHandle
       }
       mountedArtifactRef.current = artifact
-      reportReady()
+      void awaitReady(handleRef.current!, generation)
     } catch (error) {
-      reportError(error)
+      reportError(error, generation)
     }
-  }, [artifact, renderer, reportError, reportReady])
+  }, [artifact, renderer, reportError, reportLoading, awaitReady])
 
   const activeState =
     renderState.key === renderContextKey

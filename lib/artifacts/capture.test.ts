@@ -35,6 +35,8 @@ it("reveals an artifact whose pixels only exist in the dock, waits, and captures
     .mockRejectedValueOnce(new ArtifactPreviewNotMountedError("c1"))
     .mockResolvedValueOnce(png)
   const reveal = jest.fn()
+  const previewRequest = jest.fn()
+  window.addEventListener("cognia:artifact-preview:request", previewRequest)
   let checks = 0
   const image = await captureArtifactImage(
     artifact,
@@ -42,6 +44,10 @@ it("reveals an artifact whose pixels only exist in the dock, waits, and captures
     { reveal, isPreviewMounted: () => ++checks > 1, waitMs: 1_000 }
   )
   expect(reveal).toHaveBeenCalledWith("c1")
+  expect(previewRequest).toHaveBeenCalledWith(
+    expect.objectContaining({ detail: { artifactId: "c1" } })
+  )
+  window.removeEventListener("cognia:artifact-preview:request", previewRequest)
   expect(captureMock).toHaveBeenCalledTimes(2)
   expect(image.data).toBe("cG5n")
 })

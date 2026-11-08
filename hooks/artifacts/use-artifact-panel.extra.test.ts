@@ -4,6 +4,11 @@
 
 import { renderHook, act } from "@testing-library/react"
 
+jest.mock("next/navigation", () => {
+  const push = jest.fn()
+  return { useRouter: () => ({ push }), usePathname: jest.fn(() => "/"), __push: push }
+})
+
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
@@ -42,6 +47,8 @@ jest.mock("@/lib/files/save-export", () => ({
 
 jest.mock("@tauri-apps/api/path", () => ({
   downloadDir: jest.fn().mockResolvedValue("/Users/me/Downloads/"),
+  isAbsolute: jest.fn(async (path: string) => /^(?:\/|\\|[A-Za-z]:\\)/.test(path)),
+  join: jest.fn(async (...parts: string[]) => parts.join("/").replace(/\/{2,}/g, "/")),
 }))
 
 jest.mock("@/lib/files/workspace-backend", () => ({
@@ -58,6 +65,17 @@ import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layo
 import { useChatStore } from "@/stores/chat"
 import { useProjectStore } from "@/stores/project/project-store"
 import { loggers } from "@cognia/logging"
+import { useUIStore } from "@/stores/ui"
+import { useSettingsStore } from "@/stores/settings"
+import { usePathname } from "next/navigation"
+import { requestArtifactPreview } from "@/lib/artifacts/preview-view-request"
+import type { AppSettings } from "@cognia/agent-config-types"
+
+function setDefaultPanelMode(defaultPanelMode: "code" | "preview") {
+  useSettingsStore.setState({
+    settings: { id: "singleton", artifacts: { defaultPanelMode } } as AppSettings,
+  })
+}
 
 /** A chat bound to a project rooted at /repo, the shape saveToProject needs. */
 function bindSessionToProject() {
@@ -73,6 +91,8 @@ beforeEach(() => {
   openPath.mockClear()
   saveExport.mockClear().mockResolvedValue({ kind: "saved", location: "Page.html" })
   setIsTauriValue(true)
+  useUIStore.getState().setSelectedGuild({ kind: "dm" })
+  setDefaultPanelMode("code")
   useArtifactStore.setState({
     artifacts: {},
     activeArtifactIdBySession: {},
@@ -250,6 +270,128 @@ describe("saveToProject", () => {
 })
 
 describe("useArtifactPanelState — extra coverage", () => {
+  it("B18 consumes a capture request made before the panel mounts", () => {
+    bindSessionToProject()
+    const artifact = makeArtifact()
+    const release = requestArtifactPreview(artifact.id)
+    const { result } = renderHook(() => useArtifactPanelState())
+    expect(result.current.viewMode).toBe("preview")
+    release()
+  })
+
+  it("B18 targets only the requested artifact", () => {
+    bindSessionToProject()
+    const artifact = makeArtifact()
+    const { result } = renderHook(() => useArtifactPanelState())
+    const releaseOther = requestArtifactPreview("other")
+    expect(result.current.viewMode).toBe("code")
+    let release!: () => void
+    act(() => {
+      release = requestArtifactPreview(artifact.id)
+    })
+    expect(result.current.viewMode).toBe("preview")
+    release()
+    releaseOther()
+  })
+
+  it("B18 keeps a pending review from taking Preview away from a capture", () => {
+    bindSessionToProject()
+    const artifact = makeArtifact()
+    useArtifactStore.getState().proposeArtifactUpdate(artifact.id, "<p>proposed</p>")
+    const release = requestArtifactPreview(artifact.id)
+    const { result } = renderHook(() => useArtifactPanelState())
+    expect(result.current.viewMode).toBe("preview")
+    release()
+  })
+
+  it("DG01 applies the current default when an already-mounted panel first opens", () => {
+    bindSessionToProject()
+    makeArtifact()
+    useArtifactStore.setState({ panelOpen: false })
+    const { result } = renderHook(() => useArtifactPanelState())
+    act(() => setDefaultPanelMode("preview"))
+    expect(result.current.viewMode).toBe("code")
+    act(() => useArtifactStore.getState().openPanel("artifact"))
+    expect(result.current.viewMode).toBe("preview")
+  })
+
+  it("B01 opens a scriptless outer document containing only an opaque sandbox", async () => {
+    const artifact = makeArtifact()
+    useArtifactStore.getState().updateArtifact(artifact.id, {
+      content: '<p id="artifact-content">private</p><script>localStorage.clear()</script>',
+    })
+    const createObjectURL = jest.fn((_blob: Blob) => "blob:safe-tab")
+    Object.assign(URL, { createObjectURL, revokeObjectURL: jest.fn() })
+    window.open = jest.fn()
+    const { result } = renderHook(() => useArtifactPanelState())
+    act(() => result.current.handleOpenInNewTab())
+    const markup = await new Promise<string>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.readAsText(createObjectURL.mock.calls[0][0])
+    })
+    const doc = new DOMParser().parseFromString(markup, "text/html")
+    expect(doc.querySelector("script, #artifact-content")).toBeNull()
+    expect(doc.querySelector('meta[http-equiv="Content-Security-Policy"]')).not.toBeNull()
+    const frame = doc.querySelector("iframe")!
+    expect(frame).not.toBeNull()
+    expect(frame.getAttribute("sandbox")).toBe("")
+    expect(frame.srcdoc).toContain('id="artifact-content"')
+  })
+
+  it.each(["/elsewhere/Page.html", "C:\\Exports\\Page.html", "\\\\server\\share\\Page.html"])(
+    "B20 reveals an absolute save-dialog path unchanged: %s",
+    async (location) => {
+      bindSessionToProject()
+      makeArtifact()
+      saveExport.mockResolvedValueOnce({ kind: "saved", platform: "tauri", location })
+      const { result } = renderHook(() => useArtifactPanelState())
+      await act(async () => {
+        await result.current.handleDownload()
+      })
+      await act(async () => {
+        await result.current.handleRevealInExplorer()
+      })
+      expect(revealInExplorer).toHaveBeenCalledWith(location)
+    }
+  )
+
+  it("B20 joins relative filenames with the downloads directory", async () => {
+    bindSessionToProject()
+    makeArtifact()
+    const { result } = renderHook(() => useArtifactPanelState())
+    await act(async () => {
+      await result.current.handleDownload()
+    })
+    await act(async () => {
+      await result.current.handleRevealInExplorer()
+    })
+    expect(revealInExplorer).toHaveBeenCalledWith("/Users/me/Downloads/Page.html")
+  })
+
+  it("DG01 uses the default on first open and artifact switches, falling back for code", () => {
+    bindSessionToProject()
+    setDefaultPanelMode("preview")
+    makeArtifact()
+    const { result } = renderHook(() => useArtifactPanelState())
+    expect(result.current.viewMode).toBe("preview")
+    act(() => result.current.setViewMode("code"))
+    act(() => makeArtifact())
+    expect(result.current.viewMode).toBe("preview")
+    act(() =>
+      useArtifactStore.getState().createArtifact({
+        sessionId: "s",
+        messageId: "m",
+        type: "code",
+        title: "Code",
+        content: "x",
+      })
+    )
+    expect(result.current.viewMode).toBe("code")
+    expect(result.current.exportFormats).toContain("pdf")
+    expect(result.current.exportFormats).not.toContain("png")
+  })
+
   it("Esc keyboard shortcut closes the panel", () => {
     makeArtifact()
     const { result } = renderHook(() => useArtifactPanelState())
@@ -406,6 +548,7 @@ describe("useArtifactPanelState — extra coverage", () => {
 
       const docId = useArtifactStore.getState().activeCanvasId
       expect(docId).toBeTruthy()
+      expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
       // Both directions of the lineage, so either side can find the other.
       expect(useArtifactStore.getState().canvasDocuments[docId!]?.sourceArtifactId).toBe(
         artifact.id
@@ -422,12 +565,35 @@ describe("useArtifactPanelState — extra coverage", () => {
       const firstDocId = useArtifactStore.getState().activeCanvasId
 
       act(() => useArtifactStore.getState().setActiveCanvas(null))
+      act(() => useUIStore.getState().setSelectedGuild({ kind: "dm" }))
       act(() => result.current.handleOpenInCanvas())
 
       expect(useArtifactStore.getState().activeCanvasId).toBe(firstDocId)
+      expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
       expect(Object.keys(useArtifactStore.getState().canvasDocuments)).toHaveLength(1)
       expect(useArtifactStore.getState().panelView).toBe("canvas")
     })
+
+    it.each([true, false])(
+      "B19 routes back home on native=%s for new and reused documents",
+      (native) => {
+        setIsTauriValue(native)
+        jest.mocked(usePathname).mockReturnValueOnce("/artifacts")
+        const push = jest.requireMock("next/navigation").__push as jest.Mock
+        push.mockClear()
+        const { result } = openArtifactInCanvas()
+        expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
+        expect(push).toHaveBeenCalledWith("/")
+        expect(result.current.activeArtifact).not.toBeNull()
+        jest.mocked(usePathname).mockReturnValue("/artifacts")
+        act(() => useUIStore.getState().setSelectedGuild({ kind: "dm" }))
+        act(() => useArtifactStore.getState().openPanel("artifact"))
+        act(() => result.current.handleOpenInCanvas())
+        expect(useUIStore.getState().selectedGuild.kind).toBe("canvas")
+        expect(push).toHaveBeenCalledTimes(2)
+        jest.mocked(usePathname).mockReturnValue("/")
+      }
+    )
 
     it("creates a fresh document when the linked one was deleted", () => {
       const { result } = openArtifactInCanvas()

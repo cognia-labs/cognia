@@ -21,6 +21,7 @@
 import { getArtifactPreviewNode } from "@/lib/artifacts/preview-registry"
 import { hasArtifactFrameCapturer } from "@/lib/artifacts/frame-capture-registry"
 import { revealArtifactInWorkspace } from "@/lib/artifacts/reveal"
+import { requestArtifactPreview } from "./preview-view-request"
 import type { CaptureOptions } from "@/lib/artifacts/export/raster"
 import type { Artifact } from "@/types"
 
@@ -53,6 +54,23 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<boolean
   return true
 }
 
+/** Switch the inner panel to Preview and reuse the capture registry's mount wait. */
+export async function waitForArtifactPreview(
+  artifactId: string,
+  env: Pick<CaptureEnvironment, "isPreviewMounted" | "waitMs"> = {}
+): Promise<void> {
+  const release = requestArtifactPreview(artifactId)
+  try {
+    const mounted = env.isPreviewMounted ?? previewMounted
+    if (!(await waitFor(() => mounted(artifactId), env.waitMs ?? PREVIEW_MOUNT_WAIT_MS))) {
+      const { ArtifactPreviewNotMountedError } = await import("@/lib/artifacts/export/raster")
+      throw new ArtifactPreviewNotMountedError(artifactId)
+    }
+  } finally {
+    release()
+  }
+}
+
 /**
  * Render `artifact` to a PNG. Throws the raster module's typed errors
  * (`ArtifactPreviewNotMountedError` when even a revealed preview never
@@ -72,9 +90,7 @@ export async function captureArtifactImage(
   } catch (error) {
     if (!(error instanceof ArtifactPreviewNotMountedError)) throw error
     ;(env.reveal ?? revealArtifactInWorkspace)(artifact.id)
-    const mounted = env.isPreviewMounted ?? previewMounted
-    if (!(await waitFor(() => mounted(artifact.id), env.waitMs ?? PREVIEW_MOUNT_WAIT_MS)))
-      throw error
+    await waitForArtifactPreview(artifact.id, env)
     blob = await captureArtifactToPngBlob(artifact, options)
   }
   const dataUrl = await readAsDataUrl(blob)
