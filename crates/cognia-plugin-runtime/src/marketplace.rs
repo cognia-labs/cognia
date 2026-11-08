@@ -164,6 +164,28 @@ pub(crate) fn stage_tree_install(
 }
 
 /// Local directory/ZIP installs use the same journal and startup recovery as
+/// marketplace updates, but leave promotion to the caller after admission.
+pub fn stage_local_tree_for_state(
+    state: &PluginRuntimeState,
+    source: &Path,
+    manifest: &serde_json::Value,
+) -> Result<StagedDownloadPayload> {
+    let transaction_id = stage_tree_install(&state.plugin_state_dir, source, manifest)?;
+    let plugin_id = manifest["id"].as_str().unwrap(); // validated by stage_tree_install
+    let staged_path = update_transaction_dir(state, plugin_id, &transaction_id)?.join("package");
+    #[cfg(test)]
+    tests::local_install_checkpoint("staged");
+    Ok(StagedDownloadPayload {
+        transaction_id,
+        plugin_id: plugin_id.into(),
+        version: manifest["version"].as_str().unwrap_or_default().into(),
+        staged_path: staged_path.to_string_lossy().into_owned(),
+        manifest: manifest.clone(),
+        size_bytes: 0,
+    })
+}
+
+/// Local directory/ZIP installs use the same journal and startup recovery as
 /// marketplace updates. The caller populates and validates its scratch tree
 /// before this function can mutate an existing installation.
 pub fn install_local_tree_for_state(
@@ -171,7 +193,7 @@ pub fn install_local_tree_for_state(
     source: &Path,
     manifest: &serde_json::Value,
 ) -> Result<DownloadPayload> {
-    let transaction_id = stage_tree_install(&state.plugin_state_dir, source, manifest)?;
+    let transaction_id = stage_local_tree_for_state(state, source, manifest)?.transaction_id;
     let plugin_id = manifest["id"].as_str().unwrap(); // validated by stage_tree_install
     let result = (|| {
         let installed = commit_staged_update_for_state(state, plugin_id, &transaction_id)?;
@@ -1188,7 +1210,7 @@ mod tests {
 
     #[test]
     fn local_install_recovers_after_process_termination_without_changing_user_state() {
-        for phase in ["moved-out", "promoted", "finalized"] {
+        for phase in ["staged", "moved-out", "promoted", "finalized"] {
             let root = TempDir::new().unwrap();
             let state = PluginRuntimeState::new(root.path().join("installed"));
             let old = stage_test_tree(&state, b"old");
@@ -1277,6 +1299,38 @@ mod tests {
             b"new"
         );
         discard_staged_update_for_state(&state, "demo.market", &new).unwrap();
+        assert_eq!(
+            fs::read(state.plugin_dir("demo.market").join("index.js")).unwrap(),
+            b"old"
+        );
+    }
+
+    #[test]
+    fn local_staging_and_refused_admission_preserve_the_live_tree() {
+        let root = TempDir::new().unwrap();
+        let state = make_state(&root);
+        let old = stage_test_tree(&state, b"old");
+        commit_staged_update_for_state(&state, "demo.market", &old).unwrap();
+        finalize_staged_update_for_state(&state, "demo.market", &old).unwrap();
+        let source = TempDir::new().unwrap();
+        let manifest = serde_json::json!({"id":"demo.market","version":"2.0.0","type":"frontend","main":"index.js"});
+        fs::write(source.path().join("plugin.json"), manifest.to_string()).unwrap();
+        fs::write(source.path().join("index.js"), b"candidate").unwrap();
+        let staged = stage_local_tree_for_state(&state, source.path(), &manifest).unwrap();
+        let transaction =
+            update_transaction_dir(&state, "demo.market", &staged.transaction_id).unwrap();
+        assert_eq!(
+            fs::read(state.plugin_dir("demo.market").join("index.js")).unwrap(),
+            b"old"
+        );
+        assert_eq!(
+            fs::read(Path::new(&staged.staged_path).join("index.js")).unwrap(),
+            b"candidate"
+        );
+        assert!(!transaction.join("previous-package").exists());
+        assert!(!transaction.join("committed").exists());
+        discard_staged_update_for_state(&state, "demo.market", &staged.transaction_id).unwrap();
+        assert!(!transaction.exists());
         assert_eq!(
             fs::read(state.plugin_dir("demo.market").join("index.js")).unwrap(),
             b"old"

@@ -29,6 +29,10 @@ use tauri::Manager;
 
 use super::SharedState;
 use crate::plugin_api::{PluginRecord, PluginRuntimeSnapshot, PluginRuntimeState};
+use cognia_plugin_runtime::marketplace::{
+    commit_staged_update_for_state, discard_staged_update_for_state,
+    finalize_staged_update_for_state, stage_local_tree_for_state, StagedDownloadPayload,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire types
@@ -600,6 +604,12 @@ pub async fn uninstall(
 }
 
 pub async fn reload(State(state): State<SharedState>, Json(req): Json<ReloadRequest>) -> Response {
+    // Each renderer phase has its own bounded dispatch. Do not cancel a staged
+    // transaction from outside: cancellation after commit loses the knowledge
+    // needed to distinguish safe rollback from an uncertain live runtime.
+    if req.bundle_path.is_some() || req.source_dir.is_some() {
+        return reload_inner(state, req).await;
+    }
     let timeout_session_id = req
         .session_id
         .clone()
@@ -661,22 +671,36 @@ async fn reload_inner(state: SharedState, req: ReloadRequest) -> Response {
     }
     let blocking_state = state.clone();
     let install_result = tokio::task::spawn_blocking(move || {
-        let (plugin_id, warnings) = if let Some(source_dir) = source_dir.as_deref() {
+        let package = if let Some(source_dir) = source_dir.as_deref() {
             install_from_directory_blocking(
                 &blocking_state.app_handle,
                 source_dir,
                 requested_plugin_id.as_deref(),
                 &BTreeMap::new(),
+                true,
             )?
         } else if let Some(bundle_path) = bundle_path.as_deref() {
-            install_inner_blocking(&blocking_state, bundle_path, requested_plugin_id.as_deref())?
+            install_inner_blocking(
+                &blocking_state,
+                bundle_path,
+                requested_plugin_id.as_deref(),
+                true,
+            )?
         } else {
-            (requested_plugin_id.unwrap_or_default(), Vec::new())
+            LocalPackage {
+                plugin_id: requested_plugin_id.unwrap_or_default(),
+                warnings: Vec::new(),
+                staged: None,
+            }
         };
-        Ok::<_, anyhow::Error>((plugin_id, warnings))
+        Ok::<_, anyhow::Error>(package)
     })
     .await;
-    let (plugin_id, warnings) = match install_result {
+    let LocalPackage {
+        plugin_id,
+        warnings,
+        staged,
+    } = match install_result {
         Ok(Ok(value)) => value,
         Err(error) => {
             log::warn!("cli_bridge reload install task failed: {error:#}");
@@ -710,13 +734,27 @@ async fn reload_inner(state: SharedState, req: ReloadRequest) -> Response {
     };
     let metadata_state = state.clone();
     let metadata_plugin_id = plugin_id.clone();
-    let metadata_result = tokio::task::spawn_blocking(move || {
-        installed_artifact_metadata(&metadata_state, &metadata_plugin_id)
+    let metadata_staged = staged
+        .as_ref()
+        .map(|staged| PathBuf::from(&staged.staged_path));
+    let metadata_result = tokio::task::spawn_blocking(move || match metadata_staged {
+        Some(path) => artifact_metadata(&path, &metadata_plugin_id),
+        None => installed_artifact_metadata(&metadata_state, &metadata_plugin_id),
     })
     .await;
     let (package_version, plugin_type, artifact_revision) = match metadata_result {
         Ok(Ok(metadata)) => metadata,
         Ok(Err(error)) => {
+            if let Some(staged) = &staged {
+                let plugin_state = state.app_handle.state::<PluginRuntimeState>();
+                if let Err(discard_error) = discard_staged_update_for_state(
+                    &plugin_state,
+                    &plugin_id,
+                    &staged.transaction_id,
+                ) {
+                    log::error!("reload metadata cleanup deferred to startup: {discard_error}");
+                }
+            }
             log::warn!("cli_bridge reload metadata failed: {error:#}");
             return plugin_dev_failure_response(
                 &session_id,
@@ -730,6 +768,18 @@ async fn reload_inner(state: SharedState, req: ReloadRequest) -> Response {
             );
         }
         Err(error) => {
+            if let Some(staged) = &staged {
+                let plugin_state = state.app_handle.state::<PluginRuntimeState>();
+                if let Err(discard_error) = discard_staged_update_for_state(
+                    &plugin_state,
+                    &plugin_id,
+                    &staged.transaction_id,
+                ) {
+                    log::error!(
+                        "reload metadata task cleanup deferred to startup: {discard_error}"
+                    );
+                }
+            }
             log::warn!("cli_bridge reload metadata task failed: {error:#}");
             return plugin_dev_failure_response(
                 &session_id,
@@ -753,6 +803,27 @@ async fn reload_inner(state: SharedState, req: ReloadRequest) -> Response {
         "artifactRevision": artifact_revision,
         "activate": req.activate,
     });
+
+    if let Some(staged) = &staged {
+        let plugin_state = state.app_handle.state::<PluginRuntimeState>();
+        let mut result = reload_staged_package(&plugin_state, staged, payload, |payload| {
+            state.renderer.clone().dispatch(
+                &state.app_handle,
+                "plugin_dev_reload",
+                payload,
+                std::time::Duration::from_secs(25),
+            )
+        })
+        .await;
+        // Quiescence acknowledgements are private to the host/renderer
+        // transaction; retain the external CLI result envelope.
+        if let Some(object) = result.as_object_mut() {
+            object.remove("runtimeQuiesced");
+            object.remove("quiescenceProof");
+        }
+        result["warnings"] = json!(warnings);
+        return Json(result).into_response();
+    }
 
     match state
         .renderer
@@ -840,7 +911,24 @@ fn plugin_dev_failure_response(
     action: &str,
     retriable: bool,
 ) -> Response {
-    Json(json!({
+    Json(plugin_dev_failure(
+        session_id, attempt, plugin_id, stage, code, message, action, retriable,
+    ))
+    .into_response()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plugin_dev_failure(
+    session_id: &str,
+    attempt: u64,
+    plugin_id: &str,
+    stage: &str,
+    code: &str,
+    message: String,
+    action: &str,
+    retriable: bool,
+) -> serde_json::Value {
+    json!({
         "schemaVersion": 1,
         "ok": false,
         "outcome": "failed",
@@ -855,8 +943,259 @@ fn plugin_dev_failure_response(
             "action": action,
             "retriable": retriable,
         }
-    }))
-    .into_response()
+    })
+}
+
+fn renderer_matches_reload(result: &serde_json::Value, payload: &serde_json::Value) -> bool {
+    ["schemaVersion", "sessionId", "attempt", "pluginId"]
+        .iter()
+        .all(|key| result.get(key) == payload.get(key))
+}
+
+fn renderer_quiescence_proof(
+    result: &serde_json::Value,
+    payload: &serde_json::Value,
+) -> Option<(u64, u64)> {
+    if !renderer_matches_reload(result, payload) || result["runtimeQuiesced"] != true {
+        return None;
+    }
+    let proof = &result["quiescenceProof"];
+    let previous = proof["previousGeneration"].as_u64()?;
+    let generation = proof["generation"].as_u64()?;
+    (generation >= previous).then_some((previous, generation))
+}
+
+fn renderer_reload_failed(result: &serde_json::Value, payload: &serde_json::Value) -> bool {
+    renderer_matches_reload(result, payload)
+        && result["ok"] == false
+        && matches!(
+            result["outcome"].as_str(),
+            Some("failed" | "restart_required")
+        )
+        && matches!(
+            result["stage"].as_str(),
+            Some("discover" | "quiesce" | "activate" | "verify")
+        )
+        && ["code", "message", "action"]
+            .iter()
+            .all(|field| result["error"][field].is_string())
+        && result["error"]["retriable"].is_boolean()
+}
+
+fn reload_restart_required(mut result: serde_json::Value) -> serde_json::Value {
+    result["ok"] = json!(false);
+    result["outcome"] = json!("restart_required");
+    result["error"]["action"] = json!("Restart Cognia before retrying the development session; inspect startup recovery diagnostics if rollback cannot complete");
+    result["error"]["retriable"] = json!(false);
+    result
+}
+
+/// Only orchestrates the crate's durable transaction and the existing renderer
+/// port. Injecting dispatch lets tests observe the live package at each phase.
+async fn reload_staged_package<F, Fut>(
+    state: &PluginRuntimeState,
+    staged: &StagedDownloadPayload,
+    mut payload: serde_json::Value,
+    mut dispatch: F,
+) -> serde_json::Value
+where
+    F: FnMut(serde_json::Value) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value, String>>,
+{
+    // Bind renderer reservations to this exact transaction, including when a
+    // client retries the same session/attempt while the first request runs.
+    payload["transactionId"] = json!(staged.transaction_id);
+    let failure = |stage: &str, code: &str, message: String| {
+        plugin_dev_failure(
+            payload["sessionId"].as_str().unwrap(),
+            payload["attempt"].as_u64().unwrap(),
+            &staged.plugin_id,
+            stage,
+            code,
+            message,
+            "Inspect plugin development diagnostics and retry",
+            true,
+        )
+    };
+    let mut prepare_payload = payload.clone();
+    prepare_payload["phase"] = json!("prepare");
+    let prepared = dispatch(prepare_payload).await;
+    let quiescence = prepared.as_ref().ok().and_then(|result| {
+        (result["ok"] == true
+            && result["stage"] == "quiesce"
+            && result["pluginType"] == payload["pluginType"])
+            .then(|| renderer_quiescence_proof(result, &payload))
+            .flatten()
+    });
+    let Some((previous_generation, quiesced_generation)) = quiescence else {
+        let result = match prepared {
+            Ok(result) if renderer_reload_failed(&result, &payload) => result,
+            Ok(_) => failure(
+                "quiesce",
+                "quiescence_proof_mismatch",
+                "Renderer did not prove clean reload preparation".into(),
+            ),
+            Err(error) => failure(
+                "quiesce",
+                if error.contains("timed out") {
+                    "quiesce_timeout"
+                } else {
+                    "renderer_unavailable"
+                },
+                error,
+            ),
+        };
+        return discard_reload_and_rescan(state, staged, &payload, None, result, &mut dispatch)
+            .await;
+    };
+
+    let previous_record = state.plugins.read().get(&staged.plugin_id).cloned();
+    if let Err(error) =
+        commit_staged_update_for_state(state, &staged.plugin_id, &staged.transaction_id)
+    {
+        return discard_reload_and_rescan(
+            state,
+            staged,
+            &payload,
+            Some(previous_record),
+            failure("install", "install_failed", error.to_string()),
+            &mut dispatch,
+        )
+        .await;
+    }
+    register_installed_plugin(
+        state,
+        &staged.plugin_id,
+        &staged.manifest,
+        &state.plugin_dir(&staged.plugin_id),
+    );
+
+    let mut activation_payload = payload.clone();
+    activation_payload["phase"] = json!("activate");
+    let activation = dispatch(activation_payload).await;
+    let result = match activation {
+        Ok(result) => result,
+        // Delivery/timeout is ambiguous: even a clean prepare proof says
+        // nothing about a runtime the activation dispatch may have started.
+        Err(error) => {
+            return reload_restart_required(failure(
+                if error.contains("timed out") {
+                    "verify"
+                } else {
+                    "activate"
+                },
+                if error.contains("timed out") {
+                    "activation_timeout"
+                } else {
+                    "renderer_unavailable"
+                },
+                error,
+            ))
+        }
+    };
+    let validation = validate_renderer_activation_proof(
+        &result,
+        payload["sessionId"].as_str().unwrap(),
+        payload["attempt"].as_u64().unwrap(),
+        &staged.plugin_id,
+        payload["pluginType"].as_str().unwrap(),
+        &staged.version,
+        payload["artifactRevision"].as_str().unwrap(),
+    );
+    let validated = result["ok"] == true
+        && validation.is_ok()
+        && result["activationProof"]["previousGeneration"].as_u64() == Some(previous_generation)
+        && result["activationProof"]["generation"]
+            .as_u64()
+            .is_some_and(|generation| generation > quiesced_generation);
+    if validated {
+        return match finalize_staged_update_for_state(
+            state,
+            &staged.plugin_id,
+            &staged.transaction_id,
+        ) {
+            Ok(()) => result,
+            Err(error) => {
+                reload_restart_required(failure("verify", "finalize_failed", error.to_string()))
+            }
+        };
+    }
+
+    let clean =
+        renderer_quiescence_proof(&result, &payload).is_some_and(|(previous, generation)| {
+            previous == previous_generation && generation >= quiesced_generation
+        });
+    let failure_result = if renderer_reload_failed(&result, &payload) {
+        result
+    } else {
+        failure(
+            "verify",
+            "activation_proof_mismatch",
+            validation
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| {
+                    "Renderer activation did not match the prepared generation".into()
+                }),
+        )
+    };
+    if clean {
+        discard_reload_and_rescan(
+            state,
+            staged,
+            &payload,
+            Some(previous_record),
+            failure_result,
+            &mut dispatch,
+        )
+        .await
+    } else {
+        reload_restart_required(failure_result)
+    }
+}
+
+async fn discard_reload_and_rescan<F, Fut>(
+    state: &PluginRuntimeState,
+    staged: &StagedDownloadPayload,
+    payload: &serde_json::Value,
+    previous_record: Option<Option<PluginRecord>>,
+    mut result: serde_json::Value,
+    dispatch: &mut F,
+) -> serde_json::Value
+where
+    F: FnMut(serde_json::Value) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value, String>>,
+{
+    if let Err(error) =
+        discard_staged_update_for_state(state, &staged.plugin_id, &staged.transaction_id)
+    {
+        result["error"]["code"] = json!("rollback_failed");
+        result["error"]["message"] = json!(format!(
+            "{}; discard: {error}",
+            result["error"]["message"].as_str().unwrap_or_default()
+        ));
+        return reload_restart_required(result);
+    }
+    if let Some(record) = previous_record {
+        let mut plugins = state.plugins.write();
+        if let Some(record) = record {
+            plugins.insert(staged.plugin_id.clone(), record);
+        } else {
+            plugins.remove(&staged.plugin_id);
+        }
+    }
+    let mut rescan = payload.clone();
+    rescan["phase"] = json!("rescan");
+    match dispatch(rescan).await {
+        Ok(ack) if ack["ok"] == true && renderer_matches_reload(&ack, payload) => result,
+        error => {
+            result["error"]["message"] = json!(format!(
+                "{}; package discarded but renderer rescan was not confirmed: {error:?}",
+                result["error"]["message"].as_str().unwrap_or_default()
+            ));
+            reload_restart_required(result)
+        }
+    }
 }
 
 fn validate_renderer_activation_proof(
@@ -1052,6 +1391,13 @@ fn installed_artifact_metadata(
 ) -> anyhow::Result<(String, String, String)> {
     let plugin_state = state.app_handle.state::<PluginRuntimeState>();
     let install_dir = plugin_state.plugin_dir(plugin_id);
+    artifact_metadata(&install_dir, plugin_id)
+}
+
+fn artifact_metadata(
+    install_dir: &Path,
+    plugin_id: &str,
+) -> anyhow::Result<(String, String, String)> {
     let manifest_bytes = std::fs::read(install_dir.join("plugin.json"))?;
     let (manifest, installed_id) = read_manifest_from_bytes(&manifest_bytes)?;
     validate_expected_plugin_id(Some(plugin_id), &installed_id)?;
@@ -1072,7 +1418,7 @@ fn installed_artifact_metadata(
         })
         .ok_or_else(|| anyhow::anyhow!("installed plugin manifest has no supported type"))?
         .to_string();
-    let revision = installed_tree_revision(&install_dir)?;
+    let revision = installed_tree_revision(install_dir)?;
     Ok((version, plugin_type, revision))
 }
 
@@ -1146,14 +1492,22 @@ pub async fn install_inner(
     state: &SharedState,
     bundle_path: &str,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    install_inner_blocking(state, bundle_path, None)
+    let package = install_inner_blocking(state, bundle_path, None, false)?;
+    Ok((package.plugin_id, package.warnings))
+}
+
+struct LocalPackage {
+    plugin_id: String,
+    warnings: Vec<String>,
+    staged: Option<StagedDownloadPayload>,
 }
 
 fn install_inner_blocking(
     state: &SharedState,
     bundle_path: &str,
     expected_plugin_id: Option<&str>,
-) -> anyhow::Result<(String, Vec<String>)> {
+    stage_only: bool,
+) -> anyhow::Result<LocalPackage> {
     let bundle = PathBuf::from(bundle_path);
     if !bundle.is_absolute() {
         anyhow::bail!("bundle_path must be absolute");
@@ -1167,16 +1521,22 @@ fn install_inner_blocking(
     let (manifest, plugin_id) = read_manifest_from_zip(&bytes)?;
     validate_expected_plugin_id(expected_plugin_id, &plugin_id)?;
     let target_dir = plugin_state.plugin_dir(&plugin_id);
-    replace_directory_atomically(&plugin_state, &manifest, |staging| {
+    let staged = prepare_local_package(&plugin_state, &manifest, stage_only, |staging| {
         extract_zip_into(&bytes, staging)?;
         // A bundle cannot vouch for itself.
         cognia_plugin_runtime::marketplace::discard_supplied_receipt(staging)?;
         Ok(())
     })?;
 
-    register_installed_plugin(&plugin_state, &plugin_id, &manifest, &target_dir);
-    log::info!("cli_bridge installed {plugin_id} from {}", bundle.display());
-    Ok((plugin_id, vec![]))
+    if !stage_only {
+        register_installed_plugin(&plugin_state, &plugin_id, &manifest, &target_dir);
+        log::info!("cli_bridge installed {plugin_id} from {}", bundle.display());
+    }
+    Ok(LocalPackage {
+        plugin_id,
+        warnings: vec![],
+        staged,
+    })
 }
 
 /// Copy a directory tree (containing a `plugin.json`) into the host's plugin
@@ -1191,7 +1551,9 @@ pub async fn install_from_directory_inner<P: tauri::Runtime>(
     app_handle: &tauri::AppHandle<P>,
     source_dir: &str,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    install_from_directory_blocking(app_handle, source_dir, None, &BTreeMap::new())
+    let package =
+        install_from_directory_blocking(app_handle, source_dir, None, &BTreeMap::new(), false)?;
+    Ok((package.plugin_id, package.warnings))
 }
 
 /// Install a picked directory, overlaying a TS-side conversion result.
@@ -1204,7 +1566,9 @@ pub async fn install_converted_from_directory_inner<P: tauri::Runtime>(
     source_dir: &str,
     generated_files: &BTreeMap<String, String>,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    install_from_directory_blocking(app_handle, source_dir, None, generated_files)
+    let package =
+        install_from_directory_blocking(app_handle, source_dir, None, generated_files, false)?;
+    Ok((package.plugin_id, package.warnings))
 }
 
 /// Install a plugin a cogpack embeds (ADR-0209) from its files.
@@ -1221,12 +1585,14 @@ pub fn install_embedded_files_blocking<P: tauri::Runtime>(
     expected_plugin_id: &str,
 ) -> anyhow::Result<(String, Vec<String>)> {
     let staging = stage_embedded_files(files, expected_plugin_id)?;
-    install_from_directory_blocking(
+    let package = install_from_directory_blocking(
         app_handle,
         &staging.path().to_string_lossy(),
         Some(expected_plugin_id),
         &BTreeMap::new(),
-    )
+        false,
+    )?;
+    Ok((package.plugin_id, package.warnings))
 }
 
 /// Write an embedded plugin's files into a fresh staging directory and check
@@ -1271,7 +1637,8 @@ fn install_from_directory_blocking<P: tauri::Runtime>(
     source_dir: &str,
     expected_plugin_id: Option<&str>,
     generated_files: &BTreeMap<String, String>,
-) -> anyhow::Result<(String, Vec<String>)> {
+    stage_only: bool,
+) -> anyhow::Result<LocalPackage> {
     let source = PathBuf::from(source_dir);
     if !source.is_absolute() {
         anyhow::bail!("source_dir must be absolute");
@@ -1323,18 +1690,24 @@ fn install_from_directory_blocking<P: tauri::Runtime>(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
-    replace_directory_atomically(&plugin_state, &manifest, |staging| {
+    let staged = prepare_local_package(&plugin_state, &manifest, stage_only, |staging| {
         copy_dir_recursive(scratch.path(), staging)?;
         receipt_for_directory_install(staging, &source, &version)?;
         Ok(())
     })?;
 
-    register_installed_plugin(&plugin_state, &plugin_id, &manifest, &target_dir);
-    log::info!(
-        "cli_bridge installed {plugin_id} from directory {}",
-        source.display()
-    );
-    Ok((plugin_id, vec![]))
+    if !stage_only {
+        register_installed_plugin(&plugin_state, &plugin_id, &manifest, &target_dir);
+        log::info!(
+            "cli_bridge installed {plugin_id} from directory {}",
+            source.display()
+        );
+    }
+    Ok(LocalPackage {
+        plugin_id,
+        warnings: vec![],
+        staged,
+    })
 }
 
 /// The receipt a directory install leaves: never one the folder carried, and
@@ -1351,23 +1724,31 @@ fn receipt_for_directory_install(
 
 /// Populate scratch first, then use the runtime's existing durable update
 /// transaction. Startup recovery handles process death between tree renames.
-fn replace_directory_atomically(
+fn prepare_local_package(
     state: &PluginRuntimeState,
     manifest: &serde_json::Value,
+    stage_only: bool,
     populate: impl FnOnce(&Path) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<StagedDownloadPayload>> {
     let parent = &state.plugin_install_dir;
     std::fs::create_dir_all(parent)?;
     let staging = tempfile::Builder::new()
         .prefix(".cognia-plugin-staging-")
         .tempdir_in(parent)?;
     populate(staging.path())?;
+    if stage_only {
+        return Ok(Some(stage_local_tree_for_state(
+            state,
+            staging.path(),
+            manifest,
+        )?));
+    }
     cognia_plugin_runtime::marketplace::install_local_tree_for_state(
         state,
         staging.path(),
         manifest,
     )?;
-    Ok(())
+    Ok(None)
 }
 
 /// Shared between the zip and directory install paths. Builds the runtime
@@ -1886,7 +2267,7 @@ mod tests {
         std::fs::write(target.join("old.txt"), "old").unwrap();
 
         let state = PluginRuntimeState::new(tmp.path().to_path_buf());
-        let result = replace_directory_atomically(&state, &json!({"id":"demo"}), |staging| {
+        let result = prepare_local_package(&state, &json!({"id":"demo"}), false, |staging| {
             std::fs::write(staging.join("partial.txt"), "partial")?;
             anyhow::bail!("rejected archive")
         });
@@ -2088,6 +2469,278 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("not active"));
+    }
+
+    fn reload_fixture() -> (
+        tempfile::TempDir,
+        PluginRuntimeState,
+        StagedDownloadPayload,
+        serde_json::Value,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let state = PluginRuntimeState::new(root.path().join("installed"));
+        let source = root.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        let mut manifest =
+            json!({"id":"demo.plugin","version":"1.0.0","type":"frontend","main":"index.js"});
+        std::fs::write(source.join("plugin.json"), manifest.to_string()).unwrap();
+        std::fs::write(source.join("index.js"), b"old").unwrap();
+        cognia_plugin_runtime::marketplace::install_local_tree_for_state(
+            &state, &source, &manifest,
+        )
+        .unwrap();
+        manifest["version"] = json!("2.0.0");
+        std::fs::write(source.join("plugin.json"), manifest.to_string()).unwrap();
+        std::fs::write(source.join("index.js"), b"new").unwrap();
+        let staged = stage_local_tree_for_state(&state, &source, &manifest).unwrap();
+        let payload = json!({"schemaVersion":1,"sessionId":"550e8400-e29b-41d4-a716-446655440000",
+            "attempt":7,"pluginId":"demo.plugin","pluginType":"frontend","packageVersion":"2.0.0",
+            "artifactRevision":installed_tree_revision(Path::new(&staged.staged_path)).unwrap(),"activate":true});
+        (root, state, staged, payload)
+    }
+
+    fn prepared_reply(payload: &serde_json::Value) -> serde_json::Value {
+        let mut result = payload.clone();
+        result["ok"] = json!(true);
+        result["stage"] = json!("quiesce");
+        result["runtimeQuiesced"] = json!(true);
+        result["quiescenceProof"] = json!({"previousGeneration":3,"generation":3});
+        result
+    }
+
+    fn activated_reply(payload: &serde_json::Value) -> serde_json::Value {
+        let mut result = payload.clone();
+        result["ok"] = json!(true);
+        result["outcome"] = json!("activated");
+        result["stage"] = json!("verify");
+        result["activationProof"] = json!({"previousGeneration":3,"generation":4,"actualState":"active",
+            "packageVersion":"2.0.0","artifactRevision":payload["artifactRevision"],"reloadMode":"hot"});
+        result
+    }
+
+    #[tokio::test]
+    async fn staged_reload_commits_only_after_prepare_and_finalizes_only_after_proof() {
+        let (_root, state, staged, payload) = reload_fixture();
+        let transaction = Path::new(&staged.staged_path)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let mut phases = Vec::new();
+        let result = reload_staged_package(&state, &staged, payload, |request| {
+            let phase = request["phase"].as_str().unwrap().to_owned();
+            phases.push(phase.clone());
+            let disk = std::fs::read(state.plugin_dir("demo.plugin").join("index.js")).unwrap();
+            let reply = match phase.as_str() {
+                "prepare" => {
+                    assert_eq!(disk, b"old");
+                    assert!(!transaction.join("previous-package").exists());
+                    prepared_reply(&request)
+                }
+                "activate" => {
+                    assert_eq!(disk, b"new");
+                    assert_eq!(
+                        std::fs::read(transaction.join("previous-package/index.js")).unwrap(),
+                        b"old"
+                    );
+                    assert!(!transaction.join("finalized").exists());
+                    activated_reply(&request)
+                }
+                _ => panic!("unexpected phase {phase}"),
+            };
+            std::future::ready(Ok(reply))
+        })
+        .await;
+        assert_eq!(phases, ["prepare", "activate"]);
+        assert_eq!(result["ok"], true);
+        assert!(!transaction.exists());
+        assert!(!state
+            .plugin_dir("demo.plugin")
+            .join(".cognia-install-transaction")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn staged_reload_failure_matrix_preserves_or_restores_only_when_safe() {
+        for case in [
+            "refused",
+            "prepare-timeout",
+            "prepare-proof",
+            "commit-failed",
+            "activation-clean",
+            "activation-dirty",
+            "activation-timeout",
+            "activation-unavailable",
+            "proof-clean",
+            "proof-live",
+            "proof-generation",
+            "finalize-failed",
+        ] {
+            let (_root, state, staged, payload) = reload_fixture();
+            let transaction = Path::new(&staged.staged_path)
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            let committed = ![
+                "refused",
+                "prepare-timeout",
+                "prepare-proof",
+                "commit-failed",
+            ]
+            .contains(&case);
+            let deferred = [
+                "activation-dirty",
+                "activation-timeout",
+                "activation-unavailable",
+                "proof-live",
+                "proof-generation",
+                "finalize-failed",
+            ]
+            .contains(&case);
+            let mut phases = Vec::new();
+            let result = reload_staged_package(&state, &staged, payload, |request| {
+                let phase = request["phase"].as_str().unwrap().to_owned();
+                phases.push(phase.clone());
+                let reply = match phase.as_str() {
+                    "prepare" => {
+                        assert_eq!(
+                            std::fs::read(state.plugin_dir("demo.plugin").join("index.js"))
+                                .unwrap(),
+                            b"old"
+                        );
+                        match case {
+                            "prepare-timeout" => Err("renderer request timed out".into()),
+                            "refused" => Ok(plugin_dev_failure(
+                                request["sessionId"].as_str().unwrap(),
+                                7,
+                                "demo.plugin",
+                                "discover",
+                                "developer_mode_required",
+                                "Developer Mode is disabled".into(),
+                                "Enable Developer Mode",
+                                true,
+                            )),
+                            "prepare-proof" => {
+                                let mut reply = prepared_reply(&request);
+                                reply["quiescenceProof"]["generation"] = json!(2);
+                                Ok(reply)
+                            }
+                            "commit-failed" => {
+                                std::fs::remove_file(
+                                    Path::new(&staged.staged_path).join("index.js"),
+                                )
+                                .unwrap();
+                                Ok(prepared_reply(&request))
+                            }
+                            _ => Ok(prepared_reply(&request)),
+                        }
+                    }
+                    "activate" => {
+                        assert!(committed);
+                        assert_eq!(
+                            std::fs::read(state.plugin_dir("demo.plugin").join("index.js"))
+                                .unwrap(),
+                            b"new"
+                        );
+                        match case {
+                            "activation-timeout" => Err("renderer request timed out".into()),
+                            "activation-unavailable" => {
+                                Err("renderer-response sender dropped before responding".into())
+                            }
+                            "finalize-failed" => {
+                                std::fs::remove_file(transaction.join("committed")).unwrap();
+                                Ok(activated_reply(&request))
+                            }
+                            "proof-clean" | "proof-live" | "proof-generation" => {
+                                let mut reply = activated_reply(&request);
+                                if case == "proof-generation" {
+                                    reply["activationProof"]["previousGeneration"] = json!(1);
+                                } else {
+                                    reply["activationProof"]["artifactRevision"] =
+                                        json!("sha256:wrong");
+                                }
+                                if case == "proof-clean" {
+                                    reply["runtimeQuiesced"] = json!(true);
+                                    reply["quiescenceProof"] =
+                                        json!({"previousGeneration":3,"generation":4});
+                                }
+                                Ok(reply)
+                            }
+                            _ => {
+                                let mut reply = plugin_dev_failure(
+                                    request["sessionId"].as_str().unwrap(),
+                                    7,
+                                    "demo.plugin",
+                                    "activate",
+                                    "activation_failed",
+                                    "loader crashed".into(),
+                                    "Inspect diagnostics",
+                                    true,
+                                );
+                                reply["runtimeQuiesced"] = json!(case == "activation-clean");
+                                reply["quiescenceProof"] =
+                                    json!({"previousGeneration":3,"generation":4});
+                                Ok(reply)
+                            }
+                        }
+                    }
+                    "rescan" => {
+                        assert_eq!(
+                            std::fs::read(state.plugin_dir("demo.plugin").join("index.js"))
+                                .unwrap(),
+                            b"old"
+                        );
+                        let mut reply = request;
+                        reply["ok"] = json!(true);
+                        Ok(reply)
+                    }
+                    _ => panic!("unexpected phase {phase}"),
+                };
+                std::future::ready(reply)
+            })
+            .await;
+            assert_eq!(result["ok"], false, "{case}");
+            assert_eq!(transaction.exists(), deferred, "{case}");
+            assert_eq!(
+                std::fs::read(state.plugin_dir("demo.plugin").join("index.js")).unwrap(),
+                if deferred { b"new" } else { b"old" },
+                "{case}"
+            );
+            assert_eq!(phases.contains(&"rescan".to_string()), !deferred, "{case}");
+            if deferred {
+                assert_eq!(result["outcome"], "restart_required", "{case}");
+                assert!(result["error"]["action"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Restart Cognia"));
+                assert!(!transaction.join("finalized").exists());
+                let recovered =
+                    cognia_plugin_runtime::marketplace::recover_update_transactions_for_state(
+                        &state,
+                    );
+                assert_eq!(recovered.recovered_transactions, 1, "{case}");
+                assert!(
+                    recovered.failures.is_empty(),
+                    "{case}: {:?}",
+                    recovered.failures
+                );
+                assert_eq!(
+                    std::fs::read(state.plugin_dir("demo.plugin").join("index.js")).unwrap(),
+                    b"old"
+                );
+            }
+            let code = match case {
+                "refused" => "developer_mode_required",
+                "prepare-timeout" => "quiesce_timeout",
+                "prepare-proof" => "quiescence_proof_mismatch",
+                "commit-failed" => "install_failed",
+                "activation-timeout" => "activation_timeout",
+                "activation-unavailable" => "renderer_unavailable",
+                "finalize-failed" => "finalize_failed",
+                "proof-clean" | "proof-live" | "proof-generation" => "activation_proof_mismatch",
+                _ => "activation_failed",
+            };
+            assert_eq!(result["error"]["code"], code, "{case}");
+        }
     }
 
     #[test]
