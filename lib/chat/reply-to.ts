@@ -15,7 +15,7 @@ import {
   type SendContent,
 } from "@cognia/agent-config-types"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
-import { stripInboundDisplayMarkers } from "@/lib/connectors/inbound-stored-parts"
+import { stripInboundDisplayMarkers } from "@/lib/db/inbound-stored-parts"
 
 /** The fields a reply needs from the message it targets. */
 export interface ReplyTargetLike {

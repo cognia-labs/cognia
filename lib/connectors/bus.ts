@@ -66,7 +66,7 @@ import {
   inboundEventToStoredParts,
   inboundEventFromStoredMessage,
   inboundPartsForReplay,
-} from "./inbound-stored-parts"
+} from "@/lib/db/inbound-stored-parts"
 import {
   inboundEditRevision,
   isNewerInboundEdit,

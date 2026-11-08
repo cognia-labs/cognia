@@ -97,7 +97,7 @@ export {
 import { extractSessionIdFromPayload, recordPluginHookEvent } from "./hook-telemetry"
 import { dispatchTransform } from "@/lib/plugin/interceptors/dispatch"
 import type { ToolResultProjectValue } from "@/lib/plugin/interceptors/normalize"
-import { capInboundLabels, normalizeInboundLabels } from "@/lib/connectors/inbound-labels"
+import { capInboundLabels, normalizeInboundLabels } from "@/lib/chat/inbound-labels"
 import type { InboundLabel } from "@/types/connectors/inbound-label"
 
 // =============================================================================

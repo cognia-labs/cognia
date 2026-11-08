@@ -14,7 +14,7 @@ import { buildReplyPreview, REPLY_PREVIEW_MAX } from "@cognia/agent-config-types
 import type { MessageReplyTo } from "@cognia/agent-config-types"
 
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
-import { stripInboundDisplayMarkers } from "./inbound-stored-parts"
+import { stripInboundDisplayMarkers } from "@/lib/db/inbound-stored-parts"
 import { encodeQQMessageId } from "./adapters/qq-official/serialize"
 import { buildMatrixMessageId } from "./adapters/matrix/ids"
 

@@ -8,7 +8,7 @@
 import type { ConversationOverrideRow } from "./connector-types"
 import type { AssignmentEventKind } from "./crm-types"
 import type { ConnectorMode } from "@/types/connectors/policy"
-import { parseConversationKey } from "@/types/connectors/event"
+import { parseConversationKey } from "@cognia/plugin-contract/types/connectors/event"
 import { getDb } from "./schema"
 import { recordTombstones } from "./tombstones"
 import { appendAssignmentEvent } from "./conversation-assignment-events"

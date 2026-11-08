@@ -19,7 +19,7 @@ import type { UIMessage } from "ai"
 import { normalizeToolName, type ToolPartLike } from "@/lib/chat/tool-summary"
 import { promptPreambleOfParts, stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
 import { isToolPart, projectToolOutputText } from "./tool-output-text"
-import { stripInboundDisplayMarkers } from "@/lib/connectors/inbound-stored-parts"
+import { stripInboundDisplayMarkers } from "@/lib/db/inbound-stored-parts"
 
 export { contentFingerprint } from "./content-fingerprint"
 

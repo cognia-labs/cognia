@@ -10,7 +10,7 @@ import {
 } from "@cognia/plugin-contract/types/execution/run"
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
-import { readResolvedPrincipal } from "@/lib/connectors/principal/resolve"
+import { readResolvedPrincipal } from "./resolved-principal"
 import { absorbRequester } from "@cognia/plugin-contract/types/execution/acting-identity"
 import { getDb } from "@/lib/db/schema"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"

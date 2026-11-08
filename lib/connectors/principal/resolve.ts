@@ -84,28 +84,6 @@ export async function hashOpenId(openId: string): Promise<string> {
     .slice(0, 12)
 }
 
-/**
- * In-memory stamp the bus writes onto `event.channelData` after a positive
- * resolution, so downstream run-creation sites can attribute initiators
- * without re-resolving. Recovery replays re-enter the bus pipeline, which
- * re-stamps — the registry stays the authority, never this denorm.
- */
-export interface ResolvedPrincipalStamp {
-  principalId: string
-  accountId: string
-}
-
-/** Typed reader for the `channelData.resolvedPrincipal` stamp set by the bus. */
-export function readResolvedPrincipal(
-  channelData: Record<string, unknown> | undefined
-): ResolvedPrincipalStamp | undefined {
-  const raw = channelData?.resolvedPrincipal
-  if (!raw || typeof raw !== "object") return undefined
-  const stamp = raw as Record<string, unknown>
-  if (typeof stamp.principalId !== "string" || typeof stamp.accountId !== "string") return undefined
-  return { principalId: stamp.principalId, accountId: stamp.accountId }
-}
-
 /** Typed reader for the `channelData.identityScope` stamp set by the parser. */
 export function readIdentityScope(
   channelData: Record<string, unknown> | undefined

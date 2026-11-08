@@ -36,7 +36,7 @@ import {
   inboundEventFromStoredMessage,
   mergeInboundMessagesForStream,
   stripInboundDisplayMarkers,
-} from "@/lib/connectors/inbound-stored-parts"
+} from "@/lib/db/inbound-stored-parts"
 import {
   findConnectorInboundMutation,
   listConnectorInboundMutationJobs,
@@ -80,7 +80,7 @@ import { tryBuildTwinDeps } from "@/lib/twin/runtime/build-deps"
 import { discloseTwinOutboundSegments } from "@/lib/twin/outbound-disclosure"
 import { inferBuiltInSkillIntents } from "@/lib/skills/intent-resolver"
 import { generateEmbedding } from "@cognia/provider-embedding/embedding"
-import { readResolvedPrincipal } from "./principal/resolve"
+import { readResolvedPrincipal } from "@/lib/execution/resolved-principal"
 import {
   authorityFromPermissionCeiling,
   bindToolCallRun,

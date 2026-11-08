@@ -42,7 +42,7 @@ import {
 import { assertSessionWritable } from "@/lib/chat/session-write-guard"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
 import { emptyWorkingSet } from "@/lib/chat/working-set"
-import { inboundPartsForReplay } from "@/lib/connectors/inbound-stored-parts"
+import { inboundPartsForReplay } from "@/lib/db/inbound-stored-parts"
 
 function newId() {
   return "m_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)

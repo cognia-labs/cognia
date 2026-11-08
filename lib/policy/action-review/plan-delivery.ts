@@ -71,7 +71,7 @@ import type {
   OutboundJobSource,
 } from "@cognia/plugin-contract/lib/db/connector-types"
 
-import { parseConversationKey } from "@/types/connectors/event"
+import { parseConversationKey } from "@cognia/plugin-contract/types/connectors/event"
 
 import {
   authorizedOutboundToolCall,

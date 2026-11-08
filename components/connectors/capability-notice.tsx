@@ -30,7 +30,7 @@
 import { useCallback, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 
-import { UnavailableNotice } from "@/components/connectors/unavailable-notice"
+import { UnavailableNotice } from "@/components/platform/unavailable-notice"
 import {
   isActionableCause,
   type CapabilityUnavailable,

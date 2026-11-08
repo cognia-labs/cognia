@@ -15,7 +15,7 @@
 import type { ReactNode } from "react"
 import { useTranslations } from "next-intl"
 
-import { UnavailableNotice } from "@/components/connectors/unavailable-notice"
+import { UnavailableNotice } from "./unavailable-notice"
 import type { SurfaceBlock, SurfaceReach } from "@/lib/platform/surface-reach"
 
 /**

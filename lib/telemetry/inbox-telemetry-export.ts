@@ -6,12 +6,12 @@
  * audit exporter stays scoped to `ConnectorAuditRow` and the telemetry
  * exporter can evolve its columns (kind / fields shape) independently.
  *
- * Reuses `downloadBlob` from the audit exporter — the DOM glue is fully
- * generic and there's no point in duplicating it.
+ * Reuses `downloadBlob` from the plugin SDK (`@cognia/plugin-sdk/api/download`),
+ * the DOM glue the audit exporter uses too.
  */
 
 import type { InboxTelemetryEventRow } from "@/lib/db/inbox-telemetry-types"
-import { downloadBlob } from "@/lib/connectors/audit-export"
+import { downloadBlob } from "@cognia/plugin-sdk/api/download"
 
 const CSV_COLUMNS = ["at", "kind", "adapterId", "conversationKey", "fields"] as const
 

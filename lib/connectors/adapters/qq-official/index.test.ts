@@ -32,7 +32,7 @@ import { parseQQDispatch } from "./parse"
 import {
   inboundEventFromStoredMessage,
   inboundEventToStoredParts,
-} from "@/lib/connectors/inbound-stored-parts"
+} from "@/lib/db/inbound-stored-parts"
 import { inboundReplyLookupIds, resolveInboundReplyTo } from "@/lib/connectors/inbound-reply-to"
 import { evaluatePolicy } from "@/lib/connectors/policy-eval"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"

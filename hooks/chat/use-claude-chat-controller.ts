@@ -159,7 +159,7 @@ import {
 import { hostStateActionOfferedHere } from "@/lib/sync/host-state-offered-actions"
 import { restoreWithdrawnToComposer } from "@/lib/chat/restore-withdrawn"
 import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
-import { mergeInboundMessagesForStream } from "@/lib/connectors/inbound-stored-parts"
+import { mergeInboundMessagesForStream } from "@/lib/db/inbound-stored-parts"
 import {
   getSession,
   touchSession,

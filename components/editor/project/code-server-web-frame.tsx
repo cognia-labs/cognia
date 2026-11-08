@@ -22,7 +22,7 @@ import { useTranslations } from "next-intl"
 import { ExternalLinkIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { UnavailableNotice } from "@/components/connectors/unavailable-notice"
+import { UnavailableNotice } from "@/components/platform/unavailable-notice"
 import { resolveWebWorkbenchTarget, type WebWorkbenchTarget } from "@/lib/codeserver/web-embed"
 import type { CodeServerStatus } from "@/lib/codeserver/client"
 import { cn } from "@/lib/utils"

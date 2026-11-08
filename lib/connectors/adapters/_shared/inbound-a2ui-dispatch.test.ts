@@ -7,7 +7,7 @@ import { parseV12Event } from "../onebot/v12"
 import { parseV11Event } from "../onebot/v11"
 import { parseIlinkMessage } from "../wechat-personal/parse"
 import { parseWechatOaXml } from "../wechat-oa/parse"
-import { inboundEventToStoredParts } from "@/lib/connectors/inbound-stored-parts"
+import { inboundEventToStoredParts } from "@/lib/db/inbound-stored-parts"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 
 describe("projectInboundToA2UI", () => {

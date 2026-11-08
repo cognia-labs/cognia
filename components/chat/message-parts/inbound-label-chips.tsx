@@ -12,7 +12,7 @@ import { useTranslations } from "next-intl"
 import { ShieldAlertIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { readInboundLabels } from "@/lib/connectors/inbound-labels"
+import { readInboundLabels } from "@/lib/chat/inbound-labels"
 import { resolvePluginLabel } from "@/lib/plugin/i18n/plugin-label"
 import { cn } from "@/lib/utils"
 import {

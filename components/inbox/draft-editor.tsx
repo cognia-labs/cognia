@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Item, ItemContent, ItemTitle } from "@/components/ui/item"
-import { useDraftApproval } from "@/hooks/use-draft-approval"
+import { useDraftApproval } from "@/hooks/connectors/use-draft-approval"
 import type { ConnectorDraftRow } from "@/lib/db/connector-types"
 
 interface DraftEditorProps {

@@ -2,7 +2,7 @@ import type { StoredMessage } from "@cognia/agent-config-types"
 import type { UIMessage } from "ai"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
-import { segmentsToPlainText } from "@/types/connectors/segment"
+import { segmentsToPlainText } from "@cognia/plugin-contract/types/connectors/segment"
 
 /**
  * Streaming snapshots own the assistant, while the connector owns its stored

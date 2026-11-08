@@ -30,7 +30,7 @@ import { sha256Hex } from "@cognia/agent"
 import type { ActionReviewTarget } from "@cognia/agent-config-types/action-review"
 
 import { isOutboundToolId, normalizeToolId } from "@/lib/policy/risk/outbound-tools"
-import { parseConversationKey } from "@/types/connectors/event"
+import { parseConversationKey } from "@cognia/plugin-contract/types/connectors/event"
 
 /**
  * - `conversation`: an existing chat, by conversation key without its thread.

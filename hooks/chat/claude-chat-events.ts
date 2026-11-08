@@ -5,7 +5,7 @@ import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
 import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
 
 import { hasCaptureResponder } from "@/lib/claude/hitl/approval-registry"
-import { mergeInboundMessagesForStream } from "@/lib/connectors/inbound-stored-parts"
+import { mergeInboundMessagesForStream } from "@/lib/db/inbound-stored-parts"
 import { startTransition } from "react"
 import {
   applySdkEvent,
