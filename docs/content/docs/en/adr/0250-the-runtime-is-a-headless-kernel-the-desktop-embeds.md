@@ -458,6 +458,10 @@ Where an existing rule already owns a field, the field follows that rule:
     - `menu-focus-claims` moved to `lib/shortcuts/`, and `JobCenterPanel` to `components/shell/`.
     - The `/` route body picks the platform shell, so the shell owns it.
   - Still open: `components/runtime/platform-shell.tsx -> desktop`. `AppRuntime` renders the platform shell deep inside its provider tree, while its lightweight and guest branches render the children without it. Re-owning the file would only add an `app-runtime -> shell` edge. The edge goes away when `AppRuntime` is dissolved into contributions, or when the root layout passes the shell in.
+- **Amendment (2026-11-08): the root layout passes the platform shell in.** The record is §29 of `docs/plans/2026-11-07-tools-contributions.md`.
+  - `AppRuntime` takes `shell`: the route inside the platform shell and the surface availability boundary. The root layout builds it. The full runtime renders `shell`; the lightweight and guest branches keep rendering the bare route (`children`).
+  - The platform shell and its Capacitor variant moved to `components/shell/` and became client modules, because the server layout imports them. The root layout is owned by the shell.
+  - This repays the three platform-shell edges and the root layout's three edges into modules. No foundation or kernel file imports the desktop shell any more.
 
 **How modules talk.**
 - **Public API files.** A module imports another module only through the concrete files listed in its `api`, plus `types/<id>/**`. There are no barrels, as `check-root-loading-boundaries` already requires. The target must be in `dependsOn`, and the `dependsOn` graph has no cycle.

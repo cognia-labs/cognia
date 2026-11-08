@@ -464,6 +464,10 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
     - `menu-focus-claims` 移到 `lib/shortcuts/`，`JobCenterPanel` 移到 `components/shell/`。
     - `/` 路由主体负责挑选平台壳，归 shell 所有。
   - 仍未还清：`components/runtime/platform-shell.tsx -> desktop`。`AppRuntime` 在 provider 树深处渲染平台壳，而它的轻量分支与访客分支渲染子节点时不经过平台壳。把该文件改归 shell 只会新增一条 `app-runtime -> shell` 边。等 `AppRuntime` 拆成贡献，或根布局把壳作为参数传入时，这条边才会消失。
+- **修订（2026-11-08）：根布局把平台壳作为参数传入。** 实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §29。
+  - `AppRuntime` 新增 `shell` 参数：由根布局构建的、包在平台壳与界面可用性边界里的路由。完整运行时渲染 `shell`，轻量分支与访客分支仍渲染裸路由（`children`）。
+  - 平台壳及其 Capacitor 变体移到 `components/shell/`，并标为客户端模块，因为服务端布局要导入它们。根布局归 shell 所有。
+  - 还清平台壳的三条边，以及根布局指向模块的三条边。基础层与内核不再有文件导入桌面壳。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。

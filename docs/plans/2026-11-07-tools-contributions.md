@@ -579,3 +579,21 @@ interface ToolSurface {
 - 门禁：module gate 通过（894 条方向边），只删自己的 6 行基线；baseline-growth、colocated-tests、data-governance、`check-modules.test.mjs`（83 项）通过；全量类型检查只有已知的外来错误。
 - 已有、与本次无关的失败：`lib/sync/host-state-service.test.ts`（别的会话的 external-agent 改动）。
 - 待做的桌面冒烟：侧栏折叠/展开动画；IM 入站分发给 bot；桌面事件与工作流完成触发 bot；会话暂停时取消已接受的 bot 投递。
+
+## 29. T20：根布局把平台壳作为参数传给 AppRuntime（2026-11-08）
+
+- 目标：还清 `components/runtime/platform-shell.tsx -> desktop`，即内核与基础层指向桌面壳的最后一条边。
+- 做法（3678d24857，还清 6 条）：
+  - `AppRuntime` 新增 `shell` 参数：包在平台壳与 `SurfaceAvailabilityBoundary` 里的路由，由 `app/layout.tsx` 构建。完整运行时渲染 `shell`，轻量分支与访客分支仍渲染裸路由 `children`。
+  - `platform-shell.tsx` 与 `platform-shell.mobile.tsx`（含测试）用 `git mv` 移到 `components/shell/`，并加上 `"use client"`：服务端布局导入它们，必须是客户端引用。
+  - `module-ownership.json` 新增 `app/layout.` 行归 shell。这样平台壳的三条边（desktop、mobile、mobile 变体）与根布局指向 appearance、boot、initializers 的三条边一起还清。
+  - 同步更新 `next.config.ts` 与 `lib/shell/compact-shell.ts` 的注释、`desktop-app-shell.test.tsx` 的导入、`check-unreachable-components.test.mjs` 的路径用例。
+- 测试：`app/layout.test.tsx` 断言 `shell` 是平台壳包住可用性边界再包住路由；`app-runtime.test.tsx` 断言完整运行时只渲染一次 `shell`，轻量路由与访客页不渲染它。
+- 真实静态构建（直接运行 `next build --webpack`；`with-plugin-artifacts` 因授权套件 pin 过期在插件暂存一步失败，这是已知问题）：
+  - Web：编译通过，导出 129 页。`out/index.txt` 里 `shell` 序列化为 `PlatformShell` 与 `SurfaceAvailabilityBoundary` 的客户端引用；路由只发送一次，`children` 是指向 `shell` 内路由的路径引用，没有重复。
+  - 用 `pnpm start` 打开导出产物：建账户、离线继续、跳过引导后，1440 宽显示桌面框架（侧栏、工作区面板），窄视口显示移动端壳与底部标签栏；没有水合错误，控制台错误只有外部插件注册表请求失败。
+  - Mobile（`NEXT_PUBLIC_PLATFORM=mobile`）：编译通过；chunk 里没有 `title-bar`、`status-bar-customize` 等桌面框架标记，`.mobile.tsx` 变体仍然生效。
+  - 构建前删除了 3.4 GB 的 `.next/dev` 缓存（用户同意），并用磁盘守护脚本在空闲低于 900 MB 时终止构建。
+- 门禁：module gate 通过（888 条方向边），baseline-growth、colocated-tests、`check-modules.test.mjs`（83 项）、`check-unreachable-components.test.mjs`（46 项）通过；全量类型检查只有已知的外来错误。
+- 已有、与本次无关的失败：`lib/shell/workbench-panels.test.ts`（别的会话新增的 `SANDBOX_DESKTOP_PANEL_ID` 未映射）。
+- 结果：基础层与内核里不再有导入桌面壳的文件。
