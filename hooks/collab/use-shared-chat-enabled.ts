@@ -1,41 +1,60 @@
 "use client"
 
 /**
- * Whether shared conversations are available to this runtime, live.
+ * Whether shared conversations are available here, live (ADR-0252 §6).
  *
  * # Why a hook and not a bare call
  *
- * `isSharedChatClientEnabled()` used to be a build constant, so reading it in
- * a render body was fine. Now that a settings switch can flip it, a component
- * that reads it once keeps showing the sharing controls until the next reload,
- * which is the worst of both answers: the switch says off and the header still
- * offers to share.
+ * The answer moves: the settings switch, a collaboration server added or
+ * removed, the account signing in, the server starting or stopping to serve
+ * shared chat. A component that read it once would keep offering to share a
+ * conversation the plane no longer serves, or keep hiding an entry it now
+ * does. The hook re-renders on every change of the detected answer
+ * (`lib/collab/shared-chat-availability.ts`) and asks again when it is stale.
  *
- * # Why the first render always says the build's answer
+ * # Why the first render always says `checking`
  *
- * The preference lives in `localStorage`, and this app is a static export. A
- * lazy `useState` initializer reading storage would render one value during
- * the prerender and another on the client, so the first paint deliberately
- * reports what the build alone allows and the stored choice is applied in an
- * effect. Same shape the collaboration settings card uses for its own read.
+ * The answer reads `localStorage` and the network, and this app is a static
+ * export. The server snapshot and the first client render both say
+ * `checking`, which offers nothing and names nothing missing; the probe
+ * settles it right after mount.
  */
 
-import { useEffect, useState } from "react"
+import { useEffect, useSyncExternalStore } from "react"
 
 import {
-  isSharedChatBuildEnabled,
-  isSharedChatClientEnabled,
-  subscribeSharedChatPreference,
-} from "@/lib/collab/shared-chat-feature"
+  readSharedChatAvailability,
+  refreshSharedChatAvailability,
+  subscribeSharedChatAvailability,
+  type SharedChatAvailability,
+} from "@/lib/collab/shared-chat-availability"
+import { useAccountStore } from "@/stores/account/account-store"
 
-export function useSharedChatEnabled(): boolean {
-  const [enabled, setEnabled] = useState(isSharedChatBuildEnabled)
+const CHECKING: SharedChatAvailability = { state: "checking" }
+
+/** The detected answer, with the reason when shared chat is not available. */
+export function useSharedChatAvailability(): SharedChatAvailability {
+  const availability = useSyncExternalStore(
+    subscribeSharedChatAvailability,
+    readSharedChatAvailability,
+    () => CHECKING
+  )
+  // The answer is per account: a switch asks again.
+  const accountId = useAccountStore((state) => state.unlockedAccountId)
 
   useEffect(() => {
-    const sync = () => setEnabled(isSharedChatClientEnabled())
-    sync()
-    return subscribeSharedChatPreference(sync)
-  }, [])
+    void refreshSharedChatAvailability()
+    const foreground = () => {
+      if (document.visibilityState === "visible") void refreshSharedChatAvailability()
+    }
+    document.addEventListener("visibilitychange", foreground)
+    return () => document.removeEventListener("visibilitychange", foreground)
+  }, [accountId])
 
-  return enabled
+  return availability
+}
+
+/** Whether shared chat is offered right now: every entry point's yes. */
+export function useSharedChatEnabled(): boolean {
+  return useSharedChatAvailability().state === "available"
 }

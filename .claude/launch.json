@@ -22,7 +22,7 @@
     {
       "name": "cognia-next-e2e",
       "runtimeExecutable": "env",
-      "runtimeArgs": ["NEXT_PUBLIC_E2E=1", "NEXT_PUBLIC_SHARED_CHAT_ENABLED=true", "pnpm", "dev"],
+      "runtimeArgs": ["NEXT_PUBLIC_E2E=1", "pnpm", "dev"],
       "port": 3000
     },
     {

@@ -21,13 +21,8 @@ jest.mock("@/lib/collab/runtime-client", () => ({
 jest.mock("@/lib/collab/shared-chat-sync", () => ({
   syncSharedSession: (...args: unknown[]) => mockSync(...args),
 }))
-jest.mock("@/lib/collab/shared-chat-feature", () => ({
-  // The component reads the gate through `useSharedChatEnabled`, which needs
-  // all three: the build answer for its first paint, the resolved answer after
-  // mount, and a subscription so the settings switch reaches an open surface.
-  isSharedChatBuildEnabled: () => mockEnabled,
-  isSharedChatClientEnabled: () => mockEnabled,
-  subscribeSharedChatPreference: () => () => {},
+jest.mock("@/hooks/collab/use-shared-chat-enabled", () => ({
+  useSharedChatEnabled: () => mockEnabled,
 }))
 jest.mock("@/stores/chat", () => ({
   useChatStore: { getState: () => ({ setActiveSession: mockActivate }) },
@@ -93,7 +88,7 @@ it("leaves the trigger to its host and opens only when requested", () => {
   rerender(<SharedSessionJoin open onOpenChange={mockOpenChange} />)
   expect(screen.getByRole("dialog", { name: "acceptInvite" })).toBeInTheDocument()
 })
-it("hides entry when collaboration is disabled", () => {
+it("renders nothing once shared chat stops being offered", () => {
   mockEnabled = false
   const { container } = render(<SharedSessionJoin open onOpenChange={mockOpenChange} />)
   expect(container).toBeEmptyDOMElement()

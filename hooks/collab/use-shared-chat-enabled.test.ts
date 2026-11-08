@@ -1,50 +1,77 @@
 /** @jest-environment jsdom */
 
-import { act, renderHook } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 
+import type { CollabHealth } from "@/lib/collab/client"
+import { __setSharedChatAvailabilityDepsForTesting } from "@/lib/collab/shared-chat-availability"
 import { writeSharedChatPreference } from "@/lib/collab/shared-chat-feature"
 
-import { useSharedChatEnabled } from "./use-shared-chat-enabled"
+import { useSharedChatAvailability, useSharedChatEnabled } from "./use-shared-chat-enabled"
 
-describe("useSharedChatEnabled", () => {
-  const buildFlag = process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED
+let mockAccount = "acct"
+jest.mock("@/stores/account/account-store", () => ({
+  useAccountStore: (select: (state: { unlockedAccountId: string }) => unknown) =>
+    select({ unlockedAccountId: mockAccount }),
+}))
 
-  beforeEach(() => localStorage.clear())
+const SERVING: CollabHealth = {
+  status: "ok",
+  collabProtocolVersion: 2,
+  features: ["shared-chat"],
+}
 
-  afterEach(() => {
-    if (buildFlag === undefined) delete process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED
-    else process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED = buildFlag
+describe("useSharedChatAvailability", () => {
+  let health: jest.Mock<Promise<CollabHealth | null>, []>
+  let hasServer = true
+
+  beforeEach(() => {
+    localStorage.clear()
+    mockAccount = "acct"
+    hasServer = true
+    health = jest.fn(async () => SERVING)
+    __setSharedChatAvailabilityDepsForTesting({
+      accountId: () => mockAccount,
+      hasServer: () => hasServer,
+      readHealth: () => health(),
+    })
   })
 
-  it("reports enabled when the build allows it and nobody opted out", () => {
-    const { result } = renderHook(() => useSharedChatEnabled())
-    expect(result.current).toBe(true)
+  afterAll(() => __setSharedChatAvailabilityDepsForTesting(null))
+
+  it("says checking first, then what the server offers", async () => {
+    const { result } = renderHook(() => useSharedChatAvailability())
+    expect(result.current).toEqual({ state: "checking" })
+    await waitFor(() => expect(result.current.state).toBe("available"))
   })
 
-  it("picks up a stored opt-out after mount", () => {
-    writeSharedChatPreference(false)
-    const { result } = renderHook(() => useSharedChatEnabled())
-    expect(result.current).toBe(false)
+  it("names the reason when shared chat is not offered here", async () => {
+    hasServer = false
+    const { result } = renderHook(() => useSharedChatAvailability())
+    await waitFor(() => expect(result.current).toMatchObject({ reason: "no_server" }))
   })
 
-  it("follows the switch without a reload", () => {
+  it("follows the switch without a reload", async () => {
     // The point of the subscription: a header that keeps offering to share a
     // conversation after the setting was turned off is a lie the user cannot
     // see through.
     const { result } = renderHook(() => useSharedChatEnabled())
-    expect(result.current).toBe(true)
+    await waitFor(() => expect(result.current).toBe(true))
 
     act(() => writeSharedChatPreference(false))
-    expect(result.current).toBe(false)
+    await waitFor(() => expect(result.current).toBe(false))
 
     act(() => writeSharedChatPreference(true))
-    expect(result.current).toBe(true)
+    await waitFor(() => expect(result.current).toBe(true))
   })
 
-  it("stays off when the build says no, whatever was stored", () => {
-    writeSharedChatPreference(true)
-    process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED = "false"
-    const { result } = renderHook(() => useSharedChatEnabled())
-    expect(result.current).toBe(false)
+  it("asks again for another account", async () => {
+    const { result, rerender } = renderHook(() => useSharedChatAvailability())
+    await waitFor(() => expect(result.current.state).toBe("available"))
+    mockAccount = "other"
+    health.mockResolvedValueOnce({ status: "ok", collabProtocolVersion: 2, features: [] })
+    rerender()
+    await waitFor(() =>
+      expect(result.current).toMatchObject({ reason: "not_offered", accountId: "other" })
+    )
   })
 })

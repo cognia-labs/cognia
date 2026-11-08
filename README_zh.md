@@ -262,7 +262,7 @@ cognia/
 <summary><b>配置</b></summary>
 
 - **环境变量**：运行 `cp .env.example .env.local`。`NEXT_PUBLIC_*` 变量会暴露给浏览器，`lib/env.ts` 在首次访问时校验必需值。不要提交 `.env.local`。
-- **共享对话**：需要部署协作服务，构建时设置 `NEXT_PUBLIC_SHARED_CHAT_ENABLED=true`，并开启本机的共享对话设置。
+- **共享对话**：需要部署提供共享对话的协作服务（`COLLAB_SHARED_CHAT_ENABLED=true`）。应用通过服务的 `/health` 自动检测；每台机器仍可在协作设置中关闭共享对话。
 - **桌面端**：[`src-tauri/tauri.conf.json`](./src-tauri/tauri.conf.json) 定义应用标识（`com.cognia.desktop`）、`cognia://` 深链、CSP 以及随包附带的 sidecar 资源。
 - **路径别名**：`@/*` 指向仓库根目录，`@cognia/*` 指向 `packages/*/src`。
 

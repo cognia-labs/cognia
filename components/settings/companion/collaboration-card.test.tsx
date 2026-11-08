@@ -22,6 +22,7 @@ jest.mock("@/lib/accounts/active-account-id", () => ({
 }))
 
 import { loadCollabConnection, saveCollabConnection } from "@/lib/collab/connection"
+import { __setSharedChatAvailabilityDepsForTesting } from "@/lib/collab/shared-chat-availability"
 import {
   isSharedChatClientEnabled,
   readSharedChatPreference,
@@ -126,17 +127,21 @@ describe("CollaborationCard", () => {
 })
 
 describe("CollaborationCard shared-chat switch", () => {
-  const buildFlag = process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED
+  const readHealth = jest.fn()
 
   beforeEach(() => {
     localStorage.clear()
     refreshCollabPlane.mockReset()
+    readHealth.mockReset()
+    readHealth.mockResolvedValue({
+      status: "ok",
+      collabProtocolVersion: 2,
+      features: ["shared-chat"],
+    })
+    __setSharedChatAvailabilityDepsForTesting({ readHealth })
   })
 
-  afterEach(() => {
-    if (buildFlag === undefined) delete process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED
-    else process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED = buildFlag
-  })
+  afterAll(() => __setSharedChatAvailabilityDepsForTesting(null))
 
   it("starts on for a machine that has never chosen", async () => {
     render(<CollaborationCard />)
@@ -155,29 +160,57 @@ describe("CollaborationCard shared-chat switch", () => {
     await user.click(screen.getByTestId("collaboration-shared-chat"))
     expect(readSharedChatPreference()).toBe(false)
     expect(isSharedChatClientEnabled()).toBe(false)
+    expect(screen.queryByTestId("collaboration-shared-chat-availability")).not.toBeInTheDocument()
 
     await user.click(screen.getByTestId("collaboration-shared-chat"))
     expect(readSharedChatPreference()).toBe(true)
     expect(isSharedChatClientEnabled()).toBe(true)
   })
 
-  it("shows the switch disabled, with the reason, when the build says no", async () => {
-    process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED = "false"
+  it("says why shared conversations are not offered when no server is configured", async () => {
     render(<CollaborationCard />)
-
-    const toggle = await screen.findByTestId("collaboration-shared-chat")
-    await waitFor(() => expect(toggle).toBeDisabled())
-    expect(toggle).not.toBeChecked()
-    // Rendered rather than hidden: "you switched it off" and "this build never
-    // carried it" need different actions from whoever is reading.
-    expect(screen.getByText("switchBuildDisabled")).toBeInTheDocument()
+    // Rendered rather than hidden: "you switched it off", "no server yet" and
+    // "the server does not serve it" need different actions from the reader.
+    await waitFor(() =>
+      expect(screen.getByTestId("collaboration-shared-chat-availability")).toHaveTextContent(
+        "unavailable.no_server"
+      )
+    )
+    expect(readHealth).not.toHaveBeenCalled()
   })
 
-  it("never lets a local yes overrule a build that says no", async () => {
-    writeSharedChatPreference(true)
-    process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED = "false"
+  it("says the server offers them once it lists shared-chat", async () => {
+    saveCollabConnection("acct_a", { baseUrl: "https://stored.example" })
     render(<CollaborationCard />)
-    await waitFor(() => expect(screen.getByTestId("collaboration-shared-chat")).not.toBeChecked())
-    expect(isSharedChatClientEnabled()).toBe(false)
+    await waitFor(() =>
+      expect(screen.getByTestId("collaboration-shared-chat-availability")).toHaveTextContent(
+        "availability.available"
+      )
+    )
+  })
+
+  it("names a server that does not serve shared chat, and asks again on test", async () => {
+    saveCollabConnection("acct_a", { baseUrl: "https://stored.example" })
+    readHealth.mockResolvedValue({ status: "ok", collabProtocolVersion: 2, features: [] })
+    refreshCollabPlane.mockResolvedValue({ status: "refreshed", issues: 0, workspaces: 0 })
+    const user = userEvent.setup({ delay: null })
+    render(<CollaborationCard />)
+    await waitFor(() =>
+      expect(screen.getByTestId("collaboration-shared-chat-availability")).toHaveTextContent(
+        "unavailable.not_offered"
+      )
+    )
+    readHealth.mockResolvedValue({
+      status: "ok",
+      collabProtocolVersion: 2,
+      features: ["shared-chat"],
+    })
+    await waitFor(() => expect(screen.getByTestId("collaboration-test")).toBeEnabled())
+    await user.click(screen.getByTestId("collaboration-test"))
+    await waitFor(() =>
+      expect(screen.getByTestId("collaboration-shared-chat-availability")).toHaveTextContent(
+        "availability.available"
+      )
+    )
   })
 })

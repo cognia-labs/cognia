@@ -19,12 +19,12 @@
  *
  * # The shared-chat switch
  *
- * Shared conversations rode on a build-time flag alone, which meant the whole
- * plane could only be reached by rebuilding the app. The switch below is the
- * in-app half of that decision. It is rendered even when the build says no,
- * disabled and with the reason spelled out, because hiding it would merge
- * "this machine opted out" (one click away) into "this build never carried it"
- * (nothing you can do here), and those two ask different things of the reader.
+ * Shared conversations are detected, not flagged (ADR-0252 §6): they are
+ * offered when this card's server lists `shared-chat` in `/health` at a
+ * protocol this app speaks. The switch is the one thing a machine decides for
+ * itself, and under it the card says what detection found, so "this machine
+ * opted out" (one click away) never reads like "the server does not serve it"
+ * (nothing you can do here) or "no server yet" (the field below).
  */
 
 import { useCallback, useEffect, useState } from "react"
@@ -37,8 +37,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
+import { useSharedChatAvailability } from "@/hooks/collab/use-shared-chat-enabled"
+import { refreshSharedChatAvailability } from "@/lib/collab/shared-chat-availability"
 import {
-  isSharedChatBuildEnabled,
   readSharedChatPreference,
   writeSharedChatPreference,
 } from "@/lib/collab/shared-chat-feature"
@@ -61,10 +62,7 @@ export function CollaborationCard() {
   const [status, setStatus] = useState<RefreshCollabPlaneResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sharedChatOn, setSharedChatOn] = useState(true)
-  // Read once at mount rather than on every render: the value is a build
-  // constant for the life of the process, and calling it in the render body
-  // would make the static export's prerender pass disagree with the client.
-  const [buildEnabled, setBuildEnabled] = useState(true)
+  const availability = useSharedChatAvailability()
 
   useEffect(() => {
     // Deferred rather than read in a lazy `useState` initializer: this is a
@@ -77,7 +75,6 @@ export function CollaborationCard() {
       const stored = loadCollabConnection(getActiveAccountId())
       setBaseUrl(stored?.baseUrl ?? "")
       setSaved(Boolean(stored))
-      setBuildEnabled(isSharedChatBuildEnabled())
       setSharedChatOn(readSharedChatPreference() !== false)
     })
   }, [])
@@ -125,6 +122,9 @@ export function CollaborationCard() {
     setError(null)
     try {
       setStatus(await refreshCollabPlane())
+      // The same press re-reads what the server offers, so the line under the
+      // switch agrees with the result below it.
+      void refreshSharedChatAvailability({ force: true })
     } catch (cause) {
       setStatus(null)
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -147,14 +147,26 @@ export function CollaborationCard() {
           <Label className="text-xs" htmlFor="collab-shared-chat">
             {tShared("switchLabel")}
           </Label>
-          <p className="text-xs text-muted-foreground">
-            {buildEnabled ? tShared("switchHelp") : tShared("switchBuildDisabled")}
-          </p>
+          <p className="text-xs text-muted-foreground">{tShared("switchHelp")}</p>
+          {sharedChatOn ? (
+            <p
+              className={
+                availability.state === "available"
+                  ? "text-xs text-emerald-600 dark:text-emerald-400"
+                  : "text-xs text-muted-foreground"
+              }
+              data-testid="collaboration-shared-chat-availability"
+              data-state={availability.state}
+            >
+              {availability.state === "unavailable"
+                ? tShared(`unavailable.${availability.reason}`)
+                : tShared(`availability.${availability.state}`)}
+            </p>
+          ) : null}
         </div>
         <Switch
           id="collab-shared-chat"
-          checked={buildEnabled && sharedChatOn}
-          disabled={!buildEnabled}
+          checked={sharedChatOn}
           onCheckedChange={toggleSharedChat}
           data-testid="collaboration-shared-chat"
         />

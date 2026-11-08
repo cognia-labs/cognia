@@ -30,7 +30,6 @@
   "deleteTitle": "Permanently delete this shared conversation?",
   "deleteWarning": "The server will remove message content and attachments. Content cannot be recovered; metadata-only authorization audit records are retained.",
   "guest": "External guest",
-  "featureDisabled": "Shared chat is disabled",
   "guestLinkPlaceholder": "Optional user ID for a restricted guest link",
   "historyWarning": "{messages, plural, one {# message} other {# messages}} and {attachments, plural, one {# attachment} other {# attachments}} will become visible to every invited member, including the complete earlier history.",
   "historyWarningTitle": "Everyone invited later can read the full history",
@@ -102,8 +101,7 @@
   "connectionStale": "Reconnecting · draft stays local",
   "teamRoomConversion": "A team conversation cannot be shared yet: its replies are produced locally, and a shared session's come from the server.",
   "switchLabel": "Shared conversations",
-  "switchHelp": "Let this machine open conversations that several people share, with the server deciding roles, event order and approvals. Turning it off hides the sharing controls and stops this app pulling shared sessions. Nothing is deleted.",
-  "switchBuildDisabled": "This build was not compiled with shared conversations, so the switch cannot be turned on here.",
+  "switchHelp": "Let this machine open conversations that several people share, with the server deciding roles, event order and approvals. Turning it off disables the sharing controls and stops this app pulling shared sessions. Nothing is deleted.",
   "shareReferencesCancel": "Cancel",
   "shareReferencesConfirm": "Share anyway",
   "shareReferencesTitle": "This conversation quotes other conversations",
@@ -213,5 +211,17 @@
   "toolDetailConfirmWarning": "Commands and edits can hold internal hostnames, paths or secrets that redaction misses. Every member of this conversation, guests included, sees them from the next tool call on.",
   "toolDetailConfirm": "Show them",
   "toolDetailCancel": "Cancel",
-  "toolDetailFailed": "Couldn't change what members see"
+  "toolDetailFailed": "Couldn't change what members see",
+  "availability": {
+    "checking": "Checking whether your collaboration server offers shared conversations…",
+    "available": "Your collaboration server offers shared conversations."
+  },
+  "unavailable": {
+    "turned_off": "Shared conversations are turned off on this machine.",
+    "no_server": "No collaboration server is configured. Add its address in the Collaboration server settings.",
+    "not_signed_in": "Sign in to your organization to use its collaboration server.",
+    "server_unreachable": "The collaboration server cannot be reached right now.",
+    "not_offered": "Your collaboration server does not offer shared conversations.",
+    "protocol_unsupported": "Your collaboration server's shared-conversation protocol is older than this app supports. Update the server."
+  }
 }

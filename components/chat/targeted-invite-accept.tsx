@@ -32,9 +32,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useShellNav } from "@/components/shell/use-shell-nav"
-import { useSharedChatEnabled } from "@/hooks/collab/use-shared-chat-enabled"
 import { openAcceptedSharedSession } from "@/lib/collab/open-shared-session"
 import { resolveCurrentCollabContext } from "@/lib/collab/runtime-client"
+import {
+  refreshSharedChatAvailability,
+  sharedChatInertMessageKey,
+} from "@/lib/collab/shared-chat-availability"
 import type { TargetedInviteLink } from "@/lib/collab/targeted-invite-link"
 
 export interface TargetedInviteAcceptProps extends TargetedInviteLink {
@@ -45,7 +48,6 @@ export interface TargetedInviteAcceptProps extends TargetedInviteLink {
 export function TargetedInviteAccept({ inviteId, orgId, onSettled }: TargetedInviteAcceptProps) {
   const t = useTranslations("chatCollaboration")
   const { switchToDm } = useShellNav()
-  const featureEnabled = useSharedChatEnabled()
   const [open, setOpen] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -56,11 +58,6 @@ export function TargetedInviteAccept({ inviteId, orgId, onSettled }: TargetedInv
 
   const accept = async () => {
     if (busy) return
-    if (!featureEnabled) {
-      toast.error(t("featureDisabled"))
-      settle()
-      return
-    }
     if (!navigator.onLine) {
       // Kept open: the accept is never queued silently, and reconnecting then
       // pressing Accept again is the obvious next step.
@@ -68,7 +65,20 @@ export function TargetedInviteAccept({ inviteId, orgId, onSettled }: TargetedInv
       return
     }
     setBusy(true)
+    let keepOpen = false
     try {
+      // Asked here rather than read from a hook: the link opens the dialog at
+      // boot, before the first answer, and Accept must not act on `checking`.
+      const availability = await refreshSharedChatAvailability()
+      const inertKey = sharedChatInertMessageKey(availability)
+      if (inertKey) {
+        toast.error(t(inertKey))
+        // A server out of reach is "not now", like being offline: the link
+        // stays for another try. Every other reason is an answer.
+        keepOpen =
+          availability.state === "unavailable" && availability.reason === "server_unreachable"
+        return
+      }
       const context = await resolveCurrentCollabContext()
       if (!context) {
         toast.error(t("notConfigured"))
@@ -92,9 +102,9 @@ export function TargetedInviteAccept({ inviteId, orgId, onSettled }: TargetedInv
       toast.error(t("inviteAcceptFailed"))
     } finally {
       // Every outcome past this point spends the link, including the early
-      // returns above.
+      // returns above, except a server that is only out of reach.
       setBusy(false)
-      settle()
+      if (!keepOpen) settle()
     }
   }
 

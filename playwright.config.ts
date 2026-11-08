@@ -135,7 +135,6 @@ export default defineConfig({
           stderr: "pipe",
           env: {
             NEXT_PUBLIC_E2E: "1",
-            NEXT_PUBLIC_SHARED_CHAT_ENABLED: "true",
           },
         },
 

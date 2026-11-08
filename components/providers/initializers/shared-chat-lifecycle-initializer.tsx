@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 import { subscribeCollabConnection } from "@/lib/collab/connection"
 import { resolveCurrentCollabContext } from "@/lib/collab/runtime-client"
-import { useSharedChatEnabled } from "@/hooks/collab/use-shared-chat-enabled"
+import { useSharedChatAvailability } from "@/hooks/collab/use-shared-chat-enabled"
+import { keepsSharedChatRunning } from "@/lib/collab/shared-chat-availability"
 import {
   recoverSharedSessionRun,
   suspendSharedSessionRuns,
@@ -24,7 +25,10 @@ import { useProjectStore } from "@/stores/project/project-store"
 export function SharedChatLifecycleInitializer() {
   const localAccountId = useAccountStore((state) => state.unlockedAccountId)
   const workspaceId = useProjectStore((state) => state.activeProjectId)
-  const enabled = useSharedChatEnabled()
+  // Up while shared chat is offered, and while the server is only out of
+  // reach: a network blip must not suspend a run this machine executes, and
+  // the streams below reconnect on their own.
+  const enabled = keepsSharedChatRunning(useSharedChatAvailability())
   const sessionIdsKey = useChatStore((state) =>
     JSON.stringify(
       [

@@ -119,6 +119,10 @@ const unknownGate: MockGate = {
   canRead: true,
 }
 const mockGates: Record<string, MockGate> = {}
+let mockAvailability: Record<string, unknown> = { state: "available" }
+jest.mock("@/hooks/collab/use-shared-chat-enabled", () => ({
+  useSharedChatAvailability: () => mockAvailability,
+}))
 jest.mock("@/hooks/collab/use-collab-feature", () => ({
   useCollabFeature: (key: string) => mockGates[key] ?? unknownGate,
 }))
@@ -163,6 +167,27 @@ describe("SharedSessionPanel", () => {
     jest.clearAllMocks()
     resolveContext.mockReset().mockResolvedValue(null)
     mockScan.mockResolvedValue([])
+    mockAvailability = { state: "available" }
+  })
+
+  it("keeps the trigger, inert and naming why, when shared chat is not offered", () => {
+    mockAvailability = { state: "unavailable", reason: "not_offered", accountId: "a", checkedAt: 0 }
+    render(<SharedSessionPanel session={session()} />)
+    const trigger = screen.getByRole("button", { name: "unavailable.not_offered" })
+    expect(trigger).toBeDisabled()
+    expect(trigger).toHaveAttribute("title", "unavailable.not_offered")
+    expect(trigger).toHaveAttribute("data-unavailable", "not_offered")
+  })
+
+  it("stays usable while the server is only out of reach", () => {
+    mockAvailability = {
+      state: "unavailable",
+      reason: "server_unreachable",
+      accountId: "a",
+      checkedAt: 0,
+    }
+    render(<SharedSessionPanel session={session()} />)
+    expect(screen.getByRole("button", { name: "openPrivateSession" })).toBeEnabled()
   })
 
   it("marks legacy and local sessions private by default", () => {

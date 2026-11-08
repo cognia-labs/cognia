@@ -11196,6 +11196,10 @@
     "approver": "审批人",
     "audit": "授权审计",
     "auditActor": "{user} · {reason}",
+    "availability": {
+      "available": "协作服务器已提供共享会话。",
+      "checking": "正在确认协作服务器是否提供共享会话…"
+    },
     "backgroundDraft": "根据本对话起草",
     "backgroundDraftFailed": "无法起草背景说明，你可以自己填写。",
     "backgroundHeading": "来自之前一段私有对话的背景：",
@@ -11224,7 +11228,6 @@
     "deleteWarning": "服务器将清除消息正文与附件，内容无法恢复；仅保留不含正文的授权审计元数据。",
     "denied": "拒绝",
     "deny": "拒绝",
-    "featureDisabled": "共享聊天已停用",
     "files": {
       "browse": "浏览",
       "cancel": "取消",
@@ -11376,8 +11379,7 @@
     "sharedDescription": "成员、消息、运行、审批和附件均以服务器权限为准。",
     "sharedTitle": "共享会话",
     "startShared": "开始共享对话",
-    "switchBuildDisabled": "当前构建未启用共享会话，因此无法在这里打开。",
-    "switchHelp": "允许本机打开多人共享的会话，角色、事件顺序和审批由服务端决定。关闭后会隐藏共享入口，并停止本应用拉取共享会话，不会删除任何数据。",
+    "switchHelp": "允许本机打开多人共享的会话，角色、事件顺序和审批由服务端决定。关闭后共享入口会变为不可用，并停止本应用拉取共享会话，不会删除任何数据。",
     "switchLabel": "共享会话",
     "takeoverExecution": "接管执行",
     "targetedInvite": {
@@ -11400,6 +11402,14 @@
     "toolDetailLabel": "向成员显示命令和编辑内容",
     "toolDetailReadOnly": "只有所有者或维护者可以更改此项。",
     "transferBeforeLeaving": "退出前请将另一位成员设为 Owner，最后一位所有者不能退出。",
+    "unavailable": {
+      "no_server": "尚未配置协作服务器。请在“协作服务器”设置中填写地址。",
+      "not_offered": "协作服务器未提供共享会话。",
+      "not_signed_in": "请先登录你的组织，才能使用其协作服务器。",
+      "protocol_unsupported": "协作服务器的共享会话协议版本低于本应用支持的版本，请升级服务器。",
+      "server_unreachable": "暂时无法连接协作服务器。",
+      "turned_off": "本机已关闭共享会话。"
+    },
     "updateFailed": "成员状态已在其他位置变化或无法更新。",
     "userId": "用户 ID",
     "userIdPlaceholder": "usr_…"

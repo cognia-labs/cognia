@@ -6,7 +6,7 @@ const mockOpen = jest.fn()
 const mockError = jest.fn()
 const mockSuccess = jest.fn()
 const mockSwitchToDm = jest.fn()
-let mockEnabled = true
+let mockAvailability: Record<string, unknown> = { state: "available" }
 
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 jest.mock("sonner", () => ({
@@ -24,10 +24,9 @@ jest.mock("@/lib/collab/runtime-client", () => ({
 jest.mock("@/lib/collab/open-shared-session", () => ({
   openAcceptedSharedSession: (...args: unknown[]) => mockOpen(...args),
 }))
-jest.mock("@/lib/collab/shared-chat-feature", () => ({
-  isSharedChatBuildEnabled: () => mockEnabled,
-  isSharedChatClientEnabled: () => mockEnabled,
-  subscribeSharedChatPreference: () => () => {},
+jest.mock("@/lib/collab/shared-chat-availability", () => ({
+  ...jest.requireActual("@/lib/collab/shared-chat-availability"),
+  refreshSharedChatAvailability: async () => mockAvailability,
 }))
 
 import userEvent from "@testing-library/user-event"
@@ -43,7 +42,7 @@ function renderDialog(onSettled = jest.fn()) {
 
 beforeEach(() => {
   jest.clearAllMocks()
-  mockEnabled = true
+  mockAvailability = { state: "available" }
   Object.defineProperty(navigator, "onLine", { configurable: true, value: true })
   mockResolve.mockResolvedValue({ orgId: "org_1", userId: "usr_me", client })
   mockAcceptTargeted.mockResolvedValue({ invite: { sessionId: "ses_shared" }, membership: {} })
@@ -165,16 +164,34 @@ describe("TargetedInviteAccept", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument()
   })
 
-  it("says so when shared chat is turned off, without contacting the server", async () => {
-    mockEnabled = false
+  it("says why when shared chat is not offered, and spends the link", async () => {
+    mockAvailability = { state: "unavailable", reason: "turned_off", accountId: "a", checkedAt: 0 }
     const user = userEvent.setup()
     const onSettled = renderDialog()
 
     await user.click(screen.getByRole("button", { name: "targetedInvite.accept" }))
 
-    expect(mockError).toHaveBeenCalledWith("featureDisabled")
+    await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1))
+    expect(mockError).toHaveBeenCalledWith("unavailable.turned_off")
     expect(mockResolve).not.toHaveBeenCalled()
-    expect(onSettled).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps the link when the server is only out of reach", async () => {
+    mockAvailability = {
+      state: "unavailable",
+      reason: "server_unreachable",
+      accountId: "a",
+      checkedAt: 0,
+    }
+    const user = userEvent.setup()
+    const onSettled = renderDialog()
+
+    await user.click(screen.getByRole("button", { name: "targetedInvite.accept" }))
+
+    await waitFor(() => expect(mockError).toHaveBeenCalledWith("unavailable.server_unreachable"))
+    expect(mockResolve).not.toHaveBeenCalled()
+    expect(onSettled).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "targetedInvite.accept" })).toBeEnabled()
   })
 
   it("locks both buttons while the accept is on the wire", async () => {

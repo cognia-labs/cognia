@@ -31,7 +31,10 @@ jest.mock("@/components/chat/shared-session-panel", () => ({
 }))
 let mockSharedChatEnabled = true
 jest.mock("@/hooks/collab/use-shared-chat-enabled", () => ({
-  useSharedChatEnabled: () => mockSharedChatEnabled,
+  useSharedChatAvailability: () =>
+    mockSharedChatEnabled
+      ? { state: "available", accountId: "a", checkedAt: 0 }
+      : { state: "unavailable", reason: "no_server", accountId: "a", checkedAt: 0 },
 }))
 jest.mock("@/components/chat/shared-session-join", () => ({
   SharedSessionJoin: () => <div data-testid="shared-mobile-join" />,
@@ -1372,7 +1375,7 @@ describe("<AppShellMobile />", () => {
     expect(screen.queryByTestId("mobile-action-share-conversation")).not.toBeInTheDocument()
   })
 
-  it("spends no row on the sharing control while shared chat is off", () => {
+  it("spends no row on the sharing control while shared chat is not offered, and says why in ⋮", async () => {
     mockSharedChatEnabled = false
     try {
       sessionsRef.current = [
@@ -1385,9 +1388,16 @@ describe("<AppShellMobile />", () => {
         } as ChatSession,
       ]
       activeSessionId = "s-1"
+      const user = userEvent.setup()
       render(<AppShellMobile />)
       expect(screen.queryByTestId("mobile-shared-session-strip")).not.toBeInTheDocument()
       expect(screen.queryByTestId("shared-mobile-controls")).not.toBeInTheDocument()
+      await user.click(screen.getByTestId("mobile-actions-trigger"))
+      const share = await screen.findByTestId("mobile-action-share-conversation")
+      expect(share).toHaveAttribute("aria-disabled", "true")
+      expect(screen.getByTestId("mobile-action-share-conversation-reason")).toHaveTextContent(
+        "unavailable.no_server"
+      )
     } finally {
       mockSharedChatEnabled = true
     }

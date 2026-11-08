@@ -6,9 +6,10 @@ const mockSync = jest.fn()
 const mockResolve = jest.fn()
 const mockClose = jest.fn()
 const mockRecover = jest.fn()
+const mockSuspend = jest.fn()
 jest.mock("@/lib/collab/shared-run-coordinator", () => ({
   recoverSharedSessionRun: (...args: unknown[]) => mockRecover(...args),
-  suspendSharedSessionRuns: jest.fn(),
+  suspendSharedSessionRuns: () => mockSuspend(),
 }))
 let mockAccount: string | null = "account"
 let mockWorkspace: string | null = "workspace"
@@ -20,7 +21,7 @@ let mockOpenSessionIds: string[] = []
 let mockPaneIdsBySession: Record<string, string[]> = {}
 let mockExtraSessions: Record<string, typeof mockSession> = {}
 let mockIdentity: { userId: string; orgId: string; updatedAt: number } | undefined
-let mockEnabled = true
+let mockEnabled: boolean | "unreachable" = true
 let mockConnectionChanged: () => void
 const mockUnsubscribe = jest.fn()
 jest.mock("@/lib/identity/user-binding", () => ({
@@ -57,11 +58,16 @@ jest.mock("@/lib/collab/connection", () => ({
     return mockUnsubscribe
   },
 }))
-jest.mock("@/lib/collab/shared-chat-feature", () => ({
-  isSharedChatClientEnabled: () => mockEnabled,
-}))
 jest.mock("@/hooks/collab/use-shared-chat-enabled", () => ({
-  useSharedChatEnabled: () => mockEnabled,
+  useSharedChatAvailability: () =>
+    mockEnabled === true
+      ? { state: "available", accountId: "account", checkedAt: 0 }
+      : {
+          state: "unavailable",
+          reason: mockEnabled ? "server_unreachable" : "turned_off",
+          accountId: "account",
+          checkedAt: 0,
+        },
 }))
 jest.mock("@/lib/collab/runtime-client", () => ({
   resolveCurrentCollabContext: (...args: unknown[]) => mockResolve(...args),
@@ -121,6 +127,14 @@ it("does not start collaboration for a locked profile or disabled feature", () =
   mockEnabled = false
   view.rerender(<SharedChatLifecycleInitializer />)
   expect(mockResolve).not.toHaveBeenCalled()
+})
+
+it("keeps the plane up while the server is only out of reach", async () => {
+  // A network blip must not suspend a run this machine executes.
+  mockEnabled = "unreachable"
+  render(<SharedChatLifecycleInitializer />)
+  await waitFor(() => expect(mockConnect).toHaveBeenCalledTimes(1))
+  expect(mockSuspend).not.toHaveBeenCalled()
 })
 
 it("does not subscribe to another endpoint or organization", async () => {

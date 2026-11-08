@@ -108,7 +108,11 @@ export async function installCollabScenario(
     scenario.requests.push({ method, pathname: url.pathname, body })
 
     if (url.pathname === "/health")
-      return json(route, { status: "ok", features: ["shared-chat", "shared-chat-execution-v2"] })
+      return json(route, {
+        status: "ok",
+        collabProtocolVersion: 2,
+        features: ["shared-chat", "shared-chat-execution-v2"],
+      })
     if (url.pathname.endsWith("/stream-tickets"))
       return json(route, { ticket: "test-ticket", expiresAt: Date.now() + 60_000 })
     if (url.pathname.endsWith("/chat-sessions") && method === "GET")

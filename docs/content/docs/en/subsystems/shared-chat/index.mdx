@@ -62,10 +62,15 @@ through a short-lived device- and Run-bound lease token.
 
 ## Rollout
 
-Both flags must be enabled: `COLLAB_SHARED_CHAT_ENABLED=true` on the service and
-`NEXT_PUBLIC_SHARED_CHAT_ENABLED=true` in the product build. Disabling either flag stops new shared
-entry and writes without dropping tables, objects, mirrors, or private sessions. Health reports
-protocol v2 and includes `shared-chat` only when the server flag is enabled.
+The service decides: `COLLAB_SHARED_CHAT_ENABLED=true` mounts the shared routes, and `/health` then
+reports protocol v2 with `shared-chat` in its features. The app has no build flag for it (ADR-0252
+§6). It detects shared chat from the configured collaboration server's `/health`
+(`lib/collab/shared-chat-availability.ts`) and offers it when the account is signed in and the
+protocol is one it speaks. When it is not available, every entry point stays visible, inert, and
+names the reason: turned off on this machine, no server, not signed in, server unreachable, not
+offered, or an unsupported protocol. Each machine can still turn shared conversations off in its
+collaboration settings. Turning the service flag or the machine switch off stops new shared entry
+and writes without dropping tables, objects, mirrors, or private sessions.
 
 The architecture decision and threat model are recorded in
 `docs/plans/2026-08-29-server-authoritative-shared-ai-chat.md` and the 2026-08-29 supplement to ADR-0149.

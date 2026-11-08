@@ -262,7 +262,7 @@ The [directory guide](./docs/README.md) says where new files belong.
 <summary><b>Configuration</b></summary>
 
 - **Environment.** Run `cp .env.example .env.local`. `NEXT_PUBLIC_*` values reach the browser, and `lib/env.ts` validates required values on first access. Never commit `.env.local`.
-- **Shared conversations** need a deployed collaboration service, a build with `NEXT_PUBLIC_SHARED_CHAT_ENABLED=true`, and the local shared-chat preference turned on.
+- **Shared conversations** need a deployed collaboration service that serves them (`COLLAB_SHARED_CHAT_ENABLED=true`). The app detects it from the service's `/health`; each machine can still turn shared conversations off in its collaboration settings.
 - **Desktop.** [`src-tauri/tauri.conf.json`](./src-tauri/tauri.conf.json) sets the app ID (`com.cognia.desktop`), the `cognia://` deep link, the CSP, and the bundled sidecar resources.
 - **Path aliases.** `@/*` maps to the repo root and `@cognia/*` to `packages/*/src`.
 

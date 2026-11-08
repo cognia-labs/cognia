@@ -71,7 +71,8 @@ import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layo
 import { SingleExportDialog } from "@/components/data/export/single-export-dialog"
 import { SessionSettingsSheet } from "@/components/chat/session-settings-sheet"
 import { SharedSessionPanel } from "@/components/chat/shared-session-panel"
-import { useSharedChatEnabled } from "@/hooks/collab/use-shared-chat-enabled"
+import { useSharedChatAvailability } from "@/hooks/collab/use-shared-chat-enabled"
+import { sharedChatInertMessageKey } from "@/lib/collab/shared-chat-availability"
 import { MobileGlanceDrawer } from "@/components/mobile/glance/mobile-glance-drawer"
 import { MobileGlanceHome } from "@/components/mobile/glance/mobile-glance-home"
 import {
@@ -184,6 +185,7 @@ export function AppShellMobile() {
   const tShell = useTranslations("mobile.shell")
   const tChatRuntime = useTranslations("desktop.chatRuntime")
   const tRail = useTranslations("desktop.guildRail")
+  const tSharedChat = useTranslations("chatCollaboration")
   const router = useRouter()
   // Same reach contract as the desktop sidebar: grouping by workspace, or a
   // search told to reach every workspace, loads the cross-workspace list.
@@ -414,7 +416,9 @@ export function AppShellMobile() {
 
   const isTeamSession = activeSession?.kind === "team" && Boolean(activeSession.teamId)
   const activeRoomKind = roomKindOf(activeSession)
-  const sharedChatEnabled = useSharedChatEnabled()
+  // Not offered → the share action stays in the menu, inert, with the reason.
+  const sharedChatInertKey = sharedChatInertMessageKey(useSharedChatAvailability())
+  const sharedChatEnabled = sharedChatInertKey === null
 
   // Was a count of `inboundLedger` rows newer than `lastInboxViewedAt`. That
   // ledger is host-only and never syncs, so the dot was permanently dark on a
@@ -977,16 +981,28 @@ export function AppShellMobile() {
                     <span>{tShell("sessionSettings")}</span>
                   </DropdownMenuItem>
                 ) : null}
-                {activeSession && sharedChatEnabled && !activeSession.collaboration ? (
+                {activeSession && !activeSession.collaboration ? (
                   <DropdownMenuItem
+                    className="items-start"
+                    disabled={!sharedChatEnabled}
                     onSelect={() => {
                       // Defer so the menu can close before the sheet grabs focus.
                       setTimeout(() => setSharePanelOpen(true), 0)
                     }}
                     data-testid="mobile-action-share-conversation"
                   >
-                    <UsersIcon className="size-4" />
-                    <span>{tShell("shareConversation")}</span>
+                    <UsersIcon className="mt-0.5 size-4" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>{tShell("shareConversation")}</span>
+                      {sharedChatInertKey ? (
+                        <span
+                          className="text-xs text-muted-foreground"
+                          data-testid="mobile-action-share-conversation-reason"
+                        >
+                          {tSharedChat(sharedChatInertKey)}
+                        </span>
+                      ) : null}
+                    </span>
                   </DropdownMenuItem>
                 ) : null}
                 {activeSession ? (
@@ -1025,7 +1041,9 @@ export function AppShellMobile() {
           trigger). A private one used to get the same bordered row for a
           single lock button; its way in is the ⋮ menu's "Share conversation…"
           now, which drives the same sheet. */}
-        {activeSession && sharedChatEnabled ? (
+        {/* A shared conversation keeps its strip whatever detection says: its
+          panel trigger turns inert and names the reason itself. */}
+        {activeSession && (sharedChatEnabled || activeSession.collaboration) ? (
           activeSession.collaboration ? (
             <div
               className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b px-3 py-1"

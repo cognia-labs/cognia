@@ -1,6 +1,6 @@
+/** @jest-environment jsdom */
 import {
   assertSharedChatClientEnabled,
-  isSharedChatBuildEnabled,
   isSharedChatClientEnabled,
   readSharedChatPreference,
   writeSharedChatPreference,
@@ -18,25 +18,37 @@ function memoryStore(seed: Record<string, string> = {}) {
   }
 }
 
-describe("shared chat client rollout gate", () => {
-  it("fails closed in production unless explicitly enabled", () => {
-    expect(isSharedChatClientEnabled(undefined, "production")).toBe(false)
-    expect(isSharedChatClientEnabled("false", "production")).toBe(false)
-    expect(isSharedChatClientEnabled("true", "production")).toBe(true)
-    expect(isSharedChatClientEnabled(" TRUE ", "production")).toBe(true)
+describe("the machine's own gate", () => {
+  it("allows shared chat unless this machine said no", () => {
+    expect(isSharedChatClientEnabled(memoryStore())).toBe(true)
+    expect(
+      isSharedChatClientEnabled(memoryStore({ "cognia.collab.shared-chat-enabled": "true" }))
+    ).toBe(true)
+    expect(
+      isSharedChatClientEnabled(memoryStore({ "cognia.collab.shared-chat-enabled": "false" }))
+    ).toBe(false)
   })
 
-  it("keeps the feature directly testable", () => {
-    expect(isSharedChatClientEnabled(undefined, "test")).toBe(true)
+  it("throws the refusal every write path names once the machine said no", () => {
+    localStorage.clear()
+    expect(() => assertSharedChatClientEnabled()).not.toThrow()
+    writeSharedChatPreference(false)
+    expect(() => assertSharedChatClientEnabled()).toThrow("SHARED_CHAT_DISABLED")
+    writeSharedChatPreference(undefined)
     expect(() => assertSharedChatClientEnabled()).not.toThrow()
   })
 
-  it("reports the build switch separately from the local choice", () => {
-    // The settings surface needs these apart to say why the control is off.
-    expect(isSharedChatBuildEnabled("true", "production")).toBe(true)
-    const off = memoryStore({ "cognia.collab.shared-chat-enabled": "false" })
-    expect(isSharedChatBuildEnabled("true", "production")).toBe(true)
-    expect(isSharedChatClientEnabled("true", "production", off)).toBe(false)
+  it("no longer reads a build switch", () => {
+    // The plane is detected (`./shared-chat-availability.ts`); a stale build
+    // variable must not turn a machine's yes into a no.
+    const previous = process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED
+    process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED = "false"
+    try {
+      expect(isSharedChatClientEnabled(memoryStore())).toBe(true)
+    } finally {
+      if (previous === undefined) delete process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED
+      else process.env.NEXT_PUBLIC_SHARED_CHAT_ENABLED = previous
+    }
   })
 })
 
@@ -44,7 +56,7 @@ describe("shared chat local preference", () => {
   it("treats a machine that never chose as opted in", () => {
     const store = memoryStore()
     expect(readSharedChatPreference(store)).toBeUndefined()
-    expect(isSharedChatClientEnabled("true", "production", store)).toBe(true)
+    expect(isSharedChatClientEnabled(store)).toBe(true)
   })
 
   it("round-trips a choice and forgets it again", () => {
@@ -60,13 +72,6 @@ describe("shared chat local preference", () => {
   it("ignores a stored value that is not a boolean", () => {
     const store = memoryStore({ "cognia.collab.shared-chat-enabled": "yes please" })
     expect(readSharedChatPreference(store)).toBeUndefined()
-  })
-
-  it("never lets the local choice overrule a build that says no", () => {
-    const store = memoryStore()
-    writeSharedChatPreference(true, store)
-    expect(isSharedChatClientEnabled("false", "production", store)).toBe(false)
-    expect(isSharedChatClientEnabled(undefined, "production", store)).toBe(false)
   })
 
   it("survives storage that throws", () => {
@@ -85,6 +90,6 @@ describe("shared chat local preference", () => {
     }
     expect(readSharedChatPreference(hostile)).toBeUndefined()
     expect(() => writeSharedChatPreference(false, hostile)).not.toThrow()
-    expect(isSharedChatClientEnabled("true", "production", hostile)).toBe(true)
+    expect(isSharedChatClientEnabled(hostile)).toBe(true)
   })
 })

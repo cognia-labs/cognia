@@ -66,7 +66,11 @@ import {
   type SharedTranscriptReference,
 } from "@/lib/collab/shared-reference-scan"
 import { useCollabFeature } from "@/hooks/collab/use-collab-feature"
-import { useSharedChatEnabled } from "@/hooks/collab/use-shared-chat-enabled"
+import { useSharedChatAvailability } from "@/hooks/collab/use-shared-chat-enabled"
+import {
+  keepsSharedChatRunning,
+  sharedChatInertMessageKey,
+} from "@/lib/collab/shared-chat-availability"
 import { resolveCurrentCollabContext, type CurrentCollabContext } from "@/lib/collab/runtime-client"
 import { syncSharedSession, sharedChatCacheKey } from "@/lib/collab/shared-chat-sync"
 import { deleteSessionsWithTeardown } from "@/lib/chat/session-deletion"
@@ -573,9 +577,15 @@ export function SharedSessionPanel({
   }
 
   const isShared = Boolean(session.collaboration)
-  const featureEnabled = useSharedChatEnabled()
+  // Usable while shared chat is offered, and while the server is only out of
+  // reach: the panel already says "offline" and gates its own writes on it.
+  // Otherwise the trigger stays, inert, and names the reason.
+  const availability = useSharedChatAvailability()
+  const featureEnabled = keepsSharedChatRunning(availability)
+  const inertKey = sharedChatInertMessageKey(availability)
+  const inertLabel = inertKey ? t(inertKey) : ""
   // The server's rollout decision for this org and workspace. It can only
-  // narrow what the build flag and preference allow, and the server re-checks
+  // narrow what detection and the preference allow, and the server re-checks
   // every write regardless; these gates say why before the click, not after.
   const collabWorkspaceId = session.collaboration?.workspaceId ?? session.projectId ?? null
   const chatGate = useCollabFeature("shared-chat", collabWorkspaceId)
@@ -623,8 +633,8 @@ export function SharedSessionPanel({
             desktop is projected into the title bar next to the workspace pill
             and the route history — and it was the one control there carrying a
             permanent text label. In the default state that label is the word
-            for "nothing is shared", and with the collaboration client switched
-            off it grew to a whole disabled sentence, so the bar's widest chunk
+            for "nothing is shared", and with shared chat not offered it grew
+            to a whole disabled sentence, so the bar's widest chunk
             of chrome was also its least informative. The lock / users icon
             already carries the state; the words moved to `title`, which is
             where every other control in that row keeps them. */}
@@ -633,13 +643,20 @@ export function SharedSessionPanel({
             size="icon"
             className="size-7 shrink-0 text-muted-foreground"
             disabled={!featureEnabled}
-            title={featureEnabled ? (isShared ? t("shared") : t("private")) : t("featureDisabled")}
+            title={featureEnabled ? (isShared ? t("shared") : t("private")) : inertLabel}
             aria-label={
               featureEnabled
                 ? isShared
                   ? t("openSharedSession")
                   : t("openPrivateSession")
-                : t("featureDisabled")
+                : inertLabel
+            }
+            data-unavailable={
+              featureEnabled
+                ? undefined
+                : availability.state === "unavailable"
+                  ? availability.reason
+                  : "checking"
             }
           >
             {isShared ? <UsersIcon className="size-3.5" /> : <LockIcon className="size-3.5" />}
