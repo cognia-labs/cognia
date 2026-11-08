@@ -38573,6 +38573,12 @@
     "enabled": "Enabled",
     "enabledHint": "When off, setup and actions are skipped and report success.",
     "failure": "Environment command failed: {message}",
+    "initNotice": {
+      "miseMissing": "mise install was skipped: mise is not on PATH where setup runs. Cognia does not install it.",
+      "miseNoSafeMode": "mise install was skipped: this mise has no safe mode, so it could run the repository's hooks or tasks. Update mise to run it.",
+      "miseNotApproved": "mise install was skipped: this copy's mise.toml or lockfile is not the one accepted under Worktree provisioning.",
+      "miseUntrusted": "mise install was skipped: this workspace is not trusted."
+    },
     "initStatus": {
       "bypassed": "bypassed",
       "cancelled": "cancelled",
@@ -38662,7 +38668,8 @@
       "activeTitle": "In use for new worktrees",
       "candidate": {
         "cacheLink": "Link {path} from this checkout",
-        "include": "Copy {path} into each worktree"
+        "include": "Copy {path} into each worktree",
+        "setupStep": "Run mise install for the tools {path} pins"
       },
       "decline": "No thanks",
       "declinedTitle": "Declined",
@@ -38680,6 +38687,7 @@
       "retry": "Try again",
       "risk": {
         "copiedSecret": "{path} holds credentials. Each worktree gets its own copy on disk.",
+        "installsTools": "Before setup, mise downloads and installs the tool versions {path} pins, in its safe mode: the file's tasks, hooks and env settings never run, and mise itself is never installed. Editing the file or its lockfile asks again.",
         "sharedBuildDir": "Worktrees share this build directory with your checkout, so branches with different features rebuild over each other.",
         "sharedInstall": "Worktrees share this directory with your checkout. A task that installs different dependencies changes what you are working in."
       },

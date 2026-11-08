@@ -51,6 +51,7 @@ import {
   type ProvisioningConsent,
 } from "@/lib/workspace/provisioning-inference"
 import { probePnpmVirtualStore } from "@/lib/workspace/pnpm-virtual-store"
+import { MISE_CONFIG_FILES, readMiseFiles, type MiseFiles } from "@/lib/workspace/mise-step"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { Project } from "@/types"
 
@@ -74,6 +75,8 @@ export interface ProvisioningOfferState {
 export interface UseProvisioningOfferDeps {
   listRoot: (root: string, includeIgnored: boolean) => Promise<ProbeEntry[]>
   probePnpm: (root: string) => Promise<PnpmVirtualStore>
+  /** The root's mise files and their digest (`mise-step.ts`), or null. */
+  readMise: (root: string) => Promise<MiseFiles | null>
   applyToWorkspace: (projectId: string, patch: Partial<Project>) => void
   /** Whether this runtime can list the root. Production asks the command gate. */
   readGate?: WorkspaceCommandGate
@@ -86,6 +89,16 @@ const DEFAULT_DEPS: UseProvisioningOfferDeps = {
     return entries.map((entry) => ({ name: entry.relPath, isDir: entry.isDir }))
   },
   probePnpm: (root) => probePnpmVirtualStore(root),
+  readMise: async (root) => {
+    const [{ readWorkspaceFile }, { sha256String }] = await Promise.all([
+      import("@/lib/files/workspace-fs"),
+      import("@/lib/utils/hash"),
+    ])
+    return readMiseFiles(root, {
+      readFile: (base, relPath) => readWorkspaceFile(base, relPath),
+      sha256Hex: sha256String,
+    })
+  },
   applyToWorkspace: (projectId, patch) =>
     useProjectStore.getState().updateProject(projectId, patch),
 }
@@ -140,10 +153,16 @@ export function useProvisioningOffer(
         .filter((entry) => !visibleNames.has(entry.name))
         .map((entry) => entry.name)
       const pnpm = await resolved.probePnpm(root).catch<PnpmVirtualStore>(() => "unknown")
+      // Read only when the listing shows a mise config: its content is what the
+      // proposal, and so the acceptance, is bound to.
+      const hasMise = all.some((entry) =>
+        (MISE_CONFIG_FILES as readonly string[]).includes(entry.name)
+      )
+      const mise = hasMise ? await resolved.readMise(root).catch(() => null) : null
       if (cancelled) return
       setSettled({
         key: requestKey,
-        candidates: failed ? [] : inferProvisioning({ entries: all, ignored, pnpm }),
+        candidates: failed ? [] : inferProvisioning({ entries: all, ignored, pnpm, mise }),
         pnpm,
         failed,
       })

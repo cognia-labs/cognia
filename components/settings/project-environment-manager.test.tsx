@@ -723,6 +723,27 @@ describe("the environment list and the editor's guard rails", () => {
     expect(screen.getByRole("button", { name: "Bypass once" })).toBeInTheDocument()
   })
 
+  it("says what setup skipped, such as mise install", async () => {
+    listMock.mockResolvedValue([
+      stored({
+        lastInitialization: {
+          status: "succeeded",
+          scope: "managedWorktree",
+          executionRoot: "/wt",
+          startedAt: 1,
+          completedAt: 2,
+          notices: ["miseMissing", "notAKnownNotice"],
+        },
+      }),
+    ])
+    render2()
+    const lastRun = await screen.findByTestId("project-environment-last-run")
+    expect(lastRun).toHaveTextContent("mise is not on PATH where setup runs")
+    expect(screen.getByTestId("project-environment-notice-miseMissing")).toBeInTheDocument()
+    // A key this build has no words for is left out rather than shown raw.
+    expect(screen.queryByTestId("project-environment-notice-notAKnownNotice")).toBeNull()
+  })
+
   it("titles the runtime section with what it promises", async () => {
     listMock.mockResolvedValue([stored()])
     render2()

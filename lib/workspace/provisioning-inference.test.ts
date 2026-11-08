@@ -13,7 +13,11 @@ import {
 
 function probe(
   names: Array<string | ProbeEntry>,
-  options: { ignored?: string[]; pnpm?: ProvisioningProbe["pnpm"] } = {}
+  options: {
+    ignored?: string[]
+    pnpm?: ProvisioningProbe["pnpm"]
+    mise?: ProvisioningProbe["mise"]
+  } = {}
 ): ProvisioningProbe {
   return {
     entries: names.map((name) =>
@@ -21,6 +25,7 @@ function probe(
     ),
     ignored: options.ignored ?? [],
     pnpm: options.pnpm ?? "unknown",
+    ...(options.mise !== undefined ? { mise: options.mise } : {}),
   }
 }
 
@@ -87,6 +92,28 @@ describe("inferProvisioning", () => {
     expect(candidates[0].riskKey).toBe("copiedSecret")
   })
 
+  it("offers mise install for a pinned toolchain, bound to the files' content", () => {
+    const mise = { files: ["mise.toml", "mise.lock"], digest: "0123456789abcdef" }
+    const candidates = inferProvisioning(probe(["mise.toml", "mise.lock"], { mise }))
+    expect(candidates).toEqual([
+      {
+        id: "setupStep:mise@0123456789abcdef",
+        kind: "setupStep",
+        path: "mise.toml",
+        evidence: ["mise.toml", "mise.lock"],
+        riskKey: "installsTools",
+      },
+    ])
+    // A different content is a different proposal, which an old answer does not cover.
+    const edited = inferProvisioning(
+      probe(["mise.toml"], { mise: { files: ["mise.toml"], digest: "fedcba9876543210" } })
+    )
+    expect(
+      pendingCandidates(edited, withDecision(EMPTY_CONSENT, [candidates[0]!.id], true))
+    ).toHaveLength(1)
+    expect(inferProvisioning(probe(["mise.toml"], { mise: null }))).toEqual([])
+  })
+
   it("does not offer to copy a tracked env file", () => {
     const candidates = inferProvisioning(probe([{ name: ".env", isDir: false }]))
     expect(candidates).toEqual([])
@@ -132,6 +159,14 @@ describe("provisioningFromConsent", () => {
       cacheLinks: [{ source: "node_modules", target: "node_modules" }],
       include: [".env"],
     })
+  })
+
+  it("leaves the accepted mise step to setup, out of the worktree payload", () => {
+    expect(
+      provisioningFromConsent(
+        withDecision(EMPTY_CONSENT, ["setupStep:mise@0123456789abcdef"], true)
+      )
+    ).toBeUndefined()
   })
 
   it("returns undefined rather than empty arrays when nothing is accepted", () => {

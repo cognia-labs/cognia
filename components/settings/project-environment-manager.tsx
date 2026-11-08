@@ -725,6 +725,17 @@ export function ProjectEnvironmentManager({
                     {lastRun.error}
                   </p>
                 ) : null}
+                {(lastRun?.notices ?? [])
+                  .filter((notice) => t.has(`initNotice.${notice}`))
+                  .map((notice) => (
+                    <p
+                      key={notice}
+                      className="mt-1 text-[11px] text-amber-700 dark:text-amber-400"
+                      data-testid={`project-environment-notice-${notice}`}
+                    >
+                      {t(`initNotice.${notice}`)}
+                    </p>
+                  ))}
               </div>
             </ProjectEnvironmentSection>
 

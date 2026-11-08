@@ -38573,6 +38573,12 @@
     "enabled": "已启用",
     "enabledHint": "关闭后，初始化和动作都会被跳过并直接报告成功。",
     "failure": "环境命令失败：{message}",
+    "initNotice": {
+      "miseMissing": "已跳过 mise install：运行初始化的环境里 PATH 上没有 mise。Cognia 不会安装它。",
+      "miseNoSafeMode": "已跳过 mise install：这个版本的 mise 没有安全模式，可能会运行仓库的 hooks 或 tasks。升级 mise 后才会运行。",
+      "miseNotApproved": "已跳过 mise install：这个副本的 mise.toml 或锁文件不是在“工作树供给”中接受的那一份。",
+      "miseUntrusted": "已跳过 mise install：这个工作区未被信任。"
+    },
     "initStatus": {
       "bypassed": "已跳过",
       "cancelled": "已取消",
@@ -38662,7 +38668,8 @@
       "activeTitle": "新工作树将使用",
       "candidate": {
         "cacheLink": "从当前检出链接 {path}",
-        "include": "把 {path} 复制进每个工作树"
+        "include": "把 {path} 复制进每个工作树",
+        "setupStep": "运行 mise install，安装 {path} 固定的工具"
       },
       "decline": "不用",
       "declinedTitle": "已拒绝",
@@ -38680,6 +38687,7 @@
       "retry": "重试",
       "risk": {
         "copiedSecret": "{path} 含有凭据。每个工作树都会在磁盘上得到一份副本。",
+        "installsTools": "在初始化脚本之前，mise 以安全模式下载并安装 {path} 固定的工具版本：文件里的 tasks、hooks 和 env 设置都不会运行，也不会安装 mise 本身。修改该文件或其锁文件后会重新询问。",
         "sharedBuildDir": "工作树与你的检出共享这个构建目录，特性不同的分支会互相覆盖重建。",
         "sharedInstall": "工作树与你的检出共享这个目录。安装了不同依赖的任务会改变你正在使用的内容。"
       },

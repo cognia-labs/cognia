@@ -34,6 +34,7 @@ function deps(over: Record<string, unknown> = {}) {
       includeIgnored ? ALL : VISIBLE
     ),
     probePnpm: jest.fn(async () => "unsupported" as const),
+    readMise: jest.fn(async () => null),
     applyToWorkspace: mockUpdateProject,
     ...over,
   }
@@ -85,6 +86,31 @@ describe("useProvisioningOffer", () => {
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.pnpm).toBe("enabled")
     expect(result.current.candidates.map((candidate) => candidate.id)).toEqual(["include:.env"])
+  })
+
+  it("reads the mise files only when the root has a mise config, and offers the step", async () => {
+    const plain = deps()
+    const { result: withoutMise } = renderHook(() =>
+      useProvisioningOffer("p1", "/repos/app", plain)
+    )
+    await waitFor(() => expect(withoutMise.current.loading).toBe(false))
+    expect(plain.readMise).not.toHaveBeenCalled()
+
+    const withConfig = [...ALL, { name: "mise.toml", isDir: false }]
+    const injected = deps({
+      listRoot: jest.fn(async (_root: string, includeIgnored: boolean) =>
+        includeIgnored
+          ? withConfig
+          : withConfig.filter((entry) => VISIBLE.includes(entry) || entry.name === "mise.toml")
+      ),
+      readMise: jest.fn(async () => ({ files: ["mise.toml"], digest: "0123456789abcdef" })),
+    })
+    const { result } = renderHook(() => useProvisioningOffer("p1", "/repos/mise", injected))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(injected.readMise).toHaveBeenCalledWith("/repos/mise")
+    expect(result.current.candidates.map((candidate) => candidate.id)).toContain(
+      "setupStep:mise@0123456789abcdef"
+    )
   })
 
   it("proposes nothing and probes nothing without an execution root", async () => {

@@ -48,6 +48,8 @@
 
 import type { WorkspaceProvisioning } from "@/lib/task-workspace/types"
 
+import { miseStepId, type MiseFiles } from "./mise-step"
+
 /**
  * Whether pnpm on this machine can give a worktree its own `node_modules`
  * without copying anything, by linking from a store shared across projects.
@@ -73,7 +75,7 @@ export const PNPM_GLOBAL_STORE_MIN_VERSION = "11.23.0"
 /** The one command that turns it on, shown verbatim rather than run for the user. */
 export const PNPM_GLOBAL_STORE_COMMAND = "pnpm config set --global virtualStoreType global"
 
-export type ProvisioningCandidateKind = "cacheLink" | "include"
+export type ProvisioningCandidateKind = "cacheLink" | "include" | "setupStep"
 
 export interface ProvisioningCandidate {
   /** Stable across probes — the accepted/reviewed record keys on this. */
@@ -117,6 +119,8 @@ export interface ProvisioningProbe {
   /** Names among `entries` that git ignores. */
   ignored: readonly string[]
   pnpm: PnpmVirtualStore
+  /** The root's mise config and lockfile with their digest, when it has one. */
+  mise?: MiseFiles | null
 }
 
 interface CacheRule {
@@ -164,6 +168,9 @@ const CACHE_RULES: CacheRule[] = [
 /** The one risk an `include` carries: the file is credential-shaped. */
 const INCLUDE_RISK_KEY = "copiedSecret"
 
+/** The one risk the mise step carries: it downloads and installs tools. */
+const MISE_RISK_KEY = "installsTools"
+
 /**
  * Every `riskKey` a candidate can carry, derived from the rules rather than
  * re-listed — `lint:i18n` cannot see a key built as `risk.${candidate.riskKey}`,
@@ -171,11 +178,11 @@ const INCLUDE_RISK_KEY = "copiedSecret"
  * without a message fails there instead of rendering a raw key.
  */
 export const PROVISIONING_RISK_KEYS: readonly string[] = [
-  ...new Set([...CACHE_RULES.map((rule) => rule.riskKey), INCLUDE_RISK_KEY]),
+  ...new Set([...CACHE_RULES.map((rule) => rule.riskKey), INCLUDE_RISK_KEY, MISE_RISK_KEY]),
 ].sort()
 
-/** The two candidate kinds, for the same catalogue guard. */
-export const PROVISIONING_CANDIDATE_KINDS = ["cacheLink", "include"] as const
+/** The candidate kinds, for the same catalogue guard. */
+export const PROVISIONING_CANDIDATE_KINDS = ["cacheLink", "include", "setupStep"] as const
 
 /** `.env.example` and friends are committed samples, not the real file. */
 const ENV_SAMPLE_SUFFIXES = ["example", "sample", "template", "dist", "defaults"]
@@ -187,7 +194,10 @@ function isEnvSecretName(name: string): boolean {
   return !ENV_SAMPLE_SUFFIXES.includes(suffix)
 }
 
-export function candidateId(kind: ProvisioningCandidateKind, path: string): string {
+export function candidateId(
+  kind: Exclude<ProvisioningCandidateKind, "setupStep">,
+  path: string
+): string {
   return `${kind}:${path}`
 }
 
@@ -196,7 +206,8 @@ export function candidateId(kind: ProvisioningCandidateKind, path: string): stri
  *
  * Ordering is cache links first, includes second — the same order
  * `apply_provisioning` applies them in, so the card reads like the thing that
- * will happen.
+ * will happen — and the mise step last, since setup runs it after the
+ * worktree exists.
  */
 export function inferProvisioning(probe: ProvisioningProbe): ProvisioningCandidate[] {
   const names = new Set(probe.entries.map((entry) => entry.name))
@@ -237,6 +248,19 @@ export function inferProvisioning(probe: ProvisioningProbe): ProvisioningCandida
       path: entry.name,
       evidence: [entry.name],
       riskKey: INCLUDE_RISK_KEY,
+    })
+  }
+
+  // A toolchain the repository pins with mise (ADR-0147, 2026-11-08
+  // amendment). Accepted at this content only: the id carries the files'
+  // digest, so an edit to either is a new proposal (`mise-step.ts`).
+  if (probe.mise) {
+    candidates.push({
+      id: miseStepId(probe.mise.digest),
+      kind: "setupStep",
+      path: probe.mise.files[0]!,
+      evidence: [...probe.mise.files],
+      riskKey: MISE_RISK_KEY,
     })
   }
 

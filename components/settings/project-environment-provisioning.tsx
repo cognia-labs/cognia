@@ -38,6 +38,7 @@ import {
   KeyRoundIcon,
   LinkIcon,
   RotateCcwIcon,
+  WrenchIcon,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -68,7 +69,12 @@ function CandidateRow({
   children: React.ReactNode
 }) {
   const t = useTranslations("projectEnvironment.provisioning")
-  const Icon = candidate.kind === "cacheLink" ? LinkIcon : KeyRoundIcon
+  const Icon =
+    candidate.kind === "cacheLink"
+      ? LinkIcon
+      : candidate.kind === "setupStep"
+        ? WrenchIcon
+        : KeyRoundIcon
   return (
     <li
       className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5 py-2"

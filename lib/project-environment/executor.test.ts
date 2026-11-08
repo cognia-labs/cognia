@@ -37,9 +37,30 @@ jest.mock("@/lib/files/workspace-fs", () => ({
     }
   },
 }))
-jest.mock("@/lib/data/crypto", () => ({ sha256Hex: async (value: string) => `h(${value})` }))
+jest.mock("@/lib/data/crypto", () => ({
+  sha256Hex: async (value: string) =>
+    jest
+      .requireActual<typeof import("node:crypto")>("node:crypto")
+      .createHash("sha256")
+      .update(value)
+      .digest("hex"),
+}))
+let projectsMock: unknown[] = []
+jest.mock("@/lib/db/projects", () => ({ getAllProjects: async () => projectsMock }))
+let restrictedMock = false
+jest.mock("@/lib/workspace/trust-gate", () => ({
+  isWorkspaceRestricted: async () => restrictedMock,
+}))
+jest.mock("@/lib/db/settings", () => ({ getSettings: async () => ({}) }))
 
 import { executeProjectEnvironment, resolveEnvironmentScript } from "./executor"
+import { createHash } from "node:crypto"
+import {
+  MISE_STEP_SCRIPT,
+  MISE_STEP_VARIABLES,
+  miseStepId,
+  readMiseFiles,
+} from "@/lib/workspace/mise-step"
 import type { ProjectEnvironment } from "@/types/project-environment"
 import {
   __setPromptOverrideSnapshotForTests,
@@ -75,6 +96,8 @@ beforeEach(() => {
   workspacePaths = new Set()
   workspaceStatFails = false
   platformMock.mockReset().mockReturnValue("macos")
+  projectsMock = []
+  restrictedMock = false
 })
 
 it("keeps host script selection and keyring values inside the execution host", async () => {
@@ -699,5 +722,156 @@ describe("bootstrap Agent initialization", () => {
     expect(result.success).toBe(true)
     expect(result.joined).toBeUndefined()
     expect(callMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("mise install (ADR-0147, 2026-11-08 amendment)", () => {
+  const MISE_TOML = '[tools]\nnode = "22"\n'
+  const input = {
+    environment,
+    executionRoot: "/worktree",
+    scope: "managedWorktree" as const,
+    surface: "scheduled" as const,
+  }
+
+  async function digestOf(files: Record<string, string>): Promise<string> {
+    const read = await readMiseFiles("/worktree", {
+      readFile: async (_root, relPath) => {
+        if (!(relPath in files)) throw new Error("missing")
+        return files[relPath]!
+      },
+      sha256Hex: async (value) => createHash("sha256").update(value).digest("hex"),
+    })
+    return read!.digest
+  }
+
+  async function accept(files: Record<string, string>) {
+    projectsMock = [
+      {
+        id: environment.projectId,
+        roots: [{ id: "r1", path: "/repo", isPrimary: true }],
+        workspaceProvisioning: {
+          accepted: [miseStepId(await digestOf(files))],
+          reviewed: [miseStepId(await digestOf(files))],
+        },
+      },
+    ]
+  }
+
+  const scripts = () => callMock.mock.calls.map(([, args]) => (args as { script: unknown }).script)
+
+  it("never runs before the user accepted these exact files, and says so", async () => {
+    workspaceFiles = { "mise.toml": MISE_TOML }
+    projectsMock = [{ id: environment.projectId, roots: [], workspaceProvisioning: undefined }]
+
+    const result = await executeProjectEnvironment(input)
+
+    expect(scripts()).toEqual([environment.setupScript])
+    expect(result.notices).toEqual(["miseNotApproved"])
+    expect(updateInitializationMock).toHaveBeenLastCalledWith(
+      environment.id,
+      expect.objectContaining({ status: "succeeded", notices: ["miseNotApproved"] }),
+      expect.any(Number)
+    )
+  })
+
+  it("runs only `mise install`, in safe mode and without secrets, before setup", async () => {
+    workspaceFiles = { "mise.toml": MISE_TOML, "mise.lock": "lock" }
+    await accept(workspaceFiles)
+
+    const result = await executeProjectEnvironment(input)
+
+    expect(result).toEqual(expect.objectContaining({ success: true }))
+    expect(result.notices).toBeUndefined()
+    expect(callMock).toHaveBeenNthCalledWith(1, "project_environment_execute", {
+      script: MISE_STEP_SCRIPT,
+      cwd: "/worktree",
+      variables: { NODE_ENV: "development", ...MISE_STEP_VARIABLES },
+      keyringReferences: [],
+      policy: { network: "on", requireSandbox: false },
+      timeoutSecs: undefined,
+    })
+    expect(scripts()[1]).toEqual(environment.setupScript)
+  })
+
+  it("skips with a notice when the workspace is not trusted", async () => {
+    workspaceFiles = { "mise.toml": MISE_TOML }
+    await accept(workspaceFiles)
+    restrictedMock = true
+
+    const result = await executeProjectEnvironment(input)
+
+    expect(scripts()).toEqual([environment.setupScript])
+    expect(result.notices).toEqual(["miseUntrusted"])
+  })
+
+  it("reports a missing mise from the step's output and still runs setup", async () => {
+    workspaceFiles = { "mise.toml": MISE_TOML }
+    await accept(workspaceFiles)
+    callMock.mockResolvedValueOnce({
+      stdout: "cognia-setup-notice:miseMissing\n",
+      stderr: "",
+      exit_code: 0,
+      timed_out: false,
+    })
+
+    const result = await executeProjectEnvironment(input)
+
+    expect(result).toEqual(expect.objectContaining({ success: true, notices: ["miseMissing"] }))
+    expect(scripts()).toHaveLength(2)
+  })
+
+  it("fails setup when mise install fails, without running the script", async () => {
+    workspaceFiles = { "mise.toml": MISE_TOML }
+    await accept(workspaceFiles)
+    callMock.mockResolvedValueOnce({ stdout: "", stderr: "boom", exit_code: 2, timed_out: false })
+
+    const result = await executeProjectEnvironment(input)
+
+    expect(result).toEqual(
+      expect.objectContaining({ success: false, error: "mise install exited with code 2" })
+    )
+    expect(scripts()).toEqual([MISE_STEP_SCRIPT])
+  })
+
+  it("runs the step alone for an environment with no setup script", async () => {
+    workspaceFiles = { "mise.toml": MISE_TOML }
+    await accept(workspaceFiles)
+
+    const result = await executeProjectEnvironment({
+      ...input,
+      environment: { ...environment, setupScript: { default: "" } },
+    })
+
+    expect(result).toEqual(expect.objectContaining({ success: true }))
+    expect(scripts()).toEqual([MISE_STEP_SCRIPT])
+  })
+
+  it("never runs it for an action", async () => {
+    workspaceFiles = { "mise.toml": MISE_TOML }
+    await accept(workspaceFiles)
+
+    await executeProjectEnvironment({ ...input, surface: "interactive", actionId: "test" })
+
+    expect(scripts()).toEqual([{ default: "pnpm test" }])
+  })
+
+  it("fingerprints a reusable setup over the mise files too", async () => {
+    const reusable: ProjectEnvironment = {
+      ...environment,
+      setupReuse: { enabled: true, inputs: ["pnpm-lock.yaml"], outputs: [] },
+    }
+    const fingerprintFor = async (lock: string) => {
+      workspaceFiles = { "pnpm-lock.yaml": "p", "mise.toml": MISE_TOML, "mise.lock": lock }
+      await accept(workspaceFiles)
+      updateInitializationMock.mockClear()
+      await executeProjectEnvironment({ ...input, environment: reusable })
+      return updateInitializationMock.mock.calls.map((call) => call[1]).pop()?.fingerprint
+    }
+    const first = await fingerprintFor("lock-1")
+    const second = await fingerprintFor("lock-2")
+    expect(first).toEqual(expect.any(String))
+    expect(second).toEqual(expect.any(String))
+    expect(second).not.toBe(first)
   })
 })

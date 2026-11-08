@@ -21,6 +21,15 @@ import type {
   ProjectEnvironmentScript,
 } from "@/types/project-environment"
 import {
+  MISE_STEP_SCRIPT,
+  MISE_STEP_VARIABLES,
+  miseStepNotices,
+  planMiseStep,
+  type MiseStepNotice,
+  type MiseStepPlan,
+  type MiseStepPlanDeps,
+} from "@/lib/workspace/mise-step"
+import {
   computeSetupFingerprint,
   effectiveSetupReuse,
   latestSetupRecord,
@@ -42,6 +51,8 @@ export interface ProjectEnvironmentExecutionResult {
   reused?: boolean
   /** Setup was satisfied by an identical one already running in this root. */
   joined?: boolean
+  /** What setup chose not to do and why, e.g. a `mise install` it skipped. */
+  notices?: MiseStepNotice[]
 }
 
 interface NativeEnvironmentResult {
@@ -97,12 +108,21 @@ export async function executeProjectEnvironment(
 
   const action = selectAction(input.environment, input.actionId)
   const script = action?.script ?? input.environment.setupScript
-  if (
-    !(input.environment.bootstrapAgent?.enabled && !action) &&
-    !script.default.trim() &&
-    !Object.values(script.byOs ?? {}).some((value) => value?.trim())
-  ) {
-    return { success: true, bypassed: false }
+  // `mise install` belongs to setup, never to an action (ADR-0147, 2026-11-08
+  // amendment): it runs ahead of the setup script when the user accepted it
+  // for this root's exact mise files.
+  const mise: MiseStepPlan = action
+    ? { step: null, notices: [] }
+    : await planMiseStep(
+        { executionRoot: input.executionRoot, projectId: input.environment.projectId },
+        miseStepDeps
+      ).catch(() => ({ step: null, notices: [] }))
+  if (!(input.environment.bootstrapAgent?.enabled && !action) && !mise.step && !hasScript(script)) {
+    return {
+      success: true,
+      bypassed: false,
+      ...(mise.notices.length ? { notices: mise.notices } : {}),
+    }
   }
   const policy =
     input.environment.policy ??
@@ -111,7 +131,38 @@ export async function executeProjectEnvironment(
       : { network: "off" as const, requireSandbox: true })
 
   if (action) return runScript(input, script, policy, { recordInitialization: false })
-  return runSetupCoalesced(input, policy)
+  return runSetupCoalesced(input, policy, mise)
+}
+
+function hasScript(script: ProjectEnvironmentScript): boolean {
+  return Boolean(
+    script.default.trim() || Object.values(script.byOs ?? {}).some((value) => value?.trim())
+  )
+}
+
+/** Production lookups for the mise step: this root's files, the workspace row, its trust. */
+const miseStepDeps: MiseStepPlanDeps = {
+  readFile: (root, relPath) => readWorkspaceFile(root, relPath),
+  sha256Hex,
+  acceptedIds: async (projectId) => {
+    const { getAllProjects } = await import("@/lib/db/projects")
+    const project = (await getAllProjects()).find((candidate) => candidate.id === projectId)
+    return project ? (project.workspaceProvisioning?.accepted ?? []) : null
+  },
+  restricted: async (projectId) => {
+    const [{ getAllProjects }, { isWorkspaceRestricted }, { getSettings }] = await Promise.all([
+      import("@/lib/db/projects"),
+      import("@/lib/workspace/trust-gate"),
+      import("@/lib/db/settings"),
+    ])
+    const project = (await getAllProjects()).find((candidate) => candidate.id === projectId)
+    if (!project) return true
+    const settings = await getSettings().catch(() => undefined)
+    return isWorkspaceRestricted(project, {
+      enabled: settings?.workspaceTrust?.enabled !== false,
+      onWeb: !isTauri(),
+    })
+  },
 }
 
 /** The environment's own policy, or the host default applied when it has none. */
@@ -143,10 +194,14 @@ function setupFlightKey(input: ExecuteProjectEnvironmentInput): string {
 
 async function runSetupCoalesced(
   input: ExecuteProjectEnvironmentInput,
-  policy: HostExecutionPolicy
+  policy: HostExecutionPolicy,
+  mise: MiseStepPlan
 ): Promise<ProjectEnvironmentExecutionResult> {
   const key = setupFlightKey(input)
-  const signature = setupSignature(input.environment)
+  // The mise files are part of what this setup does: a different accepted
+  // content is a different setup, for joining and for reuse alike.
+  const signature =
+    setupSignature(input.environment) + (mise.step ? `\u0000mise:${mise.step.digest}` : "")
   for (let inFlight = setupFlights.get(key); inFlight; inFlight = setupFlights.get(key)) {
     const outcome = await inFlight.promise.catch(() => null)
     // Joined only when the finished setup did what this request would have
@@ -164,7 +219,7 @@ async function runSetupCoalesced(
   }
   // No await between the empty lookup above and this set, so no other caller
   // can slip a second flight in for the same key.
-  const promise = runSetupOnce(input, policy, signature)
+  const promise = runSetupOnce(input, policy, signature, mise)
   setupFlights.set(key, { signature, promise })
   try {
     return await promise
@@ -176,18 +231,20 @@ async function runSetupCoalesced(
 async function runSetupOnce(
   input: ExecuteProjectEnvironmentInput,
   policy: HostExecutionPolicy,
-  signature: string
+  signature: string,
+  mise: MiseStepPlan
 ): Promise<ProjectEnvironmentExecutionResult> {
   let reuse: ReturnType<typeof effectiveSetupReuse>
   try {
     assertBootstrapEnvironment(input.environment)
-    reuse = effectiveSetupReuse(input.environment)
+    reuse = withMiseInputs(effectiveSetupReuse(input.environment), mise)
   } catch (validationError) {
     // Invalid imported config must reach the normal recorded failure path,
     // even if it carries a matching historic fingerprint.
     return runScript(input, input.environment.setupScript, policy, {
       recordInitialization: true,
       validationError,
+      mise,
     })
   }
   const bootstrap = input.environment.bootstrapAgent?.enabled === true
@@ -222,7 +279,13 @@ async function runSetupOnce(
       if (!bootstrap && fingerprint && recordAllowsReuse(record, fingerprint) && outputsPresent) {
         // Not written to the history: the history records setups that ran, and
         // a reuse on every turn would push those out of its 100-entry window.
-        return { success: true, bypassed: false, exitCode: record?.exitCode, reused: true }
+        return {
+          success: true,
+          bypassed: false,
+          exitCode: record?.exitCode,
+          reused: true,
+          ...(mise.notices.length ? { notices: mise.notices } : {}),
+        }
       }
     }
   }
@@ -233,8 +296,22 @@ async function runSetupOnce(
     {
       recordInitialization: true,
       ...(fingerprint ? { fingerprint } : {}),
+      mise,
     }
   )
+}
+
+/**
+ * A setup that installs with mise is fingerprinted over the mise files too, so
+ * editing `mise.toml` or its lockfile runs setup again even when the setup's
+ * own declared inputs did not change. Reuse off stays off.
+ */
+function withMiseInputs(
+  reuse: ReturnType<typeof effectiveSetupReuse>,
+  mise: MiseStepPlan
+): ReturnType<typeof effectiveSetupReuse> {
+  if (!reuse || !mise.step) return reuse
+  return { ...reuse, inputs: [...new Set([...reuse.inputs, ...mise.step.files])].sort() }
 }
 
 const setupReuseIo: SetupReuseIo = {
@@ -254,7 +331,12 @@ async function runScript(
   input: ExecuteProjectEnvironmentInput,
   script: ProjectEnvironmentScript,
   policy: HostExecutionPolicy,
-  options: { recordInitialization: boolean; fingerprint?: string; validationError?: unknown }
+  options: {
+    recordInitialization: boolean
+    fingerprint?: string
+    validationError?: unknown
+    mise?: MiseStepPlan
+  }
 ): Promise<ProjectEnvironmentExecutionResult> {
   const startedAt = Date.now()
   if (options.recordInitialization) {
@@ -293,17 +375,44 @@ async function runScript(
       portLeaseFailed = true
       throw cause
     }
-    const result = await transport.call<NativeEnvironmentResult>("project_environment_execute", {
-      script: bootstrap?.script ?? script,
-      cwd: input.executionRoot,
-      variables: bootstrap?.variables ?? input.environment.variables,
-      keyringReferences: input.environment.keyringReferences,
-      policy,
-      // The CLI must retain its configured budget plus time to reap tool groups.
-      timeoutSecs: bootstrap
-        ? Math.max(input.timeoutSecs ?? 0, bootstrap.timeoutSecs)
-        : input.timeoutSecs,
-    })
+    const notices: MiseStepNotice[] = [...(options.mise?.notices ?? [])]
+    if (options.mise?.step) {
+      // Its own call, ahead of the script, under the setup's policy and with
+      // mise held to safe mode. No secrets: installing tools needs none.
+      const installed = await transport.call<NativeEnvironmentResult>(
+        "project_environment_execute",
+        {
+          script: MISE_STEP_SCRIPT,
+          cwd: input.executionRoot,
+          variables: { ...input.environment.variables, ...MISE_STEP_VARIABLES },
+          keyringReferences: [],
+          policy,
+          timeoutSecs: input.timeoutSecs,
+        }
+      )
+      if (installed.timed_out) throw new Error("mise install timed out")
+      if (installed.exit_code !== 0) {
+        throw new Error(`mise install exited with code ${installed.exit_code ?? "unknown"}`)
+      }
+      for (const notice of miseStepNotices(installed.stdout)) {
+        if (!notices.includes(notice)) notices.push(notice)
+      }
+    }
+    const result =
+      bootstrap || hasScript(script)
+        ? await transport.call<NativeEnvironmentResult>("project_environment_execute", {
+            script: bootstrap?.script ?? script,
+            cwd: input.executionRoot,
+            variables: bootstrap?.variables ?? input.environment.variables,
+            keyringReferences: input.environment.keyringReferences,
+            policy,
+            // The CLI must retain its configured budget plus time to reap tool groups.
+            timeoutSecs: bootstrap
+              ? Math.max(input.timeoutSecs ?? 0, bootstrap.timeoutSecs)
+              : input.timeoutSecs,
+          })
+        : // A setup that is only the mise step has nothing more to run.
+          { stdout: "", stderr: "", exit_code: 0, timed_out: false }
     const success = !result.timed_out && result.exit_code === 0
     const error = result.timed_out
       ? "Project environment setup timed out"
@@ -325,6 +434,7 @@ async function runScript(
           error,
           // Only a real success vouches for skipping a later setup.
           ...(success && options.fingerprint ? { fingerprint: options.fingerprint } : {}),
+          ...(notices.length ? { notices } : {}),
         },
         completedAt
       )
@@ -336,6 +446,7 @@ async function runScript(
       stdout: result.stdout || undefined,
       stderr: result.stderr || undefined,
       error,
+      ...(notices.length ? { notices } : {}),
     }
   } catch (cause) {
     const error = cause instanceof Error ? cause.message : String(cause)

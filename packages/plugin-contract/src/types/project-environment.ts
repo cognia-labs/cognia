@@ -43,6 +43,13 @@ export interface ProjectEnvironmentInitialization {
    * skipped on the strength of it.
    */
   fingerprint?: string
+  /**
+   * What setup chose not to do, as message keys (`mise-step.ts`
+   * `MiseStepNotice`): a `mise install` it skipped because the files were not
+   * accepted at this content, the workspace is not trusted, mise is not on
+   * `PATH`, or this mise has no safe mode.
+   */
+  notices?: string[]
 }
 
 /**
