@@ -25,7 +25,7 @@
  *   lands within a few milliseconds, far inside that window.
  */
 
-import type { MenuActionId } from "./menu-actions"
+import type { MenuActionId } from "@/lib/desktop/menu-actions"
 
 /** How long a keydown claim stays valid while its menu event is in flight. */
 export const MENU_CLAIM_WINDOW_MS = 1000

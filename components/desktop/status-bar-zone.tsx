@@ -19,7 +19,7 @@ import type { BarCatalogItem } from "@/lib/shell/bar-items"
 import { AgentThreadBrowser } from "@/components/agent/agent-thread-browser"
 import { AccountBarButton } from "@/components/account/account-bar-button"
 import { AttentionPanel } from "@/components/attention/attention-panel"
-import { JobCenterPanel } from "@/components/desktop/job-center-panel"
+import { JobCenterPanel } from "@/components/shell/job-center-panel"
 import { StatusBarConnectivity } from "@/components/desktop/status-bar-connectivity"
 import { StatusBarNetwork } from "@/components/desktop/status-bar-network"
 import {

@@ -14,11 +14,10 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 
-import { activePairedDevices, canHearInvalidations } from "@/components/desktop/status-bar-sync"
 import { useNetworkStatus } from "@/hooks/use-network-status"
 import { useSchedulerHostTarget } from "@/hooks/scheduler/use-scheduler-host-target"
-import { eventPlaneState } from "@/lib/companion/device-presence-registry"
-import { listPairedDevices } from "@/lib/db/paired-devices"
+import { canHearInvalidations, eventPlaneState } from "@/lib/companion/device-presence-registry"
+import { activePairedDevices, listPairedDevices } from "@/lib/db/paired-devices"
 import {
   buildAgendaSlice,
   type AgendaExecutionInput,

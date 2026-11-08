@@ -72,8 +72,15 @@ import { FinishSetupBar } from "@/components/onboarding/finish-setup-bar"
 import { isShellBypassRoute } from "@/lib/shell/bypass-routes"
 import { usesCompactShell } from "@/lib/shell/compact-shell"
 import { isOnboardingRoute } from "@/lib/onboarding/route"
+import { installSidebarGestureRunner } from "@/stores/ui/sidebar-gesture"
+import { runSidebarGesture } from "@/lib/desktop/sidebar-edge-transition"
 
 const log = loggers.shell
+
+// The desktop chrome animates every sidebar collapse/expand as one View
+// Transition; the UI store applies gestures at once until this runs, which is
+// before any of this chrome can be clicked.
+installSidebarGestureRunner(runSidebarGesture)
 
 // Re-exported so the shell stays the discoverable home of "which routes have
 // no chrome"; the list itself lives in `lib/shell/bypass-routes` because

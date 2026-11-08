@@ -5,6 +5,7 @@ import {
   __resetDevicePresenceForTests,
   attachSessionLease,
   attachedDeviceIds,
+  canHearInvalidations,
   deviceEventStreams,
   devicePresence,
   effectiveController,
@@ -437,5 +438,15 @@ describe("hasControlLease", () => {
     control("d1", "s1", lease)
     expect(hasControlLease("s1", T0 + ATTACH_LEASE_TTL_MS - 1)).toBe(true)
     expect(hasControlLease("s1", T0 + ATTACH_LEASE_TTL_MS)).toBe(false)
+  })
+})
+
+describe("canHearInvalidations", () => {
+  it("only live event streams can hear an invalidation", () => {
+    expect(canHearInvalidations("ready")).toBe(true)
+    expect(canHearInvalidations("replaying")).toBe(true)
+    expect(canHearInvalidations("connecting")).toBe(false)
+    expect(canHearInvalidations("degraded")).toBe(false)
+    expect(canHearInvalidations("disconnected")).toBe(false)
   })
 })

@@ -568,7 +568,7 @@ const jobCenterProps: {
     onIdleChange?: (idle: boolean) => void
   } | null
 } = { current: null }
-jest.mock("@/components/desktop/job-center-panel", () => ({
+jest.mock("@/components/shell/job-center-panel", () => ({
   JobCenterPanel: (props: typeof jobCenterProps.current) => {
     jobCenterProps.current = props
     return <button type="button" data-testid="status-job-center" data-open={String(props?.open)} />

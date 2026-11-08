@@ -6,7 +6,7 @@ import { JobCenterPanel } from "./job-center-panel"
 // host) read reactively from Dexie. With an empty DB the sheet shows its empty
 // state. Click the briefcase trigger to open the sheet.
 const meta = {
-  title: "Desktop/JobCenterPanel",
+  title: "Shell/JobCenterPanel",
   component: JobCenterPanel,
   parameters: { layout: "centered" },
   decorators: [

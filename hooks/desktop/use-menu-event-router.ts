@@ -51,7 +51,7 @@ import {
   toggleTerminalAction,
   type MenuActionId,
 } from "@/lib/desktop/menu-actions"
-import { takeNativeMenuClaim } from "@/lib/desktop/menu-focus-claims"
+import { takeNativeMenuClaim } from "@/lib/shortcuts/menu-focus-claims"
 
 const log = loggers.ui
 

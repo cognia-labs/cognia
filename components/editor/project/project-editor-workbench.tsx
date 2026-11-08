@@ -120,7 +120,7 @@ import { fileUriToPath } from "@/lib/files/path-uri"
 import { revealInExplorer } from "@/lib/tauri/opener"
 import { loadConfiguredMonaco } from "@/lib/canvas/monaco-loader"
 import { isTauri } from "@/lib/platform/detect"
-import { claimNativeMenuAction } from "@/lib/desktop/menu-focus-claims"
+import { claimNativeMenuAction } from "@/lib/shortcuts/menu-focus-claims"
 import { EDITOR_SUBTITLE_ROW_CLASS } from "./editor-chrome"
 import {
   CONTEXT_SIDEBAR_MAX_PERCENT as CONTEXT_PANEL_MAX_PERCENT,
@@ -159,7 +159,7 @@ interface UseProjectEditorWorkbenchArgs extends UseProjectEditorArgs {
 
 /**
  * Native-menu accelerators the workbench also answers to (see
- * `lib/desktop/menu-focus-claims.ts`): under Tauri these chords go to the
+ * `lib/shortcuts/menu-focus-claims.ts`): under Tauri these chords go to the
  * native menu, so the keydown only stamps a claim and the menu router runs
  * the workbench action.
  */

@@ -32,12 +32,16 @@ jest.mock("dexie-react-hooks", () => {
 let pairedRows: PairedDeviceRow[] = []
 let pairedError: Error | null = null
 jest.mock("@/lib/db/paired-devices", () => ({
+  ...jest.requireActual<typeof import("@/lib/db/paired-devices")>("@/lib/db/paired-devices"),
   listPairedDevices: () =>
     pairedError ? Promise.reject(pairedError) : Promise.resolve(pairedRows),
 }))
 
 let planes: Record<string, string> = {}
 jest.mock("@/lib/companion/device-presence-registry", () => ({
+  ...jest.requireActual<typeof import("@/lib/companion/device-presence-registry")>(
+    "@/lib/companion/device-presence-registry"
+  ),
   eventPlaneState: (deviceId: string) => planes[deviceId] ?? "disconnected",
 }))
 
@@ -65,12 +69,7 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }))
 
-import {
-  StatusBarSync,
-  activePairedDevices,
-  canHearInvalidations,
-  requestDeviceSync,
-} from "./status-bar-sync"
+import { StatusBarSync, requestDeviceSync } from "./status-bar-sync"
 
 function device(over: Partial<PairedDeviceRow>): PairedDeviceRow {
   return {
@@ -103,30 +102,6 @@ async function openPopover() {
 }
 
 describe("pure helpers", () => {
-  it("only live event streams can hear an invalidation", () => {
-    expect(canHearInvalidations("ready")).toBe(true)
-    expect(canHearInvalidations("replaying")).toBe(true)
-    expect(canHearInvalidations("connecting")).toBe(false)
-    expect(canHearInvalidations("degraded")).toBe(false)
-    expect(canHearInvalidations("disconnected")).toBe(false)
-  })
-
-  it("drops revoked and paused devices", () => {
-    const rows = [
-      device({ deviceId: "a" }),
-      device({ deviceId: "b", revokedAt: 5 }),
-      device({ deviceId: "c", pausedAt: 5 }),
-    ]
-    expect(activePairedDevices(rows).map((row) => row.deviceId)).toEqual(["a"])
-  })
-
-  it("does not count a paired browser extension as a device to sync", () => {
-    // It never opens the event plane, so it could only ever read as "not
-    // connected" here.
-    const rows = [device({ deviceId: "a" }), device({ deviceId: "b", platform: "browser" })]
-    expect(activePairedDevices(rows).map((row) => row.deviceId)).toEqual(["a"])
-  })
-
   it("publishes every table and then flushes the coalescing window", () => {
     const calls: string[] = []
     requestDeviceSync(

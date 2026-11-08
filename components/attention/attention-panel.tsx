@@ -3,7 +3,7 @@
 /**
  * AttentionPanel — the Control Center: one status-bar surface for every
  * pending item across chat tool approvals, agent-team HITL gates, and
- * external fleet agents. Modeled on `components/desktop/job-center-panel.tsx`
+ * external fleet agents. Modeled on `components/shell/job-center-panel.tsx`
  * (Sheet + badge trigger).
  *
  * Actions are honest about ownership: chat/team rows NAVIGATE to the surface

@@ -1,4 +1,5 @@
 import {
+  activePairedDevices,
   addPairedDevice,
   forgetPairedDevice,
   getPairedDevice,
@@ -17,6 +18,7 @@ import {
   touchPairedDevice,
 } from "./paired-devices"
 import { getDb } from "./schema"
+import type { PairedDeviceRow } from "@/types/mobile/paired-device"
 import { createDbTestFixture } from "./test-fixture"
 
 const dbFixture = createDbTestFixture()
@@ -732,5 +734,34 @@ describe("recordDeviceCapabilities", () => {
 
   it("returns false for an unknown deviceId", async () => {
     expect(await recordDeviceCapabilities("does-not-exist", ["camera"])).toBe(false)
+  })
+})
+
+describe("activePairedDevices", () => {
+  const device = (over: Partial<PairedDeviceRow>): PairedDeviceRow =>
+    ({
+      deviceId: "d1",
+      label: "Phone",
+      platform: "ios",
+      pubkey: "pk",
+      pairedAt: 1,
+      lastSeenAt: 1,
+      ...over,
+    }) as PairedDeviceRow
+
+  it("drops revoked and paused devices", () => {
+    const rows = [
+      device({ deviceId: "a" }),
+      device({ deviceId: "b", revokedAt: 5 }),
+      device({ deviceId: "c", pausedAt: 5 }),
+    ]
+    expect(activePairedDevices(rows).map((row) => row.deviceId)).toEqual(["a"])
+  })
+
+  it("does not count a paired browser extension as a device to sync", () => {
+    // It never opens the event plane, so it could only ever read as "not
+    // connected" to sync.
+    const rows = [device({ deviceId: "a" }), device({ deviceId: "b", platform: "browser" })]
+    expect(activePairedDevices(rows).map((row) => row.deviceId)).toEqual(["a"])
   })
 })

@@ -165,6 +165,11 @@ jest.mock("@/lib/desktop/menu-actions", () => ({
   toggleSidebarAction: () => toggleSidebarAction(),
 }))
 
+jest.mock("@/lib/desktop/sidebar-edge-transition", () => ({
+  runSidebarGesture: jest.fn((apply: () => void) => apply()),
+}))
+import { runSidebarGesture as runSidebarTransition } from "@/lib/desktop/sidebar-edge-transition"
+import { runSidebarGesture } from "@/stores/ui/sidebar-gesture"
 import { useShellColumnsStore } from "@/stores/ui/shell-columns-store"
 import { getAppRegistration, __resetAppRuntimeForTesting } from "@/lib/shortcuts/app-runtime"
 import { DesktopAppShell, isShellBypassRoute } from "./desktop-app-shell"
@@ -514,6 +519,15 @@ test("does not set data-app-shell on bypass routes", () => {
     </DesktopAppShell>
   )
   expect(document.body.getAttribute("data-app-shell")).toBeNull()
+})
+
+describe("sidebar gestures", () => {
+  it("animates them with the desktop View Transition runner once the shell loads", () => {
+    const apply = jest.fn()
+    runSidebarGesture(apply, 256)
+    expect(runSidebarTransition).toHaveBeenCalledWith(apply, 256)
+    expect(apply).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("isShellBypassRoute", () => {

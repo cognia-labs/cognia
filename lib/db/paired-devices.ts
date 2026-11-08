@@ -202,6 +202,19 @@ export async function recordDeviceCapabilities(
  * Return all paired devices, newest-first by `lastSeenAt`. Includes revoked
  * rows so the settings UI can show "Revoked 3d ago" tombstones.
  */
+/**
+ * Paired, not revoked, not paused: the devices this Host still serves.
+ *
+ * A paired browser extension is not one of them. It holds only `browser.submit`
+ * and `browser.read-own` (ADR-0154) and never opens the event plane, so
+ * counting it as a device to sync would show one that can never be connected.
+ */
+export function activePairedDevices(rows: readonly PairedDeviceRow[]): PairedDeviceRow[] {
+  return rows.filter(
+    (row) => row.revokedAt === undefined && row.pausedAt === undefined && row.platform !== "browser"
+  )
+}
+
 export async function listPairedDevices(): Promise<PairedDeviceRow[]> {
   return getDb().pairedDevices.orderBy("lastSeenAt").reverse().toArray()
 }

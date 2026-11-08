@@ -35,7 +35,7 @@ jest.mock("@/components/desktop/status-bar-next-run", () => ({
 jest.mock("@/components/desktop/status-bar-run-state", () => ({
   StatusBarRunState: () => <div data-testid="seg-runStatus" />,
 }))
-jest.mock("@/components/desktop/job-center-panel", () => ({
+jest.mock("@/components/shell/job-center-panel", () => ({
   JobCenterPanel: () => <div data-testid="seg-jobs" />,
 }))
 jest.mock("@/components/source-control/status-bar-branch", () => ({

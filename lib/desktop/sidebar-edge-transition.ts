@@ -12,7 +12,9 @@
  *
  * Every `sidebarCollapsed` write — toggle button, keyboard shortcut, View
  * menu, edge peek — is funnelled through here by `stores/ui/ui-store.ts`, so
- * the store action stays the single place the DOM mutation is issued.
+ * the store action stays the single place the DOM mutation is issued. The
+ * store reaches this runner through `stores/ui/sidebar-gesture.ts`, which the
+ * desktop shell (`components/desktop/desktop-app-shell.tsx`) installs it in.
  *
  * View Transitions are progressive enhancement. An engine without them (and
  * jsdom, and any scope containing a pinned native Pro IDE webview) takes the

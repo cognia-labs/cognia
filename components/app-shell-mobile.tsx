@@ -85,7 +85,7 @@ import {
 } from "@/components/mobile/glance/mobile-glance-trigger"
 import { MobileCommandPalette } from "@/components/mobile/home/mobile-command-palette"
 import { MobileHomeLayoutSheet } from "@/components/mobile/home/mobile-home-layout-sheet"
-import { JobCenterPanel } from "@/components/desktop/job-center-panel"
+import { JobCenterPanel } from "@/components/shell/job-center-panel"
 import { Button } from "@/components/ui/button"
 import {
   Sheet,

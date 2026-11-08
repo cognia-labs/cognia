@@ -5,7 +5,7 @@ import { persist } from "zustand/middleware"
 import { persistLocalStorage } from "@/stores/persist-storage"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import { nextNavEpoch } from "@/lib/ui/nav-epoch"
-import { runSidebarGesture } from "@/lib/desktop/sidebar-edge-transition"
+import { runSidebarGesture } from "@/stores/ui/sidebar-gesture"
 import type { SupportReportContext } from "@/lib/support-report/types"
 import {
   EMPTY_CONVERSATION_FILTERS,
@@ -483,7 +483,8 @@ export const useUIStore = create<UIState>()(
         // also a refusal of it, which the row budget honours for the session.
         const refusedAutoFold = get().sidebarAutoCollapsed && !collapsed
         // The gesture animates the row toward the width the sidebar is headed
-        // for — `0` when collapsing, the persisted width when expanding.
+        // for — `0` when collapsing, the persisted width when expanding. The
+        // desktop shell installs the runner that animates it.
         runSidebarGesture(
           () => {
             set({

@@ -53,7 +53,7 @@ jest.mock("@/components/source-control/status-bar-branch", () => ({
   StatusBarBranch: () => <div data-testid="status-branch" />,
 }))
 
-jest.mock("@/components/desktop/job-center-panel", () => ({
+jest.mock("@/components/shell/job-center-panel", () => ({
   JobCenterPanel: () => <button data-testid="status-job-center">Jobs</button>,
 }))
 

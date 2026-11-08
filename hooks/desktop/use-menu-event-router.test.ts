@@ -154,7 +154,7 @@ import {
   __resetNativeMenuClaimsForTesting,
   claimNativeMenuAction,
   MENU_CLAIM_WINDOW_MS,
-} from "@/lib/desktop/menu-focus-claims"
+} from "@/lib/shortcuts/menu-focus-claims"
 
 async function flush(): Promise<void> {
   // Two microtask drains for the cascade inside the hook's subscribe loop.

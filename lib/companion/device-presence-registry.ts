@@ -242,6 +242,11 @@ export function deviceEventStreams(deviceId: string): EventStreamConnection[] {
   return Array.from(entry.streams.values()).sort((a, b) => a.openedAt - b.openedAt)
 }
 
+/** A device can hear a `sync://invalidate` frame only over a live event stream. */
+export function canHearInvalidations(state: EventPlaneState): boolean {
+  return state === "ready" || state === "replaying"
+}
+
 /** The device's derived event-plane state. */
 export function eventPlaneState(deviceId: string, at: number = Date.now()): EventPlaneState {
   const entry = devices.get(deviceId)

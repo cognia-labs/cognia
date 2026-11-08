@@ -4,20 +4,22 @@ import type { NotificationRecord } from "@/types/notifications"
 import type { PairedDeviceRow } from "@/types/mobile/paired-device"
 
 jest.mock("dexie-react-hooks", () => ({ useLiveQuery: jest.fn() }))
-jest.mock("@/components/desktop/status-bar-sync", () => ({
+jest.mock("@/hooks/use-network-status", () => ({ useNetworkStatus: jest.fn() }))
+jest.mock("@/hooks/scheduler/use-scheduler-host-target", () => ({
+  useSchedulerHostTarget: jest.fn(),
+}))
+jest.mock("@/lib/companion/device-presence-registry", () => ({
+  eventPlaneState: jest.fn(),
+  canHearInvalidations: jest.fn((state: string) => state === "ready" || state === "replaying"),
+}))
+jest.mock("@/lib/db/paired-devices", () => ({
+  listPairedDevices: jest.fn(),
   activePairedDevices: jest.fn((rows: Array<Record<string, unknown>>) =>
     rows.filter(
       (r) => r.revokedAt === undefined && r.pausedAt === undefined && r.platform !== "browser"
     )
   ),
-  canHearInvalidations: jest.fn((state: string) => state === "ready" || state === "replaying"),
 }))
-jest.mock("@/hooks/use-network-status", () => ({ useNetworkStatus: jest.fn() }))
-jest.mock("@/hooks/scheduler/use-scheduler-host-target", () => ({
-  useSchedulerHostTarget: jest.fn(),
-}))
-jest.mock("@/lib/companion/device-presence-registry", () => ({ eventPlaneState: jest.fn() }))
-jest.mock("@/lib/db/paired-devices", () => ({ listPairedDevices: jest.fn() }))
 jest.mock("@/lib/scheduler/scheduler-db", () => ({
   schedulerDb: { getUpcomingTasks: jest.fn(), getRecentExecutions: jest.fn() },
 }))
