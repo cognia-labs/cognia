@@ -29,7 +29,7 @@ it("preserves the managed-runtime refusal classification before its command is r
     transport: "stdio",
     process: undefined,
     metadata: { preset: "deepseek-harness-acp" },
-  } as ExternalAgentConfig
+  } as unknown as ExternalAgentConfig
   expect(cogniaGatewaySupport(source)).toEqual({ supported: false, reason: "unsupported-runtime" })
 })
 
