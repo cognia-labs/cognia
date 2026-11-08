@@ -393,7 +393,7 @@ interface ToolSurface {
 - 第 3 步 ask_user 与技能确认（ef03cd2159）：端口加 `askUser`（不属于本渠道的会话返回 `null`）和 `confirmSkill`。读取方加 `askUserInConversation`，按模块顺序询问，第一个应答者胜出。connectors 成员用自己的 `im-elicitation-context` 调 `runImAskUser`；技能确认卡片的投递逻辑从 dispatcher 原样搬到 `lib/connectors/hitl/skill-confirmation.ts`。`run-and-capture` 的 IM 归因移到 `lib/connectors/hitl/permission-attribution.ts`，由连接器运行时的权限应答者在返回前标注（摘要轮的登记没有 runId，原来就不归因）；内核只采用应答者给出的 `attribution`。还清 `plugin-tool-ipc -> connectors`、`run-and-capture -> connectors`。
 - 第 4 步 build-options（f421dc89e7）：端口加 `capabilityPrompt`、`channelCapabilities`。build-options 对 IM 绑定会话取一次渠道：宿主能力（computer use、OCR、调度工具共用一次结果）、能力提示（缓存逻辑保留，渠道尚未学到能力矩阵时返回 `null`、不缓存）、清单的渠道能力与指纹都来自渠道；没有渠道认领的 IM 绑定什么也不给，清单的渠道能力为空列表。`adapterAllowsBuiltInSkill`、`resolveRequireHitlForWrites`、`matchesSkillSelector` 移到技能框架 `lib/skills/built-in/channel-ceiling.ts`（清单构建是同步的，不适合走异步端口，且读的是内核数据行）；调度工具名移到 `lib/scheduler/agent-tool-names.ts`，测试核对 MCP 服务端确实注册了它们，build-options 不再重新导出。还清 `dispatcher -> connectors`。计划中的单一 `runPolicy` 改为三个窄方法：build-options 的缓存键和闸门顺序原样保留更安全。
 - 门禁：共还清方向边 12 条，尺寸度量没有增长，不需要例外记录。每次写基线后剔除其他会话的 `lib/chat/... -> chat:ui` 行。
-- 仍留：`build-options`、`skills/built-in/manifest.ts`、`skills/built-in/index.ts -> connectors` 来自内置技能族的注册和 Lark CLI 能力探测，已在 §22 还清；`plugin/api/workflow-author-api.ts` 仍自己投递工作流运行审批卡片，可按 `confirmSkill` 的形状加端口方法。
+- 仍留：`build-options`、`skills/built-in/manifest.ts`、`skills/built-in/index.ts -> connectors` 来自内置技能族的注册和 Lark CLI 能力探测，已在 §22 还清；`plugin/api/workflow-author-api.ts` 的工作流审批卡片见 §23。
 - 既有失败（在本轨道开始前的提交上同样失败）：`lib/skills/built-in/context.test.ts` 4 例、`lark/doc.test.ts` 1 例、`lark/capabilities.integration.test.ts` 5 例、`im/resolve-contact.test.ts` 1 例、`lib/claude/build-options-cache-opt.test.ts` 7 例，以及 T13 记录的工作流用例。
 - 未做：桌面冒烟（飞书机器人上的 ask_user 卡片、工具审批与归因、技能确认卡片、免打扰时段、目标驱动闸门、IM 触发的工作流、computer use / 调度工具的会话开关）。
 
@@ -410,3 +410,16 @@ interface ToolSurface {
 - 门禁结果：还清方向边 3 条（`build-options`、`skills/built-in/index.ts`、`skills/built-in/manifest.ts` 指向 connectors），尺寸度量没有增长。
 - 既有失败（HEAD 上同样失败）：`context.test.ts` 4 例、`lark/doc.test.ts` 1 例、`lark/capabilities.integration.test.ts` 5 例、`im/resolve-contact.test.ts` 1 例、`build-options-cache-opt.test.ts` 7 例、`slash-commands/actions/lark.test.ts` 1 例（"refuses a non-owner…"，在 HEAD 的工作树中确认）。
 - 未做：桌面冒烟（桌面会话与飞书会话里 Lark 技能的出现与 lark-cli 不可用时的隐藏、设置页 Lark 标签）。
+
+## 23. 工作流审批卡片走 conversation-channel 端口（2026-11-08）
+
+- 起因：§21 之后 `lib/plugin/api/workflow-author-api.ts` 仍直接导入 connectors：插件的 `prepareWorkflowApproval`（运行前审批，挂起派发）和 `prepareFanoutApproval`（扇出订阅审批）自己解析 IM 实时投递目标、构建卡片并经 delivery-gateway 发出，`recordCallbackBinding` 直接写连接器的回调绑定表。
+- 端口：`ConversationChannel` 加三个方法，形状与 `confirmSkill` 一致。
+  - `approveWorkflowRun({ workflowId, runParams?, triggeredFrom })`、`approveWorkflowFanout({ workflowId, workflowName, triggeredFrom, actorScope })`：返回 `{ surfaceId, workflowName, surface }`，卡片无法送达时抛错。`triggeredFrom` 是调用方已经与会话核对过的 IM 来源（`ConversationWorkflowOrigin`）。
+  - `recordCallbackBinding(binding)`：为本渠道服务的会话登记插件卡片的一个选项；没有会话键时按适配器判断；不属于本渠道时返回 `false`。读取方加 `recordConversationCallbackBinding`，按模块顺序询问，第一个登记成功的渠道胜出。
+- connectors 成员：两张卡片的逻辑从 workflow-author-api 原样搬到 `lib/connectors/hitl/workflow-approval-cards.ts`（实时投递目标的解析与拒绝条件、运行审批取会话上限与会话自身上限的较窄者并交给 `holdWorkflowDispatchForApproval`、扇出卡片的两个绑定与中英文文案）。成员的 `recordCallbackBinding` 在会话键可解析或适配器存在时写入。
+- workflow-author-api：保留来源核对（必须是带会话的 IM 来源，且与 Host 记录的触发来源一致），`approvalActorScope` 仍按 Host 记录的发起人计算后交给渠道；没有渠道认领时抛"delivery target is unavailable"。`recordCallbackBinding` 保留对 `skill_invoke` 的拒绝和 `wf_approve`/`wf_cancel` 的发布版本锁定，再交给渠道；没有渠道服务该绑定时抛错。行为变化：此前为不存在的适配器登记绑定会静默成功，现在拒绝。
+- 纯函数构建器 `buildApprovalSurface` 从 `lib/connectors/a2ui-bridge/workflow-to-a2ui.ts` 移到内核 `lib/claude/hitl/workflow-approval-surface.ts`（与回调前缀相邻），插件 API 仍同步暴露它；不再重新导出前缀。
+- 测试：卡片测试随逻辑搬到 `workflow-approval-cards.test.ts`（含真实 Lark/Telegram 序列化、起草中拒绝、上限合成），API 测试改为模拟读取方，成员与读取方测试各加用例。
+- 门禁结果：还清 `lib/plugin/api/workflow-author-api.ts -> connectors`，尺寸度量没有增长。
+- 未做：桌面冒烟（飞书里插件发起的工作流运行审批与扇出审批卡片、点击后的派发）。

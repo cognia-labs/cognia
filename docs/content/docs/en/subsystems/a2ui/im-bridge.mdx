@@ -17,7 +17,7 @@ description: A2UI surfaces must degrade into platform-native rich content — La
   (`capability-evaluator.ts`). **Inbound**, it projects platform-rich content into an
   `InboundA2UIBlock` for the Inbox renderer (`projectInboundToA2UI` → per-platform
   `inbound-to-a2ui.ts`) and routes button taps into an AI digest turn or a workflow-control handler.
-  **Workflow projection** in this bridge is the approval card only (`workflow-to-a2ui.ts`); live
+  **Workflow projection** in this bridge is the approval card only (`lib/claude/hitl/workflow-approval-surface.ts`, a kernel builder the bridge serialises); live
   progress and terminal cards come from the durable execution-run pipeline —
   `lib/execution/workflow-bridge.ts` + `lib/connectors/run-presentation/runner.ts` — not from a
   bridge-local loop.
@@ -47,7 +47,7 @@ prompt so the model knows which components the platform can render.
   - lib/connectors/a2ui-bridge/capability-evaluator.ts — adapter capability matrix → system-prompt section
   - lib/connectors/a2ui-bridge/a2ui-to-segments.ts — assistant reply → outbound `MessageSegment[]`
   - lib/connectors/adapters/_shared/inbound-a2ui-dispatch.ts — `projectInboundToA2UI`: inbound platform payload → `InboundA2UIBlock`
-  - lib/connectors/a2ui-bridge/workflow-to-a2ui.ts — PURE approval-surface builder (`buildApprovalSurface`)
+  - lib/claude/hitl/workflow-approval-surface.ts — PURE approval-surface builder (`buildApprovalSurface`, kernel)
   - lib/connectors/run-presentation/runner.ts — live run cards (not part of the bridge; documented in Platform Connectors)
   - lib/a2ui/connector-callback-handler.ts — generic callback → AI digest turn
   - lib/a2ui/workflow-approval-handler.ts — `wf_approve` / `wf_cancel` dispatcher
@@ -214,15 +214,15 @@ a user taps a button in a rendered surface, and the bridge converts it into a fr
 ## Workflow Projection
 
 A live workflow run has to surface inside an IM thread. This bridge owns only the **approval
-handshake**: `workflow-to-a2ui.ts` holds the pure `buildApprovalSurface` builder. Live progress and
+handshake**: `workflow-approval-surface.ts` holds the pure `buildApprovalSurface` builder. Live progress and
 terminal cards are **not** built here any more — they come from the durable execution-run pipeline
 described below.
 
-### Pure builder (`workflow-to-a2ui.ts`)
+### Pure builder (`workflow-approval-surface.ts`)
 
-| Builder (`workflow-to-a2ui.ts`) | Produces |
+| Builder (`workflow-approval-surface.ts`) | Produces |
 | --- | --- |
-| `buildApprovalSurface` (48) | `Card` + `Row` + 2 `Button`s; mirror adds `回复 1 同意 / 2 取消`. Action ids = `WF_APPROVE_PREFIX` (`"wfapp:"`, 25) + `bindingId` / `WF_CANCEL_PREFIX` (`"wfcan:"`, 26) + `bindingId` (49-50); button value carries the action id; `surfaceType: "inline"` |
+| `buildApprovalSurface` (48) | `Card` + `Row` + 2 `Button`s; mirror adds `回复 1 同意 / 2 取消`. Action ids = `WF_APPROVE_PREFIX` (`"wfapp:"`, `callback-prefixes.ts:12`) + `bindingId` / `WF_CANCEL_PREFIX` (`"wfcan:"`, `callback-prefixes.ts:13`) + `bindingId` (49-50); button value carries the action id; `surfaceType: "inline"` |
 
 The input is `ApprovalSurfaceInput { bindingId, workflowName, summary? }` (28); the surface is emitted
 by the `wf_run_workflow_by_name` plugin tool as part of its tool result, and the caller owns Dexie I/O +

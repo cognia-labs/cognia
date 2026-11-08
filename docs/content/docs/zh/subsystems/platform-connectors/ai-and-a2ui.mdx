@@ -211,10 +211,10 @@ export function resolveCapabilityAwareFallbackDeliveryMode(input: {
 
 `card-edit`（适配器有 `edit` 且 `runtimeCapabilities.messageEditing !== false`）带 `editTargetMessageId` 重发 `buildRunActivitySurface` 卡片；`append` 在状态变化时新发一张卡片，否则至多每 `APPEND_UPDATE_INTERVAL_MS = 30 s` 一张（`shouldDeliverFallbackUpdate`，`runner.ts:235`）；`final-only` 只等终态快照。每次后备都汇入 `enqueueGoverned`（`delivery-gateway`），带 `source: "workflow"`、`sourceWorkflow: { …, nodeId: "run-projection" }` 与幂等键 `execution-run:<bindingId>:<revision>`，再 `waitForOutboundTerminal`，之后才经 `saveBinding` 提交游标（`lastProjectedRevision`）。
 
-审批握手仍留在桥接层：`buildApprovalSurface`（`workflow-to-a2ui.ts:48`，由 `wf_run_workflow_by_name` 工具发出）采用不同的 action-id 命名空间 —— `WF_APPROVE_PREFIX = "wfapp:"` 与 `WF_CANCEL_PREFIX = "wfcan:"`（`workflow-to-a2ui.ts:25`）—— 使总线按前缀路由 `wf_approve` 与 `wf_cancel` 而无需嗅探 payload：
+审批握手的构建器归内核：`buildApprovalSurface`（`lib/claude/hitl/workflow-approval-surface.ts:48`，由 `wf_run_workflow_by_name` 工具发出）采用不同的 action-id 命名空间 —— `WF_APPROVE_PREFIX = "wfapp:"` 与 `WF_CANCEL_PREFIX = "wfcan:"`（`lib/claude/hitl/callback-prefixes.ts:12`）—— 使总线按前缀路由 `wf_approve` 与 `wf_cancel` 而无需嗅探 payload：
 
 ```ts
-// lib/connectors/a2ui-bridge/workflow-to-a2ui.ts:49 — approve/cancel Card
+// lib/claude/hitl/workflow-approval-surface.ts:49 — approve/cancel Card
 const approveActionId = WF_APPROVE_PREFIX + input.bindingId
 const cancelActionId = WF_CANCEL_PREFIX + input.bindingId
 const safeSummary = (input.summary ?? "").trim()

@@ -233,10 +233,10 @@ export function resolveCapabilityAwareFallbackDeliveryMode(input: {
 
 `card-edit` (adapter has `edit` and `runtimeCapabilities.messageEditing !== false`) re-sends the `buildRunActivitySurface` card with `editTargetMessageId`; `append` posts a fresh card on status changes and otherwise at most every `APPEND_UPDATE_INTERVAL_MS = 30 s` (`shouldDeliverFallbackUpdate`, `runner.ts:235`); `final-only` waits for the terminal snapshot. Every fallback funnels through `enqueueGoverned` (`delivery-gateway`) with `source: "workflow"`, `sourceWorkflow: { …, nodeId: "run-projection" }` and idempotency key `execution-run:<bindingId>:<revision>`, then `waitForOutboundTerminal` before the cursor (`lastProjectedRevision`) is committed via `saveBinding`.
 
-The approval handshake still lives in the bridge: `buildApprovalSurface` (`workflow-to-a2ui.ts:48`, emitted by the `wf_run_workflow_by_name` tool) uses distinct action-id namespaces — `WF_APPROVE_PREFIX = "wfapp:"` and `WF_CANCEL_PREFIX = "wfcan:"` (`workflow-to-a2ui.ts:25`) — so the bus routes `wf_approve` vs `wf_cancel` by prefix without sniffing the payload:
+The approval handshake's builder is the kernel's: `buildApprovalSurface` (`lib/claude/hitl/workflow-approval-surface.ts:48`, emitted by the `wf_run_workflow_by_name` tool) uses distinct action-id namespaces — `WF_APPROVE_PREFIX = "wfapp:"` and `WF_CANCEL_PREFIX = "wfcan:"` (`lib/claude/hitl/callback-prefixes.ts:12`) — so the bus routes `wf_approve` vs `wf_cancel` by prefix without sniffing the payload:
 
 ```ts
-// lib/connectors/a2ui-bridge/workflow-to-a2ui.ts:49 — approve/cancel Card
+// lib/claude/hitl/workflow-approval-surface.ts:49 — approve/cancel Card
 const approveActionId = WF_APPROVE_PREFIX + input.bindingId
 const cancelActionId = WF_CANCEL_PREFIX + input.bindingId
 const safeSummary = (input.summary ?? "").trim()
