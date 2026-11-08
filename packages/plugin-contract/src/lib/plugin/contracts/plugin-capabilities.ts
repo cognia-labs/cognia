@@ -127,7 +127,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     support: "supported",
     manifestFields: ["a2uiComponents", "extensions"],
     runtimeBinding: "context.a2ui.registerComponent + Plugin A2UI bridge",
-    hostBindings: ["lib/plugin/bridge/a2ui-bridge.ts", "lib/plugin/core/registry.ts"],
+    hostBindings: ["lib/a2ui/plugin-api/plugin-bridge.ts", "lib/plugin/core/registry.ts"],
     typescriptSdk: [
       "packages/plugin-sdk/src/manifest/index.ts",
       "packages/plugin-sdk/src/context/index.ts",
@@ -528,7 +528,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     support: "supported",
     manifestFields: ["a2uiComponents", "a2uiTemplates"],
     runtimeBinding: "Plugin A2UI bridge",
-    hostBindings: ["lib/plugin/bridge/a2ui-bridge.ts", "lib/plugin/core/manager.ts"],
+    hostBindings: ["lib/a2ui/plugin-api/plugin-bridge.ts", "lib/plugin/core/manager.ts"],
     typescriptSdk: [
       "packages/plugin-sdk/src/manifest/index.ts",
       "packages/plugin-sdk/src/context/index.ts",
@@ -1379,7 +1379,10 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     manifestFields: ["connectors"],
     runtimeBinding:
       "Connector adapter factories registered via the connectors bridge into ConnectorBus",
-    hostBindings: ["lib/plugin/bridge/connectors-bridge.ts", "lib/plugin/core/manager.ts"],
+    hostBindings: [
+      "lib/connectors/plugin-api/adapters-bridge.ts",
+      "lib/plugin/core/module-plugin-api.ts",
+    ],
     typescriptSdk: [
       "packages/plugin-sdk/src/define/define-connector.ts",
       "packages/plugin-sdk/src/index.ts",
@@ -1388,7 +1391,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-connector.test.ts",
-      "lib/plugin/bridge/connectors-bridge.test.ts",
+      "lib/connectors/plugin-api/adapters-bridge.test.ts",
     ],
   },
   {

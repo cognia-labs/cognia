@@ -2,6 +2,7 @@
  * Tests for the plugin-model-call PII red-line.
  */
 
+import { preloadModulePluginApis } from "@/lib/plugin/core/module-plugin-api"
 import {
   assertNoLeakingPii,
   DEFAULT_LITERAL_CREDENTIAL_POLICY,
@@ -16,6 +17,10 @@ import type { PluginManager } from "@/lib/plugin/core/manager"
 jest.mock("@/lib/plugin/security/account-runtime-gate", () => ({
   pluginRuntimeAccountAvailable: () => true,
 }))
+
+// `ctx.a2ui` and `ctx.connectors` are built by their modules, whose plugin
+// API the manager loads before it builds a context.
+beforeAll(() => preloadModulePluginApis())
 
 describe("assertNoLeakingPii", () => {
   it("passes clean text through", () => {

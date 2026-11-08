@@ -71,7 +71,6 @@ describe("lib/plugin/api barrel", () => {
     "createStorageAPI",
     "clearPluginStorage",
     "getAllPluginStorageUsage",
-    "createConnectorsAPI",
     "createMessagePartAPI",
     "purgeMessagePartRenderersForPlugin",
     "createGitAPI",

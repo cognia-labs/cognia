@@ -36,7 +36,6 @@ import type {
   PluginStorage,
   PluginEventEmitter,
   PluginUIAPI,
-  PluginA2UIAPI,
   PluginAgentAPI,
   PluginSettingsAPI,
   PluginPythonAPI,
@@ -54,8 +53,6 @@ import type {
   PluginInputDialog,
   PluginConfirmDialog,
   PluginToolRegistration,
-  PluginA2UIComponent,
-  A2UITemplateDef,
   NetworkRequestOptions,
   NetworkResponse,
   DownloadOptions,
@@ -125,10 +122,8 @@ import {
   unregisterPluginTrigger,
   type TriggerRegistration,
 } from "@/lib/workflow/triggers/registry"
-import type { A2UIComponent, A2UISurfaceType } from "@/types/artifact/a2ui"
 import type { AgentModeConfig } from "@/types/agent/agent-mode"
 import { usePluginStore } from "@/stores/plugin-runtime"
-import { useA2UIStore } from "@/stores/a2ui"
 import type { PluginManager } from "./manager"
 import type { IntrospectablePluginPermission, PluginContextAPI } from "@/types/plugin/plugin"
 import {
@@ -188,7 +183,7 @@ import { createSubscriptionAPI } from "../api/subscription-api"
 import { createTerminalAPI } from "../api/terminal-api"
 import { createPerfAPI } from "../api/perf-api"
 import { createLogsAPI } from "../api/logs-api"
-import { createConnectorsAPI } from "../api/connectors-api"
+import { buildModulePluginNamespace, modulePluginApiHostOf } from "./module-plugin-api"
 import { createIntegrationsAPI } from "../api/integrations-api"
 import { createBotsAPI } from "../api/bots-api"
 import { createShareAPI } from "../api/share-api"
@@ -289,7 +284,7 @@ export function createPluginContext(
     storage: createStorage(pluginId),
     events: createEventEmitter(pluginId),
     ui: createUIAPI(pluginId),
-    a2ui: createA2UIAPI(pluginId, manager),
+    a2ui: buildModulePluginNamespace("a2ui", pluginId, modulePluginApiHostOf(manager)),
     agent: createAgentAPI(pluginId, manager),
     settings: createSettingsAPI(pluginId),
     python: plugin.manifest.type !== "frontend" ? createPythonAPI(pluginId, manager) : undefined,
@@ -498,7 +493,7 @@ export function createFullPluginContext(
     terminal: createTerminalAPI(pluginId),
     perf: createPerfAPI(pluginId),
     logs: createLogsAPI(pluginId),
-    connectors: createConnectorsAPI(pluginId),
+    connectors: buildModulePluginNamespace("connectors", pluginId, modulePluginApiHostOf(manager)),
     integrations: createIntegrationsAPI(pluginId, (permission) =>
       permissionsAPI.hasPermission(permission as never)
     ),
@@ -819,57 +814,6 @@ function createUIAPI(pluginId: string): PluginUIAPI {
 
     showConfirmDialog: (options: PluginConfirmDialog): Promise<boolean> =>
       openDataDialog<boolean>({ kind: "confirm", options }, false),
-  }
-}
-
-// =============================================================================
-// A2UI API
-// =============================================================================
-
-function createA2UIAPI(pluginId: string, manager: PluginManager): PluginA2UIAPI {
-  const a2uiStore = useA2UIStore.getState()
-
-  return {
-    createSurface: (id: string, type: A2UISurfaceType, options?: { title?: string }) => {
-      a2uiStore.createSurface(id, type, options)
-    },
-
-    deleteSurface: (id: string) => {
-      a2uiStore.deleteSurface(id)
-    },
-
-    updateComponents: (surfaceId: string, components: A2UIComponent[]) => {
-      a2uiStore.processMessage({
-        type: "updateComponents",
-        surfaceId,
-        components,
-      })
-    },
-
-    setReady: (surfaceId: string) => {
-      a2uiStore.processMessage({ type: "surfaceReady", surfaceId })
-    },
-
-    updateDataModel: (surfaceId: string, data: Record<string, unknown>, merge = true) => {
-      a2uiStore.processMessage({
-        type: "dataModelUpdate",
-        surfaceId,
-        data,
-        merge,
-      })
-    },
-
-    getSurface: (id: string) => {
-      return a2uiStore.getSurface(id)
-    },
-
-    registerComponent: (component: PluginA2UIComponent) => {
-      manager.getA2UIBridge().registerComponent(pluginId, component)
-    },
-
-    registerTemplate: (template: A2UITemplateDef) => {
-      manager.getA2UIBridge().registerTemplate(pluginId, template)
-    },
   }
 }
 

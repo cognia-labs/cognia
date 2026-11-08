@@ -47,7 +47,7 @@ import {
   unregisterPluginAdapters,
   getPluginConnectorKinds,
   __resetBridgeForTesting,
-} from "./connectors-bridge"
+} from "./adapters-bridge"
 import { buildPluginAdapter } from "@/lib/connectors/plugin-connector-registry"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"

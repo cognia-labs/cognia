@@ -47,7 +47,11 @@ describe("manifest-types", () => {
       capabilityContributions: { load: async () => ({ contributions: [] }) },
       taskExecutors: { types: ["im-push"], load: async () => ({ taskExecutors: {} }) },
       builtinSkills: { load: async () => ({ builtInSkillFamilies: [] }) },
-      pluginApi: { namespaces: ["pet"], load: () => import("./define") },
+      pluginApi: {
+        namespaces: ["pet"],
+        bridges: ["pet"],
+        load: async () => ({ pluginApi: { namespaces: {} } }),
+      },
       workflowNodes: { load: async () => ({ workflowNodeKinds: [] }) },
       searchProviders: async () => ({ searchProviders: [] }),
       slashCommands: [

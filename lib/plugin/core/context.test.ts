@@ -3,6 +3,7 @@
  * Plugin Context Tests
  */
 
+import { preloadModulePluginApis } from "@/lib/plugin/core/module-plugin-api"
 import {
   __resetLiteralCredentialWarningsForTesting,
   createGuardedBrowserAPI,
@@ -435,6 +436,10 @@ function pluginTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     ...overrides,
   }
 }
+
+// `ctx.a2ui` and `ctx.connectors` are built by their modules, whose plugin
+// API the manager loads before it builds a context.
+beforeAll(() => preloadModulePluginApis())
 
 describe("createPluginContext", () => {
   it("constructs the plugin API without loading dialog or chat renderers", () => {

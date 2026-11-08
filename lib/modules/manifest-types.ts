@@ -56,6 +56,7 @@ import type { GlobalSearchProvider } from "@/lib/global-search/types"
 import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import type { PromptDefinitionV1, PromptResolutionContext } from "@/lib/prompts/types"
 import type { Goal } from "@/types/goal"
+import type { ModulePluginApiContribution } from "@/types/plugin/module-plugin-api"
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
 import type { ScheduledTaskType } from "@/types/scheduler"
 import type { SyncableTable, SyncTableHandler } from "@/lib/sync/types"
@@ -610,6 +611,22 @@ export interface ModuleHostWriteCommandsEntry {
   load: LazyModule<ModuleHostWriteCommandsModule>
 }
 
+/** What a module's `pluginApi` file exports. */
+export interface ModulePluginApiModule {
+  pluginApi: ModulePluginApiContribution
+}
+
+/** One module's plugin host API as `lib/modules/generated/plugin-api.ts` lists it. */
+export interface ModulePluginApiEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  /** The `ctx.<namespace>` objects and the bridges, known before its file loads. */
+  namespaces: readonly string[]
+  bridges: readonly string[]
+  load: LazyModule<ModulePluginApiModule>
+}
+
 /** One module's node executors as `lib/modules/generated/workflow-nodes.ts` lists them. */
 export interface ModuleWorkflowNodesEntry {
   /** The contributing module, and its stage: an `experimental` one contributes nothing. */
@@ -779,8 +796,18 @@ export interface HostModuleManifest {
    * §14 `builtinSkills`), loaded before the skill registry is read.
    */
   builtinSkills?: { load: LazyModule<ModuleBuiltinSkillsModule> }
-  /** Plugin host API namespaces this module owns (ADR-0250 §9). */
-  pluginApi?: { namespaces: readonly string[]; load: LazyModule }
+  /**
+   * The plugin host API this module contributes (ADR-0250 §9, §14
+   * `pluginApi`): the `ctx.<namespace>` objects it builds (catalog
+   * `apiNamespaces` ids) and the module bridges it answers (catalog
+   * `capabilities` ids), with the file that exports them as `pluginApi`. The
+   * plugin host loads it before it builds a plugin's context.
+   */
+  pluginApi?: {
+    namespaces: readonly string[]
+    bridges?: readonly string[]
+    load: LazyModule<ModulePluginApiModule>
+  }
   /**
    * The workflow node executors this module registers (ADR-0250 §14
    * `workflowNodes`), loaded by the workflow engine before it looks one up.

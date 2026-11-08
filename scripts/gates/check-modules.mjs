@@ -135,6 +135,9 @@ export const SPOT_ICON_FILE = "components/mobile/mobile-spot-icon.tsx"
 export const EXTENSION_POINTS_FILE =
   "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.ts"
 
+/** The plugin contract catalog, whose namespace and capability ids a `pluginApi` names. */
+export const PLUGIN_CONTRACT_CATALOG = "packages/plugin-contract/contract/catalog.json"
+
 /** The data layer: `lib/db/` data modules a subsystem claims once it is their only user. */
 export const DATA_LAYER = "db"
 export const DATA_LAYER_PATH = "lib/db/"
@@ -208,6 +211,19 @@ export function codeownerHandles(text) {
   return handles
 }
 
+/**
+ * The plugin contract's namespace and capability ids a `pluginApi` may name,
+ * from the contract catalog; absent when the catalog is (fixture trees).
+ */
+function pluginContractVocabulary(ctx) {
+  if (!ctx.exists(PLUGIN_CONTRACT_CATALOG)) return {}
+  const catalog = JSON.parse(ctx.read(PLUGIN_CONTRACT_CATALOG))
+  return {
+    pluginApiNamespaces: new Set((catalog.apiNamespaces ?? []).map((entry) => entry.id)),
+    pluginBridgeCapabilities: new Set((catalog.capabilities ?? []).map((entry) => entry.id)),
+  }
+}
+
 function collectManifests(ctx, files) {
   const errors = []
   const warnings = []
@@ -224,6 +240,7 @@ function collectManifests(ctx, files) {
     spotIconNames: constStringList(ctx, SPOT_ICON_FILE, "MOBILE_SPOT_ICON_NAMES"),
     extensionPoints: constStringList(ctx, EXTENSION_POINTS_FILE, "CANONICAL_EXTENSION_POINTS"),
     ports: declaredPorts(files, (file) => ctx.read(file)),
+    ...pluginContractVocabulary(ctx),
   }
   for (const file of files) {
     const kind = manifestKind(file)
@@ -319,6 +336,26 @@ function collectManifests(ctx, files) {
           : [],
       "name",
       "host write command "
+    ),
+    // A plugin namespace and a module bridge each have one builder: the plugin
+    // host looks them up by name.
+    ...duplicateContributions(
+      host,
+      (manifest) =>
+        Array.isArray(manifest.pluginApi?.namespaces)
+          ? manifest.pluginApi.namespaces.map((name) => ({ name }))
+          : [],
+      "name",
+      "plugin API namespace "
+    ),
+    ...duplicateContributions(
+      host,
+      (manifest) =>
+        Array.isArray(manifest.pluginApi?.bridges)
+          ? manifest.pluginApi.bridges.map((name) => ({ name }))
+          : [],
+      "name",
+      "plugin module bridge "
     ),
     // A tool name routes to one module: the dispatcher looks it up by name.
     ...duplicateContributions(

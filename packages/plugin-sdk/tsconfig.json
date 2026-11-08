@@ -39,6 +39,8 @@
       "@cognia/network-guard/*": ["../../packages/network-guard/src/*"],
       "@cognia/primitives": ["../primitives/src/index.ts"],
       "@cognia/primitives/*": ["../../packages/primitives/src/*"],
+      "@cognia/a2ui-core": ["../a2ui-core/src/index.ts"],
+      "@cognia/a2ui-core/*": ["../../packages/a2ui-core/src/*"],
       "@cognia/time": ["../time/src/index.ts"],
       "@cognia/time/*": ["../../packages/time/src/*"],
       "@cognia/github-bot-kit": ["../github-bot-kit/src/index.ts"],

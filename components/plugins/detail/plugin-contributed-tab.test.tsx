@@ -78,8 +78,9 @@ jest.mock("@/lib/ai/agent/external/protocol-adapter", () => ({
 }))
 
 const mockGetPluginConnectorKinds = jest.fn<readonly string[], [string]>()
-jest.mock("@/lib/plugin/bridge/connectors-bridge", () => ({
-  getPluginConnectorKinds: (id: string) => mockGetPluginConnectorKinds(id),
+jest.mock("@/lib/plugin/core/module-plugin-api", () => ({
+  moduleBridgeContributions: (capability: string, id: string) =>
+    capability === "connectors" ? mockGetPluginConnectorKinds(id) : [],
 }))
 
 const mockGetPluginCatalogSnapshot = jest.fn<unknown[], []>()

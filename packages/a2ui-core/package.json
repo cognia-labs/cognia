@@ -2,7 +2,7 @@
   "name": "@cognia/a2ui-core",
   "version": "0.0.0",
   "private": true,
-  "description": "The pure A2UI core: the data model and JSON Pointer bindings, computed fields, the component tree, the message parser, streaming previews, the a2ui-bridge MCP tool schemas and the outbound segment sanitizer. No host imports, no state.",
+  "description": "The pure A2UI core: the data model and JSON Pointer bindings, computed fields, the component tree, the message parser, streaming previews, the a2ui-bridge MCP tool schemas, the outbound segment sanitizer and the segment replay. No host imports, no state.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

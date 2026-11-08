@@ -10,6 +10,7 @@ describe("@cognia/a2ui-core entry", () => {
       "extractA2UIBlocks",
       "isA2UIPreviewSurfaceId",
       "namespacedA2UIToolNames",
+      "segmentToMessages",
       "sanitizeOutboundSegments",
       "sanitizeScheduledOutboundPayload",
     ])

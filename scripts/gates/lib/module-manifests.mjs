@@ -152,6 +152,8 @@ export const GENERATED_TASK_EXECUTORS = "lib/modules/generated/task-executors.ts
 export const GENERATED_SYNC_HANDLERS = "lib/modules/generated/sync-handlers.ts"
 /** Every module's `hostWriteCommands` file, lazily, with the commands it answers: the paired-device write dispatcher's only route to one. */
 export const GENERATED_HOST_WRITE_COMMANDS = "lib/modules/generated/host-write-commands.ts"
+/** Every module's `pluginApi` file, lazily, with the namespaces and bridges it builds: the plugin host's only route to one. */
+export const GENERATED_PLUGIN_API = "lib/modules/generated/plugin-api.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
@@ -164,6 +166,7 @@ export const GENERATED_FILES = [
   GENERATED_TASK_EXECUTORS,
   GENERATED_SYNC_HANDLERS,
   GENERATED_HOST_WRITE_COMMANDS,
+  GENERATED_PLUGIN_API,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -772,6 +775,8 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
         errors.push("hostWriteCommands.commands names a command twice")
     }
   }
+  if (manifest.pluginApi !== undefined)
+    errors.push(...pluginApiErrors(manifest.pluginApi, vocabulary))
   if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
@@ -783,6 +788,47 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
     errors.push(...requirementErrors(manifest.requires, vocabulary.ports))
   if (manifest.messages !== undefined && !isText(manifest.messages))
     errors.push("messages is an i18n namespace")
+  return errors
+}
+
+/**
+ * `pluginApi`: the `ctx.<namespace>` objects (catalog `apiNamespaces` ids) and
+ * module bridges (catalog `capabilities` ids) a module builds, when the
+ * vocabulary carries the catalog's lists.
+ */
+function pluginApiErrors(api, vocabulary) {
+  const errors = []
+  if (!api || typeof api !== "object" || !isLazy(api.load))
+    return ['pluginApi.load is a lazy entry `() => import("…")`']
+  for (const key of Object.keys(api))
+    if (!["load", "namespaces", "bridges"].includes(key))
+      errors.push(`pluginApi: unknown field "${key}"`)
+  const lists = [
+    ["namespaces", "plugin API namespaces", vocabulary.pluginApiNamespaces],
+    ["bridges", "module bridge capabilities", vocabulary.pluginBridgeCapabilities],
+  ]
+  for (const [field, what, known] of lists) {
+    const names = api[field]
+    if (names === undefined && field === "bridges") continue
+    if (
+      !Array.isArray(names) ||
+      names.some((name) => typeof name !== "string" || !/^[a-z][A-Za-z0-9-]*$/.test(name))
+    ) {
+      errors.push(`pluginApi.${field} lists the ${what} the file exports`)
+      continue
+    }
+    if (new Set(names).size !== names.length) errors.push(`pluginApi.${field} names one twice`)
+    if (known)
+      for (const name of names)
+        if (!known.has(name))
+          errors.push(`pluginApi.${field}: "${name}" is not one of the plugin contract's ${what}`)
+  }
+  if (
+    Array.isArray(api.namespaces) &&
+    api.namespaces.length === 0 &&
+    !(Array.isArray(api.bridges) && api.bridges.length > 0)
+  )
+    errors.push("pluginApi contributes at least one namespace or bridge")
   return errors
 }
 
@@ -1062,6 +1108,17 @@ const KEYED_REGISTRIES = {
       "// needs one (`lib/sync/module-handlers.ts`).",
     ],
   },
+  pluginApi: {
+    keys: "namespaces",
+    extraKeys: ["bridges"],
+    constName: "MODULE_PLUGIN_API",
+    type: "ModulePluginApiEntry",
+    comment: [
+      "// Every module's `pluginApi`: the plugin `ctx.<namespace>` objects and module",
+      "// bridges it builds, and the file that exports them, loaded by the plugin host",
+      "// before it builds a plugin's context (`lib/plugin/core/module-plugin-api.ts`).",
+    ],
+  },
   hostWriteCommands: {
     keys: "commands",
     constName: "MODULE_HOST_WRITE_COMMANDS",
@@ -1075,14 +1132,16 @@ const KEYED_REGISTRIES = {
 }
 
 function keyedEntries(field, modules) {
-  const { keys } = KEYED_REGISTRIES[field]
+  const { keys, extraKeys = [] } = KEYED_REGISTRIES[field]
+  const list = (value) => (Array.isArray(value) ? value : [])
   return [...modules]
     .sort((a, b) => a.id.localeCompare(b.id))
     .filter(({ value }) => typeof value?.[field]?.load?.$lazy === "string")
     .map(({ id, file, value }) => ({
       module: id,
       stage: value.stage,
-      [keys]: Array.isArray(value[field][keys]) ? value[field][keys] : [],
+      [keys]: list(value[field][keys]),
+      ...Object.fromEntries(extraKeys.map((key) => [key, list(value[field][key])])),
       load: adapterImport(file, value[field].load.$lazy),
     }))
 }
@@ -1102,14 +1161,19 @@ export function hostWriteCommandEntries(modules) {
   return keyedEntries("hostWriteCommands", modules)
 }
 
+/** The modules that contribute plugin host API, in module id order, with their namespaces and bridges. */
+export function pluginApiEntries(modules) {
+  return keyedEntries("pluginApi", modules)
+}
+
 function renderKeyedRegistry(field, modules) {
-  const { keys, constName, type, comment } = KEYED_REGISTRIES[field]
+  const { keys, extraKeys = [], constName, type, comment } = KEYED_REGISTRIES[field]
   const rows = keyedEntries(field, modules).map((entry) =>
     [
       "  {",
       `    module: ${JSON.stringify(entry.module)},`,
       `    stage: ${JSON.stringify(entry.stage)},`,
-      `    ${keys}: ${JSON.stringify(entry[keys])},`,
+      ...[keys, ...extraKeys].map((key) => `    ${key}: ${JSON.stringify(entry[key])},`),
       `    load: () => import(${JSON.stringify(entry.load)}),`,
       "  },",
     ].join("\n")
@@ -1182,6 +1246,7 @@ export function renderRegistries({ host, ui }) {
     [GENERATED_TASK_EXECUTORS]: renderKeyedRegistry("taskExecutors", host),
     [GENERATED_SYNC_HANDLERS]: renderKeyedRegistry("syncHandlers", host),
     [GENERATED_HOST_WRITE_COMMANDS]: renderKeyedRegistry("hostWriteCommands", host),
+    [GENERATED_PLUGIN_API]: renderKeyedRegistry("pluginApi", host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

@@ -43,4 +43,7 @@ export default defineHostModule({
   // The protocol prompt, the app create/edit prompts and the execution-page
   // enhancer.
   prompts: () => import("./prompts-contribution"),
+  // A plugin's `ctx.a2ui`, and the bridge its components and templates
+  // register through.
+  pluginApi: { namespaces: ["a2ui"], load: () => import("./plugin-api/plugin-api") },
 })

@@ -76,10 +76,7 @@ import {
   unregisterWebviewsForPlugin,
 } from "@/lib/plugin/bridge/plugin-webview-bridge"
 import { registerBotsForPlugin, unregisterBotsForPlugin } from "@/lib/plugin/bridge/bots-bridge"
-import {
-  registerPluginAdapters,
-  unregisterPluginAdapters,
-} from "@/lib/plugin/bridge/connectors-bridge"
+import { moduleBridge } from "@/lib/plugin/core/module-plugin-api"
 import { applyPluginFonts, revertPluginFonts } from "@/lib/plugin/bridge/font-bridge"
 import { applyPluginWallpapers, revertPluginWallpapers } from "@/lib/plugin/bridge/wallpaper-bridge"
 import {
@@ -300,15 +297,19 @@ export const MODULE_BRIDGE_CAPABILITIES = {
     unregister: unregisterToolRenderersForPlugin,
   },
   connectors: {
-    // Different arg order + needs the plugin's loaded exports (factory lookup
-    // by name) rather than a per-entry importer. The manager supplies
-    // `moduleExports` from the loader's cache.
+    // The connectors module answers it (`pluginApi.bridges`): it needs the
+    // plugin's loaded exports (factory lookup by name) rather than a per-entry
+    // importer. The manager supplies `moduleExports` from the loader's cache.
     key: "connectors",
     manifestField: "connectors",
     register: async (ctx) => {
-      await registerPluginAdapters(ctx.pluginId, ctx.manifest, ctx.moduleExports)
+      const bridge = await moduleBridge("connectors")
+      if (!bridge) throw new Error("no module answers the connectors module bridge")
+      await bridge.register(ctx)
     },
-    unregister: unregisterPluginAdapters,
+    unregister: async (pluginId) => {
+      await (await moduleBridge("connectors"))?.unregister(pluginId)
+    },
   },
   integrations: {
     key: "integrations",

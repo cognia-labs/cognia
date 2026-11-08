@@ -76,10 +76,10 @@ export { createStorageAPI, clearPluginStorage, getAllPluginStorageUsage } from "
 export type { PluginStorageAPI } from "./storage-api"
 
 // Connectors / IM messaging API (ctx.connectors) — gated read/send/manage plus
-// the ungated A2UI rich-content builder. Exported here so SDK authors import
-// the surface + its types from the canonical `@/lib/plugin/api` barrel rather
-// than deep-importing the implementation module.
-export { createConnectorsAPI } from "./connectors-api"
+// the ungated A2UI rich-content builder. The connectors module builds it
+// (`pluginApi`, `lib/connectors/plugin-api/`); its types are the plugin
+// contract's, re-exported here so SDK authors import them from the canonical
+// `@/lib/plugin/api` barrel.
 export { createIntegrationsAPI } from "./integrations-api"
 export type {
   PluginConnectorsAPI,
@@ -88,8 +88,8 @@ export type {
   PluginAdapterInstanceInfo,
   PluginAdapterInstancePatch,
   PluginAdapterInstanceInput,
-  PluginConnectorsA2UIBuilder,
-} from "./connectors-api"
+} from "@cognia/plugin-contract/lib/plugin/api/connectors-api"
+export type { PluginConnectorsA2UIBuilder } from "@cognia/plugin-contract/lib/connectors/a2ui-bridge/surface-builder"
 
 export { createMessagePartAPI, purgeMessagePartRenderersForPlugin } from "./message-part-api"
 export { createToolResultAPI, purgeToolResultRenderersForPlugin } from "./tool-result-api"

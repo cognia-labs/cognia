@@ -15,9 +15,9 @@ import { usePluginStore } from "@/stores/plugin-runtime"
 import { registerComponent, unregisterComponent } from "@/lib/a2ui/catalog"
 import { globalEventEmitter } from "@/lib/a2ui/events"
 import { isA2UIPreviewSurfaceId } from "@cognia/a2ui-core/streaming-preview"
-import type { PluginRegistry } from "../core/registry"
-import type { PluginLifecycleHooks } from "../messaging/hooks-system"
-import { loggers } from "../core/logger"
+import type { PluginRegistry } from "@/lib/plugin/core/registry"
+import type { PluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
+import { loggers } from "@/lib/plugin/core/logger"
 
 // =============================================================================
 // Types

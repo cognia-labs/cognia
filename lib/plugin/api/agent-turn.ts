@@ -725,7 +725,7 @@ export async function runPluginAgentTurn(
               )
             )
               continue
-            const { segmentToMessages } = await import("@/lib/a2ui/ai-generate")
+            const { segmentToMessages } = await import("@cognia/a2ui-core/segment-messages")
             const part: A2UIPart = {
               type: "a2ui",
               surfaceId,

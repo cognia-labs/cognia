@@ -66,7 +66,11 @@ import {
   type FullPluginContext,
 } from "@/lib/plugin/core/context"
 import { buildExtensionDescriptor } from "@/lib/plugin/core/descriptor"
-import { createPluginA2UIBridge, type PluginA2UIBridge } from "@/lib/plugin/bridge/a2ui-bridge"
+import {
+  modulePluginApiHostOf,
+  preloadModulePluginApis,
+  unloadModulePluginApis,
+} from "./module-plugin-api"
 import { PluginThemesBridge } from "@/lib/plugin/bridge/themes-bridge"
 import { PluginLifecycleHooks, getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 import { isPluginSuspendEligible } from "@/lib/plugin/core/idle-policy"
@@ -907,7 +911,6 @@ export class PluginManager {
   private loader: PluginLoader
   private registry: PluginRegistry
   private hooksManager: PluginLifecycleHooks
-  private a2uiBridge: PluginA2UIBridge | null = null
   private themesBridge: PluginThemesBridge | null = null
   private contexts: Map<string, FullPluginContext> = new Map()
   private readonly managedIdeWakeups = new Map<string, number>()
@@ -2019,17 +2022,6 @@ export class PluginManager {
       this.releaseActivationLease(pluginId)
       return true
     }
-  }
-
-  private ensureA2UIBridge(): PluginA2UIBridge {
-    if (!this.a2uiBridge) {
-      this.a2uiBridge = createPluginA2UIBridge({
-        registry: this.registry,
-        hooksManager: this.hooksManager,
-        contextResolver: (pluginId: string) => this.contexts.get(pluginId),
-      })
-    }
-    return this.a2uiBridge
   }
 
   private ensureThemesBridge(): PluginThemesBridge {
@@ -4192,8 +4184,11 @@ export class PluginManager {
       // Check if debug mode is enabled for this plugin
       const enableDebug = shouldEnablePluginDebug(plugin)
 
-      // Create plugin context with optional debug instrumentation
+      // Create plugin context with optional debug instrumentation. The
+      // namespaces feature modules build (`ctx.a2ui`, `ctx.connectors`) load
+      // first: the context is built synchronously.
       getPluginIPC().registerPlugin(pluginId, plugin.manifest.permissions ?? [], plugin.manifest)
+      await preloadModulePluginApis()
       const context = createFullPluginContext(plugin, this, {
         enableDebug,
         generation: this.activationLeases.get(pluginId)?.generation ?? 0,
@@ -7007,8 +7002,21 @@ export class PluginManager {
 
     if (!plugin) return
 
-    this.a2uiBridge?.unregisterPluginComponents(pluginId)
-    this.a2uiBridge?.unregisterPluginTemplates(pluginId)
+    // What the plugin registered through module-built namespaces (the A2UI
+    // components and templates of `ctx.a2ui`).
+    try {
+      await unloadModulePluginApis(pluginId, modulePluginApiHostOf(this))
+    } catch (error) {
+      recordSilentFailure(
+        pluginId,
+        {
+          site: "manager.unregisterPluginContributions.modulePluginApis",
+          message: "Failed to drop what the plugin registered through module plugin APIs.",
+          expected: false,
+        },
+        error
+      )
+    }
     this.themesBridge?.unregisterPluginThemes(pluginId)
     this.themesBridge?.unregisterPluginThemePacks(pluginId)
     // GC any `CustomTheme` rows the plugin created via `ctx.theme.registerCustomTheme`.
@@ -7853,10 +7861,6 @@ export class PluginManager {
 
   getHooksManager(): PluginLifecycleHooks {
     return this.hooksManager
-  }
-
-  getA2UIBridge(): PluginA2UIBridge {
-    return this.ensureA2UIBridge()
   }
 
   isInitialized(): boolean {

@@ -41,6 +41,7 @@ import { routePluginDeepLink } from "@/lib/plugin/uri/route-deep-link"
 import { parseCogniaDeeplink } from "@/lib/navigation/cognia-deeplink"
 import { dispatchRoute } from "@/lib/capacitor/deeplink-router"
 import { createPluginContext } from "@/lib/plugin/core/context"
+import { preloadModulePluginApis } from "@/lib/plugin/core/module-plugin-api"
 import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import { invokePluginApi, PluginGatewayError } from "@/lib/plugin/core/transport"
 import { IntegrationRuntimeInitializer } from "@/components/providers/initializers/integration-runtime-initializer"
@@ -454,6 +455,10 @@ it.each(cases)("ES-33 $profile × $facet", async ({ profile, facet }) => {
   platform(profile)
   expect(await probes[facet](profile)).toEqual(EXTERNAL_SERVICE_RUNTIME_SUPPORT[profile][facet])
 })
+// `ctx.a2ui` and `ctx.connectors` are built by their modules, whose plugin
+// API the manager loads before it builds a context.
+beforeAll(() => preloadModulePluginApis())
+
 it("ES-33 completeness: every matrix cell has exactly one named enforcement case", () => {
   const expected = Object.entries(EXTERNAL_SERVICE_RUNTIME_SUPPORT)
     .flatMap(([profile, facets]) => Object.keys(facets).map((facet) => `${profile}:${facet}`))

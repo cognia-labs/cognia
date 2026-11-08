@@ -43,4 +43,11 @@ describe("a2ui module manifest", () => {
       expect.arrayContaining(["components/a2ui/index.ts", "stores/a2ui/index.ts"])
     )
   })
+
+  it("builds ctx.a2ui through its plugin API", async () => {
+    expect(a2uiModule.pluginApi?.namespaces).toEqual(["a2ui"])
+    const { pluginApi } = await a2uiModule.pluginApi!.load()
+    expect(typeof pluginApi.namespaces?.a2ui).toBe("function")
+    expect(typeof pluginApi.unload).toBe("function")
+  })
 })

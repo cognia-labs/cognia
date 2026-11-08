@@ -157,4 +157,11 @@ export default defineHostModule({
     tables: ["conversationOverrides"],
     load: () => import("./sync/sync-handlers"),
   },
+  // A plugin's `ctx.connectors`, and the bridge that runs the connector kinds
+  // its manifest declares.
+  pluginApi: {
+    namespaces: ["connectors"],
+    bridges: ["connectors"],
+    load: () => import("./plugin-api/plugin-api"),
+  },
 })

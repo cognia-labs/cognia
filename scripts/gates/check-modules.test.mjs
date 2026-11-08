@@ -37,6 +37,8 @@ import {
   GENERATED_HOST,
   GENERATED_TASK_EXECUTORS,
   GENERATED_SYNC_HANDLERS,
+  GENERATED_HOST_WRITE_COMMANDS,
+  GENERATED_PLUGIN_API,
   GENERATED_PROMPTS,
   GENERATED_TOOLS,
   GENERATED_UI,
@@ -1491,6 +1493,170 @@ test("a sync table has one owning module", () => {
   assert.deepEqual(
     result.errors.filter((error) => error.includes("sync table")),
     ['lib/pet/module.ts: sync table memories is also contributed by "crew"']
+  )
+})
+
+test("validateHostManifest wants hostWriteCommands as { commands, load } with distinct commands", () => {
+  const base = { id: "crew", kind: "module", stage: "stable" }
+  const errors = (hostWriteCommands) => validateHostManifest({ ...base, hostWriteCommands }, "crew")
+  assert.ok(
+    errors("./host-writes").includes('hostWriteCommands.load is a lazy entry `() => import("…")`')
+  )
+  assert.ok(
+    errors({ load: { $lazy: "./host-writes" }, commands: ["crew_send"], route: "x" }).includes(
+      'hostWriteCommands: unknown field "route"'
+    )
+  )
+  for (const commands of [undefined, [], ["crew-send"], ["CrewSend"], [3]])
+    assert.ok(
+      errors({ load: { $lazy: "./host-writes" }, commands }).includes(
+        "hostWriteCommands.commands lists the write commands the file exports"
+      )
+    )
+  assert.ok(
+    errors({ load: { $lazy: "./host-writes" }, commands: ["crew_send", "crew_send"] }).includes(
+      "hostWriteCommands.commands names a command twice"
+    )
+  )
+  assert.deepEqual(errors({ load: { $lazy: "./host-writes" }, commands: ["crew_send"] }), [])
+})
+
+test("the host write command registry lists each module's commands and lazy file", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "crew",
+        file: "lib/crew/module.ts",
+        value: {
+          stage: "stable",
+          hostWriteCommands: { commands: ["crew_send"], load: { $lazy: "./host-writes" } },
+        },
+      },
+      { id: "pet", file: "lib/pet/module.ts", value: { stage: "beta" } },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_HOST_WRITE_COMMANDS]
+  assert.match(
+    registry,
+    /export const MODULE_HOST_WRITE_COMMANDS: readonly ModuleHostWriteCommandsEntry\[\]/
+  )
+  assert.ok(registry.includes('commands: ["crew_send"],'))
+  assert.ok(registry.includes('load: () => import("@/lib/crew/host-writes")'))
+  assert.ok(!registry.includes("pet"))
+})
+
+test("a host write command has one owning module", () => {
+  const writes = `hostWriteCommands: { commands: ["crew_send"], load: () => import("./host-writes") }`
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crew/module.ts": hostManifest("crew", writes),
+    "lib/crew/host-writes.ts": "export const hostWriteCommands = {}\n",
+    "lib/pet/module.ts": hostManifest("pet", writes),
+    "lib/pet/host-writes.ts": "export const hostWriteCommands = {}\n",
+  })
+  assert.deepEqual(
+    result.errors.filter((error) => error.includes("host write command")),
+    ['lib/pet/module.ts: host write command crew_send is also contributed by "crew"']
+  )
+})
+
+test("validateHostManifest wants pluginApi as { namespaces, bridges?, load } in the contract's terms", () => {
+  const base = { id: "crew", kind: "module", stage: "stable" }
+  const vocabulary = {
+    pluginApiNamespaces: new Set(["crew", "pet"]),
+    pluginBridgeCapabilities: new Set(["crew"]),
+  }
+  const errors = (pluginApi, known = vocabulary) =>
+    validateHostManifest({ ...base, pluginApi }, "crew", known)
+  const load = { $lazy: "./plugin-api" }
+  assert.ok(errors("./plugin-api").includes('pluginApi.load is a lazy entry `() => import("…")`'))
+  assert.ok(
+    errors({ load, namespaces: ["crew"], hooks: [] }).includes('pluginApi: unknown field "hooks"')
+  )
+  for (const namespaces of [undefined, ["Crew"], ["crew api"], [3]])
+    assert.ok(
+      errors({ load, namespaces }).includes(
+        "pluginApi.namespaces lists the plugin API namespaces the file exports"
+      )
+    )
+  assert.ok(
+    errors({ load, namespaces: ["crew"], bridges: "crew" }).includes(
+      "pluginApi.bridges lists the module bridge capabilities the file exports"
+    )
+  )
+  assert.ok(
+    errors({ load, namespaces: ["crew", "crew"] }).includes("pluginApi.namespaces names one twice")
+  )
+  assert.ok(
+    errors({ load, namespaces: ["crews"] }).includes(
+      'pluginApi.namespaces: "crews" is not one of the plugin contract\'s plugin API namespaces'
+    )
+  )
+  assert.ok(
+    errors({ load, namespaces: [], bridges: ["pet"] }).includes(
+      'pluginApi.bridges: "pet" is not one of the plugin contract\'s module bridge capabilities'
+    )
+  )
+  assert.ok(
+    errors({ load, namespaces: [] }).includes(
+      "pluginApi contributes at least one namespace or bridge"
+    )
+  )
+  assert.deepEqual(errors({ load, namespaces: ["crew"], bridges: ["crew"] }), [])
+  assert.deepEqual(errors({ load, namespaces: [], bridges: ["crew"] }), [])
+  // Without the catalog (fixture trees) only the shape is checked.
+  assert.deepEqual(errors({ load, namespaces: ["crews"] }, {}), [])
+})
+
+test("the plugin API registry lists each module's namespaces, bridges and lazy file", () => {
+  const files = renderRegistries({
+    host: [
+      {
+        id: "crew",
+        file: "lib/crew/module.ts",
+        value: {
+          stage: "stable",
+          pluginApi: { namespaces: ["crew"], bridges: ["crew"], load: { $lazy: "./plugin-api" } },
+        },
+      },
+      {
+        id: "a2ui",
+        file: "lib/a2ui/module.ts",
+        value: { stage: "stable", pluginApi: { namespaces: ["a2ui"], load: { $lazy: "./api" } } },
+      },
+      { id: "pet", file: "lib/pet/module.ts", value: { stage: "beta" } },
+    ],
+    ui: [],
+  })
+  const registry = files[GENERATED_PLUGIN_API]
+  assert.match(registry, /export const MODULE_PLUGIN_API: readonly ModulePluginApiEntry\[\]/)
+  assert.ok(registry.indexOf('module: "a2ui"') < registry.indexOf('module: "crew"'))
+  assert.ok(registry.includes('namespaces: ["a2ui"],\n    bridges: [],'))
+  assert.ok(registry.includes('namespaces: ["crew"],\n    bridges: ["crew"],'))
+  assert.ok(registry.includes('load: () => import("@/lib/crew/plugin-api")'))
+  assert.ok(!registry.includes("pet"))
+})
+
+test("a plugin API namespace and a module bridge each have one owning module", () => {
+  const api = `pluginApi: { namespaces: ["crew"], bridges: ["crew"], load: () => import("./plugin-api") }`
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crew/module.ts": hostManifest("crew", api),
+    "lib/crew/plugin-api.ts": "export const pluginApi = {}\n",
+    "lib/pet/module.ts": hostManifest("pet", api),
+    "lib/pet/plugin-api.ts": "export const pluginApi = {}\n",
+  })
+  assert.deepEqual(
+    result.errors.filter(
+      (error) => error.includes("plugin API namespace") || error.includes("plugin module bridge")
+    ),
+    [
+      'lib/pet/module.ts: plugin API namespace crew is also contributed by "crew"',
+      'lib/pet/module.ts: plugin module bridge crew is also contributed by "crew"',
+    ]
   )
 })
 

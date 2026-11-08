@@ -1,5 +1,5 @@
 /**
- * The plugin contract's share of `lib/plugin/api/connectors-api.ts`, which re-exports these.
+ * The plugin contract's share of `lib/connectors/plugin-api/connectors-api.ts`, which re-exports these.
  */
 import type {
   A2UICapabilityMatrix,

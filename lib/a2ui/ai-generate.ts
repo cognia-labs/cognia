@@ -45,7 +45,6 @@ import type {
   A2UIComponent,
   A2UIComputedFields,
   A2UIComputedFieldsUpdate,
-  A2UIServerMessage,
   A2UIDispatchMessage,
 } from "@/types/a2ui/schema"
 import { isA2UIComputedFields } from "@cognia/a2ui-core/computed"
@@ -221,31 +220,6 @@ function normalizeSurfaceType(value: unknown): NonNullable<A2UISegmentContent["s
 
 /** Convert a captured surface into the authoritative create→ready message
  *  sequence, remapped onto `surfaceId`. */
-export function segmentToMessages(
-  surfaceId: string,
-  content: A2UISegmentContent
-): A2UIServerMessage[] {
-  const components = Object.values(content.components) as A2UIComponent[]
-  return [
-    {
-      type: "createSurface",
-      surfaceId,
-      surfaceType: content.surfaceType ?? "inline",
-      title: content.title,
-      catalogId: content.catalogId,
-      widget: content.widget,
-      // Validated where it was captured; re-checked here because the segment
-      // type is loose (`Record<string, unknown>`).
-      ...(isA2UIComputedFields(content.computed)
-        ? { computed: content.computed as A2UIComputedFields }
-        : {}),
-    },
-    { type: "updateComponents", surfaceId, components },
-    { type: "dataModelUpdate", surfaceId, data: content.dataModel, merge: false },
-    { type: "surfaceReady", surfaceId },
-  ]
-}
-
 async function buildPrompt(
   opts: A2UIGenerateOptions,
   surfaceId: string,

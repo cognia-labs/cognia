@@ -5,11 +5,11 @@
 
 import React from "react"
 import { render, screen } from "@testing-library/react"
-import { PluginA2UIBridge } from "./a2ui-bridge"
+import { PluginA2UIBridge } from "./plugin-bridge"
 import type { PluginA2UIComponent, A2UITemplateDef } from "@/types/plugin"
-import { PluginRegistry } from "../core/registry"
-import { reservePluginOwnership } from "../registries/createOverlayRegistry"
-import type { PluginLifecycleHooks } from "../messaging/hooks-system"
+import { PluginRegistry } from "@/lib/plugin/core/registry"
+import { reservePluginOwnership } from "@/lib/plugin/registries/createOverlayRegistry"
+import type { PluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 
 const mockRegisterCatalogComponent = jest.fn()
 const mockUnregisterCatalogComponent = jest.fn()
@@ -74,7 +74,7 @@ jest.mock("@/lib/a2ui/events", () => ({
 }))
 
 const mockManagerLoggerError = jest.fn()
-jest.mock("../core/logger", () => ({
+jest.mock("@/lib/plugin/core/logger", () => ({
   loggers: {
     registry: { warn: jest.fn() },
     manager: {

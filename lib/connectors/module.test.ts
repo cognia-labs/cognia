@@ -32,6 +32,16 @@ describe("the connectors manifest", () => {
     expect(Object.keys(syncHandlers).sort()).toEqual(["conversationOverrides"])
   })
 
+  it("builds ctx.connectors and answers the connectors bridge through its plugin API", async () => {
+    expect(connectors.pluginApi).toMatchObject({
+      namespaces: ["connectors"],
+      bridges: ["connectors"],
+    })
+    const { pluginApi } = await connectors.pluginApi!.load()
+    expect(typeof pluginApi.namespaces?.connectors).toBe("function")
+    expect(typeof pluginApi.bridges?.connectors?.register).toBe("function")
+  })
+
   it("owns the inbound job store and provides it to recovery and the testing API", async () => {
     expect(connectors.owns).toContain("lib/db/connector-inbound-jobs.ts")
     expect(connectors.api).toContain("lib/db/connector-inbound-jobs.ts")

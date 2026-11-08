@@ -5,14 +5,14 @@
  * autocomplete + a compile-time check that their connector entry matches
  * `PluginConnectorDef`. The `factory` field names an exported function from the
  * plugin's `main` entrypoint; the connectors bridge
- * (`lib/plugin/bridge/connectors-bridge.ts`) resolves it into a
+ * (`lib/connectors/plugin-api/adapters-bridge.ts`) resolves it into a
  * `PlatformAdapter` and registers it with the ConnectorBus — after which the
  * adapter is treated identically to a built-in one (policy, FIFO queue,
  * retries, the plugin⇄IM lifecycle hooks).
  *
  * Sources:
  *  - `packages/plugin-sdk/src/define/define-connector.ts`
- *  - `lib/plugin/bridge/connectors-bridge.ts`
+ *  - `lib/connectors/plugin-api/adapters-bridge.ts`
  *  - `types/plugin/plugin.ts` (PluginConnectorDef)
  */
 
