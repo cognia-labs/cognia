@@ -1191,20 +1191,10 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
     expect(response.error).toBeUndefined()
   })
 
-  it("routes ask_user to the IM question card when an elicitation context is live", async () => {
-    const imCtx = {
-      sessionId: "sess-IM",
-      adapterId: "adp-1",
-      conversationKey: "lark:adp-1:oc_1",
-      conversationRef: { platform: "lark", adapterId: "adp-1" },
-      initiatorUserId: "ou_1",
-    }
-    const runImAskUser = jest.fn().mockResolvedValue("Selected: Beta")
+  it("routes ask_user to the conversation channel whose turn owns the session", async () => {
+    const askUserInConversation = jest.fn().mockResolvedValue({ result: "Selected: Beta" })
     const runAskUser = jest.fn()
-    jest.doMock("@/lib/connectors/hitl/im-elicitation-context", () => ({
-      getImElicitationContext: jest.fn(() => imCtx),
-    }))
-    jest.doMock("@/lib/connectors/hitl/ask-user-question", () => ({ runImAskUser }))
+    jest.doMock("@/lib/chat/conversation-channel", () => ({ askUserInConversation }))
     jest.doMock("@/stores/agent/ask-user-store", () => ({ runAskUser }))
 
     const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
@@ -1221,8 +1211,8 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
       abortSignal,
     })
 
-    expect(runImAskUser).toHaveBeenCalledWith({
-      ctx: imCtx,
+    expect(askUserInConversation).toHaveBeenCalledWith({
+      sessionId: "sess-IM",
       toolUseId: "use-IM",
       args: { question: "Pick" },
       signal: abortSignal,
@@ -1232,10 +1222,10 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
     expect(response.error).toBeUndefined()
   })
 
-  it("falls back to the desktop dialog when the registered context is gone", async () => {
+  it("falls back to the desktop dialog when no channel owns the session", async () => {
     const runAskUser = jest.fn().mockResolvedValue("Answer: typed")
-    jest.doMock("@/lib/connectors/hitl/im-elicitation-context", () => ({
-      getImElicitationContext: jest.fn(() => undefined),
+    jest.doMock("@/lib/chat/conversation-channel", () => ({
+      askUserInConversation: jest.fn(async () => null),
     }))
     jest.doMock("@/stores/agent/ask-user-store", () => ({ runAskUser }))
 

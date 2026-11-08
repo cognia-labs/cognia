@@ -2,11 +2,16 @@ import { loggers } from "@cognia/logging"
 import type { HostModuleManifest } from "@/lib/modules/manifest-types"
 import { __resetPortsForTesting, __setPortModulesForTesting } from "@/lib/modules/ports"
 import type { ConversationChannel } from "@/types/modules/ports/conversation-channel"
-import { conversationChannelFor } from "./conversation-channel"
+import { askUserInConversation, conversationChannelFor } from "./conversation-channel"
 
-function channel(claims: (key: string) => boolean): ConversationChannel {
+function channel(
+  claims: (key: string) => boolean,
+  askUser: ConversationChannel["askUser"] = jest.fn(async () => null)
+): ConversationChannel {
   return {
     claimsBinding: (binding) => claims(binding.conversationKey),
+    askUser,
+    confirmSkill: jest.fn(),
     hostCapabilities: jest.fn(),
     waitForAutomation: jest.fn(),
     listSiblingConversations: jest.fn(),
@@ -77,6 +82,50 @@ describe("conversationChannelFor", () => {
       moduleProviding("connectors", async () => ({ port: im })),
     ])
     expect(await conversationChannelFor({ conversationKey: "k" })).toBe(im)
+    expect(errorLog).toHaveBeenCalledWith("conversation channel failed to load", {
+      module: "bot",
+      error: "Error: chunk failed",
+    })
+  })
+})
+
+describe("askUserInConversation", () => {
+  const question = { sessionId: "s_1", toolUseId: "tu_1", args: { question: "Which?" } }
+
+  it("goes to the first channel whose live turn owns the session", async () => {
+    const idle = jest.fn(async () => null)
+    const owner = jest.fn(async () => ({ result: "Selected: Beta" }))
+    const later = jest.fn(async () => ({ result: "never" }))
+    __setPortModulesForTesting([
+      moduleProviding("bot", async () => ({ port: channel(() => false, idle) })),
+      moduleProviding("connectors", async () => ({ port: channel(() => true, owner) })),
+      moduleProviding("browser", async () => ({ port: channel(() => false, later) })),
+    ])
+    expect(await askUserInConversation(question)).toEqual({ result: "Selected: Beta" })
+    expect(idle).toHaveBeenCalledWith(question)
+    expect(owner).toHaveBeenCalledWith(question)
+    expect(later).not.toHaveBeenCalled()
+  })
+
+  it("is null when no channel owns the session, or none is active", async () => {
+    __setPortModulesForTesting([
+      moduleProviding("connectors", async () => ({ port: channel(() => true) })),
+    ])
+    expect(await askUserInConversation(question)).toBeNull()
+    __resetPortsForTesting()
+    __setPortModulesForTesting([])
+    expect(await askUserInConversation(question)).toBeNull()
+  })
+
+  it("asks the loaded channels when another fails to load", async () => {
+    const owner = jest.fn(async () => ({ result: "ok" }))
+    __setPortModulesForTesting([
+      moduleProviding("bot", async () => {
+        throw new Error("chunk failed")
+      }),
+      moduleProviding("connectors", async () => ({ port: channel(() => true, owner) })),
+    ])
+    expect(await askUserInConversation(question)).toEqual({ result: "ok" })
     expect(errorLog).toHaveBeenCalledWith("conversation channel failed to load", {
       module: "bot",
       error: "Error: chunk failed",

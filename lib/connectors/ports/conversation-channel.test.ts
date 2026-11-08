@@ -8,6 +8,9 @@ const mockListSiblingConversations = jest.fn()
 const mockFindSessionByConversationKey = jest.fn()
 const mockEnqueueAuthorized = jest.fn()
 const mockAppendAudit = jest.fn()
+const mockGetImElicitationContext = jest.fn()
+const mockRunImAskUser = jest.fn()
+const mockPostSkillConfirmation = jest.fn()
 
 jest.mock("@/lib/db/conversation-overrides", () => ({
   readForResolution: (key: string) => mockReadForResolution(key),
@@ -26,6 +29,15 @@ jest.mock("../delivery-gateway", () => ({
   enqueueAuthorized: (input: unknown) => mockEnqueueAuthorized(input),
 }))
 jest.mock("../audit", () => ({ appendAudit: (entry: unknown) => mockAppendAudit(entry) }))
+jest.mock("../hitl/im-elicitation-context", () => ({
+  getImElicitationContext: (id: string) => mockGetImElicitationContext(id),
+}))
+jest.mock("../hitl/ask-user-question", () => ({
+  runImAskUser: (input: unknown) => mockRunImAskUser(input),
+}))
+jest.mock("../hitl/skill-confirmation", () => ({
+  postSkillConfirmation: (input: unknown) => mockPostSkillConfirmation(input),
+}))
 
 const KEY = "lark:adp_1:oc_chat"
 
@@ -137,5 +149,46 @@ describe("the IM conversation channel", () => {
         at: expect.any(Number),
       })
     )
+  })
+
+  it("answers ask_user for a session one of its turns owns, as a card in the conversation", async () => {
+    const ctx = { sessionId: "s_1", adapterId: "adp_1", conversationKey: KEY }
+    mockGetImElicitationContext.mockReturnValue(ctx)
+    mockRunImAskUser.mockResolvedValue("Selected: Beta")
+    const signal = new AbortController().signal
+    await expect(
+      port.askUser({ sessionId: "s_1", toolUseId: "tu_1", args: { q: 1 }, signal })
+    ).resolves.toEqual({ result: "Selected: Beta" })
+    expect(mockGetImElicitationContext).toHaveBeenCalledWith("s_1")
+    expect(mockRunImAskUser).toHaveBeenCalledWith({
+      ctx,
+      toolUseId: "tu_1",
+      args: { q: 1 },
+      signal,
+    })
+  })
+
+  it("leaves ask_user to others for a session none of its turns owns", async () => {
+    mockGetImElicitationContext.mockReturnValue(undefined)
+    await expect(port.askUser({ sessionId: "s_2", toolUseId: "tu", args: {} })).resolves.toBeNull()
+    expect(mockRunImAskUser).not.toHaveBeenCalled()
+  })
+
+  it("posts a skill confirmation through the confirmation card", async () => {
+    mockPostSkillConfirmation.mockResolvedValue({ status: "pending_hitl", bindingId: "b" })
+    const input = {
+      ctx: {
+        sessionId: "s_1",
+        imBinding: { adapterId: "adp_1", platform: "lark" as const, conversationKey: KEY },
+      },
+      skill: { id: "lark.x" } as never,
+      args: {},
+      now: 1,
+    }
+    await expect(port.confirmSkill(input)).resolves.toEqual({
+      status: "pending_hitl",
+      bindingId: "b",
+    })
+    expect(mockPostSkillConfirmation).toHaveBeenCalledWith(input)
   })
 })

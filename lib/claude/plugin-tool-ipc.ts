@@ -584,27 +584,23 @@ async function runPluginToolExec(
     }
     // ── Wave 1 — ask_user elicitation tool ─────────────────────────────
     // Surfaced by `buildAskUserManifestEntry()`; round-trips through the same
-    // `plugin_tool_exec` wire. A connector-initiated turn registers an
-    // `ImElicitationContext` for its session — when one is live the question
-    // goes to the IM conversation as an interactive card (`runImAskUser`),
-    // otherwise the renderer's ask-user dialog answers it. Both block until
-    // the user answers and return the same formatted result.
+    // `plugin_tool_exec` wire. A turn a conversation channel runs (an IM
+    // connector's, ADR-0250 §14 `conversation-channel`) owns its session for
+    // the capture's lifetime, and that channel puts the question to the
+    // conversation as an interactive card; otherwise the renderer's ask-user
+    // dialog answers it. Both block until the user answers and return the
+    // same formatted result.
     if (request.name === ASK_USER_TOOL_NAME) {
-      const { getImElicitationContext } =
-        await import("@/lib/connectors/hitl/im-elicitation-context")
-      const imCtx = getImElicitationContext(request.sessionId)
-      if (imCtx) {
-        const { runImAskUser } = await import("@/lib/connectors/hitl/ask-user-question")
-        const result = await runImAskUser({
-          ctx: imCtx,
-          toolUseId: request.toolUseId,
-          args: request.args,
-          // Cooperative cancellation for direct renderer callers — combined
-          // with the context's own run-lifetime signal inside runImAskUser.
-          ...(request.abortSignal ? { signal: request.abortSignal } : {}),
-        })
-        return { ...baseResponse, result: assertSafePluginToolResult(result) }
-      }
+      const { askUserInConversation } = await import("@/lib/chat/conversation-channel")
+      const answered = await askUserInConversation({
+        sessionId: request.sessionId,
+        toolUseId: request.toolUseId,
+        args: request.args,
+        // Cooperative cancellation for direct renderer callers — combined
+        // with the channel turn's own run-lifetime signal.
+        ...(request.abortSignal ? { signal: request.abortSignal } : {}),
+      })
+      if (answered) return { ...baseResponse, result: assertSafePluginToolResult(answered.result) }
       const { runAskUser } = await import("@/stores/agent/ask-user-store")
       const result = await runAskUser(request.args, {
         sessionId: request.sessionId,

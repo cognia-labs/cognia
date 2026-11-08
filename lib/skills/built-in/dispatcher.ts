@@ -41,45 +41,13 @@ import { z } from "zod"
 
 import { hasNoLeakingPii } from "@cognia/redact"
 import { append as appendAudit } from "@/lib/db/connector-audit"
-import { SKILL_INVOKE_PREFIX, SKILL_CANCEL_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
-import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { getSharedBuiltInSkillRegistry } from "./registry"
-import { resolveBuiltInSkillRunScope, resolveBuiltInSkillTurnActors } from "./context"
-import { resolveExecutingRun } from "@/lib/execution/acting-authority"
+import { resolveBuiltInSkillRunScope } from "./context"
 import type { BuiltInSkill, BuiltInSkillContext, BuiltInSkillResult } from "./types"
 import {
   adapterAllowsBuiltInSkill,
   resolveRequireHitlForWrites,
 } from "@/lib/connectors/permission-resolve"
-
-/** Default TTL for skill_invoke bindings — 7 days. Matches the existing pattern. */
-const SKILL_INVOKE_TTL_MS = 7 * 24 * 3600 * 1000
-
-/**
- * Actor scope for the pending skill_invoke binding (plan 2026-07-24 Phase 2):
- * the human whose message is driving the CURRENT turn — read from the
- * conversation's `running` inbound job — may confirm; otherwise only
- * configured operators. Keeps the confirm button from being clickable by
- * bystanders in a group.
- */
-async function skillInvokeActorScope(
-  conversationKey: string,
-  adapterId: string,
-  rootSessionId: string
-): Promise<import("@/types/connectors/interaction").CallbackActorScope> {
-  try {
-    const { initiatorUserId: initiatorId } = await resolveBuiltInSkillTurnActors(
-      conversationKey,
-      adapterId,
-      rootSessionId
-    )
-    return initiatorId
-      ? { mode: "initiator", allowedUserIds: [initiatorId] }
-      : { mode: "operators" }
-  } catch {
-    return { mode: "operators" }
-  }
-}
 
 /**
  * Run a built-in skill end-to-end.
@@ -366,149 +334,19 @@ export async function runBuiltInSkill(
         )
       }
     } else if (ctx.imBinding) {
-      const { getImElicitationContext } =
-        await import("@/lib/connectors/hitl/im-elicitation-context")
-      const { getDb } = await import("@/lib/db/schema")
-      const { resolveBuiltInSkillSessionBinding } = await import("./context")
-      let resolved: Awaited<ReturnType<typeof resolveBuiltInSkillSessionBinding>>
-      try {
-        resolved = await resolveBuiltInSkillSessionBinding(ctx.sessionId)
-      } catch {
-        return { status: "error", message: "Confirmation session binding could not be resolved" }
-      }
-      const { binding: stored, rootSessionId } = resolved
-      const live = getImElicitationContext(rootSessionId)
-      const signal =
-        ctx.signal && live?.signal
-          ? AbortSignal.any([ctx.signal, live.signal])
-          : (ctx.signal ?? live?.signal)
-      const target = live ?? stored
-      if (
-        !target ||
-        target.adapterId !== ctx.imBinding.adapterId ||
-        target.conversationKey !== ctx.imBinding.conversationKey ||
-        (live && (live.drafting || live.signal?.aborted))
-      )
-        return { status: "error", message: "No active delivery target for this confirmation" }
-      const conversationRef = target.deliveryTarget?.conversationRef ?? target.conversationRef
-      if (!conversationRef)
-        return { status: "error", message: "Confirmation delivery target is unavailable" }
-      const surface = skill.hitlSurface(validArgs as never)
-      // Persist the binding so the inbound callback can re-fire the skill
+      // The bound conversation's channel (ADR-0250 §14 `conversation-channel`)
+      // posts the confirmation card; a person's choice re-fires the skill
       // with `hitlBypass: true`.
-      const actionId = `${SKILL_INVOKE_PREFIX}${skill.id}:${cryptoRandomId()}`
-      const cancelId = `${SKILL_CANCEL_PREFIX}${skill.id}:${cryptoRandomId()}`
-      const scope =
-        live?.actorScope ??
-        (live?.initiatorUserId
-          ? { mode: "initiator" as const, allowedUserIds: [live.initiatorUserId] }
-          : await skillInvokeActorScope(
-              ctx.imBinding.conversationKey,
-              ctx.imBinding.adapterId,
-              rootSessionId
-            ))
-      for (const [componentId, value, action] of [
-        ["btn_confirm", actionId, "approve"],
-        ["btn_cancel", cancelId, "cancel"],
-      ] as const) {
-        const node = surface.components[componentId]
-        surface.components[componentId] = {
-          ...(node && typeof node === "object" ? node : {}),
-          component: "Button",
-          text:
-            node && typeof node === "object" && "text" in node
-              ? node.text
-              : action === "approve"
-                ? "Confirm"
-                : "Cancel",
-          action,
-          value,
-        }
-      }
-      try {
-        if (signal?.aborted) throw new Error("Confirmation request was cancelled")
-        const runScope = resolveBuiltInSkillRunScope(ctx)
-        const originalRun = await resolveExecutingRun(runScope.sessionId, runScope.runId)
-        for (const [value, componentId, action] of [
-          [actionId, "btn_confirm", "approve"],
-          [cancelId, "btn_cancel", "cancel"],
-        ] as const)
-          await recordCallbackBinding({
-            adapterId: ctx.imBinding.adapterId,
-            actionId: value,
-            componentId,
-            kind: "skill_invoke",
-            surfaceId: surface.rootId,
-            conversationKey: ctx.imBinding.conversationKey,
-            createdAt: now,
-            expiresAt: now + SKILL_INVOKE_TTL_MS,
-            payload: {
-              skillId: skill.id,
-              args: validArgs as never,
-              sessionId: rootSessionId,
-              executionContext: {
-                sessionId: ctx.sessionId,
-                ...(originalRun ? { originRunId: originalRun.id } : {}),
-                ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
-                ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
-                ...(ctx.characterId ? { characterId: ctx.characterId } : {}),
-              },
-            },
-            skillConfirmationNonce: value.slice(value.lastIndexOf(":") + 1),
-            actorScope: scope,
-            allowedActions: [action],
-          })
-        const { enqueueGoverned } = await import("@/lib/connectors/delivery-gateway")
-        const { buildA2UISegment } = await import("@/lib/connectors/a2ui-bridge/a2ui-to-segments")
-        if (signal?.aborted || live?.drafting) throw new Error("Confirmation request was cancelled")
-        await enqueueGoverned(
-          {
-            adapterId: ctx.imBinding.adapterId,
-            conversationKey: ctx.imBinding.conversationKey,
-            source: "skill",
-            authorization: {
-              kind: "system-notice",
-              inboundConversationKey: ctx.imBinding.conversationKey,
-            },
-            request: {
-              conversationRef,
-              ...(target.deliveryTarget ? { deliveryTarget: target.deliveryTarget } : {}),
-              segments: [buildA2UISegment(surface.rootId, surface)],
-              metadata: { idempotencyKey: actionId },
-            },
-          },
-          {
-            ...(signal ? { signal } : {}),
-            executionContext: {
-              sessionId: runScope.sessionId,
-              executionRunId: originalRun?.id ?? "",
-            },
-          }
-        )
-      } catch (error) {
-        await getDb().connectorCallbackBindings.bulkDelete([
-          `${ctx.imBinding.adapterId}:${actionId}`,
-          `${ctx.imBinding.adapterId}:${cancelId}`,
-        ])
-        return {
-          status: "error",
-          message: error instanceof Error ? error.message : "Confirmation card could not be queued",
-        }
-      }
-      await safeAppendAudit({
-        adapterId: ctx.imBinding.adapterId,
-        kind: "builtin_skill_hitl_pending",
-        at: now,
-        conversationKey: ctx.imBinding.conversationKey,
-        reason: "hitl_required",
-        message: `Awaiting user confirmation for ${skill.id}`,
-        fields: { skillId: skill.id, mutation: skill.mutation, bindingActionId: actionId },
+      const { conversationChannelFor } = await import("@/lib/chat/conversation-channel")
+      const channel = await conversationChannelFor(ctx.imBinding)
+      if (!channel)
+        return { status: "error", message: "No active delivery target for this confirmation" }
+      return channel.confirmSkill({
+        ctx: { ...ctx, imBinding: ctx.imBinding },
+        skill,
+        args: validArgs,
+        now,
       })
-      return {
-        status: "pending_hitl",
-        bindingId: `${ctx.imBinding.adapterId}:${actionId}`,
-        surfaceId: surface.rootId,
-      }
     }
     if (!parkedApproved) {
       // Desktop consent (W2 dual-channel HITL): suspend on the chat pane's

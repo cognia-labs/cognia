@@ -116,6 +116,7 @@ import { evaluateImRate } from "@/lib/connectors/im-rate/registry"
 import { getRunningAdapter } from "./lifecycle"
 import { CONNECTOR_TURN_TIMEOUT_MS, makeImPermissionResponder } from "./hitl/tool-approval"
 import { registerImElicitationContext } from "./hitl/im-elicitation-context"
+import { attributeConnectorDecision } from "./hitl/permission-attribution"
 import { holdWorkflowDispatchForApproval } from "./hitl/workflow-run-approval"
 import {
   createExecutionRun,
@@ -2410,7 +2411,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               requestId: request.requestId,
               behavior: decision.decision === "deny" ? "deny" : "allow",
             })
-            return decision
+            return attributeConnectorDecision(executionRunId, request.requestId, decision)
           },
           onSdkSessionId: (sdkSessionId) => {
             recoveryAnchor = { ...recoveryAnchor, sdkSessionId }

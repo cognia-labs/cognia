@@ -19,12 +19,7 @@ import type {
 export async function conversationChannelFor(
   binding: ConversationChannelBinding
 ): Promise<ConversationChannel | null> {
-  const { members, failures } = await loadPortCollection("conversation-channel")
-  for (const failure of failures)
-    loggers.chat.error("conversation channel failed to load", {
-      module: failure.module,
-      error: String(failure.error),
-    })
+  const members = await loadChannels()
   const claiming = members.filter((member) => member.port.claimsBinding(binding))
   if (claiming.length > 1)
     loggers.chat.error("several conversation channels claim one binding", {
@@ -32,4 +27,30 @@ export async function conversationChannelFor(
       modules: claiming.map((member) => member.module),
     })
   return claiming[0]?.port ?? null
+}
+
+/**
+ * Ask the channel whose live turn owns `sessionId` to answer an `ask_user`
+ * call. Channels are asked in module order and the first that owns the
+ * session answers; `null` when none does (a desktop turn: the caller shows
+ * the ask-user dialog).
+ */
+export async function askUserInConversation(
+  input: Parameters<ConversationChannel["askUser"]>[0]
+): Promise<{ result: unknown } | null> {
+  for (const member of await loadChannels()) {
+    const answer = await member.port.askUser(input)
+    if (answer) return answer
+  }
+  return null
+}
+
+async function loadChannels() {
+  const { members, failures } = await loadPortCollection("conversation-channel")
+  for (const failure of failures)
+    loggers.chat.error("conversation channel failed to load", {
+      module: failure.module,
+      error: String(failure.error),
+    })
+  return members
 }

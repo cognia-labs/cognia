@@ -69,7 +69,6 @@ import {
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
-import { getImElicitationContext } from "@/lib/connectors/hitl/im-elicitation-context"
 import { dispatchPreToolUse, dispatchPostToolUse } from "@/lib/claude/adapter-hooks"
 import { mayBeOutboundCall } from "@/lib/policy/risk/outbound-tools"
 import { deepMerge } from "@/lib/a2ui/data-model"
@@ -451,45 +450,6 @@ export interface CapturePermissionDecision {
   forRequest?: boolean
   /** The grant an allowed outbound ask rests on, set by the outbound policy. */
   grant?: import("@cognia/agent-config-types/action-review").ActionReviewGrant
-}
-
-async function capturePermissionAttribution(
-  sessionId: string,
-  requestId: string,
-  outcome: CapturePermissionDecision
-): Promise<ApproveToolAttribution | undefined> {
-  if (outcome.attribution) return outcome.attribution
-  const context = getImElicitationContext(sessionId)
-  if (!context?.runId) return undefined
-  // The IM responder settles its own interrupt before returning. Use that
-  // evidence, not the turn's initiator (an operator may have answered instead).
-  // Automatic allows have no interrupt; transport/TTL denials carry a message.
-  try {
-    const { getDb } = await import("@/lib/db/schema")
-    const interrupt = await getDb().executionRunInterrupts.get(
-      `tool-interrupt:${context.runId}:${requestId}`
-    )
-    if (outcome.message === "approval timed out" || interrupt?.status === "expired") {
-      return { authority: "timeout" }
-    }
-    if (
-      !outcome.message &&
-      interrupt?.runId === context.runId &&
-      interrupt.status === (outcome.decision === "deny" ? "denied" : "approved")
-    ) {
-      return {
-        authority: "human",
-        actor: {
-          kind: "connector-user",
-          ...(interrupt.resolvedBy?.remoteUserId ? { id: interrupt.resolvedBy.remoteUserId } : {}),
-        },
-      }
-    }
-    return { authority: outcome.decision === "deny" ? "policy-deny" : "policy-rule" }
-  } catch {
-    // Missing evidence must not invent a human receipt or block the decision.
-    return undefined
-  }
 }
 
 /** Tool result + correlated call passed to an {@link RunAndCaptureOptions.onToolResultReview} responder. */
@@ -1269,8 +1229,10 @@ async function captureAssistantReplyCore(
           // still be draining usage, so check the signal as well as settlement.
           if (settled || abortRequested || signal?.aborted) return
           try {
-            const resolved = await capturePermissionAttribution(sessionId, req.requestId, outcome)
-            // The outbound grant rides on whoever the answer is attributed to.
+            // A responder that knows who decided says so (the IM responder
+            // reads its run's interrupt). The outbound grant rides on whoever
+            // the answer is attributed to.
+            const resolved = outcome.attribution
             const attribution =
               resolved && outcome.grant ? { ...resolved, grant: outcome.grant } : resolved
             if (settled || abortRequested || signal?.aborted) return

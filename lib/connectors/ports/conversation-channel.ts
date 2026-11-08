@@ -2,7 +2,8 @@
 // collection port (`types/modules/ports/conversation-channel.ts`, ADR-0250
 // §14). It claims every connector conversation (a key `parseConversationKey`
 // reads) and answers from the connectors' own policy, automation controls,
-// session bindings, delivery gateway and audit log.
+// session bindings, delivery gateway and audit log. Its turns' questions and
+// skill confirmations become interactive cards in the conversation.
 
 import { parseConversationKey } from "@/types/connectors/event"
 import { newIdempotencyKey } from "@/types/connectors/outbound"
@@ -81,6 +82,24 @@ export const port: ConversationChannel = {
       authorization: input.authorization,
     })
     return result.kind
+  },
+
+  async askUser({ sessionId, toolUseId, args, signal }) {
+    // A connector turn registers its elicitation context for the capture's
+    // lifetime (`runtime.ts`, `scheduled-outbound.ts`); any other session is
+    // not this channel's to answer.
+    const { getImElicitationContext } = await import("../hitl/im-elicitation-context")
+    const ctx = getImElicitationContext(sessionId)
+    if (!ctx) return null
+    const { runImAskUser } = await import("../hitl/ask-user-question")
+    // The caller's signal is combined with the context's own run-lifetime
+    // signal inside runImAskUser.
+    return { result: await runImAskUser({ ctx, toolUseId, args, ...(signal ? { signal } : {}) }) }
+  },
+
+  async confirmSkill(input) {
+    const { postSkillConfirmation } = await import("../hitl/skill-confirmation")
+    return postSkillConfirmation(input)
   },
 
   async appendAudit(entry) {

@@ -21,8 +21,6 @@ import {
   __resetCapturedTurnsForTesting,
   capturedTurnOf,
 } from "@/lib/policy/action-review/captured-turns"
-import { registerImElicitationContext } from "@/lib/connectors/hitl/im-elicitation-context"
-import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import type { approveTool } from "./ipc"
 import type { AppSettings, ClaudeEvent, PermissionRequestEvent } from "@cognia/agent-config-types"
@@ -3613,26 +3611,9 @@ describe("durable local executor stop evidence", () => {
   )
 })
 
-describe("connector permission attribution", () => {
-  const fixture = createDbTestFixture({ seeded: false })
-  let unregister: () => void
-  beforeAll(fixture.initialize)
-  beforeEach(async () => {
-    await fixture.restore()
-    unregister = registerImElicitationContext({
-      sessionId: SESSION,
-      adapterId: "lark",
-      conversationKey: "chat-a",
-      conversationRef: { platform: "lark", adapterId: "lark", conversationId: "chat-a" },
-      runId: "run-a",
-      initiatorUserId: "initiator-a",
-    })
-  })
-  afterEach(() => unregister())
-  afterAll(fixture.dispose)
-
+describe("permission attribution", () => {
   it.each(["allow", "deny"] as const)(
-    "attributes a connector %s to the human once",
+    "files the responder's %s once, with the attribution it names",
     async (decision) => {
       const context = {
         hostId: "host-a",
@@ -3643,19 +3624,11 @@ describe("connector permission attribution", () => {
         issuedAt: 1,
         expiresAt: 2,
       }
-      const responder = jest.fn(async () => {
-        await getDb().executionRunInterrupts.put({
-          id: "tool-interrupt:run-a:approval-a",
-          runId: "run-a",
-          type: "tool_approval",
-          status: decision === "allow" ? "approved" : "denied",
-          title: "issue_list",
-          expiresAt: 10_000,
-          createdAt: 1,
-          resolvedBy: { remoteUserId: "operator-a" },
-        })
-        return { decision }
-      })
+      const attribution = {
+        authority: "human" as const,
+        actor: { kind: "connector-user" as const, id: "operator-a" },
+      }
+      const responder = jest.fn(async () => ({ decision, attribution }))
       const running = runAndCaptureAssistantReply(SESSION, "hi", undefined, {
         onPermissionRequest: responder,
       })
@@ -3682,7 +3655,7 @@ describe("connector permission attribution", () => {
         undefined,
         undefined,
         context,
-        { authority: "human", actor: { kind: "connector-user", id: "operator-a" } }
+        attribution
       )
       fire(assistantEvent("done"))
       fire(sessionEnded())
@@ -3690,52 +3663,22 @@ describe("connector permission attribution", () => {
     }
   )
 
-  it.each([
-    [{ decision: "allow" }, "policy-rule"],
-    [{ decision: "deny", message: "failed to surface approval card" }, "policy-deny"],
-    [{ decision: "deny", message: "approval timed out" }, "timeout"],
-  ] as const)(
-    "does not attribute an automatic decision to a human: %j",
-    async (decision, authority) => {
-      const running = runAndCaptureAssistantReply(SESSION, "hi", undefined, {
-        onPermissionRequest: async () => decision,
-      })
-      await flushUntilSubscribed()
-      fire({
-        type: "permission_request",
-        sessionId: SESSION,
-        requestId: "automatic",
-        toolName: "issue_list",
-        input: {},
-      } as unknown as ClaudeEvent)
-      for (let attempt = 0; attempt < 100 && approveToolMock.mock.calls.length === 0; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 1))
-      }
-      expect(approveToolMock.mock.calls[0]?.[6]).toEqual({ authority })
-      fire(assistantEvent("done"))
-      fire(sessionEnded())
-      await running
-    }
-  )
-
-  it("preserves explicit responder attribution", async () => {
-    const attribution = {
-      authority: "human" as const,
-      actor: { kind: "connector-user" as const, id: "reviewer-a" },
-    }
+  it("files no attribution the responder did not name", async () => {
     const running = runAndCaptureAssistantReply(SESSION, "hi", undefined, {
-      onPermissionRequest: () => ({ decision: "allow", attribution }),
+      onPermissionRequest: async () => ({ decision: "allow" }),
     })
     await flushUntilSubscribed()
     fire({
       type: "permission_request",
       sessionId: SESSION,
-      requestId: "explicit",
+      requestId: "anonymous",
       toolName: "issue_list",
       input: {},
     } as unknown as ClaudeEvent)
-    await flushMicrotasks(10)
-    expect(approveToolMock.mock.calls[0]?.[6]).toBe(attribution)
+    for (let attempt = 0; attempt < 100 && approveToolMock.mock.calls.length === 0; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
+    expect(approveToolMock.mock.calls[0]?.[6]).toBeUndefined()
     fire(assistantEvent("done"))
     fire(sessionEnded())
     await running

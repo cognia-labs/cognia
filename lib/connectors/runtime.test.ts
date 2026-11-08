@@ -2584,6 +2584,8 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
     expect(restoredDecision).toEqual({
       decision: "deny",
       message: "permission denied by recovered state",
+      // Not a person's answer: the receipt says the policy denied it.
+      attribution: { authority: "policy-deny" },
     })
     expect((await getDb().outboundQueue.toArray()).at(-1)?.request.segments[0]).toMatchObject({
       type: "markdown",
@@ -4006,6 +4008,8 @@ describe("installRuntime — draft-prepare", () => {
     await expect(Promise.resolve(seenPermission)).resolves.toEqual({
       decision: "deny",
       message: "ask-tier tools are denied while drafting",
+      // Not a person's answer: the receipt says the policy denied it.
+      attribution: { authority: "policy-deny" },
     })
   })
 

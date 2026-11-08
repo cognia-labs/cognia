@@ -1,7 +1,8 @@
 // The `conversation-channel` collection port (ADR-0250 §14): the channel a
 // conversation or run is bound to, answering what only that channel knows.
 // Which host capabilities the conversation allows, whether its automation is
-// paused, which sibling conversations it has, and how a message reaches it.
+// paused, which sibling conversations it has, how a message reaches it, and
+// who answers the agent's questions and confirmations while a turn runs there.
 //
 // It is a collection port: every channel that binds conversations is its own
 // member, and each member says which bindings it claims. The connectors module
@@ -13,6 +14,11 @@
 import type { ImHostCapabilityId } from "@/lib/db/connector-types"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
+import type {
+  BuiltInSkill,
+  BuiltInSkillContext,
+  BuiltInSkillResult,
+} from "@/lib/skills/built-in/types"
 import type { AuditKind } from "@/types/connectors/audit"
 
 /** A conversation as a run or session names it. */
@@ -63,6 +69,31 @@ export interface ConversationChannel {
     text: string
     authorization: OutboundAuthorization
   }): Promise<"queued" | "drafted">
+  /**
+   * Answer an `ask_user` call when a turn this channel runs owns the session:
+   * the question goes to the conversation and the call waits for the answer.
+   * `null` when the session is not one of this channel's live turns (the
+   * caller asks the next channel, then the desktop dialog).
+   */
+  askUser(input: {
+    sessionId: string
+    toolUseId: string
+    args: Record<string, unknown>
+    signal?: AbortSignal
+  }): Promise<{ result: unknown } | null>
+  /**
+   * Ask the conversation to confirm a built-in skill call (ADR-0026 HITL):
+   * post the skill's confirmation surface with its confirm and cancel
+   * choices, which re-fire the skill when a person picks one. Called for a
+   * context whose `imBinding` this channel claims; returns `pending_hitl`, or
+   * `error` when the confirmation cannot reach anyone.
+   */
+  confirmSkill(input: {
+    ctx: BuiltInSkillContext & { imBinding: NonNullable<BuiltInSkillContext["imBinding"]> }
+    skill: BuiltInSkill
+    args: unknown
+    now: number
+  }): Promise<BuiltInSkillResult>
   /** Append a row to the channel's audit log. Best-effort: never throws. */
   appendAudit(entry: {
     adapterId: string
