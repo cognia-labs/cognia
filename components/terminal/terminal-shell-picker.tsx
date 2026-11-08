@@ -110,6 +110,8 @@ export interface TerminalShellPickerProps {
    * that runs the attach command.
    */
   onAttachTmuxSession?: (sessionName: string) => void | Promise<void>
+  /** Open a saved `.cast` terminal recording for playback. */
+  onOpenRecording?: () => void | Promise<void>
   /** Test seam for the serial port scan. */
   listSerialPorts?: () => Promise<readonly { path: string; product: string | null }[]>
   /** Test seam for the tmux session scan. */
@@ -214,6 +216,7 @@ export function TerminalShellPicker({
   sshDialsFromThisDesktop = false,
   onNewSerialPort,
   onAttachTmuxSession,
+  onOpenRecording,
   listSerialPorts = defaultListSerialPorts,
   listTmuxSessions = defaultListTmuxSessions,
   variant = "dock",
@@ -507,6 +510,20 @@ export function TerminalShellPicker({
               {opt.labelKey ? t(opt.labelKey as never) : opt.value}
             </DropdownMenuItem>
           ))}
+          {onOpenRecording ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => {
+                  void onOpenRecording()
+                }}
+                className="text-xs"
+                data-testid="terminal-shell-picker-open-recording"
+              >
+                {t("terminal.shellPicker.openRecording")}
+              </DropdownMenuItem>
+            </>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

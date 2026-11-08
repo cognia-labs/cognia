@@ -75,6 +75,7 @@ import { evaluateQuickFixes } from "@/lib/terminal/quick-fix/evaluate"
 import type { QuickFixAction } from "@/lib/terminal/quick-fix/matchers"
 import { shouldShowSticky, stickyCommandFor } from "@/lib/terminal/sticky-scroll"
 import { getLiveSession } from "@/lib/terminal/session-registry"
+import { reportTerminalSize } from "@/lib/terminal/recording/session-recordings"
 import { matchFileLinks, resolveLinkPath } from "@/lib/terminal/terminal-links"
 import type {
   IntegrationEvent,
@@ -93,6 +94,10 @@ import { TerminalQuickFix } from "@/components/terminal/terminal-quick-fix"
 import { runQuickFixAction } from "@/lib/terminal/quick-fix/run-action"
 import { TerminalSessionChip } from "@/components/terminal/terminal-session-chip"
 import { TerminalStickyScroll } from "@/components/terminal/terminal-sticky-scroll"
+import {
+  TERMINAL_DEFAULT_FONT_FAMILY,
+  TERMINAL_DEFAULT_FONT_SIZE,
+} from "@/components/terminal/terminal-layout-tokens"
 
 /**
  * DEL (0x7f) — what xterm emits for Backspace and what readline/PSReadLine
@@ -245,9 +250,8 @@ type TerminalCursorInactiveStyle = "outline" | "block" | "bar" | "underline" | "
 // bundled family first also makes the char-width measurement and the rendered
 // glyphs come from the *same* font, which avoids the "every character is spaced
 // one cell too wide" artifact from measuring against a fallback.
-const DEFAULT_FONT_FAMILY =
-  '"MesloLGS NF", "JetBrains Mono", "Cascadia Code", "Menlo", "Consolas", monospace'
-const DEFAULT_FONT_SIZE = 13
+const DEFAULT_FONT_FAMILY = TERMINAL_DEFAULT_FONT_FAMILY
+const DEFAULT_FONT_SIZE = TERMINAL_DEFAULT_FONT_SIZE
 const DEFAULT_SCROLLBACK = 10000
 // VS Code's current xterm integration uses this duration when its boolean
 // `terminal.integrated.smoothScrolling` preference is enabled.
@@ -1013,6 +1017,8 @@ function TerminalInstanceImpl(
       }
       const initial = { rows: term.rows, cols: term.cols }
       void session.resize(initial.rows, initial.cols)
+      // A recording of this session starts at, and follows, the fitted size.
+      reportTerminalSize(session.id, initial.cols, initial.rows)
 
       // Single source of truth for re-fitting: recompute cols/rows from the
       // container and, when they changed, push the new size to the PTY. Shared
@@ -1025,6 +1031,7 @@ function TerminalInstanceImpl(
             initial.rows = term.rows
             initial.cols = term.cols
             void session.resize(term.rows, term.cols)
+            reportTerminalSize(session.id, term.cols, term.rows)
           }
         } catch {
           // ignore — fit can throw when the container has no layout yet

@@ -64375,8 +64375,17 @@
       "trigger": "显示快速修复"
     },
     "recording": {
+      "badge": {
+        "recording": "正在录制此标签 · {time}",
+        "unsaved": "录像未保存"
+      },
       "discard": "丢弃录制",
       "elapsed": "{time}",
+      "ended": {
+        "exited": "“{title}”的会话已关闭，录制随之结束",
+        "limit": "“{title}”的录制已达到时长上限并停止",
+        "unsaved": "录像尚未保存。"
+      },
       "export": {
         "cast": "导出为 .cast",
         "done": "导出完成",
@@ -64385,6 +64394,13 @@
         "gif": "导出为 GIF",
         "title": "导出"
       },
+      "fileError": {
+        "bad-frame": "录像中有格式错误的事件。",
+        "bad-header": "录像头缺少终端尺寸。",
+        "empty": "文件为空。",
+        "not-json": "该文件不是 asciicast 录像。",
+        "unsupported-version": "只能播放 asciicast v2 录像。"
+      },
       "frames": "{count} 帧",
       "list": {
         "delete": "删除录制",
@@ -64392,18 +64408,30 @@
         "empty": "暂无录制。",
         "title": "录制列表"
       },
+      "openFailed": "无法打开 {name}",
       "pause": "暂停录制",
+      "play": "回放",
       "player": {
+        "description": "{size} · {time}",
         "duration": "{time}",
+        "empty": "该录像没有输出内容。",
         "pause": "暂停",
         "play": "播放",
+        "position": "{current} / {total}",
         "restart": "重新开始",
         "seek": "跳转",
-        "speed": "速度：{speed}×"
+        "speed": "速度：{speed}×",
+        "speedLabel": "播放速度",
+        "speedOption": "{speed}×",
+        "title": "录像回放"
       },
       "resume": "继续录制",
       "save": "保存录制",
+      "saveCancelled": "录像尚未保存，可稍后从标签菜单保存。",
+      "saveFailed": "无法保存录像：{message}",
+      "saved": "录像已保存",
       "start": "开始录制",
+      "startFailed": "无法录制此标签：会话未在运行。",
       "status": {
         "idle": "准备就绪",
         "paused": "已暂停",
@@ -64475,6 +64503,7 @@
       "fish": "fish",
       "label": "选择 Shell",
       "nu": "Nushell",
+      "openRecording": "打开录像…",
       "powershell": "Windows PowerShell",
       "profilesLabel": "配置文件",
       "pwsh": "PowerShell 7",
@@ -64558,6 +64587,7 @@
         "close": "关闭",
         "closeOthers": "关闭其他",
         "copy": "复制",
+        "discardRecording": "丢弃录像",
         "editSshHost": "编辑 SSH 主机",
         "find": "查找…",
         "locateInChat": "在对话中定位",
@@ -64565,7 +64595,10 @@
         "reconnect": "重新连接",
         "rename": "重命名 tab",
         "restart": "重启",
+        "saveRecording": "保存录像…",
         "selectAll": "全选",
+        "startRecording": "开始录制",
+        "stopRecording": "停止并保存录像…",
         "trustAgent": "信任此 tab 的智能体"
       },
       "rename": {

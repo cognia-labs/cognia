@@ -582,4 +582,23 @@ describe("against a remote host", () => {
     fireEvent.click(row)
     expect(onNew).toHaveBeenCalledWith("/nix/store/abc/bin/xonsh")
   })
+
+  it("offers to open a saved recording only when the dock wires it", async () => {
+    const onOpenRecording = jest.fn()
+    await renderPicker(
+      <TerminalShellPicker
+        onNew={jest.fn()}
+        platform="macos"
+        detectShells={noDetect}
+        onOpenRecording={onOpenRecording}
+      />
+    )
+    fireEvent.click(screen.getByTestId("terminal-shell-picker-open-recording"))
+    expect(onOpenRecording).toHaveBeenCalledTimes(1)
+    cleanup()
+    await renderPicker(
+      <TerminalShellPicker onNew={jest.fn()} platform="macos" detectShells={noDetect} />
+    )
+    expect(screen.queryByTestId("terminal-shell-picker-open-recording")).toBeNull()
+  })
 })

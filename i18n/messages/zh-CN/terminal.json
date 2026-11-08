@@ -264,7 +264,13 @@
       "play": "播放",
       "restart": "重新开始",
       "seek": "跳转",
-      "speed": "速度：{speed}×"
+      "speed": "速度：{speed}×",
+      "title": "录像回放",
+      "description": "{size} · {time}",
+      "empty": "该录像没有输出内容。",
+      "position": "{current} / {total}",
+      "speedOption": "{speed}×",
+      "speedLabel": "播放速度"
     },
     "resume": "继续录制",
     "save": "保存录制",
@@ -276,7 +282,29 @@
       "stopped": "录制完成"
     },
     "stop": "停止录制",
-    "title": "录制"
+    "title": "录制",
+    "saved": "录像已保存",
+    "play": "回放",
+    "saveFailed": "无法保存录像：{message}",
+    "saveCancelled": "录像尚未保存，可稍后从标签菜单保存。",
+    "startFailed": "无法录制此标签：会话未在运行。",
+    "openFailed": "无法打开 {name}",
+    "fileError": {
+      "empty": "文件为空。",
+      "not-json": "该文件不是 asciicast 录像。",
+      "unsupported-version": "只能播放 asciicast v2 录像。",
+      "bad-header": "录像头缺少终端尺寸。",
+      "bad-frame": "录像中有格式错误的事件。"
+    },
+    "ended": {
+      "limit": "“{title}”的录制已达到时长上限并停止",
+      "exited": "“{title}”的会话已关闭，录制随之结束",
+      "unsaved": "录像尚未保存。"
+    },
+    "badge": {
+      "recording": "正在录制此标签 · {time}",
+      "unsaved": "录像未保存"
+    }
   },
   "search": {
     "caseSensitive": "区分大小写",
@@ -352,7 +380,8 @@
     "zsh": "zsh",
     "sshLabelThisDesktop": "SSH 主机 · 从本桌面端发起连接",
     "sshManage": "管理 SSH 主机…",
-    "sshAdd": "添加 SSH 主机…"
+    "sshAdd": "添加 SSH 主机…",
+    "openRecording": "打开录像…"
   },
   "stickyScroll": {
     "label": "固定的命令标题"
@@ -401,7 +430,11 @@
       "trustAgent": "信任此 tab 的智能体",
       "reconnect": "重新连接",
       "browseSshFiles": "通过 SFTP 浏览文件",
-      "editSshHost": "编辑 SSH 主机"
+      "editSshHost": "编辑 SSH 主机",
+      "startRecording": "开始录制",
+      "stopRecording": "停止并保存录像…",
+      "saveRecording": "保存录像…",
+      "discardRecording": "丢弃录像"
     },
     "rename": {
       "inputLabel": "新 tab 名称",

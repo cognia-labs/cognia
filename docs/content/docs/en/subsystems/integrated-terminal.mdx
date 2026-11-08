@@ -109,7 +109,7 @@ lib/terminal/
   sticky-scroll.ts · terminal-links.ts · stack-trace.ts
   backpressure.ts           # flow control on a fast-writing process
   rehydrate.ts · boot-reattach.ts        # restore tabs across reloads
-  recording/                # asciicast recorder + player (dormant, see below)
+  recording/                # asciicast recorder, player, `.cast` files, per-session recordings
   workflow-nodes/           # the terminal module's workflow node family
 
 crates/cognia-terminal/src/
@@ -171,6 +171,26 @@ is selected afterwards. A serial port has no host-side owner to come back to, so
 closing its tab closes the port, and the dock does not offer "detach" for it. Serial is not exposed over
 the paired terminal path.
 
+## Recording a tab
+
+Right-click a dock tab and choose **Start recording**. The tab shows a red dot and the elapsed time while
+it records, and keeps recording in the background while another tab is in front.
+`lib/terminal/recording/session-recordings.ts` reads the session's output through
+`BaseTerminalSession.tapData`, so recording never takes output away from the xterm, and follows the
+fitted terminal size, writing a resize event whenever it changes. Only output is recorded: keystrokes
+are not, so a password typed at a prompt that does not echo is not captured.
+
+**Stop and save recording…** writes an asciinema-compatible asciicast v2 `.cast` file through the save
+dialog. A recording that ends on its own (the 10-minute cap, the shell exiting, or its tab closing) is
+held until you save or discard it, and a toast offers both. A cancelled save keeps the recording too:
+the tab is marked unsaved and its menu offers **Save recording…** again.
+
+**Open recording…** in the "+ New" menu plays a `.cast` file in a read-only terminal sized to the
+recording, with play/pause, seeking and 0.5×–4× speed. Recordings from other asciicast v2 tools play too;
+files are validated first (`lib/terminal/recording/asciicast-file.ts`), so a file that is not a
+recording is reported instead of half-played. Recording is offered in the desktop and remote-host dock;
+the phone's terminal screen does not offer it.
+
 ## Known limits
 
 - **Unattended execution is local on the desktop.** The headless commands (`terminal_headless_exec`,
@@ -178,8 +198,6 @@ the paired terminal path.
   workflow commands on itself even when a remote Host is selected in the UI. Paired and headless clients
   route one-shot runs to their Host through `terminal_exec`, which rejects a persistent session, a requested
   sandbox and a custom shell.
-- **Recording is a library, not a feature.** `lib/terminal/recording/` holds an asciicast v2 recorder and
-  player with unit tests, but no surface records or replays a terminal yet.
 - **Verification.** The terminal module's real-shell smoke is still pending; SSH, serial hardware, WAN and
   Windows/Linux shells have not been accepted end to end.
 

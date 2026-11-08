@@ -37,10 +37,10 @@ export interface AsciicastHeader {
  * A single frame in the recording (asciicast v2 event line).
  * Format: [time, type, data]
  *   - time: seconds since recording start (float)
- *   - type: "o" for output, "i" for input
- *   - data: the text content
+ *   - type: "o" for output, "i" for input, "r" for a terminal resize
+ *   - data: the text content; for "r", `"<cols>x<rows>"`
  */
-export type AsciicastFrame = [number, "o" | "i", string]
+export type AsciicastFrame = [number, "o" | "i" | "r", string]
 
 /** A complete terminal recording. */
 export interface TerminalRecording {

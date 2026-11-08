@@ -64375,8 +64375,17 @@
       "trigger": "Show quick fixes"
     },
     "recording": {
+      "badge": {
+        "recording": "Recording this tab · {time}",
+        "unsaved": "Recording not saved"
+      },
       "discard": "Discard recording",
       "elapsed": "{time}",
+      "ended": {
+        "exited": "Recording of \"{title}\" ended because the session closed",
+        "limit": "Recording of \"{title}\" stopped at its time limit",
+        "unsaved": "It has not been saved yet."
+      },
       "export": {
         "cast": "Export as .cast",
         "done": "Export complete",
@@ -64385,6 +64394,13 @@
         "gif": "Export as GIF",
         "title": "Export"
       },
+      "fileError": {
+        "bad-frame": "The recording contains a malformed event.",
+        "bad-header": "The recording header is missing its terminal size.",
+        "empty": "The file is empty.",
+        "not-json": "The file is not an asciicast recording.",
+        "unsupported-version": "Only asciicast v2 recordings can be played."
+      },
       "frames": "{count} frames",
       "list": {
         "delete": "Delete recording",
@@ -64392,18 +64408,30 @@
         "empty": "No recordings yet.",
         "title": "Recordings"
       },
+      "openFailed": "Couldn't open {name}",
       "pause": "Pause recording",
+      "play": "Play",
       "player": {
+        "description": "{size} · {time}",
         "duration": "{time}",
+        "empty": "This recording has no output.",
         "pause": "Pause",
         "play": "Play",
+        "position": "{current} / {total}",
         "restart": "Restart",
         "seek": "Seek",
-        "speed": "Speed: {speed}×"
+        "speed": "Speed: {speed}×",
+        "speedLabel": "Playback speed",
+        "speedOption": "{speed}×",
+        "title": "Recording playback"
       },
       "resume": "Resume recording",
       "save": "Save recording",
+      "saveCancelled": "Recording not saved. Save it later from the tab menu.",
+      "saveFailed": "Couldn't save the recording: {message}",
+      "saved": "Recording saved",
       "start": "Start recording",
+      "startFailed": "This tab can't be recorded: its session is not running.",
       "status": {
         "idle": "Ready to record",
         "paused": "Paused",
@@ -64475,6 +64503,7 @@
       "fish": "fish",
       "label": "Choose a shell",
       "nu": "Nushell",
+      "openRecording": "Open recording…",
       "powershell": "Windows PowerShell",
       "profilesLabel": "Profiles",
       "pwsh": "PowerShell 7",
@@ -64558,6 +64587,7 @@
         "close": "Close",
         "closeOthers": "Close others",
         "copy": "Copy",
+        "discardRecording": "Discard recording",
         "editSshHost": "Edit SSH host",
         "find": "Find…",
         "locateInChat": "Locate in conversation",
@@ -64565,7 +64595,10 @@
         "reconnect": "Reconnect",
         "rename": "Rename tab",
         "restart": "Restart",
+        "saveRecording": "Save recording…",
         "selectAll": "Select all",
+        "startRecording": "Start recording",
+        "stopRecording": "Stop and save recording…",
         "trustAgent": "Trust agent in this tab"
       },
       "rename": {

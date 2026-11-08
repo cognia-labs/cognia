@@ -9,6 +9,15 @@
  * detects them from this module.
  */
 
+/**
+ * Default xterm font stack and size when the user set none. Shared by the live
+ * terminal and the recording player so a replay looks like the terminal it
+ * came from. The bundled family comes first (see `terminal-instance.tsx`).
+ */
+export const TERMINAL_DEFAULT_FONT_FAMILY =
+  '"MesloLGS NF", "JetBrains Mono", "Cascadia Code", "Menlo", "Consolas", monospace'
+export const TERMINAL_DEFAULT_FONT_SIZE = 13
+
 /** Tailwind sizing utilities for the terminal's floating surfaces. */
 export const TERMINAL_LAYOUT = {
   /** Find-in-terminal input width. */

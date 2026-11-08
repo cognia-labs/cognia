@@ -5,11 +5,11 @@
  *  - **recorder** — captures terminal frames into asciicast v2 format
  *  - **player** — replays recordings with timing, speed, seek
  *
- * **Dormant: a library without a product entry.** Nothing in the app, the
- * dock or a plugin API records or replays a terminal yet, so this is not a
- * shipped feature and must not be described as one. The integrated-terminal
- * docs page says so, and `index.test.ts` pins that no UI layer imports it:
- * wiring a recorder into the dock means updating both, deliberately.
+ * The product entry lives next door: `session-recordings.ts` binds a recorder
+ * to a live dock session, `asciicast-file.ts` reads and writes `.cast` files,
+ * `playback-request.ts` holds what the playback dialog shows. The dock wires
+ * them (`hooks/terminal/use-terminal-recording-actions.ts`,
+ * `components/terminal/terminal-recording-player.tsx`).
  */
 
 export type {

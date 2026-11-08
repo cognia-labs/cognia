@@ -157,10 +157,13 @@ class MockResizeObserver {
 
 jest.mock("@/lib/terminal/session-registry", () => {
   const liveSession = {
+    id: "s-1",
     info: { id: "s-1" },
     onData: jest.fn(() => () => undefined),
     onIntegration: jest.fn(() => () => undefined),
     onExit: jest.fn(() => () => undefined),
+    tapData: jest.fn(() => () => undefined),
+    isExited: false,
     onControlState: jest.fn(() => () => undefined),
     onReplayGap: jest.fn(() => () => undefined),
     write: jest.fn(async () => undefined),
@@ -268,6 +271,10 @@ jest.mock("./terminal-shell-picker", () => ({
 import { getAppRegistration } from "@/lib/shortcuts/app-runtime"
 import { useAiShell } from "@/hooks/terminal/use-ai-shell"
 import { TerminalDock } from "./terminal-dock"
+import {
+  __resetSessionRecordingsForTesting,
+  getSessionRecording,
+} from "@/lib/terminal/recording/session-recordings"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useChatStore } from "@/stores/chat/chat-store"
@@ -661,6 +668,25 @@ describe("TerminalDock", () => {
       expect(mockDetachFromDock).not.toHaveBeenCalled()
     } finally {
       delete live.reattachable
+    }
+  })
+
+  it("records a tab from its menu and shows that it is recording", async () => {
+    __resetSessionRecordingsForTesting()
+    try {
+      seedProjectAndSession({ sessionId: "s-1" })
+      render(<TerminalDock />)
+      fireEvent.contextMenu(screen.getAllByTestId("terminal-tab")[0])
+      await act(async () => {
+        fireEvent.click(await screen.findByTestId("terminal-tab-menu-record-start"))
+      })
+      expect(getSessionRecording("s-1")?.status).toBe("recording")
+      expect(screen.getByTestId("terminal-recording-badge")).toHaveAttribute(
+        "data-state",
+        "recording"
+      )
+    } finally {
+      __resetSessionRecordingsForTesting()
     }
   })
 

@@ -74,6 +74,8 @@ import { getLiveSession } from "@/lib/terminal/session-registry"
 import { isTauri } from "@/lib/tauri"
 import { useEdgeResize } from "@/hooks/ui/use-edge-resize"
 import { useTerminalTransport } from "@/hooks/terminal/use-terminal-transport"
+import { useSessionRecordings } from "@/hooks/terminal/use-session-recording"
+import { useTerminalRecordingActions } from "@/hooks/terminal/use-terminal-recording-actions"
 import { usePlatform } from "@/hooks/use-platform"
 import { useChatStore } from "@/stores/chat/chat-store"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -106,6 +108,7 @@ import {
   type VscodeTerminalProfileDescriptor,
 } from "@/lib/plugin/vscode-shim/terminal-handlers"
 import { TerminalTabContextMenu } from "./terminal-tab-context-menu"
+import { TerminalRecordingPlayer } from "./terminal-recording-player"
 import type { TabColorPreset, TabIconPreset } from "@/lib/terminal/tab-appearance"
 import { TerminalTabStrip } from "./terminal-tab-strip"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
@@ -163,6 +166,13 @@ export function TerminalDock({
   // sites once spelled this `settings.terminalSettings`, a key `AppSettings`
   // has never declared, so every saved host silently resolved to `undefined`.
   const settingsSshHosts = useSettingsStore(selectSavedSshHosts)
+  // Font and colour scheme for the recording player, read with the rest of the
+  // dock's settings rather than giving the player its own store subscription.
+  const terminalAppearance = useSettingsStore(
+    (s) =>
+      s.settings?.terminal as
+        { fontFamily?: string; fontSize?: number; colorScheme?: string } | undefined
+  )
   /**
    * Connecting a saved host, shared with Settings, the device console and the
    * phone: credential and jump-chain checks with a way to fix them, the
@@ -605,6 +615,18 @@ export function TerminalDock({
     setRenameTarget(id)
   }, [])
 
+  // Recording (lib/terminal/recording): start / stop-and-save / discard from a
+  // tab's menu, open a saved `.cast` from the "+ New" menu, play it back.
+  const recordingActions = useTerminalRecordingActions()
+  const recordings = useSessionRecordings()
+  const { stopAndSave } = recordingActions
+  const handleSaveRecording = useCallback(
+    (id: string) => {
+      void stopAndSave(id)
+    },
+    [stopAndSave]
+  )
+
   // The tab colour/icon grids live in the context menu's own submenu, so there
   // is no dialog to open and nothing to hold: the change is committed straight
   // to the store, and `terminal-tab.tsx` already paints `tabColorBorderClass`
@@ -641,6 +663,10 @@ export function TerminalDock({
       <TerminalTabContextMenu
         key={row.id}
         row={row}
+        recording={recordings.get(row.id)?.status ?? null}
+        onStartRecording={recordingActions.start}
+        onSaveRecording={handleSaveRecording}
+        onDiscardRecording={recordingActions.discard}
         onRename={handleRename}
         onRestart={handleRestart}
         onClose={requestCloseTab}
@@ -655,6 +681,10 @@ export function TerminalDock({
       </TerminalTabContextMenu>
     ),
     [
+      recordings,
+      recordingActions.start,
+      recordingActions.discard,
+      handleSaveRecording,
       handleRename,
       handleRestart,
       handleEditSshHost,
@@ -818,6 +848,7 @@ export function TerminalDock({
                 sshDialsFromThisDesktop={remoteHostActive && isTauri()}
                 onNewSerialPort={isTauri() ? handleNewSerialPort : undefined}
                 onAttachTmuxSession={handleAttachTmuxSession}
+                onOpenRecording={recordingActions.openFile}
               />
             ) : null}
             {/* An SSH dial can take seconds (a bastion, an agent prompt) and the
@@ -915,6 +946,10 @@ export function TerminalDock({
                 tab-level actions. */}
             <TerminalTabContextMenu
               row={activeRow}
+              recording={recordings.get(activeRow.id)?.status ?? null}
+              onStartRecording={recordingActions.start}
+              onSaveRecording={handleSaveRecording}
+              onDiscardRecording={recordingActions.discard}
               onRename={handleRename}
               onRestart={handleRestart}
               onClose={requestCloseTab}
@@ -1051,6 +1086,15 @@ export function TerminalDock({
       </AlertDialog>
 
       {sshConnect.dialog}
+      <TerminalRecordingPlayer
+        recording={recordingActions.playback}
+        fontFamily={terminalAppearance?.fontFamily}
+        fontSize={terminalAppearance?.fontSize}
+        colorScheme={terminalAppearance?.colorScheme}
+        onOpenChange={(open) => {
+          if (!open) recordingActions.closePlayback()
+        }}
+      />
     </div>
   )
 }

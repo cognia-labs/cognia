@@ -29,6 +29,9 @@
  *   * SSH tabs     — Edit host / Browse files, the two places a live SSH tab
  *                    most often sends you and that nothing in the dock linked
  *                    to. Shown only for a tab that knows its saved profile.
+ *   * Recording    — Start recording, then Stop and save / Discard while it
+ *                    runs, or Save / Discard for a take that ended on its own
+ *                    and is not on disk yet. Shown when the caller wires it.
  *
  * Restart is withheld from serial tabs. A serial row has no shell to respawn
  * and no profile to reconnect from, and offering it produced a local spawn of
@@ -52,6 +55,7 @@ import {
 } from "@/components/ui/context-menu"
 import type { TerminalSessionRow } from "@/stores/terminal/terminal-store"
 import type { TabColorPreset, TabIconPreset } from "@/lib/terminal/tab-appearance"
+import type { SessionRecordingState } from "@/lib/terminal/recording/session-recordings"
 
 import { TerminalTabAppearancePicker } from "./terminal-tab-appearance-picker"
 
@@ -90,6 +94,13 @@ export interface TerminalTabContextMenuProps {
   onSelectAll?: () => void
   onClear?: () => void
   onFind?: () => void
+  /** This tab's recording, if any. Read only when the recording handlers are given. */
+  recording?: SessionRecordingState["status"] | null
+  /** Start recording this tab. Omit to drop the recording group. */
+  onStartRecording?: (id: string) => void
+  /** Stop a live recording, or take an ended one, and save it. */
+  onSaveRecording?: (id: string) => void
+  onDiscardRecording?: (id: string) => void
 }
 
 export function TerminalTabContextMenu({
@@ -109,6 +120,10 @@ export function TerminalTabContextMenu({
   onSelectAll,
   onClear,
   onFind,
+  recording,
+  onStartRecording,
+  onSaveRecording,
+  onDiscardRecording,
 }: TerminalTabContextMenuProps) {
   const t = useTranslations("terminal.tab.menu")
   const hasEditGroup = !!(onCopy || onPaste || onSelectAll || onClear || onFind)
@@ -211,6 +226,38 @@ export function TerminalTabContextMenu({
                 {t("editSshHost")}
               </ContextMenuItem>
             ) : null}
+          </>
+        ) : null}
+        {onStartRecording ? (
+          <>
+            <ContextMenuSeparator />
+            {!recording ? (
+              <ContextMenuItem
+                onSelect={() => onStartRecording(row.id)}
+                data-testid="terminal-tab-menu-record-start"
+              >
+                {t("startRecording")}
+              </ContextMenuItem>
+            ) : (
+              <>
+                {onSaveRecording ? (
+                  <ContextMenuItem
+                    onSelect={() => onSaveRecording(row.id)}
+                    data-testid="terminal-tab-menu-record-save"
+                  >
+                    {recording === "recording" ? t("stopRecording") : t("saveRecording")}
+                  </ContextMenuItem>
+                ) : null}
+                {onDiscardRecording ? (
+                  <ContextMenuItem
+                    onSelect={() => onDiscardRecording(row.id)}
+                    data-testid="terminal-tab-menu-record-discard"
+                  >
+                    {t("discardRecording")}
+                  </ContextMenuItem>
+                ) : null}
+              </>
+            )}
           </>
         ) : null}
         <ContextMenuSeparator />

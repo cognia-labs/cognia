@@ -229,4 +229,47 @@ describe("TerminalTabContextMenu", () => {
       expect(screen.getByTestId("terminal-tab-menu-close")).toBeInTheDocument()
     })
   })
+
+  describe("recording", () => {
+    it("is absent unless the caller wires it", () => {
+      renderMenu()
+      expect(screen.queryByTestId("terminal-tab-menu-record-start")).toBeNull()
+    })
+
+    it("offers to start recording an unrecorded tab", () => {
+      const onStartRecording = jest.fn()
+      renderMenu({ recording: null, onStartRecording, onSaveRecording: jest.fn() })
+      expect(screen.queryByTestId("terminal-tab-menu-record-save")).toBeNull()
+      fireEvent.click(screen.getByTestId("terminal-tab-menu-record-start"))
+      expect(onStartRecording).toHaveBeenCalledWith("s-1")
+    })
+
+    it("offers stop-and-save and discard while recording", () => {
+      const onSaveRecording = jest.fn()
+      const onDiscardRecording = jest.fn()
+      renderMenu({
+        recording: "recording",
+        onStartRecording: jest.fn(),
+        onSaveRecording,
+        onDiscardRecording,
+      })
+      expect(screen.queryByTestId("terminal-tab-menu-record-start")).toBeNull()
+      expect(screen.getByTestId("terminal-tab-menu-record-save")).toHaveTextContent("stopRecording")
+      fireEvent.click(screen.getByTestId("terminal-tab-menu-record-save"))
+      expect(onSaveRecording).toHaveBeenCalledWith("s-1")
+    })
+
+    it("offers save for a take that ended and is not on disk yet", () => {
+      const onDiscardRecording = jest.fn()
+      renderMenu({
+        recording: "finished",
+        onStartRecording: jest.fn(),
+        onSaveRecording: jest.fn(),
+        onDiscardRecording,
+      })
+      expect(screen.getByTestId("terminal-tab-menu-record-save")).toHaveTextContent("saveRecording")
+      fireEvent.click(screen.getByTestId("terminal-tab-menu-record-discard"))
+      expect(onDiscardRecording).toHaveBeenCalledWith("s-1")
+    })
+  })
 })

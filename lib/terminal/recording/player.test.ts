@@ -2,10 +2,10 @@
  * Tests for the terminal recording player.
  */
 
-import { createPlayer } from "./player"
+import { createPlayer, formatPlaybackTime, parseResizeFrame } from "./player"
 import type { TerminalRecording } from "./types"
 
-function makeRecording(frames?: Array<[number, "o" | "i", string]>): TerminalRecording {
+function makeRecording(frames?: Array<[number, "o" | "i" | "r", string]>): TerminalRecording {
   return {
     id: "rec-1",
     sessionId: "s1",
@@ -271,5 +271,64 @@ describe("recording/player", () => {
       // Only the play() notification should be there
       expect(states.filter((s) => s === true)).toHaveLength(1)
     })
+  })
+
+  describe("non-output frames", () => {
+    // Input was already echoed as output; drawing it again shows it twice.
+    it("draws output frames only, and hands resizes to onResize", () => {
+      const drawn: string[] = []
+      const sizes: Array<[number, number]> = []
+      const player = createPlayer(
+        makeRecording([
+          [0.1, "o", "$ ls"],
+          [0.2, "i", "ls\r"],
+          [0.3, "r", "100x30"],
+          [0.4, "r", "garbage"],
+          [0.5, "o", "a.txt"],
+        ]),
+        {
+          onFrame: (data) => drawn.push(data),
+          onResize: (cols, rows) => sizes.push([cols, rows]),
+          now: makeClock(),
+          scheduleTimer: makeScheduler(),
+          cancelTimer: makeCancelScheduler(),
+        }
+      )
+      player.seek(1)
+      expect(drawn).toEqual(["$ ls", "a.txt"])
+      expect(sizes).toEqual([[100, 30]])
+    })
+
+    it("asks the surface to clear before a backward seek replays from the start", () => {
+      const events: string[] = []
+      const player = createPlayer(makeRecording(), {
+        onFrame: (data) => events.push(data),
+        onReset: () => events.push("<reset>"),
+        now: makeClock(),
+        scheduleTimer: makeScheduler(),
+        cancelTimer: makeCancelScheduler(),
+      })
+      player.seek(2)
+      player.seek(0.6)
+      expect(events).toEqual(["hello", " ", "world", "<reset>", "hello"])
+    })
+  })
+})
+
+describe("formatPlaybackTime", () => {
+  it("formats minutes and hours", () => {
+    expect(formatPlaybackTime(0)).toBe("0:00")
+    expect(formatPlaybackTime(65.9)).toBe("1:05")
+    expect(formatPlaybackTime(3725)).toBe("1:02:05")
+    expect(formatPlaybackTime(-3)).toBe("0:00")
+    expect(formatPlaybackTime(Number.NaN)).toBe("0:00")
+  })
+})
+
+describe("parseResizeFrame", () => {
+  it("reads cols x rows and rejects anything else", () => {
+    expect(parseResizeFrame("120x40")).toEqual({ cols: 120, rows: 40 })
+    expect(parseResizeFrame("0x40")).toBeNull()
+    expect(parseResizeFrame("wide")).toBeNull()
   })
 })

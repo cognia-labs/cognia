@@ -66,6 +66,8 @@ export interface Recorder {
   pushOutput(data: string): void
   /** Push an input frame (data typed by the user). */
   pushInput(data: string): void
+  /** Record that the terminal was resized, so playback reflows with it. */
+  pushResize(cols: number, rows: number): void
   /** Stop recording and return the completed TerminalRecording. */
   stop(sessionId: string): TerminalRecording
   /** Register a callback for state changes. Returns unsubscribe. */
@@ -90,8 +92,11 @@ export function createRecorder(options?: RecorderOptions, deps?: RecorderDeps): 
   let rows = 24
   const listeners = new Set<RecorderStateCallback>()
   let maxDurationTimer: ReturnType<typeof setTimeout> | null = null
+  /** Elapsed seconds frozen when the duration cap stopped the recording. */
+  let cappedElapsed: number | null = null
 
   function getElapsed(): number {
+    if (status === "stopped" && cappedElapsed !== null) return cappedElapsed
     if (status === "idle" || status === "stopped") return 0
     if (status === "paused") return (pauseTime - startTime - pausedDuration) / 1000
     return (clock() - startTime - pausedDuration) / 1000
@@ -124,13 +129,16 @@ export function createRecorder(options?: RecorderOptions, deps?: RecorderDeps): 
       startTime = clock()
       pausedDuration = 0
       frames = []
+      cappedElapsed = null
       status = "recording"
       notify()
 
       // Safety cap — auto-stop after max duration
       maxDurationTimer = setTimeout(() => {
         if (status === "recording" || status === "paused") {
-          // Force stop by transitioning to stopped
+          // Force stop by transitioning to stopped. The elapsed time is frozen
+          // here so a later `stop()` reports the real duration, not 0.
+          cappedElapsed = getElapsed()
           status = "stopped"
           notify()
         }
@@ -159,6 +167,12 @@ export function createRecorder(options?: RecorderOptions, deps?: RecorderDeps): 
     pushInput(data: string) {
       if (status !== "recording" || !captureInput) return
       frames.push([frameTime(), "i", data])
+    },
+
+    pushResize(c: number, r: number) {
+      if (status !== "recording") return
+      if (!Number.isFinite(c) || !Number.isFinite(r) || c <= 0 || r <= 0) return
+      frames.push([frameTime(), "r", `${Math.floor(c)}x${Math.floor(r)}`])
     },
 
     stop(sessionId: string): TerminalRecording {
@@ -211,6 +225,7 @@ export function createRecorder(options?: RecorderOptions, deps?: RecorderDeps): 
         maxDurationTimer = null
       }
       frames = []
+      cappedElapsed = null
       status = "idle"
       notify()
     },

@@ -22,6 +22,8 @@ import { TAB_ICON_COMPONENTS } from "@/lib/terminal/tab-icon-map"
 import { displayTitle, type TerminalSessionRow } from "@/stores/terminal/terminal-store"
 import { useTerminalHostLabel } from "@/hooks/terminal/use-terminal-host-label"
 
+import { TerminalRecordingBadge } from "./terminal-recording-badge"
+
 export interface TerminalTabProps {
   row: TerminalSessionRow
   active: boolean
@@ -133,6 +135,7 @@ export function TerminalTab({
       </MotionStatusSwap>
       {TabIcon && <TabIcon className="h-3 w-3 shrink-0 text-muted-foreground" />}
       <span className="max-w-[180px] truncate">{displayTitle(row)}</span>
+      <TerminalRecordingBadge sessionId={row.id} />
       {host.different ? (
         <span
           className="max-w-24 truncate rounded border px-1 text-[10px] text-muted-foreground"

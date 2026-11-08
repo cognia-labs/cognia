@@ -264,7 +264,13 @@
       "play": "Play",
       "restart": "Restart",
       "seek": "Seek",
-      "speed": "Speed: {speed}×"
+      "speed": "Speed: {speed}×",
+      "title": "Recording playback",
+      "description": "{size} · {time}",
+      "empty": "This recording has no output.",
+      "position": "{current} / {total}",
+      "speedOption": "{speed}×",
+      "speedLabel": "Playback speed"
     },
     "resume": "Resume recording",
     "save": "Save recording",
@@ -276,7 +282,29 @@
       "stopped": "Recording complete"
     },
     "stop": "Stop recording",
-    "title": "Recording"
+    "title": "Recording",
+    "saved": "Recording saved",
+    "play": "Play",
+    "saveFailed": "Couldn't save the recording: {message}",
+    "saveCancelled": "Recording not saved. Save it later from the tab menu.",
+    "startFailed": "This tab can't be recorded: its session is not running.",
+    "openFailed": "Couldn't open {name}",
+    "fileError": {
+      "empty": "The file is empty.",
+      "not-json": "The file is not an asciicast recording.",
+      "unsupported-version": "Only asciicast v2 recordings can be played.",
+      "bad-header": "The recording header is missing its terminal size.",
+      "bad-frame": "The recording contains a malformed event."
+    },
+    "ended": {
+      "limit": "Recording of \"{title}\" stopped at its time limit",
+      "exited": "Recording of \"{title}\" ended because the session closed",
+      "unsaved": "It has not been saved yet."
+    },
+    "badge": {
+      "recording": "Recording this tab · {time}",
+      "unsaved": "Recording not saved"
+    }
   },
   "search": {
     "caseSensitive": "Match case",
@@ -352,7 +380,8 @@
     "zsh": "zsh",
     "sshLabelThisDesktop": "SSH hosts · dialed from this desktop",
     "sshManage": "Manage SSH hosts…",
-    "sshAdd": "Add an SSH host…"
+    "sshAdd": "Add an SSH host…",
+    "openRecording": "Open recording…"
   },
   "stickyScroll": {
     "label": "Sticky command header"
@@ -401,7 +430,11 @@
       "trustAgent": "Trust agent in this tab",
       "reconnect": "Reconnect",
       "browseSshFiles": "Browse files over SFTP",
-      "editSshHost": "Edit SSH host"
+      "editSshHost": "Edit SSH host",
+      "startRecording": "Start recording",
+      "stopRecording": "Stop and save recording…",
+      "saveRecording": "Save recording…",
+      "discardRecording": "Discard recording"
     },
     "rename": {
       "inputLabel": "New tab title",

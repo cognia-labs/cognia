@@ -171,6 +171,34 @@ describe("recording/recorder", () => {
       expect(rec.status).toBe("stopped")
     })
 
+    // Regression: the cap moved the recorder to "stopped" and `stop()` then
+    // read the elapsed time of a stopped recorder, which is 0.
+    it("reports the real duration when the cap stopped the recording", () => {
+      const rec = createRecorder({ maxDurationSec: 2 }, { now: makeClock() })
+      rec.start(80, 24)
+      advanceClock(500)
+      rec.pushOutput("a")
+      advanceClock(1600)
+      expect(rec.status).toBe("stopped")
+      const recording = rec.stop("s1")
+      expect(recording.duration).toBeGreaterThanOrEqual(2)
+      expect(recording.header.duration).toBe(recording.duration)
+      expect(recording.frames).toHaveLength(1)
+    })
+
+    it("records resizes as asciicast 'r' frames, only while recording", () => {
+      const rec = createRecorder(undefined, { now: makeClock() })
+      rec.pushResize(100, 30)
+      rec.start(80, 24)
+      advanceClock(250)
+      rec.pushResize(120.7, 40)
+      rec.pushResize(0, 40)
+      rec.pause()
+      rec.pushResize(90, 20)
+      const recording = rec.stop("s1")
+      expect(recording.frames).toEqual([[0.25, "r", "120x40"]])
+    })
+
     it("elapsed is 0 after stop", () => {
       const rec = createRecorder(undefined, { now: makeClock() })
       rec.start(80, 24)
