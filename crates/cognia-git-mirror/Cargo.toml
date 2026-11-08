@@ -28,9 +28,16 @@ path = "src/lib.rs"
 
 [dependencies]
 base64.workspace = true
+cognia-instrument = { path = "../cognia-instrument" }
 once_cell.workspace = true
 regex.workspace = true
+serde = { workspace = true, features = ["derive"] }
 sha2.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Kill a timed-out or cancelled git's whole process group (`kill(-pgid)`), so
+# the transport helpers it spawned stop with it.
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

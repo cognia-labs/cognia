@@ -284,7 +284,7 @@ pub fn prepare_source_commit(
             branch.map(|branch| format!(" on {branch}")).unwrap_or_default()
         ));
     }
-    materialize_commit(&request, &mirror, commit)?;
+    materialize_commit(&request, &mirror, commit).map_err(|failure| failure.detail)?;
     let present = git(
         source_root,
         &["cat-file", "-e", &format!("{commit}^{{commit}}")],

@@ -361,16 +361,19 @@ async fn clone_from_mirror(
     remote_url: &str,
     destination: &std::path::Path,
     budget: std::time::Duration,
-) -> bool {
+) -> std::result::Result<(), cognia_git_mirror::MirrorFailure> {
     if depth > 0 {
-        return false;
+        return Err(cognia_git_mirror::MirrorFailure {
+            class: cognia_git_mirror::FailureClass::Other,
+            detail: "a shallow clone does not use the mirror".into(),
+        });
     }
     let remote = remote_url.to_string();
     let destination = destination.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let root = cognia_git_mirror::root();
         let request = cognia_git_mirror::MirrorRequest::new(&root, &remote).budget(budget);
-        cognia_git_mirror::derive_from_mirror(
+        cognia_git_mirror::try_derive_from_mirror(
             &request,
             &destination,
             // No branch: a plain guarded clone checks out the remote's HEAD,
@@ -380,9 +383,15 @@ async fn clone_from_mirror(
             // directory on this machine could do neither.
             cognia_git_mirror::DerivedOrigin::RealRemote,
         )
+        .map(|_| ())
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or_else(|error| {
+        Err(cognia_git_mirror::MirrorFailure {
+            class: cognia_git_mirror::FailureClass::Other,
+            detail: format!("mirror task: {error}"),
+        })
+    })
 }
 
 /// Clone with guard rails: https-only, host allow-list, no embedded
@@ -449,8 +458,22 @@ async fn clone_repo_guarded_inner(
     );
 
     let use_mirror = !isolate_credentials && guards.use_mirror.unwrap_or(CLONE_DEFAULT_USE_MIRROR);
-    if !use_mirror || !clone_from_mirror(depth, remote_url.trim(), &destination_path, budget).await
-    {
+    let from_mirror = if use_mirror {
+        clone_from_mirror(depth, remote_url.trim(), &destination_path, budget).await
+    } else {
+        Err(cognia_git_mirror::MirrorFailure {
+            class: cognia_git_mirror::FailureClass::Other,
+            detail: "mirror not used".into(),
+        })
+    };
+    if let Err(miss) = &from_mirror {
+        // The remote itself refused (no such repository, a bad credential):
+        // the network clone would ask the same remote and hear the same.
+        if !miss.class.network_could_help() {
+            return Err(GitError::from_failure_class(miss.class, &miss.detail));
+        }
+    }
+    if from_mirror.is_err() {
         let outcome = if isolate_credentials {
             let args = isolated_clone_args(depth, remote_url.trim(), &destination_path);
             let env = isolated_clone_env(remote_url.trim(), guards.token.as_ref())?;
@@ -466,7 +489,7 @@ async fn clone_repo_guarded_inner(
                 // would find a directory that looks cloned and is not. Safe to
                 // delete because `run_within` reaped the child first.
                 let _ = tokio::fs::remove_dir_all(&destination_path).await;
-                return Err(GitError::CommandFailed(
+                return Err(GitError::TimedOut(
                     format!("clone timed out after {}s", budget.as_secs()).into(),
                 ));
             }
@@ -488,7 +511,7 @@ async fn clone_repo_guarded_inner(
                 let _ = tokio::fs::remove_dir_all(&destination_path).await;
                 return match result {
                     Err(error) => Err(error),
-                    _ => Err(GitError::CommandFailed(
+                    _ => Err(GitError::TimedOut(
                         format!("checkout timed out after {}s", budget.as_secs()).into(),
                     )),
                 };
@@ -963,7 +986,9 @@ mod tests {
         let destination = tmp.path().join("checkout");
 
         assert!(
-            !clone_from_mirror(1, "https://example.test/r.git", &destination, CLONE_BUDGET).await
+            clone_from_mirror(1, "https://example.test/r.git", &destination, CLONE_BUDGET)
+                .await
+                .is_err()
         );
         assert!(
             !destination.exists(),
@@ -1009,7 +1034,9 @@ mod tests {
 
         let first = tmp.path().join("first");
         assert!(
-            clone_from_mirror(0, &remote, &first, CLONE_BUDGET).await,
+            clone_from_mirror(0, &remote, &first, CLONE_BUDGET)
+                .await
+                .is_ok(),
             "the first clone should have populated the cache"
         );
         assert_eq!(
@@ -1035,7 +1062,9 @@ mod tests {
 
         let second = tmp.path().join("second");
         assert!(
-            clone_from_mirror(0, &remote, &second, CLONE_BUDGET).await,
+            clone_from_mirror(0, &remote, &second, CLONE_BUDGET)
+                .await
+                .is_ok(),
             "the second clone went to the network instead of the cache"
         );
         assert_eq!(

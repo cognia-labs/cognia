@@ -248,6 +248,11 @@ export type GitErrorKind =
   | "networkFailed"
   | "patchFailed"
   | "lockHeld"
+  /** A git call ran past its budget and was killed. */
+  | "timedOut"
+  /** A git call was cancelled by its caller and was killed. */
+  | "cancelled"
+  | "diskFull"
   | "gitNotInstalled"
   | "libgit2"
   | "commandFailed"

@@ -98,6 +98,17 @@ pub enum GitError {
     #[error("repository is locked: {0}")]
     LockHeld(Detail),
 
+    /// A git call ran past its budget and was killed (and reaped).
+    #[error("git timed out: {0}")]
+    TimedOut(Detail),
+
+    /// A git call was cancelled by its caller and was killed (and reaped).
+    #[error("git was cancelled")]
+    Cancelled,
+
+    #[error("the disk is full: {0}")]
+    DiskFull(Detail),
+
     #[error("git is not installed or not on PATH")]
     GitNotInstalled,
 
@@ -123,6 +134,26 @@ impl From<git2::Error> for GitError {
                 GitError::MergeConflict(err.message().into())
             }
             _ => GitError::Libgit2(err.message().into()),
+        }
+    }
+}
+
+impl GitError {
+    /// The error for a classified failure from the shared runner
+    /// (`cognia_git_mirror`), so a mirror miss the remote refused reads the
+    /// same as the network clone's would have.
+    pub fn from_failure_class(class: cognia_git_mirror::FailureClass, detail: &str) -> Self {
+        use cognia_git_mirror::FailureClass;
+        let detail: Detail = detail.trim().into();
+        match class {
+            FailureClass::NotFound => GitError::NotFound(detail),
+            FailureClass::Auth => GitError::AuthRequired(detail),
+            FailureClass::Network => GitError::NetworkFailed(detail),
+            FailureClass::TimedOut => GitError::TimedOut(detail),
+            FailureClass::Cancelled => GitError::Cancelled,
+            FailureClass::Lock => GitError::LockHeld(detail),
+            FailureClass::DiskFull => GitError::DiskFull(detail),
+            FailureClass::Other => GitError::CommandFailed(detail),
         }
     }
 }

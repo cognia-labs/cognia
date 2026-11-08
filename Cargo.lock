@@ -2666,8 +2666,11 @@ name = "cognia-git-mirror"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "cognia-instrument",
+ "libc",
  "once_cell",
  "regex",
+ "serde",
  "sha2 0.11.1",
  "tempfile",
 ]

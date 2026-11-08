@@ -67,20 +67,13 @@ pub fn classify_failure(stderr: &str) -> GitError {
     {
         return GitError::IdentityRequired(detail);
     }
-    if s.contains("authentication failed")
-        || s.contains("could not read username")
-        || s.contains("could not read password")
-        || s.contains("permission denied (publickey)")
-        || s.contains("terminal prompts disabled")
-        || s.contains("invalid username or password")
-        // HTTP 401/403 on the remote URL — an insufficient/expired token, not a
-        // transport failure. Must precede the network branch below, since the
-        // 403 string also contains "unable to access".
-        || s.contains("the requested url returned error: 401")
-        || s.contains("the requested url returned error: 403")
-        || s.contains("401 unauthorized")
-        || s.contains("403 forbidden")
-    {
+    // The transport classes (auth, not found, lock, network, disk) share one
+    // pattern list with the mirror's runner, so a clone that failed through the
+    // cache and one that failed directly are classified alike. Auth is decided
+    // first: an HTTP 403 also says "unable to access", and it is a credential
+    // problem, not a transport one.
+    let class = cognia_git_mirror::classify_stderr(stderr);
+    if class == cognia_git_mirror::FailureClass::Auth {
         return GitError::AuthRequired(detail);
     }
     // Before the conflict branch, though neither string contains "conflict":
@@ -105,16 +98,12 @@ pub fn classify_failure(stderr: &str) -> GitError {
     {
         return GitError::PatchFailed(detail);
     }
-    if s.contains("index.lock") || (s.contains("unable to create") && s.contains(".lock")) {
-        return GitError::LockHeld(detail);
-    }
-    if s.contains("could not resolve host")
-        || s.contains("failed to connect")
-        || s.contains("connection timed out")
-        || s.contains("network is unreachable")
-        || s.contains("unable to access")
-    {
-        return GitError::NetworkFailed(detail);
+    match class {
+        cognia_git_mirror::FailureClass::Lock => return GitError::LockHeld(detail),
+        cognia_git_mirror::FailureClass::Network => return GitError::NetworkFailed(detail),
+        cognia_git_mirror::FailureClass::NotFound => return GitError::NotFound(detail),
+        cognia_git_mirror::FailureClass::DiskFull => return GitError::DiskFull(detail),
+        _ => {}
     }
     if s.contains("local changes")
         || s.contains("overwritten by checkout")
@@ -143,13 +132,17 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let _perf = cognia_instrument::guard("git.exec");
+    let mut perf = cognia_instrument::guard("git.exec");
     let output = base_command(cwd)
         .args(args)
         .output()
         .await
-        .map_err(spawn_error)?;
+        .map_err(|error| {
+            perf.fail();
+            spawn_error(error)
+        })?;
     if !output.status.success() {
+        perf.fail();
         return Err(classify_failure(&String::from_utf8_lossy(&output.stderr)));
     }
     Ok(())
@@ -201,12 +194,14 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let _perf = cognia_instrument::guard("git.exec");
+    let mut perf = cognia_instrument::guard("git.exec");
     let mut command = base_command(cwd);
     for (key, value) in envs {
         command.env(key, value);
     }
-    run_command_within(command, args, budget).await
+    let outcome = run_command_within(command, args, budget).await;
+    perf.set_ok(matches!(outcome, Ok(Budgeted::Completed)));
+    outcome
 }
 
 /// Clone without the user's Git configuration, helpers, netrc or injected
@@ -326,13 +321,17 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let _perf = cognia_instrument::guard("git.exec");
+    let mut perf = cognia_instrument::guard("git.exec");
     let output = base_command(cwd)
         .args(args)
         .output()
         .await
-        .map_err(spawn_error)?;
+        .map_err(|error| {
+            perf.fail();
+            spawn_error(error)
+        })?;
     if !output.status.success() {
+        perf.fail();
         return Err(classify_failure(&String::from_utf8_lossy(&output.stderr)));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -352,12 +351,17 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let _perf = cognia_instrument::guard("git.exec");
+    // A non-zero exit is this function's "no", not a failure; only a spawn
+    // failure counts against the span.
+    let mut perf = cognia_instrument::guard("git.exec");
     let output = base_command(cwd)
         .args(args)
         .output()
         .await
-        .map_err(spawn_error)?;
+        .map_err(|error| {
+            perf.fail();
+            spawn_error(error)
+        })?;
     Ok(output.status.success())
 }
 
@@ -374,12 +378,16 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let _perf = cognia_instrument::guard("git.exec");
+    // The output IS the answer here, so only a spawn failure is a failure.
+    let mut perf = cognia_instrument::guard("git.exec");
     let output = base_command(cwd)
         .args(args)
         .output()
         .await
-        .map_err(spawn_error)?;
+        .map_err(|error| {
+            perf.fail();
+            spawn_error(error)
+        })?;
     Ok((
         output.status.success(),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -655,6 +663,52 @@ mod tests {
 
     /// `git switch` and the `git checkout` fallback word this differently, and
     /// `branch.rs::checkout` can emit either, so both must classify.
+    #[test]
+    fn transport_failures_share_the_mirror_runner_s_classes() {
+        assert!(matches!(
+            classify_failure("fatal: couldn't find remote ref refs/heads/gone"),
+            GitError::NotFound(_)
+        ));
+        assert!(matches!(
+            classify_failure("fatal: write error: No space left on device"),
+            GitError::DiskFull(_)
+        ));
+        assert!(matches!(
+            classify_failure(
+                "fatal: unable to access 'https://h/': The requested URL returned error: 403"
+            ),
+            GitError::AuthRequired(_)
+        ));
+        assert!(matches!(
+            classify_failure("fatal: unable to access 'https://h/': Could not resolve host: h"),
+            GitError::NetworkFailed(_)
+        ));
+        // Domain refusals still win over the shared classes.
+        assert!(matches!(
+            classify_failure(
+                "error: Your local changes to the following files would be overwritten by merge"
+            ),
+            GitError::MergeConflict(_)
+        ));
+    }
+
+    #[test]
+    fn a_failure_class_maps_onto_the_matching_git_error() {
+        use cognia_git_mirror::FailureClass;
+        assert!(matches!(
+            GitError::from_failure_class(FailureClass::TimedOut, "after 5s"),
+            GitError::TimedOut(_)
+        ));
+        assert!(matches!(
+            GitError::from_failure_class(FailureClass::Cancelled, ""),
+            GitError::Cancelled
+        ));
+        assert!(matches!(
+            GitError::from_failure_class(FailureClass::Auth, "denied"),
+            GitError::AuthRequired(_)
+        ));
+    }
+
     #[test]
     fn classifies_a_branch_held_by_another_worktree() {
         assert!(matches!(

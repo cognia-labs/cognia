@@ -14,7 +14,6 @@
 //! so this doesn't add a new prerequisite.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cognia_git_mirror::credential::{self, GitCredential};
@@ -34,6 +33,16 @@ const DEFAULT_BASE_DIR: &str = "cognia-github-worktrees";
 /// otherwise hang the issue run waiting behind it. A miss costs one network
 /// clone, which is exactly what a cache miss is supposed to cost.
 const MIRROR_BUDGET: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Overall limit for a network clone, retries included.
+///
+/// It used to have none: a stalled `git clone` held the issue run forever,
+/// and dropping its future left git running. Each attempt runs for the shorter
+/// of [`MIRROR_BUDGET`] and what is left of this, and is killed when it ends.
+const NETWORK_CLONE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Limit for one push attempt.
+const PUSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,26 +178,22 @@ pub async fn github_workspace_clone(args: CloneArgs) -> Result<CloneResult, Stri
     )
     .await;
 
-    if !derived {
-        let mut command = Command::new("git");
-        command
-            .arg("clone")
-            .args(clone_args(&remote, &path_str, clone_branch))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        apply_git_auth_env(&mut command, &remote, &args.token);
-        let output = command
-            .output()
-            .await
-            .map_err(|e| format!("git clone spawn: {e}"))?;
-        if !output.status.success() {
-            // Redact the token before surfacing stderr — git embeds the remote
-            // URL in its error messages and we don't want it ending up in
-            // renderer logs.
-            let stderr =
-                redact_git_credentials(&String::from_utf8_lossy(&output.stderr), Some(&args.token));
-            return Err(format!("git clone failed: {stderr}"));
+    if let Err(miss) = derived {
+        // The remote refused through the mirror (no such repository or
+        // branch, a bad token). The network clone would send the same request
+        // with the same token, so say so now instead of paying for it.
+        if !miss.class.network_could_help() {
+            let detail = redact_git_credentials(&miss.detail, Some(&args.token));
+            return Err(format!("git clone failed: {detail}"));
         }
+        network_clone(
+            &remote,
+            &path_str,
+            clone_branch,
+            Some(&args.token),
+            "git clone",
+        )
+        .await?;
     }
 
     if clone_branch != args.branch {
@@ -239,27 +244,19 @@ pub async fn github_workspace_commit_and_push(args: CommitAndPushArgs) -> Result
     )
     .await;
 
-    if !derived {
-        let mut clone = Command::new("git");
-        clone
-            .arg("clone")
-            .args(clone_args(&remote, &staging_str, base_branch));
-        if let Some(token) = args.token.as_deref() {
-            apply_git_auth_env(&mut clone, &remote, token);
-        } else {
-            apply_git_isolation_env(&mut clone);
+    if let Err(miss) = derived {
+        if !miss.class.network_could_help() {
+            let detail = redact_git_credentials(&miss.detail, args.token.as_deref());
+            return Err(format!("trusted git clone failed: {detail}"));
         }
-        let output = clone
-            .output()
-            .await
-            .map_err(|e| format!("trusted git clone spawn: {e}"))?;
-        if !output.status.success() {
-            let stderr = redact_git_credentials(
-                &String::from_utf8_lossy(&output.stderr),
-                args.token.as_deref(),
-            );
-            return Err(format!("trusted git clone failed: {stderr}"));
-        }
+        network_clone(
+            &remote,
+            &staging_str,
+            base_branch,
+            args.token.as_deref(),
+            "trusted git clone",
+        )
+        .await?;
     }
 
     if base_branch != args.branch {
@@ -279,13 +276,7 @@ pub async fn github_workspace_commit_and_push(args: CommitAndPushArgs) -> Result
     run_git_silent(&staging_path, ["commit", "-m", &args.message]).await?;
 
     let refspec = format!("HEAD:refs/heads/{push_branch}");
-    run_git_silent_auth(
-        &staging_path,
-        ["push", &remote, &refspec],
-        &remote,
-        args.token.as_deref(),
-    )
-    .await?;
+    push_with_retry(&staging_path, &remote, &refspec, args.token.as_deref()).await?;
 
     let head = run_git_capture(&staging_path, ["rev-parse", "HEAD"]).await?;
     Ok(head.trim().to_string())
@@ -593,6 +584,107 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Environment for a host-owned git call: the token as a host-keyed
+/// `extraheader` when there is one, the isolation env otherwise.
+fn git_env_for(remote: &str, token: Option<&str>) -> Vec<(String, String)> {
+    let credential = token.and_then(GitCredential::from_token);
+    match (credential::origin_of(remote), credential) {
+        (Some(origin), Some(cred)) => credential::auth_env(&origin, &cred),
+        // A credential we cannot key on a host is a credential we do not send.
+        _ => credential::isolation_env(),
+    }
+}
+
+/// Whether a failed attempt is worth another one: transport trouble only.
+fn retryable(outcome: &Result<crate::exec::Budgeted, crate::error::GitError>) -> bool {
+    matches!(
+        outcome,
+        Ok(crate::exec::Budgeted::TimedOut) | Err(crate::error::GitError::NetworkFailed(_))
+    )
+}
+
+fn describe(
+    outcome: &Result<crate::exec::Budgeted, crate::error::GitError>,
+    budget: std::time::Duration,
+) -> String {
+    match outcome {
+        Ok(crate::exec::Budgeted::TimedOut) => format!("timed out after {}s", budget.as_secs()),
+        Ok(crate::exec::Budgeted::Completed) => "completed".into(),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// Clone `branch` of `remote` into `destination` over the network.
+///
+/// Each attempt runs under a budget and is killed (and reaped) when it ends,
+/// so the directory removed before a retry is one nothing still writes to.
+/// Only transport failures are retried, with capped, jittered backoff, inside
+/// [`NETWORK_CLONE_DEADLINE`].
+async fn network_clone(
+    remote: &str,
+    destination: &str,
+    branch: &str,
+    token: Option<&str>,
+    label: &str,
+) -> Result<(), String> {
+    let policy = cognia_git_mirror::RetryPolicy::default();
+    let deadline = std::time::Instant::now() + NETWORK_CLONE_DEADLINE;
+    let env = git_env_for(remote, token);
+    let cwd = std::env::temp_dir();
+    let mut attempt = 1;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let budget = MIRROR_BUDGET
+            .min(left)
+            .max(std::time::Duration::from_secs(1));
+        let mut argv = vec!["clone"];
+        argv.extend(clone_args(remote, destination, branch));
+        let outcome = crate::exec::run_within_env(&cwd, argv, budget, &env).await;
+        if matches!(outcome, Ok(crate::exec::Budgeted::Completed)) {
+            return Ok(());
+        }
+        // A half-written checkout is worse than none, and a retry needs an
+        // empty destination. Safe: the attempt's child was reaped.
+        let _ = tokio::fs::remove_dir_all(destination).await;
+        let delay = cognia_git_mirror::jittered_backoff(&policy, attempt);
+        let time_left = deadline.saturating_duration_since(std::time::Instant::now());
+        if !retryable(&outcome) || attempt >= policy.attempts || time_left <= delay {
+            let detail = redact_git_credentials(&describe(&outcome, budget), token);
+            return Err(format!("{label} failed: {detail}"));
+        }
+        tokio::time::sleep(delay).await;
+        attempt += 1;
+    }
+}
+
+/// Push `refspec` to `remote` from the trusted staging checkout, retrying
+/// transport failures. A push is safe to repeat: the second attempt of a push
+/// that landed is a no-op.
+async fn push_with_retry(
+    staging: &Path,
+    remote: &str,
+    refspec: &str,
+    token: Option<&str>,
+) -> Result<(), String> {
+    let policy = cognia_git_mirror::RetryPolicy::default();
+    let env = git_env_for(remote, token);
+    let mut attempt = 1;
+    loop {
+        let outcome =
+            crate::exec::run_within_env(staging, ["push", remote, refspec], PUSH_BUDGET, &env)
+                .await;
+        if matches!(outcome, Ok(crate::exec::Budgeted::Completed)) {
+            return Ok(());
+        }
+        if !retryable(&outcome) || attempt >= policy.attempts {
+            let detail = redact_git_credentials(&describe(&outcome, PUSH_BUDGET), token);
+            return Err(format!("git failed: {detail}"));
+        }
+        tokio::time::sleep(cognia_git_mirror::jittered_backoff(&policy, attempt)).await;
+        attempt += 1;
+    }
+}
+
 /// The shared bare-mirror cache directory.
 ///
 /// `base_dir` is a test seam, not a setting. In production the cache is the
@@ -628,7 +720,7 @@ async fn derive_from_mirror(
     destination: &str,
     branch: &str,
     token: &str,
-) -> bool {
+) -> Result<(), cognia_git_mirror::MirrorFailure> {
     let root = root.to_path_buf();
     let remote = remote.to_string();
     let destination = PathBuf::from(destination);
@@ -638,15 +730,21 @@ async fn derive_from_mirror(
         let request = MirrorRequest::new(&root, &remote)
             .maybe_credential(credential.as_ref())
             .budget(MIRROR_BUDGET);
-        cognia_git_mirror::derive_from_mirror(
+        cognia_git_mirror::try_derive_from_mirror(
             &request,
             &destination,
             Some(&branch_owned),
             DerivedOrigin::RealRemote,
         )
+        .map(|_| ())
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or_else(|error| {
+        Err(cognia_git_mirror::MirrorFailure {
+            class: cognia_git_mirror::FailureClass::Other,
+            detail: format!("mirror task: {error}"),
+        })
+    })
 }
 
 #[cfg(test)]
@@ -740,6 +838,37 @@ mod tests {
         assert_eq!(mirror_root(Some("")), default);
     }
 
+    #[test]
+    fn only_transport_failures_send_a_network_clone_or_push_round_again() {
+        use crate::error::GitError;
+        use crate::exec::Budgeted;
+        assert!(retryable(&Ok(Budgeted::TimedOut)));
+        assert!(retryable(&Err(GitError::NetworkFailed("reset".into()))));
+        assert!(!retryable(&Ok(Budgeted::Completed)));
+        assert!(!retryable(&Err(GitError::AuthRequired("403".into()))));
+        assert!(!retryable(&Err(GitError::NotFound("no repo".into()))));
+    }
+
+    #[tokio::test]
+    async fn a_network_clone_of_a_missing_repository_fails_once_and_leaves_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("work");
+        let started = std::time::Instant::now();
+        let err = network_clone(
+            "file:///definitely/not/a/repository",
+            dest.to_str().unwrap(),
+            "main",
+            None,
+            "git clone",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.starts_with("git clone failed: "), "{err}");
+        assert!(!dest.exists());
+        // Not retried: no backoff was slept.
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
     #[tokio::test]
     async fn a_derived_clone_carries_the_content_and_can_still_push() {
         // `git clone <local path>` writes that path into `origin`, and a
@@ -751,7 +880,7 @@ mod tests {
         let dest = tmp.path().join("work");
 
         let derived = derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "main", "").await;
-        assert!(derived, "the mirror should have served this clone");
+        assert!(derived.is_ok(), "the mirror should have served this clone");
         assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "hello\n");
 
         let remote = std::process::Command::new("git")
@@ -770,7 +899,11 @@ mod tests {
 
         for name in ["first", "second"] {
             let dest = tmp.path().join(name);
-            assert!(derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "main", "").await);
+            assert!(
+                derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "main", "")
+                    .await
+                    .is_ok()
+            );
         }
         let mirrors: Vec<_> = fs::read_dir(&cache)
             .unwrap()
@@ -792,7 +925,11 @@ mod tests {
             let (_origin, url) = upstream(tmp.path());
             let cache = tmp.path().join("cache");
             let dest = tmp.path().join("work");
-            assert!(derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "main", "").await);
+            assert!(
+                derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "main", "")
+                    .await
+                    .is_ok()
+            );
 
             let packs = |root: &Path| -> Vec<u64> {
                 let dir = root.join("objects").join("pack");
@@ -833,7 +970,7 @@ mod tests {
         let dest = tmp.path().join("work");
 
         let derived = derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "no-such", "").await;
-        assert!(!derived);
+        assert!(derived.is_err());
         assert!(!dest.exists(), "left a half-written workspace behind");
     }
 
@@ -843,17 +980,20 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cache = tmp.path().join("cache");
         let dest = tmp.path().join("work");
-        assert!(!derive_from_mirror(&cache, "not a url", dest.to_str().unwrap(), "main", "").await);
         assert!(
-            !derive_from_mirror(
-                &cache,
-                "file:///nope/nowhere",
-                dest.to_str().unwrap(),
-                "main",
-                ""
-            )
-            .await
+            derive_from_mirror(&cache, "not a url", dest.to_str().unwrap(), "main", "")
+                .await
+                .is_err()
         );
+        assert!(derive_from_mirror(
+            &cache,
+            "file:///nope/nowhere",
+            dest.to_str().unwrap(),
+            "main",
+            ""
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
@@ -868,7 +1008,11 @@ mod tests {
         fs::write(junk.join("stray.txt"), b"half a clone").unwrap();
 
         let dest = tmp.path().join("work");
-        assert!(derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "main", "").await);
+        assert!(
+            derive_from_mirror(&cache, &url, dest.to_str().unwrap(), "main", "")
+                .await
+                .is_ok()
+        );
         assert!(cognia_git_mirror::is_mirror(&junk));
         assert!(!junk.join("stray.txt").exists());
     }
@@ -879,7 +1023,11 @@ mod tests {
         let (origin, url) = upstream(tmp.path());
         let cache = tmp.path().join("cache");
         let first = tmp.path().join("first");
-        assert!(derive_from_mirror(&cache, &url, first.to_str().unwrap(), "main", "").await);
+        assert!(
+            derive_from_mirror(&cache, &url, first.to_str().unwrap(), "main", "")
+                .await
+                .is_ok()
+        );
 
         // A new commit upstream, and a mirror whose stamp says it is old.
         fs::write(origin.join("b.txt"), "second\n").unwrap();
@@ -889,7 +1037,11 @@ mod tests {
         fs::remove_file(mirror.join("cognia-fetched-at")).unwrap();
 
         let second = tmp.path().join("second");
-        assert!(derive_from_mirror(&cache, &url, second.to_str().unwrap(), "main", "").await);
+        assert!(
+            derive_from_mirror(&cache, &url, second.to_str().unwrap(), "main", "")
+                .await
+                .is_ok()
+        );
         assert!(
             second.join("b.txt").exists(),
             "the refresh did not pick up the new commit"

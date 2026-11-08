@@ -28,6 +28,7 @@
 //! last fetch: each costs one slow clone. A cache that can fail a run is worse
 //! than no cache.
 
+pub mod acquire;
 pub mod credential;
 pub mod plan;
 pub mod runner;
@@ -37,6 +38,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
+pub use acquire::{
+    classify_stderr, jittered_backoff, AcquisitionBudget, AcquisitionReport, CancelToken,
+    FailureClass, Phase, PhaseRecord, RetryPolicy,
+};
 pub use credential::GitCredential;
 pub use plan::{
     checkout_path, clone_args, derive_args, fetch_args, file_url, is_fresh, is_mirror,
@@ -118,6 +123,10 @@ pub struct MirrorRequest<'a> {
     /// faster; one that can hang past the budget of the request it is serving
     /// has made it slower, and the fallback to the network never runs.
     pub budget: Option<Duration>,
+    /// The acquisition this request serves. When set, every git call runs as
+    /// one of its phases (its limit, its cancel, its report) and network calls
+    /// retry transport failures; `budget` is then ignored.
+    pub acquisition: Option<&'a AcquisitionBudget>,
 }
 
 impl<'a> MirrorRequest<'a> {
@@ -128,7 +137,13 @@ impl<'a> MirrorRequest<'a> {
             credential: None,
             extra_refspecs: &[],
             budget: None,
+            acquisition: None,
         }
+    }
+
+    pub fn acquisition(mut self, acquisition: &'a AcquisitionBudget) -> Self {
+        self.acquisition = Some(acquisition);
+        self
     }
 
     pub fn maybe_credential(mut self, credential: Option<&'a GitCredential>) -> Self {
@@ -161,14 +176,75 @@ impl<'a> MirrorRequest<'a> {
     }
 }
 
+/// Why the mirror could not serve a request.
+///
+/// Still a cache miss for every caller (see the module header), but a
+/// classified one: when the remote itself refused (`Auth`, `NotFound`), a
+/// network clone would only ask it again, and the caller can say so instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorFailure {
+    pub class: FailureClass,
+    /// Redacted git output, or a description of the local step that failed.
+    pub detail: String,
+}
+
+impl MirrorFailure {
+    fn local(detail: impl Into<String>) -> Self {
+        Self {
+            class: FailureClass::Other,
+            detail: detail.into(),
+        }
+    }
+
+    fn from_run(error: &RunError) -> Self {
+        Self {
+            class: FailureClass::of(error),
+            detail: error.to_string(),
+        }
+    }
+}
+
+/// How the mirror answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirrorUse {
+    /// Already fresh; nothing fetched.
+    Hit,
+    /// Present and refreshed (or a refresh failed and the stale copy served).
+    Refreshed,
+    /// Created by this request.
+    Created,
+}
+
+impl MirrorUse {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Refreshed => "refreshed",
+            Self::Created => "created",
+        }
+    }
+}
+
 /// Run one git command on the mirror's behalf, carrying the request's
-/// credential and budget. Quiet: a cache miss is not an error to report.
-fn run_for(request: &MirrorRequest<'_>, cwd: &Path, args: &[String]) -> bool {
+/// credential and budget (or, when it has one, its acquisition's phase).
+fn run_for(
+    request: &MirrorRequest<'_>,
+    phase: Phase,
+    cwd: &Path,
+    args: &[String],
+) -> Result<(), RunError> {
     let auth = request.auth();
-    let run = GitRun::new(cwd, args)
-        .maybe_credential(auth.as_ref().map(|(origin, cred)| (origin.as_str(), *cred)))
-        .maybe_budget(request.budget);
-    run_git_quietly(run)
+    let make = || {
+        GitRun::new(cwd, args)
+            .maybe_credential(auth.as_ref().map(|(origin, cred)| (origin.as_str(), *cred)))
+    };
+    match request.acquisition {
+        Some(acquisition) if matches!(phase, Phase::Clone | Phase::Fetch | Phase::Backfill) => {
+            acquisition.run_retrying(phase, make, || {}).map(|_| ())
+        }
+        Some(acquisition) => acquisition.run(phase, make()).map(|_| ()),
+        None => run_git(make().maybe_budget(request.budget)).map(|_| ()),
+    }
 }
 
 /// Bring the mirror for the request's remote up to date, creating it when absent.
@@ -176,10 +252,18 @@ fn run_for(request: &MirrorRequest<'_>, cwd: &Path, args: &[String]) -> bool {
 /// Returns the mirror's path, or `None` when the cache could not be used, which
 /// is a request to reach the network instead.
 pub fn ensure_mirror(request: &MirrorRequest<'_>) -> Option<PathBuf> {
-    let mirror = mirror_path(request.cache_root, request.remote).ok()?;
-    if std::fs::create_dir_all(request.cache_root).is_err() {
-        return None;
-    }
+    try_ensure_mirror(request).ok().map(|(path, _)| path)
+}
+
+/// [`ensure_mirror`], saying how the mirror answered or why it could not.
+pub fn try_ensure_mirror(
+    request: &MirrorRequest<'_>,
+) -> Result<(PathBuf, MirrorUse), MirrorFailure> {
+    let mirror = mirror_path(request.cache_root, request.remote)
+        .map_err(|error| MirrorFailure::local(error.to_string()))?;
+    std::fs::create_dir_all(request.cache_root).map_err(|error| {
+        MirrorFailure::local(format!("create {}: {error}", request.cache_root.display()))
+    })?;
 
     // Serialise callers that want the same repository. A poisoned lock means a
     // previous holder panicked mid-clone, which is a reason to re-derive the
@@ -192,18 +276,41 @@ pub fn ensure_mirror(request: &MirrorRequest<'_>) -> Option<PathBuf> {
         // not a bare repository is garbage, not a cache.
         let _ = std::fs::remove_dir_all(&mirror);
         let args = clone_args(request.remote, &mirror);
-        if !run_for(request, request.cache_root, &args) {
+        let cloned = match request.acquisition {
+            // A retried clone must start from an empty destination.
+            Some(acquisition) => {
+                let auth = request.auth();
+                acquisition
+                    .run_retrying(
+                        Phase::Clone,
+                        || {
+                            GitRun::new(request.cache_root, &args).maybe_credential(
+                                auth.as_ref().map(|(origin, cred)| (origin.as_str(), *cred)),
+                            )
+                        },
+                        || {
+                            let _ = std::fs::remove_dir_all(&mirror);
+                        },
+                    )
+                    .map(|_| ())
+            }
+            None => run_for(request, Phase::Clone, request.cache_root, &args),
+        };
+        if let Err(error) = cloned {
             let _ = std::fs::remove_dir_all(&mirror);
-            return None;
+            return Err(MirrorFailure::from_run(&error));
         }
         let _ = stamp_fetch(&mirror);
         run_maintenance(&mirror);
         configure_for_serving(&mirror);
         if !request.extra_refspecs.is_empty() {
             let args = fetch_args(request.extra_refspecs);
-            let _ = run_for(request, &mirror, &args);
+            let _ = run_for(request, Phase::Fetch, &mirror, &args);
         }
-        return Some(mirror);
+        if let Some(acquisition) = request.acquisition {
+            acquisition.note(Phase::Fetch, MirrorUse::Created.as_str());
+        }
+        return Ok((mirror, MirrorUse::Created));
     }
     // A mirror made before it served partial clones gets the settings now.
     configure_for_serving(&mirror);
@@ -211,17 +318,32 @@ pub fn ensure_mirror(request: &MirrorRequest<'_>) -> Option<PathBuf> {
     // An explicit refspec is not covered by the freshness stamp: the mirror can
     // be fresh and still not hold the ref, because nothing asked for it before.
     let stale = !is_fresh(&mirror, DEFAULT_MIRROR_TTL, SystemTime::now());
-    if stale || !request.extra_refspecs.is_empty() {
+    let used = if stale || !request.extra_refspecs.is_empty() {
         let args = fetch_args(request.extra_refspecs);
-        if run_for(request, &mirror, &args) {
-            let _ = stamp_fetch(&mirror);
-            run_maintenance(&mirror);
+        match run_for(request, Phase::Fetch, &mirror, &args) {
+            Ok(()) => {
+                let _ = stamp_fetch(&mirror);
+                run_maintenance(&mirror);
+            }
+            // The remote refused outright: the history the mirror holds may
+            // be stale, but its answer about access is not, and a network
+            // clone would hear the same.
+            Err(error) if !FailureClass::of(&error).network_could_help() => {
+                return Err(MirrorFailure::from_run(&error));
+            }
+            // A failed refresh is otherwise not fatal: a slightly stale mirror
+            // still holds the history, and the derived clone fetches from the
+            // real remote the first time it needs something newer.
+            Err(_) => {}
         }
-        // A failed refresh is not fatal: a slightly stale mirror still holds the
-        // history, and the derived clone fetches from the real remote the first
-        // time it needs something newer.
+        MirrorUse::Refreshed
+    } else {
+        MirrorUse::Hit
+    };
+    if let Some(acquisition) = request.acquisition {
+        acquisition.note(Phase::Fetch, used.as_str());
     }
-    Some(mirror)
+    Ok((mirror, used))
 }
 
 /// What a derived checkout should point `origin` at.
@@ -251,9 +373,17 @@ pub fn derive_from_mirror(
     branch: Option<&str>,
     origin_policy: DerivedOrigin,
 ) -> bool {
-    let Some(mirror) = ensure_mirror(request) else {
-        return false;
-    };
+    try_derive_from_mirror(request, destination, branch, origin_policy).is_ok()
+}
+
+/// [`derive_from_mirror`], saying why the mirror could not serve it.
+pub fn try_derive_from_mirror(
+    request: &MirrorRequest<'_>,
+    destination: &Path,
+    branch: Option<&str>,
+    origin_policy: DerivedOrigin,
+) -> Result<MirrorUse, MirrorFailure> {
+    let (mirror, used) = try_ensure_mirror(request)?;
 
     // The checkout needs the file contents of the commit it lands on, and the
     // mirror holds only what someone asked for (see `plan`'s module header).
@@ -263,19 +393,19 @@ pub fn derive_from_mirror(
     );
     let Some(commit) = resolve_commit(&mirror, &wanted) else {
         // Not in the mirror yet: let the network clone answer.
-        return false;
+        return Err(MirrorFailure::local(format!(
+            "{wanted} is not in the mirror"
+        )));
     };
-    if materialize_commit(request, &mirror, &commit).is_err() {
-        return false;
-    }
+    materialize_commit(request, &mirror, &commit)?;
 
     let derive = derive_args(&mirror, destination, branch);
-    if !run_for(request, request.cache_root, &derive) {
+    if let Err(error) = run_for(request, Phase::Derive, request.cache_root, &derive) {
         // The branch may simply not be in the mirror yet (created upstream after
         // the last fetch). Leave nothing half-written behind and let the network
         // clone answer.
         let _ = std::fs::remove_dir_all(destination);
-        return false;
+        return Err(MirrorFailure::from_run(&error));
     }
 
     if origin_policy == DerivedOrigin::RealRemote {
@@ -287,13 +417,13 @@ pub fn derive_from_mirror(
         ];
         // No credential and no budget: a local `remote set-url` touches no
         // network and cannot hang.
-        if !run_git_quietly(GitRun::new(destination, &args)) {
+        if let Err(error) = run_git(GitRun::new(destination, &args)) {
             // A checkout that cannot push is worse than a slow clone.
             let _ = std::fs::remove_dir_all(destination);
-            return false;
+            return Err(MirrorFailure::from_run(&error));
         }
     }
-    true
+    Ok(used)
 }
 
 /// Let a mirror answer the partial clones derived from it. Best effort and
@@ -328,7 +458,7 @@ pub fn materialize_commit(
     request: &MirrorRequest<'_>,
     mirror: &Path,
     commit: &str,
-) -> Result<(), String> {
+) -> Result<(), MirrorFailure> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nonce = format!(
         "{}-{}-{}",
@@ -341,25 +471,30 @@ pub fn materialize_commit(
     );
     let scratch = request.cache_root.join(format!(".materialize-{nonce}"));
     let work_tree = scratch.join("tree");
-    std::fs::create_dir_all(&work_tree)
-        .map_err(|error| format!("create {}: {error}", work_tree.display()))?;
+    std::fs::create_dir_all(&work_tree).map_err(|error| {
+        MirrorFailure::local(format!("create {}: {error}", work_tree.display()))
+    })?;
     let index = scratch.join("index");
     let args = materialize_args(mirror, &work_tree, commit);
     let lock = lock_for(mirror);
     let result = {
         let _held = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let auth = request.auth();
-        run_git(
+        let make = || {
             GitRun::new(mirror, &args)
                 .maybe_credential(auth.as_ref().map(|(origin, cred)| (origin.as_str(), *cred)))
-                .maybe_budget(request.budget)
-                .env("GIT_INDEX_FILE", index.to_string_lossy()),
-        )
+                .env("GIT_INDEX_FILE", index.to_string_lossy())
+        };
+        match request.acquisition {
+            Some(acquisition) => acquisition.run_retrying(Phase::Backfill, make, || {}),
+            None => run_git(make().maybe_budget(request.budget)),
+        }
     };
     let _ = std::fs::remove_dir_all(&scratch);
-    result
-        .map(|_| ())
-        .map_err(|error| format!("fetch the files of {commit} into the mirror: {error}"))
+    result.map(|_| ()).map_err(|error| MirrorFailure {
+        class: FailureClass::of(&error),
+        detail: format!("fetch the files of {commit} into the mirror: {error}"),
+    })
 }
 
 /// Write the commit-graph and multi-pack-index for a mirror.
