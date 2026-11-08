@@ -6,7 +6,7 @@
  * Without it the fence streamed as a code block, so the user watched raw JSON
  * scroll until the turn sealed and the adapter split the fence into an `a2ui`
  * part. This renderer parses the prefix written so far
- * (`lib/a2ui/streaming-preview.ts`) into a read-only preview surface of its
+ * (`packages/a2ui-core/src/streaming-preview.ts`) into a read-only preview surface of its
  * own and draws it with the ordinary A2UI surface, so the layout appears
  * component by component.
  *
@@ -21,7 +21,10 @@ import { useTranslations } from "next-intl"
 import type { CustomRendererProps } from "streamdown"
 import { A2UISurface } from "@/components/a2ui/a2ui-surface"
 import { Skeleton } from "@/components/ui/skeleton"
-import { A2UI_PREVIEW_SURFACE_PREFIX, parseStreamingA2UI } from "@/lib/a2ui/streaming-preview"
+import {
+  A2UI_PREVIEW_SURFACE_PREFIX,
+  parseStreamingA2UI,
+} from "@cognia/a2ui-core/streaming-preview"
 import { useA2UIStore } from "@/stores/a2ui"
 import type { A2UIServerMessage } from "@/types/a2ui/schema"
 

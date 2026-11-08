@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react"
 import { A2UI_PREVIEW_THROTTLE_MS, A2UIStreamingPreview } from "./a2ui-streaming-fence"
-import { isA2UIPreviewSurfaceId } from "@/lib/a2ui/streaming-preview"
+import { isA2UIPreviewSurfaceId } from "@cognia/a2ui-core/streaming-preview"
 import { useA2UIStore } from "@/stores/a2ui"
 
 // The real surface pulls in the whole renderer catalog; this stand-in shows

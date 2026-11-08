@@ -11,7 +11,7 @@ import {
   resolveNumberOrPath,
   resolveBooleanOrPath,
   resolveArrayOrPath,
-} from "@/lib/a2ui/data-model"
+} from "@cognia/a2ui-core/data-model"
 
 interface UseA2UIDataModelReturn {
   dataModel: Record<string, unknown>

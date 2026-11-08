@@ -37,8 +37,8 @@ import type {
   A2UITooltipComponent,
 } from "@/types/artifact/a2ui"
 import type { A2UIAnimationType, AnimationDirection } from "@/types/a2ui/animation"
-import { getComponentCollectionSlots } from "./component-tree"
-import { deepClone } from "./data-model"
+import { getComponentCollectionSlots } from "@cognia/a2ui-core/component-tree"
+import { deepClone } from "@cognia/a2ui-core/data-model"
 
 type UnknownRecord = Record<string, unknown>
 

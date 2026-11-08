@@ -16,7 +16,7 @@ import {
   resolveBooleanOrPath,
   resolveArrayOrPath,
   getBindingPath,
-} from "@/lib/a2ui/data-model"
+} from "@cognia/a2ui-core/data-model"
 import { getCatalog, DEFAULT_CATALOG_ID } from "@/lib/a2ui/catalog"
 import { loggers } from "@cognia/logging"
 import { A2UIActionsCtx, A2UIDataCtx } from "@/hooks/a2ui/use-a2ui-context"

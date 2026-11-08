@@ -71,13 +71,13 @@ import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { dispatchPreToolUse, dispatchPostToolUse } from "@/lib/claude/adapter-hooks"
 import { mayBeOutboundCall } from "@/lib/policy/risk/outbound-tools"
-import { deepMerge } from "@/lib/a2ui/data-model"
-import { resolveStreamedRootId } from "@/lib/a2ui/component-tree"
+import { deepMerge } from "@cognia/a2ui-core/data-model"
+import { resolveStreamedRootId } from "@cognia/a2ui-core/component-tree"
 import {
   applyA2UIComputedFields,
   isA2UIComputedFields,
   mergeA2UIComputedFields,
-} from "@/lib/a2ui/computed"
+} from "@cognia/a2ui-core/computed"
 import type {
   A2UIComponent,
   A2UIComputedFields,

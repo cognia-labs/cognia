@@ -7,7 +7,7 @@
 // Keeping the names, descriptions, enums, raw JSON schemas, and the
 // args→dispatch mappers in ONE place ends the three-way drift that previously
 // existed between these two files and the renderer-side canonical schema
-// (lib/a2ui/mcp-tool-schemas.ts). A Jest parity test cross-checks this module
+// (packages/a2ui-core/src/mcp-tool-schemas.ts). A Jest parity test cross-checks this module
 // against that canonical TS source so the copies can never silently diverge.
 //
 // This module is intentionally dependency-free (no @anthropic-ai/claude-agent-sdk,

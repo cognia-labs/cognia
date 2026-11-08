@@ -26,7 +26,7 @@ jest.mock("@/hooks/a2ui", () => ({
   })),
 }))
 
-jest.mock("@/lib/a2ui/parser", () => ({
+jest.mock("@cognia/a2ui-core/parser", () => ({
   parseA2UIInput: jest.fn((input: unknown) => {
     if (
       (typeof input === "string" && input.includes("createSurface")) ||

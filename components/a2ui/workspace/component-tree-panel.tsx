@@ -36,7 +36,7 @@ import {
   getComponentChildReferences,
   getComponentCollectionSlots,
   type A2UIComponentPlacement,
-} from "@/lib/a2ui/component-tree"
+} from "@cognia/a2ui-core/component-tree"
 import { getRegisteredTypes, getStandardComponentTypes } from "@/lib/a2ui/catalog"
 import type { A2UIComponent } from "@/types/a2ui/schema"
 import { useWorkspaceContext } from "./a2ui-workspace-context"

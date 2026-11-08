@@ -21,7 +21,7 @@ import { createExecutionRun } from "@/lib/db/execution-runs"
 import { registerRunControlHandler } from "@/lib/execution/run-control"
 import { parseLarkInteractiveCallback } from "./adapters/lark/parse"
 import { buildLarkRunFallbackSegment } from "@/lib/connectors/adapters/lark/run-presentation/driver"
-import { sanitizeOutboundSegments } from "./a2ui-bridge/a2ui-to-segments"
+import { sanitizeOutboundSegments } from "@cognia/a2ui-core/segment-sanitize"
 import { connectorsLarkUserAuth } from "./tauri/commands"
 jest.mock("./tauri/commands", () => ({
   ...jest.requireActual("./tauri/commands"),

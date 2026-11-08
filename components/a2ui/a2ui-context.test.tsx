@@ -47,7 +47,7 @@ jest.mock("@/stores/a2ui", () => ({
   }),
 }))
 
-jest.mock("@/lib/a2ui/data-model", () => ({
+jest.mock("@cognia/a2ui-core/data-model", () => ({
   resolveStringOrPath: jest.fn((value, dataModel, defaultValue) => {
     if (typeof value === "string") return value
     if (value?.path) {

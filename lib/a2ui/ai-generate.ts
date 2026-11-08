@@ -48,7 +48,7 @@ import type {
   A2UIServerMessage,
   A2UIDispatchMessage,
 } from "@/types/a2ui/schema"
-import { isA2UIComputedFields } from "@/lib/a2ui/computed"
+import { isA2UIComputedFields } from "@cognia/a2ui-core/computed"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 
 const log = loggers.a2ui

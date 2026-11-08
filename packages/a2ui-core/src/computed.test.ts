@@ -8,7 +8,10 @@ import {
   isComputedTargetPath,
   mergeA2UIComputedFields,
 } from "./computed"
-import type { A2UIComputedExpression, A2UIComputedFields } from "@/types/a2ui/schema"
+import type {
+  A2UIComputedExpression,
+  A2UIComputedFields,
+} from "@cognia/plugin-contract/types/a2ui/schema"
 
 const p = (path: string) => ({ path })
 

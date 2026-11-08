@@ -9,7 +9,7 @@ import {
 import { __resetPromptVerdictsForTests, resolvePrompt } from "@/lib/prompts/resolve"
 import { getStandardComponentTypes } from "./catalog"
 import { A2UI_LOCAL_ACTION_NAMES } from "./chat-action-routing"
-import { A2UI_COMPUTED_OPS } from "./computed"
+import { A2UI_COMPUTED_OPS } from "@cognia/a2ui-core/computed"
 import { A2UI_PROTOCOL_PROMPT, A2UI_SYSTEM_PROMPT } from "./prompts"
 
 afterEach(() => {

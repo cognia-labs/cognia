@@ -7,7 +7,7 @@
 import { act } from "@testing-library/react"
 import { useA2UIStore } from "@/stores/a2ui/a2ui-store"
 import { appTemplates, createAppFromTemplate, getTemplateById } from "./templates"
-import { getValueByPath, extractReferencedPaths } from "./data-model"
+import { getValueByPath, extractReferencedPaths } from "@cognia/a2ui-core/data-model"
 import type { A2UIAppTemplate } from "./templates"
 import type { A2UIComponent } from "@/types/a2ui/schema"
 import {

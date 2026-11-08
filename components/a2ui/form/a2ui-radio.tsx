@@ -15,7 +15,7 @@ import type {
   A2UIRadioGroupComponent,
 } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 
 export const A2UIRadio = memo(function A2UIRadio({
   component,

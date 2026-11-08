@@ -1,5 +1,5 @@
-import { applyA2UIComputedFields, isComputedTargetPath } from "@/lib/a2ui/computed"
-import { setValueByPath } from "@/lib/a2ui/data-model"
+import { applyA2UIComputedFields, isComputedTargetPath } from "@cognia/a2ui-core/computed"
+import { setValueByPath } from "@cognia/a2ui-core/data-model"
 import { sanitizeTerminalText } from "../render/terminal-block"
 import type { TuiA2UINode, TuiA2UISurface } from "./surface"
 

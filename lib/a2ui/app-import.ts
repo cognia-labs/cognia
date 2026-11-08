@@ -14,18 +14,18 @@ import type {
   A2UISurfaceType,
   A2UIWidgetMetadata,
 } from "@/types/a2ui/schema"
-import { isA2UIComputedFields } from "./computed"
+import { isA2UIComputedFields } from "@cognia/a2ui-core/computed"
 import {
   collectComponentSubtreeIds,
   getComponentChildReferences,
   hasComponentReferenceCycle,
-} from "./component-tree"
+} from "@cognia/a2ui-core/component-tree"
 import {
   collectComponentDataPaths,
   isA2UIDataModel,
   isSafeDataModelKey,
   parseJsonPointer,
-} from "./data-model"
+} from "@cognia/a2ui-core/data-model"
 
 export const A2UI_APP_EXPORT_VERSION = "1.0"
 export const A2UI_MAX_IMPORT_BYTES = 10 * 1024 * 1024

@@ -11,7 +11,7 @@ import type { A2UIComponentProps, A2UIBaseComponent } from "@/types/a2ui/schema"
 import { A2UIChildRenderer } from "../a2ui-child-renderer"
 import type { ValidationRule } from "@/hooks/a2ui/use-a2ui-form"
 import { A2UIDataCtx } from "@/hooks/a2ui/use-a2ui-context"
-import { getValueByPath } from "@/lib/a2ui/data-model"
+import { getValueByPath } from "@cognia/a2ui-core/data-model"
 import { Button } from "@/components/ui/button"
 import { useTranslations } from "next-intl"
 

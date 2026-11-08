@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/combobox"
 import { Label } from "@/components/ui/label"
 import { useA2UIData } from "../a2ui-context"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 import type {
   A2UIComponentProps,
   A2UIBaseComponent,

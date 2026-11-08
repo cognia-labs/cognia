@@ -25,8 +25,8 @@ import {
   isDeleteSurfaceMessage,
   isSurfaceReadyMessage,
   isConnectorActionMessage,
-} from "@/lib/a2ui/parser"
-import { setValueByPath, getValueByPath, deepMerge, deepClone } from "@/lib/a2ui/data-model"
+} from "@cognia/a2ui-core/parser"
+import { setValueByPath, getValueByPath, deepMerge, deepClone } from "@cognia/a2ui-core/data-model"
 import { globalEventEmitter, createUserAction, createDataModelChange } from "@/lib/a2ui/events"
 import { getComponent as getCatalogComponent, validateComponent } from "@/lib/a2ui/catalog"
 import { getA2UIPersistenceLimit } from "@/lib/a2ui/runtime-settings"
@@ -41,7 +41,7 @@ import {
   rewriteComponentChildReferences,
   rewriteComponentCollectionSlot,
   type A2UIComponentPlacement,
-} from "@/lib/a2ui/component-tree"
+} from "@cognia/a2ui-core/component-tree"
 import {
   deleteSurface as deleteDurableSurface,
   listSurfaces as listDurableSurfaces,
@@ -52,7 +52,7 @@ import {
   applyA2UIComputedFields,
   isA2UIComputedFields,
   mergeA2UIComputedFields,
-} from "@/lib/a2ui/computed"
+} from "@cognia/a2ui-core/computed"
 
 /**
  * History entry for undo/redo
@@ -123,7 +123,7 @@ function buildSnapshotUpdate(
 
   // The store mutates `components` / `dataModel` immutably (every
   // update replaces them via structural sharing — see
-  // `lib/a2ui/data-model.ts`), so a snapshot can capture the current
+  // `packages/a2ui-core/src/data-model.ts`), so a snapshot can capture the current
   // references directly instead of deep-cloning the whole tree on
   // every component/data update. Structural sharing means the
   // retained snapshots also share unchanged subtrees, so undo history

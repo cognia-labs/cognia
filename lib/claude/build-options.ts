@@ -154,7 +154,7 @@ import {
   resolveAgentModel,
 } from "@/lib/agent/agent-profile-policy"
 import { loadAgentEnvSecret } from "@/lib/agent/agent-env-keyring"
-import { namespacedA2UIToolNames } from "@/lib/a2ui/mcp-tool-schemas"
+import { namespacedA2UIToolNames } from "@cognia/a2ui-core/mcp-tool-schemas"
 import { A2UI_SYSTEM_PROMPT } from "@/lib/a2ui/prompts"
 import { buildAgentA2UICatalogSection } from "@/lib/a2ui/agent-catalog-prompt"
 import { buildVisualOutputSection } from "@/lib/ai/prompts/visual-output-prompts"

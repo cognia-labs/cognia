@@ -11,7 +11,7 @@
 import { createA2UIComponentBundle } from "./component-definitions"
 import { getStandardComponentTypes } from "./catalog"
 import { A2UI_LOCAL_ACTION_NAMES } from "./chat-action-routing"
-import { A2UI_COMPUTED_LIMITS, A2UI_COMPUTED_OPS } from "./computed"
+import { A2UI_COMPUTED_LIMITS, A2UI_COMPUTED_OPS } from "@cognia/a2ui-core/computed"
 import { getA2UIEnumPropertyDefinitions } from "./component-properties"
 import { definePrompt } from "@/lib/prompts/types"
 

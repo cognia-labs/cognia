@@ -4,7 +4,7 @@ import { AlertCircle, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { resolveStringOrPath } from "@/lib/a2ui/data-model"
+import { resolveStringOrPath } from "@cognia/a2ui-core/data-model"
 import type { A2UIComponentProps, A2UIWidgetStatusComponent } from "@/types/a2ui/schema"
 
 function renderStatusIcon(status: A2UIWidgetStatusComponent["status"], className: string) {

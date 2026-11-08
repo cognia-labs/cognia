@@ -9,7 +9,7 @@ import type {
   A2UINumberOrPath,
   A2UIBooleanOrPath,
   A2UIArrayOrPath,
-} from "@/types/a2ui/schema"
+} from "@cognia/plugin-contract/types/a2ui/schema"
 
 const UNSAFE_DATA_MODEL_KEYS = new Set(["__proto__", "constructor", "prototype"])
 

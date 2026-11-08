@@ -30,7 +30,7 @@ import { useA2UIStore } from "@/stores/a2ui"
 import {
   canDuplicateComponentSubtree,
   type A2UIComponentPlacement,
-} from "@/lib/a2ui/component-tree"
+} from "@cognia/a2ui-core/component-tree"
 import {
   createA2UIComponentBundle,
   createAvailableComponentId,

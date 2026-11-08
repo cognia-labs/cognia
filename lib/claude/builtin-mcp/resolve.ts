@@ -18,7 +18,7 @@
 //     referential identity).
 
 import type { McpServer } from "@cognia/agent-config-types"
-import { isA2UIBridgeRow } from "@/lib/a2ui/mcp-tool-schemas"
+import { isA2UIBridgeRow } from "@cognia/a2ui-core/mcp-tool-schemas"
 
 export const COGNIA_SIDECAR_DIR_TOKEN = "${COGNIA_SIDECAR_DIR}"
 export const COGNIA_BRIDGE_SOCKET_ENV = "COGNIA_BRIDGE_SOCKET"

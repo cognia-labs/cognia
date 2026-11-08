@@ -12,7 +12,11 @@ import { A2UIStepperShell } from "../layout/a2ui-stepper-shell"
 import { A2UITable } from "../data/a2ui-table"
 import { cn } from "@/lib/utils"
 import { loggers } from "@cognia/logging"
-import { getValueByPath, resolveArrayOrPath, resolveStringOrPath } from "@/lib/a2ui/data-model"
+import {
+  getValueByPath,
+  resolveArrayOrPath,
+  resolveStringOrPath,
+} from "@cognia/a2ui-core/data-model"
 import { resolveWidgetMetadata } from "@/lib/a2ui/catalog"
 import { getA2UIWidgetSettingDefaults } from "@/lib/a2ui/runtime-settings"
 import { useSettingsStore } from "@/stores/settings"

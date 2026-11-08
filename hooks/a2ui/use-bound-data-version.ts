@@ -1,12 +1,12 @@
 import { useState } from "react"
-import { getValueByPath } from "@/lib/a2ui/data-model"
+import { getValueByPath } from "@cognia/a2ui-core/data-model"
 
 /**
  * Returns a version number that only changes when one of the values resolved at
  * `paths` changes by reference (`Object.is`) between renders.
  *
  * This is the linchpin of fine-grained A2UI re-render skipping. The data model
- * uses structural sharing (see `lib/a2ui/data-model.ts`): a mutation to path X
+ * uses structural sharing (see `packages/a2ui-core/src/data-model.ts`): a mutation to path X
  * produces new references only along the spine to X, leaving every other
  * subtree referentially identical. So a component that binds only to path Y can
  * resolve Y, see the same reference as last render, and keep a stable version,

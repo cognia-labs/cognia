@@ -8,7 +8,7 @@
 import { useEffect, useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
-import { parseA2UIInput } from "@/lib/a2ui/parser"
+import { parseA2UIInput } from "@cognia/a2ui-core/parser"
 import { useA2UI } from "@/hooks/a2ui"
 import { A2UISurface } from "./a2ui-surface"
 import { useA2UIMessageIntegration } from "./a2ui-message-renderer"

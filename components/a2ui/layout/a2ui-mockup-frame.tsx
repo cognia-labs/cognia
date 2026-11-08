@@ -1,7 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { resolveStringOrPath } from "@/lib/a2ui/data-model"
+import { resolveStringOrPath } from "@cognia/a2ui-core/data-model"
 import type { A2UIComponentProps, A2UIMockupFrameComponent } from "@/types/a2ui/schema"
 
 function getFrameClass(frameStyle: A2UIMockupFrameComponent["frameStyle"]) {

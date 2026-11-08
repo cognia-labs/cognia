@@ -34,7 +34,7 @@ jest.mock("../a2ui-context", () => ({
 }))
 
 // Mock data-model resolvers
-jest.mock("@/lib/a2ui/data-model", () => ({
+jest.mock("@cognia/a2ui-core/data-model", () => ({
   resolveStringOrPath: (value: string | { path: string }, _dm: unknown, def: string) =>
     typeof value === "string" ? value : def,
   resolveBooleanOrPath: (

@@ -4,7 +4,7 @@
  */
 
 import type { A2UIComponent, A2UIServerMessage } from "@/types/a2ui/schema"
-import { deepClone } from "../data-model"
+import { deepClone } from "@cognia/a2ui-core/data-model"
 import { formatTimerDisplay } from "../surface-timer"
 import {
   formatBuiltInRuntimeMessage,

@@ -18,7 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import type { A2UIComponentProps } from "@/types/a2ui/schema"
 import { isPathValue } from "@/types/a2ui/schema"
-import { getValueByPath } from "@/lib/a2ui/data-model"
+import { getValueByPath } from "@cognia/a2ui-core/data-model"
 import type {
   A2UIInteractiveGuideComponentDef,
   StepIndicatorProps,
@@ -185,9 +185,7 @@ export const A2UIInteractiveGuide = memo(function A2UIInteractiveGuide({
   if (!currentStepData) {
     return (
       <Card className={cn("a2ui-interactive-guide", className)}>
-        <CardContent className="py-8 text-center text-muted-foreground">
-          No steps defined
-        </CardContent>
+        <CardContent className="py-8 text-center text-muted-foreground">{t("noSteps")}</CardContent>
       </Card>
     )
   }
@@ -243,7 +241,7 @@ export const A2UIInteractiveGuide = memo(function A2UIInteractiveGuide({
                 <h4 className="font-medium">{stepTitle}</h4>
                 {currentStepData.isOptional && (
                   <Badge variant="outline" className="text-xs">
-                    Optional
+                    {t("optional")}
                   </Badge>
                 )}
               </div>

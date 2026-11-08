@@ -20,6 +20,8 @@ jest.mock("next-intl", () => ({
       previousStep: "Previous",
       nextStep: "Next",
       complete: "Complete",
+      noSteps: "No steps defined",
+      optional: "Optional",
       stepProgress: `Step ${params?.current || 1} of ${params?.total || 1}`,
     }
     return translations[key] || key

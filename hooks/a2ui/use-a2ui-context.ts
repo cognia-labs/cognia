@@ -13,7 +13,7 @@
 
 import { createContext, useContext, useCallback, useMemo } from "react"
 import type { A2UIComponent } from "@/types/a2ui/schema"
-import { getValueByPath } from "@/lib/a2ui/data-model"
+import { getValueByPath } from "@cognia/a2ui-core/data-model"
 import type {
   A2UIActionsContextValue,
   A2UIDataContextValue,

@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils"
 import { Toggle } from "@/components/ui/toggle"
 import type { A2UIComponentProps, A2UIToggleComponent } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"
-import { resolveStringOrPath, resolveBooleanOrPath } from "@/lib/a2ui/data-model"
+import { resolveStringOrPath, resolveBooleanOrPath } from "@cognia/a2ui-core/data-model"
 
 export const A2UIToggle = memo(function A2UIToggle({
   component,

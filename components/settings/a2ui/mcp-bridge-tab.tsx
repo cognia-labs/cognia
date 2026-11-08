@@ -19,7 +19,7 @@ import {
   A2UI_BRIDGE_SERVER_NAME,
   A2UI_BRIDGE_TOOLS,
   defaultA2UIAppsEnabled,
-} from "@/lib/a2ui/mcp-tool-schemas"
+} from "@cognia/a2ui-core/mcp-tool-schemas"
 import { useA2UIStore } from "@/stores/a2ui"
 import { useBridgeHealth } from "@/hooks/a2ui"
 import type { AgentId, McpServer } from "@cognia/agent-config-types"

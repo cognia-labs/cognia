@@ -18,18 +18,17 @@ import type {
 } from "@/types/connectors/segment"
 import { generatePlainTextMirror } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
-import { parseA2UIInput } from "@/lib/a2ui/parser"
+import { parseA2UIInput } from "@cognia/a2ui-core/parser"
+import { deepMerge, isA2UIDataModel, isSafeDataModelKey } from "@cognia/a2ui-core/data-model"
+import { sanitizeOutboundSegments } from "@cognia/a2ui-core/segment-sanitize"
 import {
-  deepMerge,
-  getValueByPath,
-  isA2UIDataModel,
-  isSafeDataModelKey,
-} from "@/lib/a2ui/data-model"
-import { getComponentChildReferences, hasComponentReferenceCycle } from "@/lib/a2ui/component-tree"
-import { applyA2UIComputedFields, mergeA2UIComputedFields } from "@/lib/a2ui/computed"
+  getComponentChildReferences,
+  hasComponentReferenceCycle,
+} from "@cognia/a2ui-core/component-tree"
+import { applyA2UIComputedFields, mergeA2UIComputedFields } from "@cognia/a2ui-core/computed"
 import type { A2UIComponent, A2UIComputedFields } from "@/types/a2ui/schema"
-import { isA2UIPreviewSurfaceId } from "@/lib/a2ui/parser"
-import { isA2UIComputedFields } from "@/lib/a2ui/computed"
+import { isA2UIPreviewSurfaceId } from "@cognia/a2ui-core/parser"
+import { isA2UIComputedFields } from "@cognia/a2ui-core/computed"
 
 /**
  * Minimal shape of a captured assistant reply we need to read. Kept
@@ -128,82 +127,6 @@ function extractReplySegments(reply: AssistantReplyForExtraction): ExtractedRepl
   }
 
   return segments
-}
-
-/** Model/tool content, including native cards, cannot reuse Host callbacks. */
-function withoutBindingHints<T>(content: T, dataModel: Record<string, unknown> = {}): T {
-  const namespaced = (value: unknown) =>
-    typeof value === "string" && /^[a-zA-Z_][a-zA-Z0-9_.-]*:/.test(value)
-  const callbackFields = new Set([
-    "value",
-    "callback_data",
-    "action_id",
-    "actionId",
-    "custom_id",
-    "callback_id",
-    "event_key",
-    // WeCom template_card.button_list[].key is echoed as event_key.
-    "key",
-  ])
-  const clean = (value: unknown, inCallbackValue = false): unknown => {
-    if (Array.isArray(value))
-      return value
-        .filter((entry) => !inCallbackValue || !namespaced(entry))
-        .map((entry) => clean(entry, inCallbackValue))
-    if (!value || typeof value !== "object") return value
-    const raw = value as Record<string, unknown>
-    // QQ callback buttons echo action.data as button_data. Link (type 0) and
-    // command (type 2) data are presentation, and must retain their URLs/text.
-    const isCallbackField = (key: string) =>
-      callbackFields.has(key) ||
-      (key === "data" && raw.type === 1 && Object.hasOwn(raw, "permission"))
-    return Object.fromEntries(
-      Object.entries(raw)
-        .filter(([key, entry]) => {
-          if (key.startsWith("binding")) return false
-          if (["runId", "revision", "interruptId"].includes(key)) return false
-          if (
-            key === "action" &&
-            (inCallbackValue || "runId" in raw || "revision" in raw) &&
-            typeof entry === "string" &&
-            [
-              "stop",
-              "pause",
-              "resume",
-              "approve",
-              "deny",
-              "retry",
-              "open_details",
-              "steer",
-            ].includes(entry)
-          )
-            return false
-          if (!inCallbackValue && !isCallbackField(key)) return true
-          const resolved =
-            entry && typeof entry === "object" && "path" in entry && typeof entry.path === "string"
-              ? getValueByPath(dataModel, entry.path)
-              : entry
-          return !namespaced(resolved)
-        })
-        .map(([key, entry]) => [key, clean(entry, inCallbackValue || isCallbackField(key))])
-    )
-  }
-  return clean(content) as T
-}
-
-/** Stored/model/tool content is presentation, never a Host callback builder. */
-export function sanitizeOutboundSegments(segments: MessageSegment[]): MessageSegment[] {
-  return segments.map((segment) =>
-    withoutBindingHints(segment, segment.type === "a2ui" ? segment.content.dataModel : undefined)
-  )
-}
-
-/** Shared scheduler persistence boundary: create, update, import and execution input. */
-export function sanitizeScheduledOutboundPayload<T extends Record<string, unknown> | undefined>(
-  payload: T
-): T {
-  if (!payload || !Array.isArray(payload.segments)) return payload
-  return { ...payload, segments: sanitizeOutboundSegments(payload.segments as MessageSegment[]) }
 }
 
 /** Parse only complete JSON payloads; malformed output remains visible as markdown. */

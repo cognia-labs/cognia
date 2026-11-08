@@ -5,7 +5,7 @@ import {
   useAppActionHandlers,
 } from "./action-handlers"
 import { renderHook, act } from "@testing-library/react"
-import { setValueByPath } from "@/lib/a2ui/data-model"
+import { setValueByPath } from "@cognia/a2ui-core/data-model"
 import { surfaceTimers } from "@/lib/a2ui/surface-timer"
 import { appTemplates } from "@/lib/a2ui/templates"
 import { A2UI_LOCAL_ACTION_NAMES } from "@/lib/a2ui/chat-action-routing"

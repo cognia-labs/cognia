@@ -27,7 +27,7 @@ jest.mock("@/stores/a2ui", () => ({
 }))
 
 // Mock data-model functions
-jest.mock("@/lib/a2ui/data-model", () => ({
+jest.mock("@cognia/a2ui-core/data-model", () => ({
   getValueByPath: jest.fn((dataModel, path) => {
     const parts = path.replace(/^\//, "").split("/")
     let value: unknown = dataModel

@@ -39,7 +39,7 @@ jest.mock("@/stores/a2ui", () => {
 })
 
 // Mock parser functions
-jest.mock("@/lib/a2ui/parser", () => ({
+jest.mock("@cognia/a2ui-core/parser", () => ({
   parseA2UIInput: jest.fn((input) => {
     const toMessages = (surfaceId: string) => [
       { type: "createSurface", surfaceId, surfaceType: "inline" },
@@ -262,12 +262,9 @@ describe("useA2UI", () => {
       act(() => {
         result.current.createQuickSurface("quick-computed", [], {}, { computed })
       })
-      expect(jest.requireMock("@/lib/a2ui/parser").createA2UISurface).toHaveBeenLastCalledWith(
-        "quick-computed",
-        [],
-        {},
-        expect.objectContaining({ computed })
-      )
+      expect(
+        jest.requireMock("@cognia/a2ui-core/parser").createA2UISurface
+      ).toHaveBeenLastCalledWith("quick-computed", [], {}, expect.objectContaining({ computed }))
     })
   })
 

@@ -34,7 +34,7 @@ jest.mock("../a2ui-context", () => ({
 }))
 
 // Mock getBindingPath
-jest.mock("@/lib/a2ui/data-model", () => ({
+jest.mock("@cognia/a2ui-core/data-model", () => ({
   getBindingPath: (value: unknown) => {
     if (typeof value === "object" && value !== null && "path" in value) {
       return (value as { path: string }).path

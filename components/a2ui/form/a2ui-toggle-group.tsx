@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Label } from "@/components/ui/label"
 import { useA2UIData } from "../a2ui-context"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 import type { A2UIComponentProps, A2UIBaseComponent, A2UIPathValue } from "@/types/a2ui/schema"
 
 export interface A2UIToggleGroupOption {

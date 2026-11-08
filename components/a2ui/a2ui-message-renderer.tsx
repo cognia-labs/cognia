@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { cn } from "@/lib/utils"
 import { useA2UI } from "@/hooks/a2ui"
-import { detectA2UIContent, parseA2UIInput } from "@/lib/a2ui/parser"
+import { detectA2UIContent, parseA2UIInput } from "@cognia/a2ui-core/parser"
 import { A2UIInlineSurface } from "./a2ui-surface"
 import type { A2UIUserAction, A2UIDataModelChange } from "@/types/a2ui/schema"
 import type { A2UIMessageRendererProps } from "@/types/a2ui/renderer"

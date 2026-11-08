@@ -17,7 +17,7 @@ import {
   isA2UIBridgeRow,
   namespacedA2UIToolNames,
 } from "./mcp-tool-schemas"
-import * as sidecarDefs from "../../sidecar/src/tools/a2ui/tool-defs.ts"
+import * as sidecarDefs from "../../../sidecar/src/tools/a2ui/tool-defs.ts"
 
 describe("a2ui MCP tool schemas", () => {
   describe("constants", () => {

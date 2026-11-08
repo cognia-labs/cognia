@@ -27,7 +27,7 @@ import {
   resolveStringOrPath,
   getValueByPath,
   getBindingPath,
-} from "@/lib/a2ui/data-model"
+} from "@cognia/a2ui-core/data-model"
 
 type SortDirection = "asc" | "desc" | null
 

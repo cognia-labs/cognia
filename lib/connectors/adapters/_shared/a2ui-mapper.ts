@@ -28,8 +28,8 @@ import type {
 import type { A2UIComponentKind } from "@/types/connectors/capability"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import type { A2UIComponent } from "@/types/a2ui/schema"
-import { getComponentChildReferences } from "@/lib/a2ui/component-tree"
-import { getValueByPath } from "@/lib/a2ui/data-model"
+import { getComponentChildReferences } from "@cognia/a2ui-core/component-tree"
+import { getValueByPath } from "@cognia/a2ui-core/data-model"
 import { escapeMarkdown } from "./inbound-markdown"
 
 /**

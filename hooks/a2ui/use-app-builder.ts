@@ -15,7 +15,7 @@ import { useLocale } from "next-intl"
 import { useA2UI } from "./use-a2ui"
 import { useA2UIStore } from "@/stores/a2ui"
 import { globalEventEmitter } from "@/lib/a2ui/events"
-import { deepClone } from "@/lib/a2ui/data-model"
+import { deepClone } from "@cognia/a2ui-core/data-model"
 import {
   type A2UIAppTemplate,
   getLocalizedTemplateById,

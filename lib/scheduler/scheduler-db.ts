@@ -1,4 +1,4 @@
-import { sanitizeScheduledOutboundPayload } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
+import { sanitizeScheduledOutboundPayload } from "@cognia/a2ui-core/segment-sanitize"
 /**
  * Scheduler persistence.
  *

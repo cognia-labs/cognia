@@ -20,7 +20,7 @@ import {
   isDeleteSurfaceMessage,
   isSurfaceReadyMessage,
 } from "./parser"
-import type { A2UIConnectorActionMessage } from "@/types/a2ui/schema"
+import type { A2UIConnectorActionMessage } from "@cognia/plugin-contract/types/a2ui/schema"
 
 describe("A2UI Parser", () => {
   it.each([

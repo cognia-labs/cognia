@@ -28,7 +28,7 @@ jest.mock("@/stores/settings", () => ({
   useSettingsStore: { getState: () => ({ settings: {} }) },
 }))
 
-jest.mock("@/lib/a2ui/parser", () => ({
+jest.mock("@cognia/a2ui-core/parser", () => ({
   createA2UISurface: jest.fn(() => [{ type: "createSurface" }]),
 }))
 

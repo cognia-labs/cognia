@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label"
 import { CalendarClock } from "lucide-react"
 import type { A2UIComponentProps, A2UIDateTimePickerComponent } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 
 export const A2UIDateTimePicker = memo(function A2UIDateTimePicker({
   component,

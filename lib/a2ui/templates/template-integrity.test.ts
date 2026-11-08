@@ -9,7 +9,7 @@
  */
 
 import { appTemplates } from "./index"
-import { getValueByPath } from "@/lib/a2ui/data-model"
+import { getValueByPath } from "@cognia/a2ui-core/data-model"
 import type { A2UIAppTemplate } from "./types"
 
 // Loose structural view used for traversal: every component has an `id` and

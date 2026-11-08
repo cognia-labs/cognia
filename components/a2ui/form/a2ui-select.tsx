@@ -18,7 +18,7 @@ import {
 import { Label } from "@/components/ui/label"
 import type { A2UIComponentProps, A2UISelectComponent, A2UISelectOption } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"
-import { getBindingPath, resolveArrayOrPath } from "@/lib/a2ui/data-model"
+import { getBindingPath, resolveArrayOrPath } from "@cognia/a2ui-core/data-model"
 
 export const A2UISelect = memo(function A2UISelect({
   component,

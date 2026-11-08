@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import type { A2UIComponentProps, A2UIBaseComponent } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 
 export interface A2UISwitchComponent extends A2UIBaseComponent {
   component: "Switch"

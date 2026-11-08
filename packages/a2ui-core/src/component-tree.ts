@@ -7,7 +7,7 @@
  * graph or they can leave a surface that renders with missing components.
  */
 
-import type { A2UIComponent } from "@/types/a2ui/schema"
+import type { A2UIComponent } from "@cognia/plugin-contract/types/a2ui/schema"
 
 export interface A2UIComponentChildReference {
   id: string

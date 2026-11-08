@@ -1,7 +1,7 @@
 import type { Locale } from "@/i18n/config"
 import enCatalog from "@/i18n/messages/en/a2uiTemplates.json"
 import zhCNCatalog from "@/i18n/messages/zh-CN/a2uiTemplates.json"
-import { deepClone } from "@/lib/a2ui/data-model"
+import { deepClone } from "@cognia/a2ui-core/data-model"
 import type { A2UIComponent } from "@/types/a2ui/schema"
 import type { A2UIAppTemplate } from "./types"
 

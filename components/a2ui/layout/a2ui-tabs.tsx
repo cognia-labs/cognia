@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { A2UIComponentProps, A2UITabsComponent } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"
-import { resolveStringOrPath, getBindingPath } from "@/lib/a2ui/data-model"
+import { resolveStringOrPath, getBindingPath } from "@cognia/a2ui-core/data-model"
 import { A2UIChildRenderer } from "../a2ui-child-renderer"
 
 export const A2UITabs = memo(function A2UITabs({

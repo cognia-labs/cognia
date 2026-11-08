@@ -7,7 +7,7 @@ import {
   rewriteComponentChildReferences,
   rewriteComponentCollectionSlot,
 } from "./component-tree"
-import type { A2UIComponent } from "@/types/a2ui/schema"
+import type { A2UIComponent } from "@cognia/plugin-contract/types/a2ui/schema"
 
 const component = (value: Record<string, unknown>) => value as unknown as A2UIComponent
 

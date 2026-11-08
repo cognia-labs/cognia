@@ -3,7 +3,7 @@
 import { useTranslations } from "next-intl"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { resolveArrayOrPath, resolveStringOrPath } from "@/lib/a2ui/data-model"
+import { resolveArrayOrPath, resolveStringOrPath } from "@cognia/a2ui-core/data-model"
 import type {
   A2UIComparisonCardItem,
   A2UIComparisonCardsComponent,

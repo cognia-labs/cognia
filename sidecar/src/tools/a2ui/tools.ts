@@ -85,7 +85,7 @@ export function buildA2UIToolDefinitions({
         catalogId: z.string().optional(),
         title: z.string().optional(),
         widget: widgetSchema.optional(),
-        // Validated by the renderer (`lib/a2ui/computed.ts`), like components.
+        // Validated by the renderer (`packages/a2ui-core/src/computed.ts`), like components.
         computed: z
           .record(z.string(), z.record(z.string(), z.unknown()))
           .optional()

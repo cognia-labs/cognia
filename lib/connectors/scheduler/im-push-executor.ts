@@ -1,4 +1,4 @@
-import { sanitizeOutboundSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
+import { sanitizeOutboundSegments } from "@cognia/a2ui-core/segment-sanitize"
 /**
  * `im-push` scheduled-task executor.
  *

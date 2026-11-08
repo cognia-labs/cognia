@@ -45,10 +45,8 @@ import { resolveInboxSuppression } from "./policy-resolve"
 import { tryBuildTwinDeps } from "@/lib/twin/runtime/build-deps"
 import { tryBuildMemoryDeps } from "@/lib/memory/runtime/build-deps"
 import { resolveMemoryConfig } from "@/types/memory/memory"
-import {
-  assistantReplyToSegments,
-  sanitizeOutboundSegments,
-} from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
+import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
+import { sanitizeOutboundSegments } from "@cognia/a2ui-core/segment-sanitize"
 import { safeSendPrompt, PiiGateBlocked } from "@/lib/connectors/ai-loop/safe-send-prompt"
 import {
   formatScheduledSlot,

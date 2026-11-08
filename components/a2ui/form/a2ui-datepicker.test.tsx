@@ -34,7 +34,7 @@ jest.mock("../a2ui-context", () => ({
 }))
 
 // Mock the data-model
-jest.mock("@/lib/a2ui/data-model", () => ({
+jest.mock("@cognia/a2ui-core/data-model", () => ({
   getBindingPath: jest.fn((value) =>
     typeof value === "string" && value.startsWith("/") ? value : null
   ),
@@ -66,7 +66,7 @@ const defaultProps = {
 describe("A2UIDatePicker", () => {
   it("writes the selected local calendar day without a UTC conversion", () => {
     const onDataChange = jest.fn()
-    jest.requireMock("@/lib/a2ui/data-model").getBindingPath.mockReturnValueOnce("/day")
+    jest.requireMock("@cognia/a2ui-core/data-model").getBindingPath.mockReturnValueOnce("/day")
     render(
       <A2UIDatePicker
         {...defaultProps}

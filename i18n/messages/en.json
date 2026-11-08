@@ -25225,6 +25225,8 @@
       "complete": "Complete",
       "guideTitle": "Guide",
       "nextStep": "Next",
+      "noSteps": "No steps defined",
+      "optional": "Optional",
       "previousStep": "Previous",
       "skipGuide": "Skip guide",
       "stepProgress": "Step {current} of {total}"

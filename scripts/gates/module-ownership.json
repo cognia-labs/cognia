@@ -9,11 +9,7 @@
       "class": "module",
       "api": [
         "components/a2ui/from-execution/interactive-page-dialog.tsx",
-        "lib/a2ui/component-tree.ts",
-        "lib/a2ui/computed.ts",
         "lib/a2ui/connector-callback-handler.ts",
-        "lib/a2ui/data-model.ts",
-        "lib/a2ui/parser.ts",
         "lib/a2ui/templates/index.ts",
         "lib/a2ui/workflow-approval-handler.ts",
         "lib/a2ui/workflow-fanout-handler.ts"

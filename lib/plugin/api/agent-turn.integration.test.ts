@@ -453,7 +453,7 @@ it.each(
         (part) => (part as { type: string }).type === "a2ui"
       ) as unknown as { surfaceId: string; content: string }
       expect(part?.surfaceId).toBe("review")
-      const { parseA2UIInput } = await import("@/lib/a2ui/parser")
+      const { parseA2UIInput } = await import("@cognia/a2ui-core/parser")
       expect(parseA2UIInput(part.content).messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

@@ -24,7 +24,7 @@ jest.mock("@/hooks/a2ui", () => ({
   })),
 }))
 
-jest.mock("@/lib/a2ui/parser", () => ({
+jest.mock("@cognia/a2ui-core/parser", () => ({
   detectA2UIContent: jest.fn((content: string) => content.includes("createSurface")),
   parseA2UIInput: jest.fn((input: unknown, options?: { fallbackSurfaceId?: string }) => {
     if (typeof input === "string" && input.includes("createSurface")) {
@@ -130,8 +130,8 @@ describe("useA2UIMessageIntegration", () => {
   it("detects A2UI in object payloads via marker scan (no full parse)", () => {
     const { result } = renderHook(() => useA2UIMessageIntegration())
 
-    const { detectA2UIContent } = jest.requireMock("@/lib/a2ui/parser")
-    const { parseA2UIInput } = jest.requireMock("@/lib/a2ui/parser")
+    const { detectA2UIContent } = jest.requireMock("@cognia/a2ui-core/parser")
+    const { parseA2UIInput } = jest.requireMock("@cognia/a2ui-core/parser")
     parseA2UIInput.mockClear()
 
     expect(result.current.hasA2UIContent({ type: "createSurface", surfaceId: "s1" })).toBe(true)

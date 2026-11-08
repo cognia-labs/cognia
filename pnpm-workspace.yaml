@@ -12,6 +12,8 @@ packages:
   # invalidates the plugin authoring-kit pin; drop this line at the next kit
   # repin (lib/plugin/distribution/authoring-kit.json).
   - "!packages/feishu-protocol"
+  # Same for `@cognia/a2ui-core` (the pure A2UI core).
+  - "!packages/a2ui-core"
   - services/workspace-runtime
 
 # fake-timers only restores a global on uninstall if it was an OWN property at

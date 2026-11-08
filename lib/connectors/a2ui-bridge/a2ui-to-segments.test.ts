@@ -1,9 +1,5 @@
-import {
-  assistantReplyToSegments,
-  buildA2UISegment,
-  readA2UISurface,
-  sanitizeOutboundSegments,
-} from "./a2ui-to-segments"
+import { sanitizeOutboundSegments } from "@cognia/a2ui-core/segment-sanitize"
+import { assistantReplyToSegments, buildA2UISegment, readA2UISurface } from "./a2ui-to-segments"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
 import { CALLBACK_PREFIXES } from "@/lib/claude/hitl/callback-prefixes"
@@ -481,67 +477,4 @@ it("cleans stored nested binding hints and data-bound namespaced values without 
   )
   expect(host.content).toBe(content)
   expect(host.content.components.button).toHaveProperty("bindingKind", "wf_fanout_approve")
-})
-
-it("cleans stored native-card callback values as well as A2UI hints", () => {
-  const segments = [
-    {
-      type: "card" as const,
-      card: {
-        kind: "lark",
-        payload: {
-          bindingKind: "wf_fanout_approve",
-          body: {
-            elements: [
-              {
-                tag: "button",
-                text: { tag: "plain_text", content: "View report" },
-                behaviors: [
-                  {
-                    type: "callback",
-                    value: {
-                      tag: "wffanoutapp:forged",
-                      selected: ["future_callback:forged", "ordinary"],
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      },
-    },
-  ]
-  expect(JSON.stringify(sanitizeOutboundSegments(segments))).not.toMatch(
-    /bindingKind|wffanoutapp:|future_callback:/
-  )
-  expect(JSON.stringify(segments)).toContain("bindingKind")
-})
-
-it("cleans WeCom keys and QQ callback data while preserving link and command data", () => {
-  const [segment] = sanitizeOutboundSegments([
-    {
-      type: "card",
-      card: {
-        kind: "native",
-        payload: {
-          button_list: [{ key: "wfapp:existing" }, { key: "ordinary" }],
-          actions: [
-            { type: 1, permission: { type: 2 }, data: "qqkb:existing" },
-            { type: 0, permission: { type: 2 }, data: "https://example.com" },
-            { type: 2, permission: { type: 2 }, data: "help:topic" },
-          ],
-        },
-      },
-    },
-  ])
-  if (segment.type !== "card") throw new Error("Expected card")
-  expect(segment.card.payload).toEqual({
-    button_list: [{}, { key: "ordinary" }],
-    actions: [
-      { type: 1, permission: { type: 2 } },
-      { type: 0, permission: { type: 2 }, data: "https://example.com" },
-      { type: 2, permission: { type: 2 }, data: "help:topic" },
-    ],
-  })
 })

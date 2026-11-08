@@ -1,7 +1,7 @@
 "use client"
 
 import { useTranslations } from "next-intl"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 import React, { memo, useState } from "react"
 import { A2UITrigger } from "../a2ui-child-renderer"
 import {

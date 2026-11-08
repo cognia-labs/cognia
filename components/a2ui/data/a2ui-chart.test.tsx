@@ -34,7 +34,7 @@ jest.mock("@/hooks/a2ui", () => ({
 }))
 
 // Mock data-model functions
-jest.mock("@/lib/a2ui/data-model", () => ({
+jest.mock("@cognia/a2ui-core/data-model", () => ({
   resolveArrayOrPath: (value: unknown) => {
     if (Array.isArray(value)) return value
     return []

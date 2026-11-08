@@ -17,7 +17,7 @@ import type {
   A2UIWidgetMetadata,
   A2UIComputedFields,
   A2UIComputedFieldsUpdate,
-} from "@/types/a2ui/schema"
+} from "@cognia/plugin-contract/types/a2ui/schema"
 import { isA2UIComputedFields } from "./computed"
 import { isA2UIDataModel, isSafeDataModelKey } from "./data-model"
 

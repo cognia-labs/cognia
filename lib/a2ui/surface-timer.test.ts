@@ -7,7 +7,7 @@ import {
   restingTimerFrame,
   type SurfaceTimerHost,
 } from "./surface-timer"
-import { setValueByPath } from "./data-model"
+import { setValueByPath } from "@cognia/a2ui-core/data-model"
 
 /** Live in-memory host: reads always see the latest writes, like the store. */
 function createHost(initial: Record<string, Record<string, unknown>>) {

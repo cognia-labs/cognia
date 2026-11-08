@@ -13,7 +13,7 @@
 // looks "a2ui-like" but doesn't pass strict shape checks is left alone.
 
 import { useA2UIStore } from "@/stores/a2ui"
-import { parseA2UIMessage } from "@/lib/a2ui/parser"
+import { parseA2UIMessage } from "@cognia/a2ui-core/parser"
 import { loggers } from "@cognia/logging"
 
 /** Returns true if the line was recognised + dispatched. */

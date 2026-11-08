@@ -6,7 +6,7 @@
 // the embedded `message` straight into the store.
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
-import { isA2UIPreviewSurfaceId, parseA2UIDispatchMessage } from "./parser"
+import { isA2UIPreviewSurfaceId, parseA2UIDispatchMessage } from "@cognia/a2ui-core/parser"
 import { isTauri } from "@/lib/tauri"
 import { useA2UIStore } from "@/stores/a2ui"
 import type { A2UIDispatchMessage } from "@/types/a2ui/schema"

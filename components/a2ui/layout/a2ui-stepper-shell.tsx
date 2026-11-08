@@ -4,7 +4,11 @@ import { ChevronLeft, ChevronRight } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { resolveArrayOrPath, resolveNumberOrPath, resolveStringOrPath } from "@/lib/a2ui/data-model"
+import {
+  resolveArrayOrPath,
+  resolveNumberOrPath,
+  resolveStringOrPath,
+} from "@cognia/a2ui-core/data-model"
 import type {
   A2UIComponentProps,
   A2UIRichOutputStep,

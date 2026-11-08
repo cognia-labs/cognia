@@ -46,7 +46,7 @@ import {
   isSafeDataModelKey,
   parseJsonPointer,
   setValueByPath,
-} from "@/lib/a2ui/data-model"
+} from "@cognia/a2ui-core/data-model"
 import { HOVER_REVEAL_GROUP_CLASS } from "@/lib/ui/hover-reveal"
 import { cn } from "@/lib/utils"
 import { useA2UIStore } from "@/stores/a2ui"

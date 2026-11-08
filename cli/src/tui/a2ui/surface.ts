@@ -1,4 +1,4 @@
-import { applyA2UIComputedFields, isA2UIComputedFields } from "@/lib/a2ui/computed"
+import { applyA2UIComputedFields, isA2UIComputedFields } from "@cognia/a2ui-core/computed"
 import type { A2UIComputedFields } from "@/types/a2ui/schema"
 
 export const A2UI_MAX_NODES = 500

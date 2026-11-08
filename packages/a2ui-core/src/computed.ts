@@ -33,7 +33,7 @@ import type {
   A2UIComputedFields,
   A2UIComputedFieldsUpdate,
   A2UIComputedOp,
-} from "@/types/a2ui/schema"
+} from "@cognia/plugin-contract/types/a2ui/schema"
 
 /** Bounds a declaration must fit before it is accepted. */
 export const A2UI_COMPUTED_LIMITS = {

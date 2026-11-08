@@ -37,7 +37,7 @@ import { ShareLinkDialog } from "@/components/share/share-link-dialog"
 import { useA2UIStore } from "@/stores/a2ui"
 import { useA2UIAppBuilder } from "@/hooks/a2ui/use-app-builder"
 import { useSettingsStore } from "@/stores/settings"
-import { createA2UISurface } from "@/lib/a2ui/parser"
+import { createA2UISurface } from "@cognia/a2ui-core/parser"
 import { a2uiPayload } from "@/lib/share/payload"
 import type { GeneratedApp } from "@/lib/a2ui/app-generator"
 import {

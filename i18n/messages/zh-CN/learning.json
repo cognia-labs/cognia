@@ -3,6 +3,8 @@
     "complete": "完成",
     "guideTitle": "向导",
     "nextStep": "下一步",
+    "noSteps": "未定义任何步骤",
+    "optional": "可选",
     "previousStep": "上一步",
     "skipGuide": "跳过向导",
     "stepProgress": "第 {current} 步，共 {total} 步"

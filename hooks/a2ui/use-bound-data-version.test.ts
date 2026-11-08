@@ -1,6 +1,6 @@
 import { renderHook } from "@testing-library/react"
 import { useBoundDataVersion } from "./use-bound-data-version"
-import { setValueByPath } from "@/lib/a2ui/data-model"
+import { setValueByPath } from "@cognia/a2ui-core/data-model"
 
 describe("useBoundDataVersion", () => {
   it("does not bump on mount and returns a stable number", () => {

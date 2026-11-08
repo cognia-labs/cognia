@@ -38,7 +38,7 @@ import { attachUsageToLastAssistant } from "@/lib/chat/message-run-metadata"
 import type { HookNoticePartData } from "./hooks"
 import { registerUndoSnapshot } from "./compaction-undo"
 import { persistOpticalArchive, type OpticalBoundaryMeta } from "./optical-archive-persist"
-import { extractA2UIBlocks } from "@/lib/a2ui/parser"
+import { extractA2UIBlocks } from "@cognia/a2ui-core/parser"
 import {
   extractAnthropicCitations,
   extractFootnoteSources,

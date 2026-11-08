@@ -13,7 +13,7 @@ import { InputGroupTextarea, InputGroupAddon } from "@/components/ui/input-group
 import { Label } from "@/components/ui/label"
 import type { A2UIComponentProps, A2UITextAreaComponent } from "@/types/a2ui/schema"
 import { useA2UIData } from "../a2ui-context"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 
 export const A2UITextArea = memo(function A2UITextArea({
   component,

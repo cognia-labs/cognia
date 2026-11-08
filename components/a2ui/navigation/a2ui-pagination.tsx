@@ -10,7 +10,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 import { useA2UIData } from "../a2ui-context"
 import type { A2UIComponentProps, A2UIBaseComponent, A2UINumberOrPath } from "@/types/a2ui/schema"
 

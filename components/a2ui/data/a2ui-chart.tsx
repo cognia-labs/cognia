@@ -34,7 +34,7 @@ import {
 } from "recharts"
 import type { A2UIComponentProps, A2UIChartComponent } from "@/types/a2ui/schema"
 import { useA2UIData } from "@/hooks/a2ui"
-import { resolveArrayOrPath } from "@/lib/a2ui/data-model"
+import { resolveArrayOrPath } from "@cognia/a2ui-core/data-model"
 import { CHART_TOOLTIP_STYLE as TOOLTIP_STYLE } from "@/lib/a2ui/chart-constants"
 import { useChatDiagramPalette } from "@/lib/chat/diagram-palette"
 

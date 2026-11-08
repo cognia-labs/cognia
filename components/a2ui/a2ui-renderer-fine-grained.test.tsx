@@ -4,7 +4,7 @@
  * Exercises the real provider + Zustand store + renderer together (no context
  * mock) to prove that a data change only re-renders the components whose bound
  * path actually changed — the payoff of the structural-sharing data model
- * (lib/a2ui/data-model.ts) combined with `useBoundDataVersion`.
+ * (packages/a2ui-core/src/data-model.ts) combined with `useBoundDataVersion`.
  */
 
 import React, { memo, useEffect } from "react"
@@ -12,7 +12,7 @@ import { render, act, screen } from "@testing-library/react"
 import { A2UIProvider } from "./a2ui-context"
 import { A2UIRenderer, registerBuiltInComponent } from "./a2ui-renderer"
 import { useA2UIStore } from "@/stores/a2ui"
-import { getValueByPath } from "@/lib/a2ui/data-model"
+import { getValueByPath } from "@cognia/a2ui-core/data-model"
 import type { A2UIComponent, A2UIComponentProps } from "@/types/a2ui/schema"
 
 const renderCounts: Record<string, number> = {}

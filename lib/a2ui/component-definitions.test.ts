@@ -3,7 +3,7 @@ import {
   collectComponentSubtreeIds,
   getComponentChildReferences,
   hasComponentReferenceCycle,
-} from "./component-tree"
+} from "@cognia/a2ui-core/component-tree"
 import { createA2UIComponentBundle, createAvailableComponentId } from "./component-definitions"
 
 describe("A2UI component definitions", () => {

@@ -18,7 +18,7 @@
  */
 
 import { parseA2UIInput } from "./parser"
-import type { A2UIServerMessage } from "@/types/a2ui/schema"
+import type { A2UIServerMessage } from "@cognia/plugin-contract/types/a2ui/schema"
 
 /** Deepest nesting a preview follows; real surfaces sit far below it. */
 export const A2UI_PREVIEW_MAX_DEPTH = 64

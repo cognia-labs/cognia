@@ -3,7 +3,7 @@
  * the sidecar's executing implementation are maintained in two projects
  * (sidecar/ is not in the pnpm workspace). The host is the one side that can
  * import both, so the test lives here and cross-imports the sidecar adapter
- * (same precedent as `lib/a2ui/mcp-tool-schemas.test.ts`). It pins:
+ * (same precedent as `packages/a2ui-core/src/mcp-tool-schemas.test.ts`). It pins:
  *
  *  1. the builtin protocol sets stay in sync (renderer `gemini` ↔ sidecar
  *     `google` naming mapped explicitly),

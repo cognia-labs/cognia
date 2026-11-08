@@ -23,7 +23,7 @@ export {
   type A2UIUnifiedParseResult,
   type A2UIParseInputOptions,
   type A2UIExtractedBlock,
-} from "./parser"
+} from "@cognia/a2ui-core/parser"
 
 // Data Model
 export {
@@ -51,7 +51,7 @@ export {
   type PathWatcher,
   type ComputedField,
   type ComputedFieldRegistry,
-} from "./data-model"
+} from "@cognia/a2ui-core/data-model"
 
 // Portable app import validation
 export {

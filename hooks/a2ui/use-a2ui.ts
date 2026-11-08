@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useRef } from "react"
 import { useA2UIStore } from "@/stores/a2ui"
-import { parseA2UIInput, createA2UISurface } from "@/lib/a2ui/parser"
+import { parseA2UIInput, createA2UISurface } from "@cognia/a2ui-core/parser"
 import { globalEventEmitter } from "@/lib/a2ui/events"
 import type {
   A2UIServerMessage,

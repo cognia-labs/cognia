@@ -198,7 +198,7 @@ describe("formatA2UIActionForAgent", () => {
   })
 
   it("is not itself parsed as an A2UI payload", () => {
-    const { detectA2UIContent } = jest.requireActual("./parser")
+    const { detectA2UIContent } = jest.requireActual("@cognia/a2ui-core/parser")
     expect(detectA2UIContent(formatA2UIActionForAgent(action(), surface(), "Button"))).toBe(false)
   })
 })

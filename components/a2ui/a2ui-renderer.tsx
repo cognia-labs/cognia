@@ -15,7 +15,7 @@ import {
   useA2UIDisabled,
 } from "@/hooks/a2ui/use-a2ui-context"
 import { useBoundDataVersion } from "@/hooks/a2ui/use-bound-data-version"
-import { collectComponentDataPaths } from "@/lib/a2ui/data-model"
+import { collectComponentDataPaths } from "@cognia/a2ui-core/data-model"
 import { getComponent } from "@/lib/a2ui/catalog"
 
 // Import layout components

@@ -5,7 +5,7 @@ import {
   isA2UIPreviewSurfaceId,
   parseStreamingA2UI,
 } from "./streaming-preview"
-import type { A2UIServerMessage } from "@/types/a2ui/schema"
+import type { A2UIServerMessage } from "@cognia/plugin-contract/types/a2ui/schema"
 
 const PREVIEW_ID = `${A2UI_PREVIEW_SURFACE_PREFIX}test`
 

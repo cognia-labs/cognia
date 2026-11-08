@@ -9,7 +9,7 @@ import type {
   A2UIStringOrPath,
   A2UIBooleanOrPath,
 } from "@/types/a2ui/schema"
-import { getBindingPath } from "@/lib/a2ui/data-model"
+import { getBindingPath } from "@cognia/a2ui-core/data-model"
 import { useA2UIData } from "../a2ui-context"
 
 export interface A2UICollapsibleComponent extends A2UIBaseComponent {

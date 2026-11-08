@@ -33,7 +33,7 @@ jest.mock("../a2ui-context", () => ({
 }))
 
 // Mock the data-model
-jest.mock("@/lib/a2ui/data-model", () => ({
+jest.mock("@cognia/a2ui-core/data-model", () => ({
   getBindingPath: jest.fn((value) =>
     typeof value === "string" && value.startsWith("/") ? value : null
   ),
@@ -136,7 +136,7 @@ describe("A2UIDateTimePicker", () => {
 
     it("should call onDataChange when value changes", () => {
       const onDataChange = jest.fn()
-      const mockGetBindingPath = jest.requireMock("@/lib/a2ui/data-model").getBindingPath
+      const mockGetBindingPath = jest.requireMock("@cognia/a2ui-core/data-model").getBindingPath
       mockGetBindingPath.mockReturnValue("/datetime")
 
       render(
