@@ -1316,6 +1316,8 @@ export interface PermissionRequestEvent {
   description?: string
   blockedPath?: string
   decisionReason?: string
+  /** Require a person for this call; bypass flags and remembered grants cannot approve it. */
+  requiresHumanApproval?: boolean
   suggestions?: unknown[]
   /** Select the decline action initially; an explicit user allow is still valid. */
   defaultToNo?: boolean

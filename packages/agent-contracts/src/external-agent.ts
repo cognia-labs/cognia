@@ -1338,6 +1338,8 @@ export interface AcpPermissionRequest {
   reason?: string
   riskLevel?: "low" | "medium" | "high" | "critical"
   autoApproveTimeout?: number
+  /** A managed checkpoint: require a fresh human decision, never a saved grant. */
+  requiresHumanApproval?: boolean
   metadata?: Record<string, unknown>
   _meta?: Record<string, unknown>
 }

@@ -7,6 +7,46 @@ import {
 } from "./config-requirements"
 
 describe("mapCodexConfigRequirements", () => {
+  it("preserves managed network constraints including false and empty values", () => {
+    const network = {
+      enabled: false,
+      domains: { "api.example.com": "allow", "blocked.example.com": "deny" },
+      allowedDomains: [],
+      deniedDomains: ["blocked.example.com"],
+      reviewDomains: ["review.example.com"],
+      managedAllowedDomainsOnly: true,
+      httpPort: 0,
+      socksPort: 1080,
+      allowUpstreamProxy: false,
+      dangerouslyAllowNonLoopbackProxy: false,
+      allowUnixSockets: [],
+      unixSockets: { "/tmp/agent.sock": "allow" },
+      dangerouslyAllowAllUnixSockets: false,
+      allowLocalBinding: false,
+    }
+    expect(mapCodexConfigRequirements({ requirements: { network } })).toEqual({ network })
+  })
+
+  it("does not coerce malformed network fields or include unknown fields", () => {
+    expect(
+      mapCodexConfigRequirements({
+        network: {
+          enabled: "false",
+          httpPort: -1,
+          socksPort: 65536,
+          allowedDomains: ["example.com", 42],
+          domains: { good: "deny", bad: true },
+          unixSockets: { "/tmp/test": "review" },
+          secret: "not a policy field",
+        },
+      })
+    ).toEqual({
+      network: { allowedDomains: ["example.com"], domains: { good: "deny" }, unixSockets: {} },
+    })
+    expect(mapCodexConfigRequirements({ network: null })).toBeNull()
+    expect(mapCodexConfigRequirements({ network: [] })).toBeNull()
+  })
+
   it("reads the axes Cognia actually sends, through the `requirements` envelope", () => {
     expect(
       mapCodexConfigRequirements({

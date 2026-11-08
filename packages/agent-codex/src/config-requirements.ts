@@ -25,6 +25,24 @@ import type { ExternalAgentBranchReasonCode } from "@cognia/agent-contracts/exte
 
 import type { CodexSandboxModeWire } from "./app-server-client"
 
+/** Read-only projection of Codex's NetworkRequirements wire shape (0.167.0). */
+export interface CodexNetworkRequirements {
+  enabled?: boolean
+  domains?: Record<string, "allow" | "deny">
+  allowedDomains?: string[]
+  deniedDomains?: string[]
+  reviewDomains?: string[]
+  managedAllowedDomainsOnly?: boolean
+  httpPort?: number
+  socksPort?: number
+  allowUpstreamProxy?: boolean
+  dangerouslyAllowNonLoopbackProxy?: boolean
+  unixSockets?: Record<string, "allow" | "deny">
+  allowUnixSockets?: string[]
+  dangerouslyAllowAllUnixSockets?: boolean
+  allowLocalBinding?: boolean
+}
+
 /** The subset of `ConfigRequirements` that bears on what Cognia sends. */
 export interface CodexConfigRequirements {
   /** `SandboxMode` values this Codex may be asked for. */
@@ -36,6 +54,50 @@ export interface CodexConfigRequirements {
    * A profile mapped to `false` is present but forbidden.
    */
   allowedPermissionProfiles?: Record<string, boolean>
+  /** Enforced by Codex; Cognia displays this without rewriting native policy. */
+  network?: CodexNetworkRequirements
+}
+
+function mapNetworkRequirements(value: unknown): CodexNetworkRequirements | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+  const network: CodexNetworkRequirements = {}
+  for (const key of [
+    "enabled",
+    "managedAllowedDomainsOnly",
+    "allowUpstreamProxy",
+    "dangerouslyAllowNonLoopbackProxy",
+    "dangerouslyAllowAllUnixSockets",
+    "allowLocalBinding",
+  ] as const) {
+    if (typeof raw[key] === "boolean") network[key] = raw[key]
+  }
+  for (const key of [
+    "allowedDomains",
+    "deniedDomains",
+    "reviewDomains",
+    "allowUnixSockets",
+  ] as const) {
+    const values = stringArray(raw[key])
+    if (values) network[key] = values
+  }
+  for (const key of ["httpPort", "socksPort"] as const) {
+    const port = raw[key]
+    if (typeof port === "number" && Number.isInteger(port) && port >= 0 && port <= 65535)
+      network[key] = port
+  }
+  for (const key of ["domains", "unixSockets"] as const) {
+    const permissions = raw[key]
+    if (permissions && typeof permissions === "object" && !Array.isArray(permissions)) {
+      network[key] = Object.fromEntries(
+        Object.entries(permissions).filter(
+          (entry): entry is [string, "allow" | "deny"] =>
+            entry[1] === "allow" || entry[1] === "deny"
+        )
+      )
+    }
+  }
+  return network
 }
 
 function stringArray(value: unknown): string[] | undefined {
@@ -73,6 +135,8 @@ export function mapCodexConfigRequirements(raw: unknown): CodexConfigRequirement
   if (approvalPolicies) mapped.allowedApprovalPolicies = approvalPolicies
   const profiles = booleanMap(record.allowedPermissionProfiles)
   if (profiles) mapped.allowedPermissionProfiles = profiles
+  const network = mapNetworkRequirements(record.network)
+  if (network) mapped.network = network
 
   return Object.keys(mapped).length > 0 ? mapped : null
 }

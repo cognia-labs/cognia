@@ -530,7 +530,13 @@ function normalizeSkillRoots(roots: readonly string[]): string[] {
 interface PendingApproval {
   resolve: (response: unknown) => void
   request: AcpPermissionRequest
-  kind: "command" | "fileChange" | "permissionProfile" | "legacyCommand" | "legacyFileChange"
+  kind:
+    | "command"
+    | "humanCommand"
+    | "fileChange"
+    | "permissionProfile"
+    | "legacyCommand"
+    | "legacyFileChange"
   sessionId?: string
   rpcId: number | string
   requestedPermissions?: Record<string, unknown>
@@ -753,6 +759,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
         // Unknown experimental notifications fall through the default branch.
         capabilities: {
           experimentalApi: true,
+          requiredHumanApproval: true,
           requestAttestation: false,
           mcpServerOpenaiFormElicitation: true,
         },
@@ -1414,6 +1421,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
           nextCursor?: string | null
         }>("session/list", "thread/list", {
           limit: 50,
+          modelProviders: [],
           sortKey: "updated_at",
           sortDirection: "desc",
           ...(archived ? { archived: true } : {}),
@@ -3246,6 +3254,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
     // zsh-exec-bridge and stdin callbacks can share one parent command item.
     const requestId = readString(params.approvalId) ?? itemId
     const command = readString(params.command)
+    const requiresHumanApproval = kind === "command" && params.kind === "humanCommand"
     const request: AcpPermissionRequest = {
       id: requestId,
       requestId,
@@ -3260,6 +3269,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
       },
       rawInput: kind === "command" ? { command, cwd: readString(params.cwd) } : {},
       reason: readString(params.reason),
+      ...(requiresHumanApproval ? { requiresHumanApproval: true } : {}),
     }
 
     // Forward protocol context the approval dialog can use (ordered decision
@@ -3278,7 +3288,13 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
     }
 
     const mode = session?.permissionMode ?? "default"
-    const auto = this.autoDecision(mode, kind, this.approvalPolicy(this._config, request))
+    // Managed checkpoints outrank bypass modes and configured/saved grants.
+    // Modes that cannot ask still deny; every other mode needs a person.
+    const auto = requiresHumanApproval
+      ? MODE_RANK[mode] <= MODE_RANK.dontAsk
+        ? "decline"
+        : undefined
+      : this.autoDecision(mode, kind, this.approvalPolicy(this._config, request))
     if (auto) return { decision: auto }
 
     // Surface to the UI and await `respondToPermission`.
@@ -3286,7 +3302,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
       this.pendingApprovals.set(requestId, {
         resolve: (response) => resolve(response as { decision: string }),
         request,
-        kind,
+        kind: requiresHumanApproval ? "humanCommand" : kind,
         sessionId,
         rpcId,
       })
@@ -3558,6 +3574,9 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
     if (!pending) return
     if (pending.sessionId && pending.sessionId !== _sessionId) {
       throw new Error("Permission response belongs to a different session")
+    }
+    if (pending.kind === "humanCommand") {
+      response = { ...response, scope: "once", rememberChoice: false, optionId: undefined }
     }
     this.pendingApprovals.delete(response.requestId)
     pending.resolve(

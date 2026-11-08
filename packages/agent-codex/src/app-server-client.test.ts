@@ -687,6 +687,7 @@ describe("CodexAppServerAdapter", () => {
       expect((init.params as Record<string, unknown>).clientInfo).toMatchObject({ name: "cognia" })
       expect((init.params as Record<string, unknown>).capabilities).toEqual({
         experimentalApi: true,
+        requiredHumanApproval: true,
         requestAttestation: false,
         mcpServerOpenaiFormElicitation: true,
       })
@@ -1690,6 +1691,119 @@ describe("CodexAppServerAdapter", () => {
   })
 
   describe("approvals", () => {
+    it("cancels a resolved human checkpoint and ignores a late allow", async () => {
+      const adapter = await connectedAdapter()
+      const session = await adapter.createSession()
+      const it = iterator(adapter, session.id, userMessage("run"))
+      const next = it.next()
+      feedServerRequest(805, "item/commandExecution/requestApproval", {
+        threadId: session.id,
+        itemId: "human",
+        approvalId: "checkpoint",
+        kind: "humanCommand",
+        command: "git status",
+      })
+      const request = await next
+      expect(request.value?.type).toBe("permission_request")
+      feed("serverRequest/resolved", { threadId: session.id, requestId: 805 })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await adapter.respondToPermission(session.id, {
+        requestId: "checkpoint",
+        granted: true,
+        scope: "always",
+      })
+      const replies = writes.map((line) => JSON.parse(line)).filter((m) => m.id === 805)
+      expect(replies.map((m) => m.result)).toEqual([{ decision: "cancel" }])
+      feed("turn/completed", { threadId: session.id, turn: { id: "turn_1", status: "completed" } })
+      while (!(await it.next()).done) {
+        /* drain the terminal events */
+      }
+      await adapter.disconnect()
+    })
+
+    it.each(["plan", "dontAsk"] as const)(
+      "declines a human checkpoint in %s without offering execution",
+      async (permissionMode) => {
+        const adapter = await connectedAdapter()
+        const session = await adapter.createSession({ permissionMode })
+        const it = iterator(adapter, session.id, userMessage("run"))
+        const next = it.next()
+        feedServerRequest(806, "item/commandExecution/requestApproval", {
+          threadId: session.id,
+          itemId: "human",
+          approvalId: "checkpoint",
+          kind: "humanCommand",
+          command: "git status",
+        })
+        feed("turn/completed", {
+          threadId: session.id,
+          turn: { id: "turn_1", status: "completed" },
+        })
+        let result = await next
+        while (!result.done) {
+          expect(result.value.type).not.toBe("permission_request")
+          result = await it.next()
+        }
+        expect(lastWritten((m) => m.id === 806)?.result).toEqual({ decision: "decline" })
+        await adapter.disconnect()
+      }
+    )
+
+    it("advertises support for fresh human command decisions", async () => {
+      const adapter = await connectedAdapter()
+      expect(lastWritten((m) => m.method === "initialize")?.params).toMatchObject({
+        capabilities: { experimentalApi: true, requiredHumanApproval: true },
+      })
+      await adapter.disconnect()
+    })
+
+    it.each(["default", "bypassPermissions"] as const)(
+      "requires a fresh human decision in %s even with configured auto-approval",
+      async (permissionMode) => {
+        approvalPolicy.mockReturnValueOnce("approve")
+        const adapter = await connectedAdapter()
+        const session = await adapter.createSession({ permissionMode })
+        const it = iterator(adapter, session.id, userMessage("run"))
+        const next = it.next()
+        feedServerRequest(801, "item/commandExecution/requestApproval", {
+          threadId: session.id,
+          turnId: "turn_1",
+          itemId: "human-command",
+          approvalId: "human-checkpoint",
+          kind: "humanCommand",
+          command: "git status",
+        })
+        // A turn completion makes an incorrectly auto-approved implementation
+        // finish instead of leaving this negative regression waiting forever.
+        feed("turn/completed", {
+          threadId: session.id,
+          turn: { id: "turn_1", status: "completed" },
+        })
+        const events = []
+        let event = await next
+        while (!event.done) {
+          events.push(event.value)
+          if (event.value.type === "permission_request") {
+            expect(event.value.request).toMatchObject({
+              requestId: "human-checkpoint",
+              requiresHumanApproval: true,
+            })
+            await adapter.respondToPermission(session.id, {
+              requestId: "human-checkpoint",
+              granted: true,
+              scope: "session",
+              rememberChoice: true,
+            })
+          }
+          event = await it.next()
+        }
+        expect(events.some((event) => event.type === "permission_request")).toBe(true)
+        expect(lastWritten((m) => m.id === 801)?.result).toEqual({ decision: "accept" })
+        await adapter.disconnect()
+        approvalPolicy.mockReset()
+      }
+    )
+
     it("surfaces a command approval and resolves it with the UI decision", async () => {
       const adapter = await connectedAdapter()
       const session = await adapter.createSession({ permissionMode: "default" })
@@ -5019,10 +5133,44 @@ describe("native 0.154.0 request regressions", () => {
         )?.params
       ).toEqual({
         limit: 50,
+        modelProviders: [],
         sortKey: "updated_at",
         sortDirection: "desc",
         cursor: "next-page",
       })
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it("includes other providers on every active and archived history page", async () => {
+    responders["thread/list"] = ({ params }) => {
+      const p = params as { modelProviders?: string[]; archived?: boolean; cursor?: string }
+      if (p.modelProviders?.length !== 0) return { data: [] }
+      const group = p.archived ? "archived" : "active"
+      return {
+        data: [
+          {
+            id: `${group}-${p.cursor ? "other" : "current"}`,
+            modelProvider: p.cursor ? "other" : "current",
+          },
+        ],
+        nextCursor: p.cursor ? null : "next",
+      }
+    }
+    const adapter = await connectedAdapter()
+    try {
+      expect((await adapter.listSessions()).map((s) => s.sessionId)).toEqual([
+        "active-current",
+        "active-other",
+        "archived-current",
+        "archived-other",
+      ])
+      const requests = writes
+        .map((line) => JSON.parse(line))
+        .filter((m) => m.method === "thread/list")
+      expect(requests).toHaveLength(4)
+      for (const request of requests) expect(request.params.modelProviders).toEqual([])
     } finally {
       await adapter.disconnect()
     }
