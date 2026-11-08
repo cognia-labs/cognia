@@ -137,6 +137,14 @@ describe("CompanionRoomProjector", () => {
     expect(statusBySession.get("room-1")).toBe("idle")
   })
 
+  it("does not mark a room busy for an IM room member's run", () => {
+    const { projector: p, runner } = projector(100)
+    p.handleEvent(evt("event", "room-1::char::a::im.m-1.reply-1"))
+    expect(statusBySession.get("room-1")).not.toBe("streaming")
+    expect(p.isRoomActive("room-1")).toBe(false)
+    expect(runner.handleEvent).toHaveBeenCalledTimes(1)
+  })
+
   it("keeps the room busy while any member is still running", () => {
     const { projector: p } = projector(100)
     p.handleEvent(evt("event", SUB_A))

@@ -340,6 +340,16 @@ export interface ConversationOverrideRow {
    */
   squadDisabled?: boolean
   /**
+   * The character team that answers in this IM group (ADR-0177 batch 4,
+   * ADR-0252 §6). When set on a group, channel or thread, each inbound turn
+   * is a room turn: the team's routing picks who speaks, each member replies
+   * through the connector's bot with its own signature, and outranks a Squad
+   * bound in `squadId` and a workflow in `workflowId`, which stop being the
+   * group's responder. A direct chat ignores it (a DM is not a room).
+   * Non-indexed additive; absent on every row before batch 4.
+   */
+  characterTeamId?: string
+  /**
    * Per-conversation Visual Workflow binding (workflow⇄IM parity). When set
    * (and `squadId` is NOT set — `squadId` wins routing), an inbound AI-run
    * dispatches to the workflow orchestrator (`startWorkflowFromIM`) via

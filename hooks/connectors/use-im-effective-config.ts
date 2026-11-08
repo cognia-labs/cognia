@@ -25,10 +25,18 @@
  * `renderStatus`'s closing line already says this out loud to end users.
  * Consequence worth knowing: for a conversation routed by a dispatch rule, the
  * chip shows the layer BELOW the rule, which is what "no message pending" means.
+ *
+ * ## The scope comes from the bound session
+ *
+ * A group's character team answers it directly, outranking a bound Squad or
+ * workflow, while a one-to-one chat ignores it (ADR-0177 batch 4). The scope
+ * the bus reads off each event is what the override's session last stamped,
+ * so the hook reads it there and the chip agrees with the next turn.
  */
 
 import { useLiveQuery } from "dexie-react-hooks"
 
+import { platformScopeOf } from "@/lib/chat/room/kind"
 import { resolveImEffectiveConfig } from "@/lib/connectors/effective-config"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import { getDb } from "@/lib/db/schema"
@@ -60,11 +68,14 @@ export function useImEffectiveConfig(
     if (typeof window === "undefined" || !adapterId) return undefined
     const adapter = await getDb().adapterInstances.get(adapterId)
     if (!adapter) return undefined
+    const session = override?.sessionId ? await getDb().sessions.get(override.sessionId) : undefined
+    const scope = session?.platformBinding ? platformScopeOf(session.platformBinding) : undefined
     return resolveImEffectiveConfig({
       adapter,
       override: override ?? null,
       rule: null,
       system: { mode: adapter.defaultMode ?? "auto", characterId: adapter.defaultCharacterId },
+      ...(scope ? { scope } : {}),
     })
     // `override` is depended on by identity: Dexie hands back a fresh object on
     // every write, so a re-resolve is exactly what a changed row should cause.

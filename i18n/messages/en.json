@@ -14789,6 +14789,7 @@
       "notesPlaceholder": "Notes injected into every member's transcript on each turn…",
       "openChat": "Open chat with {name}",
       "roomSettings": {
+        "imMutedHint": "Muted members never reply on their own. A message that @mentions one still reaches them.",
         "imReplyModeHints": {
           "asleep": "Messages are kept and the assistant answers nobody, a mention included, until the mode changes.",
           "auto": "The assistant answers every message the platform delivers to it, as this chat's settings in the Inbox allow.",
@@ -23234,6 +23235,9 @@
         "archived": "Archived",
         "character": "Character (id)",
         "characterPlaceholder": "(none)",
+        "characterTeamBinding": "Character team in a group",
+        "characterTeamBindingHelp": "In a group chat, this team answers member by member, each reply signed with its name, and it outranks the Agent Team and workflow above. Leave it empty for one voice. A one-to-one chat always keeps its single character.",
+        "characterTeamBindingPlaceholder": "(none — one voice answers)",
         "cooldownMs": "Cooldown after bot reply (ms)",
         "dispatchMode": {
           "label": "Dispatch mode"

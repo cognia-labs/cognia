@@ -45,6 +45,11 @@ jest.mock("@/hooks/connectors/use-im-room-reply-mode", () => ({
   },
 }))
 
+let imTeam: { team: unknown; members: { id: string; name: string }[] } | null = null
+jest.mock("@/hooks/connectors/use-im-room-team", () => ({
+  useImRoomTeam: () => imTeam,
+}))
+
 import {
   ROOM_SETTINGS_CONTROLS,
   RoomSettingsPanel,
@@ -72,6 +77,7 @@ beforeEach(() => {
   updateSession.mockClear()
   imHookArgs.length = 0
   imMode = null
+  imTeam = null
   panelSession = undefined
 })
 
@@ -81,7 +87,7 @@ describe("RoomSettingsSection", () => {
   it("shows a control only where something reads it", () => {
     expect(ROOM_SETTINGS_CONTROLS).toEqual({
       team: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
-      im: ["replyMode", "memory"],
+      im: ["replyMode", "instructions", "memory", "mutedMembers"],
       shared: ["memory"],
     })
   })
@@ -103,8 +109,9 @@ describe("RoomSettingsSection", () => {
     )
     expect(screen.getByTestId("room-settings-reply-mode-im-note")).toBeInTheDocument()
     expect(screen.getByTestId("room-memory-switch")).toBeInTheDocument()
-    expect(screen.queryByTestId("room-instructions")).not.toBeInTheDocument()
+    expect(screen.getByTestId("room-instructions")).toBeInTheDocument()
     expect(screen.queryByTestId("room-squad-handoff-confirm")).not.toBeInTheDocument()
+    // A plain group has one voice: nobody to mute.
     expect(screen.queryByTestId("room-muted-members")).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId("room-reply-mode-asleep"))
@@ -117,6 +124,48 @@ describe("RoomSettingsSection", () => {
       memoryUse: true,
       memoryLearn: true,
     })
+  })
+
+  it("lets an IM room bound to a character team mute any of its members", () => {
+    imMode = { mode: "auto", setMode: jest.fn(async () => {}) }
+    imTeam = {
+      team: {},
+      members: [
+        { id: "c-ana", name: "Ana" },
+        { id: "c-ben", name: "Ben" },
+      ],
+    }
+    render(
+      <RoomSettingsSection
+        sessionId="s-im"
+        session={imSession({ roomSettings: { memory: false, mutedMemberIds: ["c-ben"] } })}
+        defaultCollapsed={false}
+      />
+    )
+    expect(screen.getByTestId("room-mute-toggle-c-ana")).toHaveAttribute("aria-pressed", "false")
+    expect(screen.getByTestId("room-mute-toggle-c-ben")).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByTestId("room-muted-hint")).toHaveTextContent(
+      "desktop.memberList.roomSettings.imMutedHint"
+    )
+    fireEvent.click(screen.getByTestId("room-mute-toggle-c-ana"))
+    expect(updateSession).toHaveBeenCalledWith("s-im", {
+      roomSettings: { memory: false, mutedMemberIds: ["c-ben", "c-ana"] },
+    })
+  })
+
+  it("keeps an IM room's instructions on the session", async () => {
+    imMode = { mode: "auto", setMode: jest.fn(async () => {}) }
+    render(<RoomSettingsSection sessionId="s-im" session={imSession()} defaultCollapsed={false} />)
+    fireEvent.change(screen.getByTestId("room-instructions"), {
+      target: { value: "Reply in Chinese." },
+    })
+    await waitFor(
+      () =>
+        expect(updateSession).toHaveBeenCalledWith("s-im", {
+          roomSettings: { memory: false, instructions: "Reply in Chinese." },
+        }),
+      { timeout: 2_000 }
+    )
   })
 
   it("holds the reply mode back until the conversation's policy is known", () => {

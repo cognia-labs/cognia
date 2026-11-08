@@ -1059,6 +1059,7 @@ export class ConnectorBus {
         modeSource:
           resolved.modeSource === "conversation-override" ? undefined : resolved.modeSource,
       },
+      scope: event.channel.kind,
     })
     const routed = routeInboundFromComposition({
       engagement: axes.engagement.effective,
@@ -1725,6 +1726,7 @@ export class ConnectorBus {
             modeSource:
               binding.modeSource === "conversation-override" ? undefined : binding.modeSource,
           },
+          scope: event.channel.kind,
         })
       const accepted = axes(adapterRow, override, resolved)
       const current = axes(currentAdapter, currentOverride, currentBinding)

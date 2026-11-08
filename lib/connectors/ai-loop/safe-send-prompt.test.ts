@@ -240,6 +240,21 @@ describe("safeSendPrompt", () => {
     expect(fx.abort).not.toHaveBeenCalled()
   })
 
+  it("gives an IM room member the room's scratch workspace", async () => {
+    const fx = canonicalScratch()
+    const member = "sess_1::char::c-1::im.m-1.reply-1"
+    await safeSendPrompt(member, "clean", { cwd: "/scratch/old", turnId: "t-1" }, auditCtx)
+    expect(getSession).toHaveBeenCalledWith("sess_1")
+    expect(ensureSessionScratchWorkspaceBundle).toHaveBeenCalledWith("sess_1", "scratch-bundle")
+    expect(mockOpenWorkspaceBundleTurnLease).toHaveBeenCalledWith(
+      fx.bundle,
+      "primary",
+      expect.objectContaining({ sessionId: "sess_1", taskId: "task:connector:sess_1" })
+    )
+    // The member's own session runs the model.
+    expect(mockRun).toHaveBeenCalledWith(member, "clean", expect.anything(), expect.anything())
+  })
+
   it("aborts scratch when runtime rebinding fails without calling the model", async () => {
     const fx = canonicalScratch()
     jest.mocked(rebindSendOptionsWorkspace).mockRejectedValueOnce(new Error("rebind failed"))

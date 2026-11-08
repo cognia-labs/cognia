@@ -119,3 +119,36 @@ it("labels an escalation-forced mode as such", async () => {
   )
   await waitFor(() => expect(result.current?.mode.source).toBe("escalation"))
 })
+
+it("lets a group's character team answer it directly, read off the bound session's scope", async () => {
+  await getDb().adapterInstances.put(makeAdapter())
+  await getDb().sessions.clear()
+  await getDb().sessions.put({
+    id: "s_room",
+    title: "Room",
+    createdAt: 0,
+    updatedAt: 0,
+    platformBinding: {
+      platform: "telegram",
+      adapterId: "cai_1",
+      conversationKey: CONVERSATION_KEY,
+      scopeKind: "group",
+    },
+  } as never)
+  const override = makeOverride({
+    sessionId: "s_room",
+    squadId: "squad_x",
+    characterTeamId: "ct_launch",
+  })
+  const { result } = renderHook(() => useImEffectiveConfig({ adapterId: "cai_1", override }))
+  await waitFor(() => expect(result.current?.target.effective).toEqual({ kind: "direct" }))
+  expect(result.current?.characterTeam.effective).toBe("ct_launch")
+
+  // Without a session to say which chat this is, the Squad keeps the turn.
+  const unbound = renderHook(() =>
+    useImEffectiveConfig({ adapterId: "cai_1", override: { ...override, sessionId: undefined } })
+  )
+  await waitFor(() =>
+    expect(unbound.result.current?.target.effective).toEqual({ kind: "team", id: "squad_x" })
+  )
+})

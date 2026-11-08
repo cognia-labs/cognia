@@ -32,6 +32,55 @@ describe("resolveImEffectiveConfig", () => {
       })
     }
   )
+  it("answers a group with its character team, directly, whatever Squad is bound", () => {
+    const override = {
+      id: "o1",
+      conversationKey: "telegram:a1:g",
+      squadId: "squad_x",
+      characterTeamId: "ct_launch",
+      createdAt: 1,
+      updatedAt: 1,
+    } as ConversationOverrideRow
+    const room = resolveImEffectiveConfig({
+      adapter,
+      override,
+      rule: null,
+      system: { mode: "auto" },
+      scope: "group",
+    })
+    expect(room.target).toEqual({
+      requested: { kind: "direct" },
+      effective: { kind: "direct" },
+      source: "conversation-override",
+    })
+    expect(room.characterTeam).toEqual({
+      requested: "ct_launch",
+      effective: "ct_launch",
+      source: "conversation-override",
+    })
+    expect(room.model.blockedReason).toBeUndefined()
+
+    const dm = resolveImEffectiveConfig({
+      adapter,
+      override,
+      rule: null,
+      system: { mode: "auto" },
+      scope: "private",
+    })
+    expect(dm.target.effective).toEqual({ kind: "team", id: "squad_x" })
+    expect(dm.characterTeam.blockedReason).toBe("character_team_private_chat")
+
+    // Nobody said which chat this is: routing keeps its target, and the team is reported.
+    const unknown = resolveImEffectiveConfig({
+      adapter,
+      override,
+      rule: null,
+      system: { mode: "auto" },
+    })
+    expect(unknown.target.effective).toEqual({ kind: "team", id: "squad_x" })
+    expect(unknown.characterTeam.effective).toBe("ct_launch")
+  })
+
   it("reports requested, effective, and source for shared behavior fields", () => {
     const configuredAdapter: AdapterInstanceRow = {
       ...adapter,

@@ -40,3 +40,33 @@ export function decodeSubSession(
 export function isSubSessionId(id: string): boolean {
   return id.includes(SUB_SEPARATOR)
 }
+
+/**
+ * The turn segment of an IM room member's sub-session (ADR-0177 batch 4).
+ *
+ * The connector runtime runs each member of an IM group's character team
+ * under a sub-session of the IM session, so everything that maps a member's
+ * session back to its room (skill context, the hand-off tool's caller, the
+ * workspace owner) already works. What differs is who owns the run: the
+ * connector runtime answers its approvals in the group and writes its reply,
+ * so `RoomRunner`, which owns every other sub-session, leaves these alone.
+ */
+export const IM_ROOM_RUN_PREFIX = "im."
+
+/** The sub-session one IM room member's step runs under. */
+export function imRoomMemberSessionId(
+  roomSessionId: string,
+  characterId: string,
+  runKey: string
+): string {
+  return subSessionId(roomSessionId, characterId, `${IM_ROOM_RUN_PREFIX}${runKey}`)
+}
+
+/** True when `id` is a sub-session the connector runtime runs for an IM room member. */
+export function isImRoomMemberSessionId(id: string): boolean {
+  const idx = id.indexOf(SUB_SEPARATOR)
+  if (idx < 0) return false
+  const tail = id.slice(idx + SUB_SEPARATOR.length)
+  const sep = tail.indexOf("::")
+  return sep >= 0 && tail.slice(sep + 2).startsWith(IM_ROOM_RUN_PREFIX)
+}

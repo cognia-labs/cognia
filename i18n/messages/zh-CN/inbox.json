@@ -430,6 +430,9 @@
         "team": "Agent Team",
         "workflow": "Workflow"
       },
+      "characterTeamBinding": "群聊中的角色团队",
+      "characterTeamBindingHelp": "在群聊中，由这个团队的成员逐个回答，每条回复都署上成员的名字，并且优先于上面的智能体团队和工作流。留空则由一个角色回答。一对一聊天始终使用其单一角色。",
+      "characterTeamBindingPlaceholder": "（无——由一个角色回答）",
       "teamBinding": "Agent 团队 (id)",
       "teamBindingHelp": "设置后，入站消息将派发给该 Agent 团队而非单个角色；进度会回流到会话中。",
       "teamBindingPlaceholder": "（无 —— 由角色回复）",

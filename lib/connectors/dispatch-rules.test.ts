@@ -301,7 +301,25 @@ describe("resolveEffectiveRouting — precedence", () => {
       characterSource: "rule",
       respondViaAdapterId: "bot_b",
       respondViaSource: "rule",
+      characterTeamId: undefined,
+      characterTeamSource: "none",
     })
+  })
+
+  it("takes the character team from the conversation alone (ADR-0177 batch 4)", () => {
+    expect(resolveEffectiveRouting({}, { characterTeamId: "  ct_1 " }, null)).toMatchObject({
+      characterTeamId: "ct_1",
+      characterTeamSource: "override",
+    })
+    expect(resolveEffectiveRouting({}, { characterTeamId: "  " }, null)).toMatchObject({
+      characterTeamId: undefined,
+      characterTeamSource: "none",
+    })
+    // A Squad bound beside it stays the conversation's Squad: the runtime
+    // decides which one answers.
+    expect(
+      resolveEffectiveRouting({}, { characterTeamId: "ct_1", squadId: "sq_1" }, null)
+    ).toMatchObject({ characterTeamId: "ct_1", squadId: "sq_1", squadSource: "override" })
   })
 
   it("respondViaAdapterId is rule-only: unset without a rule hit, trimmed when set", () => {

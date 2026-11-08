@@ -14789,6 +14789,7 @@
       "notesPlaceholder": "笔记会在每轮对话中注入到所有成员的对话上下文中…",
       "openChat": "打开与 {name} 的对话",
       "roomSettings": {
+        "imMutedHint": "已静音的成员不会主动回复。@ 到他们的消息仍然有效。",
         "imReplyModeHints": {
           "asleep": "消息会保留，切换模式前助手不回复任何人，@ 也不会。",
           "auto": "平台推送给助手的每条消息助手都会回复，以收件箱里这个会话的设置为准。",
@@ -23234,6 +23235,9 @@
         "archived": "已归档",
         "character": "角色 (id)",
         "characterPlaceholder": "（无）",
+        "characterTeamBinding": "群聊中的角色团队",
+        "characterTeamBindingHelp": "在群聊中，由这个团队的成员逐个回答，每条回复都署上成员的名字，并且优先于上面的智能体团队和工作流。留空则由一个角色回答。一对一聊天始终使用其单一角色。",
+        "characterTeamBindingPlaceholder": "（无——由一个角色回答）",
         "cooldownMs": "机器人回复后冷却时间 (ms)",
         "dispatchMode": {
           "label": "调度模式"

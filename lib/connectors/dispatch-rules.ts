@@ -141,6 +141,13 @@ export interface EffectiveRouting {
    */
   respondViaAdapterId: string | undefined
   respondViaSource: "rule" | "none"
+  /**
+   * The character team that answers this IM group (ADR-0177 batch 4). Only
+   * the conversation override sets it; a rule or a bot default does not, so
+   * a room's cast is always a choice made for that room.
+   */
+  characterTeamId: string | undefined
+  characterTeamSource: "override" | "none"
 }
 
 /**
@@ -173,6 +180,7 @@ export function resolveEffectiveRouting(
     | "characterId"
     | "characterDisabled"
     | "routingSource"
+    | "characterTeamId"
   > | null,
   ruleHit: DispatchRuleHit | null
 ): EffectiveRouting {
@@ -246,6 +254,9 @@ export function resolveEffectiveRouting(
     respondViaSource = "rule"
   }
 
+  // ── character team (override-only layer, ADR-0177 batch 4) ────────────────
+  const characterTeamId = override?.characterTeamId?.trim() || undefined
+
   return {
     squadId,
     squadSource,
@@ -255,5 +266,7 @@ export function resolveEffectiveRouting(
     characterSource,
     respondViaAdapterId,
     respondViaSource,
+    characterTeamId,
+    characterTeamSource: characterTeamId ? "override" : "none",
   }
 }

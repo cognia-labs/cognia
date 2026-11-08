@@ -1251,6 +1251,21 @@ describe("streaming several members at once", () => {
     expect(w.calls.commits).toBe(0)
     expect(w.db.has("direct-chat")).toBe(false)
   })
+
+  it("leaves an IM room member's run to the connector runtime", async () => {
+    const w = createWorld()
+    const sub = `${ROOM}::char::a::im.m-1.reply-1`
+    w.setAlwaysAllow(["Bash"])
+    w.emit(assistantFrame(sub, "x", "Ana says hi"))
+    w.emit(permissionFrame(sub))
+    w.emit(endedFrame(sub))
+    await flush()
+    // The connector writes that reply and answers that ask in the group.
+    expect(w.calls.commits).toBe(0)
+    expect(w.db.has(ROOM)).toBe(false)
+    expect(w.approvals).toEqual([])
+    expect(w.calls.approve).toEqual([])
+  })
 })
 
 describe("tool approvals", () => {

@@ -12,9 +12,12 @@
  *   member's prompt, and the memory switch is what the memory plane reads.
  * - **IM rooms** (ADR-0177 batch 4) take their reply mode from the
  *   conversation's activation policy (`useImRoomReplyMode`), the same field
- *   the Inbox's conversation settings edit, and their memory switch from the
- *   session. Their instructions and hand-off mode arrive when an IM group's
- *   turns run through the room runner.
+ *   the Inbox's conversation settings edit, and keep their instructions,
+ *   memory switch and mute list on the session, where the connector runtime
+ *   reads them for every reply. The mute list shows only when the
+ *   conversation names a character team (`useImRoomTeam`): a plain group has
+ *   one voice and nobody to mute. Their hand-off mode arrives with the IM
+ *   hand-off confirmation.
  * - **Shared rooms** show the memory switch. Their reply mode and
  *   instructions arrive with the shared room's own batch.
  *
@@ -36,6 +39,7 @@ import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useImRoomReplyMode } from "@/hooks/connectors/use-im-room-reply-mode"
+import { useImRoomTeam } from "@/hooks/connectors/use-im-room-team"
 import { useClientLiveQuery } from "@/hooks/data"
 import { roomKindOf } from "@/lib/chat/room/kind"
 import {
@@ -58,7 +62,7 @@ export type RoomSettingsControl =
 /** The controls each kind of room shows, in order. */
 export const ROOM_SETTINGS_CONTROLS: Record<RoomKind, readonly RoomSettingsControl[]> = {
   team: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
-  im: ["replyMode", "memory"],
+  im: ["replyMode", "instructions", "memory", "mutedMembers"],
   shared: ["memory"],
 }
 
@@ -80,7 +84,7 @@ export function persistRoomSettings(
 export function RoomSettingsSection({
   sessionId,
   session,
-  members = [],
+  members: membersProp = [],
   defaultCollapsed = true,
   kind: kindProp,
 }: {
@@ -88,7 +92,7 @@ export function RoomSettingsSection({
   session: ChatSession | undefined
   /** The room's kind when the host already knows it (the team panel); read off the session otherwise. */
   kind?: RoomKind
-  /** A team room's members, to name the muted ones. */
+  /** A team room's members, to name the muted ones. An IM room reads its own. */
   members?: readonly Character[]
   /** Collapsed with a one-line summary where a members list is the panel's point. */
   defaultCollapsed?: boolean
@@ -97,8 +101,13 @@ export function RoomSettingsSection({
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const resolved = useMemo(() => resolveRoomSettings(session), [session])
   const kind = kindProp ?? roomKindOf(session)
-  const controls = kind ? ROOM_SETTINGS_CONTROLS[kind] : []
   const imReplyMode = useImRoomReplyMode(session)
+  const imTeam = useImRoomTeam(session)
+  const members = kind === "im" ? (imTeam?.members ?? []) : membersProp
+  const controls = (kind ? ROOM_SETTINGS_CONTROLS[kind] : []).filter(
+    // A plain IM group answers with one voice: there is nobody to mute.
+    (control) => control !== "mutedMembers" || kind !== "im" || members.length > 0
+  )
 
   // An IM room's reply mode is its conversation's policy; every other kind
   // keeps it on the session.
@@ -303,7 +312,40 @@ export function RoomSettingsSection({
               <span className="text-[11px] font-medium text-muted-foreground">
                 {t("roomSettings.mutedMembers")}
               </span>
-              {resolved.mutedMemberIds.length === 0 ? (
+              {kind === "im" ? (
+                // An IM room has no roster panel to mute from, so every member
+                // is a toggle here.
+                <div
+                  className="flex flex-wrap gap-1"
+                  role="group"
+                  aria-label={t("roomSettings.mutedMembers")}
+                >
+                  {members.map((member) => {
+                    const muted = resolved.mutedMemberIds.includes(member.id)
+                    return (
+                      <Button
+                        key={member.id}
+                        type="button"
+                        size="sm"
+                        variant={muted ? "secondary" : "outline"}
+                        aria-pressed={muted}
+                        data-testid={`room-mute-toggle-${member.id}`}
+                        title={t(muted ? "roomSettings.unmute" : "roomSettings.mute", {
+                          name: member.name,
+                        })}
+                        onClick={() =>
+                          persistRoomSettings(sessionId, session, {
+                            mutedMemberIds: toggleId(resolved.mutedMemberIds, member.id),
+                          })
+                        }
+                        className="h-6 px-2 text-[11px]"
+                      >
+                        {member.name}
+                      </Button>
+                    )
+                  })}
+                </div>
+              ) : resolved.mutedMemberIds.length === 0 ? (
                 <p className="text-[11px] text-muted-foreground">{t("roomSettings.noMuted")}</p>
               ) : (
                 <ul className="flex flex-wrap gap-1">
@@ -330,7 +372,7 @@ export function RoomSettingsSection({
                 </ul>
               )}
               <p className="text-[11px] text-muted-foreground" data-testid="room-muted-hint">
-                {t("roomSettings.mutedHint")}
+                {t(kind === "im" ? "roomSettings.imMutedHint" : "roomSettings.mutedHint")}
               </p>
             </div>
           ) : null}

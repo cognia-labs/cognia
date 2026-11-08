@@ -345,6 +345,43 @@ describe("ConversationOverrideForm", () => {
     expect(persisted?.proactivePush).toBe(true)
   })
 
+  it("binds a group to a character team", async () => {
+    const user = userEvent.setup()
+    const onDone = jest.fn()
+    await getDb().teams.bulkPut([
+      { id: "ct_launch", name: "Launch crew", members: [] },
+      { id: "ct_other", name: "Another crew", members: [] },
+    ] as never)
+    renderForm(
+      <ConversationOverrideForm
+        adapterId="lark-1"
+        conversationKey="lark:lark-1:oc_room"
+        sessionId="s_room"
+        onDone={onDone}
+      />
+    )
+    await user.click(screen.getByTestId("conv-override-character-team"))
+    await user.click(await screen.findByRole("option", { name: "Launch crew" }))
+    fireEvent.click(screen.getByTestId("conv-override-save"))
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+    const row = () =>
+      getDb().conversationOverrides.where("conversationKey").equals("lark:lark-1:oc_room").first()
+    expect((await row())?.characterTeamId).toBe("ct_launch")
+  })
+
+  it("shows a bound character team that no longer exists, so it can be cleared", async () => {
+    renderForm(
+      <ConversationOverrideForm
+        adapterId="lark-1"
+        conversationKey="lark:lark-1:oc_room"
+        sessionId="s_room"
+        initialRow={{ characterTeamId: "ct_gone" } as never}
+        onDone={jest.fn()}
+      />
+    )
+    expect(screen.getByTestId("conv-override-character-team")).toHaveTextContent("ct_gone")
+  })
+
   it("selects Provider and Model from the configured catalog for Direct Agent", async () => {
     await getDb().settings.put({
       id: "singleton",

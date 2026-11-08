@@ -3756,6 +3756,263 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
   })
 })
 
+describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177 batch 4)", () => {
+  const KEY = "telegram:adapter_1:room_7"
+  const roomEvent = (over: Partial<NormalizedInboundEvent> = {}) =>
+    makeEvent({
+      conversationKey: KEY,
+      messageId: over.messageId ?? "msg_room_1",
+      channel: { id: "g_room", name: "Launch room", kind: "group" },
+      plainText: "What should we ship?",
+      segments: [{ type: "text", text: "What should we ship?" }],
+      ...over,
+    })
+
+  const character = (id: string, name: string) => ({
+    id,
+    name,
+    avatarColor: "oklch(0.7 0 0)",
+    systemPrompt: `You are ${name}.`,
+    createdAt: 0,
+    updatedAt: 0,
+  })
+
+  async function seedRoom(
+    opts: {
+      orchestration?: string
+      supervisorCharacterId?: string
+      session?: Record<string, unknown>
+      override?: Record<string, unknown>
+      channelKind?: "group" | "private"
+    } = {}
+  ) {
+    await seedAdapter("adapter_1")
+    await getDb().characters.bulkPut([
+      character("c_ana", "Ana"),
+      character("c_ben", "Ben"),
+    ] as never)
+    await getDb().teams.put({
+      id: "ct_launch",
+      name: "Launch",
+      avatarColor: "x",
+      members: [{ characterId: "c_ana", role: "Lead" }, { characterId: "c_ben" }],
+      orchestration: opts.orchestration ?? "round_robin",
+      ...(opts.supervisorCharacterId ? { supervisorCharacterId: opts.supervisorCharacterId } : {}),
+      createdAt: 0,
+      updatedAt: 0,
+    } as never)
+    await getDb().sessions.add({
+      id: "s_room",
+      title: "Launch room",
+      kind: "direct",
+      platformConversationKey: KEY,
+      platformBinding: {
+        platform: "telegram",
+        adapterId: "adapter_1",
+        conversationKey: KEY,
+        scopeKind: opts.channelKind ?? "group",
+      },
+      sdkSessionId: "sdk_previous_voice",
+      createdAt: 0,
+      updatedAt: 0,
+      ...opts.session,
+    } as never)
+    await upsertByConversationKey({
+      conversationKey: KEY,
+      sessionId: "s_room",
+      characterTeamId: "ct_launch",
+      ...opts.override,
+    })
+  }
+
+  type Call = { sessionId: string; prompt: unknown; options: Record<string, unknown> }
+  function capture(
+    answer: (call: Call, index: number, cap: Parameters<RunAndCaptureFn>[3]) => string
+  ) {
+    const calls: Call[] = []
+    const run: RunAndCaptureFn = jest.fn(async (sessionId, prompt, options, cap) => {
+      const call = { sessionId, prompt, options: (options ?? {}) as Record<string, unknown> }
+      calls.push(call)
+      return { text: answer(call, calls.length - 1, cap), messageId: `asst-${calls.length}` }
+    })
+    const closeSession = jest.fn(async (_sessionId: string) => undefined)
+    installRuntime(getBus(), { runAndCapture: run, closeSession })
+    return { calls, closeSession }
+  }
+
+  const outboundTexts = async () =>
+    (await getDb().outboundQueue.toArray()).map((job) =>
+      job.request.segments
+        .map((segment: MessageSegment) =>
+          segment.type === "markdown" ? segment.md : segment.type === "text" ? segment.text : ""
+        )
+        .join("")
+    )
+
+  it("answers member by member, each fresh, signed, and stored as its own author", async () => {
+    await seedRoom({ session: { roomSettings: { instructions: "Keep it short." } } })
+    const { calls, closeSession } = capture((call) =>
+      call.sessionId.includes("c_ana") ? "Ship the beta." : "Agreed, the beta."
+    )
+
+    await callHandler(roomEvent(), "ai-run")
+
+    // Each member runs under its own sub-session of the room, named by the
+    // inbound message and the step.
+    const inbound = (await getDb().messages.toArray()).find((row) => row.role === "user")!
+    expect(calls.map((call) => call.sessionId)).toEqual([
+      `s_room::char::c_ana::im.${inbound.id}.reply-1`,
+      `s_room::char::c_ben::im.${inbound.id}.reply-2`,
+    ])
+    for (const call of calls) {
+      // A member never resumes the voice that answered the group before.
+      expect(call.options.resumeSessionId).toBeUndefined()
+      const tail = String(call.options.appendSystemPrompt)
+      expect(tail).toContain("## Room instructions\n\nKeep it short.")
+      expect(tail).toContain("What should we ship?")
+    }
+    expect(String(calls[1]!.options.appendSystemPrompt)).toContain("Ana: Ship the beta.")
+    expect(closeSession.mock.calls.map((args) => args[0])).toEqual(calls.map((c) => c.sessionId))
+
+    expect(await outboundTexts()).toEqual([
+      "**Ana**\n\nShip the beta.",
+      "**Ben**\n\nAgreed, the beta.",
+    ])
+    const replies = (await getDb().messages.where("sessionId").equals("s_room").toArray()).filter(
+      (row) => row.role === "assistant"
+    )
+    expect(
+      replies.map((row) => [row.metadata?.senderId, (row.parts[0] as { text: string }).text])
+    ).toEqual([
+      ["c_ana", "Ship the beta."],
+      ["c_ben", "Agreed, the beta."],
+    ])
+    // The conversation's own native session is left as it was.
+    expect((await getDb().sessions.get("s_room"))?.sdkSessionId).toBe("sdk_previous_voice")
+    const audit = (await getDb().connectorAudit.toArray()).find((row) => row.kind === "room.turn")
+    expect(audit?.fields).toMatchObject({ characterTeamId: "ct_launch", steps: 2, end: "done" })
+  })
+
+  it("answers as the team when a Squad is bound too: the Squad is the hand-off target", async () => {
+    await seedRoom({ override: { squadId: "squad_x" } })
+    const { calls } = capture(() => "On it.")
+    await callHandler(roomEvent(), "ai-run")
+    expect(mockStartTeamRunFromIM).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(2)
+  })
+
+  it("keeps a one-to-one chat on its single character", async () => {
+    await seedRoom({ channelKind: "private" })
+    const { calls } = capture(() => "Hi.")
+    await callHandler(roomEvent({ channel: { id: "dm", kind: "private" } }), "ai-run")
+    expect(calls.map((call) => call.sessionId)).toEqual(["s_room"])
+    expect(calls[0]!.options.resumeSessionId).toBe("sdk_previous_voice")
+    expect(await outboundTexts()).toEqual(["Hi."])
+  })
+
+  it("gives a plain group's one voice the room's instructions", async () => {
+    await seedRoom({
+      override: { characterTeamId: undefined },
+      session: { roomSettings: { instructions: "Reply in Chinese." } },
+    })
+    const { calls } = capture(() => "好的。")
+    await callHandler(roomEvent(), "ai-run")
+    expect(calls.map((call) => call.sessionId)).toEqual(["s_room"])
+    expect(String(calls[0]!.options.appendSystemPrompt)).toContain(
+      "## Room instructions\n\nReply in Chinese."
+    )
+    expect(await getDb().connectorAudit.where("kind").equals("room.turn").count()).toBe(0)
+  })
+
+  it("dispatches through a supervisor and hides the protocol from the group", async () => {
+    await seedRoom({ orchestration: "supervisor", supervisorCharacterId: "c_ana" })
+    const { calls } = capture((call, index) =>
+      index === 0
+        ? 'Let me check. <dispatch to="Ben">Price the beta</dispatch>'
+        : index === 1
+          ? "About 40."
+          : "It costs about 40."
+    )
+    await callHandler(roomEvent(), "ai-run")
+    expect(calls[1]!.prompt).toBe("Dispatch from supervisor:\nPrice the beta")
+    expect(calls[2]!.prompt).toBe("Synthesize the final reply.")
+    expect(String(calls[2]!.options.appendSystemPrompt)).toContain("Ben replied: About 40.")
+    expect(await outboundTexts()).toEqual([
+      "**Ana**\n\nLet me check.",
+      "**Ben**\n\nAbout 40.",
+      "**Ana**\n\nIt costs about 40.",
+    ])
+    const supervisorRow = (await getDb().messages.toArray()).find(
+      (row) =>
+        (row.metadata as { imRoomTurn?: { kind: string } })?.imRoomTurn?.kind === "supervisor"
+    )
+    expect(supervisorRow?.metadata).toMatchObject({
+      imRoomTurn: { protocolText: 'Let me check. <dispatch to="Ben">Price the beta</dispatch>' },
+    })
+  })
+
+  it("continues an interrupted room at the member that was cut off", async () => {
+    await seedRoom()
+    const { calls: first } = capture((call, _index, cap) => {
+      if (call.sessionId.includes("c_ben")) {
+        cap?.onSdkSessionId?.("sdk_ben_1")
+        throw new Error("sidecar went away")
+      }
+      return "One."
+    })
+    const event = roomEvent()
+    await callHandler(event, "ai-run")
+    expect(first).toHaveLength(2)
+    expect(await outboundTexts()).toEqual(["**Ana**\n\nOne."])
+    const halted = (await getDb().connectorAudit.toArray()).find((row) => row.kind === "room.turn")
+    expect(halted?.fields).toMatchObject({ steps: 2, end: "halted" })
+
+    // The operator continues it: the anchor is Ben's run, so Ana's answered
+    // step is fed back from her stored reply and only Ben runs again.
+    const inbound = (await getDb().messages.toArray()).find((row) => row.role === "user")!
+    const benRunId = `execution:agent:s_room:${inbound.id}:reply-2`
+    const started = (
+      await getDb().executionRunEvents.where("runId").equals(benRunId).toArray()
+    ).find((row) => row.type === "run.started")
+    const changed = (
+      await getDb().executionRunEvents.where("runId").equals(benRunId).toArray()
+    ).filter((row) => row.type === "resource.changed")
+    const anchor = (changed.at(-1)?.payload.recoveryAnchor ??
+      started?.payload.recoveryAnchor) as Record<string, unknown>
+    expect(anchor.executionIdentityRunId).toBe(benRunId)
+    // Ben's own native session, never the conversation's.
+    expect(anchor.sdkSessionId).toBe("sdk_ben_1")
+    expect((await getDb().sessions.get("s_room"))?.sdkSessionId).toBe("sdk_previous_voice")
+
+    const { calls: replay } = capture(() => "Two.")
+    await callHandler(
+      roomEvent({
+        channelData: {
+          recoveryIntent: "continue_safely",
+          dispatchIntent: "steer-replay",
+          recoveryAnchor: { ...anchor, attemptId: "room-recovery" },
+        },
+      }),
+      "ai-run"
+    )
+    expect(replay.map((call) => call.sessionId)).toEqual([expect.stringContaining("c_ben")])
+    expect(replay[0]!.options.resumeSessionId).toBe("sdk_ben_1")
+    expect(await outboundTexts()).toEqual(["**Ana**\n\nOne.", "**Ben**\n\nTwo."])
+    expect(await getDb().executionRuns.get(`${benRunId}:attempt:room-recovery`)).toBeDefined()
+  })
+
+  it("fails closed when the named team is gone", async () => {
+    await seedRoom({ override: { characterTeamId: "ct_deleted" } })
+    const { calls } = capture(() => "unused")
+    await callHandler(roomEvent(), "ai-run")
+    expect(calls).toHaveLength(0)
+    const audit = await getDb().connectorAudit.toArray()
+    expect(audit.find((row) => row.reason === "character_team_missing")?.fields).toMatchObject({
+      characterTeamId: "ct_deleted",
+    })
+  })
+})
+
 describe("installRuntime — ai-run (dispatch rules W3)", () => {
   beforeEach(() => {
     mockStartTeamRunFromIM.mockClear()

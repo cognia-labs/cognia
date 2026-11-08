@@ -269,6 +269,7 @@ export function buildLarkStatusCard(view: StatusView): MessageSegment {
     { label: "角色", value: value(view.character) },
     ...(view.assignee ? [{ label: "分配", value: value(view.assignee) }] : []),
     { label: "团队", value: value(view.team) },
+    { label: "角色团队", value: value(view.characterTeam) },
     { label: "工作流", value: value(view.workflow) },
   ]
   const route: LarkField[] = [

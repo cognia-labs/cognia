@@ -61,7 +61,27 @@ import type {
   StoredMessage,
   AppSettings,
   ChatSession,
+  Character,
+  Team,
 } from "@cognia/agent-config-types"
+import { imRoomMemberSessionId } from "@/lib/claude/team-session-id"
+import { selectPrimaryResponder } from "@/lib/claude/team-primary-router"
+import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
+import { buildRoomInstructionsSection, resolveRoomSettings } from "@/lib/chat/room/settings"
+import { roomKindOf } from "@/lib/chat/room/kind"
+import {
+  ImRoomTurn,
+  primaryRoutingOf,
+  visibleRoomReplyText,
+  type ImRoomStep,
+} from "./room/im-room-turn"
+import {
+  buildImRoomMemberSection,
+  deliveredImRoomStep,
+  signImRoomReply,
+  storedReplyText,
+  type ImRoomReplyMetadata,
+} from "./room/im-room-member"
 import type { AgentExecutionSendSpec } from "@cognia/agent-config-types/agent-execution"
 import type { AuditKind } from "@/types/connectors/audit"
 import type { InboxSendPolicy } from "@/lib/claude/build-options"
@@ -594,6 +614,44 @@ export interface RuntimeOptions {
   tryLiveSteer?: LiveSteerHandler
   /** Active-run registry used by the production Anthropic sidecar bridge. */
   liveSteerCoordinator?: ConnectorLiveSteerCoordinator
+  /**
+   * Close a sidecar session once an IM room member's step is over (ADR-0177
+   * batch 4). Defaults to the IPC `closeSession`; tests inject a stub.
+   */
+  closeSession?: (sessionId: string) => Promise<void>
+}
+
+/** One member step of an IM room's turn, as the reply path runs it. */
+interface ImRoomMemberRun {
+  step: ImRoomStep
+  roomSessionId: string
+  sourceMessageId: string
+  /** The sub-session the step runs under (`imRoomMemberSessionId`). */
+  sessionId: string
+  /** The step's system-prompt section (`buildImRoomMemberSection`). */
+  section: string
+  permissionCeiling: AgentPermissionCeiling
+}
+
+/** How one reply through the reply path ended. */
+type DirectReplyOutcome =
+  | { kind: "delivered"; text: string; messageId: string }
+  /** It stopped before delivering; it already audited and told the conversation. */
+  | { kind: "halted" }
+
+async function closeSidecarSession(sessionId: string): Promise<void> {
+  const { closeSession } = await import("@/lib/claude/ipc")
+  await closeSession(sessionId)
+}
+
+/** Whether a recovery anchor was minted by the run `baseRunId` names (or one of its attempts). */
+function recoveryAnchorNamesRun(
+  anchor: NonNullable<ReturnType<typeof parseAgentRunRecoveryAnchor>>,
+  baseRunId: string
+): boolean {
+  const named = (id: string | undefined) =>
+    id !== undefined && (id === baseRunId || id.startsWith(`${baseRunId}:attempt:`))
+  return named(anchor.executionIdentityRunId) || named(anchor.executionJournalRunId)
 }
 
 // Session ↔ conversation binding lookups live in `session-bindings.ts` so the
@@ -896,6 +954,75 @@ export async function insertInboundMessage(
   overrideTimestamp?: number
 ): Promise<StoredMessage> {
   return (await insertInboundMessageWithRevision(event, sessionId, overrideTimestamp)).stored
+}
+
+/** How far back a room member's transcript reads (its renderer keeps 40 turns). */
+const IM_ROOM_TRANSCRIPT_SCAN_ROWS = 160
+
+/** The room session's newest rows, oldest first. */
+async function readImRoomMessages(sessionId: string): Promise<StoredMessage[]> {
+  const rows = await getDb()
+    .messages.where("[sessionId+createdAt]")
+    .between([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER])
+    .reverse()
+    .limit(IM_ROOM_TRANSCRIPT_SCAN_ROWS)
+    .toArray()
+    .catch(() => [] as StoredMessage[])
+  return rows.reverse()
+}
+
+/**
+ * Write a member's reply into the room (ADR-0177 batch 4). A member runs
+ * under a sub-session no chat controller persists, so the reply path writes
+ * the row itself, authored by the member, after its product has been handed
+ * to delivery: a crash in between runs the step again on replay rather than
+ * losing it.
+ */
+async function recordImRoomMemberReply(
+  member: ImRoomMemberRun,
+  text: string,
+  protocolText: string
+): Promise<void> {
+  const metadata: ImRoomReplyMetadata = {
+    senderId: member.step.character.id,
+    imRoomTurn: {
+      sourceMessageId: member.sourceMessageId,
+      stepKey: member.step.stepKey,
+      kind: member.step.kind,
+      ...(protocolText !== text ? { protocolText } : {}),
+    },
+  }
+  const row: StoredMessage = {
+    id: crypto.randomUUID(),
+    sessionId: member.roomSessionId,
+    role: "assistant",
+    parts: [{ type: "text", text }],
+    metadata: metadata as unknown as StoredMessage["metadata"],
+    createdAt: Date.now(),
+  }
+  const db = getDb()
+  await db.messages.add(row)
+  await stampSessionLastMessage(row.sessionId, row)
+  await db.sessions.update(row.sessionId, { updatedAt: row.createdAt })
+  const chat = useChatStore.getState()
+  const slice = chat.sessions[row.sessionId]
+  if (slice && !slice.messages.some((message) => message.id === row.id)) {
+    chat.replaceSessionMessages(row.sessionId, [...slice.messages, rowToUIMessage(row)])
+  }
+}
+
+/** The team and characters a room binding names, or `null` when nothing of it is left. */
+async function loadImRoomTeam(
+  teamId: string
+): Promise<{ team: Team; characters: Character[] } | null> {
+  const { getTeam } = await import("@/lib/db/teams")
+  const team = await getTeam(teamId).catch(() => undefined)
+  if (!team) return null
+  const { listCharactersByIds } = await import("@/lib/db/characters")
+  const characters = await listCharactersByIds(team.members.map((slot) => slot.characterId)).catch(
+    () => [] as Character[]
+  )
+  return characters.length > 0 ? { team, characters } : null
 }
 
 /** A connector must not create renderer slices for unopened conversations. */
@@ -1616,6 +1743,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           // override and the bot default, so the facade has to see it too or
           // `/status` reports a model this turn will not use.
           session: { model: session.model, providerOverride: session.providerOverride },
+          scope: event.channel.kind,
         })
         const suppression = resolveInboxSuppression(adapterRow, override)
         const quiet = suppression.quietHours
@@ -1689,17 +1817,62 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           break
         }
 
-        const target = effectiveTeamId ? "team" : effectiveWorkflowId ? "workflow" : "direct"
-        let permissionCeiling = await buildImPermissionCeiling({
-          adapter: adapterRow,
-          override,
-          character: effectiveCharacter,
-          platform: event.platform,
-          target,
-          composition: effectiveConfig,
-        })
-        const accepted = routeContext?.acceptedPolicy
-        if (accepted) {
+        // ── Character team (ADR-0177 batch 4) ──
+        // A group whose conversation names a character team is a room the team
+        // answers, member by member, through this conversation's own reply
+        // path below: the run card, approvals in the group, drafts and
+        // streaming stay what a single character gets. The team outranks a
+        // Squad binding, which stays the room's hand-off target, and a
+        // workflow. A one-to-one chat is never a room, whatever its row says.
+        const roomTeamId = event.channel.kind === "private" ? undefined : routing.characterTeamId
+        const roomTeam = roomTeamId ? await loadImRoomTeam(roomTeamId) : null
+        if (roomTeamId && !roomTeam) {
+          await appendAudit({
+            adapterId: event.adapterId,
+            kind: "adapter.error",
+            at: Date.now(),
+            conversationKey: event.conversationKey,
+            reason: "character_team_missing",
+            fields: { characterTeamId: roomTeamId, sourceMessageId: storedMsg.id },
+          })
+          if (requireAcceptance) {
+            notifyImFailure(
+              event.conversationKey,
+              IM_FAILURE_NOTICE.dispatchFailed,
+              `dispatch-error:${event.conversationKey}`
+            )
+          } else {
+            await replyImFailure(
+              event,
+              IM_FAILURE_NOTICE.dispatchFailed,
+              `dispatch-error:${event.conversationKey}`
+            )
+          }
+          break
+        }
+
+        // A room's members each answer directly, so each gets a direct ceiling
+        // built for its own character.
+        const target = roomTeam
+          ? "direct"
+          : effectiveTeamId
+            ? "team"
+            : effectiveWorkflowId
+              ? "workflow"
+              : "direct"
+        const ceilingFor = async (
+          character: typeof effectiveCharacter
+        ): Promise<AgentPermissionCeiling> => {
+          let ceiling = await buildImPermissionCeiling({
+            adapter: adapterRow,
+            override,
+            character,
+            platform: event.platform,
+            target,
+            composition: effectiveConfig,
+          })
+          const accepted = routeContext?.acceptedPolicy
+          if (!accepted) return ceiling
           const acceptedComposition = resolveImEffectiveConfig({
             adapter: accepted.adapter,
             override: accepted.override,
@@ -1712,19 +1885,22 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                   ? undefined
                   : accepted.resolved.modeSource,
             },
+            scope: event.channel.kind,
           })
-          permissionCeiling = deriveExternalSessionPermission(
+          ceiling = deriveExternalSessionPermission(
             await buildImPermissionCeiling({
               adapter: accepted.adapter,
               override: accepted.override,
-              character: effectiveCharacter,
+              character,
               platform: event.platform,
               target,
               composition: acceptedComposition,
             }),
-            permissionCeiling
+            ceiling
           )
+          return ceiling
         }
+        const permissionCeiling = await ceilingFor(effectiveCharacter)
 
         // One-shot `dispatch.rule_matched` audit writer — appended only when
         // the matched rule's action actually decided the routing (i.e. was
@@ -1753,7 +1929,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // runtimes, bypassing `safeSendPrompt`. Enforce the same fail-closed
         // red-line here (single choke point covering both — including
         // rule-sourced teams/workflows) before any dispatch.
-        if ((effectiveTeamId || effectiveWorkflowId) && !isInboundTextPiiSafe(event)) {
+        if (!roomTeam && (effectiveTeamId || effectiveWorkflowId) && !isInboundTextPiiSafe(event)) {
           await appendAudit({
             adapterId: event.adapterId,
             kind: "adapter.error",
@@ -1779,7 +1955,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // conversation via the execution bridge + run-presentation runner
         // (triggeredFrom). Skip
         // the rest of the ai-run branch on success.
-        if (effectiveTeamId) {
+        if (effectiveTeamId && !roomTeam) {
           if (routing.squadSource === "rule") {
             await auditRuleDecision({ teamId: effectiveTeamId })
           }
@@ -1871,7 +2047,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // same execution bridge + run-presentation runner the team path
         // uses. Skip the rest
         // of the ai-run branch on dispatch.
-        if (effectiveWorkflowId) {
+        if (effectiveWorkflowId && !roomTeam) {
           if (routing.workflowSource === "rule") {
             await auditRuleDecision({ workflowId: effectiveWorkflowId })
           }
@@ -2043,955 +2219,1159 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           await auditRuleDecision({ characterId: routing.characterId })
         }
 
-        const baseExecutionRunId = `execution:agent:${session.id}:${storedMsg.id}`
-        const recoveringSafely = event.channelData?.recoveryIntent === "continue_safely"
-        const previousRecoveryAnchor = recoveringSafely
-          ? parseAgentRunRecoveryAnchor(event.channelData?.recoveryAnchor)
-          : undefined
-        const recoveryParentRunId = previousRecoveryAnchor
-          ? (previousRecoveryAnchor.executionJournalRunId ??
-            previousRecoveryAnchor.executionIdentityRunId ??
-            baseExecutionRunId)
-          : undefined
-        const executionRunId = previousRecoveryAnchor
-          ? `${baseExecutionRunId}:attempt:${previousRecoveryAnchor.attemptId}`
-          : baseExecutionRunId
-        const executionIdentity = {
-          runId: previousRecoveryAnchor?.executionIdentityRunId ?? baseExecutionRunId,
-          turnId: storedMsg.id,
-          attemptId: previousRecoveryAnchor?.attemptId ?? "a1",
-        }
+        // A plain group is a room too: its instructions reach its one voice.
+        const plainRoomSection =
+          roomKindOf(session) === "im"
+            ? buildRoomInstructionsSection(resolveRoomSettings(session).instructions)
+            : ""
 
-        // Resolve the send options (character + twin + memory context) through
-        // the shared helper so an ai-run and a draft prepare from identical
-        // grounding. `emitTrace: true` mints the connector root span, ended on
-        // the capture-error / success branches below.
-        const { projectImComposition } = await import("./composition/im-composition-selection")
-        const { sendOptions, appSettings, runTitle, workspaceRoot, mutedScope, twinId } =
-          await resolveInboundSendOptions({
-            event,
-            session,
-            resolved: effectiveResolved,
-            override,
-            adapterRow,
-            emitTrace: true,
-            executionIdentity,
-            permissionCeiling,
-            // A ChatSession carries no `agentModeId` of its own (that field
-            // lives on SystemPromptPreset), so the preset stays Standard here
-            // rather than borrowing the desktop's localStorage default — which
-            // is the very coupling this seam exists to remove. The axes below
-            // it all come from this conversation's Dexie config.
-            compositionSelection: projectImComposition({ effective: effectiveConfig }).selection,
-          })
-
-        let recoveryExecution: AgentExecutionSendSpec
-        try {
-          recoveryExecution = await resolveRecoveryExecutionSpec(
-            sendOptions,
-            session.id,
-            executionIdentity,
-            recoveringSafely,
-            previousRecoveryAnchor?.routeKind
-          )
-        } catch (error) {
-          if (
-            recoveringSafely &&
-            error instanceof Error &&
-            error.message === "recovery_gateway_ticket_remint_failed"
-          ) {
-            await markConnectorInboundJobRecoveryRequired(
-              routeContext.inboundJobId,
-              "recovery_gateway_ticket_remint_failed"
-            )
-            await runEventJournal.append(
-              recoveryParentRunId ?? executionRunId,
-              semanticRunEvent("run.recovery_required", {
-                reason: "gateway-ticket-remint-failed",
-              })
-            )
-            break
-          }
-          throw error
-        }
-        // Preserve rollout semantics: only update the on-wire spec when this
-        // send already opted into canonical dispatch. The shadow spec still
-        // owns recovery identity and journaling while the flag is off.
-        if (sendOptions.execution) sendOptions.execution = recoveryExecution
-
-        if (recoveringSafely) {
-          const current = {
-            sdkSessionId: session.sdkSessionId,
-            executionFingerprint: recoveryExecution.executionFingerprint,
-            candidateDeploymentIds: candidateDeploymentIds(sendOptions, recoveryExecution),
-            modelBindings: recoveryExecution.modelBindings,
-          }
-          const validation = previousRecoveryAnchor
-            ? validateRecoveryContinuation(previousRecoveryAnchor, current)
-            : { action: "pause" as const, mismatches: ["recoveryAnchor"] }
-          if (validation.action === "pause") {
-            await markConnectorInboundJobRecoveryRequired(
-              routeContext.inboundJobId,
-              "recovery_execution_drift",
-              { error: validation.mismatches.join(",") }
-            )
-            await runEventJournal.append(
-              recoveryParentRunId ?? executionRunId,
-              semanticRunEvent("run.recovery_required", {
-                reason: "execution-drift",
-                detail: validation.mismatches,
-              })
-            )
-            break
-          }
-        }
-
-        // ── Suppression gate: short-circuit before the sidecar call ──
-        if (sendOptions.suppressedReason) {
-          await appendAudit({
-            adapterId: event.adapterId,
-            kind: suppressedReasonToAuditKind(sendOptions.suppressedReason),
-            at: now,
-            conversationKey: event.conversationKey,
-            reason: sendOptions.suppressedReason,
-            fields: {
-              sourceMessageId: storedMsg.id,
-              // Both layers can mute; only the row says which control to go to.
-              ...(mutedScope ? { mutedScope } : {}),
-            },
-          })
-          break
-        }
-
-        // ── Capture the assistant reply via the injected wrapper ──
-        // Always wire `onPermissionRequest` so an ask-tier tool fired mid-turn
-        // projects an A2UI Allow/Deny card to the conversation and the turn
-        // suspends until the user taps (control-plane HITL). Without this the
-        // sidecar's permission_request went unanswered and the turn hung until
-        // the 5-min timeout — a latent IM auto-mode bug this also fixes.
-        // `onPartial` is additionally wired when the target adapter supports
-        // incremental replies (WeCom 智能机器人) so the assistant's growing text
-        // drives platform-side stream frames; the authoritative final message
-        // still flows through `enqueueOutbound` below. Both are best-effort.
-        //
-        // The turn timeout is raised to {@link CONNECTOR_TURN_TIMEOUT_MS} so a
-        // legitimate human approval (registry TTL 10 min) resolves before the
-        // turn times out, while a genuinely stuck sidecar is still bounded.
-        const targetAdapter = bus.getAdapter(event.adapterId)
-        // A drafted turn has no live conversational surface: nobody has agreed
-        // to see it yet, so a progress card would announce a reply the operator
-        // may never approve.
-        // ── Respond-via bot (multi-bot cross-account send) ──
-        // A matched dispatch rule may ask for the reply to be delivered
-        // through ANOTHER of our own bot instances. Validate the target at
-        // dispatch time (exists, enabled, not muted, same platform) and fall
-        // back to the receiving bot — with an audit trail either way — so a
-        // stale rule can never silently drop the reply. Resolved BEFORE the
-        // capture so platform streaming can be gated on it: when the reply is
-        // rewired away from the receiving adapter+conversation, the RECEIVING
-        // bot must not stream partial frames it will never finalize (the
-        // sibling posts the final — the user would otherwise see an orphaned
-        // duplicate preview).
-        const outboundTarget = await resolveRespondViaTarget(
-          routing.respondViaAdapterId,
-          event,
-          adapterRow
-        )
-        const streamsThroughReceiver =
-          !requireAcceptance &&
-          outboundTarget.adapterId === event.adapterId &&
-          outboundTarget.conversationKey === event.conversationKey
-        const liveActivityEnabled =
-          override?.liveActivity !== false &&
-          !requireAcceptance &&
-          !(
-            streamsThroughReceiver &&
-            targetAdapter?.meta.type === "qq-official" &&
-            event.conversationRef.scene === "c2c" &&
-            typeof targetAdapter.streamReply === "function"
-          )
-        // Persist one locale for the complete turn, including replay without
-        // an IM binding and the terminal result card.
-        const vendorReply = connectorVendor(event.platform)?.reply
-        const runLocale = vendorReply?.turnLocale
-          ? await vendorReply.turnLocale(event.plainText, appSettings?.language)
-          : appSettings?.language
-        const presentationTitle = vendorReply?.titleFromMessage
-          ? sanitizeActivityLabel(event.plainText.split(/\r?\n/, 1)[0], "Agent run")
-          : runTitle
-        const recoveryParent = recoveryParentRunId
-          ? await getDb().executionRuns.get(recoveryParentRunId)
-          : undefined
-        // A recovery anchor is routing data. Only this session's exact prior
-        // execution of this stored inbound message may supply its identity.
-        const verifiedRecoveryParent =
-          recoveryParent?.kind === "agent-turn" &&
-          recoveryParent.sessionId === session.id &&
-          recoveryParent.sourceId === storedMsg.id
-            ? recoveryParent
-            : undefined
-        await createExecutionRun({
-          id: executionRunId,
-          ...recordedRunMetadata(recoveryParentRunId ? "child" : "requester", {
-            runId: executionRunId,
-            parent: verifiedRecoveryParent,
-            requesters: [connectorRequester(event)],
-            authority: authorityFromPermissionCeiling(permissionCeiling),
-          }),
-          ...(verifiedRecoveryParent ? { parentRunId: verifiedRecoveryParent.id } : {}),
-          kind: "agent-turn",
-          sourceId: storedMsg.id,
-          sessionId: session.id,
-          projectId: session.projectId,
-          title: presentationTitle,
-          status: "queued",
-          initiator: {
-            platformIdentityId: event.sender.id,
-            remoteUserId: event.sender.remoteUserId,
-            displayName: event.sender.displayName,
-            ...(readResolvedPrincipal(event.channelData) ?? {}),
-          },
-          currentRevision: 0,
-          startedAt: Date.now(),
-          updatedAt: Date.now(),
-        })
-        await routeContext.bindExecutionRun(executionRunId)
-        if (liveActivityEnabled) {
-          const teamId =
-            typeof event.conversationRef.teamId === "string"
-              ? event.conversationRef.teamId
+        // One reply through this conversation's reply path: the whole turn for a
+        // single character, one step of a room turn for a team member (`member`).
+        // A member's step is its own execution run, under its own sub-session,
+        // started fresh rather than resuming the conversation's native session.
+        const runDirectReply = async (
+          member: ImRoomMemberRun | null
+        ): Promise<DirectReplyOutcome> => {
+          const baseExecutionRunId = member
+            ? `execution:agent:${session.id}:${storedMsg.id}:${member.step.stepKey}`
+            : `execution:agent:${session.id}:${storedMsg.id}`
+          const runSessionId = member?.sessionId ?? session.id
+          // A room replayed to continue safely resumes the one step whose run
+          // was interrupted; every other step runs (or is skipped) as usual.
+          const parsedRecoveryAnchor =
+            event.channelData?.recoveryIntent === "continue_safely"
+              ? parseAgentRunRecoveryAnchor(event.channelData?.recoveryAnchor)
               : undefined
-          await putExecutionRunBinding({
-            id: `execution-binding:${executionRunId}:${event.adapterId}:${event.conversationKey}`,
-            runId: executionRunId,
-            projectId: session.projectId,
-            adapterId: event.adapterId,
-            conversationKey: event.conversationKey,
-            status: "active",
-            deliveryMode: "native",
-            // A Feishu card answers in the language its reader wrote in,
-            // not the host's own UI language.
-            locale: runLocale,
-            sourceMessageId: event.canReplyToMessage === false ? undefined : event.messageId,
-            deliveryTarget: deliveryTargetFromEvent(event),
-            recipientUserId: event.sender.remoteUserId,
-            recipientTeamId: teamId,
-            lastProjectedRevision: 0,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          })
-        }
-        const runProducer = new AgentRunEventProducer(executionRunId, undefined, {
-          workspaceRoot,
-        })
-        let recoveryAnchor = buildAgentRunRecoveryAnchor({
-          inboundJobId: routeContext.inboundJobId,
-          sessionId: session.id,
-          sdkSessionId: session.sdkSessionId,
-          execution: recoveryExecution,
-          journalRunId: executionRunId,
-          candidateDeploymentIds: candidateDeploymentIds(sendOptions, recoveryExecution),
-          restoredPermissions: previousRecoveryAnchor?.restoredPermissions,
-          partialOutput: previousRecoveryAnchor?.partialOutput,
-        })
-        // Wall-clock turn start — also the result-card footer's elapsed base.
-        const turnStartedAt = Date.now()
-        await runProducer.start(turnStartedAt, {
-          recoveryAnchor,
-          locale: runLocale,
-          ...(vendorReply?.titleFromMessage ? { title: presentationTitle, safeTitle: true } : {}),
-        })
-        // Abort propagation: thread the per-adapter teardown signal (aborted
-        // by the install teardown and by a lifecycle requeue/stop) into the
-        // capture, so tearing the runtime down halts an in-flight turn instead
-        // of letting it run to the 15-min timeout and write Dexie post-unmount.
-        const adapterSignal = getRunningAdapter(event.adapterId)?.abortController.signal
-        const runController = new AbortController()
-        const unregisterRunController = registerAgentRunController(executionRunId, runController)
-        const unregisterLiveSteer = opts.liveSteerCoordinator?.activate({
-          conversationKey: event.conversationKey,
-          sessionId: session.id,
-          executionRunId,
-          provider: sendOptions.provider ?? "anthropic",
-          injectionProtection: sendOptions.contentSafety?.injectionProtection !== false,
-        })
-        const captureSignal = adapterSignal
-          ? AbortSignal.any([adapterSignal, runController.signal])
-          : runController.signal
-        const replyStream = createReplyStream({
-          adapter: targetAdapter,
-          conversationRef: event.conversationRef,
-          streamKey: executionRunId,
-          enabled: streamsThroughReceiver,
-          signal: captureSignal,
-        })
-        const envelope = createEnvelopeSequencer({
-          sessionId: session.id,
-          runId: executionRunId,
-          attemptId: recoveryAnchor.attemptId,
-          hostRef: recoveryExecution.hostRef,
-          runtime: recoveryExecution.runtimeAdapter,
-          turnId: executionIdentity.turnId,
-        })
-        let canonicalTail: Promise<unknown> = Promise.resolve()
-        let canonicalFailure: unknown
-        let recoveryMetadataTail: Promise<unknown> = Promise.resolve()
-        const persistCanonicalEvent = (canonical: Parameters<typeof envelope>[0]) => {
-          const nextEnvelope = envelope(canonical)
-          canonicalTail = canonicalTail
-            .catch(() => undefined)
-            .then(() => appendCanonicalEnvelopes(executionRunId, [nextEnvelope]))
-            .catch((error) => {
-              canonicalFailure ??= error
-              throw error
-            })
-          return canonicalTail
-        }
-        const approvalController = new AbortController()
-        const basePermissionResponder = makeImPermissionResponder({
-          signal: AbortSignal.any([captureSignal, approvalController.signal]),
-          runId: executionRunId,
-          sessionId: session.id,
-          adapterId: event.adapterId,
-          conversationKey: event.conversationKey,
-          conversationRef: event.conversationRef,
-          initiatorUserId: event.sender.remoteUserId,
-          deliveryTarget: deliveryTargetFromEvent(event),
-          approvalMode: override?.approvalMode,
-        })
-        // The `ask_user` tool call surfaces as an interactive card in THIS
-        // conversation while the capture runs (Phase 3 — connector-initiated
-        // runs have nobody watching the desktop dialog). The registration
-        // dies with the capture: `approvalController` aborts in the finally
-        // below, which both hides the context from late `plugin_tool_exec`
-        // events and settles any prompt still pending as aborted.
-        const unregisterImElicitation = registerImElicitationContext({
-          sessionId: session.id,
-          adapterId: event.adapterId,
-          conversationKey: event.conversationKey,
-          conversationRef: event.conversationRef,
-          deliveryTarget: deliveryTargetFromEvent(event),
-          initiatorUserId: event.sender.remoteUserId,
-          runId: executionRunId,
-          drafting: requireAcceptance,
-          signal: AbortSignal.any([captureSignal, approvalController.signal]),
-        })
-        const restoredDeniedRequests = new Set(
-          (previousRecoveryAnchor?.restoredPermissions ?? [])
-            .filter((permission) => permission.state === "denied")
-            .map((permission) => permission.requestId)
-        )
-        const sourceSendState: { changed: { deleted: boolean } | null } = { changed: null }
-        const cap: import("@/lib/claude/run-and-capture").RunAndCaptureOptions & {
-          adapterId?: string
-          conversationKey?: string
-        } = {
-          // Connector context for the injected PII gate (`safeSendPrompt`) and
-          // its usage telemetry; ignored by the raw capture wrapper.
-          adapterId: event.adapterId,
-          conversationKey: event.conversationKey,
-          timeoutMs: CONNECTOR_TURN_TIMEOUT_MS,
-          idleTimeoutMs: CONNECTOR_TURN_IDLE_TIMEOUT_MS,
-          signal: captureSignal,
-          // IPC evaluates this under the transcript lock after workspace,
-          // middleware and subscription preparation have finished.
-          beforeSend: async () => {
-            sourceSendState.changed = await sourceChange()
-            if (sourceSendState.changed) throw new Error("Inbound source changed before send")
-          },
-          // ADR-0239: the IM requester is in the thread and answers asks there;
-          // a reply into that thread needs no ask at all.
-          outboundPolicy: { unattended: false },
-          onPermissionRequest: async (request) => {
-            await persistCanonicalEvent({
-              kind: "permission-request",
-              requestId: request.requestId,
-              toolName: request.toolName,
-              input: request.input,
-            })
-            const decision = restoredDeniedRequests.has(request.requestId)
-              ? { decision: "deny" as const, message: "permission denied by recovered state" }
-              : requireAcceptance
-                ? // No human is in the loop at GENERATION time for a drafted
-                  // turn — the human reviews the finished product. Asking now
-                  // would project an Allow/Deny card into a conversation whose
-                  // operator has said the bot does not speak unprompted.
-                  { decision: "deny" as const, message: "ask-tier tools are denied while drafting" }
-                : await basePermissionResponder(request)
-            await persistCanonicalEvent({
-              kind: "permission-resolved",
-              requestId: request.requestId,
-              behavior: decision.decision === "deny" ? "deny" : "allow",
-            })
-            return attributeConnectorDecision(executionRunId, request.requestId, decision)
-          },
-          onSdkSessionId: (sdkSessionId) => {
-            recoveryAnchor = { ...recoveryAnchor, sdkSessionId }
-            recoveryMetadataTail = recoveryMetadataTail
-              .catch(() => undefined)
-              .then(async () => {
-                await setSdkSessionId(session.id, sdkSessionId)
-                await runEventJournal.append(
-                  executionRunId,
-                  semanticRunEvent("resource.changed", {
-                    resourceId: `sdk-session:${session.id}`,
-                    recoveryAnchor,
-                  })
-                )
-              })
-          },
-          onEvent: (ev: import("@/lib/claude/run-and-capture").CaptureStreamEvent) => {
-            const canonical = canonicalEventFromCaptureEvent(ev)
-            void runProducer.onCaptureEvent(ev, Date.now()).catch(() => undefined)
-            if (canonical) void persistCanonicalEvent(canonical).catch(() => undefined)
-          },
-          ...(streamsThroughReceiver &&
-          typeof targetAdapter?.streamReply === "function" &&
-          (targetAdapter.meta.type !== "qq-official" || Boolean(replyStream))
-            ? {
-                onPartial: (text: string) => {
-                  if (captureSignal.aborted) return
-                  const safeText = replyStream
-                    ? discloseReplyStreamText(text, twinId)
-                    : twinId
-                      ? (
-                          discloseTwinOutboundSegments([{ type: "text", text }], twinId)
-                            .segments[0] as { type: "text"; text: string }
-                        ).text
-                      : text
-                  if (!hasNoLeakingPii(safeText)) {
-                    void appendAudit({
-                      adapterId: event.adapterId,
-                      kind: "adapter.error",
-                      at: Date.now(),
-                      conversationKey: event.conversationKey,
-                      reason: "partial_pii_blocked",
-                    }).catch(() => undefined)
-                    return
-                  }
-                  if (replyStream) {
-                    replyStream.onPartial(safeText)
-                    return
-                  }
-                  void targetAdapter.streamReply!({
-                    conversationRef: event.conversationRef,
-                    text: safeText,
-                  }).catch(() => undefined)
-                },
-              }
-            : {}),
-        }
+          const recoveringSafely =
+            event.channelData?.recoveryIntent === "continue_safely" &&
+            (!member ||
+              (parsedRecoveryAnchor !== undefined &&
+                recoveryAnchorNamesRun(parsedRecoveryAnchor, baseExecutionRunId)))
+          const previousRecoveryAnchor = recoveringSafely ? parsedRecoveryAnchor : undefined
+          // The native session this reply continues: the conversation's for a
+          // single character; for a member, only its own interrupted one, which
+          // its recovery anchor names.
+          const resumedSdkSessionId = member
+            ? previousRecoveryAnchor?.sdkSessionId
+            : session.sdkSessionId
+          const recoveryParentRunId = previousRecoveryAnchor
+            ? (previousRecoveryAnchor.executionJournalRunId ??
+              previousRecoveryAnchor.executionIdentityRunId ??
+              baseExecutionRunId)
+            : undefined
+          const executionRunId = previousRecoveryAnchor
+            ? `${baseExecutionRunId}:attempt:${previousRecoveryAnchor.attemptId}`
+            : baseExecutionRunId
+          const executionIdentity = {
+            runId: previousRecoveryAnchor?.executionIdentityRunId ?? baseExecutionRunId,
+            turnId: member ? `${storedMsg.id}:${member.step.stepKey}` : storedMsg.id,
+            attemptId: previousRecoveryAnchor?.attemptId ?? "a1",
+          }
 
-        const inboundPrompt = inboundEventToSendContent(event)
-        // Quote + unseen group context ride into the model turn. The stored
-        // row keeps its clean body — this augments only what the sidecar sees.
-        const contextSessions =
-          event.channel.kind === "private"
-            ? []
-            : (
-                await listSessionsByConversationKey(event.conversationKey).catch(
-                  () => [] as ChatSession[]
-                )
-              ).slice(0, GROUP_CONTEXT_SESSION_LIMIT)
-        const contextIds = [...new Set([session.id, ...contextSessions.map((bound) => bound.id)])]
-        const contextRows = await getDb().sessions.bulkGet(contextIds)
-        contextGenerations = new Map(
-          contextIds.map((id, index) => [id, contextRows[index]?.runtimeTranscriptGeneration])
-        )
-        const revisions = new Map<string, string>()
-        contextRevisions = revisions
-        const rememberContextRows = (rows: readonly StoredMessage[]) => {
-          for (const row of rows) revisions.set(row.id, contextRevision(row))
-        }
-        let contextStored = storedMsg
-        const reply = storedMsg.metadata?.replyTo
-        if (reply?.messageId) {
-          const parent = await getDb().messages.get(reply.messageId)
-          if (parent && contextGenerations.has(parent.sessionId)) rememberContextRows([parent])
-          const preview =
-            parent && contextGenerations.has(parent.sessionId)
-              ? parent.metadata?.deletedAt !== undefined
-                ? "[deleted]"
-                : storedMessagePlainText(inboundPartsForReplay(parent.parts))
-              : ""
-          contextStored = {
-            ...storedMsg,
-            metadata: { ...storedMsg.metadata, replyTo: { ...reply, preview } },
+          // Resolve the send options (character + twin + memory context) through
+          // the shared helper so an ai-run and a draft prepare from identical
+          // grounding. `emitTrace: true` mints the connector root span, ended on
+          // the capture-error / success branches below.
+          const { projectImComposition } = await import("./composition/im-composition-selection")
+          const { sendOptions, appSettings, runTitle, workspaceRoot, mutedScope, twinId } =
+            await resolveInboundSendOptions({
+              event,
+              // A member starts fresh: the conversation's native session (and
+              // any branch seed it was started from) belongs to whoever
+              // answered before, and the transcript carries the room instead.
+              session: member
+                ? {
+                    ...session,
+                    sdkSessionId: resumedSdkSessionId,
+                    forkedFromSdkSessionId: undefined,
+                    branchSeed: undefined,
+                  }
+                : session,
+              resolved: member
+                ? { ...effectiveResolved, characterId: member.step.character.id }
+                : effectiveResolved,
+              override,
+              adapterRow,
+              emitTrace: true,
+              executionIdentity,
+              permissionCeiling: member?.permissionCeiling ?? permissionCeiling,
+              // A ChatSession carries no `agentModeId` of its own (that field
+              // lives on SystemPromptPreset), so the preset stays Standard here
+              // rather than borrowing the desktop's localStorage default — which
+              // is the very coupling this seam exists to remove. The axes below
+              // it all come from this conversation's Dexie config.
+              compositionSelection: projectImComposition({ effective: effectiveConfig }).selection,
+            })
+
+          // The room's part of the prompt: a member's step section, or a plain
+          // group's instructions. It rides the system-prompt tail, which the
+          // connector's PII gate walks before anything is sent.
+          const roomSection = member ? member.section : plainRoomSection
+          if (roomSection) {
+            sendOptions.appendSystemPrompt = [sendOptions.appendSystemPrompt?.trim(), roomSection]
+              .filter(Boolean)
+              .join("\n\n---\n\n")
           }
-        }
-        const contextualPrompt = await withConversationContext(inboundPrompt, {
-          event,
-          stored: contextStored,
-          contextSessions,
-          onContextRowsRead: rememberContextRows,
-        })
-        const prompt =
-          event.channelData?.dispatchIntent === "steer-replay"
-            ? buildSteerPayload([
-                { text: event.plainText, blocks: steerBlocksOf(contextualPrompt) },
-              ])
-            : contextualPrompt
-        let captured: Awaited<ReturnType<RunAndCaptureFn>>
-        try {
-          const started = await startForCurrentSource(() => {
-            // The stable provider identity may come from a recovery anchor.
-            // Tool authority belongs only to this Host-created journal attempt.
-            bindToolCallRun(
+
+          let recoveryExecution: AgentExecutionSendSpec
+          try {
+            recoveryExecution = await resolveRecoveryExecutionSpec(
+              sendOptions,
               session.id,
-              sendOptions.turnId,
-              executionRunId,
-              executionIdentity.attemptId
+              executionIdentity,
+              recoveringSafely,
+              previousRecoveryAnchor?.routeKind
             )
-            return opts.runAndCapture(session.id, prompt, sendOptions, cap)
-          })
-          if (!started) {
-            await runProducer
-              .finish("cancelled", Date.now(), "Inbound source changed before dispatch")
-              .catch(() => undefined)
-            unregisterRunController()
-            unregisterLiveSteer?.()
-            break
-          }
-          captured = await started.pending
-          await Promise.all([
-            canonicalTail.catch(() => undefined),
-            recoveryMetadataTail.catch(() => undefined),
-          ])
-        } catch (err) {
-          await replyStream?.cancel()
-          await Promise.all([
-            canonicalTail.catch(() => undefined),
-            recoveryMetadataTail.catch(() => undefined),
-          ])
-          if (sourceSendState.changed) {
-            await runProducer
-              .finish("cancelled", Date.now(), "Inbound source changed before dispatch")
-              .catch(() => undefined)
-            unregisterRunController()
-            unregisterLiveSteer?.()
-            if (!sourceSendState.changed.deleted)
+          } catch (error) {
+            if (
+              recoveringSafely &&
+              error instanceof Error &&
+              error.message === "recovery_gateway_ticket_remint_failed"
+            ) {
               await markConnectorInboundJobRecoveryRequired(
                 routeContext.inboundJobId,
-                "source_revised_before_dispatch"
+                "recovery_gateway_ticket_remint_failed"
               )
-            break
+              await runEventJournal.append(
+                recoveryParentRunId ?? executionRunId,
+                semanticRunEvent("run.recovery_required", {
+                  reason: "gateway-ticket-remint-failed",
+                })
+              )
+              return { kind: "halted" }
+            }
+            throw error
           }
-          // The PII gate (`safeSendPrompt`) throws `PiiGateBlocked` and has
-          // ALREADY written the precise `adapter.error / pii_blocked` audit
-          // row before throwing. Detect it by name (no heavy import) and skip
-          // the generic `ai_run_capture_failed` row so we don't double-audit
-          // or mislabel a deliberate PII block as a sidecar failure.
-          const isPiiBlocked = err instanceof Error && err.name === "PiiGateBlocked"
-          if (!isPiiBlocked) {
+          // Preserve rollout semantics: only update the on-wire spec when this
+          // send already opted into canonical dispatch. The shadow spec still
+          // owns recovery identity and journaling while the flag is off.
+          if (sendOptions.execution) sendOptions.execution = recoveryExecution
+
+          if (recoveringSafely) {
+            const current = {
+              sdkSessionId: resumedSdkSessionId,
+              executionFingerprint: recoveryExecution.executionFingerprint,
+              candidateDeploymentIds: candidateDeploymentIds(sendOptions, recoveryExecution),
+              modelBindings: recoveryExecution.modelBindings,
+            }
+            const validation = previousRecoveryAnchor
+              ? validateRecoveryContinuation(previousRecoveryAnchor, current)
+              : { action: "pause" as const, mismatches: ["recoveryAnchor"] }
+            if (validation.action === "pause") {
+              await markConnectorInboundJobRecoveryRequired(
+                routeContext.inboundJobId,
+                "recovery_execution_drift",
+                { error: validation.mismatches.join(",") }
+              )
+              await runEventJournal.append(
+                recoveryParentRunId ?? executionRunId,
+                semanticRunEvent("run.recovery_required", {
+                  reason: "execution-drift",
+                  detail: validation.mismatches,
+                })
+              )
+              return { kind: "halted" }
+            }
+          }
+
+          // ── Suppression gate: short-circuit before the sidecar call ──
+          if (sendOptions.suppressedReason) {
+            await appendAudit({
+              adapterId: event.adapterId,
+              kind: suppressedReasonToAuditKind(sendOptions.suppressedReason),
+              at: now,
+              conversationKey: event.conversationKey,
+              reason: sendOptions.suppressedReason,
+              fields: {
+                sourceMessageId: storedMsg.id,
+                // Both layers can mute; only the row says which control to go to.
+                ...(mutedScope ? { mutedScope } : {}),
+              },
+            })
+            return { kind: "halted" }
+          }
+
+          // ── Capture the assistant reply via the injected wrapper ──
+          // Always wire `onPermissionRequest` so an ask-tier tool fired mid-turn
+          // projects an A2UI Allow/Deny card to the conversation and the turn
+          // suspends until the user taps (control-plane HITL). Without this the
+          // sidecar's permission_request went unanswered and the turn hung until
+          // the 5-min timeout — a latent IM auto-mode bug this also fixes.
+          // `onPartial` is additionally wired when the target adapter supports
+          // incremental replies (WeCom 智能机器人) so the assistant's growing text
+          // drives platform-side stream frames; the authoritative final message
+          // still flows through `enqueueOutbound` below. Both are best-effort.
+          //
+          // The turn timeout is raised to {@link CONNECTOR_TURN_TIMEOUT_MS} so a
+          // legitimate human approval (registry TTL 10 min) resolves before the
+          // turn times out, while a genuinely stuck sidecar is still bounded.
+          const targetAdapter = bus.getAdapter(event.adapterId)
+          // A drafted turn has no live conversational surface: nobody has agreed
+          // to see it yet, so a progress card would announce a reply the operator
+          // may never approve.
+          // ── Respond-via bot (multi-bot cross-account send) ──
+          // A matched dispatch rule may ask for the reply to be delivered
+          // through ANOTHER of our own bot instances. Validate the target at
+          // dispatch time (exists, enabled, not muted, same platform) and fall
+          // back to the receiving bot — with an audit trail either way — so a
+          // stale rule can never silently drop the reply. Resolved BEFORE the
+          // capture so platform streaming can be gated on it: when the reply is
+          // rewired away from the receiving adapter+conversation, the RECEIVING
+          // bot must not stream partial frames it will never finalize (the
+          // sibling posts the final — the user would otherwise see an orphaned
+          // duplicate preview).
+          const outboundTarget = await resolveRespondViaTarget(
+            routing.respondViaAdapterId,
+            event,
+            adapterRow
+          )
+          const streamsThroughReceiver =
+            !requireAcceptance &&
+            outboundTarget.adapterId === event.adapterId &&
+            outboundTarget.conversationKey === event.conversationKey
+          const liveActivityEnabled =
+            override?.liveActivity !== false &&
+            !requireAcceptance &&
+            !(
+              streamsThroughReceiver &&
+              targetAdapter?.meta.type === "qq-official" &&
+              event.conversationRef.scene === "c2c" &&
+              typeof targetAdapter.streamReply === "function"
+            )
+          // Persist one locale for the complete turn, including replay without
+          // an IM binding and the terminal result card.
+          const vendorReply = connectorVendor(event.platform)?.reply
+          const runLocale = vendorReply?.turnLocale
+            ? await vendorReply.turnLocale(event.plainText, appSettings?.language)
+            : appSettings?.language
+          const presentationTitle = vendorReply?.titleFromMessage
+            ? sanitizeActivityLabel(event.plainText.split(/\r?\n/, 1)[0], "Agent run")
+            : runTitle
+          const recoveryParent = recoveryParentRunId
+            ? await getDb().executionRuns.get(recoveryParentRunId)
+            : undefined
+          // A recovery anchor is routing data. Only this session's exact prior
+          // execution of this stored inbound message may supply its identity.
+          const verifiedRecoveryParent =
+            recoveryParent?.kind === "agent-turn" &&
+            recoveryParent.sessionId === session.id &&
+            recoveryParent.sourceId === storedMsg.id
+              ? recoveryParent
+              : undefined
+          await createExecutionRun({
+            id: executionRunId,
+            ...recordedRunMetadata(recoveryParentRunId ? "child" : "requester", {
+              runId: executionRunId,
+              parent: verifiedRecoveryParent,
+              requesters: [connectorRequester(event)],
+              authority: authorityFromPermissionCeiling(permissionCeiling),
+            }),
+            ...(verifiedRecoveryParent ? { parentRunId: verifiedRecoveryParent.id } : {}),
+            kind: "agent-turn",
+            sourceId: storedMsg.id,
+            sessionId: session.id,
+            projectId: session.projectId,
+            title: presentationTitle,
+            status: "queued",
+            initiator: {
+              platformIdentityId: event.sender.id,
+              remoteUserId: event.sender.remoteUserId,
+              displayName: event.sender.displayName,
+              ...(readResolvedPrincipal(event.channelData) ?? {}),
+            },
+            currentRevision: 0,
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+          await routeContext.bindExecutionRun(executionRunId)
+          if (liveActivityEnabled) {
+            const teamId =
+              typeof event.conversationRef.teamId === "string"
+                ? event.conversationRef.teamId
+                : undefined
+            await putExecutionRunBinding({
+              id: `execution-binding:${executionRunId}:${event.adapterId}:${event.conversationKey}`,
+              runId: executionRunId,
+              projectId: session.projectId,
+              adapterId: event.adapterId,
+              conversationKey: event.conversationKey,
+              status: "active",
+              deliveryMode: "native",
+              // A Feishu card answers in the language its reader wrote in,
+              // not the host's own UI language.
+              locale: runLocale,
+              sourceMessageId: event.canReplyToMessage === false ? undefined : event.messageId,
+              deliveryTarget: deliveryTargetFromEvent(event),
+              recipientUserId: event.sender.remoteUserId,
+              recipientTeamId: teamId,
+              lastProjectedRevision: 0,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            })
+          }
+          const runProducer = new AgentRunEventProducer(executionRunId, undefined, {
+            workspaceRoot,
+          })
+          let recoveryAnchor = buildAgentRunRecoveryAnchor({
+            inboundJobId: routeContext.inboundJobId,
+            sessionId: session.id,
+            sdkSessionId: resumedSdkSessionId,
+            execution: recoveryExecution,
+            journalRunId: executionRunId,
+            candidateDeploymentIds: candidateDeploymentIds(sendOptions, recoveryExecution),
+            restoredPermissions: previousRecoveryAnchor?.restoredPermissions,
+            partialOutput: previousRecoveryAnchor?.partialOutput,
+          })
+          // Wall-clock turn start — also the result-card footer's elapsed base.
+          const turnStartedAt = Date.now()
+          await runProducer.start(turnStartedAt, {
+            recoveryAnchor,
+            locale: runLocale,
+            ...(vendorReply?.titleFromMessage ? { title: presentationTitle, safeTitle: true } : {}),
+          })
+          // Abort propagation: thread the per-adapter teardown signal (aborted
+          // by the install teardown and by a lifecycle requeue/stop) into the
+          // capture, so tearing the runtime down halts an in-flight turn instead
+          // of letting it run to the 15-min timeout and write Dexie post-unmount.
+          const adapterSignal = getRunningAdapter(event.adapterId)?.abortController.signal
+          const runController = new AbortController()
+          const unregisterRunController = registerAgentRunController(executionRunId, runController)
+          // A message that arrives while a member speaks is the room's next turn,
+          // not a steer into one member's run.
+          const unregisterLiveSteer = member
+            ? undefined
+            : opts.liveSteerCoordinator?.activate({
+                conversationKey: event.conversationKey,
+                sessionId: session.id,
+                executionRunId,
+                provider: sendOptions.provider ?? "anthropic",
+                injectionProtection: sendOptions.contentSafety?.injectionProtection !== false,
+              })
+          const captureSignal = adapterSignal
+            ? AbortSignal.any([adapterSignal, runController.signal])
+            : runController.signal
+          const replyStream = createReplyStream({
+            adapter: targetAdapter,
+            conversationRef: event.conversationRef,
+            streamKey: executionRunId,
+            enabled: streamsThroughReceiver,
+            signal: captureSignal,
+          })
+          const envelope = createEnvelopeSequencer({
+            sessionId: session.id,
+            runId: executionRunId,
+            attemptId: recoveryAnchor.attemptId,
+            hostRef: recoveryExecution.hostRef,
+            runtime: recoveryExecution.runtimeAdapter,
+            turnId: executionIdentity.turnId,
+          })
+          let canonicalTail: Promise<unknown> = Promise.resolve()
+          let canonicalFailure: unknown
+          let recoveryMetadataTail: Promise<unknown> = Promise.resolve()
+          const persistCanonicalEvent = (canonical: Parameters<typeof envelope>[0]) => {
+            const nextEnvelope = envelope(canonical)
+            canonicalTail = canonicalTail
+              .catch(() => undefined)
+              .then(() => appendCanonicalEnvelopes(executionRunId, [nextEnvelope]))
+              .catch((error) => {
+                canonicalFailure ??= error
+                throw error
+              })
+            return canonicalTail
+          }
+          const approvalController = new AbortController()
+          const basePermissionResponder = makeImPermissionResponder({
+            signal: AbortSignal.any([captureSignal, approvalController.signal]),
+            runId: executionRunId,
+            sessionId: session.id,
+            adapterId: event.adapterId,
+            conversationKey: event.conversationKey,
+            conversationRef: event.conversationRef,
+            initiatorUserId: event.sender.remoteUserId,
+            deliveryTarget: deliveryTargetFromEvent(event),
+            approvalMode: override?.approvalMode,
+          })
+          // The `ask_user` tool call surfaces as an interactive card in THIS
+          // conversation while the capture runs (Phase 3 — connector-initiated
+          // runs have nobody watching the desktop dialog). The registration
+          // dies with the capture: `approvalController` aborts in the finally
+          // below, which both hides the context from late `plugin_tool_exec`
+          // events and settles any prompt still pending as aborted.
+          const unregisterImElicitation = registerImElicitationContext({
+            sessionId: runSessionId,
+            adapterId: event.adapterId,
+            conversationKey: event.conversationKey,
+            conversationRef: event.conversationRef,
+            deliveryTarget: deliveryTargetFromEvent(event),
+            initiatorUserId: event.sender.remoteUserId,
+            runId: executionRunId,
+            drafting: requireAcceptance,
+            signal: AbortSignal.any([captureSignal, approvalController.signal]),
+          })
+          const restoredDeniedRequests = new Set(
+            (previousRecoveryAnchor?.restoredPermissions ?? [])
+              .filter((permission) => permission.state === "denied")
+              .map((permission) => permission.requestId)
+          )
+          const sourceSendState: { changed: { deleted: boolean } | null } = { changed: null }
+          const cap: import("@/lib/claude/run-and-capture").RunAndCaptureOptions & {
+            adapterId?: string
+            conversationKey?: string
+          } = {
+            // Connector context for the injected PII gate (`safeSendPrompt`) and
+            // its usage telemetry; ignored by the raw capture wrapper.
+            adapterId: event.adapterId,
+            conversationKey: event.conversationKey,
+            timeoutMs: CONNECTOR_TURN_TIMEOUT_MS,
+            idleTimeoutMs: CONNECTOR_TURN_IDLE_TIMEOUT_MS,
+            signal: captureSignal,
+            // IPC evaluates this under the transcript lock after workspace,
+            // middleware and subscription preparation have finished.
+            beforeSend: async () => {
+              sourceSendState.changed = await sourceChange()
+              if (sourceSendState.changed) throw new Error("Inbound source changed before send")
+            },
+            // ADR-0239: the IM requester is in the thread and answers asks there;
+            // a reply into that thread needs no ask at all.
+            outboundPolicy: { unattended: false },
+            onPermissionRequest: async (request) => {
+              await persistCanonicalEvent({
+                kind: "permission-request",
+                requestId: request.requestId,
+                toolName: request.toolName,
+                input: request.input,
+              })
+              const decision = restoredDeniedRequests.has(request.requestId)
+                ? { decision: "deny" as const, message: "permission denied by recovered state" }
+                : requireAcceptance
+                  ? // No human is in the loop at GENERATION time for a drafted
+                    // turn — the human reviews the finished product. Asking now
+                    // would project an Allow/Deny card into a conversation whose
+                    // operator has said the bot does not speak unprompted.
+                    {
+                      decision: "deny" as const,
+                      message: "ask-tier tools are denied while drafting",
+                    }
+                  : await basePermissionResponder(request)
+              await persistCanonicalEvent({
+                kind: "permission-resolved",
+                requestId: request.requestId,
+                behavior: decision.decision === "deny" ? "deny" : "allow",
+              })
+              return attributeConnectorDecision(executionRunId, request.requestId, decision)
+            },
+            onSdkSessionId: (sdkSessionId) => {
+              recoveryAnchor = { ...recoveryAnchor, sdkSessionId }
+              recoveryMetadataTail = recoveryMetadataTail
+                .catch(() => undefined)
+                .then(async () => {
+                  // A member's native session is its step's alone: only its
+                  // recovery anchor keeps it, for continuing that step.
+                  if (!member) await setSdkSessionId(session.id, sdkSessionId)
+                  await runEventJournal.append(
+                    executionRunId,
+                    semanticRunEvent("resource.changed", {
+                      resourceId: `sdk-session:${runSessionId}`,
+                      recoveryAnchor,
+                    })
+                  )
+                })
+            },
+            onEvent: (ev: import("@/lib/claude/run-and-capture").CaptureStreamEvent) => {
+              const canonical = canonicalEventFromCaptureEvent(ev)
+              void runProducer.onCaptureEvent(ev, Date.now()).catch(() => undefined)
+              if (canonical) void persistCanonicalEvent(canonical).catch(() => undefined)
+            },
+            ...(streamsThroughReceiver &&
+            typeof targetAdapter?.streamReply === "function" &&
+            (targetAdapter.meta.type !== "qq-official" || Boolean(replyStream))
+              ? {
+                  onPartial: (text: string) => {
+                    if (captureSignal.aborted) return
+                    const safeText = replyStream
+                      ? discloseReplyStreamText(text, twinId)
+                      : twinId
+                        ? (
+                            discloseTwinOutboundSegments([{ type: "text", text }], twinId)
+                              .segments[0] as { type: "text"; text: string }
+                          ).text
+                        : text
+                    if (!hasNoLeakingPii(safeText)) {
+                      void appendAudit({
+                        adapterId: event.adapterId,
+                        kind: "adapter.error",
+                        at: Date.now(),
+                        conversationKey: event.conversationKey,
+                        reason: "partial_pii_blocked",
+                      }).catch(() => undefined)
+                      return
+                    }
+                    if (replyStream) {
+                      replyStream.onPartial(safeText)
+                      return
+                    }
+                    void targetAdapter.streamReply!({
+                      conversationRef: event.conversationRef,
+                      text: safeText,
+                    }).catch(() => undefined)
+                  },
+                }
+              : {}),
+          }
+
+          const inboundPrompt = inboundEventToSendContent(event)
+          // Quote + unseen group context ride into the model turn. The stored
+          // row keeps its clean body — this augments only what the sidecar sees.
+          // A member reads the room from its transcript, so only the quote rides
+          // its prompt, not the unseen-chatter block.
+          const contextSessions =
+            event.channel.kind === "private" || member
+              ? []
+              : (
+                  await listSessionsByConversationKey(event.conversationKey).catch(
+                    () => [] as ChatSession[]
+                  )
+                ).slice(0, GROUP_CONTEXT_SESSION_LIMIT)
+          const contextIds = [...new Set([session.id, ...contextSessions.map((bound) => bound.id)])]
+          const contextRows = await getDb().sessions.bulkGet(contextIds)
+          contextGenerations = new Map(
+            contextIds.map((id, index) => [id, contextRows[index]?.runtimeTranscriptGeneration])
+          )
+          const revisions = new Map<string, string>()
+          contextRevisions = revisions
+          const rememberContextRows = (rows: readonly StoredMessage[]) => {
+            for (const row of rows) revisions.set(row.id, contextRevision(row))
+          }
+          let contextStored = storedMsg
+          const reply = storedMsg.metadata?.replyTo
+          if (reply?.messageId) {
+            const parent = await getDb().messages.get(reply.messageId)
+            if (parent && contextGenerations.has(parent.sessionId)) rememberContextRows([parent])
+            const preview =
+              parent && contextGenerations.has(parent.sessionId)
+                ? parent.metadata?.deletedAt !== undefined
+                  ? "[deleted]"
+                  : storedMessagePlainText(inboundPartsForReplay(parent.parts))
+                : ""
+            contextStored = {
+              ...storedMsg,
+              metadata: { ...storedMsg.metadata, replyTo: { ...reply, preview } },
+            }
+          }
+          const contextualPrompt = await withConversationContext(inboundPrompt, {
+            event,
+            stored: contextStored,
+            contextSessions,
+            onContextRowsRead: rememberContextRows,
+          })
+          const prompt = member?.step.instruction
+            ? member.step.instruction
+            : event.channelData?.dispatchIntent === "steer-replay"
+              ? buildSteerPayload([
+                  { text: event.plainText, blocks: steerBlocksOf(contextualPrompt) },
+                ])
+              : contextualPrompt
+          let captured: Awaited<ReturnType<RunAndCaptureFn>>
+          try {
+            const started = await startForCurrentSource(() => {
+              // The stable provider identity may come from a recovery anchor.
+              // Tool authority belongs only to this Host-created journal attempt.
+              bindToolCallRun(
+                runSessionId,
+                sendOptions.turnId,
+                executionRunId,
+                executionIdentity.attemptId
+              )
+              return opts.runAndCapture(runSessionId, prompt, sendOptions, cap)
+            })
+            if (!started) {
+              await runProducer
+                .finish("cancelled", Date.now(), "Inbound source changed before dispatch")
+                .catch(() => undefined)
+              unregisterRunController()
+              unregisterLiveSteer?.()
+              return { kind: "halted" }
+            }
+            captured = await started.pending
+            await Promise.all([
+              canonicalTail.catch(() => undefined),
+              recoveryMetadataTail.catch(() => undefined),
+            ])
+          } catch (err) {
+            await replyStream?.cancel()
+            await Promise.all([
+              canonicalTail.catch(() => undefined),
+              recoveryMetadataTail.catch(() => undefined),
+            ])
+            if (sourceSendState.changed) {
+              await runProducer
+                .finish("cancelled", Date.now(), "Inbound source changed before dispatch")
+                .catch(() => undefined)
+              unregisterRunController()
+              unregisterLiveSteer?.()
+              if (!sourceSendState.changed.deleted)
+                await markConnectorInboundJobRecoveryRequired(
+                  routeContext.inboundJobId,
+                  "source_revised_before_dispatch"
+                )
+              return { kind: "halted" }
+            }
+            // The PII gate (`safeSendPrompt`) throws `PiiGateBlocked` and has
+            // ALREADY written the precise `adapter.error / pii_blocked` audit
+            // row before throwing. Detect it by name (no heavy import) and skip
+            // the generic `ai_run_capture_failed` row so we don't double-audit
+            // or mislabel a deliberate PII block as a sidecar failure.
+            const isPiiBlocked = err instanceof Error && err.name === "PiiGateBlocked"
+            if (!isPiiBlocked) {
+              await appendAudit({
+                adapterId: event.adapterId,
+                kind: "adapter.error",
+                at: Date.now(),
+                conversationKey: event.conversationKey,
+                // The reason stays distinct even though the path is now shared:
+                // an operator filtering for drafting failures would otherwise
+                // lose that signal to the collapse, and "the draft never
+                // appeared" is a different report from "the bot did not reply".
+                reason: requireAcceptance
+                  ? "draft_prepare_capture_failed"
+                  : "ai_run_capture_failed",
+                message: err instanceof Error ? err.message : String(err),
+                fields: { sourceMessageId: storedMsg.id },
+              })
+            }
+            try {
+              await runProducer.finish(
+                captureSignal.aborted ? "cancelled" : "failed",
+                Date.now(),
+                isPiiBlocked ? "Sensitive content was blocked" : "Agent run failed"
+              )
+            } catch {
+              /* best-effort — the original error is what matters */
+            }
+            // A capture failure may have stopped mid-run, after tool calls had
+            // side effects, so the inbound job must stay eligible for the
+            // operator's continue-safely / confirmed-retry controls, which both
+            // require `recovery_required`. Left alone, the bus would complete
+            // the job as soon as this handler returns. A deliberate PII block
+            // and a user cancel are final outcomes, not interrupted work.
+            //
+            // If that write itself fails, the turn must not return normally:
+            // the bus would complete the job and the recovery entry would be
+            // lost after all. The cleanup below still runs, and the handler
+            // then rejects, which the bus never completes (it parks the job
+            // itself, and a stuck `running` row falls to lease-expiry recovery).
+            let recoveryMarkFailure: unknown
+            if (!isPiiBlocked && !captureSignal.aborted) {
+              try {
+                await markConnectorInboundJobRecoveryRequired(
+                  routeContext.inboundJobId,
+                  requireAcceptance ? "draft_prepare_capture_failed" : "ai_run_capture_failed",
+                  { error: err instanceof Error ? err.message : String(err) }
+                )
+              } catch (markError) {
+                recoveryMarkFailure = markError
+              }
+            }
+            // Surface the failure: the user otherwise gets silence on a sidecar
+            // error. With the live card on, the card already reports the failed
+            // run in the conversation, so only the proactive channel is added.
+            if (liveActivityEnabled || requireAcceptance) {
+              notifyImFailure(
+                event.conversationKey,
+                IM_FAILURE_NOTICE.replyFailed,
+                `airun-error:${event.conversationKey}`
+              )
+            } else {
+              await replyImFailure(
+                event,
+                IM_FAILURE_NOTICE.replyFailed,
+                `airun-error:${event.conversationKey}`
+              )
+            }
+            // Close the agent-trace root span on a failed capture so it doesn't
+            // dangle. Idempotent + no-op when minting was skipped (suppressed).
+            if (sendOptions.spanId) {
+              endSpan(sendOptions.spanId, {
+                errorType: isPiiBlocked ? "pii_blocked" : "ai_run_capture_failed",
+                errorMessage: err instanceof Error ? err.message : String(err),
+              })
+            }
+            unregisterRunController()
+            unregisterLiveSteer?.()
+            if (recoveryMarkFailure !== undefined) throw err
+            return { kind: "halted" }
+          } finally {
+            replyStream?.captured()
+            approvalController.abort()
+            unregisterImElicitation()
+            if (member)
+              void (opts.closeSession ?? closeSidecarSession)(member.sessionId).catch(
+                () => undefined
+              )
+          }
+          unregisterRunController()
+          unregisterLiveSteer?.()
+
+          if (canonicalFailure) {
+            await replyStream?.cancel()
+            await markConnectorInboundJobRecoveryRequired(
+              routeContext.inboundJobId,
+              "canonical_log_write_failed",
+              {
+                error:
+                  canonicalFailure instanceof Error
+                    ? canonicalFailure.message
+                    : String(canonicalFailure),
+              }
+            )
+            await runEventJournal.append(
+              executionRunId,
+              semanticRunEvent("run.recovery_required", {
+                reason: "canonical-log-write-failed",
+              })
+            )
+            if (liveActivityEnabled || requireAcceptance) {
+              notifyImFailure(
+                event.conversationKey,
+                IM_FAILURE_NOTICE.replyFailed,
+                `airun-canonical:${event.conversationKey}`
+              )
+            } else {
+              await replyImFailure(
+                event,
+                IM_FAILURE_NOTICE.replyFailed,
+                `airun-canonical:${event.conversationKey}`
+              )
+            }
+            return { kind: "halted" }
+          }
+
+          if (captured.sdkSessionId && !member) {
+            await setSdkSessionId(session.id, captured.sdkSessionId).catch(() => undefined)
+          }
+
+          const limitStop = incompleteRunStop(captured.resultSubtype)
+          if (limitStop) {
             await appendAudit({
               adapterId: event.adapterId,
               kind: "adapter.error",
               at: Date.now(),
               conversationKey: event.conversationKey,
-              // The reason stays distinct even though the path is now shared:
-              // an operator filtering for drafting failures would otherwise
-              // lose that signal to the collapse, and "the draft never
-              // appeared" is a different report from "the bot did not reply".
-              reason: requireAcceptance ? "draft_prepare_capture_failed" : "ai_run_capture_failed",
-              message: err instanceof Error ? err.message : String(err),
-              fields: { sourceMessageId: storedMsg.id },
-            })
-          }
-          try {
-            await runProducer.finish(
-              captureSignal.aborted ? "cancelled" : "failed",
-              Date.now(),
-              isPiiBlocked ? "Sensitive content was blocked" : "Agent run failed"
-            )
-          } catch {
-            /* best-effort — the original error is what matters */
-          }
-          // A capture failure may have stopped mid-run, after tool calls had
-          // side effects, so the inbound job must stay eligible for the
-          // operator's continue-safely / confirmed-retry controls, which both
-          // require `recovery_required`. Left alone, the bus would complete
-          // the job as soon as this handler returns. A deliberate PII block
-          // and a user cancel are final outcomes, not interrupted work.
-          //
-          // If that write itself fails, the turn must not return normally:
-          // the bus would complete the job and the recovery entry would be
-          // lost after all. The cleanup below still runs, and the handler
-          // then rejects, which the bus never completes (it parks the job
-          // itself, and a stuck `running` row falls to lease-expiry recovery).
-          let recoveryMarkFailure: unknown
-          if (!isPiiBlocked && !captureSignal.aborted) {
-            try {
-              await markConnectorInboundJobRecoveryRequired(
-                routeContext.inboundJobId,
-                requireAcceptance ? "draft_prepare_capture_failed" : "ai_run_capture_failed",
-                { error: err instanceof Error ? err.message : String(err) }
-              )
-            } catch (markError) {
-              recoveryMarkFailure = markError
-            }
-          }
-          // Surface the failure: the user otherwise gets silence on a sidecar
-          // error. With the live card on, the card already reports the failed
-          // run in the conversation, so only the proactive channel is added.
-          if (liveActivityEnabled || requireAcceptance) {
-            notifyImFailure(
-              event.conversationKey,
-              IM_FAILURE_NOTICE.replyFailed,
-              `airun-error:${event.conversationKey}`
-            )
-          } else {
-            await replyImFailure(
-              event,
-              IM_FAILURE_NOTICE.replyFailed,
-              `airun-error:${event.conversationKey}`
-            )
-          }
-          // Close the agent-trace root span on a failed capture so it doesn't
-          // dangle. Idempotent + no-op when minting was skipped (suppressed).
-          if (sendOptions.spanId) {
-            endSpan(sendOptions.spanId, {
-              errorType: isPiiBlocked ? "pii_blocked" : "ai_run_capture_failed",
-              errorMessage: err instanceof Error ? err.message : String(err),
-            })
-          }
-          unregisterRunController()
-          unregisterLiveSteer?.()
-          if (recoveryMarkFailure !== undefined) throw err
-          break
-        } finally {
-          replyStream?.captured()
-          approvalController.abort()
-          unregisterImElicitation()
-        }
-        unregisterRunController()
-        unregisterLiveSteer?.()
-
-        if (canonicalFailure) {
-          await replyStream?.cancel()
-          await markConnectorInboundJobRecoveryRequired(
-            routeContext.inboundJobId,
-            "canonical_log_write_failed",
-            {
-              error:
-                canonicalFailure instanceof Error
-                  ? canonicalFailure.message
-                  : String(canonicalFailure),
-            }
-          )
-          await runEventJournal.append(
-            executionRunId,
-            semanticRunEvent("run.recovery_required", {
-              reason: "canonical-log-write-failed",
-            })
-          )
-          if (liveActivityEnabled || requireAcceptance) {
-            notifyImFailure(
-              event.conversationKey,
-              IM_FAILURE_NOTICE.replyFailed,
-              `airun-canonical:${event.conversationKey}`
-            )
-          } else {
-            await replyImFailure(
-              event,
-              IM_FAILURE_NOTICE.replyFailed,
-              `airun-canonical:${event.conversationKey}`
-            )
-          }
-          break
-        }
-
-        if (captured.sdkSessionId) {
-          await setSdkSessionId(session.id, captured.sdkSessionId).catch(() => undefined)
-        }
-
-        const limitStop = incompleteRunStop(captured.resultSubtype)
-        if (limitStop) {
-          await appendAudit({
-            adapterId: event.adapterId,
-            kind: "adapter.error",
-            at: Date.now(),
-            conversationKey: event.conversationKey,
-            reason: "ai_run_stopped_incomplete",
-            message: limitStop.summary,
-            fields: {
-              sourceMessageId: storedMsg.id,
-              resultSubtype: captured.resultSubtype,
-              stop: limitStop.reason,
-            },
-          }).catch(() => undefined)
-        }
-
-        let terminalProjectionRecorded = false
-        try {
-          await runProducer.finish(
-            limitStop ? "failed" : "completed",
-            Date.now(),
-            limitStop?.summary ?? "Response ready"
-          )
-          terminalProjectionRecorded = true
-        } catch {
-          /* best-effort — the final reply still flows through below */
-        }
-        if (terminalProjectionRecorded) {
-          const frozen = await waitForExecutionRunPresentationFreeze(executionRunId)
-          if (!frozen) {
-            await appendAudit({
-              adapterId: outboundTarget.adapterId,
-              kind: "adapter.error",
-              at: Date.now(),
-              conversationKey: outboundTarget.conversationKey,
-              reason: "run_projection_freeze_timeout",
-              message: "Execution timeline freeze timed out before the final reply",
-              fields: { runId: executionRunId },
+              reason: "ai_run_stopped_incomplete",
+              message: limitStop.summary,
+              fields: {
+                sourceMessageId: storedMsg.id,
+                resultSubtype: captured.resultSubtype,
+                stop: limitStop.reason,
+              },
             }).catch(() => undefined)
           }
-        }
 
-        // ── Project text + A2UI surfaces into MessageSegment[] ──
-        // The captured reply may include any combination of plain text
-        // and A2UI surfaces (created via the builtin:a2ui-bridge MCP
-        // tools). `assistantReplyToSegments` projects each surface into
-        // a {type:"a2ui", surfaceId, content, plainTextMirror} segment
-        // and appends the trailing markdown text — adapter serialisers
-        // then route a2ui segments through `_shared/a2ui-mapper.ts` per
-        // platform (Slack Block Kit / Lark Interactive Card / Telegram
-        // InlineKeyboardMarkup / Discord Embed+Components / OneBot
-        // basic segments + plainTextMirror).
-        const recoveredPrefix = previousRecoveryAnchor?.partialOutput ?? ""
-        const answerText =
-          recoveredPrefix && !captured.text.startsWith(recoveredPrefix)
-            ? `${recoveredPrefix}${captured.text}`
+          let terminalProjectionRecorded = false
+          try {
+            await runProducer.finish(
+              limitStop ? "failed" : "completed",
+              Date.now(),
+              limitStop?.summary ?? "Response ready"
+            )
+            terminalProjectionRecorded = true
+          } catch {
+            /* best-effort — the final reply still flows through below */
+          }
+          if (terminalProjectionRecorded) {
+            const frozen = await waitForExecutionRunPresentationFreeze(executionRunId)
+            if (!frozen) {
+              await appendAudit({
+                adapterId: outboundTarget.adapterId,
+                kind: "adapter.error",
+                at: Date.now(),
+                conversationKey: outboundTarget.conversationKey,
+                reason: "run_projection_freeze_timeout",
+                message: "Execution timeline freeze timed out before the final reply",
+                fields: { runId: executionRunId },
+              }).catch(() => undefined)
+            }
+          }
+
+          // ── Project text + A2UI surfaces into MessageSegment[] ──
+          // The captured reply may include any combination of plain text
+          // and A2UI surfaces (created via the builtin:a2ui-bridge MCP
+          // tools). `assistantReplyToSegments` projects each surface into
+          // a {type:"a2ui", surfaceId, content, plainTextMirror} segment
+          // and appends the trailing markdown text — adapter serialisers
+          // then route a2ui segments through `_shared/a2ui-mapper.ts` per
+          // platform (Slack Block Kit / Lark Interactive Card / Telegram
+          // InlineKeyboardMarkup / Discord Embed+Components / OneBot
+          // basic segments + plainTextMirror).
+          const recoveredPrefix = previousRecoveryAnchor?.partialOutput ?? ""
+          // A member's reply loses the room's protocol (`<dispatch>`, the stop
+          // token) before anyone reads it; the planner reads the raw text.
+          const capturedText = member
+            ? visibleRoomReplyText(member.step, captured.text)
             : captured.text
-        // The partial answer is still worth delivering, but never as if it
-        // were the whole one: the note is the only signal an IM user without
-        // the live card gets that the run hit its ceiling. Folded into the
-        // answer text rather than sent as its own segment, because the Lark
-        // result card takes the last text segment as the answer.
-        const recoveredText = limitStop
-          ? answerText.trim()
-            ? `${answerText}\n\n${limitStop.note}`
-            : limitStop.note
-          : answerText
-        let outboundSegments: MessageSegment[] = assistantReplyToSegments({
-          text: recoveredText,
-          a2uiSurfaces: captured.a2uiSurfaces,
-          a2uiSurfaceOrder: captured.a2uiSurfaceOrder,
-          telemetry: {
-            adapterId: outboundTarget.adapterId,
-            platform: outboundTarget.deliveryTarget.address.platform,
-          },
-        })
-        const twinDisclosure = twinId
-          ? replyStream
-            ? discloseReplyStreamSegments(outboundSegments, twinId)
-            : discloseTwinOutboundSegments(outboundSegments, twinId)
-          : undefined
-        if (twinDisclosure) outboundSegments = twinDisclosure.segments
-        const idempotencyKey = `airun:${captured.messageId}`
-        // ── Reply quoting (ADR-0009 §3A.3) ──
-        // In group / thread scopes, quote the triggering message so a busy
-        // channel can tell which message the bot is answering. Only when the
-        // reply goes back through the RECEIVING conversation (a respond-via
-        // sibling posts into a conversation where `event.messageId` does not
-        // exist), the platform declares `send.reply`, and neither the
-        // conversation override nor the bot default opted out. Private chats
-        // never quote — there is a single interlocutor.
-        const quoteReply =
-          event.canReplyToMessage !== false &&
-          streamsThroughReceiver &&
-          event.channel.kind !== "private" &&
-          hasEffectiveCapability(
-            effectiveCapabilitiesForRow(adapterRow, { scopeKind: event.channel.kind }),
-            "send.reply"
-          ) &&
-          (override?.replyQuoting ?? adapterRow.replyQuoting ?? true)
-        const outboundRequest = {
-          conversationRef: outboundTarget.conversationRef,
-          deliveryTarget: outboundTarget.deliveryTarget,
-          segments: outboundSegments,
-          ...(quoteReply ? { replyTo: { messageId: event.messageId } } : {}),
-          metadata: {
-            idempotencyKey,
-            ...(replyStream ? { streamKey: replyStream.streamKey } : {}),
-            sourceMessageId: storedMsg.id,
-            ...(twinDisclosure ? { provenance: twinDisclosure.provenance } : {}),
-          },
-        }
-        // ── The one place acceptance changes anything ──
-        //
-        // The turn is finished and identical either way; what differs is
-        // whether its product ships or waits for a human. That is why `draft`
-        // stopped being a route: routing it separately meant deciding WHO runs
-        // the turn from a flag about WHO signs off on it.
-        if (requireAcceptance) {
-          const draftSegments: MessageSegment[] = outboundSegments.length
-            ? outboundSegments
-            : [{ type: "text", text: recoveredText }]
-          const draft = await createDraft({
-            conversationKey: event.conversationKey,
-            sessionId: session.id,
-            segments: draftSegments,
-            sourceMessageId: storedMsg.id,
-            outboundPreview: { ...outboundRequest, segments: draftSegments },
-          })
-          await appendAudit({
-            adapterId: event.adapterId,
-            kind: "draft.prepared",
-            at: Date.now(),
-            conversationKey: event.conversationKey,
-            fields: {
-              draftId: draft.id,
-              sourceMessageId: storedMsg.id,
-              assistantMessageId: captured.messageId,
-              // Recorded because the old branch could not: a draft now names
-              // the target that produced it, so "the team was bound and the
-              // draft came from one character anyway" is auditable rather than
-              // invisible.
-              ...(effectiveTeamId ? { teamId: effectiveTeamId } : {}),
-              ...(effectiveWorkflowId ? { workflowId: effectiveWorkflowId } : {}),
+          const answerText =
+            recoveredPrefix && !capturedText.startsWith(recoveredPrefix)
+              ? `${recoveredPrefix}${capturedText}`
+              : capturedText
+          // The partial answer is still worth delivering, but never as if it
+          // were the whole one: the note is the only signal an IM user without
+          // the live card gets that the run hit its ceiling. Folded into the
+          // answer text rather than sent as its own segment, because the Lark
+          // result card takes the last text segment as the answer.
+          const recoveredText = limitStop
+            ? answerText.trim()
+              ? `${answerText}\n\n${limitStop.note}`
+              : limitStop.note
+            : answerText
+          // Every member answers through the same bot, so its name leads the reply.
+          const deliveredText = member
+            ? signImRoomReply(member.step.character.name, recoveredText)
+            : recoveredText
+          let outboundSegments: MessageSegment[] = assistantReplyToSegments({
+            text: deliveredText,
+            a2uiSurfaces: captured.a2uiSurfaces,
+            a2uiSurfaceOrder: captured.a2uiSurfaceOrder,
+            telemetry: {
+              adapterId: outboundTarget.adapterId,
+              platform: outboundTarget.deliveryTarget.address.platform,
             },
           })
+          const twinDisclosure = twinId
+            ? replyStream
+              ? discloseReplyStreamSegments(outboundSegments, twinId)
+              : discloseTwinOutboundSegments(outboundSegments, twinId)
+            : undefined
+          if (twinDisclosure) outboundSegments = twinDisclosure.segments
+          const idempotencyKey = `airun:${captured.messageId}`
+          // ── Reply quoting (ADR-0009 §3A.3) ──
+          // In group / thread scopes, quote the triggering message so a busy
+          // channel can tell which message the bot is answering. Only when the
+          // reply goes back through the RECEIVING conversation (a respond-via
+          // sibling posts into a conversation where `event.messageId` does not
+          // exist), the platform declares `send.reply`, and neither the
+          // conversation override nor the bot default opted out. Private chats
+          // never quote — there is a single interlocutor.
+          const quoteReply =
+            event.canReplyToMessage !== false &&
+            streamsThroughReceiver &&
+            event.channel.kind !== "private" &&
+            hasEffectiveCapability(
+              effectiveCapabilitiesForRow(adapterRow, { scopeKind: event.channel.kind }),
+              "send.reply"
+            ) &&
+            (override?.replyQuoting ?? adapterRow.replyQuoting ?? true)
+          const outboundRequest = {
+            conversationRef: outboundTarget.conversationRef,
+            deliveryTarget: outboundTarget.deliveryTarget,
+            segments: outboundSegments,
+            ...(quoteReply ? { replyTo: { messageId: event.messageId } } : {}),
+            metadata: {
+              idempotencyKey,
+              ...(replyStream ? { streamKey: replyStream.streamKey } : {}),
+              sourceMessageId: storedMsg.id,
+              ...(twinDisclosure ? { provenance: twinDisclosure.provenance } : {}),
+            },
+          }
+          // ── The one place acceptance changes anything ──
+          //
+          // The turn is finished and identical either way; what differs is
+          // whether its product ships or waits for a human. That is why `draft`
+          // stopped being a route: routing it separately meant deciding WHO runs
+          // the turn from a flag about WHO signs off on it.
+          if (requireAcceptance) {
+            const draftSegments: MessageSegment[] = outboundSegments.length
+              ? outboundSegments
+              : [{ type: "text", text: deliveredText }]
+            const draft = await createDraft({
+              conversationKey: event.conversationKey,
+              sessionId: session.id,
+              segments: draftSegments,
+              sourceMessageId: storedMsg.id,
+              outboundPreview: { ...outboundRequest, segments: draftSegments },
+            })
+            await appendAudit({
+              adapterId: event.adapterId,
+              kind: "draft.prepared",
+              at: Date.now(),
+              conversationKey: event.conversationKey,
+              fields: {
+                draftId: draft.id,
+                sourceMessageId: storedMsg.id,
+                assistantMessageId: captured.messageId,
+                // Recorded because the old branch could not: a draft now names
+                // the target that produced it, so "the team was bound and the
+                // draft came from one character anyway" is auditable rather than
+                // invisible.
+                ...(effectiveTeamId ? { teamId: effectiveTeamId } : {}),
+                ...(effectiveWorkflowId ? { workflowId: effectiveWorkflowId } : {}),
+              },
+            })
+            if (member) await recordImRoomMemberReply(member, recoveredText, captured.text)
+            return { kind: "delivered", text: captured.text, messageId: captured.messageId }
+          }
+
+          // ── Vendor-drawn final answer ──
+          // A vendor may ship the completed answer as its own cards (Lark's
+          // result card). The transform runs AFTER the draft branch, so an
+          // acceptance draft always keeps the raw generated segments.
+          const finalGroups = connectorVendor(outboundTarget.deliveryTarget.address.platform)?.reply
+            ?.finalGroups
+          let vendorGroups: MessageSegment[][] | undefined
+          if (finalGroups) {
+            const presentationAdapter =
+              outboundTarget.adapterId === adapterRow.id
+                ? adapterRow
+                : await getAdapterInstance(outboundTarget.adapterId)
+            vendorGroups = await finalGroups(outboundSegments, {
+              presentationAdapter,
+              receivingAdapter: adapterRow,
+              runId: executionRunId,
+              status: limitStop ? "interrupted" : "done",
+              // The quote stands in for the platform reply-quote only when
+              // quoting is off; a private chat never needs it.
+              quote: !quoteReply && event.channel.kind !== "private" ? event.plainText : undefined,
+              elapsedMs: Date.now() - turnStartedAt,
+              privateChat: event.channel.kind === "private",
+              initiator: event.sender.remoteUserId,
+              locale: runLocale,
+              fallbackAnswer: deliveredText,
+            })
+          }
+
+          // Deliver through the respond-via target resolved above (falls back to
+          // the receiving bot on any invalid target).
+          if (vendorGroups) {
+            for (const [index, group] of vendorGroups.entries()) {
+              await enqueueOutbound(
+                {
+                  adapterId: outboundTarget.adapterId,
+                  conversationKey: outboundTarget.conversationKey,
+                  request: {
+                    conversationRef: outboundRequest.conversationRef,
+                    deliveryTarget: outboundRequest.deliveryTarget,
+                    segments: group,
+                    // The reply anchor rides on the first message of the turn.
+                    ...(index === 0 && quoteReply
+                      ? { replyTo: { messageId: event.messageId } }
+                      : {}),
+                    metadata: {
+                      ...outboundRequest.metadata,
+                      // Multi-part turns need distinct keys — the runner dedupes
+                      // delivered idempotency keys, so sharing `airun:…` across
+                      // parts would drop every part after the first.
+                      idempotencyKey:
+                        vendorGroups.length > 1
+                          ? `${idempotencyKey}:part:${index}`
+                          : idempotencyKey,
+                      // Card-bearing groups carry the terminal-card marker the
+                      // `onConnectorOutbound` hook exposes as `resultCard`.
+                      ...(group.some((segment) => segment.type === "card")
+                        ? {
+                            resultCard: {
+                              runId: executionRunId,
+                              status: limitStop ? ("interrupted" as const) : ("done" as const),
+                              sourceMessageId: storedMsg.id,
+                            },
+                          }
+                        : {}),
+                    },
+                  },
+                  source: "ai-run",
+                  authorization: {
+                    kind: "origin-reply",
+                    inboundConversationKey: event.conversationKey,
+                  },
+                },
+                { executionContext: { sessionId: session.id, executionRunId } }
+              )
+            }
+          } else {
+            try {
+              await enqueueOutbound(
+                {
+                  adapterId: outboundTarget.adapterId,
+                  conversationKey: outboundTarget.conversationKey,
+                  request: outboundRequest,
+                  source: "ai-run",
+                  // The respond-via target is the same chat through a sibling bot.
+                  authorization: {
+                    kind: "origin-reply",
+                    inboundConversationKey: event.conversationKey,
+                  },
+                },
+                { executionContext: { sessionId: session.id, executionRunId } }
+              )
+              replyStream?.handoff()
+            } catch (error) {
+              await replyStream?.cancel()
+              throw error
+            }
+          }
+
+          await appendAudit({
+            adapterId: event.adapterId,
+            kind: "outbound.ai_run_enqueued",
+            at: Date.now(),
+            conversationKey: event.conversationKey,
+            idempotencyKey,
+            message: captured.messageId,
+            fields: {
+              assistantMessageId: captured.messageId,
+              sourceMessageId: storedMsg.id,
+              ...(outboundTarget.adapterId !== event.adapterId
+                ? { respondViaAdapterId: outboundTarget.adapterId }
+                : {}),
+            },
+          })
+
+          // Close the agent-trace root span with the turn's token usage + cost.
+          // The inbound path routes through `safeSendPrompt`, which — ONLY when a
+          // provider override is configured (`sendOptions.provider`) — records a
+          // `recordProviderOutcome` child span under this same root that already
+          // carries the LLM cost/usage. To avoid double-booking, the root span
+          // owns the accounting only when there is NO provider child span; with a
+          // provider set it closes with metadata alone. No-op when minting was
+          // skipped (suppressed turns).
+          if (sendOptions.spanId) {
+            const u = captured.usage
+            const ownsAccounting = !sendOptions.provider
+            endSpan(sendOptions.spanId, {
+              responseModel: sendOptions.model,
+              ...(ownsAccounting && typeof u?.totalCostUsd === "number"
+                ? { costUsdEstimate: u.totalCostUsd }
+                : {}),
+              ...(ownsAccounting && u
+                ? {
+                    usage: {
+                      inputTokens: u.inputTokens ?? 0,
+                      outputTokens: u.outputTokens ?? 0,
+                      cacheCreationTokens: u.cacheCreationInputTokens ?? 0,
+                      cacheReadTokens: u.cacheReadInputTokens ?? 0,
+                    },
+                  }
+                : {}),
+              metadata: { assistantMessageId: captured.messageId },
+            })
+          }
+          if (member) await recordImRoomMemberReply(member, recoveredText, captured.text)
+          return { kind: "delivered", text: captured.text, messageId: captured.messageId }
+        }
+
+        if (!roomTeam) {
+          await runDirectReply(null)
           break
         }
 
-        // ── Vendor-drawn final answer ──
-        // A vendor may ship the completed answer as its own cards (Lark's
-        // result card). The transform runs AFTER the draft branch, so an
-        // acceptance draft always keeps the raw generated segments.
-        const finalGroups = connectorVendor(outboundTarget.deliveryTarget.address.platform)?.reply
-          ?.finalGroups
-        let vendorGroups: MessageSegment[][] | undefined
-        if (finalGroups) {
-          const presentationAdapter =
-            outboundTarget.adapterId === adapterRow.id
-              ? adapterRow
-              : await getAdapterInstance(outboundTarget.adapterId)
-          vendorGroups = await finalGroups(outboundSegments, {
-            presentationAdapter,
-            receivingAdapter: adapterRow,
-            runId: executionRunId,
-            status: limitStop ? "interrupted" : "done",
-            // The quote stands in for the platform reply-quote only when
-            // quoting is off; a private chat never needs it.
-            quote: !quoteReply && event.channel.kind !== "private" ? event.plainText : undefined,
-            elapsedMs: Date.now() - turnStartedAt,
-            privateChat: event.channel.kind === "private",
-            initiator: event.sender.remoteUserId,
-            locale: runLocale,
-            fallbackAnswer: recoveredText,
+        // ── The room's turn ──
+        // `ImRoomTurn` decides who speaks, in order, from the same functions
+        // `RoomRunner` uses; each member's reply runs through the reply path
+        // above. A step a replay of this message already answered is fed back
+        // from its stored row instead of running again.
+        const roomSettings = resolveRoomSettings(session)
+        const turnInput = {
+          team: roomTeam.team,
+          characters: roomTeam.characters,
+          userText: event.plainText,
+          messages: await readImRoomMessages(session.id),
+          mutedMemberIds: roomSettings.mutedMemberIds,
+        }
+        const primaryRouting = primaryRoutingOf(turnInput)
+        const primary = primaryRouting
+          ? await selectPrimaryResponder({
+              client: buildUtilityLlmClient({
+                session,
+                appSettings: await getSettings().catch(() => undefined),
+                featureId: "team-primary-router",
+              }),
+              userText: event.plainText,
+              members: primaryRouting.candidates,
+              memberByCharId: new Map(
+                roomTeam.team.members.map((slot) => [slot.characterId, slot] as const)
+              ),
+              sticky: primaryRouting.sticky,
+            }).catch(() => undefined)
+          : undefined
+        const roomTurn = new ImRoomTurn({
+          ...turnInput,
+          ...(primary ? { primaryCharacterId: primary.id } : {}),
+          now: Date.now,
+        })
+        const protection = await connectorInjectionProtection(event.adapterId)
+        const memberCeilings = new Map<string, AgentPermissionCeiling>()
+        let stepsRun = 0
+        let halted = false
+        for (let step = roomTurn.next(); step; step = roomTurn.next()) {
+          const roomRows = await readImRoomMessages(session.id)
+          const answered = deliveredImRoomStep(roomRows, storedMsg.id, step)
+          if (answered) {
+            roomTurn.record(step, storedReplyText(answered))
+            continue
+          }
+          let memberCeiling = memberCeilings.get(step.character.id)
+          if (!memberCeiling) {
+            memberCeiling = await ceilingFor(step.character)
+            memberCeilings.set(step.character.id, memberCeiling)
+          }
+          const outcome = await runDirectReply({
+            step,
+            roomSessionId: session.id,
+            sourceMessageId: storedMsg.id,
+            sessionId: imRoomMemberSessionId(
+              session.id,
+              step.character.id,
+              `${storedMsg.id}.${step.stepKey}`
+            ),
+            section: buildImRoomMemberSection({
+              step,
+              team: roomTeam.team,
+              characters: roomTeam.characters,
+              messages: roomRows,
+              scratchpad: session.scratchpad,
+              instructions: roomSettings.instructions,
+              protection,
+            }),
+            permissionCeiling: memberCeiling,
           })
-        }
-
-        // Deliver through the respond-via target resolved above (falls back to
-        // the receiving bot on any invalid target).
-        if (vendorGroups) {
-          for (const [index, group] of vendorGroups.entries()) {
-            await enqueueOutbound(
-              {
-                adapterId: outboundTarget.adapterId,
-                conversationKey: outboundTarget.conversationKey,
-                request: {
-                  conversationRef: outboundRequest.conversationRef,
-                  deliveryTarget: outboundRequest.deliveryTarget,
-                  segments: group,
-                  // The reply anchor rides on the first message of the turn.
-                  ...(index === 0 && quoteReply ? { replyTo: { messageId: event.messageId } } : {}),
-                  metadata: {
-                    ...outboundRequest.metadata,
-                    // Multi-part turns need distinct keys — the runner dedupes
-                    // delivered idempotency keys, so sharing `airun:…` across
-                    // parts would drop every part after the first.
-                    idempotencyKey:
-                      vendorGroups.length > 1 ? `${idempotencyKey}:part:${index}` : idempotencyKey,
-                    // Card-bearing groups carry the terminal-card marker the
-                    // `onConnectorOutbound` hook exposes as `resultCard`.
-                    ...(group.some((segment) => segment.type === "card")
-                      ? {
-                          resultCard: {
-                            runId: executionRunId,
-                            status: limitStop ? ("interrupted" as const) : ("done" as const),
-                            sourceMessageId: storedMsg.id,
-                          },
-                        }
-                      : {}),
-                  },
-                },
-                source: "ai-run",
-                authorization: {
-                  kind: "origin-reply",
-                  inboundConversationKey: event.conversationKey,
-                },
-              },
-              { executionContext: { sessionId: session.id, executionRunId } }
-            )
+          stepsRun += 1
+          // The reply path already said what went wrong and, where the work
+          // can be continued, parked the inbound job: the room stops there.
+          if (outcome.kind === "halted") {
+            halted = true
+            break
           }
-        } else {
-          try {
-            await enqueueOutbound(
-              {
-                adapterId: outboundTarget.adapterId,
-                conversationKey: outboundTarget.conversationKey,
-                request: outboundRequest,
-                source: "ai-run",
-                // The respond-via target is the same chat through a sibling bot.
-                authorization: {
-                  kind: "origin-reply",
-                  inboundConversationKey: event.conversationKey,
-                },
-              },
-              { executionContext: { sessionId: session.id, executionRunId } }
-            )
-            replyStream?.handoff()
-          } catch (error) {
-            await replyStream?.cancel()
-            throw error
-          }
+          roomTurn.record(step, outcome.text)
         }
-
+        const roomEnd = halted ? null : roomTurn.end
         await appendAudit({
           adapterId: event.adapterId,
-          kind: "outbound.ai_run_enqueued",
+          kind: "room.turn",
           at: Date.now(),
           conversationKey: event.conversationKey,
-          idempotencyKey,
-          message: captured.messageId,
           fields: {
-            assistantMessageId: captured.messageId,
+            characterTeamId: roomTeamId,
             sourceMessageId: storedMsg.id,
-            ...(outboundTarget.adapterId !== event.adapterId
-              ? { respondViaAdapterId: outboundTarget.adapterId }
-              : {}),
+            steps: stepsRun,
+            end: roomEnd?.kind ?? "halted",
+            ...(roomEnd?.kind === "held" ? { held: roomEnd.reason } : {}),
+            ...(roomEnd?.kind === "done" && roomEnd.autoStop ? { stop: roomEnd.autoStop } : {}),
           },
         })
-
-        // Close the agent-trace root span with the turn's token usage + cost.
-        // The inbound path routes through `safeSendPrompt`, which — ONLY when a
-        // provider override is configured (`sendOptions.provider`) — records a
-        // `recordProviderOutcome` child span under this same root that already
-        // carries the LLM cost/usage. To avoid double-booking, the root span
-        // owns the accounting only when there is NO provider child span; with a
-        // provider set it closes with metadata alone. No-op when minting was
-        // skipped (suppressed turns).
-        if (sendOptions.spanId) {
-          const u = captured.usage
-          const ownsAccounting = !sendOptions.provider
-          endSpan(sendOptions.spanId, {
-            responseModel: sendOptions.model,
-            ...(ownsAccounting && typeof u?.totalCostUsd === "number"
-              ? { costUsdEstimate: u.totalCostUsd }
-              : {}),
-            ...(ownsAccounting && u
-              ? {
-                  usage: {
-                    inputTokens: u.inputTokens ?? 0,
-                    outputTokens: u.outputTokens ?? 0,
-                    cacheCreationTokens: u.cacheCreationInputTokens ?? 0,
-                    cacheReadTokens: u.cacheReadInputTokens ?? 0,
-                  },
-                }
-              : {}),
-            metadata: { assistantMessageId: captured.messageId },
-          })
+        // A supervisor team without its supervisor is a configuration the
+        // group cannot see; silence would read as the bot ignoring it.
+        if (roomEnd?.kind === "no-supervisor") {
+          if (requireAcceptance) {
+            notifyImFailure(
+              event.conversationKey,
+              IM_FAILURE_NOTICE.dispatchFailed,
+              `dispatch-error:${event.conversationKey}`
+            )
+          } else {
+            await replyImFailure(
+              event,
+              IM_FAILURE_NOTICE.dispatchFailed,
+              `dispatch-error:${event.conversationKey}`
+            )
+          }
         }
         break
       }

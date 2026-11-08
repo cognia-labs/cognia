@@ -283,6 +283,26 @@ export function stripDispatches(text: string): string {
     .trim()
 }
 
+/** A supervisor turn's rounds: the dispatching reply, then the synthesis. */
+export const MAX_SUPERVISOR_ROUNDS = 2
+
+/**
+ * The supervisor's second-round prompt: what each dispatched member replied,
+ * and the instruction to answer the user without dispatching again.
+ */
+export function buildSynthesisAddendum(results: { name: string; reply: string }[]): string {
+  if (results.length === 0) return ""
+  const lines = ["## Dispatch results"]
+  for (const r of results) {
+    const trimmed = r.reply.trim().replace(/\s+/g, " ")
+    const snippet = trimmed.length > 600 ? trimmed.slice(0, 600) + "…" : trimmed
+    lines.push(`- ${r.name} replied: ${snippet}`)
+  }
+  lines.push("")
+  lines.push("Synthesize a final answer for the user. Do NOT emit any further <dispatch> tags.")
+  return lines.join("\n")
+}
+
 /**
  * Build the supervisor system-prompt addendum that introduces the available
  * members and explains the dispatch protocol. The orchestrator appends this

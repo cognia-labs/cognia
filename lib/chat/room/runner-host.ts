@@ -22,7 +22,7 @@
  */
 
 import type { ClaudeEvent } from "@cognia/agent-config-types"
-import { decodeSubSession } from "@/lib/claude/team-session-id"
+import { decodeSubSession, isImRoomMemberSessionId } from "@/lib/claude/team-session-id"
 import { RoomRunner } from "./runner"
 import { createProductionRoomDeps } from "./production-deps"
 import { createStoreRoomSinks } from "./store-sinks"
@@ -85,7 +85,7 @@ export class CompanionRoomProjector {
   handleEvent(evt: ClaudeEvent): void {
     const sessionId = (evt as { sessionId?: unknown }).sessionId
     if (typeof sessionId === "string") {
-      const decoded = decodeSubSession(sessionId)
+      const decoded = isImRoomMemberSessionId(sessionId) ? null : decodeSubSession(sessionId)
       if (decoded) {
         const roomId = decoded.teamSessionId
         if (evt.type === "event" || evt.type === "permission_request") this.open(roomId, sessionId)

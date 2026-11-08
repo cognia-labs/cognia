@@ -16,7 +16,7 @@
  */
 
 import { useMemo, useState } from "react"
-import type { Character } from "@cognia/agent-config-types"
+import type { Character, Team } from "@cognia/agent-config-types"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import { InfoIcon, ScanTextIcon, ShieldAlertIcon, XIcon } from "lucide-react"
@@ -140,6 +140,7 @@ export interface ConversationOverrideFormProps {
 
 /** Typed empty default — a bare `[]` infers `never[]` and poisons every read. */
 const EMPTY_CHARACTERS: Character[] = []
+const EMPTY_TEAMS: Team[] = []
 
 export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
   const {
@@ -179,6 +180,13 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
     )
     return workflows.filter((workflow) => activeProductionIds.has(workflow.id))
   }, [])
+  // Character teams, for the group room binding (ADR-0177 batch 4). Not the
+  // Squads `TeamPicker` lists: a character team answers in the chat itself.
+  const characterTeams = useLiveQuery(
+    () => (typeof window === "undefined" ? Promise.resolve<Team[]>([]) : getDb().teams.toArray()),
+    [],
+    EMPTY_TEAMS
+  )
   const settings = useLiveQuery<AppSettings | undefined>(
     () =>
       typeof window === "undefined"
@@ -208,6 +216,9 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
   // routes to the Squad runtime instead of the single character.
   const [teamId, setTeamId] = useState(initialRow?.squadId ?? "")
   const [workflowId, setWorkflowId] = useState(initialRow?.workflowId ?? "")
+  // A group's character team. Outranks the Squad and the workflow in a group;
+  // a one-to-one chat ignores it.
+  const [characterTeamId, setCharacterTeamId] = useState(initialRow?.characterTeamId ?? "")
   const [targetKind, setTargetKind] = useState<"inherit" | "direct" | "team" | "workflow">(
     initialRow?.squadId
       ? "team"
@@ -396,6 +407,7 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
           squadId: nextTeamId,
           squadDisabled: nextTeamDisabled,
           workflowId: targetKind === "workflow" ? workflowId.trim() || undefined : undefined,
+          characterTeamId: characterTeamId.trim() || undefined,
           workflowDisabled: targetKind === "team" || targetKind === "direct" ? true : undefined,
           proactivePush: proactivePush ? true : undefined,
           liveActivity: liveActivity ? undefined : false,
@@ -754,6 +766,27 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
                     </p>
                   </div>
                 )}
+
+                <div className="space-y-2">
+                  <Label htmlFor="conv-override-character-team">
+                    {t("fields.characterTeamBinding")}
+                  </Label>
+                  <EntityPicker
+                    id="conv-override-character-team"
+                    value={characterTeamId || undefined}
+                    items={(characterTeams ?? [])
+                      .slice()
+                      .sort((a, b) => a.name.localeCompare(b.name))
+                      .map((team) => ({ id: team.id, label: team.name }))}
+                    emptyLabel={t("fields.characterTeamBindingPlaceholder")}
+                    missingLabel={(id) => t("fields.referenceMissing", { id })}
+                    onChange={(id) => setCharacterTeamId(id ?? "")}
+                    triggerTestId="conv-override-character-team"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("fields.characterTeamBindingHelp")}
+                  </p>
+                </div>
               </>
             ),
           },

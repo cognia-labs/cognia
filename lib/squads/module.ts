@@ -78,6 +78,7 @@ export default defineHostModule({
     "lib/squads/durable/durable-runtime.ts",
     "lib/squads/file-activity.ts",
     "lib/squads/gates/decide-pending-gate.ts",
+    "lib/squads/gates/message-guard.ts",
     "lib/squads/pr-feedback/binding.ts",
     "lib/squads/pr-feedback/observer.ts",
     "lib/squads/pr-feedback/publish.ts",

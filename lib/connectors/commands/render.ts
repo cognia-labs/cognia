@@ -128,6 +128,11 @@ export interface StatusView {
   reasoning: string
   approvalMode: string
   team: string
+  /**
+   * The character team that answers a group as a room (ADR-0177 batch 4), or
+   * why it does not here: none bound, or a one-to-one chat it never applies to.
+   */
+  characterTeam: string
   workflow: string
   routeSource: string
   matchedRule: string
@@ -201,6 +206,7 @@ export function renderStatus(v: StatusView): string {
     `• 思考强度 / reasoning: ${v.reasoning}`,
     `• 角色 / character: ${v.character}`,
     `• 团队 / team: ${v.team}`,
+    `• 角色团队 / character team: ${v.characterTeam}`,
     `• 工作流 / workflow: ${v.workflow}`,
     `• 会话 / session: ${v.sessionTitle} (${v.sessionIdPrefix})`,
     "已启用规则（优先级顺序） / Enabled rules (priority order):",

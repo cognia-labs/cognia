@@ -872,6 +872,33 @@ describe("maybeHandleControlCommand", () => {
     expect(text).toMatch(/Main/)
   })
 
+  it("/status says a group's character team answers it, and the model is not the Squad's", async () => {
+    const h = harness({ active: session("s1", "Main") })
+    const override = { squadId: "squad_x", characterTeamId: "ct_launch" } as ConversationOverrideRow
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/status", channel: { id: "g", kind: "group", name: "Room" } }),
+      makeAdapter(),
+      override,
+      RESOLVED,
+      h.deps
+    )
+    const text = h.enqueued[0].text
+    expect(text).toMatch(/character team: ct_launch（会话覆盖 \/ conversation override）/)
+    expect(text).not.toMatch(/managed by Agent Team/)
+
+    // The same row in a one-to-one chat: the Squad answers, the team does not apply.
+    const dm = harness({ active: session("s1", "Main") })
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/status" }),
+      makeAdapter(),
+      override,
+      RESOLVED,
+      dm.deps
+    )
+    expect(dm.enqueued[0].text).toMatch(/character team: ct_launch（一对一聊天不适用/)
+    expect(dm.enqueued[0].text).toMatch(/managed by Agent Team/)
+  })
+
   it("/status shows the assignee and labels assignment-written routing (slice 1A)", async () => {
     const h = harness({ active: session("s1", "Main") })
     const override = {

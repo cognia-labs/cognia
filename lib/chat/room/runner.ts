@@ -67,6 +67,8 @@ import type { TwinDepsForBuild } from "@/lib/twin/runtime/build-deps"
 import { attachInteractiveGrounding } from "@/lib/rag/chat-grounding"
 import {
   buildSupervisorRoster,
+  buildSynthesisAddendum,
+  MAX_SUPERVISOR_ROUNDS,
   parseDispatches,
   holdReasonFor,
   parseMentions,
@@ -122,7 +124,11 @@ import type {
   TeamMember,
   MessageReplyTo,
 } from "@cognia/agent-config-types"
-import { subSessionId, decodeSubSession } from "@/lib/claude/team-session-id"
+import {
+  subSessionId,
+  decodeSubSession,
+  isImRoomMemberSessionId,
+} from "@/lib/claude/team-session-id"
 import { steerBlocksOf, steerTextOf, type SteerMessageMeta } from "@/lib/claude/steer"
 import {
   senderIdOf,
@@ -146,7 +152,6 @@ import { deriveMemberActivity } from "./member-activity"
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
 import { contextSourcesOf } from "@/lib/claude/context-sources"
 
-const MAX_SUPERVISOR_ROUNDS = 2
 /** A running tool with no result after this long stops being reported as the member's activity. */
 export const ACTIVITY_STALE_MS = 90_000
 /** A keystroke this recent means the human is mid-sentence, and an auto round waits. */
@@ -1769,6 +1774,9 @@ export class RoomRunner {
       return
     }
     if (typeof evt.sessionId !== "string") return
+    // An IM room member's run is the connector runtime's: it answers the
+    // member's approvals in the group and writes its reply (ADR-0177 batch 4).
+    if (isImRoomMemberSessionId(evt.sessionId)) return
     const decoded = decodeSubSession(evt.sessionId)
     if (!decoded) return
     const { teamSessionId, characterId } = decoded
@@ -2112,19 +2120,6 @@ function postCompactionFor(
   if (phaseNumber === null) return undefined
   const durableInstructions = workingSet ? renderWorkingSetForCompaction(workingSet) : ""
   return { phaseNumber, ...(durableInstructions ? { durableInstructions } : {}) }
-}
-
-function buildSynthesisAddendum(results: { name: string; reply: string }[]): string {
-  if (results.length === 0) return ""
-  const lines = ["## Dispatch results"]
-  for (const r of results) {
-    const trimmed = r.reply.trim().replace(/\s+/g, " ")
-    const snippet = trimmed.length > 600 ? trimmed.slice(0, 600) + "…" : trimmed
-    lines.push(`- ${r.name} replied: ${snippet}`)
-  }
-  lines.push("")
-  lines.push("Synthesize a final answer for the user. Do NOT emit any further <dispatch> tags.")
-  return lines.join("\n")
 }
 
 export function withMetadata(msg: UIMessage, extra: Record<string, unknown>): UIMessage {

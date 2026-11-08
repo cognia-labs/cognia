@@ -131,6 +131,7 @@ describe("buildLarkStatusCard", () => {
     reasoning: "默认 / default",
     approvalMode: "prompt",
     team: "无 / none",
+    characterTeam: "无 / none",
     workflow: "无 / none",
     routeSource: "Adapter 默认 / adapter default",
     matchedRule: "无 / none",

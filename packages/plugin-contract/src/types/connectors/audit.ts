@@ -275,6 +275,14 @@ export type AuditKind =
   // Fired when `overrideRow.teamId` routed the turn to `runTeamLifecycle`
   // instead of the single-character `runAndCapture` path.
   | "team.dispatched"
+  // An IM group bound to a character team answered as a room (ADR-0177
+  // batch 4): one row per inbound message, written once the room has nobody
+  // left to run. Carries `fields.characterTeamId`, `fields.sourceMessageId`,
+  // `fields.steps` (member replies run, a replay's skipped ones excluded),
+  // `fields.end` (`done`, `held`, `no-supervisor`, `empty`, `halted`) and,
+  // when the room held or stopped itself, `fields.held` (why nobody was
+  // routed) or `fields.stop` (why the hand-off chain ended).
+  | "room.turn"
   // Inbound dispatch rule decided the routing (W3 multi-bot 条件规则表).
   // Fired from the connector runtime's ai-run branch when a matched
   // `AdapterInstanceRow.dispatchRules` entry actually routed the turn (it

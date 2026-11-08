@@ -51,6 +51,7 @@ import {
 import { countPendingConnectorInboundJobs } from "@/lib/db/connector-inbound-jobs"
 import { updateAdapterInstance } from "@/lib/db/adapter-instances"
 import { getDb } from "@/lib/db/schema"
+import { getTeam } from "@/lib/db/teams"
 import {
   resolveDeliveryReadiness,
   resolveInboundActivationPolicy,
@@ -377,21 +378,31 @@ export async function maybeHandleControlCommand(
         override: override ?? null,
         rule: ruleHit,
         system: { mode: resolved.mode, characterId: resolved.characterId },
+        scope: event.channel.kind,
       })
       const routing = effectiveConfig.routing
       const charId = override?.characterDisabled
         ? undefined
         : (routing.characterId ?? resolved.characterId)
       const character = charId ? await getCharacterById(charId).catch(() => undefined) : undefined
+      const characterTeamName = routing.characterTeamId
+        ? (await getTeam(routing.characterTeamId).catch(() => undefined))?.name
+        : undefined
       // Effective values: per-conversation override first, then the BOT-level
       // instance default (annotated so the reader can tell them apart), then
       // the literal "default"/"none" fallback. Same resolver the runtime
       // dispatch uses, so `/status` can't drift from actual routing.
-      const targetManaged = routing.squadId
-        ? "由 Agent Team 管理 / managed by Agent Team"
-        : routing.workflowId
-          ? "由 Workflow 管理 / managed by Workflow"
-          : undefined
+      // The effective target, not the raw routing: a group's character team
+      // answers directly even with a Squad or workflow bound.
+      const target = effectiveConfig.target.effective
+      const roomTeamAnswers =
+        routing.characterTeamId !== undefined && event.channel.kind !== "private"
+      const targetManaged =
+        target.kind === "team"
+          ? "由 Agent Team 管理 / managed by Agent Team"
+          : target.kind === "workflow"
+            ? "由 Workflow 管理 / managed by Workflow"
+            : undefined
       const botDefault = (v: string | undefined): string | undefined =>
         v?.trim() ? R.withBotDefault(v.trim()) : undefined
       const modelBinding = (value: string | undefined, source: string): string => {
@@ -399,15 +410,17 @@ export async function maybeHandleControlCommand(
         if (source === "adapter-default") return R.withBotDefault(value.trim())
         return R.withSource(value.trim(), source)
       }
-      const routeSource = routing.squadId
-        ? routing.squadSource
-        : routing.workflowId
-          ? routing.workflowSource
-          : routing.characterId
-            ? routing.characterSource
-            : routing.respondViaAdapterId
-              ? routing.respondViaSource
-              : effectiveConfig.target.source
+      const routeSource = roomTeamAnswers
+        ? routing.characterTeamSource
+        : routing.squadId
+          ? routing.squadSource
+          : routing.workflowId
+            ? routing.workflowSource
+            : routing.characterId
+              ? routing.characterSource
+              : routing.respondViaAdapterId
+                ? routing.respondViaSource
+                : effectiveConfig.target.source
       const behaviourPreset = imModePresetFor({
         autonomy: effectiveConfig.autonomy.effective,
         engagement: effectiveConfig.engagement.effective,
@@ -452,6 +465,11 @@ export async function maybeHandleControlCommand(
           : override?.squadDisabled
             ? "已关闭 / off"
             : "无 / none",
+        characterTeam: routing.characterTeamId
+          ? roomTeamAnswers
+            ? R.withSource(characterTeamName ?? routing.characterTeamId, "override")
+            : `${characterTeamName ?? routing.characterTeamId}（一对一聊天不适用 / not in a one-to-one chat）`
+          : "无 / none",
         workflow: routing.workflowId
           ? R.withSource(routing.workflowId, routing.workflowSource)
           : override?.workflowDisabled
@@ -660,6 +678,7 @@ export async function maybeHandleControlCommand(
           override: override ?? null,
           rule: matchDispatchRule(adapterRow.dispatchRules, event),
           system: { mode: resolved.mode, characterId: resolved.characterId },
+          scope: event.channel.kind,
         }).target.effective.kind
         if (imModePresetUnavailableReason(preset, targetKind) !== null) {
           await reply(R.denyDelegateWithoutTarget(), "denied", {

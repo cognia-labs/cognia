@@ -38,6 +38,7 @@ describe("renderStatus", () => {
       reasoning: "high",
       approvalMode: "prompt",
       team: "team_bot（bot 默认 / bot default）",
+      characterTeam: "Launch crew（会话覆盖 / conversation override）",
       workflow: "无 / none",
       routeSource: "路由规则 / dispatch rule",
       matchedRule: "Status route (rule-status)",
@@ -47,6 +48,7 @@ describe("renderStatus", () => {
       sessionIdPrefix: "abc12345",
     })
     expect(text).toContain("behaviour: assistant")
+    expect(text).toContain("character team: Launch crew")
     expect(text).toContain("mode: auto")
     expect(text).toContain("model: claude-fable-5（bot 默认 / bot default）")
     expect(text).toContain("provider: anthropic")
@@ -111,6 +113,7 @@ describe("assignment provenance (slice 1A)", () => {
       reasoning: "r",
       approvalMode: "prompt",
       team: "team_r",
+      characterTeam: "无 / none",
       workflow: "无 / none",
       routeSource: "会话覆盖 / conversation override",
       matchedRule: "无 / none",
@@ -138,6 +141,7 @@ describe("assignment provenance (slice 1A)", () => {
       reasoning: "r",
       approvalMode: "prompt",
       team: "t",
+      characterTeam: "无 / none",
       workflow: "w",
       routeSource: "会话分配 / assignment",
       matchedRule: "无 / none",

@@ -512,6 +512,7 @@
         "auto": "A member's hand-off starts the Squad run right away, without a card to confirm. The Squad run still asks for its own approvals and follows the risk policy."
       },
       "mutedHint": "Muted members never reply on their own. An @mention or a pick in the composer still reaches them.",
+      "imMutedHint": "Muted members never reply on their own. A message that @mentions one still reaches them.",
       "noRoom": "Open a group chat or a shared conversation to see its room settings."
     },
     "sharedNotes": "Shared notes",

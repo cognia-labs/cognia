@@ -38,6 +38,7 @@ import {
 } from "@/lib/task-workspace/client"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { getSession } from "@/lib/db/sessions"
+import { decodeSubSession } from "@/lib/claude/team-session-id"
 import { isSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
 import { validateSessionScratchBundle } from "@/lib/task-workspace/session-bundle"
 import { rebindSendOptionsWorkspace } from "@/lib/sandbox/session-runtime"
@@ -170,7 +171,11 @@ async function openConnectorWorkspaceTurn(
   options: SendOptions | undefined,
   opts: SafeSendPromptOptions
 ): Promise<ConnectorWorkspaceTurn | null> {
-  const session = isHeadlessHost() ? await getSession(sessionId) : undefined
+  // An IM room member runs under a sub-session of the room (ADR-0177 batch
+  // 4); its workspace is the room's, so the room's scratch bundle and owner
+  // apply to every member.
+  const ownerSessionId = decodeSubSession(sessionId)?.teamSessionId ?? sessionId
+  const session = isHeadlessHost() ? await getSession(ownerSessionId) : undefined
   const scratch = session && isSessionScratchWorkspace(session)
   const knownBundleId = scratch ? session.executionContext?.execution?.bundleId : undefined
   if (scratch && !knownBundleId) {
@@ -179,10 +184,10 @@ async function openConnectorWorkspaceTurn(
   // Revalidate the canonical owner through the service, without acquiring a
   // second bundle around its alias. This must precede the sandbox early exit.
   const scratchBundle = scratch
-    ? await ensureSessionScratchWorkspaceBundle(sessionId, knownBundleId)
+    ? await ensureSessionScratchWorkspaceBundle(ownerSessionId, knownBundleId)
     : undefined
   const scratchPrimary = scratchBundle
-    ? validateSessionScratchBundle(sessionId, scratchBundle, knownBundleId)
+    ? validateSessionScratchBundle(ownerSessionId, scratchBundle, knownBundleId)
     : undefined
   const roots = scratchPrimary
     ? [
@@ -213,7 +218,7 @@ async function openConnectorWorkspaceTurn(
     : await provisioningForWorkspaceRoot(roots[0]?.sourceRoot).catch(() => undefined)
   const acquire: AcquireWorkspaceBundle = {
     ownerType: "session",
-    ownerRef: sessionId,
+    ownerRef: ownerSessionId,
     environmentKind: "managed",
     base: { kind: "remoteDefault" },
     roots,
@@ -222,12 +227,12 @@ async function openConnectorWorkspaceTurn(
   const bundle = scratchBundle ?? (await acquireWorkspaceBundle(acquire))
   const turnId =
     options?.turnId?.trim() || `connector-${Date.now()}-${(connectorTurnSequence += 1)}`
-  const taskId = connectorBoundaryId("task:connector:", sessionId)
-  const runId = connectorBoundaryId("run:connector:", `${sessionId}:${turnId}`)
+  const taskId = connectorBoundaryId("task:connector:", ownerSessionId)
+  const runId = connectorBoundaryId("run:connector:", `${ownerSessionId}:${turnId}`)
   const primaryRoot = roots[0]
   const run: BeginTaskWorkspaceTurn = {
     taskId,
-    sessionId,
+    sessionId: ownerSessionId,
     runId,
     executionRunId: runId,
     turnId,

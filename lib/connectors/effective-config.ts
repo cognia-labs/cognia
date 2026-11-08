@@ -15,6 +15,7 @@ import type {
   ConnectorMode,
   InboundActivationPolicy,
 } from "@/types/connectors/policy"
+import type { ChannelKind } from "@/types/connectors/event"
 
 export type ImConfigSource =
   | "conversation-override"
@@ -91,6 +92,14 @@ export function resolveImEffectiveConfig(input: {
    */
   session?: { model?: string; providerOverride?: string }
   characterComputerUseEnabled?: boolean
+  /**
+   * The conversation's scope, when the caller knows it (the inbound event's
+   * channel, the bound session's). A group's character team outranks the
+   * Squad and the workflow only in a room (ADR-0177 batch 4); an unknown
+   * scope keeps the target routing would otherwise pick, and still reports
+   * the team.
+   */
+  scope?: ChannelKind
   references?: {
     teamExists?: boolean
     workflowExecutable?: boolean
@@ -99,12 +108,30 @@ export function resolveImEffectiveConfig(input: {
 }) {
   const { adapter, override, rule, system, session, references } = input
   const routing = resolveEffectiveRouting(adapter, override, rule)
+  // A room's members each answer directly, so a bound character team makes
+  // the turn direct whatever Squad or workflow is also bound.
+  const characterTeam: EffectiveConfigValue<string | undefined> = {
+    requested: override?.characterTeamId,
+    effective: routing.characterTeamId,
+    source: routing.characterTeamId ? "conversation-override" : "system-default",
+    ...(routing.characterTeamId && input.scope === "private"
+      ? { blockedReason: "character_team_private_chat" }
+      : {}),
+  }
+  const roomTeamAnswers =
+    routing.characterTeamId !== undefined && input.scope !== undefined && input.scope !== "private"
   const effectiveCharacterId = override?.characterDisabled
     ? undefined
     : (routing.characterId ?? system.characterId)
 
   let target: EffectiveConfigValue<ImExecutionTarget>
-  if (routing.squadId) {
+  if (roomTeamAnswers) {
+    target = {
+      requested: { kind: "direct" },
+      effective: { kind: "direct" },
+      source: "conversation-override",
+    }
+  } else if (routing.squadId) {
     target = {
       requested: override?.squadId ? { kind: "team", id: override.squadId } : undefined,
       effective: { kind: "team", id: routing.squadId },
@@ -321,6 +348,7 @@ export function resolveImEffectiveConfig(input: {
     },
     routing,
     target,
+    characterTeam,
     character,
     autonomy,
     engagement,
