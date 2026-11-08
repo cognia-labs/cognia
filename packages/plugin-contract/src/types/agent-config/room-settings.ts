@@ -7,6 +7,13 @@
 
 export type RoomReplyMode = "auto" | "mention_only" | "asleep"
 
+/**
+ * What a member's `room_handoff_to_squad` does (ADR-0252 §4). `confirm`: it
+ * leaves a proposal card a person confirms. `auto`: the Squad run starts at
+ * once, still under the Squad run's own approval gates and risk policy.
+ */
+export type RoomSquadHandoffMode = "confirm" | "auto"
+
 export interface RoomSettings {
   /**
    * When the room's agents may speak on their own. Read by the team runner
@@ -24,4 +31,6 @@ export interface RoomSettings {
    * is about the room's own initiative, does not apply.
    */
   mutedMemberIds?: string[]
+  /** Read by `room_handoff_to_squad` (`lib/squads/room-handoff/`). Default `confirm`. */
+  squadHandoff?: RoomSquadHandoffMode
 }

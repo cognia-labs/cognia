@@ -292,6 +292,19 @@ describe("room settings (ADR-0177)", () => {
     })
   })
 
+  it("stores how a hand-off to a Squad starts and says what auto means", () => {
+    render(<TeamMembersPanel teamSessionId="s-1" teamId="t-1" />)
+    open()
+    expect(screen.getByTestId("room-squad-handoff-confirm")).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByTestId("room-settings-squad-handoff-hint")).toHaveTextContent(
+      "desktop.memberList.roomSettings.squadHandoffHints.confirm"
+    )
+    fireEvent.click(screen.getByTestId("room-squad-handoff-auto"))
+    expect(updateSession).toHaveBeenCalledWith("s-1", {
+      roomSettings: { squadHandoff: "auto" },
+    })
+  })
+
   it("mirrors the memory switch onto the two flags the memory plane reads", () => {
     render(<TeamMembersPanel teamSessionId="s-1" teamId="t-1" />)
     open()

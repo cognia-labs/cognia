@@ -496,6 +496,15 @@
         "mention_only": "Members reply only to a message that @mentions one of them, and never continue on their own.",
         "asleep": "Messages are kept and nobody replies until the mode changes."
       },
+      "squadHandoff": "Handing work to a Squad",
+      "squadHandoffModes": {
+        "confirm": "A person confirms",
+        "auto": "Starts at once"
+      },
+      "squadHandoffHints": {
+        "confirm": "When a member proposes handing work to a Squad, the room shows a card and nothing starts until someone in the room confirms it.",
+        "auto": "A member's hand-off starts the Squad run right away, without a card to confirm. The Squad run still asks for its own approvals and follows the risk policy."
+      },
       "mutedHint": "Muted members never reply on their own. An @mention or a pick in the composer still reaches them."
     },
     "sharedNotes": "Shared notes",

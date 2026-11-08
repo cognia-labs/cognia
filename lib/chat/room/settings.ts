@@ -12,10 +12,19 @@
 import type { ChatSession } from "@cognia/agent-config-types"
 import { MAX_AUTO_ROUNDS } from "@/lib/db/teams"
 import { roomKindOf, isMultiHumanRoom, type RoomKindSource } from "./kind"
-import type { ResolvedRoomSettings, RoomReplyMode, RoomSettings } from "./types"
+import type {
+  ResolvedRoomSettings,
+  RoomReplyMode,
+  RoomSettings,
+  RoomSquadHandoffMode,
+} from "./types"
 
 export const DEFAULT_ROOM_REPLY_MODE: RoomReplyMode = "auto"
 export const ROOM_REPLY_MODES: readonly RoomReplyMode[] = ["auto", "mention_only", "asleep"]
+
+/** A hand-off waits for a person unless the room says otherwise (ADR-0252 §4). */
+export const DEFAULT_ROOM_SQUAD_HANDOFF: RoomSquadHandoffMode = "confirm"
+export const ROOM_SQUAD_HANDOFF_MODES: readonly RoomSquadHandoffMode[] = ["confirm", "auto"]
 
 /** Longest instructions block injected into a prompt. */
 export const MAX_ROOM_INSTRUCTIONS_CHARS = 4_000
@@ -63,7 +72,13 @@ export function resolveRoomSettings(
   const mutedMemberIds = Array.isArray(stored?.mutedMemberIds)
     ? Array.from(new Set(stored.mutedMemberIds.filter((id) => typeof id === "string" && id)))
     : []
-  return { kind, replyMode, instructions, memory, mutedMemberIds, memoryDefaulted }
+  // Anything but a known mode, an unknown string from a newer client
+  // included, waits for a person.
+  const squadHandoff =
+    stored?.squadHandoff && ROOM_SQUAD_HANDOFF_MODES.includes(stored.squadHandoff)
+      ? stored.squadHandoff
+      : DEFAULT_ROOM_SQUAD_HANDOFF
+  return { kind, replyMode, instructions, memory, mutedMemberIds, squadHandoff, memoryDefaulted }
 }
 
 function clampInstructions(text: string | undefined): string {

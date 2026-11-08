@@ -14803,6 +14803,15 @@
           "auto": "Replies to everything",
           "mention_only": "Replies only when mentioned"
         },
+        "squadHandoff": "Handing work to a Squad",
+        "squadHandoffHints": {
+          "auto": "A member's hand-off starts the Squad run right away, without a card to confirm. The Squad run still asks for its own approvals and follows the risk policy.",
+          "confirm": "When a member proposes handing work to a Squad, the room shows a card and nothing starts until someone in the room confirms it."
+        },
+        "squadHandoffModes": {
+          "auto": "Starts at once",
+          "confirm": "A person confirms"
+        },
         "summary": "{replyMode} · {memory}",
         "title": "Room settings",
         "unmute": "Unmute {name}"

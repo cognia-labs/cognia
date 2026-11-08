@@ -72,6 +72,20 @@ describe("resolveRoomSettings", () => {
     expect(resolved.replyMode).toBe("asleep")
     expect(resolved.mutedMemberIds).toEqual(["a"])
   })
+
+  it("makes a hand-off to a Squad wait for a person unless the room says auto", () => {
+    expect(resolveRoomSettings(team).squadHandoff).toBe("confirm")
+    expect(
+      resolveRoomSettings({ ...team, roomSettings: { squadHandoff: "auto" } }).squadHandoff
+    ).toBe("auto")
+    // A mode this build does not know (a newer client's) waits for a person.
+    expect(
+      resolveRoomSettings({
+        ...team,
+        roomSettings: { squadHandoff: "eventually" as never },
+      }).squadHandoff
+    ).toBe("confirm")
+  })
 })
 
 describe("roomSettingsPatch", () => {

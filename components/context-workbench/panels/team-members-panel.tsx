@@ -18,11 +18,12 @@
  *   transcript, and it was previously only visible in team settings.
  * - **Shared notes.** The session `scratchpad`, injected into every member's
  *   transcript each turn. Collapsible, debounced-persisted, unchanged.
- * - **Room settings** (ADR-0177). Reply mode, room instructions, the memory
- *   switch and the muted members, stored on `ChatSession.roomSettings`.
- *   Instructions reach every member's prompt, the memory switch is what the
- *   memory plane reads, and the reply mode and the mute list are what the
- *   room runner routes on (batch 3).
+ * - **Room settings** (ADR-0177). Reply mode, how a hand-off to a Squad starts
+ *   (ADR-0252 §4), room instructions, the memory switch and the muted
+ *   members, stored on `ChatSession.roomSettings`. Instructions reach every
+ *   member's prompt, the memory switch is what the memory plane reads, the
+ *   reply mode and the mute list are what the room runner routes on (batch
+ *   3), and the hand-off mode is what `room_handoff_to_squad` reads.
  * - **The members.** Each with its live status, its role in *this* team, the
  *   model it actually runs on (the member override, else the character's), and
  *   a supervisor marker when the team has a leader.
@@ -67,6 +68,7 @@ import { requestComposerMention } from "@/lib/chat/composer-mention-request"
 import {
   MAX_ROOM_INSTRUCTIONS_CHARS,
   ROOM_REPLY_MODES,
+  ROOM_SQUAD_HANDOFF_MODES,
   resolveRoomSettings,
   roomSettingsPatch,
 } from "@/lib/chat/room/settings"
@@ -411,6 +413,40 @@ function RoomSettingsSection({
               data-testid="room-settings-reply-mode-hint"
             >
               {t(`roomSettings.replyModeHints.${resolved.replyMode}`)}
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              {t("roomSettings.squadHandoff")}
+            </span>
+            <div
+              className="flex flex-wrap gap-1"
+              role="group"
+              aria-label={t("roomSettings.squadHandoff")}
+            >
+              {ROOM_SQUAD_HANDOFF_MODES.map((mode) => (
+                <Button
+                  key={mode}
+                  type="button"
+                  size="sm"
+                  variant={resolved.squadHandoff === mode ? "secondary" : "outline"}
+                  aria-pressed={resolved.squadHandoff === mode}
+                  data-testid={`room-squad-handoff-${mode}`}
+                  onClick={() =>
+                    persistRoomSettings(teamSessionId, session, { squadHandoff: mode })
+                  }
+                  className="h-7 px-2 text-xs"
+                >
+                  {t(`roomSettings.squadHandoffModes.${mode}`)}
+                </Button>
+              ))}
+            </div>
+            <p
+              className="text-[11px] text-muted-foreground"
+              data-testid="room-settings-squad-handoff-hint"
+            >
+              {t(`roomSettings.squadHandoffHints.${resolved.squadHandoff}`)}
             </p>
           </div>
 

@@ -21,7 +21,7 @@ export type RoomKind = "team" | "shared" | "im"
  */
 export type RoomTurnRefusal = "roomRunsOnServer" | "teamSessionMissing"
 
-import type { RoomReplyMode } from "@cognia/agent-config-types"
+import type { RoomReplyMode, RoomSquadHandoffMode } from "@cognia/agent-config-types"
 
 /**
  * `RoomReplyMode` and `RoomSettings` are declared in
@@ -38,7 +38,7 @@ import type { RoomReplyMode } from "@cognia/agent-config-types"
  * mention, `asleep` denies with `room_asleep`, `auto` defers to what the
  * operator configured).
  */
-export type { RoomReplyMode, RoomSettings } from "@cognia/agent-config-types"
+export type { RoomReplyMode, RoomSettings, RoomSquadHandoffMode } from "@cognia/agent-config-types"
 
 /** How complete a roster is, so the UI never claims a list it does not have. */
 export type RoomRosterCompleteness = "full" | "partial" | "observed"
@@ -50,6 +50,8 @@ export interface ResolvedRoomSettings {
   instructions: string
   memory: boolean
   mutedMemberIds: readonly string[]
+  /** Whether a member's hand-off to a Squad waits for a person. */
+  squadHandoff: RoomSquadHandoffMode
   /** True when `memory` came from the kind's default rather than the row. */
   memoryDefaulted: boolean
 }
