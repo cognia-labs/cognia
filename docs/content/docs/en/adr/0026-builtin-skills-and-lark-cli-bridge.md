@@ -67,8 +67,10 @@ interface BuiltInSkill {
 
 Each skill self-registers at module load via `registerBuiltInSkill()`.
 The shared registry exposes `listByPlatform()`, `listByMutation()`, and
-`families()`. The barrel `lib/skills/built-in/index.ts` triggers
-side-effect imports for every family.
+`families()`. The barrel `lib/skills/built-in/index.ts` imports the
+kernel's families; a module's families (the connectors' Lark and IM ones)
+are its manifest's `builtinSkills` contribution (ADR-0250 §14), and readers
+await `whenBuiltInSkillsRegistered()`.
 
 ### Trust model
 

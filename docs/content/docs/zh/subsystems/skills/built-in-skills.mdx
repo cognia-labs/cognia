@@ -38,7 +38,8 @@ description: ADR-0026 的类型化工具层级——经过代码审查、由助�
 | `lib/skills/built-in/registry.ts` | 基于 Map 的注册表 + 共享单例 + 不变量强制 |
 | `lib/skills/built-in/manifest.ts` | 注册表 → MCP 工具定义；按渠道的过滤流水线；能力摘要 |
 | `lib/skills/built-in/dispatcher.ts` | `runBuiltInSkill`——6 道闸门的信任流水线；永不抛出 |
-| `lib/skills/built-in/index.ts` | 公共桶文件；`import "./lark"` 触发所有注册 |
+| `lib/skills/built-in/index.ts` | 公共桶文件；注册内核技能族，并启动加载模块贡献的技能族（`whenBuiltInSkillsRegistered()`） |
+| `lib/skills/built-in/module-skills.ts` | 加载各模块的 `builtinSkills` 贡献及其可用性闸门 |
 | `lib/skills/built-in/lark/` | 跨 6 个家族（family）的 43 个 Lark 技能 + lark-cli 执行/鉴权桥 |
 | `lib/skills/built-in/plugin-conversion/` | 仅桌面可用的整插件确定性转换 inspect/apply 工具 |
 | `lib/plugin/convert/agent-service.ts` | 源快照、过期计划、空目标校验和文件系统写入适配器 |
@@ -96,7 +97,7 @@ if (skill.mutation !== "read" && !skill.hitlSurface) {
 }
 ```
 
-共享单例在模块作用域创建（`registry.ts:112`）；`registerBuiltInSkill`（`registry.ts:115`）是加载时入口点，`getSharedBuiltInSkillRegistry`（`registry.ts:119`）是读取入口点，而 `__resetSharedBuiltInSkillRegistry`（`registry.ts:124`）是测试辅助函数。导入 `lib/skills/built-in`（`index.ts:45`）会运行 `import "./lark"`，进而扇出到全部六个家族模块并在 `build-options.ts` 遍历注册表之前将其填充完毕。
+共享单例在模块作用域创建（`registry.ts:112`）；`registerBuiltInSkill`（`registry.ts:115`）是加载时入口点，`getSharedBuiltInSkillRegistry`（`registry.ts:119`）是读取入口点，而 `__resetSharedBuiltInSkillRegistry`（`registry.ts:124`）是测试辅助函数。导入 `lib/skills/built-in` 会注册内核技能族并启动加载各模块的 `builtinSkills` 贡献；Lark 技能族属于 connectors（经厂商接缝，`lib/connectors/adapters/lark/builtin-skills.ts`），`build-options.ts` 遍历注册表之前先等待 `whenBuiltInSkillsRegistered()`。
 
 ## 清单构建器
 

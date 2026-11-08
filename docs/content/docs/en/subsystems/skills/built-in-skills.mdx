@@ -38,7 +38,8 @@ description: The ADR-0026 typed-tool tier — a code-reviewed registry of MCP to
 | `lib/skills/built-in/registry.ts` | Map-backed registry + shared singleton + invariant enforcement |
 | `lib/skills/built-in/manifest.ts` | Registry → MCP tool defs; per-channel filter pipeline; capability summary |
 | `lib/skills/built-in/dispatcher.ts` | `runBuiltInSkill` — the 6-gate trust pipeline; never throws |
-| `lib/skills/built-in/index.ts` | Public barrel; `import "./lark"` triggers all registrations |
+| `lib/skills/built-in/index.ts` | Public barrel; registers the kernel families, starts loading the modules' (`whenBuiltInSkillsRegistered()`) |
+| `lib/skills/built-in/module-skills.ts` | Loads the modules' `builtinSkills` contributions and their availability gates |
 | `lib/skills/built-in/lark/` | 43 Lark skills across 6 families + the lark-cli exec/auth bridge |
 | `lib/skills/built-in/plugin-conversion/` | Desktop-only inspect/apply tools for deterministic whole-plugin conversion |
 | `lib/plugin/convert/agent-service.ts` | Source snapshot, expiring plan, empty-target enforcement, and filesystem write adapter |
@@ -108,8 +109,9 @@ if (skill.mutation !== "read" && !skill.hitlSurface) {
 The shared singleton is created at module scope (`registry.ts:112`); `registerBuiltInSkill` (`registry.ts:115`)
 is the load-time entry point, `getSharedBuiltInSkillRegistry` (`registry.ts:119`) the read entry point, and
 `__resetSharedBuiltInSkillRegistry` (`registry.ts:124`) the test helper. Importing `lib/skills/built-in`
-(`index.ts:45`) runs `import "./lark"`, which fans out to all six family modules and populates the registry
-before `build-options.ts` ever walks it.
+registers the kernel families and starts loading the modules' `builtinSkills` contributions; the Lark families
+are the connectors' (`lib/connectors/adapters/lark/builtin-skills.ts`, through the vendor seam), and
+`build-options.ts` awaits `whenBuiltInSkillsRegistered()` before it walks the registry.
 
 ## The manifest builder
 

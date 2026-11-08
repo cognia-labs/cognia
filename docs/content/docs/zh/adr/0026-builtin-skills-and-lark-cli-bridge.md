@@ -47,7 +47,7 @@ interface BuiltInSkill {
 }
 ```
 
-每个技能在模块加载时通过 `registerBuiltInSkill()` 自注册。共享注册表提供 `listByPlatform()`、`listByMutation()`、`families()`。`lib/skills/built-in/index.ts` 触发所有家族的副作用 import。
+每个技能在模块加载时通过 `registerBuiltInSkill()` 自注册。共享注册表提供 `listByPlatform()`、`listByMutation()`、`families()`。`lib/skills/built-in/index.ts` 导入内核自己的技能族；模块的技能族（connectors 的 Lark 与 IM 族）是其 manifest 的 `builtinSkills` 贡献（ADR-0250 §14），读取方先等待 `whenBuiltInSkillsRegistered()`。
 
 ### 信任模型
 
