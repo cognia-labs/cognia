@@ -182,6 +182,8 @@ export type ConversationConfigSource =
   | "assignment"
   /** The SLA escalation sweep applied a `switchMode` step (slice 1B). */
   | "sla-escalation"
+  /** An IM room's settings section wrote its reply mode (ADR-0177 batch 4). */
+  | "room.settings"
 
 /**
  * Persist one conversation configuration section and its audit entry in the

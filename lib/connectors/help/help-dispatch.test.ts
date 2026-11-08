@@ -86,6 +86,20 @@ describe("maybeHandleHelpCommand — behaviour disclosure", () => {
     expect(cardText((d as unknown as { enqueue: jest.Mock }).enqueue)).toContain("由人来回答")
   })
 
+  // The "how to get me to reply" line reads the conversation's policy, so an
+  // asleep IM room (ADR-0177 batch 4) does not promise a reply to an @.
+  it("tells an asleep room that a mention will not wake it", async () => {
+    const d = deps({ inboundActivationPolicy: "off" })
+    await maybeHandleHelpCommand(
+      makeEvent({ plainText: "/help" }),
+      makeRow({ inboundActivationPolicy: "always" } as never),
+      d
+    )
+    const text = cardText((d as unknown as { enqueue: jest.Mock }).enqueue)
+    expect(text).toContain("这个群里我暂时不回复")
+    expect(text).not.toContain("在任意消息下我都会回复")
+  })
+
   it("adds no note for a bot that answers on its own", async () => {
     const d = deps()
     await maybeHandleHelpCommand(makeEvent({ plainText: "/help" }), makeRow(), d)

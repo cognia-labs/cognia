@@ -44,9 +44,16 @@ export interface TriggerPolicy {
 
 export type ConnectorMode = "auto" | "manual" | "draft"
 
-/** Group-message admission policy resolved at adapter then conversation scope. */
+/**
+ * Group-message admission policy resolved at adapter then conversation scope.
+ *
+ * `off` answers nobody in the conversation: its messages are still stored, and
+ * a mention does not wake it. It is the IM room's "asleep" reply mode
+ * (ADR-0177 batch 4, `lib/connectors/room-reply-mode.ts`) and is offered per
+ * conversation only; across a whole adapter it would be `direct_only`.
+ */
 export type InboundActivationPolicy =
-  "mention_each" | "mention_activates" | "always" | "direct_only"
+  "mention_each" | "mention_activates" | "always" | "direct_only" | "off"
 
 /** How a message received while a run is active should be interpreted. */
 export type ActiveRunDispatchMode = "queue" | "steer"

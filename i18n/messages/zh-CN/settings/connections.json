@@ -476,6 +476,7 @@
     "activation_direct_only": "仅私聊",
     "activation_mention_activates": "提及后激活会话",
     "activation_mention_each": "每条消息都需提及",
+    "activation_off": "关闭：本会话中不回复任何人",
     "activeRun": "已有运行时",
     "advancedAxes": "高级：逐轴设置",
     "authorityHelp": "无需询问就能做到哪一步。",

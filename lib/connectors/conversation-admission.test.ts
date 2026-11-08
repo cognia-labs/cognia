@@ -15,7 +15,7 @@ import {
 import { createPlatformSession } from "./session-bindings"
 import { updateSession } from "@/lib/db/sessions"
 import { shouldRespondToMessage } from "./at-gate"
-import type { AdapterInstanceRow } from "@/lib/db/connector-types"
+import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { parseQQDispatch } from "./adapters/qq-official/parse"
 
@@ -411,7 +411,7 @@ describe("evaluateAdmissionPolicy", () => {
   })
 })
 
-describe("the bound room's reply mode (ADR-0177 batch 3)", () => {
+describe("the IM room's reply mode is the conversation's policy (ADR-0177 batch 4)", () => {
   const adapter = {
     type: "lark",
     settings: {},
@@ -419,47 +419,44 @@ describe("the bound room's reply mode (ADR-0177 batch 3)", () => {
     deliveryReadiness: "all_messages_verified",
   } as AdapterInstanceRow
 
-  it("maps mention_only onto a forced mention and asleep onto a denial, auto defers", () => {
-    const group = event({ mentioned: false, thread: false })
-    expect(evaluateAdmissionPolicy({ event: group, adapter })).toEqual({ kind: "allow" })
-    expect(evaluateAdmissionPolicy({ event: group, adapter, roomReplyMode: "auto" })).toEqual({
-      kind: "allow",
-    })
+  it("answers nobody under `off`, a mention included, and a mention under mention_each", () => {
+    const quiet = event({ mentioned: false, thread: false })
+    const mentioned = event({ mentioned: true, thread: false })
+    expect(evaluateAdmissionPolicy({ event: quiet, adapter })).toEqual({ kind: "allow" })
+    for (const e of [quiet, mentioned, event({ mentioned: true, thread: true })]) {
+      expect(
+        evaluateAdmissionPolicy({ event: e, adapter, override: { inboundActivationPolicy: "off" } })
+      ).toEqual({ kind: "deny", reason: "room_asleep" })
+    }
     expect(
-      evaluateAdmissionPolicy({ event: group, adapter, roomReplyMode: "mention_only" })
+      evaluateAdmissionPolicy({
+        event: quiet,
+        adapter,
+        override: { inboundActivationPolicy: "mention_each" },
+      })
     ).toEqual({ kind: "deny", reason: "at_mention_required" })
-    expect(
-      evaluateAdmissionPolicy({
-        event: event({ mentioned: true, thread: false }),
-        adapter,
-        roomReplyMode: "mention_only",
-      })
-    ).toEqual({ kind: "allow" })
-    expect(
-      evaluateAdmissionPolicy({
-        event: event({ mentioned: true, thread: false }),
-        adapter,
-        roomReplyMode: "asleep",
-      })
-    ).toEqual({ kind: "deny", reason: "room_asleep" })
   })
 
-  it("reads the mode off the bound session and admits a first contact as before", async () => {
+  it("admits a direct chat whatever the policy, `off` included", () => {
+    const dm = { ...event({ mentioned: false, thread: false }), channel: { kind: "private" } }
+    expect(
+      evaluateAdmissionPolicy({
+        event: dm as never,
+        adapter,
+        override: { inboundActivationPolicy: "off" },
+      })
+    ).toEqual({ kind: "allow" })
+  })
+
+  it("no longer reads the bound session's room settings", async () => {
     const group = event({ mentioned: false, thread: false })
-    expect((await admitConversationEvent(group, adapter)).allowed).toBe(true)
     const session = await createPlatformSession(group, undefined)
     await updateSession(session.id, { roomSettings: { replyMode: "asleep" } })
-    expect(await admitConversationEvent(group, adapter)).toEqual({
-      allowed: false,
-      reason: "room_asleep",
-      activated: false,
-    })
-    await updateSession(session.id, { roomSettings: { replyMode: "mention_only" } })
-    expect((await admitConversationEvent(group, adapter)).allowed).toBe(false)
-    expect(
-      (await admitConversationEvent(event({ mentioned: true, thread: false }), adapter)).allowed
-    ).toBe(true)
-    await updateSession(session.id, { roomSettings: { replyMode: "auto" } })
     expect((await admitConversationEvent(group, adapter)).allowed).toBe(true)
+    expect(
+      await admitConversationEvent(group, adapter, {
+        override: { inboundActivationPolicy: "off" } as ConversationOverrideRow,
+      })
+    ).toEqual({ allowed: false, reason: "room_asleep", activated: false })
   })
 })

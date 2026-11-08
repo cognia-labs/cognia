@@ -14789,6 +14789,12 @@
       "notesPlaceholder": "笔记会在每轮对话中注入到所有成员的对话上下文中…",
       "openChat": "打开与 {name} 的对话",
       "roomSettings": {
+        "imReplyModeHints": {
+          "asleep": "消息会保留，切换模式前助手不回复任何人，@ 也不会。",
+          "auto": "平台推送给助手的每条消息助手都会回复，以收件箱里这个会话的设置为准。",
+          "mention_only": "助手只回复 @ 了它或回复了它的消息。"
+        },
+        "imReplyModeNote": "这就是这个会话的群聊激活设置，收件箱的会话设置里能看到同一项和更细的选项。",
         "instructions": "房间指令",
         "instructionsPlaceholder": "每位成员在每轮开始时都会读到的指引…",
         "memory": "长期记忆",
@@ -14801,6 +14807,7 @@
         "mutedHint": "已静音的成员不会主动回复。@ 或在输入框中选中他们仍然有效。",
         "mutedMembers": "已静音成员",
         "noMuted": "没有成员被静音。",
+        "noRoom": "打开一个群聊或共享会话，即可查看它的房间设置。",
         "replyMode": "回复模式",
         "replyModeHints": {
           "asleep": "消息会保留，切换模式前没有人回复。",
@@ -22900,6 +22907,7 @@
       "label": "回复",
       "mention_activates": "@ 一次后可继续追问",
       "mention_each": "每次都要 @",
+      "off": "此会话暂不回复",
       "tooltip": {
         "adapter": "这个机器人在群里回复的条件：{strategy}",
         "conversation": "本会话覆盖了机器人设置：{strategy}"
@@ -30476,6 +30484,8 @@
       "noApiKeyHint": "未配置密钥——打开会话设置进行添加",
       "openMembers": "打开成员列表",
       "openNav": "打开导航",
+      "openRoomSettings": "打开房间设置",
+      "roomSheetTitle": "房间设置",
       "search": "搜索",
       "sessionMenu": "会话菜单",
       "sessionSettings": "会话设置",
@@ -48513,6 +48523,7 @@
         "activation_direct_only": "仅私聊",
         "activation_mention_activates": "提及后激活会话",
         "activation_mention_each": "每条消息都需提及",
+        "activation_off": "关闭：本会话中不回复任何人",
         "activeRun": "已有运行时",
         "advancedAxes": "高级：逐轴设置",
         "authorityHelp": "无需询问就能做到哪一步。",

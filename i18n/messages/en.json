@@ -14789,6 +14789,12 @@
       "notesPlaceholder": "Notes injected into every member's transcript on each turn…",
       "openChat": "Open chat with {name}",
       "roomSettings": {
+        "imReplyModeHints": {
+          "asleep": "Messages are kept and the assistant answers nobody, a mention included, until the mode changes.",
+          "auto": "The assistant answers every message the platform delivers to it, as this chat's settings in the Inbox allow.",
+          "mention_only": "The assistant answers only a message that @mentions it or replies to it."
+        },
+        "imReplyModeNote": "This is the chat's group activation setting, the same one the Inbox's conversation settings show with its finer choices.",
         "instructions": "Room instructions",
         "instructionsPlaceholder": "Guidance every member reads at the top of each turn…",
         "memory": "Long-term memory",
@@ -14801,6 +14807,7 @@
         "mutedHint": "Muted members never reply on their own. An @mention or a pick in the composer still reaches them.",
         "mutedMembers": "Muted members",
         "noMuted": "Nobody is muted.",
+        "noRoom": "Open a group chat or a shared conversation to see its room settings.",
         "replyMode": "Reply mode",
         "replyModeHints": {
           "asleep": "Messages are kept and nobody replies until the mode changes.",
@@ -22900,6 +22907,7 @@
       "label": "Reply",
       "mention_activates": "@mention, then follow-ups",
       "mention_each": "@mention each time",
+      "off": "Not answering in this chat",
       "tooltip": {
         "adapter": "This bot answers in a group when: {strategy}",
         "conversation": "This conversation overrides the bot: {strategy}"
@@ -30476,6 +30484,8 @@
       "noApiKeyHint": "No API key — open session settings to add one",
       "openMembers": "Open team members",
       "openNav": "Open navigation",
+      "openRoomSettings": "Open room settings",
+      "roomSheetTitle": "Room settings",
       "search": "Search",
       "sessionMenu": "Session menu",
       "sessionSettings": "Session settings",
@@ -48513,6 +48523,7 @@
         "activation_direct_only": "Direct messages only",
         "activation_mention_activates": "Mention activates the conversation",
         "activation_mention_each": "Require a mention for every message",
+        "activation_off": "Off: answer nobody in this conversation",
         "activeRun": "When a run is active",
         "advancedAxes": "Advanced axes",
         "authorityHelp": "How far it may act without asking.",

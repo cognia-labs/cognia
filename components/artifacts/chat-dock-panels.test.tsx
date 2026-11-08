@@ -274,6 +274,12 @@ jest.mock("@/components/context-workbench/panels/team-members-panel", () => ({
   ),
 }))
 
+jest.mock("@/components/context-workbench/panels/room-settings-section", () => ({
+  RoomSettingsPanel: ({ sessionId }: { sessionId: string | null }) => (
+    <div data-testid="room-settings-panel" data-session={sessionId ?? "none"} />
+  ),
+}))
+
 jest.mock("./artifact-panel-content", () => ({
   ArtifactPanelContent: ({ panelMode }: { panelMode: string }) => (
     <div data-testid="preview" data-mode={panelMode} />
@@ -925,6 +931,52 @@ describe("useSessionSurfacePanels", () => {
     renderPanel(team, SESSION_RESOURCE)
     expect(screen.getByTestId("team-members-panel")).toHaveAttribute("data-team", "t1")
     expect(screen.getByTestId("team-members-panel")).toHaveAttribute("data-session", "s1")
+  })
+
+  it("gives an IM group or a shared conversation its room settings in the same slot (ADR-0177 batch 4)", () => {
+    const group = {
+      ...session,
+      platformBinding: {
+        platform: "lark",
+        adapterId: "a1",
+        conversationKey: "lark:a1:oc_1",
+        scopeKind: "group",
+      },
+    } as unknown as Session
+    const im = panelById(
+      collect(useSessionSurfacePanels, sessionInput({ session: group })),
+      "team-members"
+    )
+    expect(im.appliesTo(SESSION_RESOURCE)).toBe(true)
+    expect(im.labelKey).toBe("desktop.memberList.roomSettings.title")
+    renderPanel(im, SESSION_RESOURCE)
+    expect(screen.getByTestId("room-settings-panel")).toHaveAttribute("data-session", "s1")
+    expect(screen.queryByTestId("team-members-panel")).toBeNull()
+
+    const shared = { ...session, collaboration: {} } as unknown as Session
+    expect(
+      panelById(
+        collect(useSessionSurfacePanels, sessionInput({ session: shared })),
+        "team-members"
+      ).appliesTo(SESSION_RESOURCE)
+    ).toBe(true)
+
+    // A one-to-one IM chat is not a room.
+    const dm = {
+      ...session,
+      platformBinding: {
+        platform: "lark",
+        adapterId: "a1",
+        conversationKey: "lark:a1:ou_1",
+        scopeKind: "private",
+      },
+    } as unknown as Session
+    expect(
+      panelById(
+        collect(useSessionSurfacePanels, sessionInput({ session: dm })),
+        "team-members"
+      ).appliesTo(SESSION_RESOURCE)
+    ).toBe(false)
   })
 
   it("keeps sidechat off an embedded resource workbench", () => {

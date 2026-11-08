@@ -84,6 +84,11 @@ describe("buildHelpSurface", () => {
     )
     const without = buildHelpSurface(base())
     expect(without.components.atBody).toBeUndefined()
+    // An asleep room says a mention will not wake it (ADR-0177 batch 4).
+    const off = buildHelpSurface(base({ atStrategy: "off" }))
+    expect((off.components.atBody as { text: string }).text).toBe(
+      DEFAULT_HELP_SURFACE_LABELS.atStrategy.off
+    )
   })
 
   // Without this the card told a silenced bot's users "@ me and I will reply",

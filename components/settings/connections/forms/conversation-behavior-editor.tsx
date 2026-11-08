@@ -200,6 +200,9 @@ export function ConversationBehaviorEditor({
                   </SelectItem>
                 )
               )}
+              {/* One conversation's asleep room (ADR-0177 batch 4). Across a
+                  whole bot it would only repeat "direct messages only". */}
+              {optional && <SelectItem value="off">{t("activation_off")}</SelectItem>}
             </SelectContent>
           </Select>
           {source("inboundActivationPolicy")}

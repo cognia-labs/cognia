@@ -38,6 +38,26 @@ describe("ConversationBehaviorEditor", () => {
     )
   })
 
+  it("offers `off` for one conversation and not across a whole bot (ADR-0177 batch 4)", () => {
+    const { unmount } = render(
+      <ConversationBehaviorEditor
+        scope="conversation"
+        value={{ inboundActivationPolicy: "off" }}
+        onChange={jest.fn()}
+      />
+    )
+    expect(screen.getByTestId("behavior-activation")).toHaveTextContent("activation_off")
+    unmount()
+    render(
+      <ConversationBehaviorEditor
+        scope="adapter"
+        value={{ inboundActivationPolicy: "off" }}
+        onChange={jest.fn()}
+      />
+    )
+    expect(screen.getByTestId("behavior-activation")).not.toHaveTextContent("activation_off")
+  })
+
   it("emits one shared draft shape", async () => {
     const onChange = jest.fn()
     render(

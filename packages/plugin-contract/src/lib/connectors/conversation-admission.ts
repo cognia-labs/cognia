@@ -7,5 +7,8 @@ export type ConversationAdmissionReason =
   | "delivery_unverified"
   | "topic_activation_required"
   | "topic_activation_expired"
-  /** The bound room's `replyMode` is `asleep` (ADR-0177 batch 3). */
+  /**
+   * The conversation's activation policy is `off`, the IM room's `asleep`
+   * reply mode (ADR-0177 batches 3 and 4).
+   */
   | "room_asleep"

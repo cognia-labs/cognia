@@ -49,6 +49,7 @@ import {
   CornerUpLeftIcon,
   ListChecksIcon,
   PlusIcon,
+  Settings2Icon,
   UsersIcon,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -114,6 +115,8 @@ import {
   TEAM_MEMBERS_PANEL_ID,
   TeamMembersPanel,
 } from "@/components/context-workbench/panels/team-members-panel"
+import { RoomSettingsPanel } from "@/components/context-workbench/panels/room-settings-section"
+import { roomKindOf } from "@/lib/chat/room/kind"
 import { RunContextPanel } from "@/components/context-workbench/panels/run-context-panel"
 import type {
   ContextPanelDefinition,
@@ -805,6 +808,10 @@ function SessionSandboxDesktopRenderer({ inputs }: Inputs<SessionPanelInputs>) {
 function SessionTeamMembersRenderer({ inputs }: Inputs<SessionPanelInputs>) {
   const activeSessionId = usePanelInput(inputs, (input) => input.activeSessionId)
   const teamId = usePanelInput(inputs, (input) => input.session?.teamId ?? null)
+  const isTeam = usePanelInput(inputs, (input) => input.session?.kind === "team")
+  // A team conversation's panel is its roster; an IM or shared room's is its
+  // settings.
+  if (!isTeam) return <RoomSettingsPanel sessionId={activeSessionId} />
   return <TeamMembersPanel teamSessionId={activeSessionId} teamId={teamId} />
 }
 
@@ -876,6 +883,7 @@ export function useSessionSurfacePanels({
 
   const hasProjectRoots = Boolean(sessionProject?.roots.length)
   const isTeamSession = session?.kind === "team"
+  const roomKind = roomKindOf(session)
   const hasActiveSession = Boolean(activeSessionId)
 
   return useMemo<ContextPanelDefinition[]>(
@@ -1130,16 +1138,20 @@ export function useSessionSurfacePanels({
         renderer: renderers.squad,
       },
       {
-        // Team conversations only — the roster, the shared notes and the
-        // per-member actions that used to be a third column of their own
-        // (`components/shell/member-list.tsx`, removed). A direct chat has no
-        // roster, so the panel does not claim a rail slot there at all.
+        // Rooms only. A team conversation gets the roster, the shared notes
+        // and the per-member actions that used to be a third column of their
+        // own (`components/shell/member-list.tsx`, removed); an IM group or a
+        // shared conversation gets its room settings (ADR-0177 batch 4). A
+        // direct chat is not a room, so the panel claims no rail slot there.
         id: TEAM_MEMBERS_PANEL_ID,
         activity: "ai",
-        labelKey: "contextWorkbench.teamMembersPanel.title",
-        icon: UsersIcon,
+        labelKey: isTeamSession
+          ? "contextWorkbench.teamMembersPanel.title"
+          : "desktop.memberList.roomSettings.title",
+        icon: isTeamSession ? UsersIcon : Settings2Icon,
         order: 17,
-        appliesTo: (resource) => resource.kind === "session" && isTeamSession,
+        appliesTo: (resource) =>
+          resource.kind === "session" && (isTeamSession || roomKind !== null),
         retention: "stateful",
         scope: "session",
         renderer: renderers.teamMembers,
@@ -1151,6 +1163,7 @@ export function useSessionSurfacePanels({
       hasSandboxDesktop,
       hasProjectRoots,
       isTeamSession,
+      roomKind,
       newTab,
       pendingRunLearningCount,
       renderers,

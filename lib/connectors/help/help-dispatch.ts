@@ -23,7 +23,7 @@
 
 import { parseConversationKey, deliveryTargetFromEvent } from "@/types/connectors/event"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
-import type { AdapterInstanceRow } from "@/lib/db/connector-types"
+import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
 import { recordAndCheckInbound } from "@/lib/connectors/dedup"
 import { appendAudit } from "@/lib/connectors/audit"
@@ -62,12 +62,10 @@ function resolveTriggers(row: AdapterInstanceRow): string[] {
  * conversation's own axes first so a channel the operator silenced says so,
  * rather than reporting the bot-wide default that channel overrode.
  */
-async function resolveDisclosedBehaviour(
+function resolveDisclosedBehaviour(
   row: AdapterInstanceRow,
-  conversationKey: string,
-  readOverride: typeof readForResolution
-): Promise<"draft" | "silent" | undefined> {
-  const override = await readOverride(conversationKey).catch(() => undefined)
+  override: ConversationOverrideRow | undefined
+): "draft" | "silent" | undefined {
   // Same layering rule `resolveImEffectiveConfig` applies: a conversation that
   // pinned `mode` MEANS that mode, so its own pin suppresses the bot's axis
   // defaults rather than mixing with them.
@@ -87,6 +85,7 @@ async function resolveDisclosedBehaviour(
 function buildSurfaceForRow(
   event: NormalizedInboundEvent,
   row: AdapterInstanceRow,
+  override: ConversationOverrideRow | undefined,
   mode: HelpSurfaceMode,
   behaviour: "draft" | "silent" | undefined
 ) {
@@ -107,8 +106,10 @@ function buildSurfaceForRow(
     // reading `atResponseStrategy` here left the "how to get me to reply"
     // section absent on every bot configured through the current forms — and
     // stale on a legacy row whose policy has since been changed. Same resolver
-    // the bus admits on and the header chip reports.
-    atStrategy: resolveInboundActivationPolicy(row),
+    // the bus admits on and the header chip reports, over the conversation's
+    // own policy too: an asleep IM room (`off`, ADR-0177 batch 4) must not
+    // tell its members "@ me and I will reply".
+    atStrategy: resolveInboundActivationPolicy(row, override),
     behaviour,
     skillFamilies: row.lastKnownSkillCapabilities,
     welcomeText: row.welcomeText,
@@ -141,14 +142,13 @@ export async function maybeHandleHelpCommand(
   const audit = deps.audit ?? appendAudit
   const at = (deps.now ?? Date.now)()
 
-  const behaviour = await resolveDisclosedBehaviour(
-    row,
-    event.conversationKey,
-    deps.readOverride ?? readForResolution
+  const override = await (deps.readOverride ?? readForResolution)(event.conversationKey).catch(
+    () => undefined
   )
+  const behaviour = resolveDisclosedBehaviour(row, override)
   // An explicit welcome preview is an on-demand notice. It never touches
   // first-contact dedup or changes whether a future first welcome is sent.
-  const { segment } = buildSurfaceForRow(event, row, mode, behaviour)
+  const { segment } = buildSurfaceForRow(event, row, override, mode, behaviour)
   await enqueue({
     adapterId: event.adapterId,
     conversationKey: event.conversationKey,
@@ -199,12 +199,11 @@ export async function maybeSendWelcome(
   const audit = deps.audit ?? appendAudit
   const at = (deps.now ?? Date.now)()
 
-  const behaviour = await resolveDisclosedBehaviour(
-    row,
-    event.conversationKey,
-    deps.readOverride ?? readForResolution
+  const override = await (deps.readOverride ?? readForResolution)(event.conversationKey).catch(
+    () => undefined
   )
-  const { segment } = buildSurfaceForRow(event, row, "welcome", behaviour)
+  const behaviour = resolveDisclosedBehaviour(row, override)
+  const { segment } = buildSurfaceForRow(event, row, override, "welcome", behaviour)
   await enqueue({
     adapterId: event.adapterId,
     conversationKey: event.conversationKey,

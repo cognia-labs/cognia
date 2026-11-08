@@ -383,4 +383,27 @@ waiting for the 1 s stored corrections. Nothing in "Later" changes.
   identity row), the chip counts the whole room for a `partial` roster and
   says the list is incomplete, and fixed role tokens are shown in the
   reader's language.
+- **One reply-mode knob for an IM room.** Batch 3 had two: the session's
+  `roomSettings.replyMode` and the conversation's `inboundActivationPolicy`,
+  and admission applied the stricter, so the Inbox could say "every message"
+  while the room said "asleep". An IM room's reply mode is now its
+  conversation's policy and nothing else. The policy gains `off` (offered
+  per conversation only; across a bot it would repeat `direct_only`), which
+  answers nobody, a mention included. `lib/connectors/room-reply-mode.ts` is
+  the one translation: `asleep` writes `off`, `mention_only` writes
+  `mention_each`, and `auto` keeps a finer policy that is already auto for
+  the conversation's scope, follows the adapter when the adapter's is, and
+  otherwise writes `always`. `mention_activates` only opens follow-ups in a
+  thread, so in a plain group it reads as mention-only. Admission no longer
+  reads the session, and the help card reads the conversation's policy, so
+  an asleep room does not promise a reply to an `@`. Team rooms keep
+  `roomSettings.replyMode` for their router, and shared rooms keep it for
+  their own batch. Nothing had to move: the team panel was the only writer
+  of `roomSettings.replyMode`, and a team room's value still routes its
+  members.
+- **Room settings for every room.** The section moved to
+  `room-settings-section.tsx` and shows a control only where something reads
+  it: a team room keeps all five, an IM room shows its reply mode and the
+  memory switch, a shared room the memory switch. The dock's room slot and
+  the phone's sheet open it for IM and shared rooms.
 

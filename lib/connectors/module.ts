@@ -67,6 +67,7 @@ export default defineHostModule({
     "hooks/connectors/use-degraded-adapters.ts",
     "hooks/connectors/use-history-hydration.ts",
     "hooks/connectors/use-im-effective-config.ts",
+    "hooks/connectors/use-im-room-reply-mode.ts",
     "hooks/connectors/use-inbound-recovery-jobs.ts",
     "hooks/connectors/use-last-inbound.ts",
     "hooks/connectors/use-latest-outbound-job.ts",

@@ -508,6 +508,11 @@ jest.mock("@/components/mobile/shell/character-header", () => ({
     fallbackTitle: string
   }) => <div data-testid="mobile-active-title">{subject?.name ?? fallbackTitle}</div>,
 }))
+jest.mock("@/components/context-workbench/panels/room-settings-section", () => ({
+  RoomSettingsPanel: ({ sessionId }: { sessionId: string | null }) => (
+    <div data-testid="room-settings-panel" data-session-id={sessionId ?? ""} />
+  ),
+}))
 jest.mock("@/components/context-workbench/panels/team-members-panel", () => ({
   TeamMembersPanel: ({ teamId }: { teamId?: string | null }) => (
     <div data-testid="team-members-panel" data-team-id={teamId ?? ""} />
@@ -1435,6 +1440,33 @@ describe("<AppShellMobile />", () => {
     // The same workbench panel the desktop shows, bound to this session's team.
     expect(screen.getByTestId("team-members-panel")).toBeInTheDocument()
     expect(screen.getByTestId("team-members-panel")).toHaveAttribute("data-team-id", "t-1")
+  })
+
+  it("opens the room settings sheet for an IM group (ADR-0177 batch 4)", async () => {
+    sessionsRef.current = [
+      {
+        id: "s-3",
+        title: "Feishu group",
+        platformBinding: {
+          platform: "lark",
+          adapterId: "a1",
+          conversationKey: "lark:a1:oc_1",
+          scopeKind: "group",
+        },
+        createdAt: 0,
+        updatedAt: 0,
+      } as unknown as ChatSession,
+    ]
+    activeSessionId = "s-3"
+    const user = userEvent.setup()
+    render(<AppShellMobile />)
+
+    const trigger = screen.getByTestId("mobile-members-trigger")
+    expect(trigger).toHaveAccessibleName(/openRoomSettings/)
+    await user.click(trigger)
+    await waitFor(() => expect(screen.getByTestId("mobile-members-sheet")).toBeInTheDocument())
+    expect(screen.getByTestId("room-settings-panel")).toHaveAttribute("data-session-id", "s-3")
+    expect(screen.queryByTestId("team-members-panel")).not.toBeInTheDocument()
   })
 
   it("does not render the members trigger for direct (non-team) sessions", () => {

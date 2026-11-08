@@ -53,6 +53,8 @@ import { GuildRail } from "@/components/shell/guild-rail"
 import { PluginViewContainerPanel } from "@/components/shell/plugin-view-container-panel"
 import { CanvasShell } from "@/components/canvas/canvas-shell"
 import { TeamMembersPanel } from "@/components/context-workbench/panels/team-members-panel"
+import { RoomSettingsPanel } from "@/components/context-workbench/panels/room-settings-section"
+import { roomKindOf } from "@/lib/chat/room/kind"
 import { CharacterHeader } from "@/components/mobile/shell/character-header"
 import { BackgroundRunsChip } from "@/components/chat/background-runs-chip"
 import { MobileWorkspaceChip } from "@/components/mobile/shell/mobile-workspace-chip"
@@ -411,6 +413,7 @@ export function AppShellMobile() {
   })
 
   const isTeamSession = activeSession?.kind === "team" && Boolean(activeSession.teamId)
+  const activeRoomKind = roomKindOf(activeSession)
   const sharedChatEnabled = useSharedChatEnabled()
 
   // Was a count of `inboundLedger` rows newer than `lastInboxViewedAt`. That
@@ -841,17 +844,21 @@ export function AppShellMobile() {
               <SearchIcon className="size-5" />
             </Button>
 
-            {isTeamSession ? (
+            {isTeamSession || activeRoomKind ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 className="touch-target"
-                aria-label={tShell("openMembers")}
+                aria-label={tShell(isTeamSession ? "openMembers" : "openRoomSettings")}
                 onClick={() => setMemberSheetOpen(true)}
                 data-testid="mobile-members-trigger"
               >
-                <UsersIcon className="size-5" />
+                {isTeamSession ? (
+                  <UsersIcon className="size-5" />
+                ) : (
+                  <Settings2Icon className="size-5" />
+                )}
               </Button>
             ) : null}
 
@@ -1166,7 +1173,7 @@ export function AppShellMobile() {
         </main>
 
         {/* ── Right-side sheets ─────────────────────────────────────────── */}
-        {isTeamSession ? (
+        {isTeamSession || activeRoomKind ? (
           <Sheet open={memberSheetOpen} onOpenChange={setMemberSheetOpen}>
             <SheetContent
               side="right"
@@ -1174,17 +1181,24 @@ export function AppShellMobile() {
               data-testid="mobile-members-sheet"
             >
               <SheetHeader>
-                <SheetTitle>{tShell("memberSheetTitle")}</SheetTitle>
+                <SheetTitle>
+                  {tShell(isTeamSession ? "memberSheetTitle" : "roomSheetTitle")}
+                </SheetTitle>
               </SheetHeader>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {/* The same panel the desktop workbench shows — one roster, one
                   set of member actions. Opening a member's own chat navigates
-                  away, so the sheet closes behind it. */}
-                <TeamMembersPanel
-                  teamSessionId={activeSession?.id ?? null}
-                  teamId={activeSession?.teamId ?? null}
-                  onNavigated={() => setMemberSheetOpen(false)}
-                />
+                  away, so the sheet closes behind it. An IM or shared room
+                  gets its room settings instead (ADR-0177 batch 4). */}
+                {isTeamSession ? (
+                  <TeamMembersPanel
+                    teamSessionId={activeSession?.id ?? null}
+                    teamId={activeSession?.teamId ?? null}
+                    onNavigated={() => setMemberSheetOpen(false)}
+                  />
+                ) : (
+                  <RoomSettingsPanel sessionId={activeSession?.id ?? null} />
+                )}
               </div>
             </SheetContent>
           </Sheet>

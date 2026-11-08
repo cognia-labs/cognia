@@ -476,6 +476,7 @@
     "activation_direct_only": "Direct messages only",
     "activation_mention_activates": "Mention activates the conversation",
     "activation_mention_each": "Require a mention for every message",
+    "activation_off": "Off: answer nobody in this conversation",
     "activeRun": "When a run is active",
     "advancedAxes": "Advanced axes",
     "authorityHelp": "How far it may act without asking.",

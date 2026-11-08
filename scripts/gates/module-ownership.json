@@ -305,6 +305,7 @@
         "components/context-workbench/context-workbench.tsx",
         "components/context-workbench/panels/logs-workbench-panel.tsx",
         "components/context-workbench/panels/memory-workbench-panel.tsx",
+        "components/context-workbench/panels/room-settings-section.tsx",
         "components/context-workbench/panels/run-context-panel.tsx",
         "components/context-workbench/panels/source-control-workbench-panel.tsx",
         "components/context-workbench/panels/squad-context-panel.tsx",
