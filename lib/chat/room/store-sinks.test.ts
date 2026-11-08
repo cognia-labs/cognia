@@ -42,7 +42,7 @@ const steerRuntime = {
   sessionStatusOf: jest.fn(() => "streaming"),
   steerArmed: new Set<string>(),
 }
-jest.mock("@/hooks/chat/steer-runtime", () => ({
+jest.mock("@/lib/chat/steer-runtime", () => ({
   appendSteerMessage: (...args: unknown[]) => steerRuntime.appendSteerMessage(...(args as [])),
   isSessionOpen: (...args: unknown[]) => steerRuntime.isSessionOpen(...(args as [])),
   maybeDrainSteer: (...args: unknown[]) => steerRuntime.maybeDrainSteer(...(args as [])),

@@ -6378,7 +6378,7 @@ describe("useClaudeChat — actions", () => {
 
   it("cancels the session coalescers when its transcript runtime is invalidated", async () => {
     const events = await import("@/lib/chat/transcript/revision-events")
-    const { SessionCoalescingRegistry } = await import("./stream-coalescing")
+    const { SessionCoalescingRegistry } = await import("@/lib/chat/stream-coalescing")
     let notify!: (sessionId: string) => void
     const dispose = jest.fn()
     const persistGuard = { shouldPersist: () => true, runtimeGeneration: { value: "event-1" } }
@@ -7649,7 +7649,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     await act(async () => {
       await result.current.send("actually use Vitest", undefined, { webSearchContext })
     })
-    expect(steerSessionMock).toHaveBeenCalledWith("sess-1", "actually use Vitest")
+    expect(steerSessionMock).toHaveBeenCalledWith("sess-1", "actually use Vitest", undefined, {})
     // Accepted into the running query — nothing to replay later.
     expect(chatState.enqueueSteer).not.toHaveBeenCalled()
     const appended = chatState.replaceSessionMessages.mock.calls.at(-1)?.[1] as Array<{
@@ -7698,7 +7698,12 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       "superseded"
     )
     // The instruction still steers the now-unblocked turn.
-    expect(steerSessionMock).toHaveBeenCalledWith("sess-1", "actually don't delete anything")
+    expect(steerSessionMock).toHaveBeenCalledWith(
+      "sess-1",
+      "actually don't delete anything",
+      undefined,
+      {}
+    )
   })
 
   it("re-arms the session's judge context on a mid-turn instruction", async () => {
@@ -7833,7 +7838,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     await act(async () => {
       await result.current.send("check that thread", undefined, { citations })
     })
-    expect(steerSessionMock).toHaveBeenCalledWith("sess-1", "check that thread")
+    expect(steerSessionMock).toHaveBeenCalledWith("sess-1", "check that thread", undefined, {})
     const appended = chatState.replaceSessionMessages.mock.calls.at(-1)?.[1] as Array<{
       metadata?: { mentions?: unknown[] }
     }>
@@ -7949,7 +7954,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     await act(async () => {
       await result.current.send("don't use that tool")
     })
-    expect(steerSessionMock).toHaveBeenCalledWith("sess-1", "don't use that tool")
+    expect(steerSessionMock).toHaveBeenCalledWith("sess-1", "don't use that tool", undefined, {})
     expect(chatState.enqueueSteer).not.toHaveBeenCalled()
     expect(sendPromptMock).not.toHaveBeenCalled()
   })
@@ -9382,7 +9387,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
           await flush()
         })
         // A failed run keeps the queue and says the follow-up was not delivered.
-        expect(chatState.clearSteerQueue).not.toHaveBeenCalled()
+        expect(chatState.removeSteerEntry).not.toHaveBeenCalled()
         const marked = chatState.otherSlices["sess-1"]?.messages as Array<{
           metadata?: { steer?: { state: string } }
         }>
@@ -9395,12 +9400,12 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
           onSettled("cancelled")
           await flush()
         })
-        expect(chatState.clearSteerQueue).not.toHaveBeenCalled()
+        expect(chatState.removeSteerEntry).not.toHaveBeenCalled()
         await act(async () => {
           onSettled("completed")
           await flush()
         })
-        expect(chatState.clearSteerQueue).toHaveBeenCalledWith("sess-1")
+        expect(chatState.removeSteerEntry).toHaveBeenCalledWith("sess-1", "q1")
         // One turn, one outcome event: the first settle took the turn's start time.
         expect(
           mockTrackEvent.mock.calls.filter(([name]) => String(name).startsWith("chat.turn."))
@@ -9438,7 +9443,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
           onSettled("cancelled")
           await flush()
         })
-        expect(chatState.clearSteerQueue).toHaveBeenCalledWith("sess-1")
+        expect(chatState.removeSteerEntry).toHaveBeenCalledWith("sess-1", "q1")
         expect(mockTrackEvent).not.toHaveBeenCalledWith("chat.turn.failed", expect.anything())
       } finally {
         chatState.activeSessionId = "sess-1"
@@ -9569,14 +9574,14 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       action: { kind: "turn.abort" },
     })
     expect(interruptSessionMock).not.toHaveBeenCalled()
-    expect(chatState.clearSteerQueue).not.toHaveBeenCalled()
+    expect(chatState.removeSteerEntry).not.toHaveBeenCalled()
     // The host's projection, not a local `session_ended`, ends the turn.
     chatState.otherSlices["steer-sess"]!.status = "idle"
     await act(async () => {
       for (const sub of [...subscribers]) sub(chatState)
       await flush()
     })
-    expect(chatState.clearSteerQueue).toHaveBeenCalledWith("steer-sess")
+    expect(chatState.removeSteerEntry).toHaveBeenCalledWith("steer-sess", "q1")
   })
 
   it("drains a follow-up queued behind a paired-host turn when that turn ends cleanly", async () => {
@@ -9596,13 +9601,13 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       await act(async () => {
         for (const sub of [...subscribers]) sub(chatState)
       })
-      expect(chatState.clearSteerQueue).not.toHaveBeenCalled()
+      expect(chatState.removeSteerEntry).not.toHaveBeenCalled()
       chatState.otherSlices["sess-1"]!.status = "idle"
       await act(async () => {
         for (const sub of [...subscribers]) sub(chatState)
         await flush()
       })
-      expect(chatState.clearSteerQueue).toHaveBeenCalledWith("sess-1")
+      expect(chatState.removeSteerEntry).toHaveBeenCalledWith("sess-1", "q1")
     } finally {
       chatState.activeSessionId = "sess-1"
     }
@@ -12003,7 +12008,7 @@ describe("precise external steering ownership", () => {
     }
   )
   it("refuses unsupported feature overrides before steering or queueing an active external turn", async () => {
-    const { setSessionExternalLane } = await import("./steer-runtime")
+    const { setSessionExternalLane } = await import("@/lib/chat/steer-runtime")
     chatState.status = "streaming"
     setSessionExternalLane("sess-1", "ext-1")
     const { result } = renderHook(() => useClaudeChat())
@@ -12031,7 +12036,7 @@ describe("precise external steering ownership", () => {
   it.each([true, false])(
     "never guesses a native session when the exact link is available=%s",
     async (linked) => {
-      const { setSessionExternalLane } = await import("./steer-runtime")
+      const { setSessionExternalLane } = await import("@/lib/chat/steer-runtime")
       chatState.status = "streaming"
       useAgentRuntimeStore
         .getState()
@@ -12062,7 +12067,7 @@ describe("precise external steering ownership", () => {
     }
   )
   it("keeps mixed image follow-ups queued rather than falsely accepting text-only steering", async () => {
-    const { setSessionExternalLane } = await import("./steer-runtime")
+    const { setSessionExternalLane } = await import("@/lib/chat/steer-runtime")
     chatState.status = "streaming"
     useAgentRuntimeStore
       .getState()

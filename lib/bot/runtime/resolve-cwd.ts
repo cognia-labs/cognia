@@ -12,7 +12,7 @@
  *   installation scope's workspace root -> character default -> app default
  *
  * Reading Dexie rather than the stores is deliberate. The brain has no zustand,
- * and `hooks/chat/use-effective-cwd.ts` and `lib/plugin/api/workspace-root.ts`
+ * and `lib/chat/session-effective-cwd.ts` and `lib/plugin/api/workspace-root.ts`
  * both answer "what is OPEN", which is a different question from "what does
  * this installation own".
  */

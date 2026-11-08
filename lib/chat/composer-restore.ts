@@ -2,7 +2,7 @@
  * Turn a user message back into what the composer held when it was sent.
  *
  * A follow-up queued behind a running turn lives on as its optimistic bubble
- * (`hooks/chat/steer-runtime.ts`). When it cannot be delivered — the user
+ * (`lib/chat/steer-runtime.ts`). When it cannot be delivered — the user
  * stopped the run, or the app reloaded and the in-memory queue is gone — the
  * way back is the composer, and "back" has to mean everything the user staged:
  * the typed words, the screenshots and files, the chip citations, the message

@@ -216,7 +216,6 @@
         "hooks/chat/chat-send-bridge.ts",
         "hooks/chat/claude-chat-send-options.ts",
         "hooks/chat/claude-chat-turn-tasks.ts",
-        "hooks/chat/steer-runtime.ts",
         "hooks/chat/use-artifact-detection.ts",
         "hooks/chat/use-claude-chat.ts",
         "hooks/chat/use-docs-providers.ts",

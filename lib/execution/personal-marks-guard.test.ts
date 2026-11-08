@@ -15,7 +15,7 @@ const REVIEWED_WRITES: Record<string, number> = {
   "hooks/chat/claude-chat-events.ts": 8,
   "hooks/chat/plan-turn-settle.ts": 1,
   "hooks/chat/router-fusion-chat-turn.ts": 2,
-  "hooks/chat/steer-runtime.ts": 5,
+  "lib/chat/steer-runtime.ts": 5,
   "hooks/chat/use-claude-chat-controller.ts": 17,
   "hooks/chat/use-sessions.ts": 2,
   "lib/agent/composition/verified-fresh-agent.ts": 2,

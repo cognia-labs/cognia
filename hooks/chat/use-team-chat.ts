@@ -54,7 +54,7 @@ import {
 import type { RoomRunner } from "@/lib/chat/room/runner"
 import { withMetadata } from "@/lib/chat/room/runner"
 import { roomSendRefusalOf, sendRoomTurn, stopRoomTurn } from "@/lib/companion/room-send-client"
-import { maybeDrainSteer, putBackPendingSteers } from "./steer-runtime"
+import { maybeDrainSteer, putBackPendingSteers } from "@/lib/chat/steer-runtime"
 import { useChatStore } from "@/stores/chat"
 import { isCompanionShell } from "@/lib/chat/room/shell"
 import { isTauri } from "@/lib/tauri"

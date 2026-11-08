@@ -14,7 +14,7 @@ const mockScm = {
 const mockAppend = jest.fn()
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 jest.mock("@/lib/db/messages", () => ({ commitMessageDelta: jest.fn() }))
-jest.mock("@/hooks/chat/use-effective-cwd", () => ({
+jest.mock("@/lib/chat/session-effective-cwd", () => ({
   resolveEffectiveCwdForSession: async () => "/repo",
 }))
 jest.mock("@/lib/scm/service", () => ({ getSourceControlService: () => mockScm }))

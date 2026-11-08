@@ -288,7 +288,7 @@ async function defaultRunLifecycle(
 }
 
 async function defaultResolveSessionCwd(session: ChatSession): Promise<string | null> {
-  const { resolveEffectiveCwdForSession } = await import("@/hooks/chat/use-effective-cwd")
+  const { resolveEffectiveCwdForSession } = await import("@/lib/chat/session-effective-cwd")
   return resolveEffectiveCwdForSession(session)
 }
 

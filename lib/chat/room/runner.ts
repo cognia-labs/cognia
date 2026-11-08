@@ -126,7 +126,7 @@ import {
   tagEditSibling,
   teamBranchGroupId,
 } from "@/lib/chat/branch-regen"
-import { SessionCoalescingRegistry } from "@/hooks/chat/stream-coalescing"
+import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
 import { renderWorkingSetForCompaction } from "@/lib/chat/working-set"
 import { RoutingAttemptController } from "@cognia/provider-routing"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"

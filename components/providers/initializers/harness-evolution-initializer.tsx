@@ -38,7 +38,7 @@ export async function handleFailedTurn(
   if (hostOwnsSessionState(getRuntimeSnapshot())) return
   const [sessions, cwd, conversation, failureOffer, trigger] = await Promise.all([
     import("@/lib/db/sessions"),
-    import("@/hooks/chat/use-effective-cwd"),
+    import("@/lib/chat/session-effective-cwd"),
     import("@/lib/a2ui/from-execution/conversation"),
     import("@/lib/harness/failure-offer"),
     import("@/lib/harness/runtime/failure-trigger"),

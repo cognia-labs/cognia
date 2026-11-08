@@ -138,7 +138,7 @@ type ListedTemplate =
  * cannot resolve degrades to "no repository" instead of a blank section.
  */
 async function resolveWorkspaceRoot(): Promise<string | null> {
-  const { resolveEffectiveCwdForSession } = await import("@/hooks/chat/use-effective-cwd")
+  const { resolveEffectiveCwdForSession } = await import("@/lib/chat/session-effective-cwd")
   return resolveEffectiveCwdForSession(null)
 }
 

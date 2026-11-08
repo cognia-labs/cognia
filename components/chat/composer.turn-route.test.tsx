@@ -61,8 +61,8 @@ jest.mock("@/lib/chat/turn-route/resolve", () => ({
   resolveRouteLane: (...args: unknown[]) => mockResolveLane(...args),
 }))
 const mockSessionStatus = jest.fn((_sessionId: string) => "idle")
-jest.mock("@/hooks/chat/steer-runtime", () => ({
-  ...jest.requireActual("@/hooks/chat/steer-runtime"),
+jest.mock("@/lib/chat/steer-runtime", () => ({
+  ...jest.requireActual("@/lib/chat/steer-runtime"),
   sessionStatusOf: (sessionId: string) => mockSessionStatus(sessionId),
 }))
 

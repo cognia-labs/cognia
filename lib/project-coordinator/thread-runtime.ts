@@ -10,7 +10,7 @@ import {
 import { cancelQueuedChatTurn } from "@/lib/execution/chat-lease"
 import { sendAutomatedChatMessage } from "@/hooks/chat/chat-send-bridge"
 import { stopChatTurn } from "@/hooks/chat/chat-control-bridge"
-import { sessionStatusOf } from "@/hooks/chat/steer-runtime"
+import { sessionStatusOf } from "@/lib/chat/steer-runtime"
 import {
   admitThreadCreation,
   admitThreadStart,

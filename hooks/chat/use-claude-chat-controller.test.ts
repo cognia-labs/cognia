@@ -342,7 +342,7 @@ describe("autonomous external turns", () => {
   it("persists delayed output and scopes approval while ignoring ordinary delivery and old links", async () => {
     const { useChatStore } = await import("@/stores/chat/chat-store")
     const messagesDb = await import("@/lib/db/messages")
-    const { SessionCoalescingRegistry } = await import("./stream-coalescing")
+    const { SessionCoalescingRegistry } = await import("@/lib/chat/stream-coalescing")
     const persist = jest.mocked(messagesDb.persistMessages).mockClear()
     const persistStreaming = jest.mocked(messagesDb.persistStreamingMessages).mockClear()
     useAgentRuntimeStore.setState({
@@ -444,7 +444,7 @@ describe("autonomous external turns", () => {
   })
   it("flushes a detached autonomous reply and refuses late events", async () => {
     const { useChatStore } = await import("@/stores/chat/chat-store")
-    const { SessionCoalescingRegistry } = await import("./stream-coalescing")
+    const { SessionCoalescingRegistry } = await import("@/lib/chat/stream-coalescing")
     useAgentRuntimeStore.setState({
       runtimeRef: { kind: "external", agentId: "pi" },
       sessionRuntimeRefs: {},

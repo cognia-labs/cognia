@@ -49,7 +49,7 @@ import { createLogger } from "@cognia/logging"
 import { CommandEditorDialog } from "./command-editor-dialog"
 import { useChatStore } from "@/stores/chat"
 import { getSession } from "@/lib/db/sessions"
-import { resolveEffectiveCwdForSession } from "@/hooks/chat/use-effective-cwd"
+import { resolveEffectiveCwdForSession } from "@/lib/chat/session-effective-cwd"
 import {
   CLAUDE_CODE_RELATED,
   RelatedSectionsStrip,

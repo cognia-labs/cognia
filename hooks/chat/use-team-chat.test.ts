@@ -240,6 +240,7 @@ interface ChatStateLike {
   setSessionActiveBranch: jest.Mock
   enqueueSteer: jest.Mock
   clearSteerQueue: jest.Mock
+  removeSteerEntry: jest.Mock
   pushApproval: jest.Mock
   clearApproval: jest.Mock
   referencedPaths: unknown[]
@@ -297,6 +298,11 @@ const chatState: ChatStateLike = {
   }),
   clearSteerQueue: jest.fn(() => {
     chatState.steerQueue = []
+  }),
+  // A boundary drain takes the entries it carries, one by one (ADR-0252 §5).
+  removeSteerEntry: jest.fn((id: string, entryId: string) => {
+    void id
+    chatState.steerQueue = chatState.steerQueue.filter((entry) => entry.id !== entryId)
   }),
   pushApproval: jest.fn(),
   clearApproval: jest.fn(),
@@ -405,6 +411,7 @@ beforeEach(() => {
   chatState.setSessionActiveBranch.mockClear()
   chatState.enqueueSteer.mockClear()
   chatState.clearSteerQueue.mockClear()
+  chatState.removeSteerEntry.mockClear()
   chatState.setActiveSession.mockClear()
   chatState.setMessages.mockClear()
   chatState.replaceMessages.mockClear()
@@ -3304,7 +3311,7 @@ describe("useTeamChat — direct-chat parity (steer / lease / per-session)", () 
       await new Promise<void>((r) => setTimeout(r, 10))
     })
 
-    expect(chatState.clearSteerQueue).toHaveBeenCalledWith("team-1")
+    expect(chatState.removeSteerEntry).toHaveBeenCalledWith("team-1", "s1")
     // The replay issued a second full send (session re-loaded).
     expect(getSessionMock.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
@@ -3391,7 +3398,7 @@ describe("useTeamChat — direct-chat parity (steer / lease / per-session)", () 
 
     expect(interruptSessionMock).toHaveBeenCalled()
     // Armed interrupt still drains: the queue was cleared and replayed.
-    expect(chatState.clearSteerQueue).toHaveBeenCalledWith("team-1")
+    expect(chatState.removeSteerEntry).toHaveBeenCalledWith("team-1", "s1")
   })
 
   it("flushSteer replays the queue immediately without a turn boundary", async () => {
@@ -3413,7 +3420,7 @@ describe("useTeamChat — direct-chat parity (steer / lease / per-session)", () 
       result.current.flushSteer("team-1")
       await new Promise<void>((r) => setTimeout(r, 10))
     })
-    expect(chatState.clearSteerQueue).toHaveBeenCalledWith("team-1")
+    expect(chatState.removeSteerEntry).toHaveBeenCalledWith("team-1", "s1")
     expect(getSessionMock).toHaveBeenCalled()
   })
 

@@ -3,7 +3,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 
 import { getSession, updateSession } from "@/lib/db/sessions"
 import { listMessages } from "@/lib/db/messages"
-import { resolveEffectiveCwdForSession } from "@/hooks/chat/use-effective-cwd"
+import { resolveEffectiveCwdForSession } from "@/lib/chat/session-effective-cwd"
 import { dispatchConversationToCodexApp } from "@/lib/native/codex-app-dispatch"
 import { materializeMessageMedia } from "@/lib/chat/media/normalize-message-media"
 import { openCodexAppTask } from "@/lib/native/codex-app-control"
@@ -14,7 +14,7 @@ jest.mock("@/lib/db/sessions", () => ({
   getSession: jest.fn(),
 }))
 jest.mock("@/lib/db/messages", () => ({ listMessages: jest.fn() }))
-jest.mock("@/hooks/chat/use-effective-cwd", () => ({
+jest.mock("@/lib/chat/session-effective-cwd", () => ({
   resolveEffectiveCwdForSession: jest.fn(),
 }))
 jest.mock("@/lib/native/codex-app-dispatch", () => ({

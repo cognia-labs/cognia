@@ -3,7 +3,7 @@ import { sha256 } from "@noble/hashes/sha2.js"
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js"
 import type { ChatSession } from "@cognia/agent-config-types"
 
-import { resolveEffectiveCwdForSession } from "@/hooks/chat/use-effective-cwd"
+import { resolveEffectiveCwdForSession } from "@/lib/chat/session-effective-cwd"
 import type { ExternalAgentMessage } from "@/types/agent/external-agent"
 import { hasNoLeakingExternalAgentPromptInput } from "@/lib/ai/agent/external/policy/outbound-prompt-pii"
 import { materializeMessageMedia } from "@/lib/chat/media/normalize-message-media"

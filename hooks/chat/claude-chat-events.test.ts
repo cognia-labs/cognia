@@ -164,7 +164,7 @@ import {
   isArtifactAutoCreateEnabled,
   isTeamSubSession,
 } from "./claude-chat-events"
-import { SessionCoalescingRegistry } from "./stream-coalescing"
+import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
 import { useChatStore } from "@/stores/chat"
 import { setSdkSessionId } from "@/lib/db/sessions"
 import { clearSidecarLogTrail } from "@/lib/chat/sidecar-log-trail"
@@ -722,7 +722,7 @@ describe("Claude chat event seam", () => {
   })
 
   it("replays a drained steer with its host admission, citations and preamble", async () => {
-    const { recordLocalPersonSteer } = await import("./steer-runtime")
+    const { recordLocalPersonSteer } = await import("@/lib/chat/steer-runtime")
     const authority = await import("@/lib/execution/acting-authority")
     recordLocalPersonSteer("s7", "q1", authority.LOCAL_PERSON_RUN)
     // The queued entry is the only carrier of the reference metadata on a

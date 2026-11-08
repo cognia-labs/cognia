@@ -48,7 +48,7 @@ import {
   markPendingSteersFailed,
   maybeDrainSteer,
   steerArmed,
-} from "./steer-runtime"
+} from "@/lib/chat/steer-runtime"
 import {
   clearSidecarLogTrail,
   lastSidecarError,
@@ -77,7 +77,7 @@ import {
 import { notifyRemoteNeedsInput } from "@/lib/companion/needs-input-notifier"
 import { listMessages, persistMessages, type MessagePersistOptions } from "@/lib/db/messages"
 import { driveInSessionPlanAfterTurn } from "./plan-turn-settle"
-import { SessionCoalescingRegistry } from "@/hooks/chat/stream-coalescing"
+import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
 import { getSession, setSdkSessionId } from "@/lib/db/sessions"
 import {
   acknowledgeTranscriptRuntime,

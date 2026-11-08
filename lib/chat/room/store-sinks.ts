@@ -25,7 +25,7 @@ import {
   maybeDrainSteer,
   sessionStatusOf,
   steerArmed,
-} from "@/hooks/chat/steer-runtime"
+} from "@/lib/chat/steer-runtime"
 import {
   armApprovalBackstop,
   clearApprovalBackstops,

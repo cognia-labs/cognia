@@ -232,7 +232,7 @@ export interface SessionChatSlice {
    * when there is no live lane (any non-Anthropic provider, or a team turn) or
    * when the running query already closed its input, and are replayed as one
    * fresh framed turn once the turn settles. See `lib/claude/steer.ts` and
-   * `hooks/chat/steer-runtime.ts`.
+   * `lib/chat/steer-runtime.ts`.
    *
    * Each entry's `id` is mirrored on its transcript message as
    * `metadata.steer.entryId`, which is what carries the delivery state the

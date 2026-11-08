@@ -36,7 +36,7 @@ import {
   commitPendingSteerEdit,
   discardPendingSteer,
   putBackPendingSteers,
-} from "@/hooks/chat/steer-runtime"
+} from "@/lib/chat/steer-runtime"
 import { useSessionStatus, useSessionSteerQueue } from "@/stores/chat"
 import { isChatTurnQueued } from "@/lib/execution/chat-lease"
 import { extractPlainText } from "@/lib/inbox/extract-plain-text"

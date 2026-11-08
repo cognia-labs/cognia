@@ -4,7 +4,7 @@
  * a plugin, or a stopped turn putting its queued follow-ups back.
  *
  * Lives outside `components/chat/composer.tsx` so the runtime side (the steer
- * queue in `hooks/chat/steer-runtime.ts`) can dispatch it without importing the
+ * queue in `lib/chat/steer-runtime.ts`) can dispatch it without importing the
  * composer component. The composer re-exports these for its existing callers.
  */
 

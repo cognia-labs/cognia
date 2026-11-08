@@ -19,7 +19,7 @@ const sessionStatusOf = jest.fn((_sessionId: string) => "idle")
 const listBackgroundTaskRecords = jest.fn(async (): Promise<unknown[]> => [])
 const claimBackgroundJobDelivery = jest.fn(async (_input: unknown) => true)
 
-jest.mock("./steer-runtime", () => ({
+jest.mock("@/lib/chat/steer-runtime", () => ({
   isSessionOpen: (sessionId: string) => isSessionOpen(sessionId),
   sessionStatusOf: (sessionId: string) => sessionStatusOf(sessionId),
 }))

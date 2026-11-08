@@ -6,7 +6,7 @@ import {
 import type { ChatSession } from "@cognia/agent-config-types"
 import { getSession } from "@/lib/db/sessions"
 import { commitMessageDelta } from "@/lib/db/messages"
-import { resolveEffectiveCwdForSession } from "@/hooks/chat/use-effective-cwd"
+import { resolveEffectiveCwdForSession } from "@/lib/chat/session-effective-cwd"
 import { getSourceControlService } from "@/lib/scm/service"
 import { readReviewPolicyAtRef } from "@/lib/scm/review/review-policy"
 import { useChatStore } from "@/stores/chat/chat-store"

@@ -1,17 +1,14 @@
-import { renderHook } from "@testing-library/react"
-import { useEffectiveCwd, resolveEffectiveCwdForSession } from "./use-effective-cwd"
+import { act, renderHook } from "@testing-library/react"
+import { useEffectiveCwd } from "./use-effective-cwd"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useCharacter } from "@/lib/data-hooks/context"
-import { resolveCharacterById } from "@/lib/db/characters"
 import type { Project } from "@/types"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 jest.mock("@/lib/data-hooks/context", () => ({ useCharacter: jest.fn() }))
-jest.mock("@/lib/db/characters", () => ({ resolveCharacterById: jest.fn() }))
 
 const useCharacterMock = useCharacter as jest.Mock
-const resolveCharacterByIdMock = resolveCharacterById as jest.Mock
 
 function makeProject(path: string): Project {
   return {
@@ -78,40 +75,17 @@ describe("useEffectiveCwd", () => {
     expect(result.current).toBe("/char")
   })
 
+  it("re-renders when the app default changes", () => {
+    seedStores({ defaultWorkingDir: "/def" })
+    const { result, rerender } = renderHook(() => useEffectiveCwd({}))
+    expect(result.current).toBe("/def")
+    act(() => seedStores({ defaultWorkingDir: "/next" }))
+    rerender()
+    expect(result.current).toBe("/next")
+  })
+
   it("returns null when nothing in the chain resolves", () => {
     const { result } = renderHook(() => useEffectiveCwd(null))
     expect(result.current).toBeNull()
-  })
-})
-
-describe("resolveEffectiveCwdForSession", () => {
-  it("prefers session workingDir", async () => {
-    seedStores({ project: makeProject("/ws"), active: true })
-    await expect(resolveEffectiveCwdForSession({ workingDir: "/session" })).resolves.toBe(
-      "/session"
-    )
-    expect(resolveCharacterByIdMock).not.toHaveBeenCalled()
-  })
-
-  it("falls back to the active workspace root", async () => {
-    seedStores({ project: makeProject("/ws"), active: true })
-    await expect(resolveEffectiveCwdForSession({})).resolves.toBe("/ws")
-  })
-
-  it("resolves the character from Dexie when needed", async () => {
-    seedStores({})
-    resolveCharacterByIdMock.mockResolvedValue({ id: "char-1", workingDir: "/char" })
-    await expect(resolveEffectiveCwdForSession({ characterId: "char-1" })).resolves.toBe("/char")
-    expect(resolveCharacterByIdMock).toHaveBeenCalledWith("char-1")
-  })
-
-  it("survives a character lookup failure and uses the app default", async () => {
-    seedStores({ defaultWorkingDir: "/def" })
-    resolveCharacterByIdMock.mockRejectedValue(new Error("dexie down"))
-    await expect(resolveEffectiveCwdForSession({ characterId: "char-1" })).resolves.toBe("/def")
-  })
-
-  it("returns null when nothing resolves", async () => {
-    await expect(resolveEffectiveCwdForSession(null)).resolves.toBeNull()
   })
 })

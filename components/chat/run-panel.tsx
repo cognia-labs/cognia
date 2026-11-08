@@ -80,7 +80,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { MOBILE_SPRING, mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { steerMetaOf } from "@/lib/claude/steer"
-import { commitPendingSteerEdit, discardPendingSteer } from "@/hooks/chat/steer-runtime"
+import { commitPendingSteerEdit, discardPendingSteer } from "@/lib/chat/steer-runtime"
 import { resolveDragEnd } from "@/lib/chat/attachments/reorder"
 import { cn } from "@/lib/utils"
 import {

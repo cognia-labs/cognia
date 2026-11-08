@@ -86,7 +86,7 @@ import {
   setSessionExternalLane,
   setSteerMessageState,
   steerArmed,
-} from "./steer-runtime"
+} from "@/lib/chat/steer-runtime"
 import { supersedePendingApprovals } from "./approval-supersede"
 import { denialMessageForModel, denialReasonOf } from "@/lib/chat/approval-routing"
 import { invalidateJudgeContext } from "@/lib/claude/permissions/command-judge"
@@ -158,7 +158,7 @@ import {
 } from "@/lib/companion/member-turn-attachments"
 import { hostStateActionOfferedHere } from "@/lib/sync/host-state-offered-actions"
 import { restoreWithdrawnToComposer } from "@/lib/chat/restore-withdrawn"
-import { SessionCoalescingRegistry } from "@/hooks/chat/stream-coalescing"
+import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
 import { mergeInboundMessagesForStream } from "@/lib/connectors/inbound-stored-parts"
 import {
   getSession,
@@ -309,7 +309,7 @@ import {
   pickChatContinuationMetadata,
 } from "@/lib/chat/continuation"
 import { slotKeyForTurn } from "@/lib/execution/slot-key"
-import { resolveEffectiveCwdForSession } from "@/hooks/chat/use-effective-cwd"
+import { resolveEffectiveCwdForSession } from "@/lib/chat/session-effective-cwd"
 import {
   acquireChatLease,
   isChatTurnQueued,
@@ -2200,7 +2200,7 @@ export function useClaudeChat() {
           // `steer` metadata rides along into Dexie so a restart can tell a
           // delivered follow-up from one that never arrived.
           const entryId = crypto.randomUUID()
-          ;(await import("./steer-runtime")).recordLocalPersonSteer(
+          ;(await import("@/lib/chat/steer-runtime")).recordLocalPersonSteer(
             sessionId,
             entryId,
             localAuthorization

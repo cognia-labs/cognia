@@ -19,7 +19,7 @@ import {
   registerBackgroundDeliveryLane,
   type BackgroundReplaySend,
 } from "@/lib/background-tasks/result-delivery"
-import { isSessionOpen, sessionStatusOf } from "./steer-runtime"
+import { isSessionOpen, sessionStatusOf } from "@/lib/chat/steer-runtime"
 
 export {
   __resetBackgroundResultRuntimeForTesting,

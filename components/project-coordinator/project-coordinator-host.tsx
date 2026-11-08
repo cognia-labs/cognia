@@ -19,7 +19,7 @@ import { useChatStore } from "@/stores/chat"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useSessionRunStatusMap } from "@/hooks/chat/use-session-run-status-map"
-import { sessionStatusOf } from "@/hooks/chat/steer-runtime"
+import { sessionStatusOf } from "@/lib/chat/steer-runtime"
 import { resolveCoordinatorConfig } from "@/lib/project-coordinator/config"
 import { coordinatorNeedsHold, sweepIdleThreads } from "@/lib/project-coordinator/auto-resolve"
 import {

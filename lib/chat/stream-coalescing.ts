@@ -18,8 +18,18 @@
 
 import type { UIMessage } from "ai"
 import type { MessagePersistOptions } from "@/lib/db/messages"
-import type { RafThrottleHandle } from "@/hooks/workflow/use-raf-throttle"
-import type { DebouncedCallbackHandle } from "@/hooks/workflow/use-debounced-callback"
+
+/**
+ * The handle shape of `useRafThrottle` and `useDebouncedCallback`
+ * (`hooks/workflow/*`), declared here so this module stays below the UI layer.
+ */
+interface CoalescerHandle<TArgs extends readonly unknown[]> {
+  call: (...args: TArgs) => void
+  flush: () => void
+  cancel: () => void
+}
+type RafThrottleHandle<TArgs extends readonly unknown[]> = CoalescerHandle<TArgs>
+type DebouncedCallbackHandle<TArgs extends readonly unknown[]> = CoalescerHandle<TArgs>
 
 /**
  * Imperative `requestAnimationFrame` coalescer — latest args win, single frame

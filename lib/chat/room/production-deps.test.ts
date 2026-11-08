@@ -54,7 +54,7 @@ jest.mock("@/lib/execution/admit", () => ({
     runWithExecutionLease(...(args as [unknown, () => Promise<unknown>])),
 }))
 jest.mock("@/lib/execution/slot-key", () => ({ slotKeyForTurn: jest.fn(() => "slot") }))
-jest.mock("@/hooks/chat/use-effective-cwd", () => ({
+jest.mock("@/lib/chat/session-effective-cwd", () => ({
   resolveEffectiveCwdForSession: jest.fn(async () => "/cwd"),
 }))
 jest.mock("@/lib/execution/chat-lease", () => ({

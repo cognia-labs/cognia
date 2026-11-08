@@ -68,11 +68,11 @@ const getSessionMock = (jest.requireMock("@/lib/db/sessions") as { getSession: j
 
 // The section resolves the *effective* cwd (session → workspace → character →
 // default) — stub the resolver so the test controls what it yields.
-jest.mock("@/hooks/chat/use-effective-cwd", () => ({
+jest.mock("@/lib/chat/session-effective-cwd", () => ({
   resolveEffectiveCwdForSession: jest.fn(async () => null),
 }))
 const resolveEffectiveCwdMock = (
-  jest.requireMock("@/hooks/chat/use-effective-cwd") as {
+  jest.requireMock("@/lib/chat/session-effective-cwd") as {
     resolveEffectiveCwdForSession: jest.Mock
   }
 ).resolveEffectiveCwdForSession

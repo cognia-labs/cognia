@@ -67,7 +67,7 @@ const loadRepoMock = jest.fn<Promise<RepoChatTemplate[]>, [string | null | undef
 jest.mock("@/hooks/chat/use-repo-chat-templates", () => ({
   loadRepoChatTemplates: (root: string | null | undefined) => loadRepoMock(root),
 }))
-jest.mock("@/hooks/chat/use-effective-cwd", () => ({
+jest.mock("@/lib/chat/session-effective-cwd", () => ({
   resolveEffectiveCwdForSession: async () => "/repo",
 }))
 // The resource picker's live sources — mutable so a test can stand in for a
