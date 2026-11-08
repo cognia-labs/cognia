@@ -1540,8 +1540,8 @@ export class ExternalAgentManager {
     const policy = this.sessionContentPolicies.get(adapter)?.get(sessionId)
     const current = policy?.chatSessionId
       ? await (
-          await import("@/lib/connectors/content-safety")
-        ).connectorSessionInjectionProtection(policy.chatSessionId)
+          await import("@/lib/chat/conversation-channel")
+        ).sessionInjectionProtection(policy.chatSessionId)
       : undefined
     if (current !== undefined && current !== policy?.enabled)
       throw new Error("runtime_content_safety_changed")

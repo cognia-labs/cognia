@@ -4,6 +4,8 @@
 // import a channel's code.
 
 import { loggers } from "@cognia/logging"
+import type { ChatSession } from "@cognia/agent-config-types"
+import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
 import { loadPortCollection } from "@/lib/modules/ports"
 import type {
   ConversationChannel,
@@ -56,6 +58,25 @@ export async function recordConversationCallbackBinding(
   for (const member of await loadChannels())
     if (await member.port.recordCallbackBinding(binding)) return true
   return false
+}
+
+/**
+ * Whether prompt-injection protection applies to a session's model input: the
+ * policy of the channel its IM authority (or, without one, its platform
+ * binding) is bound to. `undefined` for a session bound to no conversation,
+ * which carries no channel policy. A bound session no active channel claims
+ * is protected (fail closed), as a binding whose adapter row is gone was.
+ */
+export async function sessionInjectionProtection(sessionId: string): Promise<boolean | undefined> {
+  const { getSession } = await import("@/lib/db/sessions")
+  const session = (await getSession(sessionId)) as (ChatSession & SessionImAuthority) | undefined
+  const binding = session?.imAuthorityBinding ?? session?.platformBinding
+  if (!binding?.adapterId) return undefined
+  const channel = await conversationChannelFor({
+    conversationKey: binding.conversationKey,
+    adapterId: binding.adapterId,
+  })
+  return channel ? channel.injectionProtection(binding) : true
 }
 
 async function loadChannels() {

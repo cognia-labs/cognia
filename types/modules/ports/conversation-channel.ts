@@ -1,8 +1,9 @@
 // The `conversation-channel` collection port (ADR-0250 §14): the channel a
 // conversation or run is bound to, answering what only that channel knows.
 // Which host capabilities the conversation allows, whether its automation is
-// paused, which sibling conversations it has, how a message reaches it, what
-// it can render and serve, and who answers the agent's questions and
+// paused, which sibling conversations it has, how a message, a reaction or a
+// notification reaches it, what it can render and serve, whether its input is
+// screened for prompt injection, and who answers the agent's questions and
 // confirmations while a turn runs there.
 //
 // It is a collection port: every channel that binds conversations is its own
@@ -16,6 +17,7 @@ import type { ImHostCapabilityId } from "@/lib/db/connector-types"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
 import type { PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
+import type { WritePlaneRoute } from "@/lib/runtime/write-plane-route"
 import type {
   BuiltInSkill,
   BuiltInSkillContext,
@@ -29,6 +31,7 @@ import type {
 } from "@/types/connectors/interaction"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
+import type { NotificationRecord } from "@/types/notifications"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 
 /** A conversation as a run or session names it. */
@@ -75,6 +78,25 @@ export interface ConversationCallbackBinding {
   actorScope: CallbackActorScope
   allowedActions?: string[]
 }
+
+/**
+ * What happened to a Notification Center record the channel was asked to
+ * post. `pushed` means it reached the channel's outbound queue; every skip
+ * names why it did not (`lib/notifications/im-deliver.ts` reads these).
+ */
+export type ConversationNotificationOutcome =
+  | { status: "pushed"; conversationKey: string }
+  | {
+      status: "skipped"
+      reason:
+        | "no-session" // no session is bound to the conversation
+        | "delivery-target-missing" // the bound session lacks a delivery target
+        | "opt-in-off" // the conversation has not opted in to proactive pushes
+        | "pii-blocked" // what the message would carry failed the PII scan
+        | "held-as-draft" // the outbound policy held it for a person (ADR-0239)
+      conversationKey: string
+    }
+  | { status: "error" } // a transport or persistence fault; the audit log holds the evidence
 
 export interface ConversationChannel {
   /** Whether this channel binds the conversation. Synchronous and deterministic. */
@@ -189,6 +211,46 @@ export interface ConversationChannel {
    * adapter, belongs to no conversation the channel serves).
    */
   recordCallbackBinding(binding: ConversationCallbackBinding): Promise<boolean>
+  /**
+   * Whether prompt-injection protection applies to model input that came
+   * through the conversation (the channel's own policy; on by default).
+   */
+  injectionProtection(binding: ConversationChannelBinding): Promise<boolean>
+  /**
+   * Where the conversation's writes run from this shell: `local` when this
+   * shell runs the channel, `remote` when a paired host does and this shell
+   * only mirrors its rows, `unavailable` when nothing here can reach it.
+   */
+  writeRoute(binding: ConversationChannelBinding): WritePlaneRoute
+  /**
+   * Mirror a reaction onto a message in the conversation. Resolves the
+   * platform's reaction id when it gives one; throws when the platform
+   * refuses or cannot take reactions.
+   */
+  addReaction(input: {
+    binding: ConversationChannelBinding
+    platformMessageId: string
+    emoji: string
+  }): Promise<string | undefined>
+  /**
+   * Remove a mirrored reaction, by the platform's reaction id when one was
+   * kept, else by the emoji. Throws when the platform refuses.
+   */
+  removeReaction(input: {
+    binding: ConversationChannelBinding
+    platformMessageId: string
+    reactionId?: string
+    emoji: string
+  }): Promise<void>
+  /**
+   * Post a Notification Center record to the conversation when it has opted
+   * in: as a card with its actions as buttons, or as text without any.
+   * Never throws; the outcome says what happened.
+   */
+  deliverNotification(input: {
+    record: NotificationRecord
+    conversationKey: string
+  }): Promise<ConversationNotificationOutcome>
   /** Append a row to the channel's audit log. Best-effort: never throws. */
   appendAudit(entry: {
     adapterId: string

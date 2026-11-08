@@ -1,16 +1,18 @@
 // Connector inbound → Notification Center bridge (ADR-0042). Subscribes a
 // passive observer to the ConnectorBus and turns user-meaningful inbound
-// messages into center notifications. Focus-aware: when the user is already
+// messages into center notifications. The connectors' UI effect
+// `inbound-notification-bridge` installs it in every window
+// (`components/connectors/module.ui.ts`). Focus-aware: when the user is already
 // viewing that conversation (and the window is focused), the OS channel is
 // suppressed while the center still records — Slack/Notion behaviour.
 
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { NotificationChannel } from "@/types/notifications"
-import { getBus } from "@/lib/connectors/bus"
-import { isNotifiableInboundEvent as isNotifiable } from "@/lib/connectors/inbound-notifiability"
-import { resolvePreferences } from "./preferences"
+import { getBus } from "../bus"
+import { isNotifiableInboundEvent as isNotifiable } from "../inbound-notifiability"
+import { resolvePreferences } from "@/lib/notifications/preferences"
 import { isViewingConversation } from "@/stores/inbox/active-conversation-store"
-import { notify } from "./runtime"
+import { notify } from "@/lib/notifications/runtime"
 import { useSettingsStore } from "@/stores/settings"
 
 const PREVIEW_MAX = 140

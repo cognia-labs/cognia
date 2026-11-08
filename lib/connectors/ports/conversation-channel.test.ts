@@ -15,6 +15,11 @@ const mockBuildCapabilityPromptSection = jest.fn()
 const mockPostWorkflowRunApproval = jest.fn()
 const mockPostWorkflowFanoutApproval = jest.fn()
 const mockRecordCallbackBinding = jest.fn()
+const mockConnectorInjectionProtection = jest.fn()
+const mockInboxWriteRoute = jest.fn()
+const mockAddReactionOutbound = jest.fn()
+const mockRemoveReactionOutbound = jest.fn()
+const mockDeliverNotification = jest.fn()
 
 jest.mock("@/lib/db/conversation-overrides", () => ({
   readForResolution: (key: string) => mockReadForResolution(key),
@@ -52,6 +57,22 @@ jest.mock("../hitl/workflow-approval-cards", () => ({
 }))
 jest.mock("../adapters/_shared/a2ui-mapper", () => ({
   recordCallbackBinding: (input: unknown) => mockRecordCallbackBinding(input),
+}))
+
+jest.mock("../content-safety", () => ({
+  connectorInjectionProtection: (id: string) => mockConnectorInjectionProtection(id),
+}))
+jest.mock("../inbox-writes/route", () => ({
+  resolveInboxWriteRoute: () => mockInboxWriteRoute(),
+}))
+jest.mock("../bus", () => ({
+  getBus: () => ({
+    addReactionOutbound: (...args: unknown[]) => mockAddReactionOutbound(...args),
+    removeReactionOutbound: (...args: unknown[]) => mockRemoveReactionOutbound(...args),
+  }),
+}))
+jest.mock("../notifications/im-deliver", () => ({
+  deliverNotificationToConversation: (input: unknown) => mockDeliverNotification(input),
 }))
 
 const KEY = "lark:adp_1:oc_chat"
@@ -308,5 +329,54 @@ describe("the IM conversation channel", () => {
     })
     expect(platform.fingerprint).toBeNull()
     expect(platform.capabilities.length).toBeGreaterThan(0)
+  })
+
+  it("reads injection protection from the conversation's adapter", async () => {
+    mockConnectorInjectionProtection.mockResolvedValue(false)
+    await expect(port.injectionProtection({ conversationKey: KEY })).resolves.toBe(false)
+    expect(mockConnectorInjectionProtection).toHaveBeenLastCalledWith("adp_1")
+    await port.injectionProtection({ conversationKey: KEY, adapterId: "adp_2" })
+    expect(mockConnectorInjectionProtection).toHaveBeenLastCalledWith("adp_2")
+  })
+
+  it("runs its writes where the inbox write plane does", () => {
+    for (const route of ["local", "remote", "unavailable"]) {
+      mockInboxWriteRoute.mockReturnValueOnce(route)
+      expect(port.writeRoute({ conversationKey: KEY })).toBe(route)
+    }
+  })
+
+  it("mirrors reactions through the adapter, and throws what the adapter refuses", async () => {
+    const binding = { conversationKey: KEY }
+    mockAddReactionOutbound.mockResolvedValueOnce({ ok: true, reactionId: "r1" })
+    await expect(port.addReaction({ binding, platformMessageId: "m1", emoji: "👍" })).resolves.toBe(
+      "r1"
+    )
+    expect(mockAddReactionOutbound).toHaveBeenCalledWith("adp_1", "m1", "👍")
+    mockAddReactionOutbound.mockResolvedValueOnce({ ok: false, error: { code: "unsupported" } })
+    await expect(
+      port.addReaction({ binding, platformMessageId: "m1", emoji: "👍" })
+    ).rejects.toThrow("unsupported")
+    mockRemoveReactionOutbound.mockResolvedValue({ ok: true })
+    await port.removeReaction({ binding, platformMessageId: "m1", reactionId: "r1", emoji: "👍" })
+    expect(mockRemoveReactionOutbound).toHaveBeenLastCalledWith("adp_1", "m1", "r1")
+    // Without a stored reaction id the emoji keys the removal.
+    await port.removeReaction({ binding, platformMessageId: "m1", emoji: "👍" })
+    expect(mockRemoveReactionOutbound).toHaveBeenLastCalledWith("adp_1", "m1", "👍")
+    mockRemoveReactionOutbound.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "x", message: "gone" },
+    })
+    await expect(
+      port.removeReaction({ binding, platformMessageId: "m1", emoji: "👍" })
+    ).rejects.toThrow("gone")
+  })
+
+  it("posts Notification Center records through the IM delivery", async () => {
+    const outcome = { status: "pushed", conversationKey: KEY }
+    mockDeliverNotification.mockResolvedValue(outcome)
+    const input = { record: { id: "n1" } as never, conversationKey: KEY }
+    await expect(port.deliverNotification(input)).resolves.toBe(outcome)
+    expect(mockDeliverNotification).toHaveBeenCalledWith(input)
   })
 })

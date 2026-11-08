@@ -101,6 +101,7 @@ import { getDeviceId } from "@/lib/device/device-identity"
 import { resolvePreferences } from "@/lib/notifications/preferences"
 import { useSettingsStore } from "@/stores/settings"
 import { installExecutionControlPlane } from "@/lib/execution/install-execution-control"
+import { onAgentRunResumed } from "@/lib/execution/run-resume-listeners"
 import { installDelegationBridge } from "@/lib/execution/delegation-bridge"
 import { recoverPendingRunInterrupts } from "@/lib/execution/run-control"
 import { startWorkflowApprovalRecovery } from "@/lib/a2ui/workflow-approval-handler"
@@ -352,6 +353,7 @@ export function installConnectorRuntime(
   let stopNotificationWorker: (() => void) | null = null
   let stopWorkflowApprovalRecovery: (() => void) | null = null
   let disposeExecutionRunControlHandlers: (() => void) | null = null
+  let stopResumeOnRunResumed: (() => void) | null = null
   let teardownPromise: Promise<void> | null = null
 
   /**
@@ -511,6 +513,8 @@ export function installConnectorRuntime(
       stopNotificationWorker = null
       disposeExecutionRunControlHandlers?.()
       disposeExecutionRunControlHandlers = null
+      stopResumeOnRunResumed?.()
+      stopResumeOnRunResumed = null
       // A window that never acquired the singleton runtime owns none of the
       // shared adapter transports below.
       if (!ownsRuntime) return
@@ -919,6 +923,11 @@ export function installConnectorRuntime(
       // host) no longer takes the run-control dispatch table with it. The
       // headless brain has no React tree and installs it through this path.
       disposeExecutionRunControlHandlers = installExecutionControlPlane()
+      // A crashed run resumed through run control may have inbound jobs
+      // waiting on it; they continue where this runtime runs.
+      stopResumeOnRunResumed = onAgentRunResumed(async () => {
+        await bus.resumeDurableInboundJobs()
+      })
       void recoverPendingRunInterrupts().catch((error) => {
         console.error("[execution-run] pending interrupt recovery failed", error)
       })

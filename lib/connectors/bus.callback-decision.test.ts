@@ -21,7 +21,7 @@ import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
 import { executeRunControlCommand } from "@/lib/execution/run-control"
 import { waitFor } from "@testing-library/react"
 import { handleIssueActionCallback } from "@/lib/issues/im/callback-handler"
-import { handleNotificationActionCallback } from "@/lib/notifications/im-callback-handler"
+import { handleNotificationActionCallback } from "./notifications/action-callback"
 
 // Admission storage/translation are covered by the real callback suite; this
 // suite isolates the ordering of the early callback decision and its handler.
@@ -68,7 +68,7 @@ jest.mock("@/lib/a2ui/workflow-approval-handler", () => ({
 jest.mock("@/lib/skills/built-in/dispatcher", () => ({ runBuiltInSkill: jest.fn() }))
 jest.mock("@/lib/execution/run-control", () => ({ executeRunControlCommand: jest.fn() }))
 jest.mock("@/lib/issues/im/callback-handler", () => ({ handleIssueActionCallback: jest.fn() }))
-jest.mock("@/lib/notifications/im-callback-handler", () => ({
+jest.mock("./notifications/action-callback", () => ({
   handleNotificationActionCallback: jest.fn(),
 }))
 

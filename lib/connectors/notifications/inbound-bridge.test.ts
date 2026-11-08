@@ -1,7 +1,7 @@
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 
-jest.mock("./runtime", () => ({ notify: jest.fn().mockResolvedValue("id") }))
-jest.mock("@/lib/connectors/bus", () => {
+jest.mock("@/lib/notifications/runtime", () => ({ notify: jest.fn().mockResolvedValue("id") }))
+jest.mock("../bus", () => {
   const subscribeInbound = jest.fn(() => () => {})
   return { getBus: jest.fn(() => ({ subscribeInbound })) }
 })
@@ -14,15 +14,15 @@ jest.mock("@/stores/settings", () => ({
   },
 }))
 
-import { notify } from "./runtime"
-import { getBus } from "@/lib/connectors/bus"
+import { notify } from "@/lib/notifications/runtime"
+import { getBus } from "../bus"
 import { isViewingConversation } from "@/stores/inbox/active-conversation-store"
 import { useSettingsStore } from "@/stores/settings"
 import {
   installConnectorNotificationBridge,
   __uninstallConnectorNotificationBridge,
   buildConnectorNotification,
-} from "./inbound-connector"
+} from "./inbound-bridge"
 
 const mockNotify = notify as jest.Mock
 const mockSubscribe = getBus().subscribeInbound as jest.Mock

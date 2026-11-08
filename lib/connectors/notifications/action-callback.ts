@@ -1,7 +1,8 @@
 /**
  * Handle a click on a Notification Center card that was pushed into a chat.
  *
- * Mirrors `lib/issues/im/callback-handler.ts`: the press is applied directly
+ * The bus routes a `notification_action` binding here (`../bus.ts`). Mirrors
+ * `lib/issues/im/callback-handler.ts`: the press is applied directly
  * and answered without a model turn, because the record already says what each
  * button does.
  *
@@ -15,7 +16,7 @@
  * is audited rather than guessed at.
  */
 
-import { appendAudit } from "@/lib/connectors/audit"
+import { appendAudit } from "../audit"
 import { dispatchNotificationCommand } from "@/lib/notifications/action-registry"
 import { getNotification } from "@/lib/db/notifications"
 
@@ -33,8 +34,9 @@ function readPayload(value: unknown): { notificationId: string; actionId: string
 }
 
 /**
- * Returns true when the press was applied. A false return means the card
- * referenced something that no longer exists, which is audited by the caller.
+ * Returns true when the press was applied. A false return means the payload
+ * was unreadable or the card referenced a record or action that no longer
+ * exists; the second is audited here.
  */
 export async function handleNotificationActionCallback(
   input: NotificationActionCallbackInput

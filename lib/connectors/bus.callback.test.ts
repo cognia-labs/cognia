@@ -61,7 +61,7 @@ jest.mock("@/lib/issues/im/callback-handler", () => ({
 }))
 
 const mockHandleNotificationAction = jest.fn(async (_input: unknown): Promise<boolean> => true)
-jest.mock("@/lib/notifications/im-callback-handler", () => ({
+jest.mock("./notifications/action-callback", () => ({
   handleNotificationActionCallback: (input: unknown) => mockHandleNotificationAction(input),
 }))
 

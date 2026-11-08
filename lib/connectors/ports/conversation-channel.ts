@@ -3,15 +3,22 @@
 // §14). It claims every connector conversation (a key `parseConversationKey`
 // reads) and answers from the connectors' own policy, automation controls,
 // session bindings, delivery gateway and audit log. Its turns' questions,
-// skill confirmations and workflow approvals become interactive cards in the
-// conversation.
+// skill confirmations, workflow approvals and Notification Center records
+// become interactive cards in the conversation, and reactions on its messages
+// are mirrored through the adapter.
 
 import { parseConversationKey } from "@/types/connectors/event"
+import { resolveInboxWriteRoute } from "../inbox-writes/route"
 import { newIdempotencyKey } from "@/types/connectors/outbound"
 import type {
   ConversationChannel,
   ConversationChannelBinding,
 } from "@/types/modules/ports/conversation-channel"
+
+/** The adapter a binding names, or the one its conversation key carries. */
+function adapterIdOf(binding: ConversationChannelBinding): string {
+  return binding.adapterId ?? parseConversationKey(binding.conversationKey).adapterId
+}
 
 function isConnectorConversation(binding: ConversationChannelBinding): boolean {
   try {
@@ -158,6 +165,44 @@ export const port: ConversationChannel = {
     const { recordCallbackBinding } = await import("../adapters/_shared/a2ui-mapper")
     await recordCallbackBinding(binding)
     return true
+  },
+
+  async injectionProtection(binding) {
+    const { connectorInjectionProtection } = await import("../content-safety")
+    return connectorInjectionProtection(adapterIdOf(binding))
+  },
+
+  writeRoute() {
+    // Inbox replies, drafts and reactions all execute where the connector
+    // runtime does (ADR-0131), whichever conversation they belong to.
+    return resolveInboxWriteRoute()
+  },
+
+  async addReaction({ binding, platformMessageId, emoji }) {
+    const { getBus } = await import("../bus")
+    const result = await getBus().addReactionOutbound(
+      adapterIdOf(binding),
+      platformMessageId,
+      emoji
+    )
+    if (!result.ok) throw new Error(result.error?.message ?? result.error?.code ?? "unsupported")
+    return result.reactionId
+  },
+
+  async removeReaction({ binding, platformMessageId, reactionId, emoji }) {
+    const { getBus } = await import("../bus")
+    // Adapters that hand back no reaction id key removal by the emoji itself.
+    const result = await getBus().removeReactionOutbound(
+      adapterIdOf(binding),
+      platformMessageId,
+      reactionId ?? emoji
+    )
+    if (!result.ok) throw new Error(result.error?.message ?? result.error?.code ?? "unsupported")
+  },
+
+  async deliverNotification(input) {
+    const { deliverNotificationToConversation } = await import("../notifications/im-deliver")
+    return deliverNotificationToConversation(input)
   },
 
   async appendAudit(entry) {

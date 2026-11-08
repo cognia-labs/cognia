@@ -1,29 +1,13 @@
 import {
   connectorInjectionProtection,
-  connectorSessionInjectionProtection,
   inspectConnectorText,
   inspectConnectorEvent,
 } from "./content-safety"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { getSession } from "@/lib/db/sessions"
 
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
-jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 const read = jest.mocked(getAdapterInstance)
-
-it("resolves current control policy for connector and authority-only Bot sessions", async () => {
-  jest.mocked(getSession).mockResolvedValueOnce(undefined)
-  await expect(connectorSessionInjectionProtection("ordinary")).resolves.toBeUndefined()
-  for (const field of ["platformBinding", "imAuthorityBinding"]) {
-    jest
-      .mocked(getSession)
-      .mockResolvedValueOnce({ id: "s", [field]: { adapterId: "bot" } } as never)
-    read.mockResolvedValueOnce({ promptInjectionProtection: false } as never)
-    await expect(connectorSessionInjectionProtection("s")).resolves.toBe(false)
-    expect(read).toHaveBeenLastCalledWith("bot")
-  }
-})
 
 it("defaults old/missing rows on, honors explicit false, and surfaces storage errors", async () => {
   read.mockResolvedValueOnce(undefined)

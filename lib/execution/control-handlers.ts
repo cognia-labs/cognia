@@ -28,6 +28,7 @@ import {
 import { currentDelegationAttempts, recordDelegationRetry } from "./delegation"
 import { isLiveRunStatus } from "./run-status"
 import { hasRunStop, stopRegisteredRun } from "./run-stops"
+import { notifyAgentRunResumed } from "./run-resume-listeners"
 import {
   registerRunSteerEngine,
   steerExecutionRun,
@@ -210,10 +211,9 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
           const { resumeCrashedAgentRun } =
             await import("@/lib/ai/agent/recovery/reconcile-crashed-runs")
           const outcome = await resumeCrashedAgentRun(runId)
-          if (outcome.resumed) {
-            const { getBus } = await import("@/lib/connectors/bus")
-            await getBus().resumeDurableInboundJobs()
-          }
+          // Work parked behind the run continues where its owner runs (the
+          // connector runtime resumes its durable inbound jobs).
+          if (outcome.resumed) await notifyAgentRunResumed(runId)
           return outcome
         })
       const outcome = await resume(command.runId)

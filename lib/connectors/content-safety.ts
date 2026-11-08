@@ -5,23 +5,11 @@ import {
 } from "@cognia/content-safety"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
-import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
-import type { ChatSession } from "@cognia/agent-config-types"
 
 /** Read the actual execution host's row; old/missing rows keep the safe default. */
 export async function connectorInjectionProtection(adapterId: string): Promise<boolean> {
   const adapter = await getAdapterInstance(adapterId)
   return adapter?.promptInjectionProtection !== false
-}
-
-/** Controls resolve current Host policy, including Bot-owned authority-only topics. */
-export async function connectorSessionInjectionProtection(
-  sessionId: string
-): Promise<boolean | undefined> {
-  const { getSession } = await import("@/lib/db/sessions")
-  const session = (await getSession(sessionId)) as (ChatSession & SessionImAuthority) | undefined
-  const binding = session?.imAuthorityBinding ?? session?.platformBinding
-  return binding?.adapterId ? connectorInjectionProtection(binding.adapterId) : undefined
 }
 
 /** Admission and context reuse one policy without applying outbound PII rules to ingress. */

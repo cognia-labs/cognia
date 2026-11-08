@@ -10,14 +10,14 @@
  *
  * # Where the mirror runs
  *
- * The mirror needs a connector runtime, which only the desktop host and the
- * headless brain own. The same route the Inbox write plane resolves says
- * which shell this is: `local` mirrors through the bus, `unavailable` (a
- * standalone tab with no host at all) writes the row and has nothing to
- * mirror to, and `remote` (a paired phone or web companion) writes nothing,
- * because its `messages` rows are a mirror of the host's and the host would
- * overwrite the reaction on the next sync. The picker says so instead of
- * hiding (see `components/chat/message-reactions.tsx`).
+ * The mirror runs through the channel the conversation is bound to (the
+ * `conversation-channel` port), which says where its writes run from this
+ * shell: `local` mirrors through it, `unavailable` (a standalone tab with no
+ * host at all, or a conversation no channel serves) writes the row and has
+ * nothing to mirror to, and `remote` (a paired phone or web companion) writes
+ * nothing, because its `messages` rows are a mirror of the host's and the
+ * host would overwrite the reaction on the next sync. The picker says so
+ * instead of hiding (see `components/chat/message-reactions.tsx`).
  */
 
 import type { UIMessage } from "ai"
@@ -29,8 +29,13 @@ import {
 } from "@cognia/agent-config-types"
 
 import { REACTION_EMOJIS } from "@/lib/canvas/constants"
-import { resolveInboxWriteRoute, type InboxWriteRoute } from "@/lib/connectors/inbox-writes/route"
 import { setMessageReaction } from "@/lib/db/messages"
+import type { WritePlaneRoute } from "@/lib/runtime/write-plane-route"
+import type {
+  ConversationChannel,
+  ConversationChannelBinding,
+} from "@/types/modules/ports/conversation-channel"
+import { conversationChannelFor } from "./conversation-channel"
 import { reflectMessageReactions } from "./reactions-store"
 
 /** The picker's palette, shared with canvas comments so the two read alike. */
@@ -47,15 +52,23 @@ export function readReactions(message: { metadata?: unknown }): MessageReaction[
 /** The IM address of a message that arrived over a connector, if it did. */
 export function platformAddressOf(message: {
   metadata?: unknown
-}): { adapterId: string; platformMessageId: string } | null {
+}): { adapterId: string; platformMessageId: string; conversationKey?: string } | null {
   const meta = message.metadata
   if (!meta || typeof meta !== "object") return null
   const pm = (meta as { platformMessage?: unknown }).platformMessage
   if (!pm || typeof pm !== "object") return null
-  const { adapterId, messageId } = pm as { adapterId?: unknown; messageId?: unknown }
+  const { adapterId, messageId, conversationKey } = pm as {
+    adapterId?: unknown
+    messageId?: unknown
+    conversationKey?: unknown
+  }
   if (typeof adapterId !== "string" || !adapterId) return null
   if (typeof messageId !== "string" || !messageId) return null
-  return { adapterId, platformMessageId: messageId }
+  return {
+    adapterId,
+    platformMessageId: messageId,
+    ...(typeof conversationKey === "string" && conversationKey ? { conversationKey } : {}),
+  }
 }
 
 /**
@@ -78,39 +91,28 @@ export function messageAllowsReactions(message: { metadata?: unknown }): boolean
 /** What a shell may do with reactions, from the same route the Inbox writes use. */
 export type ReactionAbility = "write-and-mirror" | "write-only" | "host-only"
 
-export function reactionAbilityFor(route: InboxWriteRoute): ReactionAbility {
+export function reactionAbilityFor(route: WritePlaneRoute): ReactionAbility {
   if (route === "local") return "write-and-mirror"
   if (route === "remote") return "host-only"
   return "write-only"
 }
 
-export interface ReactionMirror {
-  add: (adapterId: string, platformMessageId: string, emoji: string) => Promise<string | undefined>
-  remove: (
-    adapterId: string,
-    platformMessageId: string,
-    reactionRef: { reactionId?: string; emoji: string }
-  ) => Promise<void>
-}
-
-/** The bus-backed mirror, loaded on first use so the renderer never imports the bus eagerly. */
-async function busMirror(): Promise<ReactionMirror> {
-  const { getBus } = await import("@/lib/connectors/bus")
+/**
+ * The conversation a reaction belongs to: the one the message names, else the
+ * one its session is bound to (rows stored before messages named theirs).
+ */
+async function conversationOf(
+  sessionId: string,
+  address: ReturnType<typeof platformAddressOf>
+): Promise<ConversationChannelBinding | null> {
+  if (address?.conversationKey)
+    return { conversationKey: address.conversationKey, adapterId: address.adapterId }
+  const { getSession } = await import("@/lib/db/sessions")
+  const binding = (await getSession(sessionId))?.platformBinding
+  if (!binding?.conversationKey) return null
   return {
-    add: async (adapterId, platformMessageId, emoji) => {
-      const result = await getBus().addReactionOutbound(adapterId, platformMessageId, emoji)
-      if (!result.ok) throw new Error(result.error?.message ?? result.error?.code ?? "unsupported")
-      return result.reactionId
-    },
-    remove: async (adapterId, platformMessageId, ref) => {
-      // Adapters that hand back no reaction id key removal by the emoji itself.
-      const result = await getBus().removeReactionOutbound(
-        adapterId,
-        platformMessageId,
-        ref.reactionId ?? ref.emoji
-      )
-      if (!result.ok) throw new Error(result.error?.message ?? result.error?.code ?? "unsupported")
-    },
+    conversationKey: binding.conversationKey,
+    adapterId: address?.adapterId ?? binding.adapterId,
   }
 }
 
@@ -119,8 +121,11 @@ export interface ToggleReactionInput {
   message: Pick<UIMessage, "id"> & { metadata?: unknown }
   emoji: string
   actorId?: string
-  /** Test seam. Production resolves the route and the bus itself. */
-  deps?: { route?: () => InboxWriteRoute; mirror?: () => Promise<ReactionMirror> }
+  /** Test seam. Production resolves the conversation and asks its channel. */
+  deps?: {
+    conversation?: () => Promise<ConversationChannelBinding | null>
+    channelFor?: typeof conversationChannelFor
+  }
 }
 
 export interface ToggleReactionResult {
@@ -138,31 +143,39 @@ export async function toggleMessageReaction(
   input: ToggleReactionInput
 ): Promise<ToggleReactionResult> {
   const actorId = input.actorId ?? LOCAL_REACTOR_ID
-  const route = (input.deps?.route ?? resolveInboxWriteRoute)()
-  const ability = reactionAbilityFor(route)
+  const address = platformAddressOf(input.message)
+  const binding = await (
+    input.deps?.conversation ?? (() => conversationOf(input.sessionId, address))
+  )()
+  const channel: ConversationChannel | null = binding
+    ? await (input.deps?.channelFor ?? conversationChannelFor)(binding)
+    : null
+  const ability = reactionAbilityFor(
+    channel && binding ? channel.writeRoute(binding) : "unavailable"
+  )
   if (ability === "host-only") throw new ReactionNeedsHostError()
 
   const current = readReactions(input.message)
   const add = !hasReacted(current, input.emoji, actorId)
-  const address = platformAddressOf(input.message)
   const change: ReactionChange = { emoji: input.emoji, actorId, add }
 
   let mirror: ToggleReactionResult["mirror"] = "skipped"
-  if (ability === "write-and-mirror" && address) {
-    const mirrorImpl = await (input.deps?.mirror ?? busMirror)()
+  if (ability === "write-and-mirror" && address && channel && binding) {
     try {
       if (add) {
-        const reactionId = await mirrorImpl.add(
-          address.adapterId,
-          address.platformMessageId,
-          input.emoji
-        )
+        const reactionId = await channel.addReaction({
+          binding,
+          platformMessageId: address.platformMessageId,
+          emoji: input.emoji,
+        })
         if (reactionId) change.platformReactionId = reactionId
       } else {
         const reactionId = current.find((reaction) => reaction.emoji === input.emoji)
           ?.platformReactionIds?.[actorId]
-        await mirrorImpl.remove(address.adapterId, address.platformMessageId, {
-          reactionId,
+        await channel.removeReaction({
+          binding,
+          platformMessageId: address.platformMessageId,
+          ...(reactionId ? { reactionId } : {}),
           emoji: input.emoji,
         })
       }

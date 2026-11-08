@@ -3612,12 +3612,11 @@ export class ConnectorBus {
     // A button on a Notification Center card that was pushed into this chat.
     // The record already says what each button does, so the press runs its
     // registered command directly, with no model digest turn. See
-    // `lib/notifications/im-callback-handler.ts`.
+    // `lib/connectors/notifications/action-callback.ts`.
     if (resolvedBinding?.kind === "notification_action") {
       decide({ status: "accepted", kind: resolvedBinding.kind, action: event.value })
       try {
-        const { handleNotificationActionCallback } =
-          await import("@/lib/notifications/im-callback-handler")
+        const { handleNotificationActionCallback } = await import("./notifications/action-callback")
         await handleNotificationActionCallback({
           binding: { bindingPayload: resolvedBinding.payload },
           adapterId: event.adapterId,

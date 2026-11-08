@@ -6,7 +6,11 @@ import {
   askUserInConversation,
   conversationChannelFor,
   recordConversationCallbackBinding,
+  sessionInjectionProtection,
 } from "./conversation-channel"
+
+const mockGetSession = jest.fn()
+jest.mock("@/lib/db/sessions", () => ({ getSession: (id: string) => mockGetSession(id) }))
 
 function channel(
   claims: (key: string) => boolean,
@@ -26,6 +30,11 @@ function channel(
     waitForAutomation: jest.fn(),
     listSiblingConversations: jest.fn(),
     postText: jest.fn(),
+    injectionProtection: jest.fn(async () => false),
+    writeRoute: jest.fn(() => "local" as const),
+    addReaction: jest.fn(),
+    removeReaction: jest.fn(),
+    deliverNotification: jest.fn(),
     appendAudit: jest.fn(),
   }
 }
@@ -176,5 +185,40 @@ describe("recordConversationCallbackBinding", () => {
     __resetPortsForTesting()
     __setPortModulesForTesting([])
     expect(await recordConversationCallbackBinding(binding)).toBe(false)
+  })
+})
+
+describe("sessionInjectionProtection", () => {
+  const binding = { adapterId: "bot", conversationKey: "lark:bot:oc_1" }
+
+  it("asks the channel of the session's IM authority, else its platform binding", async () => {
+    const im = channel((key) => key === binding.conversationKey)
+    __setPortModulesForTesting([moduleProviding("connectors", async () => ({ port: im }))])
+    for (const field of ["imAuthorityBinding", "platformBinding"]) {
+      mockGetSession.mockResolvedValueOnce({ id: "s", [field]: binding })
+      await expect(sessionInjectionProtection("s")).resolves.toBe(false)
+      expect(im.injectionProtection).toHaveBeenLastCalledWith(binding)
+    }
+    mockGetSession.mockResolvedValueOnce({
+      id: "s",
+      imAuthorityBinding: binding,
+      platformBinding: { adapterId: "other", conversationKey: "lark:other:oc_2" },
+    })
+    await sessionInjectionProtection("s")
+    expect(im.injectionProtection).toHaveBeenLastCalledWith(binding)
+  })
+
+  it("carries no policy for a session bound to no conversation", async () => {
+    __setPortModulesForTesting([])
+    mockGetSession.mockResolvedValueOnce(undefined)
+    await expect(sessionInjectionProtection("missing")).resolves.toBeUndefined()
+    mockGetSession.mockResolvedValueOnce({ id: "s" })
+    await expect(sessionInjectionProtection("s")).resolves.toBeUndefined()
+  })
+
+  it("protects a bound session no active channel claims", async () => {
+    __setPortModulesForTesting([])
+    mockGetSession.mockResolvedValueOnce({ id: "s", platformBinding: binding })
+    await expect(sessionInjectionProtection("s")).resolves.toBe(true)
   })
 })

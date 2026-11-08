@@ -42,7 +42,7 @@ import type {
   ActionReviewGrant,
 } from "@cognia/agent-config-types/action-review"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
-import { connectorSessionInjectionProtection } from "@/lib/connectors/content-safety"
+import { sessionInjectionProtection } from "@/lib/chat/conversation-channel"
 import {
   assertSafeModelInput,
   assertSafeModelHistory,
@@ -450,7 +450,7 @@ export async function compactSession(
 ): Promise<void> {
   const command = options?.commandId ? "agent_compact" : "claude_compact"
   if (!hasNoLeakingPiiDeep(focus)) throw new Error("compact rejected by the renderer PII gate")
-  const protection = await connectorSessionInjectionProtection(sessionId)
+  const protection = await sessionInjectionProtection(sessionId)
   assertSafeModelInput(focus, protection === true)
   await assertCurrentControlContentPolicy(sessionId, protection)
   await transport.call(command, {
@@ -471,7 +471,7 @@ export async function restoreSession(sessionId: string, messages: unknown[]): Pr
   if (!hasNoLeakingPiiDeep(messages)) {
     throw new Error("session restore rejected by the renderer PII gate")
   }
-  const protection = await connectorSessionInjectionProtection(sessionId)
+  const protection = await sessionInjectionProtection(sessionId)
   assertSafeModelHistory(messages, protection === true)
   await assertCurrentControlContentPolicy(sessionId, protection)
   await transport.call("claude_restore", { sessionId, messages })
@@ -698,7 +698,7 @@ export async function steerSession(
   if (!hasNoLeakingPiiDeep(prompt)) {
     throw new Error("live-steer prompt rejected by the renderer PII gate")
   }
-  const protection = await connectorSessionInjectionProtection(sessionId)
+  const protection = await sessionInjectionProtection(sessionId)
   assertSafeModelInput(prompt, protection === true)
   return sessionControlRequest<{ accepted: true }>(
     sessionId,

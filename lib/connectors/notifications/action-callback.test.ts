@@ -9,11 +9,11 @@ jest.mock("@/lib/notifications/action-registry", () => ({
 }))
 
 const mockAudit = jest.fn().mockResolvedValue(undefined)
-jest.mock("@/lib/connectors/audit", () => ({
+jest.mock("../audit", () => ({
   appendAudit: (...a: unknown[]) => mockAudit(...a),
 }))
 
-import { handleNotificationActionCallback } from "./im-callback-handler"
+import { handleNotificationActionCallback } from "./action-callback"
 
 const record = {
   id: "n1",

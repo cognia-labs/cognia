@@ -2,57 +2,28 @@
  * IM proactive-push delivery channel (control-plane notifications).
  *
  * The Notification Center fans a record to this channel when its resolved
- * channels include `"im"`. We route the record back to a bound IM conversation:
- *
- *   1. resolve the target conversation from the record (see
- *      {@link resolveConversationKey}) → the bound ChatSession's
- *      `platformBinding` (adapterId + opaque conversationRef);
- *   2. enforce the per-conversation opt-in (`ConversationOverrideRow.
- *      proactivePush`), fail-closed default OFF — customer-facing IM must not
- *      get surprise pushes;
- *   3. PII-gate the title + body (the same fail-closed gate auto-mode replies
- *      use), dropping the IM channel (NOT the durable center record) on a hit;
- *   4. enqueue through the durable queue (idempotency-keyed on the record id so
- *      a coalesce bump never double-sends): an A2UI card when the record
- *      carries actions, plain text when it does not.
- *
- * ## Why the card path exists
- *
- * A record can carry one to three inline actions, and this channel used to
- * drop them, so "Plan awaiting approval / Approve / Discard" arrived in a
- * group chat as one sentence with no way to answer it. The buttons carry a
- * `notification_action` binding, which `ConnectorBus.dispatchConnectorCallback`
- * short-circuits into `dispatchNotificationCommand` without a model turn,
- * exactly as it does for `issue_action`.
- *
- * Static-export safe: only Dexie writes + the outbound EventTarget wake bus —
- * zero Tauri IPC, identical to the inbound-connector path.
+ * channels include `"im"`. This decides which conversation the record belongs
+ * in (see {@link resolveConversationKey}) and hands it to that conversation's
+ * channel (the `conversation-channel` port's `deliverNotification`), which
+ * enforces the conversation's opt-in, gates the content for PII and posts it
+ * (the IM channel: `lib/connectors/notifications/im-deliver.ts`).
  */
 
 import type { NotificationRecord } from "@/types/notifications"
-import { enqueueAuthorized } from "@/lib/connectors/delivery-gateway"
-import { appendAudit } from "@/lib/connectors/audit"
-import { buildA2UISegment } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
-import { findSessionByConversationKey } from "@/lib/connectors/session-bindings"
-import { readForResolution } from "@/lib/db/conversation-overrides"
+import type { ConversationNotificationOutcome } from "@/types/modules/ports/conversation-channel"
+import { conversationChannelFor } from "@/lib/chat/conversation-channel"
 import { listExecutionRunBindings } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
-import { hasNoLeakingPii } from "@cognia/redact"
-import { buildNotificationCardSurface } from "./im-card"
 
 export interface ImDeliverDeps {
-  findSession?: typeof findSessionByConversationKey
-  readOverride?: typeof readForResolution
-  enqueue?: typeof enqueueAuthorized
-  audit?: typeof appendAudit
-  /** PII gate (defaults to `hasNoLeakingPii`). Returns true when SAFE to send. */
-  isPiiSafe?: (text: string) => boolean
   /** Session lookup by id, for the `session`/`groupKey` resolution step. */
   getSession?: (
     sessionId: string
   ) => Promise<{ platformBinding?: { conversationKey?: string } } | undefined>
   /** Run-binding lookup, for the run-kind resolution step. */
   listRunBindings?: typeof listExecutionRunBindings
+  /** The channel a conversation is bound to (defaults to the port reader). */
+  channelFor?: typeof conversationChannelFor
 }
 
 /** `sourceRef.kind` values that name a durable run rather than a chat. */
@@ -108,158 +79,41 @@ async function resolveConversationKey(
   return undefined
 }
 
-function bodyText(rec: NotificationRecord): string {
-  return [rec.title, rec.body ?? ""]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join("\n")
-}
-
 /**
- * Everything the outbound message will actually contain.
- *
- * The gate used to see the title and body, which was the whole message while
- * this channel sent plain text. A card also renders each action's label and
- * the deep link, and an action can be registered by a PLUGIN
- * (`lib/notifications/plugin-bridge.ts`), so its label is not necessarily
- * product-authored text. Gating less than the card renders would let the
- * buttons carry out what the body was blocked for.
- */
-function gatedText(rec: NotificationRecord): string {
-  return [bodyText(rec), ...(rec.actions ?? []).map((a) => a.label), rec.href ?? ""]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join("\n")
-}
-
-/**
- * The structured outcome of one IM delivery attempt — what the durable
+ * The structured outcome of one IM delivery attempt: what the durable
  * diagnostics and the V2 reconciler read. A `pushed` outcome means the record
  * reached the outbound queue; every other outcome names WHY it didn't (the
- * route exists only where an existing table already holds the link — nothing
+ * route exists only where an existing table already holds the link, nothing
  * here guesses a destination).
  */
 export type ImDeliverOutcome =
-  | { status: "pushed"; conversationKey: string }
+  | ConversationNotificationOutcome
   | {
       status: "skipped"
       reason:
         | "no-conversation" // belongs in no IM conversation
-        | "no-session" // conversation resolved but no bound session
-        | "delivery-target-missing" // bound session lacks a delivery target
-        | "opt-in-off" // proactivePush not enabled (fail-closed default)
-        | "pii-blocked" // gated content failed the PII scan
-        | "held-as-draft" // the outbound policy held it for a person (ADR-0239)
+        | "no-channel" // no active channel serves the conversation
       conversationKey?: string
     }
-  | { status: "error" } // transport/persist fault — evidence is in the audit log
 
 /**
  * Deliver one center record to its resolved IM conversation. Returns the
- * structured outcome; never throws — every skip / block path audits and
- * returns so a failed IM push can't break the notification persist or the
- * other channels.
+ * structured outcome; never throws, so a failed IM push can't break the
+ * notification persist or the other channels.
  */
 export async function deliverRecordToIM(
   rec: NotificationRecord,
   deps: ImDeliverDeps = {}
 ): Promise<ImDeliverOutcome> {
-  const findSession = deps.findSession ?? findSessionByConversationKey
-  const readOverride = deps.readOverride ?? readForResolution
-  const enqueue = deps.enqueue ?? enqueueAuthorized
-  const audit = deps.audit ?? appendAudit
-  const isPiiSafe = deps.isPiiSafe ?? hasNoLeakingPii
   const getSession = deps.getSession ?? defaultGetSession
   const listRunBindings = deps.listRunBindings ?? listExecutionRunBindings
-
+  const channelFor = deps.channelFor ?? conversationChannelFor
   try {
     const conversationKey = await resolveConversationKey(rec, { getSession, listRunBindings })
     if (!conversationKey) return { status: "skipped", reason: "no-conversation" }
-
-    const session = await findSession(conversationKey)
-    const binding = session?.platformBinding
-    if (!binding) {
-      // No bound session → we can't reliably target the platform; skip
-      // silently (no adapterId to audit against).
-      return { status: "skipped", reason: "no-session", conversationKey }
-    }
-    if (!binding.deliveryTarget) {
-      await audit({
-        adapterId: binding.adapterId,
-        kind: "notify.im_skipped",
-        at: Date.now(),
-        conversationKey,
-        reason: "delivery_target_missing",
-        fields: { notificationId: rec.id },
-      })
-      return { status: "skipped", reason: "delivery-target-missing", conversationKey }
-    }
-
-    const override = await readOverride(conversationKey).catch(() => undefined)
-    if (override?.proactivePush !== true) {
-      await audit({
-        adapterId: binding.adapterId,
-        kind: "notify.im_skipped",
-        at: Date.now(),
-        conversationKey,
-        reason: "opt_in_off",
-        fields: { notificationId: rec.id },
-      })
-      return { status: "skipped", reason: "opt-in-off", conversationKey }
-    }
-
-    const text = bodyText(rec)
-    if (!isPiiSafe(gatedText(rec))) {
-      await audit({
-        adapterId: binding.adapterId,
-        kind: "notify.im_pii_blocked",
-        at: Date.now(),
-        conversationKey,
-        reason: "pii_blocked",
-        fields: { notificationId: rec.id },
-      })
-      return { status: "skipped", reason: "pii-blocked", conversationKey }
-    }
-
-    // A record with actions is a question, and a question needs its answers
-    // attached. One without is a statement, and the plain-text path renders
-    // it better on every platform, so the card is not forced on it.
-    const segment =
-      (rec.actions?.length ?? 0) > 0
-        ? buildA2UISegment(`notification:${rec.id}`, buildNotificationCardSurface({ record: rec }))
-        : { type: "text" as const, text: text || rec.title }
-
-    const delivered = await enqueue({
-      adapterId: binding.adapterId,
-      conversationKey,
-      request: {
-        conversationRef: binding.conversationRef,
-        deliveryTarget: binding.deliveryTarget,
-        segments: [segment],
-        // Idempotency keyed on the record id → a coalesce bump re-delivering
-        // the same record is deduped by the outbound runner.
-        metadata: { idempotencyKey: `notify:${rec.id}` },
-      },
-      source: "ai-run",
-      // The conversation is the one the record's session is bound to, so it is
-      // that session's origin thread; a fence on it still holds (ADR-0239).
-      authorization: {
-        kind: "unattended",
-        ownerRef: `notification:${rec.id}`,
-        ...(session?.id ? { sessionId: session.id } : {}),
-      },
-    })
-    if (delivered.kind === "drafted") {
-      return { status: "skipped", reason: "held-as-draft", conversationKey }
-    }
-    await audit({
-      adapterId: binding.adapterId,
-      kind: "notify.im_pushed",
-      at: Date.now(),
-      conversationKey,
-      fields: { notificationId: rec.id, level: rec.level },
-    })
-    return { status: "pushed", conversationKey }
+    const channel = await channelFor({ conversationKey })
+    if (!channel) return { status: "skipped", reason: "no-channel", conversationKey }
+    return await channel.deliverNotification({ record: rec, conversationKey })
   } catch {
     // Fail-closed: a delivery error must never propagate into notify()'s
     // persist / other channels.

@@ -26,10 +26,9 @@ jest.mock("@/lib/db/governance-ledger", () => ({
 
 const mockGetSession = jest.fn()
 const mockConnectorSessionProtection = jest.fn()
-jest.mock("@/lib/connectors/content-safety", () => ({
-  ...jest.requireActual("@/lib/connectors/content-safety"),
-  connectorSessionInjectionProtection: (...args: unknown[]) =>
-    mockConnectorSessionProtection(...args),
+jest.mock("@/lib/chat/conversation-channel", () => ({
+  ...jest.requireActual("@/lib/chat/conversation-channel"),
+  sessionInjectionProtection: (...args: unknown[]) => mockConnectorSessionProtection(...args),
 }))
 const mockPrepareTranscriptRuntimeSend = jest.fn(async (...args: unknown[]) => args[1])
 const mockWithTranscriptRuntimeLock = jest.fn(async (...args: unknown[]) =>
