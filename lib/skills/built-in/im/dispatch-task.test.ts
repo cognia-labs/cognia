@@ -99,7 +99,7 @@ beforeEach(() => {
 })
 
 describe("im.dispatch_task execute — create-new path", () => {
-  it("creates the chat, bootstraps, binds the team (clearing teamDisabled), posts the brief, and starts the run", async () => {
+  it("creates the chat, bootstraps, binds the Squad (clearing squadDisabled), posts the brief, and starts the run", async () => {
     const out = await skill().execute(
       {
         title: "Ship W4",
@@ -122,13 +122,13 @@ describe("im.dispatch_task execute — create-new path", () => {
       source: "im.dispatch_task",
     })
 
-    // Team binding clears an earlier `teamDisabled` veto (explicit undefined
+    // Squad binding clears an earlier `squadDisabled` veto (explicit undefined
     // key so the upsert merge overwrites it), never touches characterId.
     expect(mUpsert).toHaveBeenCalledWith({
       conversationKey: "lark:a1:oc_new",
       sessionId: "s_new",
-      teamId: "team_1",
-      teamDisabled: undefined,
+      squadId: "team_1",
+      squadDisabled: undefined,
     })
 
     expect(mEnqueue).toHaveBeenCalledWith(
@@ -252,7 +252,7 @@ describe("im.dispatch_task execute — create-new path", () => {
 })
 
 describe("im.dispatch_task execute — existing-conversation path", () => {
-  it("resolves the bound session, binds a character WITHOUT touching teamDisabled, and never auto-runs", async () => {
+  it("resolves the bound session, binds a character WITHOUT touching squadDisabled, and never auto-runs", async () => {
     mFindSession.mockResolvedValue({
       id: "s_ex",
       platformBinding: {
@@ -278,9 +278,9 @@ describe("im.dispatch_task execute — existing-conversation path", () => {
       sessionId: "s_ex",
       characterId: "char_1",
     })
-    // Character binding must NOT clear/overwrite the teamDisabled veto.
-    expect(mUpsert.mock.calls[0][0]).not.toHaveProperty("teamDisabled")
-    expect(mUpsert.mock.calls[0][0]).not.toHaveProperty("teamId")
+    // Character binding must NOT clear/overwrite the squadDisabled veto.
+    expect(mUpsert.mock.calls[0][0]).not.toHaveProperty("squadDisabled")
+    expect(mUpsert.mock.calls[0][0]).not.toHaveProperty("squadId")
 
     expect(mEnqueue).toHaveBeenCalledWith(
       expect.objectContaining({ adapterId: "a2", conversationKey: "lark:a2:oc_ex" }),

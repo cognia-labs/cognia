@@ -1592,7 +1592,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // evaluated once per turn, then composed with the conversation
         // override and the instance defaults. Computed here so the PII gate,
         // the dispatch branches, and the audits below all agree on the same
-        // routing. `teamDisabled` (the `/team off` sentinel) suppresses the
+        // routing. `squadDisabled` (the `/team off` sentinel) suppresses the
         // rule-sourced team AND the bot-level default.
         const ruleHit = matchDispatchRule(adapterRow.dispatchRules, event)
         const effectiveConfig = resolveImEffectiveConfig({
@@ -1631,7 +1631,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           break
         }
         const routing = effectiveConfig.routing
-        const effectiveTeamId = routing.teamId
+        const effectiveTeamId = routing.squadId
         const effectiveWorkflowId = routing.workflowId
         const effectiveCharacterId = override?.characterDisabled
           ? undefined
@@ -1751,7 +1751,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             message: "team/workflow dispatch prompt rejected by PII gate before dispatch",
             fields: {
               ...(effectiveTeamId
-                ? { teamId: effectiveTeamId, teamSource: routing.teamSource }
+                ? { teamId: effectiveTeamId, teamSource: routing.squadSource }
                 : {}),
               ...(effectiveWorkflowId ? { workflowId: effectiveWorkflowId } : {}),
               sourceMessageId: storedMsg.id,
@@ -1768,7 +1768,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // (triggeredFrom). Skip
         // the rest of the ai-run branch on success.
         if (effectiveTeamId) {
-          if (routing.teamSource === "rule") {
+          if (routing.squadSource === "rule") {
             await auditRuleDecision({ teamId: effectiveTeamId })
           }
           const { startTeamRunFromIM } = await import("./team-dispatch")
@@ -1822,7 +1822,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                 }),
             fields: {
               teamId: effectiveTeamId,
-              teamSource: routing.teamSource,
+              teamSource: routing.squadSource,
               sourceMessageId: storedMsg.id,
               // Recorded because the old `draft-prepare` branch could not
               // dispatch at all: a draft-mode conversation bound to a team

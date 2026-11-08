@@ -174,15 +174,15 @@ const skill: BuiltInSkill<typeof schema> = {
     const target = await resolveTarget(args, ctx)
 
     // Bind the responder on the conversation's override row. Only the provided
-    // axis is written: binding a team also CLEARS `teamDisabled` (an explicit
-    // "no team" veto must not shadow a deliberate dispatch); binding a
-    // character leaves `teamDisabled` untouched.
+    // axis is written: binding a Squad also CLEARS `squadDisabled` (an
+    // explicit "no Squad" veto must not shadow a deliberate dispatch); binding
+    // a character leaves `squadDisabled` untouched.
     const { upsertByConversationKey } = await import("@/lib/db/conversation-overrides")
     await upsertByConversationKey({
       conversationKey: target.conversationKey,
       sessionId: target.sessionId,
       ...(args.respondWithTeamId
-        ? { teamId: args.respondWithTeamId, teamDisabled: undefined }
+        ? { squadId: args.respondWithTeamId, squadDisabled: undefined }
         : { characterId: args.respondWithCharacterId }),
     })
 

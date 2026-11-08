@@ -9,7 +9,7 @@
  * `resolveEffectiveRouting` composes the final routing decision for the
  * runtime's ai-run branch. Precedence (user-confirmed):
  *   explicit conversation override (`/team`, `/character`, `/workflow`,
- *   `teamDisabled`) > first matching rule > instance defaults.
+ *   `squadDisabled`) > first matching rule > instance defaults.
  * Runtime dispatch and `/status` both consume this resolver so the route
  * reported in chat cannot drift from the rule selected for that event.
  */
@@ -118,10 +118,10 @@ export function matchDispatchRule(
 export type RoutingSource = "override" | "assignment" | "rule" | "instance-default" | "none"
 
 export interface EffectiveRouting {
-  teamId: string | undefined
-  /** Where the effective team came from — audited so operators can tell a
+  squadId: string | undefined
+  /** Where the effective Squad came from — audited so operators can tell a
    * `/team`-bound chat from a rule hit from a bot-default dispatch. */
-  teamSource: RoutingSource
+  squadSource: RoutingSource
   workflowId: string | undefined
   workflowSource: "override" | "rule" | "instance-default" | "none"
   /**
@@ -146,13 +146,13 @@ export interface EffectiveRouting {
 /**
  * Compose the effective routing for one inbound ai-run turn.
  *
- * Team: `override.teamDisabled` (the `/team off` sentinel) suppresses
- * everything — including a rule-sourced team → explicit conversation
- * `teamId` → the matched rule's `teamId` → the bot instance's
+ * Squad: `override.squadDisabled` (the `/team off` sentinel) suppresses
+ * everything — including a rule-sourced Squad → explicit conversation
+ * `squadId` → the matched rule's `teamId` → the bot instance's
  * `defaultTeamId` → none. Empty/whitespace ids are treated as unset.
  *
  * Workflow: `override.workflowId` → the matched rule's `workflowId` → none.
- * The runtime only dispatches a workflow when NO team resolved (teamId wins
+ * The runtime only dispatches a workflow when NO Squad resolved (squadId wins
  * over workflowId).
  *
  * Character: `override.characterId` → the matched rule's `characterId` →
@@ -166,8 +166,8 @@ export function resolveEffectiveRouting(
   adapter: Pick<AdapterInstanceRow, "defaultTeamId" | "defaultWorkflowId" | "defaultCharacterId">,
   override: Pick<
     ConversationOverrideRow,
-    | "teamId"
-    | "teamDisabled"
+    | "squadId"
+    | "squadDisabled"
     | "workflowId"
     | "workflowDisabled"
     | "characterId"
@@ -180,22 +180,22 @@ export function resolveEffectiveRouting(
   // (slice 1A) so consumers can render the provenance distinctly.
   const overrideSource: RoutingSource =
     override?.routingSource === "assignment" ? "assignment" : "override"
-  // ── team ──────────────────────────────────────────────────────────────────
-  let teamId: string | undefined
-  let teamSource: EffectiveRouting["teamSource"] = "none"
-  if (override?.teamDisabled !== true) {
-    const overrideTeamId = override?.teamId?.trim()
-    const ruleTeamId = ruleHit?.action.teamId?.trim()
-    const instanceTeamId = adapter.defaultTeamId?.trim()
-    if (overrideTeamId) {
-      teamId = overrideTeamId
-      teamSource = overrideSource
-    } else if (ruleTeamId) {
-      teamId = ruleTeamId
-      teamSource = "rule"
-    } else if (instanceTeamId) {
-      teamId = instanceTeamId
-      teamSource = "instance-default"
+  // ── Squad ─────────────────────────────────────────────────────────────────
+  let squadId: string | undefined
+  let squadSource: EffectiveRouting["squadSource"] = "none"
+  if (override?.squadDisabled !== true) {
+    const overrideSquadId = override?.squadId?.trim()
+    const ruleSquadId = ruleHit?.action.teamId?.trim()
+    const instanceSquadId = adapter.defaultTeamId?.trim()
+    if (overrideSquadId) {
+      squadId = overrideSquadId
+      squadSource = overrideSource
+    } else if (ruleSquadId) {
+      squadId = ruleSquadId
+      squadSource = "rule"
+    } else if (instanceSquadId) {
+      squadId = instanceSquadId
+      squadSource = "instance-default"
     }
   }
 
@@ -247,8 +247,8 @@ export function resolveEffectiveRouting(
   }
 
   return {
-    teamId,
-    teamSource,
+    squadId,
+    squadSource,
     workflowId,
     workflowSource,
     characterId,

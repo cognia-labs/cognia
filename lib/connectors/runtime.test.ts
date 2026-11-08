@@ -3296,7 +3296,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
       updatedAt: 0,
     } as never)
     void session
-    await upsertByConversationKey({ conversationKey: key, sessionId: "s_team", teamId: "team_r" })
+    await upsertByConversationKey({ conversationKey: key, sessionId: "s_team", squadId: "team_r" })
 
     await callHandler(event, "ai-run")
 
@@ -3337,7 +3337,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertByConversationKey({ conversationKey: key, sessionId: "s_team2", teamId: "ghost" })
+    await upsertByConversationKey({ conversationKey: key, sessionId: "s_team2", squadId: "ghost" })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run", {
       ...RESOLVED,
@@ -3575,7 +3575,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     expect(dispatched?.fields?.teamSource).toBe("instance-default")
   })
 
-  it("conversation override teamId beats the bot defaultTeamId", async () => {
+  it("conversation override squadId beats the bot defaultTeamId", async () => {
     const key = "telegram:adapter_1:chat_inst_vs_override"
     await seedAdapter("adapter_1", { defaultTeamId: "team_bot" })
     await getDb().sessions.add({
@@ -3587,14 +3587,14 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertByConversationKey({ conversationKey: key, sessionId: "s_iv", teamId: "team_chat" })
+    await upsertByConversationKey({ conversationKey: key, sessionId: "s_iv", squadId: "team_chat" })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run")
 
     expect((mockStartTeamRunFromIM.mock.calls[0][0] as { teamId: string }).teamId).toBe("team_chat")
   })
 
-  it("teamDisabled suppresses the bot defaultTeamId → single-character ai-run", async () => {
+  it("squadDisabled suppresses the bot defaultTeamId → single-character ai-run", async () => {
     const key = "telegram:adapter_1:chat_team_off"
     await seedAdapter("adapter_1", { defaultTeamId: "team_bot" })
     await getDb().sessions.add({
@@ -3606,7 +3606,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertByConversationKey({ conversationKey: key, sessionId: "s_off", teamDisabled: true })
+    await upsertByConversationKey({ conversationKey: key, sessionId: "s_off", squadDisabled: true })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run")
 
@@ -3659,7 +3659,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertByConversationKey({ conversationKey: key, sessionId: "s_ostale", teamId: "ghost" })
+    await upsertByConversationKey({ conversationKey: key, sessionId: "s_ostale", squadId: "ghost" })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run", {
       ...RESOLVED,
@@ -3792,7 +3792,7 @@ describe("installRuntime — ai-run (dispatch rules W3)", () => {
     expect(typeof matched?.fields?.sourceMessageId).toBe("string")
   })
 
-  it("conversation override teamId beats a matching rule (no rule_matched audit)", async () => {
+  it("conversation override squadId beats a matching rule (no rule_matched audit)", async () => {
     const key = "telegram:adapter_1:chat_rule_vs_override"
     await seedAdapter("adapter_1", { dispatchRules: [TEAM_RULE] })
     await getDb().sessions.add({
@@ -3804,7 +3804,11 @@ describe("installRuntime — ai-run (dispatch rules W3)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertByConversationKey({ conversationKey: key, sessionId: "s_rvo", teamId: "team_over" })
+    await upsertByConversationKey({
+      conversationKey: key,
+      sessionId: "s_rvo",
+      squadId: "team_over",
+    })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run")
 
@@ -3842,7 +3846,7 @@ describe("installRuntime — ai-run (dispatch rules W3)", () => {
     expect(audit.some((r) => r.kind === "dispatch.rule_matched")).toBe(false)
   })
 
-  it("teamDisabled suppresses a rule-sourced team → single-character ai-run", async () => {
+  it("squadDisabled suppresses a rule-sourced team → single-character ai-run", async () => {
     const key = "telegram:adapter_1:chat_rule_team_off"
     await seedAdapter("adapter_1", { dispatchRules: [TEAM_RULE] })
     await getDb().sessions.add({
@@ -3854,7 +3858,7 @@ describe("installRuntime — ai-run (dispatch rules W3)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertByConversationKey({ conversationKey: key, sessionId: "s_rto", teamDisabled: true })
+    await upsertByConversationKey({ conversationKey: key, sessionId: "s_rto", squadDisabled: true })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run")
 

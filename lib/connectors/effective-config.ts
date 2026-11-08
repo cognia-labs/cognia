@@ -104,11 +104,11 @@ export function resolveImEffectiveConfig(input: {
     : (routing.characterId ?? system.characterId)
 
   let target: EffectiveConfigValue<ImExecutionTarget>
-  if (routing.teamId) {
+  if (routing.squadId) {
     target = {
-      requested: override?.teamId ? { kind: "team", id: override.teamId } : undefined,
-      effective: { kind: "team", id: routing.teamId },
-      source: sourceOf(routing.teamSource),
+      requested: override?.squadId ? { kind: "team", id: override.squadId } : undefined,
+      effective: { kind: "team", id: routing.squadId },
+      source: sourceOf(routing.squadSource),
       ...(references?.teamExists === false ? { blockedReason: "team_reference_missing" } : {}),
     }
   } else if (routing.workflowId) {
@@ -123,10 +123,10 @@ export function resolveImEffectiveConfig(input: {
   } else {
     target = {
       requested:
-        override?.teamDisabled || override?.workflowDisabled ? { kind: "direct" } : undefined,
+        override?.squadDisabled || override?.workflowDisabled ? { kind: "direct" } : undefined,
       effective: { kind: "direct" },
       source:
-        override?.teamDisabled || override?.workflowDisabled
+        override?.squadDisabled || override?.workflowDisabled
           ? "conversation-override"
           : "system-default",
     }

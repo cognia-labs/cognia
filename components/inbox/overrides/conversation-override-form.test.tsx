@@ -339,7 +339,7 @@ describe("ConversationOverrideForm", () => {
     expect(persisted?.characterId).toBe("char_bravo")
     expect(persisted?.providerOverride).toBeUndefined()
     expect(persisted?.modelOverride).toBeUndefined()
-    expect(persisted?.teamId).toBe("team_research")
+    expect(persisted?.squadId).toBe("team_research")
     expect(persisted?.workflowId).toBeUndefined()
     expect(persisted?.workflowDisabled).toBe(true)
     expect(persisted?.proactivePush).toBe(true)
@@ -374,7 +374,7 @@ describe("ConversationOverrideForm", () => {
       ).toMatchObject({
         providerOverride: "anthropic",
         modelOverride: "claude-test",
-        teamDisabled: true,
+        squadDisabled: true,
         workflowDisabled: true,
       })
     })

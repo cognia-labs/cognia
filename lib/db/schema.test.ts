@@ -5044,11 +5044,11 @@ describe("v106 instance-level AI binding defaults (multi-bot connectors W1/W2)",
       id: "co-v106",
       conversationKey: "lark:lark-v106:oc_v106",
       sessionId: "s_v106",
-      teamDisabled: true,
+      squadDisabled: true,
       createdAt: now,
       updatedAt: now,
     })
-    expect((await db.conversationOverrides.get("co-v106"))?.teamDisabled).toBe(true)
+    expect((await db.conversationOverrides.get("co-v106"))?.squadDisabled).toBe(true)
 
     await db.outboundQueue.put({
       id: "job-v106",

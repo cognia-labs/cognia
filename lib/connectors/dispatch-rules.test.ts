@@ -5,7 +5,7 @@
  * invalid regex never matches, senderIds vs id/remoteUserId, channelKinds,
  * AND across fields, catch-all empty match, disabled skip, empty-action
  * skip, first-match ordering — plus `resolveEffectiveRouting` precedence
- * (override > rule > instance default; `teamDisabled` kills the rule team).
+ * (override > rule > instance default; `squadDisabled` kills the rule Squad).
  */
 
 import { matchDispatchRule, resolveEffectiveRouting } from "./dispatch-rules"
@@ -149,26 +149,26 @@ describe("matchDispatchRule — rule-table semantics", () => {
 describe("resolveEffectiveRouting — precedence", () => {
   const HIT = { rule: rule({ id: "hit" }), action: {} }
 
-  it("override teamId beats rule teamId beats instance default", () => {
+  it("override squadId beats rule teamId beats instance default", () => {
     const ruleHit = { ...HIT, action: { teamId: "team_rule" } }
     expect(
       resolveEffectiveRouting(
         { defaultTeamId: "team_inst" },
-        { teamId: "team_over" } as never,
+        { squadId: "team_over" } as never,
         ruleHit
       )
-    ).toMatchObject({ teamId: "team_over", teamSource: "override" })
+    ).toMatchObject({ squadId: "team_over", squadSource: "override" })
     expect(resolveEffectiveRouting({ defaultTeamId: "team_inst" }, null, ruleHit)).toMatchObject({
-      teamId: "team_rule",
-      teamSource: "rule",
+      squadId: "team_rule",
+      squadSource: "rule",
     })
     expect(resolveEffectiveRouting({ defaultTeamId: "team_inst" }, null, null)).toMatchObject({
-      teamId: "team_inst",
-      teamSource: "instance-default",
+      squadId: "team_inst",
+      squadSource: "instance-default",
     })
     expect(resolveEffectiveRouting({}, null, null)).toMatchObject({
-      teamId: undefined,
-      teamSource: "none",
+      squadId: undefined,
+      squadSource: "none",
     })
   })
 
@@ -178,12 +178,12 @@ describe("resolveEffectiveRouting — precedence", () => {
     expect(
       resolveEffectiveRouting(
         { defaultTeamId: "team_inst" },
-        { teamId: "team_asg", characterId: "char_asg", routingSource: "assignment" } as never,
+        { squadId: "team_asg", characterId: "char_asg", routingSource: "assignment" } as never,
         ruleHit
       )
     ).toMatchObject({
-      teamId: "team_asg",
-      teamSource: "assignment",
+      squadId: "team_asg",
+      squadSource: "assignment",
       characterId: "char_asg",
       characterSource: "assignment",
     })
@@ -195,31 +195,31 @@ describe("resolveEffectiveRouting — precedence", () => {
         { characterId: "char_asg", routingSource: "assignment" } as never,
         ruleHit
       )
-    ).toMatchObject({ teamId: "team_rule", teamSource: "rule", characterSource: "assignment" })
+    ).toMatchObject({ squadId: "team_rule", squadSource: "rule", characterSource: "assignment" })
     // Without the marker the same row is a plain override.
     expect(
-      resolveEffectiveRouting({}, { teamId: "team_over", characterId: "c" } as never, null)
-    ).toMatchObject({ teamSource: "override", characterSource: "override" })
+      resolveEffectiveRouting({}, { squadId: "team_over", characterId: "c" } as never, null)
+    ).toMatchObject({ squadSource: "override", characterSource: "override" })
   })
 
-  it("teamDisabled kills override, rule, and instance-default teams", () => {
+  it("squadDisabled kills override, rule, and instance-default Squads", () => {
     const ruleHit = { ...HIT, action: { teamId: "team_rule" } }
     const routing = resolveEffectiveRouting(
       { defaultTeamId: "team_inst" },
-      { teamId: "team_over", teamDisabled: true } as never,
+      { squadId: "team_over", squadDisabled: true } as never,
       ruleHit
     )
-    expect(routing.teamId).toBeUndefined()
-    expect(routing.teamSource).toBe("none")
+    expect(routing.squadId).toBeUndefined()
+    expect(routing.squadSource).toBe("none")
   })
 
   it("whitespace-only ids are treated as unset at every layer", () => {
     const routing = resolveEffectiveRouting(
       { defaultTeamId: "  " },
-      { teamId: " ", workflowId: " ", characterId: " " } as never,
+      { squadId: " ", workflowId: " ", characterId: " " } as never,
       { ...HIT, action: { teamId: "\t" } }
     )
-    expect(routing.teamSource).toBe("none")
+    expect(routing.squadSource).toBe("none")
     expect(routing.workflowSource).toBe("none")
     expect(routing.characterSource).toBe("none")
   })
@@ -293,8 +293,8 @@ describe("resolveEffectiveRouting — precedence", () => {
     }
     const routing = resolveEffectiveRouting({}, null, ruleHit)
     expect(routing).toEqual({
-      teamId: "t",
-      teamSource: "rule",
+      squadId: "t",
+      squadSource: "rule",
       workflowId: "w",
       workflowSource: "rule",
       characterId: "c",

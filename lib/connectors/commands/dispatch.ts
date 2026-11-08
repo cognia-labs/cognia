@@ -387,7 +387,7 @@ export async function maybeHandleControlCommand(
       // instance default (annotated so the reader can tell them apart), then
       // the literal "default"/"none" fallback. Same resolver the runtime
       // dispatch uses, so `/status` can't drift from actual routing.
-      const targetManaged = routing.teamId
+      const targetManaged = routing.squadId
         ? "由 Agent Team 管理 / managed by Agent Team"
         : routing.workflowId
           ? "由 Workflow 管理 / managed by Workflow"
@@ -399,8 +399,8 @@ export async function maybeHandleControlCommand(
         if (source === "adapter-default") return R.withBotDefault(value.trim())
         return R.withSource(value.trim(), source)
       }
-      const routeSource = routing.teamId
-        ? routing.teamSource
+      const routeSource = routing.squadId
+        ? routing.squadSource
         : routing.workflowId
           ? routing.workflowSource
           : routing.characterId
@@ -443,13 +443,13 @@ export async function maybeHandleControlCommand(
           botDefault(adapterRow.defaultReasoning) ??
           "默认 / default",
         approvalMode: override?.approvalMode ?? "prompt",
-        team: routing.teamId
-          ? routing.teamSource === "instance-default"
-            ? R.withBotDefault(routing.teamId)
-            : routing.teamSource === "rule" || routing.teamSource === "assignment"
-              ? R.withSource(routing.teamId, routing.teamSource)
-              : routing.teamId
-          : override?.teamDisabled
+        team: routing.squadId
+          ? routing.squadSource === "instance-default"
+            ? R.withBotDefault(routing.squadId)
+            : routing.squadSource === "rule" || routing.squadSource === "assignment"
+              ? R.withSource(routing.squadId, routing.squadSource)
+              : routing.squadId
+          : override?.squadDisabled
             ? "已关闭 / off"
             : "无 / none",
         workflow: routing.workflowId
@@ -743,10 +743,14 @@ export async function maybeHandleControlCommand(
 
     case "team": {
       if (!arg || arg.toLowerCase() === "off") {
-        // `teamDisabled` is the explicit sentinel: with a bot-level
-        // `defaultTeamId` in play, merely clearing `teamId` would silently
-        // fall back to the bot default instead of turning teams off.
-        await persist({ teamId: undefined, teamDisabled: true, ...ASSIGNMENT_ROUTING_MARKER_CLEAR })
+        // `squadDisabled` is the explicit sentinel: with a bot-level
+        // `defaultTeamId` in play, merely clearing `squadId` would silently
+        // fall back to the bot default instead of turning Squads off.
+        await persist({
+          squadId: undefined,
+          squadDisabled: true,
+          ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
+        })
         await reply(
           adapterRow.defaultTeamId?.trim() ? R.confirmTeamDisabled() : R.confirmTeamCleared(),
           "applied"
@@ -759,8 +763,8 @@ export async function maybeHandleControlCommand(
         return true
       }
       await persist({
-        teamId: team.id,
-        teamDisabled: undefined,
+        squadId: team.id,
+        squadDisabled: undefined,
         workflowId: undefined,
         workflowDisabled: true,
         ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
@@ -803,8 +807,8 @@ export async function maybeHandleControlCommand(
       await persist({
         workflowId: res.workflowId,
         workflowDisabled: undefined,
-        teamId: undefined,
-        teamDisabled: true,
+        squadId: undefined,
+        squadDisabled: true,
         ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
       })
       await reply(R.confirmWorkflow(res.name), "applied")

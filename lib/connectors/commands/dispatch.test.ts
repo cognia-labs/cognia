@@ -875,7 +875,7 @@ describe("maybeHandleControlCommand", () => {
   it("/status shows the assignee and labels assignment-written routing (slice 1A)", async () => {
     const h = harness({ active: session("s1", "Main") })
     const override = {
-      teamId: "team_r",
+      squadId: "team_r",
       characterId: "char_known",
       routingSource: "assignment",
       assignee: { kind: "team", id: "team_r", label: "Researchers" },
@@ -908,13 +908,13 @@ describe("maybeHandleControlCommand", () => {
       [
         "/team Researchers",
         {
-          teamId: "team_r",
-          teamDisabled: undefined,
+          squadId: "team_r",
+          squadDisabled: undefined,
           workflowId: undefined,
           workflowDisabled: true,
         },
       ],
-      ["/team off", { teamId: undefined, teamDisabled: true }],
+      ["/team off", { squadId: undefined, squadDisabled: true }],
       // An explicit mode edit writes the preset's axes alongside the mirror,
       // so a stale `autonomy` left by an assignment cannot swallow it.
       ["/mode draft", { mode: "draft", autonomy: "suggest", engagement: undefined }],
@@ -980,12 +980,12 @@ describe("maybeHandleControlCommand", () => {
     expect(h.enqueued[0].text).toMatch(/provider: openai（bot 默认 \/ bot default）/)
   })
 
-  it("/status shows team off (not the bot default) when teamDisabled is set", async () => {
+  it("/status shows team off (not the bot default) when squadDisabled is set", async () => {
     const h = harness({ active: session("s1", "Main") })
     await maybeHandleControlCommand(
       makeEvent({ plainText: "/status" }),
       makeAdapter({ defaultTeamId: "team_bot" }),
-      { teamDisabled: true } as ConversationOverrideRow,
+      { squadDisabled: true } as ConversationOverrideRow,
       RESOLVED,
       h.deps
     )
@@ -997,7 +997,7 @@ describe("maybeHandleControlCommand", () => {
     await maybeHandleControlCommand(
       makeEvent({ plainText: "/status" }),
       makeAdapter({ defaultModel: "bot-model", defaultTeamId: "team_bot" }),
-      { modelOverride: "gpt-5", teamId: "team_chat" } as ConversationOverrideRow,
+      { modelOverride: "gpt-5", squadId: "team_chat" } as ConversationOverrideRow,
       RESOLVED,
       h.deps
     )
@@ -1086,15 +1086,15 @@ describe("maybeHandleControlCommand", () => {
       h.deps
     )
     expect(h.patches[0].patch).toEqual({
-      teamId: "team_r",
-      teamDisabled: undefined,
+      squadId: "team_r",
+      squadDisabled: undefined,
       workflowId: undefined,
       workflowDisabled: true,
     })
     expect(h.enqueued[0].text).toMatch(/Team bound: Researchers/)
   })
 
-  it("/team off clears the binding and sets the teamDisabled sentinel", async () => {
+  it("/team off clears the binding and sets the squadDisabled sentinel", async () => {
     const h = harness({ active: session("s1") })
     await maybeHandleControlCommand(
       makeEvent({ plainText: "/team off" }),
@@ -1103,7 +1103,7 @@ describe("maybeHandleControlCommand", () => {
       RESOLVED,
       h.deps
     )
-    expect(h.patches[0].patch).toEqual({ teamId: undefined, teamDisabled: true })
+    expect(h.patches[0].patch).toEqual({ squadId: undefined, squadDisabled: true })
     expect(h.enqueued[0].text).toMatch(/Team unbound/)
   })
 
@@ -1116,7 +1116,7 @@ describe("maybeHandleControlCommand", () => {
       RESOLVED,
       h.deps
     )
-    expect(h.patches[0].patch).toEqual({ teamId: undefined, teamDisabled: true })
+    expect(h.patches[0].patch).toEqual({ squadId: undefined, squadDisabled: true })
     expect(h.enqueued[0].text).toMatch(/包括机器人默认团队|including the bot default/)
   })
 
@@ -1170,8 +1170,8 @@ describe("maybeHandleControlCommand", () => {
     expect(h.patches[0].patch).toEqual({
       workflowId: "wf_n",
       workflowDisabled: undefined,
-      teamId: undefined,
-      teamDisabled: true,
+      squadId: undefined,
+      squadDisabled: true,
     })
     expect(h.enqueued[0].text).toMatch(/Workflow bound: Nightly/)
     expect(h.audits[0].kind).toBe("command.applied")
@@ -1189,8 +1189,8 @@ describe("maybeHandleControlCommand", () => {
     expect(h.patches[0].patch).toEqual({
       workflowId: "wf_n",
       workflowDisabled: undefined,
-      teamId: undefined,
-      teamDisabled: true,
+      squadId: undefined,
+      squadDisabled: true,
     })
   })
 

@@ -204,16 +204,16 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
   const [characterState, setCharacterState] = useState<"inherit" | "none" | "character">(
     initialRow?.characterDisabled ? "none" : initialRow?.characterId ? "character" : "inherit"
   )
-  // Agent Team binding (control-plane multi-agent). When set, inbound AI-run
-  // routes to the team runtime instead of the single character.
-  const [teamId, setTeamId] = useState(initialRow?.teamId ?? "")
+  // Squad binding (control-plane multi-agent). When set, inbound AI-run
+  // routes to the Squad runtime instead of the single character.
+  const [teamId, setTeamId] = useState(initialRow?.squadId ?? "")
   const [workflowId, setWorkflowId] = useState(initialRow?.workflowId ?? "")
   const [targetKind, setTargetKind] = useState<"inherit" | "direct" | "team" | "workflow">(
-    initialRow?.teamId
+    initialRow?.squadId
       ? "team"
       : initialRow?.workflowId
         ? "workflow"
-        : initialRow?.teamDisabled && initialRow?.workflowDisabled
+        : initialRow?.squadDisabled && initialRow?.workflowDisabled
           ? "direct"
           : "inherit"
   )
@@ -372,8 +372,8 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
         engagement !== initialRow?.engagement ||
         nextCharacterId !== initialRow?.characterId ||
         nextCharacterDisabled !== initialRow?.characterDisabled ||
-        nextTeamId !== initialRow?.teamId ||
-        nextTeamDisabled !== initialRow?.teamDisabled
+        nextTeamId !== initialRow?.squadId ||
+        nextTeamDisabled !== initialRow?.squadDisabled
       await mutateConversationOverride({
         kind: "configSection",
         adapterId,
@@ -393,8 +393,8 @@ export function ConversationOverrideForm(props: ConversationOverrideFormProps) {
           activationTtlMs: parseActivationTtlMs(activationTtlHours),
           characterId: nextCharacterId,
           characterDisabled: nextCharacterDisabled,
-          teamId: nextTeamId,
-          teamDisabled: nextTeamDisabled,
+          squadId: nextTeamId,
+          squadDisabled: nextTeamDisabled,
           workflowId: targetKind === "workflow" ? workflowId.trim() || undefined : undefined,
           workflowDisabled: targetKind === "team" || targetKind === "direct" ? true : undefined,
           proactivePush: proactivePush ? true : undefined,

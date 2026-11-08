@@ -99,7 +99,7 @@ it("prefers the conversation's own axes over the bot defaults", async () => {
 it("reports a bound team as the effective target", async () => {
   await getDb().adapterInstances.add(makeAdapter())
   const { result } = renderHook(() =>
-    useImEffectiveConfig({ adapterId: "cai_1", override: makeOverride({ teamId: "team_1" }) })
+    useImEffectiveConfig({ adapterId: "cai_1", override: makeOverride({ squadId: "team_1" }) })
   )
   await waitFor(() => {
     expect(result.current?.target.effective).toEqual({ kind: "team", id: "team_1" })

@@ -316,33 +316,37 @@ export interface ConversationOverrideRow {
    */
   activeSessionId?: string
   /**
-   * Per-conversation Agent Team binding (control-plane multi-agent). When set,
-   * an inbound AI-run dispatches to the team runtime (`runTeamLifecycle`) via
+   * Per-conversation Squad binding (control-plane multi-agent). When set, an
+   * inbound AI-run dispatches to the Squad runtime via
    * `lib/connectors/team-dispatch.ts` instead of the single-character
    * `runAndCapture` path. Coexists with `characterId` (which still seeds the
-   * session identity/title); `teamId` wins routing. Bound via `/team` or the
+   * session identity/title); `squadId` wins routing. Bound via `/team` or the
    * inbox responder selector; `/team off` clears it. Non-indexed additive.
+   *
+   * Named `teamId` before ADR-0252 §6; a row or a relayed write that still
+   * spells it is read and written as `squadId` by the table's hooks
+   * (`lib/db/conversation-override-legacy.ts`).
    */
-  teamId?: string
+  squadId?: string
   /**
-   * Explicit "no team in this conversation" sentinel. `/team off` used to
-   * just clear `teamId`, which was indistinguishable from "never bound" —
+   * Explicit "no Squad in this conversation" sentinel. `/team off` used to
+   * just clear the binding, which was indistinguishable from "never bound" —
    * with `AdapterInstanceRow.defaultTeamId` in play that could no longer
    * express "run single-character here even though the bot defaults to a
-   * team". `true` suppresses BOTH the conversation `teamId` and the bot's
-   * `defaultTeamId` (`resolveEffectiveTeamBinding`); re-binding via
-   * `/team <name>` clears the flag. Non-indexed additive.
+   * Squad". `true` suppresses BOTH the conversation `squadId` and the bot's
+   * `defaultTeamId` (`resolveEffectiveRouting`); re-binding via
+   * `/team <name>` clears the flag. Non-indexed additive. Was `teamDisabled`.
    */
-  teamDisabled?: boolean
+  squadDisabled?: boolean
   /**
    * Per-conversation Visual Workflow binding (workflow⇄IM parity). When set
-   * (and `teamId` is NOT set — `teamId` wins routing), an inbound AI-run
+   * (and `squadId` is NOT set — `squadId` wins routing), an inbound AI-run
    * dispatches to the workflow orchestrator (`startWorkflowFromIM`) via
    * `lib/workflow/runtime/start-from-im.ts` instead of the single-character
    * `runAndCapture` path; the message text is surfaced as `$trigger.payload`.
    * Progress + final fan back through the same run-presentation runner the
    * team path uses. Bound via `/workflow <name|id>` or the inbox override form;
-   * `/workflow off` clears it. Non-indexed additive (mirrors `teamId` — no
+   * `/workflow off` clears it. Non-indexed additive (mirrors `squadId` — no
    * Dexie bump).
    */
   workflowId?: string
@@ -367,7 +371,7 @@ export interface ConversationOverrideRow {
    * rollback needs no reverse migration.
    *
    * Orchestration is deliberately absent: its storage of record stays with
-   * `teamId` / `workflowId` above, so a conversation can never carry two
+   * `squadId` / `workflowId` above, so a conversation can never carry two
    * disagreeing answers to "which engine runs this".
    *
    * Non-indexed additive fields — no Dexie bump.
@@ -399,7 +403,7 @@ export interface ConversationOverrideRow {
    * user picks a project on the "create issue" confirmation card, so the next
    * card preselects it; also lets `lib/issues/notify.ts` push that project's
    * issue lifecycle back here (still gated by `proactivePush`). Non-indexed
-   * additive (mirrors `teamId` / `workflowId`).
+   * additive (mirrors `squadId` / `workflowId`).
    */
   issueProjectId?: string
   /**
@@ -535,7 +539,7 @@ export interface ConversationOverrideRow {
   /**
    * Assignment ↔ routing sync marker (slice 1A). Set to `"assignment"` by
    * `setAssignee` when a character / team assignment wrote `characterId` /
-   * `teamId` on this row, so `resolveEffectiveRouting` can label the source
+   * `squadId` on this row, so `resolveEffectiveRouting` can label the source
    * "assignment" and unassign can restore `assignmentPreviousRouting`.
    * Cleared by `clearAssignmentRoutingMarker` whenever the operator edits the
    * routing explicitly (override form / `/character` / `/team` / `/mode`),
@@ -566,8 +570,8 @@ export interface ConversationOverrideRow {
   assignmentPreviousRouting?: {
     characterId?: string
     characterDisabled?: boolean
-    teamId?: string
-    teamDisabled?: boolean
+    squadId?: string
+    squadDisabled?: boolean
     workflowDisabled?: boolean
   }
   createdAt: number

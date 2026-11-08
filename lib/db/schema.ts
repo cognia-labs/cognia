@@ -364,6 +364,7 @@ import { encryptedRuntimeTargetDatabaseName } from "@/lib/runtime/target-registr
 import { rootsFromLegacy } from "@/lib/workspace/roots"
 import { isTauri } from "@/lib/platform/detect"
 import { createEncryptedContentMiddleware } from "./encrypted-content-middleware"
+import { installConversationOverrideLegacyHooks } from "./conversation-override-legacy"
 import {
   backfillSessionList,
   createSessionListMiddleware,
@@ -1731,6 +1732,9 @@ export class CogniaDB extends Dexie {
     this.version(248).stores(MEDIA_PACK_SCHEMA)
     this.version(249).stores(ACTION_REVIEW_AUTH_SCHEMA)
     this.version(CURRENT_SCHEMA_VERSION).stores(CURRENT_SCHEMA)
+    // The override's Squad binding was renamed (ADR-0252 §6); old rows and
+    // old clients' writes are translated here, not at every reader.
+    installConversationOverrideLegacyHooks(this.conversationOverrides)
   }
 
   // v250 — Host auth metadata; credential material stays in the secret store.

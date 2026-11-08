@@ -109,13 +109,13 @@ describe("conversation-overrides", () => {
     it("creates the row (with sessionId) and applies the patch", async () => {
       const row = await patchConversationOverride(
         "telegram:adp_1:chat_777",
-        { reasoningOverride: "high", teamId: "team_a" },
+        { reasoningOverride: "high", squadId: "team_a" },
         "sess_new"
       )
       expect(row.id).toMatch(/^cov_/)
       expect(row.sessionId).toBe("sess_new")
       expect(row.reasoningOverride).toBe("high")
-      expect(row.teamId).toBe("team_a")
+      expect(row.squadId).toBe("team_a")
     })
 
     it("merges into an existing row without a sessionId and bumps updatedAt", async () => {
@@ -169,9 +169,9 @@ describe("conversation-overrides", () => {
       conversationKey: "telegram:adp_1:chat_999",
       sessionId: "sess_999",
       section: "responder",
-      patch: { workflowId: "wf_prod", teamDisabled: true },
+      patch: { workflowId: "wf_prod", squadDisabled: true },
     })
-    expect(row).toMatchObject({ workflowId: "wf_prod", teamDisabled: true })
+    expect(row).toMatchObject({ workflowId: "wf_prod", squadDisabled: true })
     const audit = await getDb()
       .connectorAudit.where("adapterId")
       .equals("adp_1")
@@ -183,7 +183,7 @@ describe("conversation-overrides", () => {
       fields: {
         scope: "conversation",
         section: "responder",
-        changedKeys: ["teamDisabled", "workflowId"],
+        changedKeys: ["squadDisabled", "workflowId"],
         source: "inbox",
       },
     })
@@ -483,7 +483,7 @@ describe("conversation-overrides — CRM (v83)", () => {
         conversationKey: AKEY,
         sessionId: "s1",
         characterId: "char-old",
-        teamDisabled: true,
+        squadDisabled: true,
       })
       await setAssignee(AKEY, { kind: "character", id: "char-new" }, { via: "manual" })
       const row = await readForResolution(AKEY)
@@ -492,7 +492,7 @@ describe("conversation-overrides — CRM (v83)", () => {
       expect(row?.routingSource).toBe("assignment")
       expect(row?.assignmentPreviousRouting).toEqual({
         characterId: "char-old",
-        teamDisabled: true,
+        squadDisabled: true,
       })
       const audits = await auditRows()
       expect(audits).toHaveLength(1)
@@ -525,32 +525,32 @@ describe("conversation-overrides — CRM (v83)", () => {
       expect(row?.assignmentPreviousRouting).toBeUndefined()
     })
 
-    it("assigning a team writes teamId, clears teamDisabled, and character ⇄ team reassignment re-applies the snapshot", async () => {
+    it("assigning a Squad writes squadId, clears squadDisabled, and character ⇄ Squad reassignment re-applies the snapshot", async () => {
       await upsertByConversationKey({
         conversationKey: AKEY,
         sessionId: "s1",
-        teamDisabled: true,
+        squadDisabled: true,
       })
       await setAssignee(AKEY, { kind: "team", id: "team-1" })
       let row = await readForResolution(AKEY)
-      expect(row?.teamId).toBe("team-1")
-      expect(row?.teamDisabled).toBeUndefined()
-      expect(row?.assignmentPreviousRouting).toEqual({ teamDisabled: true })
+      expect(row?.squadId).toBe("team-1")
+      expect(row?.squadDisabled).toBeUndefined()
+      expect(row?.assignmentPreviousRouting).toEqual({ squadDisabled: true })
 
-      // Reassign to a character: the assignment-written teamId must NOT keep
+      // Reassign to a character: the assignment-written squadId must NOT keep
       // winning the routing — the snapshot is re-applied first.
       await setAssignee(AKEY, { kind: "character", id: "char-2" })
       row = await readForResolution(AKEY)
-      expect(row?.teamId).toBeUndefined()
-      expect(row?.teamDisabled).toBe(true)
+      expect(row?.squadId).toBeUndefined()
+      expect(row?.squadDisabled).toBe(true)
       expect(row?.characterId).toBe("char-2")
       // Snapshot is taken once and preserved across reassignment.
-      expect(row?.assignmentPreviousRouting).toEqual({ teamDisabled: true })
+      expect(row?.assignmentPreviousRouting).toEqual({ squadDisabled: true })
 
       await setAssignee(AKEY, null)
       row = await readForResolution(AKEY)
       expect(row?.characterId).toBeUndefined()
-      expect(row?.teamDisabled).toBe(true)
+      expect(row?.squadDisabled).toBe(true)
       expect(row?.assignee).toBeUndefined()
     })
 

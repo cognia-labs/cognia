@@ -395,7 +395,7 @@ export interface AdapterInstanceRow {
    *
    *   - `defaultTeamId`   — dispatch inbound AI-runs to this Agent Team
    *                         unless the conversation binds/disables one
-   *                         (`resolveEffectiveTeamBinding`).
+   *                         (`resolveEffectiveRouting`).
    *   - `defaultModel`    — model id or routing alias; resolved through the
    *                         same alias engine as every other model source.
    *   - `defaultProvider` — provider id; unknown ids keep the resolver's

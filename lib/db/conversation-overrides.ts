@@ -347,6 +347,7 @@ export interface SetAssigneeOptions {
 export interface AssignmentRoutingSync {
   kind: "character" | "team" | "manual-mode" | "restored"
   characterId?: string
+  /** The Squad. Trail events are stored history, so this keeps its old name. */
   teamId?: string
   mode?: ConnectorMode | null
 }
@@ -356,8 +357,8 @@ type AssignmentRoutingSnapshot = NonNullable<ConversationOverrideRow["assignment
 const ROUTING_SNAPSHOT_KEYS = [
   "characterId",
   "characterDisabled",
-  "teamId",
-  "teamDisabled",
+  "squadId",
+  "squadDisabled",
   "workflowDisabled",
 ] as const satisfies readonly (keyof AssignmentRoutingSnapshot)[]
 
@@ -438,8 +439,8 @@ function resolveAuditAdapterId(conversationKey: string, explicit?: string): stri
  *     snapshotted ONCE (`assignmentPreviousRouting`) the first time an
  *     assignment writes routing. A later character ⇄ team reassignment
  *     re-applies the snapshot before writing the new target so a stale
- *     `teamId` cannot keep winning over the newly assigned character.
- *   - team → same with `teamId` / `teamDisabled`.
+ *     `squadId` cannot keep winning over the newly assigned character.
+ *   - team → same with `squadId` / `squadDisabled`.
  *   - human → `assignmentPreviousMode = row.mode ?? null`, `mode = "manual"`
  *     (the AI stops auto-replying; routing fields are left alone).
  *   - null (unassign) → while `routingSource === "assignment"` the snapshot is
@@ -528,8 +529,8 @@ export async function setAssignee(
         }
       } else if (assignee?.kind === "team" && assignee.id) {
         applyTargetRouting()
-        routingPatch.teamId = assignee.id
-        routingPatch.teamDisabled = undefined
+        routingPatch.squadId = assignee.id
+        routingPatch.squadDisabled = undefined
         routing = { kind: "team", teamId: assignee.id }
         if (routingPatch.mode !== undefined || row.assignmentPreviousMode !== undefined) {
           routing.mode = routingPatch.mode ?? null
@@ -556,7 +557,7 @@ export async function setAssignee(
           routing = {
             kind: "restored",
             characterId: routingPatch.characterId,
-            teamId: routingPatch.teamId,
+            teamId: routingPatch.squadId,
             ...(row.assignmentPreviousMode !== undefined
               ? { mode: row.assignmentPreviousMode }
               : {}),
