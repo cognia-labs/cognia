@@ -959,7 +959,11 @@ export async function insertInboundMessage(
 /** How far back a room member's transcript reads (its renderer keeps 40 turns). */
 const IM_ROOM_TRANSCRIPT_SCAN_ROWS = 160
 
-/** The room session's newest rows, oldest first. */
+/**
+ * The room session's newest rows, oldest first, with each row's author in
+ * `metadata.senderId` as well: the column is where a transcript persist keeps
+ * it, and the transcript, the sticky responder and a replay read metadata.
+ */
 async function readImRoomMessages(sessionId: string): Promise<StoredMessage[]> {
   const rows = await getDb()
     .messages.where("[sessionId+createdAt]")
@@ -968,7 +972,13 @@ async function readImRoomMessages(sessionId: string): Promise<StoredMessage[]> {
     .limit(IM_ROOM_TRANSCRIPT_SCAN_ROWS)
     .toArray()
     .catch(() => [] as StoredMessage[])
-  return rows.reverse()
+  return rows
+    .reverse()
+    .map((row) =>
+      row.senderId === undefined
+        ? row
+        : { ...row, metadata: { ...row.metadata, senderId: row.senderId } }
+    )
 }
 
 /**
@@ -983,8 +993,7 @@ async function recordImRoomMemberReply(
   text: string,
   protocolText: string
 ): Promise<void> {
-  const metadata: ImRoomReplyMetadata = {
-    senderId: member.step.character.id,
+  const metadata: Omit<ImRoomReplyMetadata, "senderId"> = {
     imRoomTurn: {
       sourceMessageId: member.sourceMessageId,
       stepKey: member.step.stepKey,
@@ -992,15 +1001,25 @@ async function recordImRoomMemberReply(
       ...(protocolText !== text ? { protocolText } : {}),
     },
   }
+  const db = getDb()
+  // Strictly after the room's newest row: two members answering within one
+  // millisecond would otherwise read back in either order.
+  const newest = await db.messages
+    .where("[sessionId+createdAt]")
+    .between([member.roomSessionId, 0], [member.roomSessionId, Number.MAX_SAFE_INTEGER])
+    .last()
+    .catch(() => undefined)
   const row: StoredMessage = {
     id: crypto.randomUUID(),
     sessionId: member.roomSessionId,
     role: "assistant",
     parts: [{ type: "text", text }],
+    // The author is a column, as every transcript write keeps it.
+    senderId: member.step.character.id,
+    senderKind: "assistant",
     metadata: metadata as unknown as StoredMessage["metadata"],
-    createdAt: Date.now(),
+    createdAt: Math.max(Date.now(), (newest?.createdAt ?? 0) + 1),
   }
-  const db = getDb()
   await db.messages.add(row)
   await stampSessionLastMessage(row.sessionId, row)
   await db.sessions.update(row.sessionId, { updatedAt: row.createdAt })

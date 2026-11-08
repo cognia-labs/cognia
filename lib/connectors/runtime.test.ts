@@ -3878,12 +3878,10 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
       "**Ana**\n\nShip the beta.",
       "**Ben**\n\nAgreed, the beta.",
     ])
-    const replies = (await getDb().messages.where("sessionId").equals("s_room").toArray()).filter(
-      (row) => row.role === "assistant"
-    )
-    expect(
-      replies.map((row) => [row.metadata?.senderId, (row.parts[0] as { text: string }).text])
-    ).toEqual([
+    const replies = (await getDb().messages.where("sessionId").equals("s_room").toArray())
+      .filter((row) => row.role === "assistant")
+      .sort((a, b) => a.createdAt - b.createdAt)
+    expect(replies.map((row) => [row.senderId, (row.parts[0] as { text: string }).text])).toEqual([
       ["c_ana", "Ship the beta."],
       ["c_ben", "Agreed, the beta."],
     ])
