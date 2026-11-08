@@ -214,6 +214,17 @@ export function ArtifactPreview({
   // otherwise read a stale value from the render it was created in. Written by
   // `setError` below, so the two can never disagree.
   const errorRef = useRef<string | null>(null)
+  const pendingCaptures = useRef(
+    new Map<
+      string,
+      {
+        resolve: (snapshot: ArtifactFrameSnapshot) => void
+        reject: (error: Error) => void
+        send: () => void
+      }
+    >()
+  )
+  const captureReadyRef = useRef(false)
   // `chart` / `mermaid` / `math` draw as live React in this tree, so the only
   // way to rasterise them is to hand html2canvas the mounted node. Registering
   // it here is what makes "export as PNG" possible for those types at all —
@@ -252,6 +263,12 @@ export function ArtifactPreview({
   // export racing the failure would serialise an empty frame into a blank PNG.
   const setError = useCallback((next: string | null) => {
     errorRef.current = next
+    if (next) {
+      captureReadyRef.current = false
+      for (const entry of pendingCaptures.current.values()) {
+        entry.reject(new ArtifactFrameCaptureError(next))
+      }
+    }
     setErrorState(next)
   }, [])
   const [key, setKey] = useState(0)
@@ -395,16 +412,11 @@ export function ArtifactPreview({
   // Answering an export request. A scripted frame is opaque-origin, so the
   // exporter cannot read it and the frame cannot rasterise itself either (see
   // `frame-capture-registry.ts`). It asks, the frame serialises, we resolve.
-  const pendingCaptures = useRef(
-    new Map<
-      string,
-      { resolve: (snapshot: ArtifactFrameSnapshot) => void; reject: (error: Error) => void }
-    >()
-  )
   const captureSeq = useRef(0)
 
   useEffect(() => {
     if (!needsIframe) return undefined
+    captureReadyRef.current = false
     const pending = pendingCaptures.current
     const dispose = registerArtifactFrameCapturer(artifact.id, (timeoutMs) => {
       const target = iframeRef.current?.contentWindow
@@ -424,19 +436,32 @@ export function ArtifactPreview({
           pending.delete(requestId)
           reject(new ArtifactFrameCaptureTimeoutError(artifact.id, timeoutMs))
         }, timeoutMs)
-        pending.set(requestId, {
-          resolve: (snapshot) => {
+        let sent = false
+        const entry = {
+          resolve: (snapshot: ArtifactFrameSnapshot) => {
             clearTimeout(timer)
             pending.delete(requestId)
             resolve(snapshot)
           },
-          reject: (error) => {
+          reject: (error: Error) => {
             clearTimeout(timer)
             pending.delete(requestId)
             reject(error)
           },
-        })
-        target.postMessage({ type: "capture-snapshot", requestId }, "*")
+          send: () => {
+            if (sent) return
+            sent = true
+            try {
+              target.postMessage({ type: "capture-snapshot", requestId }, "*")
+            } catch (error) {
+              entry.reject(new ArtifactFrameCaptureError(String(error)))
+            }
+          },
+        }
+        pending.set(requestId, entry)
+        // A registered frame may still be loading its runtime. Keep the same
+        // timeout across readiness and the snapshot round trip.
+        if (!needsRuntime || captureReadyRef.current) entry.send()
       })
     })
     return () => {
@@ -447,7 +472,15 @@ export function ArtifactPreview({
         entry.reject(new ArtifactFrameCaptureError("preview closed before the capture finished"))
       }
     }
-  }, [artifact.id, needsIframe])
+  }, [
+    artifact.id,
+    artifact.content,
+    artifact.metadata?.rendererProfile,
+    frameMode,
+    key,
+    needsIframe,
+    needsRuntime,
+  ])
 
   const [frameRuntime, setFrameRuntime] = useState<ArtifactFrameRuntime | null>(null)
 
@@ -592,6 +625,7 @@ export function ArtifactPreview({
     const target = iframeRef.current?.contentWindow
     if (!target) return
     const revision = ++scriptedRevisionRef.current
+    captureReadyRef.current = false
     const isCurrent = () =>
       revision === scriptedRevisionRef.current && target === iframeRef.current?.contentWindow
     try {
@@ -859,6 +893,8 @@ export function ArtifactPreview({
         if (needsRuntime && event.data.revision !== scriptedRevisionRef.current) return
         if (needsRuntime && event.data.revision <= failedScriptedRevisionRef.current) return
         setError(null)
+        captureReadyRef.current = true
+        for (const entry of pendingCaptures.current.values()) entry.send()
         setIsLoading(false)
         syncParentContext()
         // The frame just (re)painted, so a still-armed select mode has to be

@@ -8,6 +8,8 @@ import vm from "node:vm"
 import {
   ARTIFACT_SHELL_FILE,
   ARTIFACT_SHELL_SOURCE,
+  ARTIFACT_TAB_BOOTSTRAP_FILE,
+  ARTIFACT_TAB_BOOTSTRAP_SOURCE,
   JSX_TRANSFORM_ENTRY,
   JSX_TRANSFORM_FILE,
   MANIFEST_FILE,
@@ -77,6 +79,7 @@ test("isManifestFresh rejects a version bump, a missing file, and a tampered fil
   const react = Buffer.from("react-bundle")
   const jsx = Buffer.from("jsx-bundle")
   const shell = Buffer.from("shell-bundle")
+  const tab = Buffer.from("tab-bundle")
   const sources = {
     "lib/artifacts/runtime/artifact-shell-entry.ts": Buffer.from("entry"),
     "lib/artifacts/runtime/element-pick.ts": Buffer.from("picker"),
@@ -91,9 +94,10 @@ test("isManifestFresh rejects a version bump, a missing file, and a tampered fil
       [REACT_RUNTIME_FILE]: react,
       [JSX_TRANSFORM_FILE]: jsx,
       [ARTIFACT_SHELL_FILE]: shell,
+      [ARTIFACT_TAB_BOOTSTRAP_FILE]: tab,
     },
   })
-  const files = { [REACT_RUNTIME_FILE]: react, [JSX_TRANSFORM_FILE]: jsx, [ARTIFACT_SHELL_FILE]: shell }
+  const files = { [REACT_RUNTIME_FILE]: react, [JSX_TRANSFORM_FILE]: jsx, [ARTIFACT_SHELL_FILE]: shell, [ARTIFACT_TAB_BOOTSTRAP_FILE]: tab }
   const present = (name) => files[name] ?? null
 
   assert.equal(isManifestFresh(manifest, expected, present), true)
@@ -207,6 +211,85 @@ test("the committed react bundle is a production build exposing the runtime glob
   assert.ok(sandbox.__COGNIA_ARTIFACT_REACT_VERSION__.startsWith("19."))
 })
 
+test("classic transforms allow repeated lexical declarations while preserving global script semantics", () => {
+  const sandbox = { console }
+  sandbox.globalThis = sandbox
+  sandbox.window = sandbox
+  vm.createContext(sandbox)
+  vm.runInContext(readOutput(REACT_RUNTIME_FILE).toString("utf8"), sandbox)
+  vm.runInContext(readOutput(JSX_TRANSFORM_FILE).toString("utf8"), sandbox)
+  for (const source of [
+    'const App = () => "revision"',
+    'let App = () => "revision"',
+    'class App extends React.Component { render(){ return "revision" } }',
+  ]) {
+    for (const label of ["one", "two"]) {
+      const result = sandbox.CogniaArtifactJsx.transform(source.replace("revision", label))
+      assert.equal(result.isModule, false)
+      vm.runInContext(result.code, sandbox)
+      assert.equal(typeof sandbox.App, "function")
+      const output = source.startsWith("class") ? new sandbox.App({}).render() : sandbox.App()
+      assert.equal(output, label)
+    }
+  }
+  const global = sandbox.CogniaArtifactJsx.transform('var palette="blue"; function App(){return window.palette}')
+  vm.runInContext(global.code, sandbox)
+  assert.equal(sandbox.App(), "blue")
+  const strict = sandbox.CogniaArtifactJsx.transform('"use strict"; const R=this.React; function App(){return R}')
+  vm.runInContext(strict.code, sandbox)
+  assert.equal(sandbox.App(), sandbox.React)
+  const nested = sandbox.CogniaArtifactJsx.transform('const App = () => { const local = 1; { let block = 2; class Nested {} } }; { let blockOnly = 3; }')
+  assert.match(nested.code, /const local/)
+  assert.match(nested.code, /let block/)
+  assert.match(nested.code, /class Nested/)
+  const moduleResult = sandbox.CogniaArtifactJsx.transform('export const App = () => null; class Local {}')
+  assert.equal(moduleResult.isModule, true)
+  assert.match(moduleResult.code, /const App/)
+  assert.match(moduleResult.code, /class Local/)
+})
+
+test("the Worker face uses the same redeclarable classic transform", () => {
+  const listeners = {}
+  const replies = []
+  const worker = {
+    addEventListener: (type, listener) => { listeners[type] = listener },
+    postMessage: (message) => replies.push(message),
+  }
+  vm.runInNewContext(readOutput(JSX_TRANSFORM_FILE).toString("utf8"), worker)
+  listeners.message({ data: { type: "cognia-artifact-jsx-transform", id: 1, code: "const App = () => <p>one</p>" } })
+  assert.equal(replies[0].type, "cognia-artifact-jsx-result")
+  assert.equal(replies[0].isModule, false)
+  assert.match(replies[0].code, /var App/)
+  listeners.message({ data: { type: "cognia-artifact-jsx-transform", id: 2, code: "export const App = () => <p>two</p>" } })
+  assert.equal(replies[1].isModule, true)
+  assert.match(replies[1].code, /const App/)
+})
+
+test("the committed tab bootstrap executes the embedded program with frame-owned blob URLs", () => {
+  const source = readOutput(ARTIFACT_TAB_BOOTSTRAP_FILE).toString("utf8")
+  const scripts = []
+  const parts = []
+  const revoked = []
+  const listeners = {}
+  const sandbox = {
+    document: {
+      currentScript: { previousElementSibling: { textContent: JSON.stringify([{ code: "first()" }, { code: "second()", module: true }]) } },
+      createElement: () => ({ addEventListener() {} }),
+      head: { appendChild: (script) => scripts.push(script) },
+    },
+    Blob: class { constructor(bytes) { parts.push(bytes) } },
+    URL: { createObjectURL: () => `blob:tab-${parts.length}`, revokeObjectURL: (url) => revoked.push(url) },
+    addEventListener: (type, listener) => { listeners[type] = listener },
+  }
+  vm.runInNewContext(source, sandbox)
+  assert.deepEqual(parts.map((bytes) => Array.from(bytes)), [["first()"], ["second()"]])
+  assert.equal(scripts[0].async, false)
+  assert.equal(scripts[1].type, "module")
+  assert.ok(!/\beval\(|new Function/.test(source))
+  listeners.pagehide()
+  assert.deepEqual(revoked, ["blob:tab-1", "blob:tab-2"])
+})
+
 test("the committed shell bundle carries no eval and installs itself", (t) => {
   const bundle = readOutput(ARTIFACT_SHELL_FILE)
   if (!bundle) return t.skip("public/artifact-runtime not built")
@@ -250,6 +333,8 @@ test("the committed manifest lists the real shell input set", (t) => {
     recorded.includes(ARTIFACT_SHELL_SOURCE),
     "the entry itself must be watched"
   )
+  assert.ok(recorded.includes(ARTIFACT_TAB_BOOTSTRAP_SOURCE), "the tab bootstrap must be watched")
+  assert.ok(recorded.includes("scripts/build/build-artifact-runtime.mjs"), "transform entry changes must rebuild")
   // Every recorded source must still hash as recorded, or the committed bundle
   // is stale — which is exactly the condition this file exists to catch.
   for (const rel of recorded) {

@@ -1,10 +1,12 @@
 {
-  "schema": 3,
+  "schema": 4,
   "reactVersion": "19.3.1",
   "babelVersion": "8.0.7",
   "shellSources": {
-    "lib/artifacts/runtime/artifact-shell-entry.ts": "965f9fb4588c340ffded3c8f39f80a95a4fc587bf6e3a08c42ae0543c4e53b9d",
-    "lib/artifacts/runtime/element-pick.ts": "f7442e19c10515355a2498d5498bcc08e353b05192e707b9720e5e32187d58b4"
+    "lib/artifacts/runtime/artifact-shell-entry.ts": "4137b7fe414b4c00e64f8976884713f8597f23ab123d798c212ef1641c7ca46d",
+    "lib/artifacts/runtime/artifact-tab-bootstrap.ts": "399a66460704a6d7746777f2683a19acaa50b4a744967e03d01203266d2fddb9",
+    "lib/artifacts/runtime/element-pick.ts": "f7442e19c10515355a2498d5498bcc08e353b05192e707b9720e5e32187d58b4",
+    "scripts/build/build-artifact-runtime.mjs": "fffd4fd780ba5234438ec56c2138ba9248c0d279956c99fd13e79ed0c54ed197"
   },
   "files": {
     "react-runtime.js": {
@@ -12,12 +14,16 @@
       "sha256": "931d7731ce36e683d43b25c9054026029f53be88966f662054d499adb27f5afc"
     },
     "jsx-transform.js": {
-      "bytes": 2326593,
-      "sha256": "349fa4501126b69cc61e2f33bbb812e67a16e75dd01cbcb99a360947965f3dc7"
+      "bytes": 2326919,
+      "sha256": "29aa7fa114e7a1103943e9d464f67ff2d90eff96e55f08a14522094dd2ba1acd"
     },
     "artifact-shell.js": {
-      "bytes": 14096,
-      "sha256": "3671a0184460de2bfd82b5286ff54e963fe28ec4016c716340340a15716b39f1"
+      "bytes": 14093,
+      "sha256": "d47efb36b3ae15960da248aa3e932bfded6377111eda2215321924198003f13b"
+    },
+    "artifact-tab-bootstrap.js": {
+      "bytes": 586,
+      "sha256": "6e0d26690de41844239a4dd6b2870d7c34d9832c95e8390a8f5f67aac73de27b"
     }
   }
 }

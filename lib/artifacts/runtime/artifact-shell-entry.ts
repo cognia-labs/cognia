@@ -101,9 +101,9 @@ export function buildArtifactModuleSource(code: string, isModule: boolean): stri
     // Babel downleveled ESM to CommonJS, so the code expects module/exports/require.
     return `(function () {\nconst __cogniaArtifactModule = { exports: {} };\n(function (module, exports, require) {\n${code}\n})(__cogniaArtifactModule, __cogniaArtifactModule.exports, __cogniaArtifactRequire);\n__cogniaArtifactPick(null, null, null, __cogniaArtifactModule.exports);\n})();\n`
   }
-  // Each revision owns its declarations; the picker stays in the same scope
-  // so both lexical bindings and hoisted function declarations are visible.
-  return `(function () {\n${code}\n;__cogniaArtifactPick(typeof App !== "undefined" ? App : null, typeof Component !== "undefined" ? Component : null, typeof Main !== "undefined" ? Main : null, null);\n})();\n`
+  // The transformer makes Program-level lexical declarations redeclarable.
+  // Execute globally to retain classic var/function globals and top-level this.
+  return `${code}\n;__cogniaArtifactPick(typeof App !== "undefined" ? App : null, typeof Component !== "undefined" ? Component : null, typeof Main !== "undefined" ? Main : null, null);\n`
 }
 
 /**
@@ -226,10 +226,12 @@ export function installArtifactShellRuntime(scope: ArtifactShellScope): () => vo
     )
   }
   const onExecutionError = (event: ErrorEvent) => {
-    if (ownsError(event.filename, event.error)) fail(event.message || errorText(event.error))
+    if (!activeRun.ready && ownsError(event.filename, event.error)) {
+      fail(event.message || errorText(event.error))
+    }
   }
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-    if (ownsError("", event.reason)) fail(errorText(event.reason))
+    if (!activeRun.ready && ownsError("", event.reason)) fail(errorText(event.reason))
   }
 
   /**

@@ -23,7 +23,8 @@
  *                      FILE and not an inline script, because a srcdoc child
  *                      inherits the packaged shell's CSP, which has neither
  *                      'unsafe-inline' nor 'unsafe-eval' (ADR-0158).
- *   manifest.json      versions + byte sizes + sha256 of the two bundles.
+ *   artifact-tab-bootstrap.js standalone interactive tab execution.
+ *   manifest.json      versions + byte sizes + sha256 of every bundle.
  *
  * Run before `pnpm dev` / `pnpm build` (wired into predev/prebuild next to
  * copy-monaco-assets.mjs). Shape follows that script deliberately: missing
@@ -45,13 +46,13 @@ const MANIFEST_PATH = path.join(OUT_DIR, "manifest.json")
 export const REACT_RUNTIME_FILE = "react-runtime.js"
 export const JSX_TRANSFORM_FILE = "jsx-transform.js"
 export const ARTIFACT_SHELL_FILE = "artifact-shell.js"
+export const ARTIFACT_TAB_BOOTSTRAP_FILE = "artifact-tab-bootstrap.js"
 export const MANIFEST_FILE = "manifest.json"
 
 /**
- * Schema 3 rebuilds bundles with escaped string literals, preserving upstream
- * template contents without embedding whitespace-sensitive multiline strings.
+ * Schema 4 adds the standalone tab bootstrap and redeclarable classic scripts.
  */
-export const MANIFEST_SCHEMA = 3
+export const MANIFEST_SCHEMA = 4
 
 /**
  * The shell bundle's entry source.
@@ -71,6 +72,7 @@ export const MANIFEST_SCHEMA = 3
  * records the new member.
  */
 export const ARTIFACT_SHELL_SOURCE = "lib/artifacts/runtime/artifact-shell-entry.ts"
+export const ARTIFACT_TAB_BOOTSTRAP_SOURCE = "lib/artifacts/runtime/artifact-tab-bootstrap.ts"
 
 /**
  * Hash every source esbuild reported reading for the shell bundle.
@@ -117,6 +119,23 @@ function looksLikeModule(code) {
   return /^\\s*(?:import|export)[\\s{*]/m.test(code)
 }
 
+function redeclarableClassicGlobals({ types: t }) {
+  return {
+    visitor: {
+      VariableDeclaration(path) {
+        if (path.parentPath.isProgram() && path.node.kind !== "var") path.node.kind = "var"
+      },
+      ClassDeclaration(path) {
+        if (!path.parentPath.isProgram()) return
+        const declaration = path.node
+        path.replaceWith(t.variableDeclaration("var", [
+          t.variableDeclarator(t.cloneNode(declaration.id), t.toExpression(declaration)),
+        ]))
+      },
+    },
+  }
+}
+
 /**
  * Compile artifact JSX to a classic script. Model-authored React artifacts
  * very often open with \`import React from "react"\`, which is a syntax error
@@ -127,7 +146,7 @@ export function transformArtifactJsx(code) {
   const isModule = looksLikeModule(code)
   const result = transform(code, {
     presets: [["react", { runtime: "classic" }]],
-    plugins: isModule ? [availablePlugins["transform-modules-commonjs"]] : [],
+    plugins: isModule ? [availablePlugins["transform-modules-commonjs"]] : [redeclarableClassicGlobals],
     sourceType: isModule ? "module" : "script",
     filename: "artifact.jsx",
     compact: false,
@@ -173,6 +192,12 @@ import { installArtifactShellRuntime } from "./lib/artifacts/runtime/artifact-sh
 installArtifactShellRuntime(globalThis)
 `
 
+export const ARTIFACT_TAB_BOOTSTRAP_ENTRY = `
+import { runArtifactTabScripts } from "./lib/artifacts/runtime/artifact-tab-bootstrap"
+
+runArtifactTabScripts(globalThis)
+`
+
 
 /**
  * The manifest doubles as the freshness sentinel: a rebuild is only needed
@@ -197,7 +222,7 @@ export function isManifestFresh(manifest, expected, readFile) {
   }
   const files = manifest.files
   if (!files || typeof files !== "object") return false
-  for (const name of [REACT_RUNTIME_FILE, JSX_TRANSFORM_FILE, ARTIFACT_SHELL_FILE]) {
+  for (const name of [REACT_RUNTIME_FILE, JSX_TRANSFORM_FILE, ARTIFACT_SHELL_FILE, ARTIFACT_TAB_BOOTSTRAP_FILE]) {
     const entry = files[name]
     if (!entry || typeof entry.sha256 !== "string" || typeof entry.bytes !== "number") return false
     const bytes = readFile(name)
@@ -274,7 +299,7 @@ async function main() {
   }
 
   /** Sources esbuild reported reading for the shell bundle, relative to ROOT. */
-  let shellInputs = []
+  const shellInputs = ["scripts/build/build-artifact-runtime.mjs"]
 
   const bundle = async (contents, loader = "js", collectInputs = false) => {
     const result = await esbuild.build({
@@ -295,9 +320,9 @@ async function main() {
     if (collectInputs) {
       // `<stdin>` is the synthetic entry, not a file on disk — everything else
       // is a real path the bundle depends on.
-      shellInputs = Object.keys(result.metafile?.inputs ?? {}).filter(
+      shellInputs.push(...Object.keys(result.metafile?.inputs ?? {}).filter(
         (name) => !name.startsWith("<") && readSource(name)
-      )
+      ))
     }
     return Buffer.from(result.outputFiles[0].contents)
   }
@@ -306,6 +331,7 @@ async function main() {
     [REACT_RUNTIME_FILE]: await bundle(REACT_RUNTIME_ENTRY),
     [JSX_TRANSFORM_FILE]: await bundle(JSX_TRANSFORM_ENTRY),
     [ARTIFACT_SHELL_FILE]: await bundle(ARTIFACT_SHELL_ENTRY, "ts", true),
+    [ARTIFACT_TAB_BOOTSTRAP_FILE]: await bundle(ARTIFACT_TAB_BOOTSTRAP_ENTRY, "ts", true),
   }
 
   fs.mkdirSync(OUT_DIR, { recursive: true })

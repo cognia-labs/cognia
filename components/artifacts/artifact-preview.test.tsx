@@ -6,6 +6,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 import {
   ArtifactFrameCaptureError,
+  ArtifactFrameCaptureTimeoutError,
   captureArtifactFrame,
   hasArtifactFrameCapturer,
   __resetArtifactFrameCapturersForTests,
@@ -126,6 +127,138 @@ function latestRender(post: jest.Mock): { revision: number } {
 }
 
 describe("scripted preview recovery", () => {
+  it("B18 holds the first capture through delayed runtime startup until the current revision is ready", async () => {
+    let start!: (value: Awaited<ReturnType<typeof loadArtifactReactRuntime>>) => void
+    const runtime = await loadArtifactReactRuntime()
+    const startup = new Promise<typeof runtime>((resolve) => {
+      start = resolve
+    })
+    loadArtifactReactRuntime.mockReturnValueOnce(startup)
+    const artifact = dummy({ type: "react" })
+    const { container, unmount } = render(<ArtifactPreview artifact={artifact} />)
+    const iframe = container.querySelector("iframe")!
+    const post = jest.fn()
+    iframe.contentWindow!.postMessage = post
+    const capture = captureArtifactFrame(artifact.id)
+    const settled = capture.catch(() => null)
+    try {
+      expect(post).not.toHaveBeenCalled()
+      await act(async () => start(runtime))
+      await bootFrame(iframe)
+      const currentPost = iframe.contentWindow!.postMessage as jest.Mock
+      expect(currentPost).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "capture-snapshot" }),
+        "*"
+      )
+      dispatchFrame(iframe, { ...latestRender(currentPost), type: "artifact-preview-ready" })
+      const request = currentPost.mock.calls.find(
+        ([message]) => message.type === "capture-snapshot"
+      )![0]
+      dispatchFrame(iframe, {
+        type: "artifact-capture-result",
+        requestId: request.requestId,
+        html: "<p>first capture</p>",
+        width: 100,
+        height: 40,
+      })
+      await expect(capture).resolves.toMatchObject({ html: "<p>first capture</p>" })
+    } finally {
+      unmount()
+      await settled
+    }
+  })
+
+  it("B18 waits for the new revision, ignoring an older revision's ready", async () => {
+    const artifact = dummy({ type: "react", content: "one" })
+    const { container, rerender } = render(<ArtifactPreview artifact={artifact} />)
+    const iframe = container.querySelector("iframe")!
+    const post = await bootFrame(iframe)
+    const old = latestRender(post)
+    dispatchFrame(iframe, { ...old, type: "artifact-preview-ready" })
+    rerender(<ArtifactPreview artifact={{ ...artifact, content: "two" }} />)
+    await waitFor(() => expect(latestRender(post)).toMatchObject({ code: "two" }))
+    const capture = captureArtifactFrame(artifact.id)
+    dispatchFrame(iframe, { ...old, type: "artifact-preview-ready" })
+    expect(post).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "capture-snapshot" }),
+      "*"
+    )
+    dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+    const request = post.mock.calls.find(([message]) => message.type === "capture-snapshot")![0]
+    dispatchFrame(iframe, {
+      type: "artifact-capture-result",
+      requestId: request.requestId,
+      html: "<p>two</p>",
+      width: 10,
+      height: 10,
+    })
+    await expect(capture).resolves.toMatchObject({ html: "<p>two</p>" })
+  })
+
+  it("B18 rejects a waiting capture immediately when the current revision fails", async () => {
+    const artifact = dummy({ type: "react" })
+    const { container } = render(<ArtifactPreview artifact={artifact} />)
+    const iframe = container.querySelector("iframe")!
+    const post = await bootFrame(iframe)
+    const capture = captureArtifactFrame(artifact.id)
+    const rejected = expect(capture).rejects.toThrow("startup failed")
+    dispatchFrame(iframe, {
+      ...latestRender(post),
+      type: "artifact-preview-error",
+      message: "startup failed",
+    })
+    await rejected
+    expect(post).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "capture-snapshot" }),
+      "*"
+    )
+  })
+
+  it("B18 bounds the readiness wait with the capture timeout and never sends an expired request", async () => {
+    const artifact = dummy({ type: "react" })
+    const { container } = render(<ArtifactPreview artifact={artifact} />)
+    const iframe = container.querySelector("iframe")!
+    const post = await bootFrame(iframe)
+    jest.useFakeTimers()
+    try {
+      const capture = captureArtifactFrame(artifact.id, 100)
+      const rejected = expect(capture).rejects.toBeInstanceOf(ArtifactFrameCaptureTimeoutError)
+      await act(async () => jest.advanceTimersByTime(100))
+      await rejected
+      dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+      expect(post).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "capture-snapshot" }),
+        "*"
+      )
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("B13 keeps capture available after a non-terminal runtime diagnostic", async () => {
+    const artifact = dummy({ type: "react" })
+    const { container } = render(<ArtifactPreview artifact={artifact} />)
+    const iframe = container.querySelector("iframe")!
+    const post = await bootFrame(iframe)
+    dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+    dispatchFrame(iframe, {
+      ...latestRender(post),
+      type: "artifact-preview-runtime-warning",
+      message: "click failed",
+    })
+    expect(screen.queryByRole("alert")).toBeNull()
+    const capture = captureArtifactFrame(artifact.id)
+    const request = post.mock.calls.find(([message]) => message.type === "capture-snapshot")![0]
+    dispatchFrame(iframe, {
+      type: "artifact-capture-result",
+      requestId: request.requestId,
+      html: "<button>still usable</button>",
+      width: 10,
+      height: 10,
+    })
+    await expect(capture).resolves.toMatchObject({ html: "<button>still usable</button>" })
+  })
+
   it("B14 settles initial loading when the frame reports an execution error", async () => {
     const { container } = render(<ArtifactPreview artifact={dummy({ type: "react" })} />)
     const iframe = container.querySelector("iframe")!
@@ -394,11 +527,9 @@ describe("ArtifactPreview", () => {
       )
       await waitFor(() => expect(hasArtifactFrameCapturer("r1")).toBe(true))
       const iframe = container.querySelector("iframe") as HTMLIFrameElement
-      const post = jest.fn()
-      Object.defineProperty(iframe, "contentWindow", {
-        configurable: true,
-        value: { postMessage: post },
-      })
+      const post = await bootFrame(iframe)
+      dispatchFrame(iframe, { ...latestRender(post), type: "artifact-preview-ready" })
+      post.mockClear()
 
       const pending = captureArtifactFrame("r1")
       await waitFor(() => expect(post).toHaveBeenCalled())

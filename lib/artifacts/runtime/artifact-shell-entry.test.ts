@@ -10,9 +10,15 @@ import {
   type ArtifactShellScope,
 } from "./artifact-shell-entry"
 import { createContext, runInContext } from "node:vm"
+import { readFileSync } from "node:fs"
 import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "@testing-library/react"
+
+const transformer = createContext({})
+runInContext(readFileSync("public/artifact-runtime/jsx-transform.js", "utf8"), transformer)
+const transformClassic = (code: string): string =>
+  transformer.CogniaArtifactJsx.transform(code).code
 
 describe("pickArtifactComponent", () => {
   const fn = () => null
@@ -33,19 +39,52 @@ describe("pickArtifactComponent", () => {
 })
 
 describe("buildArtifactModuleSource", () => {
+  it("preserves classic var and function globals", () => {
+    const context = createContext({ __cogniaArtifactPick: jest.fn() })
+    context.window = context
+    runInContext(
+      buildArtifactModuleSource(
+        'var palette = "blue"; function App(){return window.palette}',
+        false
+      ),
+      context
+    )
+    expect(context.palette).toBe("blue")
+    expect(context.App()).toBe("blue")
+  })
+
+  it("preserves top-level this even in a strict classic script", () => {
+    const picked = jest.fn()
+    const context = createContext({ React, __cogniaArtifactPick: picked })
+    runInContext(
+      buildArtifactModuleSource(
+        '"use strict"; const R = this.React; function App(){return R}',
+        false
+      ),
+      context
+    )
+    expect(picked.mock.calls[0][0]()).toBe(React)
+  })
+
   it.each([
     'const App = () => "revision"',
     'function App(){return "revision"}',
     'let Component = () => "revision"',
     'class Main { static revision = "revision" }',
-  ])("isolates repeated classic declarations: %s", (code) => {
+  ])("replaces repeated classic globals after the real JSX transform: %s", (code) => {
     const picked: unknown[] = []
     const context = createContext({
       __cogniaArtifactPick: (...candidates: unknown[]) =>
         picked.push(pickArtifactComponent(...(candidates as [unknown, unknown, unknown, unknown]))),
     })
-    runInContext(buildArtifactModuleSource(code.replace("revision", "one"), false), context)
-    runInContext(buildArtifactModuleSource(code.replace("revision", "two"), false), context)
+    runInContext(
+      buildArtifactModuleSource(transformClassic(code.replace("revision", "one")), false),
+      context
+    )
+    runInContext(
+      buildArtifactModuleSource(transformClassic(code.replace("revision", "two")), false),
+      context
+    )
     expect(picked).toHaveLength(2)
     expect(picked[1]).not.toBe(picked[0])
   })
@@ -203,6 +242,7 @@ describe("installArtifactShellRuntime", () => {
   it.each([
     'const App = () => React.createElement("p", null, "revision")',
     'function App(){return React.createElement("p", null, "revision")}',
+    'class App extends React.Component { render(){return React.createElement("p", null, "revision")} }',
   ])("replaces revision one with revision two using generated classic code: %s", async (code) => {
     const h = harness({ realReact: true })
     const context = createContext({ React, __cogniaArtifactPick: h.pick })
@@ -212,7 +252,11 @@ describe("installArtifactShellRuntime", () => {
         [2, "two"],
       ] as const) {
         await act(async () => {
-          h.dispatch({ type: "render-component", revision, code: code.replace("revision", label) })
+          h.dispatch({
+            type: "render-component",
+            revision,
+            code: transformClassic(code.replace("revision", label)),
+          })
           runInContext(h.blobs.at(-1)!, context)
         })
         expect(document.getElementById("root")).toHaveTextContent(label)
@@ -236,6 +280,25 @@ describe("installArtifactShellRuntime", () => {
     expect(h.rendered).toHaveLength(1)
     jest.restoreAllMocks()
     h.dispose()
+  })
+
+  it.each([
+    'var palette = "blue"; function App(){ return React.createElement("p", null, window.palette) }',
+    '"use strict"; const R = this.React; function App(){ return R.createElement("p", null, "blue") }',
+  ])("renders classic global semantics through the shell: %s", async (code) => {
+    const h = harness({ realReact: true })
+    const context = createContext({ React, __cogniaArtifactPick: h.pick })
+    context.window = context
+    try {
+      await act(async () => {
+        h.dispatch({ type: "render-component", revision: 1, code: transformClassic(code) })
+        runInContext(h.blobs.at(-1)!, context)
+      })
+      expect(document.getElementById("root")).toHaveTextContent("blue")
+      expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision: 1 })
+    } finally {
+      h.dispose()
+    }
   })
 
   it("reports ready only after the component committed, once per revision", async () => {
@@ -326,6 +389,33 @@ describe("installArtifactShellRuntime", () => {
     }
   })
 
+  it("keeps a post-ready React render failure terminal through the error boundary", async () => {
+    const logged = jest.spyOn(console, "error").mockImplementation(() => undefined)
+    const h = harness({ realReact: true })
+    function App() {
+      const [broken, setBroken] = React.useState(false)
+      if (broken) throw new Error("later render failed")
+      return React.createElement("button", { onClick: () => setBroken(true) }, "break render")
+    }
+    try {
+      await act(async () => {
+        h.dispatch({ type: "render-component", revision: 1, code: "function App(){}" })
+        h.pick(App, null, null, null)
+      })
+      expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision: 1 })
+      await act(async () => document.querySelector("button")!.click())
+      expect(h.posted).toContainEqual({
+        type: "artifact-preview-error",
+        revision: 1,
+        message: "later render failed",
+      })
+      expect(document.getElementById("root")).toHaveTextContent("later render failed")
+    } finally {
+      h.dispose()
+      logged.mockRestore()
+    }
+  })
+
   it.each([false, true])(
     "relays owned script errors and rejections (module=%s), ignoring shell and old-run errors",
     (module) => {
@@ -364,6 +454,42 @@ describe("installArtifactShellRuntime", () => {
       const afterDispose = h.posted.length
       h.emit("error", new ErrorEvent("error", { message: "disposed", filename: "blob:test-2" }))
       expect(h.posted).toHaveLength(afterDispose)
+    }
+  )
+
+  it.each(["error", "unhandledrejection"])(
+    "keeps post-ready %s non-terminal and preserves the rendered DOM",
+    async (type) => {
+      const h = harness({ realReact: true })
+      try {
+        await act(async () => {
+          h.dispatch({ type: "render-component", revision: 1, code: "function App(){}" })
+          h.pick(() => React.createElement("button", null, "still usable"), null, null, null)
+        })
+        expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision: 1 })
+        const before = document.body.innerHTML
+        const error = new Error("handler exploded")
+        error.stack = "Error: handler exploded\n at blob:test-1:1:1"
+        const event =
+          type === "error"
+            ? new ErrorEvent("error", { message: error.message, filename: "blob:test-1", error })
+            : Object.defineProperty(new Event(type), "reason", { value: error })
+        h.emit(type, event)
+        expect(h.posted).not.toContainEqual(
+          expect.objectContaining({ type: "artifact-preview-error" })
+        )
+        expect(document.body.innerHTML).toBe(before)
+        h.dispatch({ type: "capture-snapshot", requestId: "after-handler" })
+        expect(h.posted).toContainEqual(
+          expect.objectContaining({
+            type: "artifact-capture-result",
+            requestId: "after-handler",
+            html: expect.stringContaining("still usable"),
+          })
+        )
+      } finally {
+        h.dispose()
+      }
     }
   )
 

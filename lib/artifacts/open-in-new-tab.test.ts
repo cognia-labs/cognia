@@ -1,6 +1,4 @@
 /** @jest-environment jsdom */
-import { createHash } from "node:crypto"
-import { runInNewContext } from "node:vm"
 import { createArtifactTabDocument } from "./open-in-new-tab"
 import { grantInteractiveHtml } from "./interactive-grant"
 
@@ -47,21 +45,24 @@ it("B01 keeps HTML inert without the explicit per-artifact grant", () => {
   tab.dispose()
 })
 
-it("B01 carries granted scripts as data with one hash-authorized bootstrap in the opaque frame", () => {
+it("B01 carries granted scripts as data with one external bootstrap in the opaque frame", () => {
   const revoke = grantInteractiveHtml(artifact)
   try {
     const tab = createArtifactTabDocument(artifact, true)
     const { frame, inner, csp } = parse(tab.html)
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts")
     const bootstrap = inner.querySelector('script:not([type="application/json"])')!
-    const hash = createHash("sha256").update(bootstrap.textContent!).digest("base64")
-    expect(csp).toContain(`script-src 'sha256-${hash}' blob:`)
+    expect(bootstrap.getAttribute("src")).toBe(
+      new URL("/artifact-runtime/artifact-tab-bootstrap.js", window.location.href).href
+    )
+    expect(bootstrap.textContent).toBe("")
+    expect(csp).toContain(`script-src ${window.location.origin} blob:`)
     expect(
       inner.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content")
     ).toBe(csp)
     expect(inner.querySelector("[onclick]")).toBeNull()
     expect(inner.querySelectorAll("script")).toHaveLength(2)
-    expect(inner.querySelector("script[src]")).toBeNull()
+    expect(inner.querySelectorAll("script[src]")).toHaveLength(1)
     const scripts = JSON.parse(inner.querySelector('script[type="application/json"]')!.textContent!)
     expect(scripts).toHaveLength(2)
     expect(scripts[0]).toEqual({ code: "function go(){localStorage.clear()}" })
@@ -105,6 +106,25 @@ it("B01 never executes SVG scripts, even if a grant exists", () => {
   }
 })
 
+it.each([
+  ["https://app.test/workspace/chat/", "https://app.test"],
+  ["tauri://localhost/index.html", "tauri://localhost"],
+  ["http://tauri.localhost/index.html", "http://tauri.localhost"],
+])("B01 resolves the bootstrap and its CSP host from %s", (baseUrl, origin) => {
+  const revoke = grantInteractiveHtml(artifact)
+  try {
+    const { inner, csp } = parse(createArtifactTabDocument(artifact, true, baseUrl).html)
+    expect(inner.querySelector("script[src]")!.getAttribute("src")).toBe(
+      `${origin}/artifact-runtime/artifact-tab-bootstrap.js`
+    )
+    expect(csp.split("; ").find((directive) => directive.startsWith("script-src "))).toBe(
+      `script-src ${origin} blob:`
+    )
+  } finally {
+    revoke()
+  }
+})
+
 it("B01 escapes a srcdoc breakout and strips external scripts and nested frames", () => {
   const hostile = {
     ...artifact,
@@ -115,7 +135,8 @@ it("B01 escapes a srcdoc breakout and strips external scripts and nested frames"
   try {
     const tab = createArtifactTabDocument(hostile, true)
     const { inner } = parse(tab.html)
-    expect(inner.querySelector("iframe, script[src]")).toBeNull()
+    expect(inner.querySelector("iframe")).toBeNull()
+    expect(inner.querySelectorAll("script[src]")).toHaveLength(1)
     expect(
       JSON.parse(inner.querySelector('script[type="application/json"]')!.textContent!)
     ).toEqual([])
@@ -123,83 +144,6 @@ it("B01 escapes a srcdoc breakout and strips external scripts and nested frames"
   } finally {
     revoke()
   }
-})
-
-function prepareBootstrap() {
-  const scripted = {
-    ...artifact,
-    content:
-      '<p>Static</p><script>first()</script><script type="module">second()</script><script>third()</script>',
-  }
-  const revoke = grantInteractiveHtml(scripted)
-  try {
-    const { inner } = parse(createArtifactTabDocument(scripted, true).html)
-    const bootstrap = inner.querySelector('script:not([type="application/json"])')!
-    Object.defineProperty(inner, "currentScript", { value: bootstrap })
-    return { inner, bootstrap: bootstrap.textContent! }
-  } finally {
-    revoke()
-  }
-}
-
-it("creates and releases script blobs in the frame realm, retaining classic order and module flags", () => {
-  const { inner, bootstrap } = prepareBootstrap()
-  const frameUrl = { createObjectURL: jest.fn(), revokeObjectURL: jest.fn() }
-  const blobs: BlobPart[][] = []
-  class FrameBlob {
-    constructor(parts: BlobPart[], options: BlobPropertyBag) {
-      blobs.push(parts)
-      expect(options).toEqual({ type: "text/javascript" })
-    }
-  }
-  frameUrl.createObjectURL.mockImplementation(() => `blob:frame-${blobs.length}`)
-  const page = new EventTarget()
-  runInNewContext(bootstrap, {
-    document: inner,
-    URL: frameUrl,
-    Blob: FrameBlob,
-    addEventListener: page.addEventListener.bind(page),
-  })
-  expect(URL.createObjectURL).not.toHaveBeenCalled()
-  expect(blobs).toEqual([["first()"], ["second()"], ["third()"]])
-  const scripts = Array.from(inner.querySelectorAll<HTMLScriptElement>("script[src]"))
-  expect(scripts.map((script) => script.src)).toEqual([
-    "blob:frame-1",
-    "blob:frame-2",
-    "blob:frame-3",
-  ])
-  expect(scripts[0].async).toBe(false)
-  expect(scripts[1].type).toBe("module")
-  expect(scripts[2].async).toBe(false)
-  scripts[0].dispatchEvent(new Event("load"))
-  scripts[1].dispatchEvent(new Event("error"))
-  expect(frameUrl.revokeObjectURL).toHaveBeenCalledWith("blob:frame-1")
-  expect(frameUrl.revokeObjectURL).toHaveBeenCalledWith("blob:frame-2")
-  page.dispatchEvent(new Event("pagehide"))
-  expect(frameUrl.revokeObjectURL).toHaveBeenCalledWith("blob:frame-3")
-  expect(frameUrl.revokeObjectURL).toHaveBeenCalledTimes(3)
-})
-
-it("releases frame-created blobs if preparing a later script fails", () => {
-  const { inner, bootstrap } = prepareBootstrap()
-  const frameUrl = {
-    createObjectURL: jest
-      .fn()
-      .mockReturnValueOnce("blob:first")
-      .mockImplementationOnce(() => {
-        throw new Error("blob failed")
-      }),
-    revokeObjectURL: jest.fn(),
-  }
-  expect(() =>
-    runInNewContext(bootstrap, {
-      document: inner,
-      URL: frameUrl,
-      Blob,
-      addEventListener: jest.fn(),
-    })
-  ).toThrow("blob failed")
-  expect(frameUrl.revokeObjectURL).toHaveBeenCalledWith("blob:first")
 })
 
 it("escapes JSON script terminators and HTML comment openers without changing compiled code", () => {
@@ -213,8 +157,8 @@ it("escapes JSON script terminators and HTML comment openers without changing co
     expect(inner.querySelector("#breakout")).toBeNull()
     expect(inner.querySelectorAll("script")).toHaveLength(2)
     expect(JSON.parse(payload)[0].code).toContain(code)
-    expect(inner.querySelector('script:not([type="application/json"])')!.textContent).toBe(
-      prepareBootstrap().bootstrap
+    expect(inner.querySelector("script[src]")!.getAttribute("src")).toBe(
+      new URL("/artifact-runtime/artifact-tab-bootstrap.js", window.location.href).href
     )
   } finally {
     revoke()
