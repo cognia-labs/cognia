@@ -316,6 +316,11 @@ export const AIDER_CAPABILITIES: AgentCapabilityContribution = {
           evidence: "adapter-code",
           reasonKey: "noProtocolSlot",
         },
+        "workspace.additional-roots": {
+          level: "unsupported",
+          evidence: "adapter-code",
+          reasonKey: "oneWorkspacePerSession",
+        },
       },
     },
   },

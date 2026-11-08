@@ -492,6 +492,32 @@ describe("checkItem with a workspace that travels (ADR-0224 A11)", () => {
     ])
   })
 
+  it("says a multi-repository workspace travels with its primary repository only", async () => {
+    await putTravellingWorkspace()
+    const row = (await getDb().projects.get("p-app")) as unknown as Record<string, unknown>
+    await getDb().projects.put({
+      ...row,
+      roots: [
+        { id: "r1", path: "/Users/me/app", isPrimary: true },
+        { id: "r2", path: "/Users/me/sdk" },
+      ],
+    } as never)
+    const checks = await checkItem(
+      loadedTask({ type: "agent", projectId: "p-app", payload: { prompt: "x" } }),
+      facts({ manifest: async () => codeSupplyManifest() }),
+      "headless",
+      false
+    )
+    expect(checks.notes).toEqual([
+      {
+        kind: "workspace-travels",
+        workspace: "App",
+        remoteUrl: "https://github.com/acme/app.git",
+        otherRepositories: 1,
+      },
+    ])
+  })
+
   it("still blocks it on a host too old to take the workspace", async () => {
     await putTravellingWorkspace()
     const checks = await checkItem(

@@ -222,6 +222,7 @@ jest.mock("@/lib/ai/agent/external/manager", () => ({
     cancel: (...args: unknown[]) => externalCancelMock(...args),
     cancelRetiresSession: (...args: unknown[]) => externalCancelRetiresSessionMock(...args),
     getAgentCapabilityProfile: () => externalCapabilityProfileMock,
+    connect: async () => undefined,
     getAgent: () => ({
       config: {
         protocol: externalProtocolMock,
@@ -3080,8 +3081,52 @@ describe("dispatchTeammate — workspace isolation", () => {
     expect(createSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({ workingDir: "/registry/task-run-1" })
     )
+    // The team's other repository is a task copy the teammate also works in.
+    expect(resolveSendOptionsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ bundleRoots: ["/registry/docs"] })
+    )
     expect(settleTaskWorkspaceRunMock).toHaveBeenCalledWith("task-run-1", "ready")
   })
+
+  it.each([
+    ["native", ["/registry/docs"]],
+    ["unknown", undefined],
+    ["unsupported", undefined],
+  ] as const)(
+    "hands an external teammate whose extra-roots support is %s: %p",
+    async (level, expected) => {
+      externalCapabilityProfileMock = {
+        effective: { "workspace.additional-roots": { level, evidence: "handshake" } },
+      }
+      isTauriMock.mockReturnValue(true)
+      resolveExternalMock.mockResolvedValue("ext-agent-1")
+      externalExecuteMock.mockResolvedValue({ success: true, finalResponse: "external result" })
+      openRegistryWorkspaceMock.mockResolvedValue({
+        bundleTurnId: "bundle-turn-1",
+        bundleId: "bundle-1",
+        run: { runId: "task-run-1", executionRoot: "/registry/task-run-1" },
+        runs: [],
+        primaryAlias: "/registry/task-run-1",
+        additionalAliases: ["/registry/docs"],
+        settle: (state: unknown) => settleTaskWorkspaceRunMock("task-run-1", state),
+        abort: jest.fn(async () => []),
+      })
+      const { ctx } = makeCtx(makeTeammate({ config: { runtime: "codex" } }), {
+        workingDir: "/repo",
+      })
+
+      try {
+        await dispatchTeammate(ctx, { taskId: "t1", prompt: "do it" })
+      } finally {
+        externalCapabilityProfileMock = undefined
+      }
+
+      const options = externalExecuteMock.mock.calls[0][2]
+      expect(options).toMatchObject({ workingDirectory: "/registry/task-run-1" })
+      // An agent that does not take them works in the primary repository only.
+      expect(options.context?.custom?.additionalDirectories).toEqual(expected)
+    }
+  )
 
   it("forwards workspaceKey to the Registry controller for pipeline reuse", async () => {
     isTauriMock.mockReturnValue(true)

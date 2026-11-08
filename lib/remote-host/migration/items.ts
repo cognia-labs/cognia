@@ -272,6 +272,8 @@ async function workspaceChecks(
   if (!projectId) return { blockers: [], notes: [] }
   const travelling = lookup.travelling.find((project) => project.id === projectId)
   if (travelling?.repository && (await hostTakesWorkspaces(facts))) {
+    // Only the primary folder's repository is cloned on the host.
+    const otherRepositories = Math.max(0, (travelling.roots?.length ?? 1) - 1)
     return {
       blockers: [],
       notes: [
@@ -279,6 +281,7 @@ async function workspaceChecks(
           kind: "workspace-travels",
           workspace: travelling.name,
           remoteUrl: travelling.repository.remoteUrl,
+          ...(otherRepositories > 0 ? { otherRepositories } : {}),
         },
       ],
     }

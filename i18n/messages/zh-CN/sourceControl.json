@@ -322,7 +322,9 @@
   "roots": {
     "primary": "主",
     "select": "选择根目录",
-    "switchRoot": "切换仓库根目录"
+    "switchRoot": "切换仓库根目录",
+    "taskCopies": "任务副本",
+    "originals": "原始工作目录"
   },
   "sendDiffToChat": "加入对话",
   "sequencer": {

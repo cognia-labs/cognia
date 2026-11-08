@@ -61,6 +61,31 @@ describe("liveCapabilityFacts", () => {
     expect(liveCapabilityFacts({ negotiated: { streaming: true } }).images).toBeUndefined()
   })
 
+  it("answers extra workspace roots from the negotiated session capability", () => {
+    expect(
+      liveCapabilityFacts({ negotiated: { additionalDirectories: true } })[
+        "workspace.additional-roots"
+      ]
+    ).toEqual({
+      level: "native",
+      evidence: "handshake",
+      reasonKey: "negotiatedAdditionalDirectories",
+    })
+    expect(
+      liveCapabilityFacts({ negotiated: { additionalDirectories: false } })[
+        "workspace.additional-roots"
+      ]
+    ).toEqual({
+      level: "unsupported",
+      evidence: "handshake",
+      reasonKey: "negotiatedNoAdditionalDirectories",
+    })
+    // No negotiation for it: the protocol row stands.
+    expect(
+      liveCapabilityFacts({ negotiated: { streaming: true } })["workspace.additional-roots"]
+    ).toBeUndefined()
+  })
+
   it("propagates a tool-execution refusal to results and errors", () => {
     const cells = liveCapabilityFacts({ negotiated: { toolExecution: false } })
     expect(cells["tools.ordinary"]?.level).toBe("unsupported")

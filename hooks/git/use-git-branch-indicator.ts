@@ -14,6 +14,8 @@ import { subscribeGitStatusChanged } from "@/lib/git/events"
 import { loadGitRepo, refreshGitStatus } from "@/lib/git/load"
 import { useProjectStore } from "@/stores/project/project-store"
 import { resolvePanelRoot, type PanelRootTarget } from "@/lib/workspace/panel-follow"
+import { sessionTaskCopies } from "@/lib/workspace/session-root"
+import type { WorkspaceRoot } from "@/types/workspace"
 import { useSessionExecutionContext } from "@/hooks/workspace/use-session-execution-context"
 import { useChatStore } from "@/stores/chat/chat-store"
 import { useGitBranchInfo, useGitBusy, useGitStore } from "@/stores/git/git-store"
@@ -27,6 +29,11 @@ export interface BranchIndicator {
   busy: boolean
   /** Where the panel is pointing and why — rendered by `PanelRootChip`. */
   target: PanelRootTarget
+  /**
+   * The conversation's task copies, one per repository, which the root
+   * switcher lists ahead of the workspace's own checkouts.
+   */
+  taskCopies: WorkspaceRoot[]
   /** Pin to the current root, or resume following the conversation. */
   togglePin: () => void
 }
@@ -87,6 +94,10 @@ export function useGitBranchIndicator({
       }),
     [executionContext, activeProject, pinnedRoot]
   )
+  const taskCopies = useMemo(
+    () => sessionTaskCopies(executionContext, activeProject),
+    [executionContext, activeProject]
+  )
 
   // Re-bind when the resolved target moves. The tracker holds the last target
   // we bound (not `rootDir`) so a manual git-panel rebind to an ad-hoc repo is
@@ -136,6 +147,7 @@ export function useGitBranchIndicator({
     behind: branchInfo.behind,
     busy,
     target,
+    taskCopies,
     // Pin the repository actually on screen, unpin outright.
     //
     // `rootDir` rather than `target.root`: an ad-hoc rebind through

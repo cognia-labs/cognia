@@ -167,6 +167,13 @@ export interface ExecuteAgentConfig {
   /** Absolute working directory the tool-enabled run is scoped to. */
   cwd?: string
   /**
+   * More absolute roots the run works in beside `cwd`: the task copies of the
+   * workspace's other repositories when the run's bundle mounts them (ADR-0147,
+   * 2026-11-08 amendment). The send resolver adds them to its additional
+   * directories (`bundleRoots`). Ignored on the text-only channel.
+   */
+  additionalDirectories?: string[]
+  /**
    * Tool surface for this run. Without a `characterId` it is the synthesised
    * character's allow list; with one it restricts the agent's own resolved
    * surface (an intersection, never a widening).
@@ -629,6 +636,9 @@ async function runToolEnabledStandalone(
       ...(config.isDispatchedSubagent ? { isDispatchedSubagent: true } : {}),
       ...(config.permissionCeiling ? { permissionCeiling: config.permissionCeiling } : {}),
       ...(capabilityGrants ? { capabilityGrants } : {}),
+      ...(config.additionalDirectories?.length
+        ? { bundleRoots: config.additionalDirectories }
+        : {}),
       routingSurface: "agent",
       routingContextHint: { promptText: prompt },
     })

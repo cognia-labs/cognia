@@ -171,6 +171,20 @@ export type ExternalOnlyCapabilityId =
    * supply `web_search` for the turn.
    */
   | "web.search"
+  /**
+   * The agent works in more than one workspace root at once: Cognia can hand a
+   * session its primary directory plus additional absolute roots (the other
+   * repositories of a multi-repository workspace, each a task copy of its
+   * own) and the agent reads and writes all of them.
+   *
+   * Anything short of `native`/`equivalent` means the agent gets the primary
+   * root only and the other repositories stay out of its reach. That is the
+   * documented answer for three protocols, not a gap: Codex's write scope is
+   * the static `writableRoots` fixed on its process, Aider runs one workspace
+   * per session, and A2A has no local roots at all. ACP decides per agent
+   * build, at the handshake (`sessionCapabilities.additionalDirectories`).
+   */
+  | "workspace.additional-roots"
 
 export const EXTERNAL_ONLY_CAPABILITY_IDS: readonly ExternalOnlyCapabilityId[] = [
   "mcp.logs",
@@ -178,6 +192,7 @@ export const EXTERNAL_ONLY_CAPABILITY_IDS: readonly ExternalOnlyCapabilityId[] =
   "subagents.model-selection",
   "models.list",
   "web.search",
+  "workspace.additional-roots",
 ]
 
 export type ExternalAgentCapabilityId = AgentCapabilityId | ExternalOnlyCapabilityId

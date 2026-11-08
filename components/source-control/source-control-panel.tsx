@@ -381,6 +381,7 @@ export function SourceControlPanel() {
               data-testid="sc-repo-context"
             >
               <RootSwitcher
+                taskCopies={indicator.taskCopies}
                 remoteWorkspaces={remote ? remoteWorkspaces : undefined}
                 onSelectRemoteWorkspace={selectRemoteWorkspace}
               />

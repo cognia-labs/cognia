@@ -299,18 +299,23 @@ export async function executeAgentTurn(
     const [
       { acquireWorkspaceBundle },
       { openWorkspaceBundleTurnLease },
-      { bundleProvisioningForPath },
+      { bundleRootsForPath, RUN_PRIMARY_ROOT_ID },
     ] = await Promise.all([
       import("@/lib/task-workspace/client"),
       import("@/lib/task-workspace/run-lease"),
       import("@/lib/task-workspace/workspace-provisioning"),
     ])
-    const primaryLogicalRootId = "primary"
+    const primaryLogicalRootId = RUN_PRIMARY_ROOT_ID
     const base =
       surface === "chat"
         ? ({ kind: "workingState" } as const)
         : ({ kind: "remoteDefault" } as const)
-    const provisioning = await bundleProvisioningForPath(config.cwd).catch(() => ({}))
+    // The run's directory, plus every other repository of the workspace that
+    // mounts it, each provisioned from its own declaration.
+    const cwd = config.cwd
+    const { roots, ...provisioning } = await bundleRootsForPath(cwd).catch(() => ({
+      roots: [{ logicalRootId: primaryLogicalRootId, role: "primary" as const, sourceRoot: cwd }],
+    }))
     // The turn's abort cancels its checkout, which the host keys by owner. A
     // turn with no session of its own shares the "session-unbound" owner with
     // every other such turn, so its abort would reach their checkouts too; it
@@ -323,13 +328,7 @@ export async function executeAgentTurn(
         ownerRef: spec.identity.sessionId,
         environmentKind: "managed",
         base,
-        roots: [
-          {
-            logicalRootId: primaryLogicalRootId,
-            role: "primary",
-            sourceRoot: config.cwd,
-          },
-        ],
+        roots,
         ...provisioning,
       },
       ...acquireOptions
@@ -358,7 +357,13 @@ export async function executeAgentTurn(
       throw new Error("Registry did not return an Agent Bundle Turn execution root")
     }
     try {
-      const value = await executeResolved({ ...config, cwd: lease.primaryAlias })
+      const value = await executeResolved({
+        ...config,
+        cwd: lease.primaryAlias,
+        ...(lease.additionalAliases.length > 0
+          ? { additionalDirectories: [...lease.additionalAliases] }
+          : {}),
+      })
       await lease.settle("ready")
       return { ...value, taskWorkspaceRunId: lease.run.runId }
     } catch (error) {

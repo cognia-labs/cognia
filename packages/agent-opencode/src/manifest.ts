@@ -574,6 +574,11 @@ export const OPENCODE_CAPABILITIES: AgentCapabilityContribution = {
           level: "unknown",
           evidence: "none",
         },
+        "workspace.additional-roots": {
+          level: "unsupported",
+          evidence: "adapter-code",
+          reasonKey: "oneSessionLocation",
+        },
       },
     },
   },

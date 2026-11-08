@@ -67,6 +67,11 @@ export interface WorkspaceProvisioningDeps {
   ) => Promise<WorkspaceProvisioning | undefined>
   /** Every workspace known to this device, for the path lookup. */
   projects: () => Promise<Project[]>
+  /**
+   * Whether Workspace Trust lets a run reach `root`. True when trust is off or
+   * there is no local filesystem, as for a send.
+   */
+  trusted: (root: string) => Promise<boolean>
 }
 
 /**
@@ -108,6 +113,17 @@ const DEFAULT_DEPS: WorkspaceProvisioningDeps = {
     }
     const { getAllProjects } = await import("@/lib/db/projects")
     return getAllProjects()
+  },
+  trusted: async (root) => {
+    const [{ useSettingsStore }, { isTauri }, { isWorkspaceTrusted }] = await Promise.all([
+      import("@/stores/settings"),
+      import("@/lib/tauri"),
+      import("@/lib/db/trusted-workspaces"),
+    ])
+    if (!isTauri() || useSettingsStore.getState().settings?.workspaceTrust?.enabled === false) {
+      return true
+    }
+    return isWorkspaceTrusted(root)
   },
 }
 
@@ -249,4 +265,69 @@ export async function withRootProvisioning<R extends BundleRoot>(
       return provisioning ? { ...root, provisioning } : root
     })
   )
+}
+
+/** The logical id the run's own directory is mounted under. */
+export const RUN_PRIMARY_ROOT_ID = "primary"
+
+/**
+ * The roots, with their provisioning, of a bundle for a run that knows only
+ * its directory: an agent turn, a workflow node, an agent child (ADR-0147,
+ * 2026-11-08 amendment).
+ *
+ * The directory is the primary root, mounted as {@link RUN_PRIMARY_ROOT_ID}.
+ * When a workspace mounts it, every other root of that workspace the user
+ * trusts comes along as an additional root, so the run reaches the sibling
+ * repositories as task copies the way a chat in that workspace does. A run has
+ * no Restricted Mode to fall back to, so an untrusted sibling stays out of its
+ * reach rather than joining it with full tools. Each root is provisioned from
+ * the declaration read in its own checkout. A directory no workspace mounts,
+ * or a Host's clone of one, is a bundle of one root.
+ */
+export async function bundleRootsForPath(
+  sourceRoot: string,
+  deps?: Partial<WorkspaceProvisioningDeps>
+): Promise<BundleProvisioning & { roots: BundleRoot[] }> {
+  const primary: BundleRoot = {
+    logicalRootId: RUN_PRIMARY_ROOT_ID,
+    role: "primary",
+    sourceRoot,
+  }
+  const provisioning = await bundleProvisioningForPath(sourceRoot, deps)
+  let others: { id: string; path: string }[] = []
+  try {
+    const projects = await (deps?.projects ?? DEFAULT_DEPS.projects)()
+    const { locateWorkspaceForPath } = await import("@/lib/workspace/locate-workspace")
+    const location = locateWorkspaceForPath(sourceRoot, projects)
+    if (location) {
+      const own = pathKey(location.root.path)
+      const run = pathKey(sourceRoot)
+      const candidates = (location.project.roots ?? []).filter((root) => {
+        const key = root.path?.trim() ? pathKey(root.path) : ""
+        return key && key !== own && key !== run
+      })
+      const trusted = deps?.trusted ?? DEFAULT_DEPS.trusted
+      const verdicts = await Promise.all(
+        candidates.map((root) => trusted(root.path).catch(() => false))
+      )
+      others = candidates.filter((_, index) => verdicts[index])
+    }
+  } catch {
+    others = []
+  }
+  if (others.length === 0) return { ...provisioning, roots: [primary] }
+  const taken = new Set([RUN_PRIMARY_ROOT_ID])
+  const additional = others.map((root, index) => {
+    const id = taken.has(root.id) ? `additional-${index + 1}` : root.id
+    taken.add(id)
+    return { logicalRootId: id, role: "additional" as const, sourceRoot: root.path }
+  })
+  // The run's own directory carries the bundle's declaration; each other root
+  // brings the one read in its own checkout.
+  const provisioned = await withRootProvisioning(
+    additional,
+    (path) => provisioningForWorkspaceRoot(path, deps),
+    provisioning.provisioningSource
+  )
+  return { ...provisioning, roots: [primary, ...provisioned] }
 }

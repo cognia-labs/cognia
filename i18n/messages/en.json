@@ -15512,7 +15512,8 @@
         "conversationAddressRelearned": "Replies to {conversationKey} resume once that chat next writes to the Bot.",
         "schedulesTravel": "{count, plural, one {Its scheduled message set up in a chat moves to {host} with it.} other {Its # scheduled messages set up in chats move to {host} with it.}}",
         "secretTransferred": "The secret {name} is copied into {host}'s keychain.",
-        "workspaceTravels": "Its workspace “{workspace}” goes along without its folders: {host} works in a clone of {remoteUrl}. For a private repository, store a git credential for its host in {host}'s Secrets first."
+        "workspaceTravels": "Its workspace “{workspace}” goes along without its folders: {host} works in a clone of {remoteUrl}. For a private repository, store a git credential for its host in {host}'s Secrets first.",
+        "workspaceTravelsPrimaryOnly": "Only that repository is cloned: its {count, plural, one {other repository stays} other {# other repositories stay}} on this device, and work {host} runs there happens in the clone instead."
       },
       "place": {
         "here": "This device",
@@ -18744,8 +18745,10 @@
         "launchTimeAuthorityOnly": "authority is granted at launch and cannot change mid-run",
         "modelVariantOverlay": "carried as a named model variant",
         "nativeSummarizeRoute": "served by the provider's own summarize route",
+        "negotiatedAdditionalDirectories": "the agent accepts extra workspace roots",
         "negotiatedImageInput": "the agent advertised image input",
         "negotiatedLoadSession": "the agent advertised session loading",
+        "negotiatedNoAdditionalDirectories": "the agent takes its working directory only",
         "negotiatedNoImageInput": "the agent advertised text-only prompts",
         "negotiatedNoLoadSession": "the agent advertised no session loading",
         "negotiatedNoMcpTools": "the agent refused MCP tools",
@@ -18756,6 +18759,7 @@
         "negotiatedThinking": "the agent advertised a thinking control",
         "noAdvertisedCompactCommand": "the agent advertises no /compact command",
         "noHookRuntime": "this host does not run Cognia's hooks around an external turn",
+        "noLocalRoots": "a remote agent has no access to local folders",
         "noManifestRow": "nothing describes this protocol's capabilities",
         "noMidTurnApproval": "this transport cannot carry a mid-turn approval",
         "noPerSessionMcpServers": "the agent protocol has no per-session MCP channel",
@@ -18764,10 +18768,13 @@
         "noSubagentDispatch": "the dispatch_agent tool was not projected",
         "noToolHost": "Cognia's tool host is not attached here",
         "notNegotiated": "the agent did not advertise it during initialize",
+        "oneSessionLocation": "one location per session, so it works in the primary repository only",
+        "oneWorkspacePerSession": "one workspace per session, so it works in the primary repository only",
         "perThreadConfigOverride": "carried as a per-thread config override",
         "pluginUndeclared": "the contributing plugin declares no capabilities",
         "profilePluginNotComposed": "the certified profile does not compose this native plugin",
         "sidecarOnly": "only the built-in agent reports this",
+        "staticWritableRoots": "its writable roots are fixed when the process starts, so it works in the primary repository only",
         "userDeclared": "you declared this for this agent"
       }
     },
@@ -62004,9 +62011,11 @@
       "title": "Review hunks"
     },
     "roots": {
+      "originals": "Original checkouts",
       "primary": "primary",
       "select": "Select root",
-      "switchRoot": "Switch repository root"
+      "switchRoot": "Switch repository root",
+      "taskCopies": "Task copies"
     },
     "sendDiffToChat": "Add to chat",
     "sequencer": {

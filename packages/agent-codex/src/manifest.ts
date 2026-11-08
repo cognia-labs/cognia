@@ -325,6 +325,13 @@ export const CODEX_CAPABILITIES: AgentCapabilityContribution = {
           level: "unknown",
           evidence: "none",
         },
+        // The write scope is `codexOptions.writableRoots`, fixed on the app-server
+        // process; a session cannot be handed more roots.
+        "workspace.additional-roots": {
+          level: "unsupported",
+          evidence: "adapter-code",
+          reasonKey: "staticWritableRoots",
+        },
       },
     },
   },

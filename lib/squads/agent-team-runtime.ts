@@ -519,6 +519,7 @@ export async function runTeamLifecycle(
             }
             return {
               executionRoot: lease.primaryAlias,
+              additionalAliases: [...lease.additionalAliases],
               workspaceRunId: lease.run.runId,
               settle: lease.settle,
             }

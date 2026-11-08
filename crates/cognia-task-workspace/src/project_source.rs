@@ -115,6 +115,12 @@ pub fn validate_project_remote(raw: &str) -> Result<String, String> {
 }
 
 /// The first of `roots` that is a directory on this machine.
+///
+/// One root, by design: a Host or sandbox supplies a workspace's primary
+/// repository only (the one `Project.repository` names). A multi-repository
+/// workspace's other folders are not cloned there, and work in them runs at
+/// this root instead; the move to a Host says so before it happens
+/// (`workspace-travels` with `otherRepositories`).
 pub fn local_project_root(roots: &[String]) -> Option<String> {
     roots
         .iter()

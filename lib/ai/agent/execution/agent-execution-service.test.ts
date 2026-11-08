@@ -64,6 +64,16 @@ jest.mock("@/lib/task-workspace/run-lease", () => ({
     openWorkspaceBundleTurnLease(...args),
 }))
 
+const bundleRootsForPath = jest.fn(async (cwd: string) => ({
+  roots: [{ logicalRootId: "primary", role: "primary", sourceRoot: cwd }],
+}))
+
+jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
+  RUN_PRIMARY_ROOT_ID: "primary",
+  bundleRootsForPath: (...args: Parameters<typeof bundleRootsForPath>) =>
+    bundleRootsForPath(...args),
+}))
+
 jest.mock("@/lib/task-workspace/client", () => ({
   acquireWorkspaceBundle: (...args: Parameters<typeof acquireWorkspaceBundle>) =>
     acquireWorkspaceBundle(...args),
@@ -397,6 +407,53 @@ it("runs managed filesystem work through one Registry Bundle Turn", async () => 
   expect(settleWorkspaceBundle).toHaveBeenCalledWith("ready")
   expect(result.taskWorkspaceRunId).toBe("workspace-run-1")
   expect(result.trackingUnavailable).toBeUndefined()
+})
+
+it("mounts the workspace's other repositories and hands their task copies to the run", async () => {
+  bundleRootsForPath.mockResolvedValueOnce({
+    provisioningSource: "/repo",
+    provisioning: { sparsePaths: ["apps/web"] },
+    roots: [
+      { logicalRootId: "primary", role: "primary", sourceRoot: "/repo" },
+      {
+        logicalRootId: "repo-sdk",
+        role: "additional",
+        sourceRoot: "/sdk",
+        provisioning: { sparsePaths: ["src"] },
+      },
+    ],
+  } as never)
+  openWorkspaceBundleTurnLease.mockResolvedValueOnce({
+    ...workspaceBundleTurnFixture(),
+    additionalAliases: ["/isolated-sdk"] as never[],
+  })
+
+  await executeAgentTurn(
+    "p",
+    { sessionId: "session-1", cwd: "/repo", toolsEnabled: true },
+    { isTauri: true, isHeadlessHost: false },
+    {
+      surface: "workflow-agent-turn",
+      identity: { runId: "execution-1", attemptId: "attempt-1", turnId: "turn-1" },
+      taskWorkspace: { enabled: true, agentId: "workflow-agent", agentKind: "workflow" },
+    }
+  )
+
+  expect(bundleRootsForPath).toHaveBeenCalledWith("/repo")
+  expect(acquireWorkspaceBundle).toHaveBeenCalledWith(
+    expect.objectContaining({
+      provisioningSource: "/repo",
+      provisioning: { sparsePaths: ["apps/web"] },
+      roots: [
+        { logicalRootId: "primary", role: "primary", sourceRoot: "/repo" },
+        expect.objectContaining({ logicalRootId: "repo-sdk", sourceRoot: "/sdk" }),
+      ],
+    })
+  )
+  expect(agentRail).toHaveBeenCalledWith(
+    "p",
+    expect.objectContaining({ cwd: "/isolated", additionalDirectories: ["/isolated-sdk"] })
+  )
 })
 
 it("cancels a session's checkout when its turn is aborted", async () => {

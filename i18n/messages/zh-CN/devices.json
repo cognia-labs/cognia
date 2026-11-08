@@ -630,7 +630,8 @@
       "conversationAddressRelearned": "{conversationKey} 下次给 Bot 发消息后，回复才会恢复。",
       "secretTransferred": "密钥 {name} 会复制到 {host} 的钥匙串。",
       "schedulesTravel": "它在聊天中设置的 {count} 条定时消息会一起迁移到 {host}。",
-      "workspaceTravels": "它的工作区「{workspace}」会一起迁移，但不带文件夹：{host} 会在 {remoteUrl} 的克隆中工作。如果是私有仓库，请先在 {host} 的密钥中保存该代码托管站点的 git 凭据。"
+      "workspaceTravels": "它的工作区「{workspace}」会一起迁移，但不带文件夹：{host} 会在 {remoteUrl} 的克隆中工作。如果是私有仓库，请先在 {host} 的密钥中保存该代码托管站点的 git 凭据。",
+      "workspaceTravelsPrimaryOnly": "只会克隆这一个仓库：工作区里另外 {count} 个仓库留在这台设备上，{host} 上原本在那些仓库里进行的工作会改在克隆中进行。"
     },
     "badge": {
       "label": "在 {host} 上运行",

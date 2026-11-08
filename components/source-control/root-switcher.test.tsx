@@ -65,6 +65,42 @@ describe("RootSwitcher", () => {
     expect(setRootDir).toHaveBeenCalledWith("/repo/b")
   })
 
+  it("lists the conversation's task copies first, then the workspace's own checkouts", async () => {
+    const user = userEvent.setup()
+    projectRoots = [
+      { id: "r1", path: "/repo/a", isPrimary: true },
+      { id: "r2", path: "/repo/b" },
+    ]
+    gitRootDir = "/bundles/b1/a"
+    render(
+      <RootSwitcher
+        taskCopies={[
+          { id: "copy:r1", path: "/bundles/b1/a", label: "a", isPrimary: true },
+          { id: "copy:r2", path: "/bundles/b1/b", label: "b" },
+        ]}
+      />
+    )
+    expect(screen.getByTestId("root-switcher")).toHaveTextContent("a")
+    await user.click(screen.getByTestId("root-switcher"))
+    const options = await screen.findAllByTestId(/^root-option-/)
+    expect(options.map((option) => option.dataset.testid)).toEqual([
+      "root-option-copy:r1",
+      "root-option-copy:r2",
+      "root-option-r1",
+      "root-option-r2",
+    ])
+    expect(screen.getByText("Task copies")).toBeInTheDocument()
+    expect(screen.getByText("Original checkouts")).toBeInTheDocument()
+    await user.click(screen.getByTestId("root-option-copy:r2"))
+    expect(setRootDir).toHaveBeenCalledWith("/bundles/b1/b")
+  })
+
+  it("offers a single-repository conversation its task copy beside the checkout", () => {
+    projectRoots = [{ id: "r1", path: "/repo/a", isPrimary: true }]
+    render(<RootSwitcher taskCopies={[{ id: "copy:r1", path: "/bundles/b1/a", label: "a" }]} />)
+    expect(screen.getByTestId("root-switcher")).toBeInTheDocument()
+  })
+
   it("uses explicit resource-scoped roots instead of the active workspace", () => {
     projectRoots = [
       { id: "active-1", path: "/active/a", isPrimary: true },

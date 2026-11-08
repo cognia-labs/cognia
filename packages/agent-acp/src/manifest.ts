@@ -274,6 +274,12 @@ export const ACP_CAPABILITIES: AgentCapabilityContribution = {
           level: "unknown",
           evidence: "none",
         },
+        // Per agent build: the handshake's `sessionCapabilities.additionalDirectories`
+        // settles it (`capability-live-facts.ts`).
+        "workspace.additional-roots": {
+          level: "unknown",
+          evidence: "none",
+        },
       },
     },
   },

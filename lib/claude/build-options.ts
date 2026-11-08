@@ -570,6 +570,15 @@ export interface BuildOptionsContext {
    */
   referencedPaths?: { absolute: string; isDir: boolean }[]
   /**
+   * The task copies of the workspace's other repositories a bundle turn also
+   * works in, beside its cwd (ADR-0147, 2026-11-08 amendment): an agent run or
+   * a Squad teammate over a multi-repository workspace. They join
+   * `additionalDirectories` with the workspace's own extra folders, and so
+   * whatever confines or strips those (workspace confinement, a scratch
+   * workspace) treats them the same.
+   */
+  bundleRoots?: readonly string[]
+  /**
    * Projected dispatcher id of the subagent the user `@`-mentioned for THIS
    * turn (resolved by `resolveTargetAgentId` from the composer text). When it
    * names an agent actually registered in `opts.agents`, the turn runs AS that
@@ -1514,7 +1523,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const scratchHostToolNames = new Set<string>()
   // Default only attributes data for a managed scratch. Even a caller with a
   // focused project may not lend that project's roots or grants to this turn.
-  if (scratchWorkspace) ctx = { ...ctx, activeProject: null, referencedPaths: [] }
+  if (scratchWorkspace) ctx = { ...ctx, activeProject: null, referencedPaths: [], bundleRoots: [] }
   const { session, appSettings, memberOverride } = ctx
   // Which workspace's capability overlay this turn obeys. The session's own
   // workspace wins over the UI pointer for the same reason the cwd does: a
@@ -2736,13 +2745,16 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   )
 
   // --- Additional directories ----------------------------------------------
-  // Union of the active workspace's extra mounted dirs and the @-referenced
-  // files/folders. For referenced folders we add the folder itself; for files
+  // Union of the active workspace's extra mounted dirs, the bundle's other
+  // repositories, and the @-referenced files/folders. For referenced folders we add the folder itself; for files
   // we add their parent dir. Deduplicate, drop empty/nullish entries.
   {
     const dirs = new Set<string>()
     for (const dir of ctx.activeProject ? additionalDirsOf(ctx.activeProject) : []) {
       if (dir) dirs.add(dir)
+    }
+    for (const dir of ctx.bundleRoots ?? []) {
+      if (dir?.trim()) dirs.add(dir.trim())
     }
     for (const ref of ctx.referencedPaths ?? []) {
       if (!ref.absolute) continue

@@ -260,7 +260,8 @@ async function runToolEnabled(
   baseAgent?: Character,
   onExecutorStarted?: (stopped: Promise<void>) => void,
   onExecutorAccepted?: (sessionId: string) => void,
-  processOrigin?: { childRunId: string; dispatchEpoch: number }
+  processOrigin?: { childRunId: string; dispatchEpoch: number },
+  additionalRoots: readonly string[] = []
 ): Promise<{ text: string; usage?: TokenUsage }> {
   const cwd = cwdOverride ?? teamCtx.team.config?.workingDir
   const character = teammateToCharacter({
@@ -345,6 +346,8 @@ async function runToolEnabled(
             ],
           }
         : {}),
+      // The team's other repositories, as task copies beside the cwd.
+      ...(additionalRoots.length > 0 ? { bundleRoots: additionalRoots } : {}),
       routingSurface: "agent",
       routingContextHint: {
         promptText: prompt,
@@ -636,7 +639,8 @@ async function runExternalBacked(
   onExecutorStopped?: () => void,
   processOrigin?: { childRunId: string; dispatchEpoch: number },
   retainedVisibilityDigest?: string,
-  onVisibilityPrepared?: (digest: string) => void
+  onVisibilityPrepared?: (digest: string) => void,
+  additionalRoots: readonly string[] = []
 ): Promise<{ text: string; usage?: TokenUsage }> {
   const [
     { getExternalAgentManager },
@@ -740,6 +744,17 @@ async function runExternalBacked(
       await sessionWrite
       if (sessionWriteError) throw sessionWriteError
     }
+    // Whether the agent takes extra roots is a handshake answer for ACP, so
+    // connect first (after placement, which decides where it runs).
+    let extraRoots: readonly string[] = []
+    if (additionalRoots.length > 0) {
+      const { acceptsAdditionalRoots } =
+        await import("@/lib/ai/agent/external/capability/additional-roots")
+      await manager.connect(agentId).catch(() => undefined)
+      if (acceptsAdditionalRoots(manager.getAgentCapabilityProfile(agentId))) {
+        extraRoots = additionalRoots
+      }
+    }
     const result = await manager.execute(
       agentId,
       visible.prompt,
@@ -764,12 +779,15 @@ async function runExternalBacked(
         ...((cwdOverride ?? teamCtx.team.config?.workingDir)
           ? { workingDirectory: cwdOverride ?? teamCtx.team.config?.workingDir }
           : {}),
-        ...(mcpServers.length > 0 || processOrigin
+        // The team's other repositories ride as extra roots for an agent that
+        // takes them; any other works in the primary repository only.
+        ...(mcpServers.length > 0 || processOrigin || extraRoots.length > 0
           ? {
               context: {
                 custom: {
                   ...(mcpServers.length > 0 ? { mcpServers } : {}),
                   ...(processOrigin ? { processOrigin } : {}),
+                  ...(extraRoots.length > 0 ? { additionalDirectories: [...extraRoots] } : {}),
                 },
               },
             }
@@ -972,6 +990,9 @@ export async function dispatchTeammate(
   let taskWorkspaceLease: WorkspaceBundleTurnLease | undefined
   let durableEnvironmentSession: AgentChildEnvironmentSession | undefined
   let taskWorkspaceExecutionRoot: string | undefined
+  // The task copies of the team's other repositories, beside the execution
+  // root. A teammate works in all of them (ADR-0147, 2026-11-08 amendment).
+  let taskWorkspaceAdditionalRoots: string[] = []
   let taskWorkspaceChanges: unknown[] = []
   let settleRemoteDispatchLease: (() => Promise<void>) | undefined
   const settleRemoteDispatch = async (): Promise<void> => {
@@ -1839,6 +1860,7 @@ export async function dispatchTeammate(
         })
         activeDispatch.attachEnvironment(environment.adapter)
         taskWorkspaceExecutionRoot = durableEnvironmentSession.executionRoot
+        taskWorkspaceAdditionalRoots = [...(durableEnvironmentSession.additionalAliases ?? [])]
         await activeDispatch.setWorkspace({
           workspacePath: durableEnvironmentSession.executionRoot,
           ...(durableEnvironmentSession.branch ? { branch: durableEnvironmentSession.branch } : {}),
@@ -1857,6 +1879,7 @@ export async function dispatchTeammate(
         })
         taskWorkspaceLease = lease
         taskWorkspaceExecutionRoot = lease.primaryAlias
+        taskWorkspaceAdditionalRoots = [...lease.additionalAliases]
         await activeDispatch?.setWorkspace({
           workspacePath: lease.primaryAlias,
         })
@@ -1941,7 +1964,8 @@ export async function dispatchTeammate(
           retained?.personalVisibilityDigest,
           (digest) => {
             runtimeVisibilityDigest = digest
-          }
+          },
+          taskWorkspaceAdditionalRoots
         )
       }
       if (channel === "sidecar") {
@@ -1990,7 +2014,8 @@ export async function dispatchTeammate(
             : undefined,
           activeDispatch
             ? { childRunId: activeDispatch.childRunId, dispatchEpoch: activeDispatch.dispatchEpoch }
-            : undefined
+            : undefined,
+          taskWorkspaceAdditionalRoots
         )
       }
 

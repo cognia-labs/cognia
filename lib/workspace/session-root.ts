@@ -34,6 +34,7 @@
 
 import type { SessionExecutionContext } from "@/types/execution-context"
 import type { Project } from "@/types"
+import type { WorkspaceRoot } from "@/types/workspace"
 
 import { resolveSessionWorkspaceRoot } from "@/lib/task-workspace/session-execution-context"
 import { primaryRootOf } from "./roots"
@@ -145,4 +146,42 @@ export function sessionExecutionRootPath(
   projects: readonly Pick<Project, "id" | "roots">[]
 ): string | undefined {
   return resolveSessionExecutionRoot(session, projects).root ?? undefined
+}
+
+/**
+ * The task copies a conversation's bundle checked out, one per repository,
+ * primary first (ADR-0147, 2026-11-08 amendment).
+ *
+ * A managed conversation works in these, not in the workspace's own checkouts,
+ * so a surface that lets someone pick "which repository" lists them ahead of
+ * the originals. Each is labelled after the workspace root it copies; ids are
+ * `copy:<logical root id>` so they never collide with a root's own id. Empty
+ * for a conversation with no bundle yet, and for a copy that is the checkout
+ * itself.
+ */
+export function sessionTaskCopies(
+  context: SessionExecutionContext | null | undefined,
+  project?: Pick<Project, "roots"> | null
+): WorkspaceRoot[] {
+  const leases = context?.execution?.roots ?? []
+  const sources = new Map((project?.roots ?? []).map((root) => [root.id, root] as const))
+  const ownPaths = new Set((project?.roots ?? []).map((root) => root.path.trim()))
+  return [...leases]
+    .sort((a, b) => Number(b.role === "primary") - Number(a.role === "primary"))
+    .filter((lease) => lease.aliasPath?.trim() && !ownPaths.has(lease.aliasPath.trim()))
+    .map((lease) => {
+      const source = sources.get(lease.logicalRootId)
+      const label = source?.label ?? basename(source?.path ?? lease.aliasPath)
+      return {
+        id: `copy:${lease.logicalRootId}`,
+        path: lease.aliasPath,
+        ...(label ? { label } : {}),
+        ...(lease.role === "primary" ? { isPrimary: true } : {}),
+      }
+    })
+}
+
+function basename(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] ?? path
 }

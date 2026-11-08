@@ -92,6 +92,25 @@ describe("useMigrationText", () => {
     expect(t.note({ kind: "schedules-travel", count: 3 }, "Mac mini")).toBe(
       "Its 3 scheduled messages set up in chats move to Mac mini with it."
     )
+    const travels = t.note(
+      { kind: "workspace-travels", workspace: "App", remoteUrl: "https://github.com/acme/app" },
+      "Mac mini"
+    )
+    expect(travels).toContain("https://github.com/acme/app")
+    // A multi-repository workspace says which part does not travel.
+    expect(
+      t.note(
+        {
+          kind: "workspace-travels",
+          workspace: "App",
+          remoteUrl: "https://github.com/acme/app",
+          otherRepositories: 2,
+        },
+        "Mac mini"
+      )
+    ).toBe(
+      `${travels} Only that repository is cloned: its 2 other repositories stay on this device, and work Mac mini runs there happens in the clone instead.`
+    )
     expect(t.kind("bot-installation")).toBe("Bot")
     expect(t.state("awaiting-host")).toBe("waiting to reach the host")
   })

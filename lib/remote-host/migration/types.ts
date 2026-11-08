@@ -97,8 +97,19 @@ export type MigrationNote =
    * Its workspace goes along without its folders: the host clones the
    * repository with the git credential it holds for that git host
    * (ADR-0224 A11).
+   *
+   * Only the primary folder's repository is cloned; `Project.repository` names
+   * that one. A multi-repository workspace's other folders do not travel, and
+   * work there runs at the clone's root (`hostWorkingDirectory`).
+   * `otherRepositories` counts them, absent when there are none, so the move
+   * says so before it happens.
    */
-  | { kind: "workspace-travels"; workspace: string; remoteUrl: string }
+  | {
+      kind: "workspace-travels"
+      workspace: string
+      remoteUrl: string
+      otherRepositories?: number
+    }
 
 export interface MigrationPreflight {
   item: MigrationItemRef

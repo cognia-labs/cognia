@@ -297,6 +297,20 @@ describe("useGitBranchIndicator — following the conversation", () => {
     expect(result.current.target.managed).toBe(true)
   })
 
+  it("offers the conversation's task copies to the root switcher", () => {
+    seedWorkspace()
+    executionContextRef.value = {
+      ...managed,
+      execution: {
+        roots: [{ logicalRootId: "r", role: "primary", aliasPath: "/repos/app/.cognia/wt/1" }],
+      },
+    }
+    const { result } = renderHook(() => useGitBranchIndicator())
+    expect(result.current.taskCopies).toEqual([
+      { id: "copy:r", path: "/repos/app/.cognia/wt/1", label: "app", isPrimary: true },
+    ])
+  })
+
   it("falls back to the workspace root with no conversation binding", async () => {
     seedWorkspace()
     const { result } = renderHook(() => useGitBranchIndicator())

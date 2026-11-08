@@ -28,6 +28,12 @@ export interface OpenAgentChildInput {
 export interface AgentChildEnvironmentSession {
   childRunId: string
   executionRoot: string
+  /**
+   * The task copies of the workspace's other repositories, beside
+   * `executionRoot` (ADR-0147, 2026-11-08 amendment). The child works in all of
+   * them; empty for a single-repository workspace.
+   */
+  additionalAliases?: string[]
   workspaceRunId?: string
   branch?: string
   state: "running" | "suspended" | "terminated"
@@ -70,6 +76,7 @@ export interface AgentExecutionEnvironment {
 
 interface OpenWorkspaceResult {
   executionRoot: string
+  additionalAliases?: string[]
   workspaceRunId?: string
   branch?: string
   settle(finalState: "ready" | "failed" | "cancelled"): Promise<unknown>
@@ -208,6 +215,7 @@ export function createLocalTauriExecutionEnvironment(
       }
       return {
         executionRoot: lease.run.executionRoot,
+        additionalAliases: [...lease.additionalAliases],
         workspaceRunId: lease.run.runId,
         ...(lease.run.isolationKind === "gitWorktree" && lease.run.isolationRef
           ? { branch: lease.run.isolationRef }
@@ -261,6 +269,9 @@ export function createLocalTauriExecutionEnvironment(
         const session = {
           childRunId: input.childRunId,
           executionRoot: workspace.executionRoot,
+          ...(workspace.additionalAliases?.length
+            ? { additionalAliases: [...workspace.additionalAliases] }
+            : {}),
           ...(workspace.workspaceRunId ? { workspaceRunId: workspace.workspaceRunId } : {}),
           ...(workspace.branch ? { branch: workspace.branch } : {}),
           state: "running" as const,

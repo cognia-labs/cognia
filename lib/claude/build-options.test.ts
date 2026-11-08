@@ -3784,6 +3784,20 @@ describe("resolveSendOptions — agent mode resolution", () => {
   })
 })
 
+describe("resolveSendOptions — bundleRoots (ADR-0147, 2026-11-08 amendment)", () => {
+  it("adds the bundle's other repositories to the run's directories, once each", async () => {
+    const opts = await resolveSendOptions({
+      bundleRoots: ["/bundles/b1/sdk", " /bundles/b1/docs ", "", "/bundles/b1/sdk"],
+      referencedPaths: [{ absolute: "/bundles/b1/sdk", isDir: true }],
+    })
+    expect(opts.additionalDirectories?.sort()).toEqual(["/bundles/b1/docs", "/bundles/b1/sdk"])
+  })
+
+  it("adds nothing without them", async () => {
+    expect((await resolveSendOptions({ bundleRoots: [] })).additionalDirectories).toBeUndefined()
+  })
+})
+
 describe("resolveSendOptions — referencedPaths", () => {
   it("adds folder paths and parent dirs of files; dedupes", async () => {
     const opts = await resolveSendOptions({

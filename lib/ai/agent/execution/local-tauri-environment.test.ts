@@ -84,6 +84,29 @@ describe("local Tauri AgentTeam execution environment", () => {
     expect(settle).toHaveBeenCalledTimes(1)
   })
 
+  it("hands a child the task copies of the workspace's other repositories", async () => {
+    const environment = createLocalTauriExecutionEnvironment({
+      executeSetup: async () => ({ success: true }),
+      openWorkspace: async () => ({
+        executionRoot: "/worktree/app",
+        additionalAliases: ["/worktree/sdk"],
+        settle: async () => [],
+      }),
+    })
+    const prepared = await environment.prepare(profile(), "/repo")
+    const child = await environment.openChild({
+      runId: "run",
+      childRunId: "child",
+      taskId: "task",
+      teammateId: "mate",
+      repositoryPath: "/repo",
+      profile: prepared,
+    })
+    expect(child.executionRoot).toBe("/worktree/app")
+    expect(child.additionalAliases).toEqual(["/worktree/sdk"])
+    await environment.dispose("child")
+  })
+
   it("cannot revive a terminated child by suspending it before resume", async () => {
     const environment = createLocalTauriExecutionEnvironment({
       executeSetup: async () => ({ success: true }),

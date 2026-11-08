@@ -322,7 +322,9 @@
   "roots": {
     "primary": "primary",
     "select": "Select root",
-    "switchRoot": "Switch repository root"
+    "switchRoot": "Switch repository root",
+    "taskCopies": "Task copies",
+    "originals": "Original checkouts"
   },
   "sendDiffToChat": "Add to chat",
   "sequencer": {

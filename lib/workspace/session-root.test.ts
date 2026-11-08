@@ -6,6 +6,7 @@ import {
   resolveExecutionRoot,
   resolveSessionExecutionRoot,
   sessionExecutionRootPath,
+  sessionTaskCopies,
 } from "./session-root"
 import { resolvePanelRoot } from "./panel-follow"
 
@@ -200,5 +201,54 @@ describe("the panels and the rest of the app share one chain", () => {
 
   it("counts the cases, so a shrunk table cannot pass by checking nothing", () => {
     expect(cases.length).toBeGreaterThanOrEqual(5)
+  })
+})
+
+describe("sessionTaskCopies", () => {
+  const workspace = {
+    roots: [
+      { id: "app", path: "/repos/app", isPrimary: true },
+      { id: "sdk", path: "/repos/sdk", label: "SDK" },
+    ],
+  } as Pick<Project, "roots">
+  const context = (roots: unknown[]) =>
+    ({
+      location: "managedWorktree",
+      execution: { mode: "managed", bundleId: "b1", roots },
+    }) as unknown as SessionExecutionContext
+
+  it("lists each repository's copy, primary first, named after what it copies", () => {
+    expect(
+      sessionTaskCopies(
+        context([
+          { logicalRootId: "sdk", role: "additional", aliasPath: "/bundles/b1/sdk" },
+          { logicalRootId: "app", role: "primary", aliasPath: "/bundles/b1/app" },
+        ]),
+        workspace
+      )
+    ).toEqual([
+      { id: "copy:app", path: "/bundles/b1/app", label: "app", isPrimary: true },
+      { id: "copy:sdk", path: "/bundles/b1/sdk", label: "SDK" },
+    ])
+  })
+
+  it("is empty without a bundle, and skips a copy that is the checkout itself", () => {
+    expect(sessionTaskCopies(null, workspace)).toEqual([])
+    expect(sessionTaskCopies(context([]), workspace)).toEqual([])
+    expect(
+      sessionTaskCopies(
+        context([{ logicalRootId: "app", role: "primary", aliasPath: "/repos/app" }]),
+        workspace
+      )
+    ).toEqual([])
+  })
+
+  it("names a copy after its own folder when the workspace does not know its root", () => {
+    expect(
+      sessionTaskCopies(
+        context([{ logicalRootId: "primary", role: "primary", aliasPath: "/managed/scratch" }]),
+        null
+      )
+    ).toEqual([{ id: "copy:primary", path: "/managed/scratch", label: "scratch", isPrimary: true }])
   })
 })

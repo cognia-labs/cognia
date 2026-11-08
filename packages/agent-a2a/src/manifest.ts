@@ -248,6 +248,11 @@ export const A2A_CAPABILITIES: AgentCapabilityContribution = {
           level: "unknown",
           evidence: "none",
         },
+        "workspace.additional-roots": {
+          level: "unsupported",
+          evidence: "protocol-spec",
+          reasonKey: "noLocalRoots",
+        },
       },
     },
   },

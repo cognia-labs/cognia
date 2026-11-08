@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { rememberHostClone, resetHostClones } from "./host-clone-roots"
 import {
   bundleProvisioningForPath,
+  bundleRootsForPath,
   provisioningForProject,
   provisioningForRepositoryRoot,
   provisioningForWorkspaceRoot,
@@ -257,6 +258,92 @@ describe("a workspace of several repositories (ADR-0147, 2026-11-08 amendment)",
       "/repos/sdk",
       "/repos/tools",
     ])
+  })
+
+  it("mounts a run's directory with every other root of its workspace", async () => {
+    const declared = jest.fn(async (_project: ProvisioningProject, configRoot?: string) =>
+      configRoot ? { sparsePaths: [`own:${configRoot}`] } : { sparsePaths: ["web"] }
+    )
+    const deps = { declared, projects: async () => [MULTI], trusted: async () => true }
+    const bundle = await bundleRootsForPath("/repos/sdk/src", deps)
+    expect(bundle).toEqual({
+      provisioning: { sparsePaths: ["own:/repos/sdk"] },
+      provisioningSource: "/repos/sdk",
+      roots: [
+        { logicalRootId: "primary", role: "primary", sourceRoot: "/repos/sdk/src" },
+        {
+          logicalRootId: "app",
+          role: "additional",
+          sourceRoot: "/repos/app",
+          provisioning: {
+            sparsePaths: ["web"],
+            cacheLinks: [{ source: "node_modules", target: "node_modules" }],
+            include: [".env"],
+          },
+        },
+        {
+          logicalRootId: "app-pkg",
+          role: "additional",
+          sourceRoot: "/repos/app/packages/ui",
+          provisioning: { sparsePaths: ["own:/repos/app/packages/ui"] },
+        },
+      ],
+    })
+    // The run's own root, the one it is inside, is not mounted twice.
+    expect(bundle.roots.map((root) => root.sourceRoot)).not.toContain("/repos/sdk")
+  })
+
+  it("keeps a root id that would clash with the run's own a distinct one", async () => {
+    const clashing = {
+      id: "ws-clash",
+      roots: [
+        { id: "main", path: "/w/main", isPrimary: true },
+        { id: "primary", path: "/w/other" },
+      ],
+    } as Project
+    const bundle = await bundleRootsForPath("/w/main", {
+      declared: async () => undefined,
+      projects: async () => [clashing],
+      trusted: async () => true,
+    })
+    expect(bundle.roots.map((root) => root.logicalRootId)).toEqual(["primary", "additional-1"])
+  })
+
+  it("leaves out a sibling the user has not trusted", async () => {
+    const trusted = jest.fn(async (root: string) => root !== "/repos/app/packages/ui")
+    const bundle = await bundleRootsForPath("/repos/sdk", {
+      declared: async () => undefined,
+      projects: async () => [MULTI],
+      trusted,
+    })
+    expect(bundle.roots.map((root) => root.sourceRoot)).toEqual(["/repos/sdk", "/repos/app"])
+    const failing = await bundleRootsForPath("/repos/sdk", {
+      declared: async () => undefined,
+      projects: async () => [MULTI],
+      trusted: async () => {
+        throw new Error("no store")
+      },
+    })
+    expect(failing.roots.map((root) => root.sourceRoot)).toEqual(["/repos/sdk"])
+  })
+
+  it("is a bundle of one for a directory no workspace mounts", async () => {
+    expect(
+      await bundleRootsForPath("/elsewhere", {
+        declared: async () => ({ sparsePaths: ["web"] }),
+        projects: async () => [MULTI],
+      })
+    ).toEqual({
+      roots: [{ logicalRootId: "primary", role: "primary", sourceRoot: "/elsewhere" }],
+    })
+    expect(
+      await bundleRootsForPath("/repos/app", {
+        declared: async () => undefined,
+        projects: async () => {
+          throw new Error("no store")
+        },
+      })
+    ).toEqual({ roots: [{ logicalRootId: "primary", role: "primary", sourceRoot: "/repos/app" }] })
   })
 
   it("leaves a root alone when its lookup fails", async () => {

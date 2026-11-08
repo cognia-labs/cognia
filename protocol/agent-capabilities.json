@@ -47,6 +47,7 @@
     "subagents.model-selection",
     "models.list",
     "web.search",
+    "workspace.additional-roots",
     "extensions.dynamic",
     "tools.permission-policy",
     "subagents.context-fork",
@@ -263,6 +264,10 @@
           "reasonKey": "noProtocolSlot"
         },
         "web.search": {
+          "level": "unknown",
+          "evidence": "none"
+        },
+        "workspace.additional-roots": {
           "level": "unknown",
           "evidence": "none"
         },
@@ -484,6 +489,11 @@
         "web.search": {
           "level": "unknown",
           "evidence": "none"
+        },
+        "workspace.additional-roots": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "staticWritableRoots"
         },
         "extensions.dynamic": {
           "level": "unknown",
@@ -717,6 +727,10 @@
           "level": "unknown",
           "evidence": "none"
         },
+        "workspace.additional-roots": {
+          "level": "native",
+          "evidence": "adapter-code"
+        },
         "extensions.dynamic": {
           "level": "unknown",
           "evidence": "none"
@@ -936,6 +950,10 @@
           "evidence": "protocol-spec"
         },
         "web.search": {
+          "level": "unknown",
+          "evidence": "none"
+        },
+        "workspace.additional-roots": {
           "level": "unknown",
           "evidence": "none"
         },
@@ -1161,6 +1179,11 @@
         "web.search": {
           "level": "unknown",
           "evidence": "none"
+        },
+        "workspace.additional-roots": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "oneSessionLocation"
         },
         "extensions.dynamic": {
           "level": "unknown",
@@ -1395,6 +1418,11 @@
         "web.search": {
           "level": "unknown",
           "evidence": "none"
+        },
+        "workspace.additional-roots": {
+          "level": "unsupported",
+          "evidence": "protocol-spec",
+          "reasonKey": "noLocalRoots"
         },
         "extensions.dynamic": {
           "level": "unknown",
@@ -1640,6 +1668,11 @@
           "evidence": "adapter-code",
           "reasonKey": "noProtocolSlot"
         },
+        "workspace.additional-roots": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "oneWorkspacePerSession"
+        },
         "extensions.dynamic": {
           "level": "unknown",
           "evidence": "none"
@@ -1875,6 +1908,11 @@
         "subagents.auto-compaction": {
           "level": "unknown",
           "evidence": "none"
+        },
+        "workspace.additional-roots": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "staticWritableRoots"
         }
       }
     },
@@ -2082,6 +2120,10 @@
           "reasonKey": "noProtocolSlot"
         },
         "web.search": {
+          "level": "unknown",
+          "evidence": "none"
+        },
+        "workspace.additional-roots": {
           "level": "unknown",
           "evidence": "none"
         },
@@ -2332,6 +2374,10 @@
         "web.search": {
           "level": "unknown",
           "evidence": "none"
+        },
+        "workspace.additional-roots": {
+          "level": "unknown",
+          "evidence": "none"
         }
       }
     },
@@ -2568,6 +2614,11 @@
           "reasonKey": "noProtocolSlot"
         },
         "web.search": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "noProtocolSlot"
+        },
+        "workspace.additional-roots": {
           "level": "unsupported",
           "evidence": "adapter-code",
           "reasonKey": "noProtocolSlot"
@@ -2819,6 +2870,11 @@
           "level": "unsupported",
           "evidence": "adapter-code",
           "reasonKey": "noProtocolSlot"
+        },
+        "workspace.additional-roots": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "noProtocolSlot"
         }
       }
     },
@@ -3056,6 +3112,11 @@
           "reasonKey": "noProtocolSlot"
         },
         "web.search": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "noProtocolSlot"
+        },
+        "workspace.additional-roots": {
           "level": "unsupported",
           "evidence": "adapter-code",
           "reasonKey": "noProtocolSlot"
@@ -3300,6 +3361,11 @@
           "reasonKey": "noProtocolSlot"
         },
         "web.search": {
+          "level": "unsupported",
+          "evidence": "adapter-code",
+          "reasonKey": "noProtocolSlot"
+        },
+        "workspace.additional-roots": {
           "level": "unsupported",
           "evidence": "adapter-code",
           "reasonKey": "noProtocolSlot"

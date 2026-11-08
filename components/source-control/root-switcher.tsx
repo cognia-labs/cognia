@@ -2,13 +2,15 @@
 
 /**
  * RootSwitcher — for multi-root workspaces, lets the user point the Source
- * Control panel at a specific mounted root. The always-mounted
+ * Control panel at a specific mounted root. A managed conversation's task
+ * copies are listed first, in their own group, with the workspace's own
+ * checkouts after them. The always-mounted
  * `useGitBranchIndicator` auto-binds to the active project's PRIMARY root on
  * workspace switch; this switcher overrides that binding to a secondary root
  * without fighting the auto-follow (the follow guard tracks the primary, so a
  * manual pick persists until the workspace itself changes).
  *
- * Renders nothing for single-root (or rootless) workspaces.
+ * Renders nothing when there is only one directory to choose from.
  */
 
 import { useTranslations } from "next-intl"
@@ -19,6 +21,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useGitStore } from "@/stores/git/git-store"
@@ -42,12 +46,19 @@ interface RootSwitcherProps {
    * globally active workspace.
    */
   roots?: WorkspaceRoot[]
+  /**
+   * The conversation's task copies, one per repository (ADR-0147, 2026-11-08
+   * amendment). Listed first, ahead of the workspace's own checkouts, since
+   * they are where a managed conversation's changes are.
+   */
+  taskCopies?: WorkspaceRoot[]
   remoteWorkspaces?: RemoteGitWorkspace[]
   onSelectRemoteWorkspace?: (workspace: RemoteGitWorkspace) => void
 }
 
 export function RootSwitcher({
   roots: explicitRoots,
+  taskCopies,
   remoteWorkspaces,
   onSelectRemoteWorkspace,
 }: RootSwitcherProps = {}) {
@@ -108,10 +119,27 @@ export function RootSwitcher({
     )
   }
 
-  // Only meaningful when the active workspace mounts more than one directory.
-  if (roots.length <= 1) return null
+  const copies = taskCopies ?? []
+  // Only meaningful when there is more than one directory to choose from: the
+  // workspace's roots, plus the conversation's copies of them.
+  if (roots.length + copies.length <= 1) return null
 
-  const current = roots.find((r) => r.path === rootDir)
+  const current = [...copies, ...roots].find((r) => r.path === rootDir)
+  const option = (r: WorkspaceRoot) => (
+    <DropdownMenuItem
+      key={r.id}
+      onSelect={() => setRootDir(r.path)}
+      data-testid={`root-option-${r.id}`}
+    >
+      <CheckIcon className={cn("size-3.5", r.path === rootDir ? "opacity-100" : "opacity-0")} />
+      <span className="min-w-0 flex-1 truncate" title={r.path}>
+        {rootLabel(r)}
+      </span>
+      {r.isPrimary && (
+        <span className="ml-auto text-[10px] text-muted-foreground">{t("roots.primary")}</span>
+      )}
+    </DropdownMenuItem>
+  )
 
   return (
     <DropdownMenu>
@@ -131,25 +159,25 @@ export function RootSwitcher({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        {roots.map((r) => (
-          <DropdownMenuItem
-            key={r.id}
-            onSelect={() => setRootDir(r.path)}
-            data-testid={`root-option-${r.id}`}
-          >
-            <CheckIcon
-              className={cn("size-3.5", r.path === rootDir ? "opacity-100" : "opacity-0")}
-            />
-            <span className="min-w-0 flex-1 truncate" title={r.path}>
-              {rootLabel(r)}
-            </span>
-            {r.isPrimary && (
-              <span className="ml-auto text-[10px] text-muted-foreground">
-                {t("roots.primary")}
-              </span>
+        {copies.length > 0 ? (
+          <>
+            <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+              {t("roots.taskCopies")}
+            </DropdownMenuLabel>
+            {copies.map(option)}
+            {roots.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+                  {t("roots.originals")}
+                </DropdownMenuLabel>
+                {roots.map(option)}
+              </>
             )}
-          </DropdownMenuItem>
-        ))}
+          </>
+        ) : (
+          roots.map(option)
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

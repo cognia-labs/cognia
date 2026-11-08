@@ -299,6 +299,10 @@ export const DSH_CAPABILITIES: AgentCapabilityContribution = {
           level: "unknown",
           evidence: "none",
         },
+        "workspace.additional-roots": {
+          level: "native",
+          evidence: "adapter-code",
+        },
       },
     },
   },

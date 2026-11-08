@@ -86,6 +86,16 @@ export function liveCapabilityFacts(
     // manifest row and lit up `/think` on a backend that forwards the pick
     // nowhere. The manifest owns this cell; the handshake has nothing to add.
 
+    // Extra workspace roots are per agent build on ACP
+    // (`sessionCapabilities.additionalDirectories`, false when left out), so
+    // the protocol row says `unknown` and the handshake settles it.
+    if (negotiated.additionalDirectories === true) {
+      cells["workspace.additional-roots"] = yes("negotiatedAdditionalDirectories")
+    }
+    if (negotiated.additionalDirectories === false) {
+      cells["workspace.additional-roots"] = no("negotiatedNoAdditionalDirectories")
+    }
+
     if (negotiated.toolExecution === false) {
       // An agent that cannot execute tools cannot produce tool results or tool
       // errors either; recording only `tools.ordinary` would leave two cells

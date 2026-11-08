@@ -762,6 +762,13 @@ export interface AcpCapabilities {
    * answers then.
    */
   imageInput?: boolean
+  /**
+   * Whether a session may be given additional absolute workspace roots beside
+   * its cwd, as the agent itself negotiated it (ACP
+   * `sessionCapabilities.additionalDirectories`). Absent when the protocol has
+   * no such handshake; the protocol's capability row answers then.
+   */
+  additionalDirectories?: boolean
   /** Custom capabilities */
   custom?: Record<string, unknown>
 }

@@ -1150,6 +1150,15 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         // `image` out has said it takes text only. Read after the vendor
         // override, so a build that advertises images it cannot use says no.
         imageInput: initResult.agentCapabilities?.promptCapabilities?.image === true,
+        // Extra workspace roots, when the agent advertised them (DSH's own ACP
+        // profile takes them by construction). Left out rather than false
+        // otherwise: a session that mounts Cognia's tools still reaches the
+        // roots through them (`resolveAdditionalDirectories`), so silence here
+        // is not a refusal.
+        ...(this.isDshAgent() ||
+        initResult.agentCapabilities?.sessionCapabilities?.additionalDirectories
+          ? { additionalDirectories: true }
+          : {}),
         // Stdio MCP servers are baseline ACP support. The negotiated flags
         // only describe additional HTTP/SSE server transports.
         mcpTools: !this.vendor?.sessionMcpServersUnsupported,
