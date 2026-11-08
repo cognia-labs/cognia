@@ -9,7 +9,7 @@ use tokio_postgres::Row;
 
 use crate::chat::{
     authorize_session_action, SessionAction, SessionEvent, SessionMembership, SessionRole,
-    SessionStatus, SharedSession, ToolDetail,
+    RoomReplyMode, SessionStatus, SharedSession, ToolDetail,
 };
 use crate::store::{AuthorizationAuditEvent, AuthorizationContext, PgStore, StoreError};
 
@@ -301,6 +301,26 @@ fn require_tool_detail_manager(member: Option<&SessionMembership>) -> Result<(),
     }
 }
 
+fn require_room_settings_manager(member: Option<&SessionMembership>) -> Result<(), StoreError> {
+    if member.is_some_and(|m| matches!(m.role, SessionRole::Owner | SessionRole::Maintainer)) {
+        Ok(())
+    } else {
+        Err(StoreError::Policy(
+            "room settings require owner or maintainer".into(),
+        ))
+    }
+}
+
+/// Whether a room-settings change leaves the session as it is.
+fn room_settings_unchanged(
+    session: &SharedSession,
+    reply_mode: Option<RoomReplyMode>,
+    instructions: Option<&str>,
+) -> bool {
+    reply_mode.is_none_or(|mode| mode == session.reply_mode)
+        && instructions.is_none_or(|text| text == session.room_instructions)
+}
+
 fn check_tool_detail(session: &SharedSession, revision: Option<u64>) -> Result<(), StoreError> {
     if revision.is_some_and(|revision| revision < session.tool_detail_revision as u64) {
         return Err(conflict(serde_json::json!({
@@ -338,6 +358,21 @@ pub trait ChatStore: Send + Sync {
         title: Option<&str>,
         status: Option<SessionStatus>,
         tool_detail: Option<(ToolDetail, &str)>,
+        operation_id: &str,
+        base_revision: i64,
+        now: i64,
+    ) -> Result<SharedSession, StoreError>;
+    /// Change a shared room's reply mode and instructions (ADR-0177 batch 5).
+    /// Owners and maintainers only; bumps `revision` and
+    /// `room_settings_revision`, never `policy_revision`: who may do what
+    /// is unchanged.
+    async fn patch_room_settings(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        reply_mode: Option<RoomReplyMode>,
+        instructions: Option<&str>,
+        actor: &str,
         operation_id: &str,
         base_revision: i64,
         now: i64,
@@ -1226,6 +1261,9 @@ impl ChatStore for InMemoryChatStore {
         let session = SharedSession {
             tool_detail: crate::chat::ToolDetail::Summary,
             tool_detail_revision: 0,
+            reply_mode: crate::chat::RoomReplyMode::MentionOnly,
+            room_instructions: String::new(),
+            room_settings_revision: 0,
             contract_version: crate::admission::COLLAB_PROTOCOL_VERSION as i32,
             id: input.id,
             org_id: input.org_id.clone(),
@@ -1325,6 +1363,54 @@ impl ChatStore for InMemoryChatStore {
         }
         session.revision += 1;
         session.policy_revision += 1;
+        session.updated_at = now;
+        let updated = session.clone();
+        tables.chat.operations.insert(
+            (org_id.to_owned(), operation_id.to_owned()),
+            session_id.to_owned(),
+        );
+        Ok(updated)
+    }
+
+    async fn patch_room_settings(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        reply_mode: Option<RoomReplyMode>,
+        instructions: Option<&str>,
+        actor: &str,
+        operation_id: &str,
+        base_revision: i64,
+        now: i64,
+    ) -> Result<SharedSession, StoreError> {
+        let mut tables = self.tables.write();
+        admission::memory_chat(&tables, org_id, session_id, FeatureKey::SharedChat, Requirement::Write)?;
+        require_room_settings_manager(memory_member(&tables, org_id, session_id, actor).as_ref())?;
+        if let Some(id) = tables
+            .chat.operations
+            .get(&(org_id.to_owned(), operation_id.to_owned()))
+        {
+            return tables.chat.sessions.get(id).cloned().ok_or(StoreError::NotFound);
+        }
+        let session = tables
+            .chat.sessions
+            .get_mut(session_id)
+            .filter(|session| session.org_id == org_id)
+            .ok_or(StoreError::NotFound)?;
+        if session.revision != base_revision {
+            return Err(conflict(session.clone()));
+        }
+        if room_settings_unchanged(session, reply_mode, instructions) {
+            return Ok(session.clone());
+        }
+        if let Some(mode) = reply_mode {
+            session.reply_mode = mode;
+        }
+        if let Some(text) = instructions {
+            session.room_instructions = text.to_owned();
+        }
+        session.room_settings_revision += 1;
+        session.revision += 1;
         session.updated_at = now;
         let updated = session.clone();
         tables.chat.operations.insert(
@@ -2747,6 +2833,13 @@ fn session_from_row(row: &Row) -> Result<SharedSession, StoreError> {
             other => return Err(StoreError::Corrupt(format!("unknown tool detail {other}"))),
         },
         tool_detail_revision: row.get("tool_detail_revision"),
+        reply_mode: {
+            let mode: String = row.get("reply_mode");
+            RoomReplyMode::parse(&mode)
+                .ok_or_else(|| StoreError::Corrupt(format!("unknown reply mode {mode}")))?
+        },
+        room_instructions: row.get("room_instructions"),
+        room_settings_revision: row.get("room_settings_revision"),
         contract_version: row.get("contract_version"),
         id: row.get("id"),
         org_id: row.get("org_id"),
@@ -2825,7 +2918,7 @@ fn qualified_session_columns() -> String {
         .join(", ")
 }
 
-const SESSION_COLUMNS: &str = "id, org_id, workspace_id, title, status, created_by_user_id, created_at, updated_at, revision, policy_revision, contract_version, tool_detail, tool_detail_revision";
+const SESSION_COLUMNS: &str = "id, org_id, workspace_id, title, status, created_by_user_id, created_at, updated_at, revision, policy_revision, contract_version, tool_detail, tool_detail_revision, reply_mode, room_instructions, room_settings_revision";
 pub(crate) const MEMBER_JOINS: &str = "FROM chat_session_memberships m JOIN chat_sessions s ON s.org_id=m.org_id AND s.id=m.session_id LEFT JOIN users u ON u.id=m.user_id LEFT JOIN org_memberships om ON om.org_id=s.org_id AND om.user_id=m.user_id LEFT JOIN workspace_memberships wm ON wm.org_id=s.org_id AND wm.workspace_id=s.workspace_id AND wm.user_id=m.user_id";
 
 pub(crate) fn effective_member_from_row(row: &Row) -> Result<Option<SessionMembership>, StoreError> {
@@ -3159,6 +3252,53 @@ impl ChatStore for PgStore {
             .query_one(
                 &format!("UPDATE chat_sessions SET title=COALESCE($3,title),status=COALESCE($4,status),tool_detail_revision=tool_detail_revision+CASE WHEN $7::text IS NOT NULL AND tool_detail<>$7 THEN 1 ELSE 0 END,tool_detail=COALESCE($7,tool_detail),updated_at=$5,revision=revision+1,policy_revision=policy_revision+1,last_operation_id=$6 WHERE org_id=$1 AND id=$2 RETURNING {SESSION_COLUMNS}"),
                 &[&org_id, &session_id, &title, &status_text, &now, &operation_id, &detail_text],
+            )
+            .await
+            .map_err(|error| StoreError::Database(error.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|error| StoreError::Database(error.to_string()))?;
+        session_from_row(&row)
+    }
+
+    async fn patch_room_settings(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        reply_mode: Option<RoomReplyMode>,
+        instructions: Option<&str>,
+        actor: &str,
+        operation_id: &str,
+        base_revision: i64,
+        now: i64,
+    ) -> Result<SharedSession, StoreError> {
+        let mut client = self.client().await?;
+        let tx = self.scoped(&mut client, org_id).await?;
+        let existing = tx
+            .query_opt(
+                &format!("SELECT {SESSION_COLUMNS}, last_operation_id FROM chat_sessions WHERE org_id=$1 AND id=$2 FOR UPDATE"),
+                &[&org_id, &session_id],
+            )
+            .await
+            .map_err(|error| StoreError::Database(error.to_string()))?
+            .ok_or(StoreError::NotFound)?;
+        self.admit_chat(&tx, org_id, session_id, FeatureKey::SharedChat, Requirement::Write).await?;
+        require_room_settings_manager(pg_member(&tx, org_id, session_id, actor).await?.as_ref())?;
+        if existing.get::<_, String>("last_operation_id") == operation_id {
+            return session_from_row(&existing);
+        }
+        let current = session_from_row(&existing)?;
+        if current.revision != base_revision {
+            return Err(conflict(current));
+        }
+        if room_settings_unchanged(&current, reply_mode, instructions) {
+            return Ok(current);
+        }
+        let mode_text = reply_mode.map(RoomReplyMode::as_str);
+        let row = tx
+            .query_one(
+                &format!("UPDATE chat_sessions SET reply_mode=COALESCE($3,reply_mode),room_instructions=COALESCE($4,room_instructions),room_settings_revision=room_settings_revision+1,updated_at=$5,revision=revision+1,last_operation_id=$6 WHERE org_id=$1 AND id=$2 RETURNING {SESSION_COLUMNS}"),
+                &[&org_id, &session_id, &mode_text, &instructions, &now, &operation_id],
             )
             .await
             .map_err(|error| StoreError::Database(error.to_string()))?;
@@ -4439,7 +4579,7 @@ mod tests {
 
     #[test]
     fn session_discovery_qualifies_whole_columns_without_corrupting_identifiers() {
-        assert_eq!(qualified_session_columns(), "s.id, s.org_id, s.workspace_id, s.title, s.status, s.created_by_user_id, s.created_at, s.updated_at, s.revision, s.policy_revision, s.contract_version, s.tool_detail, s.tool_detail_revision");
+        assert_eq!(qualified_session_columns(), "s.id, s.org_id, s.workspace_id, s.title, s.status, s.created_by_user_id, s.created_at, s.updated_at, s.revision, s.policy_revision, s.contract_version, s.tool_detail, s.tool_detail_revision, s.reply_mode, s.room_instructions, s.room_settings_revision");
     }
 
     fn session(operation_id: &str) -> NewSharedSession {

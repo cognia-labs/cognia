@@ -31,6 +31,7 @@ import {
 } from "./shared-live-frames"
 import { mergeChatTurnMetadata, pickChatContinuationMetadata } from "@/lib/chat/continuation"
 import { initialRoomMemoryFields } from "@/lib/chat/room/settings"
+import { sharedRoomSettingsFromRemote } from "./shared-room-settings"
 
 type SharedChatReader = Pick<
   CollabClient,
@@ -170,6 +171,9 @@ async function ensureLocalProjection(
     await getDb().sessions.update(existing.id, {
       title: remote.title,
       projectId: remote.workspaceId,
+      // The server's reply mode and instructions over this machine's own
+      // memory switch (ADR-0177 batch 5).
+      roomSettings: sharedRoomSettingsFromRemote(remote, existing.roomSettings),
       collaboration: {
         ...existing.collaboration!,
         policyRevision: remote.policyRevision,
@@ -187,6 +191,7 @@ async function ensureLocalProjection(
     kind: "direct",
     // Several people share this room: it starts with memory off (ADR-0177).
     ...initialRoomMemoryFields("shared"),
+    roomSettings: sharedRoomSettingsFromRemote(remote, undefined),
     createdAt: remote.createdAt,
     updatedAt: remote.updatedAt,
     collaboration: {

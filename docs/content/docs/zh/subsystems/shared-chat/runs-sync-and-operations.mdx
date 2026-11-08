@@ -33,6 +33,16 @@ Run 的回复不只是边生成边存储（ADR-0241）。若服务端在 `/healt
 
 移除成员会关闭该用户的流、撤销附件 ticket、取消其排队输入，并结束其活动租约。客户端清除对应共享投影。离线模式只保留缓存读取与草稿，不存在延迟消息或 Run outbox。
 
+## 由房间决定助手何时回复
+
+共享会话是一个房间（ADR-0177），它的回复模式和说明保存在服务端的会话行上，所有成员读到的是同一份。只有所有者或维护者可以修改（`PATCH /chat-sessions/{id}`，带 `replyMode` 或 `roomInstructions`；这会递增 `roomSettingsRevision`，从不改动策略版本）。每个成员的同步会把它们镜像到本地会话；记忆开关仍由各设备自己决定。
+
+- `mention_only`：默认值，也是此前所有房间的行为：只有有人点击“请求 AI”时助手才回复。
+- `auto`：作者的客户端在消息落地后为每个人类回合请求回复，除非这条消息已经引导了正在回复的 Run。
+- `asleep`：没有人会得到回复。服务端以 `409 room_asleep` 拒绝 AI 请求；每个人类回合以及每次被拒绝的请求都会在会话审计中写入一条 `room.silence` 裁定，共享面板把它显示为房间保持静默。
+
+说明会作为 `## Room instructions` 进入每次 Run 的系统提示，无论 Run 由哪台设备持有。
+
 ## Break-glass 不等于 Org admin 自动读取
 
 Org admin 不会通过普通成员 API 发现私有会话内容。事故处理中，拥有 workspace-manage 能力的 Org admin 必须填写理由，并选择一到六十分钟的有效期。Grant 绑定该管理员与会话。每次读取原始事件都会检查有效期，并写入不含内容的 `session.breakGlassRead` 审计，其中 `rawContentAccessed=true`。

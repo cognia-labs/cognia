@@ -2795,6 +2795,129 @@ async fn org_member_names_list_only_this_orgs_members_in_postgres() {
 
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL instance"]
+async fn shared_room_settings_are_managed_and_revisioned_in_postgres() {
+    use cognia_collab_server::{
+        chat::RoomReplyMode,
+        chat_store::ChatStore,
+        store::StoreError,
+    };
+    let (database, store, owner, maintainer, guest) = standing_fixture().await;
+    let initial = store
+        .admin_session(&owner.org_id, "standing_session")
+        .await
+        .unwrap();
+    // The column default is what a room did before it had a setting.
+    assert_eq!(
+        (initial.reply_mode, initial.room_instructions.as_str(), initial.room_settings_revision),
+        (RoomReplyMode::MentionOnly, "", 0)
+    );
+    assert!(matches!(
+        store
+            .patch_room_settings(
+                &owner.org_id,
+                "standing_session",
+                Some(RoomReplyMode::Auto),
+                None,
+                &guest.user_id,
+                "denied",
+                initial.revision,
+                3,
+            )
+            .await,
+        Err(StoreError::Policy(_))
+    ));
+    let auto = store
+        .patch_room_settings(
+            &owner.org_id,
+            "standing_session",
+            Some(RoomReplyMode::Auto),
+            Some("Answer briefly."),
+            &owner.user_id,
+            "auto",
+            initial.revision,
+            3,
+        )
+        .await
+        .unwrap();
+    assert_eq!(auto.reply_mode, RoomReplyMode::Auto);
+    assert_eq!(auto.room_instructions, "Answer briefly.");
+    assert_eq!(auto.room_settings_revision, 1);
+    assert_eq!(auto.revision, initial.revision + 1);
+    assert_eq!(auto.policy_revision, initial.policy_revision);
+    // The same operation replays; no change is no bump; a stale base conflicts.
+    let replay = store
+        .patch_room_settings(
+            &owner.org_id,
+            "standing_session",
+            Some(RoomReplyMode::Auto),
+            Some("Answer briefly."),
+            &owner.user_id,
+            "auto",
+            initial.revision,
+            4,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay, auto);
+    let same = store
+        .patch_room_settings(
+            &owner.org_id,
+            "standing_session",
+            Some(RoomReplyMode::Auto),
+            None,
+            &owner.user_id,
+            "same",
+            auto.revision,
+            4,
+        )
+        .await
+        .unwrap();
+    assert_eq!(same, auto);
+    assert!(matches!(
+        store
+            .patch_room_settings(
+                &owner.org_id,
+                "standing_session",
+                Some(RoomReplyMode::Asleep),
+                None,
+                &owner.user_id,
+                "stale",
+                initial.revision,
+                4,
+            )
+            .await,
+        Err(StoreError::Conflict(_))
+    ));
+    let asleep = store
+        .patch_room_settings(
+            &owner.org_id,
+            "standing_session",
+            Some(RoomReplyMode::Asleep),
+            None,
+            &maintainer.user_id,
+            "asleep",
+            auto.revision,
+            5,
+        )
+        .await
+        .unwrap();
+    assert_eq!(asleep.reply_mode, RoomReplyMode::Asleep);
+    assert_eq!(asleep.room_instructions, "Answer briefly.");
+    assert_eq!(asleep.room_settings_revision, 2);
+    // Every read path carries the columns.
+    let listed = store
+        .list_sessions(&owner.org_id, &owner.user_id, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|session| session.id == "standing_session")
+        .unwrap();
+    assert_eq!(listed, asleep);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL instance"]
 async fn shared_live_admission_and_tool_detail_revisions_are_atomic_in_postgres() {
     use cognia_collab_server::{
         chat::{SessionRole, ToolDetail},

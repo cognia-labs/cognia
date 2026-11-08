@@ -272,6 +272,50 @@ it("requests AI for a durable message independently from Send", () => {
   })
   window.removeEventListener("cognia:shared-request-ai", listener)
 })
+it("keeps Request AI inert in an asleep room, and says why", () => {
+  const listener = jest.fn()
+  window.addEventListener("cognia:shared-request-ai", listener)
+  render(<SharedSessionPanel session={{ ...shared, roomSettings: { replyMode: "asleep" } }} />)
+  const request = screen.getByRole("button", { name: "requestAI" })
+  expect(request).toBeDisabled()
+  expect(request).toHaveAttribute("title", "roomAsleep")
+  expect(request).toHaveAttribute("data-unavailable", "room_asleep")
+  fireEvent.click(request)
+  expect(listener).not.toHaveBeenCalled()
+  window.removeEventListener("cognia:shared-request-ai", listener)
+})
+it("reads a silence verdict in the audit as the room staying quiet, not a decision", async () => {
+  const client = configured()
+  client.listSessionAuthorizationAudit.mockResolvedValue([
+    {
+      id: "quiet",
+      allowed: true,
+      action: "room.silence",
+      actorUserId: "me",
+      reason: "reply_mode_asleep",
+      messageId: "m1",
+      trigger: "message",
+    },
+    {
+      id: "refused",
+      allowed: true,
+      action: "room.silence",
+      actorUserId: "other",
+      reason: "reply_mode_asleep",
+      messageId: "m1",
+      trigger: "request",
+    },
+  ])
+  render(<SharedSessionPanel session={shared} />)
+  fireEvent.click(screen.getByRole("button", { name: "openSharedSession" }))
+  const lines = await screen.findAllByTestId("shared-audit-silence")
+  expect(lines.map((line) => line.textContent)).toEqual([
+    'silenceVerdictMessage:{"user":"me"}',
+    'silenceVerdictRequest:{"user":"other"}',
+  ])
+  expect(screen.getAllByText("silenceVerdict")).toHaveLength(2)
+  expect(screen.queryByText("allowed")).not.toBeInTheDocument()
+})
 it("revokes pending invites and prevents the last owner from leaving", async () => {
   const client = configured()
   render(<SharedSessionPanel session={shared} />)

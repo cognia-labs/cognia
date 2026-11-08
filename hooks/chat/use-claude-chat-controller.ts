@@ -206,6 +206,11 @@ import {
 } from "@/lib/collab/shared-run-coordinator"
 import { installSharedSessionSteerLane, steerSharedFollowUp } from "@/lib/collab/shared-run-steer"
 import {
+  applySharedRoomInstructions,
+  isRoomAsleepRefusal,
+  shouldRequestSharedReply,
+} from "@/lib/collab/shared-room-settings"
+import {
   acceptChatTurn,
   bindChatTurnContext,
   chatSubmissionId,
@@ -937,6 +942,11 @@ export function useClaudeChat() {
   const tVideo = useTranslations("chat.composer.attachments.video")
   const tAttachments = useTranslations("chat.composer.attachments")
   const tCollab = useTranslations("chatCollaboration")
+  // Read by the shared-request listener, which installs once.
+  const tCollabRef = useRef(tCollab)
+  useEffect(() => {
+    tCollabRef.current = tCollab
+  }, [tCollab])
   const tSteer = useTranslations("chat.steer")
   const tCaptureBusy = useTranslations("chat.restorePoint")
   const refuseCapturedTurn = useCallback(
@@ -2109,11 +2119,24 @@ export function useClaudeChat() {
         // the transcript either way; a steer that cannot land leaves it a
         // message, or the next run's input on the holder.
         const followUpText = steerTextOf(shared.content, sharedManifest?.length ?? 0)
-        if (followUpText) {
-          await steerSharedFollowUp(sessionId, {
-            messageId: persistedMessage.id,
-            content: followUpText,
-          }).catch((error) => console.warn("shared follow-up steer failed", error))
+        const steered = followUpText
+          ? await steerSharedFollowUp(sessionId, {
+              messageId: persistedMessage.id,
+              content: followUpText,
+            }).catch((error) => {
+              console.warn("shared follow-up steer failed", error)
+              return "none" as const
+            })
+          : ("none" as const)
+        // A room that answers every human turn (ADR-0177 batch 5): ask for
+        // this one, the way "Request AI" does, unless it steered a run that
+        // is already answering. Read off the mirror the post just refreshed.
+        if (shouldRequestSharedReply(await getSession(sessionId), steered)) {
+          window.dispatchEvent(
+            new CustomEvent("cognia:shared-request-ai", {
+              detail: { sessionId, messageId: persistedMessage.id },
+            })
+          )
         }
         return
       }
@@ -3300,12 +3323,18 @@ export function useClaudeChat() {
       if (callOptions?.sharedRequest) {
         providerPayload.messages = [makeUserMessage(turnContent)]
         providerPayload.content = turnContent
-        providerPayload.sendOptions = {
-          ...providerPayload.sendOptions,
-          resumeSessionId: undefined,
-          forkFromSessionId: undefined,
-          initialConversation: undefined,
-        }
+        // The room's instructions are the server's (ADR-0177 batch 5), and
+        // the run host is whichever member holds the lease: every run reads
+        // them, like a team room's members do.
+        providerPayload.sendOptions = applySharedRoomInstructions(
+          {
+            ...providerPayload.sendOptions,
+            resumeSessionId: undefined,
+            forkFromSessionId: undefined,
+            initialConversation: undefined,
+          },
+          session
+        )
       }
       effectiveContent = providerPayload.content
       sendOptions = providerPayload.sendOptions
@@ -6691,6 +6720,12 @@ export function useClaudeChat() {
             : {}),
         })
       } catch (error) {
+        // An asleep room answers nobody: the refusal is the room's setting
+        // working, not a failure (the server audited the silence).
+        if (isRoomAsleepRefusal(error)) {
+          toast.info(tCollabRef.current("roomAsleepRefused"))
+          return
+        }
         useChatStore
           .getState()
           .setSessionDiagnostic(

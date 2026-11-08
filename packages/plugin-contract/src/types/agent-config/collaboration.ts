@@ -1,3 +1,5 @@
+import type { RoomReplyMode } from "./room-settings"
+
 export type SharedSessionStatus = "importing" | "active" | "archived" | "deleting"
 
 export type SessionRole = "owner" | "maintainer" | "member" | "viewer"
@@ -68,6 +70,16 @@ export interface SharedSession {
    * the `member.updated` frame.
    */
   toolDetailRevision?: number
+  /**
+   * When the room's assistant answers (ADR-0177 batch 5). Absent from a
+   * server older than it: read as `mention_only`, which is what such a room
+   * does (the assistant answers only when somebody asks it to).
+   */
+  replyMode?: RoomReplyMode
+  /** Injected into the run's system prompt as `## Room instructions`. */
+  roomInstructions?: string
+  /** Bumped by every reply-mode or instructions change. */
+  roomSettingsRevision?: number
 }
 
 export interface SessionMembership {
@@ -217,6 +229,13 @@ export interface AuthorizationAuditEvent {
   reason: string
   policyRevision: number
   createdAt: number
+  /**
+   * On a silence verdict (`room.silence`, ADR-0177 batch 5): the message the
+   * room left unanswered, and whether a turn (`message`) or an AI request
+   * (`request`) was. Absent on every other row.
+   */
+  messageId?: string
+  trigger?: "message" | "request"
 }
 
 export interface ChatCollaborationBinding {

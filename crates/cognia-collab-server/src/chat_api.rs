@@ -748,6 +748,10 @@ async fn authorize_export(
 #[serde(rename_all = "camelCase")]
 struct PatchSessionBody {
     tool_detail: Option<crate::chat::ToolDetail>,
+    /// A room-settings change travels on its own (ADR-0177 batch 5): it
+    /// bumps `room_settings_revision`, not `policy_revision`.
+    reply_mode: Option<crate::chat::RoomReplyMode>,
+    room_instructions: Option<String>,
     title: Option<String>,
     status: Option<SessionStatus>,
     operation_id: String,
@@ -768,6 +772,44 @@ async fn patch_session(
         SessionAction::ManageSettings,
     )
     .await?;
+    if body.reply_mode.is_some() || body.room_instructions.is_some() {
+        if body.title.is_some() || body.status.is_some() || body.tool_detail.is_some() {
+            return Err(ChatFailure::BadRequest(
+                "room settings change on their own".into(),
+            ));
+        }
+        let instructions = body.room_instructions.as_deref().map(str::trim);
+        if instructions
+            .is_some_and(|text| text.chars().count() > crate::chat::MAX_ROOM_INSTRUCTIONS_CHARS)
+        {
+            return Err(ChatFailure::BadRequest(
+                "room instructions are too long".into(),
+            ));
+        }
+        let updated = state
+            .chat_store
+            .patch_room_settings(
+                &org_id,
+                &session_id,
+                body.reply_mode,
+                instructions,
+                &member.user_id,
+                &body.operation_id,
+                body.base_revision,
+                (state.now)(),
+            )
+            .await
+            .map_err(ChatFailure::Store)?;
+        if updated.room_settings_revision != before.room_settings_revision {
+            let _ = state.chat_hub.sender(&session_id).send(session_updated_event(
+                &session_id,
+                &member.user_id,
+                updated.room_settings_revision,
+                (state.now)(),
+            ));
+        }
+        return Ok(Json(updated));
+    }
     if body
         .title
         .as_deref()
@@ -1318,6 +1360,76 @@ async fn revoke_invite(
     ))
 }
 
+/// "The room's settings changed": not stored, sequence 0, so every member's
+/// client pulls the session again and its mirror follows.
+fn session_updated_event(
+    session_id: &str,
+    user_id: &str,
+    room_settings_revision: i64,
+    now: i64,
+) -> SessionEvent {
+    SessionEvent {
+        id: format!("evt_{}", Uuid::new_v4().simple()),
+        session_id: session_id.into(),
+        sequence: 0,
+        kind: "session.updated".into(),
+        actor_kind: "system".into(),
+        actor_id: "system".into(),
+        actor_label: None,
+        payload: serde_json::json!({"userId":user_id,"roomSettingsRevision":room_settings_revision}),
+        created_at: now,
+        operation_id: format!("room_settings_{}", Uuid::new_v4().simple()),
+    }
+}
+
+/// Why a room's assistant stayed silent, in the session audit (ADR-0177
+/// batch 5): the room is asleep. `trigger` is `message` for a human turn the
+/// room did not answer, `request` for an AI request it refused.
+#[allow(clippy::too_many_arguments)]
+async fn record_silence_verdict(
+    state: &AppState,
+    headers: &HeaderMap,
+    org_id: &str,
+    session: &crate::chat::SharedSession,
+    actor_user_id: &str,
+    message_id: &str,
+    trigger: &str,
+    now: i64,
+) -> Result<(), ChatFailure> {
+    state
+        .store
+        .append_authorization_audit(AuthorizationAuditEvent {
+            id: format!("aud_{}", Uuid::new_v4().simple()),
+            org_id: org_id.to_owned(),
+            workspace_id: Some(session.workspace_id.clone()),
+            actor_user_id: actor_user_id.to_owned(),
+            target_user_id: None,
+            invitation_id: None,
+            action: crate::chat::ROOM_SILENCE_AUDIT_ACTION.to_owned(),
+            old_role: None,
+            new_role: None,
+            reason: "reply_mode_asleep".to_owned(),
+            request_id: headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("req_{}", Uuid::new_v4().simple())),
+            grant_id: None,
+            source: serde_json::json!({
+                "resourceType": "chat_session",
+                "resourceId": session.id,
+                "policyRevision": session.policy_revision,
+                "allowed": true,
+                "messageId": message_id,
+                "trigger": trigger,
+                "replyMode": session.reply_mode,
+            }),
+            created_at: now,
+        })
+        .await
+        .map_err(ChatFailure::Store)
+}
+
 fn policy_event(session_id: &str, user_id: &str, now: i64) -> SessionEvent {
     SessionEvent {
         id: format!("evt_{}", Uuid::new_v4().simple()),
@@ -1419,6 +1531,12 @@ struct SessionAuditEvent {
     reason: String,
     policy_revision: i64,
     created_at: i64,
+    /// A silence verdict's message, and whether a turn (`message`) or a
+    /// request (`request`) went unanswered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trigger: Option<String>,
 }
 
 async fn list_session_audit(
@@ -1475,6 +1593,16 @@ async fn list_session_audit(
                 reason: event.reason,
                 policy_revision,
                 created_at: event.created_at,
+                message_id: event
+                    .source
+                    .get("messageId")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
+                trigger: event
+                    .source
+                    .get("trigger")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
             })
         })
         .collect();
@@ -1807,6 +1935,14 @@ fn normalize_human_message(
     Ok(())
 }
 
+/// A person's own turn: a fresh `message.created` with the user role, not an
+/// imported transcript line.
+fn is_human_turn(body: &AppendEventBody) -> bool {
+    body.kind == "message.created"
+        && body.payload.get("role").and_then(serde_json::Value::as_str) == Some("user")
+        && body.payload.get("imported").and_then(serde_json::Value::as_bool) != Some(true)
+}
+
 fn is_import_replay(event: &SessionEvent, body: &AppendEventBody, actor_id: &str) -> bool {
     event.kind == "message.created"
         && event.actor_id == actor_id
@@ -1898,6 +2034,33 @@ async fn append_event(
             .await?;
         }
     }
+    // A human turn an asleep room leaves unanswered, decided before the
+    // session moves into the append below. A retried append of a message
+    // already stored had its verdict written the first time.
+    let silenced = if session.reply_mode == crate::chat::RoomReplyMode::Asleep
+        && is_human_turn(&body)
+    {
+        let message_id = body
+            .payload
+            .get("messageId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let fresh = message_id.is_empty()
+            || match state
+                .chat_store
+                .get_message_event(&org_id, &session_id, &message_id)
+                .await
+            {
+                Ok(_) => false,
+                Err(StoreError::NotFound) => true,
+                Err(error) => return Err(ChatFailure::Store(error)),
+            };
+        fresh.then(|| session.clone())
+    } else {
+        None
+    };
+    let now = (state.now)();
     let event = state
         .chat_store
         .append_session_event(NewSessionEvent {
@@ -1917,7 +2080,7 @@ async fn append_event(
             actor_id: member.user_id,
             actor_label: body.actor_label,
             payload: body.payload,
-            now: (state.now)(),
+            now,
             operation_id: body.operation_id,
         })
         .await;
@@ -1930,6 +2093,25 @@ async fn append_event(
         .broadcast_event(state.chat_store.as_ref(), &org_id, event.clone())
         .await
         .map_err(ChatFailure::Store)?;
+    if let Some(session) = silenced {
+        let message_id = event
+            .payload
+            .get("messageId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(event.id.as_str())
+            .to_owned();
+        record_silence_verdict(
+            &state,
+            &headers,
+            &org_id,
+            &session,
+            &event.actor_id,
+            &message_id,
+            "message",
+            now,
+        )
+        .await?;
+    }
     Ok((StatusCode::CREATED, Json(event)))
 }
 
@@ -2437,6 +2619,25 @@ async fn enqueue_run_input(
         return Err(ChatFailure::BadRequest(
             "AI request references a redacted message".into(),
         ));
+    }
+    if session.reply_mode == crate::chat::RoomReplyMode::Asleep {
+        // An asleep room answers nobody, an explicit request included; the
+        // refusal is a verdict like any other silence.
+        record_silence_verdict(
+            &state,
+            &headers,
+            &org_id,
+            &session,
+            &member.user_id,
+            message_id,
+            "request",
+            (state.now)(),
+        )
+        .await?;
+        return Err(ChatFailure::Store(StoreError::Conflict(serde_json::json!({
+            "reason": "room_asleep",
+            "replyMode": session.reply_mode,
+        }))));
     }
     let payload = serde_json::json!({"messageId": message_id, "parts": message.payload.get("parts"), "contextSequence": message.sequence});
     let item = state
@@ -3420,6 +3621,9 @@ mod tests {
         let mut session = crate::chat::SharedSession {
             tool_detail: crate::chat::ToolDetail::Summary,
             tool_detail_revision: 0,
+            reply_mode: crate::chat::RoomReplyMode::MentionOnly,
+            room_instructions: String::new(),
+            room_settings_revision: 0,
             contract_version: crate::admission::COLLAB_PROTOCOL_VERSION as i32,
             id: "session".into(),
             org_id: "org".into(),
@@ -5069,6 +5273,263 @@ id: "created".into(), org_id: NOTICE_ORG.into(), workspace_id: "workspace".into(
                 .tool_detail_revision,
             2
         );
+    }
+
+    #[tokio::test]
+    async fn room_settings_patch_is_managed_revisioned_and_broadcast() {
+        use axum::{
+            body::{to_bytes, Body},
+            http::Request,
+        };
+        use tower::ServiceExt;
+        let (state, grant) = live_fixture().await;
+        state
+            .chat_store
+            .put_member(
+                NOTICE_ORG, "session", "workspace", BOB, SessionRole::Member, false, false, ADA, 4,
+            )
+            .await
+            .unwrap();
+        let initial = state
+            .chat_store
+            .admin_session(NOTICE_ORG, "session")
+            .await
+            .unwrap();
+        // What a room did before it had a setting.
+        assert_eq!(initial.reply_mode, crate::chat::RoomReplyMode::MentionOnly);
+        assert_eq!(initial.room_instructions, "");
+        assert_eq!(initial.room_settings_revision, 0);
+        let mut events = state.chat_hub.channels.subscribe(&"session".to_owned());
+        let app = routes().with_state(state.clone());
+        let request = |user: &str, body: serde_json::Value| {
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/v1/orgs/{NOTICE_ORG}/chat-sessions/session"))
+                .header("authorization", grant(user))
+                .header("x-cognia-collab-protocol", "2")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let read = |response: Response| async move {
+            serde_json::from_slice::<serde_json::Value>(
+                &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            )
+            .unwrap()
+        };
+        // A member reads the settings; only an owner or maintainer changes them.
+        assert_eq!(
+            app.clone()
+                .oneshot(request(BOB, serde_json::json!({"replyMode":"auto","operationId":"refused","baseRevision":initial.revision})))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        // Room settings travel on their own.
+        assert_eq!(
+            app.clone()
+                .oneshot(request(ADA, serde_json::json!({"replyMode":"auto","title":"New","operationId":"mixed","baseRevision":initial.revision})))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(ADA, serde_json::json!({"roomInstructions":"x".repeat(crate::chat::MAX_ROOM_INSTRUCTIONS_CHARS + 1),"operationId":"long","baseRevision":initial.revision})))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(ADA, serde_json::json!({"replyMode":"loud","operationId":"unknown","baseRevision":initial.revision})))
+                .await
+                .unwrap()
+                .status()
+                .is_client_error(),
+            true
+        );
+        let response = app
+            .clone()
+            .oneshot(request(ADA, serde_json::json!({"replyMode":"auto","roomInstructions":"  Answer in English.  ","operationId":"auto","baseRevision":initial.revision})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let auto = read(response).await;
+        assert_eq!(auto["replyMode"], "auto");
+        assert_eq!(auto["roomInstructions"], "Answer in English.");
+        assert_eq!(auto["roomSettingsRevision"], 1);
+        assert_eq!(auto["revision"], initial.revision + 1);
+        // Who may do what is unchanged.
+        assert_eq!(auto["policyRevision"], initial.policy_revision);
+        let pulse = events.try_recv().unwrap();
+        assert_eq!(pulse.kind, "session.updated");
+        assert_eq!(pulse.sequence, 0);
+        assert_eq!(pulse.payload["roomSettingsRevision"], 1);
+        // The same operation again is the same answer, and no second pulse.
+        let replay = app
+            .clone()
+            .oneshot(request(ADA, serde_json::json!({"replyMode":"auto","operationId":"auto","baseRevision":initial.revision})))
+            .await
+            .unwrap();
+        assert_eq!(read(replay).await, auto);
+        assert!(events.try_recv().is_err());
+        // A stale base revision is a conflict carrying the authoritative row.
+        let stale = app
+            .clone()
+            .oneshot(request(ADA, serde_json::json!({"replyMode":"asleep","operationId":"stale","baseRevision":initial.revision})))
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        assert_eq!(read(stale).await["authoritative"]["replyMode"], "auto");
+        // No change, no bump, no pulse.
+        let unchanged = app
+            .clone()
+            .oneshot(request(ADA, serde_json::json!({"replyMode":"auto","operationId":"same","baseRevision":auto["revision"]})))
+            .await
+            .unwrap();
+        assert_eq!(read(unchanged).await, auto);
+        assert!(events.try_recv().is_err());
+        // A maintainer changes them too.
+        state
+            .store
+            .set_workspace_member(NOTICE_ORG, "workspace", BOB, WorkspaceRole::Maintainer, revocation_context())
+            .await
+            .unwrap();
+        state
+            .chat_store
+            .put_member(
+                NOTICE_ORG, "session", "workspace", BOB, SessionRole::Maintainer, false, false, ADA, 6,
+            )
+            .await
+            .unwrap();
+        let response = app
+            .oneshot(request(BOB, serde_json::json!({"replyMode":"asleep","operationId":"asleep","baseRevision":auto["revision"]})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let asleep = read(response).await;
+        assert_eq!(asleep["replyMode"], "asleep");
+        assert_eq!(asleep["roomInstructions"], "Answer in English.");
+        assert_eq!(asleep["roomSettingsRevision"], 2);
+    }
+
+    #[tokio::test]
+    async fn an_asleep_room_refuses_ai_requests_and_audits_every_silenced_turn() {
+        use axum::{
+            body::{to_bytes, Body},
+            http::Request,
+        };
+        use tower::ServiceExt;
+        let (state, grant) = live_fixture().await;
+        let app = routes().with_state(state.clone());
+        let post = |message_id: &str, operation: &str| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/orgs/{NOTICE_ORG}/chat-sessions/session/events"))
+                .header("authorization", grant(ADA))
+                .header("x-cognia-collab-protocol", "2")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({"kind":"message.created","operationId":operation,
+                    "payload":{"messageId":message_id,"role":"user","parts":[{"type":"text","text":"hello"}]}}).to_string()))
+                .unwrap()
+        };
+        let request_ai = |message_id: &str, operation: &str| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/orgs/{NOTICE_ORG}/chat-sessions/session/queue"))
+                .header("authorization", grant(ADA))
+                .header("x-cognia-collab-protocol", "2")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({"payload":{"messageId":message_id},"operationId":operation}).to_string()))
+                .unwrap()
+        };
+        let silences = || async {
+            state
+                .store
+                .list_authorization_audit(NOTICE_ORG, 500)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|event| event.action == crate::chat::ROOM_SILENCE_AUDIT_ACTION)
+                .collect::<Vec<_>>()
+        };
+        // Awake: a turn leaves no verdict.
+        assert_eq!(app.clone().oneshot(post("awake", "awake")).await.unwrap().status(), StatusCode::CREATED);
+        assert!(silences().await.is_empty());
+
+        let session = state.chat_store.admin_session(NOTICE_ORG, "session").await.unwrap();
+        state
+            .chat_store
+            .patch_room_settings(
+                NOTICE_ORG, "session", Some(crate::chat::RoomReplyMode::Asleep), None, ADA, "sleep", session.revision, 11,
+            )
+            .await
+            .unwrap();
+
+        // Asleep: the turn is stored, and its silence is audited once,
+        // however often the post is retried.
+        assert_eq!(app.clone().oneshot(post("quiet", "quiet")).await.unwrap().status(), StatusCode::CREATED);
+        assert_eq!(app.clone().oneshot(post("quiet", "quiet")).await.unwrap().status(), StatusCode::CREATED);
+        let verdicts = silences().await;
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].reason, "reply_mode_asleep");
+        assert_eq!(verdicts[0].actor_user_id, ADA);
+        assert_eq!(verdicts[0].source["resourceId"], "session");
+        assert_eq!(verdicts[0].source["messageId"], "quiet");
+        assert_eq!(verdicts[0].source["trigger"], "message");
+
+        // An explicit request is refused, and the refusal is a verdict too.
+        let refused = app.clone().oneshot(request_ai("quiet", "ask")).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(refused.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(body["authoritative"]["reason"], "room_asleep");
+        let verdicts = silences().await;
+        assert_eq!(verdicts.len(), 2);
+        assert!(verdicts.iter().any(|event| event.source["trigger"] == "request"));
+        assert!(state
+            .chat_store
+            .list_run_queue(NOTICE_ORG, "session")
+            .await
+            .unwrap()
+            .is_empty());
+
+        // The session audit lists the verdicts with the rest.
+        let audit = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/orgs/{NOTICE_ORG}/chat-sessions/session/audit"))
+                    .header("authorization", grant(ADA))
+                    .header("x-cognia-collab-protocol", "2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(audit.status(), StatusCode::OK);
+        let audit: serde_json::Value =
+            serde_json::from_slice(&to_bytes(audit.into_body(), usize::MAX).await.unwrap()).unwrap();
+        let listed: Vec<_> = audit
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["action"] == "room.silence")
+            .collect();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|event| event["messageId"] == "quiet"));
+        assert!(listed.iter().any(|event| event["trigger"] == "message"));
+        assert!(listed.iter().any(|event| event["trigger"] == "request"));
+        // An ordinary authorization row carries neither.
+        assert!(audit
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["action"] != "room.silence")
+            .all(|event| event.get("trigger").is_none() && event.get("messageId").is_none()));
     }
 
     #[tokio::test]

@@ -38,6 +38,7 @@ import type {
   BreakGlassGrant,
   ChatAttachment,
   RunLease,
+  RoomReplyMode,
   RunQueueItem,
   SessionEvent,
   SessionInvite,
@@ -1083,6 +1084,29 @@ export class CollabClient {
       status?: SharedSession["status"]
       /** Owner/maintainer only (ADR-0241 D18). */
       toolDetail?: SharedToolDetail
+      operationId: string
+      baseRevision: number
+    }
+  ): Promise<SharedSession> {
+    return this.json<SharedSession>(
+      orgId,
+      `/v1/orgs/${encodeURIComponent(orgId)}/chat-sessions/${encodeURIComponent(sessionId)}`,
+      { method: "PATCH", body: JSON.stringify(input) }
+    )
+  }
+
+  /**
+   * Change a shared room's reply mode or instructions (ADR-0177 batch 5).
+   * Owners and maintainers only; travels on its own, apart from
+   * {@link updateSharedSession}, because it bumps `roomSettingsRevision` and
+   * never the policy revision.
+   */
+  async updateSharedRoomSettings(
+    orgId: string,
+    sessionId: string,
+    input: {
+      replyMode?: RoomReplyMode
+      roomInstructions?: string
       operationId: string
       baseRevision: number
     }

@@ -223,5 +223,10 @@
     "server_unreachable": "暂时无法连接协作服务器。",
     "not_offered": "协作服务器未提供共享会话。",
     "protocol_unsupported": "协作服务器的共享会话协议版本低于本应用支持的版本，请升级服务器。"
-  }
+  },
+  "roomAsleep": "这个会话处于休眠状态：在所有者或维护者更改回复模式之前，“请求 AI”不可用。",
+  "roomAsleepRefused": "这个会话处于休眠状态，助手没有回复。所有者或维护者可以在房间设置中更改回复模式。",
+  "silenceVerdict": "静默",
+  "silenceVerdictMessage": "{user} 的消息没有得到回复：会话处于休眠状态。",
+  "silenceVerdictRequest": "{user} 请求了回复但被拒绝：会话处于休眠状态。"
 }

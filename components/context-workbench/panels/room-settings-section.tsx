@@ -20,8 +20,11 @@
  *   batch 5), which `room_handoff_to_squad` reads when a member offers a
  *   Squad the work: whether the group gets a card to confirm, or the run
  *   starts at once.
- * - **Shared rooms** show the memory switch. Their reply mode and
- *   instructions arrive with the shared room's own batch.
+ * - **Shared rooms** (ADR-0177 batch 5) keep their reply mode and
+ *   instructions on the collaboration server, where every member reads the
+ *   same ones (`useSharedRoomSettings`). Only an owner or a maintainer
+ *   changes them; anyone else sees them, inert, with that reason. The memory
+ *   switch stays on the session: it is this machine's memory plane.
  *
  * A control nothing reads is not shown at all, so the section never offers a
  * choice that does nothing.
@@ -42,6 +45,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useImRoomReplyMode } from "@/hooks/connectors/use-im-room-reply-mode"
 import { useImRoomTeam } from "@/hooks/connectors/use-im-room-team"
+import { useSharedRoomSettings } from "@/hooks/collab/use-shared-room-settings"
 import { useClientLiveQuery } from "@/hooks/data"
 import { roomKindOf } from "@/lib/chat/room/kind"
 import {
@@ -65,7 +69,7 @@ export type RoomSettingsControl =
 export const ROOM_SETTINGS_CONTROLS: Record<RoomKind, readonly RoomSettingsControl[]> = {
   team: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
   im: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
-  shared: ["memory"],
+  shared: ["replyMode", "instructions", "memory"],
 }
 
 export function toggleId(ids: readonly string[], id: string): string[] {
@@ -105,6 +109,17 @@ export function RoomSettingsSection({
   const kind = kindProp ?? roomKindOf(session)
   const imReplyMode = useImRoomReplyMode(session)
   const imTeam = useImRoomTeam(session)
+  const sharedRoom = useSharedRoomSettings(kind === "shared" ? session : undefined)
+  // A shared room's settings are the server's: only a manager writes them.
+  const sharedLocked = kind === "shared" && sharedRoom.access.state !== "allowed"
+  const [sharedSaveFailed, setSharedSaveFailed] = useState(false)
+  const writeShared = (change: Parameters<typeof sharedRoom.update>[0]) => {
+    setSharedSaveFailed(false)
+    void sharedRoom.update(change).catch((err) => {
+      setSharedSaveFailed(true)
+      log.error("shared room settings persist failed", err, { sessionId })
+    })
+  }
   const members = kind === "im" ? (imTeam?.members ?? []) : membersProp
   const controls = (kind ? ROOM_SETTINGS_CONTROLS[kind] : []).filter(
     // A plain IM group answers with one voice: there is nobody to mute, and
@@ -125,10 +140,18 @@ export function RoomSettingsSection({
       })
       return
     }
+    if (kind === "shared") {
+      writeShared({ replyMode: mode })
+      return
+    }
     persistRoomSettings(sessionId, session, { replyMode: mode })
   }
   const replyModeHints =
-    kind === "im" ? "roomSettings.imReplyModeHints" : "roomSettings.replyModeHints"
+    kind === "im"
+      ? "roomSettings.imReplyModeHints"
+      : kind === "shared"
+        ? "roomSettings.sharedReplyModeHints"
+        : "roomSettings.replyModeHints"
 
   const [draft, setDraft] = useState(resolved.instructions)
   const lastSessionRef = useRef<string | null>(null)
@@ -144,6 +167,10 @@ export function RoomSettingsSection({
     if (draft === resolved.instructions) return
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
+      if (kind === "shared") {
+        if (!sharedLocked) writeShared({ instructions: draft })
+        return
+      }
       persistRoomSettings(sessionId, session, { instructions: draft })
     }, 500)
     return () => {
@@ -208,8 +235,9 @@ export function RoomSettingsSection({
                     variant={replyMode === mode ? "secondary" : "outline"}
                     aria-pressed={replyMode === mode}
                     // Disabled until the conversation's policy is known, so a
-                    // click never writes from a mode that was not on screen.
-                    disabled={replyMode === null}
+                    // click never writes from a mode that was not on screen;
+                    // and in a shared room, for anyone but a manager.
+                    disabled={replyMode === null || sharedLocked}
                     data-testid={`room-reply-mode-${mode}`}
                     onClick={() => setReplyMode(mode)}
                     className="h-7 px-2 text-xs"
@@ -232,6 +260,30 @@ export function RoomSettingsSection({
                   data-testid="room-settings-reply-mode-im-note"
                 >
                   {t("roomSettings.imReplyModeNote")}
+                </p>
+              ) : null}
+              {kind === "shared" ? (
+                <p
+                  className="text-[11px] text-muted-foreground"
+                  data-testid="room-settings-shared-note"
+                  data-access={sharedRoom.access.state}
+                >
+                  {t(
+                    sharedRoom.access.state === "allowed"
+                      ? "roomSettings.sharedNote"
+                      : sharedRoom.access.state === "checking"
+                        ? "roomSettings.sharedChecking"
+                        : "roomSettings.sharedManagersOnly"
+                  )}
+                </p>
+              ) : null}
+              {sharedSaveFailed ? (
+                <p
+                  className="text-[11px] text-destructive"
+                  role="status"
+                  data-testid="room-settings-shared-failed"
+                >
+                  {t("roomSettings.sharedSaveFailed")}
                 </p>
               ) : null}
             </div>
@@ -292,6 +344,7 @@ export function RoomSettingsSection({
                 onChange={(e) => setDraft(e.target.value)}
                 rows={3}
                 maxLength={MAX_ROOM_INSTRUCTIONS_CHARS}
+                readOnly={sharedLocked}
                 placeholder={t("roomSettings.instructionsPlaceholder")}
                 data-testid="room-instructions"
                 className="resize-y text-xs"

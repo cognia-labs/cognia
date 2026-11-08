@@ -92,6 +92,31 @@ describe("shared chat synchronization", () => {
     expect(messages.find((message) => message.role === "user")?.metadata).toMatchObject(metadata)
   })
 
+  it("mirrors the room's reply mode and instructions, keeping this machine's memory switch", async () => {
+    // A server older than the setting: the room answers only when asked.
+    await syncSharedSession(readerFor(messageEvent), session.orgId, session.id)
+    const [local] = await getDb().sessions.toArray()
+    expect(local.roomSettings).toEqual({ replyMode: "mention_only" })
+    await getDb().sessions.update(local.id, {
+      roomSettings: { ...local.roomSettings, memory: true },
+    })
+
+    const reader = readerFor()
+    reader.getSharedSession.mockResolvedValue({
+      ...session,
+      revision: 2,
+      replyMode: "auto",
+      roomInstructions: "Answer in English.",
+      roomSettingsRevision: 1,
+    })
+    await syncSharedSession(reader, session.orgId, session.id)
+    expect((await getDb().sessions.get(local.id))?.roomSettings).toEqual({
+      memory: true,
+      replyMode: "auto",
+      instructions: "Answer in English.",
+    })
+  })
+
   it("projects another collaborator's terminal run onto the owning user anchor", async () => {
     const metadata = {
       continuationRuntime: { kind: "external", agentId: "ext-1" },

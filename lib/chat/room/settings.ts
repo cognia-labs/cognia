@@ -49,6 +49,16 @@ export function defaultRoomMemory(kind: ReturnType<typeof roomKindOf>): boolean 
   return !isMultiHumanRoom(kind)
 }
 
+/**
+ * The reply mode of a room that has none stored. A shared room's is the
+ * server's, mirrored by the sync; one that has not been mirrored yet answers
+ * only when asked, which is what every shared room did before it had a
+ * setting.
+ */
+export function defaultRoomReplyMode(kind: ReturnType<typeof roomKindOf>): RoomReplyMode {
+  return kind === "shared" ? "mention_only" : DEFAULT_ROOM_REPLY_MODE
+}
+
 export function resolveRoomSettings(
   session: RoomSettingsSource | null | undefined
 ): ResolvedRoomSettings {
@@ -57,7 +67,7 @@ export function resolveRoomSettings(
   const replyMode =
     stored?.replyMode && ROOM_REPLY_MODES.includes(stored.replyMode)
       ? stored.replyMode
-      : DEFAULT_ROOM_REPLY_MODE
+      : defaultRoomReplyMode(kind)
   const instructions = clampInstructions(stored?.instructions)
   let memory: boolean
   let memoryDefaulted = false

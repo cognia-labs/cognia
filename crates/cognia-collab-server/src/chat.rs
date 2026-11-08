@@ -205,11 +205,56 @@ impl ToolDetail {
     }
 }
 
+/// When a shared room's assistant answers (ADR-0177 batch 5, ADR-0252 §6).
+///
+/// `auto`: every human turn gets a reply. `mention_only`: only a turn somebody
+/// asks it to answer ("Request AI"), which is what a room did before it had a
+/// setting. `asleep`: nobody gets one; an AI request is refused, and every
+/// human turn leaves a silence verdict in the session audit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomReplyMode {
+    Auto,
+    MentionOnly,
+    Asleep,
+}
+
+impl RoomReplyMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::MentionOnly => "mention_only",
+            Self::Asleep => "asleep",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "mention_only" => Some(Self::MentionOnly),
+            "asleep" => Some(Self::Asleep),
+            _ => None,
+        }
+    }
+}
+
+/// Longest room instructions block, in characters. The client clamps to the
+/// same ceiling (`MAX_ROOM_INSTRUCTIONS_CHARS`), and the column checks it.
+pub const MAX_ROOM_INSTRUCTIONS_CHARS: usize = 4_000;
+
+/// The audit action of a silence verdict.
+pub const ROOM_SILENCE_AUDIT_ACTION: &str = "room.silence";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedSession {
     pub tool_detail: ToolDetail,
     pub tool_detail_revision: i64,
+    pub reply_mode: RoomReplyMode,
+    /// Injected into the run's system prompt as `## Room instructions`.
+    pub room_instructions: String,
+    /// Bumped by every reply-mode or instructions change.
+    pub room_settings_revision: i64,
     pub contract_version: i32,
     pub id: String,
     pub org_id: String,
@@ -332,6 +377,18 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         }
+    }
+
+    #[test]
+    fn room_reply_mode_wire_values_are_closed_and_snake_case() {
+        for mode in [RoomReplyMode::Auto, RoomReplyMode::MentionOnly, RoomReplyMode::Asleep] {
+            let wire = serde_json::to_value(mode).unwrap();
+            assert_eq!(wire, mode.as_str());
+            assert_eq!(serde_json::from_value::<RoomReplyMode>(wire).unwrap(), mode);
+            assert_eq!(RoomReplyMode::parse(mode.as_str()), Some(mode));
+        }
+        assert!(serde_json::from_str::<RoomReplyMode>("\"mentionOnly\"").is_err());
+        assert_eq!(RoomReplyMode::parse("loud"), None);
     }
 
     #[test]

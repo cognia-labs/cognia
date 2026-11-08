@@ -1097,6 +1097,27 @@ jest.mock("@/lib/collab/shared-run-coordinator", () => ({
   beginSharedSessionRun: (...args: unknown[]) => beginSharedSessionRunMock(...args),
   sendSharedSessionMessage: (...args: unknown[]) => sendSharedSessionMessageMock(...args),
 }))
+// Every test reads the real database; one hands its own over.
+let mockDbOverride: (() => unknown) | null = null
+jest.mock("@/lib/db/schema", () => {
+  const actual = jest.requireActual("@/lib/db/schema")
+  return {
+    ...actual,
+    getDb: (...args: unknown[]) => (mockDbOverride ? mockDbOverride() : actual.getDb(...args)),
+  }
+})
+// No collaboration context unless a test hands one over: what every private
+// session reads.
+const resolveCollabContextMock = jest.fn(async (..._args: unknown[]) => null as unknown)
+jest.mock("@/lib/collab/runtime-client", () => ({
+  ...jest.requireActual("@/lib/collab/runtime-client"),
+  resolveCurrentCollabContext: (...args: unknown[]) => resolveCollabContextMock(...args),
+}))
+const syncSharedSessionMock = jest.fn(async (..._args: unknown[]) => null as unknown)
+jest.mock("@/lib/collab/shared-chat-sync", () => ({
+  ...jest.requireActual("@/lib/collab/shared-chat-sync"),
+  syncSharedSession: (...args: unknown[]) => syncSharedSessionMock(...args),
+}))
 const steerSharedFollowUpMock = jest.fn(async (..._args: unknown[]) => "none" as const)
 jest.mock("@/lib/collab/shared-run-steer", () => ({
   installSharedSessionSteerLane: () => () => undefined,
@@ -7937,6 +7958,192 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       content: "add the tests first",
     })
     expect(sendPromptMock).not.toHaveBeenCalled()
+  })
+
+  it("asks for a reply to every human turn of an auto room, unless the turn steered a run (ADR-0177 batch 5)", async () => {
+    steerSharedFollowUpMock.mockClear()
+    chatState.activeSessionId = "sess-shared-auto"
+    chatState.openSessionIds = ["sess-shared-auto"]
+    const room = (replyMode: "auto" | "mention_only") => ({
+      id: "sess-shared-auto",
+      title: "Shared",
+      model: "sonnet",
+      roomSettings: { replyMode },
+      collaboration: {
+        orgId: "org_1",
+        workspaceId: "ws_1",
+        sessionId: "shared_auto",
+        policyRevision: 1,
+        syncCursor: 0,
+      },
+    })
+    const requests: unknown[] = []
+    const listener = (event: Event) => requests.push((event as CustomEvent).detail)
+    window.addEventListener("cognia:shared-request-ai", listener)
+    try {
+      getSessionMock.mockResolvedValue(room("auto"))
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      await act(async () => {
+        await result.current.send("what changed?")
+      })
+      const posted = sendSharedSessionMessageMock.mock.calls.at(-1)?.[1] as { id: string }
+      expect(requests).toEqual([{ sessionId: "sess-shared-auto", messageId: posted.id }])
+
+      // The message steered a run already answering: that run is the reply.
+      steerSharedFollowUpMock.mockResolvedValueOnce("steered" as never)
+      await act(async () => {
+        await result.current.send("and the tests")
+      })
+      expect(requests).toHaveLength(1)
+
+      // A mention-only room waits for somebody to ask.
+      getSessionMock.mockResolvedValue(room("mention_only"))
+      await act(async () => {
+        await result.current.send("just a note")
+      })
+      expect(requests).toHaveLength(1)
+    } finally {
+      window.removeEventListener("cognia:shared-request-ai", listener)
+    }
+  })
+
+  it("tells the person an asleep room declined a request, instead of reporting a failure", async () => {
+    const { CollabConflictError } = jest.requireActual("@/lib/collab/client")
+    const rows = [
+      {
+        id: "asleep-message",
+        sessionId: "sess-asleep",
+        role: "user",
+        parts: [{ type: "text", text: "anyone?" }],
+        createdAt: 1,
+      },
+    ]
+    // One object: the turn lock checks the database it locked is still the one.
+    const fakeDb = {
+      messages: { where: () => ({ equals: () => ({ toArray: async () => rows }) }) },
+    }
+    mockDbOverride = () => fakeDb
+    const enqueue = jest.fn(async () => {
+      throw new CollabConflictError("conflict", { reason: "room_asleep", replyMode: "asleep" })
+    })
+    resolveCollabContextMock.mockResolvedValue({
+      orgId: "org_1",
+      userId: "me",
+      client: { baseUrl: "https://collab.test", enqueueSessionRunInput: enqueue },
+    })
+    getSessionMock.mockResolvedValue({
+      id: "sess-asleep",
+      title: "Shared",
+      model: "sonnet",
+      roomSettings: { replyMode: "asleep" },
+      collaboration: {
+        orgId: "org_1",
+        workspaceId: "ws_1",
+        sessionId: "shared_asleep",
+        policyRevision: 1,
+        syncCursor: 0,
+      },
+    })
+    toastInfo.mockClear()
+    chatState.setSessionDiagnostic.mockClear()
+    try {
+      renderHook(() => useClaudeChat())
+      await flush()
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("cognia:shared-request-ai", {
+            detail: { sessionId: "sess-asleep", messageId: "asleep-message" },
+          })
+        )
+        await flush()
+      })
+      expect(enqueue).toHaveBeenCalled()
+      expect(toastInfo).toHaveBeenCalledWith(
+        "This conversation is asleep, so the assistant did not answer. An owner or maintainer can change its reply mode in the room settings."
+      )
+      expect(chatState.setSessionDiagnostic).not.toHaveBeenCalledWith(
+        "sess-asleep",
+        expect.anything()
+      )
+    } finally {
+      resolveCollabContextMock.mockResolvedValue(null)
+      mockDbOverride = null
+    }
+  })
+
+  it("gives a shared run the room's instructions, whoever holds it (ADR-0177 batch 5)", async () => {
+    const rows = [
+      {
+        id: "ask-message",
+        sessionId: "sess-room",
+        role: "user",
+        parts: [{ type: "text", text: "summarise" }],
+        createdAt: 1,
+      },
+    ]
+    const event = {
+      id: "evt-1",
+      sessionId: "shared_room",
+      sequence: 1,
+      kind: "message.created",
+      payload: { messageId: "ask-message", role: "user", parts: rows[0].parts },
+    }
+    resolveCollabContextMock.mockResolvedValue({
+      orgId: "org_1",
+      userId: "me",
+      client: {
+        baseUrl: "https://collab.test",
+        enqueueSessionRunInput: jest.fn(async () => ({ id: "queue-1" })),
+        listSessionRunQueue: jest.fn(async () => [
+          { id: "queue-1", payload: { messageId: "ask-message", contextSequence: 1 } },
+        ]),
+        listSessionEvents: jest.fn(async () => [event]),
+      },
+    })
+    getSessionMock.mockResolvedValue({
+      id: "sess-room",
+      title: "Shared",
+      model: "sonnet",
+      roomSettings: { replyMode: "mention_only", instructions: "Answer in English." },
+      collaboration: {
+        orgId: "org_1",
+        workspaceId: "ws_1",
+        sessionId: "shared_room",
+        policyRevision: 1,
+        syncCursor: 0,
+      },
+    })
+    // One object: the turn lock checks the database it locked is still the one.
+    const fakeDb = {
+      messages: { where: () => ({ equals: () => ({ toArray: async () => rows }) }) },
+    }
+    mockDbOverride = () => fakeDb
+    sendPromptMock.mockClear()
+    try {
+      renderHook(() => useClaudeChat())
+      await flush()
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("cognia:shared-request-ai", {
+            detail: { sessionId: "sess-room", messageId: "ask-message" },
+          })
+        )
+        await flush()
+      })
+      await act(async () => {
+        await flush()
+      })
+      expect(sendPromptMock).toHaveBeenCalled()
+      // The resolver here returns a replacing `systemPrompt`, so the section
+      // follows it rather than riding `appendSystemPrompt` beside it.
+      const options = sendPromptMock.mock.calls.at(-1)![2]
+      expect(options.systemPrompt).toContain("## Room instructions\n\nAnswer in English.")
+      expect(options.appendSystemPrompt).toBeUndefined()
+    } finally {
+      resolveCollabContextMock.mockResolvedValue(null)
+      mockDbOverride = null
+    }
   })
 
   it("tries the live lane while awaiting approval, which is when redirecting matters most", async () => {

@@ -517,7 +517,16 @@
       },
       "mutedHint": "Muted members never reply on their own. An @mention or a pick in the composer still reaches them.",
       "imMutedHint": "Muted members never reply on their own. A message that @mentions one still reaches them.",
-      "noRoom": "Open a group chat or a shared conversation to see its room settings."
+      "noRoom": "Open a group chat or a shared conversation to see its room settings.",
+      "sharedReplyModeHints": {
+        "auto": "The assistant answers every message a person posts here. A message written while it is answering steers that answer instead.",
+        "mention_only": "The assistant answers only when somebody presses Request AI on a message.",
+        "asleep": "Messages are kept and the assistant answers nobody, Request AI included. Each unanswered message is recorded in the conversation's audit."
+      },
+      "sharedNote": "Every member of this shared conversation sees the same reply mode and instructions. The memory switch applies to this device only.",
+      "sharedChecking": "Checking whether you can change this shared conversation's settings…",
+      "sharedManagersOnly": "Only the conversation's owners and maintainers can change its reply mode and instructions.",
+      "sharedSaveFailed": "The change did not reach the collaboration server. Try again when you are back online."
     },
     "sharedNotes": "Shared notes",
     "show": "Show members",

@@ -4,6 +4,7 @@ import {
   ROOM_REPLY_MODES,
   buildRoomInstructionsSection,
   defaultRoomMemory,
+  defaultRoomReplyMode,
   initialRoomMemoryFields,
   resolveAutoRoundBudget,
   resolveRoomSettings,
@@ -50,6 +51,19 @@ describe("resolveRoomSettings", () => {
       resolveRoomSettings({ ...team, roomSettings: { replyMode: "loud" as never } })
     ).toMatchObject({ replyMode: DEFAULT_ROOM_REPLY_MODE })
     expect(ROOM_REPLY_MODES).toEqual(["auto", "mention_only", "asleep"])
+  })
+
+  it("lets a shared room not yet mirrored answer only when asked", () => {
+    const shared = {
+      kind: "direct" as const,
+      collaboration: { orgId: "o", workspaceId: "w", sessionId: "s", policyRevision: 1 } as never,
+    }
+    expect(defaultRoomReplyMode("shared")).toBe("mention_only")
+    expect(defaultRoomReplyMode("team")).toBe(DEFAULT_ROOM_REPLY_MODE)
+    expect(resolveRoomSettings(shared)).toMatchObject({ kind: "shared", replyMode: "mention_only" })
+    expect(resolveRoomSettings({ ...shared, roomSettings: { replyMode: "auto" } })).toMatchObject({
+      replyMode: "auto",
+    })
   })
 
   it("trims and clamps instructions and dedupes muted ids", () => {

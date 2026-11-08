@@ -71,6 +71,8 @@ import {
   keepsSharedChatRunning,
   sharedChatInertMessageKey,
 } from "@/lib/collab/shared-chat-availability"
+import { ROOM_SILENCE_AUDIT_ACTION } from "@/lib/collab/shared-room-settings"
+import { resolveRoomSettings } from "@/lib/chat/room/settings"
 import { resolveCurrentCollabContext, type CurrentCollabContext } from "@/lib/collab/runtime-client"
 import { syncSharedSession, sharedChatCacheKey } from "@/lib/collab/shared-chat-sync"
 import { deleteSessionsWithTeardown } from "@/lib/chat/session-deletion"
@@ -168,8 +170,11 @@ export function SharedSessionPanel({
       )[0]
   }, [session.id, Boolean(session.collaboration)])
 
+  // An asleep room answers nobody, a request included (ADR-0177 batch 5): the
+  // button stays, inert, and says why. The server refuses it regardless.
+  const roomAsleep = resolveRoomSettings(session).replyMode === "asleep"
   const requestAI = (takeover = false) => {
-    if (!latestUserMessage || !navigator.onLine) return
+    if (!latestUserMessage || !navigator.onLine || roomAsleep) return
     window.dispatchEvent(
       new CustomEvent("cognia:shared-request-ai", {
         detail: { sessionId: session.id, messageId: latestUserMessage.id, takeover },
@@ -618,9 +623,13 @@ export function SharedSessionPanel({
           <Button
             variant="outline"
             size="sm"
-            disabled={!online || !latestUserMessage || !runGate.canStart}
-            title={runGate.canStart ? undefined : gateReason(runGate)}
-            data-unavailable={runGate.canStart ? undefined : runGate.decision?.reason}
+            disabled={!online || !latestUserMessage || !runGate.canStart || roomAsleep}
+            title={
+              roomAsleep ? t("roomAsleep") : runGate.canStart ? undefined : gateReason(runGate)
+            }
+            data-unavailable={
+              roomAsleep ? "room_asleep" : runGate.canStart ? undefined : runGate.decision?.reason
+            }
             onClick={() => requestAI()}
           >
             {t("requestAI")}
@@ -1106,15 +1115,39 @@ export function SharedSessionPanel({
                         key={event.id}
                         className="rounded-lg border border-transparent bg-muted/50 p-2 text-xs"
                       >
-                        <div className="flex items-center gap-2">
-                          <Badge variant={event.allowed ? "secondary" : "destructive"}>
-                            {event.allowed ? t("allowed") : t("denied")}
-                          </Badge>
-                          <span className="truncate font-medium">{event.action}</span>
-                        </div>
-                        <p className="mt-1 text-muted-foreground">
-                          {t("auditActor", { user: event.actorUserId, reason: event.reason })}
-                        </p>
+                        {event.action === ROOM_SILENCE_AUDIT_ACTION ? (
+                          // A silence verdict is no authorization decision:
+                          // it says the room stayed quiet, and why.
+                          <>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline">{t("silenceVerdict")}</Badge>
+                              <span className="truncate font-medium">{event.action}</span>
+                            </div>
+                            <p
+                              className="mt-1 text-muted-foreground"
+                              data-testid="shared-audit-silence"
+                            >
+                              {t(
+                                event.trigger === "request"
+                                  ? "silenceVerdictRequest"
+                                  : "silenceVerdictMessage",
+                                { user: event.actorUserId }
+                              )}
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <Badge variant={event.allowed ? "secondary" : "destructive"}>
+                                {event.allowed ? t("allowed") : t("denied")}
+                              </Badge>
+                              <span className="truncate font-medium">{event.action}</span>
+                            </div>
+                            <p className="mt-1 text-muted-foreground">
+                              {t("auditActor", { user: event.actorUserId, reason: event.reason })}
+                            </p>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>

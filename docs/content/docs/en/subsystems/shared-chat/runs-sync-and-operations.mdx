@@ -64,6 +64,25 @@ Membership removal closes the person's stream, invalidates attachment tickets, c
 input, and ends their active lease. The client purges the corresponding shared projection. Offline mode
 keeps cached reads and drafts only. There is no delayed message or Run outbox.
 
+## The room decides when the assistant answers
+
+A shared session is a room (ADR-0177), and its reply mode and instructions live on the server's
+session row, where every member reads the same ones. Only an owner or a maintainer changes them
+(`PATCH /chat-sessions/{id}` with `replyMode` or `roomInstructions`, which bumps
+`roomSettingsRevision` and never the policy revision). Each member's sync mirrors them onto the
+local session; the memory switch stays on each device.
+
+- `mention_only`, the default and what every room did before the setting: the assistant answers
+  only when somebody presses Request AI.
+- `auto`: the author's client asks for a reply to every human turn once the message has landed,
+  unless the message steered a run that is already answering.
+- `asleep`: nobody gets a reply. The server refuses an AI request with `409 room_asleep`, and every
+  human turn, like every refused request, writes a `room.silence` verdict to the session audit,
+  which the sharing panel shows as the room staying quiet.
+
+The instructions reach every run's system prompt as `## Room instructions`, on whichever device
+holds the run.
+
 ## Break-glass is not implicit org-admin access
 
 Org administrators do not discover private session content through normal membership APIs. For an

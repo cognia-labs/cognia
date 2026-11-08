@@ -223,5 +223,10 @@
     "server_unreachable": "The collaboration server cannot be reached right now.",
     "not_offered": "Your collaboration server does not offer shared conversations.",
     "protocol_unsupported": "Your collaboration server's shared-conversation protocol is older than this app supports. Update the server."
-  }
+  },
+  "roomAsleep": "This conversation is asleep: Request AI is off until an owner or maintainer changes its reply mode.",
+  "roomAsleepRefused": "This conversation is asleep, so the assistant did not answer. An owner or maintainer can change its reply mode in the room settings.",
+  "silenceVerdict": "Silent",
+  "silenceVerdictMessage": "{user}'s message was not answered: the conversation is asleep.",
+  "silenceVerdictRequest": "{user} asked for a reply and was refused: the conversation is asleep."
 }

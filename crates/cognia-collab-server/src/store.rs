@@ -2968,6 +2968,11 @@ impl PgStore {
         transaction
             .batch_execute(include_str!("../migrations/0019_standing_changes.sql"))
             .await?;
+        transaction
+            .batch_execute(include_str!(
+                "../migrations/0020_shared_chat_room_settings.sql"
+            ))
+            .await?;
         if let Some((role, password)) = app_role {
             // PostgreSQL quotes both the identifier and password literal; no
             // operator-supplied text is interpolated as SQL syntax.

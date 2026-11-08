@@ -50,6 +50,16 @@ jest.mock("@/hooks/connectors/use-im-room-team", () => ({
   useImRoomTeam: () => imTeam,
 }))
 
+let sharedAccess: { state: string; role?: string | null } = { state: "allowed" }
+const sharedUpdate = jest.fn(async (_change: unknown) => {})
+const sharedHookArgs: unknown[] = []
+jest.mock("@/hooks/collab/use-shared-room-settings", () => ({
+  useSharedRoomSettings: (session: unknown) => {
+    sharedHookArgs.push(session)
+    return { access: sharedAccess, update: sharedUpdate }
+  },
+}))
+
 import {
   ROOM_SETTINGS_CONTROLS,
   RoomSettingsPanel,
@@ -70,11 +80,14 @@ const sharedSession = () =>
     id: "s-sh",
     title: "Shared",
     collaboration: {},
-    roomSettings: { memory: false },
+    roomSettings: { memory: false, replyMode: "mention_only", instructions: "" },
   }) as unknown as ChatSession
 
 beforeEach(() => {
   updateSession.mockClear()
+  sharedUpdate.mockReset().mockResolvedValue(undefined)
+  sharedHookArgs.length = 0
+  sharedAccess = { state: "allowed" }
   imHookArgs.length = 0
   imMode = null
   imTeam = null
@@ -88,7 +101,7 @@ describe("RoomSettingsSection", () => {
     expect(ROOM_SETTINGS_CONTROLS).toEqual({
       team: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
       im: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
-      shared: ["memory"],
+      shared: ["replyMode", "instructions", "memory"],
     })
   })
 
@@ -194,16 +207,67 @@ describe("RoomSettingsSection", () => {
     )
   })
 
-  it("gives a shared room its memory switch only", () => {
+  it("gives a shared room the server's reply mode and instructions, written through the server", async () => {
     render(
       <RoomSettingsSection sessionId="s-sh" session={sharedSession()} defaultCollapsed={false} />
     )
     expect(screen.getByTestId("room-settings")).toHaveAttribute("data-room-kind", "shared")
     expect(screen.getByTestId("room-memory-switch")).toBeInTheDocument()
-    expect(screen.queryByTestId("room-reply-mode-auto")).not.toBeInTheDocument()
-    expect(screen.getByTestId("room-settings-summary")).toHaveTextContent(
-      "desktop.memberList.roomSettings.memoryOff"
+    expect(screen.getByTestId("room-reply-mode-mention_only")).toHaveAttribute(
+      "aria-pressed",
+      "true"
     )
+    expect(screen.getByTestId("room-settings-reply-mode-hint")).toHaveTextContent(
+      "desktop.memberList.roomSettings.sharedReplyModeHints.mention_only"
+    )
+    expect(screen.getByTestId("room-settings-shared-note")).toHaveTextContent(
+      "desktop.memberList.roomSettings.sharedNote"
+    )
+    fireEvent.click(screen.getByTestId("room-reply-mode-auto"))
+    expect(sharedUpdate).toHaveBeenCalledWith({ replyMode: "auto" })
+    // Never the local row: the server's answer comes back through the mirror.
+    expect(updateSession).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByTestId("room-instructions"), {
+      target: { value: "Answer in English." },
+    })
+    await waitFor(() =>
+      expect(sharedUpdate).toHaveBeenCalledWith({ instructions: "Answer in English." })
+    )
+    // The memory switch is this device's own.
+    fireEvent.click(screen.getByTestId("room-memory-switch"))
+    expect(updateSession).toHaveBeenCalled()
+    // The hook is asked only for a shared room.
+    expect(sharedHookArgs.every((arg) => arg !== undefined)).toBe(true)
+  })
+
+  it("shows a member who may not change them the settings, inert, and why", () => {
+    sharedAccess = { state: "denied", role: "member" }
+    render(
+      <RoomSettingsSection sessionId="s-sh" session={sharedSession()} defaultCollapsed={false} />
+    )
+    expect(screen.getByTestId("room-reply-mode-auto")).toBeDisabled()
+    expect(screen.getByTestId("room-instructions")).toHaveAttribute("readonly")
+    expect(screen.getByTestId("room-settings-shared-note")).toHaveTextContent(
+      "desktop.memberList.roomSettings.sharedManagersOnly"
+    )
+  })
+
+  it("says so when a change does not reach the server", async () => {
+    sharedUpdate.mockRejectedValueOnce(new Error("offline"))
+    render(
+      <RoomSettingsSection sessionId="s-sh" session={sharedSession()} defaultCollapsed={false} />
+    )
+    fireEvent.click(screen.getByTestId("room-reply-mode-asleep"))
+    expect(await screen.findByTestId("room-settings-shared-failed")).toHaveTextContent(
+      "desktop.memberList.roomSettings.sharedSaveFailed"
+    )
+  })
+
+  it("asks nothing of the shared hook for any other kind of room", () => {
+    imMode = { mode: "mention_only", setMode: jest.fn(async () => {}) }
+    render(<RoomSettingsSection sessionId="s-im" session={imSession()} />)
+    expect(sharedHookArgs.every((arg) => arg === undefined)).toBe(true)
   })
 
   it("renders nothing for a direct conversation", () => {

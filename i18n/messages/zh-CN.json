@@ -11359,6 +11359,8 @@
       "owner": "所有者",
       "viewer": "只读者"
     },
+    "roomAsleep": "这个会话处于休眠状态：在所有者或维护者更改回复模式之前，“请求 AI”不可用。",
+    "roomAsleepRefused": "这个会话处于休眠状态，助手没有回复。所有者或维护者可以在房间设置中更改回复模式。",
     "runCoordination": "Agent 运行",
     "runHost": "正在 {user} 的设备上运行",
     "running": "运行中",
@@ -11378,6 +11380,9 @@
     "shared": "共享",
     "sharedDescription": "成员、消息、运行、审批和附件均以服务器权限为准。",
     "sharedTitle": "共享会话",
+    "silenceVerdict": "静默",
+    "silenceVerdictMessage": "{user} 的消息没有得到回复：会话处于休眠状态。",
+    "silenceVerdictRequest": "{user} 请求了回复但被拒绝：会话处于休眠状态。",
     "startShared": "开始共享对话",
     "switchHelp": "允许本机打开多人共享的会话，角色、事件顺序和审批由服务端决定。关闭后共享入口会变为不可用，并停止本应用拉取共享会话，不会删除任何数据。",
     "switchLabel": "共享会话",
@@ -14834,6 +14839,15 @@
           "auto": "回复所有消息",
           "mention_only": "仅被 @ 时回复"
         },
+        "sharedChecking": "正在确认你能否更改这个共享会话的设置…",
+        "sharedManagersOnly": "只有会话的所有者和维护者可以更改回复模式和说明。",
+        "sharedNote": "共享会话的所有成员看到的是同一个回复模式和同一份说明。记忆开关只作用于本设备。",
+        "sharedReplyModeHints": {
+          "asleep": "消息会保留，助手不回复任何人，“请求 AI”也不会。每条未回复的消息都会记入会话审计。",
+          "auto": "有人在这里发出的每条消息助手都会回复。助手回复期间写的消息会引导这次回复，而不是另起一次。",
+          "mention_only": "只有在有人对某条消息点击“请求 AI”时，助手才会回复。"
+        },
+        "sharedSaveFailed": "更改未能送达协作服务器，请联网后重试。",
         "squadHandoff": "交给小队",
         "squadHandoffHints": {
           "auto": "成员一提议就立即启动小队运行，不需要确认卡片。小队运行自己的审批照常提问，也照常遵循风险策略。",
