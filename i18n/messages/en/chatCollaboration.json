@@ -228,5 +228,25 @@
   "roomAsleepRefused": "This conversation is asleep, so the assistant did not answer. An owner or maintainer can change its reply mode in the room settings.",
   "silenceVerdict": "Silent",
   "silenceVerdictMessage": "{user}'s message was not answered: the conversation is asleep.",
-  "silenceVerdictRequest": "{user} asked for a reply and was refused: the conversation is asleep."
+  "silenceVerdictRequest": "{user} asked for a reply and was refused: the conversation is asleep.",
+  "catchUp": {
+    "title": "Catch up",
+    "unread": "{count, plural, one {# new message} other {# new messages}} since you were last here",
+    "covered": "Summary of {count, plural, one {# message} other {# messages}}",
+    "run": "Catch me up",
+    "retry": "Try again",
+    "cancel": "Cancel",
+    "dismiss": "Dismiss catch-up",
+    "citation": "Go to message {ordinal}",
+    "citationMissing": "That message is not loaded here any more.",
+    "failed": "The summary could not be written. Try again.",
+    "skipped": {
+      "pii": "These messages contain details that cannot be sent to a model, so they were not summarised.",
+      "empty": "There is too little to summarise.",
+      "no-output": "The model returned nothing to show.",
+      "no-model": "No model is available for summaries. Configure a provider in Settings."
+    },
+    "note": "Written by your model from the messages on this device. Only you see it.",
+    "runLabel": "Shared conversation catch-up"
+  }
 }

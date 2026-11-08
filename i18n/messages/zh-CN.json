@@ -11213,6 +11213,26 @@
     "breakGlassWarning": "此操作会显示脱敏前的原始事件，仅组织管理员可用，自动过期且始终记录审计。",
     "cancelDelete": "取消",
     "cancelQueued": "取消",
+    "catchUp": {
+      "cancel": "取消",
+      "citation": "跳到第 {ordinal} 条消息",
+      "citationMissing": "这条消息已不在本地加载范围内。",
+      "covered": "{count} 条消息的摘要",
+      "dismiss": "关闭补课",
+      "failed": "摘要生成失败，请重试。",
+      "note": "由你的模型根据本设备上的消息生成，只有你能看到。",
+      "retry": "重试",
+      "run": "帮我补课",
+      "runLabel": "共享会话补课",
+      "skipped": {
+        "empty": "内容太少，不需要摘要。",
+        "no-model": "没有可用于摘要的模型，请在设置中配置提供商。",
+        "no-output": "模型没有返回可显示的内容。",
+        "pii": "这些消息包含不能发送给模型的信息，因此没有生成摘要。"
+      },
+      "title": "补课",
+      "unread": "自你上次查看以来有 {count} 条新消息"
+    },
     "confirmDelete": "永久删除",
     "connected": "已连接",
     "connectionStale": "正在重连 · 草稿保留在本机",

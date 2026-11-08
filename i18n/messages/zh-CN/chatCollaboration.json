@@ -228,5 +228,25 @@
   "roomAsleepRefused": "这个会话处于休眠状态，助手没有回复。所有者或维护者可以在房间设置中更改回复模式。",
   "silenceVerdict": "静默",
   "silenceVerdictMessage": "{user} 的消息没有得到回复：会话处于休眠状态。",
-  "silenceVerdictRequest": "{user} 请求了回复但被拒绝：会话处于休眠状态。"
+  "silenceVerdictRequest": "{user} 请求了回复但被拒绝：会话处于休眠状态。",
+  "catchUp": {
+    "title": "补课",
+    "unread": "自你上次查看以来有 {count} 条新消息",
+    "covered": "{count} 条消息的摘要",
+    "run": "帮我补课",
+    "retry": "重试",
+    "cancel": "取消",
+    "dismiss": "关闭补课",
+    "citation": "跳到第 {ordinal} 条消息",
+    "citationMissing": "这条消息已不在本地加载范围内。",
+    "failed": "摘要生成失败，请重试。",
+    "skipped": {
+      "pii": "这些消息包含不能发送给模型的信息，因此没有生成摘要。",
+      "empty": "内容太少，不需要摘要。",
+      "no-output": "模型没有返回可显示的内容。",
+      "no-model": "没有可用于摘要的模型，请在设置中配置提供商。"
+    },
+    "note": "由你的模型根据本设备上的消息生成，只有你能看到。",
+    "runLabel": "共享会话补课"
+  }
 }

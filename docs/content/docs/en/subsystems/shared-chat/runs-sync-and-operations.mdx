@@ -83,6 +83,17 @@ local session; the memory switch stays on each device.
 The instructions reach every run's system prompt as `## Room instructions`, on whichever device
 holds the run.
 
+## Catching up
+
+A member who comes back to a shared room with four or more unread messages gets a catch-up card
+above the "new messages" line. Nothing is sent until they press "Catch me up". Then one model call
+summarises the unread messages from this device's own mirror (`lib/collab/shared-room-catch-up.ts`),
+through the utility model or, without a renderer key, one headless turn. The transcript is redacted
+and PII-gated before it leaves the device, and placeholders are restored only for display. Each
+point cites its messages as `@msg:<id>`. Only an id that was in the prompt becomes a citation, and a
+citation jumps to its message. The summary is shown only to the reader and is never posted to the
+room.
+
 ## Break-glass is not implicit org-admin access
 
 Org administrators do not discover private session content through normal membership APIs. For an

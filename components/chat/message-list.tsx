@@ -33,6 +33,7 @@ import { useJumpFlash } from "@/hooks/chat/use-jump-flash"
 import { useJumpHistory } from "@/hooks/chat/use-jump-history"
 import { JumpFlash } from "./jump-flash"
 import { UnreadDivider } from "./unread-divider"
+import { SharedRoomCatchUpCard } from "./shared-room-catch-up-card"
 import { firstUnreadMessageId } from "@/lib/chat/unread-marker"
 import { useUnreadMarker } from "@/stores/chat/unread-marker-store"
 import { ConversationJumpPill, resolveJumpPillMode } from "./conversation-jump-pill"
@@ -253,6 +254,7 @@ export function MessageList({
     () => firstUnreadMessageId(messages, unreadMarker),
     [messages, unreadMarker]
   )
+  const catchUpSessionId = paneSessionId ?? sessionId
 
   // The newest message the reader wrote. Sending is the one moment the list
   // always goes to the foot, wherever the reader had scrolled to: they want to
@@ -1039,6 +1041,15 @@ export function MessageList({
                             : undefined
                         }
                       >
+                        {m.id === firstUnreadId && catchUpSessionId ? (
+                          // A shared room offers a summary of what was
+                          // missed; the card draws nothing anywhere else.
+                          <SharedRoomCatchUpCard
+                            sessionId={catchUpSessionId}
+                            messages={messages}
+                            firstUnreadId={firstUnreadId}
+                          />
+                        ) : null}
                         {m.id === firstUnreadId && <UnreadDivider />}
                         {m.id === flashId && <JumpFlash nonce={flashNonce} holdMs={flashHoldMs} />}
                         {rowSelection.control}

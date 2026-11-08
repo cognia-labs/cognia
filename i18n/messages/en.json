@@ -11213,6 +11213,26 @@
     "breakGlassWarning": "This reveals original redacted events. It is limited to organization administrators, expires automatically, and is always audited.",
     "cancelDelete": "Cancel",
     "cancelQueued": "Cancel",
+    "catchUp": {
+      "cancel": "Cancel",
+      "citation": "Go to message {ordinal}",
+      "citationMissing": "That message is not loaded here any more.",
+      "covered": "Summary of {count, plural, one {# message} other {# messages}}",
+      "dismiss": "Dismiss catch-up",
+      "failed": "The summary could not be written. Try again.",
+      "note": "Written by your model from the messages on this device. Only you see it.",
+      "retry": "Try again",
+      "run": "Catch me up",
+      "runLabel": "Shared conversation catch-up",
+      "skipped": {
+        "empty": "There is too little to summarise.",
+        "no-model": "No model is available for summaries. Configure a provider in Settings.",
+        "no-output": "The model returned nothing to show.",
+        "pii": "These messages contain details that cannot be sent to a model, so they were not summarised."
+      },
+      "title": "Catch up",
+      "unread": "{count, plural, one {# new message} other {# new messages}} since you were last here"
+    },
     "confirmDelete": "Delete permanently",
     "connected": "Connected",
     "connectionStale": "Reconnecting · draft stays local",
