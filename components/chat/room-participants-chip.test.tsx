@@ -25,6 +25,15 @@ jest.mock("@/hooks/data", () => ({
     loader.toString().includes("collabChatMemberships") ? mockMemberships : [],
 }))
 
+let mockOverride: unknown = undefined
+const mockOverrideKeys: Array<string | null | undefined> = []
+jest.mock("@/hooks/connectors/use-conversation-overrides", () => ({
+  useConversationOverride: (key: string | null | undefined) => {
+    mockOverrideKeys.push(key)
+    return key ? mockOverride : undefined
+  },
+}))
+
 let mockMessages: unknown[] = []
 jest.mock("@/stores/chat", () => ({
   useChatStore: (selector: (state: unknown) => unknown) =>
@@ -64,7 +73,18 @@ beforeEach(() => {
   mockRoles = new Map()
   mockMemberships = []
   mockMessages = []
+  mockOverride = undefined
+  mockOverrideKeys.length = 0
 })
+
+const larkGroup = () =>
+  session({
+    platformBinding: {
+      platform: "lark",
+      conversationKey: "lark:a1:oc_1",
+      scopeKind: "group",
+    } as never,
+  })
 
 describe("RoomParticipantsChip", () => {
   it("stays out of the way of a one-to-one conversation", () => {
@@ -184,7 +204,84 @@ describe("RoomParticipantsChip", () => {
     await user.click(screen.getByTestId("room-participants-chip"))
     expect(await screen.findByText("Ana")).toBeInTheDocument()
     expect(screen.getByText("Guest Ben")).toBeInTheDocument()
-    expect(screen.getByText("owner")).toBeInTheDocument()
+    expect(screen.getByText("roles.owner")).toBeInTheDocument()
     expect(screen.queryByTestId("room-participants-observed")).not.toBeInTheDocument()
+    // Only an IM room reads the conversation's override row.
+    expect(mockOverrideKeys.every((key) => !key)).toBe(true)
+  })
+
+  it("lists an IM group's members from the roster its platform reported (ADR-0177 batch 4)", async () => {
+    mockOverride = {
+      roomRoster: {
+        tier: "full",
+        members: [
+          { remoteUserId: "ou_ann", displayName: "Ann", role: "owner" },
+          { remoteUserId: "ou_ben", displayName: "Ben" },
+          { remoteUserId: "ou_cy", displayName: "Cy" },
+        ],
+        readAt: 1,
+      },
+    }
+    mockMessages = [
+      {
+        role: "user",
+        parts: [{ type: "text", text: "hi" }],
+        metadata: {
+          platformMessage: {
+            sender: { id: "pid_ben", remoteUserId: "ou_ben", displayName: "Ben" },
+          },
+        },
+      },
+    ]
+    const user = userEvent.setup({ delay: null })
+    render(<RoomParticipantsChip session={larkGroup()} />)
+
+    expect(mockOverrideKeys).toContain("lark:a1:oc_1")
+    // Ben has spoken and is listed: one person, not two.
+    expect(screen.getByTestId("room-participants-chip").textContent).toContain("3")
+    await user.click(screen.getByTestId("room-participants-chip"))
+    expect(await screen.findByText("Cy")).toBeInTheDocument()
+    expect(screen.getAllByText("Ben")).toHaveLength(1)
+    expect(screen.getByText("roles.owner")).toBeInTheDocument()
+    expect(screen.queryByTestId("room-participants-observed")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("room-participants-partial")).not.toBeInTheDocument()
+  })
+
+  it("counts the whole room when the platform listed only its admins", async () => {
+    mockOverride = {
+      roomRoster: {
+        tier: "partial",
+        members: [{ remoteUserId: "1", displayName: "Admin", role: "admin" }],
+        memberCount: 240,
+        readAt: 1,
+      },
+    }
+    const user = userEvent.setup({ delay: null })
+    render(<RoomParticipantsChip session={larkGroup()} />)
+
+    expect(screen.getByTestId("room-participants-chip").textContent).toContain("240")
+    expect(screen.getByTestId("room-participants-chip")).toHaveAttribute(
+      "aria-label",
+      'participants:{"count":240}'
+    )
+    await user.click(screen.getByTestId("room-participants-chip"))
+    expect(await screen.findByTestId("room-participants-partial")).toHaveTextContent(
+      'partialCount:{"count":240}'
+    )
+    expect(screen.getByText("roles.admin")).toBeInTheDocument()
+  })
+
+  it("says a cut list is partial without inventing a size", async () => {
+    mockOverride = {
+      roomRoster: {
+        tier: "partial",
+        members: [{ remoteUserId: "a" }, { remoteUserId: "b", displayName: "Bo" }],
+        readAt: 1,
+      },
+    }
+    const user = userEvent.setup({ delay: null })
+    render(<RoomParticipantsChip session={larkGroup()} />)
+    await user.click(screen.getByTestId("room-participants-chip"))
+    expect(await screen.findByTestId("room-participants-partial")).toHaveTextContent("partialOnly")
   })
 })

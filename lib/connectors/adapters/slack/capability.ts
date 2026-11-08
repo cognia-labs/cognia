@@ -20,6 +20,8 @@ import {
  *  - rich-markdown.slack: Slack mrkdwn dialect
  */
 export const SLACK_CAPS: readonly Capability[] = [
+  // `conversations.members` (room roster, ADR-0177 batch 4).
+  "chat.members.read",
   "delete",
   "edit",
   "history.fetch",

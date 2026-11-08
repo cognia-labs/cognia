@@ -1740,6 +1740,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     removeChatMembers: chatMgmt.removeChatMembers,
     updateChat: chatMgmt.updateChat,
     resolveContacts: chatMgmt.resolveContacts,
+    readRoomMembers: chatMgmt.readRoomMembers,
     a2uiCapability: () => LARK_A2UI_CAPABILITY,
     platformSkillCapabilities: () => {
       // Lazy ESM import via the synchronous bundler entry. The runtime

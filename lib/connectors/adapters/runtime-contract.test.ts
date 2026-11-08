@@ -265,6 +265,8 @@ const METHOD_BACKED_CAPABILITIES: Partial<
   "chat.members": { required: ["addChatMembers", "removeChatMembers"] },
   "chat.update": { required: ["updateChat"] },
   "contact.resolve": { required: ["resolveContacts"] },
+  // Shared with the members management family; the roster read is the method.
+  "chat.members.read": { required: ["readRoomMembers"] },
 }
 
 describe("capability ↔ method drift", () => {

@@ -70,7 +70,7 @@ where its membership is kept:
 | -------- | --------------------------------------- | ---------------------------- | --------------------------------------- |
 | `team`   | `kind === "team"` and `teamId`          | `Team.members`               | the host that holds the run             |
 | `shared` | `collaboration` present                 | `collabChatMemberships`      | the collab server (a lease, batch 5)    |
-| `im`     | `platformBinding` present               | none until `chat.members.read` | the connector runtime on the host     |
+| `im`     | `platformBinding`, not a direct chat     | `chat.members.read` roster   | the connector runtime on the host       |
 
 `roomKindOf(session)` is the single classifier (`lib/chat/room/kind.ts`). A
 direct chat is `null`. Squad runs are not rooms.
@@ -362,3 +362,25 @@ before a member started and could never reach one that was already replying.
 The `shared` kind now streams: members watch a shared run's reply as it is
 written, through never-stored live frames over `cognia.chat.v2`, instead of
 waiting for the 1 s stored corrections. Nothing in "Later" changes.
+
+## Implementation update (2026-11-08, batch 4, ADR-0252 P7)
+
+- **A direct chat is not a room.** The platform binding records its scope
+  (`PlatformBinding.scopeKind`, stamped from the inbound channel), and
+  `roomKindOf` answers `null` for a `private` one. A binding written before
+  the field falls back to its delivery target's scope, then to the reference;
+  an unknown scope stays a room. The Inbox groups by chat kind (groups,
+  direct). IM and shared rooms start with memory off.
+- **The member list comes from the platform.** `readRoomMembers` is an
+  optional adapter method paired with the existing `chat.members.read`
+  capability, answering `full` or `partial` (a count and the admins, or a
+  list cut at the caller's limit). `lib/connectors/room-roster.ts` reads it
+  when an inbound group message finds the roster older than 6 h, never on
+  the reply path, at most once per 30 min after an attempt, 500 members at
+  most, and keeps it on the conversation's override row, which already
+  syncs to paired devices. The projection matches a listed member to a
+  speaker by the platform's user id (a speaker's own id is the local
+  identity row), the chip counts the whole room for a `partial` roster and
+  says the list is incomplete, and fixed role tokens are shown in the
+  reader's language.
+

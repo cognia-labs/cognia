@@ -26,6 +26,8 @@ import {
  * basic OneBot segments (text + image + at + reply) is always available.
  */
 export const ONEBOT_CAPS: readonly Capability[] = [
+  // `get_group_member_list` (room roster, ADR-0177 batch 4).
+  "chat.members.read",
   "delete",
   "forward",
   "history.fetch",

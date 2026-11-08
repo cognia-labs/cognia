@@ -198,3 +198,75 @@ it("observes the tenant contact lookup only when skill context is already presen
   await mgmt.resolveContacts({ emails: ["a@example.com"] })
   expect(observeTenantServiceData).not.toHaveBeenCalled()
 })
+
+describe("readRoomMembers (ADR-0177 batch 4)", () => {
+  const target = {
+    address: {
+      conversationKey: "lark:adapter-1:oc_1",
+      platform: "lark",
+      adapterId: "adapter-1",
+      scopeKind: "group",
+      containerId: "oc_1",
+    },
+    conversationRef: { platform: "lark", adapterId: "adapter-1" },
+    refreshedAt: 1,
+  } as never
+
+  it("pages the chat's members by open_id and marks the owner", async () => {
+    mTenant.mockImplementation(async (_creds, _method, path: string) => {
+      if (!path.includes("/members")) return { code: 0, data: { owner_id: "ou_b" } }
+      return path.includes("page_token=t2")
+        ? { code: 0, data: { items: [{ member_id: "ou_c" }], has_more: false, member_total: 3 } }
+        : {
+            code: 0,
+            data: {
+              items: [
+                { member_id: "ou_a", name: "Ann" },
+                { member_id: "ou_b", name: "Ben" },
+              ],
+              has_more: true,
+              page_token: "t2",
+              member_total: 3,
+            },
+          }
+    })
+    await expect(mgmt.readRoomMembers(target, { maxMembers: 500 })).resolves.toEqual({
+      tier: "full",
+      members: [
+        { remoteUserId: "ou_a", displayName: "Ann", role: "member" },
+        { remoteUserId: "ou_b", displayName: "Ben", role: "owner" },
+        { remoteUserId: "ou_c", role: "member" },
+      ],
+    })
+    const paths = mTenant.mock.calls.map((call) => call[2] as string)
+    expect(paths[0]).toBe("/im/v1/chats/oc_1?user_id_type=open_id")
+    expect(paths[1]).toContain("/im/v1/chats/oc_1/members?")
+    expect(paths[1]).toContain("member_id_type=open_id")
+    expect(paths[1]).toContain("page_size=100")
+    expect(paths[2]).toContain("page_token=t2")
+    expect(mTenant.mock.calls.every((call) => call[4] === "service-data")).toBe(true)
+  })
+
+  it("still lists members when the chat itself cannot be read, and names the members scope on refusal", async () => {
+    mTenant
+      .mockRejectedValueOnce(new LarkApiError({ status: 403, code: null, message: "forbidden" }))
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { items: [{ member_id: "ou_a" }], has_more: false, member_total: 40 },
+      })
+    await expect(mgmt.readRoomMembers(target, { maxMembers: 1 })).resolves.toEqual({
+      tier: "partial",
+      members: [{ remoteUserId: "ou_a", role: "member" }],
+      memberCount: 40,
+    })
+    expect(mTenant.mock.calls[1][2]).toContain("page_size=1")
+
+    mTenant.mockReset()
+    mTenant
+      .mockResolvedValueOnce({ code: 0, data: {} })
+      .mockRejectedValueOnce(new LarkApiError({ status: 200, code: 99991672, message: "denied" }))
+    const err = await mgmt.readRoomMembers(target, { maxMembers: 10 }).catch((e) => e)
+    expect(err).toBeInstanceOf(ChatManagementScopeError)
+    expect((err as ChatManagementScopeError).requiredScope).toBe("im:chat.members:read")
+  })
+})

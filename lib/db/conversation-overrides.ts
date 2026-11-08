@@ -153,6 +153,22 @@ export async function patchConversationOverride(
   return updated
 }
 
+/**
+ * Store the platform's member list for a conversation (ADR-0177 batch 4).
+ * Writes only the two roster fields, by key, so a roster read finishing late
+ * can never put back an older copy of anything an operator changed meanwhile.
+ * Observed state, not configuration: no config audit.
+ */
+export async function writeRoomRosterFields(
+  conversationKey: string,
+  sessionId: string,
+  fields: Pick<ConversationOverrideRow, "roomRoster" | "roomRosterAttemptAt">
+): Promise<void> {
+  const row = await ensureRow(conversationKey, sessionId)
+  await getDb().conversationOverrides.update(row.id, { ...fields, updatedAt: Date.now() })
+  invalidate(conversationKey)
+}
+
 export type ConversationConfigSection = "behavior" | "responder" | "permissions" | "delivery"
 
 export type ConversationConfigSource =

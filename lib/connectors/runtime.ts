@@ -93,6 +93,7 @@ import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-s
 import { connectorVendor } from "@/lib/connectors/vendor-contribution"
 import { buildSteerPayload, steerBlocksOf } from "@/lib/claude/steer"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
+import { refreshRoomRoster } from "./room-roster"
 import {
   createReplyStream,
   discloseReplyStreamText,
@@ -1450,6 +1451,17 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
       if (!originalSession) throw new Error("SESSION_NOT_FOUND")
       session = originalSession
     }
+
+    // A room's member list, read from its platform when stale (ADR-0177
+    // batch 4). Fired and not awaited: the reply never waits on it, and a
+    // direct chat or an adapter that cannot list members is a no-op.
+    void refreshRoomRoster({
+      adapter: bus.getAdapter(event.adapterId),
+      conversationKey: event.conversationKey,
+      sessionId: session.id,
+      target: deliveryTargetFromEvent(event),
+      override,
+    })
 
     // Async preparation can outlive another edit/recall. Serialize the final
     // source check and dispatch invocation with the transport mutation lock;

@@ -20,6 +20,7 @@ import type {
 } from "@cognia/agent-config-types/agent-composition"
 import type { MediaModelGrant } from "@/lib/connectors/media-model-gate"
 import type { OutboundRequest } from "@/types/connectors/outbound"
+import type { RoomMember, RoomMemberRead } from "@/types/connectors/room-members"
 import type {
   ActiveRunDispatchMode,
   DeliveryReadiness,
@@ -567,6 +568,17 @@ export interface ConversationOverrideRow {
    * `routingSource === "assignment"`; discarded by
    * `clearAssignmentRoutingMarker`.
    */
+  /**
+   * Who is in the conversation, as its platform last listed it (ADR-0177
+   * batch 4). Written on the host by `lib/connectors/room-roster.ts` from the
+   * adapter's `readRoomMembers` and kept on this row, rather than on the
+   * runtime state, so it syncs to paired devices with the rest of the
+   * conversation. Absent until a read succeeded; a platform without a member
+   * API never has one, and its room stays `observed`.
+   */
+  roomRoster?: ConversationRoomRoster
+  /** When the host last asked the platform for {@link roomRoster}, failed or not. */
+  roomRosterAttemptAt?: number
   assignmentPreviousRouting?: {
     characterId?: string
     characterDisabled?: boolean
@@ -576,6 +588,15 @@ export interface ConversationOverrideRow {
   }
   createdAt: number
   updatedAt: number
+}
+
+/** A conversation's member list as stored on its override row. */
+export interface ConversationRoomRoster {
+  tier: RoomMemberRead["tier"]
+  members: RoomMember[]
+  /** The whole room's size when the platform said and it exceeds `members`. */
+  memberCount?: number
+  readAt: number
 }
 
 export type ConnectorConversationActivationStatus = "inactive" | "active"

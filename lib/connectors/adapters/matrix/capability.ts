@@ -22,6 +22,7 @@ import {
  * Kept in alphabetical order for stable diffs.
  */
 export const MATRIX_CAPS: readonly Capability[] = [
+  "chat.members.read",
   "delete",
   "edit",
   "send.a2ui",

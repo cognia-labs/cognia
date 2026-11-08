@@ -1259,3 +1259,66 @@ it("messageRoute keeps a reply in the chat and places an edit by its composite i
   await expect(adapter.messageRoute!("22:777", "edit", ref)).resolves.toBe("elsewhere")
   await expect(adapter.messageRoute!(":777", "edit", ref)).resolves.toBe("unknown")
 })
+
+it("readRoomMembers lists a group's administrators with its member count (ADR-0177 batch 4)", async () => {
+  mockGetAdapterInstance.mockResolvedValue(undefined)
+  const urls: string[] = []
+  mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+    if (cmd !== "connectors_http_request") return undefined
+    const req = (args as { req: { url: string; body: string } }).req
+    urls.push(req.url)
+    expect(JSON.parse(req.body)).toEqual({ chat_id: "-1001" })
+    if (req.url.endsWith("/getChatMemberCount"))
+      return { status: 200, headers: {}, body: JSON.stringify({ ok: true, result: 57 }) }
+    return {
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        ok: true,
+        result: [
+          { status: "creator", user: { id: 7, first_name: "Ann", last_name: "Lee" } },
+          { status: "administrator", user: { id: 9, username: "helper_bot", is_bot: true } },
+        ],
+      }),
+    }
+  })
+  const adapter = createTelegramAdapter({
+    id: "tg-roster",
+    displayName: "Test",
+    transport: "longpoll",
+    botToken: async () => "TOKEN",
+    selfId: "100",
+  })
+  const target = {
+    address: {
+      conversationKey: "telegram:tg-roster:-1001",
+      platform: "telegram",
+      adapterId: "tg-roster",
+      scopeKind: "group",
+      containerId: "-1001",
+    },
+    conversationRef: { platform: "telegram", adapterId: "tg-roster", chatId: -1001 },
+    refreshedAt: 1,
+  } as never
+  await expect(adapter.readRoomMembers!(target, { maxMembers: 500 })).resolves.toEqual({
+    tier: "partial",
+    members: [
+      { remoteUserId: "7", displayName: "Ann Lee", role: "owner" },
+      { remoteUserId: "9", displayName: "helper_bot", role: "admin", isBot: true },
+    ],
+    memberCount: 57,
+  })
+  expect(urls.sort()).toEqual([
+    "https://api.telegram.org/botTOKEN/getChatAdministrators",
+    "https://api.telegram.org/botTOKEN/getChatMemberCount",
+  ])
+
+  mockInvoke.mockImplementation(async () => ({
+    status: 400,
+    headers: {},
+    body: JSON.stringify({ ok: false, description: "Bad Request: chat not found" }),
+  }))
+  await expect(adapter.readRoomMembers!(target, { maxMembers: 500 })).rejects.toThrow(
+    /chat not found/
+  )
+})

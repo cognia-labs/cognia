@@ -2,6 +2,15 @@
   "andMore": "{count, plural, other {另有 # 人}}",
   "listLabel": "房间成员",
   "observedOnly": "仅列出发过言的成员。",
+  "partialCount": "{count, plural, other {平台只列出了 # 名成员中的一部分。}}",
+  "partialOnly": "平台只列出了部分成员。",
   "participants": "{count, plural, other {房间内 # 人}}",
+  "roles": {
+    "owner": "所有者",
+    "admin": "管理员",
+    "maintainer": "维护者",
+    "member": "成员",
+    "viewer": "只读成员"
+  },
   "working": "正在处理 {activity}"
 }

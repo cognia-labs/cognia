@@ -16,6 +16,7 @@ import type {
 } from "./event"
 import type { OutboundRequest, OutboundResult } from "./outbound"
 import type { PresenceStatusInput } from "./presence"
+import type { RoomMemberRead, RoomMemberReadOptions } from "./room-members"
 import type { RunPresentationDriver } from "../execution/run"
 import type { ConnectorRuntimeCapabilityMatrix } from "./runtime-capability"
 
@@ -484,6 +485,18 @@ export interface PlatformAdapter {
   removeChatMembers?(input: ChatMembersInput): Promise<ChatMembersResult>
   updateChat?(input: UpdateChatInput): Promise<void>
   resolveContacts?(input: ResolveContactsInput): Promise<ContactCandidate[]>
+  /**
+   * Who is in a conversation (ADR-0177 batch 4). Optional, paired with the
+   * `chat.members.read` capability. `full` when the platform listed every
+   * member, `partial` when it gives only a count and/or the admins or the
+   * list passed `options.maxMembers`. Read by the room roster on the host
+   * (`lib/connectors/room-roster.ts`), never on a hot path: a throw leaves the
+   * conversation's last roster in place.
+   */
+  readRoomMembers?(
+    target: ConversationDeliveryTarget,
+    options: RoomMemberReadOptions
+  ): Promise<RoomMemberRead>
   /**
    * Per-adapter A2UI projection matrix. Returned synchronously so
    * `build-options.ts:resolveSendOptions` can inject a capability-aware

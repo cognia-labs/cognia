@@ -34,6 +34,7 @@ import { builtInConnectorRuntimeCapabilities } from "@/types/connectors/runtime-
 import { conversationBoundRoute } from "@/lib/connectors/adapters/_shared/message-route"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { ONEBOT_A2UI_CAPABILITY, ONEBOT_CAPS } from "./capability"
+import { readOneBotRoomMembers } from "./room-members"
 import { parseOneBotEvent, clearVariantCache } from "./parse"
 import { parseV11HistoryMessage, type OneBotV11Event } from "./v11"
 import {
@@ -849,6 +850,18 @@ export function createOneBotAdapter(opts: OneBotAdapterOptions): PlatformAdapter
     fetchHistory,
     addReaction,
     removeReaction,
+    // The room roster (ADR-0177 batch 4): `get_group_member_list`.
+    readRoomMembers: (target, options) =>
+      readOneBotRoomMembers(
+        {
+          send: (call, timeoutMs) => transport.send(call, timeoutMs),
+          variant: getVariant(),
+          self: currentSelf,
+          adapterId: opts.id,
+          groupId: target.address.containerId,
+        },
+        options
+      ),
   }
 
   return adapter

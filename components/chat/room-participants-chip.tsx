@@ -18,8 +18,10 @@
  * merges it with whoever `lib/chat/speaker.ts` says has spoken. The chip is
  * that projection with faces attached, which is what keeps the header and the
  * model looking at the same room. The projection also says how complete it
- * is, and an IM group, which declares no members at all, gets a line saying
- * only those who have spoken are listed.
+ * is: an IM group reads the member list its platform last reported (kept on
+ * the conversation's override row), says so when the platform gave only part
+ * of it, and, on a platform that cannot list members, gets a line saying only
+ * those who have spoken are listed.
  *
  * # Why it self-hides on a count rather than on a session kind
  *
@@ -42,10 +44,15 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { useConversationOverride } from "@/hooks/connectors/use-conversation-overrides"
 import { useClientLiveQuery } from "@/hooks/data"
 import { useTeamMemberRoles, useTeamMembers } from "@/hooks/use-team-members"
 import { roomKindOf } from "@/lib/chat/room/kind"
-import { projectRoomParticipants, type RoomRosterCompleteness } from "@/lib/chat/room/participants"
+import {
+  projectRoomParticipants,
+  type ImRoomRosterInput,
+  type RoomRosterCompleteness,
+} from "@/lib/chat/room/participants"
 import { MAX_ROSTER_PARTICIPANTS } from "@/lib/chat/room-roster"
 import type { SpeakerSource } from "@/lib/chat/speaker"
 import { deterministicColor, type AvatarSubject } from "@/lib/ui/avatar"
@@ -57,6 +64,13 @@ import type { SessionMembership } from "@cognia/agent-config-types/collaboration
 
 /** Faces shown side by side before the rest collapse into the count. */
 const STACKED_FACES = 3
+
+/**
+ * Roles a store names with a fixed token (a shared room's membership, an IM
+ * platform's owner and admins), shown in the reader's language. A team slot's
+ * role is free text its author wrote and is shown as written.
+ */
+const ROLE_TOKENS = new Set(["owner", "admin", "maintainer", "member", "viewer"])
 
 interface Row {
   id: string
@@ -80,10 +94,14 @@ export function RoomParticipantsChip({
   const members = useTeamMembers(teamId)
   const roles = useTeamMemberRoles(teamId)
   const memberships = useSharedRoomMemberships(kind === "shared" ? session.id : null)
+  const override = useConversationOverride(
+    kind === "im" ? session.platformBinding?.conversationKey : null
+  )
+  const imRoster = override?.roomRoster ?? null
   const messages = useChatStore((state) => state.sessions[session.id]?.messages)
   const memberActivity = useUIStore((state) => state.memberActivity)
 
-  const { rows, completeness } = useMemo(
+  const { rows, completeness, memberCount } = useMemo(
     // `UIMessage.metadata` is `unknown` by construction, while `SpeakerSource`
     // wants the record it actually holds. The resolver reads that field
     // defensively at every step, so the widening is safe and the same one
@@ -94,15 +112,21 @@ export function RoomParticipantsChip({
         members,
         roles,
         memberships,
+        imRoster,
         messages: (messages ?? []) as unknown as readonly SpeakerSource[],
         activityFor: (id) => memberActivity[`${session.id}::${id}`],
       }),
-    [kind, members, roles, memberships, messages, memberActivity, session.id]
+    [kind, members, roles, memberships, imRoster, messages, memberActivity, session.id]
   )
 
-  if (rows.length < 2) return null
+  // A partial IM roster may list fewer people than the room holds; the count
+  // is the room's, not the list's.
+  const total = memberCount ?? rows.length
+  if (total < 2) return null
 
-  const label = t("participants", { count: rows.length })
+  const label = t("participants", { count: total })
+  const roleLabel = (role: string) =>
+    kind !== "team" && ROLE_TOKENS.has(role) ? t(`roles.${role}`) : role
   const stacked = rows.slice(0, STACKED_FACES)
 
   return (
@@ -128,7 +152,7 @@ export function RoomParticipantsChip({
               />
             ))}
           </span>
-          <span className="truncate tabular-nums">{rows.length}</span>
+          <span className="truncate tabular-nums">{total}</span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-w-[18rem]">
@@ -149,13 +173,25 @@ export function RoomParticipantsChip({
               ) : null}
             </span>
             {row.role ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">{row.role}</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {roleLabel(row.role)}
+              </span>
             ) : null}
           </DropdownMenuItem>
         ))}
         {rows.length > MAX_ROSTER_PARTICIPANTS ? (
           <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
             {t("andMore", { count: rows.length - MAX_ROSTER_PARTICIPANTS })}
+          </DropdownMenuLabel>
+        ) : null}
+        {completeness === "partial" ? (
+          <DropdownMenuLabel
+            className="text-[11px] font-normal text-muted-foreground"
+            data-testid="room-participants-partial"
+          >
+            {memberCount !== undefined
+              ? t("partialCount", { count: memberCount })
+              : t("partialOnly")}
           </DropdownMenuLabel>
         ) : null}
         {completeness === "observed" ? (
@@ -204,15 +240,17 @@ function buildRows(input: {
   members: readonly Character[]
   roles: ReadonlyMap<string, string>
   memberships: readonly SessionMembership[]
+  imRoster: ImRoomRosterInput | null
   messages: readonly SpeakerSource[]
   activityFor?: (characterId: string) => string | undefined
-}): { rows: Row[]; completeness: RoomRosterCompleteness } {
-  const { kind, members, roles, memberships, messages, activityFor } = input
-  const { participants, completeness } = projectRoomParticipants({
+}): { rows: Row[]; completeness: RoomRosterCompleteness; memberCount?: number } {
+  const { kind, members, roles, memberships, imRoster, messages, activityFor } = input
+  const { participants, completeness, memberCount } = projectRoomParticipants({
     kind,
     characters: members,
     members: [...roles].map(([characterId, role]) => ({ characterId, role })),
     memberships,
+    imRoster,
     messages,
   })
   const characterById = new Map(members.map((member) => [member.id, member]))
@@ -236,5 +274,5 @@ function buildRows(input: {
         : {}),
     }
   })
-  return { rows, completeness }
+  return { rows, completeness, ...(memberCount !== undefined ? { memberCount } : {}) }
 }

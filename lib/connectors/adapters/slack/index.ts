@@ -30,6 +30,7 @@ import type { MessageSegment } from "@/types/connectors/segment"
 import { connectorsHttpRequest, connectorsMediaUpload } from "@/lib/connectors/tauri/commands"
 import { statFile } from "@/lib/file/file-operations"
 import { SLACK_A2UI_CAPABILITY, SLACK_CAPS } from "./capability"
+import { readSlackRoomMembers } from "./room-members"
 import { enrichSlackInboundMedia } from "./inbound-media"
 import {
   parseSlackEventCallback,
@@ -1072,6 +1073,9 @@ export function createSlackAdapter(opts: SlackAdapterOptions): PlatformAdapter {
       ),
     delete: deleteMessage,
     uploadFile,
+    // The room roster (ADR-0177 batch 4): member ids by `conversations.members`.
+    readRoomMembers: (target, options) =>
+      readSlackRoomMembers(doRequest, target.address.containerId, options),
     fetchHistory,
     setTyping,
     refreshCredentials,

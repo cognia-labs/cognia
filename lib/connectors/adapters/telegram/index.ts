@@ -18,7 +18,12 @@ import { connectorsHttpRequest, connectorsMediaUpload } from "@/lib/connectors/t
 import { TELEGRAM_A2UI_CAPABILITY, TELEGRAM_CAPS } from "./capability"
 import { createTelegramAlbumBuffer, type TelegramAlbumBuffer } from "./album"
 import { enrichTelegramInboundMedia } from "./inbound-media"
-import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import type { ConversationDeliveryTarget, NormalizedInboundEvent } from "@/types/connectors/event"
+import type {
+  RoomMember,
+  RoomMemberRead,
+  RoomMemberReadOptions,
+} from "@/types/connectors/room-members"
 import {
   albumGroupIdOf,
   parseTelegramUpdate,
@@ -144,6 +149,18 @@ async function callbackChatAllowed(
     reason,
   }).catch(() => undefined)
   return false
+}
+
+/** The part of a Bot API `ChatMember` the roster reads. */
+interface TelegramChatMemberEntry {
+  status?: string
+  user?: {
+    id?: number
+    is_bot?: boolean
+    first_name?: string
+    last_name?: string
+    username?: string
+  }
 }
 
 export function createTelegramAdapter(opts: TelegramAdapterOptions): PlatformAdapter {
@@ -988,6 +1005,73 @@ export function createTelegramAdapter(opts: TelegramAdapterOptions): PlatformAda
     // No-op: botToken is a resolver function called fresh on each request
   }
 
+  /** A Bot API read whose `result` is the answer (an array, a number). */
+  async function botApiResult<T>(method: string, payload: Record<string, unknown>): Promise<T> {
+    const chatPayload =
+      payload.chat_id !== undefined
+        ? { ...payload, chat_id: await resolveChatId(payload.chat_id) }
+        : payload
+    const resp = await connectorsHttpRequest({
+      url: `${TELEGRAM_API_BASE}/bot${await opts.botToken()}/${method}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(chatPayload),
+    })
+    let body: { ok?: boolean; result?: T; description?: string }
+    try {
+      body = JSON.parse(resp.body)
+    } catch {
+      throw new TelegramApiError(
+        `Telegram ${method} returned non-JSON body: ${resp.body.slice(0, 200)}`,
+        resp.status,
+        undefined
+      )
+    }
+    if (resp.status >= 400 || body?.ok !== true) {
+      throw new TelegramApiError(
+        `Telegram ${method} failed: ${body?.description ?? resp.body.slice(0, 200)}`,
+        resp.status,
+        undefined
+      )
+    }
+    return body.result as T
+  }
+
+  /**
+   * The room roster (ADR-0177 batch 4). Bots cannot list a group's members:
+   * the Bot API gives the administrators and a count, so the read is always
+   * `partial`.
+   */
+  async function readRoomMembers(
+    target: ConversationDeliveryTarget,
+    options: RoomMemberReadOptions
+  ): Promise<RoomMemberRead> {
+    const chatId = target.address.containerId
+    const [admins, count] = await Promise.all([
+      botApiResult<TelegramChatMemberEntry[]>("getChatAdministrators", { chat_id: chatId }),
+      botApiResult<number>("getChatMemberCount", { chat_id: chatId }),
+    ])
+    options.signal?.throwIfAborted()
+    const members: RoomMember[] = (Array.isArray(admins) ? admins : []).flatMap((entry) => {
+      const user = entry?.user
+      if (!user || typeof user.id !== "number") return []
+      const name = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username
+      return [
+        {
+          remoteUserId: String(user.id),
+          ...(name ? { displayName: name } : {}),
+          role: entry.status === "creator" ? ("owner" as const) : ("admin" as const),
+          ...(user.is_bot ? { isBot: true } : {}),
+        },
+      ]
+    })
+    return {
+      tier: "partial",
+      members: members.slice(0, Math.max(0, Math.floor(options.maxMembers))),
+      ...(typeof count === "number" && Number.isFinite(count) ? { memberCount: count } : {}),
+    }
+  }
+
   return {
     get meta() {
       return {
@@ -1023,6 +1107,7 @@ export function createTelegramAdapter(opts: TelegramAdapterOptions): PlatformAda
     addReaction,
     removeReaction,
     refreshCredentials,
+    readRoomMembers,
     runtimeCapabilities: builtInConnectorRuntimeCapabilities("telegram"),
     a2uiCapability: () => TELEGRAM_A2UI_CAPABILITY,
   } as PlatformAdapter & {

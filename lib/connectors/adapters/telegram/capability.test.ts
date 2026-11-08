@@ -43,7 +43,8 @@ describe("TELEGRAM_CAPS", () => {
     expect(TELEGRAM_CAPS).toContain("send.emoji")
   })
 
-  it("has exactly 16 entries (13 Phase-1 + send.a2ui + send.reaction + send.emoji)", () => {
-    expect(TELEGRAM_CAPS).toHaveLength(16)
+  it("has exactly 17 entries (13 Phase-1 + send.a2ui + send.reaction + send.emoji + chat.members.read)", () => {
+    expect(TELEGRAM_CAPS).toHaveLength(17)
+    expect(TELEGRAM_CAPS).toContain("chat.members.read")
   })
 })

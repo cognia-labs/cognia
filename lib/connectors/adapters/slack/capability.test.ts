@@ -6,8 +6,9 @@ describe("SLACK_CAPS", () => {
     expect(Array.isArray(SLACK_CAPS)).toBe(true)
   })
 
-  it("declares the Phase-1 capability set plus send.a2ui + typing (A3)", () => {
+  it("declares the Phase-1 capability set plus send.a2ui + typing (A3) and the roster read", () => {
     const expected = [
+      "chat.members.read",
       "delete",
       "edit",
       "history.fetch",

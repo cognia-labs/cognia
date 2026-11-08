@@ -18,6 +18,7 @@ import { compositeEditRoute } from "@/lib/connectors/adapters/_shared/message-ro
 import type { MessageSegment } from "@/types/connectors/segment"
 import { connectorsHttpRequest, connectorsDiscordUpload } from "@/lib/connectors/tauri/commands"
 import { DISCORD_A2UI_CAPABILITY, DISCORD_CAPS } from "./capability"
+import { readDiscordRoomMembers } from "./room-members"
 import {
   buildDiscordModalData,
   DiscordA2UIValidationError,
@@ -847,6 +848,15 @@ export function createDiscordAdapter(opts: DiscordAdapterOptions): PlatformAdapt
     addReaction,
     removeReaction,
     fetchHistory,
+    // The room roster (ADR-0177 batch 4): the guild's owner and its size.
+    readRoomMembers: (target, options) =>
+      readDiscordRoomMembers(
+        doRequest,
+        typeof target.conversationRef.guildId === "string"
+          ? target.conversationRef.guildId
+          : undefined,
+        options
+      ),
     refreshCredentials,
     runtimeCapabilities: builtInConnectorRuntimeCapabilities("discord"),
     a2uiCapability: () => DISCORD_A2UI_CAPABILITY,

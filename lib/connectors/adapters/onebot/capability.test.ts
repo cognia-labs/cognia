@@ -44,7 +44,8 @@ describe("ONEBOT_CAPS", () => {
     expect(ONEBOT_CAPS).toContain("forward")
   })
 
-  it("has exactly 13 entries (adds forward alongside send.a2ui + send.reaction)", () => {
-    expect(ONEBOT_CAPS).toHaveLength(13)
+  it("has exactly 14 entries (adds forward alongside send.a2ui + send.reaction, and the roster read)", () => {
+    expect(ONEBOT_CAPS).toHaveLength(14)
+    expect(ONEBOT_CAPS).toContain("chat.members.read")
   })
 })

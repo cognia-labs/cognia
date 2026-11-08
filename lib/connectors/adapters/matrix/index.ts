@@ -56,6 +56,7 @@ import { MatrixE2EERuntime } from "./e2ee"
 import { MatrixKeyBackup, MatrixRequestNotDispatchedError } from "./key-backup"
 import { MatrixCrossSigning, matrixAuthChallenge, type MatrixAuthChallenge } from "./cross-signing"
 import { MatrixVerification } from "./verification"
+import { readMatrixRoomMembers } from "./room-members"
 
 export interface MatrixAdapterOptions {
   id: string
@@ -888,6 +889,9 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
     health,
     send,
     edit,
+    // The room roster (ADR-0177 batch 4): `joined_members` lists everyone.
+    readRoomMembers: (target, options) =>
+      readMatrixRoomMembers(matrixRequest, target.address.containerId, options),
     // A reply is sent to the reference's room; an edit goes to the room its
     // "<roomId>|<eventId>" composite names, else the reference's (ADR-0239).
     messageRoute: async (messageId, use, conversationRef) => {

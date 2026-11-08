@@ -11469,7 +11469,16 @@
     "andMore": "{count, plural, other {# more}}",
     "listLabel": "In this room",
     "observedOnly": "Only members who have spoken are listed.",
+    "partialCount": "{count, plural, other {The platform listed only some of the # members.}}",
+    "partialOnly": "The platform listed only some members.",
     "participants": "{count, plural, other {# in this room}}",
+    "roles": {
+      "admin": "Admin",
+      "maintainer": "Maintainer",
+      "member": "Member",
+      "owner": "Owner",
+      "viewer": "Viewer"
+    },
     "working": "Working on {activity}"
   },
   "chatTemplatesSettings": {

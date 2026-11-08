@@ -11,9 +11,13 @@
  *   - resolveContacts   → `contact:user.id:readonly` (email/phone batch);
  *                         name search additionally needs a CONNECTED USER
  *                         token (`search/v1/user` rejects bot identities).
+ *   - readRoomMembers   → `im:chat.members:read` (ADR-0177 batch 4)
  */
 
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
+import type { ConversationDeliveryTarget } from "@/types/connectors/event"
+import type { RoomMemberRead, RoomMemberReadOptions } from "@/types/connectors/room-members"
+import { collectRoomMemberPages } from "../_shared/room-member-pages"
 import type {
   ChatMembersInput,
   ChatMembersResult,
@@ -35,6 +39,22 @@ export interface LarkChatManagement {
   removeChatMembers(input: ChatMembersInput): Promise<ChatMembersResult>
   updateChat(input: UpdateChatInput): Promise<void>
   resolveContacts(input: LarkResolveContactsInput): Promise<ContactCandidate[]>
+  readRoomMembers(
+    target: ConversationDeliveryTarget,
+    options: RoomMemberReadOptions
+  ): Promise<RoomMemberRead>
+}
+
+/** Lark's largest member page. */
+const LARK_MEMBER_PAGE_SIZE = 100
+
+interface LarkMemberPage {
+  data?: {
+    items?: Array<{ member_id?: string; name?: string }>
+    has_more?: boolean
+    page_token?: string
+    member_total?: number
+  }
 }
 
 async function tenantCall(
@@ -132,6 +152,50 @@ export function createLarkChatManagement(
           ...(input.description !== undefined ? { description: input.description } : {}),
         }
       )
+    },
+
+    async readRoomMembers(target, options) {
+      const chatId = target.address.containerId
+      // The owner is not marked on the member list. One read of the chat
+      // names it; a bot that cannot read the chat still lists its members.
+      const ownerId = await tenantCall(
+        resolveCreds,
+        "im:chat:readonly",
+        "GET",
+        `/im/v1/chats/${encodeURIComponent(chatId)}?user_id_type=open_id`
+      )
+        .then((parsed) => (parsed as { data?: { owner_id?: string } } | null)?.data?.owner_id)
+        .catch(() => undefined)
+      // Lark lists people only; the bots in a chat are not on this list.
+      return collectRoomMemberPages(async (pageToken) => {
+        const query = new URLSearchParams({
+          member_id_type: "open_id",
+          page_size: String(Math.min(LARK_MEMBER_PAGE_SIZE, Math.max(1, options.maxMembers))),
+          ...(pageToken ? { page_token: pageToken } : {}),
+        })
+        const parsed = (await tenantCall(
+          resolveCreds,
+          "im:chat.members:read",
+          "GET",
+          `/im/v1/chats/${encodeURIComponent(chatId)}/members?${query.toString()}`
+        )) as LarkMemberPage | null
+        const data = parsed?.data
+        return {
+          members: (data?.items ?? []).flatMap((item) =>
+            item.member_id
+              ? [
+                  {
+                    remoteUserId: item.member_id,
+                    ...(item.name ? { displayName: item.name } : {}),
+                    role: item.member_id === ownerId ? ("owner" as const) : ("member" as const),
+                  },
+                ]
+              : []
+          ),
+          ...(data?.has_more && data.page_token ? { nextCursor: data.page_token } : {}),
+          ...(typeof data?.member_total === "number" ? { total: data.member_total } : {}),
+        }
+      }, options)
     },
 
     async resolveContacts(input: LarkResolveContactsInput): Promise<ContactCandidate[]> {

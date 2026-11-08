@@ -57,6 +57,7 @@ import { gateInboundEvent } from "@/lib/connectors/at-gate"
 import { recordDeliveredMessage } from "@/lib/connectors/delivered-messages"
 import { buildConversationKey } from "@/types/connectors/event"
 import { QQ_OFFICIAL_A2UI_CAPABILITY, QQ_OFFICIAL_CAPS } from "./capability"
+import { readQQRoomMembers } from "./room-members"
 import { QQ_API_BASE, clearQQTokenCacheByToken, getQQGatewayUrl, qqAuthHeaders } from "./auth"
 import { parseQQDispatch, qqReferenceIndex, type QQDispatch, type QQScene } from "./parse"
 import { findQQReference, recordQQReference } from "./references"
@@ -1311,6 +1312,9 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
           ? ["audio/silk"]
           : [],
     management,
+    // The room roster (ADR-0177 batch 4), through `members.list`.
+    readRoomMembers: (target, options) =>
+      readQQRoomMembers(management, target.address.containerId, options),
     streamReply: async (req) => {
       await verifyConnectorAssetReferences(
         opts.id,

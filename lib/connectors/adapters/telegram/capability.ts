@@ -16,6 +16,9 @@ import {
  * to bots. Declaring `history.fetch` would be dishonest, so it is omitted.
  */
 export const TELEGRAM_CAPS: readonly Capability[] = [
+  // `readRoomMembers`: the administrators and a member count, as `partial`
+  // (bots cannot list a group's members).
+  "chat.members.read",
   "delete",
   "edit",
   "rich-markdown.telegram",

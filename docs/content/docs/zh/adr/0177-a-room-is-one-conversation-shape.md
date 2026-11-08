@@ -38,7 +38,7 @@ description: "角色团队房间、共享会话与 IM 群组统一为房间抽�
 | -------- | --------------------------------- | ----------------------------- | --------------------------------- |
 | `team`   | `kind === "team"` 且有 `teamId`   | `Team.members`                | 持有运行权的宿主                  |
 | `shared` | 存在 `collaboration`              | `collabChatMemberships`       | 协作服务器（租约，批次 5）        |
-| `im`     | 存在 `platformBinding`            | 在 `chat.members.read` 前没有 | 宿主上的连接器运行时              |
+| `im`     | 存在 `platformBinding` 且不是私聊 | `chat.members.read` 名单      | 宿主上的连接器运行时              |
 
 `roomKindOf(session)` 是唯一的分类器（`lib/chat/room/kind.ts`）。直接对话是 `null`。Squad 运行不是房间。
 
@@ -167,3 +167,9 @@ description: "角色团队房间、共享会话与 IM 群组统一为房间抽�
 ## 实现更新（2026-10-26，ADR-0241）
 
 `shared` 类型现在支持流式：成员通过 `cognia.chat.v2` 上从不存储的实时帧边生成边观看共享 Run 的回复，不必再等每秒一次的已存储 correction。"Later" 一栏不变。
+
+## 实现更新（2026-11-08，批次 4，ADR-0252 P7）
+
+- **私聊不是房间。** 平台绑定记录自己的范围（`PlatformBinding.scopeKind`，取自入站频道），`roomKindOf` 对 `private` 返回 `null`。字段出现之前写下的绑定先回退到投递目标的范围，再回退到引用；范围未知时仍算房间。收件箱按会话类型分组（群组、私聊）。IM 房间和共享房间默认关闭记忆。
+- **成员名单来自平台。** `readRoomMembers` 是可选的适配器方法，与已有的 `chat.members.read` 能力配对，返回 `full` 或 `partial`（只有人数和管理员，或在调用方上限处截断的名单）。`lib/connectors/room-roster.ts` 在群消息入站且名单超过 6 小时时读取，从不阻塞回复，一次尝试后 30 分钟内不再重试，最多 500 人，结果保存在会话的覆盖行上，该行本来就同步到配对设备。投影按平台用户 id 把名单成员和发言者对上（发言者自己的 id 是本地身份行），`partial` 名单时徽章按整个房间计数并说明名单不完整，固定的角色标记按读者语言显示。
+

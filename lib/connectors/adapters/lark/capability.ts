@@ -26,6 +26,9 @@ export const LARK_CAPS: readonly Capability[] = [
   // the optional PlatformAdapter methods wired in `lark/index.ts`.
   "chat.create",
   "chat.members",
+  // `readRoomMembers` over `GET /im/v1/chats/:id/members` (room roster,
+  // ADR-0177 batch 4).
+  "chat.members.read",
   "chat.update",
   "contact.resolve",
   "delete",

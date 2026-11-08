@@ -19,6 +19,9 @@ import {
 // `typing` and `history.fetch` are NOT transport-bound — an earlier note here
 // claimed they were; both are plain REST and work in either mode.
 export const DISCORD_CAPS: readonly Capability[] = [
+  // `GET /guilds/{id}?with_counts=true`: the owner and the approximate size,
+  // as a `partial` room roster (ADR-0177 batch 4).
+  "chat.members.read",
   "delete",
   "edit",
   // `GET /channels/{channel.id}/messages?limit=N&before=...` — added at
