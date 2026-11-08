@@ -316,7 +316,10 @@ through the PII gate. The pet hands every lifecycle event (`levelUp`, `evolved`,
 `achievementUnlocked`, `unwell`) over as `desktop.pet.<kind>`, with the id-only
 projection its workflow trigger uses. The types are `desktop.<UI automation
 kind>` (`desktop.focus-changed`) and `desktop.pet.<kind>`
-(`desktop.pet.levelUp`).
+(`desktop.pet.levelUp`). Only this machine's installations take part: one
+mirrored from a Host the desktop drives neither widens the subscription nor gets
+a local delivery. A pet event's id carries the achievement, level or stage,
+because one handling can unlock several achievements with the same timestamp.
 
 ## Known limitations
 
