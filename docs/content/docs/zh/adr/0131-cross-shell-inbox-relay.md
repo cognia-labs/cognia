@@ -71,7 +71,7 @@ description: "为收件箱的人工回复、草稿审批和会话覆盖提供统
 该帧刻意不含三样东西：
 
 - **消息正文。** 它要经过 APNs/FCM。Rust 侧的正文构造器只写发送者与平台；正文在 App 打开后经已认证的同步获取。
-- **非真人事件。** 编辑、删除、表情回应以及机器人自己的出站回声由 `isNotifiableInboundEvent` 过滤——该谓词从 `lib/notifications/inbound-connector.ts` 抽出，因此中继与桌面通知中心对"什么算新消息"永远不会产生分歧。
+- **非真人事件。** 编辑、删除、表情回应以及机器人自己的出站回声由 `isNotifiableInboundEvent` 过滤——该谓词从通知中心的入站桥（现为 `lib/connectors/notifications/inbound-bridge.ts`）抽出，因此中继与桌面通知中心对"什么算新消息"永远不会产生分歧。
 - **重复唤醒。** 操作者正在查看该会话、会话已静音、或处于免打扰时段时抑制；判定精度与出站 runner 使用同一套优先级。
 
 headless brain 没有 Tauri 运行时，因此 `lib/companion/host-event-publisher.ts` 给两种宿主同一个调用：已注册的 publisher（brain，经 `companion_event_publish` 管道）→ Tauri `emit`（桌面）→ no-op。`ws_bridge.rs` 在发布前用**封闭白名单**校验 topic：桥接对端虽已认证，但允许它任意命名 topic 会让被攻陷的 brain 伪造客户端视为权威的帧。

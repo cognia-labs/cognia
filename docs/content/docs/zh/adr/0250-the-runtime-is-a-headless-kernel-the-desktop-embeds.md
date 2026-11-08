@@ -381,10 +381,39 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 加载。生成器写 `lib/modules/generated/builtin-skills.ts`；`lib/skills/built-in/module-skills.ts` 对每个模块的文件导入一次、等待 `register`、声明了却没有注册任何技能的族记错误日志，并保存闸门。导入 `lib/skills/built-in` 会注册内核自己的技能族并启动加载；注册表的每个读取方先等待 `whenBuiltInSkillsRegistered()`（发送解析器、工具分发器的名字查找、`/lark`、插件 `skills` API、IM 权限上限、连接器运行时缓存适配器技能摘要之前、设置页标签）。加载失败的模块记日志、跳过、下次重试；`experimental` 模块不贡献。
   - 使用。清单构建器和能力摘要丢弃已加载闸门判为不可用的技能；发送解析器的清单缓存键改用 `builtInSkillAvailabilityKey(scope)`，不再自己探测 lark-cli。
   - 第一个贡献者：connectors（`lib/connectors/builtin-skills.ts`），贡献 `im` 族，并经厂商接缝（`ConnectorVendorContribution.builtInSkills`，框架文件不点名任何厂商）贡献各厂商的技能族。Lark 的六个族和 lark-cli 闸门在 `lib/connectors/adapters/lark/builtin-skills.ts`。内核自己的技能族（issues、scheduler、插件转换）仍直接导入。还清方向边 3 条：`build-options`、`skills/built-in/index.ts`、`skills/built-in/manifest.ts` 指向 connectors。
+- **修订（2026-11-08）：内核与基础层剩余的 connectors 边；`taskExecutors` 贡献与 `identity-principal-links` 端口。** manifest 落地后，内核和基础层仍有 30 条边指向 connectors。本次用现有机制加一个新贡献、一个新端口还清其中 24 条。实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §24。
+  - 放回真正的归属。db 和出站策略从 `@cognia/plugin-contract/types/connectors/event` 导入 `parseConversationKey`。以下文件移到新位置：
+    - 入站存储片段：`lib/db/inbound-stored-parts.ts`；
+    - 入站标签：`lib/chat/inbound-labels.ts`；
+    - 已解析主体戳：`lib/execution/resolved-principal.ts`；
+    - 不可用提示：`components/platform/unavailable-notice.tsx`。
+  - 草稿审批 hook 归 connectors（`hooks/connectors/use-draft-approval.ts`，列入 `api`）；收件箱遥测导出改用 SDK 的 `downloadBlob`。
+  - 渠道端口扩充。`conversation-channel` 成员新增五个方法：`injectionProtection`、`writeRoute`、`addReaction` / `removeReaction` 和 `deliverNotification`。
+  - 注入防护：读取方加 `sessionInjectionProtection`，Claude IPC 和外部智能体管理器改读它。已绑定但没有渠道认领的会话按受保护处理（失败即关闭）。
+  - 表情回应：经消息所属会话绑定的渠道镜像。没有绑定或没有渠道的消息只写本地，与原来 `unavailable` 路线的处理一致。
+  - IM 通知：通知中心的 IM 渠道分两半。内核解析记录所属的会话（`lib/notifications/im-deliver.ts`，新增跳过原因 `no-channel`），IM 成员负责投递（`lib/connectors/notifications/im-deliver.ts`）。
+  - 移入 connectors：通知动作回调（`lib/connectors/notifications/action-callback.ts`）和入站到通知中心的桥（`lib/connectors/notifications/inbound-bridge.ts`）。入站桥改由 connectors 的 UI effect `inbound-notification-bridge` 挂载（`components/connectors/module.ui.ts`）。
+  - 运行恢复：运行恢复后通知监听器（`lib/execution/run-resume-listeners.ts`），连接器运行时登记的监听器负责唤醒持久化的入站任务。
+  - `taskExecutors` 贡献。模块声明 `taskExecutors: { types, load }`，生成器写出 `lib/modules/generated/task-executors.ts`。`lib/scheduler/module-executors.ts` 把声明的每个类型变成 `TASK_EXECUTOR_OWNERS` 里的 owner。这类任务到期时，owner 依次：
+    - 加载一次模块文件；
+    - 登记它声明的执行器；
+    - 对声明了却没提供的类型，以及提供了却没声明的执行器，记录日志；
+    - 加载失败时下次重试。
+  - `taskExecutors` 的规则：`experimental` 模块不拥有任何类型。G5 校验字段形状，模块门禁保证每个任务类型只有一个 owner。第一个贡献者是 connectors 的 `im-push`（`lib/connectors/scheduler/`）。
+  - `identity-principal-links` 集合端口（`types/modules/ports/identity-principal-links.ts`）有两个方法：`attachSignIn` 和 `unlinkSelfBound`。
+    - 读取方 `lib/identity/principal-links.ts`：逐个询问成员并合并结果。某个成员失败时记日志并跳过；本地档案在调用期间被切换时仍然抛错。四个登录流程（接管、登出、个人登录、组织登录）改用读取方。
+    - connectors 成员：经厂商接缝逐个询问各厂商的 `principalLinks` 钩子。Lark 的钩子指向 `adapters/lark/principal/login-link.ts`。
+  - OAuth 深链路由不再包裹应用的 provider，改为不渲染任何内容，作为 connectors 的 UI effect `deep-link-router` 挂载。
+  - 尚未解决（缺少对应的贡献机制）：
+    - `lib/plugin/api/connectors-api.ts` 和 `lib/plugin/bridge/connectors-bridge.ts`：等 §9 的 `pluginApi`；
+    - `lib/companion/desktop-write-source.ts`：等配对设备写命令的贡献机制；
+    - `lib/sync/handlers/conversation-overrides.ts`：等同步处理器的贡献机制；
+    - `lib/db/connector-inbound-jobs.ts`：崩溃恢复仍自己续跑连接器任务，可改用恢复监听器；
+    - `lib/scheduler/scheduler-db.ts`：它的 im-push 载荷清洗用到 A2UI 辅助函数。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
-- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`，集合端口 `docs-provider` 和 `conversation-channel`，沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
+- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`，集合端口 `docs-provider`、`conversation-channel` 和 `identity-principal-links`，沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
 - **类型化事件。** 需要反转依赖时，用内核的事件总线，事件类型由发布方在 `types/<id>/events.ts` 中声明。
 - **贡献点。** 外壳和内核只通过 manifest 字段收集各模块的东西。
 

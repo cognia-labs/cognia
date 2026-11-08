@@ -71,7 +71,7 @@ The clobbering problem is closed by `pending-overrides.ts`: a conversation key w
 Three things are deliberately absent from that frame:
 
 - **Message text.** It transits APNs/FCM. The Rust body builder names the sender and the platform; the text is fetched over the authenticated sync once the app opens.
-- **Non-human events.** Edits, deletes, reactions and the bot's own outbound echoes are filtered by `isNotifiableInboundEvent`, extracted from `lib/notifications/inbound-connector.ts` so the relay and the desktop Notification Center can never disagree about what counts as a new message.
+- **Non-human events.** Edits, deletes, reactions and the bot's own outbound echoes are filtered by `isNotifiableInboundEvent`, extracted from the Notification Center bridge (now `lib/connectors/notifications/inbound-bridge.ts`) so the relay and the desktop Notification Center can never disagree about what counts as a new message.
 - **Duplicate wake-ups.** Suppressed when the operator is already viewing the conversation, when it is muted, or inside quiet hours — resolved with the same precedence the outbound runner uses.
 
 The headless brain has no Tauri runtime, so `lib/companion/host-event-publisher.ts` gives both hosts one call: a registered publisher (brain, piping through `companion_event_publish`) → Tauri `emit` (desktop) → no-op. `ws_bridge.rs` validates the topic against a **closed allowlist** before publishing; the bridge peer is authenticated but letting it name arbitrary topics would let a compromised brain forge frames clients treat as authoritative.

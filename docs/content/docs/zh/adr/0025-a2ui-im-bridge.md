@@ -97,7 +97,7 @@ Telegram 文本编辑会合并支持的文本调用及内联键盘；包含媒�
 | `issue_action`        | `lib/issues/im/callback-handler.ts`            |
 | `wf_approve` / cancel | `lib/a2ui/workflow-approval-handler.ts`        |
 | workflow 扇出         | `lib/a2ui/workflow-fanout-handler.ts`          |
-| `notification_action` | `lib/notifications/im-callback-handler.ts`     |
+| `notification_action` | `lib/connectors/notifications/action-callback.ts` |
 | 其余                  | `lib/a2ui/connector-callback-handler.ts`       |
 
 词表本身在 `types/connectors/interaction.ts`，那里才是「一个 `kind` 是什么意思」的真相源。本 ADR 刻意不逐条复述：那会是第二份会漂移的副本。

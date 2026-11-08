@@ -148,7 +148,7 @@ asking the model to re-interpret it is both slower and less reliable:
 | `issue_action`        | `lib/issues/im/callback-handler.ts`            |
 | `wf_approve` / cancel | `lib/a2ui/workflow-approval-handler.ts`        |
 | workflow fan-out      | `lib/a2ui/workflow-fanout-handler.ts`          |
-| `notification_action` | `lib/notifications/im-callback-handler.ts`     |
+| `notification_action` | `lib/connectors/notifications/action-callback.ts` |
 | everything else       | `lib/a2ui/connector-callback-handler.ts`       |
 
 The vocabulary itself lives in `types/connectors/interaction.ts`, which is

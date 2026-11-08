@@ -423,3 +423,52 @@ interface ToolSurface {
 - 测试：卡片测试随逻辑搬到 `workflow-approval-cards.test.ts`（含真实 Lark/Telegram 序列化、起草中拒绝、上限合成），API 测试改为模拟读取方，成员与读取方测试各加用例。
 - 门禁结果：还清 `lib/plugin/api/workflow-author-api.ts -> connectors`，尺寸度量没有增长。
 - 未做：桌面冒烟（飞书里插件发起的工作流运行审批与扇出审批卡片、点击后的派发）。
+
+## 24. T15：还清内核与基础层 → connectors 的剩余方向边（2026-11-08）
+
+- 起因：§21–§23 之后，`modules-baseline.json` 里仍有 30 条从内核或基础层指向 connectors 的方向边（包括 `types/connectors/**` 的运行时值）。这些边分三类：放错位置的纯函数或展示组件；本属于渠道、可以做成 `conversation-channel` 方法的问题；本身就是 connectors 逻辑、只是放在内核目录里的文件。
+- 第 1 批，放回真正的归属（d77e09caf5，还清 11 条）：
+  - `parseConversationKey` 改从 plugin-contract 导入（db 的 conversation-overrides、出站策略的 outbound-targets 和 plan-delivery）；
+  - `inbound-stored-parts` 移到 `lib/db/`，`inbound-labels` 移到 `lib/chat/`；
+  - `readResolvedPrincipal` 移到 `lib/execution/resolved-principal.ts`；
+  - `unavailable-notice` 移到 `components/platform/`；
+  - `use-draft-approval` 移到 `hooks/connectors/` 并列入 api；
+  - 收件箱遥测导出改用 SDK 的 `downloadBlob`。
+  - 计划中把 `inbox-writes/route.ts` 移到 `lib/runtime` 的一步没有做：它依赖 `stores/remote-host`（内核），会产生一条基础层 → 内核的新边。改为由渠道的 `writeRoute` 提供（见第 2 批）。
+- 第 2 批，`conversation-channel` 加方法（63985f5231，还清 7 条指向 connectors 的边，外加 `inbound-connector -> inbox` 一条）。
+  - 新增方法：`injectionProtection`、`writeRoute`、`addReaction`、`removeReaction`、`deliverNotification`（返回 `ConversationNotificationOutcome`）。
+  - 读取方 `sessionInjectionProtection` 读取 `imAuthorityBinding ?? platformBinding`：没有 adapterId 时返回 `undefined`；没有渠道认领时返回 `true`。ipc 的 3 处调用和外部智能体管理器改用它。
+  - `lib/chat/reactions.ts`：会话绑定补全 conversationKey，镜像改走渠道；`reactionAbilityFor` 改为接收 `WritePlaneRoute`。
+  - IM 通知：`lib/notifications/im-deliver.ts` 只解析记录所属的会话并交给渠道，跳过原因新增 `no-channel`；投递逻辑（会话绑定、开关、PII 闸门、卡片或文本、入队、审计）移到 `lib/connectors/notifications/im-deliver.ts`。
+  - 通知动作回调移到 `lib/connectors/notifications/action-callback.ts`，并修正与实现不符的注释：审计在 handler 内完成，不是由调用方完成。
+  - 入站桥移到 `lib/connectors/notifications/inbound-bridge.ts`。`notifications/install.ts` 只安装插件桥；入站桥由 connectors 的 UI effect `inbound-notification-bridge` 挂载，挂载的窗口与原来相同。
+  - `lib/execution/run-resume-listeners.ts`：`control-handlers` 恢复运行后调用 `notifyAgentRunResumed`；`install-connector-runtime` 登记一个监听器，调用 `resumeDurableInboundJobs`，并在 teardown 时注销。
+- 第 3 批，`taskExecutors` 贡献（0cb9660450，还清 1 条）。
+  - 契约：`taskExecutors: { types, load }`。被加载的文件导出 `taskExecutors: Partial<Record<ScheduledTaskType, TaskExecutor>>`。
+  - 门禁：`module-manifests.mjs` 校验 `load` 为懒加载，只允许 `load` 和 `types` 两个字段，`types` 是非空、不重复、格式为 `^[a-z][a-z0-9:-]*$` 的列表。它生成 `lib/modules/generated/task-executors.ts`；`check-modules` 检查一个类型只有一个模块拥有。
+  - 加载器 `lib/scheduler/module-executors.ts`：为每个声明的类型产生一个 owner，按模块记忆化，失败后重试，跳过 experimental，声明了没提供或提供了没声明都记日志。它通过 `executor-owners.ts` 并入 `TASK_EXECUTOR_OWNERS`。
+  - `im-push` 移出内置执行器表，执行器移到 `lib/connectors/scheduler/im-push-executor.ts`，贡献文件为 `lib/connectors/scheduler/task-executors.ts`。
+  - 行为：im-push 不再在启动时登记，改为第一次到期时由 owner 加载。调度器的各执行路径原本就在找不到执行器时先查询 owner，所以行为不变。
+  - 附带：负载编辑器里 segments 示例 JSON 的 placeholder 标注了 i18n-exempt。
+  - `scheduler-db.ts` 的 `sanitizeScheduledOutboundPayload` 不在本批：清洗用到 A2UI 辅助函数，而 a2ui 是模块，需要另找办法，因此 `scheduler-db -> connectors` 保留。
+- 第 4 批，`identity-principal-links` 集合端口（4d9286209b，还清 4 条）。
+  - 契约 `types/modules/ports/identity-principal-links.ts`：`attachSignIn(input) → { attached, foreign }`，`unlinkSelfBound(input) → string[]`。Lark 的 `login-link.ts` 的输入输出类型改为端口类型的别名。
+  - 读取方 `lib/identity/principal-links.ts`：按模块顺序询问成员并合并结果；加载失败或调用失败的成员记日志并跳过；最后再调用一次 `assertCurrent`，保证档案被切换时仍抛错。四个调用点原有的 try/catch 和 `deps` 注入不变。
+  - connectors 成员 `lib/connectors/ports/identity-principal-links.ts` 遍历厂商接缝新增的 `principalLinks` 钩子；`larkContribution.principalLinks` 懒加载 `principal/login-link`。
+  - 顺带修正 `lib/db/connector-types.ts` 里一处过时的路径注释。
+- 第 5 批，深链路由（1780b702e1，还清 1 条）：`ConnectorDeepLinkRouter` 改为返回 null 的组件，作为 connectors 的 UI effect `deep-link-router` 挂载；`app-runtime.tsx` 去掉对它的包裹。两者原本是同一父节点下的兄弟，i18n 和 toast 上下文都可用。
+- 合计还清基线 25 行：24 条指向 connectors，1 条 `inbound-connector -> inbox`。尺寸度量没有增长。
+- 剩余 6 条，需要尚未存在的贡献机制：
+  - `plugin/api/connectors-api`、`plugin/bridge/connectors-bridge`：等 §9 的 `pluginApi`；
+  - `companion/desktop-write-source`：等配对设备写命令的贡献机制；
+  - `sync/handlers/conversation-overrides`：等同步处理器的贡献机制；
+  - `db/connector-inbound-jobs`：崩溃恢复仍直接续跑连接器任务，可以改用第 2 批的恢复监听器；
+  - `scheduler/scheduler-db`：im-push 载荷清洗。
+- 期间门禁里出现的外来报错：另一会话未提交的 room 工作（`lib/connectors/hitl/room-handoff-card.ts` 的 G4 端口声明，`lib/connectors/runtime.ts -> lib/squads/room-handoff/im-room.ts` 的 G3），以及 4 行 `lib/chat/... -> chat:ui` 已还清但未锁定的基线行。都不属于本轮，保持原样。
+- 未做的桌面冒烟：
+  - 飞书里的表情回应镜像；
+  - IM 通知卡片和动作回调；
+  - 入站通知；
+  - 定时 IM 推送；
+  - 连接器和文档提供方的 OAuth 深链回调（包括冷启动）；
+  - 登录后飞书主体的自动关联，以及登出或接管后的解绑。
