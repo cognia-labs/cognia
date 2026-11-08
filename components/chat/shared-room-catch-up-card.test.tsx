@@ -25,8 +25,8 @@ jest.mock("@/lib/ai/generation/utility-client", () => ({
 jest.mock("@/lib/ai/headless-turn-llm-client", () => ({
   buildHeadlessTurnLlmClient: (...args: unknown[]) => mockHeadless(...args),
 }))
-jest.mock("@/stores/settings", () => ({
-  useSettingsStore: { getState: () => ({ settings: {} }) },
+jest.mock("@/lib/db/settings", () => ({
+  getSettings: async () => ({}),
 }))
 
 import { SharedRoomCatchUpCard, catchUpLanguage } from "./shared-room-catch-up-card"

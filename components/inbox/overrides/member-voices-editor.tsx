@@ -15,8 +15,17 @@
 import { useTranslations } from "next-intl"
 import type { Character } from "@cognia/agent-config-types"
 import { Label } from "@/components/ui/label"
-import { EntityPicker } from "@/components/settings/connections/forms/_shared/entity-picker"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
+
+/** The select value that stands for "this conversation's own bot". */
+const OWN_BOT = "__own__"
 
 export interface MemberVoicesEditorProps {
   /** The conversation's own bot, never a candidate. */
@@ -68,20 +77,36 @@ export function MemberVoicesEditor({
             <span className="truncate self-center text-sm" title={member.name}>
               {member.name}
             </span>
-            <EntityPicker
-              id={`conv-override-member-voice-${member.id}`}
-              value={value[member.id]}
-              items={candidates}
-              emptyLabel={t("ownBot")}
-              missingLabel={(id) => t("missing", { id })}
-              onChange={(next) => {
+            <Select
+              value={value[member.id] ?? OWN_BOT}
+              onValueChange={(next) => {
                 const updated = { ...value }
-                if (next) updated[member.id] = next
-                else delete updated[member.id]
+                if (next === OWN_BOT) delete updated[member.id]
+                else updated[member.id] = next
                 onChange(updated)
               }}
-              triggerTestId={`conv-override-member-voice-${member.id}`}
-            />
+            >
+              <SelectTrigger
+                id={`conv-override-member-voice-${member.id}`}
+                data-testid={`conv-override-member-voice-${member.id}`}
+                aria-label={t("pickFor", { name: member.name })}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="max-h-[50vh]">
+                <SelectItem value={OWN_BOT}>{t("ownBot")}</SelectItem>
+                {value[member.id] && !candidates.some((bot) => bot.id === value[member.id]) ? (
+                  <SelectItem value={value[member.id]!} className="text-destructive">
+                    {t("missing", { id: value[member.id]! })}
+                  </SelectItem>
+                ) : null}
+                {candidates.map((bot) => (
+                  <SelectItem key={bot.id} value={bot.id}>
+                    {bot.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </li>
         ))}
       </ul>

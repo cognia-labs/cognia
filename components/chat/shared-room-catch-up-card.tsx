@@ -30,8 +30,8 @@ import {
   type CatchUpPoint,
 } from "@/lib/collab/shared-room-catch-up"
 import { getSession } from "@/lib/db/sessions"
+import { getSettings } from "@/lib/db/settings"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
-import { useSettingsStore } from "@/stores/settings"
 
 type CardState =
   | { kind: "idle" }
@@ -70,20 +70,20 @@ export function SharedRoomCatchUpCard({
   if (!session?.collaboration || dismissed || !offersCatchUp(lines)) return null
 
   const run = async () => {
-    const client =
-      buildUtilityLlmClient({
-        session,
-        appSettings: useSettingsStore.getState().settings,
-        featureId: "shared-room-catch-up",
-      }) ?? buildHeadlessTurnLlmClient({ session, label: t("runLabel") })
-    if (!client) {
-      setState({ kind: "skipped", reason: "no-model" })
-      return
-    }
     const abort = new AbortController()
     abortRef.current = abort
     setState({ kind: "busy" })
     try {
+      // The persisted settings, read when asked: the card needs them once.
+      const appSettings = await getSettings().catch(() => null)
+      if (abort.signal.aborted) return
+      const client =
+        buildUtilityLlmClient({ session, appSettings, featureId: "shared-room-catch-up" }) ??
+        buildHeadlessTurnLlmClient({ session, label: t("runLabel") })
+      if (!client) {
+        setState({ kind: "skipped", reason: "no-model" })
+        return
+      }
       const result = await catchUpSharedRoom(lines, {
         client,
         language: catchUpLanguage(locale),

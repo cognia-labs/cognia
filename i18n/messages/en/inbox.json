@@ -439,6 +439,7 @@
         "help": "Each member answers through this bot with its name leading the reply, or through another bot of this platform that is in the group, as the member's own voice. A bot used as a voice no longer answers the group by itself.",
         "noSiblings": "Each member answers through this bot with its name leading the reply. Connect another bot of this platform and add it to the group to give a member a voice of its own.",
         "ownBot": "This bot, signed with the member's name",
+        "pickFor": "Bot that speaks as {name}",
         "missing": "Missing bot ({id})"
       },
       "characterTeamBindingPlaceholder": "(none — one voice answers)",

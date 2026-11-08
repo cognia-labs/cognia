@@ -23299,7 +23299,8 @@
           "label": "Member voices",
           "missing": "Missing bot ({id})",
           "noSiblings": "Each member answers through this bot with its name leading the reply. Connect another bot of this platform and add it to the group to give a member a voice of its own.",
-          "ownBot": "This bot, signed with the member's name"
+          "ownBot": "This bot, signed with the member's name",
+          "pickFor": "Bot that speaks as {name}"
         },
         "mode": "Mode",
         "modeOptions": {
