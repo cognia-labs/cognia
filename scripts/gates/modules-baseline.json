@@ -850,7 +850,6 @@
     "lib/subscription/siwc/execution.ts -> share",
     "lib/subscription/sync/subscription-sync.ts -> device",
     "lib/subscription/sync/subscription-sync.ts -> webdav",
-    "lib/sync/handlers/bot-installations.ts -> bot",
     "lib/sync/host-state-service.ts -> chat:ui",
     "lib/sync/host-state-service.ts -> filespace",
     "lib/sync/host-state-service.ts -> headless",

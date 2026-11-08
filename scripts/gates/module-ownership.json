@@ -23,6 +23,7 @@
         "components/agent/plan/plan-run-section.tsx",
         "components/agent/plan/write-plan-button.tsx",
         "components/agent/team/teammate-execution-binding-field.tsx",
+        "components/agent/unattended-permission-profile-fields.tsx",
         "components/agents/agent-visuals.tsx",
         "components/agents/editor/character-editor.tsx",
         "hooks/agent/use-agent-runtime-catalog.ts",
@@ -121,15 +122,6 @@
     },
     "boot": {
       "class": "shell"
-    },
-    "bot": {
-      "class": "module",
-      "api": [
-        "lib/bot/runtime/run.ts",
-        "lib/bot/sources/connector-inbound.ts",
-        "lib/bot/sources/desktop-event.ts",
-        "lib/bot/sources/workflow-completed.ts"
-      ]
     },
     "browser": {
       "class": "module",
@@ -574,7 +566,8 @@
       "api": [
         "lib/integrations/github-auth.ts",
         "lib/integrations/github-read-credential.ts",
-        "lib/integrations/outbound-hold.ts"
+        "lib/integrations/outbound-hold.ts",
+        "lib/integrations/registry.ts"
       ]
     },
     "interactions": {
@@ -684,7 +677,12 @@
       "class": "shell"
     },
     "outbound": {
-      "class": "module"
+      "class": "module",
+      "api": [
+        "components/outbound/outbound-recipients-editor.tsx",
+        "hooks/outbound/use-known-conversations.ts",
+        "hooks/outbound/use-known-repositories.ts"
+      ]
     },
     "packaging": {
       "class": "foundation"
@@ -784,7 +782,12 @@
       "api": ["lib/remote-desktop/native-stream.ts", "lib/remote-desktop/types.ts"]
     },
     "remote-host": {
-      "class": "kernel"
+      "class": "kernel",
+      "api": [
+        "components/remote-host/new-item-placement.tsx",
+        "components/remote-host/runs-on-host-badge.tsx",
+        "hooks/remote-host/use-place-new-item.ts"
+      ]
     },
     "reply-copilot": {
       "class": "module"

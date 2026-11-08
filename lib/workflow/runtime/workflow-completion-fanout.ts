@@ -22,6 +22,7 @@
 
 import type { RunStatus, TriggerEvent, WorkflowRunError } from "@/types/workflow/visual"
 import { loggers } from "@cognia/logging"
+import { loadPort } from "@/lib/modules/ports"
 import type { BotEventProvenanceV1 } from "@/types/bot/event"
 
 const log = loggers.scheduler
@@ -103,13 +104,12 @@ export async function emitWorkflowCompletedFanout(
       return
     }
 
-    // Bots are a second consumer of the same terminal state, and the weakest
-    // of the two: routed best-effort, never able to fail the run that finished
-    // or the workflow fan-out beside it.
+    // Bots are a second consumer of the same terminal state (`bot-dispatch`),
+    // and the weakest of the two: routed best-effort, never able to fail the
+    // run that finished or the workflow fan-out beside it.
     void (async () => {
-      const { dispatchWorkflowCompletedToBots } =
-        await import("@/lib/bot/sources/workflow-completed")
-      await dispatchWorkflowCompletedToBots({
+      const bots = await loadPort("bot-dispatch")
+      await bots?.workflowCompleted({
         workflowId: input.workflow.id,
         workflowName: input.workflow.name,
         runId: input.runId,

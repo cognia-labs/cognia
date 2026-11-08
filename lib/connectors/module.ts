@@ -31,7 +31,6 @@ export default defineHostModule({
     "account-sync",
     "audio",
     "background-tasks",
-    "bot",
     "collab",
     "device",
     "goal",
@@ -116,7 +115,9 @@ export default defineHostModule({
   ],
   // Inbound images are read and voice notes transcribed through ports.
   // `room-squad-handoff`: the IM room hand-off card decides through it.
-  requires: ["ocr", "speech", "room-squad-handoff?"],
+  // `bot-dispatch`: admitted messages reach the bots, and a cancelled
+  // conversation's bot deliveries are cancelled, through it.
+  requires: ["ocr", "speech", "room-squad-handoff?", "bot-dispatch?"],
   // The IM channel (`./ports/conversation-channel.ts`), the vendors' principal
   // registries a sign-in reaches (`./ports/identity-principal-links.ts`), and
   // the inbound job store.

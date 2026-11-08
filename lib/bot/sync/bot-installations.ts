@@ -23,8 +23,8 @@ import type { BotInstallationRow } from "@/lib/db/bot-types"
 import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
 
-import type { SyncCursor, SyncOutcome } from "../types"
-import { runSyncHandler } from "./base"
+import type { SyncCursor, SyncOutcome } from "@/lib/sync/types"
+import { runSyncHandler } from "@/lib/sync/handlers/base"
 
 export function normalizeMirroredInstallation(row: BotInstallationRow): BotInstallationRow {
   const next: BotInstallationRow = {

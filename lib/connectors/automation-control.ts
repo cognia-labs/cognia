@@ -1,6 +1,7 @@
 /** Independent observer controls; responder mute/manual mode never implicitly changes these. */
 import { liveQuery } from "dexie"
 import { getDb } from "@/lib/db/schema"
+import { loadPort } from "@/lib/modules/ports"
 
 export async function conversationAutomationState(conversationKey: string, acceptedAt: number) {
   const row = await getDb()
@@ -89,17 +90,10 @@ export async function cancelConversationAutomations(
   cutoff: number
 ): Promise<void> {
   const db = getDb()
-  const deliveries = await db.botEventDeliveries
-    .filter(
-      (row) =>
-        !row.syncedFromHost &&
-        (row.envelope.receivedAt ?? row.receivedAt) <= cutoff &&
-        row.envelope.binding?.adapterId === adapterId &&
-        row.envelope.binding.conversationKey === conversationKey
-    )
-    .toArray()
-  const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
-  for (const row of deliveries) await cancelAcceptedBotDeliveries(row.installationId, row.id)
+  // The Bot plane cancels its own deliveries (`bot-dispatch`); with no bot
+  // module there are none.
+  const bots = await loadPort("bot-dispatch")
+  await bots?.cancelConversationDeliveries({ adapterId, conversationKey, cutoff })
   const workflows = await db.workflowRuns
     .filter(
       (row) =>

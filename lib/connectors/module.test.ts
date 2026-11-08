@@ -7,7 +7,7 @@ describe("the connectors manifest", () => {
   })
 
   it("asks for OCR, speech and the room hand-off through ports, and provides its own", async () => {
-    expect(connectors.requires).toEqual(["ocr", "speech", "room-squad-handoff?"])
+    expect(connectors.requires).toEqual(["ocr", "speech", "room-squad-handoff?", "bot-dispatch?"])
     expect(connectors.provides?.map((provision) => provision.port)).toEqual([
       "conversation-channel",
       "identity-principal-links",

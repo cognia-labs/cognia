@@ -6,8 +6,14 @@ describe("the workflow manifest", () => {
     expect(workflow.acceptance).toEqual({ realSmoke: "pending" })
   })
 
-  it("asks for OCR and, optionally, knowledge-base revision pinning through ports", () => {
-    expect(workflow.requires).toEqual(["ocr", "knowledge-base-revisions?"])
+  it("asks for OCR and, optionally, revision pinning, interactive pages and the bots through ports", () => {
+    expect(workflow.requires).toEqual([
+      "ocr",
+      "knowledge-base-revisions?",
+      "interactive-page?",
+      "bot-dispatch?",
+    ])
+    expect(workflow.dependsOn).not.toContain("bot")
   })
 
   it("contributes its prompts lazily", async () => {

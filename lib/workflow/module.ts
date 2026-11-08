@@ -22,7 +22,6 @@ export default defineHostModule({
   // checks this equals what they import).
   dependsOn: [
     "automation",
-    "bot",
     "browser",
     "capture",
     "chat",
@@ -101,7 +100,9 @@ export default defineHostModule({
   // knowledge-base generations goes through `knowledge-base-revisions`, which
   // fails the deployment when no module provides it. A run's interactive page
   // opens through `interactive-page`; without it the run detail offers none.
-  requires: ["ocr", "knowledge-base-revisions?", "interactive-page?"],
+  // Desktop events and finished runs reach the bots through `bot-dispatch`;
+  // without it there are no bots to tell.
+  requires: ["ocr", "knowledge-base-revisions?", "interactive-page?", "bot-dispatch?"],
   // The Workflow Copilot a conversation in the editor runs as, which the send
   // resolver asks for by the session kind.
   provides: [{ port: "workflow-editor-session", load: () => import("./ports/editor-session") }],

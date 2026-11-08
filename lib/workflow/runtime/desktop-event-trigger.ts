@@ -25,6 +25,7 @@
 import Dexie, { type Subscription } from "dexie"
 
 import { getDb } from "@/lib/db/schema"
+import { loadPort } from "@/lib/modules/ports"
 import { elementRef, type EventFilter, type EventKind } from "@/lib/automation/types"
 import { loggers } from "@cognia/logging"
 import type { WorkflowRow } from "@/types/workflow/visual"
@@ -213,11 +214,12 @@ async function onUiaEvent(payload: DesktopUiaEvent): Promise<void> {
     const safeName = payload.name && hasNoLeakingPii(payload.name) ? payload.name : undefined
     const now = s.deps.now()
 
-    // Bots are a second consumer. Handed the ALREADY REDACTED name, never the
-    // raw one, so this fan-out cannot become the place a window title leaks.
+    // Bots are a second consumer, reached through `bot-dispatch`. Handed the
+    // ALREADY REDACTED name, never the raw one, so this fan-out cannot become
+    // the place a window title leaks.
     void (async () => {
-      const { dispatchDesktopEventToBots } = await import("@/lib/bot/sources/desktop-event")
-      await dispatchDesktopEventToBots({
+      const bots = await loadPort("bot-dispatch")
+      await bots?.desktopEvent({
         type: `desktop.${payload.kind}`,
         sourceRecordId: `uia:${payload.kind}:${now}`,
         payload: { kind: payload.kind, ...(safeName ? { name: safeName } : {}) },

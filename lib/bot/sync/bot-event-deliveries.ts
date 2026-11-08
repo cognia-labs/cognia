@@ -29,8 +29,8 @@ import type { BotEventDeliveryRow } from "@/lib/db/bot-types"
 import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
 
-import type { SyncCursor, SyncOutcome } from "../types"
-import { runSyncHandler } from "./base"
+import type { SyncCursor, SyncOutcome } from "@/lib/sync/types"
+import { runSyncHandler } from "@/lib/sync/handlers/base"
 
 /** The Host's own window, re-exported so the client cannot pick a different one. */
 export const MIRROR_BOT_DELIVERY_RETENTION_MS = BOT_DELIVERY_RETENTION_MS

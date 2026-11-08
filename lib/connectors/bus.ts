@@ -94,6 +94,7 @@ import { narrowAuthority, narrowAutonomy } from "@cognia/agent-config-types/agen
 import { recordConnectorRouteGovernance } from "@/lib/governance/producers/connector"
 import { findMatchingWorkflows } from "@/lib/workflow/runtime/trigger-subscriptions"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
+import { loadPort } from "@/lib/modules/ports"
 import { trackEvent } from "@/lib/telemetry/events/track-event"
 import { maybeHandleHelpCommand, maybeSendWelcome } from "./help/help-dispatch"
 import { maybeHandleControlCommand } from "./commands/dispatch"
@@ -1509,10 +1510,11 @@ export class ConnectorBus {
   }
 
   /**
-   * Hand an admitted inbound message to the Bot control plane.
-   *
-   * Lazily imported so a deployment with no Bot installed does not pay for the
-   * control plane's module graph on every message, and swallowed entirely: the
+   * Hand an admitted inbound message to the Bot control plane, through the
+   * `bot-dispatch` port (the bot module imports its source on first use, so a
+   * deployment with no Bot installed does not pay for the control plane's
+   * module graph on every message). With no bot module there is nothing to
+   * hand it to, so the transfer is done. Failures are swallowed entirely: the
    * conversation already has its answer by the time this runs.
    */
   private async dispatchBotFanOut(
@@ -1520,9 +1522,10 @@ export class ConnectorBus {
     acceptedAt: number
   ): Promise<boolean> {
     try {
-      const { dispatchConnectorInboundToBots } = await import("@/lib/bot/sources/connector-inbound")
-      const result = await dispatchConnectorInboundToBots({ event, acceptedAt })
-      return !result?.deferred
+      const bots = await loadPort("bot-dispatch")
+      if (!bots) return true
+      const result = await bots.connectorInbound({ event, acceptedAt })
+      return !result.deferred
     } catch {
       // The durable observer receipt retries this transfer after recovery.
       return false
