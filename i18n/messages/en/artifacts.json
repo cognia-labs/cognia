@@ -3,6 +3,8 @@
   "allTypes": "All Types",
   "analysisResults": "Analysis Results",
   "autoSaveBeforeRestore": "Auto-saved before restore",
+  "autoCreatedNotification": "{count, plural, one {Created # artifact: {title}} other {Created # artifacts: {title}}}",
+  "autoCreatedOpen": "Open artifact",
   "batchDelete": "Delete Selected",
   "batchDeleteConfirm": "Delete {count} artifacts?",
   "batchSelect": "Toggle batch selection",

@@ -7,6 +7,10 @@ import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-in
 import { hasCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import { mergeInboundMessagesForStream } from "@/lib/db/inbound-stored-parts"
 import { startTransition } from "react"
+import { toast } from "sonner"
+import { loggers } from "@cognia/logging"
+import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
+import { revealArtifactInWorkspace } from "@/lib/artifacts/reveal"
 import {
   applySdkEvent,
   extractUsage,
@@ -1814,10 +1818,8 @@ export async function handleEvent(
           })
         }
 
-        // The turn-driver block below (artifacts, utility-model titling, /goal
-        // + /loop auto-continuation) mutates the focused conversation and
-        // schedules continuations guarded by `activeRef`; it runs only for the
-        // focused session. Background panes still seal + go idle above.
+        // Artifact routing also handles background sessions. Utility-model jobs
+        // and /goal + /loop auto-continuation below remain focused-session work.
         const completedSession = await getSession(sessionId).catch(() => undefined)
         if (completedSession?.attachedChild) {
           const finalAssistant = [...nextMessages].reverse().find((m) => m.role === "assistant")
@@ -1833,7 +1835,7 @@ export async function handleEvent(
         // Auto-detect artifacts in the assistant turn that just sealed.
         // Honors the artifacts settings block; off by default for
         // power-users that flip the toggle.
-        if (isActive || completedSession?.kind === "resource-workbench") {
+        if (isCurrentEvent()) {
           try {
             const settings = useSettingsStore.getState().settings
             const artifactsCfg = settings?.artifacts
@@ -1929,21 +1931,53 @@ export async function handleEvent(
               // Honors the artifacts settings block; off by default for
               // power-users that flip the toggle.
               if (!routedToReview && isArtifactAutoCreateEnabled(artifactsCfg)) {
-                void useArtifactStore.getState().autoCreateFromContent({
-                  sessionId,
-                  messageId: lastAssistant.id,
-                  content: text,
-                  config: {
-                    autoCreate: true,
-                    minLines: artifactsCfg?.minLines,
-                    enabledTypes: artifactsCfg?.enabledTypes,
-                    showNotification: artifactsCfg?.showNotification !== false,
-                  },
-                })
+                const storageScope = useArtifactStore.persist.getOptions().name
+                void useArtifactStore
+                  .getState()
+                  .autoCreateFromContent({
+                    sessionId,
+                    messageId: lastAssistant.id,
+                    content: text,
+                    config: {
+                      autoCreate: true,
+                      minLines: artifactsCfg?.minLines,
+                      enabledTypes: artifactsCfg?.enabledTypes,
+                      showNotification: artifactsCfg?.showNotification !== false,
+                    },
+                  })
+                  .then(async (created) => {
+                    const first = created[0]
+                    if (!first || !isActive || artifactsCfg?.showNotification === false) return
+                    const canNotify = () =>
+                      activeRef.current === sessionId &&
+                      useChatStore.getState().activeSessionId === sessionId &&
+                      useArtifactStore.persist.getOptions().name === storageScope &&
+                      useArtifactStore.getState().artifacts[first.id]?.sessionId === sessionId
+                    if (!canNotify()) return
+                    const t = await getRuntimeTranslator("artifacts")
+                    if (!canNotify()) return
+                    toast.success(
+                      t("autoCreatedNotification", {
+                        count: created.length,
+                        title: first.title,
+                      }),
+                      {
+                        action: {
+                          label: t("autoCreatedOpen"),
+                          onClick: () => {
+                            if (canNotify()) revealArtifactInWorkspace(first.id)
+                          },
+                        },
+                      }
+                    )
+                  })
+                  .catch((error) => {
+                    loggers.chat.warn("artifact turn-complete routing failed", { sessionId, error })
+                  })
               }
             }
           } catch (err) {
-            console.warn("artifact turn-complete routing failed", err)
+            loggers.chat.warn("artifact turn-complete routing failed", { sessionId, error: err })
           }
         }
 

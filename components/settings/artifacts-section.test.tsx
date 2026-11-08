@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent } from "@testing-library/react"
+import { render, screen, fireEvent, within } from "@testing-library/react"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -25,6 +25,14 @@ beforeEach(() => {
 })
 
 describe("ArtifactsSection", () => {
+  it("enables focused-conversation notifications by default and saves the opt-out", () => {
+    render(<ArtifactsSection />)
+    const row = screen.getByText("showNotificationLabel").closest(".justify-between")!
+    const toggle = within(row as HTMLElement).getByRole("switch")
+    expect(toggle).toBeChecked()
+    fireEvent.click(toggle)
+    expect(saveMock.mock.calls[0][0].artifacts.showNotification).toBe(false)
+  })
   it("renders all 9 control rows", () => {
     render(<ArtifactsSection />)
     expect(screen.getByText("autoCreateLabel")).toBeInTheDocument()

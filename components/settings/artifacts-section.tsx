@@ -24,6 +24,7 @@ type ArtifactSettingsShape = {
   autoCreate: boolean
   minLines: number
   enabledTypes: ArtifactType[]
+  /** Notify only for auto-created artifacts in the focused conversation; background turns stay quiet. */
   showNotification: boolean
   defaultPanelMode: "code" | "preview"
   persistAcrossSessions: boolean

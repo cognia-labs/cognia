@@ -1,5 +1,26 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import { waitFor } from "@testing-library/react"
+import { toast } from "sonner"
+import { createTranslator } from "next-intl"
+import { loggers } from "@cognia/logging"
+import { useSettingsStore } from "@/stores/settings"
+import {
+  useArtifactStore,
+  activateArtifactAccountStorage,
+  clearArtifactAccountStorage,
+} from "@/stores/artifact/artifact-store"
+import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
+
+jest.mock("sonner", () => ({ toast: { success: jest.fn() } }))
+// The global next-intl mock omits this non-React API; formatting is the library's boundary.
+jest.mock("next-intl", () => ({
+  createTranslator: jest.fn(
+    ({ namespace }) =>
+      (key: string, values?: unknown) =>
+        `${namespace}.${key}|${JSON.stringify(values ?? null)}`
+  ),
+}))
 jest.mock("@/lib/execution/personal-marks", () => ({
   ...jest.requireActual("@/lib/execution/personal-marks"),
   bindPersonalMessageRun: jest.fn(
@@ -796,6 +817,256 @@ describe("Claude chat event seam", () => {
 })
 
 describe("artifact turn-complete policy", () => {
+  const sessionId = "artifact-turn"
+  const code = "console.log(1)\n".repeat(15).trim()
+  const text = "```js\n" + code + "\n```"
+  const activeRef = { current: sessionId }
+
+  beforeEach(() => {
+    useChatStore.getState().clear()
+    clearArtifactAccountStorage()
+    useArtifactDockLayoutStore.setState({ dockCollapsed: true, revealIntent: null })
+    useSettingsStore.setState({ settings: { artifacts: {} } } as never)
+    useChatStore.getState().setActiveSession(sessionId)
+    activeRef.current = sessionId
+    mockReadSession.mockReset().mockResolvedValue(undefined)
+    jest.mocked(toast.success).mockClear()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+    useSettingsStore.setState({ settings: null })
+    useChatStore.getState().clear()
+    clearArtifactAccountStorage()
+    mockReadSession.mockImplementation((...args: unknown[]) =>
+      jest.requireActual("@/lib/db/sessions").getSession(...args)
+    )
+  })
+
+  async function seal(content = text, shouldPersist?: () => boolean) {
+    useChatStore.getState().replaceSessionMessages(sessionId, [])
+    applySdkEventMock.mockReturnValueOnce({
+      messages: [
+        { id: "artifact-answer", role: "assistant", parts: [{ type: "text", text: content }] },
+      ],
+      turnComplete: true,
+    })
+    const registry = new SessionCoalescingRegistry({
+      onCommit: (id, messages) => useChatStore.getState().replaceSessionMessages(id, messages),
+      onPersist: () => {},
+      persistDelayMs: 0,
+    })
+    try {
+      await handleEvent(
+        { type: "event", sessionId, event: { type: "result" } } as never,
+        activeRef,
+        { current: [] },
+        { current: new Map() },
+        { current: new Map() },
+        { current: null },
+        {
+          messagesMirrorRef: { current: new Map() },
+          registry,
+          getExecutionHandle: () => undefined,
+          transcriptFence: shouldPersist
+            ? {
+                capture: async () => ({ shouldPersist }),
+                dispose: () => {},
+              }
+            : undefined,
+        }
+      )
+    } finally {
+      registry.clear()
+    }
+  }
+
+  it("creates artifacts for background turns without revealing or notifying the foreground", async () => {
+    useChatStore.getState().setActiveSession("foreground")
+    activeRef.current = "foreground"
+    await seal()
+    await waitFor(() =>
+      expect(Object.values(useArtifactStore.getState().artifacts)).toHaveLength(1)
+    )
+    expect(Object.values(useArtifactStore.getState().artifacts)[0].sessionId).toBe(sessionId)
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+    expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it("skips only artifact routing when the event becomes stale after sealing", async () => {
+    let current = true
+    useChatStore.getState().setSessionStatus(sessionId, "streaming")
+    const staleSessionReads = jest.fn()
+    mockReadSession.mockImplementation(async () => {
+      if (!current) staleSessionReads()
+      return undefined
+    })
+    const create = jest.spyOn(useArtifactStore.getState(), "autoCreateFromContent")
+    const unsubscribe = useChatStore.subscribe((state) => {
+      if (state.sessions[sessionId]?.status === "idle") current = false
+    })
+    try {
+      await seal(text, () => current)
+      expect(current).toBe(false)
+      expect(create).not.toHaveBeenCalled()
+      // The completed-session lookup is first; the real utility job must still read next.
+      await waitFor(() => expect(staleSessionReads).toHaveBeenCalledTimes(2))
+      expect(useArtifactStore.getState().artifacts).toEqual({})
+      expect(toast.success).not.toHaveBeenCalled()
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it("routes and consumes the background session's edit target without creating a duplicate", async () => {
+    const artifact = useArtifactStore.getState().createArtifact({
+      sessionId,
+      messageId: "original",
+      type: "code",
+      title: "Original",
+      content: "old code",
+    })
+    useChatStore.getState().setPendingArtifactEditTarget(sessionId, {
+      artifactId: artifact.id,
+      requestId: "edit-request",
+    })
+    useChatStore.getState().setPendingArtifactEditTarget("foreground", {
+      artifactId: "other",
+      requestId: "other-request",
+    })
+    useChatStore.getState().setActiveSession("foreground")
+    activeRef.current = "foreground"
+    await seal()
+    expect(useArtifactStore.getState().getPendingReview(artifact.id)?.proposedContent).toBe(code)
+    expect(useArtifactStore.getState().getArtifact(artifact.id)?.content).toBe("old code")
+    expect(Object.values(useArtifactStore.getState().artifacts)).toHaveLength(1)
+    expect(useChatStore.getState().pendingArtifactEditTarget[sessionId]).toBeUndefined()
+    expect(useChatStore.getState().pendingArtifactEditTarget.foreground?.artifactId).toBe("other")
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
+  })
+
+  it("toasts the created count and first title and opens that artifact only on action", async () => {
+    await seal(text + "\n```python\n" + "print(1)\n".repeat(15) + "```")
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const artifacts = Object.values(useArtifactStore.getState().artifacts)
+    expect(artifacts).toHaveLength(2)
+    const [message, options] = jest.mocked(toast.success).mock.calls[0]
+    expect(message).toBe(
+      `artifacts.autoCreatedNotification|${JSON.stringify({
+        count: 2,
+        title: artifacts[0].title,
+      })}`
+    )
+    const translatorOptions = jest.mocked(createTranslator).mock.calls.at(-1)?.[0]
+    expect(translatorOptions?.namespace).toBe("artifacts")
+    expect(translatorOptions?.messages).toEqual(
+      expect.objectContaining({
+        artifacts: expect.objectContaining({
+          autoCreatedNotification: expect.stringContaining("{title}"),
+          autoCreatedOpen: "Open artifact",
+        }),
+      })
+    )
+    expect(options?.action).toEqual(
+      expect.objectContaining({ label: "artifacts.autoCreatedOpen|null" })
+    )
+    expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
+    const action = options?.action as { onClick: () => void }
+    action.onClick()
+    expect(useArtifactStore.getState().activeArtifactIdBySession[sessionId]).toBe(artifacts[0].id)
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(false)
+    expect(useArtifactDockLayoutStore.getState().revealIntent?.panelId).toBe("preview")
+  })
+
+  it("honors the notification opt-out while still creating artifacts", async () => {
+    useSettingsStore.setState({ settings: { artifacts: { showNotification: false } } } as never)
+    const create = jest.spyOn(useArtifactStore.getState(), "autoCreateFromContent")
+    await seal()
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await create.mock.results[0].value
+    expect(Object.values(useArtifactStore.getState().artifacts)).toHaveLength(1)
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it("opens the artifact's current content if it is edited after the notification appears", async () => {
+    await seal()
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const artifact = Object.values(useArtifactStore.getState().artifacts)[0]
+    useArtifactStore.getState().updateArtifact(artifact.id, { content: "revised content" })
+    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as { onClick: () => void }
+    action.onClick()
+    expect(useArtifactDockLayoutStore.getState().revealIntent?.panelId).toBe("preview")
+    expect(useArtifactStore.getState().getArtifact(artifact.id)?.content).toBe("revised content")
+  })
+
+  it("does not notify or reveal after focus changes during artifact creation", async () => {
+    let resolveSession!: (value: undefined) => void
+    const lookup = new Promise<undefined>((resolve) => {
+      resolveSession = resolve
+    })
+    const create = jest.spyOn(useArtifactStore.getState(), "autoCreateFromContent")
+    mockReadSession.mockImplementation(() =>
+      create.mock.calls.length > 0 ? lookup : Promise.resolve(undefined)
+    )
+    const sealing = seal()
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    useChatStore.getState().setActiveSession("foreground")
+    activeRef.current = "foreground"
+    resolveSession(undefined)
+    await sealing
+    await create.mock.results[0].value
+    expect(Object.values(useArtifactStore.getState().artifacts)).toHaveLength(1)
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
+  })
+
+  it("ignores a notification's open action after the conversation loses focus", async () => {
+    await seal()
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as { onClick: () => void }
+    useChatStore.getState().setActiveSession("foreground")
+    activeRef.current = "foreground"
+    action.onClick()
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+    expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
+  })
+
+  it("ignores a notification's open action after switching accounts even if an ID is reused", async () => {
+    await seal()
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const artifact = Object.values(useArtifactStore.getState().artifacts)[0]
+    const action = jest.mocked(toast.success).mock.calls[0][1]?.action as { onClick: () => void }
+    activateArtifactAccountStorage("notification-other")
+    useArtifactStore.setState({ artifacts: { [artifact.id]: { ...artifact } } })
+    action.onClick()
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+    expect(useArtifactDockLayoutStore.getState().revealIntent).toBeNull()
+  })
+
+  it("does not toast when no artifacts were created", async () => {
+    const create = jest.spyOn(useArtifactStore.getState(), "autoCreateFromContent")
+    await seal("No fenced content")
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await create.mock.results[0].value
+    expect(Object.values(useArtifactStore.getState().artifacts)).toHaveLength(0)
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it("logs asynchronous auto-create failures instead of rejecting unhandled", async () => {
+    const failure = new Error("artifact persistence unavailable")
+    jest.spyOn(useArtifactStore.getState(), "autoCreateFromContent").mockRejectedValueOnce(failure)
+    const warn = jest.spyOn(loggers.chat, "warn")
+    await seal()
+    await waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "artifact turn-complete routing failed",
+        expect.objectContaining({ sessionId, error: failure })
+      )
+    )
+  })
+
   it("requires both auto-create and agent authoring to remain enabled", () => {
     expect(isArtifactAutoCreateEnabled(undefined)).toBe(true)
     expect(isArtifactAutoCreateEnabled({ autoCreate: false })).toBe(false)

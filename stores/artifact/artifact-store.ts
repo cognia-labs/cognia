@@ -24,6 +24,7 @@ import { disposeCanvasDocument } from "@/lib/canvas/document-disposal"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useChatStore } from "@/stores/chat"
 import { registerProjectBucketPurger } from "@/lib/project/project-bucket-purge"
+import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
 // Pure diff → hunk → apply engine (no `ai`/provider imports — safe for this
 // persisted, widely-imported store). See lib/ai/generation/canvas-review.ts.
 import {
@@ -140,6 +141,9 @@ export const DEFAULT_CANVAS_WORKBENCH: CanvasAIWorkbenchState = {
  * artifacts it exists to rescue.
  */
 export const ARTIFACT_STORAGE_KEY = "cognia-artifacts"
+
+// Also invalidate async work when an account is cleared and then reactivated.
+let artifactStorageGeneration = 0
 
 function artifactAccountStorageKey(accountId: string): string {
   return `${ARTIFACT_STORAGE_KEY}:${accountId}`
@@ -1394,11 +1398,24 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
 
       // Auto-detection and creation
       autoCreateFromContent: async ({ sessionId, messageId, content, config }) => {
+        const storageScope = useArtifactStore.persist.getOptions().name
+        const storageGeneration = artifactStorageGeneration
+        const fallbackProjectId = activeProjectId() ?? undefined
+        const isCurrentScope = () =>
+          storageGeneration === artifactStorageGeneration &&
+          storageScope === useArtifactStore.persist.getOptions().name
         // Import detection logic dynamically to avoid circular deps
-        const { detectArtifacts, DEFAULT_DETECTION_CONFIG } =
-          await import("@/lib/ai/generation/artifact-detector")
-        const finalConfig = { ...DEFAULT_DETECTION_CONFIG, ...config }
-        const detected: DetectedArtifact[] = detectArtifacts(content, finalConfig)
+        const { detectArtifacts } = await import("@/lib/ai/generation/artifact-detector")
+        if (!isCurrentScope()) return []
+        const detected: DetectedArtifact[] = detectArtifacts(content, config)
+        if (detected.length === 0) return []
+
+        const { getSession } = await import("@/lib/db/sessions")
+        if (!isCurrentScope()) return []
+        const session = await getSession(sessionId)
+        if (!isCurrentScope()) return []
+        const projectId =
+          sessionWorkspaceId(session) ?? (session?.executionContext ? undefined : fallbackProjectId)
 
         loggers.store.debug("artifacts.auto-create.start", {
           sessionId,
@@ -1409,6 +1426,7 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         const createdArtifacts: Artifact[] = []
 
         for (const item of detected) {
+          if (!isCurrentScope()) return []
           const metadata = {
             ...buildArtifactSourceMetadata({
               sessionId,
@@ -1444,6 +1462,7 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
 
           const artifact: Artifact = {
             id: nanoid(),
+            projectId,
             sessionId,
             messageId,
             type: item.type,
@@ -1466,7 +1485,7 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         }
 
         // Set the first artifact as active and open panel
-        if (createdArtifacts.length > 0) {
+        if (createdArtifacts.length > 0 && isCurrentScope()) {
           const sessionKey = artifactSessionKey(sessionId)
           set({
             activeArtifactIdBySession: {
@@ -1483,7 +1502,8 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
             ),
             artifactWorkspace: {
               ...get().artifactWorkspace,
-              sessionId,
+              // Background completions must not change the foreground workspace scope.
+              ...(focusedSessionId() === sessionId ? { sessionId } : {}),
               recentArtifactIds: updateRecentArtifactIds(
                 get().artifactWorkspace.recentArtifactIds,
                 createdArtifacts[0].id
@@ -2746,6 +2766,7 @@ registerProjectBucketPurger("artifacts", (projectId) => {
 })
 
 export function activateArtifactAccountStorage(accountId: string): void {
+  artifactStorageGeneration += 1
   const storageKey = artifactAccountStorageKey(accountId)
   adoptLegacyArtifactStorage(storageKey)
   useArtifactStore.persist.setOptions({ name: storageKey })
@@ -2756,6 +2777,7 @@ export function activateArtifactAccountStorage(accountId: string): void {
 }
 
 export function clearArtifactAccountStorage(): void {
+  artifactStorageGeneration += 1
   useArtifactStore.persist.setOptions({ name: ARTIFACT_STORAGE_KEY })
   useArtifactStore.setState(initialState)
 }

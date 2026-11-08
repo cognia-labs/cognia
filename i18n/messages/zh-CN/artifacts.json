@@ -3,6 +3,8 @@
   "allTypes": "所有类型",
   "analysisResults": "分析结果",
   "autoSaveBeforeRestore": "恢复前自动保存",
+  "autoCreatedNotification": "已创建 {count} 个产物：{title}",
+  "autoCreatedOpen": "打开产物",
   "batchDelete": "批量删除",
   "batchDeleteConfirm": "删除 {count} 个作品？",
   "batchSelect": "切换批量选择",

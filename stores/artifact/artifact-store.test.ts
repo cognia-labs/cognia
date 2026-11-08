@@ -42,6 +42,9 @@ jest.mock("@/stores/chat", () => ({
   useChatStore: { getState: () => ({ activeSessionId: mockActiveSessionId }) },
 }))
 
+jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(async () => undefined) }))
+import { getSession } from "@/lib/db/sessions"
+
 // Reset the rate-limiter singleton so the high-frequency dispatch tests
 // start with a full token bucket.
 import { resetPluginRateLimiter } from "@/lib/plugin/security/rate-limiter"
@@ -117,6 +120,7 @@ beforeEach(() => {
   resetPluginRateLimiter()
   mockActiveProjectId = null
   mockActiveSessionId = null
+  jest.mocked(getSession).mockReset().mockResolvedValue(undefined)
 })
 
 it("registers the live artifact store with project bucket purge", () => {
@@ -633,6 +637,181 @@ describe("workspace filters", () => {
 })
 
 describe("autoCreateFromContent", () => {
+  const codeBlock = "```js\n" + "console.log(1)\n".repeat(15) + "```"
+
+  it.each([false, true])(
+    "only moves the workspace session for focused creation (focused=%s)",
+    async (focused) => {
+      mockActiveSessionId = "foreground"
+      const foreground = useArtifactStore.getState().createArtifact({
+        sessionId: "foreground",
+        messageId: "original",
+        type: "code",
+        title: "Foreground",
+        content: "foreground content",
+      })
+      expect(useArtifactStore.getState().artifactWorkspace.sessionId).toBe("foreground")
+      if (focused) mockActiveSessionId = "creating"
+      const [created] = await useArtifactStore.getState().autoCreateFromContent({
+        sessionId: "creating",
+        messageId: "m",
+        content: codeBlock,
+      })
+      expect(useArtifactStore.getState().artifactWorkspace.sessionId).toBe(
+        focused ? "creating" : "foreground"
+      )
+      expect(activeTab("creating")).toBe(created.id)
+      expect(openTabs("creating")).toContain(created.id)
+      expect(activeTab("foreground")).toBe(foreground.id)
+      expect(useArtifactStore.getState().artifactWorkspace.recentArtifactIds[0]).toBe(created.id)
+      if (!focused) {
+        expect(
+          useArtifactStore
+            .getState()
+            .getArtifactsForWorkspace()
+            .map((artifact) => artifact.id)
+        ).toEqual([foreground.id])
+      }
+    }
+  )
+
+  it.each(["switch", "clear", "switch-back"])(
+    "abandons creation when account storage changes during import (%s)",
+    async (transition) => {
+      activateArtifactAccountStorage("account-A")
+      const pending = useArtifactStore.getState().autoCreateFromContent({
+        sessionId: "s",
+        messageId: "m",
+        content: codeBlock,
+      })
+      if (transition === "clear") clearArtifactAccountStorage()
+      else activateArtifactAccountStorage("account-B")
+      if (transition === "switch-back") activateArtifactAccountStorage("account-A")
+      try {
+        expect(await pending).toEqual([])
+        expect(useArtifactStore.getState().artifacts).toEqual({})
+        expect(mockHooksManager.dispatchArtifactCreate).not.toHaveBeenCalled()
+      } finally {
+        clearArtifactAccountStorage()
+      }
+    }
+  )
+
+  it.each([
+    { minLines: undefined, enabledTypes: undefined },
+    { minLines: NaN, enabledTypes: null },
+    { minLines: Infinity, enabledTypes: "code" },
+    { minLines: "1", enabledTypes: ["unknown"] },
+    { minLines: undefined, enabledTypes: ["code", "unknown"] },
+  ])("falls back to valid detection defaults for %j", async (config) => {
+    const created = await useArtifactStore.getState().autoCreateFromContent({
+      sessionId: "s",
+      messageId: "m",
+      content: codeBlock,
+      config: config as never,
+    })
+    expect(created).toHaveLength(1)
+    expect(created[0].type).toBe("code")
+    expect(
+      await useArtifactStore.getState().autoCreateFromContent({
+        sessionId: "s",
+        messageId: "short",
+        content: "```js\nconsole.log(1)\n```",
+        config: config as never,
+      })
+    ).toEqual([])
+  })
+
+  it("abandons creation if account storage changes during the session lookup", async () => {
+    let resolveSession!: (value: undefined) => void
+    jest.mocked(getSession).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSession = resolve
+      })
+    )
+    activateArtifactAccountStorage("account-A")
+    const pending = useArtifactStore.getState().autoCreateFromContent({
+      sessionId: "s",
+      messageId: "m",
+      content: codeBlock,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(getSession).toHaveBeenCalledWith("s")
+    activateArtifactAccountStorage("account-B")
+    resolveSession(undefined)
+    try {
+      expect(await pending).toEqual([])
+      expect(useArtifactStore.getState().artifacts).toEqual({})
+      expect(mockHooksManager.dispatchArtifactCreate).not.toHaveBeenCalled()
+    } finally {
+      clearArtifactAccountStorage()
+    }
+  })
+
+  it("propagates a failed session lookup without misattributing or inserting artifacts", async () => {
+    mockActiveProjectId = "project-B"
+    const failure = new Error("session read failed")
+    jest.mocked(getSession).mockRejectedValueOnce(failure)
+    await expect(
+      useArtifactStore.getState().autoCreateFromContent({
+        sessionId: "s",
+        messageId: "m",
+        content: codeBlock,
+      })
+    ).rejects.toBe(failure)
+    expect(useArtifactStore.getState().artifacts).toEqual({})
+  })
+
+  it("preserves an explicitly empty allowed-types list", async () => {
+    expect(
+      await useArtifactStore.getState().autoCreateFromContent({
+        sessionId: "s",
+        messageId: "m",
+        content: codeBlock,
+        config: { enabledTypes: [] },
+      })
+    ).toEqual([])
+  })
+
+  it.each([{ projectId: "project-A" }, { executionContext: { projectId: "project-A" } }])(
+    "attributes background artifacts to their session workspace: %j",
+    async (binding) => {
+      mockActiveProjectId = "project-B"
+      jest.mocked(getSession).mockResolvedValueOnce({ id: "s", ...binding } as never)
+      const [created] = await useArtifactStore.getState().autoCreateFromContent({
+        sessionId: "s",
+        messageId: "m",
+        content: codeBlock,
+      })
+      expect(created.projectId).toBe("project-A")
+      expect(useArtifactStore.getState().getArtifactsForWorkspace({ sessionId: "s" })).toEqual([])
+      useArtifactStore.getState().purgeProject("project-A")
+      expect(useArtifactStore.getState().getArtifact(created.id)).toBeUndefined()
+    }
+  )
+
+  it("captures the fallback project before awaiting an unbound session", async () => {
+    mockActiveProjectId = "project-A"
+    const pending = useArtifactStore.getState().autoCreateFromContent({
+      sessionId: "s",
+      messageId: "m",
+      content: codeBlock,
+    })
+    mockActiveProjectId = "project-B"
+    expect((await pending)[0].projectId).toBe("project-A")
+  })
+
+  it("does not inherit UI workspace for a durable binding with no project", async () => {
+    mockActiveProjectId = "project-B"
+    jest.mocked(getSession).mockResolvedValueOnce({ executionContext: {} } as never)
+    const [created] = await useArtifactStore.getState().autoCreateFromContent({
+      sessionId: "s",
+      messageId: "m",
+      content: codeBlock,
+    })
+    expect(created.projectId).toBeUndefined()
+  })
+
   it("persists the Diagram Design renderer profile from detected HTML", async () => {
     const html = [
       "<!doctype html>",

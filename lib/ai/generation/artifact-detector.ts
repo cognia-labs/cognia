@@ -11,6 +11,7 @@ import type {
 } from "@/types"
 import {
   LANGUAGE_MAP,
+  ARTIFACT_TYPES,
   ALWAYS_CREATE_TYPES,
   DETECTION_PATTERNS,
   generateArtifactTitle,
@@ -32,6 +33,27 @@ export const DEFAULT_DETECTION_CONFIG: ArtifactDetectionConfig = {
   minLines: 10,
   autoCreate: true,
   enabledTypes: ["code", "html", "react", "svg", "mermaid", "chart", "math", "document", "jupyter"],
+}
+
+/** Persisted partial settings must not replace detection defaults with invalid values. */
+function normalizeArtifactDetectionConfig(
+  config?: Partial<ArtifactDetectionConfig>
+): ArtifactDetectionConfig {
+  return {
+    autoCreate:
+      typeof config?.autoCreate === "boolean"
+        ? config.autoCreate
+        : DEFAULT_DETECTION_CONFIG.autoCreate,
+    minLines:
+      typeof config?.minLines === "number" && Number.isFinite(config.minLines)
+        ? config.minLines
+        : DEFAULT_DETECTION_CONFIG.minLines,
+    enabledTypes:
+      Array.isArray(config?.enabledTypes) &&
+      config.enabledTypes.every((type) => ARTIFACT_TYPES.includes(type))
+        ? config.enabledTypes
+        : DEFAULT_DETECTION_CONFIG.enabledTypes,
+  }
 }
 
 // Detected artifact from content
@@ -211,8 +233,9 @@ export function shouldAutoCreate(
  */
 export function detectArtifacts(
   responseContent: string,
-  config: ArtifactDetectionConfig = DEFAULT_DETECTION_CONFIG
+  config: Partial<ArtifactDetectionConfig> = DEFAULT_DETECTION_CONFIG
 ): DetectedArtifact[] {
+  const finalConfig = normalizeArtifactDetectionConfig(config)
   const artifacts: DetectedArtifact[] = []
   const codeBlocks = extractCodeBlocks(responseContent)
 
@@ -227,7 +250,7 @@ export function detectArtifacts(
       LANGUAGE_MAP[block.language.toLowerCase()] || (block.language as ArtifactLanguage)
     const lineCount = countLines(block.code)
 
-    if (shouldAutoCreate(block.code, type, config)) {
+    if (shouldAutoCreate(block.code, type, finalConfig)) {
       const chartContract = type === "chart" ? parseChartPayload(block.code) : undefined
       artifacts.push({
         type,
@@ -251,7 +274,11 @@ export function detectArtifacts(
   // Check for standalone math expressions
   const mathMatches = responseContent.matchAll(/\$\$([\s\S]+?)\$\$/g)
   for (const match of mathMatches) {
-    if (match[1].split("\n").length >= 3) {
+    if (
+      finalConfig.autoCreate &&
+      finalConfig.enabledTypes.includes("math") &&
+      countLines(match[1]) >= 3
+    ) {
       artifacts.push({
         type: "math",
         content: match[1].trim(),
@@ -299,13 +326,14 @@ export function detectStreamingArtifact(
   responseContent: string,
   config: ArtifactDetectionConfig = DEFAULT_DETECTION_CONFIG
 ): StreamingArtifact | null {
+  const finalConfig = normalizeArtifactDetectionConfig(config)
   const open = findOpenCodeBlock(responseContent)
-  if (!open) return null
+  if (!open || open.language.toLowerCase() === INLINE_CHART_FENCE) return null
   const code = open.code.trim()
   if (!code) return null
 
   const { type } = detectArtifactType(code, open.language)
-  if (!shouldAutoCreate(code, type, config)) return null
+  if (!shouldAutoCreate(code, type, finalConfig)) return null
 
   return {
     type,

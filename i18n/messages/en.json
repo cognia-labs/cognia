@@ -4828,6 +4828,8 @@
     "allRuntimeStates": "All Runtime States",
     "allTypes": "All Types",
     "analysisResults": "Analysis Results",
+    "autoCreatedNotification": "{count, plural, one {Created # artifact: {title}} other {Created # artifacts: {title}}}",
+    "autoCreatedOpen": "Open artifact",
     "autoSaveBeforeRestore": "Auto-saved before restore",
     "batchDelete": "Delete Selected",
     "batchDeleteConfirm": "Delete {count} artifacts?",

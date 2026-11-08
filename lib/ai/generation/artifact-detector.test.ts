@@ -114,6 +114,17 @@ describe("shouldAutoCreate", () => {
 })
 
 describe("detectArtifacts", () => {
+  it.each([{ enabledTypes: [] }, { enabledTypes: ["code"] }, { autoCreate: false }])(
+    "respects detection policy for standalone display math: %j",
+    (config) => {
+      expect(
+        detectArtifacts("$$\na = b\nc = d\n$$", {
+          ...DEFAULT_DETECTION_CONFIG,
+          ...config,
+        } as never)
+      ).toEqual([])
+    }
+  )
   it("marks Cognia Diagram Design HTML with its renderer profile", () => {
     const html = [
       "<!doctype html>",
@@ -236,6 +247,21 @@ describe("module exports", () => {
 })
 
 describe("detectStreamingArtifact", () => {
+  it.each(["chart", "CHART"])(
+    "never promises a dock artifact for an inline %s fence",
+    (language) => {
+      const open =
+        `\`\`\`${language}\n` + JSON.stringify({ data: [{ name: "A", value: 1 }] }, null, 2)
+      expect(detectArtifacts(open + "\n```")).toEqual([])
+      expect(detectStreamingArtifact(open)).toBeNull()
+    }
+  )
+
+  it("still promises dock charts in JSON fences", () => {
+    const open = "```json\n" + JSON.stringify({ data: [{ name: "A", value: 1 }] }, null, 2)
+    expect(detectStreamingArtifact(open)?.type).toBe("chart")
+    expect(detectArtifacts(open + "\n```")[0]?.type).toBe("chart")
+  })
   const openBlock = (lines: number, language = "python") =>
     `Here you go:\n\n\`\`\`${language}\n` +
     Array.from({ length: lines }, (_, index) => `print(${index})`).join("\n")

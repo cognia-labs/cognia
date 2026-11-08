@@ -31,6 +31,15 @@ beforeEach(() => {
 })
 
 describe("useStreamingArtifact", () => {
+  it("never promises a dock chart for the transcript's inline chart fence", () => {
+    useChatStore.setState({
+      messages: [
+        assistant("```chart\n" + JSON.stringify({ data: [{ name: "A", value: 1 }] }, null, 2)),
+      ],
+    })
+    const { result } = renderHook(() => useStreamingArtifact("s1"))
+    expect(result.current).toBeNull()
+  })
   it("reports the block the assistant is still writing", () => {
     const { result } = renderHook(() => useStreamingArtifact("s1"))
     expect(result.current?.type).toBe("code")
