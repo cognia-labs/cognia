@@ -31,10 +31,10 @@ const isMobileBuild = process.env.NEXT_PUBLIC_PLATFORM === "mobile"
 /**
  * Platform extensions, the React Native / metro convention applied to webpack:
  * with `.mobile.tsx` ahead of `.tsx` in `resolve.extensions`, an import of
- * `@/components/runtime/platform-shell` picks up `platform-shell.mobile.tsx`
+ * `@/components/shell/platform-shell` picks up `platform-shell.mobile.tsx`
  * when that file exists and falls back to `platform-shell.tsx` when it does
  * not. That is how the Capacitor bundle drops module graphs it can never run
- * (see `components/runtime/platform-shell.tsx` for the seam's contract).
+ * (see `components/shell/platform-shell.tsx` for the seam's contract).
  *
  * It has to be `resolve.extensions` rather than `resolve.alias`: Next unshifts
  * its own `JsConfigPathsPlugin` into `resolve.plugins`, and that plugin

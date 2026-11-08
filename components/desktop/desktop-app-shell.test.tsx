@@ -173,8 +173,8 @@ import { runSidebarGesture } from "@/stores/ui/sidebar-gesture"
 import { useShellColumnsStore } from "@/stores/ui/shell-columns-store"
 import { getAppRegistration, __resetAppRuntimeForTesting } from "@/lib/shortcuts/app-runtime"
 import { DesktopAppShell, isShellBypassRoute } from "./desktop-app-shell"
-import { PlatformShell } from "@/components/runtime/platform-shell"
-import { PlatformShell as MobilePlatformShell } from "@/components/runtime/platform-shell.mobile"
+import { PlatformShell } from "@/components/shell/platform-shell"
+import { PlatformShell as MobilePlatformShell } from "@/components/shell/platform-shell.mobile"
 
 beforeEach(() => {
   logInfo.mockReset()

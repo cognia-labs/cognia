@@ -74,6 +74,8 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 import { renderToStaticMarkup } from "react-dom/server"
 import { AppRuntime } from "@/components/runtime/app-runtime"
 import { WebVitalsReporter } from "@/components/providers/initializers/web-vitals-reporter"
+import { SurfaceAvailabilityBoundary } from "@/components/runtime/surface-availability-boundary"
+import { PlatformShell } from "@/components/shell/platform-shell"
 import RootLayout, { metadata } from "./layout"
 
 describe("RootLayout", () => {
@@ -116,6 +118,18 @@ describe("RootLayout", () => {
     expect(body.props.children[0].type).toBe(WebVitalsReporter)
     expect(body.props.children[1].type).toBe(AppRuntime)
     expect(body.props.children[1].props.children).toBe(page)
+  })
+
+  // The platform shell is the shell layer's, which the foundation runtime may
+  // not import (ADR-0250 §14): the layout wraps the route in it and hands that
+  // to the runtime, whose lightweight and guest branches keep the bare route.
+  it("hands the runtime the route inside the platform shell and the availability boundary", async () => {
+    const page = <main>content</main>
+    const tree = await RootLayout({ children: page })
+    const shell = tree.props.children[1].props.children[1].props.shell
+    expect(shell.type).toBe(PlatformShell)
+    expect(shell.props.children.type).toBe(SurfaceAvailabilityBoundary)
+    expect(shell.props.children.props.children).toBe(page)
   })
 
   it("renders html/body with font variables and children", async () => {

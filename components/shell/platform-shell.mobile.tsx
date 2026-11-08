@@ -1,3 +1,5 @@
+"use client"
+
 /**
  * Capacitor variant of the platform shell — see `platform-shell.tsx` for how
  * the `.mobile.tsx` extension is selected and why the seam exists.

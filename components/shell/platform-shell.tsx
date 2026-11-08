@@ -1,6 +1,11 @@
+"use client"
+
 /**
  * Platform shell seam — the single place `app/layout.tsx` asks for "whatever
- * chrome this build target needs" instead of naming both shells itself.
+ * chrome this build target needs" instead of naming both shells itself. The
+ * layout builds it around the route and hands it to `AppRuntime` as `shell`,
+ * so the foundation runtime never imports the shell layer (ADR-0250 §14). It
+ * is a client module because the server layout imports it.
  *
  * This file is the DEFAULT variant, resolved by the browser build and by the
  * Tauri desktop build (they consume the same `out/`, so they must resolve the

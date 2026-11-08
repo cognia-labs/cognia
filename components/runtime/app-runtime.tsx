@@ -52,7 +52,6 @@ import { WebDavStartupPromptProvider } from "@/components/providers/webdav-start
 import { WebDavMobileAutosyncProvider } from "@/components/providers/webdav-mobile-autosync-provider"
 import { CompanionBootProvider } from "@/components/providers/companion-boot-provider"
 import { WebCompanionBootProvider } from "@/components/providers/web-companion-boot-provider"
-import { SurfaceAvailabilityBoundary } from "@/components/runtime/surface-availability-boundary"
 import { CompanionEventBridgeProvider } from "@/components/providers/companion-event-bridge-provider"
 import {
   MobileNativeSplashInitializer,
@@ -60,7 +59,6 @@ import {
 } from "@/components/providers/initializers/mobile-only-initializers"
 import { PlatformDesktopInitializers } from "@/components/runtime/platform-desktop-initializers"
 import { PlatformDesktopSources } from "@/components/runtime/platform-desktop-sources"
-import { PlatformShell } from "@/components/runtime/platform-shell"
 import { CanvasBridgeProvider } from "@/components/providers/canvas-bridge-provider"
 import { HookTrustSyncProvider } from "@/components/providers/hook-trust-sync-provider"
 import { A2UIDispatchProvider } from "@/components/providers/a2ui-dispatch-provider"
@@ -130,8 +128,19 @@ installVectorRuntimeAdapters()
  * as children preserves server rendering without serializing a client-module
  * reference for every provider/initializer into every exported route payload.
  * Account, recovery, guest and lightweight-route gates keep their original order.
+ *
+ * `shell` is the route inside the platform chrome, built by the root layout:
+ * the platform shell belongs to the shell layer, which this foundation runtime
+ * may not import (ADR-0250 §14). The lightweight and guest branches render the
+ * bare route (`children`); only the full runtime renders `shell`.
  */
-export function AppRuntime({ children }: { children: React.ReactNode }) {
+export function AppRuntime({
+  children,
+  shell,
+}: {
+  children: React.ReactNode
+  shell: React.ReactNode
+}) {
   return (
     <ThemeProvider
       attribute="class"
@@ -377,11 +386,7 @@ export function AppRuntime({ children }: { children: React.ReactNode }) {
                                                                 data-bg-target="global"
                                                                 className="contents"
                                                               >
-                                                                <PlatformShell>
-                                                                  <SurfaceAvailabilityBoundary>
-                                                                    {children}
-                                                                  </SurfaceAvailabilityBoundary>
-                                                                </PlatformShell>
+                                                                {shell}
                                                               </div>
                                                             </ClaudeChatRuntimeProvider>
                                                           </AgentExecutionHandleProvider>

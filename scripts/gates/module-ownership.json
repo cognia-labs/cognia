@@ -1113,6 +1113,11 @@
       "why": "Route shell owned by the deep-link navigation shell (analysis §11.3 C)."
     },
     {
+      "prefix": "app/layout.",
+      "owner": "shell",
+      "why": "The root layout wraps every route in the platform shell and hands it to the foundation runtime, so the shell owns it (ADR-0250 §14)."
+    },
+    {
       "prefix": "app/route-body.",
       "owner": "shell",
       "why": "The `/` route body picks the platform shell (the mobile app shell or the desktop chat workspace), so the shell owns it (ADR-0250 §14)."

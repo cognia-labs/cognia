@@ -217,14 +217,14 @@ describe("diffAgainstBaseline", () => {
 describe("platformVariantBase", () => {
   it("maps a build-target variant onto the module it replaces", () => {
     assert.equal(
-      platformVariantBase("components/runtime/platform-shell.mobile.tsx"),
-      "components/runtime/platform-shell.tsx"
+      platformVariantBase("components/shell/platform-shell.mobile.tsx"),
+      "components/shell/platform-shell.tsx"
     )
     assert.equal(platformVariantBase("components/foo.mobile.ts"), "components/foo.ts")
   })
 
   it("leaves ordinary files alone", () => {
-    assert.equal(platformVariantBase("components/runtime/platform-shell.tsx"), null)
+    assert.equal(platformVariantBase("components/shell/platform-shell.tsx"), null)
     assert.equal(platformVariantBase("components/mobile/shell/mobile-shell-wrapper.tsx"), null)
     assert.equal(platformVariantBase("components/foo.desktop.tsx"), null)
   })

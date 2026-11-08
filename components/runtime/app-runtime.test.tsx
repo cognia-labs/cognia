@@ -13,9 +13,6 @@ jest.mock("@/components/providers/full-messages-gate", () => ({
       <>{children}</>
     ),
 }))
-jest.mock("@/components/desktop/desktop-app-shell", () => ({
-  DesktopAppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}))
 jest.mock("@/components/account/cloud-sign-in-gate", () => ({
   CloudSignInGate: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -109,7 +106,13 @@ function expectNoPluginHosts(markup: string) {
 
 const renderRuntime = () =>
   renderToStaticMarkup(
-    <AppRuntime>
+    <AppRuntime
+      shell={
+        <div data-testid="platform-shell">
+          <main>page content</main>
+        </div>
+      }
+    >
       <main>page content</main>
     </AppRuntime>
   )
@@ -159,6 +162,7 @@ describe("AppRuntime boot boundaries", () => {
     mockAccount = "locked"
     const markup = renderRuntime()
     expect(markup).toContain("<main>page content</main>")
+    expect(markup).not.toContain('data-testid="platform-shell"')
     expect(markup).not.toContain('data-testid="window-liveness"')
     expect(markup).not.toContain('data-testid="account-locked"')
     expect(markup).not.toContain('data-testid="plugin-runtime"')
@@ -219,6 +223,7 @@ describe("AppRuntime boot boundaries", () => {
     const markup = renderRuntime()
     expect(markup).toContain('data-testid="share-guest-shell"')
     expect(markup).toContain("<main>page content</main>")
+    expect(markup).not.toContain('data-testid="platform-shell"')
     expect(markup).not.toContain('data-testid="plugin-runtime"')
     expectNoPluginHosts(markup)
   })
@@ -226,6 +231,10 @@ describe("AppRuntime boot boundaries", () => {
   it("keeps app content and mobile splash inside the unlocked runtime", () => {
     const markup = renderRuntime()
     expect(markup).toContain("<main>page content</main>")
+    // The full runtime draws the route the layout wrapped in the platform shell,
+    // once: the bare route is only for the lightweight and guest branches.
+    expect(markup.split('data-testid="platform-shell"')).toHaveLength(2)
+    expect(markup.split("<main>page content</main>")).toHaveLength(2)
     expect(markup).toContain('data-testid="plugin-runtime"')
     expect(markup).toContain('data-testid="mobile-splash-overlay"')
   })

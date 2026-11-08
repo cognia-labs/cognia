@@ -16,6 +16,8 @@ import { createStartupRecoveryScript } from "@/lib/boot/startup-recovery"
 import enLoading from "@/i18n/messages/en/loading.json"
 import zhLoading from "@/i18n/messages/zh-CN/loading.json"
 import { AppRuntime } from "@/components/runtime/app-runtime"
+import { SurfaceAvailabilityBoundary } from "@/components/runtime/surface-availability-boundary"
+import { PlatformShell } from "@/components/shell/platform-shell"
 import { WebVitalsReporter } from "@/components/providers/initializers/web-vitals-reporter"
 import "./globals.css"
 
@@ -99,7 +101,17 @@ export default async function RootLayout({
       </head>
       <body className="antialiased">
         <WebVitalsReporter />
-        <AppRuntime>{children}</AppRuntime>
+        {/* The full runtime draws the route inside the platform chrome; its
+            lightweight and guest branches draw the bare route. */}
+        <AppRuntime
+          shell={
+            <PlatformShell>
+              <SurfaceAvailabilityBoundary>{children}</SurfaceAvailabilityBoundary>
+            </PlatformShell>
+          }
+        >
+          {children}
+        </AppRuntime>
       </body>
     </html>
   )

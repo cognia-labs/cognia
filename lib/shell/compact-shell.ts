@@ -4,7 +4,7 @@ import type { Platform } from "@/lib/platform/detect"
  * Which of the two app shells owns the layout right now.
  *
  * `MobileShellWrapper` and `DesktopAppShell` are both mounted on every route
- * (`components/runtime/platform-shell.tsx`) and exactly one of them must draw
+ * (`components/shell/platform-shell.tsx`) and exactly one of them must draw
  * the frame. They used to agree by both testing `platform === "mobile"`, which
  * is why a 375px browser got the desktop three-pane workspace with `GuildRail`
  * hidden below `md` and therefore no navigation at all.
