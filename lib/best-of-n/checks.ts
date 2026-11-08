@@ -3,6 +3,7 @@ import type { AgentChangeset } from "@/lib/scm/types"
 import type { ScmHost } from "@/lib/scm/host"
 import { createScmRuntime } from "@/lib/scm/runtime"
 import { acquireWorkspaceBundle, archiveManagedWorkspace } from "@/lib/task-workspace/client"
+import { provisioningForWorkspaceRoot } from "@/lib/task-workspace/workspace-provisioning"
 import { runWorkspaceUserAction } from "@/lib/task-workspace/user-action"
 
 /** Capture refs can differ from the agent's working tree. Verify a fresh checkout
@@ -15,6 +16,9 @@ export async function checkBestOfNHead(
   signal: AbortSignal
 ) {
   signal.throwIfAborted()
+  // Checked in the tree the candidate was written in.
+  const provisioning = await provisioningForWorkspaceRoot(group.sourceRoot).catch(() => undefined)
+  signal.throwIfAborted()
   const bundle = await runWorkspaceUserAction("task_workspace_bundle_acquire", () =>
     acquireWorkspaceBundle(
       {
@@ -26,6 +30,7 @@ export async function checkBestOfNHead(
         roots: [
           { logicalRootId: group.repositoryId, role: "primary", sourceRoot: group.sourceRoot },
         ],
+        ...(provisioning ? { provisioning } : {}),
       },
       // Cancelling the check stops the checkout it is waiting on, not only
       // the review after it.

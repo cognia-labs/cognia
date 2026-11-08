@@ -32,8 +32,9 @@ use std::time::Duration;
 
 use cognia_git_mirror::credential::GitCredential;
 use cognia_git_mirror::{
-    checkout_path, ensure_mirror, materialize_commit, resolve_commit, try_derive_from_mirror,
-    try_ensure_mirror, AcquisitionBudget, DerivedOrigin, GitRun, MirrorRequest, Phase, RunError,
+    backfill_commit, checkout_path, ensure_mirror, materialize_commit, resolve_commit,
+    try_derive_from_mirror, try_ensure_mirror, AcquisitionBudget, DerivedOrigin, GitRun,
+    MirrorRequest, Phase, RunError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +73,13 @@ pub struct EnsureRemoteSource {
     /// response, a log line, or a persisted job payload.
     #[serde(default, skip_serializing)]
     pub credential: Option<String>,
+    /// The cone the caller will check out, as repository-relative
+    /// directories. The mirror fetches only those files of the served commit
+    /// (plus the files directly in the root and in each ancestor directory,
+    /// which cone mode always writes). Empty means every file, so a full
+    /// checkout of the served commit works offline afterwards.
+    #[serde(default)]
+    pub sparse_paths: Vec<String>,
 }
 
 /// Never prints the credential. A token in a debug line is a token in a log
@@ -86,6 +94,7 @@ impl fmt::Debug for EnsureRemoteSource {
                 "credential",
                 &self.credential.as_ref().map(|_| "<redacted>"),
             )
+            .field("sparse_paths", &self.sparse_paths)
             .finish()
     }
 }
@@ -201,6 +210,7 @@ pub fn ensure_remote_source_within(
         .as_deref()
         .and_then(GitCredential::from_token);
     let refspecs = extra_refspecs_for(&input.base);
+    let cone = crate::service::sparse_cone(&input.sparse_paths)?;
 
     std::fs::create_dir_all(sources_dir)
         .map_err(|error| format!("create sources dir {}: {error}", sources_dir.display()))?;
@@ -249,6 +259,21 @@ pub fn ensure_remote_source_within(
     // left claiming its old address.
     set_upstream_remote(&source_root, remote)?;
 
+    // The mirror fetches with `--filter=blob:none` and never fetches on the
+    // checkout's behalf, so a commit it learned of after the derive has no
+    // file contents behind it, and a worktree added there fails with
+    // `upload-pack: not our ref`. Backfill the commit this supply serves,
+    // narrowed to the caller's cone when it sent one (ADR-0176 A2, D26).
+    if let Some(commit) = served_commit(&mirror, &source_root, &input.base) {
+        let cone = Some(cone.as_slice()).filter(|paths| !paths.is_empty());
+        backfill_commit(&request, &mirror, &commit, cone).map_err(|failure| {
+            format!(
+                "could not backfill {commit} for {remote}: {}",
+                failure.detail
+            )
+        })?;
+    }
+
     let resolved_ref = requested_ref(&input.base).map(|name| {
         // Best effort: report the name we were given when it cannot be resolved
         // to a commit yet, rather than failing the supply. The caller's own
@@ -261,6 +286,18 @@ pub fn ensure_remote_source_within(
         resolved_ref,
         mirror_path: mirror.to_string_lossy().into_owned(),
     })
+}
+
+/// The commit a worktree built on `base` will be added at: the mirror's HEAD
+/// for the remote default (what the checkout's `origin/HEAD` follows), the
+/// named ref as the checkout resolves it otherwise. `None` when the base names
+/// a tree the caller already has, or a ref that does not resolve, which the
+/// caller's own base resolution reports.
+fn served_commit(mirror: &Path, source_root: &Path, base: &WorkspaceBaseSpec) -> Option<String> {
+    match base {
+        WorkspaceBaseSpec::RemoteDefault => resolve_commit(mirror, "HEAD"),
+        _ => requested_ref(base).and_then(|name| resolve_commit(source_root, &name)),
+    }
 }
 
 /// A non-bare git working tree, as opposed to a directory, a bare repository,
@@ -455,6 +492,7 @@ mod tests {
                 remote_url: remote.to_string(),
                 base,
                 credential: None,
+                sparse_paths: Vec::new(),
             },
         )
         .expect("supply")
@@ -509,6 +547,7 @@ mod tests {
             remote_url: remote.clone(),
             base: WorkspaceBaseSpec::RemoteDefault,
             credential: None,
+            sparse_paths: Vec::new(),
         };
         prepare_source_commit(
             &tmp.path().join("mirrors"),
@@ -648,6 +687,7 @@ mod tests {
                 remote_url: remote,
                 base: WorkspaceBaseSpec::RemoteDefault,
                 credential: None,
+                sparse_paths: Vec::new(),
             },
             &budget,
         )
@@ -659,6 +699,183 @@ mod tests {
         assert!(phases
             .iter()
             .any(|record| record.phase == Phase::Fetch && record.ok));
+    }
+
+    /// An upstream that serves filters and any-SHA wants, like GitHub, so the
+    /// mirror really is a blob-less partial clone. Two directories of files.
+    fn layered_upstream(dir: &Path) -> String {
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        sh(dir, &["init", "--initial-branch=main", "."]);
+        sh(dir, &["config", "uploadpack.allowFilter", "true"]);
+        sh(dir, &["config", "uploadpack.allowAnySHA1InWant", "true"]);
+        std::fs::write(dir.join("README.md"), "one\n").unwrap();
+        std::fs::write(dir.join("app/a.ts"), "a1\n").unwrap();
+        std::fs::write(dir.join("docs/d.md"), "d1\n").unwrap();
+        sh(dir, &["add", "."]);
+        sh(dir, &["commit", "-m", "first"]);
+        format!("file://{}", dir.display())
+    }
+
+    /// Commit new contents for every file upstream, and let the next supply
+    /// see them: a mirror fetched within its freshness window is not
+    /// fetched again, so its stamp (`cognia-fetched-at`) is dropped.
+    fn move_upstream(dir: &Path, mirror: &str) -> String {
+        std::fs::remove_file(Path::new(mirror).join("cognia-fetched-at")).unwrap();
+        std::fs::write(dir.join("README.md"), "two\n").unwrap();
+        std::fs::write(dir.join("app/a.ts"), "a2\n").unwrap();
+        std::fs::write(dir.join("docs/d.md"), "d2\n").unwrap();
+        sh(dir, &["commit", "-qam", "second"]);
+        rev_parse(dir, "HEAD").unwrap()
+    }
+
+    fn supply_with_cone(
+        tmp: &TempDir,
+        remote: &str,
+        cone: &[&str],
+    ) -> Result<RemoteSourceCheckout, String> {
+        ensure_remote_source(
+            &tmp.path().join("mirrors"),
+            &tmp.path().join("sources"),
+            &EnsureRemoteSource {
+                remote_url: remote.to_string(),
+                base: WorkspaceBaseSpec::RemoteDefault,
+                credential: None,
+                sparse_paths: cone.iter().map(|path| path.to_string()).collect(),
+            },
+        )
+    }
+
+    /// Whether the mirror holds `spec`'s contents, without fetching them.
+    fn mirror_has(mirror: &str, spec: &str) -> bool {
+        Command::new("git")
+            .args(["-C", mirror, "cat-file", "-e", spec])
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .status()
+            .expect("git")
+            .success()
+    }
+
+    #[test]
+    fn a_worktree_at_the_moved_default_branch_works_after_the_next_supply() {
+        // The regression: the mirror fetches blob-less and never fetches for
+        // the checkout, so before the supply backfilled what it serves, a
+        // worktree at the new default branch failed with "not our ref".
+        let tmp = TempDir::new().unwrap();
+        let upstream_dir = tmp.path().join("upstream");
+        let remote = layered_upstream(&upstream_dir);
+        let first = ensure(&tmp, &remote, WorkspaceBaseSpec::RemoteDefault);
+        assert_eq!(
+            git(
+                Path::new(&first.mirror_path),
+                &["config", "remote.origin.promisor"]
+            )
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap(),
+            "true",
+            "the mirror must be a partial clone for this to test anything"
+        );
+        let moved = move_upstream(&upstream_dir, &first.mirror_path);
+
+        let second = ensure(&tmp, &remote, WorkspaceBaseSpec::RemoteDefault);
+        let root = PathBuf::from(&second.source_root);
+        let worktree = tmp.path().join("run");
+        let output = git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                worktree.to_str().unwrap(),
+                "origin/HEAD",
+            ],
+        )
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            rev_parse(&worktree, "HEAD").as_deref(),
+            Some(moved.as_str())
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("app/a.ts")).unwrap(),
+            "a2\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("docs/d.md")).unwrap(),
+            "d2\n"
+        );
+    }
+
+    #[test]
+    fn a_supply_with_a_cone_backfills_only_the_cone_and_the_files_above_it() {
+        let tmp = TempDir::new().unwrap();
+        let upstream_dir = tmp.path().join("upstream");
+        let remote = layered_upstream(&upstream_dir);
+        let first = supply_with_cone(&tmp, &remote, &[]).expect("first supply");
+        let moved = move_upstream(&upstream_dir, &first.mirror_path);
+
+        let supplied = supply_with_cone(&tmp, &remote, &["app/"]).expect("narrowed supply");
+        let mirror = supplied.mirror_path.as_str();
+        assert!(mirror_has(mirror, &format!("{moved}:app/a.ts")));
+        assert!(
+            mirror_has(mirror, &format!("{moved}:README.md")),
+            "cone mode always writes root files"
+        );
+        assert!(
+            !mirror_has(mirror, &format!("{moved}:docs/d.md")),
+            "outside the cone"
+        );
+
+        // A sparse worktree with that cone checks out without the network.
+        std::fs::remove_dir_all(&upstream_dir).unwrap();
+        let root = PathBuf::from(&supplied.source_root);
+        let worktree = tmp.path().join("run");
+        let path = worktree.to_str().unwrap();
+        for args in [
+            vec![
+                "worktree",
+                "add",
+                "--no-checkout",
+                "--detach",
+                path,
+                moved.as_str(),
+            ],
+            vec!["-C", path, "sparse-checkout", "set", "--cone", "app"],
+            vec!["-C", path, "checkout", "-f", "--detach", moved.as_str()],
+        ] {
+            let output = git(&root, &args).unwrap();
+            assert!(
+                output.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("app/a.ts")).unwrap(),
+            "a2\n"
+        );
+        assert!(!worktree.join("docs/d.md").exists());
+    }
+
+    #[test]
+    fn a_cone_that_escapes_the_repository_is_refused_before_anything_is_created() {
+        let tmp = TempDir::new().unwrap();
+        let sources = tmp.path().join("sources");
+        for (cone, why) in [
+            (["../outside"], "path escapes workspace"),
+            (["/etc"], "path escapes workspace"),
+            ([""], "path escapes workspace"),
+            (["--no-cone"], "must not start with -"),
+        ] {
+            let error = supply_with_cone(&tmp, "https://github.com/o/r.git", &cone)
+                .expect_err("refused cone");
+            assert!(error.contains(why), "{error}");
+        }
+        assert!(!sources.exists(), "nothing should have been created");
     }
 
     #[test]
@@ -740,6 +957,7 @@ mod tests {
                 remote_url: remote,
                 base: WorkspaceBaseSpec::RemoteDefault,
                 credential: None,
+                sparse_paths: Vec::new(),
             },
         )
         .expect_err("a miss must be reported");
@@ -757,6 +975,7 @@ mod tests {
                 remote_url: "   ".into(),
                 base: WorkspaceBaseSpec::RemoteDefault,
                 credential: None,
+                sparse_paths: Vec::new(),
             },
         )
         .expect_err("blank remote");
@@ -772,6 +991,7 @@ mod tests {
             remote_url: "https://github.com/o/r.git".into(),
             base: WorkspaceBaseSpec::RemoteDefault,
             credential: Some("ghs_SECRET".into()),
+            sparse_paths: Vec::new(),
         };
         let json = serde_json::to_string(&input).expect("serialize");
         assert!(!json.contains("ghs_SECRET"), "{json}");

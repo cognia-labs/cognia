@@ -40,6 +40,11 @@ pub struct EnsureProjectSource {
     /// for the remote's host is used.
     #[serde(default, skip_serializing)]
     pub credential: Option<String>,
+    /// The cone a clone will be checked out with, passed through to the
+    /// supply (see [`EnsureRemoteSource::sparse_paths`]). Ignored when a
+    /// local folder answers.
+    #[serde(default)]
+    pub sparse_paths: Vec<String>,
 }
 
 impl fmt::Debug for EnsureProjectSource {
@@ -51,6 +56,7 @@ impl fmt::Debug for EnsureProjectSource {
                 "credential",
                 &self.credential.as_ref().map(|_| "<redacted>"),
             )
+            .field("sparse_paths", &self.sparse_paths)
             .finish()
     }
 }
@@ -146,6 +152,7 @@ pub fn ensure_project_source(
         remote_url: remote.clone(),
         base: WorkspaceBaseSpec::RemoteDefault,
         credential: input.credential.clone(),
+        sparse_paths: input.sparse_paths.clone(),
     })?;
     Ok(ProjectSource {
         root: checkout.source_root,
@@ -205,6 +212,7 @@ mod tests {
             roots: vec!["/Users/someone-else/app".into(), here.clone()],
             remote_url: Some("https://github.com/acme/app.git".into()),
             credential: None,
+            sparse_paths: Vec::new(),
         };
         let source = ensure_project_source(&input, |_| panic!("no clone")).unwrap();
         assert_eq!(source.root, here);
@@ -220,6 +228,7 @@ mod tests {
             roots: vec!["/Users/me/app".into(), "/Users/me/docs".into()],
             remote_url: Some("https://github.com/acme/app.git".into()),
             credential: Some("token".into()),
+            sparse_paths: Vec::new(),
         };
         let source = ensure_project_source(&input, |request| {
             assert_eq!(request.remote_url, "https://github.com/acme/app.git");
@@ -255,6 +264,7 @@ mod tests {
             roots: vec!["/Users/me/app".into()],
             remote_url: Some("git@github.com:acme/app.git".into()),
             credential: None,
+            sparse_paths: Vec::new(),
         };
         assert!(ensure_project_source(&ssh, |_| panic!("no clone"))
             .unwrap_err()
@@ -263,6 +273,7 @@ mod tests {
             roots: Vec::new(),
             remote_url: Some("https://github.com/acme/app.git".into()),
             credential: None,
+            sparse_paths: Vec::new(),
         };
         assert_eq!(
             ensure_project_source(&failing, |_| Err("could not supply a mirror".into()))
@@ -291,6 +302,7 @@ mod tests {
             roots: Vec::new(),
             remote_url: None,
             credential: Some("secret-token".into()),
+            sparse_paths: Vec::new(),
         };
         assert!(!format!("{input:?}").contains("secret-token"));
         assert!(!serde_json::to_string(&input)

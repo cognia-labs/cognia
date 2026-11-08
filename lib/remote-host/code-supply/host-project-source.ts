@@ -26,10 +26,26 @@
  * Answers are remembered for a few minutes per workspace, so a burst of
  * turns does not fetch the repository once each; the clone itself is brought
  * up to date by the task workspace each run starts from.
+ *
+ * Each clone is recorded as its workspace's (`host-clone-roots`), so the
+ * worktrees acquired in it are provisioned from the repository declaration in
+ * the clone. When that declaration (approved on this Host) names sparse paths,
+ * the next supply asks the mirror for just that cone of the commit it serves
+ * (ADR-0176 A2, D26), which is what those worktrees check out. That only saves
+ * a fetch: each worktree backfills its own base and cone before it is added
+ * (D29). The first supply of a clone, before there is a declaration to read,
+ * and a clone several workspaces share, backfill every file.
  */
 
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { isPathUnderRoot } from "@/lib/sandbox/policy-bridge"
+import {
+  forgetHostClone,
+  hostCloneOwners,
+  hostCloneRootOf,
+  rememberHostClone,
+  resetHostClones,
+} from "@/lib/task-workspace/host-clone-roots"
 import type { ProjectSource } from "@/lib/task-workspace/types"
 import { allRootPaths } from "@/lib/workspace/roots"
 import type { Project } from "@/types"
@@ -37,12 +53,23 @@ import type { Project } from "@/types"
 /** How long one answer is reused for a workspace. */
 export const HOST_PROJECT_SOURCE_TTL_MS = 5 * 60 * 1000
 
-export type HostProject = Pick<Project, "id" | "roots" | "repository">
+export type HostProject = Pick<Project, "id" | "roots" | "repository"> &
+  Partial<Pick<Project, "workspaceProvisioning">>
 
 export interface HostProjectSourceDeps {
   isHost(): boolean
-  ensure(input: { roots: string[]; remoteUrl?: string | null }): Promise<ProjectSource>
+  ensure(input: {
+    roots: string[]
+    remoteUrl?: string | null
+    sparsePaths?: string[]
+  }): Promise<ProjectSource>
   now(): number
+  /**
+   * The sparse paths the worktrees in `cloneRoot` are provisioned with, the
+   * same answer `provisioningForWorkspaceRoot` gives for them. Absent or
+   * failing means "every file".
+   */
+  sparsePathsFor?(project: HostProject, cloneRoot: string): Promise<string[] | undefined>
 }
 
 /** A workspace the host has no folder or clone for. */
@@ -90,10 +117,14 @@ export async function resolveHostProjectSource(
   }
   const inFlight = pending.get(key)
   if (inFlight) return inFlight
-  const request = deps
-    .ensure({ roots, remoteUrl })
+  const request = coneOfKnownClone(project, deps)
+    .then((sparsePaths) =>
+      deps.ensure({ roots, remoteUrl, ...(sparsePaths?.length ? { sparsePaths } : {}) })
+    )
     .then((source) => {
       remembered.set(project.id, { key, at: deps.now(), source })
+      if (source.source === "clone") rememberHostClone(project.id, source.root)
+      else forgetHostClone(project.id)
       return source
     })
     .catch((error: unknown) => {
@@ -105,6 +136,21 @@ export async function resolveHostProjectSource(
     .finally(() => pending.delete(key))
   pending.set(key, request)
   return request
+}
+
+/** The cone the worktrees in this workspace's clone check out, if it has one. */
+async function coneOfKnownClone(
+  project: HostProject,
+  deps: HostProjectSourceDeps
+): Promise<string[] | undefined> {
+  const cloneRoot = hostCloneRootOf(project.id)
+  if (!cloneRoot || !deps.sparsePathsFor) return undefined
+  // A clone another workspace shares serves that one's worktrees too, which
+  // this workspace's cone says nothing about.
+  if (hostCloneOwners(cloneRoot).length !== 1) return undefined
+  // A cone that cannot be read is a full backfill: slower, never a worktree
+  // missing files.
+  return deps.sparsePathsFor(project, cloneRoot).catch(() => undefined)
 }
 
 /** Clone roots already resolved for a workspace, for matching a path back to it. */
@@ -150,6 +196,7 @@ export async function hostWorkingDirectory(
 export function resetHostProjectSources(): void {
   remembered.clear()
   pending.clear()
+  resetHostClones()
 }
 
 export function defaultHostProjectSourceDeps(): HostProjectSourceDeps {
@@ -160,5 +207,10 @@ export function defaultHostProjectSourceDeps(): HostProjectSourceDeps {
       return ensureProjectWorkspaceSource(input)
     },
     now: () => Date.now(),
+    sparsePathsFor: async (project, cloneRoot) => {
+      const { provisioningForProject } = await import("@/lib/task-workspace/workspace-provisioning")
+      return (await provisioningForProject(project, undefined, { configRoot: cloneRoot }))
+        ?.sparsePaths
+    },
   }
 }

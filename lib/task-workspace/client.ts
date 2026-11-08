@@ -894,7 +894,13 @@ export async function acquireWorkspaceBundleFromRemote(
   }
 ): Promise<{ supplied: RemoteSourceCheckout; bundle: WorkspaceBundle }> {
   const { bundle: bundleInput, ...supply } = input
-  const supplied = await ensureRemoteWorkspaceSource(supply)
+  // The supply backfills only the cone it is told about; told this bundle's,
+  // it fetches exactly what the worktree checks out.
+  const cone = supply.sparsePaths ?? bundleInput.provisioning?.sparsePaths
+  const supplied = await ensureRemoteWorkspaceSource({
+    ...supply,
+    ...(cone?.length ? { sparsePaths: cone } : {}),
+  })
   const bundle = await acquireWorkspaceBundle({
     ...bundleInput,
     roots: bundleInput.roots ?? [

@@ -21344,6 +21344,14 @@
                 "null"
               ],
               "description": "A token for the clone. When absent the host's stored git credential for the remote's host is used."
+            },
+            "sparsePaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "The cone a clone will be checked out with: repository-relative directories, passed through to the supply. Ignored when a local folder answers. Empty or absent backfills every file of the served commit."
             }
           },
           "additionalProperties": false
@@ -21527,6 +21535,14 @@
                 "null"
               ],
               "description": "PAT or installation token for the mirror fetch. Never serialized back out, in a response, a log line, or a persisted job payload."
+            },
+            "sparsePaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "The cone the caller will check out: repository-relative directories. The mirror fetches only those files of the served commit (the remote default's HEAD, or the named ref), plus the files directly in the root and in each ancestor directory, in one batch. Empty or absent backfills every file. A path that escapes the repository is refused."
             }
           },
           "additionalProperties": false

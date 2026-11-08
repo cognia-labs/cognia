@@ -97,6 +97,9 @@ pub struct GitRun<'a> {
     /// helpers, SSH keys and `insteadOf` rules. Never combined with a
     /// credential: that path is for host-owned remotes.
     pub user_config: bool,
+    /// Bytes written to git's stdin, which is then closed (`--stdin` input
+    /// such as a list of object ids). `None` gives git no stdin at all.
+    pub stdin: Option<Vec<u8>>,
 }
 
 impl<'a> GitRun<'a> {
@@ -110,7 +113,14 @@ impl<'a> GitRun<'a> {
             env: Vec::new(),
             cancel: None,
             user_config: false,
+            stdin: None,
         }
+    }
+
+    /// See [`GitRun::stdin`].
+    pub fn stdin(mut self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.stdin = Some(bytes.into());
+        self
     }
 
     pub fn credential(mut self, origin: &'a str, credential: &'a GitCredential) -> Self {
@@ -161,13 +171,17 @@ impl<'a> GitRun<'a> {
 }
 
 /// Run it. Blocking.
-pub fn run_git(run: GitRun<'_>) -> Result<String, RunError> {
+pub fn run_git(mut run: GitRun<'_>) -> Result<String, RunError> {
     if run.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
         return Err(RunError::Cancelled);
     }
     let mut command = Command::new("git");
     command.current_dir(run.cwd).args(run.args);
-    command.stdin(Stdio::null());
+    command.stdin(if run.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     command.stdout(if run.capture_stdout {
         Stdio::piped()
     } else {
@@ -207,7 +221,7 @@ pub fn run_git(run: GitRun<'_>) -> Result<String, RunError> {
 
     let cred = run.credential.map(|(_, credential)| credential);
 
-    if run.budget.is_none() && run.cancel.is_none() {
+    if run.budget.is_none() && run.cancel.is_none() && run.stdin.is_none() {
         let output = command
             .output()
             .map_err(|e| RunError::Spawn(credential::redact(&e.to_string(), cred)))?;
@@ -217,6 +231,15 @@ pub fn run_git(run: GitRun<'_>) -> Result<String, RunError> {
     let mut child = command
         .spawn()
         .map_err(|e| RunError::Spawn(credential::redact(&e.to_string(), cred)))?;
+    // Fed from a thread, like the pipes are drained: git may fill stdout or
+    // stderr before it has read all of its input, and a blocking write here
+    // would then wait on a child that waits on us.
+    if let (Some(mut pipe), Some(bytes)) = (child.stdin.take(), run.stdin.take()) {
+        std::thread::spawn(move || {
+            use std::io::Write as _;
+            let _ = pipe.write_all(&bytes);
+        });
+    }
     let stdout = child.stdout.take().map(|pipe| drain(pipe, usize::MAX));
     let stderr = child.stderr.take().map(|pipe| drain(pipe, STDERR_CAP));
 
@@ -425,6 +448,38 @@ mod tests {
         .expect("config --get");
         assert!(out.starts_with("Authorization: Basic "), "{out}");
         assert!(!out.contains("ghp_secret"), "{out}");
+    }
+
+    #[test]
+    fn stdin_reaches_git_even_when_it_is_larger_than_a_pipe() {
+        // `cat-file --batch-check` answers each line as it reads it, so with
+        // 400 KB of input its stdout fills while stdin still has more: a
+        // runner that wrote stdin before draining stdout would deadlock.
+        let dir = TempDir::new().unwrap();
+        assert!(Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let line = format!("{}\n", "0".repeat(40));
+        let input = line.repeat(10_000);
+        let started = Instant::now();
+        let out = run_git(
+            GitRun::new(dir.path(), &args(&["cat-file", "--batch-check"]))
+                .capture_stdout()
+                .stdin(input)
+                .budget(Duration::from_secs(20)),
+        )
+        .expect("batch-check answers every line");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(
+            out.lines()
+                .filter(|line| line.ends_with(" missing"))
+                .count(),
+            10_000
+        );
     }
 
     #[test]

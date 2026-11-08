@@ -137,7 +137,9 @@ pub use sensitive::{
     decide_access, validate_include_pattern, IncludePatternError, SensitiveAuditEntry,
     SensitiveDecision, SensitiveGrant, SensitiveGrantStore,
 };
-pub use service::{execution_root_from, ServiceConfig, TaskWorkspaceService, EXECUTION_ROOT_ENV};
+pub use service::{
+    execution_root_from, MirrorCredentials, ServiceConfig, TaskWorkspaceService, EXECUTION_ROOT_ENV,
+};
 pub use transfer::{
     DownloadHandle, TransferChunk, TransferRegistry, UploadHandle, MAX_TRANSFER_CHUNK_BYTES,
 };

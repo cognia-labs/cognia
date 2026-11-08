@@ -23,6 +23,9 @@ const bundle = {
   ],
 }
 const acquire = jest.fn<Promise<typeof bundle>, unknown[]>(async () => bundle)
+const provisioning = jest.fn<Promise<{ sparsePaths: string[] } | undefined>, unknown[]>(
+  async () => undefined
+)
 const settle = jest.fn()
 const options: SendOptions = Object.freeze({
   model: "chosen",
@@ -44,6 +47,9 @@ jest.mock("@/lib/task-workspace/client", () => ({
   acquireWorkspaceBundle: (...args: unknown[]) => acquire(...args),
   getWorkspaceBundle: async () => bundle,
   ensureWorkspacePortLease: async () => ({ canonicalRoot: "/physical" }),
+}))
+jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
+  provisioningForWorkspaceRoot: (...args: unknown[]) => provisioning(...args),
 }))
 jest.mock("@/lib/task-workspace/run-lease", () => ({
   openWorkspaceBundleTurnLease: async () => ({ settle }),
@@ -192,6 +198,15 @@ it("hands the group's stop to the candidate's checkout", async () => {
   expect(acquire).toHaveBeenCalledWith(expect.objectContaining({ ownerRef: "session" }), {
     signal: controller.signal,
   })
+})
+
+it("provisions a candidate's checkout like the source's own worktrees", async () => {
+  provisioning.mockResolvedValueOnce({ sparsePaths: ["app"] })
+  await createBestOfNExecution().acquire(group, group.candidates[0], request)
+  expect(provisioning).toHaveBeenCalledWith(group.sourceRoot)
+  expect(acquire).toHaveBeenLastCalledWith(
+    expect.objectContaining({ provisioning: { sparsePaths: ["app"] } })
+  )
 })
 
 it("acquires the frozen base for the Host-assigned child, reusing its port block", async () => {

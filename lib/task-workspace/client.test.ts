@@ -1152,6 +1152,40 @@ describe("task workspace client", () => {
     // The credential goes to the supply command and nowhere near acquisition.
     const acquireArgs = JSON.stringify(call.mock.calls.at(-1))
     expect(acquireArgs).not.toContain("ghs_SECRET")
+    // No cone: the supply backfills every file.
+    expect(call.mock.calls.at(-2)?.[1]).toEqual({
+      input: { remoteUrl: "https://github.com/o/r.git", credential: "ghs_SECRET" },
+    })
+  })
+
+  it("tells the supply the cone the bundle checks out", async () => {
+    call.mockResolvedValueOnce({
+      sourceRoot: "/data/sources/o-r",
+      resolvedRef: null,
+      mirrorPath: "/m",
+    })
+    call.mockResolvedValueOnce({ bundleId: "bundle-remote", leases: [] })
+
+    await acquireWorkspaceBundleFromRemote({
+      remoteUrl: "https://github.com/o/r.git",
+      bundle: {
+        ownerType: "session",
+        ownerRef: "session-remote",
+        environmentKind: "managed",
+        base: { kind: "remoteDefault" },
+        provisioning: { sparsePaths: ["apps/web"] },
+      },
+    })
+
+    // A worktree checking out more than the mirror was asked for fails, so
+    // both sides get the same cone.
+    expect(call.mock.calls.at(-2)).toEqual([
+      "task_workspace_remote_source_ensure",
+      { input: { remoteUrl: "https://github.com/o/r.git", sparsePaths: ["apps/web"] } },
+    ])
+    expect(call).toHaveBeenLastCalledWith("task_workspace_bundle_acquire", {
+      input: expect.objectContaining({ provisioning: { sparsePaths: ["apps/web"] } }),
+    })
   })
 
   it("begins tracking inside a Registry bundle lease without reprovisioning", async () => {

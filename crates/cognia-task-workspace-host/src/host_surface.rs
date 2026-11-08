@@ -79,6 +79,14 @@ pub fn install(data_dir: PathBuf) -> Result<Arc<TaskWorkspaceService>, String> {
             .map_err(|error| format!("invalid COGNIA_TASK_WORKSPACE_RETENTION_DAYS: {error}"))?;
         config.retention = std::time::Duration::from_secs(days.saturating_mul(24 * 60 * 60));
     }
+    // A worktree over a supplied checkout backfills its own base into the
+    // mirror (ADR-0176 A2); a private repository needs the git credential a
+    // paired device stored for its host, the one the supply itself uses.
+    config.mirror_credentials = Some(cognia_task_workspace::MirrorCredentials::new(|remote| {
+        cognia_secrets::host_secrets::git_token_for_remote(remote)
+            .ok()
+            .flatten()
+    }));
     config.code_snapshot_max_bytes = cognia_task_workspace::code_snapshot_max_bytes_from(
         std::env::var(cognia_task_workspace::CODE_SNAPSHOT_MAX_BYTES_ENV)
             .ok()
@@ -720,6 +728,7 @@ pub async fn code_snapshot_apply(mut input: ApplyCodeSnapshot) -> Result<CodeChe
         roots: Vec::new(),
         remote_url: input.remote_url.clone(),
         credential: None,
+        sparse_paths: Vec::new(),
     })
     .credential;
     blocking(move |service| service.apply_code_snapshot(&input)).await
@@ -746,6 +755,7 @@ pub async fn code_checkout_export(mut input: ExportCodeCheckout) -> Result<CodeR
             roots: Vec::new(),
             remote_url,
             credential: None,
+            sparse_paths: Vec::new(),
         })
         .credential;
         service.export_code_checkout(&input)
@@ -2412,6 +2422,7 @@ mod tests {
             remote_url: "https://supply.example.com/acme/app.git".to_string(),
             base: Default::default(),
             credential: credential.map(str::to_string),
+            sparse_paths: Vec::new(),
         };
         assert_eq!(
             super::with_stored_git_token(input(None)).credential.as_deref(),
@@ -2429,6 +2440,7 @@ mod tests {
             remote_url: "https://other.example.com/a.git".to_string(),
             base: Default::default(),
             credential: None,
+            sparse_paths: Vec::new(),
         };
         assert_eq!(super::with_stored_git_token(elsewhere).credential, None);
     }
@@ -2442,6 +2454,7 @@ mod tests {
             roots: vec!["/Users/me/app".to_string()],
             remote_url: remote.map(str::to_string),
             credential: credential.map(str::to_string),
+            sparse_paths: Vec::new(),
         };
         let remote = Some("https://project.example.com/acme/app.git");
         assert_eq!(

@@ -1,3 +1,4 @@
+import { hostCloneFor } from "@/lib/task-workspace/host-clone-roots"
 import type { ProjectSource } from "@/lib/task-workspace/types"
 
 import {
@@ -127,5 +128,86 @@ describe("resolveHostProjectSource", () => {
     )
     expect(d.ensure).toHaveBeenCalledTimes(3)
     expect(knownHostRoots("unknown")).toEqual([])
+  })
+
+  it("records the clone as its workspace's, and a folder the host has as nothing", async () => {
+    await resolveHostProjectSource(project(), deps(clone))
+    expect(hostCloneFor(`${CLONE}/web`)).toEqual({ projectId: "p1", root: CLONE })
+
+    const local: ProjectSource = {
+      root: "/srv/docs",
+      source: "local",
+      standsFor: null,
+      remoteUrl: null,
+    }
+    await resolveHostProjectSource(project("p2"), deps(local))
+    expect(hostCloneFor("/srv/docs")).toBeNull()
+  })
+
+  it("asks the mirror for the cone of the clone's worktrees once there is a clone to read it from", async () => {
+    // The first supply makes the clone, so there is no declaration to read
+    // yet: it backfills every file. Later ones narrow to what the worktrees
+    // in that clone check out, read through the same provisioning lookup.
+    const sparsePathsFor = jest.fn(async () => ["apps/web"])
+    const d = deps(clone, { sparsePathsFor })
+    await resolveHostProjectSource(project(), d)
+    expect(d.ensure).toHaveBeenLastCalledWith({
+      roots: ["/Users/me/app", "/Users/me/docs"],
+      remoteUrl: "https://github.com/acme/app.git",
+    })
+    expect(sparsePathsFor).not.toHaveBeenCalled()
+
+    d.clock.now += HOST_PROJECT_SOURCE_TTL_MS + 1
+    await resolveHostProjectSource(project(), d)
+    expect(sparsePathsFor).toHaveBeenCalledWith(project(), CLONE)
+    expect(d.ensure).toHaveBeenLastCalledWith({
+      roots: ["/Users/me/app", "/Users/me/docs"],
+      remoteUrl: "https://github.com/acme/app.git",
+      sparsePaths: ["apps/web"],
+    })
+  })
+
+  it("backfills every file for a clone another workspace shares", async () => {
+    const sparsePathsFor = jest.fn(async () => ["apps/web"])
+    const d = deps(clone, { sparsePathsFor })
+    await resolveHostProjectSource(project("p1"), d)
+    await resolveHostProjectSource(project("p2"), d)
+    d.clock.now += HOST_PROJECT_SOURCE_TTL_MS + 1
+    await resolveHostProjectSource(project("p1"), d)
+    expect(sparsePathsFor).not.toHaveBeenCalled()
+    expect(d.ensure.mock.lastCall?.[0]).not.toHaveProperty("sparsePaths")
+  })
+
+  it("forgets the clone once a folder of the workspace is here", async () => {
+    const d = deps(clone)
+    await resolveHostProjectSource(project(), d)
+    expect(hostCloneFor(CLONE)?.projectId).toBe("p1")
+    d.clock.now += HOST_PROJECT_SOURCE_TTL_MS + 1
+    d.ensure.mockResolvedValueOnce({
+      root: "/Users/me/app",
+      source: "local",
+      standsFor: null,
+      remoteUrl: null,
+    })
+    await resolveHostProjectSource(project(), d)
+    expect(hostCloneFor(CLONE)).toBeNull()
+  })
+
+  it("backfills every file when the clone declares no cone or it cannot be read", async () => {
+    for (const sparsePathsFor of [
+      jest.fn(async () => undefined),
+      jest.fn(async () => []),
+      jest.fn(async () => {
+        throw new Error("declaration unreadable")
+      }),
+    ]) {
+      resetHostProjectSources()
+      const d = deps(clone, { sparsePathsFor })
+      await resolveHostProjectSource(project(), d)
+      d.clock.now += HOST_PROJECT_SOURCE_TTL_MS + 1
+      await resolveHostProjectSource(project(), d)
+      expect(sparsePathsFor).toHaveBeenCalledTimes(1)
+      expect(d.ensure.mock.lastCall?.[0]).not.toHaveProperty("sparsePaths")
+    }
   })
 })

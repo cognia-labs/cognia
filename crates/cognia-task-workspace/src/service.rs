@@ -44,6 +44,40 @@ pub struct ServiceConfig {
     /// The largest working-copy snapshot this host accepts (ADR-0224 A11b,
     /// [`crate::CODE_SNAPSHOT_MAX_BYTES_ENV`]).
     pub code_snapshot_max_bytes: u64,
+    /// How a worktree's own mirror backfill authenticates (ADR-0176 A2).
+    /// Absent: unauthenticated, which is all a public repository needs.
+    pub mirror_credentials: Option<MirrorCredentials>,
+}
+
+/// The git token for a mirror's upstream, looked up by its credential-free
+/// URL (ADR-0176 A2). The Host passes its stored git credential, so a
+/// worktree over a private repository's supplied checkout can fetch the files
+/// its mirror does not hold yet.
+#[derive(Clone)]
+pub struct MirrorCredentials(Arc<dyn Fn(&str) -> Option<String> + Send + Sync>);
+
+impl MirrorCredentials {
+    pub fn new(lookup: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(lookup))
+    }
+
+    fn token_for(&self, remote: &str) -> Option<String> {
+        (self.0)(remote)
+    }
+}
+
+/// Never prints a token: there is none to print, only the lookup.
+impl std::fmt::Debug for MirrorCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MirrorCredentials(<lookup>)")
+    }
+}
+
+/// The mirrors a worktree's base may have to be backfilled into first, and
+/// how to authenticate that fetch (see `backfill_derived_base`).
+pub(crate) struct MirrorAccess<'a> {
+    pub(crate) mirrors_dir: &'a Path,
+    pub(crate) credentials: Option<&'a MirrorCredentials>,
 }
 
 impl ServiceConfig {
@@ -54,6 +88,7 @@ impl ServiceConfig {
             max_blob_bytes: 1024 * 1024 * 1024,
             execution_root: None,
             code_snapshot_max_bytes: crate::DEFAULT_CODE_SNAPSHOT_MAX_BYTES,
+            mirror_credentials: None,
         }
     }
 
@@ -98,6 +133,7 @@ pub struct TaskWorkspaceService {
     /// a process-global. `task_workspace::install` points the global at this
     /// same path, so the two never disagree in production.
     mirrors_dir: PathBuf,
+    mirror_credentials: Option<MirrorCredentials>,
     manifest_key: Vec<u8>,
     retention: Duration,
     transfers: TransferRegistry,
@@ -382,6 +418,7 @@ impl TaskWorkspaceService {
             checkpoint_dir: service_dir.join("sandbox-checkpoints"),
             sources_dir,
             mirrors_dir,
+            mirror_credentials: config.mirror_credentials.clone(),
             manifest_key: load_or_create_manifest_key(&service_dir)?,
             retention: config.retention,
             transfers: TransferRegistry::new(Duration::from_secs(5 * 60)),
@@ -490,6 +527,13 @@ impl TaskWorkspaceService {
         );
         self.record_acquisition(&acquisition, &result);
         result
+    }
+
+    fn mirror_access(&self) -> MirrorAccess<'_> {
+        MirrorAccess {
+            mirrors_dir: &self.mirrors_dir,
+            credentials: self.mirror_credentials.as_ref(),
+        }
     }
 
     /// Stop the acquisition in flight under the named key (ADR-0176 A1).
@@ -905,6 +949,7 @@ impl TaskWorkspaceService {
             roots: input.roots.clone(),
             remote_url: input.remote_url.clone(),
             credential: input.credential.clone(),
+            sparse_paths: Vec::new(),
         })?;
         let source_root = PathBuf::from(&source.root);
         if source.source == crate::ProjectSourceKind::Clone {
@@ -915,6 +960,7 @@ impl TaskWorkspaceService {
                     remote_url: source.remote_url.clone().unwrap_or_default(),
                     base: WorkspaceBaseSpec::RemoteDefault,
                     credential: input.credential.clone(),
+                    sparse_paths: Vec::new(),
                 },
                 base,
                 input.manifest.base_ref.as_deref(),
@@ -1792,6 +1838,7 @@ impl TaskWorkspaceService {
                     None,
                     &tracking_policy,
                     budget,
+                    &self.mirror_access(),
                 )
             };
             let (created_kind, isolation_ref) = match created {
@@ -3105,6 +3152,7 @@ impl TaskWorkspaceService {
                         requested_name.as_deref(),
                         &tracking_policy,
                         budget,
+                        &self.mirror_access(),
                     )
                 };
                 let (_isolation, requested_branch) = match created {
@@ -4142,6 +4190,7 @@ impl TaskWorkspaceService {
                 None,
                 &crate::ResourceTrackingPolicy::default(),
                 budget,
+                &self.mirror_access(),
             )
         };
         created?;
@@ -6011,37 +6060,220 @@ pub(crate) fn apply_provisioning_within(
 ) -> Result<(), String> {
     let _perf = cognia_instrument::guard("workspace.apply_provisioning");
     if !provisioning.sparse_paths.is_empty() {
-        for path in &provisioning.sparse_paths {
-            validate_event_relative_path(path)?;
-        }
-        // Cone mode: directory-granular, orders of magnitude faster than the
-        // pattern matcher on a large tree, and the only mode whose semantics a
-        // repository author can predict from a path list.
-        let init = ["sparse-checkout", "init", "--cone"].map(String::from);
-        acquisition_git(budget, Phase::Sparse, execution_root, &init).map_err(|error| {
-            describe_git_step(
-                error,
-                "start git sparse-checkout init",
-                "git sparse-checkout init failed",
-            )
-        })?;
-        let set = ["sparse-checkout".to_string(), "set".to_string()]
-            .into_iter()
-            .chain(provisioning.sparse_paths.iter().cloned())
-            .collect::<Vec<_>>();
-        acquisition_git(budget, Phase::Sparse, execution_root, &set).map_err(|error| {
-            describe_git_step(
-                error,
-                "start git sparse-checkout set",
-                "git sparse-checkout set failed",
-            )
-        })?;
+        let paths = sparse_cone(&provisioning.sparse_paths)?;
+        set_sparse_cone(budget, execution_root, &paths)?;
     }
+    link_and_copy_within(workspace_root, execution_root, provisioning, budget)
+}
+
+/// The cache links and includes of a declaration, as one acquisition's
+/// `provisioning` phase.
+fn link_and_copy_within(
+    workspace_root: &Path,
+    execution_root: &Path,
+    provisioning: &WorkspaceProvisioning,
+    budget: &AcquisitionBudget,
+) -> Result<(), String> {
     budget.timed(
         Phase::Provisioning,
         || link_and_copy(workspace_root, execution_root, provisioning),
         |_| FailureClass::Other,
     )
+}
+
+/// Make the mirror behind a supplied checkout hold what a worktree at
+/// `commit` with `cone` checks out (ADR-0176 A2, D29).
+///
+/// A checkout a remote supply derived takes its file contents from one of this
+/// host's mirrors, and the mirror never fetches on its behalf, so `worktree
+/// add` at a commit the mirror was not backfilled for, or with a wider cone,
+/// fails half way with `upload-pack: not our ref`. Backfilling here, from the
+/// worktree's own base and cone, makes that independent of what the last
+/// supply was told. A mirror that already holds the files costs no network;
+/// any other checkout is left alone.
+fn backfill_derived_base(
+    mirrors: &MirrorAccess<'_>,
+    source_root: &Path,
+    commit: &str,
+    cone: Option<&[String]>,
+    budget: &AcquisitionBudget,
+) -> Result<(), String> {
+    let Some(mirror) = derived_mirror(mirrors.mirrors_dir, source_root) else {
+        return Ok(());
+    };
+    let Some(upstream) = git_config_value(&mirror, "remote.origin.url") else {
+        return Ok(());
+    };
+    let credential = mirrors
+        .credentials
+        .and_then(|credentials| credentials.token_for(&upstream))
+        .and_then(|token| cognia_git_mirror::GitCredential::from_token(&token));
+    let request = cognia_git_mirror::MirrorRequest::new(mirrors.mirrors_dir, &upstream)
+        .maybe_credential(credential.as_ref())
+        .acquisition(budget);
+    cognia_git_mirror::backfill_commit(&request, &mirror, commit, cone)
+        .map(|_| ())
+        .map_err(|failure| {
+            format!(
+                "could not fetch the files of {commit} into the mirror for this worktree: {}",
+                failure.detail
+            )
+        })
+}
+
+/// The mirror under `mirrors_dir` that `source_root`'s `origin` is, if it is
+/// one: a remote supply points `origin` at its mirror as a `file://` URL.
+fn derived_mirror(mirrors_dir: &Path, source_root: &Path) -> Option<PathBuf> {
+    let url = git_config_value(source_root, "remote.origin.url")?;
+    let path = percent_decode(url.strip_prefix("file://")?)?;
+    let mirror = Path::new(&path).canonicalize().ok()?;
+    let root = mirrors_dir.canonicalize().ok()?;
+    (mirror != root && mirror.starts_with(&root)).then_some(mirror)
+}
+
+fn git_config_value(repository: &Path, key: &str) -> Option<String> {
+    let args = ["config", "--get", key].map(String::from);
+    let value = cognia_git_mirror::run_git(GitRun::new(repository, &args).capture_stdout()).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// The path of a `file://` URL as `cognia_git_mirror::file_url` encodes it.
+fn percent_decode(encoded: &str) -> Option<String> {
+    let bytes = encoded.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// A declaration's sparse paths in the one form the checkout and the mirror
+/// backfill share ([`cognia_git_mirror::cone_path`]). An escaping path is
+/// reported as every other escaping provisioning path is.
+pub(crate) fn sparse_cone(paths: &[String]) -> Result<Vec<String>, String> {
+    for path in paths {
+        validate_event_relative_path(path.trim())?;
+    }
+    cognia_git_mirror::cone_paths(paths)
+}
+
+/// Turn on cone-mode sparse checkout in `execution_root` with `paths`, already
+/// normalized by [`sparse_cone`].
+///
+/// Cone mode: directory-granular, orders of magnitude faster than the pattern
+/// matcher on a large tree, and the only mode whose semantics a repository
+/// author can predict from a path list. `--` ends the options, so no path is
+/// ever read as one.
+fn set_sparse_cone(
+    budget: &AcquisitionBudget,
+    execution_root: &Path,
+    paths: &[String],
+) -> Result<(), String> {
+    let init = ["sparse-checkout", "init", "--cone"].map(String::from);
+    acquisition_git(budget, Phase::Sparse, execution_root, &init).map_err(|error| {
+        describe_git_step(
+            error,
+            "start git sparse-checkout init",
+            "git sparse-checkout init failed",
+        )
+    })?;
+    let set = ["sparse-checkout", "set", "--"]
+        .map(String::from)
+        .into_iter()
+        .chain(paths.iter().cloned())
+        .collect::<Vec<_>>();
+    acquisition_git(budget, Phase::Sparse, execution_root, &set)
+        .map(|_| ())
+        .map_err(|error| {
+            describe_git_step(
+                error,
+                "start git sparse-checkout set",
+                "git sparse-checkout set failed",
+            )
+        })
+}
+
+/// Narrow a `--no-checkout` worktree to `paths` (cone mode), then write it.
+///
+/// `git checkout` rather than `read-tree -mu`, because `worktree add` runs the
+/// repository's post-checkout hook and a `--no-checkout` add does not: the
+/// checkout here is what keeps that hook running.
+fn check_out_sparse(
+    budget: &AcquisitionBudget,
+    execution_root: &Path,
+    paths: &[String],
+    base_commit: &str,
+    requested_name: Option<&str>,
+) -> Result<(), String> {
+    set_sparse_cone(budget, execution_root, paths)?;
+    // HEAD already names the base; the index is still empty, so the checkout
+    // writes every path the cone admits. By commit id, never by the ref the
+    // caller gave, which would resolve again from inside this worktree.
+    let checkout: Vec<String> = match requested_name {
+        Some(name) => vec![
+            "checkout".into(),
+            "-f".into(),
+            "-B".into(),
+            name.into(),
+            base_commit.into(),
+        ],
+        None => vec![
+            "checkout".into(),
+            "-f".into(),
+            "--detach".into(),
+            base_commit.into(),
+        ],
+    };
+    acquisition_git(budget, Phase::Checkout, execution_root, &checkout)
+        .map_err(|error| describe_git_step(error, "start git checkout", "git checkout failed"))?;
+    Ok(())
+}
+
+/// Clear the skip-worktree bit of every index entry whose file exists in the
+/// tree: the overlay's files outside the cone (see `create_execution`).
+fn clear_skip_worktree_of_present_files(
+    budget: &AcquisitionBudget,
+    execution_root: &Path,
+) -> Result<(), String> {
+    let listing = ["ls-files", "-v", "-z"].map(String::from);
+    let listed = acquisition_git(budget, Phase::Sparse, execution_root, &listing)
+        .map_err(|error| describe_git_step(error, "start git ls-files", "git ls-files failed"))?;
+    let present: Vec<&str> = listed
+        .split('\0')
+        .filter_map(|line| line.strip_prefix("S "))
+        .filter(|path| execution_root.join(path).symlink_metadata().is_ok())
+        .collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+    // On stdin: the overlay's fallback writes the whole snapshot, so this can
+    // be every file outside the cone, more than an argument list holds.
+    let args = ["update-index", "--no-skip-worktree", "-z", "--stdin"].map(String::from);
+    let mut input = Vec::new();
+    for path in &present {
+        input.extend_from_slice(path.as_bytes());
+        input.push(0);
+    }
+    budget
+        .run(
+            Phase::Sparse,
+            GitRun::new(execution_root, &args)
+                .user_config()
+                .stdin(input),
+        )
+        .map_err(|error| {
+            describe_git_step(error, "start git update-index", "git update-index failed")
+        })?;
+    Ok(())
 }
 
 /// The cache links and includes of a declaration.
@@ -6266,6 +6498,7 @@ fn create_execution(
     requested_name: Option<&str>,
     policy: &crate::ResourceTrackingPolicy,
     budget: &AcquisitionBudget,
+    mirrors: &MirrorAccess<'_>,
 ) -> Result<(IsolationKind, Option<String>), String> {
     let _perf = cognia_instrument::guard("workspace.create_execution");
     if is_git_root(workspace_root) {
@@ -6273,6 +6506,23 @@ fn create_execution(
             .filter(|reason| !reason.is_empty())
             .ok_or_else(|| "managed Git worktree requires a Registry lock reason".to_string())?;
         let base_ref = resolve_git_base(workspace_root, base, budget)?;
+        // With sparse paths the tree is narrowed BEFORE git writes it (ADR-0176
+        // A2): a full checkout of a large repository that is then mostly deleted
+        // again is the cost this removes. Validated before anything is created.
+        let sparse_paths = provisioning
+            .map(|value| value.sparse_paths.as_slice())
+            .filter(|paths| !paths.is_empty())
+            .map(sparse_cone)
+            .transpose()?;
+        let sparse_paths = sparse_paths.as_deref();
+        // Resolved once, here: the sparse checkout below runs inside the new
+        // worktree, where a relative ref (`HEAD~1`, `@{-1}`) would name a
+        // different commit than it did for `worktree add`. An unresolvable
+        // base is left for `worktree add` to report.
+        let base_commit = cognia_git_mirror::resolve_commit(workspace_root, &base_ref);
+        if let Some(commit) = base_commit.as_deref() {
+            backfill_derived_base(mirrors, workspace_root, commit, sparse_paths, budget)?;
+        }
         if let Some(parent) = execution_root.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("create {}: {error}", parent.display()))?;
@@ -6287,6 +6537,9 @@ fn create_execution(
             None => args.push("--detach".into()),
         }
         args.extend(["--lock".into(), "--reason".into(), lock_reason.into()]);
+        if sparse_paths.is_some() {
+            args.push("--no-checkout".into());
+        }
         args.push(execution_root.to_string_lossy().into_owned());
         args.push(base_ref.clone());
         // Known before the add so a failure never deletes a branch the add
@@ -6308,6 +6561,16 @@ fn create_execution(
                 "git worktree add failed",
             ));
         }
+        if let Some(paths) = sparse_paths {
+            let target = base_commit.as_deref().unwrap_or(&base_ref);
+            if let Err(error) =
+                check_out_sparse(budget, execution_root, paths, target, requested_name)
+            {
+                unlock_git_worktree(workspace_root, execution_root, IsolationKind::GitWorktree);
+                cleanup_git_worktree(workspace_root, execution_root, requested_name.unwrap_or(""));
+                return Err(error);
+            }
+        }
         if *base == WorkspaceBaseSpec::WorkingState {
             // A Git-backed baseline is the checkout Git has just written plus a
             // small overlay, so the tree only needs the difference applied.
@@ -6326,6 +6589,15 @@ fn create_execution(
                 },
                 |_| FailureClass::Other,
             );
+            // The overlay writes the working state's files wherever they are,
+            // inside the cone or not. One written outside it must read as an
+            // ordinary modified file, as it does on today's path; git 2.37+
+            // clears the skip-worktree bit of a file that exists, older git
+            // keeps it and would hide the change from `git status` and `add`.
+            let result = result.and_then(|()| match sparse_paths {
+                Some(_) => clear_skip_worktree_of_present_files(budget, execution_root),
+                None => Ok(()),
+            });
             if let Err(error) = result {
                 unlock_git_worktree(workspace_root, execution_root, IsolationKind::GitWorktree);
                 cleanup_git_worktree(workspace_root, execution_root, requested_name.unwrap_or(""));
@@ -6335,11 +6607,17 @@ fn create_execution(
         // Provisioning is part of creating the tree, not a later touch-up: a
         // half-provisioned worktree handed to an agent is worse than none, so a
         // failure here rolls the whole acquisition back the same way a failed
-        // materialize does.
+        // materialize does. Sparse paths were applied before the checkout.
         if let Some(provisioning) = provisioning.filter(|value| !value.is_empty()) {
-            if let Err(error) =
-                apply_provisioning_within(workspace_root, execution_root, provisioning, budget)
-            {
+            let provisioned = match sparse_paths {
+                Some(_) => {
+                    link_and_copy_within(workspace_root, execution_root, provisioning, budget)
+                }
+                None => {
+                    apply_provisioning_within(workspace_root, execution_root, provisioning, budget)
+                }
+            };
+            if let Err(error) = provisioned {
                 unlock_git_worktree(workspace_root, execution_root, IsolationKind::GitWorktree);
                 cleanup_git_worktree(workspace_root, execution_root, requested_name.unwrap_or(""));
                 return Err(error);
@@ -14668,6 +14946,7 @@ mod tests {
                 remote_url: format!("file://{}", upstream.path().display()),
                 base: WorkspaceBaseSpec::RemoteDefault,
                 credential: Some("ghs_SECRET".into()),
+                sparse_paths: Vec::new(),
             })
             .expect("supply");
 
@@ -14713,6 +14992,7 @@ mod tests {
                 remote_url: format!("file://{}", upstream.path().display()),
                 base: WorkspaceBaseSpec::RemoteDefault,
                 credential: Some("ghs_SECRET".into()),
+                sparse_paths: Vec::new(),
             })
             .expect("supply");
         service
@@ -15228,6 +15508,7 @@ mod tests {
             Some("slow-branch"),
             &policy,
             budget,
+            &no_mirrors(),
         )
     }
 
@@ -15423,6 +15704,422 @@ mod tests {
             Some("bundle:session:session-cancelled")
         );
         assert_eq!(recent[0].failure_class.as_deref(), Some("cancelled"));
+    }
+
+    /// A repository laid out like spike S1's: a cone (`app`), a sibling
+    /// directory, root files and an executable, with a local hooks path so a
+    /// global `core.hooksPath` cannot skip a test's hook.
+    fn sparse_repository() -> (TempDir, PathBuf) {
+        let repository = TempDir::new().unwrap();
+        let root = repository.path().canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "s@example.com"]);
+        git(&["config", "user.name", "s"]);
+        // Absolute: in a linked worktree `.git` is a file, so a relative
+        // `.git/hooks` resolves to nothing there.
+        let hooks = root.join(".git/hooks");
+        git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+        fs::create_dir_all(root.join("app/src")).unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("lib")).unwrap();
+        fs::write(root.join("app/src/a.ts"), "app\n").unwrap();
+        fs::write(root.join("app/run.sh"), "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(root.join("app/run.sh"), fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        fs::write(root.join("docs/d.md"), "docs\n").unwrap();
+        fs::write(root.join("lib/l.ts"), "lib\n").unwrap();
+        fs::write(root.join("README.md"), "root\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "base"]);
+        (repository, root)
+    }
+
+    /// A checkout no mirror stands behind: `create_execution` backfills
+    /// nothing for it.
+    fn no_mirrors() -> MirrorAccess<'static> {
+        MirrorAccess {
+            mirrors_dir: Path::new(""),
+            credentials: None,
+        }
+    }
+
+    fn sparse_execution(
+        root: &Path,
+        execution_root: &Path,
+        base: WorkspaceBaseSpec,
+        sparse: &[&str],
+        name: Option<&str>,
+    ) -> Result<(IsolationKind, Option<String>), String> {
+        let policy = crate::ResourceTrackingPolicy::default();
+        let (baseline, blobs) = capture_with_policy(root, &policy).unwrap();
+        let provisioning = WorkspaceProvisioning {
+            sparse_paths: sparse.iter().map(|path| path.to_string()).collect(),
+            ..Default::default()
+        };
+        create_execution(
+            root,
+            execution_root,
+            &base,
+            &baseline,
+            &blobs,
+            Some("cognia test"),
+            Some(&provisioning),
+            name,
+            &policy,
+            &AcquisitionBudget::new(None),
+            &no_mirrors(),
+        )
+    }
+
+    fn git_lines(cwd: &Path, args: &[&str]) -> Vec<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        lines.sort();
+        lines
+    }
+
+    #[test]
+    fn a_sparse_working_state_worktree_is_the_snapshot_inside_and_outside_the_cone() {
+        let (_repository, root) = sparse_repository();
+        // The working state: changed, added and deleted, inside the cone and out.
+        fs::write(root.join("app/src/a.ts"), "app-dirty\n").unwrap();
+        fs::write(root.join("app/new.ts"), "new\n").unwrap();
+        fs::remove_file(root.join("app/run.sh")).unwrap();
+        fs::write(root.join("docs/d.md"), "docs-dirty\n").unwrap();
+        fs::write(root.join("docs/new.md"), "docs-new\n").unwrap();
+        fs::remove_file(root.join("lib/l.ts")).unwrap();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("ws");
+
+        sparse_execution(
+            &root,
+            &execution_root,
+            WorkspaceBaseSpec::WorkingState,
+            &["app"],
+            None,
+        )
+        .unwrap();
+
+        // D25: a deletion inside the cone stays deleted. Applying sparse after
+        // the overlay used to check the file out again.
+        assert!(!execution_root.join("app/run.sh").exists());
+        assert_eq!(
+            fs::read_to_string(execution_root.join("app/src/a.ts")).unwrap(),
+            "app-dirty\n"
+        );
+        assert_eq!(
+            fs::read_to_string(execution_root.join("app/new.ts")).unwrap(),
+            "new\n"
+        );
+        assert_eq!(
+            fs::read_to_string(execution_root.join("README.md")).unwrap(),
+            "root\n"
+        );
+        // Outside the cone the working state's files are there too, as
+        // ordinary modified and untracked files, and the deletion holds.
+        assert_eq!(
+            fs::read_to_string(execution_root.join("docs/d.md")).unwrap(),
+            "docs-dirty\n"
+        );
+        assert_eq!(
+            fs::read_to_string(execution_root.join("docs/new.md")).unwrap(),
+            "docs-new\n"
+        );
+        assert!(!execution_root.join("lib/l.ts").exists());
+        let skipped: Vec<String> = git_lines(&execution_root, &["ls-files", "-v"])
+            .into_iter()
+            .filter(|line| line.starts_with("S "))
+            .collect();
+        assert_eq!(
+            skipped,
+            vec!["S lib/l.ts".to_string()],
+            "only the absent file is skipped"
+        );
+        assert_eq!(
+            git_lines(
+                &execution_root,
+                &["status", "--porcelain", "--untracked-files=all"]
+            ),
+            vec![
+                " D app/run.sh",
+                " M app/src/a.ts",
+                " M docs/d.md",
+                "?? app/new.ts",
+                "?? docs/new.md"
+            ]
+        );
+        assert_eq!(
+            git_lines(&execution_root, &["sparse-checkout", "list"]),
+            vec!["app"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sparse_worktree_on_a_named_branch_writes_only_the_cone_and_still_runs_the_hook() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_repository, root) = sparse_repository();
+        let hook = root.join(".git/hooks/post-checkout");
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        fs::write(
+            &hook,
+            "#!/bin/sh\ntouch \"$(git rev-parse --show-toplevel)/.hook-ran\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("named");
+
+        let (_, name) = sparse_execution(
+            &root,
+            &execution_root,
+            WorkspaceBaseSpec::LocalHead,
+            &["app"],
+            Some("narrow"),
+        )
+        .unwrap();
+
+        assert_eq!(name.as_deref(), Some("narrow"));
+        assert_eq!(
+            git_lines(&execution_root, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            vec!["narrow"]
+        );
+        assert!(execution_root.join("app/run.sh").exists());
+        assert!(
+            execution_root.join("README.md").exists(),
+            "cone mode keeps root files"
+        );
+        assert!(!execution_root.join("docs").exists());
+        assert!(!execution_root.join("lib").exists());
+        assert!(
+            execution_root.join(".hook-ran").exists(),
+            "the checkout still runs the repository's hook"
+        );
+        assert!(git_lines(&execution_root, &["status", "--porcelain"])
+            .iter()
+            .all(|line| line.starts_with("??")));
+    }
+
+    #[test]
+    fn a_sparse_path_that_escapes_is_refused_before_a_worktree_exists() {
+        let (_repository, root) = sparse_repository();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("escape");
+
+        let error = sparse_execution(
+            &root,
+            &execution_root,
+            WorkspaceBaseSpec::LocalHead,
+            &["../outside"],
+            None,
+        )
+        .unwrap_err();
+
+        assert!(!error.is_empty());
+        assert!(!execution_root.exists());
+        assert_eq!(registered_worktrees(&root), 1);
+    }
+
+    #[test]
+    fn a_sparse_path_that_reads_as_an_option_is_refused_before_a_worktree_exists() {
+        let (_repository, root) = sparse_repository();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("option");
+
+        let error = sparse_execution(
+            &root,
+            &execution_root,
+            WorkspaceBaseSpec::LocalHead,
+            &["app", "--no-cone"],
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("must not start with -"), "{error}");
+        assert!(!execution_root.exists());
+        assert_eq!(registered_worktrees(&root), 1);
+    }
+
+    #[test]
+    fn a_sparse_worktree_on_a_relative_ref_lands_on_the_commit_it_names() {
+        // `HEAD~1` names one commit in the source and another inside a
+        // worktree already at it; the checkout must not resolve it again.
+        let (_repository, root) = sparse_repository();
+        fs::write(root.join("app/src/a.ts"), "app two\n").unwrap();
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["commit", "-qam", "second"])
+            .status()
+            .unwrap()
+            .success());
+        let parent = git_lines(&root, &["rev-parse", "HEAD~1"]);
+        let executions = TempDir::new().unwrap();
+        for (label, name) in [("detached", None), ("named", Some("relative-ref"))] {
+            let execution_root = executions.path().join(label);
+            sparse_execution(
+                &root,
+                &execution_root,
+                WorkspaceBaseSpec::GitRef {
+                    git_ref: "HEAD~1".into(),
+                },
+                &["app"],
+                name,
+            )
+            .expect(label);
+            assert_eq!(
+                git_lines(&execution_root, &["rev-parse", "HEAD"]),
+                parent,
+                "{label}"
+            );
+            assert_eq!(
+                fs::read_to_string(execution_root.join("app/src/a.ts")).unwrap(),
+                "app\n",
+                "{label}"
+            );
+        }
+        assert_eq!(git_lines(&root, &["rev-parse", "relative-ref"]), parent);
+    }
+
+    /// ADR-0176 A2, D29: a worktree over a supplied checkout no longer depends
+    /// on the cone the last supply was told. Its own base and cone are
+    /// backfilled into the mirror before `worktree add`.
+    #[test]
+    fn a_full_worktree_over_a_narrowed_supply_fetches_what_the_mirror_lacks() {
+        let data = TempDir::new().unwrap();
+        let upstream = TempDir::new().unwrap();
+        let up = upstream.path();
+        let git = |args: &[&str]| {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(up)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "s@example.com"]);
+        git(&["config", "user.name", "s"]);
+        git(&["config", "uploadpack.allowFilter", "true"]);
+        git(&["config", "uploadpack.allowAnySHA1InWant", "true"]);
+        fs::create_dir_all(up.join("app")).unwrap();
+        fs::create_dir_all(up.join("docs")).unwrap();
+        fs::write(up.join("app/a.ts"), "a1\n").unwrap();
+        fs::write(up.join("docs/d.md"), "d1\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "first"]);
+        let remote = format!("file://{}", up.display());
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut config = ServiceConfig::new(data.path().into());
+        let seen = Arc::clone(&asked);
+        config.mirror_credentials = Some(MirrorCredentials::new(move |remote| {
+            seen.lock().push(remote.to_string());
+            None
+        }));
+        let service = TaskWorkspaceService::open(config).unwrap();
+        let supply = |cone: &[&str]| {
+            service
+                .ensure_remote_source(&crate::EnsureRemoteSource {
+                    remote_url: remote.clone(),
+                    base: WorkspaceBaseSpec::RemoteDefault,
+                    credential: None,
+                    sparse_paths: cone.iter().map(|path| path.to_string()).collect(),
+                })
+                .expect("supply")
+        };
+        let first = supply(&[]);
+        fs::write(up.join("app/a.ts"), "a2\n").unwrap();
+        fs::write(up.join("docs/d.md"), "d2\n").unwrap();
+        git(&["commit", "-qam", "second"]);
+        // Let the next supply fetch: a fresh mirror is not fetched again.
+        fs::remove_file(Path::new(&first.mirror_path).join("cognia-fetched-at")).unwrap();
+        let narrowed = supply(&["app"]);
+        assert!(
+            asked.lock().is_empty(),
+            "a supply carries its own credential"
+        );
+
+        let bundle = service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                requested_name: None,
+                provisioning: None,
+                project_id: None,
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("session-wider".into()),
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                base: WorkspaceBaseSpec::RemoteDefault,
+                roots: vec![crate::WorkspaceBundleRootInput {
+                    logical_root_id: "primary".into(),
+                    role: crate::WorkspaceRootRole::Primary,
+                    source_root: narrowed.source_root.clone(),
+                }],
+            })
+            .expect("a full worktree over a narrowed mirror");
+        let execution_root = PathBuf::from(&bundle.leases[0].alias_path);
+        assert_eq!(
+            fs::read_to_string(execution_root.join("app/a.ts")).unwrap(),
+            "a2\n"
+        );
+        assert_eq!(
+            fs::read_to_string(execution_root.join("docs/d.md")).unwrap(),
+            "d2\n"
+        );
+        // The mirror's own upstream, by its credential-free URL.
+        assert_eq!(asked.lock().as_slice(), [remote.clone()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_sparse_checkout_leaves_no_worktree_and_no_branch() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_repository, root) = sparse_repository();
+        let hook = root.join(".git/hooks/post-checkout");
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("failed");
+
+        let error = sparse_execution(
+            &root,
+            &execution_root,
+            WorkspaceBaseSpec::LocalHead,
+            &["app"],
+            Some("gone"),
+        )
+        .unwrap_err();
+
+        assert!(error.starts_with("git checkout failed"), "{error}");
+        assert!(!execution_root.exists());
+        assert_eq!(registered_worktrees(&root), 1);
+        assert!(!branch_exists(&root, "gone"));
     }
 
     #[cfg(unix)]

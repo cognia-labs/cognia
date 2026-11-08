@@ -22,6 +22,7 @@ import {
 } from "@/lib/task-workspace/client"
 import { openWorkspaceBundleTurnLease } from "@/lib/task-workspace/run-lease"
 import { runWorkspaceUserAction } from "@/lib/task-workspace/user-action"
+import { provisioningForWorkspaceRoot } from "@/lib/task-workspace/workspace-provisioning"
 import { createScmHost, scmErrorCode } from "@/lib/scm/host"
 import {
   externalAgentIdFromProviderId,
@@ -122,6 +123,11 @@ export function createBestOfNExecution(): BestOfNExecution {
     async acquire(group, candidate, request, signal) {
       // Keyed by the candidate's own session, so a stop cancels only its checkout.
       const acquireOptions: [] | [{ signal: AbortSignal }] = signal ? [{ signal }] : []
+      // The same provisioning the session's own worktree gets, so a candidate
+      // is compared in the tree the person works in.
+      const provisioning = await provisioningForWorkspaceRoot(group.sourceRoot).catch(
+        () => undefined
+      )
       const bundle = await runWorkspaceUserAction("task_workspace_bundle_acquire", () =>
         acquireWorkspaceBundle(
           {
@@ -133,6 +139,7 @@ export function createBestOfNExecution(): BestOfNExecution {
             roots: [
               { logicalRootId: group.repositoryId, role: "primary", sourceRoot: group.sourceRoot },
             ],
+            ...(provisioning ? { provisioning } : {}),
           },
           ...acquireOptions
         )

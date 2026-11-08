@@ -39,19 +39,27 @@ import type { WorkspaceProvisioning } from "./types"
 export type ProvisioningProject = Pick<Project, "roots" | "workspaceProvisioning">
 
 export interface WorkspaceProvisioningDeps {
-  /** The repository's approved declaration, or null. */
-  declared: (project: ProvisioningProject) => Promise<WorkspaceProvisioning | undefined>
+  /**
+   * The repository's approved declaration, or null. `configRoot` is the
+   * checkout to read it from when that is not the workspace's primary folder:
+   * a clone on an always-on Host.
+   */
+  declared: (
+    project: ProvisioningProject,
+    configRoot?: string
+  ) => Promise<WorkspaceProvisioning | undefined>
   /** Every workspace known to this device, for the path lookup. */
   projects: () => Promise<Project[]>
 }
 
 const DEFAULT_DEPS: WorkspaceProvisioningDeps = {
-  declared: async (project) => {
+  declared: async (project, configRoot) => {
     const [{ useSettingsStore }, { isTauri }] = await Promise.all([
       import("@/stores/settings"),
       import("@/lib/tauri"),
     ])
     const declared = await loadDeclaredWorkspace(project, {
+      ...(configRoot ? { configRoot } : {}),
       trustEnabled: useSettingsStore.getState().settings?.workspaceTrust?.enabled !== false,
       onWeb: !isTauri(),
     })
@@ -78,15 +86,18 @@ const DEFAULT_DEPS: WorkspaceProvisioningDeps = {
  * Provisioning for a workspace the caller already has in hand.
  *
  * The local half is rebuilt from stored ids, so this costs nothing beyond the
- * declaration read — no directory listing, no process spawn.
+ * declaration read — no directory listing, no process spawn. `configRoot`
+ * reads the declaration from that checkout instead of the primary folder; the
+ * approval is still the workspace's (`approvalKeyFor`).
  */
 export async function provisioningForProject(
   project: ProvisioningProject,
-  deps?: Partial<WorkspaceProvisioningDeps>
+  deps?: Partial<WorkspaceProvisioningDeps>,
+  options?: { configRoot?: string }
 ): Promise<WorkspaceProvisioning | undefined> {
   const local = provisioningFromConsent(project.workspaceProvisioning)
   try {
-    const declared = await (deps?.declared ?? DEFAULT_DEPS.declared)(project)
+    const declared = await (deps?.declared ?? DEFAULT_DEPS.declared)(project, options?.configRoot)
     return mergeProvisioning(declared, local)
   } catch {
     // The declaration is what failed to read. The local acceptance is already
@@ -101,6 +112,11 @@ export async function provisioningForProject(
  * For the acquisition sites that know a directory and nothing else. Returns
  * undefined when no workspace mounts it — an adopted folder, a bare path from a
  * CLI flag — which is the same answer they had before this existed.
+ *
+ * A clone an always-on Host made for a workspace (`host-clone-roots`) counts as
+ * that workspace's, with the declaration read from the clone. That is also
+ * where the supply reads the cone it backfills (`host-project-source`), so a
+ * clone's worktree never checks out files its mirror was not asked for.
  */
 export async function provisioningForWorkspaceRoot(
   sourceRoot: string | null | undefined,
@@ -112,8 +128,12 @@ export async function provisioningForWorkspaceRoot(
     const projects = await (deps?.projects ?? DEFAULT_DEPS.projects)()
     const { locateWorkspaceForPath } = await import("@/lib/workspace/locate-workspace")
     const project = locateWorkspaceForPath(root, projects)?.project
-    if (!project) return undefined
-    return await provisioningForProject(project, deps)
+    if (project) return await provisioningForProject(project, deps)
+    const { hostCloneFor } = await import("./host-clone-roots")
+    const clone = hostCloneFor(root)
+    const owner = clone ? projects.find((candidate) => candidate.id === clone.projectId) : undefined
+    if (!clone || !owner) return undefined
+    return await provisioningForProject(owner, deps, { configRoot: clone.root })
   } catch {
     return undefined
   }

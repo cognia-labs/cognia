@@ -497,6 +497,218 @@ pub fn materialize_commit(
     })
 }
 
+/// What [`backfill_commit`] found and did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backfill {
+    /// File contents the checkout needs.
+    pub wanted: usize,
+    /// Of those, the ones the mirror lacked and fetched now.
+    pub fetched: usize,
+}
+
+/// One cone directory in the one form every consumer of it agrees on
+/// (ADR-0176 A2): repository-relative, `/`-separated, with no leading `./`,
+/// no surrounding slashes or whitespace. Refuses an empty path, an absolute
+/// one, a `.` or `..` component, and a leading `-`, which `git sparse-checkout
+/// set` and `ls-tree` would otherwise read as an option, and a `\\` or `:`,
+/// which are not portable directory names (`:` starts pathspec magic).
+///
+/// The sparse checkout, the mirror backfill and the cone listing all take the
+/// normalized form, so ` app/` cannot backfill `app` and then check out
+/// nothing under it.
+pub fn cone_path(path: &str) -> Result<String, String> {
+    let refuse = |why: &str| Err(format!("sparse path {path:?} {why}"));
+    let trimmed = path.trim();
+    if trimmed.starts_with('/') || trimmed.contains('\\') || trimmed.contains(':') {
+        return refuse("must be a repository-relative directory with / separators");
+    }
+    let mut rest = trimmed;
+    while let Some(next) = rest.strip_prefix("./") {
+        rest = next;
+    }
+    let normalized = rest.trim_matches('/');
+    if normalized.is_empty() {
+        return refuse("names no directory");
+    }
+    if normalized.starts_with('-') {
+        return refuse("must not start with -");
+    }
+    if normalized
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return refuse("must not contain empty, . or .. components");
+    }
+    Ok(normalized.to_string())
+}
+
+/// [`cone_path`] over a whole cone, keeping its order.
+pub fn cone_paths(paths: &[String]) -> Result<Vec<String>, String> {
+    paths.iter().map(|path| cone_path(path)).collect()
+}
+
+/// The `ls-tree` calls that list what a cone-mode sparse checkout of `cone`
+/// writes: every file under each cone directory, and the files directly in the
+/// root and in every directory above a cone directory (git's cone semantics).
+/// `(recursive, pathspec)`, where an empty pathspec is the root.
+pub fn cone_listings(cone: &[String]) -> Vec<(bool, String)> {
+    let mut parents = std::collections::BTreeSet::new();
+    let mut dirs = std::collections::BTreeSet::new();
+    for path in cone {
+        let path = path.trim().trim_matches('/');
+        if path.is_empty() {
+            continue;
+        }
+        dirs.insert(path.to_string());
+        let parts: Vec<&str> = path.split('/').collect();
+        for depth in 1..parts.len() {
+            parents.insert(format!("{}/", parts[..depth].join("/")));
+        }
+    }
+    let mut listings = vec![(false, String::new())];
+    listings.extend(parents.into_iter().map(|parent| (false, parent)));
+    listings.extend(dirs.into_iter().map(|dir| (true, dir)));
+    listings
+}
+
+/// The blob ids in `ls-tree -z` output (`<mode> blob <oid>\t<path>\0`).
+/// Trees and submodule commits are not file contents and are skipped.
+pub fn blob_ids(listing: &str) -> Vec<String> {
+    listing
+        .split('\0')
+        .filter_map(|entry| {
+            let (meta, _path) = entry.split_once('\t')?;
+            let mut fields = meta.split(' ');
+            let (_mode, kind, oid) = (fields.next()?, fields.next()?, fields.next()?);
+            (kind == "blob").then(|| oid.to_string())
+        })
+        .collect()
+}
+
+/// Make the mirror hold every file content a checkout of `commit` needs,
+/// narrowed to a cone-mode `cone` when one is given (ADR-0176 A2, D26).
+///
+/// The mirror never fetches on a derived checkout's behalf (see `plan`'s
+/// module header), so a supply has to backfill what it will serve before a
+/// worktree is added at it. Unlike [`materialize_commit`], nothing is written
+/// out: the commit's blobs are listed, the ones the mirror already holds are
+/// skipped without a lazy fetch (`GIT_NO_LAZY_FETCH`), and the rest arrive in
+/// one batched fetch. A mirror that has them all costs no network at all.
+pub fn backfill_commit(
+    request: &MirrorRequest<'_>,
+    mirror: &Path,
+    commit: &str,
+    cone: Option<&[String]>,
+) -> Result<Backfill, MirrorFailure> {
+    // Local reads: a missing object must be reported, never fetched, and
+    // `ls-tree` must take a cone directory literally (`:lit` is a directory
+    // here, not pathspec magic, as it is to `sparse-checkout`). Under the
+    // acquisition when there is one, so a cancel or the overall deadline stops
+    // them too.
+    let local = |args: Vec<String>| {
+        let run = GitRun::new(mirror, &args)
+            .capture_stdout()
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env("GIT_LITERAL_PATHSPECS", "1");
+        match request.acquisition {
+            Some(acquisition) => acquisition.run(Phase::Backfill, run),
+            None => run_git(run.maybe_budget(request.budget)),
+        }
+    };
+    let listings = match cone.filter(|paths| !paths.is_empty()) {
+        Some(paths) => {
+            let paths = cone_paths(paths).map_err(MirrorFailure::local)?;
+            cone_listings(&paths)
+        }
+        None => vec![(true, String::new())],
+    };
+    let mut wanted = std::collections::BTreeSet::new();
+    for (recursive, pathspec) in listings {
+        let mut args = vec!["ls-tree".to_string(), "-z".to_string()];
+        if recursive {
+            args.push("-r".to_string());
+        }
+        args.push(commit.to_string());
+        if !pathspec.is_empty() {
+            args.push("--".to_string());
+            args.push(pathspec);
+        }
+        let listing = local(args).map_err(|error| MirrorFailure {
+            class: FailureClass::of(&error),
+            detail: format!("list the files of {commit} in the mirror: {error}"),
+        })?;
+        wanted.extend(blob_ids(&listing));
+    }
+    if wanted.is_empty() {
+        return Ok(Backfill {
+            wanted: 0,
+            fetched: 0,
+        });
+    }
+    // `rev-list --missing=print` names what the mirror lacks without fetching
+    // it, on every git a partial clone runs on. `cat-file` would honour
+    // `GIT_NO_LAZY_FETCH` only from git 2.44 and, before that, fetch each
+    // missing blob one round trip at a time.
+    let objects = local(vec![
+        "rev-list".to_string(),
+        "--objects".to_string(),
+        "--missing=print".to_string(),
+        "--no-walk".to_string(),
+        commit.to_string(),
+    ])
+    .map_err(|error| MirrorFailure {
+        class: FailureClass::of(&error),
+        detail: format!("check the mirror for the files of {commit}: {error}"),
+    })?;
+    let missing: Vec<&str> = objects
+        .lines()
+        .filter_map(|line| line.strip_prefix('?'))
+        .map(str::trim)
+        .filter(|oid| wanted.contains(*oid))
+        .collect();
+    if missing.is_empty() {
+        return Ok(Backfill {
+            wanted: wanted.len(),
+            fetched: 0,
+        });
+    }
+    let input = missing.join("\n") + "\n";
+    let args = [
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--filter=blob:none",
+        "--stdin",
+        "origin",
+    ]
+    .map(String::from);
+    let lock = lock_for(mirror);
+    let result = {
+        let _held = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let auth = request.auth();
+        let make = || {
+            GitRun::new(mirror, &args)
+                .maybe_credential(auth.as_ref().map(|(origin, cred)| (origin.as_str(), *cred)))
+                .stdin(input.clone().into_bytes())
+        };
+        match request.acquisition {
+            Some(acquisition) => acquisition.run_retrying(Phase::Backfill, make, || {}),
+            None => run_git(make().maybe_budget(request.budget)),
+        }
+    };
+    result.map_err(|error| MirrorFailure {
+        class: FailureClass::of(&error),
+        detail: format!("fetch the files of {commit} into the mirror: {error}"),
+    })?;
+    Ok(Backfill {
+        wanted: wanted.len(),
+        fetched: missing.len(),
+    })
+}
+
 /// Write the commit-graph and multi-pack-index for a mirror.
 ///
 /// Best effort and never fatal. Deliberately not `git maintenance register`,
@@ -784,6 +996,194 @@ mod tests {
             })
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn a_cone_lists_its_directories_and_the_files_above_them() {
+        let cone = vec!["app".to_string(), "web/ui/".to_string(), " ".to_string()];
+        assert_eq!(
+            cone_listings(&cone),
+            vec![
+                (false, String::new()),
+                (false, "web/".to_string()),
+                (true, "app".to_string()),
+                (true, "web/ui".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_blobs_are_file_contents() {
+        let listing = "100644 blob aaa\tREADME.md\0040000 tree bbb\tapp\0160000 commit ccc\tvendor\0120000 blob ddd\tlink\0";
+        assert_eq!(
+            blob_ids(listing),
+            vec!["aaa".to_string(), "ddd".to_string()]
+        );
+    }
+
+    /// A partial-serving upstream with a cone (`app`), a nested cone parent
+    /// (`web/ui` under `web`), and everything a sparse checkout leaves out.
+    fn layered_upstream(dir: &Path) -> String {
+        let remote = partial_upstream(dir);
+        for (path, text) in [
+            ("app/a.ts", "a"),
+            ("app/b.ts", "b"),
+            ("web/w.ts", "w"),
+            ("web/ui/x.ts", "x"),
+            ("web/other/y.ts", "y"),
+            ("docs/d1.md", "d1"),
+            ("docs/d2.md", "d2"),
+            ("lib/l.ts", "l"),
+        ] {
+            let file = dir.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
+        }
+        sh(dir, &["add", "."]);
+        sh(dir, &["commit", "-m", "layers"]);
+        remote
+    }
+
+    /// File contents of `commit`'s own tree the mirror lacks; history is
+    /// not a checkout's concern.
+    fn missing_paths(mirror: &Path, commit: &str) -> usize {
+        git_out(
+            mirror,
+            &[
+                "rev-list",
+                "--objects",
+                "--no-walk",
+                "--missing=print",
+                commit,
+            ],
+        )
+        .lines()
+        .filter(|line| line.starts_with('?'))
+        .count()
+    }
+
+    #[test]
+    fn a_narrowed_backfill_fetches_the_cone_once_and_a_full_one_the_rest() {
+        let tmp = TempDir::new().unwrap();
+        let remote = layered_upstream(&tmp.path().join("upstream"));
+        let cache = tmp.path().join("cache");
+        let request = MirrorRequest::new(&cache, &remote);
+        let mirror = ensure_mirror(&request).expect("mirror");
+        let head = resolve_commit(&mirror, "HEAD").unwrap();
+        let before = missing_paths(&mirror, &head);
+
+        let cone = vec!["app".to_string(), "web/ui".to_string()];
+        let narrowed = backfill_commit(&request, &mirror, &head, Some(&cone)).expect("narrowed");
+        // README.md (root), app/a.ts, app/b.ts, web/w.ts (above a cone dir),
+        // web/ui/x.ts; not web/other, docs or lib.
+        assert_eq!(
+            narrowed,
+            Backfill {
+                wanted: 5,
+                fetched: 5
+            }
+        );
+        assert_eq!(missing_paths(&mirror, &head), before - 5);
+
+        // A second request for the same cone asks the network for nothing,
+        // so it works with the upstream gone.
+        std::fs::rename(tmp.path().join("upstream"), tmp.path().join("gone")).unwrap();
+        let again = backfill_commit(&request, &mirror, &head, Some(&cone)).expect("again");
+        assert_eq!(
+            again,
+            Backfill {
+                wanted: 5,
+                fetched: 0
+            }
+        );
+
+        // A full request needs the rest, and offline that is a loud failure.
+        let offline = backfill_commit(&request, &mirror, &head, None).unwrap_err();
+        assert!(
+            offline
+                .detail
+                .starts_with(&format!("fetch the files of {head}")),
+            "{}",
+            offline.detail
+        );
+        std::fs::rename(tmp.path().join("gone"), tmp.path().join("upstream")).unwrap();
+        let full = backfill_commit(&request, &mirror, &head, None).expect("full");
+        assert_eq!(
+            full,
+            Backfill {
+                wanted: 9,
+                fetched: 4
+            }
+        );
+        assert_eq!(missing_paths(&mirror, &head), 0);
+    }
+
+    #[test]
+    fn a_cone_path_has_one_form_and_never_reads_as_an_option() {
+        for (raw, normalized) in [
+            ("app", "app"),
+            (" app/ ", "app"),
+            ("./web/ui/", "web/ui"),
+            ("././a", "a"),
+        ] {
+            assert_eq!(cone_path(raw).as_deref(), Ok(normalized), "{raw:?}");
+        }
+        for refused in [
+            "",
+            "  ",
+            "/",
+            "./",
+            "/etc",
+            "--no-cone",
+            "-x",
+            "a/../b",
+            "..",
+            "a/./b",
+            "a//b",
+            ":lit",
+            "a\\b",
+        ] {
+            assert!(cone_path(refused).is_err(), "{refused:?}");
+        }
+        assert!(cone_paths(&["app".into(), "--stdin".into()]).is_err());
+    }
+
+    #[test]
+    fn a_cancelled_backfill_stops_before_it_reads_the_mirror() {
+        let tmp = TempDir::new().unwrap();
+        let remote = layered_upstream(&tmp.path().join("upstream"));
+        let cache = tmp.path().join("cache");
+        let mirror = ensure_mirror(&MirrorRequest::new(&cache, &remote)).expect("mirror");
+        let head = resolve_commit(&mirror, "HEAD").unwrap();
+        let budget = AcquisitionBudget::new(None);
+        budget.cancel_token().cancel();
+        let request = MirrorRequest::new(&cache, &remote).acquisition(&budget);
+        let error = backfill_commit(&request, &mirror, &head, None).unwrap_err();
+        assert_eq!(error.class, FailureClass::Cancelled, "{}", error.detail);
+        assert!(missing_paths(&mirror, &head) > 0, "nothing was fetched");
+    }
+
+    #[test]
+    fn a_cone_directory_is_taken_literally_and_a_bad_one_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let remote = layered_upstream(&tmp.path().join("upstream"));
+        let cache = tmp.path().join("cache");
+        let request = MirrorRequest::new(&cache, &remote);
+        let mirror = ensure_mirror(&request).expect("mirror");
+        let head = resolve_commit(&mirror, "HEAD").unwrap();
+        let spaced = backfill_commit(&request, &mirror, &head, Some(&[" ./app/ ".to_string()]))
+            .expect("normalized cone");
+        let plain = backfill_commit(&request, &mirror, &head, Some(&["app".to_string()]))
+            .expect("same cone");
+        assert_eq!(spaced.wanted, plain.wanted);
+        assert_eq!(plain.fetched, 0, "the normalized cone already fetched it");
+        let refused = backfill_commit(&request, &mirror, &head, Some(&["--no-cone".to_string()]))
+            .unwrap_err();
+        assert!(
+            refused.detail.contains("must not start with -"),
+            "{}",
+            refused.detail
+        );
     }
 
     #[test]

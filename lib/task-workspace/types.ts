@@ -712,6 +712,15 @@ export interface EnsureRemoteSource {
    * reach it even holding a `host.admin` lease.
    */
   credential?: string
+  /**
+   * The cone the worktrees over this checkout will use, as repository-relative
+   * directories (ADR-0176 A2). The mirror then fetches only those files of the
+   * commit the supply serves, plus the files in the root and in each ancestor
+   * directory. Omit for every file. Pass the worktrees' own
+   * `provisioning.sparsePaths`: a worktree with a wider cone still works, but
+   * fetches the rest itself before it is added.
+   */
+  sparsePaths?: string[]
 }
 
 /**
@@ -723,6 +732,8 @@ export interface EnsureProjectSource {
   roots: string[]
   /** Its repository: credential-free https. */
   remoteUrl?: string | null
+  /** Passed to the clone's supply: see {@link EnsureRemoteSource.sparsePaths}. */
+  sparsePaths?: string[]
 }
 
 /** `cognia_task_workspace::ProjectSource`. */

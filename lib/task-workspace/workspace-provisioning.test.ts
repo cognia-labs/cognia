@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
+import { rememberHostClone, resetHostClones } from "./host-clone-roots"
 import {
   provisioningForProject,
   provisioningForWorkspaceRoot,
@@ -50,6 +51,14 @@ describe("provisioningForProject", () => {
     })
   })
 
+  it("reads the declaration from another checkout when asked to", async () => {
+    const declared = jest.fn(async () => ({ sparsePaths: ["apps/web"] }))
+    await provisioningForProject(LOCAL, { declared }, { configRoot: "/host/sources/app" })
+    expect(declared).toHaveBeenCalledWith(LOCAL, "/host/sources/app")
+    await provisioningForProject(LOCAL, { declared })
+    expect(declared).toHaveBeenLastCalledWith(LOCAL, undefined)
+  })
+
   it("returns undefined when neither side asks for anything", async () => {
     expect(
       await provisioningForProject({ roots: [] }, { declared: async () => undefined })
@@ -83,6 +92,50 @@ describe("provisioningForWorkspaceRoot", () => {
         declared: async () => undefined,
       })
     ).toBeUndefined()
+  })
+
+  describe("a clone an always-on Host made", () => {
+    afterEach(resetHostClones)
+
+    it("is provisioned as its workspace, from the declaration in the clone", async () => {
+      // The clone sits at a path no workspace mounts. Without the recorded
+      // pair this answered "nothing", so the worktree was a full checkout
+      // while the supply had narrowed its backfill to the declared cone.
+      rememberHostClone("p2", "/host/sources/app-1a2b")
+      const declared = jest.fn(async (_project: ProvisioningProject, configRoot?: string) =>
+        configRoot === "/host/sources/app-1a2b" ? { sparsePaths: ["apps/web"] } : undefined
+      )
+      const provisioning = await provisioningForWorkspaceRoot("/host/sources/app-1a2b/apps/web", {
+        projects: async () => projects,
+        declared,
+      })
+      expect(declared).toHaveBeenCalledWith(projects[1], "/host/sources/app-1a2b")
+      expect(provisioning).toEqual({
+        sparsePaths: ["apps/web"],
+        cacheLinks: [{ source: "node_modules", target: "node_modules" }],
+        include: [".env"],
+      })
+    })
+
+    it("is nothing when the workspace it was made for is gone", async () => {
+      rememberHostClone("deleted", "/host/sources/gone")
+      expect(
+        await provisioningForWorkspaceRoot("/host/sources/gone", {
+          projects: async () => projects,
+          declared: async () => ({ sparsePaths: ["x"] }),
+        })
+      ).toBeUndefined()
+    })
+
+    it("does not shadow a folder a workspace mounts", async () => {
+      rememberHostClone("p1", "/repos")
+      const declared = jest.fn(async () => undefined)
+      await provisioningForWorkspaceRoot("/repos/app", {
+        projects: async () => projects,
+        declared,
+      })
+      expect(declared).toHaveBeenCalledWith(projects[1], undefined)
+    })
   })
 
   it("returns undefined for an empty root without touching the store", async () => {
