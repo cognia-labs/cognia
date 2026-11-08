@@ -111,6 +111,8 @@ export interface WorkspaceReviewProps {
    * switches the review to it, opening `relPath` when the scope lists it.
    */
   scopeRequest?: { id: string; choice: ReviewScopeChoice; relPath?: string } | null
+  /** Keep the host's cold-remount destination in sync with the scope picker. */
+  onScopeChange?: (choice: ReviewScopeChoice) => void
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -136,6 +138,7 @@ export function WorkspaceReview({
   onOpenInEditor,
   focus = null,
   scopeRequest = null,
+  onScopeChange,
 }: WorkspaceReviewProps) {
   const t = useTranslations("artifacts.workspace")
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -343,7 +346,11 @@ export function WorkspaceReview({
     <div className="shrink-0 space-y-1 border-b px-1.5 py-1" data-testid="workspace-review-scope">
       <ReviewScopePicker
         value={activeChoice}
-        onChange={setChoice}
+        onChange={(next) => {
+          setChoice(next)
+          setSnapshotFocus(null)
+          onScopeChange?.(next)
+        }}
         rootDir={rootPath}
         sessionId={sessionId}
         allowConversation={canScopeConversation}

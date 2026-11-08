@@ -2882,6 +2882,32 @@ describe("workspace (project) isolation", () => {
 })
 
 describe("account storage isolation", () => {
+  it.each(["clear", "switch"] as const)(
+    "clears every conversation's runtime review state on account %s",
+    (transition) => {
+      activateArtifactAccountStorage("acct_a")
+      useDockTabsStore.setState({ bySession: {} })
+      for (const sessionId of ["foreground", "background"]) {
+        useDockTabsStore.getState().rememberDock(sessionId, { open: true, dismissed: false })
+        useDockTabsStore.getState().setReviewAttention(sessionId, true)
+        useDockTabsStore.getState().setReviewDestination(sessionId, {
+          id: `review:${sessionId}`,
+          kind: "review",
+          sessionId,
+          rootPath: "/private",
+        })
+      }
+      if (transition === "clear") clearArtifactAccountStorage()
+      else activateArtifactAccountStorage("acct_b")
+
+      for (const entry of Object.values(useDockTabsStore.getState().bySession)) {
+        expect(entry.reviewAttention).toBe(false)
+        expect(entry.reviewDestination).toBeNull()
+        expect(entry.dock).toEqual({ open: true, dismissed: false })
+      }
+    }
+  )
+
   const persistedArtifact = (id: string, title: string) => ({
     id,
     sessionId: "session",

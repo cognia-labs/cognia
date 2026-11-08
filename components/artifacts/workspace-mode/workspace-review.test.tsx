@@ -82,10 +82,16 @@ jest.mock("@/components/source-control/review-scope-picker", () => ({
       data-counts={JSON.stringify(counts ?? {})}
     >
       {["uncommitted", "unstaged", "staged", "conversation"].map((scope) => (
-        <button key={scope} data-testid={`pick-${scope}`} onClick={() => onChange({ scope })} />
+        <button
+          key={scope}
+          aria-label={scope}
+          data-testid={`pick-${scope}`}
+          onClick={() => onChange({ scope })}
+        />
       ))}
       <button
         data-testid="pick-turn"
+        aria-label="lastTurn"
         onClick={() => onChange({ scope: "lastTurn", runId: "run:1" })}
       />
     </div>
@@ -523,6 +529,22 @@ describe("WorkspaceReview scopes", () => {
     mockWidth = 1000
     mockConversationPaths = new Set()
     mockConversationReady = true
+  })
+
+  it("notifies the host of each picked scope and drops the previous snapshot's file focus", () => {
+    const onScopeChange = jest.fn()
+    renderReview({
+      sessionId: "s1",
+      scopeRequest: { id: "old", choice: { scope: "commit", commitSha: "abc" }, relPath: "old.ts" },
+      onScopeChange,
+    })
+    expect(onScopeChange).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "lastTurn" }))
+    expect(onScopeChange).toHaveBeenLastCalledWith({ scope: "lastTurn", runId: "run:1" })
+    expect(screen.getByTestId("snapshot-review")).toHaveAttribute("data-focus", "")
+    fireEvent.click(screen.getByRole("button", { name: "staged" }))
+    expect(onScopeChange).toHaveBeenLastCalledWith({ scope: "staged" })
+    expect(onScopeChange).toHaveBeenCalledTimes(2)
   })
 
   it("narrows to the staged or the unstaged side of the working tree", () => {

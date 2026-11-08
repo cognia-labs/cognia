@@ -53,24 +53,48 @@ async function locateInSessionRoot(
   sessionId: string,
   path: string
 ): Promise<{ root: string; relPath: string } | null> {
-  if (useChatStore.getState().activeSessionId !== sessionId) return null
-  let focusChanged = false
-  const unsubscribe = useChatStore.subscribe((state, previous) => {
-    if (state.activeSessionId !== previous.activeSessionId) focusChanged = true
-  })
-  let session: Awaited<ReturnType<typeof getSession>>
-  try {
-    session = await getSession(sessionId)
-    if (focusChanged) return null
-  } finally {
-    unsubscribe()
-  }
+  const session = await getSession(sessionId)
   if (!session) return null
   const { root } = resolveSessionExecutionRoot(session, useProjectStore.getState().projects)
   if (!root) return null
 
   const relPath = relativePathWithinRoot(resolveLinkPath(root, path), root)
   return relPath ? { root, relPath } : null
+}
+
+/** Keep a click valid until navigation changes, including clicks from a split pane. */
+async function revealInSessionRoot(
+  sessionId: string,
+  path: string,
+  reveal: (location: { root: string; relPath: string }) => void
+): Promise<boolean> {
+  if (!hasWorkspaceFsBackend()) return false
+  let navigationChanged = false
+  const unsubscribeChat = useChatStore.subscribe((state, previous) => {
+    if (
+      state.activeSessionId !== previous.activeSessionId ||
+      state.splitSessionId !== previous.splitSessionId ||
+      state.openSessionIds.includes(sessionId) !== previous.openSessionIds.includes(sessionId)
+    )
+      navigationChanged = true
+  })
+  const unsubscribeDock = useArtifactDockLayoutStore.subscribe((state, previous) => {
+    if (
+      state.workspaceContext !== previous.workspaceContext ||
+      state.workspaceSurfaceActive !== previous.workspaceSurfaceActive ||
+      (state.revealIntent !== null && state.revealIntent !== previous.revealIntent)
+    )
+      navigationChanged = true
+  })
+  try {
+    const located = await locateInSessionRoot(sessionId, path)
+    if (!located || navigationChanged) return false
+    reveal(located)
+    return true
+  } finally {
+    unsubscribeChat()
+    unsubscribeDock()
+  }
 }
 
 /**
@@ -83,19 +107,16 @@ export async function openEditInWorkbenchReview({
   sessionId,
   absolutePath,
 }: OpenEditReviewArgs): Promise<boolean> {
-  if (!hasWorkspaceFsBackend()) return false
-  const located = await locateInSessionRoot(sessionId, absolutePath)
-  if (!located || useChatStore.getState().activeSessionId !== sessionId) return false
-
   // Open the dock's existing source-control review surface and preselect the
   // touched working-tree file. This path does not depend on the project Context
   // Workbench being mounted inside the already-narrow chat dock.
-  useArtifactDockLayoutStore.getState().revealWorkspaceReview({
-    sessionId,
-    rootPath: located.root,
-    relPath: located.relPath,
+  return revealInSessionRoot(sessionId, absolutePath, (located) => {
+    useArtifactDockLayoutStore.getState().revealWorkspaceReview({
+      sessionId,
+      rootPath: located.root,
+      relPath: located.relPath,
+    })
   })
-  return true
 }
 
 export interface OpenWorkbenchFileArgs {
@@ -130,16 +151,13 @@ export async function openFileInWorkbenchWorkspace({
   line,
   column,
 }: OpenWorkbenchFileArgs): Promise<boolean> {
-  if (!hasWorkspaceFsBackend()) return false
-  const located = await locateInSessionRoot(sessionId, path)
-  if (!located || useChatStore.getState().activeSessionId !== sessionId) return false
-
-  useArtifactDockLayoutStore.getState().revealWorkspaceFile({
-    sessionId,
-    rootPath: located.root,
-    relPath: located.relPath,
-    line,
-    column,
+  return revealInSessionRoot(sessionId, path, (located) => {
+    useArtifactDockLayoutStore.getState().revealWorkspaceFile({
+      sessionId,
+      rootPath: located.root,
+      relPath: located.relPath,
+      line,
+      column,
+    })
   })
-  return true
 }

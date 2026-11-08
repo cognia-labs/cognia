@@ -56,7 +56,7 @@ describe("conversation routing memory", () => {
     )
   })
 
-  it("keeps review destinations and attention per conversation, but does not persist requests (B10/DG06)", () => {
+  it("keeps review destinations and attention per conversation at runtime only (B10/DG06)", () => {
     const store = useDockTabsStore.getState()
     store.setReviewDestination("a", {
       id: "review-1",
@@ -72,13 +72,42 @@ describe("conversation routing memory", () => {
     expect(useDockTabsStore.getState().bySession.a.reviewAttention).toBe(true)
     const persisted = useDockTabsStore.persist.getOptions().partialize!(useDockTabsStore.getState())
     expect(persisted.bySession.a.pendingBrowserRequests).toBeUndefined()
-    expect(persisted.bySession.a.reviewDestination?.scope).toEqual({
+    expect(persisted.bySession.a.reviewDestination).toBeUndefined()
+    expect(persisted.bySession.a.reviewAttention).toBeUndefined()
+    expect(useDockTabsStore.getState().bySession.a.reviewDestination?.scope).toEqual({
       scope: "commit",
       commitSha: "abc",
     })
     store.setReviewDestination("a", null)
     expect(useDockTabsStore.getState().bySession.a.reviewDestination).toBeNull()
   })
+
+  it.each([1, 2])(
+    "discards review state persisted by older builds at version %s",
+    async (version) => {
+      localStorage.setItem(
+        "cognia-dock-tabs-v1",
+        JSON.stringify({
+          version,
+          state: {
+            bySession: {
+              a: {
+                order: [P],
+                lastUsedAt: Date.now(),
+                reviewAttention: true,
+                reviewDestination: { id: "old", kind: "review", sessionId: "a", rootPath: "/old" },
+              },
+            },
+          },
+        })
+      )
+      await useDockTabsStore.persist.rehydrate()
+      const entry = useDockTabsStore.getState().bySession.a
+      expect(entry.order).toEqual([P])
+      expect(entry.reviewDestination).toBeUndefined()
+      expect(entry.reviewAttention).toBeUndefined()
+    }
+  )
 })
 
 beforeEach(() => {

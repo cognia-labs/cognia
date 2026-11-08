@@ -35,7 +35,7 @@ import { resolveSessionExecutionRoot } from "@/lib/workspace/session-root"
 import { resolvePanelRoot } from "@/lib/workspace/panel-follow"
 import { PanelRootChip } from "@/components/workspace/panel-root-chip"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
-import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
+import { useDockTabsStore, type DockReviewDestination } from "@/stores/artifact/dock-tabs-store"
 import { useProjectEditorSessionStore } from "@/stores/editor/project-editor-session-store"
 import { useGitStore } from "@/stores/git/git-store"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -75,16 +75,44 @@ export function DockWorkspace({ activeSessionId, layout = "desktop" }: DockWorks
   const t = useTranslations("artifacts.workspace")
   const request = useArtifactDockLayoutStore((state) => state.workspaceRevealRequest)
   const workspaceContext = useArtifactDockLayoutStore((state) => state.workspaceContext)
-  const reviewDestination = useDockTabsStore((state) =>
-    activeSessionId ? state.bySession[activeSessionId]?.reviewDestination : null
+  const splitSessionId = useChatStore((state) =>
+    state.splitSessionId && state.openSessionIds.includes(state.splitSessionId)
+      ? state.splitSessionId
+      : null
   )
-
   const session = useClientLiveQuery<ChatSession | undefined>(
     () => (activeSessionId ? getSession(activeSessionId) : Promise.resolve(undefined)),
     [activeSessionId],
     undefined
   )
+  const requestedSplitId =
+    splitSessionId && (request?.sessionId ?? workspaceContext?.sessionId) === splitSessionId
+      ? splitSessionId
+      : null
+  const splitSession = useClientLiveQuery<ChatSession | undefined>(
+    () => (requestedSplitId ? getSession(requestedSplitId) : Promise.resolve(undefined)),
+    [requestedSplitId],
+    undefined
+  )
+  // Match ChatPaneGroup's visible split: an open conversation in the same workspace.
+  const resolvedSession =
+    session?.id === activeSessionId
+      ? requestedSplitId &&
+        splitSession?.id === requestedSplitId &&
+        splitSession.projectId === session.projectId
+        ? splitSession
+        : session
+      : undefined
+  const targetSessionId = resolvedSession?.id ?? activeSessionId
+  const reviewDestination = useDockTabsStore((state) =>
+    targetSessionId ? state.bySession[targetSessionId]?.reviewDestination : null
+  )
   const projects = useProjectStore((state) => state.projects)
+  const { project, root: followedRoot } = resolveSessionExecutionRoot(resolvedSession, projects)
+  const restoredReview =
+    reviewDestination?.sessionId === targetSessionId && reviewDestination.rootPath === followedRoot
+      ? reviewDestination
+      : null
 
   if (!hasWorkspaceFsBackend()) {
     return (
@@ -96,12 +124,14 @@ export function DockWorkspace({ activeSessionId, layout = "desktop" }: DockWorks
     )
   }
 
-  // Only this conversation's reveal may outrank its execution root. A saved
-  // review also carries the root needed to restore it after a cold unmount.
+  // Explicit reveals may name a root directly. A cold restore must wait for
+  // the session row and match its current execution root before using it.
   const revealContext =
-    (request?.sessionId === activeSessionId ? request : null) ??
-    (workspaceContext?.sessionId === activeSessionId ? workspaceContext : null) ??
-    reviewDestination
+    (request?.sessionId === targetSessionId ? request : null) ??
+    (workspaceContext?.sessionId === targetSessionId &&
+    (!reviewDestination || (resolvedSession && workspaceContext.rootPath === followedRoot))
+      ? workspaceContext
+      : null)
   if (revealContext) {
     return (
       <WorkspaceEditorBody
@@ -109,11 +139,12 @@ export function DockWorkspace({ activeSessionId, layout = "desktop" }: DockWorks
         sessionId={revealContext.sessionId}
         workingDir={revealContext.rootPath}
         layout={layout}
+        initialReview={restoredReview}
       />
     )
   }
 
-  if (!activeSessionId || !session) {
+  if (!targetSessionId || !resolvedSession) {
     return (
       <WorkspaceEmpty
         testId="workspace-session-missing"
@@ -126,8 +157,7 @@ export function DockWorkspace({ activeSessionId, layout = "desktop" }: DockWorks
   // The conversation's execution root, not the workspace's primary root — the
   // editor is where a user reads what the agent just wrote, and pointing it at
   // the checkout a worktree was cut from shows them a stale copy of the file.
-  const { project, root: followedRoot } = resolveSessionExecutionRoot(session, projects)
-  const executionContext = session.executionContext ?? null
+  const executionContext = resolvedSession.executionContext ?? null
   // Worktree discovery still runs from the REPOSITORY: `git worktree list` in a
   // worktree would label that worktree "main" and skip the real one.
   const repoRoot = project ? primaryRootOf(project)?.path : undefined
@@ -154,12 +184,13 @@ export function DockWorkspace({ activeSessionId, layout = "desktop" }: DockWorks
 
   return (
     <WorkspaceEditorBody
-      sessionId={session.id}
+      sessionId={resolvedSession.id}
       workingDir={workingDir}
       followedRoot={followedRoot}
       executionContext={executionContext}
       project={project}
       layout={layout}
+      initialReview={restoredReview}
     />
   )
 }
@@ -171,6 +202,7 @@ function WorkspaceEditorBody({
   executionContext,
   project,
   layout,
+  initialReview,
 }: {
   sessionId: string
   workingDir: string
@@ -189,6 +221,7 @@ function WorkspaceEditorBody({
   executionContext?: SessionExecutionContext | null
   project?: Pick<Project, "roots"> | null
   layout: "desktop" | "mobile"
+  initialReview: DockReviewDestination | null
 }) {
   const t = useTranslations("artifacts.workspace")
   const editorLabels = useTranslations("projectEditor")
@@ -196,8 +229,7 @@ function WorkspaceEditorBody({
   const clearRequest = useArtifactDockLayoutStore((state) => state.clearWorkspaceRevealRequest)
   const setReviewDestination = useDockTabsStore((state) => state.setReviewDestination)
   const [restoredReview] = useState(() => {
-    const destination = useDockTabsStore.getState().bySession[sessionId]?.reviewDestination
-    return destination?.rootPath === workingDir ? destination : null
+    return initialReview?.rootPath === (followedRoot ?? workingDir) ? initialReview : null
   })
   const addContextSelection = useChatStore((state) => state.addContextSelection)
   const [surface, setSurface] = useState<"file" | "review">(restoredReview ? "review" : "file")
@@ -336,6 +368,19 @@ function WorkspaceEditorBody({
     }
   }, [activeTask, activateTask, sessionId, workingDir])
   const { roots, rootKey, rootPath, selectRoot, pinned, resumeFollow } = editor
+  const rememberReviewScope = useCallback(
+    (choice: ReviewScopeChoice) => {
+      const destination = useDockTabsStore.getState().bySession[sessionId]?.reviewDestination
+      setReviewDestination(sessionId, {
+        id: destination?.id ?? `review-scope:${sessionId}`,
+        kind: "review",
+        sessionId,
+        rootPath,
+        scope: choice,
+      })
+    },
+    [sessionId, rootPath, setReviewDestination]
+  )
   const tFiles = useTranslations("filespace")
   // "Copy Link" on a tree entry addresses it inside this conversation's
   // FileSpace (ADR-0222), whichever root the editor is showing. The filespace
@@ -803,6 +848,7 @@ function WorkspaceEditorBody({
                 onOpenInEditor={openReviewFileInEditor}
                 focus={reviewFocus}
                 scopeRequest={reviewScopeRequest}
+                onScopeChange={rememberReviewScope}
               />
             </div>
           ) : null}

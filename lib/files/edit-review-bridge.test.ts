@@ -28,7 +28,7 @@ import {
 
 beforeEach(() => {
   useArtifactDockLayoutStore.getState().resetLayout()
-  useChatStore.setState({ activeSessionId: "s1" })
+  useChatStore.setState({ activeSessionId: "s1", splitSessionId: null, openSessionIds: ["s1"] })
   jest.mocked(getSession).mockImplementation(async () => session as never)
   revealWorkspaceReview.mockClear()
   revealWorkspaceFile.mockClear()
@@ -38,6 +38,78 @@ beforeEach(() => {
 })
 
 describe("conversation switches during lookup (B08)", () => {
+  it("drops a secondary-pane lookup when that pane closes before it resolves", async () => {
+    useChatStore.setState({
+      activeSessionId: "primary",
+      splitSessionId: "s1",
+      openSessionIds: ["primary", "s1"],
+    })
+    let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
+    jest.mocked(getSession).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSession = resolve
+        })
+    )
+    const pending = openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
+    useChatStore.setState({ splitSessionId: null })
+    resolveSession(session as never)
+    expect(await pending).toBe(false)
+    expect(revealWorkspaceFile).not.toHaveBeenCalled()
+  })
+  it.each(["file", "review"] as const)(
+    "reveals a %s clicked in a secondary split pane",
+    async (kind) => {
+      useChatStore.setState({
+        activeSessionId: "primary",
+        splitSessionId: "s1",
+        openSessionIds: ["primary", "s1"],
+      })
+      const routed =
+        kind === "file"
+          ? await openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
+          : await openEditInWorkbenchReview({ sessionId: "s1", absolutePath: "/repo/a.ts" })
+
+      expect(routed).toBe(true)
+      expect(useChatStore.getState().activeSessionId).toBe("primary")
+      expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toMatchObject({
+        kind,
+        sessionId: "s1",
+        rootPath: "/repo",
+        relPath: "a.ts",
+      })
+    }
+  )
+
+  it.each(["file", "review"] as const)(
+    "drops a late %s click when the dock target changes without changing chat focus",
+    async (kind) => {
+      let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
+      jest.mocked(getSession).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSession = resolve
+          })
+      )
+      const pending =
+        kind === "file"
+          ? openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
+          : openEditInWorkbenchReview({ sessionId: "s1", absolutePath: "/repo/a.ts" })
+      useArtifactDockLayoutStore
+        .getState()
+        .revealWorkspaceRoot({ sessionId: "s2", rootPath: "/other" })
+      resolveSession(session as never)
+
+      expect(await pending).toBe(false)
+      expect(useArtifactDockLayoutStore.getState().workspaceContext).toMatchObject({
+        sessionId: "s2",
+        rootPath: "/other",
+      })
+      expect(revealWorkspaceFile).not.toHaveBeenCalled()
+      expect(revealWorkspaceReview).not.toHaveBeenCalled()
+    }
+  )
+
   it("drops a click even if focus returns before its lookup resolves", async () => {
     let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
     jest.mocked(getSession).mockImplementationOnce(

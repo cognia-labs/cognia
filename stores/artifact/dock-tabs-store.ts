@@ -120,9 +120,9 @@ export interface SessionDockTabs {
   bestOfNGroupId?: string | null
   /** A narrow host delivers these in order when its conversation is shown. Runtime-only. */
   pendingBrowserRequests?: DockBrowserRequest[]
-  /** A proposal arrived in this conversation and has not been seen in its dock. */
+  /** A proposal arrived in this conversation and has not been seen in its dock. Runtime-only. */
   reviewAttention?: boolean
-  /** The consumed review reveal, retained across the dock body's cold unmount. */
+  /** The consumed review reveal, retained across the dock body's cold unmount. Runtime-only. */
   reviewDestination?: DockReviewDestination | null
   lastUsedAt: number
 }
@@ -160,6 +160,7 @@ interface DockTabsState {
   consumeBrowserRequest: (sessionId: string, id: string) => void
   setReviewAttention: (sessionId: string, unread: boolean) => void
   setReviewDestination: (sessionId: string, destination: DockReviewDestination | null) => void
+  clearReviewState: () => void
   setBestOfNGroup: (sessionId: string, groupId: string) => void
   bySession: Record<string, SessionDockTabs>
   /**
@@ -242,7 +243,12 @@ function normalizeAll(
   return Object.fromEntries(
     Object.entries(bySession ?? {}).map(([sessionId, entry]) => [
       sessionId,
-      normalizeEntry(entry, now),
+      {
+        ...normalizeEntry(entry, now),
+        pendingBrowserRequests: undefined,
+        reviewAttention: undefined,
+        reviewDestination: undefined,
+      },
     ])
   )
 }
@@ -294,6 +300,15 @@ export const useDockTabsStore = create<DockTabsState>()(
                 })),
               }
         ),
+      clearReviewState: () =>
+        set((state) => ({
+          bySession: Object.fromEntries(
+            Object.entries(state.bySession).map(([id, entry]) => [
+              id,
+              { ...entry, reviewAttention: false, reviewDestination: null },
+            ])
+          ),
+        })),
       setBestOfNGroup: (sessionId, groupId) =>
         set((state) => ({
           bySession: touch(state.bySession, sessionId, (entry) => ({
@@ -418,6 +433,8 @@ export const useDockTabsStore = create<DockTabsState>()(
             {
               ...entry,
               pendingBrowserRequests: undefined,
+              reviewAttention: undefined,
+              reviewDestination: undefined,
               pages: entry.pages.map((page) =>
                 isSandboxPreviewBootstrapUrl(page.url) ? { ...page, url: "", title: "" } : page
               ),

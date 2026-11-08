@@ -2772,6 +2772,7 @@ registerProjectBucketPurger("artifacts", (projectId) => {
 
 export function activateArtifactAccountStorage(accountId: string): void {
   artifactStorageGeneration += 1
+  useDockTabsStore.getState().clearReviewState()
   const storageKey = artifactAccountStorageKey(accountId)
   adoptLegacyArtifactStorage(storageKey)
   useArtifactStore.persist.setOptions({ name: storageKey })
@@ -2783,6 +2784,7 @@ export function activateArtifactAccountStorage(accountId: string): void {
 
 export function clearArtifactAccountStorage(): void {
   artifactStorageGeneration += 1
+  useDockTabsStore.getState().clearReviewState()
   useArtifactStore.persist.setOptions({ name: ARTIFACT_STORAGE_KEY })
   useArtifactStore.setState(initialState)
 }

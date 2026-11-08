@@ -1,10 +1,12 @@
 /** @jest-environment jsdom */
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 
 let backendAvailable = true
 let session:
   { id: string; projectId?: string; executionContext?: Record<string, unknown> } | undefined
+let splitSession: typeof session
 let projects: Array<{
   id: string
   roots: Array<{ id: string; path: string; isPrimary?: boolean }>
@@ -150,7 +152,8 @@ jest.mock("@/components/editor/project/code-server-web-pane", () => ({
 }))
 
 jest.mock("@/hooks/data/use-client-live-query", () => ({
-  useClientLiveQuery: () => session,
+  useClientLiveQuery: (_query: unknown, dependencies: unknown[]) =>
+    dependencies[0] === "secondary" ? splitSession : session,
 }))
 
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
@@ -441,15 +444,22 @@ import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layo
 import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import { useProjectEditorSessionStore } from "@/stores/editor/project-editor-session-store"
 import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
+import { useChatStore } from "@/stores/chat"
 import { PROJECT_EDITOR_GOTO_EVENT } from "@/components/editor/project/editor-events"
 const clearWorkspaceRevealRequest =
   useArtifactDockLayoutStore.getState().clearWorkspaceRevealRequest
 
 beforeEach(() => {
+  useChatStore.setState({
+    activeSessionId: "session-1",
+    splitSessionId: null,
+    openSessionIds: ["session-1"],
+  })
   useDockTabsStore.setState({ bySession: {} })
   setInTauri(true)
   backendAvailable = true
   session = { id: "session-1", projectId: "project-1" }
+  splitSession = undefined
   projects = [{ id: "project-1", roots: [{ id: "root-1", path: "/repo", isPrimary: true }] }]
   gitState = {
     rootDir: "/repo",
@@ -491,6 +501,63 @@ beforeEach(() => {
 })
 
 describe("DockWorkspace", () => {
+  it.each(["file", "review"] as const)(
+    "consumes a %s reveal from the open secondary split pane",
+    async (kind) => {
+      splitSession = { id: "secondary", projectId: "project-1" }
+      useChatStore.setState({
+        splitSessionId: "secondary",
+        openSessionIds: ["session-1", "secondary"],
+      })
+      const reveal =
+        kind === "file"
+          ? useArtifactDockLayoutStore.getState().revealWorkspaceFile
+          : useArtifactDockLayoutStore.getState().revealWorkspaceReview
+      reveal({ sessionId: "secondary", rootPath: "/repo", relPath: "src/a.ts" })
+      render(<DockWorkspace activeSessionId="session-1" />)
+
+      await waitFor(() =>
+        expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toBeNull()
+      )
+      expect(mockUseProjectEditor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeKey: "session:secondary",
+          workingDir: "/repo",
+        })
+      )
+      expect(useChatStore.getState().activeSessionId).toBe("session-1")
+      if (kind === "file") expect(openFile).toHaveBeenCalledWith("src/a.ts")
+      else expect(screen.getByTestId("workspace-review-layout")).toBeInTheDocument()
+    }
+  )
+
+  it.each(["closed", "other-workspace"])(
+    "ignores a reveal from a %s split conversation",
+    (reason) => {
+      splitSession = {
+        id: "secondary",
+        projectId: reason === "other-workspace" ? "other-project" : "project-1",
+      }
+      useChatStore.setState({
+        splitSessionId: "secondary",
+        openSessionIds: reason === "closed" ? ["session-1"] : ["session-1", "secondary"],
+      })
+      useArtifactDockLayoutStore.getState().revealWorkspaceFile({
+        sessionId: "secondary",
+        rootPath: "/other",
+        relPath: "private.ts",
+      })
+      render(<DockWorkspace activeSessionId="session-1" />)
+      expect(mockUseProjectEditor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeKey: "session:session-1",
+          workingDir: "/repo",
+        })
+      )
+      expect(openFile).not.toHaveBeenCalled()
+    }
+  )
+
   it("ignores another conversation's retained workspace context (B08)", () => {
     useArtifactDockLayoutStore.getState().revealWorkspaceFile({
       sessionId: "background",
@@ -547,6 +614,110 @@ describe("DockWorkspace", () => {
     second.unmount()
     render(<DockWorkspace activeSessionId="session-1" />)
     expect(screen.queryByTestId("workspace-review-layout")).not.toBeInTheDocument()
+  })
+
+  it.each(["uncommitted", "staged"] as const)(
+    "restores the last picked %s scope after a historical review cold remount",
+    async (scope) => {
+      const user = userEvent.setup()
+      useArtifactDockLayoutStore.getState().revealWorkspaceReview({
+        sessionId: "session-1",
+        rootPath: "/repo",
+        relPath: "src/a.ts",
+        scope: { scope: "commit", commitSha: "old-commit" },
+      })
+      const first = render(<DockWorkspace activeSessionId="session-1" />)
+      await screen.findByTestId("snapshot-review")
+      await waitFor(() =>
+        expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toBeNull()
+      )
+      screen.getByRole("button", { name: "label" }).focus()
+      await user.keyboard("{ArrowDown}")
+      await user.click(
+        await screen.findByRole("menuitemradio", {
+          name: scope === "staged" ? "staged 0" : "uncommitted 0",
+        })
+      )
+      expect(screen.queryByTestId("snapshot-review")).not.toBeInTheDocument()
+      first.unmount()
+      jest.mocked(listReviewScopeFiles).mockClear()
+
+      render(<DockWorkspace activeSessionId="session-1" />)
+      await screen.findByTestId("workspace-review-layout")
+      expect(screen.queryByTestId("snapshot-review")).not.toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "label" })).toHaveTextContent(scope)
+      expect(listReviewScopeFiles).not.toHaveBeenCalled()
+      expect(useDockTabsStore.getState().bySession["session-1"].reviewDestination).toMatchObject({
+        scope: { scope },
+      })
+    }
+  )
+
+  it.each(["different-root", "different-session", "missing-session"])(
+    "refuses a restored review for %s",
+    (mismatch) => {
+      useDockTabsStore.getState().setReviewDestination("session-1", {
+        id: "old-review",
+        kind: "review",
+        sessionId: mismatch === "different-session" ? "other-session" : "session-1",
+        rootPath: mismatch === "different-root" ? "/old-account" : "/repo",
+        scope: { scope: "commit", commitSha: "private-commit" },
+      })
+      if (mismatch === "missing-session") session = undefined
+      render(<DockWorkspace activeSessionId="session-1" />)
+      expect(screen.queryByTestId("workspace-review-layout")).not.toBeInTheDocument()
+      if (mismatch === "missing-session") {
+        expect(mockUseProjectEditor).not.toHaveBeenCalled()
+      } else {
+        expect(mockUseProjectEditor).toHaveBeenCalledWith(
+          expect.objectContaining({
+            scopeKey: "session:session-1",
+            workingDir: "/repo",
+          })
+        )
+      }
+      expect(listReviewScopeFiles).not.toHaveBeenCalled()
+    }
+  )
+
+  it("waits for the session's current root before restoring a retained review context", async () => {
+    useArtifactDockLayoutStore.getState().revealWorkspaceReview({
+      sessionId: "session-1",
+      rootPath: "/old-account",
+      scope: { scope: "commit", commitSha: "private-commit" },
+    })
+    const request = useArtifactDockLayoutStore.getState().workspaceRevealRequest!
+    useDockTabsStore.getState().setReviewDestination("session-1", { ...request, kind: "review" })
+    clearWorkspaceRevealRequest(request.id)
+    session = undefined
+    const first = render(<DockWorkspace activeSessionId="session-1" />)
+    expect(mockUseProjectEditor).not.toHaveBeenCalled()
+    session = { id: "session-1", projectId: "project-1" }
+    first.rerender(<DockWorkspace activeSessionId="session-1" />)
+    expect(mockUseProjectEditor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeKey: "session:session-1",
+        workingDir: "/repo",
+      })
+    )
+    expect(screen.queryByTestId("workspace-review-layout")).not.toBeInTheDocument()
+    expect(listReviewScopeFiles).not.toHaveBeenCalled()
+  })
+
+  it("restores a valid review after the session row loads without retained layout context", async () => {
+    useDockTabsStore.getState().setReviewDestination("session-1", {
+      id: "remembered-review",
+      kind: "review",
+      sessionId: "session-1",
+      rootPath: "/repo",
+      scope: { scope: "commit", commitSha: "abc" },
+    })
+    session = undefined
+    const first = render(<DockWorkspace activeSessionId="session-1" />)
+    expect(mockUseProjectEditor).not.toHaveBeenCalled()
+    session = { id: "session-1", projectId: "project-1" }
+    first.rerender(<DockWorkspace activeSessionId="session-1" />)
+    expect(await screen.findByTestId("snapshot-review")).toHaveAttribute("data-scope", "commit")
   })
   it("shows an explicit unavailable empty state without a filesystem backend", () => {
     backendAvailable = false
