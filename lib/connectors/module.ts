@@ -137,6 +137,20 @@ export default defineHostModule({
   builtinSkills: { load: () => import("./builtin-skills") },
   // Scheduled pushes into a bound IM conversation.
   taskExecutors: { types: ["im-push"], load: () => import("./scheduler/task-executors") },
+  // What a paired device writes on the host through the connectors: Inbox
+  // replies and draft decisions, relayed bot policy, adapter instances and
+  // per-conversation overrides (`./host-writes.ts`).
+  hostWriteCommands: {
+    commands: [
+      "adapter_update_policy",
+      "adapter_instance_mutate",
+      "connector_enqueue_outbound",
+      "connector_approve_draft",
+      "connector_reject_draft",
+      "conversation_overrides_update",
+    ],
+    load: () => import("./host-writes"),
+  },
   // The conversation-override pull, which keeps this client's in-flight
   // relayed mutations from being reverted by an older host row.
   syncHandlers: {

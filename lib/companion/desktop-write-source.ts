@@ -69,14 +69,10 @@ import {
   routeCompanionRunControl,
 } from "@/lib/router-fusion/gate/companion-bridge"
 import { currentRouterFusionGateSettings } from "@/lib/router-fusion/gate/current-settings"
-import { parseAdapterPolicyRelay } from "@/lib/connectors/adapter-policy-relay"
-import { updateAdapterConfigSection } from "@/lib/db/adapter-instances"
 import { createCharacter, deleteCharacter, updateCharacter } from "@/lib/db/characters"
 import type { CharacterDraft } from "@/lib/db/characters"
-import { isConnectorRuntimeOwnedHere } from "@/lib/connectors/bootstrap/install-connector-runtime"
-import type { OutboundRequest } from "@/types/connectors/outbound"
-import type { MessageSegment } from "@/types/connectors/segment"
 import { attachSession, detachSession } from "@/lib/companion/remote-attach-registry"
+import { moduleHostWriteHandler } from "./module-write-commands"
 import {
   abortAttachmentUpload,
   appendAttachmentChunk,
@@ -168,10 +164,6 @@ import {
   resumeJob,
   retryDeadLetterJob,
 } from "@/lib/db/twin-jobs"
-import {
-  upsertByConversationKey,
-  type ConversationOverrideInput,
-} from "@/lib/db/conversation-overrides"
 import { buildBackupPackage } from "@/lib/data/build-package"
 import { applyBackupPackage } from "@/lib/data/apply-package"
 import type {
@@ -492,6 +484,10 @@ export async function dispatchCommand(
       resolveHostStateService(request, bridge)
     )
   }
+  // A command a module answers (ADR-0250 §14 `hostWriteCommands`): the
+  // connectors' Inbox relay, adapter policy and override writes, among others.
+  const contributed = await moduleHostWriteHandler(command)
+  if (contributed) return contributed(payload, { partition })
   switch (command) {
     case "character_upsert":
       return characterUpsert(payload)
@@ -511,15 +507,6 @@ export async function dispatchCommand(
       return mcpSetEnabled(payload)
     case "mcp_set_tool_rules":
       return mcpSetToolRules(payload)
-    case "adapter_update_policy":
-      return adapterUpdatePolicy(payload)
-    // A whole connector instance from another device of the account (ADR-0224
-    // migration), or a configuration change to one this host runs. Interactive
-    // approval: the RPC layer has already checked the admin lease.
-    case "adapter_instance_mutate": {
-      const { mutateAdapterInstanceOnHost } = await import("@/lib/connectors/instance-transfer")
-      return mutateAdapterInstanceOnHost(payload)
-    }
     // A copy of another device's workspace for the always-on work bound to it
     // (ADR-0224 A11): the host clones its repository when it lacks the
     // folders. Interactive: the RPC layer has already checked the admin lease.
@@ -586,23 +573,12 @@ export async function dispatchCommand(
     // through the same generic desktop_writes_bridge but land in
     // subsystem-specific dispatch arms below. Production callers:
     //   - connector_send         → app/share-target/page.tsx
-    //   - connector_enqueue_outbound  → lib/connectors/inbox-writes/remote.ts
-    //       (every Inbox reply from a phone / web companion / desktop that is
-    //        driving this host — ADR-0131)
-    //   - connector_approve_draft → components/mobile/connector/draft-approval-panel.tsx
-    //       + lib/connectors/inbox-writes/remote.ts (carries edited segments)
-    //   - connector_reject_draft  → components/mobile/connector/draft-approval-panel.tsx
-    //       + lib/connectors/inbox-writes/remote.ts
     //   - workflow_trigger_manual → components/mobile/workflow/trigger-button.tsx
     //   - twin_ingest_source      → components/mobile/discover/twin-{sources,drafts}-panel.tsx
+    // The Inbox relay's `connector_enqueue_outbound`, `connector_approve_draft`
+    // and `connector_reject_draft` are the connectors' (`lib/connectors/host-writes.ts`).
     case "connector_send":
       return connectorSend(payload)
-    case "connector_enqueue_outbound":
-      return connectorEnqueueOutbound(payload)
-    case "connector_approve_draft":
-      return connectorApproveDraft(payload)
-    case "connector_reject_draft":
-      return connectorRejectDraft(payload)
     // The Bot control plane. A paired device can arm, run and replay, and
     // drive the installation lifecycle through `bot_installation_mutate`,
     // which re-validates the catalog entry, scope, config and every credential
@@ -916,9 +892,6 @@ export async function dispatchCommand(
       return externalAgentCancelRun(payload)
     case "external_agent_resolve_decision":
       return externalAgentResolveDecision(payload)
-    // Settings — per-conversation overrides (pin/archive/title).
-    case "conversation_overrides_update":
-      return conversationOverridesUpdate(payload)
     // App-data backup.
     case "backup_export":
       return backupExport(payload)
@@ -2057,30 +2030,6 @@ async function mcpSetToolRules(payload: Record<string, unknown>): Promise<null> 
 }
 
 /**
- * Apply one bot's policy relayed from a paired client.
- *
- * `parseAdapterPolicyRelay` owns the wire vocabulary and the absent-vs-null
- * distinction; this arm owns only the writing. Each section lands through
- * `updateAdapterConfigSection`, so a change made from a phone leaves the same
- * `adapter.config_changed` breadcrumb as the desktop card that owns those
- * fields — attributed to `"mobile"`, the source this queue has always been
- * spelled with (it covers every paired client, phone or not).
- *
- * Sections are applied in order and each is its own transaction. A malformed
- * field throws before any of them run, so a rejected request never leaves half
- * a policy behind; a failure *between* sections is reported to the caller with
- * the earlier sections already committed, which is the same granularity the
- * desktop cards have — they are separate saves there too.
- */
-async function adapterUpdatePolicy(payload: Record<string, unknown>): Promise<null> {
-  const { id, sections } = parseAdapterPolicyRelay(payload)
-  for (const { section, patch } of sections) {
-    await updateAdapterConfigSection(id, section, patch, "mobile")
-  }
-  return null
-}
-
-/**
  * One board action from a paired phone (spec 2026-09-06 D8). The payload is
  * checked field by field (`parseIssueAction`) and then goes through the
  * service's `applyIssueAction`, never a bare Dexie write, so the capability
@@ -2399,26 +2348,6 @@ async function hostFeatureManifest(
 // ---------------------------------------------------------------------------
 
 /**
- * ADR-0131 §2.7 — refuse a relayed Inbox write when THIS process does not own
- * the connector runtime. During a desktop ⇄ headless-brain handoff the bridge
- * can route a phone's reply to the side that just released the lease; running
- * it there would enqueue an outbound job no runner picks up (or, worse, a
- * second one once the owner also handles the retry).
- *
- * The thrown message is deliberately free of the words `lib/queue/retry-policy.ts`
- * treats as terminal (`not found`, `bad request`, `validation`, `401/403/404`,
- * …), so the phone's durable queue RETRIES: 5 attempts of exponential backoff
- * ≈ 31 s, which covers a normal lease handoff. `install-connector-runtime.ts`
- * pins the classification in its tests.
- */
-function requireConnectorRuntimeOwnership(command: string): void {
-  if (isConnectorRuntimeOwnedHere()) return
-  throw new Error(
-    `connector_runtime_not_owner: ${command} reached a process that does not own the connector runtime; retry`
-  )
-}
-
-/**
  * Refuse a relayed Bot write when THIS process does not run a delivery runner.
  *
  * The twin of `requireConnectorRuntimeOwnership`, and it asks the same kind of
@@ -2551,82 +2480,6 @@ async function connectorSend(payload: Record<string, unknown>): Promise<{ messag
   await getDb().messages.add(row)
   markSessionDirty(sessionId)
   return { messageId: id }
-}
-
-/**
- * ADR-0131 cross-shell inbox relay — the real "send this reply to the
- * platform" arm. Runs the SAME `sendManualReplyLocally` the desktop composer
- * runs (`lib/connectors/inbox-writes/local.ts`), so a phone reply and a
- * desktop reply produce byte-identical `outboundQueue` + `messages` rows.
- *
- * Idempotent by construction: the client mints `request.metadata.idempotencyKey`
- * ONCE and replays it on every retry, and `sendManualReplyLocally` returns the
- * existing job instead of enqueuing a second one. The durable queue therefore
- * cannot double-send across a dropped connection.
- */
-async function connectorEnqueueOutbound(
-  payload: Record<string, unknown>
-): Promise<{ jobId: string; messageId: string; reused: boolean }> {
-  requireConnectorRuntimeOwnership("connector_enqueue_outbound")
-  const adapterId = payload.adapterId as string | undefined
-  const conversationKey = payload.conversationKey as string | undefined
-  const sessionId = payload.sessionId as string | undefined
-  const request = payload.request as OutboundRequest | undefined
-  if (!adapterId) throw new Error("connector_enqueue_outbound.adapterId is required")
-  if (!conversationKey) throw new Error("connector_enqueue_outbound.conversationKey is required")
-  if (!sessionId) throw new Error("connector_enqueue_outbound.sessionId is required")
-  if (!request || typeof request !== "object") {
-    throw new Error("connector_enqueue_outbound.request is required")
-  }
-  if (!Array.isArray(request.segments)) {
-    throw new Error("connector_enqueue_outbound.request.segments must be an array")
-  }
-  const idempotencyKey = request.metadata?.idempotencyKey
-  if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
-    throw new Error("connector_enqueue_outbound.request.metadata.idempotencyKey is required")
-  }
-  const { sendManualReplyLocally, parseManualReplyMessageMetadata } =
-    await import("@/lib/connectors/inbox-writes/local")
-  return sendManualReplyLocally({
-    adapterId,
-    conversationKey,
-    sessionId,
-    conversationRef: request.conversationRef,
-    segments: request.segments,
-    idempotencyKey,
-    clientMessageId: payload.clientMessageId as string | undefined,
-    replyTo: request.replyTo,
-    threadId: request.threadId,
-    messageMetadata: parseManualReplyMessageMetadata(payload.messageMetadata),
-  })
-}
-
-/** Approve a pending connector draft so the connector outbound runner can
- *  pick it up for the real platform send. `segments` (ADR-0131) carries what
- *  the operator actually approved after editing it on the phone; without it
- *  the draft's own segments are sent. */
-async function connectorApproveDraft(
-  payload: Record<string, unknown>
-): Promise<{ draftId: string; jobId?: string; alreadyApproved: boolean }> {
-  requireConnectorRuntimeOwnership("connector_approve_draft")
-  const draftId = payload.draftId as string | undefined
-  if (!draftId) throw new Error("connector_approve_draft.draftId is required")
-  const segments = payload.segments as MessageSegment[] | undefined
-  if (segments !== undefined && !Array.isArray(segments)) {
-    throw new Error("connector_approve_draft.segments must be an array when present")
-  }
-  const { approveDraftLocally } = await import("@/lib/connectors/inbox-writes/local")
-  return approveDraftLocally(draftId, { segments })
-}
-
-/** Reject a pending connector draft. */
-async function connectorRejectDraft(payload: Record<string, unknown>): Promise<null> {
-  requireConnectorRuntimeOwnership("connector_reject_draft")
-  const draftId = payload.draftId as string | undefined
-  if (!draftId) throw new Error("connector_reject_draft.draftId is required")
-  const { rejectDraftLocally } = await import("@/lib/connectors/inbox-writes/local")
-  await rejectDraftLocally(draftId)
-  return null
 }
 
 /** Trigger a workflow run manually from the mobile shell. Routes through the
@@ -3580,42 +3433,6 @@ function isAcpPermissionMode(value: unknown): value is AcpPermissionMode {
 // ---------------------------------------------------------------------------
 // Settings — per-conversation overrides (Wave 4.1)
 // ---------------------------------------------------------------------------
-
-/**
- * Two payload shapes:
- *
- *  - legacy `{ input }` — a plain upsert, the pre-ADR-0131 mobile settings
- *    form's only move. Kept because an older phone build still sends it.
- *  - `{ mutation }` (ADR-0131) — one {@link ConversationOverrideMutation}
- *    applied with FULL host semantics: audit rows, the assignment trail, and
- *    assignment ↔ routing sync all behave exactly as if the operator had made
- *    the change on this desktop. `via` is stamped from the authenticated
- *    caller device (injected by the Rust layer, never trusted from the raw
- *    payload) so a phone-originated change is attributable.
- */
-async function conversationOverridesUpdate(
-  payload: Record<string, unknown>
-): Promise<{ override: unknown }> {
-  const mutation = payload.mutation
-  if (mutation !== undefined) {
-    const { applyConversationOverrideMutation, isConversationOverrideMutation } =
-      await import("@/lib/connectors/inbox-writes/override-mutation")
-    if (!isConversationOverrideMutation(mutation)) {
-      throw new Error("conversation_overrides_update.mutation is malformed")
-    }
-    const deviceId = payload.callerDeviceId as string | undefined
-    const override = await applyConversationOverrideMutation(mutation, {
-      via: deviceId ? `device:${deviceId}` : undefined,
-    })
-    return { override: override ?? null }
-  }
-  const input = payload.input as ConversationOverrideInput | undefined
-  if (!input || typeof input !== "object") {
-    throw new Error("conversation_overrides_update requires `mutation` or legacy `input`")
-  }
-  const override = await upsertByConversationKey(input)
-  return { override }
-}
 
 // ---------------------------------------------------------------------------
 // App-data backup (Wave 4.1)

@@ -576,6 +576,40 @@ export interface ModuleSyncHandlersEntry {
   load: LazyModule<ModuleSyncHandlersModule>
 }
 
+/** Where a paired-device write command was received. */
+export interface HostWriteContext {
+  /**
+   * The request came through a person partition (ADR-0253) rather than a
+   * device grant; the dispatcher has already checked the partition marker.
+   */
+  partition: boolean
+}
+
+/** A paired-device write command's handler: the payload as the RPC layer delivered it. */
+export type HostWriteHandler = (
+  payload: Record<string, unknown>,
+  context: HostWriteContext
+) => Promise<unknown>
+
+/**
+ * What a module's `hostWriteCommands.load` resolves to: the handler of each
+ * write command the manifest's `hostWriteCommands.commands` names
+ * (`lib/companion/module-write-commands.ts`).
+ */
+export interface ModuleHostWriteCommandsModule {
+  hostWriteCommands: Readonly<Record<string, HostWriteHandler>>
+}
+
+/** One module's write commands as `lib/modules/generated/host-write-commands.ts` lists them. */
+export interface ModuleHostWriteCommandsEntry {
+  /** The contributing module, and its stage: an `experimental` one contributes nothing. */
+  module: string
+  stage: ModuleStage
+  /** The commands the module answers, known before its file loads. */
+  commands: readonly string[]
+  load: LazyModule<ModuleHostWriteCommandsModule>
+}
+
 /** One module's node executors as `lib/modules/generated/workflow-nodes.ts` lists them. */
 export interface ModuleWorkflowNodesEntry {
   /** The contributing module, and its stage: an `experimental` one contributes nothing. */
@@ -729,6 +763,16 @@ export interface HostModuleManifest {
   syncHandlers?: {
     tables: readonly SyncableTable[]
     load: LazyModule<ModuleSyncHandlersModule>
+  }
+  /**
+   * The paired-device write commands this module answers on the host, and the
+   * file that exports their handlers (ADR-0250 §14 `hostWriteCommands`). The
+   * host's write dispatcher (`lib/companion/desktop-write-source.ts`) routes a
+   * command here before its own arms; a command has one owner.
+   */
+  hostWriteCommands?: {
+    commands: readonly string[]
+    load: LazyModule<ModuleHostWriteCommandsModule>
   }
   /**
    * The built-in skill families this module registers (ADR-0026, ADR-0250

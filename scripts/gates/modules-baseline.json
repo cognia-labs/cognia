@@ -398,7 +398,6 @@
     "lib/companion/desktop-write-source.ts -> bot",
     "lib/companion/desktop-write-source.ts -> browser-companion",
     "lib/companion/desktop-write-source.ts -> cogsets",
-    "lib/companion/desktop-write-source.ts -> connectors",
     "lib/companion/desktop-write-source.ts -> files-library",
     "lib/companion/desktop-write-source.ts -> glance",
     "lib/companion/desktop-write-source.ts -> goal",

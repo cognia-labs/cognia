@@ -310,6 +310,16 @@ function collectManifests(ctx, files) {
       "name",
       "sync table "
     ),
+    // A write command has one handler: the dispatcher looks it up by name.
+    ...duplicateContributions(
+      host,
+      (manifest) =>
+        Array.isArray(manifest.hostWriteCommands?.commands)
+          ? manifest.hostWriteCommands.commands.map((name) => ({ name }))
+          : [],
+      "name",
+      "host write command "
+    ),
     // A tool name routes to one module: the dispatcher looks it up by name.
     ...duplicateContributions(
       host,

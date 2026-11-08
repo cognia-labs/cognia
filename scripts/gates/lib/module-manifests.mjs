@@ -41,6 +41,7 @@ export const HOST_FIELDS = [
   "context",
   "taskExecutors",
   "syncHandlers",
+  "hostWriteCommands",
   "builtinSkills",
   "pluginApi",
   "workflowNodes",
@@ -149,6 +150,8 @@ export const GENERATED_BUILTIN_SKILLS = "lib/modules/generated/builtin-skills.ts
 export const GENERATED_TASK_EXECUTORS = "lib/modules/generated/task-executors.ts"
 /** Every module's `syncHandlers` file, lazily, with the tables it owns: the sync orchestrator's and the host reader's only route to one. */
 export const GENERATED_SYNC_HANDLERS = "lib/modules/generated/sync-handlers.ts"
+/** Every module's `hostWriteCommands` file, lazily, with the commands it answers: the paired-device write dispatcher's only route to one. */
+export const GENERATED_HOST_WRITE_COMMANDS = "lib/modules/generated/host-write-commands.ts"
 export const GENERATED_FILES = [
   GENERATED_HOST,
   ...Object.values(GENERATED_RUNTIMES),
@@ -160,6 +163,7 @@ export const GENERATED_FILES = [
   GENERATED_BUILTIN_SKILLS,
   GENERATED_TASK_EXECUTORS,
   GENERATED_SYNC_HANDLERS,
+  GENERATED_HOST_WRITE_COMMANDS,
   GENERATED_UI,
 ]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
@@ -747,6 +751,27 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
         errors.push("syncHandlers.tables names a table twice")
     }
   }
+  if (manifest.hostWriteCommands !== undefined) {
+    const writes = manifest.hostWriteCommands
+    if (!writes || typeof writes !== "object" || !isLazy(writes.load))
+      errors.push('hostWriteCommands.load is a lazy entry `() => import("…")`')
+    else {
+      for (const key of Object.keys(writes))
+        if (key !== "load" && key !== "commands")
+          errors.push(`hostWriteCommands: unknown field "${key}"`)
+      const commands = writes.commands
+      if (
+        !Array.isArray(commands) ||
+        commands.length === 0 ||
+        commands.some(
+          (command) => typeof command !== "string" || !/^[a-z][a-z0-9_]*$/.test(command)
+        )
+      )
+        errors.push("hostWriteCommands.commands lists the write commands the file exports")
+      else if (new Set(commands).size !== commands.length)
+        errors.push("hostWriteCommands.commands names a command twice")
+    }
+  }
   if (manifest.tools !== undefined) errors.push(...toolsErrors(manifest.tools))
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
@@ -1011,66 +1036,80 @@ export function promptEntries(modules) {
   return lazyRegistryEntries("prompts", modules)
 }
 
-/** The modules that own scheduled task executors, in module id order, with their task types. */
-export function taskExecutorEntries(modules) {
+/**
+ * The registries that name what each module owns before its file loads: the
+ * manifest field, the list of owned keys inside it, and the generated
+ * constant. One lazy import per module, in module id order.
+ */
+const KEYED_REGISTRIES = {
+  taskExecutors: {
+    keys: "types",
+    constName: "MODULE_TASK_EXECUTORS",
+    type: "ModuleTaskExecutorsEntry",
+    comment: [
+      "// Every module's `taskExecutors`: the scheduled task types it owns, and the file",
+      "// that exports their executors, loaded by the scheduler when one of them",
+      "// comes due (`lib/scheduler/module-executors.ts`).",
+    ],
+  },
+  syncHandlers: {
+    keys: "tables",
+    constName: "MODULE_SYNC_HANDLERS",
+    type: "ModuleSyncHandlersEntry",
+    comment: [
+      "// Every module's `syncHandlers`: the companion sync tables it owns, and the",
+      "// file that exports their pull and host-side reader, loaded when a sync first",
+      "// needs one (`lib/sync/module-handlers.ts`).",
+    ],
+  },
+  hostWriteCommands: {
+    keys: "commands",
+    constName: "MODULE_HOST_WRITE_COMMANDS",
+    type: "ModuleHostWriteCommandsEntry",
+    comment: [
+      "// Every module's `hostWriteCommands`: the paired-device write commands it",
+      "// answers, and the file that exports their handlers, loaded when one first",
+      "// arrives (`lib/companion/module-write-commands.ts`).",
+    ],
+  },
+}
+
+function keyedEntries(field, modules) {
+  const { keys } = KEYED_REGISTRIES[field]
   return [...modules]
     .sort((a, b) => a.id.localeCompare(b.id))
-    .filter(({ value }) => typeof value?.taskExecutors?.load?.$lazy === "string")
+    .filter(({ value }) => typeof value?.[field]?.load?.$lazy === "string")
     .map(({ id, file, value }) => ({
       module: id,
       stage: value.stage,
-      types: Array.isArray(value.taskExecutors.types) ? value.taskExecutors.types : [],
-      load: adapterImport(file, value.taskExecutors.load.$lazy),
+      [keys]: Array.isArray(value[field][keys]) ? value[field][keys] : [],
+      load: adapterImport(file, value[field].load.$lazy),
     }))
 }
 
-function renderTaskExecutors(modules) {
-  const rows = taskExecutorEntries(modules).map((entry) =>
-    [
-      "  {",
-      `    module: ${JSON.stringify(entry.module)},`,
-      `    stage: ${JSON.stringify(entry.stage)},`,
-      `    types: ${JSON.stringify(entry.types)},`,
-      `    load: () => import(${JSON.stringify(entry.load)}),`,
-      "  },",
-    ].join("\n")
-  )
-  return [
-    `${HEADER("lib/<id>/module.ts")}`,
-    "//",
-    "// Every module's `taskExecutors`: the scheduled task types it owns, and the file",
-    "// that exports their executors, loaded by the scheduler when one of them",
-    "// comes due (`lib/scheduler/module-executors.ts`).",
-    "",
-    'import type { ModuleTaskExecutorsEntry } from "@/lib/modules/manifest-types"',
-    "",
-    rows.length
-      ? `export const MODULE_TASK_EXECUTORS: readonly ModuleTaskExecutorsEntry[] = [\n${rows.join("\n")}\n]`
-      : "export const MODULE_TASK_EXECUTORS: readonly ModuleTaskExecutorsEntry[] = []",
-    "",
-  ].join("\n")
+/** The modules that own scheduled task executors, in module id order, with their task types. */
+export function taskExecutorEntries(modules) {
+  return keyedEntries("taskExecutors", modules)
 }
 
 /** The modules that own companion sync tables, in module id order, with their tables. */
 export function syncHandlerEntries(modules) {
-  return [...modules]
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .filter(({ value }) => typeof value?.syncHandlers?.load?.$lazy === "string")
-    .map(({ id, file, value }) => ({
-      module: id,
-      stage: value.stage,
-      tables: Array.isArray(value.syncHandlers.tables) ? value.syncHandlers.tables : [],
-      load: adapterImport(file, value.syncHandlers.load.$lazy),
-    }))
+  return keyedEntries("syncHandlers", modules)
 }
 
-function renderSyncHandlers(modules) {
-  const rows = syncHandlerEntries(modules).map((entry) =>
+/** The modules that answer paired-device write commands, in module id order, with their commands. */
+export function hostWriteCommandEntries(modules) {
+  return keyedEntries("hostWriteCommands", modules)
+}
+
+function renderKeyedRegistry(field, modules) {
+  const { keys, constName, type, comment } = KEYED_REGISTRIES[field]
+  const rows = keyedEntries(field, modules).map((entry) =>
     [
       "  {",
       `    module: ${JSON.stringify(entry.module)},`,
       `    stage: ${JSON.stringify(entry.stage)},`,
-      `    tables: ${JSON.stringify(entry.tables)},`,
+      `    ${keys}: ${JSON.stringify(entry[keys])},`,
       `    load: () => import(${JSON.stringify(entry.load)}),`,
       "  },",
     ].join("\n")
@@ -1078,15 +1117,13 @@ function renderSyncHandlers(modules) {
   return [
     `${HEADER("lib/<id>/module.ts")}`,
     "//",
-    "// Every module's `syncHandlers`: the companion sync tables it owns, and the",
-    "// file that exports their pull and host-side reader, loaded when a sync first",
-    "// needs one (`lib/sync/module-handlers.ts`).",
+    ...comment,
     "",
-    'import type { ModuleSyncHandlersEntry } from "@/lib/modules/manifest-types"',
+    `import type { ${type} } from "@/lib/modules/manifest-types"`,
     "",
     rows.length
-      ? `export const MODULE_SYNC_HANDLERS: readonly ModuleSyncHandlersEntry[] = [\n${rows.join("\n")}\n]`
-      : "export const MODULE_SYNC_HANDLERS: readonly ModuleSyncHandlersEntry[] = []",
+      ? `export const ${constName}: readonly ${type}[] = [\n${rows.join("\n")}\n]`
+      : `export const ${constName}: readonly ${type}[] = []`,
     "",
   ].join("\n")
 }
@@ -1142,8 +1179,9 @@ export function renderRegistries({ host, ui }) {
     [GENERATED_CONTEXT]: renderLazyRegistry("context", host),
     [GENERATED_WORKFLOW_NODES]: renderLazyRegistry("workflowNodes", host),
     [GENERATED_BUILTIN_SKILLS]: renderLazyRegistry("builtinSkills", host),
-    [GENERATED_TASK_EXECUTORS]: renderTaskExecutors(host),
-    [GENERATED_SYNC_HANDLERS]: renderSyncHandlers(host),
+    [GENERATED_TASK_EXECUTORS]: renderKeyedRegistry("taskExecutors", host),
+    [GENERATED_SYNC_HANDLERS]: renderKeyedRegistry("syncHandlers", host),
+    [GENERATED_HOST_WRITE_COMMANDS]: renderKeyedRegistry("hostWriteCommands", host),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }
