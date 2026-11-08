@@ -109,14 +109,15 @@
 
 结论写回账本（H4、H5、D13）。任一 spike 不通过，就回到 grilling。
 
-### A2 sparse-before-checkout（范围见 D13）
+### A2 sparse-before-checkout（范围见 D13，按 S1/S2 结论修订为 D25、D26）
 
 1. `create_execution`：
-   - 有 `sparse_paths` 时：`worktree add --no-checkout` → 配置 sparse（cone）→ 检出，overlay 按 S1 的结论处理。
+   - 有 `sparse_paths` 时：`worktree add --no-checkout` → 配置 sparse（cone）→ 检出 → overlay。S1 表明这与现路径只有一处不同：工作区里删除的、位于 cone 内的文件，现路径会被后置的 `sparse-checkout set` 重新检出，新路径保留删除。按 D25，最终树以快照为准，并为这个场景加回归测试。
+   - overlay 写到 cone 外的文件，显式清掉它们的 skip-worktree 位（git 2.37 以下不会自动清，见 X8）。
    - 没有 `sparse_paths` 时：路径完全不变。
    - `apply_provisioning` 不再处理 sparse，只做链接和 include。
    - 直接调用 `apply_provisioning` 的 sparse 测试（`service.rs:9740-9794`）改写为调用 `create_execution`。校验测试（`:9604-9637`）保留。
-2. 远程供给（`remote_source.rs`）：把工作区声明的 sparse 路径传到 `MirrorRequest`，`materialize_commit` 按 S2 的方案收窄。
+2. 远程供给（`remote_source.rs`）：把工作区声明的 sparse 路径传到 `MirrorRequest`。按 D26，有 sparse 路径的请求只补自己 cone 的内容：cone 目录下的文件，加上根目录和每一级祖先目录下的文件。做法是把这些 blob id 用一次 `fetch --stdin` 批量拉取，不用 `read-tree`。没有 sparse 路径的请求保持现在的全量 `materialize_commit`。S2 表明 mirror 不会替派生仓库懒加载，所以每个请求都必须先补齐自己的范围；派生仓库事后自己扩大 cone 会明确报错，记为残余风险（X8）。
 3. GitHub workspace 和 guarded clone 不变，它们没有 sparse 来源（O31）。
 4. `workspace.sparse` 和 `workspace.checkout` 分别计时。
 
