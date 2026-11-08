@@ -62,6 +62,7 @@ import {
 import { patchFilePath } from "@/lib/git/unified-patch"
 import { WorkbenchReviewButton } from "@/components/chat/message-parts/mcp-renderers/workbench-review-button"
 import { cn } from "@/lib/utils"
+import { captureChatNavigation } from "./chat-navigation-guard"
 
 export type FileToolKind = "read" | "write" | "edit" | "patch" | "grep" | "glob" | "ls" | "notebook"
 
@@ -301,8 +302,14 @@ const OpenInWorkspaceButton = memo(function OpenInWorkspaceButton({
       data-testid="file-tool-open-in-workspace"
       onClick={(e) => {
         e.stopPropagation()
-        void openFileInWorkbenchWorkspace({ sessionId, path, line }).then((opened) => {
-          if (!opened) toast.error(t("openInWorkspaceOutOfScope"))
+        void openFileInWorkbenchWorkspace({
+          sessionId,
+          path,
+          line,
+          isCurrent: captureChatNavigation(sessionId),
+        }).then((opened) => {
+          // `null`: the user moved on before the lookup finished — not an error.
+          if (opened === false) toast.error(t("openInWorkspaceOutOfScope"))
         })
       }}
     >

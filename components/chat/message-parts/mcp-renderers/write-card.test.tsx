@@ -50,6 +50,7 @@ describe("WriteCard", () => {
     expect(openEditInWorkbenchReview).toHaveBeenCalledWith({
       sessionId: "s1",
       absolutePath: "/repo/src/new.ts",
+      isCurrent: expect.any(Function),
     })
   })
 

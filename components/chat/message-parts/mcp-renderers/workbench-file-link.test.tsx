@@ -34,6 +34,7 @@ describe("WorkbenchFileLink", () => {
         path: "/repo/src/a.ts",
         line: 42,
         column: 3,
+        isCurrent: expect.any(Function),
       })
     )
     expect(toastError).not.toHaveBeenCalled()
@@ -71,6 +72,7 @@ describe("WorkbenchFileLink", () => {
         path: "src/a.ts",
         line: 4,
         column: undefined,
+        isCurrent: expect.any(Function),
       })
     )
   })

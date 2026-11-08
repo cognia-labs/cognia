@@ -38,12 +38,7 @@ beforeEach(() => {
 })
 
 describe("conversation switches during lookup (B08)", () => {
-  it("drops a secondary-pane lookup when that pane closes before it resolves", async () => {
-    useChatStore.setState({
-      activeSessionId: "primary",
-      splitSessionId: "s1",
-      openSessionIds: ["primary", "s1"],
-    })
+  function deferSession() {
     let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
     jest.mocked(getSession).mockImplementationOnce(
       () =>
@@ -51,27 +46,53 @@ describe("conversation switches during lookup (B08)", () => {
           resolveSession = resolve
         })
     )
-    const pending = openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
-    useChatStore.setState({ splitSessionId: null })
-    resolveSession(session as never)
-    expect(await pending).toBe(false)
-    expect(revealWorkspaceFile).not.toHaveBeenCalled()
-  })
+    return () => resolveSession(session as never)
+  }
+
+  it.each(["file", "review"] as const)(
+    "drops a late %s reveal once the caller's navigation moved on",
+    async (kind) => {
+      const resolve = deferSession()
+      let current = true
+      const isCurrent = () => current
+      const pending =
+        kind === "file"
+          ? openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts", isCurrent })
+          : openEditInWorkbenchReview({ sessionId: "s1", absolutePath: "/repo/a.ts", isCurrent })
+      current = false
+      useArtifactDockLayoutStore.getState().clearSessionScopedReveals()
+      resolve()
+
+      // Superseded, not refused: callers show no "out of scope" error for it.
+      expect(await pending).toBeNull()
+      expect(useArtifactDockLayoutStore.getState().workspaceContext).toBeNull()
+      expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toBeNull()
+      expect(revealWorkspaceFile).not.toHaveBeenCalled()
+      expect(revealWorkspaceReview).not.toHaveBeenCalled()
+    }
+  )
+
   it.each(["file", "review"] as const)(
     "reveals a %s clicked in a secondary split pane",
     async (kind) => {
+      // The click's conversation is not the focused one; only navigation
+      // changes after the click make it stale.
       useChatStore.setState({
         activeSessionId: "primary",
         splitSessionId: "s1",
         openSessionIds: ["primary", "s1"],
       })
+      const isCurrent = () => true
       const routed =
         kind === "file"
-          ? await openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
-          : await openEditInWorkbenchReview({ sessionId: "s1", absolutePath: "/repo/a.ts" })
+          ? await openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts", isCurrent })
+          : await openEditInWorkbenchReview({
+              sessionId: "s1",
+              absolutePath: "/repo/a.ts",
+              isCurrent,
+            })
 
       expect(routed).toBe(true)
-      expect(useChatStore.getState().activeSessionId).toBe("primary")
       expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toMatchObject({
         kind,
         sessionId: "s1",
@@ -84,13 +105,7 @@ describe("conversation switches during lookup (B08)", () => {
   it.each(["file", "review"] as const)(
     "drops a late %s click when the dock target changes without changing chat focus",
     async (kind) => {
-      let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
-      jest.mocked(getSession).mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSession = resolve
-          })
-      )
+      const resolve = deferSession()
       const pending =
         kind === "file"
           ? openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
@@ -98,54 +113,13 @@ describe("conversation switches during lookup (B08)", () => {
       useArtifactDockLayoutStore
         .getState()
         .revealWorkspaceRoot({ sessionId: "s2", rootPath: "/other" })
-      resolveSession(session as never)
+      resolve()
 
-      expect(await pending).toBe(false)
+      expect(await pending).toBeNull()
       expect(useArtifactDockLayoutStore.getState().workspaceContext).toMatchObject({
         sessionId: "s2",
         rootPath: "/other",
       })
-      expect(revealWorkspaceFile).not.toHaveBeenCalled()
-      expect(revealWorkspaceReview).not.toHaveBeenCalled()
-    }
-  )
-
-  it("drops a click even if focus returns before its lookup resolves", async () => {
-    let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
-    jest.mocked(getSession).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveSession = resolve
-        })
-    )
-    const pending = openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
-    useChatStore.setState({ activeSessionId: "s2" })
-    useChatStore.setState({ activeSessionId: "s1" })
-    resolveSession(session as never)
-    expect(await pending).toBe(false)
-    expect(revealWorkspaceFile).not.toHaveBeenCalled()
-  })
-  it.each(["file", "review"] as const)(
-    "drops a late %s reveal after focus changes",
-    async (kind) => {
-      let resolveSession!: (value: Awaited<ReturnType<typeof getSession>>) => void
-      jest.mocked(getSession).mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSession = resolve
-          })
-      )
-      const pending =
-        kind === "file"
-          ? openFileInWorkbenchWorkspace({ sessionId: "s1", path: "/repo/a.ts" })
-          : openEditInWorkbenchReview({ sessionId: "s1", absolutePath: "/repo/a.ts" })
-      useChatStore.setState({ activeSessionId: "s2" })
-      useArtifactDockLayoutStore.getState().clearSessionScopedReveals()
-      resolveSession(session as never)
-
-      expect(await pending).toBe(false)
-      expect(useArtifactDockLayoutStore.getState().workspaceContext).toBeNull()
-      expect(useArtifactDockLayoutStore.getState().workspaceRevealRequest).toBeNull()
       expect(revealWorkspaceFile).not.toHaveBeenCalled()
       expect(revealWorkspaceReview).not.toHaveBeenCalled()
     }

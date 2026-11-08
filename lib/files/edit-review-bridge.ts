@@ -11,7 +11,6 @@ import { resolveLinkPath } from "@/lib/terminal/terminal-links"
 import { resolveSessionExecutionRoot } from "@/lib/workspace/session-root"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import { useProjectStore } from "@/stores/project/project-store"
-import { useChatStore } from "@/stores/chat"
 
 /**
  * Whether the workbench review action can be offered at all. Gated on a
@@ -25,6 +24,8 @@ export function canOfferWorkbenchReview(): boolean {
 export interface OpenEditReviewArgs {
   sessionId: string
   absolutePath: string
+  /** False once the conversation navigation the click came from has moved on. */
+  isCurrent?: () => boolean
 }
 
 /**
@@ -62,22 +63,20 @@ async function locateInSessionRoot(
   return relPath ? { root, relPath } : null
 }
 
-/** Keep a click valid until navigation changes, including clicks from a split pane. */
+/**
+ * Keep a click valid until navigation changes, including clicks from a split
+ * pane. The dock's own navigation is watched here; the conversation side comes
+ * from the caller's `isCurrent` (this file must not depend on the chat store).
+ * Resolves `null` when the click was superseded — nothing to report then.
+ */
 async function revealInSessionRoot(
   sessionId: string,
   path: string,
+  isCurrent: (() => boolean) | undefined,
   reveal: (location: { root: string; relPath: string }) => void
-): Promise<boolean> {
+): Promise<boolean | null> {
   if (!hasWorkspaceFsBackend()) return false
   let navigationChanged = false
-  const unsubscribeChat = useChatStore.subscribe((state, previous) => {
-    if (
-      state.activeSessionId !== previous.activeSessionId ||
-      state.splitSessionId !== previous.splitSessionId ||
-      state.openSessionIds.includes(sessionId) !== previous.openSessionIds.includes(sessionId)
-    )
-      navigationChanged = true
-  })
   const unsubscribeDock = useArtifactDockLayoutStore.subscribe((state, previous) => {
     if (
       state.workspaceContext !== previous.workspaceContext ||
@@ -88,11 +87,11 @@ async function revealInSessionRoot(
   })
   try {
     const located = await locateInSessionRoot(sessionId, path)
-    if (!located || navigationChanged) return false
+    if (navigationChanged || isCurrent?.() === false) return null
+    if (!located) return false
     reveal(located)
     return true
   } finally {
-    unsubscribeChat()
     unsubscribeDock()
   }
 }
@@ -101,16 +100,17 @@ async function revealInSessionRoot(
  * Reveal the given absolute file (an agent Edit/Write target) in the chat
  * workspace dock and activate its git-review panel. Returns false, without any
  * side effect, when there is no fs backend, no session, no project root, or the
- * path is outside the session's root.
+ * path is outside the session's root; `null` when navigation moved on first.
  */
 export async function openEditInWorkbenchReview({
   sessionId,
   absolutePath,
-}: OpenEditReviewArgs): Promise<boolean> {
+  isCurrent,
+}: OpenEditReviewArgs): Promise<boolean | null> {
   // Open the dock's existing source-control review surface and preselect the
   // touched working-tree file. This path does not depend on the project Context
   // Workbench being mounted inside the already-narrow chat dock.
-  return revealInSessionRoot(sessionId, absolutePath, (located) => {
+  return revealInSessionRoot(sessionId, absolutePath, isCurrent, (located) => {
     useArtifactDockLayoutStore.getState().revealWorkspaceReview({
       sessionId,
       rootPath: located.root,
@@ -129,6 +129,8 @@ export interface OpenWorkbenchFileArgs {
   /** 1-based caret to reveal, when the tool call named one. */
   line?: number
   column?: number
+  /** False once the conversation navigation the click came from has moved on. */
+  isCurrent?: () => boolean
 }
 
 /**
@@ -143,15 +145,17 @@ export interface OpenWorkbenchFileArgs {
  * open an empty comparison.
  *
  * Returns false, with no side effect, under exactly the conditions the review
- * twin refuses under, so a caller can offer one control for both.
+ * twin refuses under, so a caller can offer one control for both (and `null`
+ * for a superseded click).
  */
 export async function openFileInWorkbenchWorkspace({
   sessionId,
   path,
   line,
   column,
-}: OpenWorkbenchFileArgs): Promise<boolean> {
-  return revealInSessionRoot(sessionId, path, (located) => {
+  isCurrent,
+}: OpenWorkbenchFileArgs): Promise<boolean | null> {
+  return revealInSessionRoot(sessionId, path, isCurrent, (located) => {
     useArtifactDockLayoutStore.getState().revealWorkspaceFile({
       sessionId,
       rootPath: located.root,

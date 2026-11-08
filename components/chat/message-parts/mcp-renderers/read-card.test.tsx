@@ -207,6 +207,7 @@ describe("ReadCard", () => {
         path: "src/a.ts",
         line: 12,
         column: undefined,
+        isCurrent: expect.any(Function),
       })
     )
   })

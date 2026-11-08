@@ -80,6 +80,7 @@ describe("GlobCard", () => {
         path: "src/a.ts",
         line: undefined,
         column: undefined,
+        isCurrent: expect.any(Function),
       })
     )
   })

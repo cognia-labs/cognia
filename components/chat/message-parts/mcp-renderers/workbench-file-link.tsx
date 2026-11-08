@@ -23,6 +23,7 @@ import {
 } from "@/lib/files/edit-review-bridge"
 import { FileTypeIcon } from "@/components/shared/file-type-icon"
 import { cn } from "@/lib/utils"
+import { captureChatNavigation } from "../chat-navigation-guard"
 
 export interface WorkbenchFileLinkProps {
   sessionId?: string
@@ -96,8 +97,10 @@ export function WorkbenchFileLink({
           path,
           line,
           column,
+          isCurrent: captureChatNavigation(sessionId!),
         }).then((opened) => {
-          if (!opened) toast.error(t("openInWorkspaceOutOfScope"))
+          // `null`: the user moved on before the lookup finished — not an error.
+          if (opened === false) toast.error(t("openInWorkspaceOutOfScope"))
         })
       }}
     >

@@ -9,6 +9,7 @@ import { useTranslations } from "next-intl"
 import { GitCompareArrowsIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { canOfferWorkbenchReview, openEditInWorkbenchReview } from "@/lib/files/edit-review-bridge"
+import { captureChatNavigation } from "../chat-navigation-guard"
 
 export function WorkbenchReviewButton({
   sessionId,
@@ -29,7 +30,13 @@ export function WorkbenchReviewButton({
       aria-label={t("openInReview")}
       title={t("openInReview")}
       data-testid="mcp-open-in-review"
-      onClick={() => void openEditInWorkbenchReview({ sessionId, absolutePath })}
+      onClick={() =>
+        void openEditInWorkbenchReview({
+          sessionId,
+          absolutePath,
+          isCurrent: captureChatNavigation(sessionId),
+        })
+      }
     >
       <GitCompareArrowsIcon className="size-3.5" />
     </Button>

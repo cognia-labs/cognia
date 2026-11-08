@@ -34,6 +34,7 @@ describe("WorkbenchReviewButton", () => {
     expect(openEditInWorkbenchReview).toHaveBeenCalledWith({
       sessionId: "s1",
       absolutePath: "/repo/a.ts",
+      isCurrent: expect.any(Function),
     })
   })
 })

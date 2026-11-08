@@ -116,6 +116,7 @@ describe("NotebookEditCard", () => {
         path: "nb/n.ipynb",
         line: undefined,
         column: undefined,
+        isCurrent: expect.any(Function),
       })
     )
   })
