@@ -45,6 +45,7 @@ export function useCodexAppServerStatus(
         adapter.refreshMcpServers(),
         adapter.refreshSkills(),
         adapter.refreshAccount(),
+        adapter.refreshConfigRequirements(),
       ])
       if (generation.current === requestGeneration) setStatus(adapter.getStatus())
     } finally {

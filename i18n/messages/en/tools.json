@@ -5,6 +5,7 @@
   "approve": "Approve",
   "cancel": "Cancel",
   "deny": "Deny",
+  "humanApprovalRequired": "This managed command requires a fresh human approval. The decision applies only to this call.",
   "parameters": "Parameters",
   "riskHigh": "High Risk",
   "riskLow": "Low Risk",

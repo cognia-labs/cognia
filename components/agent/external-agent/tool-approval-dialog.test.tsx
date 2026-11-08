@@ -30,6 +30,24 @@ const baseRequest: ToolApprovalRequest = {
 }
 
 describe("ToolApprovalDialog (ACP variant)", () => {
+  it("hides saved grants for a human checkpoint, including a previously checked checkbox", () => {
+    const onApprove = jest.fn()
+    const props = { open: true, onOpenChange: jest.fn(), onApprove, onDeny: jest.fn() }
+    const { rerender } = render(wrap(<ToolApprovalDialog {...props} request={baseRequest} />))
+    fireEvent.click(screen.getByRole("checkbox"))
+    rerender(
+      wrap(
+        <ToolApprovalDialog
+          {...props}
+          request={{ ...baseRequest, id: "human", requiresHumanApproval: true }}
+        />
+      )
+    )
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
+    expect(screen.getByText(en.tools.humanApprovalRequired)).toBeVisible()
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }))
+    expect(onApprove).toHaveBeenCalledWith("human", false)
+  })
   it("returns null when there is no request", () => {
     const { container } = render(
       wrap(

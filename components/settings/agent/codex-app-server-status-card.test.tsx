@@ -40,6 +40,17 @@ const messages = {
         managedPolicyUnsupported: "This Codex has no managed-policy surface.",
         managedPolicyUnread: "The managed limits have not been read yet.",
         managedPolicyForbidsAll: "This Codex's managed configuration permits nothing.",
+        managedNetwork: "Managed network",
+        managedNetworkEnforced: "Codex enforces these network requirements.",
+        managedPolicyNetworkOnly: "Only network requirements are declared.",
+        managedNetworkEnabled: "Enforcement: {value}",
+        managedNetworkAllowedDomains: "Allowed domains: {value}",
+        managedNetworkDeniedDomains: "Denied domains: {value}",
+        managedNetworkReviewDomains: "Approval required: {value}",
+        managedNetworkManagedAllowedDomainsOnly: "Managed allowlist only: {value}",
+        managedNetworkTrue: "Yes",
+        managedNetworkFalse: "No",
+        managedNetworkEmpty: "None declared",
       },
     },
   },
@@ -63,6 +74,50 @@ beforeEach(() => {
 })
 
 describe("CodexAppServerStatusCard", () => {
+  it.each<Record<string, "allow" | "deny">>([{}, { "canonical.example": "deny" }])(
+    "prefers canonical domain maps over legacy views (%j)",
+    (domains) => {
+      hookValue.status.configRequirements = {
+        network: {
+          domains,
+          allowedDomains: ["legacy.example"],
+          deniedDomains: ["legacy-denied.example"],
+        },
+      }
+      renderCard()
+      expect(screen.queryByText(/legacy\.example|legacy-denied\.example/)).not.toBeInTheDocument()
+      expect(screen.getByText("Allowed domains: None declared")).toBeVisible()
+      expect(
+        screen.getByText(
+          Object.keys(domains).length
+            ? "Denied domains: canonical.example"
+            : "Denied domains: None declared"
+        )
+      ).toBeVisible()
+    }
+  )
+
+  it("shows network-only requirements without claiming everything is forbidden", () => {
+    hookValue.status.configRequirements = {
+      network: {
+        enabled: false,
+        domains: { "allowed.example": "allow", "denied.example": "deny" },
+        reviewDomains: [],
+        managedAllowedDomainsOnly: true,
+      },
+    }
+    renderCard()
+    expect(
+      screen.getByText("Managed network", { selector: "dt" }).nextElementSibling
+    ).toHaveTextContent("Enforcement: No")
+    expect(screen.getByText("Allowed domains: allowed.example")).toBeVisible()
+    expect(screen.getByText("Denied domains: denied.example")).toBeVisible()
+    expect(screen.getByText("Approval required: None declared")).toBeVisible()
+    expect(screen.queryByText(/permits nothing/)).not.toBeInTheDocument()
+    expect(screen.getByText("Only network requirements are declared.")).toBeVisible()
+    expect(screen.queryByText(/declares no managed limits/)).not.toBeInTheDocument()
+  })
+
   it("keeps a disconnected agent quiet even if a previous snapshot is still present", () => {
     hookValue.status = {
       mcpServers: [{ name: "previous-server" }],

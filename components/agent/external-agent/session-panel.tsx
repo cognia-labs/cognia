@@ -215,6 +215,7 @@ function RemoteSessionPanel({
                 riskLevel:
                   permission.riskLevel === "critical" ? "high" : (permission.riskLevel ?? "medium"),
                 acpOptions: permission.options,
+                requiresHumanApproval: permission.requiresHumanApproval,
               }
             : null
         }
@@ -511,6 +512,7 @@ function LocalExternalAgentSessionPanel({
                     ? "high"
                     : pendingPermission.riskLevel || "medium",
                 acpOptions: pendingPermission.options,
+                requiresHumanApproval: pendingPermission.requiresHumanApproval,
               }
             : null
         }

@@ -639,22 +639,32 @@ describe("ExternalAgentManager", () => {
     expect(failures.other).toBeDefined()
   })
 
-  it("opens the ACP permission dialog when pendingPermission is non-null", () => {
-    const pending: AcpPermissionRequest = {
-      id: "req-1",
-      requestId: "req-1",
-      sessionId: "session-1",
-      title: "Run a tool",
-      toolInfo: { id: "tool-1", name: "filesystem_write" },
-      reason: "Write a file",
-      rawInput: { path: "/tmp/x" },
-      riskLevel: "low",
+  it.each([false, true])(
+    "preserves the human approval requirement in the manager dialog (%s)",
+    (requiresHumanApproval) => {
+      const pending: AcpPermissionRequest = {
+        id: "req-1",
+        requestId: "req-1",
+        sessionId: "session-1",
+        title: "Run a tool",
+        toolInfo: { id: "tool-1", name: "filesystem_write" },
+        reason: "Write a file",
+        rawInput: { path: "/tmp/x" },
+        riskLevel: "low",
+        requiresHumanApproval,
+      }
+      mockUseExternalAgent.mockReturnValue({ ...baseHookValue(), pendingPermission: pending })
+      render(wrap(<ExternalAgentManager />))
+      expect(screen.getByText("Run a tool")).toBeInTheDocument()
+      expect(screen.getByTestId("code-block").textContent).toContain('"path"')
+      if (requiresHumanApproval)
+        expect(
+          screen.queryByRole("checkbox", { name: en.tools.alwaysAllowTool })
+        ).not.toBeInTheDocument()
+      else
+        expect(screen.getByRole("checkbox", { name: en.tools.alwaysAllowTool })).toBeInTheDocument()
     }
-    mockUseExternalAgent.mockReturnValue({ ...baseHookValue(), pendingPermission: pending })
-    render(wrap(<ExternalAgentManager />))
-    expect(screen.getByText("Run a tool")).toBeInTheDocument()
-    expect(screen.getByTestId("code-block").textContent).toContain('"path"')
-  })
+  )
 
   it("approves a pending permission via the manager", async () => {
     const respondToPermission = jest.fn().mockResolvedValue(undefined)

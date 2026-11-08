@@ -18,6 +18,7 @@ const fakeAdapter = {
   refreshMcpServers: jest.fn(async () => [{ name: "fs", status: "running" }]),
   refreshSkills: jest.fn(async () => [{ name: "deploy", path: "/s" }]),
   refreshAccount: jest.fn(async () => {}),
+  refreshConfigRequirements: jest.fn(async () => {}),
 }
 let statusListener: ((s: unknown) => void) | undefined
 let adapterForAgent: typeof fakeAdapter | null = fakeAdapter
@@ -56,6 +57,7 @@ describe("useCodexAppServerStatus", () => {
       await result.current.refresh()
     })
     expect(fakeAdapter.refreshMcpServers).toHaveBeenCalledTimes(1)
+    expect(fakeAdapter.refreshConfigRequirements).toHaveBeenCalledTimes(1)
   })
 
   it("applies live status updates pushed through onStatusUpdate", async () => {

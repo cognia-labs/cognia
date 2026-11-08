@@ -61,6 +61,11 @@ describe("projected Cognia tool identity", () => {
 })
 
 describe("configuredApprovalPolicy", () => {
+  it("never auto-approves a required human decision, even with a wildcard", () => {
+    const request = { title: "Read", requiresHumanApproval: true }
+    expect(configuredApprovalPolicy({ autoApprovePatterns: ["*"] }, request)).toBe("ask")
+    expect(configuredApprovalPolicy(undefined, request)).toBe("ask")
+  })
   const lists = { autoApprovePatterns: ["Read", "Bash(git status*)"], requireApprovalFor: ["edit"] }
 
   it("leaves the decision to the mode without lists", () => {

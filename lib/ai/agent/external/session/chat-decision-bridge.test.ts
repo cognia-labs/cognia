@@ -116,6 +116,22 @@ describe("registerExternalApproval", () => {
     }
   })
 
+  it("keeps required-human approvals one-time on both the chat card and reply", () => {
+    const approval = registerExternalApproval({
+      agentId: "codex",
+      chatSessionId: "chat-1",
+      event: event({ requiresHumanApproval: true }),
+    })!
+    expect(approval).toMatchObject({ requiresPerCallApproval: true, suppressAlwaysAllowRule: true })
+    const response = toPermissionResponse(
+      "allow_always",
+      getExternalApprovalTarget(approval.requestId)!
+    )
+    expect(response).toMatchObject({ granted: true, optionId: "o-allow-once" })
+    expect(response.rememberChoice).not.toBe(true)
+    expect(response.scope).toBeUndefined()
+  })
+
   it("keeps a non-empty rawInput over any preview", () => {
     const approval = registerExternalApproval({
       agentId: "a",

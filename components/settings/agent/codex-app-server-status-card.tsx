@@ -32,6 +32,88 @@ export function CodexAppServerStatusCard({ agentId, connected }: CodexAppServerS
   // branch on. Counting the badges after emitting them cannot distinguish an
   // empty row from an absent one, and the empty row is the fail-closed case.
   const requirements = status.configRequirements
+  const hasManagedAllowlists =
+    requirements?.allowedSandboxModes !== undefined ||
+    requirements?.allowedApprovalPolicies !== undefined ||
+    requirements?.allowedPermissionProfiles !== undefined
+  const network = requirements?.network
+  const networkDetails = [
+    ...(
+      [
+        ["enabled", "managedNetworkEnabled"],
+        ["managedAllowedDomainsOnly", "managedNetworkManagedAllowedDomainsOnly"],
+        ["allowUpstreamProxy", "managedNetworkAllowUpstreamProxy"],
+        ["dangerouslyAllowNonLoopbackProxy", "managedNetworkNonLoopbackProxy"],
+        ["dangerouslyAllowAllUnixSockets", "managedNetworkAllUnixSockets"],
+        ["allowLocalBinding", "managedNetworkLocalBinding"],
+        ["httpPort", "managedNetworkHttpPort"],
+        ["socksPort", "managedNetworkSocksPort"],
+      ] as const
+    ).flatMap(([key, label]) => {
+      const value = network?.[key]
+      return value === undefined
+        ? []
+        : [
+            {
+              key,
+              label: t(label, {
+                value:
+                  typeof value === "boolean"
+                    ? t(value ? "managedNetworkTrue" : "managedNetworkFalse")
+                    : String(value),
+              }),
+            },
+          ]
+    }),
+    ...(
+      [
+        [
+          "allowedDomains",
+          "managedNetworkAllowedDomains",
+          network?.domains
+            ? Object.keys(network.domains).filter((domain) => network.domains?.[domain] === "allow")
+            : network?.allowedDomains,
+        ],
+        [
+          "deniedDomains",
+          "managedNetworkDeniedDomains",
+          network?.domains
+            ? Object.keys(network.domains).filter((domain) => network.domains?.[domain] === "deny")
+            : network?.deniedDomains,
+        ],
+        ["reviewDomains", "managedNetworkReviewDomains", network?.reviewDomains],
+        [
+          "allowedSockets",
+          "managedNetworkAllowedSockets",
+          network?.unixSockets
+            ? Object.keys(network.unixSockets).filter(
+                (socket) => network.unixSockets?.[socket] === "allow"
+              )
+            : network?.allowUnixSockets,
+        ],
+        [
+          "deniedSockets",
+          "managedNetworkDeniedSockets",
+          network?.unixSockets
+            ? Object.keys(network.unixSockets).filter(
+                (socket) => network.unixSockets?.[socket] === "deny"
+              )
+            : undefined,
+        ],
+      ] as const
+    ).flatMap(([key, label, values]) =>
+      values === undefined
+        ? []
+        : [
+            {
+              key,
+              label: t(label, {
+                value: values.length ? values.join(", ") : t("managedNetworkEmpty"),
+              }),
+            },
+          ]
+    ),
+  ]
   const managedPolicyBadges: { key: string; label: string }[] = [
     ...(requirements?.allowedSandboxModes ?? []).map((mode) => ({
       key: `sandbox-${mode}`,
@@ -193,7 +275,7 @@ export function CodexAppServerStatusCard({ agentId, connected }: CodexAppServerS
               </p>
             ) : status.configRequirements === null ? (
               <p className="text-xs text-muted-foreground">{t("managedPolicyNone")}</p>
-            ) : managedPolicyBadges.length === 0 ? (
+            ) : managedPolicyBadges.length === 0 && hasManagedAllowlists ? (
               // A requirements object whose every allowlist is empty is the
               // fail-closed extreme: nothing is permitted, so every request is
               // refused before it is sent. Rendering an empty badge row for that
@@ -201,6 +283,8 @@ export function CodexAppServerStatusCard({ agentId, connected }: CodexAppServerS
               <p className="text-xs text-muted-foreground" data-testid="codex-managed-policy-empty">
                 {t("managedPolicyForbidsAll")}
               </p>
+            ) : managedPolicyBadges.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("managedPolicyNetworkOnly")}</p>
             ) : (
               <div className="flex flex-wrap gap-1" data-testid="codex-managed-policy">
                 {managedPolicyBadges.map(({ key, label }) => (
@@ -216,6 +300,25 @@ export function CodexAppServerStatusCard({ agentId, connected }: CodexAppServerS
             )}
           </dd>
         </div>
+
+        {network && (
+          <div className={STATUS_ROW_CLASS_NAME}>
+            <dt className="flex items-start gap-1.5 text-xs font-medium text-muted-foreground">
+              <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              {t("managedNetwork")}
+            </dt>
+            <dd className="flex min-w-0 flex-col gap-1.5">
+              {networkDetails.length > 0 && (
+                <ul className="space-y-1 text-xs [overflow-wrap:anywhere]">
+                  {networkDetails.map(({ key, label }) => (
+                    <li key={key}>{label}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-muted-foreground">{t("managedNetworkEnforced")}</p>
+            </dd>
+          </div>
+        )}
 
         <div className={STATUS_ROW_CLASS_NAME}>
           <dt className="flex items-start gap-1.5 text-xs font-medium text-muted-foreground">

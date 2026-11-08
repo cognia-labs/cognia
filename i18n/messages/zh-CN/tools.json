@@ -5,6 +5,7 @@
   "approve": "批准",
   "cancel": "取消",
   "deny": "拒绝",
+  "humanApprovalRequired": "此托管命令需要人工重新审批，决定仅对本次调用有效。",
   "parameters": "参数",
   "riskHigh": "高风险",
   "riskLow": "低风险",

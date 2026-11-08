@@ -77,6 +77,7 @@ export interface ExternalApprovalTarget {
   /** The chat session whose pane shows the dialog; used only for cleanup. */
   chatSessionId: string
   options?: AcpPermissionOption[]
+  requiresHumanApproval?: boolean
   /**
    * Set when the agent is running on a paired HOST rather than in this shell.
    *
@@ -133,6 +134,7 @@ export function toPermissionResponse(
   decision: ApprovalDecision,
   target: ExternalApprovalTarget
 ): AcpPermissionResponse {
+  if (target.requiresHumanApproval && decision === "allow_always") decision = "allow"
   return {
     requestId: target.responseRequestId,
     granted: decision !== "deny",
@@ -141,7 +143,11 @@ export function toPermissionResponse(
     // consent for this conversation, and a persistent cross-session grant to a
     // third-party agent process should be a deliberate settings action.
     ...(decision === "allow_always" ? { rememberChoice: true, scope: "session" as const } : {}),
-    optionId: pickPermissionOptionId(decision, target.options),
+    optionId: target.requiresHumanApproval
+      ? target.options?.find(
+          (option) => option.kind === (decision === "deny" ? "reject_once" : "allow_once")
+        )?.optionId
+      : pickPermissionOptionId(decision, target.options),
   }
 }
 
@@ -185,6 +191,7 @@ export function registerExternalApproval(params: {
     responseRequestId,
     chatSessionId,
     options: request.options,
+    ...(request.requiresHumanApproval ? { requiresHumanApproval: true } : {}),
     ...(remoteDecisionId ? { remoteDecisionId } : {}),
   })
 
@@ -200,6 +207,12 @@ export function registerExternalApproval(params: {
     displayName: request.toolInfo?.name,
     description: request.toolInfo?.description ?? request.reason,
     status: "pending",
+    ...(request.requiresHumanApproval
+      ? {
+          requiresPerCallApproval: true,
+          suppressAlwaysAllowRule: true,
+        }
+      : {}),
   }
 }
 

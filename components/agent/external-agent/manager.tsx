@@ -1600,6 +1600,7 @@ export function ExternalAgentManager({
                     ? "high"
                     : pendingPermission.riskLevel || "medium",
                 acpOptions: mapAcpOptions(pendingPermission.options),
+                requiresHumanApproval: pendingPermission.requiresHumanApproval,
                 userInput: pendingUserInput,
               }
             : null

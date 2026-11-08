@@ -99,6 +99,25 @@ const baseAgentState = {
 }
 
 describe("ExternalAgentSessionPanel", () => {
+  it("preserves human-only approvals in the native session dialog", () => {
+    mockAgentRuntime.mockReturnValue({ runtime: "external" })
+    useExternalAgentMock.mockReturnValue({
+      ...baseAgentState,
+      activeAgentId: "agent",
+      activeSession: { id: "session" },
+      pendingPermission: {
+        id: "human-checkpoint",
+        requiresHumanApproval: true,
+        riskLevel: "low",
+        toolInfo: { id: "tool", name: "git status" },
+      },
+    })
+    render(wrap(<ExternalAgentSessionPanel />))
+    expect(screen.getByText(en.tools.humanApprovalRequired)).toBeVisible()
+    expect(
+      screen.queryByRole("checkbox", { name: en.tools.alwaysAllowTool })
+    ).not.toBeInTheDocument()
+  })
   it.each([false, true])("honors negotiated ACP fork support (%s)", (supported) => {
     mockAgentRuntime.mockReturnValue({ runtime: "external" })
     useExternalAgentMock.mockReturnValue({

@@ -43,6 +43,7 @@ export type ConfiguredApprovalPolicy = "ask" | "approve" | null
 
 /** The fields of a permission request the approval lists can match. */
 export interface ApprovalPolicyRequest {
+  requiresHumanApproval?: boolean
   title?: string
   kind?: string
   toolInfo?: { name?: string }
@@ -77,6 +78,7 @@ export function configuredApprovalPolicy(
     | undefined,
   request: ApprovalPolicyRequest
 ): ConfiguredApprovalPolicy {
+  if (request.requiresHumanApproval) return "ask"
   if (!config) return null
   // Goose Code Mode approves a complete JavaScript batch. Its nested calls do
   // not generate separate ACP permission requests, so review the opaque batch

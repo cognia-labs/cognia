@@ -59,6 +59,7 @@ export interface ToolApprovalRequest {
   toolDescription: string
   args: Record<string, unknown>
   riskLevel: "low" | "medium" | "high"
+  requiresHumanApproval?: boolean
   /** ACP permission options (if provided by the external agent). */
   acpOptions?: AcpPermissionOption[]
   /**
@@ -126,7 +127,12 @@ export function ToolApprovalDialog({
 
   const risk = riskConfig[request.riskLevel]
   const RiskIcon = risk.icon
-  const hasAcpOptions = !!request.acpOptions && request.acpOptions.length > 0
+  const acpOptions = request.requiresHumanApproval
+    ? request.acpOptions?.filter(
+        (option) => option.kind === "allow_once" || option.kind === "reject_once"
+      )
+    : request.acpOptions
+  const hasAcpOptions = !!acpOptions?.length
   const questions = request.userInput?.questions ?? []
   const isQuestionMode = questions.length > 0
   const submitting = submittedId === request.id
@@ -136,7 +142,7 @@ export function ToolApprovalDialog({
   const handleApprove = () => {
     if (submitting) return
     setSubmittedId(request.id)
-    onApprove(request.id, alwaysAllow)
+    onApprove(request.id, !request.requiresHumanApproval && alwaysAllow)
     setAlwaysAllow(false)
   }
 
@@ -370,7 +376,10 @@ export function ToolApprovalDialog({
             </div>
           </div>
 
-          {request.riskLevel === "low" && (
+          {request.requiresHumanApproval && (
+            <p className="text-sm text-muted-foreground">{t("humanApprovalRequired")}</p>
+          )}
+          {request.riskLevel === "low" && !request.requiresHumanApproval && (
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="always-allow"
@@ -391,7 +400,7 @@ export function ToolApprovalDialog({
           {hasAcpOptions ? (
             <>
               <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-                {request.acpOptions!.map((option) => (
+                {acpOptions!.map((option) => (
                   <Button
                     key={option.optionId}
                     variant={option.isDefault ? "default" : "outline"}
