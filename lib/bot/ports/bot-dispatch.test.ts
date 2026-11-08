@@ -24,6 +24,14 @@ jest.mock("../sources/desktop-event", () => ({
 jest.mock("../sources/workflow-completed", () => ({
   dispatchWorkflowCompletedToBots: (input: unknown) => dispatchWorkflowCompletedToBots(input),
 }))
+const stopWatching = jest.fn()
+const watchDesktopEventTypes = jest.fn(
+  (_listener: (types: ReadonlySet<string>) => void) => stopWatching
+)
+jest.mock("../sources/desktop-event-types", () => ({
+  watchDesktopEventTypes: (listener: (types: ReadonlySet<string>) => void) =>
+    watchDesktopEventTypes(listener),
+}))
 jest.mock("../runtime/run", () => ({
   cancelAcceptedBotDeliveries: (...args: unknown[]) => cancelAcceptedBotDeliveries(...(args as [])),
 }))
@@ -61,6 +69,22 @@ describe("bot-dispatch", () => {
     const run = { workflowId: "w", workflowName: "W", runId: "r", status: "succeeded" as const }
     await port.workflowCompleted(run)
     expect(dispatchWorkflowCompletedToBots).toHaveBeenCalledWith(run)
+  })
+
+  it("watches the desktop event types through the source and stops it", async () => {
+    const listener = jest.fn()
+    const stop = port.watchDesktopEventTypes(listener)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(watchDesktopEventTypes).toHaveBeenCalledWith(listener)
+    stop()
+    expect(stopWatching).toHaveBeenCalledTimes(1)
+  })
+
+  it("never starts the watch when stopped before the source loads", async () => {
+    const stop = port.watchDesktopEventTypes(jest.fn())
+    stop()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(watchDesktopEventTypes).not.toHaveBeenCalled()
   })
 
   it("cancels a conversation's own accepted deliveries up to the cutoff", async () => {

@@ -2,8 +2,9 @@
  * @jest-environment jsdom
  *
  * Coverage for the trigger.desktop.event fan-out: backend subscription
- * lifecycle, kind matching, the PII gate on element names, and both loop
- * guards (cooldown + in-flight).
+ * lifecycle, kind matching, the PII gate on element names, both loop guards
+ * (cooldown + in-flight), and the Bots' own subscription through
+ * `bot-dispatch`.
  */
 
 let workflowRows: unknown[] = []
@@ -36,7 +37,10 @@ import {
   initDesktopEventTrigger,
   disposeDesktopEventTrigger,
   _injectUiaEventForTest,
+  botEventKinds,
 } from "./desktop-event-trigger"
+import { __resetPortsForTesting, __setPortForTesting } from "@/lib/modules/ports"
+import type { BotDispatchPort } from "@/types/modules/ports/bot-dispatch"
 import {
   _seedTriggerSubscriptionsForTest,
   disposeTriggerSubscriptions,
@@ -82,7 +86,14 @@ function makeDeps() {
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
+// No Bots unless a test installs them: the runner then subscribes for the
+// workflows alone, as on a deployment without the bot module.
+beforeEach(() => {
+  __setPortForTesting("bot-dispatch", null)
+})
+
 afterEach(() => {
+  __resetPortsForTesting()
   disposeDesktopEventTrigger()
   disposeTriggerSubscriptions()
   workflowRows = []
@@ -261,5 +272,138 @@ describe("desktop-event fan-out", () => {
     expect(dispatchTriggerMock).toHaveBeenCalledTimes(2)
     pendingRuns.forEach((resolve) => resolve())
     await third
+  })
+})
+
+describe("Bot desktop events", () => {
+  let botListener: ((types: ReadonlySet<string>) => void) | undefined
+  const stopBotWatch = jest.fn()
+  const desktopEvent = jest.fn<Promise<void>, Parameters<BotDispatchPort["desktopEvent"]>>(
+    async () => undefined
+  )
+
+  beforeEach(() => {
+    botListener = undefined
+    stopBotWatch.mockClear()
+    desktopEvent.mockClear()
+    __setPortForTesting("bot-dispatch", {
+      connectorInbound: async () => ({}),
+      desktopEvent,
+      workflowCompleted: async () => undefined,
+      cancelConversationDeliveries: async () => 0,
+      watchDesktopEventTypes: (listener) => {
+        botListener = listener
+        return stopBotWatch
+      },
+    })
+  })
+
+  async function botsWant(types: string[]) {
+    botListener?.(new Set(types))
+    await flush()
+    await flush()
+  }
+
+  it("maps Bot types onto UI automation kinds and ignores the pet's", () => {
+    expect(
+      botEventKinds(new Set(["desktop.focus-changed", "desktop.pet.levelUp", "desktop.bogus"]))
+    ).toEqual(["focus-changed"])
+  })
+
+  it("subscribes for the Bots with no workflow and hands them its events", async () => {
+    const deps = makeDeps()
+    initDesktopEventTrigger(deps)
+    await flush()
+    expect(deps.subscribe).not.toHaveBeenCalled()
+
+    await botsWant(["desktop.focus-changed", "desktop.pet.levelUp"])
+    expect(deps.subscribe).toHaveBeenCalledTimes(1)
+    expect(deps.subscribe).toHaveBeenCalledWith({ kinds: ["focus-changed"] })
+    expect(deps.listen).toHaveBeenCalledTimes(1)
+
+    await _injectUiaEventForTest({ subscriptionId: 7, kind: "focus-changed", name: "Inbox", at: 1 })
+    await flush()
+    expect(desktopEvent).toHaveBeenCalledTimes(1)
+    expect(desktopEvent).toHaveBeenCalledWith({
+      type: "desktop.focus-changed",
+      sourceRecordId: "uia:focus-changed:100000",
+      payload: { kind: "focus-changed", name: "Inbox" },
+      occurredAt: 100_000,
+    })
+    expect(dispatchTriggerMock).not.toHaveBeenCalled()
+  })
+
+  it("hands the Bots the redacted name only", async () => {
+    initDesktopEventTrigger(makeDeps())
+    await flush()
+    await botsWant(["desktop.focus-changed"])
+    hasNoLeakingPiiMock.mockReturnValue(false)
+
+    await _injectUiaEventForTest({
+      subscriptionId: 7,
+      kind: "focus-changed",
+      name: "alice@example.com",
+      at: 1,
+    })
+    await flush()
+    expect(desktopEvent.mock.calls[0][0].payload).toEqual({ kind: "focus-changed" })
+  })
+
+  it("shares a workflow group with the same filter and hands each event to both once", async () => {
+    const row = wf("wf1", {})
+    workflowRows = [row]
+    _seedTriggerSubscriptionsForTest([row])
+    const deps = makeDeps()
+    initDesktopEventTrigger(deps)
+    await flush()
+    await botsWant([
+      "desktop.focus-changed",
+      "desktop.property-changed",
+      "desktop.structure-changed",
+    ])
+
+    expect(deps.subscribe).toHaveBeenCalledTimes(1)
+    await _injectUiaEventForTest({ subscriptionId: 7, kind: "focus-changed", at: 1 })
+    await flush()
+    expect(dispatchTriggerMock).toHaveBeenCalledTimes(1)
+    expect(desktopEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps a workflow's scoped events from the Bots", async () => {
+    const row = wf("wf1", { kinds: ["focus-changed"], scope: "scope-a" })
+    workflowRows = [row]
+    _seedTriggerSubscriptionsForTest([row])
+    const deps = makeDeps()
+    let nextSubscriptionId = 10
+    deps.subscribe.mockImplementation(async () => nextSubscriptionId++)
+    initDesktopEventTrigger(deps)
+    await flush()
+    await botsWant(["desktop.focus-changed"])
+
+    expect(deps.subscribe).toHaveBeenCalledTimes(2)
+    expect(deps.subscribe).toHaveBeenNthCalledWith(2, { kinds: ["focus-changed"] })
+    await _injectUiaEventForTest({ subscriptionId: 10, kind: "focus-changed", at: 1 })
+    await flush()
+    expect(dispatchTriggerMock).toHaveBeenCalledTimes(1)
+    expect(desktopEvent).not.toHaveBeenCalled()
+
+    await _injectUiaEventForTest({ subscriptionId: 11, kind: "focus-changed", at: 2 })
+    await flush()
+    expect(dispatchTriggerMock).toHaveBeenCalledTimes(1)
+    expect(desktopEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it("releases the Bots' subscription when they stop listening and stops watching on dispose", async () => {
+    const deps = makeDeps()
+    initDesktopEventTrigger(deps)
+    await flush()
+    await botsWant(["desktop.focus-changed"])
+    expect(deps.subscribe).toHaveBeenCalledTimes(1)
+
+    await botsWant([])
+    expect(deps.unsubscribe).toHaveBeenCalledWith(7)
+
+    disposeDesktopEventTrigger()
+    expect(stopBotWatch).toHaveBeenCalledTimes(1)
   })
 })

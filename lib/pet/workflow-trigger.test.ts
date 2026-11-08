@@ -18,6 +18,7 @@ import {
   initPetEventTrigger,
 } from "./workflow-trigger"
 import { _seedTriggerSubscriptionsForTest } from "@/lib/workflow/runtime/trigger-subscriptions"
+import { __resetPortsForTesting, __setPortForTesting } from "@/lib/modules/ports"
 import type { PetEvent } from "@/types/pet"
 import type { WorkflowRow } from "@/types/workflow/visual"
 
@@ -34,13 +35,20 @@ function event(kind: PetEvent["kind"], meta?: Record<string, unknown>): PetEvent
 
 let clock = 0
 
+const desktopEvent = jest.fn().mockResolvedValue(undefined)
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
 beforeEach(() => {
+  desktopEvent.mockClear()
+  // No Bots unless a test installs them.
+  __setPortForTesting("bot-dispatch", null)
   dispatchTrigger.mockClear()
   clock = 100_000
   initPetEventTrigger({ now: () => clock })
 })
 
 afterEach(() => {
+  __resetPortsForTesting()
   disposePetEventTrigger()
   _seedTriggerSubscriptionsForTest([])
 })
@@ -109,5 +117,44 @@ describe("pet-event-trigger", () => {
     disposePetEventTrigger()
     await _injectPetEventForTest(event("levelUp", { level: 5 }))
     expect(dispatchTrigger).not.toHaveBeenCalled()
+  })
+})
+
+describe("pet events for Bots", () => {
+  beforeEach(() => {
+    __setPortForTesting("bot-dispatch", {
+      connectorInbound: async () => ({}),
+      desktopEvent,
+      workflowCompleted: async () => undefined,
+      cancelConversationDeliveries: async () => 0,
+      watchDesktopEventTypes: () => () => undefined,
+    })
+  })
+
+  it("hands every lifecycle event to the Bots, projected, with no workflow listening", async () => {
+    await _injectPetEventForTest(event("levelUp", { level: 5, userText: "SECRET" }))
+    await flush()
+    expect(desktopEvent).toHaveBeenCalledTimes(1)
+    expect(desktopEvent).toHaveBeenCalledWith({
+      type: "desktop.pet.levelUp",
+      sourceRecordId: "pet:levelUp:1000",
+      payload: { kind: "levelUp", at: 1000, level: 5 },
+      occurredAt: 1000,
+    })
+    expect(dispatchTrigger).not.toHaveBeenCalled()
+  })
+
+  it("hands an event to the Bots and to a matching workflow alike", async () => {
+    _seedTriggerSubscriptionsForTest([workflowWithPetTrigger("wf1")])
+    await _injectPetEventForTest(event("evolved", { stage: "adult" }))
+    await flush()
+    expect(desktopEvent).toHaveBeenCalledTimes(1)
+    expect(dispatchTrigger).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps non-lifecycle kinds from the Bots too", async () => {
+    await _injectPetEventForTest(event("fed"))
+    await flush()
+    expect(desktopEvent).not.toHaveBeenCalled()
   })
 })

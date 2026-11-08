@@ -9,6 +9,13 @@
  * filter and each distinct group owns one backend subscription. Incoming
  * subscription ids route events back to only the trigger nodes in that group.
  *
+ * Bots are the second consumer. Through `bot-dispatch` the runner watches the
+ * `desktop.<kind>` types the enabled Bot installations listen for and keeps
+ * one unscoped subscription for those kinds (shared with a workflow group
+ * that has the same filter), so a Bot watching desktop events fires whether
+ * or not any workflow does. Only events from that subscription are handed to
+ * the Bots, each exactly once.
+ *
  * Safety gates:
  *  1. **PII red-line** — the focused element's `name` may carry user text
  *     (document titles, form contents); it is forwarded only when
@@ -60,10 +67,18 @@ export interface DesktopUiaEvent {
 interface BackendSubscription {
   id: number
   nodeIds: Set<string>
+  /** Events from this subscription are handed to the Bots. */
+  bots: boolean
 }
 
 interface RunnerState {
   workflowsSub?: Subscription
+  /** Stops watching the desktop event types the Bots listen for. */
+  stopBotWatch?: () => void
+  /** The UI automation kinds the Bots listen for. */
+  botKinds: EventKind[]
+  /** The last workflow rows seen, so a Bot change can reconcile without a read. */
+  lastRows: WorkflowRow[]
   uiaUnlisten?: (() => void) | null
   backendSubs: Map<string, BackendSubscription>
   subscriptionsById: Map<number, BackendSubscription>
@@ -98,9 +113,18 @@ const ALL_EVENT_KINDS: EventKind[] = ["focus-changed", "structure-changed", "pro
 interface DesiredBackendSubscription {
   filter: EventFilter
   nodeIds: Set<string>
+  bots: boolean
 }
 
-function desiredSubscriptions(rows: WorkflowRow[]): Map<string, DesiredBackendSubscription> {
+/** The UI automation kinds named by Bot `desktop.<kind>` types; others are not this runner's. */
+export function botEventKinds(types: ReadonlySet<string>): EventKind[] {
+  return ALL_EVENT_KINDS.filter((kind) => types.has(`desktop.${kind}`))
+}
+
+function desiredSubscriptions(
+  rows: WorkflowRow[],
+  botKinds: readonly EventKind[]
+): Map<string, DesiredBackendSubscription> {
   const desired = new Map<string, DesiredBackendSubscription>()
   for (const workflow of rows) {
     if (workflow.isTemplate || workflow.isBuiltIn) continue
@@ -127,16 +151,24 @@ function desiredSubscriptions(rows: WorkflowRow[]): Map<string, DesiredBackendSu
         desired.set(key, {
           filter: { kinds, ...(scopeValue ? { scope: elementRef(scopeValue) } : {}) },
           nodeIds: new Set([node.id]),
+          bots: false,
         })
       }
     }
+  }
+  if (botKinds.length > 0) {
+    const kinds = [...botKinds].sort()
+    const key = JSON.stringify({ kinds, scope: null })
+    const shared = desired.get(key)
+    if (shared) shared.bots = true
+    else desired.set(key, { filter: { kinds }, nodeIds: new Set(), bots: true })
   }
   return desired
 }
 
 async function reconcileNow(s: RunnerState, rows: WorkflowRow[]): Promise<void> {
   if (!s.active || state !== s) return
-  const desired = desiredSubscriptions(rows)
+  const desired = desiredSubscriptions(rows, s.botKinds)
 
   for (const [key, current] of [...s.backendSubs]) {
     if (desired.has(key)) continue
@@ -153,6 +185,7 @@ async function reconcileNow(s: RunnerState, rows: WorkflowRow[]): Promise<void> 
     const current = s.backendSubs.get(key)
     if (current) {
       current.nodeIds = wanted.nodeIds
+      current.bots = wanted.bots
       continue
     }
     try {
@@ -161,7 +194,7 @@ async function reconcileNow(s: RunnerState, rows: WorkflowRow[]): Promise<void> 
         await s.deps.unsubscribe(id).catch(() => undefined)
         return
       }
-      const registered = { id, nodeIds: wanted.nodeIds }
+      const registered = { id, nodeIds: wanted.nodeIds, bots: wanted.bots }
       s.backendSubs.set(key, registered)
       s.subscriptionsById.set(id, registered)
       log.info?.("desktop-event-trigger: backend subscription active", {
@@ -184,6 +217,7 @@ async function reconcileNow(s: RunnerState, rows: WorkflowRow[]): Promise<void> 
 function queueReconcile(rows: WorkflowRow[]): void {
   const s = state
   if (!s) return
+  s.lastRows = rows
   s.reconcileChain = s.reconcileChain
     .then(() => reconcileNow(s, rows))
     .catch((err) =>
@@ -200,32 +234,36 @@ async function onUiaEvent(payload: DesktopUiaEvent): Promise<void> {
     const [{ dispatchTrigger }, { findMatchingWorkflows }, { hasNoLeakingPii }] = await Promise.all(
       [import("./trigger-bridge"), import("./trigger-subscriptions"), import("@cognia/redact")]
     )
-    const routedNodeIds =
+    const routed =
       payload.subscriptionId === undefined
         ? undefined
-        : s.subscriptionsById.get(payload.subscriptionId)?.nodeIds
-    if (payload.subscriptionId !== undefined && !routedNodeIds) return
-    const matches = findMatchingWorkflows("trigger.desktop.event", {
-      desktopEventKind: payload.kind,
-    }).filter((match) => !routedNodeIds || routedNodeIds.has(match.nodeId))
-    if (matches.length === 0) return
+        : s.subscriptionsById.get(payload.subscriptionId)
+    if (payload.subscriptionId !== undefined && !routed) return
 
     // PII red-line: element names carry user text (titles, form contents).
     const safeName = payload.name && hasNoLeakingPii(payload.name) ? payload.name : undefined
     const now = s.deps.now()
 
-    // Bots are a second consumer, reached through `bot-dispatch`. Handed the
-    // ALREADY REDACTED name, never the raw one, so this fan-out cannot become
-    // the place a window title leaks.
-    void (async () => {
-      const bots = await loadPort("bot-dispatch")
-      await bots?.desktopEvent({
-        type: `desktop.${payload.kind}`,
-        sourceRecordId: `uia:${payload.kind}:${now}`,
-        payload: { kind: payload.kind, ...(safeName ? { name: safeName } : {}) },
-        occurredAt: now,
-      })
-    })().catch(() => undefined)
+    // Bots get the events of the subscription kept for them, once each. A
+    // backend that does not tag events with a subscription id gets the Bots'
+    // kinds instead. Handed the ALREADY REDACTED name, never the raw one, so
+    // this fan-out cannot become the place a window title leaks.
+    const forBots = routed ? routed.bots : s.botKinds.includes(payload.kind as EventKind)
+    if (forBots)
+      void (async () => {
+        const bots = await loadPort("bot-dispatch")
+        await bots?.desktopEvent({
+          type: `desktop.${payload.kind}`,
+          sourceRecordId: `uia:${payload.kind}:${now}`,
+          payload: { kind: payload.kind, ...(safeName ? { name: safeName } : {}) },
+          occurredAt: now,
+        })
+      })().catch(() => undefined)
+
+    const matches = findMatchingWorkflows("trigger.desktop.event", {
+      desktopEventKind: payload.kind,
+    }).filter((match) => !routed || routed.nodeIds.has(match.nodeId))
+    if (matches.length === 0) return
 
     await Promise.all(
       matches.map(async (match) => {
@@ -282,6 +320,8 @@ export function initDesktopEventTrigger(deps: DesktopEventTriggerDeps = {}): voi
     backendSubs: new Map(),
     subscriptionsById: new Map(),
     reconcileChain: Promise.resolve(),
+    botKinds: [],
+    lastRows: [],
     lastFired: new Map(),
     inflight: new Set(),
     active: true,
@@ -293,6 +333,22 @@ export function initDesktopEventTrigger(deps: DesktopEventTriggerDeps = {}): voi
     },
   }
   state = s
+  // The Bots' kinds join the reconcile as they change. With no `bot-dispatch`
+  // provider there are no Bots and only the workflows subscribe.
+  void loadPort("bot-dispatch")
+    .then((bots) => {
+      if (!bots || !s.active || state !== s) return
+      s.stopBotWatch = bots.watchDesktopEventTypes((types) => {
+        if (!s.active || state !== s) return
+        s.botKinds = botEventKinds(types)
+        queueReconcile(s.lastRows)
+      })
+    })
+    .catch((err) =>
+      log.warn?.("desktop-event-trigger: bot watch failed", {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    )
   try {
     // Deterministic initial reconcile (liveQuery's first emission is
     // scheduler-dependent); reconcile is idempotent, so the liveQuery's own
@@ -338,6 +394,8 @@ export function disposeDesktopEventTrigger(): void {
   } catch {
     // best-effort
   }
+  s.stopBotWatch?.()
+  s.stopBotWatch = undefined
   s.uiaUnlisten?.()
   s.uiaUnlisten = null
   for (const subscription of s.backendSubs.values()) {

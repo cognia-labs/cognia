@@ -2,6 +2,10 @@ import { PET_SHOW_TOOL_NAME, PET_STATUS_TOOL_NAME, PET_TOOL_NAMES } from "./agen
 import petModule from "./module"
 
 describe("pet module manifest", () => {
+  it("hands its lifecycle events to Bots only when a bot module provides bot-dispatch", () => {
+    expect(petModule.requires).toEqual(["speech?", "bot-dispatch?"])
+  })
+
   it("declares a stable module whose real-world smoke is still owed", () => {
     expect(petModule).toMatchObject({ id: "pet", kind: "module", stage: "stable" })
     expect(petModule.acceptance).toEqual({ realSmoke: "pending" })

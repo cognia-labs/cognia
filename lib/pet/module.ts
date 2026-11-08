@@ -44,8 +44,10 @@ export default defineHostModule({
     "twin",
     "workflow",
   ],
-  // It speaks through the `speech` port, and stays silent without one.
-  requires: ["speech?"],
+  // It speaks through the `speech` port, and stays silent without one. Its
+  // lifecycle events reach installed Bots through `bot-dispatch` when a bot
+  // module provides it.
+  requires: ["speech?", "bot-dispatch?"],
   // What other modules use: which window this is (account gates, appearance,
   // the tray), revealing the pet (island, tray panel), the pet's view and care
   // condition (tray, glance), its paired-phone client and request ids (glance,

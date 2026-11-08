@@ -9,6 +9,11 @@
  * backend resource to reconcile: an idle bus subscription is a Set entry, so
  * the liveQuery-driven acquire/release dance is deliberately omitted.
  *
+ * Bots are the second consumer: every lifecycle event is handed to them as a
+ * `desktop.pet.<kind>` event through `bot-dispatch` (the router decides which
+ * installations listen), whether or not any workflow matches. They get the
+ * same id-only projection.
+ *
  * Safety gates (mirroring the desktop runner):
  *  1. **PII red-line** — the trigger payload is a PROJECTION, never the raw
  *     event meta (talked events carry meta.userText; even though talked is
@@ -19,6 +24,7 @@
  */
 
 import { loggers } from "@cognia/logging"
+import { loadPort } from "@/lib/modules/ports"
 import type { PetEvent } from "@/types/pet"
 
 const log = loggers.scheduler
@@ -54,6 +60,27 @@ async function onPetEvent(event: PetEvent): Promise<void> {
   const s = state
   if (!s || !s.active) return
   if (!TRIGGERABLE_KINDS.has(event.kind)) return
+
+  // PII red-line: project only id-shaped meta — never forward meta wholesale.
+  const payload: Record<string, unknown> = { kind: event.kind, at: event.at }
+  if (typeof event.meta?.achievementId === "string") {
+    payload.achievementId = event.meta.achievementId
+  }
+  if (typeof event.meta?.level === "number") payload.level = event.meta.level
+  if (typeof event.meta?.stage === "string") payload.stage = event.meta.stage
+
+  // Bots get every lifecycle event; with no `bot-dispatch` provider there are
+  // none. Best-effort, like the workflow fan-out below.
+  void (async () => {
+    const bots = await loadPort("bot-dispatch")
+    await bots?.desktopEvent({
+      type: `desktop.pet.${event.kind}`,
+      sourceRecordId: `pet:${event.kind}:${event.at}`,
+      payload: { ...payload },
+      occurredAt: event.at,
+    })
+  })().catch(() => undefined)
+
   try {
     const [{ dispatchTrigger }, { findMatchingWorkflows }] = await Promise.all([
       import("@/lib/workflow/runtime/trigger-bridge"),
@@ -61,14 +88,6 @@ async function onPetEvent(event: PetEvent): Promise<void> {
     ])
     const matches = findMatchingWorkflows("trigger.pet.event", { petEventKind: event.kind })
     if (matches.length === 0) return
-
-    // PII red-line: project only id-shaped meta — never forward meta wholesale.
-    const payload: Record<string, unknown> = { kind: event.kind, at: event.at }
-    if (typeof event.meta?.achievementId === "string") {
-      payload.achievementId = event.meta.achievementId
-    }
-    if (typeof event.meta?.level === "number") payload.level = event.meta.level
-    if (typeof event.meta?.stage === "string") payload.stage = event.meta.stage
 
     const now = s.now()
     await Promise.all(

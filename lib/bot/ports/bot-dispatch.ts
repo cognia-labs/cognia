@@ -16,6 +16,20 @@ export const port: BotDispatchPort = {
     await dispatchDesktopEventToBots(input)
   },
 
+  // Synchronous by contract (the caller keeps the unsubscribe), so the source
+  // loads behind it and a stop that comes first wins.
+  watchDesktopEventTypes: (listener) => {
+    let stopped = false
+    let stop: (() => void) | undefined
+    void import("../sources/desktop-event-types").then(({ watchDesktopEventTypes }) => {
+      if (!stopped) stop = watchDesktopEventTypes(listener)
+    })
+    return () => {
+      stopped = true
+      stop?.()
+    }
+  },
+
   workflowCompleted: async (input) => {
     const { dispatchWorkflowCompletedToBots } = await import("../sources/workflow-completed")
     await dispatchWorkflowCompletedToBots(input)

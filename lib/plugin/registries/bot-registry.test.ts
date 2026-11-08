@@ -9,6 +9,7 @@ import {
   listBotIds,
   parseBotDefinitionId,
   registerBot,
+  subscribeBots,
   unregisterBotById,
   unregisterBotsByPlugin,
 } from "./bot-registry"
@@ -66,6 +67,18 @@ describe("botDefinitionId", () => {
 })
 
 describe("bot registry", () => {
+  it("tells subscribers when a Bot registers or leaves, until they unsubscribe", () => {
+    const listener = jest.fn()
+    const unsubscribe = subscribeBots(listener)
+    registerBot("digest", { id: "acme:digest", definition: def("digest") }, { pluginId: "acme" })
+    expect(listener).toHaveBeenCalledTimes(1)
+    unregisterBotsByPlugin("acme")
+    expect(listener).toHaveBeenCalledTimes(2)
+    unsubscribe()
+    registerBot("digest", { id: "acme:digest", definition: def("digest") }, { pluginId: "acme" })
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
   it("stores under the namespaced id, not the raw one", () => {
     registerBot("digest", { id: "acme:digest", definition: def("digest") }, { pluginId: "acme" })
 

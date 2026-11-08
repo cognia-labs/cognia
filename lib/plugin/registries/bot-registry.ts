@@ -83,5 +83,11 @@ export const getBotEntry = registry.getEntry
 export const listBotIds = registry.list
 /** List every registered entry (id + Bot + pluginId) in registration order. */
 export const listBotEntries = registry.entries
+/**
+ * Listen for Bots registering or leaving; returns the unsubscribe. Readers
+ * that derive something from the registered definitions (the desktop event
+ * types the installed Bots watch) re-derive on each call.
+ */
+export const subscribeBots = registry.subscribe
 /** Test-only: clear every dynamically registered Bot. */
 export const __resetBotsForTesting = registry.__resetForTesting

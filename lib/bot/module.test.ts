@@ -6,13 +6,14 @@ describe("the bot manifest", () => {
     expect(bot.acceptance).toEqual({ realSmoke: "pending" })
   })
 
-  it("provides bot-dispatch, so the connectors and the workflow plane do not depend on it", async () => {
+  it("provides bot-dispatch, so the connectors, the workflow plane and the pet do not depend on it", async () => {
     expect(bot.provides?.map((provision) => provision.port)).toEqual(["bot-dispatch"])
     const { port } = (await bot.provides![0]!.load()) as { port: object }
     expect(Object.keys(port).sort()).toEqual([
       "cancelConversationDeliveries",
       "connectorInbound",
       "desktopEvent",
+      "watchDesktopEventTypes",
       "workflowCompleted",
     ])
     expect(bot.dependsOn).toEqual(expect.arrayContaining(["connectors", "squads", "workflow"]))

@@ -2,10 +2,12 @@
 // that produce Bot events reach the Bot control plane. The bot module provides
 // it (`lib/bot/ports/bot-dispatch.ts`). The connectors hand it each admitted
 // inbound message and cancel a conversation's accepted deliveries through it,
-// and the workflow plane hands it desktop events and finished runs, so neither
-// imports the bot module (which itself drives connectors, workflows and
-// squads). With no provider there are no bots: inbound and event hand-offs are
-// no-ops, and there is nothing to cancel.
+// the workflow plane hands it desktop events and finished runs (and asks which
+// desktop events the bots watch, to subscribe the OS watcher for them), and
+// the pet hands it its lifecycle events, so none of them imports the bot module
+// (which itself drives connectors, workflows and squads). With no provider
+// there are no bots: inbound and event hand-offs are no-ops, there is nothing
+// to cancel, and no desktop event is watched for bots.
 
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { BotEventProvenanceV1 } from "@/types/bot/event"
@@ -17,7 +19,10 @@ export interface BotConnectorInboundInput {
 }
 
 export interface BotDesktopEventInput {
-  /** Dotted type, for example `desktop.uia` or `desktop.pet`. */
+  /**
+   * Dotted type: `desktop.<UI automation kind>` (`desktop.focus-changed`) or
+   * `desktop.pet.<pet event kind>` (`desktop.pet.levelUp`).
+   */
   type: string
   /** A stable id for this occurrence, so a redelivery is the same event. */
   sourceRecordId: string
@@ -52,6 +57,15 @@ export interface BotDispatchPort {
   connectorInbound(input: BotConnectorInboundInput): Promise<{ deferred?: true }>
   /** Route one desktop or pet occurrence to the installed bots. */
   desktopEvent(input: BotDesktopEventInput): Promise<void>
+  /**
+   * Watch which `desktop.*` event types the enabled installations' armed
+   * triggers listen for. The listener gets the current set once it is known
+   * and again on every change (an installation added, enabled, re-armed or
+   * removed; a plugin registering or dropping a Bot). Returns the unsubscribe.
+   * The UI automation runner subscribes the OS watcher for these types, so a
+   * Bot watching desktop events fires whether or not a workflow does.
+   */
+  watchDesktopEventTypes(listener: (types: ReadonlySet<string>) => void): () => void
   /** Route one finished workflow run to the installed bots. */
   workflowCompleted(input: BotWorkflowCompletedInput): Promise<void>
   /**
