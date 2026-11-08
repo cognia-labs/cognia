@@ -87,7 +87,10 @@ import { cn } from "@/lib/utils"
 import { ProjectEnvironmentBootstrap } from "./project-environment-bootstrap"
 import { ProjectEnvironmentList } from "./project-environment-list"
 import { ProjectEnvironmentProvisioning } from "./project-environment-provisioning"
-import { ProjectEnvironmentRepoConfigView } from "./project-environment-repo-config"
+import {
+  ProjectEnvironmentOtherRepositories,
+  ProjectEnvironmentRepoConfigView,
+} from "./project-environment-repo-config"
 import { ProjectEnvironmentRuntime } from "./project-environment-runtime"
 import { ProjectEnvironmentSection } from "./project-environment-section"
 import {
@@ -634,6 +637,7 @@ export function ProjectEnvironmentManager({
       <div className="mb-8 grid items-start gap-x-8 gap-y-7 @3xl/environment-pane:grid-cols-2">
         <ProjectEnvironmentSection id="repo-config" title={tRepo("title")}>
           <ProjectEnvironmentRepoConfigView state={repoConfig} />
+          <ProjectEnvironmentOtherRepositories projectId={projectId} />
         </ProjectEnvironmentSection>
         <ProjectEnvironmentProvisioning projectId={projectId} executionRoot={executionRoot} />
       </div>

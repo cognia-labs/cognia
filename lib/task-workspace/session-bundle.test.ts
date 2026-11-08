@@ -457,6 +457,70 @@ describe("repository-declared provisioning", () => {
     // an agent may be mid-turn in.
     expect(loadProvisioning).not.toHaveBeenCalled()
   })
+
+  // ADR-0147, 2026-11-08 amendment: one declaration per repository.
+  it("provisions each repository from its own declaration", async () => {
+    const loadRepositoryProvisioning = jest.fn(async (_project: unknown, root: string) =>
+      root === "/docs" ? { sparsePaths: ["guide"] } : undefined
+    )
+    await ensureSessionExecutionBundle({
+      sessionId: "session-1",
+      context,
+      project,
+      loadProvisioning: async () => ({ sparsePaths: ["packages/web"] }),
+      loadRepositoryProvisioning,
+    })
+
+    const acquired = acquireWorkspaceBundle.mock.calls[0]![0] as {
+      provisioning?: unknown
+      provisioningSource?: string
+      roots: Array<{ logicalRootId: string; provisioning?: unknown }>
+    }
+    // The workspace's own file, with the folder it was read in.
+    expect(acquired.provisioning).toEqual({ sparsePaths: ["packages/web"] })
+    expect(acquired.provisioningSource).toBe("/repo")
+    expect(acquired.roots).toEqual([
+      { logicalRootId: "app", role: "primary", sourceRoot: "/repo" },
+      {
+        logicalRootId: "docs",
+        role: "additional",
+        sourceRoot: "/docs",
+        provisioning: { sparsePaths: ["guide"] },
+      },
+    ])
+    // The primary root's file is the bundle's; it is not read twice.
+    expect(loadRepositoryProvisioning).toHaveBeenCalledTimes(1)
+    expect(loadRepositoryProvisioning).toHaveBeenCalledWith(project, "/docs")
+  })
+
+  it("keeps the workspace's declaration with its folder when the chat is pointed elsewhere", async () => {
+    // The host gives it to the repository that folder is in; the repository
+    // the chat is pointed at gets its own file, not the workspace primary's.
+    await ensureSessionExecutionBundle({
+      sessionId: "session-1",
+      context: { ...context, rootId: "docs" },
+      project,
+      loadProvisioning: async () => ({ sparsePaths: ["packages/web"] }),
+      loadRepositoryProvisioning: async () => ({ sparsePaths: ["guide"] }),
+    })
+
+    const acquired = acquireWorkspaceBundle.mock.calls[0]![0] as {
+      provisioning?: unknown
+      provisioningSource?: string
+      roots: Array<{ logicalRootId: string; role: string; provisioning?: unknown }>
+    }
+    expect(acquired.provisioning).toEqual({ sparsePaths: ["packages/web"] })
+    expect(acquired.provisioningSource).toBe("/repo")
+    expect(acquired.roots).toEqual([
+      { logicalRootId: "app", role: "additional", sourceRoot: "/repo" },
+      {
+        logicalRootId: "docs",
+        role: "primary",
+        sourceRoot: "/docs",
+        provisioning: { sparsePaths: ["guide"] },
+      },
+    ])
+  })
 })
 
 describe("a turn stopped while its bundle is being created", () => {

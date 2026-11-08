@@ -122,13 +122,29 @@ export interface AcquireWorkspaceBundle {
     logicalRootId: string
     role: "primary" | "additional"
     sourceRoot: string
+    /**
+     * The approved `.cognia/workspace.json` read at this root, under this
+     * root's own approval (ADR-0147, 2026-11-08 amendment). It applies to the
+     * repository the root is in, unless the bundle's `provisioning` is that
+     * repository's; of several roots of one repository the one at its top
+     * wins, and different ones with none at the top are refused.
+     */
+    provisioning?: WorkspaceProvisioning
   }>
   /**
-   * Repository-declared provisioning, applied to a Git worktree as part of
-   * creating it. Absent for every caller that has no approved declaration —
-   * the overwhelmingly common case.
+   * The workspace primary's provisioning, applied to a Git worktree as part of
+   * creating it — to the repository `provisioningSource` is in. Another
+   * repository in the bundle gets its own root's `provisioning`, never this
+   * one. Absent for every caller that has no approved declaration — the
+   * overwhelmingly common case.
    */
   provisioning?: WorkspaceProvisioning
+  /**
+   * The checkout `provisioning` was read in. The host applies it to the
+   * repository that path is in, and nowhere when no root is in it; absent
+   * means the primary root's repository, as before.
+   */
+  provisioningSource?: string
   /**
    * Caller-chosen name for the created worktree's branch. Absent leaves the
    * managed worktree on a detached head with a host-generated identity

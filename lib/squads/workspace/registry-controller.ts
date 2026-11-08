@@ -13,9 +13,12 @@ import type {
   BeginTaskWorkspaceTurn,
   WorkspaceBaseSpec,
   WorkspaceBundle,
-  WorkspaceProvisioning,
 } from "@/lib/task-workspace/types"
-import { provisioningForWorkspaceRoot } from "@/lib/task-workspace/workspace-provisioning"
+import {
+  bundleProvisioningForPath,
+  withRootProvisioning,
+  type BundleProvisioning,
+} from "@/lib/task-workspace/workspace-provisioning"
 import {
   integrateTeamRun,
   type AgentTeamIntegrationConfig,
@@ -23,6 +26,7 @@ import {
   type AgentTeamIntegrationResult,
   type TeamIntegrationCandidate,
 } from "./integrate-team-run"
+import type { UnresolvedRepositoryDependency } from "./declared-dependencies"
 import { sanitizePromotionSegment, type PromotionWorkspaceHandle } from "./promotion"
 
 export interface AgentTeamWorkspaceRoot {
@@ -45,7 +49,7 @@ type AcquireBundle = (
   options?: { signal?: AbortSignal }
 ) => Promise<WorkspaceBundle>
 type CreateBranch = typeof createWorkspaceBranch
-type ResolveProvisioning = (sourceRoot: string) => Promise<WorkspaceProvisioning | undefined>
+type ResolveProvisioning = (sourceRoot: string) => Promise<BundleProvisioning>
 type OpenTurn = (
   bundle: Pick<WorkspaceBundle, "bundleId" | "leases">,
   primaryLogicalRootId: string,
@@ -94,8 +98,13 @@ export interface AgentTeamMergeAllOptions {
   deps: AgentTeamIntegrationDeps
   /** taskId → the taskIds it depends on, from the run's task list. */
   dependencies: Record<string, string[]>
-  /** logicalRootId → the logicalRootIds it depends on, from the team's repository bindings. */
+  /**
+   * logicalRootId → the logicalRootIds it depends on: the team's repository
+   * bindings, unioned with what each repository declares itself.
+   */
   repositoryDependencies?: Record<string, string[]>
+  /** logicalRootId → its declared dependencies that matched no repository, or several. */
+  unresolvedDependencies?: Record<string, UnresolvedRepositoryDependency[]>
 }
 
 type DeleteBranch = (workspaceId: string, branch: string) => Promise<void>
@@ -154,7 +163,7 @@ export class AgentTeamRegistryWorkspaceController {
     this.acquireBundle = options.acquireBundle ?? acquireWorkspaceBundle
     this.openTurn = options.openTurn ?? openWorkspaceBundleTurnLease
     this.createBranch = options.createBranch ?? createWorkspaceBranch
-    this.resolveProvisioning = options.resolveProvisioning ?? provisioningForWorkspaceRoot
+    this.resolveProvisioning = options.resolveProvisioning ?? bundleProvisioningForPath
     this.deleteBranch = options.deleteBranch
     this.signal = options.signal
   }
@@ -174,9 +183,28 @@ export class AgentTeamRegistryWorkspaceController {
       // with no `node_modules`. Asking for the workspace's provisioning here is
       // what turns five cold installs into five links — the chat path has had
       // it since the declaration landed; this one had not.
-      bundlePromise = this.resolveProvisioning(primary.sourceRoot)
-        .catch(() => undefined)
-        .then((provisioning) => {
+      // Each repository brings its own declaration (ADR-0147, 2026-11-08
+      // amendment): the dispatch's repository for the bundle, with the folder
+      // it was read in, and every other repository of the team for its root.
+      const resolve = (sourceRoot: string) =>
+        this.resolveProvisioning(sourceRoot).catch((): BundleProvisioning => ({}))
+      bundlePromise = resolve(primary.sourceRoot)
+        .then(async (bundleProvisioning) => ({
+          bundleProvisioning,
+          roots: await withRootProvisioning(
+            this.roots.map((root) => ({
+              logicalRootId: root.logicalRootId,
+              role:
+                root.logicalRootId === primary.logicalRootId
+                  ? ("primary" as const)
+                  : ("additional" as const),
+              sourceRoot: root.sourceRoot,
+            })),
+            async (sourceRoot) => (await resolve(sourceRoot)).provisioning,
+            bundleProvisioning.provisioningSource
+          ),
+        }))
+        .then(({ bundleProvisioning, roots }) => {
           const acquireOptions: [] | [{ signal: AbortSignal }] = this.signal
             ? [{ signal: this.signal }]
             : []
@@ -186,12 +214,8 @@ export class AgentTeamRegistryWorkspaceController {
               ownerRef: this.runId,
               environmentKind: "managed",
               base: this.base,
-              roots: this.roots.map((root) => ({
-                logicalRootId: root.logicalRootId,
-                role: root.logicalRootId === primary.logicalRootId ? "primary" : "additional",
-                sourceRoot: root.sourceRoot,
-              })),
-              ...(provisioning ? { provisioning } : {}),
+              roots,
+              ...bundleProvisioning,
             },
             ...acquireOptions
           )
@@ -393,6 +417,7 @@ export class AgentTeamRegistryWorkspaceController {
       options.deps,
       {
         repositoryDependencies: options.repositoryDependencies,
+        unresolvedDependencies: options.unresolvedDependencies,
         unsuccessfulTasks: [...unsuccessfulTasks],
       }
     )

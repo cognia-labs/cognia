@@ -126,6 +126,68 @@ describe("workspace repository config", () => {
     })
   })
 
+  describe("dependsOn (ADR-0147, 2026-11-08 amendment)", () => {
+    it("is absent when the file names no dependency, keeping ADR-0147 digests", async () => {
+      for (const extra of [{}, { dependsOn: [] }]) {
+        const config = parseWorkspaceConfig(
+          JSON.stringify({ version: 1, setup: { default: "x" }, ...extra })
+        )
+        expect("dependsOn" in config).toBe(false)
+        // The same pinned digest as the environment block's test.
+        await expect(workspaceConfigDigest(config)).resolves.toBe(
+          "b88f2fd25f8801cf8922f8d039d65ce091b23184eb8cb9d6f1d3d91cc213a970"
+        )
+      }
+    })
+
+    it("stores each repository in its canonical form, so respelling does not re-prompt", async () => {
+      const spelled = parseWorkspaceConfig(
+        JSON.stringify({
+          version: 1,
+          dependsOn: [
+            { repository: "git@github.com:Org/SDK.git" },
+            { repository: "ghe.corp.example/platform/ui" },
+          ],
+        })
+      )
+      expect(spelled.dependsOn).toEqual([
+        { repository: "github.com/org/sdk" },
+        { repository: "ghe.corp.example/platform/ui" },
+      ])
+      const bare = parseWorkspaceConfig(
+        JSON.stringify({
+          version: 1,
+          dependsOn: [
+            { repository: "github.com/org/sdk" },
+            { repository: "https://ghe.corp.example/platform/ui.git" },
+          ],
+        })
+      )
+      await expect(workspaceConfigDigest(bare)).resolves.toBe(await workspaceConfigDigest(spelled))
+    })
+
+    it.each([
+      [{ dependsOn: {} }, "dependsOn"],
+      [{ dependsOn: ["github.com/org/sdk"] }, "dependsOn[0]"],
+      [{ dependsOn: [{}] }, "dependsOn[0].repository"],
+      [{ dependsOn: [{ repository: "../sdk" }] }, "dependsOn[0].repository"],
+      [{ dependsOn: [{ repository: "org/sdk" }] }, "dependsOn[0].repository"],
+      [
+        {
+          dependsOn: [
+            { repository: "github.com/org/sdk" },
+            { repository: "git@github.com:org/sdk" },
+          ],
+        },
+        "dependsOn",
+      ],
+    ])("refuses %j instead of ignoring it", (extra, field) => {
+      expect(() => parseWorkspaceConfig(JSON.stringify({ version: 1, ...extra }))).toThrow(
+        expect.objectContaining({ field })
+      )
+    })
+  })
+
   describe("environment", () => {
     it("is absent from the parsed config when the file has no block, keeping ADR-0147 digests", async () => {
       const config = parseWorkspaceConfig(JSON.stringify({ version: 1, setup: { default: "x" } }))

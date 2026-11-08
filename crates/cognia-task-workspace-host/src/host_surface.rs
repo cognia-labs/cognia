@@ -3212,7 +3212,9 @@ mod tests {
                     logical_root_id: "root-1".into(),
                     role: cognia_task_workspace::WorkspaceRootRole::Primary,
                     source_root: workspace.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
 

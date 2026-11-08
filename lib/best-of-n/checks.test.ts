@@ -7,11 +7,11 @@ jest.mock("@/lib/task-workspace/user-action", () => ({
 }))
 jest.mock("@/lib/scm/runtime", () => ({ createScmRuntime: jest.fn() }))
 jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
-  provisioningForWorkspaceRoot: jest.fn(async () => undefined),
+  bundleProvisioningForPath: jest.fn(async () => ({})),
 }))
 import { acquireWorkspaceBundle, archiveManagedWorkspace } from "@/lib/task-workspace/client"
 import { createScmRuntime } from "@/lib/scm/runtime"
-import { provisioningForWorkspaceRoot } from "@/lib/task-workspace/workspace-provisioning"
+import { bundleProvisioningForPath } from "@/lib/task-workspace/workspace-provisioning"
 import { checkBestOfNHead } from "./checks"
 import type { AgentChangeset } from "@/lib/scm/types"
 import type { BestOfNGroup } from "@/types/best-of-n"
@@ -53,15 +53,21 @@ it("checks a fresh committed-head checkout with no AI reviewer and archives it",
 })
 
 it("checks the head in a worktree provisioned like the source's own", async () => {
-  jest.mocked(provisioningForWorkspaceRoot).mockResolvedValueOnce({ sparsePaths: ["app"] })
+  jest.mocked(bundleProvisioningForPath).mockResolvedValueOnce({
+    provisioning: { sparsePaths: ["app"] },
+    provisioningSource: "/source",
+  })
   jest
     .mocked(createScmRuntime)
     .mockReturnValue({ review: jest.fn().mockResolvedValue({ changeset, checks: [] }) } as never)
   const host = { getChangeset: jest.fn().mockResolvedValue(changeset) }
   await checkBestOfNHead(group, changeset, null, host as never, new AbortController().signal)
-  expect(provisioningForWorkspaceRoot).toHaveBeenCalledWith("/source")
+  expect(bundleProvisioningForPath).toHaveBeenCalledWith("/source")
   expect(acquireWorkspaceBundle).toHaveBeenCalledWith(
-    expect.objectContaining({ provisioning: { sparsePaths: ["app"] } }),
+    expect.objectContaining({
+      provisioning: { sparsePaths: ["app"] },
+      provisioningSource: "/source",
+    }),
     expect.anything()
   )
 })

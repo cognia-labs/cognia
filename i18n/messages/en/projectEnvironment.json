@@ -185,7 +185,11 @@
       "on": "on",
       "off": "off"
     },
-    "unavailable": "Not read on this device."
+    "unavailable": "Not read on this device.",
+    "otherRepositories": {
+      "description": "This repository ships its own configuration and is approved on its own. Until it is approved, its task copies are made without it.",
+      "label": "Configuration of {name}"
+    }
   },
   "retry": "Retry setup",
   "runAction": "Run {name}",

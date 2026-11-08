@@ -75,6 +75,21 @@ describe("loadDeclaredWorkspace", () => {
     expect(await loadDeclaredWorkspace(project, options, deps())).toBeNull()
   })
 
+  it("checks another repository's file against that repository's own approval", async () => {
+    // ADR-0147, 2026-11-08 amendment.
+    const digest = await workspaceConfigDigest(parsed())
+    const approvedDigestFor = jest.fn(async (path: string) =>
+      path === "/repos/sdk" ? digest : undefined
+    )
+    const declared = await loadDeclaredWorkspace(
+      project,
+      { ...options, configRoot: "/repos/sdk", approvalRoot: "/repos/sdk" },
+      deps({ approvedDigestFor })
+    )
+    expect(declared).not.toBeNull()
+    expect(approvedDigestFor).toHaveBeenCalledWith("/repos/sdk")
+  })
+
   it("returns nothing in an untrusted workspace", async () => {
     expect(
       await loadDeclaredWorkspace(

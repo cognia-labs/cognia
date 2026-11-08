@@ -674,9 +674,11 @@ impl TaskWorkspaceService {
                 logical_root_id: "primary".into(),
                 role: crate::WorkspaceRootRole::Primary,
                 source_root: seed.to_string_lossy().into_owned(),
+                provisioning: None,
             }],
             provisioning: None,
             requested_name: None,
+            provisioning_source: None,
         });
         let bundle = match result {
             Ok(bundle) => bundle,
@@ -3111,6 +3113,7 @@ impl TaskWorkspaceService {
             .collect::<Vec<_>>();
         let layout = crate::plan_bundle_layout(&group_roots, &devices, home_dir().as_deref());
         bundle.flat_layout = layout.flat;
+        let group_provisioning = group_provisioning(&input, &groups, &group_roots, &inspected)?;
         let bundle_dir = self
             .execution_dir
             .join("bundles")
@@ -3184,7 +3187,7 @@ impl TaskWorkspaceService {
                         &baseline,
                         &blobs,
                         record.locked_by.as_deref(),
-                        input.provisioning.as_ref(),
+                        group_provisioning[index].as_ref(),
                         requested_name.as_deref(),
                         &tracking_policy,
                         budget,
@@ -7578,6 +7581,114 @@ fn volume_of(path: &Path) -> Option<u64> {
     }
 }
 
+/// The provisioning each repository of a bundle is created with (ADR-0147,
+/// 2026-11-08 amendment), one per physical group, in group order.
+///
+/// Each repository is provisioned from its own approved declaration, never
+/// another's: applying the primary's to every repository, as before, narrowed
+/// a second repository to directories it does not have. Which repository a
+/// declaration belongs to is decided here, by the git repository its source
+/// path is in, not by the caller's guess from paths:
+///
+///  - The bundle's `provisioning` is the workspace primary's declaration. It
+///    goes to the group its `provisioning_source` is in (the group of the
+///    primary-role root when an older caller sends no source), and wins there,
+///    as it always has.
+///  - A root's own `provisioning` was read at that root, so it belongs to the
+///    root's group. Several roots of one repository may each carry one: the
+///    one read at the repository's top wins, identical ones agree, and
+///    different ones with neither is refused rather than resolved by picking.
+///  - A declaration whose source is in no group of the bundle applies nowhere.
+fn group_provisioning(
+    input: &AcquireWorkspaceBundle,
+    groups: &[crate::PhysicalLeaseGroup],
+    group_roots: &[PathBuf],
+    inspected: &[InspectedBundleRoot],
+) -> Result<Vec<Option<WorkspaceProvisioning>>, String> {
+    let group_of_path = |path: &Path| {
+        group_roots
+            .iter()
+            .enumerate()
+            .filter(|(_, root)| path.starts_with(root))
+            .max_by_key(|(_, root)| root.components().count())
+            .map(|(index, _)| index)
+    };
+    let group_of_root = |logical_id: &str| {
+        groups
+            .iter()
+            .position(|group| group.logical_root_ids.iter().any(|id| id == logical_id))
+    };
+    let bundle_group = match input
+        .provisioning
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        None => None,
+        Some(_) => match input.provisioning_source.as_deref() {
+            Some(source) => Path::new(source)
+                .canonicalize()
+                .ok()
+                .and_then(|path| group_of_path(&path)),
+            None => input
+                .roots
+                .iter()
+                .find(|root| root.role == crate::WorkspaceRootRole::Primary)
+                .and_then(|root| group_of_root(&root.logical_root_id)),
+        },
+    };
+    let mut resolved = Vec::with_capacity(groups.len());
+    for (index, group) in groups.iter().enumerate() {
+        if bundle_group == Some(index) {
+            resolved.push(input.provisioning.clone());
+            continue;
+        }
+        let mut at_top: Option<(&str, &WorkspaceProvisioning)> = None;
+        let mut others: Vec<(&str, &WorkspaceProvisioning)> = Vec::new();
+        for logical_id in &group.logical_root_ids {
+            let Some(own) = input
+                .roots
+                .iter()
+                .find(|root| &root.logical_root_id == logical_id)
+                .and_then(|root| root.provisioning.as_ref())
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let at_repository_top = inspected
+                .iter()
+                .find(|root| &root.logical_root_id == logical_id)
+                .is_some_and(|root| root.source_root == group_roots[index]);
+            if !at_repository_top {
+                others.push((logical_id, own));
+                continue;
+            }
+            match at_top {
+                Some((other, existing)) if existing != own => {
+                    return Err(format!(
+                        "roots {other} and {logical_id} are one repository but declare different provisioning"
+                    ));
+                }
+                Some(_) => {}
+                None => at_top = Some((logical_id, own)),
+            }
+        }
+        let chosen = match (at_top, others.first()) {
+            (Some((_, value)), _) => Some(value.clone()),
+            (None, None) => None,
+            (None, Some((first, value))) => {
+                if let Some((other, _)) = others.iter().find(|(_, other)| other != value) {
+                    return Err(format!(
+                        "roots {first} and {other} are one repository but declare different provisioning"
+                    ));
+                }
+                Some((*value).clone())
+            }
+        };
+        resolved.push(chosen);
+    }
+    Ok(resolved)
+}
+
 /// The user's home directory, resolved like the roots are.
 fn home_dir() -> Option<PathBuf> {
     let raw = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
@@ -10190,6 +10301,7 @@ mod tests {
                 logical_root_id: "root-1".into(),
                 role: crate::WorkspaceRootRole::Primary,
                 source_root: root.to_string_lossy().into_owned(),
+                provisioning: None,
             })
             .expect("inspect")
         };
@@ -13381,9 +13493,11 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: source.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
                 provisioning: None,
                 requested_name: None,
+                provisioning_source: None,
             })
             .unwrap();
         let lease = &bundle.leases[0];
@@ -13526,9 +13640,11 @@ mod tests {
                 logical_root_id: "primary".into(),
                 role: crate::WorkspaceRootRole::Primary,
                 source_root: source.path().to_string_lossy().into_owned(),
+                provisioning: None,
             }],
             provisioning: None,
             requested_name: None,
+            provisioning_source: None,
         });
         assert!(result.unwrap_err().contains("capacity exceeded"));
         assert!(service.registry.list().unwrap().is_empty());
@@ -13604,7 +13720,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: repo.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
 
@@ -13642,7 +13760,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: repo.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
 
@@ -13680,7 +13800,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: repo.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
         };
         assert!(acquire("has space").is_err());
@@ -13710,7 +13832,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: shadow.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap_err();
         assert!(error.contains("requires at least one Git root"));
@@ -13743,7 +13867,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: repo.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap_err();
         assert!(error.contains("worktree add failed") || error.contains("already exists"));
@@ -13780,23 +13906,28 @@ mod tests {
                         logical_root_id: "primary".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: primary.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "package".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: package.to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "second".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: second.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "notes".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: shadow.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                 ],
+                provisioning_source: None,
             })
             .unwrap();
 
@@ -13865,7 +13996,9 @@ mod tests {
                     logical_root_id: "notes".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: shadow.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
         let lease = &bundle.leases[0];
@@ -13916,7 +14049,9 @@ mod tests {
                     logical_root_id: "notes".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: shadow.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
 
@@ -13965,7 +14100,9 @@ mod tests {
                         logical_root_id: "root".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: root.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     }],
+                    provisioning_source: None,
                 })
                 .unwrap_err();
             assert!(error.contains("injected port failure"), "{error}");
@@ -14001,13 +14138,16 @@ mod tests {
                         logical_root_id: "git".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: repository.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "shadow".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: shadow.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                 ],
+                provisioning_source: None,
             })
             .unwrap_err();
 
@@ -14052,7 +14192,9 @@ mod tests {
                     logical_root_id: "notes".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: shadow.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
         let lease = &bundle.leases[0];
@@ -14117,7 +14259,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: shadow.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
         let workspace_id = &bundle.leases[0].workspace_id;
@@ -14159,7 +14303,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: shadow.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
         let workspace_id = &bundle.leases[0].workspace_id;
@@ -14199,7 +14345,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: repository.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
         let lease = &bundle.leases[0];
@@ -14516,13 +14664,16 @@ mod tests {
                             logical_root_id: "primary".into(),
                             role: crate::WorkspaceRootRole::Primary,
                             source_root: primary.path().to_string_lossy().into_owned(),
+                            provisioning: None,
                         },
                         crate::WorkspaceBundleRootInput {
                             logical_root_id: "additional".into(),
                             role: crate::WorkspaceRootRole::Additional,
                             source_root: additional.path().to_string_lossy().into_owned(),
+                            provisioning: None,
                         },
                     ],
+                    provisioning_source: None,
                 })
                 .unwrap();
             let request = crate::BeginWorkspaceBundleTurn {
@@ -14584,13 +14735,16 @@ mod tests {
                         logical_root_id: "primary".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: primary.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "additional".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: additional.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                 ],
+                provisioning_source: None,
             })
             .unwrap();
         let turn = service
@@ -14665,13 +14819,16 @@ mod tests {
                         logical_root_id: "repository".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: repository.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "package".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: package.to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                 ],
+                provisioning_source: None,
             })
             .unwrap();
 
@@ -14735,31 +14892,41 @@ mod tests {
         let prior_sources = provenance_line_sources(&service, primary.path(), "result.txt");
         assert_eq!(prior_sources[0].run_id.as_deref(), Some(prior.run_id.as_str()));
 
-        let bundle = service.acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
-            requested_name: None,
-            provisioning: None,
-            project_id: None,
-            owner_type: WorkspaceOwnerType::Session,
-            owner_ref: Some("session-1".into()),
-            environment_kind: crate::WorkspaceEnvironmentKind::Managed,
-            base: WorkspaceBaseSpec::WorkingState,
-            roots: vec![
-                crate::WorkspaceBundleRootInput {
-                    logical_root_id: "primary".into(),
-                    role: crate::WorkspaceRootRole::Primary,
-                    source_root: primary.path().to_string_lossy().into_owned(),
+        let bundle = service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                requested_name: None,
+                provisioning: None,
+                project_id: None,
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("session-1".into()),
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                base: WorkspaceBaseSpec::WorkingState,
+                roots: vec![
+                    crate::WorkspaceBundleRootInput {
+                        logical_root_id: "primary".into(),
+                        role: crate::WorkspaceRootRole::Primary,
+                        source_root: primary.path().to_string_lossy().into_owned(),
+                        provisioning: None,
+                    },
+                    crate::WorkspaceBundleRootInput {
+                        logical_root_id: "additional".into(),
+                        role: crate::WorkspaceRootRole::Additional,
+                        source_root: additional.path().to_string_lossy().into_owned(),
+                        provisioning: None,
+                    },
+                ],
+                provisioning_source: None,
+            })
+            .unwrap();
+        let turn = service
+            .begin_workspace_bundle_turn(
+                &bundle.bundle_id,
+                crate::BeginWorkspaceBundleTurn {
+                    primary_logical_root_id: "primary".into(),
+                    run: input(&primary, "task-mid-apply", "run-mid-apply"),
                 },
-                crate::WorkspaceBundleRootInput {
-                    logical_root_id: "additional".into(),
-                    role: crate::WorkspaceRootRole::Additional,
-                    source_root: additional.path().to_string_lossy().into_owned(),
-                },
-            ],
-        }).unwrap();
-        let turn = service.begin_workspace_bundle_turn(&bundle.bundle_id, crate::BeginWorkspaceBundleTurn {
-            primary_logical_root_id: "primary".into(),
-            run: input(&primary, "task-mid-apply", "run-mid-apply"),
-        }).unwrap();
+            )
+            .unwrap();
         for lease in &turn.runs {
             fs::write(Path::new(&lease.run.execution_root).join("result.txt"), "after\n").unwrap();
         }
@@ -14814,13 +14981,16 @@ mod tests {
                         logical_root_id: "primary".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: primary.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "additional".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: additional.path().to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                 ],
+                provisioning_source: None,
             })
             .unwrap();
         let turn = service
@@ -14962,7 +15132,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: shadow.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
         let workspace_id = bundle.leases[0].workspace_id.clone();
@@ -15057,7 +15229,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: supplied.source_root.clone(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .expect("acquire over a supplied source");
 
@@ -15102,7 +15276,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: supplied.source_root.clone(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .expect("acquire");
 
@@ -15152,7 +15328,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: repository.path().to_string_lossy().into_owned(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .unwrap();
 
@@ -15776,7 +15954,9 @@ mod tests {
                         logical_root_id: "primary".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: root.to_string_lossy().into_owned(),
+                        provisioning: None,
                     }],
+                    provisioning_source: None,
                 })
                 .unwrap_err()
         });
@@ -16130,13 +16310,16 @@ mod tests {
                         logical_root_id: "app".into(),
                         role: crate::WorkspaceRootRole::Primary,
                         source_root: app.to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                     crate::WorkspaceBundleRootInput {
                         logical_root_id: "sdk".into(),
                         role: crate::WorkspaceRootRole::Additional,
                         source_root: sdk.to_string_lossy().into_owned(),
+                        provisioning: None,
                     },
                 ],
+                provisioning_source: None,
             })
             .unwrap();
         assert_eq!(bundle.layout_version, crate::BUNDLE_LAYOUT_RELATIVE);
@@ -16200,6 +16383,310 @@ mod tests {
         );
     }
 
+    /// ADR-0147 (2026-11-08 amendment), B2.2: each repository is provisioned
+    /// from its own declaration. The primary's cone used to reach every root,
+    /// narrowing a sibling repository to directories it does not have.
+    #[test]
+    fn each_repository_in_a_bundle_gets_its_own_provisioning() {
+        use git2::{IndexAddOption, Repository, Signature};
+        let commit_tree = |root: &Path, files: &[&str]| {
+            let repository = Repository::init(root).unwrap();
+            for file in files {
+                let path = root.join(file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, *file).unwrap();
+            }
+            let mut index = repository.index().unwrap();
+            index.add_all(["*"], IndexAddOption::DEFAULT, None).unwrap();
+            index.write().unwrap();
+            let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+            let signature = Signature::now("Task Workspace Test", "task@example.com").unwrap();
+            repository
+                .commit(Some("HEAD"), &signature, &signature, "seed", &tree, &[])
+                .unwrap();
+        };
+        let data = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        let app = parent.path().join("app");
+        let sdk = parent.path().join("sdk");
+        commit_tree(&app, &["web/index.ts", "docs/guide.md"]);
+        commit_tree(&sdk, &["lib/core.ts", "examples/demo.ts"]);
+        let cone = |path: &str| WorkspaceProvisioning {
+            sparse_paths: vec![path.into()],
+            ..WorkspaceProvisioning::default()
+        };
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let bundle = service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                requested_name: None,
+                provisioning: Some(cone("web")),
+                project_id: None,
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("session-per-root".into()),
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                base: WorkspaceBaseSpec::LocalHead,
+                roots: vec![
+                    crate::WorkspaceBundleRootInput {
+                        logical_root_id: "app".into(),
+                        role: crate::WorkspaceRootRole::Primary,
+                        source_root: app.to_string_lossy().into_owned(),
+                        provisioning: None,
+                    },
+                    crate::WorkspaceBundleRootInput {
+                        logical_root_id: "sdk".into(),
+                        role: crate::WorkspaceRootRole::Additional,
+                        source_root: sdk.to_string_lossy().into_owned(),
+                        provisioning: Some(cone("lib")),
+                    },
+                ],
+                provisioning_source: None,
+            })
+            .unwrap();
+        let alias = |id: &str| {
+            PathBuf::from(
+                &bundle
+                    .leases
+                    .iter()
+                    .find(|lease| lease.logical_root_id == id)
+                    .unwrap()
+                    .alias_path,
+            )
+        };
+        let (app_alias, sdk_alias) = (alias("app"), alias("sdk"));
+        assert!(app_alias.join("web/index.ts").exists());
+        assert!(!app_alias.join("docs").exists(), "the app's own cone");
+        assert!(sdk_alias.join("lib/core.ts").exists(), "not the app's cone");
+        assert!(!sdk_alias.join("examples").exists(), "the SDK's own cone");
+    }
+
+    fn commit_files(root: &Path, files: &[&str]) {
+        use git2::{IndexAddOption, Repository, Signature};
+        let repository = Repository::init(root).unwrap();
+        for file in files {
+            let path = root.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, *file).unwrap();
+        }
+        let mut index = repository.index().unwrap();
+        index.add_all(["*"], IndexAddOption::DEFAULT, None).unwrap();
+        index.write().unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = Signature::now("Task Workspace Test", "task@example.com").unwrap();
+        repository
+            .commit(Some("HEAD"), &signature, &signature, "seed", &tree, &[])
+            .unwrap();
+    }
+
+    fn cone(path: &str) -> WorkspaceProvisioning {
+        WorkspaceProvisioning {
+            sparse_paths: vec![path.into()],
+            ..WorkspaceProvisioning::default()
+        }
+    }
+
+    fn bundle_root(
+        id: &str,
+        role: crate::WorkspaceRootRole,
+        source: &Path,
+        provisioning: Option<WorkspaceProvisioning>,
+    ) -> crate::WorkspaceBundleRootInput {
+        crate::WorkspaceBundleRootInput {
+            logical_root_id: id.into(),
+            role,
+            source_root: source.to_string_lossy().into_owned(),
+            provisioning,
+        }
+    }
+
+    fn acquire_with(
+        service: &TaskWorkspaceService,
+        provisioning: Option<WorkspaceProvisioning>,
+        source: Option<&Path>,
+        roots: Vec<crate::WorkspaceBundleRootInput>,
+    ) -> Result<crate::WorkspaceBundle, String> {
+        service.acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+            requested_name: None,
+            provisioning,
+            provisioning_source: source.map(|path| path.to_string_lossy().into_owned()),
+            project_id: None,
+            owner_type: WorkspaceOwnerType::Session,
+            owner_ref: Some(format!("session-{}", Uuid::new_v4())),
+            environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+            base: WorkspaceBaseSpec::LocalHead,
+            roots,
+        })
+    }
+
+    fn alias_of(bundle: &crate::WorkspaceBundle, id: &str) -> PathBuf {
+        PathBuf::from(
+            &bundle
+                .leases
+                .iter()
+                .find(|lease| lease.logical_root_id == id)
+                .unwrap()
+                .alias_path,
+        )
+    }
+
+    /// The workspace primary's declaration goes to the repository it was read
+    /// in. A separate repository nested in the primary's folder used to get
+    /// the primary's cone whenever it was the bundle's primary-role root.
+    #[test]
+    fn a_declaration_reaches_only_the_repository_it_was_read_in() {
+        use crate::WorkspaceRootRole::Primary;
+        let data = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        let app = parent.path().join("app");
+        commit_files(&app, &["web/index.ts", "docs/guide.md", ".gitignore"]);
+        fs::write(app.join(".gitignore"), "vendor/\n").unwrap();
+        let vendored = app.join("vendor").join("lib");
+        commit_files(&vendored, &["src/core.ts", "web/demo.ts"]);
+        let app = app.canonicalize().unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+
+        // The app's cone, read in the app, does not reach the nested repository.
+        let bundle = acquire_with(
+            &service,
+            Some(cone("web")),
+            Some(&app),
+            vec![bundle_root("lib", Primary, &vendored, None)],
+        )
+        .unwrap();
+        let lib = alias_of(&bundle, "lib");
+        assert!(
+            lib.join("src/core.ts").exists(),
+            "a full checkout, not the app's cone"
+        );
+
+        // Its own declaration does.
+        let bundle = acquire_with(
+            &service,
+            Some(cone("web")),
+            Some(&app),
+            vec![bundle_root("lib", Primary, &vendored, Some(cone("src")))],
+        )
+        .unwrap();
+        let lib = alias_of(&bundle, "lib");
+        assert!(lib.join("src/core.ts").exists());
+        assert!(
+            !lib.join("web").exists(),
+            "the nested repository's own cone"
+        );
+
+        // A source no root of the bundle is in applies nowhere.
+        let elsewhere = TempDir::new().unwrap();
+        let bundle = acquire_with(
+            &service,
+            Some(cone("web")),
+            Some(elsewhere.path()),
+            vec![bundle_root("app", Primary, &app, None)],
+        )
+        .unwrap();
+        assert!(alias_of(&bundle, "app").join("docs/guide.md").exists());
+
+        // An older caller without a source keeps today's meaning: the
+        // primary-role root's repository.
+        let bundle = acquire_with(
+            &service,
+            Some(cone("web")),
+            None,
+            vec![bundle_root("app", Primary, &app, None)],
+        )
+        .unwrap();
+        assert!(!alias_of(&bundle, "app").join("docs").exists());
+    }
+
+    /// Several roots of one repository: the workspace primary's declaration
+    /// wins in its repository, else the one read at the repository's top, else
+    /// identical ones; different ones with none at the top are refused.
+    #[test]
+    fn roots_of_one_repository_resolve_to_one_declaration() {
+        use crate::WorkspaceRootRole::{Additional, Primary};
+        let data = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        let mono = parent.path().join("mono");
+        commit_files(
+            &mono,
+            &[
+                "apps/web/index.ts",
+                "apps/api/server.ts",
+                "libs/ui/button.ts",
+            ],
+        );
+        let mono = mono.canonicalize().unwrap();
+        let web = mono.join("apps/web");
+        let api = mono.join("apps/api");
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        // Relative to the repository's worktree, which the roots share.
+        let has = |bundle: &crate::WorkspaceBundle, id: &str, file: &str| {
+            service
+                .registry
+                .get(
+                    &bundle
+                        .leases
+                        .iter()
+                        .find(|lease| lease.logical_root_id == id)
+                        .unwrap()
+                        .workspace_id,
+                )
+                .unwrap()
+                .map(|record| Path::new(&record.execution_root).join(file).exists())
+                .unwrap_or(false)
+        };
+
+        // The primary's declaration, read in a subfolder, beats the repository
+        // top's own file: no refusal, and the primary's cone.
+        let bundle = acquire_with(
+            &service,
+            Some(cone("apps")),
+            Some(&web),
+            vec![
+                bundle_root("web", Primary, &web, None),
+                bundle_root("mono", Additional, &mono, Some(cone("libs"))),
+            ],
+        )
+        .unwrap();
+        assert!(has(&bundle, "web", "apps/web/index.ts"));
+        assert!(!has(&bundle, "web", "libs/ui/button.ts"));
+
+        // Without it, the declaration at the repository's top wins.
+        let bundle = acquire_with(
+            &service,
+            None,
+            None,
+            vec![
+                bundle_root("web", Primary, &web, Some(cone("apps"))),
+                bundle_root("mono", Additional, &mono, Some(cone("libs"))),
+            ],
+        )
+        .unwrap();
+        assert!(has(&bundle, "web", "libs/ui/button.ts"));
+        assert!(!has(&bundle, "web", "apps/web/index.ts"));
+
+        // Two subfolders: the same declaration agrees, different ones refuse.
+        acquire_with(
+            &service,
+            None,
+            None,
+            vec![
+                bundle_root("web", Primary, &web, Some(cone("apps"))),
+                bundle_root("api", Additional, &api, Some(cone("apps"))),
+            ],
+        )
+        .unwrap();
+        let refused = acquire_with(
+            &service,
+            None,
+            None,
+            vec![
+                bundle_root("web", Primary, &web, Some(cone("apps"))),
+                bundle_root("api", Additional, &api, Some(cone("libs"))),
+            ],
+        )
+        .unwrap_err();
+        assert!(refused.contains("one repository"), "{refused}");
+    }
+
     /// A bundle that fails on its second root leaves no directories of the
     /// relative layout behind.
     #[test]
@@ -16228,13 +16715,16 @@ mod tests {
                     logical_root_id: "app".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: app.to_string_lossy().into_owned(),
+                    provisioning: None,
                 },
                 crate::WorkspaceBundleRootInput {
                     logical_root_id: "empty".into(),
                     role: crate::WorkspaceRootRole::Additional,
                     source_root: empty.to_string_lossy().into_owned(),
+                    provisioning: None,
                 },
             ],
+            provisioning_source: None,
         });
         assert!(result.is_err());
         let bundles = service.execution_dir.join("bundles");
@@ -16400,7 +16890,9 @@ mod tests {
                     logical_root_id: "primary".into(),
                     role: crate::WorkspaceRootRole::Primary,
                     source_root: narrowed.source_root.clone(),
+                    provisioning: None,
                 }],
+                provisioning_source: None,
             })
             .expect("a full worktree over a narrowed mirror");
         let execution_root = PathBuf::from(&bundle.leases[0].alias_path);

@@ -42,7 +42,12 @@ import { decodeSubSession } from "@/lib/claude/team-session-id"
 import { isSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
 import { validateSessionScratchBundle } from "@/lib/task-workspace/session-bundle"
 import { rebindSendOptionsWorkspace } from "@/lib/sandbox/session-runtime"
-import { provisioningForWorkspaceRoot } from "@/lib/task-workspace/workspace-provisioning"
+import {
+  bundleProvisioningForPath,
+  provisioningForWorkspaceRoot,
+  withRootProvisioning,
+  type BundleProvisioning,
+} from "@/lib/task-workspace/workspace-provisioning"
 import {
   openWorkspaceBundleTurnLease,
   type WorkspaceBundleTurnLease,
@@ -213,16 +218,26 @@ async function openConnectorWorkspaceTurn(
   // Same provisioning a chat turn in this workspace would get. An IM-driven
   // turn runs the same agent against the same repository; the only difference
   // is who asked.
-  const provisioning = scratch
-    ? undefined
-    : await provisioningForWorkspaceRoot(roots[0]?.sourceRoot).catch(() => undefined)
+  // Each repository brings its own declaration (ADR-0147, 2026-11-08
+  // amendment), so the other roots are provisioned from their own files.
+  const primarySource = roots.find((root) => root.role === "primary")?.sourceRoot
+  const bundleProvisioning: BundleProvisioning = scratch
+    ? {}
+    : await bundleProvisioningForPath(primarySource ?? roots[0]?.sourceRoot).catch(() => ({}))
+  const provisionedRoots = scratch
+    ? roots
+    : await withRootProvisioning(
+        roots,
+        (sourceRoot) => provisioningForWorkspaceRoot(sourceRoot),
+        bundleProvisioning.provisioningSource
+      )
   const acquire: AcquireWorkspaceBundle = {
     ownerType: "session",
     ownerRef: ownerSessionId,
     environmentKind: "managed",
     base: { kind: "remoteDefault" },
-    roots,
-    ...(provisioning ? { provisioning } : {}),
+    roots: provisionedRoots,
+    ...bundleProvisioning,
   }
   // The turn's own stop cancels the checkout, which the host keys by its
   // owner. A room member's owner is the room, so its signal would also cancel

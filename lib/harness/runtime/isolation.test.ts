@@ -20,9 +20,10 @@ const workspaceClient = {
 }
 const turnLease = { openWorkspaceBundleTurnLease: jest.fn() }
 const provisioning = {
-  provisioningForWorkspaceRoot: jest.fn<Promise<{ sparsePaths: string[] } | undefined>, [string]>(
-    async () => undefined
-  ),
+  bundleProvisioningForPath: jest.fn<
+    Promise<{ provisioning?: { sparsePaths: string[] }; provisioningSource?: string }>,
+    [string]
+  >(async () => ({})),
 }
 
 jest.mock("@/lib/task-workspace/client", () => workspaceClient)
@@ -322,15 +323,21 @@ describe("defaultIsolationDeps", () => {
   it("provisions the probe's worktree like the source's own", async () => {
     const { defaultIsolationDeps } = await import("./isolation")
     const deps = await defaultIsolationDeps()
-    provisioning.provisioningForWorkspaceRoot.mockResolvedValueOnce({ sparsePaths: ["app"] })
+    provisioning.bundleProvisioningForPath.mockResolvedValueOnce({
+      provisioning: { sparsePaths: ["app"] },
+      provisioningSource: "/repo",
+    })
     const task = makeTask({
       isolation: "git",
       git: { sourceRoot: "/repo", resolvedBaseSha: "abc123", projectId: "proj" },
     })
     await deps.git.acquire({ task, ...ids })
-    expect(provisioning.provisioningForWorkspaceRoot).toHaveBeenCalledWith("/repo")
+    expect(provisioning.bundleProvisioningForPath).toHaveBeenCalledWith("/repo")
     expect(workspaceClient.acquireWorkspaceBundle).toHaveBeenLastCalledWith(
-      expect.objectContaining({ provisioning: { sparsePaths: ["app"] } })
+      expect.objectContaining({
+        provisioning: { sparsePaths: ["app"] },
+        provisioningSource: "/repo",
+      })
     )
   })
 

@@ -332,14 +332,14 @@ async function acquireGitProbeWorkspace(input: {
 }): Promise<GitWorkspaceHandle> {
   const git = input.task.git
   if (!git?.resolvedBaseSha) throw new Error("A git rollout needs the run's resolved base commit")
-  const [client, lease, userAction, { provisioningForWorkspaceRoot }] = await Promise.all([
+  const [client, lease, userAction, { bundleProvisioningForPath }] = await Promise.all([
     import("@/lib/task-workspace/client"),
     import("@/lib/task-workspace/run-lease"),
     import("@/lib/task-workspace/user-action"),
     import("@/lib/task-workspace/workspace-provisioning"),
   ])
   // The provisioning a session's worktree of this repository gets.
-  const provisioning = await provisioningForWorkspaceRoot(git.sourceRoot).catch(() => undefined)
+  const provisioning = await bundleProvisioningForPath(git.sourceRoot).catch(() => ({}))
   const logicalRootId = "harness-probe"
   const acquireOptions: [] | [{ signal: AbortSignal }] = input.signal
     ? [{ signal: input.signal }]
@@ -353,7 +353,7 @@ async function acquireGitProbeWorkspace(input: {
         environmentKind: "managed",
         base: { kind: "gitRef", gitRef: git.resolvedBaseSha as string },
         roots: [{ logicalRootId, role: "primary", sourceRoot: git.sourceRoot }],
-        ...(provisioning ? { provisioning } : {}),
+        ...provisioning,
       },
       ...acquireOptions
     )

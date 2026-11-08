@@ -185,7 +185,11 @@
       "on": "开启",
       "off": "关闭"
     },
-    "unavailable": "此设备无法读取。"
+    "unavailable": "此设备无法读取。",
+    "otherRepositories": {
+      "description": "这个仓库有自己的配置文件，需要单独批准。批准之前，它的任务副本不会使用这份配置。",
+      "label": "{name} 的配置"
+    }
   },
   "retry": "重试初始化",
   "runAction": "运行{name}",

@@ -6,6 +6,13 @@ import type { Project } from "@/types"
 
 const mockProjects: Array<Pick<Project, "id" | "roots">> = [
   { id: "p1", roots: [{ id: "r1", path: "/repos/app", isPrimary: true }] } as never,
+  {
+    id: "p2",
+    roots: [
+      { id: "r1", path: "/repos/app", isPrimary: true },
+      { id: "r2", path: "/repos/sdk" },
+    ],
+  } as never,
 ]
 let trustEnabled = true
 
@@ -24,7 +31,10 @@ jest.mock("@/stores/settings", () => ({
 }))
 jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
 
-import { useRepoWorkspaceConfig } from "./use-repo-workspace-config"
+import {
+  useOtherRepositoriesNeedAttention,
+  useRepoWorkspaceConfig,
+} from "./use-repo-workspace-config"
 import { parseWorkspaceConfig } from "@/lib/project-environment/workspace-config"
 import { workspaceConfigDigest } from "@/lib/project-environment/workspace-config-trust"
 
@@ -230,5 +240,84 @@ describe("seeding what the repository declares", () => {
     })
     expect(mockUpdateProject).not.toHaveBeenCalled()
     expect(recordSeeded).not.toHaveBeenCalled()
+  })
+})
+
+describe("another repository of the workspace (ADR-0147, 2026-11-08 amendment)", () => {
+  it("reads and approves the file at its own root, never under the primary's key", async () => {
+    const digest = await workspaceConfigDigest(parseWorkspaceConfig(JSON.stringify(CONFIG)))
+    const approve = jest.fn(async () => true)
+    const approvedDigestFor = jest.fn(async (path: string) =>
+      // The primary has approved its own file; that must not count here.
+      path === "/repos/app" ? digest : undefined
+    )
+    const readFile = jest.fn(async () => JSON.stringify(CONFIG))
+    const { result } = renderHook(() =>
+      useRepoWorkspaceConfig("p2", "/repos/sdk", deps({ approve, approvedDigestFor, readFile }), {
+        approvalRoot: "/repos/sdk",
+      })
+    )
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.approvalKey).toBe("/repos/sdk")
+    expect(result.current.verdict.kind).toBe("unapproved")
+    expect(readFile).toHaveBeenCalledWith("/repos/sdk", expect.any(String), expect.any(Number))
+    await act(async () => {
+      await result.current.approve()
+    })
+    expect(approve).toHaveBeenCalledWith("/repos/sdk", digest, expect.anything())
+  })
+
+  it("seeds nothing into the workspace from another repository's file", async () => {
+    // Its roots and capabilities would land on the whole workspace, and its
+    // seeded root ids could collide with the primary's.
+    const seeding = {
+      version: 1,
+      roots: [{ id: "docs", path: "docs" }],
+      capabilities: { mcpServer: { jira: true } },
+    }
+    const recordSeeded = jest.fn(async () => true)
+    const { result } = renderHook(() =>
+      useRepoWorkspaceConfig(
+        "p2",
+        "/repos/sdk",
+        deps({ readFile: jest.fn(async () => JSON.stringify(seeding)), recordSeeded }),
+        { approvalRoot: "/repos/sdk" }
+      )
+    )
+    await waitFor(() => expect(result.current.verdict.kind).toBe("unapproved"))
+    await act(async () => {
+      await result.current.approve()
+    })
+    expect(mockUpdateProject).not.toHaveBeenCalled()
+    expect(recordSeeded).not.toHaveBeenCalled()
+  })
+
+  it("flags another repository whose file waits for a decision", async () => {
+    const approvedDigestFor = jest.fn(async () => undefined)
+    const { result } = renderHook(() =>
+      useOtherRepositoriesNeedAttention(
+        "p2",
+        deps({ approvedDigestFor, readGate: { available: true, reason: null } }) as never
+      )
+    )
+    await waitFor(() => expect(result.current).toBe(true))
+    expect(approvedDigestFor).toHaveBeenCalledWith("/repos/sdk")
+    expect(approvedDigestFor).not.toHaveBeenCalledWith("/repos/app")
+  })
+
+  it("stays quiet once that repository's file is approved, and for one repository", async () => {
+    const digest = await workspaceConfigDigest(parseWorkspaceConfig(JSON.stringify(CONFIG)))
+    const approved = deps({
+      approvedDigestFor: jest.fn(async () => digest),
+      readGate: { available: true, reason: null },
+    }) as never
+    const multi = renderHook(() => useOtherRepositoriesNeedAttention("p2", approved))
+    const single = renderHook(() => useOtherRepositoriesNeedAttention("p1", approved))
+    // Let the read settle before asserting it found nothing to flag.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(multi.result.current).toBe(false)
+    expect(single.result.current).toBe(false)
   })
 })

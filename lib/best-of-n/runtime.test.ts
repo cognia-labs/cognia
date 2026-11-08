@@ -23,9 +23,10 @@ const bundle = {
   ],
 }
 const acquire = jest.fn<Promise<typeof bundle>, unknown[]>(async () => bundle)
-const provisioning = jest.fn<Promise<{ sparsePaths: string[] } | undefined>, unknown[]>(
-  async () => undefined
-)
+const provisioning = jest.fn<
+  Promise<{ provisioning?: { sparsePaths: string[] }; provisioningSource?: string }>,
+  unknown[]
+>(async () => ({}))
 const settle = jest.fn()
 const options: SendOptions = Object.freeze({
   model: "chosen",
@@ -49,7 +50,7 @@ jest.mock("@/lib/task-workspace/client", () => ({
   ensureWorkspacePortLease: async () => ({ canonicalRoot: "/physical" }),
 }))
 jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
-  provisioningForWorkspaceRoot: (...args: unknown[]) => provisioning(...args),
+  bundleProvisioningForPath: (...args: unknown[]) => provisioning(...args),
 }))
 jest.mock("@/lib/task-workspace/run-lease", () => ({
   openWorkspaceBundleTurnLease: async () => ({ settle }),
@@ -201,11 +202,17 @@ it("hands the group's stop to the candidate's checkout", async () => {
 })
 
 it("provisions a candidate's checkout like the source's own worktrees", async () => {
-  provisioning.mockResolvedValueOnce({ sparsePaths: ["app"] })
+  provisioning.mockResolvedValueOnce({
+    provisioning: { sparsePaths: ["app"] },
+    provisioningSource: group.sourceRoot,
+  })
   await createBestOfNExecution().acquire(group, group.candidates[0], request)
   expect(provisioning).toHaveBeenCalledWith(group.sourceRoot)
   expect(acquire).toHaveBeenLastCalledWith(
-    expect.objectContaining({ provisioning: { sparsePaths: ["app"] } })
+    expect.objectContaining({
+      provisioning: { sparsePaths: ["app"] },
+      provisioningSource: group.sourceRoot,
+    })
   )
 })
 

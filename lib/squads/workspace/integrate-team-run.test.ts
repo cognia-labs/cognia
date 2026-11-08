@@ -465,20 +465,77 @@ describe("integrateTeamRun", () => {
         DEFAULT_AGENT_TEAM_INTEGRATION,
         s.deps
       )
-      expect(s.integrate.mock.calls.map(([input]) => input.changesetIds)).toEqual([
-        ["cs-sdk"],
-        ["cs-app"],
-      ])
+      expect(s.integrate.mock.calls.map(([input]) => input.changesetIds)).toEqual([["cs-sdk"]])
       // The host composes one repository; a changeset in another is not its to order.
       expect(s.captured.map((input) => [input.workspaceId, input.dependsOn])).toEqual([
         ["ws-sdk-sdk", []],
         ["ws-app-app", []],
       ])
-      // Results keep the run's repository order.
-      expect(result.roots.map((root) => [root.logicalRootId, root.merged, root.holds])).toEqual([
-        ["app", ["cs-app"], []],
-        ["sdk", ["cs-sdk"], []],
+      // Results keep the run's repository order. The SDK merged a change, and
+      // nothing checks the app against it, so the app waits for a person
+      // (ADR-0227, 2026-11-08 amendment, D15).
+      expect(result.roots.map((root) => [root.logicalRootId, root.merged])).toEqual([
+        ["app", []],
+        ["sdk", ["cs-sdk"]],
       ])
+      expect(result.roots[0].awaitingApproval).toEqual(["cs-app"])
+      expect(result.roots[0].holds).toEqual([
+        {
+          key: "app:app",
+          changesetId: "cs-app",
+          cause: "provider_changed",
+          provider: { key: "sdk:sdk", logicalRootId: "sdk", taskId: "sdk", changesetId: "cs-sdk" },
+        },
+      ])
+    })
+
+    it("holds a consumer whose provider changed through a repository edge too", async () => {
+      const s = scenario()
+      const result = await integrateTeamRun(
+        "run-1",
+        [candidate("sdk", "sdk"), candidate("app", "app"), candidate("docs", "docs")],
+        {},
+        DEFAULT_AGENT_TEAM_INTEGRATION,
+        s.deps,
+        { repositoryDependencies: { app: ["sdk"] } }
+      )
+      const byRoot = Object.fromEntries(result.roots.map((root) => [root.logicalRootId, root]))
+      expect(byRoot.sdk!.merged).toEqual(["cs-sdk"])
+      expect(byRoot.app!.holds).toEqual([
+        expect.objectContaining({ cause: "provider_changed", changesetId: "cs-app" }),
+      ])
+      // A repository nothing depends on goes in as before.
+      expect(byRoot.docs!.merged).toEqual(["cs-docs"])
+    })
+
+    it("holds a consumer whose declared dependency names no repository of the run, or several", async () => {
+      const s = scenario()
+      const dependency = {
+        repository: "github.com/org/sdk",
+        reason: "ambiguous" as const,
+        matches: ["sdk", "mirror"],
+      }
+      const result = await integrateTeamRun(
+        "run-1",
+        [candidate("sdk", "sdk"), candidate("app", "app")],
+        {},
+        DEFAULT_AGENT_TEAM_INTEGRATION,
+        s.deps,
+        { unresolvedDependencies: { app: [dependency] } }
+      )
+      const app = result.roots.find((root) => root.logicalRootId === "app")!
+      expect(app.merged).toEqual([])
+      expect(app.awaitingApproval).toEqual(["cs-app"])
+      expect(app.holds).toEqual([
+        {
+          key: "app:app",
+          changesetId: "cs-app",
+          cause: "dependency_unresolved",
+          provider: null,
+          dependency,
+        },
+      ])
+      expect(result.roots.find((root) => root.logicalRootId === "sdk")!.merged).toEqual(["cs-sdk"])
     })
 
     it("holds a consumer whose provider's capture failed in another repository", async () => {

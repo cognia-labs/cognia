@@ -9,6 +9,16 @@
 import "fake-indexeddb/auto"
 
 const getTeamRunContextMock = jest.fn()
+// The production lookups read files and git; here they are a lever.
+const mockDeclared: Record<string, Array<{ repository: string }>> = {}
+const mockRemotes: Record<string, string> = {}
+jest.mock("@/lib/squads/workspace/declared-dependencies", () => ({
+  ...jest.requireActual("@/lib/squads/workspace/declared-dependencies"),
+  declaredDependencyDepsFor: () => ({
+    declared: async ({ id }: { id: string }) => mockDeclared[id] ?? [],
+    remoteOf: async (path: string) => mockRemotes[path] ?? null,
+  }),
+}))
 jest.mock("@/lib/squads/team-run-context", () => ({
   getTeamRunContext: (...a: unknown[]) => getTeamRunContextMock(...a),
 }))
@@ -151,6 +161,7 @@ describe("action.team.reconcile executor", () => {
           config: unknown
           dependencies: unknown
           repositoryDependencies: unknown
+          unresolvedDependencies: unknown
           deps: Record<string, unknown>
         }
       },
@@ -165,6 +176,7 @@ describe("action.team.reconcile executor", () => {
     expect(options.mergeAll.dependencies).toEqual({ t1: [], t2: ["t1"] })
     // Repository ids are the logical roots the run acquired.
     expect(options.mergeAll.repositoryDependencies).toEqual({ app: ["sdk"] })
+    expect(options.mergeAll.unresolvedDependencies).toEqual({})
     for (const port of [
       "host",
       "review",
@@ -176,5 +188,44 @@ describe("action.team.reconcile executor", () => {
     ]) {
       expect(options.mergeAll.deps[port]).toBeDefined()
     }
+  })
+  it("adds the edges each repository declares itself, and says which did not resolve", async () => {
+    // ADR-0147, 2026-11-08 amendment: the app's approved file names the SDK
+    // and a UI kit by remote; only the SDK is in the run.
+    mockDeclared.app = [{ repository: "github.com/org/sdk" }, { repository: "github.com/org/ui" }]
+    mockRemotes["/repo/sdk"] = "git@github.com:Org/SDK.git"
+    mockRemotes["/repo/app"] = "https://github.com/org/app"
+    const reconcile = jest.fn(async () => ({
+      mode: "merge-all",
+      branches: [],
+      handles: [],
+      summary: "",
+    }))
+    getTeamRunContextMock.mockReturnValue({
+      runId: "run_test",
+      team: {
+        id: "team-1",
+        projectId: "project-1",
+        config: {
+          workspaceIsolation: { reconcile: "manual" },
+          repositories: [
+            { id: "sdk", role: "dependency", path: "/repo/sdk", writable: true },
+            { id: "app", role: "primary", path: "/repo/app", writable: true },
+          ],
+        },
+      },
+      workspaceController: { reconcile },
+    })
+    await getExecutor("action.team.reconcile", 1)!.execute(
+      makeCtx("action.team.reconcile", { mode: "merge-all" })
+    )
+    const [options] = reconcile.mock.calls[0] as unknown as [
+      { mergeAll: { repositoryDependencies: unknown; unresolvedDependencies: unknown } },
+    ]
+    expect(options.mergeAll.repositoryDependencies).toEqual({ app: ["sdk"] })
+    expect(options.mergeAll.unresolvedDependencies).toEqual({
+      app: [{ repository: "github.com/org/ui", reason: "noMatch", matches: [] }],
+    })
+    delete mockDeclared.app
   })
 })

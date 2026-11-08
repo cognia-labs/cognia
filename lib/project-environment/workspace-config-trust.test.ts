@@ -304,6 +304,24 @@ describe("verdict helpers", () => {
     expect(approvalKeyFor({ roots: [] } as Pick<Project, "roots">)).toBeNull()
     expect(approvalKeyFor(null)).toBeNull()
   })
+
+  // ADR-0147, 2026-11-08 amendment: another repository's file is approved on
+  // its own root, and the primary's approval keeps its key.
+  it("keys another repository's approval on its own root", async () => {
+    expect(approvalKeyFor(project, " /repos/lib ")).toBe("/repos/lib")
+    expect(approvalKeyFor(project, "")).toBe(REPO)
+    const digest = await workspaceConfigDigest(parseWorkspaceConfig(JSON.stringify(CONFIG)))
+    const approvedDigestFor = jest.fn(async (path: string) => (path === REPO ? digest : undefined))
+    // The primary approved this exact content; the other repository has not.
+    const verdict = await evaluateWorkspaceConfig(
+      { ...base, configRoot: "/repos/lib", approvalRoot: "/repos/lib" },
+      deps({ approvedDigestFor })
+    )
+    expect(verdict.kind).toBe("unapproved")
+    expect(approvedDigestFor).toHaveBeenCalledWith("/repos/lib")
+    expect(approvedDigestFor).not.toHaveBeenCalledWith(REPO)
+    expect((await evaluateWorkspaceConfig(base, deps({ approvedDigestFor }))).kind).toBe("approved")
+  })
 })
 
 // ── Acceptance profiles (ADR-0188 D15, WP-D2) ──────────────────────────────

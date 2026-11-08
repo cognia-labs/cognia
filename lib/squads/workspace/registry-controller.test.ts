@@ -219,6 +219,51 @@ describe("AgentTeamRegistryWorkspaceController", () => {
     expect(openTurn.mock.calls[0][2].turnId).not.toBe(openTurn.mock.calls[1][2].turnId)
   })
 
+  it("provisions each repository from its own declaration (ADR-0147, 2026-11-08)", async () => {
+    const acquireBundle = jest.fn(async () => bundle("bundle-sdk", "sdk"))
+    const openTurn = jest.fn(async (workspaceBundle, primaryLogicalRootId, _input) => ({
+      ...turnLease(workspaceBundle.bundleId, primaryLogicalRootId),
+      run: turnLease(workspaceBundle.bundleId, primaryLogicalRootId).runs[0].run,
+      settle: jest.fn(async () => []),
+      abort: jest.fn(async () => []),
+    }))
+    const cones: Record<string, string> = { "/repo/app": "web", "/repo/sdk": "lib" }
+    const resolveProvisioning = jest.fn(async (root: string) =>
+      cones[root] ? { provisioning: { sparsePaths: [cones[root]!] }, provisioningSource: root } : {}
+    )
+    const controller = new AgentTeamRegistryWorkspaceController({
+      runId: "run-1",
+      base: { kind: "localHead" },
+      roots: [
+        { logicalRootId: "app", sourceRoot: "/repo/app" },
+        { logicalRootId: "sdk", sourceRoot: "/repo/sdk" },
+      ],
+      acquireBundle,
+      openTurn,
+      resolveProvisioning,
+    })
+
+    await controller.openDispatch({ taskId: "sdk-task", teammateId: "alice", repositoryId: "sdk" })
+
+    // The dispatch's repository is the bundle's; the app keeps its own cone
+    // instead of receiving the SDK's.
+    expect(acquireBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provisioning: { sparsePaths: ["lib"] },
+        provisioningSource: "/repo/sdk",
+        roots: [
+          {
+            logicalRootId: "app",
+            role: "additional",
+            sourceRoot: "/repo/app",
+            provisioning: { sparsePaths: ["web"] },
+          },
+          { logicalRootId: "sdk", role: "primary", sourceRoot: "/repo/sdk" },
+        ],
+      })
+    )
+  })
+
   it("fails closed when a dispatch targets a root outside the writable bundle", async () => {
     const acquireBundle = jest.fn()
     const controller = new AgentTeamRegistryWorkspaceController({

@@ -25,6 +25,17 @@ export interface WorkspaceConfigCacheLink {
 }
 
 /**
+ * Another repository this one builds against (ADR-0147, 2026-11-08
+ * amendment), named by remote identity in its canonical `host/path` form
+ * (`github.com/org/sdk`). Matched against the workspace's roots by the remote
+ * their checkout reads; a change to that repository in a run holds this one's
+ * changes for a person.
+ */
+export interface WorkspaceConfigDependency {
+  repository: string
+}
+
+/**
  * Capabilities the repository SUGGESTS for a workspace opened on it.
  *
  * Same shape as `WorkspaceCapabilityOverlay` (id → on/off, absent inherits),
@@ -59,6 +70,12 @@ export interface WorkspaceRepositoryConfigV1 {
    * declaration digest and approval.
    */
   environment?: WorkspaceEnvironmentBlock
+  /**
+   * Repositories this one depends on. Present only when the file names at
+   * least one, so the ADR-0147 digest of every existing configuration is
+   * unchanged.
+   */
+  dependsOn?: WorkspaceConfigDependency[]
   // `acceptanceProfiles` (ADR-0188 D15) is deliberately NOT a member. It is
   // read only by `readWorkspaceAcceptanceProfiles`, which only Router + Fusion
   // calls, so this shape, `parseWorkspaceConfig` and the ADR-0147 digest are

@@ -21,6 +21,7 @@
  * names it.
  */
 
+import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { CheckIcon, CircleSlashIcon, FileWarningIcon, ShieldAlertIcon } from "lucide-react"
 
@@ -36,11 +37,18 @@ import {
   type WorkspaceConfigChange,
 } from "@/lib/project-environment/workspace-config-diff"
 import { cn } from "@/lib/utils"
+import { additionalDirsOf } from "@/lib/workspace/roots"
+import { useProjectStore } from "@/stores/project/project-store"
 
 interface Props {
   projectId: string
   /** Where the file is read from — the same root the environment runs in. */
   executionRoot: string
+  /**
+   * Another repository of the workspace, approved at its own root. Absent is
+   * the workspace's primary repository.
+   */
+  approvalRoot?: string
   /** Injected in tests; production takes the hook's own defaults. */
   deps?: Parameters<typeof useRepoWorkspaceConfig>[2]
 }
@@ -205,9 +213,78 @@ function ConfigChanges({
   )
 }
 
-export function ProjectEnvironmentRepoConfig({ projectId, executionRoot, deps }: Props) {
-  const state = useRepoWorkspaceConfig(projectId, executionRoot, deps)
+export function ProjectEnvironmentRepoConfig({
+  projectId,
+  executionRoot,
+  approvalRoot,
+  deps,
+}: Props) {
+  const state = useRepoWorkspaceConfig(
+    projectId,
+    executionRoot,
+    deps,
+    approvalRoot ? { approvalRoot } : undefined
+  )
   return <ProjectEnvironmentRepoConfigView state={state} />
+}
+
+/**
+ * The workspace's other roots that ship a file of their own, each read at and
+ * approved for its own root (ADR-0147, 2026-11-08 amendment), so approving
+ * one repository's file never approves another's. A root with no file shows
+ * nothing, so a workspace of one repository shows nothing at all.
+ */
+export function ProjectEnvironmentOtherRepositories({
+  projectId,
+  deps,
+}: {
+  projectId: string
+  /** Injected in tests; production takes the hook's own defaults. */
+  deps?: Parameters<typeof useRepoWorkspaceConfig>[2]
+}) {
+  const project = useProjectStore((state) =>
+    state.projects.find((candidate) => candidate.id === projectId)
+  )
+  const roots = useMemo(() => (project ? additionalDirsOf(project) : []), [project])
+  if (roots.length === 0) return null
+  return (
+    <div className="space-y-5 empty:hidden" data-testid="other-repository-configs">
+      {roots.map((root) => (
+        <OtherRepositoryConfig key={root} projectId={projectId} root={root} deps={deps} />
+      ))}
+    </div>
+  )
+}
+
+function OtherRepositoryConfig({
+  projectId,
+  root,
+  deps,
+}: {
+  projectId: string
+  root: string
+  deps?: Parameters<typeof useRepoWorkspaceConfig>[2]
+}) {
+  const t = useTranslations("projectEnvironment.repoConfig.otherRepositories")
+  const state = useRepoWorkspaceConfig(projectId, root, deps, { approvalRoot: root })
+  // The primary's card already says when files cannot be read here, and a
+  // root with no file of its own has nothing to say.
+  if (state.unavailable !== null || state.verdict.kind === "absent") return null
+  return (
+    <section className="mt-6" aria-label={t("label", { name: repositoryName(root) })}>
+      <h3 className="truncate text-xs font-semibold" title={root}>
+        {t("label", { name: repositoryName(root) })}
+      </h3>
+      <p className="mt-0.5 mb-2 text-xs leading-snug text-muted-foreground">{t("description")}</p>
+      <ProjectEnvironmentRepoConfigView state={state} />
+    </section>
+  )
+}
+
+/** The last path segment, which is how a person names a repository. */
+function repositoryName(root: string): string {
+  const parts = root.replace(/[\\/]+$/, "").split(/[\\/]/)
+  return parts[parts.length - 1] || root
 }
 
 export function ProjectEnvironmentRepoConfigView({ state }: { state: RepoWorkspaceConfigState }) {

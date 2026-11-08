@@ -38744,6 +38744,10 @@
           "title": "该仓库自带 Cognia 配置"
         }
       },
+      "otherRepositories": {
+        "description": "这个仓库有自己的配置文件，需要单独批准。批准之前，它的任务副本不会使用这份配置。",
+        "label": "{name} 的配置"
+      },
       "overriddenVariables": "以下变量以你的本机值为准：{names}",
       "requiredSecrets": "需要在本设备绑定这些密钥：{names}",
       "reviewChanges": "复核变更",

@@ -46,6 +46,7 @@ import {
 } from "@/lib/project-environment/workspace-config-trust"
 import type {
   WorkspaceConfigCapabilities,
+  WorkspaceConfigDependency,
   WorkspaceConfigRoot,
   WorkspaceRepositoryConfigV1,
 } from "@/lib/project-environment/workspace-config"
@@ -69,6 +70,11 @@ export interface DeclaredWorkspace {
    * acquire payload stays absent rather than carrying three empty arrays.
    */
   provisioning?: WorkspaceProvisioning
+  /**
+   * Repositories this one builds against, by canonical remote identity
+   * (ADR-0147, 2026-11-08 amendment). Empty when it names none.
+   */
+  dependsOn: WorkspaceConfigDependency[]
 }
 
 /**
@@ -96,6 +102,7 @@ export function declaredWorkspaceOf(config: WorkspaceRepositoryConfigV1): Declar
     roots: config.roots,
     capabilities: config.capabilities,
     ...(Object.keys(provisioning).length ? { provisioning } : {}),
+    dependsOn: config.dependsOn ?? [],
   }
 }
 
@@ -106,7 +113,13 @@ export function declaredWorkspaceOf(config: WorkspaceRepositoryConfigV1): Declar
  */
 export async function loadDeclaredWorkspace(
   project: Pick<Project, "roots"> | null | undefined,
-  options: { configRoot?: string | null; trustEnabled: boolean; onWeb: boolean },
+  options: {
+    configRoot?: string | null
+    /** Another repository's own approval (`EvaluateWorkspaceConfigInput.approvalRoot`). */
+    approvalRoot?: string | null
+    trustEnabled: boolean
+    onWeb: boolean
+  },
   deps?: Partial<EvaluateWorkspaceConfigDeps>
 ): Promise<DeclaredWorkspace | null> {
   const configRoot = options.configRoot?.trim() || primaryRootOf(project ?? { roots: [] })?.path
@@ -115,6 +128,7 @@ export async function loadDeclaredWorkspace(
     {
       configRoot,
       project,
+      ...(options.approvalRoot ? { approvalRoot: options.approvalRoot } : {}),
       trustEnabled: options.trustEnabled,
       onWeb: options.onWeb,
     },

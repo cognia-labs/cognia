@@ -2702,9 +2702,11 @@ mod tests {
                         logical_root_id: "primary".into(),
                         role: WorkspaceRootRole::Primary,
                         source_root: self.source.to_string_lossy().into_owned(),
+                        provisioning: None,
                     }],
                     provisioning: None,
                     requested_name: None,
+                    provisioning_source: None,
                 })
                 .unwrap();
             self.service

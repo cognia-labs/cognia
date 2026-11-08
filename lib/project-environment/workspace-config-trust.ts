@@ -147,6 +147,13 @@ export interface EvaluateWorkspaceConfigInput {
   configRoot: string | null | undefined
   /** The workspace, for the trust decision and the approval key. */
   project: Pick<Project, "roots"> | null | undefined
+  /**
+   * The repository the approval belongs to, when it is not the workspace's
+   * primary: another repository in a multi-root workspace has a file, and an
+   * approval, of its own (ADR-0147, 2026-11-08 amendment). Absent keys the
+   * approval on the primary (`approvalKeyFor`).
+   */
+  approvalRoot?: string | null
   /** `appSettings.workspaceTrust?.enabled !== false`. */
   trustEnabled: boolean
   /** True in the browser, where there is no real local filesystem. */
@@ -193,8 +200,17 @@ const DEFAULT_DEPS: EvaluateWorkspaceConfigDeps = {
  * repository at a different path; keying on it would ask the user to approve
  * the same configuration again for every worktree, and a worktree path is not
  * something they ever chose to trust.
+ *
+ * Another repository in the same workspace is the exception: its file is its
+ * author's, so its approval is keyed on its own root (`approvalRoot`), and
+ * approving one repository's file never approves another's.
  */
-export function approvalKeyFor(project: Pick<Project, "roots"> | null | undefined): string | null {
+export function approvalKeyFor(
+  project: Pick<Project, "roots"> | null | undefined,
+  approvalRoot?: string | null
+): string | null {
+  const own = approvalRoot?.trim()
+  if (own) return own
   const roots = project?.roots ?? []
   const primary = roots.find((root) => root.isPrimary) ?? roots[0]
   return primary?.path?.trim() || null
@@ -242,7 +258,7 @@ export async function evaluateWorkspaceConfig(
   if (!config) return { kind: "absent" }
 
   const digest = await workspaceConfigDigest(config)
-  const key = approvalKeyFor(input.project)
+  const key = approvalKeyFor(input.project, input.approvalRoot)
   const approvedDigest = key
     ? await resolved.approvedDigestFor(key).catch(() => undefined)
     : undefined

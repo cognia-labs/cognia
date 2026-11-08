@@ -56,6 +56,11 @@ jest.mock("@/lib/task-workspace/client", () => ({
 }))
 
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(), updateSession: jest.fn() }))
+jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
+  ...jest.requireActual("@/lib/task-workspace/workspace-provisioning"),
+  provisioningForWorkspaceRoot: jest.fn(async () => undefined),
+  bundleProvisioningForPath: jest.fn(async () => ({})),
+}))
 jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),
   isHeadlessHost: jest.fn(() => false),
@@ -671,6 +676,54 @@ describe("safeSendPrompt", () => {
     )
     expect(settle).toHaveBeenCalledWith("ready")
     expect(abort).not.toHaveBeenCalled()
+  })
+
+  it("provisions each repository root from its own declaration", async () => {
+    // ADR-0147, 2026-11-08 amendment: the primary's cone no longer reaches a
+    // second repository the turn can write to.
+    const { provisioningForWorkspaceRoot, bundleProvisioningForPath } = jest.requireMock(
+      "@/lib/task-workspace/workspace-provisioning"
+    ) as { provisioningForWorkspaceRoot: jest.Mock; bundleProvisioningForPath: jest.Mock }
+    bundleProvisioningForPath.mockImplementation(async (root: string) =>
+      root === "/repo"
+        ? { provisioning: { sparsePaths: ["web"] }, provisioningSource: "/repo" }
+        : {}
+    )
+    provisioningForWorkspaceRoot.mockImplementation(async (root: string) =>
+      root === "/repo"
+        ? { sparsePaths: ["web"] }
+        : root === "/sdk"
+          ? { sparsePaths: ["lib"] }
+          : undefined
+    )
+    mockAcquireWorkspaceBundle.mockRejectedValueOnce(new Error("stop after acquisition input"))
+    await expect(
+      safeSendPrompt(
+        "sess_1",
+        "clean",
+        { cwd: "/repo", additionalDirectories: ["/repo/docs", "/sdk"], turnId: "turn-1" },
+        auditCtx
+      )
+    ).rejects.toThrow()
+
+    expect(mockAcquireWorkspaceBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provisioning: { sparsePaths: ["web"] },
+        provisioningSource: "/repo",
+        roots: [
+          { logicalRootId: "connector-root-0", role: "primary", sourceRoot: "/repo" },
+          { logicalRootId: "connector-root-1", role: "additional", sourceRoot: "/repo/docs" },
+          {
+            logicalRootId: "connector-root-2",
+            role: "additional",
+            sourceRoot: "/sdk",
+            provisioning: { sparsePaths: ["lib"] },
+          },
+        ],
+      })
+    )
+    provisioningForWorkspaceRoot.mockReset().mockResolvedValue(undefined)
+    bundleProvisioningForPath.mockReset().mockResolvedValue({})
   })
 
   it("fails closed when Registry Bundle acquisition fails", async () => {

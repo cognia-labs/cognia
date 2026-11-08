@@ -299,7 +299,7 @@ export async function executeAgentTurn(
     const [
       { acquireWorkspaceBundle },
       { openWorkspaceBundleTurnLease },
-      { provisioningForWorkspaceRoot },
+      { bundleProvisioningForPath },
     ] = await Promise.all([
       import("@/lib/task-workspace/client"),
       import("@/lib/task-workspace/run-lease"),
@@ -310,7 +310,7 @@ export async function executeAgentTurn(
       surface === "chat"
         ? ({ kind: "workingState" } as const)
         : ({ kind: "remoteDefault" } as const)
-    const provisioning = await provisioningForWorkspaceRoot(config.cwd).catch(() => undefined)
+    const provisioning = await bundleProvisioningForPath(config.cwd).catch(() => ({}))
     // The turn's abort cancels its checkout, which the host keys by owner. A
     // turn with no session of its own shares the "session-unbound" owner with
     // every other such turn, so its abort would reach their checkouts too; it
@@ -330,7 +330,7 @@ export async function executeAgentTurn(
             sourceRoot: config.cwd,
           },
         ],
-        ...(provisioning ? { provisioning } : {}),
+        ...provisioning,
       },
       ...acquireOptions
     )

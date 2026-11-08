@@ -6,7 +6,11 @@ import { acquireWorkspaceBundle, getWorkspaceBundle } from "./client"
 import { runWorkspaceUserAction } from "./user-action"
 import type { WorkspaceBundle } from "./types"
 import { resolvePullRequestWorkspaceBase } from "./pull-request-base"
-import { provisioningForProject } from "./workspace-provisioning"
+import {
+  provisioningForProject,
+  provisioningForRepositoryRoot,
+  withRootProvisioning,
+} from "./workspace-provisioning"
 
 export interface SessionBundleBinding {
   context: SessionExecutionContext
@@ -101,6 +105,14 @@ export async function ensureSessionExecutionBundle(input: {
   loadProvisioning?: (
     project: Pick<Project, "roots" | "workspaceProvisioning">
   ) => Promise<WorkspaceProvisioning | undefined>
+  /**
+   * Test seam. Production reads another repository's own approved
+   * declaration — see `provisioningForRepositoryRoot`.
+   */
+  loadRepositoryProvisioning?: (
+    project: Pick<Project, "roots" | "workspaceProvisioning">,
+    repositoryRoot: string
+  ) => Promise<WorkspaceProvisioning | undefined>
 }): Promise<SessionBundleBinding> {
   const { context, project, sessionId } = input
   if (context.location !== "managedWorktree" || context.execution?.mode === "local") {
@@ -144,7 +156,28 @@ export async function ensureSessionExecutionBundle(input: {
     // tree handed to an agent is worse than none, so it cannot be a later
     // touch-up. Non-empty only for a repository whose declaration the user
     // approved on this device, or for suggestions they accepted themselves.
+    //
+    // Each repository brings its own declaration (ADR-0147, 2026-11-08
+    // amendment): the chat may be pointed at another repository of the
+    // workspace than its primary, and the bundle's other roots are provisioned
+    // from their own files, never from the primary's.
     const provisioning = await (input.loadProvisioning ?? provisioningForProject)(project)
+    // The workspace primary's file was read there; the host gives it to the
+    // repository that folder is in, whichever lease the chat is pointed at.
+    const projectPrimary = managedRoots ? undefined : primaryRootOf(project)
+    const loadRepository = input.loadRepositoryProvisioning ?? provisioningForRepositoryRoot
+    const rootInputs = roots.map((root) => ({
+      logicalRootId: root.id,
+      role: root.id === primaryRoot.id ? ("primary" as const) : ("additional" as const),
+      sourceRoot: root.path,
+    }))
+    const bundleRoots = projectPrimary
+      ? await withRootProvisioning(
+          rootInputs,
+          (path) => loadRepository(project, path),
+          projectPrimary.path
+        )
+      : rootInputs
     // `task_workspace_bundle_acquire` is `approval: "interactive"`. This is the
     // one call that happens before the turn lease exists, so it carries its own
     // one-shot approval rather than the turn scope opened in `run-lease.ts`.
@@ -161,12 +194,9 @@ export async function ensureSessionExecutionBundle(input: {
           projectId: project.id,
           environmentKind: context.execution?.mode === "permanent" ? "permanent" : "managed",
           base: resolvedBase,
-          roots: roots.map((root) => ({
-            logicalRootId: root.id,
-            role: root.id === primaryRoot.id ? ("primary" as const) : ("additional" as const),
-            sourceRoot: root.path,
-          })),
+          roots: bundleRoots,
           ...(provisioning ? { provisioning } : {}),
+          ...(provisioning && projectPrimary ? { provisioningSource: projectPrimary.path } : {}),
           ...(context.requestedWorktreeName
             ? { requestedName: context.requestedWorktreeName }
             : {}),

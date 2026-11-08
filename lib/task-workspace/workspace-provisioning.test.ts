@@ -4,8 +4,11 @@ import { join } from "node:path"
 
 import { rememberHostClone, resetHostClones } from "./host-clone-roots"
 import {
+  bundleProvisioningForPath,
   provisioningForProject,
+  provisioningForRepositoryRoot,
   provisioningForWorkspaceRoot,
+  withRootProvisioning,
   type ProvisioningProject,
 } from "./workspace-provisioning"
 import type { Project } from "@/types"
@@ -153,6 +156,117 @@ describe("provisioningForWorkspaceRoot", () => {
       },
     })
     expect(provisioning).toBeUndefined()
+  })
+})
+
+describe("a workspace of several repositories (ADR-0147, 2026-11-08 amendment)", () => {
+  const MULTI: Project = {
+    id: "ws-multi",
+    roots: [
+      { id: "app", path: "/repos/app", isPrimary: true },
+      { id: "app-pkg", path: "/repos/app/packages/ui" },
+      { id: "sdk", path: "/repos/sdk" },
+    ],
+    workspaceProvisioning: LOCAL.workspaceProvisioning,
+  } as Project
+
+  it("reads another root's own file under its own approval, without the local set", async () => {
+    const declared = jest.fn(async () => ({ sparsePaths: ["lib"] }))
+    expect(await provisioningForRepositoryRoot(MULTI, "/repos/sdk", { declared })).toEqual({
+      sparsePaths: ["lib"],
+    })
+    expect(declared).toHaveBeenCalledWith(MULTI, "/repos/sdk", "/repos/sdk")
+    const failing = jest.fn(async () => {
+      throw new Error("unreadable")
+    })
+    expect(
+      await provisioningForRepositoryRoot(MULTI, "/repos/sdk", { declared: failing })
+    ).toBeUndefined()
+  })
+
+  it("answers for a path with the declaration of the root it is in, and where it was read", async () => {
+    const declared = jest.fn(async (_project: ProvisioningProject, configRoot?: string) =>
+      configRoot ? { sparsePaths: [`own:${configRoot}`] } : { sparsePaths: ["web"] }
+    )
+    const deps = { declared, projects: async () => [MULTI] }
+    expect(await bundleProvisioningForPath("/repos/sdk/src", deps)).toEqual({
+      provisioning: { sparsePaths: ["own:/repos/sdk"] },
+      provisioningSource: "/repos/sdk",
+    })
+    // A root inside the primary's folder may be a repository of its own; the
+    // host decides that from git, so it is asked about its own file too.
+    expect(await bundleProvisioningForPath("/repos/app/packages/ui", deps)).toEqual({
+      provisioning: { sparsePaths: ["own:/repos/app/packages/ui"] },
+      provisioningSource: "/repos/app/packages/ui",
+    })
+    // The primary root gets the workspace's provisioning, local set included.
+    expect(await bundleProvisioningForPath("/repos/app/src", deps)).toEqual({
+      provisioning: {
+        sparsePaths: ["web"],
+        cacheLinks: [{ source: "node_modules", target: "node_modules" }],
+        include: [".env"],
+      },
+      provisioningSource: "/repos/app",
+    })
+    expect(await provisioningForWorkspaceRoot("/repos/sdk", deps)).toEqual({
+      sparsePaths: ["own:/repos/sdk"],
+    })
+    expect(await bundleProvisioningForPath("/elsewhere", deps)).toEqual({})
+  })
+
+  it("names the clone as the source of a clone's declaration", async () => {
+    resetHostClones()
+    rememberHostClone("ws-multi", "/host/clones/app")
+    const provisioning = await bundleProvisioningForPath("/host/clones/app", {
+      declared: async () => ({ sparsePaths: ["web"] }),
+      projects: async () => [MULTI],
+    })
+    expect(provisioning.provisioningSource).toBe("/host/clones/app")
+    resetHostClones()
+  })
+
+  it("gives each root its own file, except the one the bundle's was read at", async () => {
+    const resolve = jest.fn(async (sourceRoot: string) =>
+      sourceRoot === "/repos/tools" ? undefined : { sparsePaths: [sourceRoot] }
+    )
+    const roots = await withRootProvisioning(
+      [
+        { logicalRootId: "app", role: "primary" as const, sourceRoot: "/repos/app/" },
+        { logicalRootId: "app-pkg", role: "additional" as const, sourceRoot: "/repos/app/ui" },
+        { logicalRootId: "sdk", role: "additional" as const, sourceRoot: "/repos/sdk" },
+        { logicalRootId: "tools", role: "additional" as const, sourceRoot: "/repos/tools" },
+        {
+          logicalRootId: "given",
+          role: "additional" as const,
+          sourceRoot: "/repos/given",
+          provisioning: { include: [".env"] },
+        },
+      ],
+      resolve,
+      "/repos/app"
+    )
+    expect(roots.map((root) => root.provisioning)).toEqual([
+      undefined,
+      { sparsePaths: ["/repos/app/ui"] },
+      { sparsePaths: ["/repos/sdk"] },
+      undefined,
+      { include: [".env"] },
+    ])
+    expect(resolve.mock.calls.map(([path]) => path)).toEqual([
+      "/repos/app/ui",
+      "/repos/sdk",
+      "/repos/tools",
+    ])
+  })
+
+  it("leaves a root alone when its lookup fails", async () => {
+    const roots = await withRootProvisioning(
+      [{ logicalRootId: "sdk", role: "additional" as const, sourceRoot: "/repos/sdk" }],
+      async () => {
+        throw new Error("no store")
+      }
+    )
+    expect(roots[0]).toEqual({ logicalRootId: "sdk", role: "additional", sourceRoot: "/repos/sdk" })
   })
 })
 

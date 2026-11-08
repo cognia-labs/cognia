@@ -77,7 +77,10 @@ import { verdictNeedsAttention } from "@/lib/project-environment/workspace-confi
 import { cn } from "@/lib/utils"
 import { useClientLiveQuery } from "@/hooks/data"
 import { useIsMobile } from "@/hooks/ui/use-mobile"
-import { useRepoWorkspaceConfig } from "@/hooks/workspace/use-repo-workspace-config"
+import {
+  useOtherRepositoriesNeedAttention,
+  useRepoWorkspaceConfig,
+} from "@/hooks/workspace/use-repo-workspace-config"
 import { listIssues } from "@/lib/db/issues"
 import { listIssueProjects } from "@/lib/db/issue-projects"
 import { listActiveAgentRuns, type ActiveAgentRun } from "@/lib/workspace/active-agent-runs"
@@ -173,7 +176,10 @@ export function WorkspaceOverview({ tab = "overview", onTabChange }: WorkspaceOv
   // A repository config waiting for approval changes what every turn here
   // runs, and its card sits at the bottom of a tab nobody opens by habit.
   const repoConfig = useRepoWorkspaceConfig(workspaceId, primaryRoot)
-  const environmentsNeedAttention = verdictNeedsAttention(repoConfig.verdict)
+  // Another repository's pending file costs its worktrees their provisioning.
+  const otherRepositoriesNeedAttention = useOtherRepositoriesNeedAttention(workspaceId)
+  const environmentsNeedAttention =
+    verdictNeedsAttention(repoConfig.verdict) || otherRepositoriesNeedAttention
 
   const projects = useClientLiveQuery(
     () => (workspaceId ? listIssueProjects({ projectId: workspaceId }) : Promise.resolve([])),

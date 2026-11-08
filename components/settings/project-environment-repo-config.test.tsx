@@ -10,6 +10,14 @@ import type { Project } from "@/types"
 
 const mockProjects: Array<Pick<Project, "id" | "roots">> = [
   { id: "p1", roots: [{ id: "r1", path: "/repos/app", isPrimary: true }] } as never,
+  {
+    id: "p2",
+    roots: [
+      { id: "r1", path: "/repos/app", isPrimary: true },
+      { id: "r2", path: "/repos/app/packages/ui" },
+      { id: "r3", path: "/repos/sdk" },
+    ],
+  } as never,
 ]
 let trustEnabled = true
 
@@ -29,6 +37,7 @@ jest.mock("@/stores/settings", () => ({
 jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
 
 import {
+  ProjectEnvironmentOtherRepositories,
   ProjectEnvironmentRepoConfig,
   ProjectEnvironmentRepoConfigView,
 } from "./project-environment-repo-config"
@@ -168,6 +177,39 @@ describe("ProjectEnvironmentRepoConfig", () => {
     await waitFor(() => expect(screen.getByTestId("repo-config-approve")).toBeInTheDocument())
     const card = screen.getByTestId("project-environment-repo-config")
     expect(card.textContent ?? "").not.toMatch(/projectEnvironment\.repoConfig\./)
+  })
+})
+
+describe("ProjectEnvironmentOtherRepositories (ADR-0147, 2026-11-08 amendment)", () => {
+  // Only the SDK ships a file; the app's sub-package does not.
+  const onlySdk = jest.fn(async (root: string) => {
+    if (root === "/repos/sdk") return JSON.stringify(CONFIG)
+    throw new Error("No such file or directory")
+  })
+
+  it("renders nothing for a workspace of one repository", () => {
+    const { container } = render(
+      <ProjectEnvironmentOtherRepositories projectId="p1" deps={deps()} />
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it("shows each other root that ships a file, read and approved at that root", async () => {
+    const approve = jest.fn(async () => true)
+    render(
+      <ProjectEnvironmentOtherRepositories
+        projectId="p2"
+        deps={deps({ approve, readFile: onlySdk })}
+      />
+    )
+    await waitFor(() => expect(screen.getByTestId("repo-config-approve")).toBeInTheDocument())
+    const list = screen.getByTestId("other-repository-configs")
+    expect(list.querySelectorAll("section")).toHaveLength(1)
+    expect(list).toHaveTextContent("sdk")
+    expect(list.textContent ?? "").not.toMatch(/projectEnvironment\.repoConfig\./)
+    expect(onlySdk).toHaveBeenCalledWith("/repos/sdk", expect.any(String), expect.any(Number))
+    await userEvent.click(screen.getByTestId("repo-config-approve"))
+    expect(approve).toHaveBeenCalledWith("/repos/sdk", expect.any(String), expect.any(Object))
   })
 })
 

@@ -795,11 +795,19 @@ pub struct WorkspaceRootLease {
 /// One logical root requested for transactional bundle acquisition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[schemars(transform = cognia_problem::wire_schema::closed_object)]
+#[schemars(transform = cognia_problem::wire_schema::closed_sparse_object)]
 pub struct WorkspaceBundleRootInput {
     pub logical_root_id: String,
     pub role: WorkspaceRootRole,
     pub source_root: String,
+    /// The declaration read at this root, under its own approval (ADR-0147,
+    /// 2026-11-08 amendment): a second repository in the workspace has one of
+    /// its own. It applies to the repository the root is in, unless the
+    /// bundle's `provisioning` is that repository's; of several roots of one
+    /// repository, the one at the repository's top wins, and different ones
+    /// with none at the top are refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioning: Option<WorkspaceProvisioning>,
 }
 
 /// One directory linked into an execution root instead of copied.
@@ -872,11 +880,19 @@ pub struct AcquireWorkspaceBundle {
     #[serde(default)]
     pub base: WorkspaceBaseSpec,
     pub roots: Vec<WorkspaceBundleRootInput>,
-    /// What the repository declares about provisioning, forwarded only after
-    /// the user approved that declaration on the calling device. Absent for
-    /// every caller that has none — the overwhelmingly common case.
+    /// What the workspace's primary repository declares about provisioning,
+    /// forwarded only after the user approved that declaration on the calling
+    /// device. Applied to the repository `provisioning_source` is in; another
+    /// repository gets its root's own `provisioning`. Absent for every caller
+    /// that has none — the overwhelmingly common case.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provisioning: Option<WorkspaceProvisioning>,
+    /// Where `provisioning` was read: the checkout whose
+    /// `.cognia/workspace.json` it is. The host applies it to the repository
+    /// that path is in, and to none when no root of the bundle is in it.
+    /// Absent (older callers) means the primary-role root's repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioning_source: Option<String>,
     /// Caller-chosen name for the created worktree's branch. Absent keeps the
     /// ADR-0111 default (detached head, host-generated identity); present puts
     /// each Git worktree in the bundle onto a branch of this name. Rejected

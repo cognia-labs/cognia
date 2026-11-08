@@ -153,8 +153,10 @@ jest.mock("./workspace-context-summary", () => ({
   ),
 }))
 let repoVerdict: { kind: string } = { kind: "absent" }
+let otherRepositoriesNeedAttention = false
 jest.mock("@/hooks/workspace/use-repo-workspace-config", () => ({
   useRepoWorkspaceConfig: () => ({ verdict: repoVerdict }),
+  useOtherRepositoriesNeedAttention: () => otherRepositoriesNeedAttention,
 }))
 jest.mock("@/components/settings/project-environment-manager", () => ({
   ProjectEnvironmentManager: () => <section data-testid="project-environment-manager-stub" />,
@@ -560,6 +562,18 @@ describe("WorkspaceOverview", () => {
     expect(chip).toHaveAttribute("data-tone", "warning")
     expect(chip).toHaveTextContent("workspace.environmentsAttentionShort")
     expect(chip).toHaveAttribute("title", "workspace.environmentsAttention")
+  })
+
+  it("flags the Environments tab when another repository's config needs a decision", () => {
+    // ADR-0147, 2026-11-08 amendment: until it is approved, that repository's
+    // worktrees are made without it.
+    otherRepositoriesNeedAttention = true
+    render(<WorkspaceOverview />)
+    expect(screen.getByTestId("workspace-environments-attention")).toHaveAttribute(
+      "data-tone",
+      "warning"
+    )
+    otherRepositoriesNeedAttention = false
   })
 
   it("keeps the Environments tab quiet when the repository asks for nothing", () => {

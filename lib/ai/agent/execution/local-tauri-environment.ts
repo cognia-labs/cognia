@@ -174,11 +174,9 @@ export function createLocalTauriExecutionEnvironment(
         options.openWorkspaceBundleTurnLease ??
         (await import("@/lib/task-workspace/run-lease")).openWorkspaceBundleTurnLease
       const primaryLogicalRootId = "primary"
-      const { provisioningForWorkspaceRoot } =
+      const { bundleProvisioningForPath } =
         await import("@/lib/task-workspace/workspace-provisioning")
-      const provisioning = await provisioningForWorkspaceRoot(input.repositoryPath).catch(
-        () => undefined
-      )
+      const provisioning = await bundleProvisioningForPath(input.repositoryPath).catch(() => ({}))
       const bundle = await acquireBundle({
         ownerType: "team",
         ownerRef: input.runId,
@@ -191,7 +189,7 @@ export function createLocalTauriExecutionEnvironment(
             sourceRoot: input.repositoryPath,
           },
         ],
-        ...(provisioning ? { provisioning } : {}),
+        ...provisioning,
       })
       const lease = await openBundleTurn(bundle, primaryLogicalRootId, {
         taskId: input.taskId,

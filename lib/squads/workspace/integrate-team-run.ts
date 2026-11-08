@@ -19,9 +19,14 @@
  * - **Across repositories.** The host composes one repository at a time, so a
  *   changeset only declares the prerequisites in its own repository. Edges
  *   between repositories (a task depending on a task in another repository, or
- *   a repository binding's `dependsOn`) are enforced here: repositories
- *   integrate in dependency order, and a consumer only goes in once every
- *   provider it depends on has merged.
+ *   a repository binding's `dependsOn`, or a repository's own declared
+ *   `dependsOn`) are enforced here: repositories integrate in dependency
+ *   order. A consumer whose provider merged a change in this run waits for a
+ *   person (ADR-0147 / ADR-0227, 2026-11-08 amendments, decision D15): its
+ *   own checks ran against the provider as it was, and no check here
+ *   composes the two repositories yet. A consumer whose provider changed
+ *   nothing goes in; one whose declaration names no repository of the run,
+ *   or several, waits with that declaration in its record.
  * - **Where it lands.** By default a branch this run creates,
  *   `agent/<run>/integrated`, starting at the source checkout's HEAD — an
  *   unattended team never moves a branch nobody named. `target: "base"`
@@ -36,6 +41,7 @@ import type {
   IntegrationOutcome,
 } from "@/lib/scm/integration/orchestrator"
 import { scmErrorCode, type ScmHost } from "@/lib/scm/host"
+import type { UnresolvedRepositoryDependency } from "./declared-dependencies"
 import type {
   AgentChangeset,
   IntegrationConflictPolicy,
@@ -98,6 +104,16 @@ export type TeamIntegrationHoldCause =
   | "provider_blocked"
   /** The prerequisite went to its queue but did not merge (conflict, drop, stale). */
   | "provider_not_merged"
+  /**
+   * The prerequisite is in another repository and merged a change in this
+   * run. Nothing here checks the two together, so a person decides.
+   */
+  | "provider_changed"
+  /**
+   * The repository's own `dependsOn` names a repository no root of the run
+   * reads, or several do; the edge is not guessed.
+   */
+  | "dependency_unresolved"
   /** Repositories depend on each other in a cycle; the later one cannot wait for the earlier. */
   | "dependency_cycle"
 
@@ -106,19 +122,27 @@ export interface TeamIntegrationHold {
   key: string
   changesetId: string
   cause: TeamIntegrationHoldCause
+  /** The prerequisite waited on; null for `dependency_unresolved`, which has none. */
   provider: {
     /** Candidate key, or null for a teammate that never produced a candidate. */
     key: string | null
     logicalRootId: string | null
     taskId: string
     changesetId: string | null
-  }
+  } | null
+  /** The declaration that did not resolve, for `dependency_unresolved`. */
+  dependency?: UnresolvedRepositoryDependency
 }
 
 /** Edges `integrateTeamRun` reads besides the task graph. */
 export interface TeamIntegrationGraph {
-  /** logicalRootId → the logicalRootIds it depends on (repository bindings' `dependsOn`). */
+  /**
+   * logicalRootId → the logicalRootIds it depends on: repository bindings'
+   * `dependsOn` and the repositories' own declarations, unioned.
+   */
   repositoryDependencies?: Readonly<Record<string, readonly string[]>>
+  /** logicalRootId → its declared dependencies that matched no root, or several. */
+  unresolvedDependencies?: Readonly<Record<string, readonly UnresolvedRepositoryDependency[]>>
   /** Tasks whose teammate did not succeed, so they never became candidates. */
   unsuccessfulTasks?: readonly string[]
 }
@@ -362,13 +386,17 @@ export async function integrateTeamRun(
     // Same repository: the queue composes it in order with its prerequisite.
     if (provider.logicalRootId === candidate.logicalRootId) return null
     if (!doneRoots.has(provider.logicalRootId)) return "dependency_cycle"
-    return merged.has(state.changesetId) ? null : "provider_not_merged"
+    return merged.has(state.changesetId) ? "provider_changed" : "provider_not_merged"
   }
 
   /** The first prerequisite that keeps `candidate` out, or null when none does. */
   const prerequisiteHold = (
     candidate: TeamIntegrationCandidate
   ): Omit<TeamIntegrationHold, "key" | "changesetId"> | null => {
+    const [unresolved] = graph.unresolvedDependencies?.[candidate.logicalRootId] ?? []
+    if (unresolved) {
+      return { cause: "dependency_unresolved", provider: null, dependency: unresolved }
+    }
     for (const taskId of dependencies[candidate.taskId] ?? []) {
       if (unsuccessful.has(taskId) && !byTask.has(taskId)) {
         return {

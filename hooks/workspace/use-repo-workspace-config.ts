@@ -39,11 +39,13 @@ import {
 import {
   approvalKeyFor,
   evaluateWorkspaceConfig,
+  verdictNeedsAttention,
   type EvaluateWorkspaceConfigDeps,
   type WorkspaceConfigVerdict,
 } from "@/lib/project-environment/workspace-config-trust"
 import type { WorkspaceRepositoryConfigV1 } from "@/lib/project-environment/workspace-config"
 import { declaredWorkspaceOf, seedDeclarations } from "@/lib/workspace/repo-declared"
+import { additionalDirsOf } from "@/lib/workspace/roots"
 import { isTauri } from "@/lib/tauri"
 import type { Project } from "@/types"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -80,10 +82,20 @@ export interface UseRepoWorkspaceConfigDeps extends Partial<EvaluateWorkspaceCon
 
 const LOADING: WorkspaceConfigVerdict = { kind: "absent" }
 
+export interface UseRepoWorkspaceConfigOptions {
+  /**
+   * Another repository of the workspace, whose file is read and approved at
+   * its own root (ADR-0147, 2026-11-08 amendment). Absent is the workspace's
+   * primary repository and its existing approval.
+   */
+  approvalRoot?: string | null
+}
+
 export function useRepoWorkspaceConfig(
   projectId: string | null | undefined,
   executionRoot: string | null | undefined,
-  deps?: Partial<UseRepoWorkspaceConfigDeps>
+  deps?: Partial<UseRepoWorkspaceConfigDeps>,
+  options?: UseRepoWorkspaceConfigOptions
 ): RepoWorkspaceConfigState {
   const projects = useProjectStore((state) => state.projects)
   const trustEnabled = useSettingsStore(
@@ -95,7 +107,8 @@ export function useRepoWorkspaceConfig(
   )
 
   const [nonce, setNonce] = useState(0)
-  const approvalKey = useMemo(() => approvalKeyFor(project), [project])
+  const approvalRoot = options?.approvalRoot?.trim() || null
+  const approvalKey = useMemo(() => approvalKeyFor(project, approvalRoot), [project, approvalRoot])
   const gate = useWorkspaceCommandGate()
   const readGate = deps?.readGate ?? gate("fs_read_workspace_file")
   const unavailable = readGate.available ? null : readGate.reason
@@ -108,11 +121,12 @@ export function useRepoWorkspaceConfig(
     () =>
       [
         executionRoot ?? "",
+        approvalRoot ?? "",
         trustEnabled ? "1" : "0",
         (project?.roots ?? []).map((root) => root.path).join(","),
         nonce,
       ].join("|"),
-    [executionRoot, trustEnabled, project, nonce]
+    [executionRoot, approvalRoot, trustEnabled, project, nonce]
   )
 
   const [settled, setSettled] = useState<{ key: string; verdict: WorkspaceConfigVerdict } | null>(
@@ -129,6 +143,7 @@ export function useRepoWorkspaceConfig(
       {
         configRoot: executionRoot,
         project,
+        ...(approvalRoot ? { approvalRoot } : {}),
         trustEnabled,
         onWeb: !isTauri(),
       },
@@ -172,6 +187,11 @@ export function useRepoWorkspaceConfig(
       // The content goes with the digest, so the next change can be shown
       // as a change against exactly what was approved here.
       await persist(approvalKey, verdict.digest, verdict.config)
+      // Another repository's file reaches its own worktrees only (its
+      // provisioning and `dependsOn`). Its roots and capabilities would land
+      // on the whole workspace, and its root ids could collide with the
+      // primary's seeded ones, so nothing is seeded from it.
+      if (approvalRoot) return
       // Approval is the moment the user says yes to THIS content, so it is also
       // the moment the repository's non-script declarations take effect. Seeded
       // once and recorded, so removing a seeded root or clearing a seeded
@@ -201,7 +221,66 @@ export function useRepoWorkspaceConfig(
       // agree with.
       setNonce((n) => n + 1)
     }
-  }, [verdict, approvalKey, project, deps])
+  }, [verdict, approvalKey, approvalRoot, project, deps])
 
   return { verdict, unavailable, loading, approving, approvalKey, approve, refresh }
+}
+
+/**
+ * Whether any other root of the workspace has a file waiting for the user
+ * (ADR-0147, 2026-11-08 amendment).
+ *
+ * Until it is approved that repository's worktrees get no provisioning from
+ * it, so the surfaces that flag the primary's pending file flag this too. One
+ * read per root, at that root and under that root's own approval.
+ */
+export function useOtherRepositoriesNeedAttention(
+  projectId: string | null | undefined,
+  deps?: Partial<Pick<UseRepoWorkspaceConfigDeps, "readGate">> &
+    Partial<EvaluateWorkspaceConfigDeps>
+): boolean {
+  const projects = useProjectStore((state) => state.projects)
+  const trustEnabled = useSettingsStore(
+    (state) => state.settings?.workspaceTrust?.enabled !== false
+  )
+  const project = useMemo(
+    () => projects.find((candidate) => candidate.id === projectId) ?? null,
+    [projects, projectId]
+  )
+  // Every other root may be a repository with a file of its own; one with
+  // none reads as absent and asks for nothing.
+  const repositories = useMemo(() => (project ? additionalDirsOf(project) : []), [project])
+  const gate = useWorkspaceCommandGate()
+  const readable = (deps?.readGate ?? gate("fs_read_workspace_file")).available
+  const requestKey = useMemo(
+    () => [repositories.join(","), trustEnabled ? "1" : "0", readable ? "1" : "0"].join("|"),
+    [repositories, trustEnabled, readable]
+  )
+  const [settled, setSettled] = useState<{ key: string; attention: boolean } | null>(null)
+
+  useEffect(() => {
+    if (!readable || repositories.length === 0) return
+    let cancelled = false
+    void Promise.all(
+      repositories.map((root) =>
+        evaluateWorkspaceConfig(
+          { configRoot: root, approvalRoot: root, project, trustEnabled, onWeb: !isTauri() },
+          deps
+        ).catch(() => ({ kind: "absent" }) as WorkspaceConfigVerdict)
+      )
+    ).then((verdicts) => {
+      if (!cancelled) {
+        setSettled({ key: requestKey, attention: verdicts.some(verdictNeedsAttention) })
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+    // `deps` is a test seam; `requestKey` covers what the read depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestKey])
+
+  return readable && repositories.length > 0 && settled?.key === requestKey
+    ? settled.attention
+    : false
 }

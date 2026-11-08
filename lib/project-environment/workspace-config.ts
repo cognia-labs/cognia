@@ -12,6 +12,7 @@ import {
   WORKSPACE_CAPABILITY_KINDS,
   type WorkspaceCapabilityKind,
 } from "@/lib/workspace/capability-overlay"
+import { originKey, parseOrigin } from "@/lib/workspace/repository-origin"
 import type {
   ProjectEnvironment,
   ProjectEnvironmentAction,
@@ -25,12 +26,14 @@ import {
 } from "./environment-declaration"
 import type {
   WorkspaceConfigCapabilities,
+  WorkspaceConfigDependency,
   WorkspaceConfigRoot,
   WorkspaceRepositoryConfigV1,
 } from "@cognia/plugin-contract/lib/project-environment/workspace-config"
 export type {
   WorkspaceConfigCacheLink,
   WorkspaceConfigCapabilities,
+  WorkspaceConfigDependency,
   WorkspaceConfigExecution,
   WorkspaceConfigRoot,
   WorkspaceConfigRootRole,
@@ -154,6 +157,36 @@ function capabilities(value: unknown): WorkspaceConfigCapabilities {
   return out
 }
 
+/**
+ * `dependsOn` (ADR-0147, 2026-11-08 amendment), checked rather than ignored
+ * like an unknown key: a misspelt repository would otherwise drop the hold it
+ * asks for without a word. Each entry is stored in its canonical `host/path`
+ * form, so respelling a remote does not change the digest.
+ */
+function dependencies(value: unknown): WorkspaceConfigDependency[] {
+  if (!Array.isArray(value)) {
+    throw new WorkspaceConfigError("dependsOn must be an array", "dependsOn")
+  }
+  const seen = new Set<string>()
+  return value.map((entry, index) => {
+    const field = `dependsOn[${index}].repository`
+    const repository = text(object(entry, `dependsOn[${index}]`).repository, field)
+    const origin = parseOrigin(repository)
+    if (!origin) {
+      throw new WorkspaceConfigError(
+        `${field} must name a remote repository, such as github.com/org/repo`,
+        field
+      )
+    }
+    const key = originKey(origin)
+    if (seen.has(key)) {
+      throw new WorkspaceConfigError(`dependsOn names ${key} twice`, "dependsOn")
+    }
+    seen.add(key)
+    return { repository: key }
+  })
+}
+
 function baseSpec(value: unknown): WorkspaceBaseSpec {
   if (value === undefined) return { kind: "workingState" }
   const row = object(value, "defaults.base")
@@ -252,6 +285,8 @@ export function parseWorkspaceConfig(source: string): WorkspaceRepositoryConfigV
     }
   })
 
+  const dependsOn = row.dependsOn === undefined ? [] : dependencies(row.dependsOn)
+
   let environment: WorkspaceEnvironmentBlock | undefined
   if (row.environment !== undefined) {
     const parsed = parseWorkspaceEnvironmentBlock(row.environment)
@@ -279,6 +314,7 @@ export function parseWorkspaceConfig(source: string): WorkspaceRepositoryConfigV
     requiredSecrets: stringArray(row.requiredSecrets, "requiredSecrets"),
     capabilities: capabilities(row.capabilities),
     ...(environment ? { environment } : {}),
+    ...(dependsOn.length ? { dependsOn } : {}),
   }
 }
 

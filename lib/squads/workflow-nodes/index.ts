@@ -561,11 +561,15 @@ async function mergeAllOptions(
     { DEFAULT_AGENT_TEAM_INTEGRATION },
     { useSettingsStore },
     { useAgentTeamStore },
+    { useProjectStore },
+    { declaredDependencyDepsFor, resolveDeclaredDependencies, unionRepositoryEdges },
   ] = await Promise.all([
     import("@/lib/scm/runtime"),
     import("@/lib/squads/workspace/integrate-team-run"),
     import("@/stores/settings/settings-store"),
     import("@/stores/squads/agent-team-store/store"),
+    import("@/stores/project/project-store"),
+    import("@/lib/squads/workspace/declared-dependencies"),
   ])
   const configured = team.config.workspaceIsolation?.integration ?? {}
   const runtime = createScmRuntime({
@@ -577,11 +581,24 @@ async function mergeAllOptions(
     dependencies[task.id] = [...task.dependencies]
   }
   // Repository ids are the logical root ids the controller acquired.
-  const repositoryDependencies: Record<string, string[]> = {}
+  const bindingDependencies: Record<string, string[]> = {}
   for (const repository of team.config.repositories ?? []) {
-    if (repository.dependsOn?.length)
-      repositoryDependencies[repository.id] = [...repository.dependsOn]
+    if (repository.dependsOn?.length) bindingDependencies[repository.id] = [...repository.dependsOn]
   }
+  // What each repository declares itself (ADR-0147, 2026-11-08 amendment):
+  // its approved `dependsOn`, matched to the run's repositories by remote.
+  const projectId = ctx.projectId ?? team.projectId ?? null
+  const project = projectId
+    ? useProjectStore.getState().projects.find((candidate) => candidate.id === projectId)
+    : undefined
+  const declared = await resolveDeclaredDependencies(
+    (team.config.repositories ?? []).map((repository) => ({
+      id: repository.id,
+      path: repository.path,
+    })),
+    declaredDependencyDepsFor(project)
+  )
+  const repositoryDependencies = unionRepositoryEdges(bindingDependencies, declared.edges)
   return {
     config: {
       target: configured.target ?? DEFAULT_AGENT_TEAM_INTEGRATION.target,
@@ -591,6 +608,7 @@ async function mergeAllOptions(
     },
     dependencies,
     repositoryDependencies,
+    unresolvedDependencies: declared.unresolved,
     deps: {
       host: runtime.host,
       review: (changesetId) => runtime.review(changesetId, ctx.signal),

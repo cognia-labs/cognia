@@ -36,6 +36,7 @@ jest.mock("@/hooks/workspace/use-repo-workspace-config", () => ({
     approve: jest.fn(),
     refresh: jest.fn(),
   }),
+  useOtherRepositoriesNeedAttention: () => false,
 }))
 jest.mock("./project-environment-provisioning", () => ({
   ProjectEnvironmentProvisioning: () => <div data-testid="provisioning-probe" />,
