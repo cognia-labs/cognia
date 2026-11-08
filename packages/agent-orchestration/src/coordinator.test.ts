@@ -100,6 +100,28 @@ describe("durable AgentTeam coordinator", () => {
     throw new Error("Condition did not settle")
   }
 
+  it("recovers a newly registered replacement before its rebuilt engine ever starts", async () => {
+    const isStopped = jest.fn(async () => undefined)
+    const coordinator = make({ localSessions: { isStopped } })
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "replacement")
+
+    // Losing the renderer before executor admission must not turn a fresh
+    // filtered-history rebuild into a possibly-running legacy session.
+    const restarted = make({ localSessions: { isStopped } })
+    await expect(restarted.assessTaskRecovery("run-admission", "replacement")).resolves.toEqual({
+      eligible: true,
+    })
+    await expect(restarted.recover()).resolves.toEqual([
+      { runId: "run-admission", status: "recovering" },
+    ])
+    await expect(restarted.retryChild("replacement")).resolves.toMatchObject({
+      status: "queued",
+      dispatchEpoch: 0,
+    })
+    expect(isStopped).not.toHaveBeenCalled()
+  })
+
   it("recovers interrupted local execution from its checkpoint in a fresh coordinator", async () => {
     const coordinator = make()
     await coordinator.prepareRun(spec(), "run-admission")

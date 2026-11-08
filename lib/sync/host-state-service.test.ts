@@ -871,6 +871,7 @@ describe("HostStateService", () => {
       hooks: {
         created?: (service: Service) => void
         before?: (service: Service) => Promise<void>
+        beforeEnd?: () => Promise<void>
       } = {}
     ) {
       await getDb().sessions.update("session-1", { title: "New conversation" })
@@ -916,6 +917,7 @@ describe("HostStateService", () => {
       await service.projectRuntimeEnvelope(
         runtimeEnvelope({ kind: "lifecycle", phase: "started" }, "evt-title-start")
       )
+      await hooks.beforeEnd?.()
       await service.projectRuntimeEnvelope(
         runtimeEnvelope({ kind: "lifecycle", phase: "ended" }, "evt-title-end")
       )
@@ -924,6 +926,34 @@ describe("HostStateService", () => {
 
     const titleOf = async (service: ReturnType<typeof createHostStateService>) =>
       ((await service.snapshot({ ...scope, channel })).state as { title?: string }).title
+
+    it("does not feed another person's history to the Host owner title model", async () => {
+      const generateTitle = jest.fn(async () => "private generated title")
+      const service = await firstTurn(generateTitle, undefined, {
+        beforeEnd: async () => {
+          await getDb().messages.update("a1", {
+            metadata: {
+              personalMarks: [
+                {
+                  person: {
+                    kind: "platform",
+                    platform: "lark",
+                    adapterId: "foreign",
+                    remoteUserId: "other",
+                  },
+                  source: "private-title-source",
+                  markedAt: 1,
+                },
+              ],
+            },
+          })
+        },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(generateTitle).not.toHaveBeenCalled()
+      expect(await titleOf(service)).not.toBe("private generated title")
+      await service.stop()
+    })
 
     it("names the conversation with the model's title in its channel and on the row", async () => {
       const generateTitle = jest.fn(async () => "Friendly greeting")
@@ -4793,6 +4823,8 @@ describe("HostState Agent RPC dispatcher", () => {
       allowedAgents: [{ runtimeId: "claude-agent-acp", available: true, providers: ["anthropic"] }],
       defaultAgent: "claude-agent-acp",
       execution: "sandboxed",
+      models: { anthropic: ["claude-sonnet-4-5"] },
+      usage: null,
     }
     beforeEach(async () => {
       await getDb().sessions.update("session-1", {

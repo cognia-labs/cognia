@@ -177,6 +177,38 @@ describe("planDelete", () => {
 })
 
 describe("planExplore", () => {
+  it("withholds marked JSONL history before flattening it into either model's prompt", async () => {
+    const { dispatch } = harness()
+    const prompts: string[] = []
+    await planExplore("public task", {
+      dispatch,
+      home: HOME,
+      sessionId: "cli-reader-is-unverified",
+      read: () => [
+        {
+          id: "private-message",
+          role: "user",
+          content: "PRIVATE_HISTORY_SNIPPET",
+          ts: 1,
+          metadata: {
+            personalMarks: [
+              { person: { kind: "local-person" }, source: "personal-read", markedAt: 0 },
+            ],
+          },
+        },
+      ],
+      dispatchAgent: async (def, prompt) => {
+        prompts.push(prompt)
+        return { text: def.id === "Explore" ? "public research" : "# Public plan" }
+      },
+    })
+    expect(prompts).toHaveLength(2)
+    for (const prompt of prompts) {
+      expect(prompt).toContain("[Withheld: personal content of Host owner]")
+      expect(prompt).not.toContain("PRIVATE_HISTORY_SNIPPET")
+    }
+  })
+
   it("never starts Plan with an empty Explore digest after a tool-only or reasoning-only result", async () => {
     const { dispatch, actions } = harness()
     const dispatchAgent = jest.fn(async () => ({ text: "  ", finishReason: "success" }))

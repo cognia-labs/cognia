@@ -167,6 +167,8 @@ describe("durable dispatch bridge", () => {
     await dispatch.fail(new Error("prepare failed"))
     expect(await coordinator.store.getChild(dispatch.childRunId)).toMatchObject({
       status: "failed",
+      dispatchEpoch: 0,
+      resourceUsage: { attempts: 0, failures: 1 },
     })
     await expect(coordinator.assessTaskRecovery(input.runId, input.taskId)).resolves.toEqual({
       eligible: true,
@@ -313,7 +315,16 @@ describe("durable dispatch bridge", () => {
 
   it("keeps an external timeout unconfirmed until the Host registry proves it stopped", async () => {
     const { coordinator, dispatch, input } = await openDispatch("external-timeout")
-    await dispatch.attachControl({ steer: async () => {} }, "native-session", "external-process")
+    await dispatch.attachControl(
+      { steer: async () => {} },
+      "native-session",
+      "external-process",
+      "personal-v1:owner"
+    )
+    expect(await runtimeDb.getAgentTeamChildRun(dispatch.childRunId)).toMatchObject({
+      sessionId: "native-session",
+      personalVisibilityDigest: "personal-v1:owner",
+    })
     await coordinator.store.updateChild(dispatch.childRunId, { runtime: "codex" })
     mockLiveExternalProcesses.mockResolvedValue(new Set(["external-process"]))
     await expect(

@@ -104,64 +104,68 @@ export async function settleAgentTeamRunIfCurrent(
   patch: Partial<Omit<AgentTeamRunRecord, "id" | "teamId" | "createdAt">>
 ): Promise<AgentTeamRunRecord["status"] | undefined> {
   const db = getDb()
-  return db.transaction("rw", [db.agentTeamRuns, db.agentTeamChildRuns], async () => {
-    const run = await db.agentTeamRuns.get(id)
-    if (!matchesControlState(run, expected)) return undefined
-    const children = await db.agentTeamChildRuns.where("runId").equals(id).toArray()
-    const at = patch.updatedAt ?? Date.now()
-    if (
-      (
-        await Promise.all(
-          children.map((child) => isStoredChildStopped(dexieTeamRunStore, child, at))
-        )
-      ).some((stopped) => !stopped)
-    ) {
-      await db.agentTeamRuns.update(id, {
-        status: "needs_input",
-        recoveryReason: "stop_unconfirmed",
-        completedAt: undefined,
-        ...(run.stop ? { stop: { ...run.stop, state: "unconfirmed", proof: undefined } } : {}),
-        updatedAt: at,
-      })
-      return "needs_input"
-    }
-    const targetStatus =
-      run.stop?.state === "requested" || run.stop?.state === "unconfirmed"
-        ? run.stop.action === "terminate"
-          ? "terminated"
-          : "cancelled"
-        : (patch.status ?? run.status)
-    const stopping = targetStatus === "cancelled" || targetStatus === "terminated"
-    for (const child of children) {
-      if (isChildSettled(child)) continue
-      const epoch = child.dispatchEpoch ?? 0
-      const proof =
-        childStopProof(child, at) ??
-        (!hasRemoteDispatch(child) ? { kind: "ack" as const, epoch, at } : undefined)
-      if (proof)
-        await db.agentTeamChildRuns.update(child.id, {
-          ...(stopping ? { status: "terminated", completedAt: at } : {}),
-          stop: { state: "confirmed", epoch, requestedAt: child.stop?.requestedAt ?? at, proof },
+  return db.transaction(
+    "rw",
+    [db.agentTeamRuns, db.agentTeamChildRuns, db.agentTeamCheckpoints, db.agentTeamTrajectory],
+    async () => {
+      const run = await db.agentTeamRuns.get(id)
+      if (!matchesControlState(run, expected)) return undefined
+      const children = await db.agentTeamChildRuns.where("runId").equals(id).toArray()
+      const at = patch.updatedAt ?? Date.now()
+      if (
+        (
+          await Promise.all(
+            children.map((child) => isStoredChildStopped(dexieTeamRunStore, child, at))
+          )
+        ).some((stopped) => !stopped)
+      ) {
+        await db.agentTeamRuns.update(id, {
+          status: "needs_input",
+          recoveryReason: "stop_unconfirmed",
+          completedAt: undefined,
+          ...(run.stop ? { stop: { ...run.stop, state: "unconfirmed", proof: undefined } } : {}),
           updatedAt: at,
         })
+        return "needs_input"
+      }
+      const targetStatus =
+        run.stop?.state === "requested" || run.stop?.state === "unconfirmed"
+          ? run.stop.action === "terminate"
+            ? "terminated"
+            : "cancelled"
+          : (patch.status ?? run.status)
+      const stopping = targetStatus === "cancelled" || targetStatus === "terminated"
+      for (const child of children) {
+        if (isChildSettled(child)) continue
+        const epoch = child.dispatchEpoch ?? 0
+        const proof =
+          childStopProof(child, at) ??
+          (!hasRemoteDispatch(child) ? { kind: "ack" as const, epoch, at } : undefined)
+        if (proof)
+          await db.agentTeamChildRuns.update(child.id, {
+            ...(stopping ? { status: "terminated", completedAt: at } : {}),
+            stop: { state: "confirmed", epoch, requestedAt: child.stop?.requestedAt ?? at, proof },
+            updatedAt: at,
+          })
+      }
+      await db.agentTeamRuns.update(id, {
+        ...patch,
+        status: targetStatus,
+        ...(stopping
+          ? {
+              completedAt: patch.completedAt ?? at,
+              stop: {
+                state: "confirmed",
+                epoch: Math.max(0, ...children.map((child) => child.dispatchEpoch ?? 0)),
+                action: targetStatus === "terminated" ? "terminate" : "stop",
+                requestedAt: run.stop?.requestedAt ?? at,
+              },
+            }
+          : {}),
+      })
+      return targetStatus
     }
-    await db.agentTeamRuns.update(id, {
-      ...patch,
-      status: targetStatus,
-      ...(stopping
-        ? {
-            completedAt: patch.completedAt ?? at,
-            stop: {
-              state: "confirmed",
-              epoch: Math.max(0, ...children.map((child) => child.dispatchEpoch ?? 0)),
-              action: targetStatus === "terminated" ? "terminate" : "stop",
-              requestedAt: run.stop?.requestedAt ?? at,
-            },
-          }
-        : {}),
-    })
-    return targetStatus
-  })
+  )
 }
 
 export async function listAgentTeamRuns(teamId?: string): Promise<AgentTeamRunRecord[]> {

@@ -1,4 +1,27 @@
-import type { ChatSession } from "@cognia/agent-config-types"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerHistory: jest.fn(async (messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+  preparePersonalHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+  preparePersonalDerivedHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalHistory, prepareOwnerHistory } from "@/lib/execution/personal-visibility"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
+
+import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 import type { UIMessage } from "ai"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 
@@ -28,6 +51,47 @@ const parent: ChatSession = {
   createdAt: 1,
   updatedAt: 1,
 }
+
+it("filters parent messages before rendering a persisted child branch seed", async () => {
+  const person = {
+    kind: "platform" as const,
+    platform: "lark",
+    adapterId: "adapter",
+    remoteUserId: "foreign",
+  }
+  const marked: UIMessage = {
+    ...message("private", "assistant", "PRIVATE_PARENT_TEXT"),
+    metadata: { personalMarks: [{ person, source: "personal-read", markedAt: 0 }] },
+  }
+  expect(withholdForReaders([marked], [person]).withheldMessageIds).toEqual([])
+  const setupResult = setup([marked])
+  jest
+    .mocked(preparePersonalHistory)
+    .mockImplementationOnce(
+      async (consumerSessionId, messages) =>
+        withholdForReaders(
+          messages,
+          consumerSessionId === parent.id ? [person, { kind: "local-person" }] : []
+        ) as never
+    )
+  const child = await createAttachedSession(
+    {
+      parentSessionId: parent.id,
+      title: "child",
+      prompt: "new task",
+      context: { mode: "full" },
+      workspace: "shared",
+    },
+    setupResult.deps
+  )
+  expect(JSON.stringify(child.branchSeed)).toContain("[Withheld:")
+  expect(JSON.stringify(child.branchSeed)).not.toContain("PRIVATE_PARENT")
+  expect(preparePersonalHistory).toHaveBeenCalledWith(
+    parent.id,
+    [expect.objectContaining({ sessionId: parent.id })],
+    { session: parent }
+  )
+})
 
 function message(id: string, role: "user" | "assistant", text: string): UIMessage {
   return { id, role, parts: [{ type: "text", text }] }
@@ -487,5 +551,113 @@ describe("consumeStagedPrompt", () => {
     const updateSession = jest.fn(async () => undefined)
     await consumeStagedPrompt("child-1", "inherit", { updateSession })
     expect(updateSession).toHaveBeenCalledWith("child-1", { spawnedTask: { mode: "inherit" } })
+  })
+})
+
+describe("Host-owned attached session staging", () => {
+  const { createDbTestFixture } =
+    jest.requireActual<typeof import("@/lib/db/test-fixture")>("@/lib/db/test-fixture")
+  const { getDb } = jest.requireActual<typeof import("@/lib/db/schema")>("@/lib/db/schema")
+  const fixture = createDbTestFixture({ seeded: false })
+  const actual = jest.requireActual<typeof import("@/lib/execution/personal-visibility")>(
+    "@/lib/execution/personal-visibility"
+  )
+  const authority = jest.requireActual<typeof import("@/lib/execution/acting-authority")>(
+    "@/lib/execution/acting-authority"
+  )
+  const LOCAL_PERSON_RUN: typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN =
+    authority.LOCAL_PERSON_RUN
+  const { startToolExecutionRun, finishToolExecutionRun } = authority
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+
+  async function legacySource() {
+    const source: ChatSession = {
+      ...parent,
+      platformBinding: {
+        platform: "lark",
+        adapterId: "owner-adapter",
+        conversationKey: "owner-im",
+        conversationRef: { platform: "lark", adapterId: "owner-adapter", chatId: "owner-im" },
+      },
+    }
+    await getDb().adapterInstances.put({
+      id: "owner-adapter",
+      type: "lark",
+      displayName: "Lark",
+      enabled: true,
+      settings: { connectedUser: { openId: "owner" } },
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+    await getDb().sessions.put(source)
+    const row: StoredMessage = {
+      id: "legacy-owner",
+      role: "user",
+      parts: [{ type: "text", text: "OWNER LEGACY IM HISTORY" }],
+      sessionId: parent.id,
+      createdAt: 1,
+    }
+    await getDb().messages.put(row)
+    const test = setup([row])
+    test.deps.getSession = async (id) => (id === parent.id ? source : undefined)
+    return test
+  }
+  const input = {
+    parentSessionId: parent.id,
+    title: "child",
+    prompt: "new task",
+    context: { mode: "full" } as const,
+    workspace: "shared" as const,
+  }
+
+  it("allows an explicit owner UI action to stage their migrated IM history", async () => {
+    const test = await legacySource()
+    jest.mocked(prepareOwnerHistory).mockImplementationOnce(actual.prepareOwnerHistory)
+    const child = await createAttachedSession(
+      { ...input, localAuthorization: LOCAL_PERSON_RUN },
+      test.deps
+    )
+    expect(child.branchSeed?.content).toContain("OWNER LEGACY IM HISTORY")
+    expect(child.attachedChild?.parentSessionId).toBe(parent.id)
+  })
+
+  it("keeps readerless and forged-token staging closed", async () => {
+    const test = await legacySource()
+    jest.mocked(preparePersonalHistory).mockImplementationOnce(actual.preparePersonalHistory)
+    const child = await createAttachedSession(
+      { ...input, localAuthorization: Symbol("host-local-person-run") as typeof LOCAL_PERSON_RUN },
+      test.deps
+    )
+    expect(child.branchSeed?.content).toContain("[Withheld:")
+    expect(child.branchSeed?.content).not.toContain("OWNER LEGACY IM HISTORY")
+  })
+
+  it("uses the live parent requester set and withholds when a second person joins", async () => {
+    const test = await legacySource()
+    const run = await startToolExecutionRun(parent.id, { localAuthorization: LOCAL_PERSON_RUN })
+    try {
+      await getDb().executionRuns.update(run.id, {
+        actingIdentity: {
+          ...run.actingIdentity!,
+          requesters: [
+            { kind: "local-person" },
+            {
+              kind: "platform",
+              platform: "lark",
+              adapterId: "owner-adapter",
+              remoteUserId: "second",
+            },
+          ],
+        },
+      })
+      jest.mocked(preparePersonalHistory).mockImplementationOnce(actual.preparePersonalHistory)
+      const child = await createAttachedSession(input, test.deps)
+      expect(child.branchSeed?.content).toContain("[Withheld:")
+      expect(child.branchSeed?.content).not.toContain("OWNER LEGACY IM HISTORY")
+    } finally {
+      await finishToolExecutionRun(run.id)
+    }
   })
 })

@@ -9,6 +9,25 @@ const now = () => 1_700_000_000_000
 const ctx = { source: "chat" as const, now, id: "d1" }
 
 describe("toDiagnostic — structure before text", () => {
+  it.each(["personal_visibility_changed", "personal_history_context_changed"])(
+    "keeps %s out of the primary UI and notification message",
+    (reason) => {
+      for (const error of [new Error(reason), { code: reason, message: reason }, reason]) {
+        const out = toDiagnostic(error, {
+          ...ctx,
+          meta: { sessionId: "s1", extra: { preserved: true } },
+        })
+        expect(out.code).toBe("dispatchFailed")
+        expect(out.message).toBe("")
+        expect(out.retryable).toBe(true)
+        expect(out.meta).toEqual({
+          sessionId: "s1",
+          extra: { preserved: true, personalHistoryReason: reason },
+        })
+      }
+    }
+  )
+
   it("passes an existing diagnostic through, merging extra context", () => {
     const existing = createDiagnostic("timeout", { source: "provider", now, id: "orig" })
     const out = toDiagnostic(existing, { ...ctx, meta: { sessionId: "s1" } })

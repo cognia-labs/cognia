@@ -200,7 +200,11 @@ export function externalAgentRouteKey(input: {
   return "native"
 }
 
-type GatewaySessionLink = { agentId: string; sessionId: string }
+type GatewaySessionLink = {
+  agentId: string
+  sessionId: string
+  personalVisibilityDigest?: string
+}
 
 type SessionModelColumns = Pick<
   ChatSession,
@@ -250,7 +254,13 @@ export function rememberGatewaySession(
     if (!candidate || !isGatewaySessionLink(candidate.sessionId)) continue
     const at = ordered.findIndex((entry) => same(entry, candidate))
     if (at >= 0) ordered.splice(at, 1)
-    ordered.push({ agentId: candidate.agentId, sessionId: candidate.sessionId })
+    ordered.push({
+      agentId: candidate.agentId,
+      sessionId: candidate.sessionId,
+      ...(candidate.personalVisibilityDigest
+        ? { personalVisibilityDigest: candidate.personalVisibilityDigest }
+        : {}),
+    })
   }
   const kept: GatewaySessionLink[] = []
   const evicted: GatewaySessionLink[] = []

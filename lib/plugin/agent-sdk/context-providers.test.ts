@@ -1,4 +1,10 @@
 import { resolveContextContributions, readSharedMemory, queryTwinMemory } from "./context-providers"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  recordAbsorbedRequester,
+} from "@/lib/execution/acting-authority"
 import {
   registerContextProvider,
   __resetContextProvidersForTesting,
@@ -22,6 +28,7 @@ const getCharacterMock = jest.fn()
 const tryBuildTwinDepsMock = jest.fn()
 const applyTwinContextMock = jest.fn()
 jest.mock("@/lib/db/characters", () => ({
+  ...jest.requireActual("@/lib/db/characters"),
   __esModule: true,
   getCharacter: (id: string) => getCharacterMock(id),
 }))
@@ -34,9 +41,17 @@ jest.mock("@/lib/twin/runtime/apply-twin-context", () => ({
   applyTwinContext: (input: unknown) => applyTwinContextMock(input),
 }))
 
-beforeEach(() => {
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(async () => {
+  await fixture.restore()
   jest.clearAllMocks()
   __resetContextProvidersForTesting()
+})
+afterAll(fixture.dispose)
+const localHost = async () => ({
+  executionRunId: (await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN }))
+    .id,
 })
 
 describe("resolveContextContributions", () => {
@@ -125,17 +140,65 @@ describe("resolveContextContributions", () => {
 })
 
 describe("readSharedMemory", () => {
-  it("maps ACL-readable entries and filters by tag", async () => {
-    getStateMock.mockReturnValue({})
+  it("withholds migrated ACL-readable entries after filtering by tag", async () => {
+    getStateMock.mockReturnValue({ sharedMemory: {} })
     selectMock.mockReturnValue([
       { key: "k1", value: 1, writtenBy: "tm", version: 2, tags: ["a"] },
       { key: "k2", value: 2, writtenBy: "tm", version: 1, tags: ["b"] },
     ])
-    const all = await readSharedMemory("team-1")
-    expect(selectMock).toHaveBeenCalledWith("team-1", "operator", {})
+    const host = await localHost()
+    const all = await readSharedMemory("team-1", {}, host)
+    expect(selectMock).toHaveBeenCalledWith("team-1", "operator", { sharedMemory: {} })
     expect(all).toHaveLength(2)
-    const filtered = await readSharedMemory("team-1", { tags: ["a"] })
-    expect(filtered).toEqual([{ key: "k1", value: 1, writtenBy: "tm", version: 2, tags: ["a"] }])
+    const filtered = await readSharedMemory("team-1", { tags: ["a"] }, host)
+    expect(filtered).toEqual([
+      {
+        key: expect.stringMatching(/^withheld:/),
+        value: "[Withheld: personal content of unverified person]",
+        writtenBy: "withheld",
+        version: 0,
+      },
+    ])
+    expect(JSON.stringify(filtered)).not.toMatch(/"k1"|"tags"|"tm"/)
+  })
+
+  it("maps proven live publications with their fields and filters by tag", async () => {
+    const { autoPublishTaskResult } = await import("@/lib/squads/memory/shared-memory-orchestrator")
+    const memory: Record<string, import("@/types/agent/agent-team").SharedMemoryEntry> = {}
+    getStateMock.mockReturnValue({
+      sharedMemory: { "team-1": memory },
+      teams: {},
+      writeSharedMemory: (_teamId: string, key: string, entry: (typeof memory)[string]) => {
+        memory[key] = entry
+      },
+    })
+    const host = await localHost()
+    const first = autoPublishTaskResult(
+      { id: "team-1" },
+      { id: "a", title: "First" },
+      "first result",
+      { id: "tm", name: "Writer" },
+      host.executionRunId
+    )!
+    const second = autoPublishTaskResult(
+      { id: "team-1" },
+      { id: "b", title: "Second" },
+      "second result",
+      { id: "tm", name: "Writer" },
+      host.executionRunId
+    )!
+    selectMock.mockReturnValue([first, second])
+    expect(await readSharedMemory("team-1", {}, host)).toHaveLength(2)
+    expect(await readSharedMemory("team-1", { tags: ["task:a"] }, host)).toEqual([
+      {
+        key: "task:a",
+        value: "first result",
+        writtenBy: "tm",
+        writerName: "Writer",
+        version: 1,
+        tags: ["task:a", "taskTitle:First"],
+      },
+    ])
   })
 })
 
@@ -167,9 +230,23 @@ describe("queryTwinMemory", () => {
         },
       ],
     })
-    const out = await queryTwinMemory("c1", "q", { topK: 3 })
+    const out = await queryTwinMemory("c1", "q", { topK: 3 }, await localHost())
     expect(applyTwinContextMock.mock.calls[0][0].character.twinSettings.ragTopK).toBe(3)
     expect(out).toEqual([{ content: "fact", score: 0.9, sourceTitle: "Doc" }])
+  })
+
+  it("never retrieves private twin history for an unverified reader or a root joined by another person", async () => {
+    expect(await queryTwinMemory("c1", "q")).toEqual([])
+    expect(applyTwinContextMock).not.toHaveBeenCalled()
+    const host = await localHost()
+    await recordAbsorbedRequester(host.executionRunId, {
+      kind: "platform",
+      platform: "slack",
+      adapterId: "a",
+      remoteUserId: "other",
+    })
+    expect(await queryTwinMemory("c1", "q", {}, host)).toEqual([])
+    expect(applyTwinContextMock).not.toHaveBeenCalled()
   })
 
   it("degrades to [] when retrieval throws", async () => {

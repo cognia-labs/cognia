@@ -454,14 +454,9 @@ export async function runPluginAgentTurn(
       await ensureSession(request.characterId, cwd, owner, sessionId, binding)
       const session = await sessionsDb.getSession(sessionId)
       const appSettings = await getSettings().catch(() => undefined)
-      const sendOptions = await resolveSendOptions({
-        session: session ?? null,
-        character,
-        appSettings: appSettings ?? null,
-        ...(request.composition ? { compositionSelection: request.composition } : {}),
-        capabilityGrants,
-      })
-      if (request.permissionMode) sendOptions.permissionMode = request.permissionMode
+      // The Host execution record must exist before history-bearing preambles
+      // are resolved. A Bot/plugin request cannot declare its own readers.
+      let sendOptions: SendOptions = { turnId: crypto.randomUUID() }
 
       // Nobody is watching this turn. A permission request is answered here,
       // by parking it for a person, rather than left to whichever shell-specific
@@ -481,13 +476,14 @@ export async function runPluginAgentTurn(
       const booking = options.usage
       const usageTracker = booking ? trackCaptureUsage() : undefined
       sendOptions.turnId ??= crypto.randomUUID()
+      const dispatchTurnId = sendOptions.turnId
       const userMessageId = operationId
         ? `agent-turn:user:${JSON.stringify([source.kind, source.id, sessionId, operationId])}`
         : sendOptions.turnId
       if (booking) claimTurnUsage(sessionId, sendOptions.turnId)
       // Ordinary delta writes preserve history that this producer has not loaded.
       // Own transcript ingestion just as capture already owns permission responses.
-      const releaseTranscript = registerCaptureResponder(sessionId, sendOptions.turnId, false, true)
+      let releaseTranscript = registerCaptureResponder(sessionId, sendOptions.turnId, false, true)
       let entry: Awaited<ReturnType<typeof startToolExecutionRun>> | undefined
       const turnDb = getDb()
       let consumedGeneration = session?.runtimeTranscriptGeneration
@@ -594,6 +590,22 @@ export async function runPluginAgentTurn(
           ...(options.parentRunId ? { parentRunId: options.parentRunId } : {}),
           title: options.unattendedLabel ?? `Plugin turn: ${character.name}`,
         })
+        sendOptions = await resolveSendOptions({
+          session: session ?? null,
+          character,
+          appSettings: appSettings ?? null,
+          ...(request.composition ? { compositionSelection: request.composition } : {}),
+          capabilityGrants,
+          turnId: dispatchTurnId,
+          executionIdentity: { runId: entry.id },
+        })
+        sendOptions.turnId ??= dispatchTurnId
+        if (sendOptions.turnId !== dispatchTurnId) {
+          releaseTranscript()
+          releaseTranscript = registerCaptureResponder(sessionId, sendOptions.turnId, false, true)
+          if (booking) claimTurnUsage(sessionId, sendOptions.turnId)
+        }
+        if (request.permissionMode) sendOptions.permissionMode = request.permissionMode
         result = await runner.runAndCaptureAssistantReply(sessionId, prompt, sendOptions, {
           currentMessageId: userMessageId,
           onSdkEvent: (event) => {

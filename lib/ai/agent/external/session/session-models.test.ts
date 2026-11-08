@@ -495,6 +495,15 @@ describe("gateway link bookkeeping", () => {
     sessionId: gatewaySessionId(task, "native", kimi),
   })
 
+  it("persists the visibility digest with every retained gateway resume id", () => {
+    const previous = { ...link("a", "previous"), personalVisibilityDigest: "owner-only" }
+    const current = { ...link("a", "current"), personalVisibilityDigest: "second-reader" }
+    expect(rememberGatewaySession({ externalAgentSession: previous }, current).sessions).toEqual([
+      previous,
+      current,
+    ])
+  })
+
   it("retains the replaced current link and bounds each agent's list", () => {
     let row: {
       externalAgentSession?: { agentId: string; sessionId: string }

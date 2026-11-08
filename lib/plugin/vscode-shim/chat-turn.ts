@@ -3,6 +3,7 @@ import type { UIMessage } from "ai"
 import type { ClaudeEvent, SDKMessage } from "@cognia/agent-config-types"
 import type { ExecuteAgentConfig, ExecuteAgentResult } from "@/lib/ai/agent/agent-executor"
 import { createSdkEventMapper } from "@/lib/ai/chat/sdk-event-mapper"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import {
   runVscodeChatParticipant,
   type ChatParticipantHistoryTurn,
@@ -90,12 +91,13 @@ export async function runVscodeChatTurn(input: {
   let text = ""
   let metadata: unknown
   try {
+    const history = await preparePersonalHistory(sessionId, input.messages.slice(0, -1))
     const result = await runVscodeChatParticipant({
       characterId: input.characterId,
       prompt: participantPrompt(input.prompt),
       sessionId,
       generation: binding.generation,
-      history: participantHistory(input.messages.slice(0, -1), binding),
+      history: participantHistory(history.messages, binding),
       signal,
       onPart: async (part) => {
         if (part.kind === "progress") {
@@ -154,20 +156,27 @@ export async function runVscodeChatAgentTurn(
   config: ExecuteAgentConfig,
   binding: Binding
 ): Promise<ExecuteAgentResult> {
-  let history = config.priorMessages
-    ? participantHistory(
-        config.priorMessages.map((message, index) => ({
-          id: `prior-${index}`,
-          role: message.role,
-          parts: [{ type: "text" as const, text: message.content }],
-          ...(message.metadata ? { metadata: message.metadata } : {}),
-        })),
-        binding
-      )
+  const supplied = config.priorMessages
+    ? config.priorMessages.map((message, index) => ({
+        id: `prior-${index}`,
+        role: message.role,
+        parts: [{ type: "text" as const, text: message.content }],
+        ...(message.metadata ? { metadata: message.metadata } : {}),
+      }))
     : undefined
-  if (!history && config.sessionId) {
+  let history: ChatParticipantHistoryTurn[] | undefined
+  if (supplied) {
+    history = participantHistory(
+      (await preparePersonalHistory(config.sessionId, supplied)).messages,
+      binding
+    )
+  } else if (config.sessionId) {
     const { listMessages } = await import("@/lib/db/messages")
-    history = participantHistory(await listMessages(config.sessionId), binding)
+    history = participantHistory(
+      (await preparePersonalHistory(config.sessionId, await listMessages(config.sessionId)))
+        .messages,
+      binding
+    )
   }
   const signal =
     config.timeoutMs && config.timeoutMs > 0

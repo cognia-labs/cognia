@@ -22,6 +22,17 @@ import {
 import { invalidateEntityMentionCaches } from "./entity-cache"
 import { __setHostHistoryReferenceClientForTests } from "./host-references"
 import type { EntitySelectionKind } from "@/types/artifact/artifact"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(
+    async <T extends { id: string }>(_sessionId: string | undefined, messages: readonly T[]) => ({
+      messages: [...messages],
+      readers: [],
+      withheldMessageIds: [],
+      visibilityDigest: "test",
+    })
+  ),
+}))
 
 // The `@chat:` source reaches these through `await import(...)`, so the mocks
 // keep Dexie out of this suite while still exercising the real `load()` body —
@@ -131,6 +142,43 @@ function candidate(over: Partial<EntityMentionCandidate> = {}): EntityMentionCan
 
 beforeEach(() => {
   __resetEntityMentionSourcesForTests()
+  jest.mocked(preparePersonalDerivedHistory).mockClear()
+})
+
+it("strips private titles and tool subtitles when a staged body is withheld", () => {
+  const placeholder = "[Withheld: personal content of Host owner]"
+  const selection = entitySelectionFrom(
+    candidate({
+      entityKind: "result",
+      title: "private title",
+      subtitle: "PrivateTool · private snippet",
+    }),
+    placeholder
+  )
+  expect(selection.title).toBe(placeholder)
+  expect(selection).not.toHaveProperty("subtitle")
+  expect(JSON.stringify(selection)).not.toMatch(/private title|PrivateTool|private snippet/)
+})
+
+it("checks a conversation title independently of its bounded transcript", async () => {
+  listSessionsMock.mockResolvedValue([
+    { id: "private-session", title: "private title", updatedAt: 1 },
+  ])
+  jest.mocked(preparePersonalDerivedHistory).mockResolvedValueOnce({
+    messages: [{ id: "private-session", text: "[Withheld: personal content of Host owner]" }],
+    readers: [],
+    withheldMessageIds: ["private-session"],
+    visibilityDigest: "private",
+  } as never)
+  const source = getEntityMentionSource("session")!
+  const candidates = await source.load!({})
+  expect(JSON.stringify(candidates)).not.toContain("private title")
+  expect(candidates[0].title).toContain("[Withheld: personal content of Host owner]")
+  expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(
+    undefined,
+    [{ id: "private-session", text: "private title" }],
+    { sessionId: "private-session", legacyOwnerArtifact: true }
+  )
 })
 
 describe("entity mention registry", () => {
@@ -617,9 +665,10 @@ describe("@msg: candidates", () => {
   })
 
   it("titles the row by conversation and subtitles it with the excerpt", async () => {
+    bulkGetMock.mockResolvedValue([{ id: "s1", title: "Canonical restacking", updatedAt: 1 }])
     searchChatHistoryMock.mockResolvedValue({ results: [hit()], moreOlderHistory: false })
     const [row] = await searchCandidates(source(), "restack", {})
-    expect(row.title).toBe("Restacking")
+    expect(row.title).toBe("Canonical restacking")
     expect(row.subtitle).toContain("assistant")
     expect(row.subtitle).toContain("run /stack restack")
   })

@@ -19,6 +19,7 @@
 
 import type { Experimental_RealtimeModelV4ToolDefinition as RealtimeToolDefinition } from "@ai-sdk/provider"
 import type { UIMessage } from "ai"
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
 
 import type { RealtimeToolPolicy } from "./approval"
 import { buildLiveVoiceContext, type LiveVoiceContextLimits } from "./context"
@@ -141,7 +142,10 @@ export async function buildLiveVoiceRuntimeBindings(
   if (options.sessionId) {
     try {
       const history = await deps.listMessages(options.sessionId)
-      const transcript = buildLiveVoiceContext(history, options.limits)
+      const visible = await prepareOwnerHistory(
+        history.map((message) => ({ ...message, sessionId: options.sessionId }))
+      )
+      const transcript = buildLiveVoiceContext(visible.messages, options.limits)
       if (transcript) bindings.contextTranscript = transcript
     } catch {
       // History unreadable — start cold rather than not at all.

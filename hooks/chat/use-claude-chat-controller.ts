@@ -1,6 +1,10 @@
 "use client"
 
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
+import {
+  preparePersonalDerivedHistory,
+  preparePersonalHistory,
+} from "@/lib/execution/personal-visibility"
 
 import {
   acquireSessionTurnLease,
@@ -371,11 +375,17 @@ import {
   extractAssistantText,
 } from "./claude-chat-turn-tasks"
 import type { SendFn } from "./claude-chat-turn-tasks"
-import { prepareTranscriptRuntimeSend, buildSendOptions } from "./claude-chat-send-options"
+import {
+  prepareTranscriptRuntimeSend,
+  preparePersonalSteer,
+  assertPersonalContextReaders,
+  buildSendOptions,
+} from "./claude-chat-send-options"
 import {
   createTranscriptRuntimeFence,
   type TranscriptRuntimeFence,
   withTranscriptRuntimeLock,
+  invalidateTranscriptRuntime,
 } from "@/lib/chat/transcript/revision-events"
 import { hostStateSendEligible, type HostStateSendFacts } from "./host-state-send-eligibility"
 import type {
@@ -651,6 +661,39 @@ export function redirectSendToBundleAliases(
  * Owns the direct-chat runtime. Only ClaudeChatRuntimeProvider mounts this
  * controller; surfaces consume the shared public useClaudeChat hook.
  */
+/** Retained memory must be retired only when the current projection withholds content. */
+export function externalSessionVisibilityMatches(
+  link: { personalVisibilityDigest?: string } | undefined,
+  visibilityDigest: string,
+  withheldMessageIds: readonly string[]
+): boolean {
+  return withheldMessageIds.length === 0 || link?.personalVisibilityDigest === visibilityDigest
+}
+
+/** Rebuild from the canonical parent after admission; cached prompt text grants no visibility. */
+export async function buildPersonalAsideContext(
+  sessionId: string,
+  sourceSessionId: string,
+  executionRunId: string,
+  options: Parameters<typeof prepareAsideContext>[1] = {}
+) {
+  const sourceSession = await getSession(sourceSessionId)
+  const filtered = await preparePersonalHistory(
+    sessionId,
+    selectVisibleMessages(
+      await listMessages(sourceSessionId),
+      sourceSession?.activeBranchByGroup ?? {}
+    ),
+    { executionRunId, session: sourceSession }
+  )
+  const readers = await preparePersonalHistory(sessionId, [], { executionRunId })
+  return {
+    ...filtered,
+    readersDigest: readers.visibilityDigest,
+    delivery: prepareAsideContext(filtered.messages, options),
+  }
+}
+
 /** A UI-created fork/clone takes precedence over the tool host's previous native session. */
 export function resolveNativeExternalSessionId(
   chatSessionId: string,
@@ -2328,10 +2371,35 @@ export function useClaudeChat() {
           // The lane comes from what THIS session dispatched
           // (`sessionExternalLane`), not the composer's global runtime pick,
           // which in split view describes whichever pane happens to be focused.
-          if (derivedProducer || fusionTurn || turnQueued) {
-            // Queued below: a derived input waits for the boundary, a verified
-            // run has no live input, and a turn that has not been admitted has
-            // no input open at all.
+          const personalSteerAllowed =
+            derivedProducer || fusionTurn || turnQueued
+              ? false
+              : await preparePersonalSteer(
+                  sessionId,
+                  localAuthorization,
+                  externalAgentId
+                    ? {
+                        kind: "external",
+                        sessionId: externalSessionLinkForSession(sessionId)?.sessionId,
+                      }
+                    : { kind: "builtin" }
+                )
+          if (
+            !personalSteerAllowed &&
+            externalAgentId &&
+            !derivedProducer &&
+            !fusionTurn &&
+            !turnQueued
+          ) {
+            const link = externalSessionLinkForSession(sessionId)
+            if (link && !link.host) {
+              const { getExternalAgentManager } = await import("@/lib/ai/agent/external/manager")
+              await getExternalAgentManager().closeSession(externalAgentId, link.sessionId)
+            }
+          }
+          if (derivedProducer || fusionTurn || turnQueued || !personalSteerAllowed) {
+            // Queued below: a verified run has no live input, and a turn that
+            // has not been admitted has no input open at all.
           } else if (externalAgentId) {
             // Adapter steering carries text only (`turn/steer` takes a string),
             // so an attachment-only follow-up has to queue on this lane.
@@ -2505,18 +2573,23 @@ export function useClaudeChat() {
       ) {
         const { buildHandoffContext, prepareHandoffContext } =
           await import("@/lib/chat/handoff-context")
-        const history = await listMessages(sessionId)
+        const personalHistory = await preparePersonalHistory(
+          sessionId,
+          await listMessages(sessionId)
+        )
+        const history = personalHistory.messages
         const imported = session.importCanonicalState
-        const state = imported
-          ? {
-              tasks: imported.tasks,
-              plans: imported.plans,
-              goals: imported.goals,
-              checkpoints: imported.checkpoints,
-              history: imported.history,
-              interAgentMessages: imported.interAgentMessages,
-            }
-          : undefined
+        const state =
+          imported && personalHistory.withheldMessageIds.length === 0
+            ? {
+                tasks: imported.tasks,
+                plans: imported.plans,
+                goals: imported.goals,
+                checkpoints: imported.checkpoints,
+                history: imported.history,
+                interAgentMessages: imported.interAgentMessages,
+              }
+            : undefined
         const projected = buildHandoffContext(history, { state })
         if (projected.losses.some((loss) => loss.kind === "budget")) {
           const { buildAgentBackedLlmClient } =
@@ -3225,6 +3298,8 @@ export function useClaudeChat() {
         if (unseen.length > 0) {
           try {
             foreignTurnsContext = await foreignTurnsHandoffText(unseen, {
+              sessionId,
+              executionRunId,
               client: async () => {
                 const { buildAgentBackedLlmClient } =
                   await import("@/lib/ai/generation/agent-backed-client")
@@ -3287,7 +3362,19 @@ export function useClaudeChat() {
           ? store.getState().sessions[session.surfaceBinding.sessionId]
           : undefined
       const parentMessages = parentSlice
-        ? selectVisibleMessages(parentSlice.messages, parentSlice.activeBranchByGroup)
+        ? (
+            await preparePersonalHistory(
+              sessionId,
+              selectVisibleMessages(parentSlice.messages, parentSlice.activeBranchByGroup),
+              {
+                executionRunId,
+                session:
+                  session?.surfaceBinding?.kind === "session"
+                    ? await getSession(session.surfaceBinding.sessionId)
+                    : undefined,
+              }
+            )
+          ).messages
         : []
       const inProgressMessageId =
         parentSlice &&
@@ -3299,10 +3386,12 @@ export function useClaudeChat() {
         Boolean(session?.spawnedTask?.pendingPrompt) &&
         session?.lastMessageAt === undefined &&
         !session?.forkedFromSdkSessionId
-      const cachedAsideContext = asideContextForRegenerate(
-        lastResourceContextRef.current.get(sessionId),
-        callOptions?.regenerateBranch?.anchorId
-      )
+      const cachedAsideContext = isSessionAside
+        ? undefined
+        : asideContextForRegenerate(
+            lastResourceContextRef.current.get(sessionId),
+            callOptions?.regenerateBranch?.anchorId
+          )
       // Capture once at send time. The final SDK resume id is checked again
       // after transcript preparation, which may replace provider history.
       let resourceDelivery: AsideContextDelivery =
@@ -3314,7 +3403,9 @@ export function useClaudeChat() {
               header: isSessionAside ? ASIDE_REFERENCE_HEADER : "Current resource context",
             })
       const providerMessages = withWorkbenchMessageContext(
-        withReplyContextLines(next),
+        withReplyContextLines(
+          (await preparePersonalHistory(sessionId, next, { executionRunId, session })).messages
+        ),
         resourceDelivery.context,
         resourceDelivery.header
       )
@@ -3325,6 +3416,30 @@ export function useClaudeChat() {
             resourceDelivery.header
           )
         : { content: providerContent, sendOptions, messages: providerMessages }
+      let withheldBackgroundParts: UIMessage["parts"] | undefined
+      let personalAsideRequiresRebuild = false
+      let personalAsideSourceDigest: string | undefined
+      const unprojectedBackgroundContent = callOptions?.backgroundDelivery
+        ? providerPayload.content
+        : undefined
+      if (callOptions?.backgroundDelivery) {
+        // Squad/Fusion admit their own consuming run below. No caller or
+        // originating child identity may stand in for that not-yet-admitted audience.
+        const framed = await preparePersonalDerivedHistory(
+          undefined,
+          [{ ...userMsg, content: providerPayload.content }],
+          { runIds: callOptions.backgroundDelivery.personalRunIds }
+        )
+        const publicHistory = await preparePersonalHistory(undefined, providerPayload.messages, {
+          session,
+        })
+        providerPayload.content = framed.messages[0].content
+        providerPayload.messages = publicHistory.messages.map((message) =>
+          message.id === userMsg.id
+            ? { ...message, parts: framed.messages[0].parts, metadata: framed.messages[0].metadata }
+            : message
+        )
+      }
       if (callOptions?.sharedRequest) {
         providerPayload.messages = [makeUserMessage(turnContent)]
         providerPayload.content = turnContent
@@ -3358,7 +3473,7 @@ export function useClaudeChat() {
         Array.isArray(effectiveContent) && Array.isArray(providerSourceContent)
           ? effectiveContent.length - providerSourceContent.length
           : 0
-      const externalTurn = externalTurnPrompt(
+      let externalTurn = externalTurnPrompt(
         effectiveContent,
         turnManifest?.length ?? 0,
         leadingCount
@@ -3841,7 +3956,10 @@ export function useClaudeChat() {
           sessionId,
           stamp: fusionRun,
           messages: providerPayload.messages,
-          userMessage: skipAppend ? null : userMsg,
+          userMessage: skipAppend
+            ? null
+            : (providerPayload.messages.find((message) => message.id === userMsg.id) ??
+              (callOptions?.backgroundDelivery ? null : userMsg)),
           workspaceRoot: turnCwd,
           settings: useSettingsStore.getState().settings,
           // The answer is this turn's reply, written by the run rather than
@@ -4454,6 +4572,107 @@ export function useClaudeChat() {
       } catch (error) {
         await refuseTurn({
           errorCode: "execution_run_start_failed",
+          finishRun: true,
+          diagnostic: toDiagnostic(error, { source: "chat", meta: { sessionId } }),
+        })
+        return
+      }
+      try {
+        if (isSessionAside && session?.surfaceBinding?.kind === "session") {
+          await assertPersonalContextReaders(sessionId, sendOptions, executionRunId)
+          const fresh = await buildPersonalAsideContext(
+            sessionId,
+            session.surfaceBinding.sessionId,
+            executionRunId,
+            { inProgressMessageId }
+          )
+          resourceDelivery = fresh.delivery
+          personalAsideSourceDigest = fresh.visibilityDigest
+          personalAsideRequiresRebuild = fresh.withheldMessageIds.length > 0
+          if (personalAsideRequiresRebuild) await invalidateTranscriptRuntime(sessionId)
+          sendOptions = { ...sendOptions, personalContextReadersDigest: fresh.readersDigest }
+          effectiveContent = gateWorkbenchProviderPayload(
+            { content: providerContent, messages: [], sendOptions },
+            resourceDelivery.context,
+            resourceDelivery.header
+          ).content
+          providerPayload.content = effectiveContent
+          externalTurn = externalTurnPrompt(
+            effectiveContent,
+            turnManifest?.length ?? 0,
+            Array.isArray(effectiveContent) && Array.isArray(providerSourceContent)
+              ? effectiveContent.length - providerSourceContent.length
+              : 0
+          )
+        }
+        if (callOptions?.backgroundDelivery) {
+          const filtered = await preparePersonalDerivedHistory(
+            sessionId,
+            [{ id: userMsg.id, content: unprojectedBackgroundContent ?? effectiveContent }],
+            { executionRunId, runIds: callOptions.backgroundDelivery.personalRunIds }
+          )
+          effectiveContent = filtered.messages[0].content
+          providerContent = effectiveContent
+          providerPayload.content = effectiveContent
+          if (filtered.withheldMessageIds.length) {
+            withheldBackgroundParts =
+              typeof effectiveContent === "string"
+                ? [{ type: "text" as const, text: effectiveContent }]
+                : effectiveContent.flatMap((block) =>
+                    block.type === "text" ? [{ type: "text" as const, text: block.text }] : []
+                  )
+            providerPayload.messages = providerPayload.messages.map((message) =>
+              message.id === userMsg.id ? { ...message, parts: withheldBackgroundParts! } : message
+            )
+          } else withheldBackgroundParts = undefined
+          externalTurn = externalTurnPrompt(effectiveContent)
+        }
+        if (
+          turnLane.kind === "builtin" &&
+          builtinHandoffContext === undefined &&
+          !callOptions?.skipUserAppend &&
+          !callOptions?.sharedRequest &&
+          !callOptions?.backgroundDelivery &&
+          !isStandaloneChatMode()
+        ) {
+          const unseen = unseenForeignTurns(
+            selectVisibleMessages(
+              previousMessages,
+              store.getState().sessions[sessionId]?.activeBranchByGroup ?? {}
+            ),
+            "builtin"
+          )
+          foreignTurnsContext = await foreignTurnsHandoffText(unseen, {
+            sessionId,
+            executionRunId,
+            client: async () => {
+              const { buildAgentBackedLlmClient } =
+                await import("@/lib/ai/generation/agent-backed-client")
+              return buildAgentBackedLlmClient({
+                session,
+                appSettings: useSettingsStore.getState().settings,
+                featureId: "handoff",
+                label: "Summarize task handoff",
+              })
+            },
+          })
+          providerContent = prefixForeignTurnsContext(
+            callOptions?.replyTo
+              ? prefixReplyContext(routedContent, callOptions.replyTo)
+              : routedContent,
+            foreignTurnsContext,
+            callOptions?.replyTo ? 0 : (turnManifest?.length ?? 0)
+          )
+          effectiveContent = gateWorkbenchProviderPayload(
+            { content: providerContent, sendOptions, messages: [] },
+            resourceDelivery.context,
+            resourceDelivery.header
+          ).content
+          providerPayload.content = effectiveContent
+        }
+      } catch (error) {
+        await refuseTurn({
+          errorCode: "personal_history_preparation_failed",
           finishRun: true,
           diagnostic: toDiagnostic(error, { source: "chat", meta: { sessionId } }),
         })
@@ -5265,6 +5484,47 @@ export function useClaudeChat() {
            * ones the local lane uses.
            */
           let persistedExternalSessionId = session?.externalAgentSession?.sessionId
+          const externalPersonalHistory = await preparePersonalHistory(
+            sessionId,
+            selectVisibleMessages(
+              await listMessages(sessionId),
+              store.getState().sessions[sessionId]?.activeBranchByGroup ?? {}
+            ),
+            { executionRunId, session }
+          )
+          const externalHistoryMessages = externalPersonalHistory.messages.filter(
+            (message) => message.id !== userMsg.id
+          )
+          const retainedExternalLink = [
+            session?.externalAgentSession,
+            ...(session?.externalAgentGatewaySessions ?? []),
+          ].find(
+            (link) =>
+              link?.agentId === extAgentId &&
+              (modelSelection.gatewayLink
+                ? link.sessionId === modelSelection.gatewayLink
+                : !isGatewaySessionLink(link.sessionId))
+          )
+          let persistedExternalVisibilityDigest = retainedExternalLink?.personalVisibilityDigest
+          const externalVisibilityChanged = !externalSessionVisibilityMatches(
+            retainedExternalLink,
+            externalPersonalHistory.visibilityDigest,
+            externalPersonalHistory.withheldMessageIds
+          )
+          if (
+            externalVisibilityChanged &&
+            (session?.externalAgentSession ||
+              session?.externalAgentGatewaySessions?.length ||
+              session?.importRuntimeBinding?.nativeSessionId)
+          ) {
+            // Imported/native sessions without a persisted visibility identity
+            // cannot prove they forgot content, even after an app restart.
+            await withTranscriptRuntimeLock(sessionId, () => invalidateTranscriptRuntime(sessionId))
+            await updateSession(sessionId, {
+              externalAgentSession: undefined,
+              externalAgentGatewaySessions: [],
+            })
+          }
           // The links as this turn last wrote them, so a second write in the
           // same turn builds on the first rather than on the stale row.
           let persistedLinks = {
@@ -5295,12 +5555,25 @@ export function useClaudeChat() {
             // turn resume a Cognia task.
             if (hosted?.agentId === extAgentId && nativeId && !isGatewaySessionLink(nativeId))
               hosted.nativeSessionId = nativeId
-            if (!isGatewaySessionLink(nativeId) || nativeId === persistedExternalSessionId) return
+            if (
+              !nativeId ||
+              (nativeId === persistedExternalSessionId &&
+                persistedExternalVisibilityDigest === externalPersonalHistory.visibilityDigest)
+            )
+              return
             persistedExternalSessionId = nativeId
-            const link = { agentId: extAgentId, sessionId: nativeId }
+            persistedExternalVisibilityDigest = externalPersonalHistory.visibilityDigest
+            const link = {
+              agentId: extAgentId,
+              sessionId: nativeId,
+              personalVisibilityDigest: externalPersonalHistory.visibilityDigest,
+            }
             // The task this conversation used before stays retained, so a
             // switch back to its binding resumes it rather than starting over.
-            const { sessions: retained, evicted } = rememberGatewaySession(persistedLinks, link)
+            const { sessions: retained, evicted } = rememberGatewaySession(
+              externalVisibilityChanged ? undefined : persistedLinks,
+              link
+            )
             persistedLinks = { externalAgentSession: link, externalAgentGatewaySessions: retained }
             externalSessionWrite = externalSessionWrite
               .then(async () => {
@@ -5505,6 +5778,8 @@ export function useClaudeChat() {
           // A Host lane cannot rebind a task to another model, so there the
           // switch starts a new task and hands the transcript over instead.
           let resetExternalSession =
+            personalAsideRequiresRebuild ||
+            externalVisibilityChanged ||
             modelSelection.resetExternalSession === true ||
             (modelSelection.rebind === true && Boolean(hostSelection))
           let verifiedNativeResume = false
@@ -5525,9 +5800,12 @@ export function useClaudeChat() {
             if (nativeRoute) {
               const resolved = manager.resolveConversationSessionId(extAgentId, sessionId)
               nativeConversationSessionId =
-                resolved && !isGatewaySessionLink(resolved) ? resolved : undefined
+                !externalVisibilityChanged && resolved && !isGatewaySessionLink(resolved)
+                  ? resolved
+                  : undefined
             }
             verifiedNativeResume = Boolean(
+              !externalVisibilityChanged &&
               nativeRoute &&
               sessionId.startsWith("import:") &&
               composition.verifiedNativeResume &&
@@ -5550,9 +5828,7 @@ export function useClaudeChat() {
               modelSelection.gatewayLink
             ) {
               const { renderTranscript } = await import("@/lib/chat/branch-session")
-              externalContinuationContext = renderTranscript(
-                (await listMessages(sessionId)).filter((message) => message.id !== userMsg.id)
-              )
+              externalContinuationContext = renderTranscript(externalHistoryMessages)
             }
             const mcpLevel = profile?.effective.mcp.level
             if (mcpLevel === "native" || mcpLevel === "equivalent") {
@@ -5635,9 +5911,7 @@ export function useClaudeChat() {
                   // A protocol without resume starts a fresh native session.
                   // Preserve Cognia's transcript explicitly as task context.
                   const { renderTranscript } = await import("@/lib/chat/branch-session")
-                  externalContinuationContext = renderTranscript(
-                    (await listMessages(sessionId)).filter((message) => message.id !== userMsg.id)
-                  )
+                  externalContinuationContext = renderTranscript(externalHistoryMessages)
                   resetExternalSession = true
                   entry.nativeSessionId = undefined
                   useAgentRuntimeStore.getState().setSessionExternalLink(sessionId, undefined)
@@ -5668,9 +5942,10 @@ export function useClaudeChat() {
           if (resetExternalSession)
             useAgentRuntimeStore.getState().setSessionExternalLink(sessionId, undefined)
           const hostedSession = externalToolHostsRef.current.get(sessionId)
-          const matchingHostedNativeSessionId = nativeRoute
-            ? resolveNativeExternalSessionId(sessionId, extAgentId, hostedSession)
-            : undefined
+          const matchingHostedNativeSessionId =
+            nativeRoute && !externalVisibilityChanged
+              ? resolveNativeExternalSessionId(sessionId, extAgentId, hostedSession)
+              : undefined
           // A session on THIS route: the gateway task the selection names, or
           // the agent's own session on a native turn. A session on the other
           // route is not one, however recently it ran: switching between the
@@ -5691,9 +5966,7 @@ export function useClaudeChat() {
             externalContinuationContext !== undefined ||
             !hasMatchingExternalSession
           ) {
-            const history = (await listMessages(sessionId)).filter(
-              (message) => message.id !== userMsg.id
-            )
+            const history = externalHistoryMessages
             const imported = session?.importCanonicalState
             const state = imported
               ? {
@@ -5710,6 +5983,8 @@ export function useClaudeChat() {
             // the first turn on the new route with `no-client`.
             externalContinuationContext =
               (await foreignTurnsHandoffText(history, {
+                sessionId,
+                executionRunId,
                 ...(state ? { state } : {}),
                 client: async () => {
                   const { buildAgentBackedLlmClient } =
@@ -5731,7 +6006,7 @@ export function useClaudeChat() {
             // a Cognia task). Only that part of the thread is handed over.
             const unseen = unseenForeignTurns(
               selectVisibleMessages(
-                (await listMessages(sessionId)).filter((message) => message.id !== userMsg.id),
+                externalHistoryMessages,
                 store.getState().sessions[sessionId]?.activeBranchByGroup ?? {}
               ),
               externalLane
@@ -5739,6 +6014,8 @@ export function useClaudeChat() {
             if (unseen.length > 0) {
               externalContinuationContext =
                 (await foreignTurnsHandoffText(unseen, {
+                  sessionId,
+                  executionRunId,
                   client: async () => {
                     const { buildAgentBackedLlmClient } =
                       await import("@/lib/ai/generation/agent-backed-client")
@@ -5819,6 +6096,52 @@ export function useClaudeChat() {
             .filter((section): section is string => typeof section === "string" && !!section.trim())
             .join("\n\n")
 
+          await assertPersonalContextReaders(sessionId, sendOptions, executionRunId)
+          const currentExternalHistory = await preparePersonalHistory(
+            sessionId,
+            selectVisibleMessages(
+              await listMessages(sessionId),
+              store.getState().sessions[sessionId]?.activeBranchByGroup ?? {}
+            ),
+            { executionRunId, session }
+          )
+          if (
+            currentExternalHistory.visibilityDigest !== externalPersonalHistory.visibilityDigest
+          ) {
+            await invalidateTranscriptRuntime(sessionId)
+            throw new Error("personal_visibility_changed")
+          }
+          if (isSessionAside && session?.surfaceBinding?.kind === "session") {
+            const currentSource = await buildPersonalAsideContext(
+              sessionId,
+              session.surfaceBinding.sessionId,
+              executionRunId
+            )
+            if (currentSource.visibilityDigest !== personalAsideSourceDigest) {
+              await invalidateTranscriptRuntime(sessionId)
+              throw new Error("personal_history_context_changed")
+            }
+          }
+
+          const retainedExecutionSessionId = resetExternalSession
+            ? undefined
+            : hostSelection
+              ? modelSelection.gatewayLink && !modelSelection.rebind
+                ? modelSelection.gatewayLink
+                : externalSessionLinkForSession(sessionId)?.host
+                  ? externalSessionLinkForSession(sessionId)?.sessionId
+                  : undefined
+              : verifiedNativeResume && session?.importRuntimeBinding?.nativeSessionId
+                ? session.importRuntimeBinding.nativeSessionId
+                : (matchingHostedNativeSessionId ??
+                  modelSelection.gatewayLink ??
+                  nativeConversationSessionId)
+          // Existing sessions need the new digest even when the adapter does
+          // not repeat their id in an event or in the completed result.
+          persistExternalSession(retainedExecutionSessionId)
+          await externalSessionWrite
+          if (externalSessionWriteError) throw externalSessionWriteError
+
           // Two executors, one contract. `executeOnRemoteHostAgent` presents
           // the same `(prompt, { onEvent }) => ExternalAgentResult | null`
           // shape over the companion plane, so everything downstream of this
@@ -5840,9 +6163,9 @@ export function useClaudeChat() {
                   workspaceCapture: { runId: chatRunId, assistantMessageId: assistantId },
                   // Only the gateway task the selection names. A native turn
                   // after a Cognia one must not hand the Host that task.
-                  ...(modelSelection.gatewayLink && !modelSelection.rebind
+                  ...(!resetExternalSession && modelSelection.gatewayLink && !modelSelection.rebind
                     ? { externalSessionId: modelSelection.gatewayLink }
-                    : externalSessionLinkForSession(sessionId)?.host
+                    : !resetExternalSession && externalSessionLinkForSession(sessionId)?.host
                       ? { externalSessionId: externalSessionLinkForSession(sessionId)?.sessionId }
                       : {}),
                   newRunId: () => remoteRunId,
@@ -6301,20 +6624,63 @@ export function useClaudeChat() {
               useChatStore.getState().sessions[sessionId]?.activeBranchByGroup ??
               session?.activeBranchByGroup,
           })
+          // Early prompt assembly precedes direct-run admission. Reproject
+          // with the admitted Host identity so an owner's own marked history
+          // is restored for engines that consume the whole message list.
+          if (!callOptions?.sharedRequest) {
+            providerPayload.messages = gateWorkbenchProviderPayload({
+              content: "",
+              sendOptions,
+              messages: withWorkbenchMessageContext(
+                withReplyContextLines(
+                  (
+                    await preparePersonalHistory(
+                      sessionId,
+                      next.map((message) =>
+                        withheldBackgroundParts && message.id === userMsg.id
+                          ? { ...message, parts: withheldBackgroundParts }
+                          : message
+                      ),
+                      { executionRunId, session }
+                    )
+                  ).messages
+                ),
+                resourceDelivery.context,
+                resourceDelivery.header
+              ),
+            }).messages
+          }
           const asideSdkTurn =
             isSessionAside &&
             asideProviderHistoryMode(sendOptions, standaloneEngineTurn) === "sdk-resume"
-          if (asideSdkTurn && !seededFirstTurn && !cachedAsideContext) {
-            resourceDelivery = prepareAsideContext(parentMessages, {
-              cursor: session?.asideContextCursor,
-              resumeSdkSessionId: sendOptions.resumeSessionId,
-              inProgressMessageId,
-            })
+          if (isSessionAside && session?.surfaceBinding?.kind === "session") {
+            const fresh = await buildPersonalAsideContext(
+              sessionId,
+              session.surfaceBinding.sessionId,
+              executionRunId,
+              asideSdkTurn && !seededFirstTurn
+                ? {
+                    cursor: session?.asideContextCursor,
+                    resumeSdkSessionId: sendOptions.resumeSessionId,
+                    inProgressMessageId,
+                  }
+                : { inProgressMessageId }
+            )
+            if (fresh.visibilityDigest !== personalAsideSourceDigest) {
+              await invalidateTranscriptRuntime(sessionId)
+              throw new Error("personal_history_context_changed")
+            }
+            resourceDelivery = fresh.delivery
             effectiveContent = gateWorkbenchProviderPayload(
               { content: providerContent, messages: [], sendOptions },
               resourceDelivery.context,
               resourceDelivery.header
             ).content
+            providerPayload.messages = withWorkbenchMessageContext(
+              (await preparePersonalHistory(sessionId, next, { executionRunId, session })).messages,
+              resourceDelivery.context,
+              resourceDelivery.header
+            )
           }
           asideContextDispatchRef.current.get(sessionId)?.cancel()
           asideContextDispatchRef.current.delete(sessionId)
@@ -6883,10 +7249,42 @@ export function useClaudeChat() {
         deliver: async (peerMessage) => {
           const sender = await getSession(peerMessage.senderSessionId)
           if (!sender) throw new Error(`Sender session ${peerMessage.senderSessionId} was removed`)
+          // The stored peer row carries no originating Host execution proof,
+          // and its receiver has not admitted a consuming run yet. Project
+          // the title together with the content so the frame cannot disclose it.
+          const peerHistory = await preparePersonalDerivedHistory(
+            undefined,
+            [
+              {
+                id: `session-peer:${peerMessage.id}`,
+                content: JSON.stringify({ title: sender.title, content: peerMessage.content }),
+                metadata: {
+                  personalMarks: [
+                    {
+                      person: { kind: "local-person" },
+                      source: "unproven-session-peer-history",
+                      markedAt: 0,
+                    },
+                  ],
+                },
+              },
+            ],
+            { sessionId: peerMessage.senderSessionId }
+          )
+          const projected = peerHistory.messages[0]
+          const withheld = peerHistory.withheldMessageIds.length > 0
+          const visibleSender = withheld ? { ...sender, title: projected.content } : sender
+          const visiblePeer = withheld
+            ? { ...peerMessage, content: projected.content }
+            : peerMessage
           const current =
             useChatStore.getState().sessions[peerMessage.receiverSessionId]?.messages ??
             (await listMessages(peerMessage.receiverSessionId))
-          const inbound = buildSessionPeerInboundMessage(peerMessage, sender)
+          const inbound = buildSessionPeerInboundMessage(visiblePeer, visibleSender)
+          inbound.metadata = {
+            ...(inbound.metadata as Record<string, unknown> | undefined),
+            ...projected.metadata,
+          }
           if (!current.some((message) => message.id === inbound.id)) {
             const next = [...current, inbound]
             useChatStore.getState().setSessionMessages(peerMessage.receiverSessionId, next)
@@ -6895,7 +7293,7 @@ export function useClaudeChat() {
           if (peerMessage.intent === "trigger_turn") {
             const activeSend = sendRef.current
             if (!activeSend) throw new Error("Chat send runtime is unavailable")
-            const modelPrompt = renderSessionPeerModelPrompt(peerMessage, sender)
+            const modelPrompt = renderSessionPeerModelPrompt(visiblePeer, visibleSender)
             if (!hasNoLeakingPiiDeep(modelPrompt)) {
               throw new Error("Session peer prompt rejected by the renderer PII gate")
             }

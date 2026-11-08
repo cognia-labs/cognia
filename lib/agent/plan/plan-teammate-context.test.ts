@@ -20,6 +20,15 @@ function team(over: Partial<AgentTeam> = {}): AgentTeam {
 }
 
 describe("createPlanTeammateRunContext", () => {
+  it("retains the Host plan execution root instead of inventing a team authority", () => {
+    const ctx = createPlanTeammateRunContext({
+      runId: "workflow",
+      personalExecutionRunId: "execution:plan:p",
+      team: team(),
+      teammates: [teammate()],
+    })
+    expect(ctx.personalExecutionRunId).toBe("execution:plan:p")
+  })
   it("builds a TeamRunContext whose pool claims a seeded teammate", () => {
     const tm = teammate({ id: "tm1" })
     const ctx = createPlanTeammateRunContext({ runId: "r1", team: team(), teammates: [tm] })

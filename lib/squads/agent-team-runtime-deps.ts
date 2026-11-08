@@ -44,6 +44,7 @@ import {
   TEAMMATE_TASK_PROMPT,
   teamPromptContext,
 } from "./team-prompts"
+import { visibleTeamDerivedTextForTeam } from "./team-run-context"
 
 export interface TeamPromptResolveOptions {
   /**
@@ -206,13 +207,21 @@ export function buildAgentTeamRuntimeDeps(
       : params.systemPrompt
 
     try {
-      const result = await executeAgent(prompt, {
+      const visible = await visibleTeamDerivedTextForTeam(
+        team.id,
+        JSON.stringify({ prompt, systemPrompt: effectiveSystem }),
+        `team-lead:${phase}`
+      )
+      const fields = visible.startsWith("[Withheld:")
+        ? { prompt: visible, systemPrompt: undefined }
+        : (JSON.parse(visible) as { prompt: string; systemPrompt: string })
+      const result = await executeAgent(fields.prompt, {
         ...execution,
-        systemPrompt: effectiveSystem,
+        systemPrompt: fields.systemPrompt,
         abortSignal: signal,
       })
       void firePostCallHooks(firer, hookCtx, { success: true })
-      return result.text ?? ""
+      return visibleTeamDerivedTextForTeam(team.id, result.text ?? "", `team-lead-result:${phase}`)
     } catch (err) {
       void firePostCallHooks(firer, hookCtx, {
         success: false,

@@ -18,6 +18,95 @@ import type { EvalPersistenceScope } from "@/lib/db/eval-lab"
 import Dexie from "dexie"
 import { createEvalDeadline } from "./deadline"
 import { waitForEvalTracePersistence } from "./trace-persistence"
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
+import {
+  mergePersonalMarks,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
+
+const sampleMarks = new WeakMap<EvalSample, PersonalMarkV1[]>()
+
+/** Host-observed source evidence stays in memory across transient-chat cleanup.
+ * Imported or legacy samples without that evidence remain owner-derived. */
+export async function personalEvalSampleForRun(
+  sample: EvalSample,
+  executionRunId?: string,
+  sources?: readonly { sessionId?: string; runId?: string }[]
+): Promise<EvalSample> {
+  let marks = sampleMarks.get(sample)
+  if (!marks) {
+    const record = sample as EvalSample & {
+      personalMarks?: PersonalMarkV1[]
+      metadata?: { personalMarks?: PersonalMarkV1[] }
+    }
+    marks = mergePersonalMarks(record.personalMarks, record.metadata?.personalMarks)
+    if (!sources?.length) {
+      marks = mergePersonalMarks(marks, [
+        { person: { kind: "local-person" }, source: "legacy-eval-sample", markedAt: 0 },
+      ])
+    } else {
+      const unique = new Map(
+        sources.map((source) => [JSON.stringify([source.sessionId, source.runId]), source])
+      )
+      for (const source of unique.values()) {
+        const evidence = await preparePersonalDerivedHistory(
+          undefined,
+          [
+            {
+              id: "eval-sample",
+              text: sample.output,
+              metadata: { personalMarks: [] as PersonalMarkV1[] },
+            },
+          ],
+          { sessionId: source.sessionId, ...(source.runId ? { runIds: [source.runId] } : {}) }
+        )
+        // This projection has no reader. A denied source can never become
+        // available merely because its transient session was deleted later.
+        marks = mergePersonalMarks(
+          marks,
+          evidence.withheldMessageIds.length
+            ? [
+                {
+                  person: { kind: "service", ref: "withheld-eval-source" },
+                  source: "eval-source-visibility",
+                  markedAt: 0,
+                },
+              ]
+            : (evidence.messages[0].metadata as { personalMarks?: PersonalMarkV1[] } | undefined)
+                ?.personalMarks
+        )
+      }
+    }
+    sampleMarks.set(sample, marks)
+  }
+  const visible = await preparePersonalHistory(
+    undefined,
+    [{ id: "eval-sample", text: sample.output, metadata: { personalMarks: marks } }],
+    { executionRunId }
+  )
+  if (visible.withheldMessageIds.length === 0) return sample
+  const filtered: EvalSample = {
+    output: visible.messages[0].text,
+    toolCalls: [],
+    retrievedChunks: [],
+    usage: sample.usage,
+    costUsd: sample.costUsd,
+    latencyMs: sample.latencyMs,
+    stepCount: sample.stepCount,
+    degraded: sample.degraded,
+    ...(sample.executionStatus ? { executionStatus: sample.executionStatus } : {}),
+    ...(sample.executionProfile ? { executionProfile: sample.executionProfile } : {}),
+    ...(sample.metricAvailability ? { metricAvailability: sample.metricAvailability } : {}),
+    ...(sample.error
+      ? { error: `Evaluation ${(sample.executionStatus ?? "failed").replaceAll("_", " ")}` }
+      : {}),
+  }
+  sampleMarks.set(filtered, marks)
+  return filtered
+}
 
 function parseArgs(span: AgentTraceSpan): Record<string, unknown> {
   // Prefer structured metadata, fall back to the (PII-gated) inputPreview JSON.
@@ -278,15 +367,22 @@ export function createChatTarget(config: ChatTargetConfig, deps: ChatTargetDeps)
         )
         sessionId = result.sessionId
         const spans = await deadline.run(() => deps.fetchSpans(result.sessionId))
-        return {
-          ...assembleSampleFromSpans(spans, {
-            output: result.text,
-            degraded: !deps.isToolCapable(),
-            wallTimeMs: Math.max(0, Date.now() - startedAt),
-          }),
-          executionStatus: "completed",
-          executionProfile: "desktop-chat",
-        }
+        return await personalEvalSampleForRun(
+          {
+            ...assembleSampleFromSpans(spans, {
+              output: result.text,
+              degraded: !deps.isToolCapable(),
+              wallTimeMs: Math.max(0, Date.now() - startedAt),
+            }),
+            executionStatus: "completed",
+            executionProfile: "desktop-chat",
+          },
+          undefined,
+          [
+            { sessionId: result.sessionId },
+            ...spans.map((span) => ({ sessionId: span.sessionId, runId: span.runId })),
+          ]
+        )
       } finally {
         deadline.dispose()
         if (sessionId) await deps.cleanupSession?.(sessionId)

@@ -17,7 +17,7 @@
  */
 import type { AgentTeamTask } from "@/types/agent/agent-team"
 import type { TeamRunContext } from "../team-run-context"
-import { readDependencyResults } from "../memory/shared-memory-orchestrator"
+import { readDependencyResultsForRun } from "../memory/shared-memory-orchestrator"
 import { dispatchStructured } from "../teammate/structured-dispatch"
 import {
   replanDecisionSchema,
@@ -64,7 +64,7 @@ async function buildPrompt(
   justRanTaskIds: string[],
   remaining: AgentTeamTask[]
 ): Promise<string> {
-  const results = readDependencyResults(teamCtx.teamId, justRanTaskIds)
+  const results = await readDependencyResultsForRun(teamCtx, justRanTaskIds)
   const resultLines =
     results.length > 0
       ? results.map((r) => `- ${r.taskTitle ?? r.taskId}: ${r.value.slice(0, 600)}`).join("\n")

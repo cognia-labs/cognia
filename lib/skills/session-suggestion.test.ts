@@ -11,6 +11,38 @@ const mockReset = jest.fn()
 const mockSetEdits = jest.fn()
 const mockDispatch = jest.fn(() => true)
 
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerHistory: async (messages: readonly { id: string }[]) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(messages, [{ kind: "local-person" }])
+  },
+  prepareOwnerDerivedHistory: async (messages: readonly { id: string }[]) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(
+      messages.map((m) => ({
+        ...m,
+        metadata: {
+          personalMarks: [
+            {
+              person: {
+                kind: "platform",
+                platform: "lark",
+                adapterId: "foreign-adapter",
+                remoteUserId: "foreign-person",
+              },
+              source: "legacy-derived",
+              markedAt: 0,
+            },
+          ],
+        },
+      })),
+      [{ kind: "local-person" }]
+    )
+  },
+}))
+
 jest.mock("@/lib/db/skill-recordings", () => ({
   createRecording: (...args: unknown[]) => mockCreateRecording(...args),
   checkpointRecording: (...args: unknown[]) => mockCheckpointRecording(...args),
@@ -97,6 +129,53 @@ describe("isSkillSuggestionEligible", () => {
 })
 
 describe("prepareSkillRecordingFromSource", () => {
+  it("filters source message content and tool names before they become generation steps", async () => {
+    mockListMessages.mockResolvedValue([
+      {
+        ...message("assistant", "PRIVATE SKILL SOURCE"),
+        metadata: {
+          personalMarks: [
+            {
+              person: {
+                kind: "platform",
+                platform: "lark",
+                adapterId: "foreign-adapter",
+                remoteUserId: "foreign-person",
+              },
+              source: "read",
+              markedAt: 1,
+            },
+          ],
+        },
+        parts: [
+          { type: "text", text: "PRIVATE SKILL SOURCE" },
+          { type: "tool-PrivateTool", state: "output-available" },
+        ],
+      },
+    ])
+    await prepareSkillRecordingFromSource({ kind: "session", sessionId: "private" })
+    const edits = JSON.stringify(mockCheckpointRecording.mock.calls[0][1].edits)
+    expect(edits).toContain("[Withheld: personal content of")
+    expect(edits).not.toMatch(/PRIVATE SKILL SOURCE|PrivateTool/)
+  })
+  it("retains the owner's personal source steps after their explicit Recorder action", async () => {
+    mockListMessages.mockResolvedValue([
+      {
+        ...message("assistant", "OWNER SKILL SOURCE"),
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+        },
+      },
+    ])
+    await prepareSkillRecordingFromSource({ kind: "session", sessionId: "owner-session" })
+    expect(JSON.stringify(mockCheckpointRecording.mock.calls[0][1].edits)).toContain(
+      "OWNER SKILL SOURCE"
+    )
+    expect(mockCreateRecording).toHaveBeenCalledWith(
+      expect.objectContaining({ source: { kind: "session", sessionId: "owner-session" } })
+    )
+  })
+
   it("does not load session content until explicitly invoked", () => {
     expect(mockListMessages).not.toHaveBeenCalled()
   })

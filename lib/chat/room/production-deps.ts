@@ -10,6 +10,10 @@
 
 import { approveTool, closeSession, interruptSession, sendPrompt } from "@/lib/claude/ipc"
 import { resolveSendOptions } from "@/lib/claude/build-options"
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
 import { runTurnMemory } from "@/lib/memory/run-turn-memory"
 import { tryBuildMemoryDeps } from "@/lib/memory/runtime/build-deps"
 import { tryBuildTwinDeps } from "@/lib/twin/runtime/build-deps"
@@ -88,6 +92,8 @@ export function createProductionRoomDeps(opts: ProductionRoomDepsOptions = {}): 
       resolveEffectiveCwdForSession: (session) => resolveEffectiveCwdForSession(session),
     },
     ai: {
+      preparePersonalHistory,
+      preparePersonalDerivedHistory,
       resolveSendOptions,
       tryBuildTwinDeps: () => tryBuildTwinDeps(),
       tryBuildMemoryDeps: (config, twin) => tryBuildMemoryDeps(config as never, twin),

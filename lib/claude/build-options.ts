@@ -1,4 +1,9 @@
 import { getAllProviders } from "@cognia/provider-types/provider"
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+  withPersonalRerankerVisibility,
+} from "@/lib/execution/personal-visibility"
 // Pure helper that resolves the final SendOptions for a turn by merging:
 //   1. App-wide defaults (settings store)
 //   2. Character config (if session.characterId is set)
@@ -1300,6 +1305,56 @@ export function resolvedSessionAsideRuntime(options: SendOptions): AgentRuntimeR
 }
 
 export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<SendOptions> {
+  // This is a Host dispatch reference, never an identity supplied by messages.
+  const historySessionId = ctx.session?.id
+  const historyRunId = ctx.personalCredentialContext?.executionRunId ?? ctx.executionIdentity?.runId
+  let personalContextReadersDigest: string | undefined
+  const historyText = async (
+    id: string,
+    text: string,
+    sourceSessionId?: string,
+    runIds?: string[],
+    legacyOwnerArtifact?: true
+  ) => {
+    const result = await preparePersonalDerivedHistory(historySessionId, [{ id, text }], {
+      sessionId: sourceSessionId,
+      runIds,
+      executionRunId: historyRunId,
+      legacyOwnerArtifact,
+    })
+    if (!result.withheldMessageIds.length && result.readers.length)
+      personalContextReadersDigest ??= result.visibilityDigest
+    return result.messages[0].text
+  }
+  let personalMemoryDeps = ctx.memoryDeps
+  if (personalMemoryDeps) {
+    const { withPersonalMemoryVisibility } = await import("@/lib/memory/runtime/build-deps")
+    personalMemoryDeps = withPersonalMemoryVisibility(
+      personalMemoryDeps,
+      historySessionId,
+      historyRunId
+    )
+  }
+  const memoryReaders = personalMemoryDeps
+    ? await preparePersonalHistory(historySessionId, [], { executionRunId: historyRunId })
+    : undefined
+  const twinReaders =
+    ctx.character?.twinId && ctx.twinDeps && ctx.twinUserMessage?.trim()
+      ? await preparePersonalHistory(
+          historySessionId,
+          [
+            {
+              id: "twin-history",
+              metadata: {
+                personalMarks: [
+                  { person: { kind: "local-person" }, source: "twin-history", markedAt: 0 },
+                ],
+              },
+            },
+          ],
+          { executionRunId: historyRunId }
+        )
+      : undefined
   const withheldPersonalMcpServers = new Set<string>()
   const participantCharacterId =
     ctx.character?.id ?? ctx.memberOverride?.characterId ?? ctx.session?.characterId
@@ -1562,6 +1617,21 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     activeGoal: ctx.activeGoal ?? null,
     prompts: { snapshot: promptSnapshot, context: promptContext },
   })
+  for (const contribution of contributed.grants) {
+    if (
+      contribution.source.id === "goal/active-goal" &&
+      ctx.activeGoal &&
+      contribution.instructions
+    ) {
+      contribution.instructions = await Promise.all(
+        contribution.instructions.map((text) =>
+          historyText(`goal:${ctx.activeGoal!.id}`, text, ctx.activeGoal!.sessionId, [
+            `execution:goal:${ctx.activeGoal!.id}`,
+          ])
+        )
+      )
+    }
+  }
   const grant = foldCapabilityGrants([
     ...(ctx.capabilityGrants ?? []),
     ...contributed.grants,
@@ -1629,6 +1699,27 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       !resolveBuiltinSkillIdentity(skill.id) &&
       !resolveBuiltinSkillIdentity(skill.canonicalId ?? "")
   )
+  // Recorded skills are history-derived, including drafts saved before 2B.
+  // Gate the whole entry so its catalog name cannot reveal a private title.
+  const visibleSkills: Skill[] = []
+  for (const skill of skills) {
+    if (skill.source === "generated") {
+      const { getDb } = await import("@/lib/db/schema")
+      const recording = await getDb().skillRecordings.where("skillId").equals(skill.id).first()
+      const source = recording?.source
+      const serialized = JSON.stringify(skill)
+      const projected = await historyText(
+        `recorded-skill:${skill.id}`,
+        serialized,
+        source?.sessionId,
+        source?.kind === "run" ? [source.runId] : undefined,
+        true
+      )
+      if (projected !== serialized) continue
+    }
+    visibleSkills.push(skill)
+  }
+  skills = visibleSkills
   const explicitSkillIds = new Set(
     session?.trialSkillId ? [session.trialSkillId] : (ctx.ephemeralSkillIds ?? [])
   )
@@ -2553,10 +2644,19 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       },
       hostDeps: Object.fromEntries(
         Object.entries({
-          twin: ctx.twinDeps,
+          twin:
+            twinReaders?.withheldMessageIds.length === 0 && ctx.twinDeps
+              ? {
+                  ...ctx.twinDeps,
+                  reranker: withPersonalRerankerVisibility(ctx.twinDeps.reranker, {
+                    sessionId: historySessionId,
+                    executionRunId: historyRunId,
+                  }),
+                }
+              : undefined,
           twinQuery: ctx.twinUserMessage,
           twinInjectSource: ctx.twinInjectSource,
-          memory: ctx.memoryDeps,
+          memory: personalMemoryDeps,
           memoryQuery: ctx.memoryUserMessage,
           memoryScope: ctx.memoryDeps
             ? { targetAgentId: ctx.targetAgentId, branch: ctx.memoryBranch, path: ctx.memoryPath }
@@ -2571,6 +2671,13 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     },
     { cacheOptimization: cacheOptimizationEnabled }
   )
+  if (contributedContext.identity !== undefined && twinReaders)
+    personalContextReadersDigest ??= twinReaders.visibilityDigest
+  if (
+    memoryReaders?.readers.length &&
+    (contributedContext.sources["memory.recall"] || contributedContext.sources["memory.continuity"])
+  )
+    personalContextReadersDigest ??= memoryReaders.visibilityDigest
   // A module's identity section stands in for the agent's base system prompt.
   if (contributedContext.identity !== undefined) {
     baseSystem = contributedContext.identity
@@ -4258,7 +4365,15 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       // authoritative and keeps operational directives in force.
       if (ctx.postCompaction) {
         const recovery = buildPostCompactionRecovery({
-          durableInstructions: ctx.postCompaction.durableInstructions,
+          durableInstructions: ctx.postCompaction.durableInstructions
+            ? await historyText(
+                "post-compaction",
+                ctx.postCompaction.durableInstructions,
+                session?.id,
+                undefined,
+                true
+              )
+            : undefined,
           base: resolveTurnPrompt(POST_COMPACTION_RECOVERY_PROMPT),
         })
         const base = opts.appendSystemPrompt?.trim() ?? ""
@@ -4278,11 +4393,21 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // draft / awaiting_approval / paused / terminal plans are skipped.
   if (ctx.activePlan && ctx.activePlan.status === "executing") {
     const { appendPlanContext } = await import("@/lib/agent/plan/context-injector")
-    opts.appendSystemPrompt = appendPlanContext({
-      appendSystemPrompt: opts.appendSystemPrompt,
+    const planContext = appendPlanContext({
       activePlan: ctx.activePlan,
       promptSnapshot,
     })
+    opts.appendSystemPrompt =
+      [
+        opts.appendSystemPrompt,
+        planContext
+          ? await historyText(`plan:${ctx.activePlan.id}`, planContext, ctx.activePlan.sessionId, [
+              `execution:plan:${ctx.activePlan.id}`,
+            ])
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n") || undefined
   }
 
   // --- Capability-grant instructions ----------------------------------------
@@ -4624,10 +4749,12 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       session.branchSeed.kind === "summary"
         ? "Summary of the conversation this thread was branched from:"
         : "Context from the conversation this thread was branched from:"
-    const seedBlock = `${label}\n\n${session.branchSeed.content}`
+    const seedBlock = `${label}\n\n${await historyText("branch-seed", session.branchSeed.content, session.id, undefined, true)}`
     const existing = opts.appendSystemPrompt?.trim() ?? ""
     opts.appendSystemPrompt = existing ? `${existing}\n\n${seedBlock}` : seedBlock
   }
+
+  if (personalContextReadersDigest) opts.personalContextReadersDigest = personalContextReadersDigest
 
   // --- Resume / fork continuity --------------------------------------------
   // The sidecar persists the SDK-issued `session_id` onto the ChatSession row

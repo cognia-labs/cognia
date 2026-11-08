@@ -288,6 +288,9 @@ export async function sendPrompt(
     return sendPromptToTransport(sessionId, prompt, options, delivery, { pairedHost: true })
   }
   if (delivery?.transcriptRuntime === "prepared" || delivery?.transcriptRuntime === "host-owned") {
+    if (delivery.transcriptRuntime === "prepared") {
+      await assertPersonalVisibilityDigest(sessionId, options)
+    }
     if (
       delivery.transcriptRuntime === "prepared" &&
       options?.expectedRuntimeSessionId &&
@@ -311,6 +314,7 @@ export async function sendPrompt(
       if (options?.transcriptInvalidationId !== session.runtimeTranscriptGeneration) {
         throw new TranscriptRuntimeRecoveryError("frozen_transcript_generation_mismatch")
       }
+      await assertPersonalVisibilityDigest(sessionId, options)
       return sendPromptToTransport(sessionId, prompt, options, delivery)
     }
     const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
@@ -330,6 +334,53 @@ export async function sendPrompt(
   })
 }
 
+/** An async admission/steer may tighten readers after history was prepared. */
+async function assertPersonalVisibilityDigest(
+  sessionId: string,
+  options?: SendOptions,
+  allowFullyVisibleEngine = false
+): Promise<void> {
+  const [
+    { getSession, updateSession },
+    { listMessages },
+    { selectVisibleMessages },
+    { preparePersonalHistory },
+  ] = await Promise.all([
+    import("@/lib/db/sessions"),
+    import("@/lib/db/messages"),
+    import("@/stores/chat"),
+    import("@/lib/execution/personal-visibility"),
+  ])
+  const session = await getSession(sessionId)
+  if (
+    !session &&
+    !options?.personalVisibilityDigest &&
+    !options?.personalContextReadersDigest &&
+    !options?.resumeSessionId &&
+    !options?.forkFromSessionId &&
+    !options?.expectedRuntimeSessionId &&
+    !options?.initialConversation?.length
+  )
+    return
+  const filtered = await preparePersonalHistory(
+    sessionId,
+    selectVisibleMessages(await listMessages(sessionId), session?.activeBranchByGroup ?? {}),
+    { session }
+  )
+  if (allowFullyVisibleEngine && filtered.withheldMessageIds.length === 0) {
+    if (session && session.runtimePersonalVisibilityDigest !== filtered.visibilityDigest) {
+      await updateSession(sessionId, { runtimePersonalVisibilityDigest: filtered.visibilityDigest })
+    }
+    return
+  }
+  if (
+    options?.personalVisibilityDigest !== filtered.visibilityDigest ||
+    session?.runtimePersonalVisibilityDigest !== filtered.visibilityDigest
+  ) {
+    throw new TranscriptRuntimeRecoveryError("personal_visibility_changed")
+  }
+}
+
 async function sendPromptToTransport(
   sessionId: string,
   prompt: SendContent,
@@ -340,6 +391,13 @@ async function sendPromptToTransport(
   if (isSessionCapturedByOtherTurn(sessionId, options?.turnId))
     throw new TranscriptRuntimeRecoveryError("session_turn_busy")
   await delivery?.beforeSend?.()
+  if (
+    !route.pairedHost &&
+    delivery?.transcriptRuntime !== "host-owned" &&
+    options?.personalVisibilityDigest
+  ) {
+    await assertPersonalVisibilityDigest(sessionId, options)
+  }
   if (isSessionCapturedByOtherTurn(sessionId, options?.turnId))
     throw new TranscriptRuntimeRecoveryError("session_turn_busy")
   const sdk = options?.claudeAgentSdk
@@ -446,13 +504,18 @@ export async function interruptSession(
 export async function compactSession(
   sessionId: string,
   focus?: string,
-  options?: { commandId?: string }
+  options?: {
+    commandId?: string
+    hostOwnedTranscriptControl?: typeof HOST_OWNED_TRANSCRIPT_CONTROL
+  }
 ): Promise<void> {
   const command = options?.commandId ? "agent_compact" : "claude_compact"
   if (!hasNoLeakingPiiDeep(focus)) throw new Error("compact rejected by the renderer PII gate")
-  const protection = await sessionInjectionProtection(sessionId)
-  assertSafeModelInput(focus, protection === true)
+  const hostOwned = options?.hostOwnedTranscriptControl === HOST_OWNED_TRANSCRIPT_CONTROL
+  const protection = hostOwned ? undefined : await sessionInjectionProtection(sessionId)
+  assertSafeModelInput(focus, hostOwned || protection === true)
   await assertCurrentControlContentPolicy(sessionId, protection)
+  await assertPersonalControlVisibility(sessionId, options)
   await transport.call(command, {
     sessionId,
     focus,
@@ -467,14 +530,55 @@ export async function compactSession(
  * (`compact_metadata.pre_messages`) — NOT renderer UIMessages. Only valid on the
  * generic (AI-SDK) path while the session is still live and idle.
  */
-export async function restoreSession(sessionId: string, messages: unknown[]): Promise<void> {
+export async function restoreSession(
+  sessionId: string,
+  messages: unknown[],
+  options?: { hostOwnedTranscriptControl?: typeof HOST_OWNED_TRANSCRIPT_CONTROL }
+): Promise<void> {
   if (!hasNoLeakingPiiDeep(messages)) {
     throw new Error("session restore rejected by the renderer PII gate")
   }
-  const protection = await sessionInjectionProtection(sessionId)
-  assertSafeModelHistory(messages, protection === true)
+  const hostOwned = options?.hostOwnedTranscriptControl === HOST_OWNED_TRANSCRIPT_CONTROL
+  const protection = hostOwned ? undefined : await sessionInjectionProtection(sessionId)
+  assertSafeModelHistory(messages, hostOwned || protection === true)
   await assertCurrentControlContentPolicy(sessionId, protection)
+  await assertPersonalControlVisibility(sessionId, options)
   await transport.call("claude_restore", { sessionId, messages })
+}
+
+/** Only the CLI's canonical transcript owner may supply this in-process proof. */
+export const HOST_OWNED_TRANSCRIPT_CONTROL = Symbol("host-owned-transcript-control")
+
+async function assertPersonalControlVisibility(
+  sessionId: string,
+  options?: { hostOwnedTranscriptControl?: typeof HOST_OWNED_TRANSCRIPT_CONTROL }
+): Promise<void> {
+  if (
+    options?.hostOwnedTranscriptControl === HOST_OWNED_TRANSCRIPT_CONTROL ||
+    turnsRunOnPairedHost()
+  )
+    return
+  const { getSession } = await import("@/lib/db/sessions")
+  const session = await getSession(sessionId)
+  if (!session) throw new TranscriptRuntimeRecoveryError("personal_visibility_changed")
+  try {
+    await assertPersonalVisibilityDigest(
+      sessionId,
+      {
+        personalVisibilityDigest: session.runtimePersonalVisibilityDigest,
+      },
+      true
+    )
+  } catch (error) {
+    if (
+      error instanceof TranscriptRuntimeRecoveryError &&
+      error.code === "personal_visibility_changed"
+    ) {
+      const { invalidateTranscriptRuntime } = await import("@/lib/chat/transcript/revision-events")
+      await invalidateTranscriptRuntime(sessionId)
+    }
+    throw error
+  }
 }
 
 /** A control cannot keep an older tool/history policy after the Host setting changes. */
@@ -579,10 +683,12 @@ async function sidecarRoundTrip<T>(
   command: string,
   buildArgs: (requestId: string) => Record<string, unknown>,
   label: string,
-  timeoutMs: number
+  timeoutMs: number,
+  beforeDispatch?: () => Promise<void>
 ): Promise<T> {
   // Await the subscription before firing so a fast reply can't race the listener.
   await ensureControlListener()
+  await beforeDispatch?.()
   const requestId = crypto.randomUUID()
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -608,13 +714,17 @@ async function sessionControlRequest<T>(
   sessionId: string,
   method: SessionControlMethod,
   params?: Record<string, unknown>,
-  options?: { commandId?: string }
+  options?: {
+    commandId?: string
+    hostOwnedTranscriptControl?: typeof HOST_OWNED_TRANSCRIPT_CONTROL
+  }
 ): Promise<T> {
   return sidecarRoundTrip<T>(
     "claude_session_control",
     (requestId) => ({ sessionId, requestId, method, params, commandId: options?.commandId }),
     `control "${method}"`,
-    CONTROL_TIMEOUT_MS
+    CONTROL_TIMEOUT_MS,
+    method === "steer" ? () => assertPersonalControlVisibility(sessionId, options) : undefined
   )
 }
 
@@ -693,13 +803,19 @@ export async function steerSession(
   sessionId: string,
   prompt: SendContent,
   sourceMessageId?: string,
-  options?: { priority?: "now" | "next"; commandId?: string }
+  options?: {
+    priority?: "now" | "next"
+    commandId?: string
+    hostOwnedTranscriptControl?: typeof HOST_OWNED_TRANSCRIPT_CONTROL
+  }
 ): Promise<{ accepted: true }> {
   if (!hasNoLeakingPiiDeep(prompt)) {
     throw new Error("live-steer prompt rejected by the renderer PII gate")
   }
-  const protection = await sessionInjectionProtection(sessionId)
-  assertSafeModelInput(prompt, protection === true)
+  const hostOwned = options?.hostOwnedTranscriptControl === HOST_OWNED_TRANSCRIPT_CONTROL
+  const protection = hostOwned ? undefined : await sessionInjectionProtection(sessionId)
+  assertSafeModelInput(prompt, hostOwned || protection === true)
+  await assertPersonalControlVisibility(sessionId, options)
   return sessionControlRequest<{ accepted: true }>(
     sessionId,
     "steer",

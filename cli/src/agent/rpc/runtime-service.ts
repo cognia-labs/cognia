@@ -27,6 +27,7 @@ import { DEFAULT_SANDBOX_SESSION_BINDING } from "@/lib/sandbox/binding"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
 import {
   compactSession,
+  HOST_OWNED_TRANSCRIPT_CONTROL,
   onClaudeMessage,
   restoreSession,
   sessionControl,
@@ -900,6 +901,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
           await runCommand(session, method, params, async (commandId) => {
             if (!session.busy) throw structured("usage_error", "no active turn to steer")
             const input = lowerInput(params.input)
+            await assertPersonalControlOwner(session)
             // External agents steer through their own adapter (Pi `steer`,
             // Codex `turn/steer`) — the claude_session_control channel below is
             // the built-in backend's and cannot reach a Pi or Codex thread.
@@ -910,6 +912,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
               await steerSession(session.id, input, undefined, {
                 priority: "now",
                 commandId,
+                hostOwnedTranscriptControl: HOST_OWNED_TRANSCRIPT_CONTROL,
               })
             }
             return receipt(commandId)
@@ -998,7 +1001,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
               throw structured("unsupported_capability", "compaction requires a live session")
             }
             const boundary = await compactLiveSession(
-              session.id,
+              session,
               typeof params.instructions === "string" ? params.instructions : undefined,
               commandId
             )
@@ -1034,7 +1037,10 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
                 "the compaction snapshot is unavailable or belongs to another host session"
               )
             }
-            await (options.restore ?? restoreSession)(session.id, snapshot.messages)
+            await assertPersonalControlOwner(session)
+            await (options.restore ?? restoreSession)(session.id, snapshot.messages, {
+              hostOwnedTranscriptControl: HOST_OWNED_TRANSCRIPT_CONTROL,
+            })
             compactionSnapshots.delete(boundaryId)
             return receipt(commandId)
           })
@@ -2151,11 +2157,26 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     compactionSnapshots.clear()
   }
 
+  async function assertPersonalControlOwner(session: HostedSession): Promise<void> {
+    const current = session.lease.current
+    if (!current?.assertPersonalControlVisibility) {
+      throw structured(
+        "unsupported_capability",
+        "the live runtime cannot verify personal history visibility"
+      )
+    }
+    await current.assertPersonalControlVisibility()
+    if (session.lease.current !== current) {
+      throw structured("session_busy", "the live runtime changed before control dispatch")
+    }
+  }
+
   async function compactLiveSession(
-    sessionId: string,
+    session: HostedSession,
     instructions: string | undefined,
     commandId: string
   ): Promise<{ boundaryId: string; messages?: unknown[] } | null> {
+    const sessionId = session.id
     if (instructions !== undefined && !hasNoLeakingPiiDeep(instructions)) {
       throw structured("permission_denied", "compaction instructions blocked by the PII gate")
     }
@@ -2175,7 +2196,11 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     })
 
     try {
-      await (options.compact ?? compactSession)(sessionId, instructions, { commandId })
+      await assertPersonalControlOwner(session)
+      await (options.compact ?? compactSession)(sessionId, instructions, {
+        commandId,
+        hostOwnedTranscriptControl: HOST_OWNED_TRANSCRIPT_CONTROL,
+      })
       const timedOut = new Promise<null>((resolve) => {
         timeout = setTimeout(() => resolve(null), options.compactionTimeoutMs ?? 30_000)
         timeout.unref?.()

@@ -1993,10 +1993,43 @@ it("preserves effective legacy personal marks on paired sync copies", async () =
     id: "legacy-sync-message",
     sessionId: "legacy-sync",
     role: "assistant",
-    parts: [],
+    parts: [{ type: "text", text: "legacy secret answer" }],
     createdAt: 10,
   })
   const delta = await readDexieDelta("messages", 0)
   expect(JSON.stringify(delta)).toContain('"remoteUserId":"owner"')
+  expect(JSON.stringify(delta)).toContain("legacy secret answer")
+  expect(JSON.stringify(delta)).not.toContain("[Withheld:")
   expect((await getDb().messages.get("legacy-sync-message"))?.metadata).toBeUndefined()
+})
+
+it("keeps owner marked bodies and derived session fields in legacy and cursor sync pages", async () => {
+  await getDb().sessions.put({
+    id: "private-sync",
+    title: "secret sync title",
+    lastMessagePreview: "secret preview",
+    branchSeed: { kind: "summary", content: "secret branch seed" },
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  await getDb().messages.put({
+    id: "private-sync-message",
+    sessionId: "private-sync",
+    role: "assistant",
+    createdAt: 1,
+    parts: [{ type: "text", text: "secret sync body" }],
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+    },
+  })
+  for (const cursor of [undefined, ""]) {
+    const page = await readDexieDelta("messages", 0, undefined, undefined, cursor)
+    expect(JSON.stringify(page)).toContain("secret sync body")
+    expect(JSON.stringify(page)).not.toContain("[Withheld:")
+  }
+  const sessions = await readDexieDelta("sessions", 0)
+  expect(JSON.stringify(sessions)).toMatch(/secret sync title/)
+  expect(JSON.stringify(sessions)).toContain("secret preview")
+  expect(JSON.stringify(sessions)).toContain("secret branch seed")
+  expect((await getDb().sessions.get("private-sync"))?.title).toBe("secret sync title")
 })

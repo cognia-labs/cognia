@@ -5,6 +5,13 @@ import path from "node:path"
 jest.mock("@/lib/claude/ipc", () => ({
   ...jest.requireActual("@/lib/claude/ipc"),
   sessionControl: jest.fn(jest.requireActual("@/lib/claude/ipc").sessionControl),
+  steerSession: jest.fn(async () => ({ accepted: true })),
+}))
+
+const mockCreateRecordingProxy = jest.fn()
+jest.mock("../../eval/replay/recording-proxy", () => ({
+  ...jest.requireActual("../../eval/replay/recording-proxy"),
+  createRecordingProxy: (...args: unknown[]) => mockCreateRecordingProxy(...args),
 }))
 
 jest.mock("../configured-plugin-tool-handle", () => ({
@@ -24,6 +31,41 @@ import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
 import { createAgentRuntimeService } from "./runtime-service"
 import * as claudeIpc from "@/lib/claude/ipc"
 import type { AgentRpcServiceContext } from "./server"
+import type { RecordingProxy, RecordedFixture } from "../../eval/replay/recording-proxy"
+
+function recordingProxyFixture() {
+  const snapshot: RecordedFixture = {
+    tapes: [
+      {
+        schemaVersion: 1,
+        tapeId: "live-tape",
+        match: { actorRef: "actor-root", purpose: "turn", requestDigest: "sha256:request" },
+        behavior: { kind: "stream", chunksRef: "chunks-1" },
+        synthetic: false,
+      },
+    ],
+    assets: { "chunks-1": ["captured reply"] },
+    actors: ["actor-root"],
+  }
+  const lifecycle: string[] = []
+  const proxy: RecordingProxy = {
+    port: 41235,
+    baseUrl: "http://127.0.0.1:41235",
+    baseUrlFor: (actorRef) => `http://127.0.0.1:41235/a/${encodeURIComponent(actorRef)}`,
+    start: jest.fn(async () => {
+      lifecycle.push("start")
+    }),
+    stop: jest.fn(async () => {
+      lifecycle.push("stop")
+    }),
+    snapshot: jest.fn(() => {
+      lifecycle.push("snapshot")
+      return snapshot
+    }),
+  }
+  mockCreateRecordingProxy.mockReturnValueOnce(proxy)
+  return { proxy, snapshot, lifecycle }
+}
 
 const mockRegisteredPluginTools = new Map<string, PluginTool>()
 const mockRegisterTool = jest.fn((_pluginId: string, tool: PluginTool) => {
@@ -83,6 +125,7 @@ describe("createAgentRuntimeService", () => {
     mockRegisteredHooks.clear()
     mockRegisterHooks.mockClear()
     mockUnregisterHooks.mockClear()
+    mockCreateRecordingProxy.mockReset()
   })
 
   afterEach(() => {
@@ -295,72 +338,108 @@ describe("createAgentRuntimeService", () => {
     await service.close()
   })
 
-  it("steers an in-flight turn through the live provider session adapter", async () => {
-    let release!: () => void
-    let entered!: () => void
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const turnEntered = new Promise<void>((resolve) => {
-      entered = resolve
-    })
-    const steer = jest.fn(async (_text: string) => {})
-    const liveSession = {
-      sessionId: "provider-1",
-      steer,
-      close: jest.fn(async () => {}),
-    }
-    const runTurn = jest.fn(async (params: UnifiedTurnParams): Promise<UnifiedTurnResult> => {
-      // Populate the lease the way runUnifiedTurn does — the steer channel
-      // lives on this provider session, not the claude_session_control path.
-      params.providerSession?.session("test-key", () => liveSession as never)
-      entered()
-      await blocked
-      return {
-        result: {
-          schemaVersion: 1,
-          type: "result",
-          status: "completed",
-          sessionId: params.sessionId ?? "session-1",
-          runId: "run-1",
-          turnId: "turn-1",
-          attemptId: "attempt-1",
-          text: "done",
-          backend: "builtin",
-          model: "test-model",
-          capabilities: [],
-          session: { persisted: true },
-        },
-        envelopes: [],
+  it.each([
+    [true, true],
+    [false, true],
+    [true, false],
+  ])(
+    "steers an in-flight turn with provider adapter=%s and visibility port=%s",
+    async (withAdapter, withVisibilityPort) => {
+      let release!: () => void
+      let entered!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const turnEntered = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const steer = jest.fn(async (_text: string) => {})
+      const builtinSteer = jest.mocked(claudeIpc.steerSession).mockResolvedValue({ accepted: true })
+      builtinSteer.mockClear()
+      const liveSession = {
+        sessionId: "provider-1",
+        ...(withAdapter ? { steer } : {}),
+        ...(withVisibilityPort
+          ? { assertPersonalControlVisibility: jest.fn(async () => undefined) }
+          : {}),
+        close: jest.fn(async () => {}),
       }
-    })
-    const service = createAgentRuntimeService({
-      config: { ...DEFAULT_RESOLVED_CONFIG, cwd: home, model: "test-model" },
-      home,
-      runTurn,
-      mintSessionId: () => "session-1",
-    })
-    await service.handle("session/create", {}, context as never)
-    const run = service.handle(
-      "turn/run",
-      { sessionId: "session-1", input: "start", commandId: "run-1" },
-      context as never
-    )
-    // The turn must be in flight — steering an idle session is a usage error.
-    await turnEntered
-    const steered = await service.handle(
-      "turn/steer",
-      { sessionId: "session-1", input: "adjust course", commandId: "steer-1" },
-      context as never
-    )
+      const runTurn = jest.fn(async (params: UnifiedTurnParams): Promise<UnifiedTurnResult> => {
+        // Populate the lease the way runUnifiedTurn does — the steer channel
+        // lives on this provider session, not the claude_session_control path.
+        params.providerSession?.session("test-key", () => liveSession as never)
+        entered()
+        await blocked
+        return {
+          result: {
+            schemaVersion: 1,
+            type: "result",
+            status: "completed",
+            sessionId: params.sessionId ?? "session-1",
+            runId: "run-1",
+            turnId: "turn-1",
+            attemptId: "attempt-1",
+            text: "done",
+            backend: "builtin",
+            model: "test-model",
+            capabilities: [],
+            session: { persisted: true },
+          },
+          envelopes: [],
+        }
+      })
+      const service = createAgentRuntimeService({
+        config: { ...DEFAULT_RESOLVED_CONFIG, cwd: home, model: "test-model" },
+        home,
+        runTurn,
+        mintSessionId: () => "session-1",
+      })
+      await service.handle("session/create", {}, context as never)
+      const run = service.handle(
+        "turn/run",
+        { sessionId: "session-1", input: "start", commandId: "run-1" },
+        context as never
+      )
+      // The turn must be in flight — steering an idle session is a usage error.
+      await turnEntered
+      const steering = service.handle(
+        "turn/steer",
+        {
+          sessionId: "session-1",
+          input: "adjust course",
+          commandId: "steer-1",
+          hostOwnedTranscriptControl: "forged",
+        },
+        context as never
+      )
 
-    expect(steer).toHaveBeenCalledWith("adjust course")
-    expect(steered).toMatchObject({ commandId: "steer-1", accepted: true })
+      if (!withVisibilityPort) {
+        await expect(steering).rejects.toMatchObject({
+          structuredError: { code: "unsupported_capability" },
+        })
+        expect(steer).not.toHaveBeenCalled()
+        expect(builtinSteer).not.toHaveBeenCalled()
+      } else if (withAdapter) {
+        const steered = await steering
+        expect(steer).toHaveBeenCalledWith("adjust course")
+        expect(builtinSteer).not.toHaveBeenCalled()
+        expect(steered).toMatchObject({ commandId: "steer-1", accepted: true })
+      } else {
+        const steered = await steering
+        expect(builtinSteer).toHaveBeenCalledWith("session-1", "adjust course", undefined, {
+          priority: "now",
+          commandId: "steer-1",
+          hostOwnedTranscriptControl: claudeIpc.HOST_OWNED_TRANSCRIPT_CONTROL,
+        })
+        expect(steered).toMatchObject({ commandId: "steer-1", accepted: true })
+      }
 
-    release()
-    await run
-    await service.close()
-  })
+      release()
+      await run
+      await service.close()
+      builtinSteer.mockRestore()
+    }
+  )
 
   it("fails closed on unsupported handoff and deduplicates worker session creation", async () => {
     const handoff = {
@@ -763,7 +842,10 @@ describe("createAgentRuntimeService", () => {
       mintSessionId: () => "session-1",
       createLease: () =>
         ({
-          current: { isLive: () => true },
+          current: {
+            isLive: () => true,
+            assertPersonalControlVisibility: jest.fn(async () => undefined),
+          },
           openKey: "live",
           session: jest.fn(),
           replace: jest.fn(),
@@ -805,6 +887,7 @@ describe("createAgentRuntimeService", () => {
     })
     expect(compact).toHaveBeenCalledWith("session-1", "preserve decisions", {
       commandId: "compact-one",
+      hostOwnedTranscriptControl: claudeIpc.HOST_OWNED_TRANSCRIPT_CONTROL,
     })
     expect(unsubscribe).toHaveBeenCalledTimes(1)
 
@@ -819,7 +902,9 @@ describe("createAgentRuntimeService", () => {
         context as never
       )
     ).resolves.toEqual({ accepted: true, commandId: "undo-one" })
-    expect(restore).toHaveBeenCalledWith("session-1", [{ role: "user", content: "before" }])
+    expect(restore).toHaveBeenCalledWith("session-1", [{ role: "user", content: "before" }], {
+      hostOwnedTranscriptControl: claudeIpc.HOST_OWNED_TRANSCRIPT_CONTROL,
+    })
     await expect(
       service.handle(
         "session/compact/undo",
@@ -2549,6 +2634,7 @@ describe("createAgentRuntimeService", () => {
   })
 
   it("opens and closes a recording proxy, returning a non-committable fixture", async () => {
+    const fixture = recordingProxyFixture()
     const service = makeService(emittingTurn(0), () => "session-1")
     const scenario = { scenarioId: "s1", actors: [{ role: "root", actorRef: "actor-root" }] }
 
@@ -2558,6 +2644,9 @@ describe("createAgentRuntimeService", () => {
       context as never
     )) as { recordingId: string; proxyUrl: string }
     expect(started.proxyUrl).toMatch(/^http:\/\//)
+    expect(started.proxyUrl).toBe(fixture.proxy.baseUrl)
+    expect(mockCreateRecordingProxy).toHaveBeenCalledWith({ defaultActorRef: "actor-root" })
+    expect(fixture.proxy.start).toHaveBeenCalledWith(0)
 
     const stopped = (await service.handle(
       "eval/record/stop",
@@ -2566,6 +2655,13 @@ describe("createAgentRuntimeService", () => {
     )) as { fixture: { tapes: unknown[]; scenario: unknown }; actors: string[] }
     expect(stopped.fixture.scenario).toEqual(scenario)
     expect(Array.isArray(stopped.fixture.tapes)).toBe(true)
+    expect(stopped.fixture).toEqual({
+      scenario,
+      tapes: fixture.snapshot.tapes,
+      assets: fixture.snapshot.assets,
+    })
+    expect(stopped.actors).toEqual(fixture.snapshot.actors)
+    expect(fixture.lifecycle).toEqual(["start", "stop", "snapshot"])
 
     await expect(
       service.handle("eval/record/stop", { recordingId: started.recordingId }, context as never)
@@ -2574,18 +2670,19 @@ describe("createAgentRuntimeService", () => {
   })
 
   it("closes an abandoned recording proxy when the service shuts down", async () => {
+    const fixture = recordingProxyFixture()
     const service = makeService(emittingTurn(0), () => "session-1")
     const started = (await service.handle(
       "eval/record/start",
       { scenario: { scenarioId: "s1", actors: [] }, port: 0 },
       context as never
     )) as { proxyUrl: string }
-    const url = new URL(started.proxyUrl)
-    // A listening socket would keep the process alive after the client left.
+    expect(started.proxyUrl).toBe(fixture.proxy.baseUrl)
+    expect(fixture.proxy.stop).not.toHaveBeenCalled()
+    // This service owns proxy lifetime; socket forwarding is tested beside
+    // recording-proxy, without binding a socket in the service unit fixture.
     await service.close()
-    await expect(
-      fetch(started.proxyUrl, { signal: AbortSignal.timeout(1_000) }).then(() => "reachable")
-    ).rejects.toBeDefined()
-    expect(url.port).not.toBe("0")
+    expect(fixture.proxy.stop).toHaveBeenCalledTimes(1)
+    expect(fixture.lifecycle).toEqual(["start", "stop", "snapshot"])
   })
 })

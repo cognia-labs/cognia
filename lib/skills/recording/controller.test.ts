@@ -36,6 +36,38 @@ const dbRecordings = {
 const saveRecordedSkill = jest.fn(async (_input: unknown) => ({ skillId: "skill-1" }))
 const collectRegisteredToolNames = jest.fn(async () => ["Read", "Bash"])
 const toastError = jest.fn()
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerDerivedHistory: async (
+    messages: readonly { id: string }[],
+    source: { sessionId?: string }
+  ) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(
+      messages.map((m) => ({
+        ...m,
+        metadata: {
+          personalMarks: [
+            {
+              person:
+                source.sessionId === "owner-session"
+                  ? { kind: "local-person" }
+                  : {
+                      kind: "platform",
+                      platform: "lark",
+                      adapterId: "foreign-adapter",
+                      remoteUserId: "foreign-person",
+                    },
+              source: "old-recording",
+              markedAt: 0,
+            },
+          ],
+        },
+      })),
+      [{ kind: "local-person" }]
+    )
+  },
+}))
 
 // The factories are hoisted above the consts above, so every reference has to
 // be made lazily — inside a function body, never in the returned literal.
@@ -530,6 +562,29 @@ describe("loadAssetBytes", () => {
 })
 
 describe("generate", () => {
+  it("rechecks a restored conversation-derived recording before its reviewed steps leave", async () => {
+    live()
+    await stopRecording()
+    dbRecordings.getRecording.mockResolvedValue({
+      id: RECORDING,
+      source: { kind: "session", sessionId: "private" },
+    } as never)
+    const envelope = await buildEnvelope("en")
+    expect(envelope.userPrompt).toContain("[Withheld: personal content of")
+    expect(envelope.userPrompt).not.toContain("Button")
+  })
+  it("keeps the owner's restored recording prompt after the owner starts generation", async () => {
+    live()
+    await stopRecording()
+    dbRecordings.getRecording.mockResolvedValue({
+      id: RECORDING,
+      source: { kind: "session", sessionId: "owner-session" },
+    } as never)
+    const envelope = await buildEnvelope("en")
+    expect(envelope.userPrompt).toContain("Button")
+    expect(envelope.userPrompt).not.toContain("[Withheld:")
+  })
+
   async function reachReview() {
     live()
     await stopRecording()

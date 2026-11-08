@@ -225,6 +225,7 @@ function InputImpl({
   suggestDebounceMs,
   sessionId,
   recentMessages,
+  suggestHome,
 }: {
   input: InputState
   dispatch: (action: TuiAction) => void
@@ -278,6 +279,7 @@ function InputImpl({
   suggestDebounceMs?: number
   sessionId?: string
   recentMessages?: readonly GhostMessage[]
+  suggestHome?: string
 }) {
   const t = useCliTranslations("cliUiCommon")
   const theme = useTheme()
@@ -506,6 +508,7 @@ function InputImpl({
     cwd,
     sessionId,
     recentMessages,
+    home: suggestHome,
   })
   const suggestion = inline.ghost.length > 0 ? inline.ghost : null
   // Tell the user WHERE the ghost came from: a history hit is exact and free,

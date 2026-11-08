@@ -26,6 +26,7 @@ import { useSettingsStore } from "@/stores/settings"
 import type { UIMessage } from "ai"
 import { stripPromptPreambleFromContent } from "@/lib/chat/prompt-preamble"
 import { extractAssistantText, extractPlainText } from "@/lib/chat/message-text"
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
 
 // Moved to a dependency-light module so a Host's brain can read a transcript
 // without loading the chat view; re-exported for the callers that import here.
@@ -78,6 +79,11 @@ export function runUtilityModelTasks(sessionId: string, messages: UIMessage[]): 
       const locale = settings.language
       const sessionRow = await getSession(sessionId).catch(() => undefined)
       if (!sessionRow) return
+      const history = await prepareOwnerHistory(
+        messages.map((message) => ({ ...message, sessionId })),
+        { session: sessionRow }
+      )
+      if (history.withheldMessageIds.length) return
 
       // ── Conversation title: first assistant turn, enabled, not renamed ──
       const titleCfg = settings.conversationTitle
@@ -123,7 +129,12 @@ export function runUtilityModelTasks(sessionId: string, messages: UIMessage[]): 
       const labelCfg = settings.conversationTimeline?.labelSummary
       if (labelCfg?.enabled) {
         const store = useChatStore.getState()
-        const msgs = store.activeSessionId === sessionId ? store.messages : messages
+        const raw = store.activeSessionId === sessionId ? store.messages : messages
+        const current = await prepareOwnerHistory(
+          raw.map((message) => ({ ...message, sessionId })),
+          { session: sessionRow }
+        )
+        const msgs = current.messages
         let lastUserIdx = -1
         for (let i = msgs.length - 1; i >= 0; i--) {
           if (msgs[i].role === "user") {
@@ -135,7 +146,7 @@ export function runUtilityModelTasks(sessionId: string, messages: UIMessage[]): 
           const userMsg = msgs[lastUserIdx]
           const userMsgId = userMsg.id
           const meta = (userMsg as { metadata?: Record<string, unknown> }).metadata ?? {}
-          if (userMsgId && !meta.minimapLabel) {
+          if (userMsgId && !meta.minimapLabel && !current.withheldMessageIds.includes(userMsgId)) {
             const client = buildUtilityLlmClient({
               session: sessionRow,
               appSettings: settings,

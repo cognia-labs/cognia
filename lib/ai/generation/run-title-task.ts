@@ -18,6 +18,7 @@ import { buildAgentRoleLlmClient } from "@/lib/ai/generation/agent-role-client"
 import { generateConversationTitle } from "@/lib/ai/generation/title"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import type { LlmClient } from "@/lib/twin/distill/llm"
+import { prepareOwnerDerivedHistory } from "@/lib/execution/personal-visibility"
 
 // The placeholder vocabulary lives in a dependency-free module so the
 // conversation lists can localize it without importing this pipeline.
@@ -86,6 +87,8 @@ export interface RunTitleTaskArgs {
   featureId: string
   /** Primary text to title (first user message / task description). */
   sourceText: string
+  /** Host source provenance for non-chat work titles; never reader authority. */
+  sourceRunIds?: readonly string[]
   /** Optional secondary text (first assistant reply / run result). */
   resultText?: string
   /** UI locale so the title language matches the user. */
@@ -156,6 +159,19 @@ export async function runTitleTask(args: RunTitleTaskArgs): Promise<string | nul
           featureId,
         })
     if (!client) return null
+
+    if (session?.id || args.sourceRunIds?.length) {
+      const history = await prepareOwnerDerivedHistory(
+        [
+          {
+            id: dedupKey ?? session?.id ?? "work-title",
+            text: JSON.stringify({ sourceText, resultText }),
+          },
+        ],
+        { sessionId: session?.id, runIds: args.sourceRunIds }
+      )
+      if (history.withheldMessageIds.length) return null
+    }
 
     const title = await generateConversationTitle(client, {
       firstUserText: sourceText,

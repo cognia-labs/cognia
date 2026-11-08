@@ -38,6 +38,11 @@ import { extractPlainText } from "@/lib/inbox/extract-plain-text"
 import { emptyWorkingSet } from "@/lib/chat/working-set"
 import { inheritableSessionConfig } from "@/lib/chat/session-config-inheritance"
 import type { CompleteSessionHistory } from "@/lib/sync/session-history"
+import { personalMessageForCopy } from "@/lib/execution/personal-marks"
+import {
+  mergePersonalMarks,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
 
 export type BranchMode = "direct" | "summary"
 export type BranchWorkingSetPolicy = "as-of" | "current" | "initial"
@@ -309,6 +314,27 @@ export async function branchSessionAtMessage(params: BranchSessionParams): Promi
   if (snapshotRows && sourceRows.some((row) => !row || row.sessionId !== sourceId)) {
     throw new Error("Cannot branch: incomplete source snapshot")
   }
+  const portable = await Promise.all(
+    kept.map(async (message, index) => {
+      const row = sourceRows[index]
+      const copy = await personalMessageForCopy(
+        getDb(),
+        row ?? {
+          sessionId: sourceId,
+          createdAt: 0,
+          metadata: message.metadata as Record<string, unknown> | undefined,
+        },
+        source
+      )
+      return {
+        ...message,
+        metadata: {
+          ...(message.metadata as Record<string, unknown> | undefined),
+          ...copy.metadata,
+        },
+      }
+    })
+  )
   const historicalStates = sourceRows.map((row) =>
     row?.sessionId === sourceId ? row.workingSetSnapshot : undefined
   )
@@ -336,13 +362,22 @@ export async function branchSessionAtMessage(params: BranchSessionParams): Promi
         id: newMessageId(),
         role: "assistant",
         parts: [{ type: "text", text: summary }],
-        metadata: { branchSummary: true },
+        metadata: {
+          branchSummary: true,
+          personalMarks: mergePersonalMarks(
+            ...portable.map(
+              (message) =>
+                (message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)
+                  ?.personalMarks
+            )
+          ),
+        },
       } as UIMessage,
     ]
     child.branchSeed = { kind: "summary", content: summary }
   } else {
     // direct
-    seededMessages = cloneMessages(kept)
+    seededMessages = cloneMessages(portable)
     // A cherry-pick never reuses the SDK fork, even at the tail: the fork
     // reproduces the parent's context in FULL, which is the opposite of what
     // was asked for — the child would show three messages while the model
@@ -371,7 +406,7 @@ export async function branchSessionAtMessage(params: BranchSessionParams): Promi
     } else {
       // Mid-conversation (or no SDK session yet): re-establish the truncated
       // context explicitly on the first send.
-      const { content } = renderBranchSeed(kept)
+      const { content } = renderBranchSeed(portable)
       if (content) child.branchSeed = { kind: "transcript", content }
     }
   }

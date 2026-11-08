@@ -239,10 +239,16 @@ export interface ProjectHistoryToolDeps {
   getSessions: (ids: readonly string[]) => Promise<Array<ChatSession | undefined>>
   /** The session a message belongs to, or null when the message is gone. */
   locateMessage: (messageId: string) => Promise<string | null>
+  /** Recheck the canonical row, never the potentially stale search projection. */
+  canReadMessage: (messageId: string, context: ProjectHistoryToolContext) => Promise<boolean>
+  /** A title may summarize private turns beyond the particular matched row. */
+  readSessionTitle: (sessionId: string, context: ProjectHistoryToolContext) => Promise<string>
   buildWindow: (input: {
     sessionId: string
     messageId: string
     span: MessageSpan
+    readerSessionId: string
+    executionRunId?: string
   }) => Promise<string | null>
   now: () => number
   /**
@@ -258,6 +264,7 @@ export interface ProjectHistoryToolDeps {
 
 export interface ProjectHistoryToolContext {
   sessionId: string
+  executionRunId?: string
 }
 
 function refuse(code: ProjectHistoryRefusalCode, error: string): ProjectHistoryRefusal {
@@ -402,10 +409,15 @@ export async function runProjectHistorySearch(
       for (const result of outcome.results) {
         if (seenMessages.has(result.messageId)) continue
         seenMessages.add(result.messageId)
+        if (!(await deps.canReadMessage(result.messageId, context))) {
+          withheldCount++
+          continue
+        }
+        const sessionTitle = await deps.readSessionTitle(result.sessionId, context)
         const snippet = clip(result.snippet.text)
         // The title rides along in the payload, so it goes through the same
         // gate the body does — titles are derived from user prose.
-        if (!hasNoLeakingPii(`${result.sessionTitle}\n${snippet}`)) {
+        if (!hasNoLeakingPii(`${sessionTitle}\n${snippet}`)) {
           withheldCount++
           continue
         }
@@ -413,7 +425,7 @@ export async function runProjectHistorySearch(
           hit: {
             kind: "message",
             sessionId: result.sessionId,
-            sessionTitle: result.sessionTitle,
+            sessionTitle,
             messageId: result.messageId,
             role: result.role,
             createdAt: result.createdAt,
@@ -425,7 +437,7 @@ export async function runProjectHistorySearch(
             kind: "message",
             sessionId: result.sessionId,
             messageId: result.messageId,
-            title: result.sessionTitle,
+            title: sessionTitle,
             snippet,
             createdAt: result.createdAt,
           },
@@ -487,6 +499,10 @@ export async function runProjectHistorySearch(
         // output would be readable through a channel that rejects it on the
         // message leg.
         if (!sessionAdmits(byId.get(row.sessionId), projectId)) continue
+        if (!(await deps.canReadMessage(row.messageId, context))) {
+          withheldCount++
+          continue
+        }
         const preview = clip(row.preview)
         if (!hasNoLeakingPii(`${row.title}\n${preview}`)) {
           withheldCount++
@@ -550,7 +566,17 @@ export async function runProjectHistorySearch(
       // condition the search legs proved — otherwise it becomes the way around
       // them.
       if (!sessionAdmits(session, projectId)) continue
-      const transcript = await deps.buildWindow({ sessionId, messageId, span: EXPAND_SPAN })
+      if (!(await deps.canReadMessage(messageId, context))) {
+        withheldCount++
+        continue
+      }
+      const transcript = await deps.buildWindow({
+        sessionId,
+        messageId,
+        span: EXPAND_SPAN,
+        readerSessionId: context.sessionId,
+        executionRunId: context.executionRunId,
+      })
       if (!transcript) continue
       if (!hasNoLeakingPii(transcript)) {
         withheldCount++
@@ -562,7 +588,7 @@ export async function runProjectHistorySearch(
         kind: "message",
         sessionId,
         messageId,
-        title: session?.title ?? sessionId,
+        title: await deps.readSessionTitle(sessionId, context),
         snippet: clip(transcript),
         createdAt: session?.updatedAt ?? 0,
       })

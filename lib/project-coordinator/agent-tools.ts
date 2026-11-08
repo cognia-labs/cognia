@@ -340,11 +340,28 @@ function parseBrief(
   return { brief: parsed, ...(rootId ? { rootId } : {}) }
 }
 
+async function visibleThreadReport(
+  consumer: { sessionId: string; executionRunId?: string },
+  thread: ChatSession,
+  report: unknown
+): Promise<unknown> {
+  const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+  const content = JSON.stringify(report)
+  const history = await preparePersonalDerivedHistory(
+    consumer.sessionId,
+    [{ id: `thread-report:${thread.id}`, content }],
+    { sessionId: thread.id, executionRunId: consumer.executionRunId }
+  )
+  return history.messages[0].content === content
+    ? report
+    : { id: thread.id, withheld: history.messages[0].content }
+}
+
 export async function runProjectCoordinatorBuiltinTool(
   name: string,
   args: Record<string, unknown>,
   deps: ProjectCoordinatorToolDeps | undefined,
-  context: { sessionId: string }
+  context: { sessionId: string; executionRunId?: string }
 ): Promise<unknown> {
   if (!isProjectCoordinatorBuiltinTool(name)) return fail(`unknown project tool: ${name}`)
   if (!deps) return fail("Project coordination host dependencies are unavailable")
@@ -377,7 +394,7 @@ async function runCoordinatorTool(
   name: string,
   args: Record<string, unknown>,
   deps: ProjectCoordinatorToolDeps,
-  context: { sessionId: string }
+  context: { sessionId: string; executionRunId?: string }
 ): Promise<unknown> {
   const caller = await requireCoordinator(context.sessionId, deps)
   if (isError(caller)) return caller
@@ -448,9 +465,13 @@ async function runCoordinatorTool(
     }
     case T.listThreads: {
       const includeResolved = args.include_resolved === true
-      const threads = (await deps.listThreads(coordinator.id))
-        .filter((thread) => includeResolved || thread.projectThread?.resolvedAt === undefined)
-        .map((thread) => summarize(thread, deps.statusOf(thread.id)))
+      const threads = await Promise.all(
+        (await deps.listThreads(coordinator.id))
+          .filter((thread) => includeResolved || thread.projectThread?.resolvedAt === undefined)
+          .map((thread) =>
+            visibleThreadReport(context, thread, summarize(thread, deps.statusOf(thread.id)))
+          )
+      )
       return { ok: true, threads }
     }
     case T.readThreadReport: {
@@ -461,13 +482,22 @@ async function runCoordinatorTool(
         thread: summarize(thread, deps.statusOf(thread.id)),
         result: thread.attachedChild?.result?.summary ?? null,
       }
-      if (args.full !== true) return base
-      const recent = (await deps.listMessages(thread.id))
+      if (args.full !== true) return visibleThreadReport(context, thread, base)
+      const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+      const history = await preparePersonalHistory(
+        context.sessionId,
+        (await deps.listMessages(thread.id)).map((message) => ({
+          ...message,
+          sessionId: thread.id,
+        })),
+        { executionRunId: context.executionRunId }
+      )
+      const recent = history.messages
         .filter((message) => message.role === "assistant")
         .slice(-FULL_REPORT_MESSAGES)
         .map((message) => deps.assistantText(message))
         .filter(Boolean)
-      return { ...base, recentAssistantMessages: recent }
+      return visibleThreadReport(context, thread, { ...base, recentAssistantMessages: recent })
     }
     case T.stopThread: {
       const thread = await requireOwnThread(coordinator.id, args.thread_id, deps)
@@ -530,6 +560,7 @@ export const toolFamily: ModuleToolFamily = {
   async run(name, args, call) {
     return runProjectCoordinatorBuiltinTool(name, args, await resolveDeps(), {
       sessionId: call.sessionId,
+      executionRunId: call.executionRunId,
     })
   },
 }

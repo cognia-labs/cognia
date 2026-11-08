@@ -7,6 +7,8 @@
  */
 
 import "fake-indexeddb/auto"
+import { waitFor } from "@testing-library/react"
+import { launchChildRun, type LaunchChildRunInput } from "@/lib/execution/launch-child-run"
 import {
   TEAM_TOOL_NAMES,
   buildTeamToolEntries,
@@ -27,18 +29,47 @@ import {
   clearTeamDispatchContext,
   registerTeamDispatchContext,
 } from "@/lib/claude/agents/dispatch-context-registry"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+import { filterSharedMemoryEntriesForRun } from "@/lib/squads/memory/shared-memory-orchestrator"
 
-// Keep the background-delegation path off the real LLM / background runtime so
-// the defaultTeamToolDeps `background` branch is safe to exercise.
-jest.mock("@/lib/ai/agent/agent-executor", () => ({
-  executeAgent: jest.fn(async () => ({ text: "bg done" })),
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    withheldMessageIds: [],
+    visibilityDigest: "team-tool-test",
+    readers: [],
+  })),
 }))
-jest.mock("@/lib/ai/agent/background-agent-manager", () => ({
-  getBackgroundAgentManager: () => ({
-    registerAgent: () => new AbortController().signal,
-    finishAgent: jest.fn(),
-    cancelAgent: jest.fn(),
-  }),
+jest.mock("@/lib/squads/memory/shared-memory-orchestrator", () => ({
+  ...jest.requireActual("@/lib/squads/memory/shared-memory-orchestrator"),
+  filterSharedMemoryEntriesForRun: jest.fn(async (_teamId: string, entries: unknown[]) => entries),
+}))
+
+beforeEach(() => {
+  jest.mocked(preparePersonalDerivedHistory<{ id: string; content: string }>).mockClear()
+  jest
+    .mocked(
+      filterSharedMemoryEntriesForRun<
+        Pick<SharedMemoryEntry, "key" | "value" | "writtenBy" | "version">
+      >
+    )
+    .mockClear()
+})
+
+// All three delegation engines now use the Host launcher. Keep the real
+// orchestrator/store binding while controlling its engine boundary, and wait
+// for settlement below so no child outlives this suite's environment.
+jest.mock("@/lib/execution/launch-child-run", () => ({
+  ...jest.requireActual("@/lib/execution/launch-child-run"),
+  launchChildRun: jest.fn(async (input: LaunchChildRunInput) => ({
+    started: true,
+    childId: `test-${input.target.kind}`,
+    executionRunId:
+      input.target.kind === "squad"
+        ? "execution:team:test-squad"
+        : `execution:job:test-${input.target.kind}`,
+    outcome: Promise.resolve({ status: "completed", text: "done" }),
+  })),
 }))
 // Twin runtime is dynamic-imported by defaultTeamToolDeps.searchTwinKnowledge.
 const tryBuildTwinDepsMock = jest.fn()
@@ -104,8 +135,8 @@ function makeDeps(over: Partial<TeamToolDeps> = {}): {
       rec("castVote")(input)
       return { id: input.consensusId, status: "open" } as unknown as ConsensusRequest
     }) as TeamToolDeps["castVote"],
-    delegate: ((input) => {
-      rec("delegate")(input)
+    delegate: ((input, executionRunId) => {
+      rec("delegate")(input, executionRunId)
       return { id: "del-1", status: "active" }
     }) as TeamToolDeps["delegate"],
     listMembers: (() => [{ id: "tm-a", name: "Ada", role: "lead" }]) as TeamToolDeps["listMembers"],
@@ -182,6 +213,99 @@ describe("collaboration tool entries", () => {
 })
 
 describe("runTeamTool", () => {
+  it("filters task titles and comments with the exact Host caller", async () => {
+    const placeholder = "[Withheld: personal content of Host owner]"
+    jest
+      .mocked(preparePersonalDerivedHistory<{ id: string; content: string }>)
+      .mockResolvedValueOnce({
+        messages: [{ id: "team-tool:team-1", content: placeholder }],
+        visibilityDigest: "withheld",
+        withheldMessageIds: ["team-tool:team-1"],
+        readers: [],
+      })
+    const { deps } = makeDeps()
+    const hostCaller: TeamToolCaller = {
+      ...caller,
+      executionRunId: "execution:actual-tool-run",
+      toolCall: { kind: "tool-call", sessionId: "caller-session", toolUseId: "tool-1" },
+    }
+    expect(await runTeamTool(TEAM_TOOL_NAMES.getTask, { taskId: "task-1" }, hostCaller, deps)).toBe(
+      placeholder
+    )
+    expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(
+      "caller-session",
+      [expect.objectContaining({ content: expect.stringContaining("first finding") })],
+      { executionRunId: "execution:actual-tool-run" }
+    )
+  })
+
+  it("uses each shared-memory publication's Host provenance before returning it", async () => {
+    const placeholder = "[Withheld: personal content of Host owner]"
+    jest
+      .mocked(
+        filterSharedMemoryEntriesForRun<
+          Pick<SharedMemoryEntry, "key" | "value" | "writtenBy" | "version">
+        >
+      )
+      .mockResolvedValueOnce([
+        { key: "withheld:opaque", value: placeholder, writtenBy: "withheld", version: 0 },
+      ])
+    const { deps } = makeDeps()
+    const result = await runTeamTool(
+      TEAM_TOOL_NAMES.readMemory,
+      {},
+      {
+        ...caller,
+        executionRunId: "execution:board-reader",
+      },
+      deps
+    )
+    expect(result).toEqual([
+      { key: "withheld:opaque", value: placeholder, writtenBy: "withheld", version: 0 },
+    ])
+    expect(filterSharedMemoryEntriesForRun).toHaveBeenLastCalledWith(
+      "team-1",
+      [expect.objectContaining({ key: "k1" }), expect.objectContaining({ key: "k2" })],
+      { sessionId: undefined, executionRunId: "execution:board-reader" }
+    )
+  })
+
+  it("rechecks a twin result after retrieval and does not expose its title or twin id", async () => {
+    const placeholder = "[Withheld: personal content of Host owner]"
+    const { deps } = makeDeps({
+      searchTwinKnowledge: async () => {
+        jest
+          .mocked(preparePersonalDerivedHistory<{ id: string; content: string }>)
+          .mockResolvedValueOnce({
+            messages: [{ id: "team-tool:team-1", content: placeholder }],
+            visibilityDigest: "changed-readers",
+            withheldMessageIds: ["team-tool:team-1"],
+            readers: [],
+          })
+        return {
+          ok: true,
+          twinId: "private-twin-title",
+          hits: [{ text: "private passage", score: 1 }],
+        }
+      },
+    })
+    const result = await runTeamTool(
+      TEAM_TOOL_NAMES.twinKnowledgeSearch,
+      { query: "q" },
+      {
+        ...caller,
+        executionRunId: "execution:actual-tool-run",
+      },
+      deps
+    )
+    expect(result).toBe(placeholder)
+    expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(
+      undefined,
+      [expect.objectContaining({ content: expect.stringContaining("private-twin-title") })],
+      { executionRunId: "execution:actual-tool-run" }
+    )
+  })
+
   it("rejects an unknown tool name", async () => {
     const { deps } = makeDeps()
     expect(await runTeamTool("nope", {}, caller, deps)).toMatch(/unknown team tool/)
@@ -626,7 +750,7 @@ describe("defaultTeamToolDeps (real store-backed orchestrators)", () => {
     const voted = deps.castVote({ consensusId: cons.id, voterId: "tm-a", optionIndex: 0 })
     expect(voted.votes).toHaveLength(1)
 
-    // delegate — all three target branches (background uses the mocked runtime)
+    // delegate — all three target branches use the mocked engine boundary.
     const delExt = deps.delegate({
       target: "external",
       sourceTeamId: "team-1",
@@ -655,6 +779,13 @@ describe("defaultTeamToolDeps (real store-backed orchestrators)", () => {
       systemPrompt: "be terse",
     })
     expect(useAgentTeamStore.getState().delegations[delBg.id]).toBeDefined()
+    await waitFor(() => {
+      for (const delegation of [delExt, delTeam, delBg])
+        expect(useAgentTeamStore.getState().delegations[delegation.id].status).toBe("completed")
+    })
+    expect(jest.mocked(launchChildRun).mock.calls.map(([input]) => input.target.kind)).toEqual(
+      expect.arrayContaining(["external", "squad", "agent"])
+    )
 
     // members roster reflects the store
     useAgentTeamStore.setState(

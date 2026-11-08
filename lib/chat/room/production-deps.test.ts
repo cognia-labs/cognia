@@ -79,6 +79,10 @@ jest.mock("@/lib/claude/sdk-subagent-bridge", () => ({
 
 import { createProductionRoomDeps } from "./production-deps"
 import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
+import {
   startToolExecutionRun,
   finishToolExecutionRun,
   LOCAL_PERSON_RUN,
@@ -107,6 +111,8 @@ it("forwards the sidecar seam verbatim", async () => {
 
 it("binds the Dexie readers and writers the hook always used", async () => {
   const deps = createProductionRoomDeps()
+  expect(deps.ai.preparePersonalHistory).toBe(preparePersonalHistory)
+  expect(deps.ai.preparePersonalDerivedHistory).toBe(preparePersonalDerivedHistory)
   const messages = jest.requireMock("@/lib/db/messages")
   const sessions = jest.requireMock("@/lib/db/sessions")
   expect(deps.db.listMessages).toBe(messages.listMessages)

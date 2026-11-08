@@ -77,6 +77,12 @@ describe("account sync table policies", () => {
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("deliverySourceHosts")
   })
 
+  it("never replicates one Host's proof of retained engine visibility", () => {
+    expect(TABLE_POLICIES.sessions.fields.runtimePersonalVisibilityDigest).toBe("local")
+    expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("runtimePersonalVisibilityDigest")
+    expect(SYNC_SCHEMA_VERSION).toBe(2)
+  })
+
   it("keeps Host-attached acceptance run authority device-local", () => {
     expect(TABLE_POLICIES.sessions.fields.managedAcceptance).toBe("local")
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("managedAcceptance")

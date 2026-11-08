@@ -43,6 +43,11 @@ import type { StepExecutionContext } from "@/types/workflow/visual"
 import { registerNodeExecutor } from "../registry"
 import { nonRetryable } from "../shared/executor-support"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 
 /** Cap on messages a single node may pull into a step output. */
 const MESSAGE_LIMIT_CEILING = 500
@@ -88,6 +93,19 @@ function toSessionSummary(session: ChatSession) {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   }
+}
+
+async function visibleSession(ctx: StepExecutionContext, session: ChatSession) {
+  const history = await preparePersonalHistory(undefined, await listMessages(session.id), {
+    executionRunId: workflowExecutionRunId(ctx.runId),
+  })
+  if (!history.withheldMessageIds.length) return session
+  const result = await preparePersonalDerivedHistory(
+    undefined,
+    [{ id: session.id, text: session.title }],
+    { sessionId: session.id, executionRunId: workflowExecutionRunId(ctx.runId) }
+  )
+  return { ...session, title: result.messages[0].text }
 }
 
 /** Plain-text rendering of a message's text parts. */
@@ -147,7 +165,7 @@ registerNodeExecutor({
     const session = await getSession(sessionId)
     return {
       output: session
-        ? toSessionSummary(session)
+        ? toSessionSummary(await visibleSession(ctx, session))
         : { sessionId, title: str(p, "title") ?? "", pinned: false },
     }
   },
@@ -159,15 +177,18 @@ registerNodeExecutor({
   execute: async (ctx: StepExecutionContext) => {
     const p = params(ctx)
     const session = await requireSession(ctx, "action.session.get")
+    const projected = await visibleSession(ctx, session)
     const limit = Math.min(Math.max(int(p, "messageLimit") ?? 0, 0), MESSAGE_LIMIT_CEILING)
     if (limit === 0) {
-      return { output: { ...toSessionSummary(session), messages: [], messageCount: 0 } }
+      return { output: { ...toSessionSummary(projected), messages: [], messageCount: 0 } }
     }
     const all = await listMessages(session.id)
-    const recent = all.slice(-limit)
+    const { messages: recent } = await preparePersonalHistory(undefined, all.slice(-limit), {
+      executionRunId: workflowExecutionRunId(ctx.runId),
+    })
     return {
       output: {
-        ...toSessionSummary(session),
+        ...toSessionSummary(projected),
         messages: recent.map(toMessageSummary),
         messageCount: recent.length,
         totalMessageCount: all.length,
@@ -203,7 +224,9 @@ registerNodeExecutor({
     return {
       output: {
         projectId: scope,
-        sessions: page.map(toSessionSummary),
+        sessions: await Promise.all(
+          page.map(async (s) => toSessionSummary(await visibleSession(ctx, s)))
+        ),
         sessionCount: page.length,
         totalCount: filtered.length,
         truncated: filtered.length > page.length,
@@ -277,7 +300,11 @@ registerNodeExecutor({
     }
 
     const updated = await getSession(session.id)
-    return { output: updated ? toSessionSummary(updated) : { sessionId: session.id } }
+    return {
+      output: updated
+        ? toSessionSummary(await visibleSession(ctx, updated))
+        : { sessionId: session.id },
+    }
   },
 })
 
@@ -294,7 +321,9 @@ registerNodeExecutor({
     const updated = await getSession(session.id)
     return {
       output: {
-        ...(updated ? toSessionSummary(updated) : { sessionId: session.id }),
+        ...(updated
+          ? toSessionSummary(await visibleSession(ctx, updated))
+          : { sessionId: session.id }),
         archived,
       },
     }
@@ -307,7 +336,10 @@ registerNodeExecutor({
   execute: async (ctx: StepExecutionContext) => {
     const p = params(ctx)
     const session = await requireSession(ctx, "action.session.export")
-    const messages = await listMessages(session.id)
+    const projected = await visibleSession(ctx, session)
+    const { messages } = await preparePersonalHistory(undefined, await listMessages(session.id), {
+      executionRunId: workflowExecutionRunId(ctx.runId),
+    })
     const format = p.format === "json" ? "json" : "markdown"
 
     // Serialized here rather than through `messagesToMarkdown`, which lives
@@ -316,12 +348,12 @@ registerNodeExecutor({
     const content =
       format === "json"
         ? JSON.stringify(
-            { session: toSessionSummary(session), messages: messages.map(toMessageSummary) },
+            { session: toSessionSummary(projected), messages: messages.map(toMessageSummary) },
             null,
             2
           )
         : [
-            `# ${session.title}`,
+            `# ${projected.title}`,
             "",
             ...messages.flatMap((m) => [`## ${m.role}`, "", messageText(m), ""]),
           ].join("\n")
@@ -329,7 +361,7 @@ registerNodeExecutor({
     return {
       output: {
         sessionId: session.id,
-        title: session.title,
+        title: projected.title,
         format,
         content,
         messageCount: messages.length,

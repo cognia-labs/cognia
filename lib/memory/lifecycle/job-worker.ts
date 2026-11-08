@@ -3,6 +3,7 @@ import { getSettings } from "@/lib/db/settings"
 import { getSession } from "@/lib/db/sessions"
 import { resolveCharacterById } from "@/lib/db/characters"
 import { listMessages } from "@/lib/db/messages"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import {
   appendMemoryAuditEvent,
   claimNextMemoryJob,
@@ -268,7 +269,16 @@ async function loadJobContext(job: MemoryJob): Promise<{
       ? new MemoryJobTerminalError(window.code)
       : new MemoryJobProcessingError(window.code)
   }
-  const transcript = window.transcript
+  // The job has no personal reader. Check its durable checkpoint against the
+  // canonical text first, then withhold before extraction or vector indexing.
+  const windowIds = new Set(window.transcript.map((message) => message.id))
+  const personalHistory = await preparePersonalHistory(
+    undefined,
+    messages.filter((message) => windowIds.has(message.id)),
+    { session }
+  )
+  const withheld = new Set(personalHistory.withheldMessageIds)
+  const transcript = window.transcript.filter((message) => !withheld.has(message.id ?? ""))
   const externalContext = detectMemoryExternalContext(transcript)
   const policy = resolveAgentMemoryPolicy({
     config,
@@ -710,7 +720,8 @@ async function processClaimRevalidation(job: MemoryJob): Promise<MemoryJobProces
 async function processVectorReconcile(): Promise<MemoryJobProcessOutcome> {
   const settings = await getSettings()
   const config = resolveMemoryConfig(settings?.memory)
-  const { tryBuildMemoryVectorSink } = await import("@/lib/memory/runtime/build-deps")
+  const { tryBuildMemoryVectorSink, filterPersonalMemories } =
+    await import("@/lib/memory/runtime/build-deps")
   const sink = await tryBuildMemoryVectorSink(config)
   if (!sink) throw new MemoryJobProcessingError("vector_backend_unavailable")
 
@@ -719,9 +730,16 @@ async function processVectorReconcile(): Promise<MemoryJobProcessOutcome> {
   const backendIds = sink.listIds ? new Set(await sink.listIds()) : undefined
 
   const rows = await listMemories({ status: "active" })
+  const readableIds = new Set((await filterPersonalMemories(rows)).map((memory) => memory.id))
   const activeDocIds = new Set<string>()
   let changes = 0
   for (const row of rows) {
+    if (!readableIds.has(row.id)) {
+      // Keep existing owner-scoped derived vectors; the recall boundary checks
+      // their canonical provenance. This background job must not re-embed them.
+      if (row.vectorDocId) activeDocIds.add(row.vectorDocId)
+      continue
+    }
     // PII-bearing text must not live in the vector store; skipping the row
     // also lets the orphan sweep below remove any legacy embedding of it.
     if (!hasNoLeakingPii(row.text)) continue
@@ -785,6 +803,7 @@ async function processLifecycleSweep(): Promise<MemoryJobProcessOutcome> {
           compactedAt: now,
         })
         if (!sink) return
+        if (!(await buildDeps.filterPersonalMemories([memory])).length) return
         try {
           if (hasNoLeakingPii(text)) {
             await sink.upsert(memory.vectorDocId ?? memory.id, text)

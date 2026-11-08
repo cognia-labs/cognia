@@ -38,6 +38,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { decideAgentTurn, transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
 import { requestLocalToolApproval } from "@/lib/claude/ipc"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 import { resolveStandaloneProvider } from "./resolve-standalone-provider"
 import { createSdkEventMapper } from "./sdk-event-mapper"
@@ -229,7 +230,26 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
       )
 
       const system = composeSystem(sendOptions.systemPrompt, sendOptions.appendSystemPrompt)
-      const modelMessages = await convertToModelMessages(messages)
+      // Provider selection and message conversion may yield after the caller's
+      // preparation. Only the live Host root decides this attempt's audience.
+      const personalHistory = await preparePersonalHistory(sessionId, messages)
+      const modelMessages = await convertToModelMessages(personalHistory.messages)
+      const assertCurrentAudience = async () => {
+        if (sendOptions.personalContextReadersDigest !== undefined) {
+          const readers = await preparePersonalHistory(sessionId, [])
+          if (readers.visibilityDigest !== sendOptions.personalContextReadersDigest) {
+            const error = new Error("personal_history_context_changed")
+            turnController.abort(error)
+            throw error
+          }
+        }
+        const current = await preparePersonalHistory(sessionId, messages)
+        if (current.visibilityDigest !== personalHistory.visibilityDigest) {
+          const error = new Error("personal_visibility_changed")
+          turnController.abort(error)
+          throw error
+        }
+      }
       // System content travels in the top-level instructions option — AI SDK 7
       // rejects `{ role: "system" }` inside `messages`. Gate the partitioned
       // payload rather than the pre-split pair so the PII check covers exactly
@@ -265,6 +285,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
       }
 
       try {
+        await assertCurrentAudience()
         const result = stream({
           model,
           ...partitioned,
@@ -298,6 +319,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
                   emit,
                 })
             )
+            await assertCurrentAudience()
             return undefined
           },
           ...(resolvedTools

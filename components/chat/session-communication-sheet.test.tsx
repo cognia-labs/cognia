@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { ChatSession } from "@cognia/agent-config-types"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { SessionCommunicationSheet } from "./session-communication-sheet"
 
 const createAttachedSession = jest.fn()
@@ -131,6 +132,7 @@ describe("SessionCommunicationSheet", () => {
 
     await waitFor(() =>
       expect(createAttachedSession).toHaveBeenCalledWith({
+        localAuthorization: LOCAL_PERSON_RUN,
         parentSessionId: "parent-1",
         title: "Review migration",
         prompt: "Check schema v155",

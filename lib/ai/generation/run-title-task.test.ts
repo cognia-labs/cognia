@@ -15,14 +15,108 @@ jest.mock("./agent-role-client", () => ({
   buildAgentRoleLlmClient: jest.fn(),
 }))
 jest.mock("@cognia/redact", () => ({
+  ...jest.requireActual("@cognia/redact"),
   hasNoLeakingPiiDeep: (...args: unknown[]) => mockHasNoLeakingPiiDeep(...args),
 }))
 
 const mockBuild = buildAgentRoleLlmClient as jest.MockedFunction<typeof buildAgentRoleLlmClient>
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
 
 function clientReturning(text: string): LlmClient {
   return { complete: jest.fn(async () => text) }
 }
+
+it("does not send another person's history to the Host owner title model or retry", async () => {
+  await getDb().sessions.put({ id: "private-title", title: "New chat", createdAt: 1, updatedAt: 1 })
+  await getDb().messages.put({
+    id: "private",
+    sessionId: "private-title",
+    role: "assistant",
+    createdAt: 1,
+    parts: [{ type: "text", text: "private report" }],
+    metadata: {
+      personalMarks: [
+        {
+          person: {
+            kind: "platform",
+            platform: "lark",
+            adapterId: "foreign",
+            remoteUserId: "other",
+          },
+          source: "private",
+          markedAt: 1,
+        },
+      ],
+    },
+  } as never)
+  const client = clientReturning("should not generate")
+  mockBuild.mockResolvedValue(client)
+  const persist = jest.fn()
+  expect(
+    await runTitleTask({
+      session: await getDb().sessions.get("private-title"),
+      appSettings: null,
+      featureId: "title-test",
+      sourceText: "private report",
+      persist,
+    })
+  ).toBeNull()
+  expect(client.complete).not.toHaveBeenCalled()
+  expect(persist).not.toHaveBeenCalled()
+})
+
+it("titles the owner's migrated IM history while downstream model reads retain source taint", async () => {
+  await getDb().adapterInstances.put({
+    id: "owner-adapter",
+    type: "lark",
+    displayName: "Lark",
+    enabled: true,
+    settings: { connectedUser: { openId: "owner-open-id" } },
+    createdAt: 1,
+    updatedAt: 1,
+  } as never)
+  const session = {
+    id: "owner-im",
+    title: "New chat",
+    createdAt: 1,
+    updatedAt: 1,
+    platformBinding: { platform: "lark", adapterId: "owner-adapter", conversationId: "im-chat" },
+  } as never
+  await getDb().sessions.put(session)
+  await getDb().messages.put({
+    id: "owner-message",
+    sessionId: "owner-im",
+    role: "user",
+    createdAt: 1,
+    parts: [{ type: "text", text: "Owner IM history" }],
+  } as never)
+  const client = clientReturning("Owner conversation")
+  mockBuild.mockResolvedValue(client)
+  const persist = jest.fn()
+  expect(
+    await runTitleTask({
+      session,
+      appSettings: null,
+      featureId: "title-test",
+      sourceText: "Owner IM history",
+      persist,
+    })
+  ).toBe("Owner conversation")
+  expect(client.complete).toHaveBeenCalled()
+  const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+  const next = await preparePersonalDerivedHistory(
+    undefined,
+    [{ id: "title", text: "Owner conversation" }],
+    { sessionId: "owner-im" }
+  )
+  expect(next.withheldMessageIds).toEqual(["title"])
+  expect(next.messages[0].text).not.toContain("Owner conversation")
+})
 
 beforeEach(() => {
   mockBuild.mockReset()

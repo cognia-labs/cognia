@@ -26,6 +26,41 @@ function constantComplete(raw: string | null): InlineCompleteFn {
 const signal = () => new AbortController().signal
 
 describe("createAiCompletionProvider", () => {
+  it("awaits filtered recent context instead of sending a stale flattened copy", async () => {
+    const complete = jest.fn<ReturnType<InlineCompleteFn>, Parameters<InlineCompleteFn>>(
+      async () => "more"
+    )
+    const provider = createAiCompletionProvider({
+      complete,
+      isPiiSafe: () => true,
+      resolveRecentMessages: async () => [
+        { role: "assistant", text: "[Withheld: personal content of Host owner]" },
+      ],
+    })
+    await provider.getCompletions(
+      ctx("fix ", {
+        recentMessages: [{ role: "assistant", text: "stale private source" }],
+      }),
+      signal()
+    )
+    expect(complete.mock.calls[0][0].prompt).toContain("[Withheld: personal content of Host owner]")
+    expect(complete.mock.calls[0][0].prompt).not.toContain("stale private source")
+  })
+
+  it("does not dispatch after context resolution outlives cancellation", async () => {
+    const controller = new AbortController()
+    const complete = jest.fn(constantComplete("more"))
+    const provider = createAiCompletionProvider({
+      complete,
+      resolveRecentMessages: async () => {
+        controller.abort()
+        return []
+      },
+    })
+    expect(await provider.getCompletions(ctx("fix "), controller.signal)).toEqual([])
+    expect(complete).not.toHaveBeenCalled()
+  })
+
   it("is declared async so the engine debounces and caches it", () => {
     expect(createAiCompletionProvider({ complete: constantComplete("x") }).sync).toBe(false)
   })

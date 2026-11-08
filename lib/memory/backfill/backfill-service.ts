@@ -15,6 +15,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { ProjectMiningRun } from "@/types/memory/governance"
 import { getDb } from "@/lib/db/schema"
 import { listMessages } from "@/lib/db/messages"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import { cancelMemoryJobsForRun, countPendingMemoryJobsForRun } from "@/lib/db/memory-governance"
 import {
   advanceProjectMiningRun,
@@ -85,21 +86,27 @@ function backfillDeps(): ProjectMiningBackfillDeps {
   return {
     pageSessions,
     loadTranscript: async (sessionId) => {
-      const messages = await listMessages(sessionId)
-      return messages.flatMap((message) =>
-        message.id
-          ? [
-              {
-                id: message.id,
-                role: message.role,
-                // The extractor must not credit the user with context the
-                // composer attached to their turn.
-                text: memoryTranscriptProse(message.parts ?? []),
-                parts: Array.isArray(message.parts) ? message.parts : undefined,
-              },
-            ]
-          : []
+      const history = await preparePersonalHistory(
+        undefined,
+        (await listMessages(sessionId)).map((message) => ({ ...message, sessionId }))
       )
+      const withheld = new Set(history.withheldMessageIds)
+      return history.messages
+        .filter((message) => !withheld.has(message.id))
+        .flatMap((message) =>
+          message.id
+            ? [
+                {
+                  id: message.id,
+                  role: message.role,
+                  // The extractor must not credit the user with context the
+                  // composer attached to their turn.
+                  text: memoryTranscriptProse(message.parts ?? []),
+                  parts: Array.isArray(message.parts) ? message.parts : undefined,
+                },
+              ]
+            : []
+        )
     },
     enqueueForSession: async ({ session, runId, transcript }) => {
       const jobs = await enqueueProjectMiningJobs({

@@ -47,6 +47,7 @@ describe("generateWorkflowRunTitle", () => {
     const args = runTitleTaskMock.mock.calls[0][0]
     expect(args.kind).toBe("work")
     expect(args.featureId).toBe("workflow-run-title")
+    expect(args.sourceRunIds).toEqual(["execution:workflow:run-1"])
     expect(args.sourceText).toContain("Nightly sync")
     expect(args.sourceText).toContain("Sync the inbox")
     expect(args.locale).toBe("en")

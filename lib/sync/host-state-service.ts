@@ -1978,7 +1978,12 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
       import("./host-state-title"),
     ])
     const currentTitle = state.title ?? ""
-    const source = title.hostStateTitleSource(await listMessages(sessionId), currentTitle)
+    // This Host-owned title job writes only the owner's session projection.
+    // Model consumers still re-derive the title's source taint at their boundary.
+    const { prepareOwnerHistory } = await import("@/lib/execution/personal-visibility")
+    const history = await prepareOwnerHistory(await listMessages(sessionId), { session })
+    if (history.withheldMessageIds.length) return
+    const source = title.hostStateTitleSource(history.messages, currentTitle)
     if (!source) return
     const generate = options.generateTitle ?? title.createHostStateTitleGenerator()
     const written =

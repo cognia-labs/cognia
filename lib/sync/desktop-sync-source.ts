@@ -1,6 +1,9 @@
 "use client"
 
-import { personalMessageForCopy } from "@/lib/execution/personal-marks"
+import {
+  preparePairedOwnerHistory,
+  projectPersonalSessionHistory,
+} from "@/lib/execution/personal-visibility"
 
 /**
  * Desktop-side counterpart of the Rust `companion::sync_bridge`
@@ -313,7 +316,11 @@ async function readSessionsDelta(since: number): Promise<SyncDelta<ChatSession>>
         ? { ...row, executionContext: portableExecutionContext(row.executionContext) }
         : row
   )
-  return finalizeDelta("sessions", rows, since)
+  return finalizeDelta(
+    "sessions",
+    await Promise.all(rows.map(projectPersonalSessionHistory)),
+    since
+  )
 }
 
 async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage>> {
@@ -329,7 +336,7 @@ async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage
     newest.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
     return finalizeDelta(
       "messages",
-      await Promise.all(newest.map((row) => personalMessageForCopy(getDb(), row))),
+      (await preparePairedOwnerHistory(newest)).messages,
       since,
       false,
       (row) => row.createdAt
@@ -360,7 +367,7 @@ async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage
   }
   return finalizeDelta(
     "messages",
-    await Promise.all(page.map((row) => personalMessageForCopy(getDb(), row))),
+    (await preparePairedOwnerHistory(page)).messages,
     since,
     hasMore,
     (row) => row.createdAt
@@ -515,9 +522,7 @@ async function readCursorDelta(
     rows = page.slice(0, RUN_PAGE_SIZE).map(projectRunForSync)
   }
   if (table === "messages")
-    rows = await Promise.all(
-      (rows as unknown as StoredMessage[]).map((row) => personalMessageForCopy(db, row))
-    )
+    rows = (await preparePairedOwnerHistory(rows as unknown as StoredMessage[])).messages
   const deleted = await readTombstonesSince(table, cursor.deletedAt)
   const last = rows.at(-1)
   const next: PagedSyncCursor = {

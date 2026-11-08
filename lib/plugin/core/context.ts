@@ -1196,7 +1196,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
             'agent.sessions.create requires the "session:write" permission — declare it in the plugin manifest.'
           )
         }
-        return createPluginAgentSession(options)
+        return createPluginAgentSession(options, pluginId)
       },
       resume: async (sessionId: string) => {
         if (!pluginHasApiPermission(pluginId, "session:read")) {
@@ -1204,7 +1204,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
             'agent.sessions.resume requires the "session:read" permission — declare it in the plugin manifest.'
           )
         }
-        return resumePluginAgentSession(sessionId)
+        return resumePluginAgentSession(sessionId, pluginId)
       },
     },
 
@@ -1225,7 +1225,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
             'agent.context.readSharedMemory requires the "agent:shared-memory:read" permission — declare it in the plugin manifest.'
           )
         }
-        return readSharedMemory(teamId, opts)
+        return readSharedMemory(teamId, opts, pluginExecutionContext(pluginId))
       },
       queryTwinMemory: async (
         characterId: string,
@@ -1237,7 +1237,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
             'agent.context.queryTwinMemory requires the "twin:read" permission — declare it in the plugin manifest.'
           )
         }
-        return queryTwinMemory(characterId, query, opts)
+        return queryTwinMemory(characterId, query, opts, pluginExecutionContext(pluginId))
       },
     },
   }

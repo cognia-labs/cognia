@@ -31,6 +31,12 @@ import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 import { hasNoLeakingPii, hasNoLeakingPiiDeep } from "@cognia/redact"
 import { getSharedMemoryAdapter } from "@/lib/plugin/registries/shared-memory-adapter-registry"
 import { loggers } from "@cognia/logging"
+import { contentDigest } from "@cognia/agent"
+import type { TeamRunContext } from "../team-run-context"
+
+// Host object identity, never plugin entry fields, proves a live publication's
+// source. Persisted/imported entries without that proof take the legacy rule.
+const taskResultSources = new WeakMap<SharedMemoryEntry, string>()
 
 // Re-exported so build-options and other consumers share one ACL predicate.
 export {
@@ -151,18 +157,21 @@ export function autoPublishTaskResult(
   team: Pick<AgentTeam, "id">,
   task: Pick<AgentTeamTask, "id" | "title">,
   result: string,
-  writer: Pick<AgentTeammate, "id" | "name">
+  writer: Pick<AgentTeammate, "id" | "name">,
+  executionRunId?: string
 ): SharedMemoryEntry | undefined {
   const trimmed = result.trim()
   if (trimmed.length === 0) return undefined
   if (!hasNoLeakingPii(trimmed)) return undefined
-  return publishEntry({
+  const entry = publishEntry({
     teamId: team.id,
     key: `task:${task.id}`,
     value: trimmed,
     writer,
     tags: [`task:${task.id}`, `taskTitle:${task.title}`],
   })
+  if (executionRunId) taskResultSources.set(entry, executionRunId)
+  return entry
 }
 
 /** One upstream dependency's result, read back off the blackboard. */
@@ -203,6 +212,61 @@ export function readDependencyResults(
     })
   }
   return out
+}
+
+/** Model-facing board reads recheck each publication's source against live readers. */
+export async function readDependencyResultsForRun(
+  ctx: TeamRunContext,
+  depTaskIds: readonly string[]
+): Promise<DependencyResult[]> {
+  const results = readDependencyResults(ctx.teamId, depTaskIds)
+  const entries = await filterSharedMemoryEntriesForRun(
+    ctx.teamId,
+    results.map((result) => ({ ...result, key: `task:${result.taskId}` })),
+    {
+      executionRunId: ctx.personalExecutionRunId ?? `execution:team:${ctx.runId}`,
+    }
+  )
+  return entries.map((entry, index) => {
+    return {
+      taskId: results[index].taskId,
+      value: entry.value,
+      ...(entry.taskTitle ? { taskTitle: entry.taskTitle } : {}),
+      ...(entry.writerName ? { writerName: entry.writerName } : {}),
+    }
+  })
+}
+
+/** The same Host entry provenance protects plugin and teammate model-facing board reads. */
+export async function filterSharedMemoryEntriesForRun<T extends { key: string }>(
+  teamId: string,
+  entries: readonly T[],
+  consumer: { sessionId?: string; executionRunId?: string }
+): Promise<T[]> {
+  const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+  return Promise.all(
+    entries.map(async (entry) => {
+      const canonical = useAgentTeamStore.getState().sharedMemory[teamId]?.[entry.key]
+      const sourceRunId = canonical && taskResultSources.get(canonical)
+      const content = JSON.stringify(entry)
+      const history = await preparePersonalDerivedHistory(
+        consumer.sessionId,
+        [{ id: `shared-memory:${entry.key}`, content }],
+        {
+          runIds: sourceRunId ? [sourceRunId] : [],
+          executionRunId: consumer.executionRunId,
+        }
+      )
+      return history.messages[0].content === content
+        ? entry
+        : ({
+            key: `withheld:${contentDigest(entry.key)}`,
+            value: history.messages[0].content,
+            writtenBy: "withheld",
+            version: 0,
+          } as unknown as T)
+    })
+  )
 }
 
 /** Drop every entry for a team. Convenience wrapper around the store action. */

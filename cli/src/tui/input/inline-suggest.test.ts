@@ -1,12 +1,48 @@
 /** @jest-environment jsdom */
+jest.mock("../../agent/transcript", () => ({
+  ...jest.requireActual("../../agent/transcript"),
+  readTranscript: jest.fn(jest.requireActual("../../agent/transcript").readTranscript),
+}))
 import { act, renderHook, waitFor } from "@testing-library/react"
 
 import {
   recentSuggestionMessages,
+  recentCanonicalSuggestionMessages,
   useInlineSuggest,
   type UseInlineSuggestOptions,
 } from "./inline-suggest"
 import type { InlineCommandInfo } from "@/lib/chat/completion/inline/types"
+import * as transcript from "../../agent/transcript"
+
+afterEach(() => {
+  jest.restoreAllMocks()
+  jest
+    .mocked(transcript.readTranscript)
+    .mockImplementation(jest.requireActual("../../agent/transcript").readTranscript)
+    .mockClear()
+})
+
+it("filters canonical JSONL marks before flattening utility completion history", () => {
+  const fsx = transcript.createTransientTranscriptFs()
+  transcript.appendTranscript(
+    "/configured",
+    "s",
+    {
+      role: "assistant",
+      content: "PRIVATE CELL",
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+      },
+    },
+    fsx,
+    1
+  )
+  transcript.appendTranscript("/configured", "s", { role: "user", content: "public" }, fsx, 2)
+  const result = recentCanonicalSuggestionMessages("/configured", "s", fsx)
+  expect(result[0].text).toContain("[Withheld: personal content of")
+  expect(result[1].text).toBe("public")
+  expect(JSON.stringify(result)).not.toContain("PRIVATE CELL")
+})
 
 /**
  * Let timers + provider promises settle inside `act`, so a late state update
@@ -160,6 +196,9 @@ describe("useInlineSuggest — model tier", () => {
   })
 
   it("uses the bound session transcript and invalidates the same draft after context changes", async () => {
+    const read = jest
+      .spyOn(transcript, "readTranscript")
+      .mockReturnValue([{ ts: 1, role: "assistant", content: "B final result" }])
     const aiComplete = jest.fn(
       async (_args: Parameters<NonNullable<UseInlineSuggestOptions["aiComplete"]>>[0]) =>
         "the scoped result"
@@ -177,6 +216,7 @@ describe("useInlineSuggest — model tier", () => {
     const { result, rerender } = render(initial)
     await waitFor(() => expect(result.current.ghost).toBe("the scoped result"))
     expect(aiComplete.mock.calls[0][0].prompt).toContain("B final result")
+    read.mockReturnValue([{ ts: 2, role: "assistant", content: "B revised result" }])
     rerender({ ...initial, recentMessages: [{ role: "assistant", text: "B revised result" }] })
     await waitFor(() => expect(aiComplete).toHaveBeenCalledTimes(2))
     expect(aiComplete.mock.calls[1][0].prompt).toContain("B revised result")

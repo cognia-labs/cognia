@@ -75,8 +75,27 @@ async function resolveProjectHistoryToolDeps(): Promise<ProjectHistoryToolDeps> 
       const row = await getDb().messages.get(messageId)
       return row?.sessionId ?? null
     },
-    buildWindow: ({ sessionId, messageId, span }) =>
-      buildMessageReferenceText({ sessionId, messageId, span }),
+    canReadMessage: async (messageId, context) => {
+      const row = await getDb().messages.get(messageId)
+      if (!row) return false
+      const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+      const history = await preparePersonalHistory(context.sessionId, [row], {
+        executionRunId: context.executionRunId,
+      })
+      return history.withheldMessageIds.length === 0
+    },
+    readSessionTitle: async (sessionId, context) => {
+      const session = await getDb().sessions.get(sessionId)
+      if (!session) return "Conversation"
+      const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+      const history = await preparePersonalDerivedHistory(
+        context.sessionId,
+        [{ id: session.id, text: session.title }],
+        { sessionId, executionRunId: context.executionRunId, legacyOwnerArtifact: true }
+      )
+      return history.withheldMessageIds.length ? "Conversation" : session.title
+    },
+    buildWindow: (input) => buildMessageReferenceText(input),
     now: () => Date.now(),
   }
 }
@@ -100,7 +119,7 @@ export const toolFamily: ModuleToolFamily = {
         // the CALLING session, which only the call carries.
         recordEvidence: (evidence) => recordProjectHistoryEvidence(call.sessionId, evidence),
       },
-      { sessionId: call.sessionId }
+      { sessionId: call.sessionId, executionRunId: call.executionRunId }
     )
   },
 }

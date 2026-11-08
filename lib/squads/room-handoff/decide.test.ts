@@ -9,6 +9,19 @@ import {
   type RoomHandoffDecideDeps,
 } from "./decide"
 import { handoffDecisionOf } from "./proposal"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
+
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId, messages) => ({
+    messages,
+    withheldMessageIds: [],
+    visibilityDigest: "handoff-test",
+    readers: [],
+  })),
+}))
+
+beforeEach(() => jest.clearAllMocks())
 
 const ROOM = "room-1"
 const room = { id: ROOM, kind: "team", teamId: "team-1", projectId: "p-1" } as ChatSession
@@ -92,6 +105,42 @@ const confirm = (extra: Partial<{ squadId: string; roomId: string; toolUseId: st
   )
 
 describe("decideRoomSquadHandoff", () => {
+  it("rechecks the proposal's source before its brief reaches a Squad", async () => {
+    const w = world({ input: { brief: "PRIVATE_ROOM_BRIEF", squadId: "sq-1" } })
+    jest
+      .mocked(preparePersonalDerivedHistory)
+      .mockImplementationOnce(async (_sessionId, messages) => ({
+        ...withholdForReaders(
+          messages.map((message) => ({
+            ...message,
+            metadata: {
+              personalMarks: [
+                { person: { kind: "local-person" }, source: "twin-history", markedAt: 1 },
+              ],
+            },
+          })),
+          []
+        ),
+        readers: [],
+      }))
+    await expect(confirm()).resolves.toMatchObject({ ok: true, decision: { status: "started" } })
+    expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(
+      ROOM,
+      [{ id: "room-handoff:tu-1", text: "PRIVATE_ROOM_BRIEF" }],
+      {
+        sessionId: ROOM,
+        runIds: ["execution:tool:member"],
+        executionRunId: "execution:delegation:room-handoff:tu-1",
+      }
+    )
+    expect(JSON.stringify((w.deps.launch as jest.Mock).mock.calls)).not.toContain(
+      "PRIVATE_ROOM_BRIEF"
+    )
+    expect(JSON.stringify((w.deps.watchAttempt as jest.Mock).mock.calls)).not.toContain(
+      "PRIVATE_ROOM_BRIEF"
+    )
+  })
+
   it("takes the work on as the member turn's child, launches the Squad and records it on the reply", async () => {
     const w = world()
     const result = await confirm()

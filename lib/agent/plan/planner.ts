@@ -23,6 +23,7 @@ import { resolvePrompt, resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
 import { planPromptContext } from "./prompts"
 import { linearAgentTurnSteps } from "./steps"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 
 /** Hard cap on generated steps — keeps a plan scannable + bounded. */
 export const MAX_PLAN_STEPS = 16
@@ -301,7 +302,12 @@ export async function refinePlanSteps(
       context: planPromptContext(plan),
     })
     if (signal?.aborted) return null
-    raw = await client.complete(renderRefineUserPrompt(plan, request), {
+    const history = await preparePersonalDerivedHistory(
+      plan.sessionId,
+      [{ id: `plan-refine:${plan.id}`, content: renderRefineUserPrompt(plan, request) }],
+      { runIds: [`execution:plan:${plan.id}`], sessionId: plan.sessionId }
+    )
+    raw = await client.complete(history.messages[0].content, {
       system: system.text,
       maxTokens: opts.maxTokens ?? 700,
       temperature: opts.temperature ?? 0.2,

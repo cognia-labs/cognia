@@ -147,6 +147,11 @@ export function envelopeEmitterParams({
 export function restartReason(existing: HostSession, options?: SendOptions) {
   if (Array.isArray(options?.initialConversation)) return "transcript restored"
   if (
+    options?.personalVisibilityHasWithheld === true &&
+    options.personalVisibilityDigest !== existing.sendOptions?.personalVisibilityDigest
+  )
+    return "personal history visibility changed"
+  if (
     typeof options?.transcriptInvalidationId === "string" &&
     options.transcriptInvalidationId !== existing.sendOptions?.transcriptInvalidationId
   ) {
@@ -253,6 +258,12 @@ export async function routeSendIntoLiveLoop(
     if (!current()) return false
     existing.sendOptions ??= {}
     existing.sendOptions.model = options.model
+  }
+  if (typeof options?.personalVisibilityDigest === "string") {
+    existing.sendOptions ??= {}
+    existing.sendOptions.personalVisibilityDigest = options.personalVisibilityDigest
+    existing.sendOptions.personalVisibilityHasWithheld =
+      options.personalVisibilityHasWithheld === true
   }
   // Only reached for a session we're pushing into in place; a restarted one
   // got a fresh ref, and the loop it replaced keeps its own.

@@ -149,6 +149,8 @@ export interface AgentTeamChildRun {
   status: AgentTeamChildStatus
   attempt: number
   sessionId?: string
+  /** Unindexed digest of the personal visibility used to build this native session. */
+  personalVisibilityDigest?: string
   /** Authenticated Companion device identity; never supplied by the worker. */
   hostRef?: string
   executionFingerprint?: string

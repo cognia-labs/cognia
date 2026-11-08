@@ -14,6 +14,11 @@
  */
 
 import { listContextProviderEntries } from "@/lib/plugin/registries/context-provider-registry"
+import {
+  preparePersonalHistory,
+  withPersonalRerankerVisibility,
+} from "@/lib/execution/personal-visibility"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import type {
   PluginContextProviderInput,
   PluginSharedMemoryReadEntry,
@@ -60,7 +65,8 @@ export async function resolveContextContributions(
 /** Project a team's ACL-readable shared-memory entries (operator view). */
 export async function readSharedMemory(
   teamId: string,
-  options: PluginSharedMemoryReadOptions = {}
+  options: PluginSharedMemoryReadOptions = {},
+  host?: Pick<PersonalCredentialContext, "sessionId" | "executionRunId">
 ): Promise<PluginSharedMemoryReadEntry[]> {
   const [{ useAgentTeamStore }, selectors] = await Promise.all([
     import("@/stores/squads/agent-team-store/store"),
@@ -71,7 +77,7 @@ export async function readSharedMemory(
     selectors.OPERATOR_READER_ID
   )(useAgentTeamStore.getState())
   const tagFilter = options.tags
-  return entries
+  const selected = entries
     .filter((e) =>
       tagFilter && tagFilter.length > 0 ? (e.tags ?? []).some((t) => tagFilter.includes(t)) : true
     )
@@ -83,6 +89,9 @@ export async function readSharedMemory(
       version: e.version,
       ...(e.tags ? { tags: e.tags } : {}),
     }))
+  const { filterSharedMemoryEntriesForRun } =
+    await import("@/lib/squads/memory/shared-memory-orchestrator")
+  return filterSharedMemoryEntriesForRun(teamId, selected, host ?? {})
 }
 
 /**
@@ -93,10 +102,26 @@ export async function readSharedMemory(
 export async function queryTwinMemory(
   characterId: string,
   query: string,
-  options: PluginTwinMemoryQueryOptions = {}
+  options: PluginTwinMemoryQueryOptions = {},
+  host?: Pick<PersonalCredentialContext, "sessionId" | "executionRunId">
 ): Promise<PluginTwinMemoryChunk[]> {
   if (typeof query !== "string" || !query.trim()) return []
   try {
+    const projection = await preparePersonalHistory(
+      host?.sessionId,
+      [
+        {
+          id: "twin",
+          metadata: {
+            personalMarks: [
+              { person: { kind: "local-person" }, source: "twin-history", markedAt: 0 },
+            ],
+          },
+        },
+      ],
+      { executionRunId: host?.executionRunId }
+    )
+    if (projection.withheldMessageIds.length) return []
     const { getCharacter } = await import("@/lib/db/characters")
     const character = await getCharacter(characterId)
     if (!character?.twinId) return []
@@ -117,8 +142,15 @@ export async function queryTwinMemory(
     const result = await applyTwinContext({
       character: scoped,
       userMessage: query,
-      deps: deps as unknown as Parameters<typeof applyTwinContext>[0]["deps"],
+      deps: {
+        ...deps,
+        reranker: withPersonalRerankerVisibility(deps.reranker, host ?? {}),
+      } as unknown as Parameters<typeof applyTwinContext>[0]["deps"],
     })
+    const current = await preparePersonalHistory(host?.sessionId, projection.messages, {
+      executionRunId: host?.executionRunId,
+    })
+    if (current.withheldMessageIds.length) return []
     return result.retrievedChunks.map((c) => ({
       content: c.chunk.contentRedacted,
       score: c.score,

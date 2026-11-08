@@ -1,8 +1,20 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import {
   registerTeamRunContext,
   getTeamRunContext,
   unregisterTeamRunContext,
   __resetTeamRunContextForTesting,
+  visibleTeamDerivedText,
+  getTeamRunContextForTeam,
   type TeamRunContext,
 } from "./team-run-context"
 import type { AgentTeam } from "@/types/agent/agent-team"
@@ -45,6 +57,24 @@ describe("TeamRunContext registry", () => {
 
   it("get returns undefined for unknown runId", () => {
     expect(getTeamRunContext("missing")).toBeUndefined()
+  })
+
+  it("refuses to guess a run when concurrent Host contexts share a team", () => {
+    const first = fakeCtx("one")
+    registerTeamRunContext(first)
+    expect(getTeamRunContextForTeam("team-1")).toBe(first)
+    registerTeamRunContext(fakeCtx("two"))
+    expect(getTeamRunContextForTeam("team-1")).toBeUndefined()
+  })
+
+  it("uses the Host plan root for adapted team prompts and the real source root for summaries", async () => {
+    const ctx = { ...fakeCtx("plan-workflow"), personalExecutionRunId: "execution:plan:p" }
+    await visibleTeamDerivedText(ctx, "artifact", "summary", ["source-root"])
+    expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(
+      undefined,
+      [{ id: "summary", content: "artifact" }],
+      { executionRunId: "execution:plan:p", runIds: ["source-root"] }
+    )
   })
 
   it("unregister drops the context", () => {

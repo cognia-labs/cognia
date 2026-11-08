@@ -1,3 +1,14 @@
+const mockMemoryVisibility = jest.fn((deps: unknown, ..._args: unknown[]) => deps)
+jest.mock("@/lib/memory/runtime/build-deps", () => ({
+  tryBuildMemoryDeps: jest.fn(async () => ({ loadCandidates: jest.fn() })),
+  withPersonalMemoryVisibility: (...args: unknown[]) =>
+    mockMemoryVisibility(...(args as [unknown])),
+}))
+jest.mock("@/lib/execution/acting-authority", () => ({
+  LOCAL_PERSON_RUN: Symbol("owner"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "owner-copilot-recall" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/db/messages", () => ({ listRecentMessages: jest.fn() }))
 jest.mock("@/lib/db/platform-identities", () => ({
@@ -8,11 +19,33 @@ jest.mock("@/lib/db/platform-identities", () => ({
   }),
 }))
 jest.mock("@/lib/memory/retrieve/retriever", () => ({ retrieveMemories: jest.fn() }))
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    prepareOwnerHistory: async <T extends { id: string; metadata?: unknown }>(
+      messages: readonly T[]
+    ) => ({ ...withholdForReaders(messages, [{ kind: "local-person" }]), readers: [] }),
+  }
+})
 
 import type { AppSettings } from "@cognia/agent-config-types"
 import type { PlatformIdentityRow } from "@/lib/db/connector-types"
 import type { TranscriptRow } from "./build-state"
-import { copilotMemoryAllowed, loadCopilotContext, type LoadContextDeps } from "./load-context"
+import {
+  copilotMemoryAllowed,
+  loadCopilotContext,
+  recallCopilotMemory,
+  type LoadContextDeps,
+} from "./load-context"
+import { listRecentMessages } from "@/lib/db/messages"
+import { retrieveMemories } from "@/lib/memory/retrieve/retriever"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 
 const inbound: TranscriptRow = {
   role: "user",
@@ -74,6 +107,49 @@ describe("copilotMemoryAllowed", () => {
 })
 
 describe("loadCopilotContext", () => {
+  it("filters the production history reader before the copilot sees personal content", async () => {
+    jest.mocked(listRecentMessages).mockResolvedValueOnce([
+      {
+        id: "private",
+        role: "assistant",
+        parts: [{ type: "text", text: "private source" }],
+        metadata: {
+          personalMarks: [
+            {
+              person: {
+                kind: "platform",
+                platform: "lark",
+                adapterId: "foreign-adapter",
+                remoteUserId: "foreign-person",
+              },
+              source: "test",
+              markedAt: 1,
+            },
+          ],
+        },
+      },
+    ])
+    const ctx = await loadCopilotContext({ id: "s1" }, null)
+    expect(ctx.transcript.turns).toEqual([
+      { from: "me", text: expect.stringContaining("[Withheld: personal content of person ") },
+    ])
+  })
+
+  it("retains the owner's personal transcript in drafts shown only to the owner", async () => {
+    jest.mocked(listRecentMessages).mockResolvedValueOnce([
+      {
+        id: "owner-copilot",
+        role: "assistant",
+        parts: [{ type: "text", text: "OWNER COPILOT CONTEXT" }],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+        },
+      },
+    ])
+    const ctx = await loadCopilotContext({ id: "s1" }, null)
+    expect(ctx.transcript.turns).toEqual([{ from: "me", text: "OWNER COPILOT CONTEXT" }])
+  })
+
   it("classifies the bot's own echo as me and reads the contact + memory", async () => {
     const resolveContact = jest.fn(deps().resolveContact)
     const recall = jest.fn(async () => ["likes hotpot"])
@@ -97,4 +173,20 @@ describe("loadCopilotContext", () => {
     expect(recall).not.toHaveBeenCalled()
     expect(ctx.knowledge.memorySkipped).toBe("disabled")
   })
+})
+
+it("uses an admitted owner reader through personal copilot memory recall and releases it", async () => {
+  jest
+    .mocked(retrieveMemories)
+    .mockResolvedValueOnce([{ memory: { text: "Owner memory" } }] as never)
+  expect(await recallCopilotMemory(optedIn, "owner draft")).toEqual(["Owner memory"])
+  expect(startToolExecutionRun).toHaveBeenCalledWith(undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  expect(mockMemoryVisibility).toHaveBeenCalledWith(
+    expect.anything(),
+    undefined,
+    "owner-copilot-recall"
+  )
+  expect(finishToolExecutionRun).toHaveBeenCalledWith("owner-copilot-recall", false)
 })

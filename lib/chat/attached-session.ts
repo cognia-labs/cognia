@@ -12,6 +12,8 @@ import { inheritableSessionConfig } from "./session-config-inheritance"
 import { createResourceWorkbenchSession } from "@/lib/db/resource-workbench-sessions"
 import { listMessages } from "@/lib/db/messages"
 import { deleteSession, getSession, listSessionBranches, updateSession } from "@/lib/db/sessions"
+import { preparePersonalHistory, prepareOwnerHistory } from "@/lib/execution/personal-visibility"
+import { LOCAL_PERSON_RUN, type LocalPersonRun } from "@/lib/execution/acting-authority"
 
 export type AttachedSessionWorkspace = "shared" | "independent"
 
@@ -21,6 +23,8 @@ export interface CreateAttachedSessionInput {
   prompt: string
   context: AttachedSessionContextMode
   workspace: AttachedSessionWorkspace
+  /** Opaque Host UI admission; never a field accepted from a model or plugin. */
+  localAuthorization?: LocalPersonRun
   /**
    * Extra columns written with the attachment in the same update, so a
    * specialised child (a project thread, ADR-0204) is never observable half
@@ -104,16 +108,35 @@ export async function createAttachedSession(
   const parent = await deps.getSession(parentSessionId)
   if (!parent) throw new Error(`Parent session ${parentSessionId} was not found`)
 
+  const visibleParentHistory = (messages: UIMessage[]) =>
+    input.localAuthorization === LOCAL_PERSON_RUN
+      ? prepareOwnerHistory(messages, { session: parent })
+      : preparePersonalHistory(parentSessionId, messages, { session: parent })
+
   let inheritedContent: string | undefined
   if (input.context.mode === "last-n") {
-    const messages = await deps.listMessages(parentSessionId)
+    const { messages } = await visibleParentHistory(
+      (await deps.listMessages(parentSessionId)).map((message) => ({
+        ...message,
+        sessionId: parentSessionId,
+      }))
+    )
     inheritedContent = renderBranchSeed(messages.slice(-input.context.turns)).content || undefined
     if (inheritedContent && !deps.gateInheritedContent(inheritedContent)) {
       throw new Error("The attached-session context was blocked by the PII redaction gate")
     }
   } else if (input.context.mode === "full") {
     inheritedContent =
-      renderBranchSeed(await deps.listMessages(parentSessionId)).content || undefined
+      renderBranchSeed(
+        (
+          await visibleParentHistory(
+            (await deps.listMessages(parentSessionId)).map((message) => ({
+              ...message,
+              sessionId: parentSessionId,
+            }))
+          )
+        ).messages
+      ).content || undefined
     if (inheritedContent && !deps.gateInheritedContent(inheritedContent)) {
       throw new Error("The attached-session context was blocked by the PII redaction gate")
     }

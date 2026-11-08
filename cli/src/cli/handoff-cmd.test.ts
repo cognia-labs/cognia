@@ -131,6 +131,37 @@ it("encodes imported ids consistently in handoff drop paths", () => {
 })
 
 describe("resumeCommand", () => {
+  it("withholds imported personal history before the handoff preamble while retaining canonical marks", async () => {
+    const s = sink()
+    const run = jest.fn().mockResolvedValue({ sessionId: "private", text: "continued" })
+    const write = jest.fn()
+    const metadata = {
+      personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    }
+    const code = await resumeCommand(parseArgv(["resume", "private", "continue"]), {
+      out: s.out,
+      home: HOME,
+      loadConfig: () => cfg(),
+      run,
+      readDrop: () =>
+        JSON.stringify({
+          ts: 1,
+          id: "personal",
+          role: "assistant",
+          content: "PRIVATE_HANDOFF_SNIPPET",
+          metadata,
+        }),
+      transcriptFs: { read: () => null, mkdirp: jest.fn(), append: jest.fn(), write },
+    })
+    expect(code).toBe(0)
+    expect(run.mock.calls[0][0].prompt).toContain("[Withheld:")
+    expect(run.mock.calls[0][0].prompt).not.toContain("PRIVATE_HANDOFF")
+    expect(JSON.parse(write.mock.calls[0][1])).toMatchObject({
+      content: "PRIVATE_HANDOFF_SNIPPET",
+      metadata,
+    })
+  })
+
   it("rejects oversized external handoffs when the backend cannot enforce tool-free summaries", async () => {
     const s = sink()
     const run = jest.fn()

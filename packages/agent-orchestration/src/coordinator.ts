@@ -599,7 +599,8 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
       ...(input.workspacePath ? { workspacePath: input.workspacePath } : {}),
       ...(input.branch ? { branch: input.branch } : {}),
       ...(input.fileOwnership ? { fileOwnership: input.fileOwnership } : {}),
-      resourceUsage: { ...EMPTY_USAGE },
+      // Registration reserves a child; only executor admission spends an attempt.
+      resourceUsage: { ...EMPTY_USAGE, attempts: 0 },
       createdAt: at,
       updatedAt: at,
     }

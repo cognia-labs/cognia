@@ -59,7 +59,7 @@ function harness(options: { holdLast?: boolean; turnLimit?: number } = {}) {
   const manager = {
     addAgent: jest.fn(async () => undefined),
     removeAgent: jest.fn(async () => undefined),
-    executeStreaming: jest.fn(() => {
+    executeStreaming: jest.fn((..._args: Parameters<PersonAgentManager["executeStreaming"]>) => {
       const next = turns.shift()
       if (!next) throw new Error("no scripted turn")
       return next.run(options.holdLast ?? false)
@@ -101,7 +101,11 @@ function harness(options: { holdLast?: boolean; turnLimit?: number } = {}) {
             family: "claude",
           }
         : undefined,
-    history: jest.fn(async () => "User: earlier\n\nAssistant: reply"),
+    history: jest.fn(async () => ({
+      text: "User: earlier\n\nAssistant: reply",
+      visibilityDigest: "same-readers",
+      hasWithheld: false,
+    })),
     writeMessage: jest.fn(async (sessionId, message) => {
       writes.push({ sessionId, id: message.id, parts: message.parts })
       order.push(`write:${message.parts.length}`)
@@ -252,7 +256,7 @@ describe("person agent runner", () => {
       })
     )
     // The first turn of a fresh process carries the conversation so far.
-    expect(h.deps.history).toHaveBeenCalledWith("s1", ["m1", "assistant-a1"])
+    expect(h.deps.history).toHaveBeenCalledWith("s1", ["m1", "assistant-a1"], "a1")
     expect(h.manager.executeStreaming).toHaveBeenCalledWith("person-agent-id1", "hello", {
       workingDirectory: PERSON_AGENT_WORKSPACE,
       context: { custom: { conversationHistory: "User: earlier\n\nAssistant: reply" } },
@@ -482,7 +486,7 @@ describe("person agent runner", () => {
     await h.runner.startTurn(request({ actionId: "a2", messageId: "m2" }))
     await drain()
     expect(h.manager.addAgent).toHaveBeenCalledTimes(1)
-    expect(h.deps.history).toHaveBeenCalledTimes(1)
+    expect(h.deps.history).toHaveBeenCalledTimes(2)
     expect(h.manager.executeStreaming).toHaveBeenLastCalledWith("person-agent-id1", "hello", {
       sessionId: "native-1",
       workingDirectory: PERSON_AGENT_WORKSPACE,
@@ -494,6 +498,88 @@ describe("person agent runner", () => {
     await flush()
     expect(h.manager.removeAgent).toHaveBeenCalledWith("person-agent-id1")
     expect(h.runner.liveAgent("s1")).toBeUndefined()
+  })
+
+  it("keeps the native process when readers loosen to fully visible owner history", async () => {
+    const h = harness()
+    h.turns.push(replyTurn(), replyTurn("again"))
+    jest
+      .mocked(h.deps.history)
+      .mockResolvedValueOnce({
+        text: "[Withheld: personal content of Host owner]",
+        visibilityDigest: "two-readers",
+        hasWithheld: true,
+      })
+      .mockResolvedValue({
+        text: "owner-only material",
+        visibilityDigest: "owner",
+        hasWithheld: false,
+      })
+    await h.runner.startTurn(request())
+    await drain()
+    await h.runner.startTurn(request({ actionId: "a2", messageId: "m2" }))
+    await drain()
+    expect(h.manager.removeAgent).not.toHaveBeenCalled()
+    expect(h.manager.addAgent).toHaveBeenCalledTimes(1)
+    expect(h.manager.executeStreaming.mock.calls.at(-1)?.[2]?.sessionId).toBe("native-1")
+    await h.runner.closeAll()
+  })
+
+  it("rebuilds the native process from filtered history when a second requester joins", async () => {
+    const h = harness()
+    h.turns.push(replyTurn(), replyTurn("again"))
+    jest
+      .mocked(h.deps.history)
+      .mockResolvedValueOnce({
+        text: "owner-only material",
+        visibilityDigest: "owner",
+        hasWithheld: false,
+      })
+      .mockResolvedValue({
+        text: "[Withheld: personal content of Host owner]",
+        visibilityDigest: "owner-and-requester",
+        hasWithheld: true,
+      })
+    await h.runner.startTurn(request())
+    await drain()
+    await h.runner.startTurn(request({ actionId: "a2", messageId: "m2" }))
+    await drain()
+    expect(h.manager.removeAgent).toHaveBeenCalledWith("person-agent-id1")
+    expect(h.manager.addAgent).toHaveBeenCalledTimes(2)
+    const options = h.manager.executeStreaming.mock.calls.at(-1)?.[2]
+    expect(options).not.toHaveProperty("sessionId")
+    expect(options?.context?.custom.conversationHistory).toBe(
+      "[Withheld: personal content of Host owner]"
+    )
+    await h.runner.closeAll()
+  })
+
+  it("rechecks live readers after a replacement process launches", async () => {
+    const h = harness()
+    h.turns.push(replyTurn(), replyTurn("again"))
+    let joined = false
+    jest.mocked(h.deps.history).mockImplementation(async () =>
+      joined
+        ? {
+            text: "[Withheld: personal content of Host owner]",
+            visibilityDigest: "all-readers",
+            hasWithheld: true,
+          }
+        : { text: "owner-only material", visibilityDigest: "owner", hasWithheld: false }
+    )
+    await h.runner.startTurn(request())
+    await drain()
+    jest.mocked(h.manager.addAgent).mockImplementationOnce(async () => {
+      joined = true
+    })
+    await h.runner.startTurn(request({ actionId: "a2", messageId: "m2", model: "claude-opus" }))
+    await drain()
+    const options = h.manager.executeStreaming.mock.calls.at(-1)?.[2]
+    expect(options).not.toHaveProperty("sessionId")
+    expect(options?.context?.custom.conversationHistory).toBe(
+      "[Withheld: personal content of Host owner]"
+    )
+    await h.runner.closeAll()
   })
 
   it("p6e starts a new process and lease when the model changes", async () => {

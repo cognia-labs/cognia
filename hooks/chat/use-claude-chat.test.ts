@@ -6,6 +6,22 @@
  * — that handler is exercised indirectly via `send` / `respondToApproval`.
  */
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { personalVisibilityDigest } from "@cognia/plugin-contract/types/execution/personal-visibility"
+import { applyInstantTitle } from "./claude-chat-turn-tasks"
+
+jest.mock("./claude-chat-turn-tasks", () => {
+  const actual = jest.requireActual("./claude-chat-turn-tasks")
+  return { ...actual, applyInstantTitle: jest.fn(actual.applyInstantTitle) }
+})
+
+// Exercise the production Host reader resolver instead of replacing the
+// personal-history filter in this hook's routing harness.
+const personalHistoryFixture = createDbTestFixture({ seeded: false })
+beforeAll(personalHistoryFixture.initialize)
+afterAll(personalHistoryFixture.dispose)
+const EMPTY_VISIBILITY_DIGEST = personalVisibilityDigest([], [])
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
 jest.mock("@/lib/execution/personal-marks", () => ({
   ...jest.requireActual("@/lib/execution/personal-marks"),
@@ -18,8 +34,8 @@ import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 jest.mock("@/lib/chat/lifecycle-events", () => ({ publishChatLifecycleEvent: jest.fn() }))
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
-import { act, renderHook } from "@testing-library/react"
-import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
+import { act, renderHook, waitFor } from "@testing-library/react"
+import type { SendContentBlock, SendOptions, StoredMessage } from "@cognia/agent-config-types"
 import {
   HostStateChannelUnavailableError,
   type WithdrawnHostStateMessage,
@@ -28,6 +44,7 @@ import {
   __resetRuntimeSnapshotForTesting,
   setRuntimeSnapshot,
 } from "@/lib/runtime/runtime-snapshot-store"
+import type { SessionPeerMessageRow } from "@/lib/db/session-peer-messages"
 
 import { useAgentRuntimeStore, useExternalAgentStore } from "@/stores/agent"
 import type { StartSquadRunInput, StartSquadRunResult } from "@/lib/squads/squad/start-squad-run"
@@ -91,6 +108,7 @@ jest.mock("@/lib/router-fusion/chat/store-provider", () => ({
 }))
 const backgroundDrainMock = jest.fn()
 const peerDrainMock = jest.fn(async () => undefined)
+const peerRuntimeMock = jest.fn()
 jest.mock("./background-result-runtime", () => ({
   ...jest.requireActual("./background-result-runtime"),
   maybeDrainBackgroundResults: (sessionId: string) => backgroundDrainMock(sessionId),
@@ -103,6 +121,16 @@ jest.mock("@/lib/chat/canonical-sink", () => {
 })
 jest.mock("@/lib/chat/session-peer-messaging", () => ({
   ...jest.requireActual("@/lib/chat/session-peer-messaging"),
+  registerSessionPeerRuntime: (
+    runtime: Parameters<
+      typeof import("@/lib/chat/session-peer-messaging").registerSessionPeerRuntime
+    >[0]
+  ) => {
+    peerRuntimeMock(runtime)
+    return jest
+      .requireActual("@/lib/chat/session-peer-messaging")
+      .registerSessionPeerRuntime(runtime)
+  },
   drainSessionPeerMessages: (sessionId: string) => (peerDrainMock as jest.Mock)(sessionId),
 }))
 
@@ -758,6 +786,7 @@ interface ChatStateLike {
   >
   setActiveSession: jest.Mock
   setMessages: jest.Mock
+  setSessionMessages: jest.Mock
   replaceMessages: jest.Mock
   appendMessage: jest.Mock
   setStatus: jest.Mock
@@ -843,6 +872,7 @@ const chatState: ChatStateLike = {
   lastSendBySession: {},
   setActiveSession: jest.fn(),
   setMessages: jest.fn(),
+  setSessionMessages: jest.fn((id: string, messages: unknown[]) => sliceWrite(id, { messages })),
   replaceMessages: jest.fn((m: unknown[]) => {
     chatState.messages = m
   }),
@@ -1097,15 +1127,6 @@ jest.mock("@/lib/collab/shared-run-coordinator", () => ({
   beginSharedSessionRun: (...args: unknown[]) => beginSharedSessionRunMock(...args),
   sendSharedSessionMessage: (...args: unknown[]) => sendSharedSessionMessageMock(...args),
 }))
-// Every test reads the real database; one hands its own over.
-let mockDbOverride: (() => unknown) | null = null
-jest.mock("@/lib/db/schema", () => {
-  const actual = jest.requireActual("@/lib/db/schema")
-  return {
-    ...actual,
-    getDb: (...args: unknown[]) => (mockDbOverride ? mockDbOverride() : actual.getDb(...args)),
-  }
-})
 // No collaboration context unless a test hands one over: what every private
 // session reads.
 const resolveCollabContextMock = jest.fn(async (..._args: unknown[]) => null as unknown)
@@ -1189,6 +1210,7 @@ beforeEach(async () => {
   for (const [callback] of onClaudeMessageMock.mock.calls) callback({ type: "sidecar_exited" })
   await Promise.resolve()
   await Promise.resolve()
+  await personalHistoryFixture.restore()
   useTaskWorkspaceStore.getState().clear()
   jest.mocked(publishChatLifecycleEvent).mockClear()
   persistSessionAssetsMock.mockReset().mockImplementation(async (_sessionId, message) => message)
@@ -1246,6 +1268,7 @@ beforeEach(async () => {
     id: "sess-1",
     title: "New chat",
     model: "sonnet",
+    runtimePersonalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
   })
   setSdkSessionIdMock.mockClear()
   touchSessionMock.mockClear()
@@ -1406,6 +1429,64 @@ afterEach(() => {
 })
 
 describe("useClaudeChat — actions", () => {
+  it("withholds a stored peer's private title and summary before the receiver persists or sends it", async () => {
+    await getDb().sessions.put({
+      id: "private-peer-sender",
+      title: "private sender title",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await getDb().messages.put({
+      id: "private-peer-source",
+      sessionId: "private-peer-sender",
+      role: "assistant",
+      createdAt: 1,
+      parts: [{ type: "text", text: "private sender answer" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+      },
+    })
+    const receiver = await getSessionMock("sess-1")
+    getSessionMock.mockImplementation(async (id: string) =>
+      id === "private-peer-sender"
+        ? { id, title: "private sender title", createdAt: 1, updatedAt: 1 }
+        : receiver
+    )
+    renderHook(() => useClaudeChat())
+    await flush()
+    const deliver = peerRuntimeMock.mock.calls.at(-1)?.[0].deliver as (
+      message: SessionPeerMessageRow
+    ) => Promise<void>
+    await act(async () => {
+      await deliver({
+        id: "private-peer-note",
+        senderSessionId: "private-peer-sender",
+        receiverSessionId: "sess-1",
+        content: "private peer summary",
+        intent: "trigger_turn",
+        origin: "agent",
+        authority: "untrusted_agent_message",
+        status: "queued",
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      })
+    })
+    await waitFor(() => expect(sendPromptMock).toHaveBeenCalled())
+    const peerWrite = persistMessagesMock.mock.calls
+      .flatMap(([, messages]) => messages)
+      .find((message) => message.id === "session-peer:private-peer-note")
+    expect(JSON.stringify(peerWrite)).not.toContain("private sender title")
+    expect(JSON.stringify(peerWrite)).not.toContain("private peer summary")
+    expect(peerWrite.metadata.personalMarks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ person: { kind: "local-person" } })])
+    )
+    const sentPrompt = JSON.stringify(sendPromptMock.mock.calls.at(-1)?.[1])
+    expect(sentPrompt).toContain("[Withheld: personal content of Host owner, unverified person]")
+    expect(sentPrompt).not.toContain("private sender title")
+    expect(sentPrompt).not.toContain("private peer summary")
+  })
+
   it("waits for the latest model write and runtime reset before reading and dispatching", async () => {
     const { result } = renderHook(() => useClaudeChat())
     await flush()
@@ -2214,6 +2295,7 @@ describe("useClaudeChat — actions", () => {
           sending = result.current.send("hello", prebuilt ? options : undefined)
           await flush()
         })
+        await waitFor(() => expect(ensureExecutionPortLeaseMock).toHaveBeenCalledTimes(1))
         expect(ensureExecutionPortLeaseMock).toHaveBeenCalledTimes(1)
         expect(
           jest.mocked(await import("@/lib/task-workspace/client")).beginObservedTaskWorkspaceTurn
@@ -2851,8 +2933,7 @@ describe("useClaudeChat — actions", () => {
       act(() => {
         sending = result.current.send("hello")
       })
-      await flush()
-      expect(checkoutSignal).toBeDefined()
+      await waitFor(() => expect(checkoutSignal).toBeDefined())
       expect(checkoutSignal!.aborted).toBe(false)
 
       await act(async () => {
@@ -2901,8 +2982,7 @@ describe("useClaudeChat — actions", () => {
       act(() => {
         sending = result.current.send("hello")
       })
-      await flush()
-      expect(checkoutSignal).toBeDefined()
+      await waitFor(() => expect(checkoutSignal).toBeDefined())
       enqueueHostStateIntentMock.mockRejectedValueOnce(new Error("outbox down"))
       await act(async () => {
         await result.current.stop("sess-1")
@@ -3253,6 +3333,7 @@ describe("useClaudeChat — actions", () => {
     await act(async () => {
       void result.current.send("hello")
     })
+    await waitFor(() => expect(runStandaloneTurnMock).toHaveBeenCalled())
     await act(async () => {
       await result.current.stop("sess-1")
     })
@@ -3665,6 +3746,7 @@ describe("useClaudeChat — actions", () => {
         _messageCallback?.({ type: "session_ended", sessionId: "sess-1", turnId })
         await flush()
       })
+      await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(2))
       expect(sendPromptMock).toHaveBeenCalledTimes(2)
     } finally {
       chatState.steerQueue = undefined
@@ -3911,6 +3993,7 @@ describe("useClaudeChat — actions", () => {
       sending = result.current.send("hi")
       await flush()
     })
+    await waitFor(() => expect(persistMessagesMock).toHaveBeenCalled())
     const queuedWrite = chatState.replaceSessionMessages.mock.calls.at(-1)?.[1] as Array<{
       role: string
       metadata?: { turnAdmission?: { state: string; waitingFor?: { holderLabel?: string } } }
@@ -4100,46 +4183,93 @@ describe("useClaudeChat — actions", () => {
     expect(text?.text).toContain("Which file?")
   })
 
-  it("reuses a verified imported native session on the external lane", async () => {
-    externalPresetMock.value = "codex"
-    useAgentRuntimeStore.setState({
-      runtimeRef: { kind: "external", agentId: "ext-1" },
-      sessionCompositions: {
-        // The marker, not the id. The native session id lives on the session
-        // row, which is where the resume reads it from.
-        "import:codex:thread-1": {
-          presetId: "standard",
-          verifiedNativeResume: true,
-          verifiedNativeResumeAgentId: "ext-1",
+  it.each([false, true])(
+    "retains a verified imported native upgrade unless current history is withheld (%s)",
+    async (withheld) => {
+      externalPresetMock.value = "codex"
+      useAgentRuntimeStore.setState({
+        runtimeRef: { kind: "external", agentId: "ext-1" },
+        sessionCompositions: {
+          // The marker, not the id. The native session id lives on the session
+          // row, which is where the resume reads it from.
+          "import:codex:thread-1": {
+            presetId: "standard",
+            verifiedNativeResume: true,
+            verifiedNativeResumeAgentId: "ext-1",
+          },
         },
-      },
-    })
-    getSessionMock.mockResolvedValue({
-      id: "import:codex:thread-1",
-      title: "Imported Codex",
-      importOwnership: "native-bound",
-      branchSeed: { kind: "transcript", content: "Imported context" },
-      importRuntimeBinding: { nativeSessionId: "thread-1", presetId: "codex" },
-    })
-    executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "continued" })
-    const { result } = renderHook(() => useClaudeChat())
-    await flush()
-    await act(async () => {
-      await result.current.send("continue", undefined, { sessionId: "import:codex:thread-1" })
-    })
-    expect(executeOnExternalAgentMock).toHaveBeenCalledWith(
-      "continue",
-      expect.objectContaining({
-        agentId: "ext-1",
-        sessionId: "thread-1",
-        context: expect.objectContaining({
-          custom: expect.objectContaining({ chatSessionId: "import:codex:thread-1" }),
-        }),
       })
-    )
-    expect(clearBranchSeedMock).toHaveBeenCalledWith("import:codex:thread-1")
-    expect(freezeImportedSessionMock).not.toHaveBeenCalled()
-  })
+      getSessionMock.mockResolvedValue({
+        id: "import:codex:thread-1",
+        title: "Imported Codex",
+        importOwnership: "native-bound",
+        branchSeed: { kind: "transcript", content: "Imported context" },
+        importRuntimeBinding: { nativeSessionId: "thread-1", presetId: "codex" },
+      })
+      listMessagesMock.mockResolvedValue(
+        withheld
+          ? [
+              {
+                id: "private-imported-answer",
+                role: "assistant",
+                parts: [{ type: "text", text: "private imported salary" }],
+                metadata: {
+                  personalMarks: [
+                    {
+                      person: {
+                        kind: "platform",
+                        platform: "lark",
+                        adapterId: "someone-else",
+                        remoteUserId: "another-person",
+                      },
+                      source: "import",
+                      markedAt: 1,
+                    },
+                  ],
+                },
+              },
+            ]
+          : []
+      )
+      executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "continued" })
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      await act(async () => {
+        await result.current.send("continue", undefined, { sessionId: "import:codex:thread-1" })
+      })
+      expect(executeOnExternalAgentMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          agentId: "ext-1",
+          ...(withheld ? { resetExternalSession: true } : { sessionId: "thread-1" }),
+          context: expect.objectContaining({
+            custom: expect.objectContaining({ chatSessionId: "import:codex:thread-1" }),
+          }),
+        })
+      )
+      const dispatched = executeOnExternalAgentMock.mock.calls[0]
+      expect(JSON.stringify(dispatched)).not.toContain("private imported salary")
+      if (withheld) {
+        expect(dispatched[1].sessionId).toBeUndefined()
+        expect(JSON.stringify(dispatched)).toContain("[Withheld:")
+      } else {
+        expect(dispatched[1].resetExternalSession).not.toBe(true)
+        // The adapter deliberately returns no id and emits no session event.
+        // Its known imported session still records the new digest before reuse.
+        expect(updateSessionMock).toHaveBeenCalledWith(
+          "import:codex:thread-1",
+          expect.objectContaining({
+            externalAgentSession: expect.objectContaining({
+              sessionId: "thread-1",
+              personalVisibilityDigest: expect.any(String),
+            }),
+          })
+        )
+      }
+      expect(clearBranchSeedMock).toHaveBeenCalledWith("import:codex:thread-1")
+      expect(freezeImportedSessionMock).not.toHaveBeenCalled()
+    }
+  )
 
   it.each([
     ["different instance", "ext-2", "codex"],
@@ -4203,7 +4333,11 @@ describe("useClaudeChat — actions", () => {
       importOwnership: "native-bound",
       sdkSessionId: "external-native",
       importRuntimeBinding: { nativeSessionId: "external-native", presetId: "codex" },
-      externalAgentSession: { agentId: "ext-1", sessionId: "external-native" },
+      externalAgentSession: {
+        agentId: "ext-1",
+        personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+        sessionId: "external-native",
+      },
     })
     listMessagesMock.mockResolvedValue([
       {
@@ -4230,7 +4364,7 @@ describe("useClaudeChat — actions", () => {
       }),
       { transcriptRuntime: "prepared" }
     )
-    expect(sendPromptMock.mock.calls[0][2]).not.toHaveProperty("resumeSessionId")
+    expect(sendPromptMock.mock.calls[0][2].resumeSessionId).toBeUndefined()
     expect(updateSessionMock).toHaveBeenCalledWith(
       id,
       expect.objectContaining({
@@ -4288,10 +4422,10 @@ describe("useClaudeChat — actions", () => {
         await result.current.send("next", undefined, { sessionId: id })
       })
       expect(sendPromptMock).toHaveBeenCalled()
-      expect(sendPromptMock.mock.calls[0][2].appendSystemPrompt ?? "").not.toContain(
+      expect(sendPromptMock.mock.calls[0][2].appendSystemPrompt ?? "").toContain(
         "Full original requirements"
       )
-      expect(listMessagesMock).not.toHaveBeenCalled()
+      expect(listMessagesMock).toHaveBeenCalledWith(id)
     }
   )
 
@@ -4711,7 +4845,11 @@ describe("useClaudeChat — actions", () => {
       id: "sess-1",
       title: "Resumed task",
       model: "auto",
-      externalAgentSession: { agentId: "ext-1", sessionId: nativeId },
+      externalAgentSession: {
+        agentId: "ext-1",
+        personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+        sessionId: nativeId,
+      },
     })
     executeOnExternalAgentMock.mockResolvedValue({
       success: true,
@@ -4759,6 +4897,7 @@ describe("useClaudeChat — actions", () => {
       sending = result.current.send("hi", undefined, { sessionId: "sess-1" })
       await flush()
     })
+    await waitFor(() => expect(taskSignal).toBeDefined())
     expect(taskSignal).toBeDefined()
     await act(async () => {
       await result.current.stop("sess-1")
@@ -4790,8 +4929,18 @@ describe("useClaudeChat — actions", () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
     })
     expect(updateSessionMock).toHaveBeenCalledWith("sess-1", {
-      externalAgentSession: { agentId: "ext-1", sessionId: nativeId },
-      externalAgentGatewaySessions: [{ agentId: "ext-1", sessionId: nativeId }],
+      externalAgentSession: {
+        agentId: "ext-1",
+        personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+        sessionId: nativeId,
+      },
+      externalAgentGatewaySessions: [
+        {
+          agentId: "ext-1",
+          personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          sessionId: nativeId,
+        },
+      ],
     })
   })
 
@@ -4917,7 +5066,11 @@ describe("useClaudeChat — actions", () => {
       getSessionMock.mockResolvedValue({
         id: "sess-1",
         title: "Kimi",
-        externalAgentSession: { agentId: "ext-1", sessionId: kimiLink },
+        externalAgentSession: {
+          agentId: "ext-1",
+          personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          sessionId: kimiLink,
+        },
         externalAgentModels: { "ext-1": { kind: "native" } },
       })
       await sendOnce()
@@ -4947,6 +5100,11 @@ describe("useClaudeChat — actions", () => {
       getSessionMock.mockResolvedValue({
         id: "sess-1",
         title: "Kimi",
+        externalAgentSession: {
+          agentId: "ext-1",
+          sessionId: "native-thread",
+          personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+        },
         externalAgentModels: { "ext-1": { kind: "native" } },
       })
       await sendOnce("back to native")
@@ -4961,7 +5119,11 @@ describe("useClaudeChat — actions", () => {
       getSessionMock.mockResolvedValue({
         id: "sess-1",
         title: "Kimi",
-        externalAgentSession: { agentId: "ext-1", sessionId: kimiLink },
+        externalAgentSession: {
+          agentId: "ext-1",
+          personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          sessionId: kimiLink,
+        },
         externalAgentModels: { "ext-1": { kind: "cognia", binding: claude } },
       })
       executeOnExternalAgentMock.mockResolvedValue({
@@ -4976,10 +5138,22 @@ describe("useClaudeChat — actions", () => {
       expect(options).toMatchObject({ cogniaModel: claude, sessionId: kimiLink, rebind: true })
       expect(options).not.toHaveProperty("resetExternalSession")
       expect(updateSessionMock).toHaveBeenCalledWith("sess-1", {
-        externalAgentSession: { agentId: "ext-1", sessionId: claudeLink },
+        externalAgentSession: {
+          agentId: "ext-1",
+          personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          sessionId: claudeLink,
+        },
         externalAgentGatewaySessions: [
-          { agentId: "ext-1", sessionId: kimiLink },
-          { agentId: "ext-1", sessionId: claudeLink },
+          {
+            agentId: "ext-1",
+            personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+            sessionId: kimiLink,
+          },
+          {
+            agentId: "ext-1",
+            personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+            sessionId: claudeLink,
+          },
         ],
       })
     })
@@ -4990,10 +5164,22 @@ describe("useClaudeChat — actions", () => {
       getSessionMock.mockResolvedValue({
         id: "sess-1",
         title: "Kimi",
-        externalAgentSession: { agentId: "ext-1", sessionId: claudeLink },
+        externalAgentSession: {
+          agentId: "ext-1",
+          personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          sessionId: claudeLink,
+        },
         externalAgentGatewaySessions: [
-          { agentId: "ext-1", sessionId: kimiLink },
-          { agentId: "ext-1", sessionId: claudeLink },
+          {
+            agentId: "ext-1",
+            personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+            sessionId: kimiLink,
+          },
+          {
+            agentId: "ext-1",
+            personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+            sessionId: claudeLink,
+          },
         ],
         externalAgentModels: { "ext-1": { kind: "cognia", binding: kimi } },
       })
@@ -5291,6 +5477,16 @@ describe("useClaudeChat — actions", () => {
     await act(async () => {
       await result.current.send("first")
     })
+    getSessionMock.mockResolvedValue({
+      id: "sess-1",
+      title: "Native conversation",
+      runtimePersonalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+      externalAgentSession: {
+        agentId: "ext-1",
+        sessionId: "native-1",
+        personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+      },
+    })
     await act(async () => {
       await result.current.send("follow-up")
     })
@@ -5388,7 +5584,10 @@ describe("useClaudeChat — actions", () => {
     await act(async () => {
       sending = result.current.send("/later")
     })
-    await flush()
+    await waitFor(() => {
+      expect(finish).toEqual(expect.any(Function))
+      expect(externalBackgroundListeners.size).toBe(1)
+    })
     const base = {
       sessionId: "native-background",
       timestamp: new Date(),
@@ -5410,13 +5609,17 @@ describe("useClaudeChat — actions", () => {
       await sending
     })
     await flush()
-    const messages = persistMessagesMock.mock.calls.at(-1)?.[1] as Array<{
-      role: string
-      parts: Array<{ text?: string }>
-    }>
-    expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
-    expect(messages.some((message) => message.parts.some((part) => part.text === "ack"))).toBe(true)
-    expect(messages.some((message) => message.parts.some((part) => part.text === "x"))).toBe(true)
+    await waitFor(() => {
+      const messages = persistMessagesMock.mock.calls.at(-1)?.[1] as Array<{
+        role: string
+        parts: Array<{ text?: string }>
+      }>
+      expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
+      expect(messages.some((message) => message.parts.some((part) => part.text === "ack"))).toBe(
+        true
+      )
+      expect(messages.some((message) => message.parts.some((part) => part.text === "x"))).toBe(true)
+    })
     expect(rendererToolHostPauseMock).not.toHaveBeenCalled()
   })
 
@@ -5969,6 +6172,7 @@ describe("useClaudeChat — actions", () => {
         await flush()
       })
       // The replay is a new turn of its own, admitted under the settling lease.
+      await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(1))
       expect(sendPromptMock).toHaveBeenCalledTimes(1)
       expect(chatState.setSessionStatus.mock.calls.at(-1)).toEqual(["sess-1", "streaming"])
     } finally {
@@ -6494,7 +6698,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it.each(["openai", "anthropic"])(
-    "keeps an initialized %s loop and stamps its generation without reading full history",
+    "keeps an initialized %s loop only after checking its history visibility",
     async (provider) => {
       sessionControlMock.mockResolvedValue({
         retained: true,
@@ -6502,6 +6706,7 @@ describe("useClaudeChat — actions", () => {
         sdkSessionId: "ready-sdk",
         provider,
         transcriptInvalidationId: "retained-1",
+        personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
         active: false,
       })
       resolveSendOptionsMock.mockResolvedValue({ provider, model: "gpt-5" })
@@ -6510,6 +6715,7 @@ describe("useClaudeChat — actions", () => {
         title: "Ready",
         sdkSessionId: "ready-sdk",
         runtimeTranscriptGeneration: "retained-1",
+        runtimePersonalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
       })
       const { result } = renderHook(() => useClaudeChat())
       await flush()
@@ -6520,7 +6726,7 @@ describe("useClaudeChat — actions", () => {
       expect(sendPromptMock).toHaveBeenCalled()
       expect(sendPromptMock.mock.calls.at(-1)?.[2].initialConversation).toBeUndefined()
       expect(sendPromptMock.mock.calls.at(-1)?.[2].transcriptInvalidationId).toBe("retained-1")
-      expect(listMessagesMock).not.toHaveBeenCalled()
+      expect(listMessagesMock).toHaveBeenCalledWith("sess-1")
       expect(closeSessionIpcMock).not.toHaveBeenCalled()
     }
   )
@@ -8140,7 +8346,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("tells the person an asleep room declined a request, instead of reporting a failure", async () => {
     const { CollabConflictError } = jest.requireActual("@/lib/collab/client")
-    const rows = [
+    const rows: StoredMessage[] = [
       {
         id: "asleep-message",
         sessionId: "sess-asleep",
@@ -8149,11 +8355,8 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         createdAt: 1,
       },
     ]
-    // One object: the turn lock checks the database it locked is still the one.
-    const fakeDb = {
-      messages: { where: () => ({ equals: () => ({ toArray: async () => rows }) }) },
-    }
-    mockDbOverride = () => fakeDb
+    // Use the same canonical database as the Host visibility resolver.
+    await getDb().messages.bulkPut(rows)
     const enqueue = jest.fn(async () => {
       throw new CollabConflictError("conflict", { reason: "room_asleep", replyMode: "asleep" })
     })
@@ -8188,7 +8391,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         )
         await flush()
       })
-      expect(enqueue).toHaveBeenCalled()
+      await waitFor(() => expect(enqueue).toHaveBeenCalled())
       expect(toastInfo).toHaveBeenCalledWith(
         "This conversation is asleep, so the assistant did not answer. An owner or maintainer can change its reply mode in the room settings."
       )
@@ -8198,12 +8401,11 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       )
     } finally {
       resolveCollabContextMock.mockResolvedValue(null)
-      mockDbOverride = null
     }
   })
 
   it("gives a shared run the room's instructions, whoever holds it (ADR-0177 batch 5)", async () => {
-    const rows = [
+    const rows: StoredMessage[] = [
       {
         id: "ask-message",
         sessionId: "sess-room",
@@ -8244,11 +8446,8 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         syncCursor: 0,
       },
     })
-    // One object: the turn lock checks the database it locked is still the one.
-    const fakeDb = {
-      messages: { where: () => ({ equals: () => ({ toArray: async () => rows }) }) },
-    }
-    mockDbOverride = () => fakeDb
+    // Use the same canonical database as the Host visibility resolver.
+    await getDb().messages.bulkPut(rows)
     sendPromptMock.mockClear()
     try {
       renderHook(() => useClaudeChat())
@@ -8264,7 +8463,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       await act(async () => {
         await flush()
       })
-      expect(sendPromptMock).toHaveBeenCalled()
+      await waitFor(() => expect(sendPromptMock).toHaveBeenCalled())
       // The resolver here returns a replacing `systemPrompt`, so the section
       // follows it rather than riding `appendSystemPrompt` beside it.
       const options = sendPromptMock.mock.calls.at(-1)![2]
@@ -8272,7 +8471,6 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       expect(options.appendSystemPrompt).toBeUndefined()
     } finally {
       resolveCollabContextMock.mockResolvedValue(null)
-      mockDbOverride = null
     }
   })
 
@@ -8589,7 +8787,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     await act(async () => {
       kickoff?.(activeLoop({ safePrompt: "do the thing" }))
     })
-    await flush()
+    await waitFor(() => expect(sendPromptMock).toHaveBeenCalled())
     expect(sendPromptMock).toHaveBeenCalledWith(
       "sess-1",
       expect.stringContaining("[Loop iteration 1 of 100]"),
@@ -9469,6 +9667,9 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
     it("asks nothing about the Host while chat routing is off", async () => {
       delete settings.routerFusion
+      // Automatic titles independently probe Host ownership (ADR-0253 D06).
+      // Their own suite tests that path; isolate this routing-only assertion.
+      jest.mocked(applyInstantTitle).mockResolvedValueOnce(undefined)
       const { result } = renderHook(() => useClaudeChat())
       await flush()
       await act(async () => {
@@ -9741,6 +9942,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
           await flush()
         })
         expect(chatState.removeSteerEntry).toHaveBeenCalledWith("sess-1", "q1")
+        await waitFor(() => expect(runFusionChatTurnMock).toHaveBeenCalledTimes(2))
         // One turn, one outcome event: the first settle took the turn's start time.
         expect(
           mockTrackEvent.mock.calls.filter(([name]) => String(name).startsWith("chat.turn."))
@@ -9779,6 +9981,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
           await flush()
         })
         expect(chatState.removeSteerEntry).toHaveBeenCalledWith("sess-1", "q1")
+        await waitFor(() => expect(runFusionChatTurnMock).toHaveBeenCalledTimes(2))
         expect(mockTrackEvent).not.toHaveBeenCalledWith("chat.turn.failed", expect.anything())
       } finally {
         chatState.activeSessionId = "sess-1"
@@ -9873,6 +10076,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
     await act(async () => {
       void result.current.send("hello")
     })
+    await waitFor(() => expect(runStandaloneTurnMock).toHaveBeenCalled())
     chatState.activeSessionId = "elsewhere"
     try {
       chatState.otherSlices["sess-1"] = {
@@ -9975,10 +10179,12 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
         await flush()
       })
       expect(chatState.clearSteerQueue).not.toHaveBeenCalled()
-      const marked = chatState.otherSlices["sess-1"]?.messages as Array<{
-        metadata?: { steer?: { state: string } }
-      }>
-      expect(marked[0]?.metadata?.steer?.state).toBe("failed")
+      await waitFor(() => {
+        const marked = chatState.otherSlices["sess-1"]?.messages as Array<{
+          metadata?: { steer?: { state: string } }
+        }>
+        expect(marked[0]?.metadata?.steer?.state).toBe("failed")
+      })
     } finally {
       chatState.activeSessionId = "sess-1"
     }
@@ -10120,6 +10326,7 @@ describe("embedded runtime reachability", () => {
     await act(async () =>
       kickoff?.(activeLoop({ sessionId: "aside", safePrompt: "continue aside" }))
     )
+    await waitFor(() => expect(sendPromptMock).toHaveBeenCalled())
     expect(sendPromptMock).toHaveBeenCalledWith(
       "aside",
       expect.stringContaining("continue aside"),
@@ -12171,14 +12378,22 @@ describe("durable background result admission", () => {
     const { result } = renderHook(() => useClaudeChat())
     await flush()
     await act(async () => {
-      await result.current.send("output", undefined, {
-        backgroundDelivery: { id: "background-squad", onAccepted },
+      await result.current.send("private child summary", undefined, {
+        backgroundDelivery: {
+          id: "background-squad",
+          onAccepted,
+          personalRunIds: ["execution:job:private-child"],
+        },
         throwOnError: true,
       })
     })
     expect(startSquadRunMock).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "background-squad" })
     )
+    expect(startSquadRunMock.mock.calls[0][0].goal).toContain(
+      "[Withheld: personal content of unverified person]"
+    )
+    expect(startSquadRunMock.mock.calls[0][0].goal).not.toContain("private child summary")
     expect(onAccepted).toHaveBeenCalledTimes(1)
     expect(sendPromptMock).not.toHaveBeenCalled()
   })
@@ -12210,12 +12425,25 @@ describe("durable background result admission", () => {
     const { result } = renderHook(() => useClaudeChat())
     await flush()
     await act(async () => {
-      await result.current.send("output", undefined, {
-        backgroundDelivery: { id: "background-fusion-new", onAccepted },
+      await result.current.send("private child summary", undefined, {
+        backgroundDelivery: {
+          id: "background-fusion-new",
+          onAccepted,
+          personalRunIds: ["execution:job:private-child"],
+        },
         throwOnError: true,
       })
     })
     expect(onAccepted).toHaveBeenCalledTimes(1)
+    const handedOver = runFusionChatTurnMock.mock.calls[0][0] as {
+      messages: unknown
+      userMessage: unknown
+    }
+    expect(JSON.stringify(handedOver.messages)).toContain(
+      "[Withheld: personal content of unverified person]"
+    )
+    expect(JSON.stringify(handedOver.messages)).not.toContain("private child summary")
+    expect(JSON.stringify(handedOver.userMessage)).not.toContain("private child summary")
     expect(resolveSendOptionsMock).toHaveBeenCalledWith(
       expect.objectContaining({ backgroundDeliveryId: "background-fusion-new" })
     )
@@ -12254,6 +12482,16 @@ describe("precise external steering ownership", () => {
         useAgentRuntimeStore
           .getState()
           .setSessionExternalLink("sess-1", { agentId: "ext-1", sessionId: "native" })
+      if (linked)
+        getSessionMock.mockResolvedValue({
+          id: "sess-1",
+          runtimePersonalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          externalAgentSession: {
+            agentId: "ext-1",
+            sessionId: "native",
+            personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          },
+        })
       checkDelegationMock.mockReturnValue({ shouldDelegate: false })
       let finish!: () => void
       let started!: () => void
@@ -12386,6 +12624,15 @@ describe("precise external steering ownership", () => {
         useAgentRuntimeStore
           .getState()
           .setSessionExternalLink("sess-1", { agentId: "ext-1", sessionId: "correct-native" })
+      if (linked)
+        getSessionMock.mockResolvedValue({
+          id: "sess-1",
+          externalAgentSession: {
+            agentId: "ext-1",
+            sessionId: "correct-native",
+            personalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
+          },
+        })
       setSessionExternalLane("sess-1", "ext-1")
       const { result } = renderHook(() => useClaudeChat())
       await flush()

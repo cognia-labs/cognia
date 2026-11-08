@@ -1,3 +1,5 @@
+import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import React from "react"
 import { act, render, waitFor } from "@testing-library/react"
@@ -5,10 +7,29 @@ import { __fireInput, __resetInk } from "ink"
 import { disposeOpenCliDb } from "../../db/bootstrap"
 import { __disposeCliBackgroundJournalForTesting } from "../../agent/subagent-background-tasks"
 
+let isolatedHome: string
+let previousHome: string | undefined
+beforeAll(() => {
+  previousHome = process.env.COGNIA_HOME
+  isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-fullscreen-test-"))
+  process.env.COGNIA_HOME = isolatedHome
+})
 afterAll(async () => {
   await __disposeCliBackgroundJournalForTesting()
   await disposeOpenCliDb()
+  if (previousHome === undefined) delete process.env.COGNIA_HOME
+  else process.env.COGNIA_HOME = previousHome
+  fs.rmSync(isolatedHome, { recursive: true, force: true })
 })
+
+// Fullscreen rendering uses the real turn routing with a fake session. Keep
+// native workspace capture at its own tested boundary instead of spawning it.
+jest.mock("../../worker/workspace-client", () => ({
+  ...jest.requireActual("../../worker/workspace-client"),
+  openWorkerTurnCapture: jest.fn(async () => ({
+    finish: async () => ({ available: false, reason: "helper-unavailable" }),
+  })),
+}))
 
 jest.mock("../input/history-store", () => ({
   appendHistory: jest.fn(),

@@ -52,6 +52,7 @@ import {
 } from "./teammate-character"
 import { applyTeammateTwinContext } from "./twin-context"
 import type { TeamRunContext } from "../team-run-context"
+import { visibleTeamDerivedText, visibleTeamTurn } from "../team-run-context"
 import { isTaskReviewEnabled } from "../gates/task-review-policy"
 import type { ClaimOptions } from "./teammate-pool"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
@@ -251,7 +252,10 @@ async function runToolEnabled(
   maxSteps?: number,
   cwdOverride?: string,
   spanId?: string,
-  onSessionCreated?: (sessionId: string) => Promise<void | (() => void)>,
+  onSessionCreated?: (
+    sessionId: string,
+    personalVisibilityDigest: string
+  ) => Promise<void | (() => void)>,
   taskKind?: DispatchTeammateArgs["taskKind"],
   baseAgent?: Character,
   onExecutorStarted?: (stopped: Promise<void>) => void,
@@ -304,7 +308,7 @@ async function runToolEnabled(
     teammateName: teammate.name,
     runId: teamCtx.runId,
   })
-  const releaseLiveControl = await onSessionCreated?.(session.id)
+  let releaseLiveControl: (() => void) | undefined
   const { startToolExecutionRun, finishToolExecutionRun } =
     await import("@/lib/execution/acting-authority")
   let execution: Awaited<ReturnType<typeof startToolExecutionRun>> | undefined
@@ -312,7 +316,9 @@ async function runToolEnabled(
   const executorStops: Promise<void>[] = []
   try {
     execution = await startToolExecutionRun(session.id, {
-      ...(teamCtx.runId ? { parentRunId: `execution:team:${teamCtx.runId}` } : {}),
+      ...(teamCtx.runId
+        ? { parentRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}` }
+        : {}),
     })
     const appSettings =
       (await settingsDb.getSettings().catch(() => undefined)) ??
@@ -442,52 +448,75 @@ async function runToolEnabled(
       let executorStopped = true
       try {
         signal.throwIfAborted()
-        result = await runner.runAndCaptureAssistantReply(session.id, prompt, attemptOptions, {
-          signal,
-          ...(onExecutorAccepted ? { onExecutorAccepted } : {}),
-          ...(onExecutorStarted
-            ? {
-                onExecutorStarted: (stopped: Promise<void>) => {
-                  executorStopped = false
-                  executorStops.push(stopped)
-                  void stopped.then(() => {
-                    executorStopped = true
-                  })
-                  onExecutorStarted(stopped)
-                },
-              }
-            : {}),
-          ...(plan || onCaptureEvent
-            ? {
-                onEvent: (event: CaptureStreamEvent) => {
-                  const commits =
-                    (event.type === "text-delta" && event.delta.length > 0) ||
-                    event.type === "tool-call"
-                  if (commits && !committed) {
-                    committed = true
-                    controller?.commit()
-                    if (plan && spanId) {
-                      recordEvent(spanId, {
-                        name: "routing.commit",
-                        at: Date.now(),
-                        attributes: {
-                          decisionId: plan.decisionId,
-                          attemptIndex,
-                          trigger: event.type,
-                        },
-                      })
+        const visible = await visibleTeamTurn(
+          teamCtx,
+          prompt,
+          JSON.stringify({
+            systemPrompt: attemptOptions.systemPrompt,
+            appendSystemPrompt: attemptOptions.appendSystemPrompt,
+          }),
+          `teammate-native:${teammate.id}`
+        )
+        const visibleOptions = {
+          ...attemptOptions,
+          ...(visible.withheld ? { systemPrompt: "", appendSystemPrompt: undefined } : {}),
+          personalVisibilityDigest: visible.personalVisibilityDigest,
+          personalVisibilityHasWithheld: visible.withheld,
+        }
+        releaseLiveControl?.()
+        releaseLiveControl =
+          (await onSessionCreated?.(session.id, visible.personalVisibilityDigest)) || undefined
+        result = await runner.runAndCaptureAssistantReply(
+          session.id,
+          visible.prompt,
+          visibleOptions,
+          {
+            signal,
+            ...(onExecutorAccepted ? { onExecutorAccepted } : {}),
+            ...(onExecutorStarted
+              ? {
+                  onExecutorStarted: (stopped: Promise<void>) => {
+                    executorStopped = false
+                    executorStops.push(stopped)
+                    void stopped.then(() => {
+                      executorStopped = true
+                    })
+                    onExecutorStarted(stopped)
+                  },
+                }
+              : {}),
+            ...(plan || onCaptureEvent
+              ? {
+                  onEvent: (event: CaptureStreamEvent) => {
+                    const commits =
+                      (event.type === "text-delta" && event.delta.length > 0) ||
+                      event.type === "tool-call"
+                    if (commits && !committed) {
+                      committed = true
+                      controller?.commit()
+                      if (plan && spanId) {
+                        recordEvent(spanId, {
+                          name: "routing.commit",
+                          at: Date.now(),
+                          attributes: {
+                            decisionId: plan.decisionId,
+                            attemptIndex,
+                            trigger: event.type,
+                          },
+                        })
+                      }
                     }
-                  }
-                  onCaptureEvent?.(event)
-                },
-              }
-            : {}),
-          execution: {
-            kind: "team",
-            label: `Team ${session.id.slice(0, 8)}`,
-            ...(session.projectId ? { projectId: session.projectId } : {}),
-          },
-        })
+                    onCaptureEvent?.(event)
+                  },
+                }
+              : {}),
+            execution: {
+              kind: "team",
+              label: `Team ${session.id.slice(0, 8)}`,
+              ...(session.projectId ? { projectId: session.projectId } : {}),
+            },
+          }
+        )
         controller?.complete()
         break
       } catch (error) {
@@ -605,7 +634,9 @@ async function runExternalBacked(
   sessionId?: string,
   onSessionCreated?: (sessionId: string) => Promise<void | (() => void)>,
   onExecutorStopped?: () => void,
-  processOrigin?: { childRunId: string; dispatchEpoch: number }
+  processOrigin?: { childRunId: string; dispatchEpoch: number },
+  retainedVisibilityDigest?: string,
+  onVisibilityPrepared?: (digest: string) => void
 ): Promise<{ text: string; usage?: TokenUsage }> {
   const [
     { getExternalAgentManager },
@@ -687,9 +718,31 @@ async function runExternalBacked(
   await placeDispatchedAgent(agentId, cwdOverride ?? teamCtx.team.config?.workingDir, manager)
   try {
     signal.throwIfAborted()
+    const visible = await visibleTeamTurn(
+      teamCtx,
+      prompt,
+      systemPrompt,
+      `teammate-external:${teammate.id}`
+    )
+    if (
+      sessionId &&
+      visible.withheld &&
+      retainedVisibilityDigest !== visible.personalVisibilityDigest
+    ) {
+      sessionId = undefined
+      observedSessionId = undefined
+    }
+    onVisibilityPrepared?.(visible.personalVisibilityDigest)
+    // A reused adapter may emit neither a session event nor an id in its result.
+    // Persist the new audience before it can consume this turn's visible text.
+    if (sessionId) {
+      observeSession(sessionId)
+      await sessionWrite
+      if (sessionWriteError) throw sessionWriteError
+    }
     const result = await manager.execute(
       agentId,
-      prompt,
+      visible.prompt,
       {
         // The preset is only the executable. An absent teammate binding selects
         // native mode; a retained gateway session carries its frozen binding. A
@@ -701,7 +754,7 @@ async function runExternalBacked(
             ? {}
             : { cogniaModel: null }),
         ...(sessionId ? { sessionId } : {}),
-        systemPrompt,
+        systemPrompt: visible.systemPrompt,
         // The sidecar and text channels both honour the resolved model; the
         // external channel used to drop it on the floor, so an external teammate
         // silently ran on whatever its CLI's own config selected.
@@ -758,6 +811,7 @@ async function runExternalBacked(
 
 /** Run one teammate turn through the text-only AI-SDK fallback (web/mobile). */
 async function runTextOnly(
+  teamCtx: TeamRunContext,
   prompt: string,
   systemPrompt: string,
   modelHint: string | undefined,
@@ -768,8 +822,9 @@ async function runTextOnly(
 ): Promise<{ text: string; usage?: TokenUsage }> {
   const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
   signal.throwIfAborted()
-  const result = await executeAgent(prompt, {
-    systemPrompt,
+  const visible = await visibleTeamTurn(teamCtx, prompt, systemPrompt, "teammate-text")
+  const result = await executeAgent(visible.prompt, {
+    systemPrompt: visible.systemPrompt,
     ...(modelHint ? { model: modelHint } : {}),
     ...(typeof maxSteps === "number" && maxSteps > 0 ? { maxSteps } : {}),
     abortSignal: signal,
@@ -1325,6 +1380,11 @@ export async function dispatchTeammate(
           promptText,
         ].join("\n")
       }
+      promptText = await visibleTeamDerivedText(
+        teamCtx,
+        promptText,
+        `teammate-prompt:${args.taskId}`
+      )
       if (executionTarget.mode !== "colocate") {
         // Recheck after admission: turning rollout off while a child waits
         // must not send that child down a local runtime branch.
@@ -1838,6 +1898,7 @@ export async function dispatchTeammate(
           retained?.sessionId && parseGatewaySessionId(retained.sessionId)
             ? retained.sessionId
             : undefined
+        let runtimeVisibilityDigest: string | undefined
         return runExternalBacked(
           teamCtx,
           teammate,
@@ -1868,14 +1929,19 @@ export async function dispatchTeammate(
                 return activeDispatch.attachControl(
                   externalSessionControl(manager, externalAgentId, sessionId, activeDispatch),
                   sessionId,
-                  processOwned ? "external-process" : "unconfirmed"
+                  processOwned ? "external-process" : "unconfirmed",
+                  runtimeVisibilityDigest
                 )
               }
             : undefined,
           activeDispatch ? () => activeDispatch.trackLocalStop(Promise.resolve()) : undefined,
           activeDispatch
             ? { childRunId: activeDispatch.childRunId, dispatchEpoch: activeDispatch.dispatchEpoch }
-            : undefined
+            : undefined,
+          retained?.personalVisibilityDigest,
+          (digest) => {
+            runtimeVisibilityDigest = digest
+          }
         )
       }
       if (channel === "sidecar") {
@@ -1892,7 +1958,7 @@ export async function dispatchTeammate(
           executionRoot,
           activeSpan.spanId,
           activeDispatch
-            ? async (sessionId) =>
+            ? async (sessionId, personalVisibilityDigest) =>
                 activeDispatch.attachControl(
                   sidecarSessionControl(
                     {
@@ -1909,7 +1975,9 @@ export async function dispatchTeammate(
                     },
                     sessionId
                   ),
-                  sessionId
+                  sessionId,
+                  undefined,
+                  personalVisibilityDigest
                 )
             : undefined,
           args.taskKind,
@@ -1938,10 +2006,14 @@ export async function dispatchTeammate(
           ...(teammate.config.twinSettings ? { twinSettings: teammate.config.twinSettings } : {}),
           twinDeps: teamCtx.twinDeps,
           source: "team",
+          personalContext: {
+            executionRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
+          },
         })
         textSystemPrompt = injected.systemPrompt
       }
       return runTextOnly(
+        teamCtx,
         promptText,
         textSystemPrompt,
         modelHint,
@@ -2058,7 +2130,7 @@ export async function dispatchTeammate(
     release("success")
 
     return {
-      text,
+      text: await visibleTeamDerivedText(teamCtx, text, `teammate-result:${args.taskId}`),
       teammateId: teammate.id,
       teammateName: teammate.name,
       usage: turn.usage,

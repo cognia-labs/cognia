@@ -33,10 +33,103 @@ import { generateSafeEmbedding } from "@/lib/rag/safe-embedding"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { MEMORY_RERANK_PROMPT } from "./rerank-prompt"
+import { getDb } from "@/lib/db/schema"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import {
+  mergePersonalMarks,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
+import type { PersonalHistoryMessage } from "@cognia/plugin-contract/types/execution/personal-visibility"
 
 /** Single global collection for memory vectors. */
 export const MEMORY_VECTOR_COLLECTION = "cognia_memory"
 const VECTOR_READ_BATCH_SIZE = 256
+
+/** Filter existing derived facts against canonical provenance before reranking or recall. */
+export async function filterPersonalMemories(
+  memories: readonly Memory[],
+  sessionId?: string,
+  executionRunId?: string
+): Promise<Memory[]> {
+  if (!memories.length) return []
+  const db = getDb()
+  const sources = await Promise.all(
+    memories.map(async (memory): Promise<PersonalHistoryMessage[]> => {
+      const stored = memory as Memory & {
+        personalMarks?: PersonalMarkV1[]
+        metadata?: { personalMarks?: PersonalMarkV1[] }
+      }
+      const explicit = mergePersonalMarks(stored.personalMarks, stored.metadata?.personalMarks)
+      const marks: PersonalHistoryMessage[] = explicit.length
+        ? [{ id: memory.id, metadata: { personalMarks: explicit } }]
+        : []
+      const message = memory.sourceMessageId
+        ? await db.messages.get(memory.sourceMessageId)
+        : undefined
+      if (message && (!memory.sourceSessionId || message.sessionId === memory.sourceSessionId))
+        return [...marks, { ...message, id: memory.id }]
+      if (memory.sourceSessionId && !memory.sourceMessageId) {
+        const history = await db.messages
+          .where("sessionId")
+          .equals(memory.sourceSessionId)
+          .toArray()
+        if (history.length) return [...marks, ...history.map((row) => ({ ...row, id: memory.id }))]
+      }
+      if (!memory.sourceSessionId && !memory.sourceMessageId && marks.length) return marks
+      // Old derived rows without provenance belong to this Host's owner. A lost
+      // explicit reference cannot prove even that ownership and stays closed.
+      return [
+        ...marks,
+        {
+          id: memory.id,
+          metadata: {
+            personalMarks: [
+              {
+                person:
+                  memory.sourceSessionId || memory.sourceMessageId
+                    ? { kind: "service", ref: "unavailable-memory-provenance" }
+                    : { kind: "local-person" },
+                source: "memory-provenance",
+                markedAt: 0,
+              },
+            ],
+          },
+        },
+      ]
+    })
+  )
+  if (getDb() !== db) throw new Error("Personal memory database changed")
+  const history = await preparePersonalHistory(sessionId, sources.flat(), { executionRunId })
+  const withheld = new Set(history.withheldMessageIds)
+  return memories.filter((memory) => !withheld.has(memory.id))
+}
+
+/** Carry the consuming Host identity through each candidate leg, ahead of model reranking. */
+export function withPersonalMemoryVisibility(
+  deps: ApplyMemoryContextDeps,
+  sessionId?: string,
+  executionRunId?: string
+): ApplyMemoryContextDeps {
+  return {
+    ...deps,
+    loadCandidates: async (reader) =>
+      filterPersonalMemories(await deps.loadCandidates(reader), sessionId, executionRunId),
+    loadProcedural: async (reader) =>
+      filterPersonalMemories(await deps.loadProcedural(reader), sessionId, executionRunId),
+    ...(deps.loadHistoricalCandidates
+      ? {
+          loadHistoricalCandidates: async (
+            reader: Parameters<NonNullable<ApplyMemoryContextDeps["loadHistoricalCandidates"]>>[0]
+          ) =>
+            filterPersonalMemories(
+              await deps.loadHistoricalCandidates!(reader),
+              sessionId,
+              executionRunId
+            ),
+        }
+      : {}),
+  }
+}
 
 /** The (non-undefined) shape returned by `tryBuildTwinDeps`. */
 type PrebuiltTwinDeps = NonNullable<Awaited<ReturnType<typeof tryBuildTwinDeps>>>

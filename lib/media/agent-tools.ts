@@ -126,6 +126,7 @@ function fail(code: MediaToolFailureCode, error: string): Failure {
 
 export interface MediaToolContext {
   sessionId: string
+  executionRunId?: string
 }
 
 export interface MediaToolDeps {
@@ -196,10 +197,15 @@ function latestImageRef(messages: UIMessage[]): string | undefined {
 async function startFrameOf(
   image: string,
   deps: MediaToolDeps,
-  sessionId: string
+  sessionId: string,
+  executionRunId?: string
 ): Promise<VideoJobStartFrameInput | Failure> {
   if (image === LATEST_IMAGE) {
-    const ref = latestImageRef(await deps.listMessages(sessionId))
+    const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+    const history = await preparePersonalHistory(sessionId, await deps.listMessages(sessionId), {
+      executionRunId,
+    })
+    const ref = latestImageRef(history.messages)
     if (!ref) return fail("no_image", "There is no image in this conversation to animate.")
     return { kind: "media", ref }
   }
@@ -267,7 +273,7 @@ export async function runMediaBuiltinTool(
         const image = str(args, "image")
         let startFrame: VideoJobStartFrameInput | undefined
         if (image) {
-          const frame = await startFrameOf(image, deps, context.sessionId)
+          const frame = await startFrameOf(image, deps, context.sessionId, context.executionRunId)
           if ("ok" in frame) return frame
           startFrame = frame
         }
@@ -365,6 +371,7 @@ export const toolFamily: ModuleToolFamily = {
   async run(name, args, call) {
     return runMediaBuiltinTool(name, args, await resolveMediaToolDeps(), {
       sessionId: call.sessionId,
+      executionRunId: call.executionRunId,
     })
   },
 }

@@ -7,6 +7,7 @@
 import type { Scorer, Score } from "@/types/eval/eval"
 import type { CalibrationItemRow } from "@/lib/db/calibration-items"
 import type { CalibrationRunRow } from "@/lib/db/calibration-runs"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
 import {
   runCalibration,
   buildCalibrationRunDeps,
@@ -18,6 +19,11 @@ jest.mock("@/lib/ai/renderer-llm-client", () => ({
   buildRendererLlmClient: jest.fn(),
 }))
 import { buildRendererLlmClient } from "@/lib/ai/renderer-llm-client"
+
+const personalFixture = createDbTestFixture({ seeded: false })
+beforeAll(personalFixture.initialize)
+beforeEach(personalFixture.restore)
+afterAll(personalFixture.dispose)
 
 function item(overrides: Partial<CalibrationItemRow> = {}): CalibrationItemRow {
   return {
@@ -104,7 +110,7 @@ describe("runCalibration", () => {
     expect(row.scoredCount).toBe(4)
     expect(row.erroredCount).toBe(0)
     expect(row.metrics.matrix).toEqual({ tp: 1, fp: 1, tn: 1, fn: 1 })
-    expect(row.criterion).toBe("task completion")
+    expect(row.criterion).toBe("[Withheld: personal content of unverified person]")
     expect(row.judgeModel).toBe("claude-sonnet-4-6")
     // disagreement reasoning is preserved
     expect(row.verdicts.find((v) => v.itemId === "i3")?.reasoning).toBe("missed a step")
@@ -167,6 +173,34 @@ describe("runCalibration", () => {
       { done: 1, total: 2 },
       { done: 2, total: 2 },
     ])
+  })
+
+  it("withholds migrated calibration prompts, answers, history and judge rubrics", async () => {
+    const judge = scriptedJudge({ i1: { passed: true } })
+    const score = jest.spyOn(judge, "score")
+    const deps = makeDeps(
+      [
+        item({
+          criterion: "private criterion",
+          rubric: "private rubric",
+          input: "private request",
+          output: "private answer",
+          history: [{ role: "user", content: "private old message" }],
+          reference: "private reference",
+        }),
+      ],
+      judge,
+      []
+    )
+    const makeJudge = jest.spyOn(deps, "makeJudge")
+    await runCalibration({ setId: "set-a", appSettings: null, deps })
+    expect(makeJudge).toHaveBeenCalledWith(
+      "[Withheld: personal content of unverified person]",
+      "[Withheld: personal content of unverified person]"
+    )
+    expect(JSON.stringify(score.mock.calls)).not.toContain("private")
+    expect(score.mock.calls[0][0].output).toBe("[Withheld: personal content of unverified person]")
+    expect(score.mock.calls[0][1]).not.toHaveProperty("history")
   })
 
   it("throws AbortError and saves nothing when the signal is already aborted", async () => {

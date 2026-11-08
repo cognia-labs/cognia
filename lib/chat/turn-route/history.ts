@@ -30,6 +30,7 @@ import type { UIMessage } from "ai"
 import type { SendContent } from "@cognia/agent-config-types"
 import { runMetadataOf } from "@/lib/chat/message-run-metadata"
 import type { LlmClient } from "@/lib/twin/distill/llm"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 /**
  * The memory a turn can land in.
@@ -173,11 +174,26 @@ export function prefixForeignTurnsContext(
  */
 export async function foreignTurnsHandoffText(
   messages: readonly UIMessage[],
-  options: { client: () => Promise<LlmClient | null>; signal?: AbortSignal; state?: unknown }
+  options: {
+    client: () => Promise<LlmClient | null>
+    signal?: AbortSignal
+    state?: unknown
+    sessionId?: string
+    executionRunId?: string
+  }
 ): Promise<string> {
   if (messages.length === 0) return ""
+  const filtered = await preparePersonalHistory(options.sessionId, messages, {
+    executionRunId: options.executionRunId,
+  })
+  messages = filtered.messages
   const { buildHandoffContext, prepareHandoffContext } = await import("@/lib/chat/handoff-context")
-  const stateOption = options.state === undefined ? {} : { state: options.state }
+  // Imported summaries have no message-level provenance. Once any of their
+  // source messages is withheld, only the filtered canonical rows may travel.
+  const stateOption =
+    options.state === undefined || filtered.withheldMessageIds.length
+      ? {}
+      : { state: options.state }
   const projected = buildHandoffContext(messages, stateOption)
   if (!projected.losses.some((loss) => loss.kind === "budget")) return projected.text
   try {

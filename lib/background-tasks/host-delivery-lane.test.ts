@@ -38,6 +38,7 @@ function turnDeps(patch: Partial<HostAutomatedTurnDeps> = {}) {
       rows.push(row)
     }),
     bindMessageRuns: jest.fn(),
+    prepareText: jest.fn(async (_sessionId, text) => text),
     buildOptions: jest.fn(async () => ({ model: "m" }) as SendOptions),
     dispatch: jest.fn(async () => undefined),
     onError: jest.fn(),
@@ -53,6 +54,32 @@ const input = {
 }
 
 describe("runHostAutomatedTurn", () => {
+  it("projects derived results before retrieval and rechecks before dispatch", async () => {
+    const placeholder = "[Withheld: personal content of Host owner]"
+    const { deps } = turnDeps({ prepareText: jest.fn(async () => placeholder) })
+    await runHostAutomatedTurn({ ...input, personalRunIds: ["source-run"] }, deps)
+    await flush()
+    expect(deps.prepareText).toHaveBeenCalledWith("chat-1", input.text, RECEIPT.runId, [
+      "source-run",
+    ])
+    expect(deps.buildOptions).toHaveBeenCalledWith(SESSION, placeholder, RECEIPT.runId)
+    expect(deps.dispatch).toHaveBeenCalledWith(
+      "chat-1",
+      placeholder,
+      expect.anything(),
+      expect.anything()
+    )
+    const changed = turnDeps({
+      prepareText: jest.fn().mockResolvedValueOnce(input.text).mockResolvedValueOnce(placeholder),
+    })
+    await runHostAutomatedTurn(input, changed.deps)
+    await flush()
+    expect(changed.deps.dispatch).not.toHaveBeenCalled()
+    expect(changed.deps.onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("visibility changed") })
+    )
+  })
+
   it("accepts the framed results as a background-result row, then dispatches it", async () => {
     const { deps, rows, stopHeartbeat } = turnDeps()
     await expect(

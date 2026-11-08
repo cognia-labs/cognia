@@ -13,6 +13,7 @@
 import { getDb } from "@/lib/db/schema"
 import { useSettingsStore } from "@/stores/settings"
 import { runTitleTask } from "@/lib/ai/generation/run-title-task"
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 
 /** Serialise an arbitrary payload into a short text preview for the prompt. */
 function preview(value: unknown, max: number): string {
@@ -58,6 +59,7 @@ export async function generateWorkflowRunTitle(runId: string): Promise<string | 
       override: titleCfg,
       featureId: "workflow-run-title",
       sourceText: sourceParts,
+      sourceRunIds: [workflowExecutionRunId(runId)],
       resultText: resultText || undefined,
       locale: settings?.language,
       kind: "work",

@@ -26,7 +26,10 @@ import {
   type RunAndCaptureResult,
   type CaptureStreamEvent,
 } from "@/lib/claude/run-and-capture"
-import { setSessionMode as defaultSetSessionMode } from "@/lib/claude/ipc"
+import {
+  closeSession as defaultCloseSession,
+  setSessionMode as defaultSetSessionMode,
+} from "@/lib/claude/ipc"
 import type { SendOptions } from "@cognia/agent-config-types"
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
 import type { ResolvedAgentExecutionSpec } from "@cognia/agent-config-types/agent-execution"
@@ -56,9 +59,11 @@ import { readToolApprovals } from "./tool-approvals"
 import {
   appendTranscript,
   readTranscriptTail,
+  writeTranscript,
   type TranscriptFs,
   type TranscriptTail,
 } from "./transcript"
+import { prepareCliPersonalHistory, rebuildCliPersonalHistory } from "./personal-history"
 import {
   CLI_AUTO_APPROVED_TOOLS,
   withCliAutoApprovedTools,
@@ -197,6 +202,8 @@ export interface AgentSessionParams {
    * permission mode without respawning the sidecar. Defaults to the ipc
    * {@link defaultSetSessionMode}; injected in tests. */
   setSessionMode?: (sessionId: string, mode: PermissionModeValue) => Promise<void>
+  /** Close opaque provider memory before rebuilding changed canonical visibility. */
+  closeSession?: (sessionId: string) => Promise<void>
   /** Fetch the twin context from the running desktop (only when `config.twin`
    * is enabled). Resolves `null` on any failure — the turn then proceeds
    * without twin grounding. Injected in tests. */
@@ -265,6 +272,8 @@ export type AgentSessionUiEvent =
   | { kind: "input-queue-cleared"; text: string; imagePaths: string[] }
 
 export interface AgentSession {
+  /** Host-only control fence; absence cannot authorize replay of opaque memory. */
+  assertPersonalControlVisibility?(): Promise<void>
   /** Canonical autonomous turns emitted outside send(), with normal transcript semantics. */
   subscribeEvents?(listener: (event: AgentEventEnvelope) => void): () => void
   cancel?(): Promise<void>
@@ -399,7 +408,9 @@ function checkConversationSnapshot(
 /** Reject lossy restoration before dispatching a new provider turn. */
 function restoreRuntimeHistory(
   options: SendOptions,
-  tail: TranscriptTail
+  tail: TranscriptTail,
+  history: Awaited<ReturnType<typeof prepareCliPersonalHistory>>,
+  appendSystemPrompt: string | undefined
 ): RuntimeHistoryRestore | undefined {
   if (!tail.hasEntries) return undefined
   function fail(reason: string): never {
@@ -416,6 +427,7 @@ function restoreRuntimeHistory(
         sdkSessionId?: string
         sdkSessionStorage?: SdkSessionStorage
         messages?: unknown[]
+        personalVisibilityDigest?: string
       }
     | undefined
   const runtime =
@@ -429,6 +441,20 @@ function restoreRuntimeHistory(
     fail("the saved transcript has no compatible durable runtime history")
   if (saved.runtime !== runtime || saved.provider !== options.provider)
     fail("the saved runtime/provider differs from this session")
+  let checked: ReturnType<typeof checkConversationSnapshot> | undefined
+  if (runtime !== "claude-agent-sdk") {
+    if (!Array.isArray(saved.messages) || saved.messages.length === 0)
+      fail("the provider message snapshot is missing")
+    checked = checkConversationSnapshot(saved.messages)
+    if (typeof checked === "string") fail(checked)
+  }
+  if (
+    history.withheldMessageIds.length > 0 &&
+    saved.personalVisibilityDigest !== history.visibilityDigest
+  ) {
+    rebuildCliPersonalHistory(options, history.messages, appendSystemPrompt)
+    return { unfinishedTurns: 0, startsFresh: false }
+  }
   if (runtime === "claude-agent-sdk") {
     if (typeof saved.sdkSessionId !== "string" || !saved.sdkSessionId)
       fail("the native SDK session id is missing")
@@ -449,12 +475,7 @@ function restoreRuntimeHistory(
   // A turn that failed after the latest snapshot saved nothing durable; the
   // snapshot is still the last complete provider conversation, so resume from
   // it and report the requests it does not contain.
-  if (!Array.isArray(saved.messages) || saved.messages.length === 0)
-    fail("the provider message snapshot is missing")
-  const checked = checkConversationSnapshot(saved.messages)
-  if (typeof checked === "string") fail(checked)
-  const messages = checked
-  options.initialConversation = messages
+  options.initialConversation = checked as NonNullable<SendOptions["initialConversation"]>
   return { unfinishedTurns: tail.unfinishedUserTurns, startsFresh: false }
 }
 
@@ -573,6 +594,44 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
   // its SendOptions and cannot re-resolve the prompt per turn).
   let sendOptionsOverrideMode: PermissionModeValue | null = null
   let turnSequence = 0
+  let personalVisibilityDigest: string | undefined
+  const baseAppendPrompts = new WeakMap<SendOptions, string | undefined>()
+
+  function recordPersonalVisibility(
+    options: SendOptions,
+    history: Awaited<ReturnType<typeof prepareCliPersonalHistory>>
+  ): void {
+    personalVisibilityDigest = history.visibilityDigest
+    options.personalVisibilityDigest = history.visibilityDigest
+    options.personalVisibilityHasWithheld = history.withheldMessageIds.length > 0
+    // No old engine memory is hidden from these readers. Upgrade the retained
+    // resume identity without discarding it, including control-only turns.
+    if (history.withheldMessageIds.length > 0) return
+    const latest = history.entries.findLastIndex((entry) => entry.role === "assistant")
+    const saved = history.entries[latest]?.meta?.runtimeHistory
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return
+    const runtimeHistory = saved as Record<string, unknown>
+    if (runtimeHistory.personalVisibilityDigest === history.visibilityDigest) return
+    writeTranscript(
+      home,
+      sessionId,
+      history.entries.map((entry, index) =>
+        index === latest
+          ? {
+              ...entry,
+              meta: {
+                ...entry.meta,
+                runtimeHistory: {
+                  ...runtimeHistory,
+                  personalVisibilityDigest: history.visibilityDigest,
+                },
+              },
+            }
+          : entry
+      ),
+      params.transcriptFs
+    )
+  }
 
   function publishStatus(
     session: ResolvedCliSessionContext,
@@ -596,14 +655,18 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
     if (closed) throw new Error("agent session is closed")
     const session = await assembler.resolveSession()
     if (closed) throw new Error("agent session is closed")
+    if (!baseAppendPrompts.has(session.sendOptions))
+      baseAppendPrompts.set(session.sendOptions, session.sendOptions.appendSystemPrompt)
     if (!boot) {
-      // Only the tail of the transcript matters for a provider-runtime resume —
-      // the latest assistant snapshot plus the last non-system role. Scanning
-      // backwards keeps a large transcript from being parsed a second time.
+      // Read canonical history before touching opaque runtime restore state.
+      const history = await prepareCliPersonalHistory(home, sessionId, params.transcriptFs)
       const restored = restoreRuntimeHistory(
         session.sendOptions,
-        readTranscriptTail(home, sessionId, params.transcriptFs)
+        readTranscriptTail(home, sessionId, params.transcriptFs),
+        history,
+        baseAppendPrompts.get(session.sendOptions)
       )
+      recordPersonalVisibility(session.sendOptions, history)
       pendingRestoreNotice = restored ? runtimeHistoryRestoreNotice(restored) : undefined
       publishStatus(session, "initializing")
       try {
@@ -664,6 +727,18 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
         pendingRestoreNotice = undefined
       }
       const sendOptions = session.sendOptions
+      const personalHistory = await prepareCliPersonalHistory(home, sessionId, params.transcriptFs)
+      if (
+        personalHistory.withheldMessageIds.length > 0 &&
+        personalVisibilityDigest !== personalHistory.visibilityDigest
+      ) {
+        rebuildCliPersonalHistory(
+          sendOptions,
+          personalHistory.messages,
+          baseAppendPrompts.get(sendOptions)
+        )
+      }
+      recordPersonalVisibility(sendOptions, personalHistory)
       const turnNumber = turnSequence++
       const turnIdentity = {
         runId: `${sessionId}:r${turnNumber}`,
@@ -829,6 +904,7 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
         version: 1,
         runtime: runtimeName,
         provider: sendOptions.provider,
+        personalVisibilityDigest,
         ...(sdkSessionIdFromRun || sendOptions.resumeSessionId
           ? {
               sdkSessionId: sdkSessionIdFromRun ?? sendOptions.resumeSessionId,
@@ -1001,6 +1077,29 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
     },
     isLive() {
       return boot !== null && turnSequence > 0 && !closed
+    },
+    async assertPersonalControlVisibility() {
+      if (closed || !personalVisibilityDigest) throw new Error("personal_visibility_changed")
+      const history = await prepareCliPersonalHistory(home, sessionId, params.transcriptFs)
+      const cached = assembler.peek()
+      if (
+        history.withheldMessageIds.length === 0 ||
+        history.visibilityDigest === personalVisibilityDigest
+      ) {
+        if (cached) recordPersonalVisibility(cached.sendOptions, history)
+        return
+      }
+      await (params.closeSession ?? defaultCloseSession)(sessionId)
+      if (cached) {
+        rebuildCliPersonalHistory(
+          cached.sendOptions,
+          history.messages,
+          baseAppendPrompts.get(cached.sendOptions)
+        )
+      }
+      // Keep the old identity until send() dispatches the rebuilt history. A
+      // cancelled in-flight turn must not persist its old snapshot as new.
+      throw new Error("personal_visibility_changed")
     },
     async close() {
       if (closed) return

@@ -15,6 +15,8 @@
 import type { UIMessage } from "ai"
 import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
 import { createPluginBudget, type PluginBudget } from "./budget"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import type {
   PluginAgentSession,
   PluginCreateSessionOptions,
@@ -44,12 +46,14 @@ function toSessionMessage(message: UIMessage): PluginSessionMessage {
 function buildSession(
   id: string,
   base: { characterId?: string; cwd?: string },
-  budget?: PluginBudget
+  budget?: PluginBudget,
+  pluginId?: string
 ): PluginAgentSession {
   const send = async (
     prompt: string,
     options: PluginSessionSendOptions = {}
   ): Promise<PluginSessionSendResult> => {
+    const host = pluginId ? pluginExecutionContext(pluginId) : undefined
     if (typeof prompt !== "string" || !prompt) {
       throw new Error("session.send requires a non-empty prompt")
     }
@@ -64,7 +68,12 @@ function buildSession(
     const existing = await messagesDb.listMessages(id)
     // Prior turns for the text-channel fallback (ignored on the sidecar, where
     // native resume carries the conversation).
-    const priorMessages = existing
+    const projection = await preparePersonalHistory(
+      host?.sessionId,
+      existing.map((message) => ({ ...message, sessionId: id })),
+      { executionRunId: host?.executionRunId ?? "" }
+    )
+    const priorMessages = projection.messages
       .map((message) => ({
         ...toSessionMessage(message),
         ...(message.metadata ? { metadata: message.metadata as Record<string, unknown> } : {}),
@@ -124,9 +133,17 @@ function buildSession(
   }
 
   const history = async (): Promise<PluginSessionMessage[]> => {
+    const host = pluginId ? pluginExecutionContext(pluginId) : undefined
     const messagesDb = await import("@/lib/db/messages")
     const rows = await messagesDb.listMessages(id)
-    return rows.map(toSessionMessage)
+    const projection = await preparePersonalHistory(
+      host?.sessionId,
+      rows.map((message) => ({ ...message, sessionId: id })),
+      {
+        executionRunId: host?.executionRunId ?? "",
+      }
+    )
+    return projection.messages.map(toSessionMessage)
   }
 
   const end = async (): Promise<void> => {
@@ -139,7 +156,8 @@ function buildSession(
 
 /** Create a new durable plugin agent session. */
 export async function createPluginAgentSession(
-  options: PluginCreateSessionOptions = {}
+  options: PluginCreateSessionOptions = {},
+  pluginId?: string
 ): Promise<PluginAgentSession> {
   const sessionsDb = await import("@/lib/db/sessions")
   const session = await sessionsDb.createSession({
@@ -161,19 +179,28 @@ export async function createPluginAgentSession(
       ...(options.characterId ? { characterId: options.characterId } : {}),
       ...(options.cwd ? { cwd: options.cwd } : {}),
     },
-    budget
+    budget,
+    pluginId
   )
 }
 
 /** Resume an existing plugin agent session by id. */
-export async function resumePluginAgentSession(sessionId: string): Promise<PluginAgentSession> {
+export async function resumePluginAgentSession(
+  sessionId: string,
+  pluginId?: string
+): Promise<PluginAgentSession> {
   const sessionsDb = await import("@/lib/db/sessions")
   const row = await sessionsDb.getSession(sessionId)
   if (!row) {
     throw new Error(`resumeSession: session "${sessionId}" not found`)
   }
-  return buildSession(row.id, {
-    ...(row.characterId ? { characterId: row.characterId } : {}),
-    ...(row.workingDir ? { cwd: row.workingDir } : {}),
-  })
+  return buildSession(
+    row.id,
+    {
+      ...(row.characterId ? { characterId: row.characterId } : {}),
+      ...(row.workingDir ? { cwd: row.workingDir } : {}),
+    },
+    undefined,
+    pluginId
+  )
 }

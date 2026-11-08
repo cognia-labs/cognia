@@ -4,6 +4,16 @@ import { useEffect } from "react"
 import { useComposerGhostText } from "./use-composer-ghost-text"
 import type { InlineCommandInfo } from "@/lib/chat/completion/inline/types"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    prepareOwnerHistory: async <T extends { id: string; metadata?: unknown }>(
+      messages: readonly T[]
+    ) => ({ ...withholdForReaders(messages, [{ kind: "local-person" }]), readers: [] }),
+  }
+})
 
 /**
  * Let timers + provider promises settle inside `act`, so a late state update
@@ -24,7 +34,7 @@ jest.mock("@/stores/settings/settings-store", () => ({
   }),
 }))
 
-type TestMessage = { role: string; parts: unknown }
+type TestMessage = { id?: string; role: string; parts: unknown; metadata?: Record<string, unknown> }
 const mockChatState = {
   messages: [] as TestMessage[],
   sessions: {} as Record<string, { messages: TestMessage[] }>,
@@ -83,6 +93,61 @@ describe("useComposerGhostText — model tier", () => {
     act(() => result.current.feed("hello"))
     await waitFor(() => expect(result.current.ghost).toBe(" world"))
     expect(result.current.suggestion?.source).toBe("ai")
+  })
+
+  it("filters stored messages before serializing a model completion prompt", async () => {
+    const complete = jest.fn(async () => " world")
+    mockBuildClient.mockReturnValue({ complete })
+    mockChatState.messages = [
+      {
+        id: "private",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "private source" },
+          { type: "tool-PrivateTool", output: "private result" },
+        ],
+        metadata: {
+          personalMarks: [
+            {
+              person: {
+                kind: "platform",
+                platform: "lark",
+                adapterId: "foreign-adapter",
+                remoteUserId: "foreign-person",
+              },
+              source: "test",
+              markedAt: 1,
+            },
+          ],
+        },
+      },
+    ]
+    const { result } = render()
+    act(() => result.current.feed("hello"))
+    await waitFor(() => expect(result.current.ghost).toBe(" world"))
+    expect(JSON.stringify(complete.mock.calls)).toContain("[Withheld: personal content of person ")
+    expect(JSON.stringify(complete.mock.calls)).not.toMatch(
+      /private source|PrivateTool|private result/
+    )
+  })
+
+  it("uses the Host owner's personal history for their composer suggestion", async () => {
+    const complete = jest.fn(async () => " world")
+    mockBuildClient.mockReturnValue({ complete })
+    mockChatState.messages = [
+      {
+        id: "owner-history",
+        role: "assistant",
+        parts: [{ type: "text", text: "OWNER COMPOSER CONTEXT" }],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+        },
+      },
+    ]
+    const { result } = render()
+    act(() => result.current.feed("hello"))
+    await waitFor(() => expect(result.current.ghost).toBe(" world"))
+    expect(JSON.stringify(complete.mock.calls)).toContain("OWNER COMPOSER CONTEXT")
   })
 
   it("accept() returns the joined value and clears the ghost", async () => {

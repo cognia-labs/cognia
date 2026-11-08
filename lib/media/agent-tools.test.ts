@@ -1,3 +1,19 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+  preparePersonalDerivedHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+
 import type { UIMessage } from "ai"
 
 import type { MediaGenerationJobRow } from "@/lib/ai/media/video-jobs/types"
@@ -188,6 +204,33 @@ describe("video_generate", () => {
       context
     )
     expect(t.start.mock.calls[0]![0].startFrame).toEqual({ kind: "media", ref: "cognia-media:new" })
+  })
+
+  it("does not send a withheld historical image to the media provider", async () => {
+    const t = deps()
+    jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+      messages: [
+        {
+          id: "private-image",
+          role: "user",
+          parts: [{ type: "text", text: "[Withheld: personal content of Host owner]" }],
+        },
+      ],
+      visibilityDigest: "changed",
+      withheldMessageIds: ["private-image"],
+      readers: [],
+    } as never)
+    const result = await runMediaBuiltinTool(
+      "video_generate",
+      { prompt: "Move", image: "latest" },
+      t.deps,
+      { sessionId: "s1", executionRunId: "host-run" }
+    )
+    expect(result).toMatchObject({ ok: false, code: "no_image" })
+    expect(t.start).not.toHaveBeenCalled()
+    expect(preparePersonalHistory).toHaveBeenCalledWith("s1", expect.any(Array), {
+      executionRunId: "host-run",
+    })
   })
 
   it("passes a media reference or an attachment id through to the engine's resolver", async () => {

@@ -13,6 +13,10 @@ jest.mock("../plugin/plugin-tool-dispatch", () => ({
 jest.mock("../plugin/plugin-runtime", () => ({
   ensurePluginRuntime: jest.fn(async () => undefined),
 }))
+jest.mock("./personal-history", () => {
+  const actual = jest.requireActual("./personal-history")
+  return { ...actual, prepareCliPersonalHistory: jest.fn(actual.prepareCliPersonalHistory) }
+})
 
 import {
   createAgentSession,
@@ -22,8 +26,19 @@ import {
   type AttachmentSummary,
 } from "./session-runner"
 import type { SendOptions } from "@cognia/agent-config-types"
+import {
+  personalVisibilityDigest,
+  withholdForReaders,
+} from "@cognia/plugin-contract/types/execution/personal-visibility"
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import { createPermissionGate } from "./permission-gate"
-import { appendTranscript, readTranscript, type TranscriptFs } from "./transcript"
+import {
+  appendTranscript,
+  createTransientTranscriptFs,
+  readTranscript,
+  type TranscriptFs,
+} from "./transcript"
+import { prepareCliPersonalHistory } from "./personal-history"
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "../config/schema"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 import type { SidecarBootstrap } from "../runtime/bootstrap"
@@ -1785,6 +1800,238 @@ describe("createAgentSession — liveness and defaults", () => {
 
 describe("durable runtime history", () => {
   it.each(["anthropic", "deepseek"])(
+    "upgrades public %s history without a saved digest and preserves its runtime resume",
+    async (provider) => {
+      const fs = createTransientTranscriptFs()
+      const snapshot = [{ role: "assistant", content: "public original answer" }]
+      appendTranscript(
+        HOME,
+        "public-upgrade",
+        {
+          role: "assistant",
+          content: "public original answer",
+          meta: {
+            runtimeHistory: {
+              version: 1,
+              runtime: provider === "anthropic" ? "claude-agent-sdk" : "ai-sdk",
+              provider,
+              sdkSessionId: "existing-native",
+              messages: snapshot,
+            },
+          },
+        },
+        fs,
+        1
+      )
+      const dispatched: SendOptions[] = []
+      const session = createAgentSession({
+        config: cfg({ provider }),
+        home: HOME,
+        sessionId: "public-upgrade",
+        transcriptFs: fs,
+        resolveOptions: async () => ({ provider, model: "m" }),
+        bootstrap: async () => ({ transport: {}, shutdown: async () => {} }) as never,
+        capture: (async (_id: string, _content: unknown, options: SendOptions) => {
+          dispatched.push({ ...options })
+          return {
+            ...result("continued"),
+            sdkSessionId: "existing-native",
+            conversationSnapshot: snapshot,
+          }
+        }) as never,
+      })
+      try {
+        await session.prepareForSubagent!()
+        const saved = readTranscript(HOME, "public-upgrade", fs)[0]?.meta?.runtimeHistory as Record<
+          string,
+          unknown
+        >
+        expect(saved.personalVisibilityDigest).toBe(personalVisibilityDigest([], []))
+        expect(saved.sdkSessionId).toBe("existing-native")
+        await session.send("continue", { gate: createPermissionGate({ yes: true }) })
+        if (provider === "anthropic") expect(dispatched[0].resumeSessionId).toBe("existing-native")
+        else expect(dispatched[0].initialConversation).toEqual(snapshot)
+        expect(dispatched[0].personalVisibilityHasWithheld).toBe(false)
+      } finally {
+        await session.close()
+      }
+    }
+  )
+
+  it("keeps the CLI engine and persists the owner-only identity when readers loosen before a control", async () => {
+    const originalPrepare = jest.requireActual("./personal-history")
+      .prepareCliPersonalHistory as typeof prepareCliPersonalHistory
+    let readers: PrincipalRefV1[] = [
+      { kind: "local-person" },
+      { kind: "platform", platform: "slack", adapterId: "a", remoteUserId: "other" },
+    ]
+    jest.mocked(prepareCliPersonalHistory).mockImplementation(async (...args) => {
+      const history = await originalPrepare(...args)
+      const messages = history.entries.map((entry, index) => ({
+        ...entry,
+        id: entry.id ?? `cli:${index}:${entry.ts}`,
+        createdAt: entry.ts,
+      }))
+      return { ...withholdForReaders(messages, readers), entries: history.entries }
+    })
+    const fs = createTransientTranscriptFs()
+    appendTranscript(
+      HOME,
+      "owner-returns",
+      {
+        role: "assistant",
+        content: "OWNER_CANONICAL_ANSWER",
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+        },
+        meta: {
+          runtimeHistory: {
+            version: 1,
+            runtime: "claude-agent-sdk",
+            provider: "anthropic",
+            sdkSessionId: "filtered-native",
+            personalVisibilityDigest: personalVisibilityDigest(readers, ["cli:0:1"]),
+          },
+        },
+      },
+      fs,
+      1
+    )
+    const closeSession = jest.fn(async () => undefined)
+    const dispatched: SendOptions[] = []
+    const session = createAgentSession({
+      config: cfg(),
+      home: HOME,
+      sessionId: "owner-returns",
+      transcriptFs: fs,
+      closeSession,
+      resolveOptions: async () => ({ provider: "anthropic", model: "m" }),
+      bootstrap: async () => ({ transport: {}, shutdown: async () => {} }) as never,
+      capture: (async (_id: string, _content: unknown, options: SendOptions) => {
+        dispatched.push({ ...options })
+        return { ...result("public reply"), sdkSessionId: "filtered-native" }
+      }) as never,
+    })
+    try {
+      await session.send("joint turn", { gate: createPermissionGate({ yes: true }) })
+      readers = [{ kind: "local-person" }]
+      await expect(session.assertPersonalControlVisibility!()).resolves.toBeUndefined()
+      expect(closeSession).not.toHaveBeenCalled()
+      const saved = readTranscript(HOME, "owner-returns", fs).at(-1)?.meta
+        ?.runtimeHistory as Record<string, unknown>
+      expect(saved.personalVisibilityDigest).toBe(personalVisibilityDigest(readers, []))
+      expect(saved.sdkSessionId).toBe("filtered-native")
+      await session.send("owner continues", { gate: createPermissionGate({ yes: true }) })
+      expect(dispatched[1].resumeSessionId).toBe("filtered-native")
+      expect(dispatched[1].initialConversation).toBeUndefined()
+      expect(dispatched[1].personalVisibilityHasWithheld).toBe(false)
+    } finally {
+      jest.mocked(prepareCliPersonalHistory).mockImplementation(originalPrepare)
+      await session.close()
+    }
+  })
+
+  it("closes and rebuilds opaque CLI memory when canonical marks tighten before a control", async () => {
+    const { fsx } = memFs()
+    const closeSession = jest.fn(async () => undefined)
+    const sent: SendOptions[] = []
+    const session = createAgentSession({
+      config: cfg(),
+      sessionId: "control-visibility",
+      home: HOME,
+      transcriptFs: fsx,
+      resolveOptions: async () => ({ provider: "anthropic", model: "m" }),
+      bootstrap: async () => ({ transport: {}, shutdown: async () => {} }) as never,
+      closeSession,
+      capture: (async (_id: string, _content: unknown, options: SendOptions) => {
+        sent.push({ ...options })
+        return { ...result("public reply"), sdkSessionId: "old-native-memory" }
+      }) as never,
+    })
+    await expect(session.assertPersonalControlVisibility!()).rejects.toThrow(
+      "personal_visibility_changed"
+    )
+    await session.send("first", { gate: createPermissionGate({ yes: true }) })
+    await expect(session.assertPersonalControlVisibility!()).resolves.toBeUndefined()
+    appendTranscript(
+      HOME,
+      "control-visibility",
+      {
+        role: "assistant",
+        content: "PRIVATE_TOOL_HISTORY",
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+        },
+      },
+      fsx,
+      3
+    )
+    await expect(session.assertPersonalControlVisibility!()).rejects.toThrow(
+      "personal_visibility_changed"
+    )
+    expect(closeSession).toHaveBeenCalledWith("control-visibility")
+    await session.send("repeat", { gate: createPermissionGate({ yes: true }) })
+    expect(sent[1].resumeSessionId).toBeUndefined()
+    expect(JSON.stringify(sent[1])).toContain("[Withheld: personal content of Host owner]")
+    expect(JSON.stringify(sent[1])).not.toContain("PRIVATE_TOOL_HISTORY")
+    await session.close()
+  })
+
+  it.each(["anthropic", "deepseek"])(
+    "rebuilds %s from filtered canonical history when the saved visibility digest differs",
+    async (provider) => {
+      const { fsx } = memFs()
+      appendTranscript(
+        HOME,
+        "private-restore",
+        {
+          role: "assistant",
+          content: "OWNER_PRIVATE_ANSWER",
+          metadata: {
+            personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+          },
+          meta: {
+            runtimeHistory: {
+              version: 1,
+              runtime: provider === "anthropic" ? "claude-agent-sdk" : "ai-sdk",
+              provider,
+              sdkSessionId: "STALE_NATIVE",
+              personalVisibilityDigest: "old-reader-set",
+              messages: [{ role: "assistant", content: "SNAPSHOT_PRIVATE_TOOL_RESULT" }],
+            },
+          },
+        },
+        fsx,
+        1
+      )
+      let dispatched: SendOptions | undefined
+      const session = createAgentSession({
+        config: cfg({ provider }),
+        sessionId: "private-restore",
+        home: HOME,
+        transcriptFs: fsx,
+        resolveOptions: async () => ({ provider, model: "m" }),
+        bootstrap: async () => ({ transport: {}, shutdown: async () => {} }) as never,
+        capture: (async (_id: string, _content: unknown, options: SendOptions) => {
+          dispatched = { ...options }
+          return { ...result("continued"), sdkSessionId: "new-native" }
+        }) as never,
+      })
+      await session.send("repeat the answer", { gate: createPermissionGate({ yes: true }) })
+      expect(dispatched?.resumeSessionId).toBeUndefined()
+      expect(JSON.stringify(dispatched)).not.toContain("PRIVATE_")
+      const context =
+        provider === "anthropic" ? dispatched?.appendSystemPrompt : dispatched?.initialConversation
+      expect(JSON.stringify(context)).toContain("[Withheld:")
+      expect(typeof dispatched?.personalVisibilityDigest).toBe("string")
+      const saved = readTranscript(HOME, "private-restore", fsx).at(-1)?.meta
+        ?.runtimeHistory as Record<string, unknown>
+      expect(saved.personalVisibilityDigest).toBe(dispatched?.personalVisibilityDigest)
+      await session.close()
+    }
+  )
+
+  it.each(["anthropic", "deepseek"])(
     "restores %s history on a fresh CLI process",
     async (provider) => {
       const { fsx } = memFs()
@@ -2007,7 +2254,13 @@ it("resumes an AI SDK transcript after a failed turn from the last completed sna
       role: "assistant",
       content: "previous",
       meta: {
-        runtimeHistory: { version: 1, runtime: "ai-sdk", provider: "deepseek", messages: snapshot },
+        runtimeHistory: {
+          version: 1,
+          runtime: "ai-sdk",
+          provider: "deepseek",
+          messages: snapshot,
+          personalVisibilityDigest: personalVisibilityDigest([], []),
+        },
       },
     },
     fsx

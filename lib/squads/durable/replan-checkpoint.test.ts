@@ -8,7 +8,7 @@ jest.mock("../gates/replan-gate", () => ({
 }))
 const readDependencyResultsMock = jest.fn((..._args: unknown[]) => [] as unknown[])
 jest.mock("../memory/shared-memory-orchestrator", () => ({
-  readDependencyResults: (...args: unknown[]) => readDependencyResultsMock(...args),
+  readDependencyResultsForRun: (...args: unknown[]) => readDependencyResultsMock(...args),
 }))
 
 import { runReplanCheckpoint } from "./replan-checkpoint"

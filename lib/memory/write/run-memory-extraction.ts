@@ -220,12 +220,15 @@ export async function buildAutoExtractionDeps(
   })
   if (!client) return null
 
-  const [{ tryBuildMemoryDeps, tryBuildMemoryVectorSink }, { retrieveMemories }, memDb] =
-    await Promise.all([
-      import("@/lib/memory/runtime/build-deps"),
-      import("@/lib/memory/retrieve/retriever"),
-      import("@/lib/db/memories"),
-    ])
+  const [
+    { tryBuildMemoryDeps, tryBuildMemoryVectorSink, withPersonalMemoryVisibility },
+    { retrieveMemories },
+    memDb,
+  ] = await Promise.all([
+    import("@/lib/memory/runtime/build-deps"),
+    import("@/lib/memory/retrieve/retriever"),
+    import("@/lib/db/memories"),
+  ])
   const [memDeps, vectorSink] = await Promise.all([
     tryBuildMemoryDeps(config),
     tryBuildMemoryVectorSink(config),
@@ -254,7 +257,7 @@ export async function buildAutoExtractionDeps(
           sessionRecallRouting: false,
           beliefRankingWeight: 0,
         },
-        memDeps
+        withPersonalMemoryVisibility(memDeps)
       ).catch(() => [])
       return hits.map((h) => h.memory).filter((memory) => sameMemoryNamespace(memory, namespace))
     },

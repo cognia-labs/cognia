@@ -43,6 +43,12 @@ jest.mock("@/lib/modules/ports", () => ({
 }))
 
 import { hasRunStop, stopRegisteredRun } from "./run-stops"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  recordAbsorbedRequester,
+} from "./acting-authority"
+import { preparePersonalHistory } from "./personal-visibility"
 import { __resetChildRunOwnershipForTesting, inProcessOwnership } from "./child-run-ownership"
 import {
   __resetAgentTraceEmitterForTesting,
@@ -566,6 +572,53 @@ describe("launchChildRun: external", () => {
 })
 
 describe("launchChildRun: twin", () => {
+  it("resolves a twin child's readers from the live Host root", async () => {
+    const root = await startToolExecutionRun("session-parent", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    ports.set("twin-answer", {
+      start: (input: TwinAnswerInput): StartedChildEngine => ({
+        stop: jest.fn(),
+        outcome: preparePersonalHistory(
+          input.personalContext?.sessionId,
+          [
+            {
+              id: "twin-private",
+              text: "PRIVATE_TWIN_PERSONA",
+              metadata: {
+                personalMarks: [
+                  { person: { kind: "local-person" }, source: "twin-history", markedAt: 1 },
+                ],
+              },
+            },
+          ],
+          input.personalContext
+        ).then((history) => ({ status: "completed", text: history.messages[0].text })),
+      }),
+    })
+    const input = {
+      parentRunId: root.id,
+      target: { kind: "twin" as const, twinId: "tw", question: "q" },
+      title: "Twin",
+    }
+    const own = started(await launchChildRun(input))
+    await expect(own.outcome).resolves.toEqual({
+      status: "completed",
+      text: "PRIVATE_TWIN_PERSONA",
+    })
+    await recordAbsorbedRequester(root.id, {
+      kind: "platform",
+      platform: "lark",
+      adapterId: "a",
+      remoteUserId: "other",
+    })
+    const shared = started(await launchChildRun(input))
+    expect(JSON.stringify(await shared.outcome)).not.toContain("PRIVATE_TWIN_PERSONA")
+    await expect(shared.outcome).resolves.toMatchObject({
+      text: expect.stringContaining("[Withheld:"),
+    })
+  })
+
   it("answers through the twin-answer port with the grants", async () => {
     const start = jest.fn((_input: TwinAnswerInput): StartedChildEngine => ({
       outcome: Promise.resolve({ status: "completed", text: "as the twin" }),
@@ -586,6 +639,7 @@ describe("launchChildRun: twin", () => {
       question: "what now?",
       systemPrompt: "base",
       grants,
+      personalContext: { executionRunId: launched.executionRunId },
     })
     expect((await getExecutionRun(launched.executionRunId))?.status).toBe("completed")
   })
@@ -602,6 +656,34 @@ describe("launchChildRun: twin", () => {
       error: "engine_unavailable: twin-answer",
     })
     expect((await getExecutionRun(launched.executionRunId))?.status).toBe("failed")
+  })
+
+  it("uses the journaled child's context rather than fields on the target", async () => {
+    await seedParent()
+    const start = jest.fn((): StartedChildEngine => ({
+      outcome: Promise.resolve({ status: "completed" }),
+      stop: jest.fn(),
+    }))
+    ports.set("twin-answer", { start })
+    const launched = started(
+      await launchChildRun({
+        parentRunId: PARENT_ID,
+        target: {
+          kind: "twin",
+          twinId: "twin-1",
+          question: "q",
+          ...{ personalContext: { executionRunId: "forged" }, readers: [{ kind: "local-person" }] },
+        },
+        title: "t",
+      })
+    )
+    await launched.outcome
+    expect(start).toHaveBeenCalledWith({
+      twinId: "twin-1",
+      question: "q",
+      grants: [],
+      personalContext: { sessionId: "session-parent", executionRunId: launched.executionRunId },
+    })
   })
 
   it("forwards a stop to the twin's engine", async () => {

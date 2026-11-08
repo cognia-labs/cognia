@@ -163,6 +163,7 @@ test("runtimeStatus reports only the owning live AI runtime's nonsecret identity
       provider: "openai",
       cwd: "/workspace",
       transcriptInvalidationId: "g1",
+      personalVisibilityDigest: "personal-v1:owner",
       providerCredentials: { apiKey: "private" },
     },
   }
@@ -173,6 +174,7 @@ test("runtimeStatus reports only the owning live AI runtime's nonsecret identity
     provider: "openai",
     cwd: "/workspace",
     transcriptInvalidationId: "g1",
+    personalVisibilityDigest: "personal-v1:owner",
     active: false,
   })
   assert.deepEqual(runtimeStatus({ ...session, q: { closed: true } }), { retained: false })

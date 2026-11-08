@@ -394,6 +394,55 @@ test("restartReason: an explicit restored transcript replaces even an otherwise 
   )
 })
 
+test("restartReason: personal visibility is part of the retained engine identity", () => {
+  const existing = {
+    multiTurn: true,
+    q: { active: false },
+    sendOptions: { personalVisibilityDigest: "owner-only" },
+  }
+  assert.equal(restartReason(existing, { personalVisibilityDigest: "owner-only" }), null)
+  assert.equal(
+    restartReason(existing, {
+      personalVisibilityDigest: "second-requester",
+      personalVisibilityHasWithheld: true,
+    }),
+    "personal history visibility changed"
+  )
+  assert.equal(restartReason(existing, {}), null)
+  assert.equal(
+    restartReason(existing, {
+      personalVisibilityDigest: "owner-visible",
+      personalVisibilityHasWithheld: false,
+    }),
+    null
+  )
+  assert.equal(
+    restartReason(
+      { multiTurn: true },
+      { personalVisibilityDigest: "owner-only", personalVisibilityHasWithheld: false }
+    ),
+    null
+  )
+})
+
+test("routeSendIntoLiveLoop records a fully visible digest without replacing the retained engine", async () => {
+  const pushed: unknown[] = []
+  const existing = {
+    multiTurn: true,
+    q: { active: false },
+    sendOptions: { personalVisibilityDigest: "two-readers", personalVisibilityHasWithheld: true },
+    pushUserMessage: (prompt: unknown) => {
+      pushed.push(prompt)
+    },
+  }
+  const options = { personalVisibilityDigest: "owner-only", personalVisibilityHasWithheld: false }
+  assert.equal(restartReason(existing, options), null)
+  assert.equal(await routeSendIntoLiveLoop(existing, options, "continue"), true)
+  assert.equal(existing.sendOptions.personalVisibilityDigest, "owner-only")
+  assert.equal(existing.sendOptions.personalVisibilityHasWithheld, false)
+  assert.deepEqual(pushed, ["continue"])
+})
+
 test("restartReason: a lingering single-turn (Anthropic) session is always restarted", () => {
   // Anthropic exposes no `q.active`; its mere presence in the map means the
   // previous turn never ended — restart so the recovery prompt doesn't hang.

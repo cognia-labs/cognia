@@ -97,6 +97,11 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export interface AiCompletionProviderOptions {
+  /** Resolve Host-filtered stored history before prompt serialization. */
+  resolveRecentMessages?: (
+    context: InlineCompletionContext,
+    signal: AbortSignal
+  ) => Promise<InlineCompletionContext["recentMessages"]>
   /** Runs the model. MUST honour `signal`; may throw (errors become `[]`). */
   complete: InlineCompleteFn
   /**
@@ -149,6 +154,7 @@ export function createAiCompletionProvider(
     minChars = DEFAULT_MIN_CHARS,
     score = DEFAULT_AI_SCORE,
     manual = false,
+    resolveRecentMessages,
   } = options
 
   return {
@@ -170,9 +176,13 @@ export function createAiCompletionProvider(
       if (commandQuery(draft) !== null) return []
       if (signal.aborted) return []
 
+      const recentMessages = resolveRecentMessages
+        ? await resolveRecentMessages(context, signal)
+        : context.recentMessages
+      if (signal.aborted) return []
       const { system, prompt } = buildGhostPrompt({
         draft,
-        recentMessages: context.recentMessages,
+        recentMessages,
         ...(context.sessionId ? { promptContext: { sessionId: context.sessionId } } : {}),
       })
       // The gate runs on the assembled prompt, so it covers the draft AND the

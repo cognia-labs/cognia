@@ -21,6 +21,12 @@ import { getSession } from "@/lib/db/sessions"
 import { buildAgentBackedLlmClient } from "@/lib/ai/generation/agent-backed-client"
 import { renderConversationSegments, structuralSummary } from "@/lib/ai/generation/summarizer"
 import { summarizeMaterial, type SummaryOutcome } from "@/lib/ai/generation/summarize-material"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import {
+  finishToolExecutionRun,
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 
 /** Why the draft holds a digest rather than a model summary. */
 export type SummaryFallbackReason = Extract<SummaryOutcome, { kind: "unavailable" }>["reason"]
@@ -87,8 +93,20 @@ export function useConversationSummaryDraft({
     generations.current.set(forSession, request)
     const current = () => generations.current.get(forSession) === request
     setPending((previous) => ({ ...previous, [forSession]: true }))
+    let executionRunId: string | undefined
+    let failed = true
     try {
+      const run = await startToolExecutionRun(undefined, {
+        localAuthorization: LOCAL_PERSON_RUN,
+        title: turnLabel,
+      })
+      executionRunId = run.id
       const session = await getSession(forSession)
+      const history = await preparePersonalHistory(
+        undefined,
+        messages.map((message) => ({ ...message, sessionId: forSession })),
+        { executionRunId, session }
+      )
       const appSettings = useSettingsStore.getState().settings
       // The utility model, then a headless turn. The utility client alone is
       // null on a subscription account (no renderer key), which made every
@@ -100,25 +118,30 @@ export function useConversationSummaryDraft({
         label: turnLabel,
       })
       const outcome = await summarizeMaterial({
-        segments: renderConversationSegments(messages),
+        segments: renderConversationSegments(history.messages),
         purpose: "branch-seed",
         client,
         locale,
       })
+      failed = false
       if (!current()) return
       if (outcome.kind === "summary") {
         write(forSession, { text: outcome.text, fallback: null })
       } else {
         // Still a usable draft, but it now SAYS it is not a summary, and why.
         write(forSession, {
-          text: outcome.reason === "empty" ? "" : structuralSummary(messages),
+          text: outcome.reason === "empty" ? "" : structuralSummary(history.messages),
           fallback: outcome.reason,
         })
       }
     } catch (error) {
       if (current()) onError?.(error)
     } finally {
-      if (current()) settle(forSession)
+      try {
+        if (executionRunId) await finishToolExecutionRun(executionRunId, failed)
+      } finally {
+        if (current()) settle(forSession)
+      }
     }
   }
 

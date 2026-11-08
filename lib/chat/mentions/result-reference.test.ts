@@ -86,6 +86,16 @@ describe("resultBodyText", () => {
     expect(await resultBodyText("m1:1")).toContain("the whole file, not a preview")
   })
 
+  it("withholds a personal result before rendering its tool name or output", async () => {
+    await seed([{ type: "tool-PrivateTool", state: "output-available", output: "private result" }])
+    await getDb().messages.update("m1", {
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+      },
+    })
+    expect(await resultBodyText("m1:0")).toBe("[Withheld: personal content of Host owner]")
+  })
+
   // Three real cases, one honest answer: the message was deleted, it was edited
   // so nothing sits at that index any more, or the part no longer produces
   // readable output. In each the caller must say the record is unavailable.

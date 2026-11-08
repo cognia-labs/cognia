@@ -8,6 +8,7 @@ import {
   deleteResourceWorkbenchSession,
 } from "@/lib/db/resource-workbench-sessions"
 import { listMessages } from "@/lib/db/messages"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import { getSession, updateSession } from "@/lib/db/sessions"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
@@ -67,7 +68,15 @@ export async function dispatchSpawnTask(
 
   let inheritedTranscript: string | undefined
   if (brief.mode === "inherit") {
-    const { content } = renderBranchSeed(await deps.listMessages(parentSessionId))
+    const history = await preparePersonalHistory(
+      parentSessionId,
+      (await deps.listMessages(parentSessionId)).map((message) => ({
+        ...message,
+        sessionId: parentSessionId,
+      })),
+      { session: parent }
+    )
+    const { content } = renderBranchSeed(history.messages)
     if (content && !deps.gateInheritedContent(content)) {
       throw new Error("The inherited task context was blocked by the PII redaction gate")
     }

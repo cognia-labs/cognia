@@ -1,0 +1,371 @@
+/** Host identity resolution for the shared, portable history filter. */
+import type { ChatSession } from "@cognia/agent-config-types"
+import type {
+  PersonalMarkV1,
+  PrincipalRefV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
+import { mergePersonalMarks } from "@cognia/plugin-contract/types/execution/acting-identity"
+import {
+  effectivePersonalMarks,
+  personalReaderKey,
+  personalReaders,
+  withholdForReaders,
+  type PersonalHistoryMessage,
+} from "@cognia/plugin-contract/types/execution/personal-visibility"
+import { getDb } from "@/lib/db/schema"
+import { resolveRunActingIdentity } from "./acting-authority"
+import { personalMarkContextForSession } from "./personal-marks"
+import type { RerankerOptions } from "@/lib/twin/runtime/reranker"
+import type { ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
+
+export {
+  personalReaders,
+  withholdForReaders,
+} from "@cognia/plugin-contract/types/execution/personal-visibility"
+
+export interface HostPersonContext {
+  /** Published only after the adapter verified its connected owner on this Host. */
+  connectedOwners: readonly PrincipalRefV1[]
+}
+
+function samePlatformPerson(left: PrincipalRefV1, right: PrincipalRefV1): boolean {
+  return (
+    left.kind === "platform" &&
+    right.kind === "platform" &&
+    left.platform === right.platform &&
+    ((left.adapterId === right.adapterId && left.remoteUserId === right.remoteUserId) ||
+      (!!left.unionId && !!right.unionId && left.unionId === right.unionId))
+  )
+}
+
+/** One Host equivalence: its local person and its verified connected owners. */
+export function samePersonForHost(
+  left: PrincipalRefV1,
+  right: PrincipalRefV1,
+  context: HostPersonContext
+): boolean {
+  const isOwner = (person: PrincipalRefV1) =>
+    person.kind === "local-person" ||
+    context.connectedOwners.some((owner) => samePlatformPerson(person, owner))
+  if (isOwner(left) && isOwner(right)) return true
+  return samePlatformPerson(left, right)
+}
+
+/** Recheck before model-backed scoring, after retrieval and any preceding awaits. */
+export function withPersonalRerankerVisibility<
+  T extends Pick<RerankerOptions, "scorer" | "batchScorer">,
+>(
+  reranker: T | undefined,
+  consumer: { sessionId?: string; executionRunId?: string }
+): T | undefined {
+  if (!reranker) return reranker
+  const readable = async () => {
+    const result = await preparePersonalHistory(
+      consumer.sessionId,
+      [
+        {
+          id: "personal-reranker",
+          metadata: {
+            personalMarks: [
+              { person: { kind: "local-person" }, source: "twin-history", markedAt: 0 },
+            ],
+          },
+        },
+      ],
+      consumer
+    )
+    return result.withheldMessageIds.length === 0
+  }
+  return {
+    ...reranker,
+    ...(reranker.scorer
+      ? {
+          scorer: async (...args: Parameters<NonNullable<RerankerOptions["scorer"]>>) =>
+            (await readable()) ? reranker.scorer!(...args) : 0,
+        }
+      : {}),
+    ...(reranker.batchScorer
+      ? {
+          batchScorer: async (...args: Parameters<NonNullable<RerankerOptions["batchScorer"]>>) =>
+            (await readable()) ? reranker.batchScorer!(...args) : args[1].map(() => 0),
+        }
+      : {}),
+  }
+}
+
+/** Session id is the consuming run; stored message session ids retain source attribution. */
+export async function preparePersonalHistory<T extends PersonalHistoryMessage>(
+  sessionId: string | undefined,
+  messages: readonly T[],
+  options: { executionRunId?: string; session?: Pick<ChatSession, "platformBinding"> } = {}
+): Promise<{
+  messages: T[]
+  visibilityDigest: string
+  withheldMessageIds: string[]
+  readers: PrincipalRefV1[]
+}> {
+  return prepareHistoryForReaders(sessionId, messages, options)
+}
+
+/** Explicit owner-only UI/job read; never use this to establish a run's audience. */
+export function prepareOwnerHistory<T extends PersonalHistoryMessage>(
+  messages: readonly T[],
+  options: { session?: Pick<ChatSession, "platformBinding"> } = {}
+): ReturnType<typeof preparePersonalHistory<T>> {
+  return prepareHistoryForReaders(undefined, messages, options, [{ kind: "local-person" }])
+}
+
+/**
+ * Interim paired read as the Host owner. Phase 2B-2 must pass a Rust caller flag
+ * from crates/cognia-companion-rpc/src/rpc/data_sync.rs (sync_pull, session_list,
+ * message_get_by_session, session_timeline, session_turn_messages), using
+ * SecurityStore::is_owner_device(tenant, device); member devices then get no
+ * personal reader. Keep this one named entry for every paired history read.
+ */
+export function preparePairedOwnerHistory<T extends PersonalHistoryMessage>(
+  messages: readonly T[]
+): ReturnType<typeof preparePersonalHistory<T>> {
+  return prepareOwnerHistory(messages)
+}
+
+async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
+  sessionId: string | undefined,
+  messages: readonly T[],
+  options: { executionRunId?: string; session?: Pick<ChatSession, "platformBinding"> },
+  ownerReaders?: PrincipalRefV1[]
+): ReturnType<typeof preparePersonalHistory<T>> {
+  const db = getDb()
+  const assertCurrent = () => {
+    if (getDb() !== db) throw new Error("Personal history database changed")
+  }
+  const adapters = await db.adapterInstances.toArray()
+  const connectedOwners: PrincipalRefV1[] = []
+  for (const adapter of adapters) {
+    const connected = adapter.settings.connectedUser as
+      { openId?: unknown; unionId?: unknown } | undefined
+    const slack = adapter.settings.connectedTeam as { authedUserId?: unknown } | undefined
+    if (adapter.type === "lark" && typeof connected?.openId === "string" && connected.openId)
+      connectedOwners.push({
+        kind: "platform",
+        platform: "lark",
+        adapterId: adapter.id,
+        remoteUserId: connected.openId,
+        ...(typeof connected.unionId === "string" ? { unionId: connected.unionId } : {}),
+      })
+    if (adapter.type === "slack" && typeof slack?.authedUserId === "string" && slack.authedUserId)
+      connectedOwners.push({
+        kind: "platform",
+        platform: "slack",
+        adapterId: adapter.id,
+        remoteUserId: slack.authedUserId,
+      })
+  }
+  const host: HostPersonContext = { connectedOwners }
+  const consumerSession =
+    options.session ?? (sessionId ? await db.sessions.get(sessionId) : undefined)
+  const contexts = new Map<
+    string | undefined,
+    Awaited<ReturnType<typeof personalMarkContextForSession>>
+  >()
+  const sessions = new Map<string | undefined, Pick<ChatSession, "platformBinding"> | undefined>([
+    [sessionId, consumerSession],
+  ])
+  const canonical: T[] = []
+  for (const message of messages) {
+    const metadata = message.metadata as Record<string, unknown> | undefined
+    const sourceSessionId =
+      typeof (message as T & { sessionId?: unknown }).sessionId === "string"
+        ? (message as T & { sessionId: string }).sessionId
+        : typeof metadata?.sessionId === "string"
+          ? metadata.sessionId
+          : sessionId
+    if (!sessions.has(sourceSessionId))
+      sessions.set(
+        sourceSessionId,
+        sourceSessionId ? await db.sessions.get(sourceSessionId) : undefined
+      )
+    const sourceSession = sessions.get(sourceSessionId)
+    if (!contexts.has(sourceSessionId))
+      contexts.set(sourceSessionId, await personalMarkContextForSession(db, sourceSession))
+    const marks = effectivePersonalMarks(
+      message,
+      sourceSession ?? {},
+      contexts.get(sourceSessionId)!
+    )
+    canonical.push(
+      marks.length ? { ...message, metadata: { ...metadata, personalMarks: marks } } : message
+    )
+  }
+  assertCurrent()
+  const readers =
+    ownerReaders ??
+    personalReaders(await resolveRunActingIdentity(sessionId, options.executionRunId))
+  assertCurrent()
+  const result = withholdForReaders(
+    canonical,
+    readers,
+    {},
+    {
+      samePerson: (left, right) => samePersonForHost(left, right, host),
+      personKey: (person) =>
+        samePersonForHost(person, { kind: "local-person" }, host)
+          ? "host-owner"
+          : person.kind === "platform" && person.unionId
+            ? JSON.stringify([person.platform, "union", person.unionId])
+            : personalReaderKey(person),
+    }
+  )
+  return { ...result, readers }
+}
+
+/** Derived text keeps its Host source's taint; missing provenance never grants access. */
+export async function preparePersonalDerivedHistory<T extends PersonalHistoryMessage>(
+  sessionId: string | undefined,
+  messages: readonly T[],
+  source: {
+    runIds?: readonly string[]
+    sessionId?: string
+    executionRunId?: string
+    /** Host-owned legacy title/seed/skill; known source marks still take precedence. */
+    legacyOwnerArtifact?: true
+  } = {}
+): ReturnType<typeof preparePersonalHistory<T>> {
+  return prepareDerivedHistory(sessionId, messages, source)
+}
+
+/** Owner-local derived UI/job output. Later run consumers must re-derive its source taint. */
+export function prepareOwnerDerivedHistory<T extends PersonalHistoryMessage>(
+  messages: readonly T[],
+  source: { runIds?: readonly string[]; sessionId?: string } = {}
+): ReturnType<typeof preparePersonalHistory<T>> {
+  return prepareDerivedHistory(undefined, messages, { ...source, legacyOwnerArtifact: true }, true)
+}
+
+async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
+  sessionId: string | undefined,
+  messages: readonly T[],
+  source: {
+    runIds?: readonly string[]
+    sessionId?: string
+    executionRunId?: string
+    legacyOwnerArtifact?: true
+  },
+  ownerRead = false
+): ReturnType<typeof preparePersonalHistory<T>> {
+  const db = getDb()
+  const marksFromRuns: PersonalMarkV1[] = []
+  let proven = !!source.runIds?.length
+  for (const sourceId of source.runIds ?? []) {
+    let id: string | undefined = sourceId
+    const visited = new Set<string>()
+    while (id) {
+      if (visited.has(id) || visited.size >= 32) throw new Error("Personal history ancestry cycle")
+      visited.add(id)
+      const run: ExecutionRun | undefined = await db.executionRuns.get(id)
+      if (!run) {
+        proven = false
+        break
+      }
+      if (!run.actingIdentity) proven = false
+      marksFromRuns.push(...(run.personalMarks ?? []))
+      if (run.actingIdentity?.rootRunId === id) break
+      id = run.parentRunId ?? run.actingIdentity?.rootRunId
+    }
+  }
+  const sourceSessions: (ChatSession | undefined)[] = []
+  const sourceSessionIds = new Set<string>()
+  let sourceSessionId = source.sessionId
+  while (sourceSessionId) {
+    if (sourceSessionIds.has(sourceSessionId) || sourceSessionIds.size >= 32)
+      throw new Error("Personal history source-session ancestry cycle")
+    sourceSessionIds.add(sourceSessionId)
+    const session = await db.sessions.get(sourceSessionId)
+    sourceSessions.push(session)
+    // Staged attached/branch seeds retain their canonical parent as provenance.
+    // A later run must re-derive it rather than trust the owner's earlier UI read.
+    sourceSessionId =
+      session?.attachedChild?.parentSessionId ??
+      (session?.branchSeed
+        ? session.surfaceBinding?.kind === "session"
+          ? session.surfaceBinding.sessionId
+          : session.parentSessionId
+        : undefined)
+  }
+  // Message deletion does not erase a title, seed or working set. Preserve the
+  // source session's durable run taint even after its marked rows are gone.
+  const retainedMarks: PersonalMarkV1[][] = []
+  const legacy: PersonalMarkV1[][] = []
+  for (const [index, id] of [...sourceSessionIds].entries()) {
+    const session = sourceSessions[index]
+    const stored = await db.messages.where("sessionId").equals(id).toArray()
+    const sourceRuns = await db.executionRuns.where("sessionId").equals(id).toArray()
+    const context = await personalMarkContextForSession(db, session)
+    legacy.push(effectivePersonalMarks({}, session ?? {}, context))
+    retainedMarks.push(
+      ...sourceRuns.map((run) => run.personalMarks ?? []),
+      ...stored.map((message) => effectivePersonalMarks(message, session ?? {}, context))
+    )
+  }
+  const legacyMarks = mergePersonalMarks(...legacy)
+  const marks = mergePersonalMarks(
+    marksFromRuns,
+    ...retainedMarks,
+    // Remaining public rows cannot prove that an older derived artifact never
+    // included a deleted personal row. A legacy bound person is attributable;
+    // otherwise an unverified sentinel cannot equal any personal reader.
+    !proven
+      ? legacyMarks.length
+        ? legacyMarks
+        : source.legacyOwnerArtifact
+          ? [{ person: { kind: "local-person" }, source: "legacy-owner-artifact", markedAt: 0 }]
+          : [
+              {
+                person: { kind: "service", ref: "unverified-personal-history" },
+                source: "unverified-derived-history",
+                markedAt: 0,
+              },
+            ]
+      : []
+  )
+  if (getDb() !== db) throw new Error("Personal history database changed")
+  const marked = messages.map((message) => ({
+    ...message,
+    metadata: {
+      ...(message.metadata as Record<string, unknown> | undefined),
+      personalMarkVersion: 1,
+      personalMarks: mergePersonalMarks(
+        (message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)?.personalMarks,
+        marks
+      ),
+    },
+  }))
+  if (ownerRead) return prepareOwnerHistory(marked)
+  return preparePersonalHistory(sessionId, marked, { executionRunId: source.executionRunId })
+}
+
+/** Paired session fields share the explicit interim owner read policy. */
+export async function projectPersonalSessionHistory(session: ChatSession): Promise<ChatSession> {
+  const db = getDb()
+  const attributed = await prepareOwnerDerivedHistory([{ id: session.id, text: session.title }], {
+    sessionId: session.id,
+  })
+  const result = await preparePairedOwnerHistory(attributed.messages)
+  if (getDb() !== db) throw new Error("Personal history database changed")
+  if (result.withheldMessageIds.length === 0) return session
+  return {
+    ...session,
+    title: result.messages[0].text,
+    lastMessagePreview: result.messages[0].text,
+    branchSeed: undefined,
+    scratchpad: undefined,
+    workingSet: undefined,
+    spawnedTask: undefined,
+    importCanonicalState: undefined,
+    importLifecycle: undefined,
+    importRuntimeBinding: undefined,
+    sdkSessionId: undefined,
+    forkedFromSdkSessionId: undefined,
+    externalAgentSession: undefined,
+    externalAgentGatewaySessions: undefined,
+  }
+}

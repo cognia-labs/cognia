@@ -12,7 +12,7 @@
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalCase, EvalSample } from "@/types/eval/eval"
 import type { EvalTarget } from "@cognia/eval-core"
-import { assembleSampleFromSpans } from "./chat"
+import { assembleSampleFromSpans, personalEvalSampleForRun } from "./chat"
 import { newEvalTraceId } from "./span-scope"
 
 export interface WorkflowTargetConfig {
@@ -61,7 +61,11 @@ export function createWorkflowTarget(
       })
       const spans = await deps.fetchSpansByTrace(traceId)
       // Workflows are always "tool-capable" in the node-execution sense.
-      return assembleSampleFromSpans(spans, { output: outputToText(output), degraded: false })
+      return personalEvalSampleForRun(
+        assembleSampleFromSpans(spans, { output: outputToText(output), degraded: false }),
+        undefined,
+        spans.map((span) => ({ sessionId: span.sessionId, runId: span.runId }))
+      )
     },
   }
 }

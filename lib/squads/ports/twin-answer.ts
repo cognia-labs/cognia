@@ -29,6 +29,7 @@ async function twinSystemPrompt(input: TwinAnswerInput): Promise<string | undefi
       twinId: input.twinId,
       twinDeps,
       source: "team-delegation",
+      ...(input.personalContext ? { personalContext: input.personalContext } : {}),
     })
     return injected.systemPrompt
   } catch {

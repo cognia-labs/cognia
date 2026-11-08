@@ -20,6 +20,7 @@ import type { BackgroundDeliveryLane } from "@/lib/background-tasks/result-deliv
 import type { ConnectorBus } from "@/lib/connectors/bus"
 import { roomKindOf } from "@/lib/chat/room/kind"
 import { getDb } from "@/lib/db/schema"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 
 export interface ImRoomDeliveryLaneDeps {
   bus: () => Pick<
@@ -52,14 +53,21 @@ export function createImRoomDeliveryLane(deps: ImRoomDeliveryLaneDeps): Backgrou
     },
     // Accepted once the group's turn is queued (its job is written): a room
     // turn runs for minutes, and a second send of the delivery is the same turn.
-    send: async (framedText, sessionId, deliveryId, _personalRunIds, targets) => {
+    send: async (framedText, sessionId, deliveryId, personalRunIds, targets) => {
       const binding = await groupBinding(deps, sessionId)
       if (!binding) return false
+      // An automated group turn has no personal reader. Filter before the
+      // bus persists it or any member embeds it; the outbox keeps the source.
+      const visible = await preparePersonalDerivedHistory(
+        sessionId,
+        [{ id: deliveryId, text: framedText }],
+        { sessionId, runIds: personalRunIds ?? [], executionRunId: "" }
+      )
       return deps
         .bus()
         .enqueueAutomatedRoomTurn({
           binding,
-          text: framedText,
+          text: visible.messages[0].text,
           deliveryId,
           producer: "background-result",
           ...(targets?.memberIds.length ? { targetMemberIds: targets.memberIds } : {}),

@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import { dispatchTeammate, ExternalRuntimeUnavailableError } from "./dispatch-teammate"
 import { closeSession } from "@/lib/claude/ipc"
 jest.mock("@/lib/claude/ipc", () => ({
@@ -470,6 +480,12 @@ function makeCtx(
 
 beforeEach(() => {
   jest.clearAllMocks()
+  jest.mocked(preparePersonalDerivedHistory).mockImplementation(async (_sessionId, messages) => ({
+    messages: [...messages],
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  }))
   externalProtocolMock = "acp"
   externalTransportMock = "stdio"
   externalEndpointMock = undefined
@@ -557,10 +573,54 @@ describe("dispatchTeammate — text-only fallback", () => {
       expect(attachControl).toHaveBeenCalledWith(
         expect.anything(),
         "native-session",
-        processOwned ? "external-process" : "unconfirmed"
+        processOwned ? "external-process" : "unconfirmed",
+        expect.any(String)
       )
     }
   )
+  it("withholds a child's result when its root readers change during the child turn", async () => {
+    let tightened = false
+    const prepare = jest.mocked(preparePersonalDerivedHistory)
+    prepare.mockImplementation(
+      async (_session, messages) =>
+        ({
+          messages: messages.map((message) =>
+            tightened
+              ? { ...message, content: "[Withheld: personal content of Host owner]" }
+              : message
+          ),
+          visibilityDigest: "live",
+          withheldMessageIds: [],
+          readers: [],
+        }) as never
+    )
+    executeAgentMock.mockImplementationOnce(async () => {
+      tightened = true
+      return { text: "PRIVATE_TEAM_RESULT" }
+    })
+    try {
+      const { ctx } = makeCtx(makeTeammate())
+      const result = await dispatchTeammate(ctx, { taskId: "t1", prompt: "new task" })
+      expect(result.text).toBe("[Withheld: personal content of Host owner]")
+      expect(executeAgentMock.mock.calls[0][0]).toBe("new task")
+      expect(prepare).toHaveBeenLastCalledWith(
+        undefined,
+        expect.any(Array),
+        expect.objectContaining({ executionRunId: `execution:team:${ctx.runId}` })
+      )
+    } finally {
+      prepare.mockImplementation(
+        async (_session, messages) =>
+          ({
+            messages: [...messages],
+            visibilityDigest: "test-visibility",
+            withheldMessageIds: [],
+            readers: [],
+          }) as never
+      )
+    }
+  })
+
   it("runs the AI-SDK path off-desktop and records success", async () => {
     executeAgentMock.mockResolvedValue({ text: "the answer" })
     const { ctx, pool } = makeCtx(makeTeammate())
@@ -1577,7 +1637,12 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
     expect(runAndCaptureMock).toHaveBeenCalledWith(
       "sess1",
       "edit code",
-      { agentKind: "teammate", agentRef: "tm1" },
+      {
+        agentKind: "teammate",
+        agentRef: "tm1",
+        personalVisibilityDigest: "test-visibility",
+        personalVisibilityHasWithheld: false,
+      },
       expect.any(Object)
     )
     expect(deleteSessionMock).toHaveBeenCalledWith("sess1")
@@ -2047,7 +2112,10 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
       complete: jest.fn(async () => undefined),
       fail: jest.fn(async () => undefined),
     })
-    getAgentTeamChildRunMock.mockResolvedValue({ sessionId: publicSession })
+    getAgentTeamChildRunMock.mockResolvedValue({
+      sessionId: publicSession,
+      personalVisibilityDigest: "test-visibility",
+    })
     // Cancelling a gateway session releases its task: the session is retired.
     externalCancelRetiresSessionMock.mockReturnValue(true)
     let pauseOutcome: unknown
@@ -2082,6 +2150,119 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
     expect(checkpointPause).toHaveBeenCalledTimes(1)
     expect(pauseOutcome).toBe(false)
     expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { retainedDigest: undefined, withheld: false, rebuild: false },
+    { retainedDigest: "old-readers", withheld: false, rebuild: false },
+    { retainedDigest: undefined, withheld: true, rebuild: true },
+    { retainedDigest: "old-readers", withheld: true, rebuild: true },
+  ])(
+    "rebuilds a durable external child only for currently withheld history (%j)",
+    async ({ retainedDigest, withheld, rebuild }) => {
+      jest
+        .mocked(preparePersonalDerivedHistory)
+        .mockImplementation(async (_sessionId, messages) => ({
+          messages: [...messages],
+          visibilityDigest: "test-visibility",
+          withheldMessageIds: withheld ? ["private"] : [],
+          readers: [],
+        }))
+      isTauriMock.mockReturnValue(true)
+      resolveExternalMock.mockResolvedValue("agent-1")
+      getAgentTeamChildRunMock.mockResolvedValue({
+        sessionId: "cognia-gateway:old:native",
+        personalVisibilityDigest: retainedDigest,
+      })
+      const attachControl = jest.fn(async () => () => undefined)
+      beginDurableDispatchMock.mockResolvedValue({
+        childRunId: "private-child",
+        startLocalExecution: async () => {},
+        prepareTurnContext: async () => "",
+        capture: jest.fn(),
+        attachControl,
+        run: (operation: () => Promise<unknown>) => operation(),
+        complete: async () => {},
+        fail: async () => {},
+      })
+      externalExecuteMock.mockResolvedValue({
+        success: true,
+        finalResponse: "safe",
+        sessionId: "cognia-gateway:new:native",
+      })
+      const { ctx } = makeCtx(makeTeammate({ config: { runtime: "claude-code" } }))
+      await dispatchTeammate(ctx, { taskId: "t1", prompt: "continue" })
+      expect(externalExecuteMock.mock.calls[0][2].sessionId).toBe(
+        rebuild ? undefined : "cognia-gateway:old:native"
+      )
+      expect(attachControl).toHaveBeenCalledWith(
+        expect.anything(),
+        "cognia-gateway:new:native",
+        expect.any(String),
+        "test-visibility"
+      )
+    }
+  )
+
+  it("records a reused child's visible digest before an idless adapter reply and rebuilds on later withholding", async () => {
+    isTauriMock.mockReturnValue(true)
+    resolveExternalMock.mockResolvedValue("agent-1")
+    let currentDigest = "owner-visible"
+    let withheld = false
+    let retained = {
+      sessionId: "cognia-gateway:retained:native",
+      personalVisibilityDigest: "two-readers",
+    }
+    jest.mocked(preparePersonalDerivedHistory).mockImplementation(async (_sessionId, messages) => ({
+      messages: [...messages],
+      visibilityDigest: currentDigest,
+      withheldMessageIds: withheld ? ["private"] : [],
+      readers: [],
+    }))
+    getAgentTeamChildRunMock.mockImplementation(async () => retained)
+    const attachControl = jest.fn(
+      async (_control: unknown, sessionId: string, _ownership: string, digest: string) => {
+        retained = { sessionId, personalVisibilityDigest: digest }
+        return () => undefined
+      }
+    )
+    beginDurableDispatchMock.mockImplementation(async () => ({
+      childRunId: "retained-child",
+      startLocalExecution: async () => {},
+      prepareTurnContext: async () => "",
+      capture: jest.fn(),
+      attachControl,
+      run: (operation: () => Promise<unknown>) => operation(),
+      complete: async () => {},
+      fail: async () => {},
+    }))
+    externalExecuteMock
+      .mockImplementationOnce(async (_agent, _prompt, options) => {
+        expect(options.sessionId).toBe("cognia-gateway:retained:native")
+        expect(retained.personalVisibilityDigest).toBe("owner-visible")
+        return { success: true, finalResponse: "owner answer" }
+      })
+      .mockImplementationOnce(async (_agent, _prompt, options) => {
+        expect(options.sessionId).toBeUndefined()
+        return { success: true, finalResponse: "filtered answer" }
+      })
+    await dispatchTeammate(makeCtx(makeTeammate({ config: { runtime: "claude-code" } })).ctx, {
+      taskId: "t1",
+      prompt: "continue",
+    })
+    expect(attachControl).toHaveBeenCalledWith(
+      expect.anything(),
+      "cognia-gateway:retained:native",
+      expect.any(String),
+      "owner-visible"
+    )
+    currentDigest = "two-readers"
+    withheld = true
+    await dispatchTeammate(makeCtx(makeTeammate({ config: { runtime: "claude-code" } })).ctx, {
+      taskId: "t1",
+      prompt: "continue",
+    })
+    expect(externalExecuteMock).toHaveBeenCalledTimes(2)
   })
 
   it("keeps the session of an external teammate whose cancel only ends the turn", async () => {

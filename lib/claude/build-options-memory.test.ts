@@ -3,9 +3,23 @@
  * `resolveSendOptions`. Mirrors `build-options-twin.test.ts`.
  */
 
-import { resolveSendOptions } from "./build-options"
+import { resolveSendOptions as resolveOptions, type BuildOptionsContext } from "./build-options"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+
+// Each call in these injection tests represents an admitted owner turn.
+async function resolveSendOptions(context: BuildOptionsContext) {
+  if (context.executionIdentity?.runId) return resolveOptions(context)
+  const run = await startToolExecutionRun(context.session?.id, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  return resolveOptions({
+    ...context,
+    executionIdentity: { ...context.executionIdentity, runId: run.id },
+  })
+}
 import { contextSourcesOf } from "./context-sources"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
 import type { AppSettings, Character } from "@cognia/agent-config-types"
 import type { Memory } from "@/types/memory/memory"
 import type { ApplyMemoryContextDeps } from "@/lib/memory/runtime/apply-memory-context"
@@ -373,6 +387,14 @@ describe("resolveSendOptions project-claim injection", () => {
   })
 
   it("carries the source anchor so the chip can jump to the turn", async () => {
+    await getDb().messages.put({
+      id: "m3",
+      sessionId: "s7",
+      role: "user",
+      parts: [{ type: "text", text: "the repo pins rust to 1.77.2" }],
+      metadata: { personalMarkVersion: 1 },
+      createdAt: 1,
+    } as never)
     const opts = await resolveSendOptions({
       character: baseCharacter,
       appSettings: ON,

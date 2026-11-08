@@ -105,6 +105,9 @@ export function runtimeStatus(session: HostSession | undefined) {
     ...(typeof session.sendOptions?.transcriptInvalidationId === "string"
       ? { transcriptInvalidationId: session.sendOptions.transcriptInvalidationId }
       : {}),
+    ...(typeof session.sendOptions?.personalVisibilityDigest === "string"
+      ? { personalVisibilityDigest: session.sendOptions.personalVisibilityDigest }
+      : {}),
     ...(runtimeFeaturePolicyKey(session.sendOptions ?? {})
       ? { featurePolicyKey: runtimeFeaturePolicyKey(session.sendOptions ?? {}) }
       : {}),

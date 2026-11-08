@@ -117,6 +117,50 @@ describe("durable AgentTeam runtime persistence", () => {
     }
   })
 
+  it.each(["none", "checkpoint", "trajectory"] as const)(
+    "checks %s activity before settling a newly registered child",
+    async (activity) => {
+      await dexieTeamRunStore.createRun({ ...contractRun(), executionConstraints: undefined })
+      await createAgentTeamChildRun(contractChild({ dispatchEpoch: 0 }))
+      if (activity === "checkpoint") {
+        await markAgentTeamCheckpoint({
+          runId: "run-1",
+          childRunId: "child-1",
+          trajectorySequence: 0,
+          decisionVersion: 0,
+          replay: "needs_input",
+          sideEffects: [{ id: "effect-1", kind: "tool", state: "unknown", replay: "unsafe" }],
+          createdAt: 2,
+        })
+      } else if (activity === "trajectory") {
+        await appendAgentTeamTrajectory({
+          runId: "run-1",
+          childRunId: "child-1",
+          kind: "model_turn_started",
+          correlationId: "turn-1",
+          createdAt: 2,
+        })
+      }
+      const run = (await getAgentTeamRun("run-1"))!
+      expect(
+        await settleAgentTeamRunIfCurrent(run.id, run, { status: "failed", updatedAt: 3 })
+      ).toBe(activity === "none" ? "failed" : "needs_input")
+      const child = await getAgentTeamChildRun("child-1")
+      if (activity === "none") {
+        expect(child?.stop).toMatchObject({
+          state: "confirmed",
+          proof: { kind: "ack", epoch: 0 },
+        })
+      } else {
+        expect(child?.stop?.proof).toBeUndefined()
+        expect(await getAgentTeamRun(run.id)).toMatchObject({
+          status: "needs_input",
+          recoveryReason: "stop_unconfirmed",
+        })
+      }
+    }
+  )
+
   it.each(["completed", "failed", "cancelled", "terminated"] as const)(
     "gates lifecycle %s on actual child stop evidence",
     async (status) => {

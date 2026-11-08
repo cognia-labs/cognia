@@ -269,7 +269,7 @@ describe("browser evaluation task execution", () => {
       expect.objectContaining({
         providerId: "provider-a",
         modelId: "model-a",
-        systemPrompt: "Be concise",
+        systemPrompt: "[Withheld: personal content of unverified person]",
         parameters: { temperature: 0.2, topP: 0.8, maxOutputTokens: 512 },
       }),
       expect.objectContaining({
@@ -280,6 +280,9 @@ describe("browser evaluation task execution", () => {
       })
     )
     expect(result.value.scores.length).toBeGreaterThan(0)
+    const dispatched = mockDefaultTargetRun.mock.calls[0][0] as EvalCase
+    expect(dispatched.input).toBe("[Withheld: personal content of unverified person]")
+    expect(dispatched).not.toHaveProperty("reference")
 
     const targetDependencies = mockCreatePureModelTarget.mock.calls[0][1] as {
       resolveAsset(id: string): Promise<{ data: string; mediaType: string }>
@@ -571,6 +574,71 @@ describe("browser evaluation task execution", () => {
       status: "errored",
       error: "judge malformed",
     })
+  })
+
+  it("withholds old case envelopes and target evidence before a different judge reads them", async () => {
+    const score = jest.fn(async () => ({
+      scorerId: "judge-private",
+      dimension: "response-quality" as const,
+      status: "scored" as const,
+      value: 1,
+      passed: true,
+    }))
+    let dispatched: EvalCase | undefined
+    const execute = createBrowserEvalTaskExecutor(
+      { appSettings: {} as AppSettings, artifactKey: new Uint8Array(32) },
+      {
+        loadExperiment: async () => ({
+          id: manifest.id,
+          projectId: manifest.projectId,
+          manifest,
+          state: "running",
+          spentCost: 0,
+          reservedCost: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+        loadCase: async () => ({
+          ...evalCase,
+          input: "private request",
+          history: [{ role: "assistant", content: "private remembered answer" }],
+          contentParts: [{ type: "text", text: "private attachment" }],
+          reference: { expectedOutput: "private reference" },
+        }),
+        buildTarget: () => ({
+          label: "target",
+          run: async (value) => {
+            dispatched = value
+            return {
+              ...sample,
+              output: "private target answer",
+              toolCalls: [{ name: "private-tool", args: { private: "arguments" }, index: 0 }],
+              retrievedChunks: [{ text: "private retrieved context" }],
+            }
+          },
+        }),
+        resolveScorers: () => [
+          {
+            id: "judge-private",
+            dimension: "response-quality",
+            requiresLlm: true,
+            gating: true,
+            score,
+          },
+        ],
+        encryptArtifact: async () => ({
+          version: "cognia-eval-encrypted/v1",
+          algorithm: "AES-GCM",
+          iv: "iv",
+          ciphertext: "ciphertext",
+        }),
+      }
+    )
+    await execute(task, new AbortController().signal)
+    expect(dispatched?.input).toBe("[Withheld: personal content of unverified person]")
+    expect(JSON.stringify(dispatched)).not.toContain("private")
+    expect(score).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(score.mock.calls)).not.toContain("private")
   })
 
   it("constructs the independent judge tier and blocks when the configured judge is unavailable", async () => {

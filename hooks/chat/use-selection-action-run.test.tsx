@@ -10,6 +10,38 @@ import {
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
 import { SELECTION_EXPLAIN_PROMPT } from "@/lib/chat/selection/run-selection-action"
 import { useSelectionActionRun, type SelectionRunRequest } from "./use-selection-action-run"
+import {
+  finishToolExecutionRun,
+  startToolExecutionRun,
+  LOCAL_PERSON_RUN,
+} from "@/lib/execution/acting-authority"
+
+jest.mock("@/lib/execution/acting-authority", () => ({
+  LOCAL_PERSON_RUN: Symbol("local-person"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "selection-owner-run" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    preparePersonalHistory: async <T extends { id: string; metadata?: unknown }>(
+      _sessionId: string | undefined,
+      messages: readonly T[],
+      options?: { executionRunId?: string }
+    ) => ({
+      ...withholdForReaders(messages, options?.executionRunId ? [{ kind: "local-person" }] : []),
+      readers: [],
+    }),
+  }
+})
+const mockSourceRows = new Map<string, Record<string, unknown>>()
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({
+    messages: { bulkGet: async (ids: string[]) => ids.map((id) => mockSourceRows.get(id)) },
+  }),
+}))
 
 const mockBuildClient = jest.fn()
 jest.mock("@/lib/ai/generation/agent-backed-client", () => ({
@@ -52,9 +84,51 @@ beforeEach(() => {
   jest.clearAllMocks()
   mockGetSession.mockResolvedValue({ id: "s1", model: "opus" })
   mockLoadBodies.mockResolvedValue(null)
+  mockSourceRows.clear()
+  mockSourceRows.set("m1", {
+    id: "m1",
+    sessionId: "s1",
+    role: "assistant",
+    parts: [{ type: "text", text: "public source" }],
+  })
 })
 
 describe("useSelectionActionRun", () => {
+  it("checks canonical selection provenance under a separate admitted owner run", async () => {
+    const llm = client(async () => "Withheld source.")
+    mockBuildClient.mockResolvedValue(llm)
+    mockSourceRows.set("m1", {
+      id: "m1",
+      sessionId: "s1",
+      role: "assistant",
+      parts: [{ type: "text", text: "private source" }],
+      metadata: {
+        personalMarks: [
+          {
+            person: { kind: "platform", platform: "lark", adapterId: "a", remoteUserId: "other" },
+            source: "test",
+            markedAt: 1,
+          },
+        ],
+      },
+    })
+    const { result } = renderHook(() => useSelectionActionRun())
+    await act(() =>
+      result.current.run(request({ quote: "private quote", context: "private context" }))
+    )
+    expect(JSON.stringify((llm.complete as jest.Mock).mock.calls)).toContain(
+      "[Withheld: personal content of person "
+    )
+    expect(JSON.stringify((llm.complete as jest.Mock).mock.calls)).not.toMatch(
+      /private source|private quote|private context/
+    )
+    expect(startToolExecutionRun).toHaveBeenCalledWith(undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+      title: "Selection explanation",
+    })
+    expect(finishToolExecutionRun).toHaveBeenCalledWith("selection-owner-run", false)
+  })
+
   // Whole messages: the summary reads them labelled by who said them, split
   // between messages, rather than the unlabelled text a reference keeps.
   it("summarizes from the per-message segments when the request carries them", async () => {

@@ -1,6 +1,64 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: async (_sessionId: unknown, messages: readonly { id: string }[]) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(messages, [])
+  },
+  preparePersonalDerivedHistory: async (
+    _sessionId: unknown,
+    messages: readonly { id: string }[],
+    source: { sessionId?: string } = {}
+  ) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(
+      source.sessionId === "private-source"
+        ? messages.map((m) => ({
+            ...m,
+            metadata: {
+              personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+            },
+          }))
+        : messages,
+      []
+    )
+  },
+}))
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalCase } from "@/types/eval/eval"
-import { assembleSampleFromSpans, createChatTarget, defaultChatTargetDeps } from "./chat"
+import {
+  assembleSampleFromSpans,
+  createChatTarget,
+  defaultChatTargetDeps,
+  personalEvalSampleForRun,
+} from "./chat"
+
+it("keeps source visibility when a child sample outlives its transient source", async () => {
+  const sample = assembleSampleFromSpans(
+    [
+      span({
+        operationName: "execute_tool",
+        toolName: "PrivateTool",
+        metadata: { args: { secret: "PRIVATE ARG" }, retrievedChunks: [{ text: "PRIVATE CHUNK" }] },
+      }),
+    ],
+    { output: "PRIVATE OUTPUT" }
+  )
+  sample.retrievedChunks = [{ text: "PRIVATE CHUNK" }]
+  sample.error = "PRIVATE ERROR"
+  const filtered = await personalEvalSampleForRun(sample, undefined, [
+    { sessionId: "private-source" },
+  ])
+  expect(filtered.output).toContain("[Withheld: personal content of")
+  expect(JSON.stringify(filtered)).not.toMatch(/PRIVATE|PrivateTool/)
+  expect(await personalEvalSampleForRun(filtered)).toEqual(filtered)
+  const publicSample = assembleSampleFromSpans([], { output: "public output" })
+  const publicResult = await personalEvalSampleForRun(publicSample, undefined, [
+    { sessionId: "public-source" },
+  ])
+  expect(publicResult.output).toBe("public output")
+  expect((await personalEvalSampleForRun(publicResult)).output).toBe("public output")
+})
 
 function span(overrides: Partial<AgentTraceSpan>): AgentTraceSpan {
   const id = overrides.id ?? "sp_" + Math.random().toString(36).slice(2)

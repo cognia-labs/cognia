@@ -1,6 +1,19 @@
 /** @jest-environment node */
 import type { ChatSession } from "@cognia/agent-config-types"
 import { createImRoomDeliveryLane, installImRoomDelivery } from "./im-room-delivery-lane"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
+
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId, messages) => ({
+    messages,
+    withheldMessageIds: [],
+    visibilityDigest: "im-delivery-test",
+    readers: [],
+  })),
+}))
+
+beforeEach(() => jest.clearAllMocks())
 
 const group = {
   id: "s_room",
@@ -38,6 +51,38 @@ const sessions = new Map([group, dm].map((session) => [session.id, session]))
 const getSession = async (id: string) => sessions.get(id)
 
 describe("the IM room delivery lane", () => {
+  it("withholds marked hand-off results before the bus persists or dispatches the automated turn", async () => {
+    const bus = fakeBus()
+    const lane = createImRoomDeliveryLane({ bus: () => bus, getSession, consumerId: () => "c" })
+    jest
+      .mocked(preparePersonalDerivedHistory)
+      .mockImplementationOnce(async (_sessionId, messages) => ({
+        ...withholdForReaders(
+          messages.map((message) => ({
+            ...message,
+            metadata: {
+              personalMarks: [
+                { person: { kind: "local-person" }, source: "twin-history", markedAt: 1 },
+              ],
+            },
+          })),
+          []
+        ),
+        readers: [],
+      }))
+    await expect(
+      lane.send("PRIVATE_SQUAD_RESULT", "s_room", "private-delivery", ["execution:team:r1"])
+    ).resolves.toBe(true)
+    expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(
+      "s_room",
+      [{ id: "private-delivery", text: "PRIVATE_SQUAD_RESULT" }],
+      { sessionId: "s_room", runIds: ["execution:team:r1"], executionRunId: "" }
+    )
+    expect(JSON.stringify(bus.enqueueAutomatedRoomTurn.mock.calls)).not.toContain(
+      "PRIVATE_SQUAD_RESULT"
+    )
+  })
+
   it("reaches a group whose adapter runs here, and waits while its turns run", async () => {
     const bus = fakeBus()
     const lane = createImRoomDeliveryLane({ bus: () => bus, getSession, consumerId: () => "c" })

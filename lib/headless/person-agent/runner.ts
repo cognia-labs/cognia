@@ -171,7 +171,11 @@ export interface PersonAgentRunnerDeps {
   /** Catalog launch for a runtime id, or `undefined` when it is not bundled. */
   launchFor(runtimeId: string): { config: ExternalAgentConfig; family: string } | undefined
   /** Earlier turns of a conversation as text, for a fresh process. */
-  history(sessionId: string, excludeMessageIds: readonly string[]): Promise<string>
+  history(
+    sessionId: string,
+    excludeMessageIds: readonly string[],
+    actionId: string
+  ): Promise<{ text: string; visibilityDigest: string; hasWithheld: boolean }>
   writeMessage(sessionId: string, message: UIMessage): Promise<void>
   /** Delete one message the turn already wrote. */
   removeMessage(sessionId: string, messageId: string): Promise<void>
@@ -230,6 +234,7 @@ interface LiveAgent {
   provider: string
   model: string
   nativeSessionId?: string
+  visibilityDigest?: string
   /** True until the first turn, which carries the conversation's history. */
   fresh: boolean
   dead: boolean
@@ -802,7 +807,27 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
     accepted: boolean
   ): Promise<{ settled: Promise<PersonAgentSettleOutcome> }> {
     const sessionId = request.session.id
-    const agent = await agentFor(request)
+    let agent = await agentFor(request)
+    const readHistory = () =>
+      deps.history(
+        sessionId,
+        [request.messageId, `assistant-${request.actionId}`],
+        request.actionId
+      )
+    let history = await readHistory()
+    // A native process can retain tools and prose beyond its visible transcript.
+    // Recreate it only when the current projection withholds content the engine may remember.
+    if (
+      !agent.fresh &&
+      history.hasWithheld &&
+      agent.visibilityDigest !== history.visibilityDigest
+    ) {
+      await close(sessionId)
+      agent = await agentFor(request)
+      // Requesters can change while the replacement process starts. Resolve
+      // live readers again after every asynchronous launch, before any feed.
+      history = await readHistory()
+    }
     const turn: ActiveTurn = { actionId: request.actionId, aborted: false }
     agent.turn = turn
     let stream: AsyncIterator<ExternalAgentEvent>
@@ -810,16 +835,15 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
       // Read before the turn's first request reaches the gateway, so the
       // difference afterwards is this turn's alone.
       turn.gatewayBefore = await readTicket(agent)
-      const history = agent.fresh
-        ? await deps.history(sessionId, [request.messageId, `assistant-${request.actionId}`])
-        : ""
+      const replay = agent.fresh ? history.text : ""
+      agent.visibilityDigest = history.visibilityDigest
       agent.fresh = false
       stream = deps.manager
         .executeStreaming(agent.agentId, prompt.text, {
           ...(agent.nativeSessionId ? { sessionId: agent.nativeSessionId } : {}),
           workingDirectory: PERSON_AGENT_WORKSPACE,
           ...(prompt.attachments.length > 0 ? { attachments: prompt.attachments } : {}),
-          ...(history ? { context: { custom: { conversationHistory: history } } } : {}),
+          ...(replay ? { context: { custom: { conversationHistory: replay } } } : {}),
         })
         [Symbol.asyncIterator]()
     } catch (error) {

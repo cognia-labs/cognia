@@ -7,6 +7,7 @@
 
 const getCharacterMock = jest.fn()
 jest.mock("@/lib/db/characters", () => ({
+  ...jest.requireActual("@/lib/db/characters"),
   getCharacter: (...args: unknown[]) => getCharacterMock(...args),
 }))
 
@@ -20,7 +21,18 @@ jest.mock("@/lib/twin/runtime/apply-twin-context", () => ({
   applyTwinContext: (...args: unknown[]) => applyTwinContextMock(...args),
 }))
 
-import { twinContextGet } from "./twin-context"
+import { twinContextGet as handleTwinContext } from "./twin-context"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { startToolExecutionRun, LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
+async function twinContextGet(payload: Record<string, unknown>) {
+  const run = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+  return handleTwinContext(payload, { executionRunId: run.id })
+}
 
 beforeEach(() => {
   getCharacterMock.mockReset()
@@ -29,6 +41,25 @@ beforeEach(() => {
 })
 
 describe("twinContextGet", () => {
+  it("refuses caller-supplied session/identity labels before private retrieval", async () => {
+    getCharacterMock.mockResolvedValue({ id: "c1", twinId: "tw1" })
+    const out = await handleTwinContext({
+      characterId: "c1",
+      message: "hi",
+      sessionId: "forged-owner",
+      executionRunId: "local",
+      readers: [{ kind: "local-person" }],
+    })
+    expect(out).toMatchObject({
+      ok: true,
+      degraded: true,
+      degradedReason: "personal_history_withheld",
+      sources: [],
+    })
+    expect(out.applied).toBeUndefined()
+    expect(tryBuildTwinDepsMock).not.toHaveBeenCalled()
+    expect(applyTwinContextMock).not.toHaveBeenCalled()
+  })
   it("validates message and characterId", async () => {
     expect((await twinContextGet({ characterId: "c1", message: "  " })).ok).toBe(false)
     expect((await twinContextGet({ message: "hi" })).ok).toBe(false)

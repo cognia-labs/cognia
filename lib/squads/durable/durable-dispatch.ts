@@ -571,12 +571,14 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
   const attachControl = async (
     control: DurableChildControl,
     sessionId?: string,
-    executorRegistry?: BeginDurableDispatchInput["executorRegistry"]
+    executorRegistry?: BeginDurableDispatchInput["executorRegistry"],
+    personalVisibilityDigest?: string
   ): Promise<() => void> => {
     await ownedChild()
     if (sessionId || executorRegistry)
       await updateOwnedChild({
         ...(sessionId ? { sessionId } : {}),
+        ...(personalVisibilityDigest ? { personalVisibilityDigest } : {}),
         ...(executorRegistry ? { executorRegistry } : {}),
         updatedAt: now(),
       })
@@ -1240,7 +1242,9 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
             totalTokens: 0,
             wallTimeMs: Math.max(0, failedAt - startedAt),
             toolTimeMs,
-            attempts: attempt,
+            // A preparation failure did not admit this attempt's executor.
+            // Preserve prior admissions so recovery cannot invent opaque memory.
+            attempts: executionStarted ? attempt : (latest.resourceUsage.attempts ?? 0),
             failures: previousFailures + 1,
           },
         })

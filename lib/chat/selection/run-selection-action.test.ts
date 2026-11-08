@@ -1,4 +1,11 @@
 import type { LlmClient, LlmClientCallOptions } from "@/lib/twin/distill/llm"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 import {
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
@@ -19,6 +26,88 @@ afterEach(() => {
 })
 
 type Call = { prompt: string; options: LlmClientCallOptions | undefined }
+
+describe("canonical selection visibility", () => {
+  const fixture = createDbTestFixture()
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+
+  it.each(["explain", "translate", "summarize"] as const)(
+    "%s withholds the selected message, its quote and context for a run without a personal reader",
+    async (action) => {
+      await getDb().messages.put({
+        id: "private",
+        sessionId: "source",
+        role: "assistant",
+        createdAt: 1,
+        parts: [{ type: "text", text: "private canonical source" }],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+        },
+      } as never)
+      const client = completeClient(() => "Withheld source.")
+      await runSelectionAction(
+        input({
+          action,
+          client,
+          text: "private selected quote",
+          context: "private source context",
+          segments: ["private selected segment"],
+          source: { sessionId: "source", messageIds: ["private"] },
+        })
+      )
+      expect(JSON.stringify(client.calls)).toContain("[Withheld: personal content of Host owner]")
+      expect(JSON.stringify(client.calls)).not.toMatch(
+        /private canonical source|private selected quote|private source context|private selected segment/
+      )
+    }
+  )
+
+  it("allows the separately admitted owner to explain their own personal selection", async () => {
+    const run = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    await getDb().messages.put({
+      id: "private",
+      sessionId: "source",
+      role: "assistant",
+      createdAt: 1,
+      parts: [{ type: "text", text: "owner canonical source" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+      },
+    } as never)
+    const client = completeClient(() => "An explanation.")
+    await runSelectionAction(
+      input({
+        client,
+        text: "owner selected quote",
+        context: "owner source context",
+        source: { sessionId: "source", messageIds: ["private"], executionRunId: run.id },
+      })
+    )
+    expect(client.calls[0].prompt).toContain("owner selected quote")
+    expect(client.calls[0].prompt).toContain("owner source context")
+    await finishToolExecutionRun(run.id)
+  })
+
+  it("does not trust flattened text after its selected canonical source disappears", async () => {
+    const run = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    const client = completeClient(() => "Withheld source.")
+    await runSelectionAction(
+      input({
+        client,
+        text: "deleted private quote",
+        context: "deleted private context",
+        source: { sessionId: "source", messageIds: ["deleted"], executionRunId: run.id },
+      })
+    )
+    expect(JSON.stringify(client.calls)).toContain("[Withheld: personal content of person ")
+    expect(JSON.stringify(client.calls)).not.toMatch(
+      /deleted private quote|deleted private context/
+    )
+    await finishToolExecutionRun(run.id)
+  })
+})
 
 function completeClient(reply: (prompt: string) => string): LlmClient & { calls: Call[] } {
   const calls: Call[] = []

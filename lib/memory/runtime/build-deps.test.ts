@@ -1,4 +1,8 @@
 import { DEFAULT_MEMORY_CONFIG, type MemoryConfig } from "@/types/memory/memory"
+import type { Memory } from "@/types/memory/memory"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
 
 const mockTryBuildTwinDeps = jest.fn()
 const mockCreateProviderEmbeddingAdapter = jest.fn()
@@ -48,6 +52,8 @@ import {
   tryBuildMemoryVectorSink,
   describeMemoryRetrievalMode,
   MEMORY_VECTOR_COLLECTION,
+  filterPersonalMemories,
+  withPersonalMemoryVisibility,
 } from "./build-deps"
 
 function cfg(over: Partial<MemoryConfig> = {}): MemoryConfig {
@@ -61,6 +67,110 @@ beforeEach(() => {
   mockGetSettings.mockResolvedValue({ theme: "dark" })
   mockBuildUtilityLlmClient.mockReturnValue({ complete: jest.fn() })
   mockCreateMemoryLlmReranker.mockReturnValue(async () => null)
+})
+
+describe("personal memory provenance", () => {
+  const fixture = createDbTestFixture()
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+  const other = {
+    kind: "platform",
+    platform: "lark",
+    adapterId: "a",
+    remoteUserId: "other",
+  } as const
+  const mark = (person: typeof other | { kind: "local-person" }) => ({
+    person,
+    source: "test",
+    markedAt: 1,
+  })
+  const memory = (id: string, extra: Record<string, unknown> = {}) =>
+    ({ id, text: `${id} remembered prose`, ...extra }) as unknown as Memory
+
+  it("keeps unproven legacy memories with the owner and withholds them from another requester", async () => {
+    const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })
+    const legacy = memory("legacy")
+    expect(await filterPersonalMemories([legacy], "reader", run.id)).toEqual([legacy])
+    await getDb().executionRuns.update(run.id, {
+      actingIdentity: { ...run.actingIdentity!, trigger: "requester", requesters: [other] },
+    })
+    expect(await filterPersonalMemories([legacy], "reader", run.id)).toEqual([])
+    expect(await filterPersonalMemories([legacy])).toEqual([])
+  })
+
+  it("checks explicit memory marks together with its canonical source marks", async () => {
+    const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })
+    await getDb().messages.put({
+      id: "source",
+      sessionId: "source-session",
+      role: "assistant",
+      createdAt: 1,
+      parts: [{ type: "text", text: "other person's private source" }],
+      metadata: { personalMarks: [mark(other)] },
+    } as never)
+    const fromSource = memory("from-source", {
+      sourceSessionId: "source-session",
+      sourceMessageId: "source",
+    })
+    const explicit = memory("explicit", { personalMarks: [mark(other)] })
+    const missing = memory("missing", { sourceMessageId: "deleted-source" })
+    expect(await filterPersonalMemories([fromSource, explicit, missing], "reader", run.id)).toEqual(
+      []
+    )
+    await getDb().executionRuns.update(run.id, {
+      actingIdentity: { ...run.actingIdentity!, trigger: "requester", requesters: [other] },
+    })
+    expect(await filterPersonalMemories([fromSource, explicit, missing], "reader", run.id)).toEqual(
+      [fromSource, explicit]
+    )
+    const mixed = memory("mixed", {
+      sourceMessageId: "source",
+      metadata: { personalMarks: [mark({ kind: "local-person" })] },
+    })
+    expect(await filterPersonalMemories([mixed], "reader", run.id)).toEqual([])
+  })
+
+  it("filters every candidate leg before downstream reranking and checks session-only provenance", async () => {
+    const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })
+    await getDb().messages.bulkPut([
+      {
+        id: "public",
+        sessionId: "source-session",
+        role: "user",
+        createdAt: 1,
+        parts: [{ type: "text", text: "public source" }],
+        metadata: { personalMarkVersion: 1 },
+      },
+      {
+        id: "private",
+        sessionId: "source-session",
+        role: "assistant",
+        createdAt: 2,
+        parts: [{ type: "text", text: "private source" }],
+        metadata: { personalMarks: [mark(other)] },
+      },
+    ] as never)
+    const publicMemory = memory("public-memory", { sourceMessageId: "public" })
+    const sessionMemory = memory("session-memory", { sourceSessionId: "source-session" })
+    const values = [publicMemory, sessionMemory]
+    const rerank = jest.fn()
+    const deps = withPersonalMemoryVisibility(
+      {
+        loadCandidates: async () => values,
+        loadProcedural: async () => values,
+        loadHistoricalCandidates: async () => values,
+        touch: async () => undefined,
+        rerank,
+      },
+      "reader",
+      run.id
+    )
+    expect(await deps.loadCandidates()).toEqual([publicMemory])
+    expect(await deps.loadProcedural()).toEqual([publicMemory])
+    expect(await deps.loadHistoricalCandidates!()).toEqual([publicMemory])
+    expect(deps.rerank).toBe(rerank)
+  })
 })
 
 describe("tryBuildMemoryDeps", () => {

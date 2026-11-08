@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import {
   runDispatchAgentTool,
   releaseDispatchBudgetForSession,
@@ -157,6 +167,41 @@ beforeEach(() => {
 })
 
 describe("runDispatchAgentTool — call modes", () => {
+  it("checks the consuming root after a child completes, including a requester joining mid-child", async () => {
+    let secondRequester = false
+    mockDispatch.mockImplementationOnce(async () => {
+      secondRequester = true
+      return ok("PRIVATE_CHILD_RESULT")
+    })
+    jest.mocked(preparePersonalDerivedHistory).mockImplementationOnce(
+      async (_session, messages) =>
+        ({
+          messages: messages.map((message) =>
+            secondRequester
+              ? { ...message, content: "[Withheld: personal content of Host owner]" }
+              : message
+          ),
+          visibilityDigest: "changed",
+          withheldMessageIds: [],
+          readers: [],
+        }) as never
+    )
+    const result = await runDispatchAgentTool({
+      sessionId: "chat-1",
+      executionRunId: "consumer",
+      args: { subagentId: "coder", prompt: "read" },
+    })
+    expect(result).toBe("[Withheld: personal content of Host owner]")
+    expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(
+      "chat-1",
+      expect.any(Array),
+      expect.objectContaining({
+        executionRunId: "consumer",
+        runIds: [expect.stringMatching(/^execution:job:/)],
+      })
+    )
+  })
+
   it("forwards the Host-correlated execution run into dispatch admission", async () => {
     jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "issuing-run" } as never)
     await runDispatchAgentTool({

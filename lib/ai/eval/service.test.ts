@@ -1,7 +1,26 @@
+/** @jest-environment jsdom */
 /** Service facade — progress fan-out + gate verdicts over runConfiguredEval. */
-import { runEvalService, listDatasetSummaries, getRunDetail, createEvalDataset } from "./service"
+import {
+  runEvalService,
+  listDatasetSummaries,
+  getRunDetail,
+  createEvalDataset,
+  personalEvalCaseForRun,
+} from "./service"
 import type { RunConfiguredDeps } from "./run-config"
 import type { EvalCase, EvalDataset, Scorer } from "@/types/eval/eval"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import {
+  startToolExecutionRun,
+  finishToolExecutionRun,
+  LOCAL_PERSON_RUN,
+} from "@/lib/execution/acting-authority"
+
+const fixture = createDbTestFixture()
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
 
 jest.mock("@/lib/db/eval-datasets", () => ({
   createDataset: jest.fn(),
@@ -100,6 +119,111 @@ function makeDeps(): RunConfiguredDeps {
 }
 
 describe("runEvalService", () => {
+  it("selects original capability labels before withholding the case envelope", async () => {
+    const deps = makeDeps()
+    deps.loadCases = async () => [{ ...cases[0], capability: "private-capability" }]
+    const run = jest.fn(async () => ({
+      output: "ok",
+      toolCalls: [],
+      retrievedChunks: [],
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      costUsd: 0,
+      latencyMs: 1,
+      stepCount: 1,
+      degraded: false,
+    }))
+    deps.buildTarget = () => ({ label: "t", run })
+    const result = await runEvalService({
+      datasetId: "d1",
+      config: {
+        targets: [{ kind: "chat", label: "t", model: "m" }],
+        scorerIds: [],
+        k: 1,
+        subset: { capabilities: ["private-capability"] },
+      },
+      appSettings: null,
+      deps,
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(result.reports[0].caseCount).toBe(1)
+    expect(JSON.stringify(run.mock.calls)).not.toContain("private-capability")
+  })
+  it("withholds a trace-derived case as a whole, including fallback snapshots and golden tools", async () => {
+    const db = getDb()
+    await db.sessions.put({
+      id: "private-source",
+      title: "PRIVATE TITLE",
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+    await db.messages.put({
+      id: "private-row",
+      sessionId: "private-source",
+      role: "user",
+      createdAt: 1,
+      parts: [{ type: "text", text: "PRIVATE PROMPT" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+      },
+    } as never)
+    const source = await startToolExecutionRun("private-source", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    await finishToolExecutionRun(source.id)
+    await db.agentTraces.put({
+      id: "trace-span",
+      traceId: "private-trace",
+      startTime: 1,
+      sessionId: "private-source",
+      runId: source.id,
+    } as never)
+    const row: EvalCase = {
+      ...cases[0],
+      source: "real-trace",
+      sourceTraceId: "private-trace",
+      input: "PRIVATE PREVIEW",
+      history: [{ role: "assistant", content: "PRIVATE PRIOR" }],
+      reference: { expectedTools: ["PrivateTool"] },
+      contentParts: [{ type: "text", text: "PRIVATE PART" }],
+      notes: "PRIVATE NOTE",
+    }
+    const filtered = await personalEvalCaseForRun(row)
+    expect(filtered.input).toContain("[Withheld: personal content of")
+    expect(JSON.stringify(filtered)).not.toMatch(/PRIVATE|PrivateTool/)
+    const owner = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    expect(await personalEvalCaseForRun(row, owner.id)).toEqual(row)
+    await finishToolExecutionRun(owner.id)
+    await db.agentTraces.clear()
+    expect((await personalEvalCaseForRun(row)).input).toContain("[Withheld: personal content of")
+  })
+
+  it("blocks unproven sample tool outputs and retrieved chunks before model-backed judging", async () => {
+    const judge = jest.fn(passScorer.score)
+    const deps = makeDeps()
+    deps.allScorers = [{ ...passScorer, requiresLlm: true, score: judge }]
+    deps.buildTarget = () => ({
+      label: "private-child",
+      run: async () => ({
+        output: "PRIVATE OUTPUT",
+        toolCalls: [{ name: "PrivateTool", args: { secret: "PRIVATE ARG" }, index: 0 }],
+        retrievedChunks: [{ text: "PRIVATE DOCUMENT" }],
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        costUsd: 0,
+        latencyMs: 1,
+        stepCount: 1,
+        degraded: false,
+      }),
+    })
+    await runEvalService({
+      datasetId: "d1",
+      config: { targets: [{ kind: "chat", label: "t", model: "m" }], scorerIds: [], k: 1 },
+      appSettings: null,
+      deps,
+    })
+    expect(judge).toHaveBeenCalled()
+    expect(JSON.stringify(judge.mock.calls)).not.toMatch(/PRIVATE|PrivateTool/)
+    expect(judge.mock.calls[0][0].output).toContain("[Withheld: personal content of")
+  })
   it("runs, reports progress per case, and gates each report", async () => {
     const ticks: Array<{ done: number; total: number; passing: number }> = []
     const res = await runEvalService({

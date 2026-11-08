@@ -50,13 +50,86 @@ import { sessionControl, mcpRuntimeConfigurationMatches } from "@/lib/claude/ipc
 import type { RuntimeSessionStatus } from "@cognia/agent-config-types"
 import { renderBranchSeed } from "@/lib/chat/branch-session"
 import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import {
+  LOCAL_PERSON_RUN,
+  recordAbsorbedRequester,
+  resolveRunActingIdentity,
+  type LocalPersonRun,
+} from "@/lib/execution/acting-authority"
+
+/** A new reader cannot steer an engine that still remembers the old audience. */
+export async function preparePersonalSteer(
+  sessionId: string,
+  localAuthorization?: LocalPersonRun,
+  engine: { kind: "builtin" } | { kind: "external"; sessionId?: string } = { kind: "builtin" }
+): Promise<boolean> {
+  const identity = await resolveRunActingIdentity(sessionId)
+  if (localAuthorization === LOCAL_PERSON_RUN && identity?.rootRunId) {
+    await recordAbsorbedRequester(identity.rootRunId, { kind: "local-person" })
+  }
+  const session = await getSession(sessionId)
+  const filtered = await preparePersonalHistory(sessionId, await listMessages(sessionId), {
+    session,
+  })
+  const retainedDigest =
+    engine.kind === "builtin"
+      ? session?.runtimePersonalVisibilityDigest
+      : [session?.externalAgentSession, ...(session?.externalAgentGatewaySessions ?? [])].find(
+          (link) => engine.sessionId !== undefined && link?.sessionId === engine.sessionId
+        )?.personalVisibilityDigest
+  if (retainedDigest === filtered.visibilityDigest) return true
+  if (filtered.withheldMessageIds.length === 0) {
+    if (session) {
+      if (engine.kind === "builtin") {
+        await updateSession(sessionId, {
+          runtimePersonalVisibilityDigest: filtered.visibilityDigest,
+        })
+      } else {
+        const updateLink = <T extends { sessionId: string; personalVisibilityDigest?: string }>(
+          link: T
+        ): T =>
+          link.sessionId === engine.sessionId
+            ? { ...link, personalVisibilityDigest: filtered.visibilityDigest }
+            : link
+        await updateSession(sessionId, {
+          ...(session.externalAgentSession
+            ? { externalAgentSession: updateLink(session.externalAgentSession) }
+            : {}),
+          ...(session.externalAgentGatewaySessions
+            ? { externalAgentGatewaySessions: session.externalAgentGatewaySessions.map(updateLink) }
+            : {}),
+        })
+      }
+    }
+    return true
+  }
+  await invalidateTranscriptRuntime(sessionId)
+  return false
+}
+
+/** Prompt-derived context must still belong to the live Host audience. */
+export async function assertPersonalContextReaders(
+  sessionId: string,
+  options: SendOptions,
+  executionRunId?: string
+): Promise<void> {
+  if (options.personalContextReadersDigest === undefined) return
+  const contextReaders = await preparePersonalHistory(sessionId, [], { executionRunId })
+  if (options.personalContextReadersDigest === contextReaders.visibilityDigest) return
+  await invalidateTranscriptRuntime(sessionId)
+  throw new Error("personal_history_context_changed")
+}
 
 /** Rehydrate a replaced AI-SDK session from surviving canonical message parts. */
 export async function buildAiSdkInitialConversation(
   messages: UIMessage[],
   currentMessageId: string | null,
-  contentSafety?: SendOptions["contentSafety"]
+  contentSafety?: SendOptions["contentSafety"],
+  personalContext: { sessionId?: string; executionRunId?: string } = {}
 ): Promise<NonNullable<SendOptions["initialConversation"]>> {
+  messages = (await preparePersonalHistory(personalContext.sessionId, messages, personalContext))
+    .messages
   const currentIndex = messages.findIndex((message) => message.id === currentMessageId)
   const history = currentIndex < 0 ? messages : messages.slice(0, currentIndex)
   const materialized = await Promise.all(history.map(materializeMessageMedia))
@@ -87,6 +160,52 @@ export async function prepareTranscriptRuntimeSend(
   }
   let session = await getSession(sessionId)
   assertDatabaseCurrent()
+  const canonical = await listMessages(sessionId)
+  assertDatabaseCurrent()
+  const personalHistory = await preparePersonalHistory(
+    sessionId,
+    selectVisibleMessages(
+      canonical,
+      preparation.activeBranchByGroup ?? session?.activeBranchByGroup ?? {}
+    ),
+    { session }
+  )
+  assertDatabaseCurrent()
+  const visibilityChanged =
+    session?.runtimePersonalVisibilityDigest !== personalHistory.visibilityDigest
+  const visibilityRequiresRebuild =
+    personalHistory.withheldMessageIds.length > 0 && visibilityChanged
+  await assertPersonalContextReaders(sessionId, options)
+  assertDatabaseCurrent()
+  if (
+    visibilityRequiresRebuild &&
+    (session?.sdkSessionId || options.resumeSessionId || options.forkFromSessionId)
+  ) {
+    // A retained engine remembers more than its current transcript. Retire it
+    // before publishing the new visibility identity, including after restart.
+    await invalidateTranscriptRuntime(sessionId)
+    assertDatabaseCurrent()
+    session = await getSession(sessionId)
+    assertDatabaseCurrent()
+  }
+  options = {
+    ...options,
+    personalVisibilityDigest: personalHistory.visibilityDigest,
+    personalVisibilityHasWithheld: personalHistory.withheldMessageIds.length > 0,
+    ...(visibilityRequiresRebuild
+      ? {
+          resumeSessionId: undefined,
+          forkFromSessionId: undefined,
+          expectedRuntimeSessionId: undefined,
+        }
+      : {}),
+  }
+  if (session && visibilityChanged) {
+    await updateSession(sessionId, {
+      runtimePersonalVisibilityDigest: personalHistory.visibilityDigest,
+    })
+    assertDatabaseCurrent()
+  }
   const usesAiSdk =
     !isExternalAgentProviderId(options.provider) &&
     (options.execution?.runtimeAdapter ??
@@ -112,19 +231,26 @@ export async function prepareTranscriptRuntimeSend(
     !isExternalAgentProviderId(options.provider) &&
     options.contentSafety?.injectionProtection === true &&
     Boolean(session?.sdkSessionId || options.resumeSessionId || options.forkFromSessionId)
+  const nativeHasUnseededHistory =
+    !session?.sdkSessionId &&
+    !options.resumeSessionId &&
+    !options.forkFromSessionId &&
+    personalHistory.messages.some(
+      (message) =>
+        message.id !==
+        (preparation.currentMessageId === undefined ? options.turnId : preparation.currentMessageId)
+    )
   if (
     !usesAiSdk &&
     !preparation.skipHydration &&
-    (session?.runtimeTranscriptInvalidated || protectedNativeResume)
+    (session?.runtimeTranscriptInvalidated ||
+      protectedNativeResume ||
+      visibilityRequiresRebuild ||
+      nativeHasUnseededHistory)
   ) {
     // Native SDK resume identities retain opaque pre-edit history. Start a
     // fresh query with the surviving, gated text transcript instead.
-    const canonical = await listMessages(sessionId)
-    assertDatabaseCurrent()
-    const visible = selectVisibleMessages(
-      canonical,
-      preparation.activeBranchByGroup ?? session?.activeBranchByGroup ?? {}
-    )
+    const visible = personalHistory.messages
     const currentId =
       preparation.currentMessageId === undefined ? options.turnId : preparation.currentMessageId
     if (
@@ -163,6 +289,7 @@ export async function prepareTranscriptRuntimeSend(
     !preparation.skipHydration &&
     session?.sdkSessionId &&
     !session.runtimeTranscriptInvalidated &&
+    !visibilityRequiresRebuild &&
     !preparation.replacesHistory
   ) {
     // A persisted SDK id is not evidence that its in-memory loop survived a
@@ -177,6 +304,8 @@ export async function prepareTranscriptRuntimeSend(
       runtime.provider === options.provider &&
       runtime.cwd === options.cwd &&
       runtime.transcriptInvalidationId === session.runtimeTranscriptGeneration &&
+      (personalHistory.withheldMessageIds.length === 0 ||
+        runtime.personalVisibilityDigest === personalHistory.visibilityDigest) &&
       runtime.active === false &&
       runtime.featurePolicyKey === runtimeFeaturePolicyKey(options)
     ) {
@@ -194,6 +323,7 @@ export async function prepareTranscriptRuntimeSend(
     !preparation.skipHydration &&
     (!session?.sdkSessionId ||
       session.runtimeTranscriptInvalidated ||
+      visibilityRequiresRebuild ||
       preparation.replacesHistory ||
       lostRetainedContext)
   ) {
@@ -206,11 +336,10 @@ export async function prepareTranscriptRuntimeSend(
     if (
       options.initialConversation === undefined ||
       session?.runtimeTranscriptInvalidated ||
+      visibilityRequiresRebuild ||
       preparation.replacesHistory ||
       lostRetainedContext
     ) {
-      const canonical = await listMessages(sessionId)
-      assertDatabaseCurrent()
       const currentId =
         preparation.currentMessageId === undefined ? options.turnId : preparation.currentMessageId
       if (
@@ -221,12 +350,7 @@ export async function prepareTranscriptRuntimeSend(
       ) {
         throw new Error("inbound_message_recalled")
       }
-      const visible = withReplyContextLines(
-        selectVisibleMessages(
-          canonical,
-          preparation.activeBranchByGroup ?? session?.activeBranchByGroup ?? {}
-        )
-      )
+      const visible = withReplyContextLines(personalHistory.messages)
       prepared = {
         ...options,
         initialConversation: await buildAiSdkInitialConversation(
@@ -234,7 +358,8 @@ export async function prepareTranscriptRuntimeSend(
           preparation.currentMessageId === undefined
             ? (options.turnId ?? null)
             : preparation.currentMessageId,
-          options.contentSafety
+          options.contentSafety,
+          { sessionId }
         ),
       }
     }

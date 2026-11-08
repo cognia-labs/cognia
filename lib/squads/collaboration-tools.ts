@@ -46,6 +46,8 @@ import {
   describeSuppressedMessage,
   type RecentMessage,
 } from "./gates/message-guard"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+import { filterSharedMemoryEntriesForRun } from "@/lib/squads/memory/shared-memory-orchestrator"
 
 /**
  * The collaboration tools' instructions, appended to the system prompt with
@@ -90,6 +92,8 @@ export interface TeamToolCaller {
   teammateId: string
   teammateName: string
   runId?: string
+  /** Exact Host execution, correlated with this tool call by plugin-tool-ipc. */
+  executionRunId?: string
   /**
    * The tool call being run, from the call's context. What `team_post_to_chat`
    * delivers is authorized by it (ADR-0239).
@@ -121,19 +125,22 @@ export interface TeamToolDeps {
   listMemory: (teamId: string, readerId: string) => SharedMemoryEntry[]
   createConsensus: (input: CreateConsensusInput) => ConsensusRequest
   castVote: (input: CastVoteInput) => ConsensusRequest
-  delegate: (input: {
-    target: "background" | "external" | "team" | "twin"
-    sourceTeamId: string
-    sourceTaskId: string
-    reason: string
-    prompt?: string
-    systemPrompt?: string
-    targetAgentId?: string
-    targetTeamId?: string
-    /** Employee Digital Twin id (required for `twin`). */
-    twinId?: string
-    ultracode?: boolean
-  }) => { id: string; status: string }
+  delegate: (
+    input: {
+      target: "background" | "external" | "team" | "twin"
+      sourceTeamId: string
+      sourceTaskId: string
+      reason: string
+      prompt?: string
+      systemPrompt?: string
+      targetAgentId?: string
+      targetTeamId?: string
+      /** Employee Digital Twin id (required for `twin`). */
+      twinId?: string
+      ultracode?: boolean
+    },
+    executionRunId?: string
+  ) => { id: string; status: string }
   listMembers: (teamId: string) => Array<{ id: string; name: string; role: string }>
   /** Recent team messages (epoch-ms `createdAt`), windowed by the default impl. */
   recentMessages: (teamId: string) => RecentMessage[]
@@ -168,6 +175,7 @@ export interface TeamToolDeps {
     query: string
     twinId?: string
     topK?: number
+    personalContext?: { sessionId?: string; executionRunId?: string }
   }) => Promise<
     { ok: true; twinId: string; hits: TwinKnowledgeHit[] } | { ok: false; error: string }
   >
@@ -502,16 +510,19 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
       )(useAgentTeamStore.getState()),
     createConsensus: (input) => consensus.createConsensus(input),
     castVote: (input) => consensus.castVote(input),
-    delegate: (input) => {
+    delegate: (input, executionRunId) => {
       if (input.target === "external") {
-        const { delegation: rec } = delegation.delegateToExternal({
-          sourceTeamId: input.sourceTeamId,
-          sourceTaskId: input.sourceTaskId,
-          targetAgentId: input.targetAgentId ?? "",
-          prompt: input.prompt ?? input.reason,
-          ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
-          reason: input.reason,
-        })
+        const { delegation: rec } = delegation.delegateToExternal(
+          {
+            sourceTeamId: input.sourceTeamId,
+            sourceTaskId: input.sourceTaskId,
+            targetAgentId: input.targetAgentId ?? "",
+            prompt: input.prompt ?? input.reason,
+            ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+            reason: input.reason,
+          },
+          { executionRunId }
+        )
         return { id: rec.id, status: rec.status }
       }
       if (input.target === "team") {
@@ -525,23 +536,29 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
         return { id: rec.id, status: rec.status }
       }
       if (input.target === "twin") {
-        const { delegation: rec } = delegation.delegateToTwin({
+        const { delegation: rec } = delegation.delegateToTwin(
+          {
+            sourceTeamId: input.sourceTeamId,
+            sourceTaskId: input.sourceTaskId,
+            twinId: input.twinId ?? "",
+            prompt: input.prompt ?? input.reason,
+            ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+            reason: input.reason,
+          },
+          { executionRunId }
+        )
+        return { id: rec.id, status: rec.status }
+      }
+      const { delegation: rec } = delegation.delegateToBackground(
+        {
           sourceTeamId: input.sourceTeamId,
           sourceTaskId: input.sourceTaskId,
-          twinId: input.twinId ?? "",
           prompt: input.prompt ?? input.reason,
           ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
           reason: input.reason,
-        })
-        return { id: rec.id, status: rec.status }
-      }
-      const { delegation: rec } = delegation.delegateToBackground({
-        sourceTeamId: input.sourceTeamId,
-        sourceTaskId: input.sourceTaskId,
-        prompt: input.prompt ?? input.reason,
-        ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
-        reason: input.reason,
-      })
+        },
+        { executionRunId }
+      )
       return { id: rec.id, status: rec.status }
     },
     listMembers: (teamId) =>
@@ -638,6 +655,7 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
         query: input.query,
         ...(typeof input.topK === "number" ? { topK: input.topK } : {}),
         twinDeps,
+        personalContext: input.personalContext,
       })
       return { ok: true, twinId: target, hits: res.hits }
     },
@@ -680,6 +698,17 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v : ""
+}
+
+/** Stored tool results have no trustworthy provenance in their plugin fields. */
+async function visibleTeamToolResult(caller: TeamToolCaller, value: unknown): Promise<unknown> {
+  const content = JSON.stringify(value)
+  const history = await preparePersonalDerivedHistory(
+    caller.toolCall?.sessionId,
+    [{ id: `team-tool:${caller.teamId}`, content }],
+    { executionRunId: caller.executionRunId }
+  )
+  return history.messages[0].content === content ? value : history.messages[0].content
 }
 
 /**
@@ -750,7 +779,12 @@ export async function runTeamTool(
           value: e.value,
           writerName: e.writerName,
         }))
-        return picked.length > 0 ? picked : "No readable shared-memory entries."
+        return picked.length > 0
+          ? await filterSharedMemoryEntriesForRun(caller.teamId, picked, {
+              sessionId: caller.toolCall?.sessionId,
+              executionRunId: caller.executionRunId,
+            })
+          : "No readable shared-memory entries."
       }
       case TEAM_TOOL_NAMES.requestConsensus: {
         const question = asString(args.question).trim()
@@ -797,18 +831,23 @@ export async function runTeamTool(
           return "Error: team_delegate target=twin requires a `twinId`."
         }
         const reason = asString(args.reason).trim() || "delegated by teammate"
-        const rec = d.delegate({
-          target,
-          sourceTeamId: caller.teamId,
-          sourceTaskId: caller.runId ?? `adhoc:${caller.teammateId}`,
-          reason,
-          ...(typeof args.prompt === "string" ? { prompt: args.prompt } : {}),
-          ...(typeof args.systemPrompt === "string" ? { systemPrompt: args.systemPrompt } : {}),
-          ...(typeof args.targetAgentId === "string" ? { targetAgentId: args.targetAgentId } : {}),
-          ...(typeof args.targetTeamId === "string" ? { targetTeamId: args.targetTeamId } : {}),
-          ...(typeof args.twinId === "string" ? { twinId: args.twinId } : {}),
-          ...(typeof args.ultracode === "boolean" ? { ultracode: args.ultracode } : {}),
-        })
+        const rec = d.delegate(
+          {
+            target,
+            sourceTeamId: caller.teamId,
+            sourceTaskId: caller.runId ?? `adhoc:${caller.teammateId}`,
+            reason,
+            ...(typeof args.prompt === "string" ? { prompt: args.prompt } : {}),
+            ...(typeof args.systemPrompt === "string" ? { systemPrompt: args.systemPrompt } : {}),
+            ...(typeof args.targetAgentId === "string"
+              ? { targetAgentId: args.targetAgentId }
+              : {}),
+            ...(typeof args.targetTeamId === "string" ? { targetTeamId: args.targetTeamId } : {}),
+            ...(typeof args.twinId === "string" ? { twinId: args.twinId } : {}),
+            ...(typeof args.ultracode === "boolean" ? { ultracode: args.ultracode } : {}),
+          },
+          caller.executionRunId
+        )
         return `Delegated to ${target} (id=${rec.id}, status=${rec.status}).`
       }
       case TEAM_TOOL_NAMES.proposeDecision: {
@@ -840,12 +879,12 @@ export async function runTeamTool(
           ...(impacts ? { impacts } : {}),
           ...(compatibilityScopes ? { compatibilityScopes } : {}),
         })
-        return {
+        return await visibleTeamToolResult(caller, {
           id: proposal.id,
           version: proposal.version,
           status: "proposed",
           ...(proposal.conflict ? { conflict: proposal.conflict } : {}),
-        }
+        })
       }
       case TEAM_TOOL_NAMES.listMembers: {
         return d.listMembers(caller.teamId)
@@ -879,7 +918,7 @@ export async function runTeamTool(
         const taskId = asString(args.taskId).trim()
         if (!taskId) return "Error: task_get requires a `taskId`."
         const task = d.getTask(taskId)
-        return task ?? `Error: task ${taskId} not found.`
+        return task ? await visibleTeamToolResult(caller, task) : `Error: task ${taskId} not found.`
       }
       case TEAM_TOOL_NAMES.postToChat: {
         const conversationKey = asString(args.conversationKey).trim()
@@ -955,18 +994,32 @@ export async function runTeamTool(
           query,
           ...(twinId ? { twinId } : {}),
           ...(Number.isInteger(topKRaw) && topKRaw > 0 ? { topK: topKRaw } : {}),
+          personalContext: {
+            sessionId: caller.toolCall?.sessionId,
+            executionRunId: caller.executionRunId,
+          },
         })
-        if (!res.ok) return `Error: ${res.error}`
+        if (!res.ok) return await visibleTeamToolResult(caller, `Error: ${res.error}`)
         if (res.hits.length === 0) {
-          return `No knowledge found in twin "${res.twinId}" for that query.`
+          return await visibleTeamToolResult(
+            caller,
+            `No knowledge found in twin "${res.twinId}" for that query.`
+          )
         }
-        return { twinId: res.twinId, hits: res.hits }
+        return await visibleTeamToolResult(caller, { twinId: res.twinId, hits: res.hits })
       }
       /* istanbul ignore next -- unreachable: isTeamTool() filters non-team names before the switch */
       default:
         return `Error: unhandled team tool: ${name}`
     }
   } catch (err) {
+    if (
+      name === TEAM_TOOL_NAMES.readMemory ||
+      name === TEAM_TOOL_NAMES.getTask ||
+      name === TEAM_TOOL_NAMES.proposeDecision ||
+      name === TEAM_TOOL_NAMES.twinKnowledgeSearch
+    )
+      return "Error: team history is unavailable."
     return `Error: ${err instanceof Error ? err.message : String(err)}`
   }
 }
@@ -1039,7 +1092,7 @@ export const teamToolFamily: ModuleToolFamily = {
     return runTeamTool(
       name,
       args,
-      { ...caller, toolCall: call.outboundAuthorization },
+      { ...caller, executionRunId: call.executionRunId, toolCall: call.outboundAuthorization },
       depsOverride ? await depsOverride() : undefined
     )
   },

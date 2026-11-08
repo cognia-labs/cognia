@@ -81,6 +81,8 @@ export interface TeamTwinSummary {
 }
 
 export interface TeamRunContext {
+  /** Host-owned root when this context adapts another runtime, such as a plan. */
+  readonly personalExecutionRunId?: string
   readonly knowledgeAccess?: import("@/lib/knowledge-base/runtime/progressive-reading").KnowledgeReadingAccess
   readonly runId: string
   readonly teamId: string
@@ -230,6 +232,74 @@ export function registerTeamRunContext(ctx: TeamRunContext): void {
 
 export function getTeamRunContext(runId: string): TeamRunContext | undefined {
   return registry.get(runId)
+}
+
+/** Only a unique live Host context can identify a team's current run. */
+export function getTeamRunContextForTeam(teamId: string): TeamRunContext | undefined {
+  const matches = [...registry.values()].filter((ctx) => ctx.teamId === teamId)
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+/** Recheck the live root readers immediately before another team model consumes text. */
+export async function prepareTeamDerivedHistory(
+  ctx: TeamRunContext,
+  text: string,
+  id: string,
+  sourceRunIds?: readonly string[]
+) {
+  const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+  const executionRunId = ctx.personalExecutionRunId ?? `execution:team:${ctx.runId}`
+  const history = await preparePersonalDerivedHistory(undefined, [{ id, content: text }], {
+    runIds: sourceRunIds ?? [executionRunId],
+    executionRunId,
+  })
+  return history
+}
+
+export async function visibleTeamDerivedText(
+  ctx: TeamRunContext,
+  text: string,
+  id: string,
+  sourceRunIds?: readonly string[]
+): Promise<string> {
+  const history = await prepareTeamDerivedHistory(ctx, text, id, sourceRunIds)
+  return history.messages[0].content
+}
+
+/** Keep a turn's prompt and system preamble under the same live visibility decision. */
+export async function visibleTeamTurn(
+  ctx: TeamRunContext,
+  prompt: string,
+  systemPrompt: string,
+  id: string
+) {
+  const content = JSON.stringify({ prompt, systemPrompt })
+  const history = await prepareTeamDerivedHistory(ctx, content, id)
+  return {
+    ...(history.messages[0].content === content
+      ? { prompt, systemPrompt }
+      : { prompt: history.messages[0].content, systemPrompt: "" }),
+    personalVisibilityDigest: history.visibilityDigest,
+    withheld: history.withheldMessageIds.length > 0,
+  }
+}
+
+/** Lead/delegation callbacks use only the unique live Host run, never stored plugin labels. */
+export async function visibleTeamDerivedTextForTeam(
+  teamId: string,
+  text: string,
+  id: string
+): Promise<string> {
+  const ctx = getTeamRunContextForTeam(teamId)
+  if (ctx) return visibleTeamDerivedText(ctx, text, id)
+  const { getInflightTeamRunId } = await import("./agent-team-runtime")
+  const runId = getInflightTeamRunId(teamId)
+  const executionRunId = runId ? `execution:team:${runId}` : undefined
+  const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+  const history = await preparePersonalDerivedHistory(undefined, [{ id, content: text }], {
+    ...(executionRunId ? { runIds: [executionRunId], executionRunId } : {}),
+  })
+  return history.messages[0].content
 }
 
 export function unregisterTeamRunContext(runId: string): void {

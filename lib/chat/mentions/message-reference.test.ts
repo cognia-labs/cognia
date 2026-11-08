@@ -215,6 +215,26 @@ describe("buildMessageReferenceText", () => {
     )
   })
 
+  it("withholds marked tool names, inputs, and outputs in a cross-run reference", async () => {
+    await seed("s", 3)
+    await getDb().messages.update("s-m1", {
+      parts: [
+        { type: "tool-PrivateTool", input: { title: "private title" }, output: "private body" },
+      ],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+      },
+    } as never)
+    const result = await buildMessageReferenceText({
+      sessionId: "s",
+      messageId: "s-m1",
+      span: { before: 1, after: 1 },
+    })
+    expect(result).toContain("[Withheld: personal content of Host owner]")
+    expect(result).toContain("turn 0")
+    expect(result).not.toMatch(/PrivateTool|private title|private body/)
+  })
+
   it("widens symmetrically and keeps document order", async () => {
     await seed("s", 7)
     const out = await buildMessageReferenceText({

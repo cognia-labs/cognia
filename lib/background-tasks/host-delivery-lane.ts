@@ -51,6 +51,12 @@ export interface HostAutomatedTurnDeps {
   writeUserRow: (sessionId: string, row: import("ai").UIMessage) => Promise<void>
   /** Mark the row as answering the runs whose results it carries. */
   bindMessageRuns: (messageId: string, runIds: readonly string[]) => void
+  prepareText: (
+    sessionId: string,
+    text: string,
+    executionRunId: string,
+    sourceRunIds: readonly string[]
+  ) => Promise<string>
   buildOptions: (session: ChatSession, text: string, executionRunId: string) => Promise<SendOptions>
   /**
    * Prepare and send under the transcript lock, binding the frozen context
@@ -76,6 +82,7 @@ const TURN_DEP_KEYS: readonly (keyof HostAutomatedTurnDeps)[] = [
   "heartbeat",
   "writeUserRow",
   "bindMessageRuns",
+  "prepareText",
   "buildOptions",
   "dispatch",
   "onError",
@@ -135,7 +142,9 @@ export async function runHostAutomatedTurn(
   if (!receipt) return false
 
   // Accepted: from here the work outbox owns a turn that fails to start.
-  void startAcceptedTurn(deps, session, text, row.id, receipt).catch(deps.onError)
+  void startAcceptedTurn(deps, session, text, row.id, receipt, input.personalRunIds ?? []).catch(
+    deps.onError
+  )
   return true
 }
 
@@ -144,14 +153,18 @@ async function startAcceptedTurn(
   session: ChatSession,
   text: string,
   messageId: string,
-  receipt: WorkReceiptV1
+  receipt: WorkReceiptV1,
+  sourceRunIds: readonly string[]
 ): Promise<void> {
   const claim = await deps.claim(receipt.runId)
   if (claim === "owned_elsewhere") return
   const stopHeartbeat = claim === "claimed" ? deps.heartbeat(receipt.submissionId) : () => {}
   try {
-    const options = await deps.buildOptions(session, text, receipt.runId)
-    await deps.dispatch(session.id, text, options, {
+    const visibleText = await deps.prepareText(session.id, text, receipt.runId, sourceRunIds)
+    const options = await deps.buildOptions(session, visibleText, receipt.runId)
+    if ((await deps.prepareText(session.id, text, receipt.runId, sourceRunIds)) !== visibleText)
+      throw new Error("Personal history visibility changed before background dispatch")
+    await deps.dispatch(session.id, visibleText, options, {
       messageId,
       receipt,
       commandId: receipt.runId,
@@ -197,6 +210,15 @@ async function defaultTurnDeps(): Promise<HostAutomatedTurnDeps> {
       }),
     writeUserRow: (sessionId, row) => commitMessageDelta(sessionId, { upserts: [row] }),
     bindMessageRuns: (messageId, runIds) => bindPersonalMessageRun(messageId, runIds),
+    prepareText: async (sessionId, text, executionRunId, sourceRunIds) => {
+      const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+      const projected = await preparePersonalDerivedHistory(
+        sessionId,
+        [{ id: `background-result:${executionRunId}`, text }],
+        { runIds: sourceRunIds, executionRunId }
+      )
+      return projected.messages[0].text
+    },
     buildOptions: async (session, text, executionRunId) => {
       const { buildSendOptions } = await import("@/hooks/chat/claude-chat-send-options")
       return buildSendOptions(session, text, undefined, undefined, undefined, { executionRunId })

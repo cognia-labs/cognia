@@ -16,7 +16,7 @@
 import { z } from "zod"
 import type { AgentTeamTask } from "@/types/agent/agent-team"
 import type { TeamRunContext } from "../team-run-context"
-import { readDependencyResults } from "../memory/shared-memory-orchestrator"
+import { readDependencyResultsForRun } from "../memory/shared-memory-orchestrator"
 import { dispatchStructured } from "../teammate/structured-dispatch"
 import { resolvePrompt, resolvePromptAsync } from "@/lib/prompts/resolve"
 import {
@@ -129,7 +129,7 @@ export interface JudgeProgressDeps {
 async function buildJudgePrompt(deps: JudgeProgressDeps): Promise<string> {
   const { teamCtx, doneTaskIds, remaining, stallCount } = deps
   const objective = teamCtx.team.task ?? teamCtx.team.description ?? teamCtx.team.name
-  const results = readDependencyResults(teamCtx.teamId, doneTaskIds)
+  const results = await readDependencyResultsForRun(teamCtx, doneTaskIds)
   const resultLines =
     results.length > 0
       ? results.map((r) => `- ${r.taskTitle ?? r.taskId}: ${r.value.slice(0, 400)}`).join("\n")

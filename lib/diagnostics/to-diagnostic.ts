@@ -106,6 +106,29 @@ export function toDiagnostic(err: unknown, ctx: ToDiagnosticContext): CogniaDiag
     return merged ? { ...err, meta: merged } : err
   }
 
+  // These stable refusal reasons describe a changed context, not provider
+  // prose. Leave message empty so localized diagnostic/notification fallbacks
+  // remain primary, while reports retain the exact internal reason.
+  const personalReason =
+    typeof err === "string"
+      ? err
+      : err && typeof err === "object"
+        ? ((err as { code?: unknown; message?: unknown }).code ??
+          (err as { message?: unknown }).message)
+        : undefined
+  if (
+    personalReason === "personal_visibility_changed" ||
+    personalReason === "personal_history_context_changed"
+  ) {
+    return createDiagnostic("dispatchFailed", {
+      source,
+      meta: mergeMeta({ extra: { ...ctxMeta?.extra, personalHistoryReason: personalReason } }),
+      detail: stackOf(err),
+      now,
+      id,
+    })
+  }
+
   // 2 — typed errors from the execution layer.
   const execution = diagnoseExecutionError(err)
   if (execution) {

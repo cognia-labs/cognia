@@ -2,7 +2,14 @@ import type { ClaudeEvent, SendOptions } from "@cognia/agent-config-types"
 import { loggers } from "@cognia/logging"
 import type { RoutingPlan } from "@cognia/provider-types/auto-router"
 
-import { streamText, type UIMessage } from "ai"
+import { convertToModelMessages, streamText, type UIMessage } from "ai"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import {
+  LOCAL_PERSON_RUN,
+  recordAbsorbedRequester,
+  startToolExecutionRun,
+} from "@/lib/execution/acting-authority"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import { MockLanguageModelV4 } from "ai/test"
 import { abortableStreamModel } from "@/lib/ai/webview-stream-fixtures"
 
@@ -28,7 +35,7 @@ jest.mock("@/lib/ai/agent/agent-executor", () => ({
   composeSystem: (...parts: Array<string | undefined>) => parts.filter(Boolean).join("\n\n"),
 }))
 jest.mock("ai", () => ({
-  convertToModelMessages: (m: unknown) => m,
+  convertToModelMessages: jest.fn((m: unknown) => m),
   streamText: jest.fn(),
   // `standalone-tools` builds real tool defs off these; identity wrappers keep
   // the assertions readable while still proving what gets handed to streamText.
@@ -52,6 +59,7 @@ let mockPiiSafe = true
 let mockPiiPrivateToken: string | undefined
 let mockPiiResults: boolean[] = []
 jest.mock("@cognia/redact", () => ({
+  ...jest.requireActual("@cognia/redact"),
   hasNoLeakingPiiDeep: (value: unknown) =>
     mockPiiPrivateToken && JSON.stringify(value).includes(mockPiiPrivateToken)
       ? false
@@ -61,6 +69,10 @@ jest.mock("@cognia/redact", () => ({
 const mockResolve = resolveStandaloneProvider as jest.MockedFunction<
   typeof resolveStandaloneProvider
 >
+const personalFixture = createDbTestFixture({ seeded: false })
+beforeAll(personalFixture.initialize)
+beforeEach(personalFixture.restore)
+afterAll(personalFixture.dispose)
 
 const resolved = {
   kind: "resolved" as const,
@@ -138,6 +150,73 @@ beforeEach(() => {
   mockPiiResults = []
 })
 afterEach(() => __resetInterceptorRegistryForTesting())
+
+const personalHistoryMessage = {
+  id: "private-answer",
+  role: "assistant",
+  content: "private salary 12345",
+  metadata: {
+    personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+  },
+}
+
+it("filters marked history inside the standalone engine for the live Host readers", async () => {
+  const stream = jest.fn(fakeStream([]))
+  await run({ messages: [personalHistoryMessage] as never, streamTextImpl: stream as never })
+    .promise
+  expect(stream).toHaveBeenCalled()
+  expect(JSON.stringify(stream.mock.calls)).toContain("[Withheld: personal content of Host owner]")
+  expect(JSON.stringify(stream.mock.calls)).not.toContain("private salary 12345")
+})
+
+it("refuses an audience that tightens while message conversion is pending", async () => {
+  const root = await startToolExecutionRun("s1", { localAuthorization: LOCAL_PERSON_RUN })
+  jest.mocked(convertToModelMessages).mockImplementationOnce(async (messages) => {
+    await recordAbsorbedRequester(root.id, {
+      kind: "platform",
+      platform: "lark",
+      adapterId: "a",
+      remoteUserId: "other",
+    })
+    return messages as never
+  })
+  const stream = jest.fn(fakeStream([]))
+  const { promise, events } = run({
+    messages: [personalHistoryMessage] as never,
+    streamTextImpl: stream as never,
+  })
+  await promise
+  expect(stream).not.toHaveBeenCalled()
+  expect(events.at(-1)).toMatchObject({
+    type: "session_ended",
+    error: "personal_visibility_changed",
+  })
+})
+
+it("refuses an old history-derived system prompt after another requester joins", async () => {
+  const root = await startToolExecutionRun("s1", { localAuthorization: LOCAL_PERSON_RUN })
+  const readers = await preparePersonalHistory("s1", [], { executionRunId: root.id })
+  await recordAbsorbedRequester(root.id, {
+    kind: "platform",
+    platform: "lark",
+    adapterId: "a",
+    remoteUserId: "other",
+  })
+  const stream = jest.fn(fakeStream([]))
+  const { promise, events } = run({
+    sendOptions: {
+      appendSystemPrompt: "private summary",
+      personalContextReadersDigest: readers.visibilityDigest,
+    },
+    streamTextImpl: stream as never,
+  })
+  await promise
+  expect(stream).not.toHaveBeenCalled()
+  expect(events.at(-1)).toMatchObject({
+    type: "session_ended",
+    error: "personal_history_context_changed",
+  })
+})
 
 it("gates derived assistant history before the first provider attempt", async () => {
   mockPiiPrivateToken = "LOCAL_PRIVATE_NOTE"

@@ -3156,6 +3156,7 @@ export function App({
             overlays={overlays}
             bottom={
               <BottomRegion
+                home={home}
                 state={state}
                 dispatch={dispatch}
                 cursor={cursor}

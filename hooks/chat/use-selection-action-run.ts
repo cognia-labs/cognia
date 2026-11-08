@@ -26,6 +26,11 @@ import {
   type SelectionActionProgress,
 } from "@/lib/chat/selection/run-selection-action"
 import { useSettingsStore } from "@/stores/settings"
+import {
+  finishToolExecutionRun,
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 
 /** What the runs console shows for the fallback turn, by action. */
 export const SELECTION_ACTION_TURN_LABELS: Record<SelectionAction, string> = {
@@ -109,7 +114,14 @@ export function useSelectionActionRun() {
       setState({ status: "running", request, text: "", progress: null })
 
       let latest = ""
+      let executionRunId: string | undefined
+      let failed = true
       try {
+        const execution = await startToolExecutionRun(undefined, {
+          localAuthorization: LOCAL_PERSON_RUN,
+          title: SELECTION_ACTION_TURN_LABELS[request.action],
+        })
+        executionRunId = execution.id
         const [session, storedContext] = await Promise.all([
           getSession(request.sessionId).catch(() => undefined),
           request.action === "explain"
@@ -133,6 +145,7 @@ export function useSelectionActionRun() {
           ),
           locale,
           client,
+          source: { sessionId: request.sessionId, messageIds: request.messageIds, executionRunId },
           promptContext: {
             sessionId: request.sessionId,
             ...(session?.projectId ? { workspaceId: session.projectId } : {}),
@@ -156,6 +169,7 @@ export function useSelectionActionRun() {
             })
           },
         })
+        failed = false
         if (!current()) return
         cancelFrame()
         setState(
@@ -177,7 +191,11 @@ export function useSelectionActionRun() {
           message: error instanceof Error ? error.message : String(error),
         })
       } finally {
-        if (controllerRef.current === controller) controllerRef.current = null
+        try {
+          if (executionRunId) await finishToolExecutionRun(executionRunId, failed)
+        } finally {
+          if (controllerRef.current === controller) controllerRef.current = null
+        }
       }
     },
     [cancelFrame, locale]

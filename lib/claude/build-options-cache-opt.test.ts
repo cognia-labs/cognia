@@ -17,11 +17,24 @@ jest.mock("@/lib/memory/runtime/apply-memory-context", () => ({
 // Twin runtime mock — returns a template with explicit stable/dynamic
 // cacheSegments so the split path is observable.
 const mApplyTwinContext = jest.fn()
-jest.mock("@/lib/twin/runtime", () => ({
+jest.mock("@/lib/twin/runtime/apply-twin-context", () => ({
   applyTwinContext: (...args: unknown[]) => mApplyTwinContext(...args),
 }))
 
-import { resolveSendOptions } from "./build-options"
+import { resolveSendOptions as resolveOptions, type BuildOptionsContext } from "./build-options"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+
+// Each call in these injection tests represents an admitted owner turn.
+async function resolveSendOptions(context: BuildOptionsContext) {
+  if (context.executionIdentity?.runId) return resolveOptions(context)
+  const run = await startToolExecutionRun(context.session?.id, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  return resolveOptions({
+    ...context,
+    executionIdentity: { ...context.executionIdentity, runId: run.id },
+  })
+}
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import type { AppSettings, Character, ChatSession } from "@cognia/agent-config-types"
 
@@ -39,6 +52,7 @@ beforeEach(async () => {
     systemPromptSection: MEMORY_SECTION,
     retrievedMemories: [],
     proceduralCount: 0,
+    budget: { limit: 1000, used: 0 },
     degraded: false,
   })
 })

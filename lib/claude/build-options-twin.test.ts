@@ -31,7 +31,20 @@ jest.mock("@/lib/twin/runtime/apply-twin-context", () => {
   }
 })
 
-import { resolveSendOptions } from "./build-options"
+import { resolveSendOptions as resolveOptions, type BuildOptionsContext } from "./build-options"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+
+// Each call in these injection tests represents an admitted owner turn.
+async function resolveSendOptions(context: BuildOptionsContext) {
+  if (context.executionIdentity?.runId) return resolveOptions(context)
+  const run = await startToolExecutionRun(context.session?.id, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  return resolveOptions({
+    ...context,
+    executionIdentity: { ...context.executionIdentity, runId: run.id },
+  })
+}
 import { contextSourcesOf } from "./context-sources"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { readTwinInjectLog, __resetTwinInjectLog } from "@/lib/twin/runtime/inject-log"

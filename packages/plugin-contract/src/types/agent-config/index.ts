@@ -593,6 +593,12 @@ export type SendOptions = {
   initialConversation?: Array<{ role: string; content?: unknown; [field: string]: unknown }>
   /** Transcript generation carried by the runtime and its events, including retained turns. */
   transcriptInvalidationId?: string
+  /** Host-derived identity of the readers and withheld canonical message ids. */
+  personalVisibilityDigest?: string
+  /** Host proof that the current canonical projection contains withheld message ids. */
+  personalVisibilityHasWithheld?: boolean
+  /** Reader-only provenance of history-derived prompt additions; grants no identity. */
+  personalContextReadersDigest?: string
   /** Require this live AI-SDK context; refuse if it was retired after the status probe. */
   expectedRuntimeSessionId?: string
   /** Resume an existing SDK session by id. Mutually exclusive with `forkFromSessionId`. */
@@ -1530,6 +1536,7 @@ export type RuntimeSessionStatus =
       provider: string
       cwd?: string
       transcriptInvalidationId?: string
+      personalVisibilityDigest?: string
       featurePolicyKey?: string
       active: boolean
     }
@@ -2751,10 +2758,12 @@ export interface ChatSession {
   runtimeTranscriptInvalidated?: string
   /** Retained transcript generation used to reject stale runtime events and writes. */
   runtimeTranscriptGeneration?: string
+  /** Unindexed visibility identity saved beside the engine resume id; no schema change. */
+  runtimePersonalVisibilityDigest?: string
   /** Original native transcript backend; never contains host credentials or tenant authority. */
   sdkSessionStorage?: { backend: "filesystem" | "host-sqlite"; workspace?: string | null }
   /** Nonsecret, agent-scoped native session link for isolated gateway task resume. */
-  externalAgentSession?: { agentId: string; sessionId: string }
+  externalAgentSession?: { agentId: string; sessionId: string; personalVisibilityDigest?: string }
   /** Original Host identities captured before delivery admission; no transport credentials. */
   deliverySourceHosts?: Array<{
     kind: "local" | "remote"
@@ -2782,7 +2791,11 @@ export interface ChatSession {
    * branch (a task belongs to one conversation). `externalAgentSession` stays
    * the CURRENT link. Not indexed.
    */
-  externalAgentGatewaySessions?: Array<{ agentId: string; sessionId: string }>
+  externalAgentGatewaySessions?: Array<{
+    agentId: string
+    sessionId: string
+    personalVisibilityDigest?: string
+  }>
   /**
    * When forking, the SDK session id this branch was created from. The next
    * send on a session whose `forkedFromSdkSessionId` is set populates

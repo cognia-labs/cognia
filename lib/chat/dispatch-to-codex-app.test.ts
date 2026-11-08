@@ -1,3 +1,22 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+  preparePersonalDerivedHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
+
 import type { UIMessage } from "ai"
 import type { ChatSession } from "@cognia/agent-config-types"
 
@@ -8,6 +27,16 @@ import { dispatchConversationToCodexApp } from "@/lib/native/codex-app-dispatch"
 import { materializeMessageMedia } from "@/lib/chat/media/normalize-message-media"
 import { openCodexAppTask } from "@/lib/native/codex-app-control"
 import { dispatchSessionToCodexApp, returnSessionFromCodexApp } from "./dispatch-to-codex-app"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
+jest.mock("@/lib/execution/acting-authority", () => ({
+  LOCAL_PERSON_RUN: Symbol("local-handoff"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "handoff-root" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
 
 jest.mock("@/lib/db/sessions", () => ({
   updateSession: jest.fn().mockResolvedValue(undefined),
@@ -91,6 +120,18 @@ test("dispatches a role-preserving snapshot and opens the imported Codex task", 
   ])
 
   await expect(dispatchSessionToCodexApp(session)).resolves.toEqual({ threadId: "thread-1" })
+  expect(startToolExecutionRun).toHaveBeenCalledWith(session.id, {
+    localAuthorization: LOCAL_PERSON_RUN,
+    title: "Codex App handoff",
+  })
+  expect(finishToolExecutionRun).toHaveBeenCalledWith("handoff-root", false)
+  expect(preparePersonalHistory).toHaveBeenCalledWith(session.id, expect.any(Array), {
+    executionRunId: "handoff-root",
+  })
+  expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(session.id, expect.any(Array), {
+    sessionId: session.id,
+    executionRunId: "handoff-root",
+  })
 
   expect(mockListMessages).toHaveBeenCalledWith("session-1")
   expect(mockResolveCwd).toHaveBeenCalledWith(session)

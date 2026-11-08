@@ -1,4 +1,17 @@
 import type { SendFn } from "./claude-chat-turn-tasks"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerHistory: jest.fn(async (messages: { id: string }[]) => {
+    const { withholdForReaders } = jest.requireActual(
+      "@cognia/plugin-contract/types/execution/personal-visibility"
+    )
+    return withholdForReaders(messages, [{ kind: "local-person" }])
+  }),
+}))
+const runTitleTaskMock = jest.fn()
+jest.mock("@/lib/ai/generation/run-title-task", () => ({
+  ...jest.requireActual("@/lib/ai/generation/run-title-task"),
+  runTitleTask: (...args: unknown[]) => runTitleTaskMock(...args),
+}))
 const getSessionMock = jest.fn()
 const updateSessionMock = jest.fn()
 jest.mock("@/lib/db/sessions", () => ({
@@ -20,8 +33,11 @@ import {
   extractAssistantText,
   extractPlainText,
   renderGoalExitCard,
+  runUtilityModelTasks,
 } from "./claude-chat-turn-tasks"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
+import { useSettingsStore } from "@/stores/settings"
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
 
 describe("Claude chat turn tasks", () => {
   const message = { id: "a1", role: "assistant", parts: [{ type: "text", text: "done" }] } as never
@@ -33,6 +49,35 @@ describe("Claude chat turn tasks", () => {
 
   it("renders terminal goal cards", () => {
     expect(renderGoalExitCard("completed", "shipped")).toContain("Goal completed")
+  })
+  it("does not title another person's sealed turn in the Host owner utility job", async () => {
+    getSessionMock.mockResolvedValue({ id: "s", title: "New chat" })
+    useSettingsStore.setState({ settings: { language: "en" } as never })
+    runTitleTaskMock.mockClear()
+    runUtilityModelTasks("s", [
+      {
+        id: "personal",
+        role: "assistant",
+        parts: [{ type: "text", text: "private report" }],
+        metadata: {
+          personalMarks: [
+            {
+              person: {
+                kind: "platform",
+                platform: "lark",
+                adapterId: "foreign-adapter",
+                remoteUserId: "foreign-person",
+              },
+              source: "private-tool",
+              markedAt: 1,
+            },
+          ],
+        },
+      },
+    ] as never)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(prepareOwnerHistory).toHaveBeenCalled()
+    expect(runTitleTaskMock).not.toHaveBeenCalled()
   })
 })
 

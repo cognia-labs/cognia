@@ -242,6 +242,11 @@ export function __getInflightControllerForTesting(teamId: string): AbortControll
   return inflightControllers.get(teamId)?.controller
 }
 
+/** Host registry identity for callbacks that run before TeamRunContext registration. */
+export function getInflightTeamRunId(teamId: string): string | undefined {
+  return inflightControllers.get(teamId)?.runId
+}
+
 /** Control-plane decisions win over a late executor result or setup error. */
 async function settleDurableRunStatus(
   runId: string,

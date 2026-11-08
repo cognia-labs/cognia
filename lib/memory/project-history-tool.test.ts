@@ -89,6 +89,8 @@ function makeDeps(overrides: Partial<ProjectHistoryToolDeps> = {}): ProjectHisto
     searchResults: async () => [],
     getSessions: async (ids) => ids.map((id) => session({ id })),
     locateMessage: async () => "s-1",
+    canReadMessage: async () => true,
+    readSessionTitle: async () => "Earlier conversation",
     buildWindow: async () => "user: why pnpm?\n\nassistant: workspaces",
     now: () => 0,
     ...overrides,
@@ -96,6 +98,69 @@ function makeDeps(overrides: Partial<ProjectHistoryToolDeps> = {}): ProjectHisto
 }
 
 const ctx = { sessionId: "current" }
+
+describe("personal history gates", () => {
+  it("drops private indexed snippets, result labels, and expansion windows before framing", async () => {
+    const buildWindow = jest.fn(async () => "private expansion")
+    const canReadMessage = jest.fn(async () => false)
+    const result = await runProjectHistorySearch(
+      { queries: ["private"], expand: ["private-message"] },
+      makeDeps({
+        canReadMessage,
+        buildWindow,
+        searchMessages: async () =>
+          searchOutcome([
+            {
+              messageId: "private-message",
+              sessionTitle: "private title",
+              snippet: { text: "private snippet", positions: [] },
+            },
+          ]),
+        searchResults: async () => [
+          resultRow({
+            toolName: "PrivateTool",
+            title: "private result title",
+            preview: "private result",
+          }),
+        ],
+      }),
+      { ...ctx, executionRunId: "host-run" }
+    )
+    expect(result).toMatchObject({ ok: true, hits: [], withheldCount: 3 })
+    expect(JSON.stringify(result)).not.toMatch(
+      /private title|private snippet|PrivateTool|private result|private expansion/
+    )
+    expect(buildWindow).not.toHaveBeenCalled()
+    expect(canReadMessage).toHaveBeenCalledWith("private-message", {
+      sessionId: "current",
+      executionRunId: "host-run",
+    })
+  })
+
+  it("uses the separately checked canonical title instead of a private indexed title", async () => {
+    const recordEvidence = jest.fn()
+    const result = await runProjectHistorySearch(
+      { queries: ["public"], scope: "messages" },
+      makeDeps({
+        searchMessages: async () =>
+          searchOutcome([
+            {
+              messageId: "public-message",
+              sessionTitle: "private indexed title",
+              snippet: { text: "public source", positions: [] },
+            },
+          ]),
+        readSessionTitle: async () => "Conversation",
+        recordEvidence,
+      }),
+      ctx
+    )
+    expect(result).toMatchObject({ ok: true, hits: [{ sessionTitle: "Conversation" }] })
+    expect(JSON.stringify([result, recordEvidence.mock.calls])).not.toContain(
+      "private indexed title"
+    )
+  })
+})
 
 describe("manifest", () => {
   it("ships exactly one entry", () => {
@@ -198,6 +263,7 @@ describe("message leg", () => {
     const result = await runProjectHistorySearch(
       { queries: ["pnpm"], scope: "messages" },
       makeDeps({
+        readSessionTitle: async () => "mail to someone@example.com",
         searchMessages: async () =>
           searchOutcome([{ messageId: "m-1", sessionTitle: "mail to someone@example.com" }]),
       }),

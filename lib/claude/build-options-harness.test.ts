@@ -15,9 +15,11 @@ import { resolveSendOptions } from "./build-options"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import type { Character, ChatSession } from "@cognia/agent-config-types"
 import { AGENT_CAPABILITY_GRANT_SCHEMA_VERSION } from "@cognia/agent-config-types/agent-capability-grant"
-import { materializeHarnessRun } from "@/lib/harness/overlay"
+import { materializeHarnessRun, type HarnessRuntimeOverlay } from "@/lib/harness/overlay"
 import { makeComponents } from "@/lib/harness/test-fixtures"
 import { loadSkillResourceForSession, releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+import { createRecording } from "@/lib/db/skill-recordings"
 
 const dbFixture = createDbTestFixture()
 
@@ -118,15 +120,34 @@ describe("resolveSendOptions — harness subagents", () => {
 describe("resolveSendOptions — probe overlay", () => {
   afterEach(() => releaseSkillLoadContext("probe-session"))
 
+  async function admitRecordedOverlay(overlay: HarnessRuntimeOverlay) {
+    const run = await startToolExecutionRun("probe-session", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    await Promise.all(
+      overlay.skills.map(({ skill }) =>
+        createRecording({
+          id: `recording:${skill.id}`,
+          skillId: skill.id,
+          status: "saved",
+          source: { kind: "run", runId: run.id, sessionId: "probe-session" },
+        })
+      )
+    )
+    return run
+  }
+
   it("joins the candidate's skills and serves their resources from memory", async () => {
     const { character, overlay } = materializeHarnessRun(
       { id: "snap-9", components: makeComponents({ subagents: [], toolRules: [] }) },
       baseCharacter,
       1
     )
+    const run = await admitRecordedOverlay(overlay)
     const opts = await resolveSendOptions({
       character,
       session: { id: "probe-session", characterId: character.id } as unknown as ChatSession,
+      executionIdentity: { runId: run.id },
       skillRenderMode: "hybrid",
       harnessOverlay: overlay,
     })
@@ -142,9 +163,11 @@ describe("resolveSendOptions — probe overlay", () => {
       baseCharacter,
       1
     )
+    const run = await admitRecordedOverlay(overlay)
     const opts = await resolveSendOptions({
       character,
       session: { id: "probe-session", characterId: character.id } as unknown as ChatSession,
+      executionIdentity: { runId: run.id },
       skillRenderMode: "hybrid",
       harnessOverlay: overlay,
       capabilityGrants: [
@@ -156,5 +179,23 @@ describe("resolveSendOptions — probe overlay", () => {
       ],
     })
     expect(opts.systemPrompt ?? "").not.toContain("csv-report")
+  })
+
+  it("withholds an unproven generated overlay from a readerless probe", async () => {
+    const { character, overlay } = materializeHarnessRun(
+      { id: "snap-9", components: makeComponents({ subagents: [], toolRules: [] }) },
+      baseCharacter,
+      1
+    )
+    const opts = await resolveSendOptions({
+      character,
+      session: { id: "probe-session", characterId: character.id } as unknown as ChatSession,
+      skillRenderMode: "hybrid",
+      harnessOverlay: overlay,
+    })
+    expect(opts.systemPrompt ?? "").not.toContain("csv-report")
+    await expect(
+      loadSkillResourceForSession("probe-session", "csv-report", "scripts/summarize.py")
+    ).resolves.toMatchObject({ ok: false })
   })
 })

@@ -41,6 +41,7 @@ import { resolveMessageSpeaker, type SpeakerSource } from "@/lib/chat/speaker"
 import { messagePermalinkQuery } from "@/lib/chat/message-permalink"
 import { selectionTitleFor } from "@/lib/chat/selection/selection-text"
 import { stripSteerPrefix } from "@/lib/claude/steer"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 /** Longest a prompt runs as its own row title before it is elided. */
 export const PROMPT_TITLE_MAX = 120
@@ -140,7 +141,9 @@ export async function readPromptRecord(refId: string): Promise<PromptRecord | nu
   if (!parsed) return null
   const { getDb } = await import("@/lib/db/schema")
   const row = (await getDb().messages.get(parsed.messageId)) as PromptMessageRow | undefined
-  return promptRecordOf(row, parsed.sessionId)
+  if (!row || !promptRecordOf(row, parsed.sessionId)) return null
+  const history = await preparePersonalHistory(undefined, [row])
+  return promptRecordOf(history.messages[0], parsed.sessionId)
 }
 
 /** The body a staged `@prompt:` chip carries. */
@@ -215,16 +218,20 @@ export async function searchOwnPrompts(
   )[]
   const seen = new Set<string>()
   const candidates: EntityMentionCandidate[] = []
+  const titles = await listableSessionTitles(hits.map((hit) => hit.sessionId))
   for (const [index, hit] of hits.entries()) {
     if (candidates.length >= ENTITY_MENTION_RESULT_LIMIT) break
     // A row the index knows and Dexie does not (the turn is still being
     // written) has no words to offer yet.
-    const record = promptRecordOf(rows[index], hit.sessionId)
+    const canonical = rows[index]
+    if (!canonical || !promptRecordOf(canonical, hit.sessionId)) continue
+    const history = await preparePersonalHistory(undefined, [canonical])
+    const record = promptRecordOf(history.messages[0], hit.sessionId)
     if (!record) continue
     const identity = promptIdentity(record.text)
     if (seen.has(identity)) continue
     seen.add(identity)
-    candidates.push(promptCandidate(record, hit.sessionTitle))
+    candidates.push(promptCandidate(record, titles.get(hit.sessionId) ?? "Conversation"))
   }
   return candidates
 }

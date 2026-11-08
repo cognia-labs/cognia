@@ -30,6 +30,7 @@ import {
 } from "../handoff/client"
 import { createPermissionGate } from "../agent/permission-gate"
 import { runHeadlessTurn as defaultRun } from "../agent/run"
+import { prepareCliPersonalMessages } from "../agent/personal-history"
 import { buildHandoffContext, prepareHandoffContext } from "@/lib/chat/handoff-context"
 import { CLI_HANDOFF_PROMPT } from "@/lib/agent/prompts/cli-prompts"
 import { resolvePrompt } from "@/lib/prompts/resolve"
@@ -358,10 +359,11 @@ export async function resumeCommand(args: ParsedArgs, deps: ResumeDeps = {}): Pr
       }
       priorEntries = existing
     }
-    priorMessages = priorEntries.map((e, i) => ({
+    priorMessages = (await prepareCliPersonalMessages(id, priorEntries)).messages.map((e, i) => ({
       id: e.id ?? `m_${i}`,
       role: e.role,
       parts: e.parts ?? [{ type: "text", text: e.content }],
+      metadata: e.metadata,
     }))
     transcript = buildHandoffContext(priorMessages).text
   } catch (err) {

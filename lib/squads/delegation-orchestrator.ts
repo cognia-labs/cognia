@@ -31,6 +31,7 @@
  */
 
 import { nanoid } from "nanoid"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 import {
   validateHandoffEnvelope,
   type HandoffEnvelope,
@@ -89,11 +90,36 @@ interface PendingRun {
   sourceTeamId: string
   /** The run that asked, when it is not the source team's live run. */
   parentRunId?: string
+  personalExecutionRunId?: string
   timeoutMs?: number
   /** team delegations only: force ultracode orchestration on the target run. */
   ultracode?: boolean
 }
 const pendingRuns = new Map<string, PendingRun>()
+
+type HostDelegationContext = { executionRunId?: string }
+
+async function visibleDelegationPrompt(
+  delegationId: string,
+  prompt: string,
+  systemPrompt: string | undefined,
+  executionRunId: string | undefined
+) {
+  const history = await preparePersonalDerivedHistory(
+    undefined,
+    [
+      {
+        id: `delegation-prompt:${delegationId}`,
+        content: JSON.stringify({ prompt, systemPrompt }),
+      },
+    ],
+    { runIds: executionRunId ? [executionRunId] : [], executionRunId }
+  )
+  const content = history.messages[0].content
+  return history.withheldMessageIds.length > 0
+    ? { prompt: content, systemPrompt: undefined }
+    : (JSON.parse(content) as { prompt: string; systemPrompt?: string })
+}
 
 /**
  * Stop handles for launched delegations, keyed by delegationId. A cancel
@@ -243,9 +269,19 @@ async function runDelegation(
       }
     }
     if (cancelled()) return current()
+    const fields =
+      run.kind === "team"
+        ? run
+        : await visibleDelegationPrompt(
+            delegationId,
+            run.prompt,
+            run.systemPrompt,
+            run.personalExecutionRunId ?? parentRunId
+          )
+    if (cancelled()) return current()
     const launched = await launchChildRun({
       ...(parentRunId ? { parentRunId } : {}),
-      target: childTarget(delegationId, run),
+      target: childTarget(delegationId, { ...run, ...fields }),
       title: `team-delegation:${delegationId}`,
       ...(run.kind === "background" || run.kind === "twin" ? { childId: run.targetId } : {}),
       surface: "agent-team",
@@ -552,7 +588,10 @@ function buildDelegation(input: {
  * Returns the initial delegation record synchronously; callers await
  * `delegation.completionPromise` for the final state.
  */
-export function delegateToBackground(input: DelegateToBackgroundInput): {
+export function delegateToBackground(
+  input: DelegateToBackgroundInput,
+  host: HostDelegationContext = {}
+): {
   delegation: TeamDelegationRecord
   completionPromise: Promise<TeamDelegationRecord>
 } {
@@ -580,6 +619,7 @@ export function delegateToBackground(input: DelegateToBackgroundInput): {
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
     targetId: agentId,
     sourceTeamId: input.sourceTeamId,
+    personalExecutionRunId: host.executionRunId,
     ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
   }
   pendingRuns.set(delegation.id, run)
@@ -632,7 +672,10 @@ export interface DelegateToTwinInput {
  *
  * Returns the initial record synchronously; callers await `completionPromise`.
  */
-export function delegateToTwin(input: DelegateToTwinInput): {
+export function delegateToTwin(
+  input: DelegateToTwinInput,
+  host: HostDelegationContext = {}
+): {
   delegation: TeamDelegationRecord
   completionPromise: Promise<TeamDelegationRecord>
 } {
@@ -662,6 +705,7 @@ export function delegateToTwin(input: DelegateToTwinInput): {
     targetId: agentId,
     twinId: input.twinId,
     sourceTeamId: input.sourceTeamId,
+    personalExecutionRunId: host.executionRunId,
     ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
   }
   pendingRuns.set(delegation.id, run)
@@ -693,7 +737,10 @@ export function delegateToTwin(input: DelegateToTwinInput): {
  * Returns the initial record synchronously; callers await `completionPromise`
  * for the final state.
  */
-export function delegateToExternal(input: DelegateToExternalInput): {
+export function delegateToExternal(
+  input: DelegateToExternalInput,
+  host: HostDelegationContext = {}
+): {
   delegation: TeamDelegationRecord
   completionPromise: Promise<TeamDelegationRecord>
 } {
@@ -715,6 +762,7 @@ export function delegateToExternal(input: DelegateToExternalInput): {
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
     targetId: input.targetAgentId,
     sourceTeamId: input.sourceTeamId,
+    personalExecutionRunId: host.executionRunId,
     ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
   }

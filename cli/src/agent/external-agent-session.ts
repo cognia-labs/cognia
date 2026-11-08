@@ -100,7 +100,8 @@ import { createIdleWatchdog } from "./idle-watchdog"
 import { isResumableLink, readExternalLink, writeExternalLink } from "./external-session-link"
 import { mintSessionId } from "./run"
 import type { AgentModelOption, AgentSession, SendTurnOptions } from "./session-runner"
-import { appendTranscript, iterTranscriptEntries, type TranscriptFs } from "./transcript"
+import { appendTranscript, type TranscriptFs } from "./transcript"
+import { prepareCliPersonalHistory } from "./personal-history"
 import {
   createCliContextAssembler,
   prependTextBlock,
@@ -783,6 +784,7 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
   let sessionContextVersion: string | null = isResumableLink(recordedLink, backend)
     ? (recordedLink.contextVersion ?? null)
     : null
+  let personalVisibilityDigest = recordedLink?.personalVisibilityDigest
   // Set when the permission mode changed and the adapter could not apply it to
   // the running protocol session. Cleared by `reconcile`, which recreates that
   // session so the new mode is the one the agent actually runs under.
@@ -1017,8 +1019,10 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
   const reconcile = async (): Promise<{
     session: ResolvedCliSessionContext
     restarted: boolean
+    personalHistory: Awaited<ReturnType<typeof prepareCliPersonalHistory>>
   }> => {
     const session = await assembler.resolveSession()
+    const personalHistory = await prepareCliPersonalHistory(home, sessionId, params.transcriptFs)
     let restarted = false
     // Only a session that actually exists can be stale. `sessionContextVersion`
     // is null for a link recorded before versions existed, and null never equals
@@ -1031,7 +1035,10 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
     // change they had already applied.
     if (
       externalSessionId &&
-      (sessionContextVersion !== session.contextVersion || permissionModeStale)
+      (sessionContextVersion !== session.contextVersion ||
+        (personalHistory.withheldMessageIds.length > 0 &&
+          personalVisibilityDigest !== personalHistory.visibilityDigest) ||
+        permissionModeStale)
     ) {
       // Everything `session/new` baked in has changed. Appending a second system
       // prompt to the live session would leave the agent with two conflicting
@@ -1055,7 +1062,24 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
     }
     permissionModeStale = false
     sessionContextVersion = session.contextVersion
-    return { session, restarted }
+    personalVisibilityDigest = personalHistory.visibilityDigest
+    session.sendOptions.personalVisibilityDigest = personalVisibilityDigest
+    session.sendOptions.personalVisibilityHasWithheld =
+      personalHistory.withheldMessageIds.length > 0
+    if (externalSessionId) {
+      writeExternalLink(
+        home,
+        sessionId,
+        {
+          backend,
+          externalSessionId,
+          contextVersion: session.contextVersion,
+          personalVisibilityDigest,
+        },
+        params.transcriptFs
+      )
+    }
+    return { session, restarted, personalHistory }
   }
 
   const publishMcp = (
@@ -1111,6 +1135,20 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
     }
   }
   const createMcpSession = async (resolved: ResolvedCliSessionContext) => {
+    const personalHistory = await prepareCliPersonalHistory(home, sessionId, params.transcriptFs)
+    personalVisibilityDigest = personalHistory.visibilityDigest
+    resolved.sendOptions.personalVisibilityDigest = personalVisibilityDigest
+    resolved.sendOptions.personalVisibilityHasWithheld =
+      personalHistory.withheldMessageIds.length > 0
+    const seed = personalHistory.messages
+      .map((entry) => `${entry.role}: ${entry.content}`)
+      .join("\n\n")
+    const systemPrompt = [
+      resolved.sendOptions.systemPrompt,
+      seed ? `[Conversation history]\n\n${seed}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n")
     if (!manager.createSession)
       throw new Error("The current agent cannot create a session explicitly")
     const cogniaServers = await ensureToolHost(resolved)
@@ -1124,10 +1162,10 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
       },
       mcpServers: [...cogniaServers, ...(mcpServers ??= toAcpMcpServers(resolved.mcpServers))],
       additionalDirectories: resolved.additionalDirectories,
-      systemPrompt: resolved.sendOptions.systemPrompt,
+      systemPrompt,
       instructionEnvelope: {
         hash: resolved.contextVersion,
-        developerInstructions: resolved.sendOptions.systemPrompt ?? "",
+        developerInstructions: systemPrompt,
         sourceFlags: {
           hasSkills: resolved.activeSkillIds.length > 0,
           hasAdditionalRoots: resolved.additionalDirectories.length > 0,
@@ -1161,7 +1199,12 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
     writeExternalLink(
       home,
       sessionId,
-      { backend, externalSessionId: created.id, contextVersion: resolved.contextVersion },
+      {
+        backend,
+        externalSessionId: created.id,
+        contextVersion: resolved.contextVersion,
+        personalVisibilityDigest,
+      },
       params.transcriptFs
     )
     return created
@@ -1591,7 +1634,7 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
           // after the model. An agent with no axis never sees a write.
           reasoningEffort = thinkingLevelToEffort(params.config.thinkingLevel)
         }
-        const { session, restarted } = await reconcile()
+        const { session, restarted, personalHistory } = await reconcile()
         const turnNumber = turnSequence++
         const turnIdentity = {
           runId: `${sessionId}:r${turnNumber}`,
@@ -1679,11 +1722,12 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
         // SDK gateway credentials are scoped to one process/turn. Its latest
         // wire has no resume request, so subsequent tasks replay Cognia history.
         const conversationHistory =
-          restarted || (protocol === "dsh-sdk" && externalSessionId?.startsWith("cognia-gateway:"))
-            ? Array.from(
-                iterTranscriptEntries(home, sessionId, params.transcriptFs),
-                (entry) => `${entry.role}: ${entry.content}`
-              ).join("\n\n")
+          restarted ||
+          !externalSessionId ||
+          (protocol === "dsh-sdk" && externalSessionId?.startsWith("cognia-gateway:"))
+            ? personalHistory.messages
+                .map((entry) => `${entry.role}: ${entry.content}`)
+                .join("\n\n")
             : undefined
         appendTranscript(
           home,
@@ -1946,6 +1990,7 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
               backend,
               externalSessionId: result.sessionId,
               contextVersion: session.contextVersion,
+              personalVisibilityDigest,
             },
             params.transcriptFs
           )

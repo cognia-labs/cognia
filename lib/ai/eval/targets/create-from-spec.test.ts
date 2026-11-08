@@ -1,3 +1,29 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: async (_sessionId: unknown, messages: readonly { id: string }[]) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(messages, [])
+  },
+  preparePersonalDerivedHistory: async (
+    _sessionId: unknown,
+    messages: readonly { id: string }[],
+    source: { sessionId?: string } = {}
+  ) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(
+      source.sessionId === "private-source"
+        ? messages.map((m) => ({
+            ...m,
+            metadata: {
+              personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+            },
+          }))
+        : messages,
+      []
+    )
+  },
+}))
 import { createTargetFromSpec, type TargetDepsBundle } from "./create-from-spec"
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 

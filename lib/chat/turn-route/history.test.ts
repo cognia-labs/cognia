@@ -1,5 +1,14 @@
 import type { UIMessage } from "ai"
 import type { SendContent } from "@cognia/agent-config-types"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_sessionId, messages) => ({
+    messages,
+    visibilityDigest: "visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
 import {
   externalLaneMemory,
   foreignTurnsHandoffText,
@@ -151,6 +160,28 @@ describe("foreignTurnsHandoffText", () => {
   beforeEach(() => {
     handoff.build.mockReset()
     handoff.prepare.mockReset()
+  })
+
+  it("filters a child's personal result before projection and drops unmarked imported summaries", async () => {
+    const placeholder = reply("private", "external")
+    placeholder.parts = [{ type: "text", text: "[Withheld: personal content of Host owner]" }]
+    jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+      messages: [placeholder],
+      visibilityDigest: "second-requester",
+      withheldMessageIds: ["private"],
+      readers: [],
+    })
+    handoff.build.mockReturnValue({ text: "FILTERED", losses: [] })
+    await foreignTurnsHandoffText([reply("private salary", "external")], {
+      sessionId: "parent",
+      executionRunId: "other-requester-run",
+      state: { plans: [{ title: "private salary summary" }] },
+      client: async () => null,
+    })
+    expect(handoff.build).toHaveBeenCalledWith([placeholder], {})
+    expect(preparePersonalHistory).toHaveBeenCalledWith("parent", expect.any(Array), {
+      executionRunId: "other-requester-run",
+    })
   })
 
   it("hands over nothing for no messages, without projecting", async () => {

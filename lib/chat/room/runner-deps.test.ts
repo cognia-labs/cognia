@@ -7,6 +7,7 @@
  */
 
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
 
 export function makeFakeDeps(): RoomRunnerDeps {
   return {
@@ -38,6 +39,14 @@ export function makeFakeDeps(): RoomRunnerDeps {
       resolveEffectiveCwdForSession: async () => null,
     },
     ai: {
+      preparePersonalHistory: async (_sessionId, messages) => ({
+        ...withholdForReaders(messages, []),
+        readers: [],
+      }),
+      preparePersonalDerivedHistory: async (_sessionId, messages) => ({
+        ...withholdForReaders(messages, []),
+        readers: [],
+      }),
       resolveSendOptions: async () => ({}),
       tryBuildTwinDeps: async () => undefined,
       tryBuildMemoryDeps: async () => undefined,

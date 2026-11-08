@@ -3,6 +3,19 @@ import { composeTurnText } from "@/lib/chat/prompt-preamble"
 import { attachmentEvidenceSourceId } from "@cognia/memory/extract/project-attachment-evidence"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    preparePersonalHistory: async <T extends { id: string; metadata?: unknown }>(
+      _sessionId: string | undefined,
+      messages: readonly T[],
+      options?: { session?: { platformBinding?: unknown } }
+    ) => ({ ...withholdForReaders(messages, [], options?.session), readers: [] }),
+  }
+})
+
 const mockGetSettings = jest.fn()
 const mockGetSession = jest.fn()
 const mockListMessages = jest.fn()
@@ -66,6 +79,14 @@ jest.mock("@/lib/memory/lifecycle/maintenance", () => ({
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
   tryBuildMemoryVectorSink: (...args: unknown[]) => mockTryBuildVectorSink(...args),
   tryBuildMemoryVectorReader: (...args: unknown[]) => mockTryBuildVectorReader(...args),
+  filterPersonalMemories: async <T extends { id: string; metadata?: unknown }>(memories: T[]) => {
+    const { withholdForReaders } = jest.requireActual<
+      typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+    >("@cognia/plugin-contract/types/execution/personal-visibility")
+    const history = withholdForReaders(memories, [])
+    const withheld = new Set(history.withheldMessageIds)
+    return memories.filter((memory) => !withheld.has(memory.id))
+  },
 }))
 jest.mock("@/lib/memory/lifecycle/lifecycle-sweep", () => ({
   runMemoryLifecycleSweep: (...args: unknown[]) => mockRunLifecycleSweep(...args),
@@ -423,6 +444,21 @@ describe("memory job worker", () => {
     expect(mockUpdateMemory).not.toHaveBeenCalledWith("m1", expect.anything())
   })
 
+  it("never sends marked recovered history to extraction or vector indexing", async () => {
+    const metadata = {
+      personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+    }
+    mockListMessages.mockResolvedValue([
+      { id: "u1", role: "user", metadata, parts: [{ type: "text", text: "private preference" }] },
+      { id: "a1", role: "assistant", metadata, parts: [{ type: "text", text: "private answer" }] },
+    ])
+    await expect(
+      processMemoryJob({ ...job("private"), sessionId: "s1", projectId: "p1" })
+    ).rejects.toMatchObject({ message: "turn_pair_unavailable" })
+    expect(mockRunExtraction).not.toHaveBeenCalled()
+    expect(mockTryBuildVectorSink).not.toHaveBeenCalled()
+  })
+
   it("learns only authored user prose when an opted-in turn contains attachments", async () => {
     mockGetSettings.mockResolvedValue({
       memory: { enabled: true, learnFromChats: true, disableLearningOnExternalContext: false },
@@ -531,6 +567,26 @@ describe("memory job worker", () => {
     expect(mockUpdateMemory).toHaveBeenCalledWith("fresh", { vectorDocId: "fresh" })
     // Only the orphan is swept.
     expect(del).toHaveBeenCalledWith(["orphan"])
+  })
+
+  it("does not embed personal memories or purge their existing owner-scoped vector", async () => {
+    const upsert = jest.fn(async () => undefined)
+    const remove = jest.fn(async () => undefined)
+    const metadata = {
+      personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+    }
+    mockTryBuildVectorSink.mockResolvedValue({
+      upsert,
+      delete: remove,
+      listIds: async () => ["old-private-vector"],
+    })
+    mockListMemories.mockResolvedValue([
+      { id: "new-private", text: "private source", metadata },
+      { id: "old-private", text: "private source", vectorDocId: "old-private-vector", metadata },
+    ])
+    await processMemoryJob({ ...job("private-vector"), kind: "vector-reconcile" })
+    expect(upsert).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
   })
 
   describe("project mining dispatch", () => {
@@ -1282,6 +1338,23 @@ describe("memory-lifecycle-sweep job", () => {
     const deps = await capturedDeps()
     await expect(deps.reviseText(row(), "compacted text", "compaction", 1)).resolves.toBeUndefined()
     expect(mockNoteVectorFailure).toHaveBeenCalledTimes(1)
+  })
+
+  it("updates a personal memory locally without sending revised prose to the embedding model", async () => {
+    const upsert = jest.fn(async () => undefined)
+    mockTryBuildVectorSink.mockResolvedValue({ upsert })
+    const deps = await capturedDeps()
+    const memory = row({
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+      },
+    })
+    await deps.reviseText(memory, "private revised prose", "compaction", 1)
+    expect(mockUpdateMemory).toHaveBeenCalledWith(
+      "m1",
+      expect.objectContaining({ text: "private revised prose" })
+    )
+    expect(upsert).not.toHaveBeenCalled()
   })
 
   it("supersede invalidates the loser and drops its vector doc", async () => {

@@ -168,6 +168,53 @@ test("a send requiring retained context refuses lost, replaced, closing, or rest
   assert.equal(retainedRuntimeSendIsSafe(undefined, { initialConversation: [] }), true)
 })
 
+test("personal visibility mismatches refuse retained context only when currently withholding", () => {
+  const current = {
+    sdkSessionId: "live",
+    multiTurn: true,
+    q: { active: false },
+    sendOptions: { personalVisibilityDigest: "owner" },
+  }
+  assert.equal(retainedRuntimeSendIsSafe(current, { personalVisibilityDigest: "owner" }), true)
+  assert.equal(
+    retainedRuntimeSendIsSafe(current, {
+      personalVisibilityDigest: "other",
+      personalVisibilityHasWithheld: true,
+    }),
+    false
+  )
+  assert.equal(retainedRuntimeSendIsSafe(current, {}), true)
+  assert.equal(
+    retainedRuntimeSendIsSafe(current, {
+      personalVisibilityDigest: "owner-visible",
+      personalVisibilityHasWithheld: false,
+    }),
+    true
+  )
+  assert.equal(
+    retainedRuntimeSendIsSafe(
+      { ...current, sendOptions: {} },
+      { personalVisibilityDigest: "owner-visible", personalVisibilityHasWithheld: false }
+    ),
+    true
+  )
+  assert.equal(
+    retainedRuntimeSendIsSafe(
+      { ...current, sendOptions: {} },
+      { personalVisibilityDigest: "joined", personalVisibilityHasWithheld: true }
+    ),
+    false
+  )
+  assert.equal(
+    retainedRuntimeSendIsSafe(current, {
+      personalVisibilityDigest: "other",
+      personalVisibilityHasWithheld: true,
+      initialConversation: [],
+    }),
+    true
+  )
+})
+
 test("provider-visible sends are rejected when any prompt surface leaks PII", () => {
   assert.equal(
     providerVisibleSendPayloadIsSafe({

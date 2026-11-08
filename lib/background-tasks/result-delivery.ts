@@ -346,8 +346,8 @@ export async function attemptBackgroundResultDelivery(sessionId: string): Promis
     const runIds = new Set(batch.runIds)
     const { childJobExecutionRunId } = await import("@/lib/execution/launch-child-run")
     const batchEntries = entries.filter((entry) => runIds.has(entry.runId))
-    // A job or hand-off entry is not a run of the outbox's own: only run
-    // results name the runs the turn answers.
+    // The outbox ids are not source execution ids: agent results name job
+    // runs, while hand-offs retain the actual Squad attempt's run id.
     const runResults = batchEntries.filter((entry) => !entry.job && !entry.squadHandoff)
     const memberIds = [
       ...new Set(batchEntries.flatMap((entry) => entry.squadHandoff?.proposerId ?? [])),
@@ -356,7 +356,10 @@ export async function attemptBackgroundResultDelivery(sessionId: string): Promis
       frameBackgroundResults(batchEntries),
       sessionId,
       batch.deliveryId,
-      backgroundResultRunIds(runResults).map(childJobExecutionRunId),
+      [
+        ...backgroundResultRunIds(runResults).map(childJobExecutionRunId),
+        ...batchEntries.flatMap((entry) => entry.squadHandoff?.squadRunId ?? []),
+      ],
       memberIds.length > 0 ? { memberIds } : undefined
     )
     if (!accepted) return

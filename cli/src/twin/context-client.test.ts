@@ -16,7 +16,7 @@ describe("fetchTwinContext", () => {
     expect(out).toBeNull()
   })
 
-  it("POSTs the request with the dev token and unwraps the bridge envelope", async () => {
+  it("POSTs with the dev token but withholds owner context from an unverified CLI reader", async () => {
     const result = {
       ok: true,
       applied: { systemPrompt: "SP", stable: "S", dynamic: "D" },
@@ -29,7 +29,14 @@ describe("fetchTwinContext", () => {
       { characterId: "c1", message: "hi", sessionId: "s1" },
       { endpoint, fetch: doFetch as unknown as typeof fetch }
     )
-    expect(out).toEqual(result)
+    const placeholder = "[Withheld: personal content of Host owner]"
+    expect(out).toEqual({
+      ok: true,
+      applied: { systemPrompt: placeholder, stable: placeholder, dynamic: placeholder },
+      degraded: false,
+      sources: [],
+      styleSampleCount: 0,
+    })
     const [url, init] = doFetch.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe(`${endpoint.baseUrl}${TWIN_CONTEXT_PATH}`)
     expect((init.headers as Record<string, string>)[DEV_TOKEN_HEADER]).toBe("tok")

@@ -160,6 +160,16 @@ beforeEach(() => {
 const HOST_GRANT = { schemaVersion: 1, source: owner, permissionProfile: {} }
 
 describe("runPluginAgentTurn", () => {
+  it("resolves history-bearing options only after the Host has admitted its execution", async () => {
+    await runTurn(base, { ...caller, parentRunId: "bot-root" })
+    expect(resolveSendOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ executionIdentity: { runId: "entry-run" } })
+    )
+    expect(startToolExecutionRun.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveSendOptions.mock.invocationCallOrder[0]
+    )
+  })
+
   it("parks a permission ask and reports needs_approval when nobody answers", async () => {
     runAndCaptureAssistantReply.mockImplementation(async (...args: unknown[]) => {
       const opts = args[3] as {

@@ -8,6 +8,10 @@ import { getDb } from "@/lib/db/schema"
 import type { StepEdits } from "@/lib/skills/recording/step-model"
 import { useRecorderStore } from "@/stores/skills/recorder-store"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
+import {
+  prepareOwnerHistory,
+  prepareOwnerDerivedHistory,
+} from "@/lib/execution/personal-visibility"
 
 const log = loggers.agent.child("skill-suggestion")
 const MAX_SOURCE_STEPS = 80
@@ -68,15 +72,27 @@ function messagesToIntents(messages: readonly UIMessage[]): string[] {
 }
 
 async function loadSourceIntents(source: SkillSuggestionSource): Promise<string[]> {
-  if (source.kind === "session") return messagesToIntents(await listMessages(source.sessionId))
+  const sessionIntents = async (sessionId: string) => {
+    const history = await prepareOwnerHistory(
+      (await listMessages(sessionId)).map((message) => ({ ...message, sessionId }))
+    )
+    return messagesToIntents(history.messages)
+  }
+  if (source.kind === "session") return sessionIntents(source.sessionId)
 
   const attempt = await getDb().agentTaskAttempts.get(source.runId)
   if (!attempt || (attempt.status !== "completed" && attempt.status !== "review")) {
     throw new Error("skill-source-not-successful")
   }
   const intents: string[] = []
-  if (attempt.sessionId) intents.push(...messagesToIntents(await listMessages(attempt.sessionId)))
-  if (attempt.result?.trim()) intents.push(redactStep("Successful run result", attempt.result))
+  if (attempt.sessionId) intents.push(...(await sessionIntents(attempt.sessionId)))
+  if (attempt.result?.trim()) {
+    const result = await prepareOwnerDerivedHistory([{ id: source.runId, text: attempt.result }], {
+      runIds: [source.runId],
+      sessionId: attempt.sessionId,
+    })
+    intents.push(redactStep("Successful run result", result.messages[0].text))
+  }
   return intents.slice(0, MAX_SOURCE_STEPS)
 }
 

@@ -1,4 +1,15 @@
 import type { ClaudeEvent, SDKMessage } from "@cognia/agent-config-types"
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    preparePersonalHistory: async <T extends { id: string; metadata?: unknown }>(
+      _sessionId: string | undefined,
+      messages: readonly T[]
+    ) => ({ ...withholdForReaders(messages, []), readers: [] }),
+  }
+})
 import {
   configureChatRegistry,
   handleChatParticipantRespond,
@@ -21,6 +32,51 @@ beforeEach(() => {
     activate: async () => {},
     canInvoke: async () => true,
   })
+})
+
+it("withholds marked message metadata and tools before invoking an extension", async () => {
+  await handleCreateChatParticipant({ extensionId: "ext", id: "helper", token: "callback" })
+  const target = await resolveVscodeChatParticipant("vscode-chat:ext:helper")
+  const provider = jest.fn(async (_owner, _method, raw) => {
+    const request = raw as { context: { history: unknown[] } }
+    expect(JSON.stringify(request.context.history)).toContain(
+      "[Withheld: personal content of Host owner]"
+    )
+    expect(JSON.stringify(request.context.history)).not.toMatch(
+      /private text|PrivateTool|private metadata/
+    )
+    return {}
+  })
+  configureChatRegistry({ callProvider: provider })
+  await runVscodeChatTurn({
+    sessionId: "s",
+    turnId: "t",
+    characterId: target.characterId,
+    binding: target,
+    prompt: "question",
+    signal: new AbortController().signal,
+    emit: () => {},
+    messages: [
+      {
+        id: "private",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "private text" },
+          { type: "tool-PrivateTool", output: "private result" } as never,
+        ],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+          vscodeChat: {
+            pluginId: "ext",
+            participantId: "helper",
+            result: { metadata: "private metadata" },
+          },
+        },
+      },
+      { id: "current", role: "user", parts: [{ type: "text", text: "question" }] },
+    ],
+  })
+  expect(provider).toHaveBeenCalledTimes(1)
 })
 
 it("streams extension markdown into assistant snapshots and the final result, with progress and references", async () => {

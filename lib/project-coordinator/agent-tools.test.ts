@@ -1,3 +1,22 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+  preparePersonalDerivedHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
+
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import {
@@ -79,6 +98,35 @@ function deps(overrides: Partial<ProjectCoordinatorToolDeps> = {}): ProjectCoord
 
 const run = (name: string, args: Record<string, unknown>, d = deps(), sessionId = "coord") =>
   runProjectCoordinatorBuiltinTool(name, args, d, { sessionId })
+
+it("filters full thread history and its summary before returning it to the coordinator model", async () => {
+  jest.mocked(preparePersonalDerivedHistory).mockImplementationOnce(
+    async (_session, messages) =>
+      ({
+        messages: messages.map((row) => ({
+          ...row,
+          content: "[Withheld: personal content of Host owner]",
+        })),
+        visibilityDigest: "changed",
+        withheldMessageIds: ["thread-report:t1"],
+        readers: [],
+      }) as never
+  )
+  const result = await runProjectCoordinatorBuiltinTool(
+    T.readThreadReport,
+    { thread_id: own.id, full: true },
+    deps(),
+    { sessionId: coordinator.id, executionRunId: "consumer" }
+  )
+  expect(result).toEqual({ id: own.id, withheld: "[Withheld: personal content of Host owner]" })
+  expect(preparePersonalHistory).toHaveBeenCalledWith(coordinator.id, expect.any(Array), {
+    executionRunId: "consumer",
+  })
+  expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(coordinator.id, expect.any(Array), {
+    sessionId: own.id,
+    executionRunId: "consumer",
+  })
+})
 
 describe("manifest", () => {
   it("declares every coordinator tool and the thread tool with object schemas", () => {

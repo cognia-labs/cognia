@@ -7,6 +7,16 @@
  * the plugin runtime.
  */
 
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import "fake-indexeddb/auto"
 
 const dispatchOnSharedMemoryWrite = jest.fn()
@@ -26,6 +36,7 @@ import {
   deleteEntry,
   publishEntry,
   readDependencyResults,
+  readDependencyResultsForRun,
   syncSharedMemoryFromAdapter,
 } from "./shared-memory-orchestrator"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
@@ -187,6 +198,41 @@ describe("shared-memory-orchestrator", () => {
   })
 
   describe("readDependencyResults", () => {
+    it("rechecks Host publication provenance and removes private titles and writers with a withheld value", async () => {
+      const ctx = {
+        runId: "consumer",
+        teamId: team.id,
+      } as import("../team-run-context").TeamRunContext
+      autoPublishTaskResult(team, task, "PRIVATE_RESULT", writer, "execution:team:source")
+      jest.mocked(preparePersonalDerivedHistory).mockImplementationOnce(
+        async (_session, messages) =>
+          ({
+            messages: messages.map((message) => ({
+              ...message,
+              content: "[Withheld: personal content of Host owner]",
+            })),
+            visibilityDigest: "changed",
+            withheldMessageIds: [],
+            readers: [],
+          }) as never
+      )
+      const result = await readDependencyResultsForRun(ctx, [task.id])
+      expect(result).toEqual([
+        { taskId: task.id, value: "[Withheld: personal content of Host owner]" },
+      ])
+      expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(undefined, expect.any(Array), {
+        executionRunId: "execution:team:consumer",
+        runIds: ["execution:team:source"],
+      })
+      const entry = useAgentTeamStore.getState().sharedMemory[team.id][`task:${task.id}`]
+      useAgentTeamStore.getState().writeSharedMemory(team.id, entry.key, { ...entry })
+      await readDependencyResultsForRun(ctx, [task.id])
+      expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(undefined, expect.any(Array), {
+        executionRunId: "execution:team:consumer",
+        runIds: [],
+      })
+    })
+
     it("returns [] for an empty dependency list without touching the store", () => {
       expect(readDependencyResults(team.id, [])).toEqual([])
     })

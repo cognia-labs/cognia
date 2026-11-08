@@ -1,3 +1,29 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: async (_sessionId: unknown, messages: readonly { id: string }[]) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(messages, [])
+  },
+  preparePersonalDerivedHistory: async (
+    _sessionId: unknown,
+    messages: readonly { id: string }[],
+    source: { sessionId?: string } = {}
+  ) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(
+      source.sessionId === "private-source"
+        ? messages.map((m) => ({
+            ...m,
+            metadata: {
+              personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+            },
+          }))
+        : messages,
+      []
+    )
+  },
+}))
 import { createTeamTarget } from "./team"
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalCase } from "@/types/eval/eval"
@@ -26,6 +52,32 @@ const evalCase: EvalCase = {
 }
 
 describe("createTeamTarget", () => {
+  it("withholds a private teammate result and tool trajectory before a judge can read it", async () => {
+    const target = createTeamTarget(
+      { label: "t", teamId: "tm1" },
+      {
+        runTeam: async ({ traceId }) => ({
+          runId: "r",
+          status: "completed",
+          text: "PRIVATE RESULT",
+          traceId,
+          spans: [
+            span({
+              sessionId: "private-source",
+              operationName: "execute_tool",
+              toolName: "PrivateTool",
+              metadata: { args: { value: "PRIVATE ARG" } },
+            }),
+          ],
+        }),
+        fetchSpansByTrace: async () => [],
+        isToolCapable: () => true,
+      }
+    )
+    const sample = await target.run(evalCase)
+    expect(sample.output).toContain("[Withheld: personal content of")
+    expect(JSON.stringify(sample)).not.toMatch(/PRIVATE|PrivateTool/)
+  })
   it.each(["failed", "cancelled"])(
     "preserves a %s lifecycle outcome even with a matching answer",
     async (status) => {
@@ -90,7 +142,7 @@ describe("createTeamTarget", () => {
     })
     expect(runTeam).not.toHaveBeenCalled()
     expect(sample.executionStatus).toBe("blocked")
-    expect(sample.error).toMatch(/asset/i)
+    expect(sample.error).toBe("Evaluation blocked")
   })
 
   it("enforces the evaluation deadline and aborts the dispatched run", async () => {

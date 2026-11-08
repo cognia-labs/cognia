@@ -1,3 +1,22 @@
+jest.mock("../input/ai-complete", () => ({
+  ...jest.requireActual("../input/ai-complete"),
+  createTuiInlineComplete: jest.fn(
+    jest.requireActual("../input/ai-complete").createTuiInlineComplete
+  ),
+}))
+// App exercises the real turn routing with fake runtimes. Native workspace
+// capture is tested at its own boundary and must not spawn a helper for /work.
+jest.mock("../../worker/workspace-client", () => ({
+  ...jest.requireActual("../../worker/workspace-client"),
+  openWorkerTurnCapture: jest.fn(async () => ({
+    finish: async () => ({ available: false, reason: "helper-unavailable" }),
+  })),
+}))
+
+jest.mock("../../agent/transcript", () => ({
+  ...jest.requireActual("../../agent/transcript"),
+  readTranscript: jest.fn(jest.requireActual("../../agent/transcript").readTranscript),
+}))
 import {
   registerSessionMcpStatus,
   publishSessionMcpStatus,
@@ -6,6 +25,8 @@ import {
 import path from "node:path"
 import fs from "node:fs"
 import os from "node:os"
+import * as inlineComplete from "../input/ai-complete"
+import * as canonicalTranscript from "../../agent/transcript"
 import React from "react"
 import { act, render, waitFor } from "@testing-library/react"
 import { __fireInput, __resetInk, __suspendTerminal } from "ink"
@@ -190,6 +211,29 @@ function runBareCommand(line: string) {
 }
 
 describe("App", () => {
+  it("threads its configured home to canonical model suggestion context", async () => {
+    const complete = jest.fn(async (_args: { prompt: string }) => "the answer")
+    const factory = jest.mocked(inlineComplete.createTuiInlineComplete).mockReturnValue(complete)
+    const read = jest
+      .spyOn(canonicalTranscript, "readTranscript")
+      .mockReturnValue([{ ts: 1, role: "assistant", content: "CANONICAL SCOPED HOME" }])
+    const session = fakeSession()
+    const view = render(
+      <App
+        config={{ ...config, autosuggest: { ai: true, debounceMs: 200 } }}
+        sessionId="s1"
+        createSession={session.create}
+        home="/configured-suggestion-home"
+      />
+    )
+    type("explain ")
+    await waitFor(() => expect(complete).toHaveBeenCalled())
+    expect(read).toHaveBeenCalledWith("/configured-suggestion-home", "s1", undefined)
+    expect(complete.mock.calls[0][0].prompt).toContain("CANONICAL SCOPED HOME")
+    view.unmount()
+    factory.mockImplementation(jest.requireActual("../input/ai-complete").createTuiInlineComplete)
+    read.mockImplementation(jest.requireActual("../../agent/transcript").readTranscript)
+  })
   let isolatedHome: string
   let previousHome: string | undefined
   beforeAll(() => {
@@ -3462,6 +3506,8 @@ describe("App", () => {
 
 it("shows approval waiting before a Bash side effect and resumes only after Enter", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-approval-view-"))
+  const previousHome = process.env.COGNIA_HOME
+  process.env.COGNIA_HOME = dir
   const target = path.join(dir, "approved.txt")
   __resetInk()
   const input = { command: `touch ${target} && chmod +x ${target}` }
@@ -3510,6 +3556,8 @@ it("shows approval waiting before a Bash side effect and resumes only after Ente
     expect(container.textContent).not.toContain("Waiting for approval")
     unmount()
   } finally {
+    if (previousHome === undefined) delete process.env.COGNIA_HOME
+    else process.env.COGNIA_HOME = previousHome
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })

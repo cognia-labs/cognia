@@ -11,11 +11,33 @@ import {
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { readDependencyResultsForRun } from "../memory/shared-memory-orchestrator"
+jest.mock("../memory/shared-memory-orchestrator", () => ({
+  readDependencyResultsForRun: jest.fn(async () => []),
+}))
 
 const judgeCtx = {
   teamId: "team-1",
   team: { name: "Squad", task: "ship the feature" },
 } as unknown as TeamRunContext
+
+it("builds a judge prompt from the filtered board projection", async () => {
+  jest
+    .mocked(readDependencyResultsForRun)
+    .mockResolvedValueOnce([
+      { taskId: "private-task", value: "[Withheld: personal content of Host owner]" },
+    ])
+  const dispatch = jest.fn(async (_input: { prompt: string }) => verdict())
+  await judgeProgress({
+    teamCtx: judgeCtx,
+    doneTaskIds: ["private-task"],
+    remaining: [],
+    stallCount: 2,
+    dispatch,
+  })
+  expect(readDependencyResultsForRun).toHaveBeenCalledWith(judgeCtx, ["private-task"])
+  expect(dispatch.mock.calls[0][0].prompt).toContain("[Withheld:")
+})
 
 const verdict = (over: Partial<ProgressLedgerVerdict> = {}): ProgressLedgerVerdict => ({
   isSatisfied: false,

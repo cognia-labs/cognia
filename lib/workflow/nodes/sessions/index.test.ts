@@ -69,6 +69,29 @@ describe("registration", () => {
   })
 })
 
+it("withholds personal history and its title from workflow step outputs that can feed models", async () => {
+  await seedSession({ title: "secret report title" })
+  await persistMessages("sess1", [
+    {
+      id: "personal",
+      role: "assistant",
+      parts: [{ type: "text", text: "secret report body" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "private-tool", markedAt: 1 }],
+      },
+    },
+  ] as never)
+  for (const kind of ["action.session.get", "action.session.export", "action.session.list"]) {
+    const output = (await run(kind, { sessionId: "sess1", messageLimit: 10 })).output
+    expect(JSON.stringify(output)).not.toContain("secret report")
+    expect(JSON.stringify(output)).toContain("Withheld: personal content of Host owner")
+    expect(JSON.stringify(output)).not.toContain("private-tool")
+  }
+  expect((await listMessages("sess1"))[0].parts).toEqual([
+    { type: "text", text: "secret report body" },
+  ])
+})
+
 describe("action.session.create", () => {
   it("goes through startSeededSession, not createSession", async () => {
     // `createSession` writes the row and skips workspace attribution from the

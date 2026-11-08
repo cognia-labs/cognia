@@ -15,10 +15,21 @@ import { buildAgentTeamRuntimeDeps } from "./agent-team-runtime-deps"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import type { AppSettings } from "@cognia/agent-config-types"
 import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+import {
+  registerTeamRunContext,
+  __resetTeamRunContextForTesting,
+  type TeamRunContext,
+} from "./team-run-context"
 
 jest.mock("ai", () => ({ streamText: jest.fn() }))
 
 const mockStreamText = streamText as jest.MockedFunction<typeof streamText>
+const dbFixture = createDbTestFixture({ seeded: false })
+beforeAll(dbFixture.initialize)
+afterAll(dbFixture.dispose)
+afterEach(__resetTeamRunContextForTesting)
 
 function mockReply(text: string) {
   mockStreamText.mockReturnValue({
@@ -93,7 +104,15 @@ function planWith(appSettings: AppSettings | null) {
   })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await dbFixture.restore()
+  __resetTeamRunContextForTesting()
+  const root = await startToolExecutionRun("team-1", { localAuthorization: LOCAL_PERSON_RUN })
+  registerTeamRunContext({
+    runId: "provider-resolution-test",
+    teamId: "team-1",
+    personalExecutionRunId: root.id,
+  } as TeamRunContext)
   jest.clearAllMocks()
   useAgentTeamStore.getState().reset()
   const store = useAgentTeamStore.getState()

@@ -147,6 +147,7 @@ import {
   runTeamLifecycle,
   abortTeam,
   __getInflightControllerForTesting,
+  getInflightTeamRunId,
   parseProposedPlan,
   __resetInflightForTesting,
   type RunTeamLifecycleDeps,
@@ -1220,6 +1221,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     const active = runTeamLifecycle("team-1", deps)
     expect(abortTeam("team-1", new Error("shutdown"), "previous-run")).toBe(false)
     expect(__getInflightControllerForTesting("team-1")?.signal.aborted).toBe(false)
+    expect(getInflightTeamRunId("team-1")).toBe("current-run")
     await expect(active).resolves.toMatchObject({ status: "completed" })
   })
 

@@ -3,6 +3,16 @@
  * All collaborators are module-mocked; the executors are pure orchestration.
  */
 
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import type { StepExecutionContext } from "@/types/workflow/visual"
 import { runTeamCompose, runTeamStatus, runTeamDelegate, runTeamMessage } from "./team-ops"
 
@@ -253,6 +263,11 @@ describe("runTeamStatus", () => {
     expect(out.tasks).toHaveLength(2)
     expect(out.teammates).toHaveLength(1)
     expect(out.delegations).toBeUndefined()
+    expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(
+      undefined,
+      expect.any(Array),
+      expect.objectContaining({ executionRunId: expect.stringMatching(/^execution:workflow:/) })
+    )
   })
 
   it("honors include flags", async () => {
@@ -321,7 +336,8 @@ describe("runTeamDelegate", () => {
         prompt: "help",
         // The child hangs under this workflow run.
         parentRunId: "execution:workflow:run_1",
-      })
+      }),
+      { executionRunId: "execution:workflow:run_1" }
     )
     expect(result.output).toMatchObject({
       delegationId: "d_new",
@@ -355,7 +371,8 @@ describe("runTeamDelegate", () => {
       expect.objectContaining({
         targetAgentId: "claude-code",
         parentRunId: "execution:workflow:run_1",
-      })
+      }),
+      { executionRunId: "execution:workflow:run_1" }
     )
 
     delegateToTeamMock.mockReturnValue(settled("completed"))

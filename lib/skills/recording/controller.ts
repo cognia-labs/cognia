@@ -14,6 +14,7 @@
  */
 
 import { toast } from "sonner"
+import { prepareOwnerDerivedHistory } from "@/lib/execution/personal-visibility"
 
 import {
   checkpointRecording,
@@ -420,7 +421,7 @@ export async function loadAssetBytes(assetId: string): Promise<string | null> {
 export async function buildEnvelope(locale: string): Promise<GenerationEnvelope> {
   const state = store()
   const toolCatalog = await collectRegisteredToolNames()
-  return buildGenerationEnvelope(
+  const envelope = buildGenerationEnvelope(
     state.steps,
     {
       variables: state.inputVariables,
@@ -429,6 +430,18 @@ export async function buildEnvelope(locale: string): Promise<GenerationEnvelope>
     },
     CATEGORY_IDS
   )
+  // Restored recordings may predate source filtering. Keep their original
+  // provenance attached until the model boundary, including reviewed edits.
+  const recording = state.recordingId ? await getRecording(state.recordingId) : undefined
+  if (recording?.source) {
+    const source = recording.source
+    const visible = await prepareOwnerDerivedHistory(
+      [{ id: recording.id, text: envelope.userPrompt }],
+      { sessionId: source.sessionId, ...(source.kind === "run" ? { runIds: [source.runId] } : {}) }
+    )
+    return { ...envelope, userPrompt: visible.messages[0].text }
+  }
+  return envelope
 }
 
 export interface GenerateOptions {

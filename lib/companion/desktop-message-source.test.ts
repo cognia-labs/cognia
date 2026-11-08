@@ -72,7 +72,7 @@ describe("readSessionPage", () => {
     expect(page.next_offset).toBeUndefined()
   })
 
-  it("projects transport rows without heavyweight execution-only session fields", async () => {
+  it("keeps owner derived text and excludes heavyweight execution-only session fields", async () => {
     const db = getDb()
     await db.sessions.put({
       id: "s-heavy",
@@ -107,6 +107,11 @@ describe("readSessionPage", () => {
       },
     ])
     expect(JSON.stringify(page).length).toBeLessThan(1024)
+    expect(await db.sessions.get("s-heavy")).toMatchObject({
+      title: "Heavy",
+      lastMessagePreview: "Last answer",
+      scratchpad: "y".repeat(64 * 1024),
+    })
   })
 
   it("does not expose embedded resource sessions to the companion connector", async () => {
@@ -1703,4 +1708,42 @@ it("materializes legacy personal provenance in paired message-history pages with
     ],
   })
   expect((await getDb().messages.get("legacy-paired"))?.metadata).toBeUndefined()
+})
+
+it("keeps owner marked messages and derived titles across paired pages and timeline", async () => {
+  await putExposedSession("private-paired")
+  await getDb().sessions.update("private-paired", {
+    title: "secret title",
+    lastMessagePreview: "secret preview",
+    transcriptRevision: 1,
+  })
+  await getDb().messages.put({
+    id: "private-turn",
+    sessionId: "private-paired",
+    role: "user",
+    createdAt: 1,
+    parts: [{ type: "text", text: "secret body" }],
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+    },
+  })
+  const page = await readMessagesPage("private-paired")
+  const timeline = await readTranscriptTimeline({ sessionId: "private-paired" })
+  const detail = await readTranscriptTurnMessages({
+    sessionId: "private-paired",
+    turnKey: "turn:private-turn",
+    revision: 1,
+    detailRevision: 1,
+  })
+  const sessions = await readSessionPage(200, 0)
+  expect(JSON.stringify(sessions)).toContain("secret title")
+  expect(JSON.stringify(sessions)).toContain("secret preview")
+  for (const result of [page, timeline, detail]) {
+    expect(JSON.stringify(result)).toContain("secret body")
+    expect(JSON.stringify(result)).not.toContain("[Withheld:")
+  }
+  expect((await getDb().messages.get("private-turn"))?.parts).toEqual([
+    { type: "text", text: "secret body" },
+  ])
+  expect((await getDb().sessions.get("private-paired"))?.title).toBe("secret title")
 })

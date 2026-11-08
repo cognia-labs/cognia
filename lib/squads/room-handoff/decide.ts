@@ -34,6 +34,7 @@ import {
   type RoomSquadHandoffDecision,
 } from "@/types/squads/room-handoff"
 import { findRoomHandoffProposal, withHandoffDecision, type RoomHandoffProposal } from "./proposal"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 
 /** A started attempt, what its settlement needs to report back. */
 export interface RoomHandoffAttempt {
@@ -229,12 +230,22 @@ async function decideOnce(
     })
   }
 
+  const visible = await preparePersonalDerivedHistory(
+    request.roomId,
+    [{ id: roomHandoffDelegationId(proposal.toolUseId), text: proposal.args.brief }],
+    {
+      sessionId: request.roomId,
+      runIds: memberRunId ? [memberRunId] : [],
+      executionRunId: delegation.runId,
+    }
+  )
+  const brief = visible.messages[0].text
   const launched = await deps.launch({
     delegationRunId: delegation.runId,
     roomId: request.roomId,
     squadId: squad.id,
     squadName: squad.name,
-    brief: proposal.args.brief,
+    brief,
   })
   if (!launched.started) {
     await deps.failDelegation(delegation.runId).catch(() => undefined)
@@ -253,7 +264,7 @@ async function decideOnce(
       proposerId: proposal.proposerId,
       squadId: squad.id,
       squadName: squad.name,
-      brief: proposal.args.brief,
+      brief,
       delegationRunId: delegation.runId,
       squadRunId: launched.executionRunId,
       startedAt: decidedAt,

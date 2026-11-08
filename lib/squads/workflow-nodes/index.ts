@@ -175,7 +175,7 @@ export async function dispatchTeamTask(ctx: StepExecutionContext): Promise<StepE
     { getTeamRunContext },
     { buildTeammatePrompt },
     { dispatchTeammate },
-    { readDependencyResults, autoPublishTaskResult },
+    { readDependencyResultsForRun, autoPublishTaskResult },
     { resolvePrompt },
     { loadPromptOverrideSnapshot },
     { TEAMMATE_UPSTREAM_RESULTS_PROMPT, teamPromptContext },
@@ -209,7 +209,7 @@ export async function dispatchTeamTask(ctx: StepExecutionContext): Promise<StepE
   const depIds = Array.isArray(params.dependencies)
     ? params.dependencies.filter((d): d is string => typeof d === "string" && d.length > 0)
     : []
-  const upstream = readDependencyResults(teamId, depIds)
+  const upstream = await readDependencyResultsForRun(teamCtx, depIds)
   // One snapshot for the step (ADR-0236): the upstream heading and the
   // teammate prompt (built later, inside the claim callback) read the same
   // revision set.
@@ -266,7 +266,8 @@ export async function dispatchTeamTask(ctx: StepExecutionContext): Promise<StepE
       { id: teamId },
       { id: taskId, title: params.title ?? taskId },
       result.text,
-      { id: result.teammateId, name: result.teammateName }
+      { id: result.teammateId, name: result.teammateName },
+      teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`
     )
   } catch {
     /* never fail a completed task on a blackboard write */
@@ -637,8 +638,13 @@ export async function reconcileTeamRun(ctx: StepExecutionContext): Promise<StepE
                 (candidate) => `key=${candidate.key}\n${(candidate.output ?? "").slice(0, 2000)}`
               )
               .join("\n\n")
-            const text = (await executeAgent(`Pick the best candidate key only.\n\n${prompt}`, {}))
-              .text
+            const { visibleTeamDerivedText } = await import("../team-run-context")
+            const visiblePrompt = await visibleTeamDerivedText(
+              teamCtx,
+              `Pick the best candidate key only.\n\n${prompt}`,
+              "team-reconcile-judge"
+            )
+            const text = (await executeAgent(visiblePrompt, {})).text
             return candidates.find((candidate) => text?.includes(candidate.key))?.key ?? null
           },
         }

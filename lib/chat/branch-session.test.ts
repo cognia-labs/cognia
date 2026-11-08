@@ -60,6 +60,53 @@ const visible = (): UIMessage[] => [
 
 afterAll(dbFixture.dispose)
 
+it("retains legacy personal attribution on direct and summary branches after the connector binding is gone", async () => {
+  await seedSource({
+    platformBinding: {
+      platform: "lark",
+      adapterId: "legacy",
+      conversationKey: "c",
+      conversationRef: { platform: "lark", adapterId: "legacy" },
+    },
+  })
+  await getDb().adapterInstances.put({
+    id: "legacy",
+    type: "lark",
+    settings: { connectedUser: { openId: "owner" } },
+  } as never)
+  const messages = [uiMsg("old", "assistant", "private answer")]
+  await getDb().messages.put({
+    id: "old",
+    sessionId: "src1",
+    role: "assistant",
+    parts: messages[0].parts,
+    createdAt: 1,
+  })
+  for (const mode of ["direct", "summary"] as const) {
+    const child = await branchSessionAtMessage({
+      sourceId: "src1",
+      visibleMessages: messages,
+      messageId: "old",
+      mode,
+      summaryText: "private derived summary",
+    })
+    const copied = await listMessages(child.id)
+    expect(copied[0].metadata).toMatchObject({
+      personalMarks: [
+        expect.objectContaining({
+          person: {
+            kind: "platform",
+            platform: "lark",
+            adapterId: "legacy",
+            remoteUserId: "owner",
+          },
+        }),
+      ],
+    })
+  }
+  expect((await getDb().messages.get("old"))?.metadata).toBeUndefined()
+})
+
 describe("branch working set policy", () => {
   it("inherits historical state without future mutations and keeps child mutations independent", async () => {
     await seedSource()

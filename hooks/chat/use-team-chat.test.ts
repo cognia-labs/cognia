@@ -16,6 +16,11 @@ jest.mock("@/lib/companion/room-send-client", () => ({
 
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { toast } from "sonner"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+
+const personalHistoryFixture = createDbTestFixture({ seeded: false })
+beforeAll(personalHistoryFixture.initialize)
+afterAll(personalHistoryFixture.dispose)
 
 // The factory must not close over a `const` declared in this file: hoisted
 // imports evaluate a keyring store that calls `isTauri()` at module load,
@@ -153,6 +158,7 @@ jest.mock("@/lib/db/sessions", () => ({
 
 const listCharactersByIdsMock = jest.fn().mockResolvedValue([])
 jest.mock("@/lib/db/characters", () => ({
+  ...jest.requireActual("@/lib/db/characters"),
   listCharactersByIds: (ids: string[]) => listCharactersByIdsMock(ids),
 }))
 
@@ -162,6 +168,7 @@ jest.mock("@/lib/db/session-state", () => ({
 
 const getTeamMock = jest.fn()
 jest.mock("@/lib/db/teams", () => ({
+  ...jest.requireActual("@/lib/db/teams"),
   getTeam: (id: string) => getTeamMock(id),
 }))
 
@@ -1097,6 +1104,35 @@ describe("useTeamChat — send coverage", () => {
 
   it("restores the active Working Set through the existing team compaction seam", async () => {
     makeAutoResolveSetup()
+    const db = jest.requireActual<typeof import("@/lib/db/schema")>("@/lib/db/schema").getDb()
+    // This predates per-artifact run provenance, so the source session must
+    // retain its verified legacy owner rather than inventing one from its text.
+    await db.adapterInstances.put({
+      id: "working-set-owner",
+      type: "lark",
+      displayName: "Lark",
+      enabled: true,
+      settings: { connectedUser: { openId: "working-set-owner" } },
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+    await db.sessions.put({
+      id: "team-1",
+      title: "T",
+      createdAt: 1,
+      updatedAt: 1,
+      platformBinding: {
+        platform: "lark",
+        adapterId: "working-set-owner",
+        conversationId: "working-set-room",
+      },
+    } as never)
+    const authority = jest.requireActual<typeof import("@/lib/execution/acting-authority")>(
+      "@/lib/execution/acting-authority"
+    )
+    startToolExecutionRunMock.mockImplementationOnce(async (sessionId: string) =>
+      authority.startToolExecutionRun(sessionId, { localAuthorization: authority.LOCAL_PERSON_RUN })
+    )
     chatState.messages = [
       {
         id: "compact-1",
@@ -1138,9 +1174,14 @@ describe("useTeamChat — send coverage", () => {
 
     const { result } = renderHook(() => useTeamChat())
     await flush()
-    await act(async () => {
-      await result.current.send("continue")
-    })
+    try {
+      await act(async () => {
+        await result.current.send("continue")
+      })
+    } finally {
+      await db.sessions.delete("team-1")
+      await db.adapterInstances.delete("working-set-owner")
+    }
 
     expect(resolveSendOptionsMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1839,7 +1880,7 @@ describe("useTeamChat — event handler coverage", () => {
     resolveSendOptionsMock.mockResolvedValue({
       model: "sonnet",
       systemPrompt: "sys",
-      memoryContext,
+      contextSources: { "memory.recall": memoryContext },
     } as never)
 
     const reply = { id: "a-alice", role: "assistant", parts: [{ type: "text", text: "done" }] }

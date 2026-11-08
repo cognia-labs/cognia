@@ -13,6 +13,7 @@ import {
   localChatRunAuthorization,
   chatHookCredentialContext,
   resolveNativeExternalSessionId,
+  externalSessionVisibilityMatches,
   useClaudeChat,
   userPromptText,
   rewriteUserPromptText,
@@ -31,6 +32,31 @@ jest.mock("@/lib/db/execution-runs", () => ({
 }))
 
 describe("Claude chat controller seam", () => {
+  it("rebuilds an external session when another reader joins, including legacy persisted links", () => {
+    expect(externalSessionVisibilityMatches(undefined, "owner-only", ["private"])).toBe(false)
+    expect(externalSessionVisibilityMatches({}, "owner-only", ["private"])).toBe(false)
+    expect(
+      externalSessionVisibilityMatches({ personalVisibilityDigest: "owner-only" }, "two-readers", [
+        "private",
+      ])
+    ).toBe(false)
+    expect(
+      externalSessionVisibilityMatches({ personalVisibilityDigest: "owner-only" }, "owner-only", [
+        "private",
+      ])
+    ).toBe(true)
+  })
+  it("retains external history on a fully visible upgrade or owner-only loosening", () => {
+    expect(externalSessionVisibilityMatches(undefined, "owner-only", [])).toBe(true)
+    expect(externalSessionVisibilityMatches({}, "owner-only", [])).toBe(true)
+    expect(
+      externalSessionVisibilityMatches(
+        { personalVisibilityDigest: "two-readers" },
+        "owner-only",
+        []
+      )
+    ).toBe(true)
+  })
   it("uses local proof only before a new run and keeps an existing run's identity", async () => {
     jest.mocked(getExecutionRun).mockResolvedValueOnce(undefined)
     await expect(chatHookCredentialContext("session", "run", LOCAL_PERSON_RUN)).resolves.toEqual({

@@ -80,6 +80,12 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import * as pluginPiiGate from "@/lib/plugin/api/plugin-pii-gate"
 import { getSecret } from "@/lib/keyring"
+import { readSharedMemory, queryTwinMemory } from "@/lib/plugin/agent-sdk/context-providers"
+jest.mock("@/lib/plugin/agent-sdk/context-providers", () => ({
+  ...jest.requireActual("@/lib/plugin/agent-sdk/context-providers"),
+  readSharedMemory: jest.fn(async () => []),
+  queryTwinMemory: jest.fn(async () => []),
+}))
 
 // createPkceFlow records a single-use Host auth attempt (ADR-0246 §6). Its
 // replay receipt normally lives in Dexie; keep it in memory for this suite.
@@ -2627,6 +2633,22 @@ describe("createPluginContext", () => {
 })
 
 describe("createFullPluginContext", () => {
+  it("uses the Host plugin invocation for memory reads instead of caller option fields", async () => {
+    const plugin = createMockPlugin({
+      manifest: { ...mockManifest, permissions: ["agent:shared-memory:read", "twin:read"] },
+    })
+    getPermissionGuard().grant(plugin.manifest.id, "agent:shared-memory:read")
+    getPermissionGuard().grant(plugin.manifest.id, "twin:read")
+    initializePluginPermissions(plugin.manifest.id, ["agent:shared-memory:read", "twin:read"])
+    const context = createFullPluginContext(plugin, mockManager)
+    const host = { sessionId: "host-session", executionRunId: "host-run" }
+    await withPluginExecutionContext(plugin.manifest.id, host, async () => {
+      await context.agent.context.readSharedMemory("team", { tags: ["tag"] })
+      await context.agent.context.queryTwinMemory("character", "query", { topK: 2 })
+    })
+    expect(readSharedMemory).toHaveBeenLastCalledWith("team", { tags: ["tag"] }, host)
+    expect(queryTwinMemory).toHaveBeenLastCalledWith("character", "query", { topK: 2 }, host)
+  })
   it("binds library imports to the consumer and its final guarded context", async () => {
     const plugin = createMockPlugin()
     plugin.manifest.permissions = [...(plugin.manifest.permissions ?? []), "ipc:call"]

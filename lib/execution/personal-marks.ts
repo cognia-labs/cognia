@@ -13,6 +13,8 @@ import type { ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 import { getDb } from "@/lib/db/schema"
 import { resolveExecutingRun } from "./acting-authority"
 import type { PersonalCredentialContext, PersonalCredentialSource } from "./personal-credential"
+import { effectivePersonalMarks } from "@cognia/plugin-contract/types/execution/personal-visibility"
+export { effectivePersonalMarks } from "@cognia/plugin-contract/types/execution/personal-visibility"
 
 /** Admission cannot release the credential until the whole ancestry commits. */
 export async function markPersonalCredential(
@@ -163,23 +165,6 @@ export function personalMessageMetadata(
   })()
 }
 
-/** Pure phase-2B read boundary. The caller supplies the Host-resolved bound person. */
-export function effectivePersonalMarks(
-  message: { metadata?: Record<string, unknown>; createdAt: number },
-  session: { platformBinding?: unknown },
-  context: { boundPerson: PrincipalRefV1; source: string }
-): PersonalMarkV1[] {
-  const explicit = message.metadata?.personalMarks as PersonalMarkV1[] | undefined
-  if (explicit?.length) return mergePersonalMarks(explicit)
-  if (
-    message.metadata?.personalMarkVersion === 1 ||
-    !session.platformBinding ||
-    !context.boundPerson
-  )
-    return []
-  return [{ person: context.boundPerson, source: context.source, markedAt: message.createdAt }]
-}
-
 /** Materialize a legacy read-time mark on a portable copy, never on its source row.
  * Lark and Slack expose a connected platform person; older adapters without such an
  * identity belong to the Host's local person. Neither choice grants authority.
@@ -199,6 +184,18 @@ export async function personalMessageForCopy<
   const session = knownSession ?? (await db.sessions.get(message.sessionId))
   const binding = session?.platformBinding
   if (!binding) return message
+  const context = await personalMarkContextForSession(db, session)
+  const personalMarks = effectivePersonalMarks(message, session, context)
+  return { ...message, metadata: { ...message.metadata, personalMarks } }
+}
+
+/** Shared Host-owned connected-person source for copies and history visibility. */
+export async function personalMarkContextForSession(
+  db: ReturnType<typeof getDb>,
+  session: Pick<ChatSession, "platformBinding"> | undefined
+): Promise<{ boundPerson: PrincipalRefV1; source: string }> {
+  const binding = session?.platformBinding
+  if (!binding) return { boundPerson: { kind: "local-person" }, source: "integration-user" }
   const adapter = await db.adapterInstances.get(binding.adapterId)
   const connected = adapter?.settings.connectedUser as
     { openId?: unknown; unionId?: unknown } | undefined
@@ -222,7 +219,7 @@ export async function personalMessageForCopy<
             remoteUserId: slack.authedUserId,
           }
         : { kind: "local-person" }
-  const personalMarks = effectivePersonalMarks(message, session, {
+  return {
     boundPerson: person,
     source:
       binding.platform === "lark"
@@ -230,6 +227,5 @@ export async function personalMessageForCopy<
         : binding.platform === "slack"
           ? "slack-user"
           : "integration-user",
-  })
-  return { ...message, metadata: { ...message.metadata, personalMarks } }
+  }
 }

@@ -1,3 +1,7 @@
+jest.mock("../../agent/transcript", () => ({
+  ...jest.requireActual("../../agent/transcript"),
+  readTranscript: jest.fn(jest.requireActual("../../agent/transcript").readTranscript),
+}))
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -35,8 +39,36 @@ import type { MentionCandidate } from "../mention/types"
 import type { MentionProviders } from "../mention/providers"
 import { MENTION_DEBOUNCE_MS } from "../mention/async-load"
 import type { InlineCompleteFn } from "@/lib/chat/completion/inline/ai-provider"
+import * as transcript from "../../agent/transcript"
 
 const config: ResolvedConfig = { ...DEFAULT_RESOLVED_CONFIG, cwd: "/work" }
+
+it("passes the configured transcript home to filtered model completion", async () => {
+  const read = jest
+    .spyOn(transcript, "readTranscript")
+    .mockReturnValue([{ ts: 1, role: "assistant", content: "canonical public answer" }])
+  const complete = jest.fn(async (_args: { prompt: string }) => "the answer")
+  const state = createInitialState(config, "s")
+  state.input.buffer = { lines: ["explain "], cursorRow: 0, cursorCol: 8 }
+  const view = render(
+    <Input
+      input={state.input}
+      dispatch={jest.fn()}
+      onSubmit={jest.fn()}
+      cwd="/work"
+      suggestHome="/configured"
+      sessionId="s"
+      aiComplete={complete}
+      suggestDebounceMs={200}
+      mentionProviders={stubProviders(listDir)}
+    />
+  )
+  await waitFor(() => expect(complete).toHaveBeenCalled())
+  expect(read).toHaveBeenCalledWith("/configured", "s", undefined)
+  expect(complete.mock.calls[0][0].prompt).toContain("canonical public answer")
+  view.unmount()
+  read.mockImplementation(jest.requireActual("../../agent/transcript").readTranscript)
+})
 
 const listing: Record<string, DirEntry[]> = {
   ".": [

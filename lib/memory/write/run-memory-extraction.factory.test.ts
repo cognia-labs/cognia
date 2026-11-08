@@ -11,6 +11,7 @@ import type { ConsolidateDeps } from "@/lib/memory/consolidate/consolidator"
 const mockBuildClient = jest.fn()
 const mockTryBuildMemoryDeps = jest.fn()
 const mockTryBuildMemoryVectorSink = jest.fn()
+const mockWithPersonalMemoryVisibility = jest.fn((deps) => ({ ...deps, personalVisibility: true }))
 const mockRetrieveMemories = jest.fn()
 const mockCreateMemory = jest.fn()
 const mockUpdateMemory = jest.fn()
@@ -22,6 +23,8 @@ jest.mock("@/lib/ai/generation/utility-client", () => ({
   buildUtilityLlmClient: (...a: unknown[]) => mockBuildClient(...a),
 }))
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
+  withPersonalMemoryVisibility: (...a: unknown[]) =>
+    mockWithPersonalMemoryVisibility(...(a as [unknown])),
   tryBuildMemoryDeps: (...a: unknown[]) => mockTryBuildMemoryDeps(...a),
   tryBuildMemoryVectorSink: (...a: unknown[]) => mockTryBuildMemoryVectorSink(...a),
 }))
@@ -109,6 +112,8 @@ describe("buildAutoExtractionDeps", () => {
         pathPattern: "src",
       }
     )
+    expect(mockWithPersonalMemoryVisibility).toHaveBeenCalledTimes(1)
+    expect(mockRetrieveMemories.mock.calls.at(-1)?.[1]).toHaveProperty("personalVisibility", true)
     expect(mockRetrieveMemories).toHaveBeenCalledWith(
       expect.objectContaining({
         reader: {

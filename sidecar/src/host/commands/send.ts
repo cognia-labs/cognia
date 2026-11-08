@@ -34,6 +34,13 @@ export function retainedRuntimeSendIsSafe(
   options?: SendOptions
 ) {
   if (
+    existing &&
+    !Array.isArray(options?.initialConversation) &&
+    options?.personalVisibilityHasWithheld === true &&
+    options?.personalVisibilityDigest !== existing.sendOptions?.personalVisibilityDigest
+  )
+    return false
+  if (
     existing?.multiTurn === true &&
     (existing.sendOptions?.execution?.runtimeAdapter ??
       ((existing.sendOptions?.provider ?? "anthropic") === "anthropic"

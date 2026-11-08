@@ -92,6 +92,30 @@ describe("proposing", () => {
 })
 
 describe("the background tick", () => {
+  it("excludes marked source prose before a workspace backfill can enqueue a model job", async () => {
+    await seedSession("s1", "p1", 100)
+    await seedMessage("public", "s1", "p1", 100)
+    await seedMessage("private", "s1", "p1", 101)
+    await seedMessage("legacy", "s1", "p1", 102)
+    await getDb().sessions.update("s1", {
+      platformBinding: { platform: "lark", adapterId: "adapter", conversationKey: "conversation" },
+    } as never)
+    await getDb().messages.update("public", { metadata: { personalMarkVersion: 1 } })
+    await getDb().messages.update("private", {
+      parts: [{ type: "text", text: "private source prose" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+      },
+    } as never)
+    const run = await proposeWorkspaceBackfill("p1")
+    await confirmWorkspaceBackfill(run.id)
+    jest.mocked(enqueueProjectMiningJobs).mockClear()
+    await tickWorkspaceBackfill("p1")
+    const [input] = jest.mocked(enqueueProjectMiningJobs).mock.calls[0]!
+    expect(input.transcript.map((message) => message.id)).toEqual(["public"])
+    expect(JSON.stringify(input)).not.toContain("private source prose")
+  })
+
   it("will not move a run a person has not agreed to", async () => {
     await seedSession("s1", "p1", 100)
     const run = await proposeWorkspaceBackfill("p1")

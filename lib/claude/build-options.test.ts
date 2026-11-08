@@ -1,4 +1,24 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+// This option-composition suite models a verified owner turn. Actual Host
+// identity/provenance resolution is exercised by the colocated visibility suite.
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const actual = jest.requireActual("@/lib/execution/personal-visibility")
+  const { withholdForReaders } = jest.requireActual(
+    "@cognia/plugin-contract/types/execution/personal-visibility"
+  )
+  const readers = [{ kind: "local-person" }]
+  return {
+    ...actual,
+    preparePersonalHistory: async (_session: unknown, messages: { id: string }[]) => ({
+      ...withholdForReaders(messages, readers),
+      readers,
+    }),
+    preparePersonalDerivedHistory: async (_session: unknown, messages: { id: string }[]) => ({
+      ...withholdForReaders(messages, readers),
+      readers,
+    }),
+  }
+})
 jest.mock("@/lib/mcp/run-server-map", () => {
   const actual = jest.requireActual("@/lib/mcp/run-server-map")
   return { ...actual, buildRunMcpServerMap: jest.fn(actual.buildRunMcpServerMap) }

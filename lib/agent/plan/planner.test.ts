@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import type { AgentPlan, PlanRefinementRequest, PlanStep } from "@/types/agent/plan"
 import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
@@ -133,6 +143,10 @@ describe("refinePlanSteps", () => {
     const prompt = (c.complete as jest.Mock).mock.calls[0][0] as string
     expect(prompt).toContain("big step")
     expect(prompt).toContain("oops")
+    expect(preparePersonalDerivedHistory).toHaveBeenCalledWith("ses", expect.any(Array), {
+      runIds: ["execution:plan:p1"],
+      sessionId: "ses",
+    })
   })
 
   it("includes custom instructions in the prompt", async () => {

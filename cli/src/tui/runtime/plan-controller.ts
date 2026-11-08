@@ -12,6 +12,7 @@
 import { normalizeDispatchBudgetResult } from "@/lib/claude/agents/dispatch-error"
 import { recordCliIncompleteForegroundRun } from "../../agent/subagent-background-tasks"
 import { readTranscript, type TranscriptEntry } from "../../agent/transcript"
+import { prepareCliPersonalMessages } from "../../agent/personal-history"
 import { deletePlan, listPlans, loadPlan, type PlanStoreDeps } from "./plan-store"
 import { openDocument } from "./shared"
 import { planDiffText, planTitle } from "./plan"
@@ -181,7 +182,12 @@ export async function planExplore(task: string, deps: PlanExploreDeps): Promise<
     // Carry context without promoting its storage role into instruction authority.
     const earlier =
       deps.home && deps.sessionId
-        ? (deps.read ?? readTranscript)(deps.home, deps.sessionId)
+        ? (
+            await prepareCliPersonalMessages(
+              deps.sessionId,
+              (deps.read ?? readTranscript)(deps.home, deps.sessionId)
+            )
+          ).messages
             .filter((entry) => entry.role === "user")
             .filter((entry) => !entry.content.startsWith("[background task update]"))
             .map((entry) =>

@@ -33,6 +33,7 @@ import {
 } from "@/lib/automation/managed-desktop-acceptance-request"
 import { ManagedDesktopAcceptanceCriteria } from "./managed-desktop-acceptance-criteria"
 import { useConfirmDialog } from "@/components/shared/confirm-dialog"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createAttachedSession } from "@/lib/chat/attached-session"
 import { getSession, updateSession } from "@/lib/db/sessions"
 import { revealSpawnedTask } from "@/lib/tasks/spawn-task-dispatch"
@@ -164,6 +165,7 @@ function HandoffForm({ target, config }: Props) {
         const request = preparedInput.current
         const promptCriteria = request?.deliveryId === run.deliveryId ? request.criteria : []
         const child = await createAttachedSession({
+          localAuthorization: LOCAL_PERSON_RUN,
           parentSessionId: run.source.sessionId,
           title: a("childTitle", { branch }),
           context: { mode: "none" },

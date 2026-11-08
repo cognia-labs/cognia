@@ -1,3 +1,7 @@
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerHistory: jest.fn(async (messages: unknown[]) => ({ messages })),
+}))
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import {
   CATCH_UP_MAX_MESSAGES,
@@ -109,6 +113,34 @@ describe("catchUpSharedRoom", () => {
     ({ complete: jest.fn(async () => answer) }) as unknown as LlmClient & {
       complete: jest.Mock
     }
+
+  it("keeps source marks until the owner projection and never flattens a withheld body or author", async () => {
+    const metadata = {
+      personalMarks: [
+        {
+          person: { kind: "platform", platform: "lark", adapterId: "a", remoteUserId: "other" },
+          source: "test",
+          markedAt: 1,
+        },
+      ],
+    }
+    const lines = catchUpLines([...room, text("private", "user", "private body", metadata)], "m1")
+    const placeholder = "[Withheld: personal content of another person]"
+    jest
+      .mocked(prepareOwnerHistory)
+      .mockResolvedValueOnce({
+        messages: lines.map((line) =>
+          line.id === "private" ? { id: line.id, text: placeholder } : line
+        ),
+      } as never)
+    const llm = client("- covered @msg:private")
+    await catchUpSharedRoom(lines, { client: llm, language: "English" })
+    expect(prepareOwnerHistory).toHaveBeenLastCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: "private", metadata })])
+    )
+    expect(llm.complete.mock.calls[0][0]).not.toContain("private body")
+    expect(llm.complete.mock.calls[0][0]).toContain(placeholder)
+  })
 
   it("asks once with the redacted transcript and restores what it redacted for display", async () => {
     const lines = catchUpLines(

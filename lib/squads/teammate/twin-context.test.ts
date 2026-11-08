@@ -7,6 +7,20 @@ import {
 import type { TwinRuntimeDepsForBuild } from "@/lib/claude/build-options"
 import { estimateFallbackTokens } from "@/lib/ai/tokens/fallback-estimator"
 import type { IVectorStore } from "@cognia/vector/store"
+import {
+  preparePersonalHistory,
+  withPersonalRerankerVisibility,
+} from "@/lib/execution/personal-visibility"
+
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    withheldMessageIds: [],
+    visibilityDigest: "twin-test",
+    readers: [],
+  })),
+  withPersonalRerankerVisibility: jest.fn((reranker: unknown) => reranker),
+}))
 
 // ── Module mocks (all dynamically imported inside twin-context.ts) ─────────
 const tryBuildTwinDepsMock = jest.fn()
@@ -388,6 +402,70 @@ describe("applyTeammateTwinContext", () => {
 
 describe("searchTwinKnowledge", () => {
   const baseInput = { twinId: "twin-1", twinDeps: twinDepsFixture }
+
+  it("withholds owner knowledge before any retrieval without using twin configuration as authority", async () => {
+    const placeholder = "[Withheld: personal content of Host owner]"
+    jest.mocked(preparePersonalHistory<{ id: string; content: string }>).mockResolvedValueOnce({
+      messages: [{ id: "team-twin-history", content: placeholder }],
+      visibilityDigest: "withheld",
+      withheldMessageIds: ["team-twin-history"],
+      readers: [],
+    })
+    const result = await searchTwinKnowledge({
+      ...baseInput,
+      query: "q",
+      personalContext: { executionRunId: "execution:verified" },
+    })
+    expect(result).toEqual({ hits: [{ text: placeholder, score: 0 }], degraded: false })
+    expect(applyTwinContextMock).not.toHaveBeenCalled()
+    expect(preparePersonalHistory).toHaveBeenCalledWith(
+      undefined,
+      [
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            personalMarks: [expect.objectContaining({ person: { kind: "local-person" } })],
+          }),
+        }),
+      ],
+      { executionRunId: "execution:verified" }
+    )
+  })
+
+  it("rechecks readers after retrieval and binds the model reranker to the same Host execution", async () => {
+    const placeholder = "[Withheld: personal content of Host owner]"
+    const reranker = { scorer: async () => 1 }
+    applyTwinContextMock.mockImplementationOnce(async () => {
+      jest.mocked(preparePersonalHistory<{ id: string; content: string }>).mockResolvedValueOnce({
+        messages: [{ id: "team-twin-history", content: placeholder }],
+        visibilityDigest: "joined-reader",
+        withheldMessageIds: ["team-twin-history"],
+        readers: [],
+      })
+      return {
+        applied: null,
+        degraded: false,
+        retrievedChunks: [
+          {
+            chunk: { vectorDocId: "secret", content: "private" },
+            score: 1,
+            sourceTitle: "private title",
+          },
+        ],
+        selectedStyleSamples: [],
+      }
+    })
+    const result = await searchTwinKnowledge({
+      ...baseInput,
+      twinDeps: { ...twinDepsFixture, reranker },
+      query: "q",
+      personalContext: { executionRunId: "execution:verified" },
+    })
+    expect(result.hits).toEqual([{ text: placeholder, score: 0 }])
+    expect(withPersonalRerankerVisibility).toHaveBeenCalledWith(reranker, {
+      executionRunId: "execution:verified",
+    })
+    expect(getTwinChunksByVectorDocIdsMock).not.toHaveBeenCalled()
+  })
 
   it("short-circuits on a blank query without touching any dependency", async () => {
     const result = await searchTwinKnowledge({ ...baseInput, query: "   " })

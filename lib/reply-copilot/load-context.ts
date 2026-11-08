@@ -7,6 +7,12 @@
 
 import type { AppSettings, ChatSession } from "@cognia/agent-config-types"
 import { listRecentMessages } from "@/lib/db/messages"
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 import { resolveMemoryTurnPolicy } from "@/lib/memory/control-plane/policy"
 import { retrieveMemories, type MemoryRetrieverDeps } from "@/lib/memory/retrieve/retriever"
 import {
@@ -46,23 +52,42 @@ export async function recallCopilotMemory(
       .then((m) => m.tryBuildMemoryDeps(resolveMemoryConfig(settings?.memory)))
       .catch(() => null)) ?? null
   if (!deps) return []
-  const recalled = await retrieveMemories(
-    {
-      queryText: query,
-      topK: 5,
-      relevanceFloor: 0.2,
-      types: ["semantic", "episodic"],
-      // What the user has shared about people and plans — not facts mined
-      // from a repository, which would read as chat context here.
-      claimFilter: "personal-only",
-    },
-    deps
-  )
-  return recalled.map((hit) => hit.memory.text)
+  const { withPersonalMemoryVisibility } = await import("@/lib/memory/runtime/build-deps")
+  // Reply drafts belong to the desktop owner. Keep an explicit admitted
+  // reader through candidate loading and reranking instead of a readerless job.
+  const execution = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+  let failed = true
+  try {
+    const recalled = await retrieveMemories(
+      {
+        queryText: query,
+        topK: 5,
+        relevanceFloor: 0.2,
+        types: ["semantic", "episodic"],
+        // What the user has shared about people and plans — not facts mined
+        // from a repository, which would read as chat context here.
+        claimFilter: "personal-only",
+      },
+      withPersonalMemoryVisibility(
+        { ...deps, loadProcedural: async () => [] },
+        undefined,
+        execution.id
+      )
+    )
+    failed = false
+    return recalled.map((hit) => hit.memory.text)
+  } finally {
+    await finishToolExecutionRun(execution.id, failed)
+  }
 }
 
 const defaultDeps: LoadContextDeps = {
-  listRows: (sessionId, limit) => listRecentMessages(sessionId, limit) as Promise<TranscriptRow[]>,
+  listRows: async (sessionId, limit) =>
+    (
+      await prepareOwnerHistory(
+        (await listRecentMessages(sessionId, limit)).map((message) => ({ ...message, sessionId }))
+      )
+    ).messages as TranscriptRow[],
   selfPlatformIds: selfPlatformIdsForAdapter,
   resolveContact: resolveCopilotContact,
   recall: recallCopilotMemory,

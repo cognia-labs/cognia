@@ -37,6 +37,7 @@ const NO_OP_STORE_WRITER: TeamStoreWriter = {
 export interface CreatePlanTeammateRunContextInput {
   /** The plan run id — used as the team run id so spans / hooks correlate. */
   runId: string
+  personalExecutionRunId?: string
   team: AgentTeam
   /** Teammates eligible for this dispatch (the whole team or a single member). */
   teammates: AgentTeammate[]
@@ -68,6 +69,9 @@ export function createPlanTeammateRunContext(
 
   return {
     runId,
+    ...(input.personalExecutionRunId
+      ? { personalExecutionRunId: input.personalExecutionRunId }
+      : {}),
     teamId: team.id,
     team,
     pool,

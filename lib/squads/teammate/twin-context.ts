@@ -29,6 +29,40 @@ import type { TwinRuntimeDepsForBuild } from "@/lib/claude/build-options"
 import type { TwinSettings } from "@/types/twin"
 import type { TeamTwinSummary } from "../team-run-context"
 import { estimateFallbackTokens } from "@/lib/ai/tokens/fallback-estimator"
+import {
+  preparePersonalHistory,
+  withPersonalRerankerVisibility,
+} from "@/lib/execution/personal-visibility"
+
+type PersonalTwinConsumer = { sessionId?: string; executionRunId?: string }
+
+/** Twin knowledge and profiles are Host-owner history, including old imports. */
+async function visibleTwinHistory(consumer: PersonalTwinConsumer | undefined, content: string) {
+  return preparePersonalHistory(
+    consumer?.sessionId,
+    [
+      {
+        id: "team-twin-history",
+        content,
+        metadata: {
+          personalMarks: [
+            { person: { kind: "local-person" }, source: "twin-history", markedAt: 0 },
+          ],
+        },
+      },
+    ],
+    consumer
+  )
+}
+
+function visibleTwinDeps(deps: TwinRuntimeDepsForBuild, consumer?: PersonalTwinConsumer) {
+  return {
+    ...deps,
+    ...(deps.reranker
+      ? { reranker: withPersonalRerankerVisibility(deps.reranker, consumer ?? {}) }
+      : {}),
+  } as unknown as ApplyTwinContextDeps
+}
 
 /** Default / max knowledge hits returned by `searchTwinKnowledge`. */
 const DEFAULT_TWIN_SEARCH_TOPK = 5
@@ -135,6 +169,8 @@ export interface ApplyTeammateTwinContextInput {
   precomputedQueryEmbedding?: number[]
   /** Inject-log source tag, e.g. `"team"` / `"team-delegation"`. */
   source: string
+  /** Host execution proof supplied by the dispatch runtime, never the model. */
+  personalContext?: PersonalTwinConsumer
 }
 
 export interface ApplyTeammateTwinContextResult {
@@ -158,6 +194,13 @@ export async function applyTeammateTwinContext(
     return { systemPrompt: input.baseSystemPrompt, applied: false }
   }
   try {
+    const permission = await visibleTwinHistory(input.personalContext, "Twin knowledge")
+    if (permission.withheldMessageIds.length > 0) {
+      return {
+        systemPrompt: `${input.baseSystemPrompt}\n\n${permission.messages[0].content}`,
+        applied: false,
+      }
+    }
     const [{ applyTwinContext }, { recordTwinInject }] = await Promise.all([
       import("@/lib/twin/runtime/apply-twin-context"),
       import("@/lib/twin/runtime/inject-log"),
@@ -184,8 +227,15 @@ export async function applyTeammateTwinContext(
       // `twinDeps` is the structural mirror declared in build-options; at
       // runtime the store is the real IVectorStore, so widening here is safe
       // (same cast the workflow twin-injector uses).
-      deps: input.twinDeps as unknown as ApplyTwinContextDeps,
+      deps: visibleTwinDeps(input.twinDeps, input.personalContext),
     })
+    const visible = await visibleTwinHistory(input.personalContext, JSON.stringify(result))
+    if (visible.withheldMessageIds.length > 0) {
+      return {
+        systemPrompt: `${input.baseSystemPrompt}\n\n${visible.messages[0].content}`,
+        applied: false,
+      }
+    }
     if (!result.applied) {
       await recordTwinInject({
         ts,
@@ -198,6 +248,13 @@ export async function applyTeammateTwinContext(
         styleSampleCount: 0,
         tokensApprox: 0,
       })
+      const finalVisible = await visibleTwinHistory(input.personalContext, JSON.stringify(result))
+      if (finalVisible.withheldMessageIds.length > 0) {
+        return {
+          systemPrompt: `${input.baseSystemPrompt}\n\n${finalVisible.messages[0].content}`,
+          applied: false,
+        }
+      }
       return {
         systemPrompt: input.baseSystemPrompt,
         applied: false,
@@ -220,12 +277,23 @@ export async function applyTeammateTwinContext(
       chunkScores: result.retrievedChunks.map((chunk) => chunk.score),
       styleSampleIds: result.selectedStyleSamples.map((sample) => sample.id),
     })
+    const finalVisible = await visibleTwinHistory(input.personalContext, systemPrompt)
+    if (finalVisible.withheldMessageIds.length > 0) {
+      return {
+        systemPrompt: `${input.baseSystemPrompt}\n\n${finalVisible.messages[0].content}`,
+        applied: false,
+      }
+    }
     return { systemPrompt, applied: true }
   } catch (err) {
+    const visible = await visibleTwinHistory(
+      input.personalContext,
+      err instanceof Error ? err.message : String(err)
+    )
     return {
       systemPrompt: input.baseSystemPrompt,
       applied: false,
-      degradedReason: err instanceof Error ? err.message : String(err),
+      degradedReason: visible.messages[0].content,
     }
   }
 }
@@ -243,6 +311,7 @@ export interface SearchTwinKnowledgeInput {
   query: string
   topK?: number
   twinDeps: TwinRuntimeDepsForBuild
+  personalContext?: PersonalTwinConsumer
 }
 
 export interface SearchTwinKnowledgeResult {
@@ -264,6 +333,10 @@ export async function searchTwinKnowledge(
 ): Promise<SearchTwinKnowledgeResult> {
   if (!input.query.trim()) return { hits: [], degraded: false }
   try {
+    const permission = await visibleTwinHistory(input.personalContext, "Twin knowledge")
+    if (permission.withheldMessageIds.length > 0) {
+      return { hits: [{ text: permission.messages[0].content, score: 0 }], degraded: false }
+    }
     const [{ applyTwinContext }, { getTwinChunksByVectorDocIds }, { DEFAULT_TWIN_SETTINGS }] =
       await Promise.all([
         import("@/lib/twin/runtime/apply-twin-context"),
@@ -292,8 +365,12 @@ export async function searchTwinKnowledge(
     const result = await applyTwinContext({
       character,
       userMessage: input.query,
-      deps: input.twinDeps as unknown as ApplyTwinContextDeps,
+      deps: visibleTwinDeps(input.twinDeps, input.personalContext),
     })
+    const resultVisibility = await visibleTwinHistory(input.personalContext, JSON.stringify(result))
+    if (resultVisibility.withheldMessageIds.length > 0) {
+      return { hits: [{ text: resultVisibility.messages[0].content, score: 0 }], degraded: false }
+    }
     const retrieved = result.retrievedChunks
     if (retrieved.length === 0) {
       return {
@@ -313,16 +390,24 @@ export async function searchTwinKnowledge(
         score: c.score,
       }))
       .filter((h) => h.text.trim().length > 0)
+    const visible = await visibleTwinHistory(input.personalContext, JSON.stringify(hits))
+    if (visible.withheldMessageIds.length > 0) {
+      return { hits: [{ text: visible.messages[0].content, score: 0 }], degraded: false }
+    }
     return {
       hits,
       degraded: result.degraded,
       ...(result.degradedReason ? { degradedReason: result.degradedReason } : {}),
     }
   } catch (err) {
+    const visible = await visibleTwinHistory(
+      input.personalContext,
+      err instanceof Error ? err.message : String(err)
+    )
     return {
       hits: [],
       degraded: true,
-      degradedReason: err instanceof Error ? err.message : String(err),
+      degradedReason: visible.messages[0].content,
     }
   }
 }

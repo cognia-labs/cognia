@@ -1,4 +1,5 @@
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 /**
  * Wiring for a member partition's sandboxed agents (P6e).
  *
@@ -103,10 +104,18 @@ export async function installPersonAgents(
     ticketTokens: (ticketId) =>
       deps.transport.call<PersonAgentTicketTokens>("person_agent_usage_get", { ticketId }),
     launchFor: personAgentLaunch,
-    history: async (sessionId, excluded) =>
-      renderTranscript(
-        (await listMessages(sessionId)).filter((message) => !excluded.includes(message.id))
-      ),
+    history: async (sessionId, excluded, actionId) => {
+      const history = await preparePersonalHistory(
+        sessionId,
+        (await listMessages(sessionId)).filter((message) => !excluded.includes(message.id)),
+        { executionRunId: hostStateRunId(actionId) }
+      )
+      return {
+        text: renderTranscript(history.messages),
+        visibilityDigest: history.visibilityDigest,
+        hasWithheld: history.withheldMessageIds.length > 0,
+      }
+    },
     writeMessage: (sessionId, message) => {
       const actionId = message.id.startsWith("assistant-")
         ? message.id.slice("assistant-".length)

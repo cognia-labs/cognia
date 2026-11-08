@@ -67,6 +67,7 @@ import type {
 import type { PluginPostToolUseFn } from "@/types/plugin/plugin-agent-hooks"
 import { routingPlanTraceAttributes } from "@/lib/routing/plan-trace-attributes"
 import { decideAgentTurn, transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
 
 export interface AgentTool {
   /** Stable id; defaults to `name` when the caller omits it. */
@@ -915,6 +916,19 @@ export async function runCompletionRail(
   prompt: string,
   config: ExecuteAgentConfig = {}
 ): Promise<ExecuteAgentResult> {
+  // This completion rail has no admitted Host run. Stored-history builders
+  // materialize legacy marks before flattening; keep those marks effective at
+  // this final boundary, including routing/ledger prompts and later retries.
+  if (config.priorMessages?.length) {
+    const projected = withholdForReaders(
+      config.priorMessages.map((message, index) => ({
+        ...message,
+        id: `completion-history:${index}`,
+      })),
+      []
+    )
+    config = { ...config, priorMessages: projected.messages }
+  }
   // Renderer callers share one already-hydrated settings store. Reading that
   // in-memory snapshot here closes every public Agent entrypoint without
   // adding a Dexie/network operation or threading the same tuple through each

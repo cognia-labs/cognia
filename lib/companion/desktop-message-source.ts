@@ -1,6 +1,9 @@
 "use client"
 
-import { personalMessageForCopy } from "@/lib/execution/personal-marks"
+import {
+  preparePairedOwnerHistory,
+  projectPersonalSessionHistory,
+} from "@/lib/execution/personal-visibility"
 
 /**
  * Desktop-side counterpart of the Rust
@@ -608,7 +611,9 @@ export async function readSessionPage(
     }
   }
   const hasMore = candidates.length > pageSize
-  const rows = accessible.slice(0, pageSize).map(projectSessionListItem)
+  const rows = (
+    await Promise.all(accessible.slice(0, pageSize).map(projectPersonalSessionHistory))
+  ).map(projectSessionListItem)
   const nextOffset = hasMore ? offset + rows.length : undefined
 
   return {
@@ -671,12 +676,9 @@ export async function readMessagesPage(
   // Compatibility path for clients predating transcript/media V1. Capable
   // clients never call this full-message API; legacy clients cannot resolve a
   // content-addressed ref, so expand only this bounded wire page.
+  const filtered = await preparePairedOwnerHistory(candidates.slice(0, pageSize))
   const rows = await Promise.all(
-    candidates
-      .slice(0, pageSize)
-      .map(async (row) =>
-        expandLegacyMediaRefs(toWireMessage(await personalMessageForCopy(getDb(), row, session)))
-      )
+    filtered.messages.map(async (row) => expandLegacyMediaRefs(toWireMessage(row)))
   )
   const end = start + rows.length
   return {
@@ -810,10 +812,11 @@ export async function readTranscriptTimeline(
     rowsDescending.length = completeRowCount
   }
   const rows = rowsDescending.reverse()
+  const filtered = await preparePairedOwnerHistory(rows)
   const projected = projectTranscriptTimeline({
     sessionId: request.sessionId,
     revision: session.revision,
-    messages: rows,
+    messages: filtered.messages,
     activeBranchByGroup: session.activeBranchByGroup,
   })
   const items = projected.slice(-limit)
@@ -836,7 +839,12 @@ export async function readTranscriptTimeline(
   await commitTranscriptIndexPage({
     sessionId: request.sessionId,
     revision: session.revision,
-    items,
+    items: projectTranscriptTimeline({
+      sessionId: request.sessionId,
+      revision: session.revision,
+      messages: rows,
+      activeBranchByGroup: session.activeBranchByGroup,
+    }).slice(-limit),
     complete: !hasMore,
   }).catch(() => undefined)
   return {
@@ -925,9 +933,10 @@ export async function readTranscriptTurnMessages(
   )
   const page: TranscriptMessage[] = []
   let approximateBytes = 2
-  for (const row of allRows.slice(position, position + limit + 1)) {
+  const filtered = await preparePairedOwnerHistory(allRows.slice(position, position + limit + 1))
+  for (const row of filtered.messages) {
     if (page.length >= limit) break
-    const message = toTranscriptMessage(await personalMessageForCopy(getDb(), row))
+    const message = toTranscriptMessage(row)
     const messageBytes = new TextEncoder().encode(JSON.stringify(message)).byteLength + 1
     if (page.length > 0 && approximateBytes + messageBytes > TRANSCRIPT_DETAIL_PAGE_BYTE_LIMIT)
       break

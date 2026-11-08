@@ -1,3 +1,20 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+  preparePersonalDerivedHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
+
 import type { UIMessage } from "ai"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
@@ -76,6 +93,46 @@ function dependencies(overrides: Partial<SpawnTaskDispatchDeps> = {}): SpawnTask
 }
 
 describe("dispatchSpawnTask", () => {
+  it("filters inherited history before staging a task's branch seed", async () => {
+    const person = {
+      kind: "platform" as const,
+      platform: "lark",
+      adapterId: "adapter",
+      remoteUserId: "foreign",
+    }
+    const deps = dependencies({
+      listMessages: async (id) =>
+        id === "parent-1"
+          ? [
+              {
+                id: "private",
+                role: "assistant",
+                parts: [{ type: "text", text: "PRIVATE_TASK_CONTEXT" }],
+                metadata: { personalMarks: [{ person, source: "personal-read", markedAt: 0 }] },
+              },
+            ]
+          : [],
+    })
+    jest
+      .mocked(preparePersonalHistory)
+      .mockImplementationOnce(
+        async (consumerSessionId, messages) =>
+          withholdForReaders(
+            messages,
+            consumerSessionId === "parent-1" ? [person, { kind: "local-person" }] : []
+          ) as never
+      )
+    await dispatchSpawnTask("parent-1", { ...brief, mode: "inherit" }, deps)
+    const serialized = JSON.stringify(jest.mocked(deps.updateSession).mock.calls)
+    expect(serialized).toContain("[Withheld:")
+    expect(serialized).not.toContain("PRIVATE_TASK")
+    expect(preparePersonalHistory).toHaveBeenCalledWith(
+      "parent-1",
+      [expect.objectContaining({ sessionId: "parent-1" })],
+      { session: session("parent-1") }
+    )
+  })
+
   beforeEach(() => {
     jest.clearAllMocks()
     defaultGetSession.mockResolvedValue(session("parent-1"))
@@ -387,4 +444,93 @@ describe("revealSpawnedTask", () => {
     expect(defaultSelectAside).toHaveBeenCalledWith("session:parent-1", "task-1")
     expect(defaultRevealSidechat).toHaveBeenCalledTimes(1)
   })
+})
+
+describe("spawn inherited history uses the parent's live Host readers", () => {
+  const { createDbTestFixture } =
+    jest.requireActual<typeof import("@/lib/db/test-fixture")>("@/lib/db/test-fixture")
+  const { getDb } = jest.requireActual<typeof import("@/lib/db/schema")>("@/lib/db/schema")
+  const fixture = createDbTestFixture({ seeded: false })
+  const actual = jest.requireActual<typeof import("@/lib/execution/personal-visibility")>(
+    "@/lib/execution/personal-visibility"
+  )
+  const authority = jest.requireActual<typeof import("@/lib/execution/acting-authority")>(
+    "@/lib/execution/acting-authority"
+  )
+  const LOCAL_PERSON_RUN: typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN =
+    authority.LOCAL_PERSON_RUN
+  const { startToolExecutionRun, finishToolExecutionRun } = authority
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+
+  async function source() {
+    const parent = session("parent-1", {
+      platformBinding: {
+        platform: "lark",
+        adapterId: "owner-adapter",
+        conversationKey: "im",
+        conversationRef: { platform: "lark", adapterId: "owner-adapter", chatId: "im" },
+      },
+    })
+    await getDb().sessions.put(parent)
+    await getDb().adapterInstances.put({
+      id: "owner-adapter",
+      type: "lark",
+      displayName: "Lark",
+      enabled: true,
+      settings: { connectedUser: { openId: "owner" } },
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+    const message = {
+      id: "legacy-im",
+      sessionId: parent.id,
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: "OWNER SPAWN IM HISTORY" }],
+      createdAt: 1,
+    }
+    await getDb().messages.put(message)
+    return dependencies({
+      getSession: async () => parent,
+      listMessages: async (id) => (id === parent.id ? [message] : []),
+    })
+  }
+
+  it.each([false, true])(
+    "retains owner history only until a second requester joins (%s)",
+    async (joined) => {
+      const deps = await source()
+      const run = await startToolExecutionRun("parent-1", { localAuthorization: LOCAL_PERSON_RUN })
+      try {
+        if (joined)
+          await getDb().executionRuns.update(run.id, {
+            actingIdentity: {
+              ...run.actingIdentity!,
+              requesters: [
+                { kind: "local-person" },
+                {
+                  kind: "platform",
+                  platform: "lark",
+                  adapterId: "owner-adapter",
+                  remoteUserId: "second",
+                },
+              ],
+            },
+          })
+        jest.mocked(preparePersonalHistory).mockImplementationOnce(actual.preparePersonalHistory)
+        await dispatchSpawnTask("parent-1", { ...brief, mode: "inherit" }, deps)
+        const staged = JSON.stringify(jest.mocked(deps.updateSession).mock.calls)
+        if (joined) {
+          expect(staged).toContain("[Withheld:")
+          expect(staged).not.toContain("OWNER SPAWN IM HISTORY")
+        } else {
+          expect(staged).toContain("OWNER SPAWN IM HISTORY")
+          expect(staged).not.toContain("[Withheld:")
+        }
+      } finally {
+        await finishToolExecutionRun(run.id)
+      }
+    }
+  )
 })

@@ -24,6 +24,7 @@
  * plain text, so a made-up id can never point anywhere.
  */
 
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
 import { hasNoLeakingPii, redactText, unredactText } from "@cognia/redact"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import { resolveMessageSpeaker, speakerTranscriptName } from "@/lib/chat/speaker"
@@ -42,6 +43,7 @@ export const CATCH_UP_MAX_PROMPT_CHARS = 24_000
 export const CATCH_UP_CITATION_PREFIX = "@msg:"
 
 export interface CatchUpMessage {
+  sessionId?: string
   id: string
   role: string
   parts?: readonly unknown[]
@@ -49,6 +51,8 @@ export interface CatchUpMessage {
 }
 
 export interface CatchUpLine {
+  metadata?: unknown
+  sessionId?: string
   id: string
   author: string
   text: string
@@ -92,6 +96,8 @@ export function catchUpLines(
         : "member"
     lines.push({
       id: message.id,
+      ...(message.metadata ? { metadata: message.metadata } : {}),
+      ...(message.sessionId ? { sessionId: message.sessionId } : {}),
       author,
       text:
         text.length > CATCH_UP_MAX_MESSAGE_CHARS
@@ -199,7 +205,13 @@ export async function catchUpSharedRoom(
   deps: CatchUpDeps
 ): Promise<CatchUpResult> {
   if (!offersCatchUp(lines)) return { kind: "skipped", reason: "empty" }
-  const { text, covered } = catchUpTranscript(lines)
+  const history = await prepareOwnerHistory(lines)
+  const { text, covered } = catchUpTranscript(
+    history.messages.map((line) => ({
+      ...line,
+      author: line.author ?? "member",
+    }))
+  )
   const { redacted, map } = redactText(text)
   if (!(deps.isPiiSafe ?? hasNoLeakingPii)(redacted)) return { kind: "skipped", reason: "pii" }
   const answer = await deps.client.complete(redacted, {

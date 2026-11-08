@@ -4,6 +4,14 @@ import type { UIMessage } from "ai"
 import { buildLiveVoiceRuntimeBindings } from "./runtime-bindings"
 import type { LiveVoiceCapabilities } from "./types"
 
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerHistory: async (messages: readonly { id: string }[]) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(messages, [{ kind: "local-person" }])
+  },
+}))
+
 const CAPABILITIES: LiveVoiceCapabilities = {
   supportsTools: true,
   supportsServerVad: true,
@@ -170,6 +178,63 @@ describe("buildLiveVoiceRuntimeBindings", () => {
 
     expect(bindings.contextTranscript).toContain("User: who won")
     expect(bindings.contextTranscript).toContain("Assistant: the badgers")
+  })
+
+  it("withholds marked seed rows before rendering their text and tool labels", async () => {
+    const bindings = await buildLiveVoiceRuntimeBindings(
+      options({
+        deps: deps({
+          listMessages: async () => [
+            {
+              id: "private",
+              role: "assistant",
+              metadata: {
+                personalMarks: [
+                  {
+                    version: 1,
+                    person: {
+                      kind: "platform",
+                      platform: "lark",
+                      adapterId: "foreign-adapter",
+                      remoteUserId: "foreign-person",
+                    },
+                    source: "personal-read",
+                    markedAt: 1,
+                  },
+                ],
+              },
+              parts: [
+                { type: "text", text: "PRIVATE VOICE SEED" },
+                { type: "tool-secret-tool", state: "output-available", output: "PRIVATE RESULT" },
+              ],
+            },
+          ],
+        }),
+      })
+    )
+
+    expect(bindings.contextTranscript).toContain("[Withheld: personal content of")
+    expect(bindings.contextTranscript).not.toMatch(/PRIVATE|secret-tool/)
+  })
+
+  it("includes the owner's marked history in their own live voice dialog", async () => {
+    const bindings = await buildLiveVoiceRuntimeBindings(
+      options({
+        deps: deps({
+          listMessages: async () => [
+            {
+              id: "owner-voice",
+              role: "assistant",
+              parts: [{ type: "text", text: "OWNER VOICE CONTEXT" }],
+              metadata: {
+                personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+              },
+            },
+          ],
+        }),
+      })
+    )
+    expect(bindings.contextTranscript).toContain("OWNER VOICE CONTEXT")
   })
 
   it("skips the seed when there is no session", async () => {

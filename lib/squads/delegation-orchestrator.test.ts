@@ -11,6 +11,15 @@
  */
 
 import "fake-indexeddb/auto"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    withheldMessageIds: [],
+    visibilityDigest: "delegation-test",
+    readers: [],
+  })),
+}))
 
 const dispatchOnTeamDelegationStart = jest.fn()
 const dispatchOnTeamDelegationComplete = jest.fn()
@@ -176,10 +185,44 @@ describe("delegation-orchestrator", () => {
     dispatchOnTeamDelegationStart.mockReset()
     dispatchOnTeamDelegationComplete.mockReset()
     isInQuietHoursMock.mockReturnValue(false)
+    jest.mocked(preparePersonalDerivedHistory).mockClear()
     resetLauncher()
   })
 
   describe("delegateToBackground", () => {
+    it("retains the Host reader across approval and ignores forged record metadata", async () => {
+      const { delegation } = delegateToBackground(
+        {
+          sourceTeamId: "team-1",
+          sourceTaskId: "task-1",
+          prompt: "private prompt",
+          systemPrompt: "private system",
+          reason: "test",
+          awaitingApproval: true,
+          metadata: { personalExecutionRunId: "forged-run" },
+        },
+        { executionRunId: "host-root" }
+      )
+      const placeholder = "[Withheld: personal content of Host owner]"
+      jest
+        .mocked(preparePersonalDerivedHistory<{ id: string; content: string }>)
+        .mockResolvedValueOnce({
+          messages: [{ id: `delegation-prompt:${delegation.id}`, content: placeholder }],
+          withheldMessageIds: [delegation.id],
+          visibilityDigest: "withheld",
+          readers: [],
+        })
+      approveDelegation(delegation.id)
+      await flush()
+      expect(preparePersonalDerivedHistory).toHaveBeenLastCalledWith(
+        undefined,
+        [expect.objectContaining({ content: expect.stringContaining("private prompt") })],
+        { runIds: ["host-root"], executionRunId: "host-root" }
+      )
+      expect(lastLaunch().input.target).toMatchObject({ kind: "agent", prompt: placeholder })
+      expect(lastLaunch().input.target).not.toHaveProperty("systemPrompt")
+    })
+
     it("creates an active delegation and fires onTeamDelegationStart", async () => {
       const { delegation, completionPromise } = delegateToBackground({
         sourceTeamId: "team-1",
@@ -695,6 +738,7 @@ describe("delegateToTeam (team → team)", () => {
     dispatchOnTeamDelegationStart.mockReset()
     dispatchOnTeamDelegationComplete.mockReset()
     isInQuietHoursMock.mockReturnValue(false)
+    jest.mocked(preparePersonalDerivedHistory).mockClear()
     resetLauncher()
   })
 

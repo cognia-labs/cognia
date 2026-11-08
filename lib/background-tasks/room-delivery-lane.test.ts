@@ -43,7 +43,7 @@ describe("createRoomDeliveryLane", () => {
     )
     // Resolves on acceptance, while the turn is still running.
     await expect(
-      subject.send("[background task update] done", "room-1", "delivery-1", [], {
+      subject.send("[background task update] done", "room-1", "delivery-1", ["execution:team:r1"], {
         memberIds: ["ava"],
       })
     ).resolves.toBe(true)
@@ -51,7 +51,11 @@ describe("createRoomDeliveryLane", () => {
       "[background task update] done",
       expect.objectContaining({
         sessionId: "room-1",
-        automatedTurn: { producer: "background-result", messageId: "delivery-1" },
+        automatedTurn: {
+          producer: "background-result",
+          messageId: "delivery-1",
+          personalRunIds: ["execution:team:r1"],
+        },
         targetMemberIds: ["ava"],
       })
     )

@@ -9,6 +9,7 @@
  * would leave the agent obeying settings the TUI already shows as changed.
  */
 import type { SendOptions } from "@cognia/agent-config-types"
+import { personalVisibilityDigest } from "@cognia/plugin-contract/types/execution/personal-visibility"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 import type {
   ExternalAgentExecutionOptions,
@@ -249,6 +250,7 @@ describe("resume across a context change", () => {
         backend: "claude-code",
         externalSessionId: "acp-old",
         contextVersion: resolved.contextVersion,
+        personalVisibilityDigest: personalVisibilityDigest([], []),
       }),
     })
     await send("one")

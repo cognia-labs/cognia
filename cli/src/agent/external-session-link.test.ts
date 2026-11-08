@@ -158,6 +158,25 @@ describe("isResumableLink — context version", () => {
 })
 
 describe("readExternalLink — context version", () => {
+  it("persists the exact personal visibility digest beside the native session id", () => {
+    const { fs } = memoryFs()
+    writeExternalLink(
+      HOME,
+      "s1",
+      { backend: "codex", externalSessionId: "native", personalVisibilityDigest: "visibility-v1" },
+      fs
+    )
+    expect(readExternalLink(HOME, "s1", fs)?.personalVisibilityDigest).toBe("visibility-v1")
+    const bad = memoryFs({
+      [externalLinkPath(HOME, "s1")]: JSON.stringify({
+        backend: "codex",
+        externalSessionId: "native",
+        personalVisibilityDigest: 7,
+      }),
+    })
+    expect(readExternalLink(HOME, "s1", bad.fs)?.personalVisibilityDigest).toBeUndefined()
+  })
+
   it("round-trips the recorded context version", () => {
     const home = "/home/u/.cognia"
     const store: Record<string, string> = {}

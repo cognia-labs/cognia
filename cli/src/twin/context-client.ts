@@ -14,6 +14,7 @@
 
 import { detectDesktop, DEV_TOKEN_HEADER, type HandoffClientDeps } from "../handoff/client"
 import type { BridgeEndpoint } from "../handoff/endpoint"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
 
 export const TWIN_CONTEXT_PATH = "/api/dev/twin/context"
 const REQUEST_TIMEOUT_MS = 10_000
@@ -68,6 +69,31 @@ export async function fetchTwinContext(
     if (!res.ok) return null
     const body = (await res.json()) as { ok?: boolean; result?: TwinContextResult }
     if (!body?.ok || !body.result || body.result.ok !== true) return null
+    // A dev token and caller-provided session id do not prove a Host reader.
+    const visible = withholdForReaders(
+      [
+        {
+          id: "cli-twin-context",
+          content: JSON.stringify(body.result),
+          metadata: {
+            personalMarks: [
+              { person: { kind: "local-person" }, source: "twin-history", markedAt: 0 },
+            ],
+          },
+        },
+      ],
+      []
+    )
+    if (visible.withheldMessageIds.length > 0) {
+      const placeholder = visible.messages[0].content
+      return {
+        ok: true,
+        applied: { systemPrompt: placeholder, stable: placeholder, dynamic: placeholder },
+        degraded: false,
+        sources: [],
+        styleSampleCount: 0,
+      }
+    }
     return body.result
   } catch {
     return null

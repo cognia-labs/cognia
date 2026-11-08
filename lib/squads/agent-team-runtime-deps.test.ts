@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import {
   buildAgentTeamRuntimeDeps,
   buildTeammatePrompt,
@@ -111,6 +121,7 @@ function seedStore(team: AgentTeam, teammates: AgentTeammate[]): void {
 
 beforeEach(() => {
   useAgentTeamStore.getState().reset()
+  jest.mocked(preparePersonalDerivedHistory).mockClear()
 })
 
 afterEach(() => {

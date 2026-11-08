@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test-visibility",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+
 import type { AgentPlan, PlanStep, PlanStepStatus } from "@/types/agent/plan"
 import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
 import { PluginToolInvocationError } from "@/lib/plugin/core/invoke-plugin-tool"
@@ -191,6 +201,11 @@ describe("dispatchPlanStepNode — agent_turn", () => {
     )
     expect(calls.map((c) => c.status)).toEqual(["in_progress", "completed"])
     expect(calls[1].patch).toMatchObject({ result: "did it" })
+    expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(
+      undefined,
+      [{ id: "s1", content: "go" }],
+      { runIds: ["execution:plan:p1"], executionRunId: "execution:plan:p1", sessionId: "ses" }
+    )
   })
 
   it("derives the prompt from title + description when no param prompt", async () => {

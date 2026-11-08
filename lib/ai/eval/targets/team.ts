@@ -12,7 +12,7 @@
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalCase, EvalSample } from "@/types/eval/eval"
 import type { EvalTarget } from "@cognia/eval-core"
-import { assembleSampleFromSpans, renderEvalTextPrompt } from "./chat"
+import { assembleSampleFromSpans, renderEvalTextPrompt, personalEvalSampleForRun } from "./chat"
 import { newEvalTraceId } from "./span-scope"
 import { createEvalDeadline } from "./deadline"
 
@@ -127,12 +127,16 @@ export function createTeamTarget(config: TeamTargetConfig, deps: TeamTargetDeps)
         sample.metricAvailability.cost =
           sample.metricAvailability.cost === "unavailable" ? "unavailable" : "partial"
       }
-      return {
-        ...sample,
-        executionStatus: status,
-        ...(executionProfile ? { executionProfile } : {}),
-        ...(error ? { error } : {}),
-      }
+      return personalEvalSampleForRun(
+        {
+          ...sample,
+          executionStatus: status,
+          ...(executionProfile ? { executionProfile } : {}),
+          ...(error ? { error } : {}),
+        },
+        undefined,
+        capturedSpans.map((span) => ({ sessionId: span.sessionId, runId: span.runId }))
+      )
     },
   }
 }

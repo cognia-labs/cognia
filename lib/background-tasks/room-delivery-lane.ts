@@ -31,7 +31,7 @@ export function createRoomDeliveryLane(deps: RoomDeliveryLaneDeps): BackgroundDe
     isIdle: (sessionId) => deps.runner().isIdle(sessionId),
     // Accepted once the room took the turn (its row is written and its
     // members start), not when the turn ends: a room turn runs for minutes.
-    send: (framedText, sessionId, deliveryId, _personalRunIds, targets) =>
+    send: (framedText, sessionId, deliveryId, personalRunIds, targets) =>
       new Promise<boolean>((resolve) => {
         let answered = false
         const answer = (accepted: boolean) => {
@@ -43,7 +43,11 @@ export function createRoomDeliveryLane(deps: RoomDeliveryLaneDeps): BackgroundDe
           .runner()
           .send(framedText, {
             sessionId,
-            automatedTurn: { producer: "background-result", messageId: deliveryId },
+            automatedTurn: {
+              producer: "background-result",
+              messageId: deliveryId,
+              ...(personalRunIds?.length ? { personalRunIds } : {}),
+            },
             ...(targets?.memberIds.length ? { targetMemberIds: [...targets.memberIds] } : {}),
             onAccepted: () => answer(true),
             onRefused: () => answer(false),

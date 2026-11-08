@@ -15,6 +15,7 @@
  */
 
 import { projectSearchText } from "@/lib/chat/search/project-text"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 /**
  * Messages included, newest-last.
@@ -85,7 +86,14 @@ export function formatTranscript(
  */
 export async function getSessionTranscriptText(sessionId: string): Promise<string | null> {
   const { listRecentMessages } = await import("@/lib/db/messages")
-  const messages = await listRecentMessages(sessionId, MAX_TRANSCRIPT_MESSAGES + 1)
+  // A staged cross-conversation reference has no admitted consuming run yet.
+  const { messages } = await preparePersonalHistory(
+    undefined,
+    (await listRecentMessages(sessionId, MAX_TRANSCRIPT_MESSAGES + 1)).map((message) => ({
+      ...message,
+      sessionId,
+    }))
+  )
   if (messages.length === 0) return null
   return formatTranscript(
     messages.map((m) => ({ role: m.role, parts: m.parts })),

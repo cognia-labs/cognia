@@ -111,6 +111,22 @@ it("binds headless person-agent writes to the Host action run", async () => {
   const binding = jest.mocked(personalMarks.bindPersonalMessageRun).mockClear()
   const stop = await installPersonAgents({ transport: transport(), manager, log: () => undefined })
   try {
+    const messages = jest.mocked((await import("@/lib/db/messages")).listMessages)
+    messages.mockResolvedValueOnce([
+      {
+        id: "private",
+        role: "assistant",
+        parts: [{ type: "text", text: "private headless answer" }],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+        },
+      },
+    ] as never)
+    const history = await captured!.history("s1", [], "unknown-action")
+    expect(history.text).toContain("[Withheld: personal content of Host owner]")
+    expect(history.text).not.toContain("private headless answer")
+    expect(history.visibilityDigest).toMatch(/^personal-v1:/)
+    expect(history.hasWithheld).toBe(true)
     await captured!.writeMessage("s1", {
       id: "assistant-action-marks",
       role: "assistant",

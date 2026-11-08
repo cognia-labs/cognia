@@ -16,6 +16,15 @@ import {
   type CodexAppDispatchMessage,
 } from "@/lib/native/codex-app-dispatch"
 import { openCodexAppTask } from "@/lib/native/codex-app-control"
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 
 export type CodexAppDispatchErrorCode =
   "NO_CWD" | "NO_USER_MESSAGE" | "UNTRANSFERABLE_CONTENT" | "TARGET_NOT_FOUND" | "PII_BLOCKED"
@@ -58,15 +67,19 @@ function toDispatchMessage(message: UIMessage): CodexAppDispatchMessage | null {
   }
 }
 
-async function createAndOpenSnapshot(session: ChatSession): Promise<{ threadId: string }> {
+async function createAndOpenSnapshot(
+  session: ChatSession,
+  executionRunId: string
+): Promise<{ threadId: string }> {
   const [storedMessages, cwd] = await Promise.all([
     listMessages(session.id),
     resolveEffectiveCwdForSession(session),
   ])
   if (!cwd?.trim()) throw new CodexAppDispatchError("NO_CWD")
 
+  const history = await preparePersonalHistory(session.id, storedMessages, { executionRunId })
   const messages = await Promise.all(
-    storedMessages.map((message) => materializeMessageMedia(message))
+    history.messages.map((message) => materializeMessageMedia(message))
   )
   const projection = buildHandoffContext(messages, { maxChars: 64 * 1024 * 1024 })
   if (
@@ -95,7 +108,25 @@ async function createAndOpenSnapshot(session: ChatSession): Promise<{ threadId: 
     throw new CodexAppDispatchError("NO_USER_MESSAGE")
   }
 
-  const imported = session.importCanonicalState
+  const originalMetadata = JSON.stringify({
+    title: session.title,
+    imported: session.importCanonicalState,
+    systemPrompt: session.systemPrompt,
+  })
+  const metadataHistory = await preparePersonalDerivedHistory(
+    session.id,
+    [{ id: "codex-handoff-metadata", content: originalMetadata }],
+    { sessionId: session.id, executionRunId }
+  )
+  const metadata =
+    metadataHistory.messages[0].content === originalMetadata
+      ? {
+          title: session.title,
+          imported: session.importCanonicalState,
+          systemPrompt: session.systemPrompt,
+        }
+      : { title: metadataHistory.messages[0].content, imported: undefined, systemPrompt: undefined }
+  const imported = metadata.imported
   const historicalState = imported
     ? {
         tasks: imported.tasks,
@@ -106,7 +137,7 @@ async function createAndOpenSnapshot(session: ChatSession): Promise<{ threadId: 
       }
     : undefined
   const historicalInstructions = [
-    session.systemPrompt,
+    metadata.systemPrompt,
     ...messages
       .filter((message) => message.role === "system")
       .map((message) =>
@@ -140,7 +171,7 @@ async function createAndOpenSnapshot(session: ChatSession): Promise<{ threadId: 
     if (
       !hasNoLeakingExternalAgentPromptInput(
         { id: `handoff-${index}`, role: snapshot.role, content, timestamp: new Date(0) },
-        { title: session.title, cwd }
+        { title: metadata.title, cwd }
       )
     ) {
       throw new CodexAppDispatchError("PII_BLOCKED")
@@ -149,7 +180,7 @@ async function createAndOpenSnapshot(session: ChatSession): Promise<{ threadId: 
 
   const result = await dispatchConversationToCodexApp({
     sourceSessionId: session.id,
-    title: session.title.trim() || "Cognia conversation",
+    title: metadata.title.trim() || "Cognia conversation",
     cwd: cwd.trim(),
     messages: snapshotMessages,
   })
@@ -176,7 +207,22 @@ export function dispatchSessionToCodexApp(session: ChatSession): Promise<{ threa
   const existing = inFlightDispatches.get(session.id)
   if (existing) return existing
 
-  const dispatch = createAndOpenSnapshot(session)
+  // This entry point is called only by the desktop's explicit handoff action.
+  // A short-lived Host root proves the local reader without borrowing an IM run.
+  const dispatch = (async () => {
+    const run = await startToolExecutionRun(session.id, {
+      localAuthorization: LOCAL_PERSON_RUN,
+      title: "Codex App handoff",
+    })
+    let failed = true
+    try {
+      const result = await createAndOpenSnapshot(session, run.id)
+      failed = false
+      return result
+    } finally {
+      await finishToolExecutionRun(run.id, failed)
+    }
+  })()
   inFlightDispatches.set(session.id, dispatch)
   const clear = () => {
     if (inFlightDispatches.get(session.id) === dispatch) inFlightDispatches.delete(session.id)

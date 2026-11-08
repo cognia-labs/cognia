@@ -56,6 +56,7 @@ import type {
 import type { GhostMessage } from "@/lib/chat/completion/ghost-prompt"
 import type { AppSettings, ChatSession } from "@cognia/agent-config-types"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
 
 const MIN_DEBOUNCE = 200
 const MAX_DEBOUNCE = 2000
@@ -151,7 +152,7 @@ export function useComposerGhostText(
   const contextKey = JSON.stringify([
     session?.id,
     session?.transcriptRevision,
-    visibleMessages.map((message) => [message.id, message.parts]),
+    visibleMessages.map((message) => [message.id, message.parts, message.metadata]),
     session?.model,
     session?.providerOverride,
     session?.accountId,
@@ -226,6 +227,15 @@ export function useComposerGhostText(
     // provider's closure — which reads the latest-session ref — is never
     // constructed during render.
     const providers: InlineCompletionProvider[] = []
+    const resolveRecentMessages = async () => {
+      const sourceSessionId = sessionRef.current?.id
+      const history = await prepareOwnerHistory(
+        messagesRef.current
+          .slice(-RECENT)
+          .map((message) => ({ ...message, sessionId: sourceSessionId }))
+      )
+      return recentMessages(history.messages)
+    }
     if (localEnabled) {
       // The textarea wraps, so a multi-line completion renders correctly here
       // (unlike the TUI's single inline row).
@@ -252,6 +262,7 @@ export function useComposerGhostText(
       }
       providers.push(
         createAiCompletionProvider({
+          resolveRecentMessages,
           complete: async ({ system, prompt, signal }) => {
             const client = buildClient()
             if (!client) return null
@@ -272,6 +283,7 @@ export function useComposerGhostText(
       // outranks `ai` so the answer they asked for wins.
       providers.push(
         createAgentCompletionProvider({
+          resolveRecentMessages,
           complete: async ({ system, prompt, signal }) => {
             const client = buildHeadlessTurnLlmClient({
               session: sessionRef.current ?? null,
@@ -313,7 +325,6 @@ export function useComposerGhostText(
         caret: draft.length,
         history: historyRef.current,
         commands: commandsRef.current,
-        recentMessages: recentMessages(messagesRef.current),
         surface: "gui",
         sessionId,
       }),

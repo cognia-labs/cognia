@@ -64,7 +64,7 @@ import type { ResolvedBinding } from "./policy-resolve"
 import type { AgentExecutionSendSpec } from "@cognia/agent-config-types/agent-execution"
 import { computeExecutionFingerprint } from "@/lib/ai/agent/execution/fingerprint"
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
-import type { ChatSession } from "@cognia/agent-config-types"
+import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 import type { Project } from "@/types"
 import * as buildOptions from "@/lib/claude/build-options"
 import * as platform from "@/lib/platform/detect"
@@ -138,6 +138,7 @@ jest.mock("@/lib/twin/runtime/build-deps", () => ({
 let tryBuildMemoryDepsImpl: jest.Mock = jest.fn(async () => undefined)
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
   __esModule: true,
+  ...jest.requireActual("@/lib/memory/runtime/build-deps"),
   tryBuildMemoryDeps: (...a: Parameters<typeof tryBuildMemoryDepsImpl>) =>
     tryBuildMemoryDepsImpl(...a),
 }))
@@ -2934,23 +2935,62 @@ describe("installRuntime — ai-run (PII embed gate covers the fallback legs)", 
       memory: { enabled: true, useMemory: true },
     } as never)
     await getDb().characters.put({ id: "char_abc", name: "Plain" } as never)
+    const adapter = await createAdapterInstance({
+      type: "lark",
+      displayName: "Owner",
+      enabled: true,
+      transportMode: "webhook",
+      settings: { connectedUser: { openId: "u_alice" } },
+      credentialsRef: { keyringService: "test", accounts: [] },
+      trigger: { rules: [], blockers: [], storeUnmatchedInDraftMode: false },
+      defaultMode: "auto",
+    })
+    const ownerEvent = (key: string, text = "hello runtime") =>
+      makeEvent({
+        platform: "lark",
+        adapterId: adapter.id,
+        conversationKey: `lark:${adapter.id}:${key}`,
+        conversationRef: { platform: "lark", adapterId: adapter.id },
+        sender: { ...makeEvent({}).sender, platform: "lark", adapterId: adapter.id },
+        plainText: text,
+        segments: [{ type: "text", text }],
+      })
     const clean = memoryDepsWithEmbedSpy()
     tryBuildMemoryDepsImpl = jest.fn(async () => clean.deps)
-    await callHandler(makeEvent({ conversationKey: "telegram:adapter_1:chat_mem_c" }), "ai-run")
+    await callHandler(ownerEvent("chat_mem_c"), "ai-run")
     expect(clean.embed).toHaveBeenCalledWith("hello runtime", { signal: expect.any(AbortSignal) })
 
     const leaky = memoryDepsWithEmbedSpy()
     tryBuildMemoryDepsImpl = jest.fn(async () => leaky.deps)
-    await callHandler(
-      makeEvent({
-        conversationKey: "telegram:adapter_1:chat_mem_l",
-        plainText: LEAKY_TEXT,
-        segments: [{ type: "text", text: LEAKY_TEXT }],
-      }),
-      "ai-run"
-    )
+    await callHandler(ownerEvent("chat_mem_l", LEAKY_TEXT), "ai-run")
     expect(leaky.embed).not.toHaveBeenCalled()
     expect(mockGenerateEmbedding).not.toHaveBeenCalled()
+  })
+
+  it("withholds owner memory from a different connector requester before embedding", async () => {
+    await getDb().settings.put({
+      id: "singleton",
+      memory: { enabled: true, useMemory: true },
+    } as never)
+    const memory = memoryDepsWithEmbedSpy()
+    tryBuildMemoryDepsImpl = jest.fn(async () => memory.deps)
+    await callHandler(makeEvent({ conversationKey: "telegram:adapter_1:foreign-memory" }), "ai-run")
+    expect(memory.embed).not.toHaveBeenCalled()
+    expect(DEFAULT_RUN_AND_CAPTURE).toHaveBeenCalledTimes(1)
+  })
+
+  it("settles an admitted identity when context preparation fails before dispatch", async () => {
+    await getDb().characters.put({ id: "char_abc", name: "Twinned", twinId: "twin_1" } as never)
+    tryBuildTwinDepsImpl = jest.fn(async () => {
+      throw new Error("twin store unavailable")
+    })
+    await expect(
+      callHandler(makeEvent({ conversationKey: "telegram:adapter_1:context-failure" }), "ai-run")
+    ).rejects.toThrow("twin store unavailable")
+    const runs = await getDb().executionRuns.toArray()
+    expect(runs).toHaveLength(1)
+    expect(runs[0].status).toBe("cancelled")
+    expect(DEFAULT_RUN_AND_CAPTURE).not.toHaveBeenCalled()
   })
 })
 
@@ -3893,6 +3933,26 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
     expect((await getDb().sessions.get("s_room"))?.sdkSessionId).toBe("sdk_previous_voice")
     const audit = (await getDb().connectorAudit.toArray()).find((row) => row.kind === "room.turn")
     expect(audit?.fields).toMatchObject({ characterTeamId: "ct_launch", steps: 2, end: "done" })
+  })
+
+  it("keeps a room member's personal run marks on its stored reply", async () => {
+    await seedRoom()
+    const mark = { person: { kind: "local-person" as const }, source: "twin-history", markedAt: 1 }
+    capture(async (call, index) => {
+      if (index === 0) {
+        const run = (
+          await getDb().executionRuns.where("sessionId").equals("s_room").toArray()
+        ).find((row) => row.id.endsWith(":reply-1"))
+        expect(run).toBeDefined()
+        await getDb().executionRuns.update(run!.id, { personalMarks: [mark] })
+      }
+      return index === 0 ? "PRIVATE_MEMBER_REPLY" : "Public reply"
+    })
+    await callHandler(roomEvent(), "ai-run")
+    const reply = (await getDb().messages.where("sessionId").equals("s_room").toArray()).find(
+      (row) => row.role === "assistant" && row.senderId === "c_ana"
+    )
+    expect(reply?.metadata).toMatchObject({ personalMarkVersion: 1, personalMarks: [mark] })
   })
 
   describe("a member with a bot of its own (ADR-0252 P7)", () => {
@@ -6130,6 +6190,7 @@ function storedMsgRow(
     metadata:
       role === "user"
         ? {
+            personalMarkVersion: 1,
             platformMessage: {
               messageId: `pm_${id}`,
               platform: "telegram",
@@ -6150,6 +6211,52 @@ function storedMsgRow(
 }
 
 describe("recentGroupContextBlock", () => {
+  it("withholds personal ambient chatter and reply previews from a run with no reader", async () => {
+    const now = Date.now()
+    await seedGroupSession("private-context")
+    const parent = storedMsgRow(
+      "private-parent",
+      "private-context",
+      "user",
+      "private ambient",
+      now - 1
+    ) as unknown as StoredMessage
+    parent.metadata = {
+      ...parent.metadata,
+      personalMarkVersion: 1,
+      personalMarks: [
+        {
+          person: { kind: "local-person" },
+          source: "test",
+          markedAt: 1,
+        },
+      ],
+    }
+    await getDb().messages.put(parent)
+    const block = await recentGroupContextBlock({
+      event: groupEvent(),
+      excludeMessageId: "current",
+      now,
+    })
+    expect(block).not.toContain("private ambient")
+    expect(block).toContain("[Withheld: personal content of Host owner]")
+    const prompt = await withConversationContext("new request", {
+      event: groupEvent(),
+      stored: {
+        ...parent,
+        id: "reply",
+        metadata: {
+          replyTo: {
+            messageId: parent.id,
+            preview: "private preview",
+          },
+        },
+      },
+    })
+    expect(prompt).not.toContain("private preview")
+    expect(prompt).toContain("[Withheld: personal content of Host owner]")
+  })
+
   it("reassesses stored group messages using the current adapter setting without changing history", async () => {
     const adapter = await createAdapterInstance({
       type: "telegram",
@@ -6333,6 +6440,31 @@ describe("recentGroupContextBlock", () => {
 })
 
 describe("withConversationContext", () => {
+  beforeEach(async () => {
+    // These formatting/safety tests quote canonical, public ingress rows.
+    // A missing source is tested separately and must remain unproven.
+    await getDb().messages.bulkPut(
+      ["old", "m_1"].map((id) => ({
+        id,
+        sessionId: "quote-source",
+        role: "user",
+        parts: [{ type: "text", text: "original" }],
+        createdAt: 1,
+        metadata: { personalMarkVersion: 1 },
+      }))
+    )
+  })
+
+  it("keeps a preview with a missing source withheld", async () => {
+    const stored = {
+      id: "now",
+      metadata: { replyTo: { messageId: "missing", preview: "UNKNOWN_PRIVATE_QUOTE" } },
+    } as never
+    const out = await withConversationContext("body", { event: makeEvent({}), stored })
+    expect(out).not.toContain("UNKNOWN_PRIVATE_QUOTE")
+    expect(out).toContain("[Withheld: personal content of unverified person]")
+  })
+
   it("reassesses edited reply previews and follows the current bot opt-out", async () => {
     const adapter = await createAdapterInstance({
       type: "telegram",

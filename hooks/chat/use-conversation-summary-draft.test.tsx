@@ -3,6 +3,26 @@
  */
 import { act, renderHook, waitFor } from "@testing-library/react"
 import type { UIMessage } from "ai"
+jest.mock("@/lib/execution/acting-authority", () => ({
+  LOCAL_PERSON_RUN: Symbol("local-person"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "summary-owner-run" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    preparePersonalHistory: async <T extends { id: string; metadata?: unknown }>(
+      _sessionId: string | undefined,
+      messages: readonly T[],
+      options?: { executionRunId?: string }
+    ) => ({
+      ...withholdForReaders(messages, options?.executionRunId ? [{ kind: "local-person" }] : []),
+      readers: [],
+    }),
+  }
+})
 
 jest.mock("next-intl", () => ({ useLocale: () => "en" }))
 jest.mock("@/lib/ai/generation/summarize-material", () => ({
@@ -26,6 +46,11 @@ jest.mock("@/stores/chat/chat-store", () => ({
 
 import { summarizeMaterial } from "@/lib/ai/generation/summarize-material"
 import {
+  startToolExecutionRun,
+  finishToolExecutionRun,
+  LOCAL_PERSON_RUN,
+} from "@/lib/execution/acting-authority"
+import {
   readVisibleSessionMessages,
   useConversationSummaryDraft,
 } from "./use-conversation-summary-draft"
@@ -39,6 +64,8 @@ const messages = [
 beforeEach(() => {
   summarize.mockReset()
   buildClient.mockClear()
+  jest.mocked(startToolExecutionRun).mockClear()
+  jest.mocked(finishToolExecutionRun).mockClear()
   for (const key of Object.keys(chatState)) delete chatState[key]
 })
 
@@ -53,6 +80,51 @@ describe("useConversationSummaryDraft", () => {
     expect(result.current.fallback).toBeNull()
     expect(summarize.mock.calls[0][0]).toMatchObject({ purpose: "branch-seed", locale: "en" })
     expect(buildClient.mock.calls[0][0]).toMatchObject({ label: "Background" })
+    expect(startToolExecutionRun).toHaveBeenCalledWith(undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+      title: "Background",
+    })
+    expect(finishToolExecutionRun).toHaveBeenCalledWith("summary-owner-run", false)
+  })
+
+  it("keeps the admitted owner's personal content while withholding another person's message and fallback digest", async () => {
+    summarize.mockResolvedValue({ kind: "unavailable", reason: "no-client" })
+    const own = {
+      personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+    }
+    const other = {
+      personalMarks: [
+        {
+          person: { kind: "platform", platform: "lark", adapterId: "a", remoteUserId: "other" },
+          source: "test",
+          markedAt: 1,
+        },
+      ],
+    }
+    const { result } = renderHook(() =>
+      useConversationSummaryDraft({ sessionId: "s1", turnLabel: "Summary" })
+    )
+    await act(() =>
+      result.current.generate([
+        {
+          id: "own",
+          role: "assistant",
+          parts: [{ type: "text", text: "owner private source" }],
+          metadata: own,
+        },
+        {
+          id: "other",
+          role: "assistant",
+          parts: [{ type: "text", text: "other private source" }],
+          metadata: other,
+        },
+      ])
+    )
+    expect(JSON.stringify(summarize.mock.calls[0][0])).toContain("owner private source")
+    expect(JSON.stringify(summarize.mock.calls[0][0])).not.toContain("other private source")
+    expect(result.current.text).toContain("owner private source")
+    expect(result.current.text).toContain("[Withheld: personal content of person ")
+    expect(result.current.text).not.toContain("other private source")
   })
 
   it("falls back to the digest and says why when no model summary is possible", async () => {
@@ -74,6 +146,7 @@ describe("useConversationSummaryDraft", () => {
     await act(() => result.current.generate(messages))
     expect(onError).toHaveBeenCalled()
     expect(result.current.generating).toBe(false)
+    expect(finishToolExecutionRun).toHaveBeenCalledWith("summary-owner-run", true)
   })
 
   it("resets the draft", async () => {

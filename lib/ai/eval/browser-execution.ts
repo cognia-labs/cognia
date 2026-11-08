@@ -44,6 +44,7 @@ import { defaultTeamTargetDeps } from "./targets/team-default-deps"
 import { defaultWorkflowTargetDeps } from "./targets/workflow-default-deps"
 import { isConfirmedLocalProvider } from "./provider-locality"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 import {
   digestEvalDependency,
   estimateEvalTaskCost,
@@ -515,6 +516,17 @@ function defaultResolveScorers(
     ...judge,
     async complete(prompt: string, options?: Parameters<typeof judge.complete>[1]) {
       execution?.assertActive()
+      if (!hasNoLeakingPiiDeep({ prompt, system: options?.system })) {
+        throw new Error("Evaluation judge prompt blocked by the PII gate")
+      }
+      const projected = await preparePersonalDerivedHistory(undefined, [
+        { id: "eval-judge-prompt", text: prompt },
+        { id: "eval-judge-system", text: options?.system ?? "" },
+      ])
+      execution?.assertActive()
+      prompt = projected.messages[0].text
+      if (options?.system !== undefined)
+        options = { ...options, system: projected.messages[1].text }
       const maxTokens = options?.maxTokens ?? manifest.judgePolicy.maxOutputTokens ?? 300
       if (!Number.isInteger(maxTokens) || maxTokens <= 0)
         throw new Error("Evaluation judge requires a bounded output token limit")
@@ -546,9 +558,6 @@ function defaultResolveScorers(
         throw new Error("Evaluation judge call exceeds its reserved budget")
       }
       admittedJudgeCost += reservation
-      if (!hasNoLeakingPiiDeep({ prompt, system: options?.system })) {
-        throw new Error("Evaluation judge prompt blocked by the PII gate")
-      }
       if (price.inputPerMillion + price.outputPerMillion > 0) admittedJudgeCalls += 1
       try {
         const result = await judge.complete(prompt, {
@@ -789,9 +798,22 @@ export function createBrowserEvalTaskExecutor(
           }
         : variant
     const confirmedLocal = confirmedVariantLocality(variant, options.appSettings)
+    // The manifest and encrypted evidence retain the canonical case. Model
+    // inputs use its Host provenance, never the stored experiment's identity.
+    const { personalEvalCaseForRun } = await import("./service")
+    const visibleVariant = { ...boundedVariant }
+    if (typeof boundedVariant.parameters?.systemPrompt === "string") {
+      const projected = await preparePersonalDerivedHistory(undefined, [
+        { id: variant.id, text: boundedVariant.parameters.systemPrompt },
+      ])
+      visibleVariant.parameters = {
+        ...boundedVariant.parameters,
+        systemPrompt: projected.messages[0].text,
+      }
+    }
     const target = dependencies.buildTarget({
       manifest: experiment.manifest,
-      variant: boundedVariant,
+      variant: visibleVariant,
       appSettings: options.appSettings,
       artifactKey: options.artifactKey,
       confirmedLocal,
@@ -801,7 +823,7 @@ export function createBrowserEvalTaskExecutor(
       variant.kind === "model"
         ? undefined
         : await prepareAgentTargetCase(evalCase, variant, confirmedLocal)
-    const targetCase = preparedAgentCase?.evalCase ?? evalCase
+    const targetCase = await personalEvalCaseForRun(preparedAgentCase?.evalCase ?? evalCase)
     assertActive()
     const targetSample = await target.run(targetCase, signal)
     // An abort after model work must not discard returned usage or elapsed
@@ -852,7 +874,11 @@ export function createBrowserEvalTaskExecutor(
           outputTokens: 0,
           cost: 0,
         })
-    const judgeEvidence = redactJudgeEvidence(evalCase, sample)
+    const { personalEvalSampleForRun } = await import("./targets/chat")
+    const judgeEvidence = redactJudgeEvidence(
+      await personalEvalCaseForRun(evalCase),
+      await personalEvalSampleForRun(sample)
+    )
     const judgeRedactionDigest = await digestTargetPayload(judgeEvidence)
     assertScope()
     const scores = await Promise.all(

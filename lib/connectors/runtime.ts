@@ -1,3 +1,7 @@
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
 /**
  * Bus runtime — Task 37 + IM-completion §A (real ai-run capture).
  *
@@ -853,6 +857,7 @@ export async function recentGroupContextBlock(input: {
   now?: number
   sessions?: readonly ChatSession[]
   onRowsRead?: (rows: readonly StoredMessage[]) => void
+  consumer?: { sessionId?: string; executionRunId?: string }
 }): Promise<string | undefined> {
   const { event } = input
   if (event.channel.kind === "private") return undefined
@@ -875,7 +880,10 @@ export async function recentGroupContextBlock(input: {
     // Newest assistant reply in this session is the watermark: rows at or
     // below it already reached the model through session history.
     const lastAssistantAt = rows.find((row) => row.role === "assistant")?.createdAt ?? 0
-    for (const row of rows) {
+    const visible = await preparePersonalHistory(input.consumer?.sessionId, rows, {
+      executionRunId: input.consumer?.executionRunId,
+    })
+    for (const row of visible.messages) {
       if (row.role !== "user") continue
       if (row.metadata?.deletedAt !== undefined) continue
       if (row.id === input.excludeMessageId) continue
@@ -925,11 +933,28 @@ export async function withConversationContext(
     stored: StoredMessage
     contextSessions?: readonly ChatSession[]
     onContextRowsRead?: (rows: readonly StoredMessage[]) => void
+    consumer?: { sessionId?: string; executionRunId?: string }
   }
 ): Promise<SendContent> {
   const headers: string[] = []
-  const replyMeta = input.stored.metadata?.replyTo as { preview?: string } | undefined
-  const preview = replyMeta?.preview
+  const replyMeta = input.stored.metadata?.replyTo as
+    { preview?: string; messageId?: string } | undefined
+  let preview = replyMeta?.preview
+  if (preview?.trim()) {
+    const parent = replyMeta?.messageId
+      ? await getDb().messages.get(replyMeta.messageId)
+      : undefined
+    const projected = parent
+      ? await preparePersonalHistory(input.consumer?.sessionId, [{ ...parent, text: preview }], {
+          executionRunId: input.consumer?.executionRunId,
+        })
+      : await preparePersonalDerivedHistory(
+          input.consumer?.sessionId,
+          [{ id: `reply-preview:${input.stored.id}`, text: preview }],
+          { sessionId: input.stored.sessionId, executionRunId: input.consumer?.executionRunId }
+        )
+    preview = projected.messages[0].text
+  }
   const protection = await connectorInjectionProtection(input.event.adapterId)
   if (
     typeof preview === "string" &&
@@ -948,6 +973,7 @@ export async function withConversationContext(
     excludeMessageId: input.stored.id,
     sessions: input.contextSessions,
     onRowsRead: input.onContextRowsRead,
+    consumer: input.consumer,
   })
   if (context) headers.push(context)
   if (headers.length === 0) return prompt
@@ -1050,7 +1076,8 @@ async function readImRoomMessages(sessionId: string): Promise<StoredMessage[]> {
 async function recordImRoomMemberReply(
   member: ImRoomMemberRun,
   text: string,
-  protocolText: string
+  protocolText: string,
+  executionRunId: string
 ): Promise<void> {
   const metadata: Omit<ImRoomReplyMetadata, "senderId"> = {
     imRoomTurn: {
@@ -1080,6 +1107,13 @@ async function recordImRoomMemberReply(
     senderKind: "assistant",
     metadata: metadata as unknown as StoredMessage["metadata"],
     createdAt: Math.max(Date.now(), (newest?.createdAt ?? 0) + 1),
+  }
+  const { bindPersonalMessageRun, personalMessageMetadata } =
+    await import("@/lib/execution/personal-marks")
+  bindPersonalMessageRun(row.id, executionRunId)
+  row.metadata = {
+    ...(await personalMessageMetadata(row.id, row.metadata, undefined, { rowExists: false })),
+    personalMarkVersion: 1,
   }
   await db.messages.add(row)
   await stampSessionLastMessage(row.sessionId, row)
@@ -1399,6 +1433,8 @@ async function resolveInboundSendOptions(params: {
   adapterRow: AdapterInstanceRow
   emitTrace: boolean
   executionIdentity?: { runId: string; turnId: string; attemptId: string }
+  /** The admitted attempt, including recovery attempts whose identity names an older root. */
+  personalExecutionRunId?: string
   permissionCeiling?: AgentPermissionCeiling
   resolvedCharacter?: Awaited<ReturnType<typeof resolveCharacterById>>
   /**
@@ -1429,6 +1465,7 @@ async function resolveInboundSendOptions(params: {
     adapterRow,
     emitTrace,
     executionIdentity,
+    personalExecutionRunId,
     permissionCeiling,
     resolvedCharacter,
     compositionSelection,
@@ -1560,6 +1597,10 @@ async function resolveInboundSendOptions(params: {
     traceSurface: "connector",
     turnId: executionIdentity?.turnId,
     executionIdentity,
+    personalCredentialContext: {
+      sessionId: session.id,
+      executionRunId: personalExecutionRunId ?? executionIdentity?.runId,
+    },
     skillIntents: inferBuiltInSkillIntents(event.plainText),
     skillRenderMode: "hybrid",
     permissionCeiling,
@@ -2326,6 +2367,20 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // single character, one step of a room turn for a team member (`member`).
         // A member's step is its own execution run, under its own sub-session,
         // started fresh rather than resuming the conversation's native session.
+        let preparingRunId: string | undefined
+        const cancelUnstartedReply = async () => {
+          const runId = preparingRunId
+          preparingRunId = undefined
+          if (!runId) return
+          const run = await getDb().executionRuns.get(runId)
+          if (run?.status === "queued")
+            await runEventJournal.append(
+              runId,
+              semanticRunEvent("run.cancelled", {
+                reason: "context-not-dispatched",
+              })
+            )
+        }
         const runDirectReply = async (
           member: ImRoomMemberRun | null
         ): Promise<DirectReplyOutcome> => {
@@ -2365,6 +2420,50 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             attemptId: previousRecoveryAnchor?.attemptId ?? "a1",
           }
 
+          // Admit the Host identity before any personal context is retrieved.
+          // Plugin/message fields never establish this run's readers.
+          const initialRunTitle = connectorVendor(event.platform)?.reply?.titleFromMessage
+            ? sanitizeActivityLabel(event.plainText.split(/\r?\n/, 1)[0], "Agent run")
+            : (member?.step.character ?? effectiveCharacter)?.name?.trim() || "Agent run"
+          const recoveryParent = recoveryParentRunId
+            ? await getDb().executionRuns.get(recoveryParentRunId)
+            : undefined
+          // A recovery anchor is routing data. Only this session's exact prior
+          // execution of this stored inbound message may supply its identity.
+          const verifiedRecoveryParent =
+            recoveryParent?.kind === "agent-turn" &&
+            recoveryParent.sessionId === session.id &&
+            recoveryParent.sourceId === storedMsg.id
+              ? recoveryParent
+              : undefined
+          await createExecutionRun({
+            id: executionRunId,
+            ...recordedRunMetadata(recoveryParentRunId ? "child" : "requester", {
+              runId: executionRunId,
+              parent: verifiedRecoveryParent,
+              requesters: [connectorRequester(event)],
+              authority: authorityFromPermissionCeiling(permissionCeiling),
+            }),
+            ...(verifiedRecoveryParent ? { parentRunId: verifiedRecoveryParent.id } : {}),
+            kind: "agent-turn",
+            sourceId: storedMsg.id,
+            sessionId: session.id,
+            projectId: session.projectId,
+            title: initialRunTitle,
+            status: "queued",
+            initiator: {
+              platformIdentityId: event.sender.id,
+              remoteUserId: event.sender.remoteUserId,
+              displayName: event.sender.displayName,
+              ...(readResolvedPrincipal(event.channelData) ?? {}),
+            },
+            currentRevision: 0,
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+          preparingRunId = executionRunId
+          await routeContext.bindExecutionRun(executionRunId)
+
           // Resolve the send options (character + twin + memory context) through
           // the shared helper so an ai-run and a draft prepare from identical
           // grounding. `emitTrace: true` mints the connector root span, ended on
@@ -2391,6 +2490,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               adapterRow,
               emitTrace: true,
               executionIdentity,
+              personalExecutionRunId: executionRunId,
               permissionCeiling: member?.permissionCeiling ?? permissionCeiling,
               // A ChatSession carries no `agentModeId` of its own (that field
               // lives on SystemPromptPreset), so the preset stays Standard here
@@ -2549,43 +2649,11 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           const presentationTitle = vendorReply?.titleFromMessage
             ? sanitizeActivityLabel(event.plainText.split(/\r?\n/, 1)[0], "Agent run")
             : runTitle
-          const recoveryParent = recoveryParentRunId
-            ? await getDb().executionRuns.get(recoveryParentRunId)
-            : undefined
-          // A recovery anchor is routing data. Only this session's exact prior
-          // execution of this stored inbound message may supply its identity.
-          const verifiedRecoveryParent =
-            recoveryParent?.kind === "agent-turn" &&
-            recoveryParent.sessionId === session.id &&
-            recoveryParent.sourceId === storedMsg.id
-              ? recoveryParent
-              : undefined
-          await createExecutionRun({
-            id: executionRunId,
-            ...recordedRunMetadata(recoveryParentRunId ? "child" : "requester", {
-              runId: executionRunId,
-              parent: verifiedRecoveryParent,
-              requesters: [connectorRequester(event)],
-              authority: authorityFromPermissionCeiling(permissionCeiling),
-            }),
-            ...(verifiedRecoveryParent ? { parentRunId: verifiedRecoveryParent.id } : {}),
-            kind: "agent-turn",
-            sourceId: storedMsg.id,
-            sessionId: session.id,
-            projectId: session.projectId,
+          await getDb().executionRuns.update(executionRunId, {
             title: presentationTitle,
-            status: "queued",
-            initiator: {
-              platformIdentityId: event.sender.id,
-              remoteUserId: event.sender.remoteUserId,
-              displayName: event.sender.displayName,
-              ...(readResolvedPrincipal(event.channelData) ?? {}),
-            },
-            currentRevision: 0,
-            startedAt: Date.now(),
+            projectId: session.projectId,
             updatedAt: Date.now(),
           })
-          await routeContext.bindExecutionRun(executionRunId)
           if (liveActivityEnabled) {
             const teamId =
               typeof event.conversationRef.teamId === "string"
@@ -2865,6 +2933,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             stored: contextStored,
             contextSessions,
             onContextRowsRead: rememberContextRows,
+            consumer: { sessionId: runSessionId, executionRunId: executionIdentity.runId },
           })
           const prompt = member?.step.instruction
             ? member.step.instruction
@@ -3216,7 +3285,8 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                 ...(effectiveWorkflowId ? { workflowId: effectiveWorkflowId } : {}),
               },
             })
-            if (member) await recordImRoomMemberReply(member, recoveredText, captured.text)
+            if (member)
+              await recordImRoomMemberReply(member, recoveredText, captured.text, executionRunId)
             return { kind: "delivered", text: captured.text, messageId: captured.messageId }
           }
 
@@ -3363,12 +3433,13 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               metadata: { assistantMessageId: captured.messageId },
             })
           }
-          if (member) await recordImRoomMemberReply(member, recoveredText, captured.text)
+          if (member)
+            await recordImRoomMemberReply(member, recoveredText, captured.text, executionRunId)
           return { kind: "delivered", text: captured.text, messageId: captured.messageId }
         }
 
         if (!roomTeam) {
-          await runDirectReply(null)
+          await runDirectReply(null).finally(cancelUnstartedReply)
           break
         }
 
@@ -3460,7 +3531,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               }),
               permissionCeiling: memberCeiling,
               handoff,
-            })
+            }).finally(cancelUnstartedReply)
           } finally {
             handoff.close()
           }

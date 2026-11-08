@@ -29,6 +29,8 @@ import { cancelSubagentRun } from "./cancel-subagent"
 import { renderDispatchOutcomeForModel } from "./dispatch-error"
 import { resolveCaller, startDispatchRun, DEFAULT_NESTING_MAX_DEPTH } from "./dispatch-run"
 import { forgetContextSessionState } from "@/lib/claude/context-session-state"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 
 export { DEFAULT_NESTING_MAX_DEPTH }
 
@@ -36,6 +38,19 @@ export interface DispatchAgentToolRequest {
   sessionId: string
   executionRunId?: string
   args: Record<string, unknown>
+}
+
+async function visibleDispatchText(
+  req: Pick<DispatchAgentToolRequest, "sessionId" | "executionRunId">,
+  text: string,
+  runIds: readonly string[]
+): Promise<string> {
+  const history = await preparePersonalDerivedHistory(
+    req.sessionId,
+    [{ id: `dispatch:${runIds.join(":")}`, role: "assistant", content: text }],
+    { runIds: runIds.map(childJobExecutionRunId), executionRunId: req.executionRunId }
+  )
+  return history.messages[0].content
 }
 
 /**
@@ -97,10 +112,15 @@ export async function runDispatchAgentTool(req: DispatchAgentToolRequest): Promi
 
   if (parsed.mode === "cancel") return cancelDispatchRuns(parsed.runIds)
 
-  if (parsed.mode === "collect") return collectDispatchRuns(parsed.runIds, parsed.timeoutMs)
+  if (parsed.mode === "collect")
+    return visibleDispatchText(
+      req,
+      await collectDispatchRuns(parsed.runIds, parsed.timeoutMs),
+      parsed.runIds
+    )
 
   if (parsed.mode === "resume") {
-    return resumeDispatchRun(req.sessionId, parsed)
+    return resumeDispatchRun(req, parsed)
   }
 
   const caller = await resolveCaller(req.sessionId)
@@ -113,13 +133,14 @@ export async function runDispatchAgentTool(req: DispatchAgentToolRequest): Promi
   // draw-down and the per-child budget check trips mid-batch. An unlimited
   // budget has nothing to overshoot, so it runs as wide as the user's cap.
   const width = resolveDispatchWidth(caller)
+  const sourceRunIds: string[] = []
   const outcomes = await runDispatchFanout({
     dispatches: parsed.dispatches,
     width,
     // `startDispatchRun` collapses per-run errors into the result text itself,
     // so every outcome is surfaced as `ok` text.
     runOne: async (d, label) => {
-      const { text } = await startDispatchRun({
+      const { runId, text } = await startDispatchRun({
         subagentId: d.subagentId,
         prompt: d.prompt,
         toolsEnabled: d.toolsEnabled,
@@ -130,10 +151,11 @@ export async function runDispatchAgentTool(req: DispatchAgentToolRequest): Promi
         label,
         ...(d.model ? { model: d.model } : {}),
       })
+      sourceRunIds.push(runId)
       return { text, ok: true }
     },
   })
-  return outcomes.map((o) => o.text).join("\n\n---\n\n")
+  return visibleDispatchText(req, outcomes.map((o) => o.text).join("\n\n---\n\n"), sourceRunIds)
 }
 
 /**
@@ -143,7 +165,7 @@ export async function runDispatchAgentTool(req: DispatchAgentToolRequest): Promi
  * readable tool result.
  */
 async function resumeDispatchRun(
-  sessionId: string,
+  req: Pick<DispatchAgentToolRequest, "sessionId" | "executionRunId">,
   parsed: {
     runId: string
     prompt: string
@@ -152,6 +174,7 @@ async function resumeDispatchRun(
     model?: string
   }
 ): Promise<string> {
+  const { sessionId } = req
   const [{ getBackgroundTaskRecord }, { frameResumePrompt }, { getDispatchableSubagentDef }] =
     await Promise.all([
       import("@/lib/db/background-tasks"),
@@ -176,19 +199,25 @@ async function resumeDispatchRun(
   }
 
   const caller = await resolveCaller(sessionId)
-  const framedPrompt = frameResumePrompt(
-    {
-      prompt: record.prompt,
-      outcome: record.resultText ?? record.error ?? "(no output recorded)",
-    },
-    parsed.prompt
+  const priorContext = await visibleDispatchText(
+    req,
+    frameResumePrompt(
+      {
+        prompt: record.prompt,
+        outcome: record.resultText ?? record.error ?? "(no output recorded)",
+      },
+      ""
+    ),
+    [record.runId]
   )
+  const framedPrompt = `${priorContext}\n\n${parsed.prompt}`
   const { runId, text } = await startDispatchRun({
     subagentId: record.subagentId,
     prompt: framedPrompt,
     toolsEnabled: parsed.toolsEnabled ?? record.toolsEnabled ?? true,
     background: parsed.background,
     parentSessionId: sessionId,
+    ...(req.executionRunId !== undefined ? { executionRunId: req.executionRunId } : {}),
     caller,
     label: `${record.subagentId} (resumed)`,
     resumeOfRunId: record.runId,
@@ -201,7 +230,7 @@ async function resumeDispatchRun(
   } catch {
     // Journal bookkeeping only.
   }
-  return text
+  return visibleDispatchText(req, text, [runId])
 }
 
 /**

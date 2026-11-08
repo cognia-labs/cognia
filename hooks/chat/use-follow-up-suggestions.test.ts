@@ -2,7 +2,17 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
 import { useFollowUpSuggestions } from "./use-follow-up-suggestions"
 
-type Msg = { id: string; role: string; parts: unknown }
+type Msg = { id: string; role: string; parts: unknown; metadata?: Record<string, unknown> }
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    prepareOwnerHistory: async <T extends { id: string; metadata?: unknown }>(
+      messages: readonly T[]
+    ) => ({ ...withholdForReaders(messages, [{ kind: "local-person" }]), readers: [] }),
+  }
+})
 type NativePrediction = {
   turnId: string
   requestedAt: number
@@ -90,6 +100,63 @@ describe("useFollowUpSuggestions", () => {
     const { result } = renderHook(() => useFollowUpSuggestions(session))
     await waitFor(() => expect(result.current.suggestions).toEqual(["Tell me more", "Why?"]))
     expect(mockSuggest).toHaveBeenCalledTimes(1)
+  })
+
+  it("withholds marked message prose and tools before suggesting follow-ups", async () => {
+    mockChatState.messages = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "public question" }] },
+      {
+        id: "private",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "private source" },
+          { type: "tool-PrivateTool", output: "private result" },
+        ],
+        metadata: {
+          personalMarks: [
+            {
+              person: {
+                kind: "platform",
+                platform: "lark",
+                adapterId: "foreign-adapter",
+                remoteUserId: "foreign-person",
+              },
+              source: "test",
+              markedAt: 1,
+            },
+          ],
+        },
+      },
+    ]
+    const { result } = renderHook(() => useFollowUpSuggestions(session))
+    await waitFor(() => expect(result.current.status).toBe("ready"))
+    expect(mockSuggest.mock.calls[0][0].recentMessages).toEqual([
+      { role: "user", text: "public question" },
+      {
+        role: "assistant",
+        text: expect.stringContaining("[Withheld: personal content of person "),
+      },
+    ])
+    expect(JSON.stringify(mockSuggest.mock.calls[0])).not.toMatch(
+      /private source|PrivateTool|private result/
+    )
+  })
+
+  it("uses the Host owner's personal history for owner-only follow-ups", async () => {
+    mockChatState.messages = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "public question" }] },
+      {
+        id: "owner-history",
+        role: "assistant",
+        parts: [{ type: "text", text: "OWNER FOLLOWUP CONTEXT" }],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+        },
+      },
+    ]
+    const { result } = renderHook(() => useFollowUpSuggestions(session))
+    await waitFor(() => expect(result.current.status).toBe("ready"))
+    expect(JSON.stringify(mockSuggest.mock.calls[0])).toContain("OWNER FOLLOWUP CONTEXT")
   })
 
   it("sends the generator the typed text, not the context envelope", async () => {
@@ -277,7 +344,7 @@ describe("useFollowUpSuggestions — ownership and lifecycle regressions", () =>
     const first = renderHook(() => useFollowUpSuggestions(session))
     first.unmount()
     const next = renderHook(() => useFollowUpSuggestions(session))
-    expect(mockSuggest).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(mockSuggest).toHaveBeenCalledTimes(1))
     await act(async () => resolve(["Shared result"]))
     expect(next.result.current.suggestions).toEqual(["Shared result"])
   })
@@ -313,6 +380,7 @@ describe("useFollowUpSuggestions — ownership and lifecycle regressions", () =>
         })
     )
     const { result } = renderHook(() => useFollowUpSuggestions(session))
+    await waitFor(() => expect(mockSuggest).toHaveBeenCalledTimes(1))
     act(() => result.current.dismiss())
     await act(async () => resolve(["Late result"]))
     expect(result.current.suggestions).toEqual([])
@@ -368,6 +436,10 @@ describe("useFollowUpSuggestions — ownership and lifecycle regressions", () =>
     try {
       mockSuggest.mockImplementation(() => new Promise(() => {}))
       const { result } = renderHook(() => useFollowUpSuggestions(session))
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
       await act(async () => {
         jest.advanceTimersByTime(15_000)
       })

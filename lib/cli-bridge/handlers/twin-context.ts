@@ -16,6 +16,11 @@
  * Never throws — every failure shape resolves to `{ ok: false, error }` or
  * an honest degraded result, matching the twin runtime's own semantics.
  */
+import {
+  preparePersonalHistory,
+  withPersonalRerankerVisibility,
+} from "@/lib/execution/personal-visibility"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 
 export interface TwinContextRequest {
   characterId?: string
@@ -46,7 +51,10 @@ const EMPTY: Omit<TwinContextResult, "ok"> = {
   styleSampleCount: 0,
 }
 
-export async function twinContextGet(payload: Record<string, unknown>): Promise<TwinContextResult> {
+export async function twinContextGet(
+  payload: Record<string, unknown>,
+  host?: Pick<PersonalCredentialContext, "sessionId" | "executionRunId">
+): Promise<TwinContextResult> {
   const req = payload as TwinContextRequest
   const message = typeof req.message === "string" ? req.message.trim() : ""
   if (!message) {
@@ -68,6 +76,27 @@ export async function twinContextGet(payload: Record<string, unknown>): Promise<
       return { ok: true, ...EMPTY }
     }
 
+    // The dev bridge's token and a caller-supplied session id prove no person.
+    const consumer = { sessionId: host?.sessionId, executionRunId: host?.executionRunId ?? "" }
+    const source = [
+      {
+        id: "cli-twin",
+        metadata: {
+          personalMarks: [
+            {
+              person: { kind: "local-person" as const },
+              source: "twin-history",
+              markedAt: 0,
+            },
+          ],
+        },
+      },
+    ]
+    if (
+      (await preparePersonalHistory(consumer.sessionId, source, consumer)).withheldMessageIds.length
+    )
+      return { ok: true, ...EMPTY, degraded: true, degradedReason: "personal_history_withheld" }
+
     const { tryBuildTwinDeps } = await import("@/lib/twin/runtime/build-deps")
     const deps = await tryBuildTwinDeps()
     if (!deps) {
@@ -84,8 +113,16 @@ export async function twinContextGet(payload: Record<string, unknown>): Promise<
       character,
       userMessage: message,
       ...(typeof req.sessionId === "string" && req.sessionId ? { sessionId: req.sessionId } : {}),
-      deps: deps as Parameters<typeof applyTwinContext>[0]["deps"],
+      deps: {
+        ...deps,
+        reranker: withPersonalRerankerVisibility(deps.reranker, consumer),
+      } as Parameters<typeof applyTwinContext>[0]["deps"],
     })
+
+    if (
+      (await preparePersonalHistory(consumer.sessionId, source, consumer)).withheldMessageIds.length
+    )
+      return { ok: true, ...EMPTY, degraded: true, degradedReason: "personal_history_withheld" }
 
     return {
       ok: true,

@@ -34,6 +34,8 @@ export interface ExternalSessionLink {
    * "unknown" and therefore not resumable under a known version.
    */
   contextVersion?: string
+  /** Last accepted Host reader/withheld-message digest for this native session. */
+  personalVisibilityDigest?: string
 }
 
 export function externalLinkPath(home: string, sessionId: string): string {
@@ -68,12 +70,14 @@ export function readExternalLink(
     if (!raw) return undefined
     const parsed: unknown = JSON.parse(raw)
     if (!parsed || typeof parsed !== "object") return undefined
-    const { backend, externalSessionId, contextVersion } = parsed as Partial<ExternalSessionLink>
+    const { backend, externalSessionId, contextVersion, personalVisibilityDigest } =
+      parsed as Partial<ExternalSessionLink>
     if (typeof backend !== "string" || typeof externalSessionId !== "string") return undefined
     return {
       backend,
       externalSessionId,
       ...(typeof contextVersion === "string" ? { contextVersion } : {}),
+      ...(typeof personalVisibilityDigest === "string" ? { personalVisibilityDigest } : {}),
     }
   } catch {
     return undefined

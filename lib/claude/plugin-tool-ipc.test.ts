@@ -1957,6 +1957,8 @@ describe("project_history_search routing", () => {
       getSessions: async () => [],
       locateMessage: async () => null,
       buildWindow: async () => null,
+      canReadMessage: async () => true,
+      readSessionTitle: async () => "Conversation",
       now: () => 0,
       ...overrides,
     }
@@ -1974,6 +1976,45 @@ describe("project_history_search routing", () => {
     expect(resolveProjectId).toHaveBeenCalledWith("session-1")
     expect(response.error).toBeUndefined()
     expect(response.result).toMatchObject({ ok: true, coverage: "complete" })
+  })
+
+  it("binds history visibility to the Host-correlated tool run", async () => {
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    bindToolCallRun("session-1", "history-turn", "history-host-run", "history-attempt")
+    const canReadMessage = jest.fn(async () => false)
+    __setProjectHistoryToolDepsForTesting(() =>
+      makeDeps({
+        canReadMessage,
+        searchMessages: async () => ({
+          results: [
+            {
+              messageId: "private-message",
+              sessionId: "source-session",
+              sessionTitle: "private title",
+              snippet: { text: "private source", positions: [] },
+              role: "assistant",
+              createdAt: 1,
+            },
+          ] as never,
+          moreOlderHistory: false,
+          indexIncomplete: false,
+        }),
+      })
+    )
+    const response = await handlePluginToolExec(
+      makeRequest({
+        name: "project_history_search",
+        args: { queries: ["private"] },
+        turnId: "history-turn",
+        attemptId: "history-attempt",
+      })
+    )
+    expect(canReadMessage).toHaveBeenCalledWith("private-message", {
+      sessionId: "session-1",
+      executionRunId: "history-host-run",
+    })
+    expect(response.result).toMatchObject({ ok: true, hits: [], withheldCount: 1 })
+    expect(JSON.stringify(response)).not.toContain("private source")
   })
 
   it("relays a structured refusal as a RESULT, not a transport error", async () => {

@@ -27,6 +27,7 @@ import {
   type CalibrationVerdict,
 } from "@/lib/db/calibration-runs"
 import { computeAgreement, type LabelPair } from "./metrics"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 
 /** Thrown by the default deps when no renderer judge client resolves. */
 export class CalibrationNoJudgeError extends Error {
@@ -124,11 +125,30 @@ function itemToScorable(item: CalibrationItemRow): { sample: EvalSample; evalCas
 export async function runCalibration(input: RunCalibrationInput): Promise<CalibrationRunRow> {
   const deps = input.deps ?? buildCalibrationRunDeps(input.appSettings, input.judgeModel)
   const items = await deps.loadItems(input.setId)
+  // Calibration rows include old conversation turns and copied answers. No
+  // verified consuming Host run is admitted by this background runner.
+  const projected = await preparePersonalDerivedHistory(
+    undefined,
+    items.map((item) => ({ id: item.id, text: JSON.stringify(item) }))
+  )
+  const visibleItems = items.map((item, index) =>
+    projected.withheldMessageIds.includes(item.id)
+      ? {
+          ...item,
+          criterion: projected.messages[index].text,
+          rubric: projected.messages[index].text,
+          input: projected.messages[index].text,
+          output: projected.messages[index].text,
+          history: undefined,
+          reference: undefined,
+        }
+      : item
+  )
 
   // A set is homogeneous (one judge) in v1: snapshot the criterion/rubric from
   // the first item; an empty set yields empty snapshots and null metrics.
-  const criterion = items[0]?.criterion ?? ""
-  const rubric = items[0]?.rubric ?? ""
+  const criterion = visibleItems[0]?.criterion ?? ""
+  const rubric = visibleItems[0]?.rubric ?? ""
   const judge = items.length > 0 ? deps.makeJudge(criterion, rubric) : null
 
   const verdicts: CalibrationVerdict[] = []
@@ -137,7 +157,7 @@ export async function runCalibration(input: RunCalibrationInput): Promise<Calibr
   for (let i = 0; i < items.length; i++) {
     if (input.signal?.aborted) throw new DOMException("Calibration aborted", "AbortError")
     const item = items[i]
-    const { sample, evalCase } = itemToScorable(item)
+    const { sample, evalCase } = itemToScorable(visibleItems[i])
     // `judge` is non-null here because items.length > 0.
     const score = await judge!.score(sample, evalCase)
     const errored = score.error !== undefined

@@ -18,6 +18,7 @@ import type { StepExecutionResult, TriggerEvent } from "@/types/workflow/visual"
 import type { PlanStep } from "@/types/agent/plan"
 import type { AgentTeammate } from "@/types/agent/agent-team"
 import type { PlanRunContext } from "./plan-run-context"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 
 /** The approval-bus scope plan `approval_gate` steps wait on. */
@@ -100,13 +101,20 @@ async function runStepWork(
     case "agent_turn": {
       const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
       const cwd = runCtx.executionRoot
-      const turn = (turnSignal: AbortSignal) =>
-        executeAgent(stepPrompt(step), {
+      const turn = async (turnSignal: AbortSignal) => {
+        const executionRunId = `execution:plan:${runCtx.plan.id}`
+        const history = await preparePersonalDerivedHistory(
+          undefined,
+          [{ id: step.id, content: stepPrompt(step) }],
+          { runIds: [executionRunId], executionRunId, sessionId: runCtx.plan.sessionId }
+        )
+        return executeAgent(history.messages[0].content, {
           toolsEnabled: true,
           ...(runCtx.characterId ? { characterId: runCtx.characterId } : {}),
           ...(cwd ? { cwd } : {}),
           abortSignal: turnSignal,
         })
+      }
 
       // Every step of a run shares one directory, so `maxConcurrency > 1` puts
       // two tool-enabled agents in the same checkout. The slot serializes the
@@ -353,7 +361,12 @@ async function runStepWork(
         import("./plan-teammate-context"),
         import("@/lib/squads/teammate/dispatch-teammate"),
       ])
-      const teamCtx = createPlanTeammateRunContext({ runId: runCtx.runId, team, teammates })
+      const teamCtx = createPlanTeammateRunContext({
+        runId: runCtx.runId,
+        team,
+        teammates,
+        personalExecutionRunId: `execution:plan:${runCtx.plan.id}`,
+      })
       const result = await dispatchTeammate(teamCtx, {
         taskId: step.id,
         prompt: spawnPrompt?.trim() || stepPrompt(step),

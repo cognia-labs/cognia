@@ -1,4 +1,4 @@
-import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
+import { bindPersonalMessageChanges, bindPersonalMessageRun } from "@/lib/execution/personal-marks"
 /**
  * The room runner: character-team orchestration with no React in it
  * (ADR-0177, batch 1).
@@ -214,7 +214,12 @@ export interface RoomSendOptions {
    * no person's authority, and it leaves no turn memory and no title. It never
    * queues as a steer: a busy room refuses it with `ROOM_BUSY`.
    */
-  automatedTurn?: { producer: AutomatedTurnProducer; messageId: string }
+  automatedTurn?: {
+    producer: AutomatedTurnProducer
+    messageId: string
+    /** Host outbox source runs, never reader authority from a remote payload. */
+    personalRunIds?: readonly string[]
+  }
 }
 
 /** Options for `editAndResend`: a send's, plus where to report files left out. */
@@ -661,7 +666,7 @@ export class RoomRunner {
     // the user typed — never off a referenced document in front of it, an
     // attached file's extracted text (a text block ahead of the typed one), or
     // a fetched page after it.
-    const userText = stripPromptPreamble(steerTextOf(content, opts.attachmentManifest?.length ?? 0))
+    let userText = stripPromptPreamble(steerTextOf(content, opts.attachmentManifest?.length ?? 0))
 
     // Embed the user message ONCE per turn so twin-bound members can share the
     // same query vector, and build the memory read deps once for the same reason.
@@ -698,6 +703,24 @@ export class RoomRunner {
     }
     if (this.interrupted.has(sessionId)) return
 
+    // No personal reader exists for an automated turn, including its shared
+    // embedding. Keep the raw row with the Host-derived source marks, while
+    // only its projection is used as model input.
+    const automatedHistory = automated
+      ? await deps.ai.preparePersonalDerivedHistory(
+          sessionId,
+          [{ id: automated.messageId, content }],
+          { sessionId, runIds: automated.personalRunIds ?? [], executionRunId: "" }
+        )
+      : undefined
+    const automatedMetadata = (
+      automatedHistory?.messages[0] as
+        | {
+            metadata?: Record<string, unknown>
+          }
+        | undefined
+    )?.metadata
+
     // 1. Persist the user turn first, tagging it as a "user" sender.
     let instantPreviewTitle: string | undefined
     if (!skipsUserTurn(opts)) {
@@ -712,6 +735,7 @@ export class RoomRunner {
           ...replyMetadata(opts),
           ...referenceMetadata(content, opts),
           ...authorMetadata(opts),
+          ...automatedMetadata,
         }
       )
       if (opts.branchTag) {
@@ -729,6 +753,18 @@ export class RoomRunner {
         this.pendingEditOwners.delete(sessionId)
       }
       const before = sinks.messages.read(sessionId) ?? (await deps.db.listMessages(sessionId))
+      // Unproven derived history keeps its sentinel rather than replacing it
+      // with an empty set of marks from an older, unattributed source row.
+      const unverifiedSource = (
+        automatedMetadata?.personalMarks as
+          | import("@cognia/plugin-contract/types/execution/acting-identity").PersonalMarkV1[]
+          | undefined
+      )?.some(
+        (mark) =>
+          mark.person.kind === "service" && mark.person.ref === "unverified-personal-history"
+      )
+      if (automated?.personalRunIds?.length && !unverifiedSource)
+        bindPersonalMessageRun(userMsg.id, automated.personalRunIds)
       const after = [...before, userMsg]
       sinks.messages.commit(sessionId, after)
       this.lastUserContent.set(sessionId, {
@@ -769,6 +805,10 @@ export class RoomRunner {
 
     // 2. Branch on orchestration. Supervisor has its own multi-round loop.
     try {
+      if (automatedHistory) {
+        content = automatedHistory.messages[0].content
+        userText = stripPromptPreamble(steerTextOf(content, 0))
+      }
       if (userText.trim()) {
         turnTwinDeps = await deps.ai.tryBuildTwinDeps()
         if (turnTwinDeps) {
@@ -1604,86 +1644,112 @@ export class RoomRunner {
     } = args
     const { deps, sinks } = this
 
-    const referencedPaths = sinks.referencedPaths()
-    const teamRecoveryPhase = deps.ai.pendingRecoveryPhase(sinks.messages.read(sessionId) ?? [])
-    const baseOpts = await deps.ai.resolveSendOptions({
-      session: session as never,
-      character,
-      appSettings: sinks.settings.read(),
-      memberOverride: memberByCharId.get(character.id),
-      referencedPaths,
-      twinDeps: turnTwinDeps,
-      twinUserMessage: turnUserMessage,
-      precomputedQueryEmbedding: turnEmbedding,
-      memoryDeps: turnMemoryDeps,
-      memoryUserMessage: turnMemoryDeps ? turnUserMessage : undefined,
-      twinInjectSource: "team",
-      postCompaction: postCompactionFor(teamRecoveryPhase, session.workingSet),
-      routingSurface: "chat",
-      routingContextHint: { promptText: turnUserMessage },
-    } as never)
-    const roomSettings = resolveRoomSettings(session)
-    const handoffTargets = memberByCharId.get(character.id)?.handoffTargets
-    const transcript = buildTeamTranscript({
-      messages: (await deps.db.listMessages(sessionId)) as unknown as TeamTranscriptMessage[],
-      respondingCharacterId: character.id,
-      members: members.map((member) => ({
-        id: member.id,
-        name: member.name,
-        role: memberByCharId.get(member.id)?.role,
-      })),
-      scratchpad: session.scratchpad,
-      handoffEnabled: (args.team.maxAutoRounds ?? 0) > 0,
-      handoffTargetNames: handoffTargets
-        ? handoffTargets.flatMap((id) => {
-            const target = members.find((member) => member.id === id)
-            return target ? [target.name] : []
-          })
-        : undefined,
-    })
-    const finalSystemPrompt = [
-      baseOpts.systemPrompt,
-      promptAddendum,
-      buildRoomInstructionsSection(roomSettings.instructions),
-      transcript,
-    ]
-      .filter((p) => p && p.trim())
-      .join("\n\n---\n\n")
-    let opts: SendOptions = {
-      ...baseOpts,
-      ...(finalSystemPrompt ? { systemPrompt: finalSystemPrompt } : {}),
-    }
-    const plan = baseOpts.routingPlan
-    const settings = sinks.settings.read()
-    const controller = plan
-      ? new RoutingAttemptController(
-          plan,
-          settings?.routingConfig?.maxFallbackAttempts ?? DEFAULT_ROUTING_CONFIG.maxFallbackAttempts
-        )
-      : undefined
-    let candidate = controller?.begin()
-
-    const ctx: SubResolverCtx = {
-      senderId: character.id,
-      providerId: opts.provider,
-      model: opts.model,
-      startedAt: deps.now(),
-      extraMetadata: messageMetadata,
-      postProcessText,
-      options: baseOpts,
-      onRoutingCommit: () => controller?.commit(),
-    }
-    this.subCtx.set(sub, ctx)
-
-    let lastError: unknown
-    // This host runner is entered by the desktop composer or authenticated paired UI.
-    // Each member turn needs its own entry record before its first tool call.
     let executionRunId: string | undefined
     let executionFailed = true
     try {
       executionRunId = await deps.execution.startMemberRun?.(sub, {
         automated: this.automatedTurns.has(sessionId),
       })
+      const history = await deps.ai.preparePersonalHistory(
+        sub,
+        (await deps.db.listMessages(sessionId)).map((message) => ({ ...message, sessionId })),
+        { executionRunId, session }
+      )
+      const sharedState = await deps.ai.preparePersonalDerivedHistory(
+        sub,
+        [
+          {
+            id: `room-state:${sessionId}`,
+            text: "Room shared state",
+            metadata: {
+              personalMarks: [
+                { person: { kind: "local-person" }, source: "legacy-room-state", markedAt: 0 },
+              ],
+            },
+          },
+        ],
+        { sessionId, executionRunId }
+      )
+      const contextSession =
+        history.withheldMessageIds.length || sharedState.withheldMessageIds.length
+          ? { ...session, scratchpad: undefined, workingSet: undefined }
+          : session
+      const referencedPaths = sinks.referencedPaths()
+      const teamRecoveryPhase = deps.ai.pendingRecoveryPhase(sinks.messages.read(sessionId) ?? [])
+      const baseOpts = await deps.ai.resolveSendOptions({
+        session: contextSession as never,
+        character,
+        appSettings: sinks.settings.read(),
+        memberOverride: memberByCharId.get(character.id),
+        referencedPaths,
+        twinDeps: turnTwinDeps,
+        twinUserMessage: turnUserMessage,
+        precomputedQueryEmbedding: turnEmbedding,
+        memoryDeps: turnMemoryDeps,
+        memoryUserMessage: turnMemoryDeps ? turnUserMessage : undefined,
+        twinInjectSource: "team",
+        postCompaction: postCompactionFor(teamRecoveryPhase, contextSession.workingSet),
+        routingSurface: "chat",
+        routingContextHint: { promptText: turnUserMessage },
+        executionIdentity: { runId: executionRunId },
+      } as never)
+      const roomSettings = resolveRoomSettings(session)
+      const handoffTargets = memberByCharId.get(character.id)?.handoffTargets
+      const transcript = buildTeamTranscript({
+        messages: history.messages as unknown as TeamTranscriptMessage[],
+        respondingCharacterId: character.id,
+        members: members.map((member) => ({
+          id: member.id,
+          name: member.name,
+          role: memberByCharId.get(member.id)?.role,
+        })),
+        scratchpad: contextSession.scratchpad,
+        handoffEnabled: (args.team.maxAutoRounds ?? 0) > 0,
+        handoffTargetNames: handoffTargets
+          ? handoffTargets.flatMap((id) => {
+              const target = members.find((member) => member.id === id)
+              return target ? [target.name] : []
+            })
+          : undefined,
+      })
+      const finalSystemPrompt = [
+        baseOpts.systemPrompt,
+        promptAddendum,
+        buildRoomInstructionsSection(roomSettings.instructions),
+        transcript,
+      ]
+        .filter((p) => p && p.trim())
+        .join("\n\n---\n\n")
+      let opts: SendOptions = {
+        ...baseOpts,
+        ...(finalSystemPrompt ? { systemPrompt: finalSystemPrompt } : {}),
+      }
+      const plan = baseOpts.routingPlan
+      const settings = sinks.settings.read()
+      const controller = plan
+        ? new RoutingAttemptController(
+            plan,
+            settings?.routingConfig?.maxFallbackAttempts ??
+              DEFAULT_ROUTING_CONFIG.maxFallbackAttempts
+          )
+        : undefined
+      let candidate = controller?.begin()
+
+      const ctx: SubResolverCtx = {
+        senderId: character.id,
+        providerId: opts.provider,
+        model: opts.model,
+        startedAt: deps.now(),
+        extraMetadata: messageMetadata,
+        postProcessText,
+        options: baseOpts,
+        onRoutingCommit: () => controller?.commit(),
+      }
+      this.subCtx.set(sub, ctx)
+
+      let lastError: unknown
+      // This host runner is entered by the desktop composer or authenticated paired UI.
+      // Each member turn needs its own entry record before its first tool call.
       if (executionRunId) {
         opts = { ...opts, turnId: executionRunId }
         ctx.options = { ...ctx.options, turnId: executionRunId }
@@ -2094,13 +2160,17 @@ export class RoomRunner {
   /** Most recent assistant message authored by `characterId` (from Dexie, so background rooms work). */
   private async readLastAssistantText(roomId: string, characterId: string): Promise<string> {
     const all = await this.deps.db.listMessages(roomId)
+    const history = await this.deps.ai.preparePersonalHistory(
+      undefined,
+      all.map((message) => ({ ...message, sessionId: roomId }))
+    )
     for (let i = all.length - 1; i >= 0; i--) {
       const m = all[i]
       if (m.role !== "assistant") continue
       const meta = (m as { metadata?: Record<string, unknown> }).metadata
       const senderId = typeof meta?.senderId === "string" ? meta.senderId : undefined
       if (senderId !== characterId) continue
-      return textFromParts(m.parts)
+      return textFromParts(history.messages[i].parts)
     }
     return ""
   }

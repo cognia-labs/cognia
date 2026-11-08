@@ -1,3 +1,7 @@
+jest.mock("../../../agent/transcript", () => ({
+  ...jest.requireActual("../../../agent/transcript"),
+  readTranscript: jest.fn(jest.requireActual("../../../agent/transcript").readTranscript),
+}))
 import React from "react"
 import { render, waitFor } from "@testing-library/react"
 import { bufferFromText } from "../../input/buffer"
@@ -17,6 +21,7 @@ import type { TuiState } from "../../state/types"
 import type { TranscriptCursor } from "../../hooks/useTranscriptCursor"
 import type { MentionProviders } from "../../mention/providers"
 import { terminalLayout } from "../../layout/terminal-layout"
+import * as transcript from "../../../agent/transcript"
 
 const config: ResolvedConfig = { ...DEFAULT_RESOLVED_CONFIG, cwd: "/work" }
 
@@ -89,14 +94,19 @@ const wrap = (el: React.ReactElement) =>
   )
 
 describe("BottomRegion", () => {
-  it("passes the visible transcript and resets prediction ownership on session switches", async () => {
+  it("reads the configured canonical transcript and resets prediction ownership on session switches", async () => {
+    const read = jest
+      .spyOn(transcript, "readTranscript")
+      .mockReturnValue([{ ts: 1, role: "assistant", content: "Canonical final result" }])
     const aiComplete = jest.fn(async (_args: { prompt: string }) => "the result")
     const state = baseState({ cells: [{ id: "b1", kind: "assistant", raw: "B final result" }] })
     state.input = { ...state.input, buffer: bufferFromText("explain ") }
-    const props = baseProps({ state, aiComplete, suggestDebounceMs: 200 })
+    const props = baseProps({ state, home: "/configured", aiComplete, suggestDebounceMs: 200 })
     const view = wrap(<BottomRegion {...props} />)
     await waitFor(() => expect(aiComplete).toHaveBeenCalledTimes(1))
-    expect(aiComplete.mock.calls[0][0].prompt).toContain("B final result")
+    expect(aiComplete.mock.calls[0][0].prompt).toContain("Canonical final result")
+    expect(aiComplete.mock.calls[0][0].prompt).not.toContain("B final result")
+    expect(read).toHaveBeenCalledWith("/configured", "s1", undefined)
     view.rerender(
       <ThemeProvider palette={BUILTIN_THEMES.ansi}>
         <RenderPrefsProvider prefs={resolveRenderConfig(undefined)}>
@@ -105,6 +115,7 @@ describe("BottomRegion", () => {
       </ThemeProvider>
     )
     await waitFor(() => expect(aiComplete).toHaveBeenCalledTimes(2))
+    read.mockImplementation(jest.requireActual("../../../agent/transcript").readTranscript)
   })
 
   it("renders the composer when no overlay/find is active", () => {

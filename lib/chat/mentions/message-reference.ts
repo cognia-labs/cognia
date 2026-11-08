@@ -20,6 +20,7 @@ import { normalizeToolName, type ToolPartLike } from "@/lib/chat/tool-summary"
 import { promptPreambleOfParts, stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
 import { isToolPart, projectToolOutputText } from "./tool-output-text"
 import { stripInboundDisplayMarkers } from "@/lib/db/inbound-stored-parts"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 export { contentFingerprint } from "./content-fingerprint"
 
@@ -222,6 +223,9 @@ export interface MessageReferenceInput {
   sessionId: string
   messageId: string
   span?: MessageSpan
+  /** Present only when a Host run, rather than an unadmitted chip, consumes it. */
+  readerSessionId?: string
+  executionRunId?: string
 }
 
 /**
@@ -239,6 +243,8 @@ export async function buildMessageReferenceText({
   sessionId,
   messageId,
   span = NO_SPAN,
+  readerSessionId,
+  executionRunId,
 }: MessageReferenceInput): Promise<string | null> {
   const { getDb } = await import("@/lib/db/schema")
   const db = getDb()
@@ -247,7 +253,8 @@ export async function buildMessageReferenceText({
 
   const { before, after } = clampSpan(span)
   if (before === 0 && after === 0) {
-    return formatMessageReference([{ role: anchor.role, parts: anchor.parts }], 0)
+    const { messages } = await preparePersonalHistory(readerSessionId, [anchor], { executionRunId })
+    return formatMessageReference(messages, 0)
   }
 
   // Walk outwards on `[sessionId+createdAt]` from the anchor's own timestamp.
@@ -285,8 +292,11 @@ export async function buildMessageReferenceText({
           .slice(0, after)
       : []
 
-  const window = [...earlier, anchor, ...later]
-  if (!window.some(hasBranchMetadata)) {
+  const canonicalWindow = [...earlier, anchor, ...later]
+  const { messages: window } = await preparePersonalHistory(readerSessionId, canonicalWindow, {
+    executionRunId,
+  })
+  if (!canonicalWindow.some(hasBranchMetadata)) {
     return formatMessageReference(
       window.map((row) => ({ role: row.role, parts: row.parts })),
       earlier.length
@@ -315,8 +325,11 @@ export async function buildMessageReferenceText({
   }
   const start = Math.max(0, at - before)
   const slice = visible.slice(start, at + after + 1)
+  const { messages: filteredSlice } = await preparePersonalHistory(readerSessionId, slice, {
+    executionRunId,
+  })
   return formatMessageReference(
-    slice.map((row) => ({ role: row.role, parts: row.parts })),
+    filteredSlice.map((row) => ({ role: row.role, parts: row.parts })),
     at - start
   )
 }

@@ -38,6 +38,10 @@ jest.mock("./configured-plugin-tool-handle", () => ({
 jest.mock("../plugin/plugin-runtime", () => ({
   ensurePluginRuntime: jest.fn(async () => ({ ok: true })),
 }))
+jest.mock("./personal-history", () => {
+  const actual = jest.requireActual("./personal-history")
+  return { ...actual, prepareCliPersonalHistory: jest.fn(actual.prepareCliPersonalHistory) }
+})
 jest.mock("@/lib/ai/agent/external/config/presets", () => {
   const actual = jest.requireActual("@/lib/ai/agent/external/config/presets")
   return {
@@ -68,7 +72,14 @@ import { createGateController, runTurn } from "../tui/hooks/turn-engine"
 import { createInitialState } from "../tui/state/initial"
 import { tuiReducer } from "../tui/state/reducer"
 import { canonicalEnvelopeToActions } from "../tui/state/event-mapper"
-import type { TranscriptFs } from "./transcript"
+import { appendTranscript, createTransientTranscriptFs, type TranscriptFs } from "./transcript"
+import { readExternalLink, writeExternalLink } from "./external-session-link"
+import { prepareCliPersonalHistory } from "./personal-history"
+import {
+  personalVisibilityDigest,
+  withholdForReaders,
+} from "@cognia/plugin-contract/types/execution/personal-visibility"
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import { RunAndCaptureError } from "@/lib/claude/run-and-capture"
 import * as externalPresets from "@/lib/ai/agent/external/config/presets"
 import { useAskUserStore } from "@/stores/agent/ask-user-store"
@@ -2216,6 +2227,162 @@ describe("external-agent turn bounds", () => {
     // The context version rides along so a later resume can refuse a session
     // created under settings that have since changed.
     expect(typeof link.contextVersion).toBe("string")
+    expect(typeof link.personalVisibilityDigest).toBe("string")
+  })
+
+  it("rebuilds a resumed external session and filters JSONL when personal visibility tightens", async () => {
+    const home = "/home/.cognia"
+    const fs = createTransientTranscriptFs()
+    const first = fakeManager()
+    const previous = createExternalAgentSession({
+      disableToolHost: true,
+      config: baseConfig,
+      sessionId: "private-cli",
+      home,
+      manager: first.manager,
+      transcriptFs: fs,
+    })
+    await previous.send("first", { gate: async () => ({ decision: "allow" }) })
+    await previous.close()
+    const link = readExternalLink(home, "private-cli", fs)!
+    writeExternalLink(
+      home,
+      "private-cli",
+      { ...link, personalVisibilityDigest: "previous-owner" },
+      fs
+    )
+    appendTranscript(
+      home,
+      "private-cli",
+      {
+        role: "assistant",
+        content: "PRIVATE_JSONL_TOOL_RESULT",
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+        },
+      },
+      fs,
+      2
+    )
+    const next = fakeManager()
+    const resumed = createExternalAgentSession({
+      disableToolHost: true,
+      config: baseConfig,
+      sessionId: "private-cli",
+      home,
+      manager: next.manager,
+      transcriptFs: fs,
+    })
+    await resumed.send("repeat", { gate: async () => ({ decision: "allow" }) })
+    expect(next.getExecuteOptions()?.sessionId).toBeUndefined()
+    const history = next.getExecuteOptions()?.context?.custom?.conversationHistory
+    expect(history).toContain("[Withheld:")
+    expect(history).not.toContain("PRIVATE_JSONL")
+    expect(next.manager.cancel).toHaveBeenCalledWith(expect.any(String), link.externalSessionId)
+    expect(readExternalLink(home, "private-cli", fs)?.personalVisibilityDigest).not.toBe(
+      "previous-owner"
+    )
+    await resumed.close()
+  })
+
+  it.each([undefined, "previous-reader-set"])(
+    "keeps a resumed public external session with retained digest %s and persists its current identity",
+    async (retainedDigest) => {
+      const home = "/home/.cognia"
+      const fs = createTransientTranscriptFs()
+      const previous = createExternalAgentSession({
+        disableToolHost: true,
+        config: baseConfig,
+        sessionId: "public-resume",
+        home,
+        manager: fakeManager().manager,
+        transcriptFs: fs,
+      })
+      await previous.send("first public request", { gate: async () => ({ decision: "allow" }) })
+      await previous.close()
+      const link = readExternalLink(home, "public-resume", fs)!
+      writeExternalLink(
+        home,
+        "public-resume",
+        { ...link, personalVisibilityDigest: retainedDigest },
+        fs
+      )
+      const next = fakeManager()
+      const resumed = createExternalAgentSession({
+        disableToolHost: true,
+        config: baseConfig,
+        sessionId: "public-resume",
+        home,
+        manager: next.manager,
+        transcriptFs: fs,
+      })
+      try {
+        await resumed.send("continue", { gate: async () => ({ decision: "allow" }) })
+        expect(next.getExecuteOptions()?.sessionId).toBe(link.externalSessionId)
+        expect(next.manager.cancel).not.toHaveBeenCalled()
+        expect(readExternalLink(home, "public-resume", fs)?.personalVisibilityDigest).toBe(
+          personalVisibilityDigest([], [])
+        )
+      } finally {
+        await resumed.close()
+      }
+    }
+  )
+
+  it("keeps an external engine when the current readers return to owner-only visibility", async () => {
+    const originalPrepare = jest.requireActual("./personal-history")
+      .prepareCliPersonalHistory as typeof prepareCliPersonalHistory
+    let readers: PrincipalRefV1[] = [
+      { kind: "local-person" },
+      { kind: "platform", platform: "slack", adapterId: "a", remoteUserId: "other" },
+    ]
+    jest.mocked(prepareCliPersonalHistory).mockImplementation(async (...args) => {
+      const history = await originalPrepare(...args)
+      const messages = history.entries.map((entry, index) => ({
+        ...entry,
+        id: entry.id ?? `cli:${index}:${entry.ts}`,
+        createdAt: entry.ts,
+      }))
+      return { ...withholdForReaders(messages, readers), entries: history.entries }
+    })
+    const home = "/home/.cognia"
+    const fs = createTransientTranscriptFs()
+    appendTranscript(
+      home,
+      "owner-resumes-external",
+      {
+        role: "assistant",
+        content: "OWNER_CANONICAL_HISTORY",
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+        },
+      },
+      fs,
+      1
+    )
+    const next = fakeManager()
+    const session = createExternalAgentSession({
+      disableToolHost: true,
+      config: baseConfig,
+      sessionId: "owner-resumes-external",
+      home,
+      manager: next.manager,
+      transcriptFs: fs,
+    })
+    try {
+      await session.send("joint turn", { gate: async () => ({ decision: "allow" }) })
+      const nativeId = readExternalLink(home, "owner-resumes-external", fs)!.externalSessionId
+      readers = [{ kind: "local-person" }]
+      await session.send("owner continues", { gate: async () => ({ decision: "allow" }) })
+      expect(next.getExecuteOptions()?.sessionId).toBe(nativeId)
+      expect(next.manager.cancel).not.toHaveBeenCalled()
+      expect(readExternalLink(home, "owner-resumes-external", fs)?.personalVisibilityDigest).toBe(
+        personalVisibilityDigest(readers, [])
+      )
+    } finally {
+      jest.mocked(prepareCliPersonalHistory).mockImplementation(originalPrepare)
+      await session.close()
+    }
   })
 
   it("resumes the recorded agent session instead of starting an empty one", async () => {

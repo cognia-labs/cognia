@@ -9,6 +9,7 @@ import { DEFAULT_MEMORY_CONFIG, type MemoryConfig } from "@/types/memory/memory"
 const mockBuildAgentBacked = jest.fn()
 const mockTryBuildMemoryDeps = jest.fn()
 const mockTryBuildMemoryVectorSink = jest.fn()
+const mockWithPersonalMemoryVisibility = jest.fn((deps) => ({ ...deps, personalVisibility: true }))
 const mockRetrieveMemories = jest.fn()
 const mockCreateMemory = jest.fn()
 const mockUpdateMemory = jest.fn()
@@ -22,6 +23,8 @@ jest.mock("@/lib/ai/generation/agent-backed-client", () => ({
   buildAgentBackedLlmClient: (...a: unknown[]) => mockBuildAgentBacked(...a),
 }))
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
+  withPersonalMemoryVisibility: (...a: unknown[]) =>
+    mockWithPersonalMemoryVisibility(...(a as [unknown])),
   tryBuildMemoryDeps: (...a: unknown[]) => mockTryBuildMemoryDeps(...a),
   tryBuildMemoryVectorSink: (...a: unknown[]) => mockTryBuildMemoryVectorSink(...a),
 }))
@@ -185,6 +188,8 @@ describe("buildProjectMiningDeps", () => {
     expect(await wired.findSimilar({ text: "existing", type: "semantic" }, namespace)).toEqual([
       exact,
     ])
+    expect(mockWithPersonalMemoryVisibility).toHaveBeenCalledTimes(1)
+    expect(mockRetrieveMemories.mock.calls.at(-1)?.[1]).toHaveProperty("personalVisibility", true)
   })
 
   it("refreshes supported claim metadata on update without clearing absent fields", async () => {

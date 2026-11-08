@@ -80,6 +80,7 @@ jest.mock("@/stores/chat", () => ({
 jest.mock("@/stores/ui", () => ({
   useUIStore: { getState: () => ({ setSelectedGuild: jest.fn() }) },
 }))
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createAttachedSession } from "@/lib/chat/attached-session"
 import { getSession, updateSession } from "@/lib/db/sessions"
 import { revealSpawnedTask } from "@/lib/tasks/spawn-task-dispatch"
@@ -385,6 +386,7 @@ test("a human must confirm a current quote; Start creates one child only after a
   expect(createAttachedSession).toHaveBeenCalledWith(
     expect.objectContaining({
       parentSessionId: "parent",
+      localAuthorization: LOCAL_PERSON_RUN,
       title: "Acceptance: task",
       context: { mode: "none" },
       workspace: "shared",

@@ -18,6 +18,8 @@ export interface TwinAnswerInput {
   systemPrompt?: string
   /** Applied by the agent the twin answers through (ADR-0198). */
   grants: readonly AgentCapabilityGrantV1[]
+  /** Host-created child run context; never supplied by model or plugin arguments. */
+  personalContext?: { sessionId?: string; executionRunId?: string }
 }
 
 export interface TwinAnswerPort {

@@ -41,6 +41,8 @@ function makeDeps(overrides: Partial<ProjectHistoryToolDeps> = {}): ProjectHisto
     searchResults: async () => [],
     getSessions: async () => [],
     locateMessage: async () => null,
+    canReadMessage: async () => true,
+    readSessionTitle: async () => "Conversation",
     buildWindow: async () => null,
     now: () => 0,
     ...overrides,

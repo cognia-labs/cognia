@@ -336,7 +336,8 @@ function startExternalEngine(
 
 async function startJobEngine(
   target: Exclude<ChildRunTarget, { kind: "squad" }>,
-  grants: readonly AgentCapabilityGrantV1[]
+  grants: readonly AgentCapabilityGrantV1[],
+  personalContext: { sessionId?: string; executionRunId: string }
 ): Promise<StartedChildEngine | { refused: LaunchChildRunRefusal; detail?: string }> {
   switch (target.kind) {
     case "agent":
@@ -359,6 +360,7 @@ async function startJobEngine(
         question: target.question,
         ...(target.systemPrompt ? { systemPrompt: target.systemPrompt } : {}),
         grants,
+        personalContext,
       })
     }
   }
@@ -555,7 +557,10 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
           prompt: background.prompt,
         })
       }
-      const started = await startJobEngine(target, grants)
+      const started = await startJobEngine(target, grants, {
+        ...(sessionId ? { sessionId } : {}),
+        executionRunId,
+      })
       engine =
         "refused" in started
           ? settledEngine({

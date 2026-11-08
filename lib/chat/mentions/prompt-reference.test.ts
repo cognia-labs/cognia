@@ -98,6 +98,22 @@ async function seedMessage({
 
 const IM_SENDER = { platformMessage: { sender: { id: "u_42", kind: "user", displayName: "Ana" } } }
 
+it("withholds marked prompt words and independently derived conversation titles", async () => {
+  await seedSession({ id: "s1", title: "private conversation title" })
+  await seedMessage({
+    id: "private",
+    text: "private typed words",
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+    },
+  })
+  expect(await promptReferenceText("s1#private")).toBe("[Withheld: personal content of Host owner]")
+  const candidates = await searchOwnPrompts("", {})
+  expect(candidates).toHaveLength(1)
+  expect(candidates[0].insertText).toBe("[Withheld: personal content of Host owner]")
+  expect(JSON.stringify(candidates)).not.toMatch(/private typed words|private conversation title/)
+})
+
 describe("typedPromptOf", () => {
   it("keeps the words with their newlines", () => {
     expect(typedPromptOf([{ type: "text", text: "line one\n\n  line two" }])).toEqual({
@@ -210,12 +226,14 @@ describe("searchOwnPrompts — recent", () => {
     expect(rows[0]).toMatchObject({
       entityKind: "prompt",
       title: "tag the release then push",
-      subtitle: "Release prep · 2026-09-02",
+      // The owner-owned title still has no admitted consuming reader in this picker.
+      subtitle: "[Withheld: personal content of Host owner] · 2026-09-02",
       href: "/?session=s1&message=new",
       sourceSessionId: "s1",
       // The words exactly, for putting back in the composer.
       insertText: "tag the release\nthen push",
     })
+    expect((await getDb().sessions.get("s1"))?.title).toBe("Release prep")
   })
 
   it("leaves out assistant turns, other people's messages and attachment-only turns", async () => {

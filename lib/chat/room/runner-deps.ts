@@ -33,6 +33,10 @@ import type { TwinDepsForBuild } from "@/lib/twin/runtime/build-deps"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"
 import type { ApproveToolAttribution } from "@/lib/claude/ipc"
 import type { CogniaDiagnostic } from "@cognia/diagnostics"
+import type {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
 
 export type ApproveToolFn = (
   sessionId: string,
@@ -109,6 +113,8 @@ export interface RoomRunnerExecution {
 }
 
 export interface RoomRunnerAi {
+  preparePersonalHistory: typeof preparePersonalHistory
+  preparePersonalDerivedHistory: typeof preparePersonalDerivedHistory
   resolveSendOptions: (ctx: BuildOptionsContext) => Promise<SendOptions>
   tryBuildTwinDeps: () => Promise<TwinDepsForBuild | undefined>
   tryBuildMemoryDeps: (

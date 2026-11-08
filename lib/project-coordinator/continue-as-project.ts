@@ -4,6 +4,10 @@ import { hasNoLeakingPii } from "@cognia/redact"
 import type { ChatStatus } from "@/stores/chat/chat-store"
 import { buildHandoffContext } from "@/lib/chat/handoff-context"
 import { listMessages } from "@/lib/db/messages"
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
 import { getSession, updateSession } from "@/lib/db/sessions"
 import { sessionStatusOf } from "@/lib/chat/steer-runtime"
 import { sendAutomatedChatMessage } from "@/hooks/chat/chat-send-bridge"
@@ -120,13 +124,28 @@ export async function continueAsProject(
   }
   await deps.updateSession(session.id, patch)
 
-  const context = buildHandoffContext(messages, { maxChars: CONTINUE_CONTEXT_MAX_CHARS }).text
+  // The staged coordinator seed has no admitted reader yet. Canonical source
+  // messages stay in the original thread; only the filtered projection enters
+  // the new model's first prompt.
+  const history = await preparePersonalHistory(
+    undefined,
+    messages.map((message) => ({ ...message, sessionId: session.id }))
+  )
+  const label = await preparePersonalDerivedHistory(
+    undefined,
+    [{ id: `continue-title:${session.id}`, text: title }],
+    { sessionId: session.id }
+  )
+  const visibleTitle = label.messages[0].text
+  const context = buildHandoffContext(history.messages, {
+    maxChars: CONTINUE_CONTEXT_MAX_CHARS,
+  }).text
   // Most to least: with the context, without it, and without the title — the
   // send path refuses a prompt carrying an email, key or token outright.
   const seed =
     [
-      renderContinueSeed({ title, threadId: session.id, context: context || null }),
-      renderContinueSeed({ title, threadId: session.id, context: null }),
+      renderContinueSeed({ title: visibleTitle, threadId: session.id, context: context || null }),
+      renderContinueSeed({ title: visibleTitle, threadId: session.id, context: null }),
     ].find((text) => deps.gate(text)) ??
     renderContinueSeed({ title: session.id, threadId: session.id, context: null })
   return {

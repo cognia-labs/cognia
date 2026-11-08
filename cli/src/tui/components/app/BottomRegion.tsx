@@ -32,6 +32,7 @@ import type { TranscriptCursor } from "../../hooks/useTranscriptCursor"
 import type { TerminalLayoutBudget } from "../../layout/terminal-layout"
 
 export interface BottomRegionProps {
+  home?: string
   state: TuiState
   dispatch: Dispatch<TuiAction>
   cursor: TranscriptCursor
@@ -220,6 +221,7 @@ export function BottomRegion(props: BottomRegionProps): React.ReactElement {
             input={state.input}
             sessionId={state.sessionId}
             recentMessages={recentMessages}
+            suggestHome={props.home}
             dispatch={dispatch}
             onSubmit={handleSubmit}
             onHistoryPush={handleHistoryPush}

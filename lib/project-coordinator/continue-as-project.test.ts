@@ -1,3 +1,22 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+  preparePersonalDerivedHistory: jest.fn(async (_session: unknown, messages: unknown[]) => ({
+    messages,
+    visibilityDigest: "test",
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
+import {
+  preparePersonalHistory,
+  preparePersonalDerivedHistory,
+} from "@/lib/execution/personal-visibility"
+
 import type { UIMessage } from "ai"
 import type { ChatSession } from "@cognia/agent-config-types"
 
@@ -47,6 +66,35 @@ function setup(row: ChatSession | undefined, messages: UIMessage[] = []) {
 }
 
 describe("continueAsProject", () => {
+  it("withholds personal content and titles from the coordinator's staged first turn", async () => {
+    const { deps } = setup(session({ title: "PRIVATE_TITLE" }), [
+      message("private", "assistant", "PRIVATE_CONTEXT"),
+    ])
+    jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+      messages: [
+        {
+          id: "private",
+          role: "assistant",
+          parts: [{ type: "text", text: "[Withheld: personal content of Host owner]" }],
+        },
+      ],
+      visibilityDigest: "changed",
+      withheldMessageIds: ["private"],
+      readers: [],
+    } as never)
+    jest.mocked(preparePersonalDerivedHistory).mockResolvedValueOnce({
+      messages: [{ id: "title", text: "[Withheld: personal content of Host owner]" }],
+      visibilityDigest: "changed",
+      withheldMessageIds: ["title"],
+      readers: [],
+    } as never)
+    await continueAsProject({ sessionId: "s1", coordinatorTitle: "C" }, deps)
+    const seed = jest.mocked(deps.send).mock.calls[0][1]
+    expect(seed).toContain("[Withheld:")
+    expect(seed).not.toContain("PRIVATE_")
+    expect(preparePersonalHistory).toHaveBeenCalledWith(undefined, expect.any(Array))
+  })
+
   it("turns the conversation into a completed thread and seeds the coordinator", async () => {
     const { deps, rows } = setup(session(), [
       message("u1", "user", "Please refactor billing"),

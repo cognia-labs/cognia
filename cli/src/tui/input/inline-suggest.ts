@@ -27,6 +27,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import os from "node:os"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
+import { resolveHome } from "../../config/load"
+import { readTranscript, type TranscriptFs } from "../../agent/transcript"
 
 import { InlineCompletionEngine, type InlineEngineView } from "@/lib/chat/completion/inline/engine"
 import { createHistoryProvider } from "@/lib/chat/completion/inline/history-provider"
@@ -49,7 +53,7 @@ const MIN_DEBOUNCE = 200
 const MAX_DEBOUNCE = 2000
 const DEFAULT_DEBOUNCE = 500
 
-/** Only visible conversation cells are eligible; never include hidden reasoning or tool payloads. */
+/** UI-only cache invalidation descriptor; model context is read canonically below. */
 export function recentSuggestionMessages(cells: readonly Cell[]): GhostMessage[] {
   const messages: GhostMessage[] = []
   for (let i = cells.length - 1; i >= 0 && messages.length < 6; i--) {
@@ -61,6 +65,30 @@ export function recentSuggestionMessages(cells: readonly Cell[]): GhostMessage[]
     })
   }
   return messages
+}
+
+/** Utility completions have no admitted personal reader. Read canonical marks
+ * before reducing records to the text-only completion context. */
+export function recentCanonicalSuggestionMessages(
+  home: string,
+  sessionId: string,
+  fsx?: TranscriptFs
+): GhostMessage[] {
+  const records = readTranscript(home, sessionId, fsx)
+  return withholdForReaders(
+    records.map((record, index) => ({
+      ...record,
+      id: record.id ?? `cli:${index}:${record.ts}`,
+      createdAt: record.ts,
+    })),
+    []
+  )
+    .messages.filter((record) => record.role === "user" || record.role === "assistant")
+    .slice(-6)
+    .map((record) => ({
+      role: record.role as "user" | "assistant",
+      text: record.content.slice(-500),
+    }))
 }
 
 const EMPTY_VIEW: InlineEngineView = {
@@ -117,6 +145,8 @@ export interface UseInlineSuggestOptions {
   debounceMs?: number
   sessionId?: string
   recentMessages?: readonly GhostMessage[]
+  /** The configured transcript home; rendered cells are cache invalidation only. */
+  home?: string
   cwd?: string
 }
 
@@ -161,6 +191,7 @@ export function useInlineSuggest(options: UseInlineSuggestOptions): UseInlineSug
     debounceMs,
     sessionId,
     recentMessages,
+    home,
     cwd,
   } = options
 
@@ -171,13 +202,11 @@ export function useInlineSuggest(options: UseInlineSuggestOptions): UseInlineSug
   // tearing down the engine (which would drop its cache and in-flight query).
   const historyRef = useRef(history)
   const commandsRef = useRef(commands)
-  const messagesRef = useRef(recentMessages)
   // Synced after commit, never during render. Declared BEFORE the engine
   // effect so it lands first on every pass.
   useEffect(() => {
     historyRef.current = history
     commandsRef.current = commands
-    messagesRef.current = recentMessages
   })
 
   const clampedDebounce = Math.min(
@@ -191,6 +220,13 @@ export function useInlineSuggest(options: UseInlineSuggestOptions): UseInlineSug
     // Providers are built inside the effect (not a `useMemo`) so no closure
     // over the latest-context refs is ever constructed during render.
     const providers: InlineCompletionProvider[] = []
+    const resolveRecentMessages = async () =>
+      sessionId
+        ? recentCanonicalSuggestionMessages(
+            home ?? resolveHome(process.env, os.homedir()),
+            sessionId
+          )
+        : []
     if (localEnabled) {
       // No `allowMultiline`: the ghost is painted on the cursor's row, so a
       // completion containing a newline would corrupt the composer layout.
@@ -198,8 +234,17 @@ export function useInlineSuggest(options: UseInlineSuggestOptions): UseInlineSug
       providers.push(createCommandProvider())
     }
     if (aiComplete)
-      providers.push(createAiCompletionProvider({ complete: aiComplete, stream: aiStream }))
-    if (agentComplete) providers.push(createAgentCompletionProvider({ complete: agentComplete }))
+      providers.push(
+        createAiCompletionProvider({
+          complete: aiComplete,
+          stream: aiStream,
+          resolveRecentMessages,
+        })
+      )
+    if (agentComplete)
+      providers.push(
+        createAgentCompletionProvider({ complete: agentComplete, resolveRecentMessages })
+      )
     if (providers.length === 0) {
       engineRef.current = null
       return
@@ -216,7 +261,6 @@ export function useInlineSuggest(options: UseInlineSuggestOptions): UseInlineSug
           typeof commandsRef.current === "function" ? commandsRef.current() : commandsRef.current,
         surface: "tui",
         sessionId,
-        recentMessages: messagesRef.current,
         cwd,
       }),
       onChange: () => setView(engineRef.current?.getView() ?? EMPTY_VIEW),
@@ -234,6 +278,7 @@ export function useInlineSuggest(options: UseInlineSuggestOptions): UseInlineSug
     agentComplete,
     clampedDebounce,
     sessionId,
+    home,
     cwd,
     contextKey,
   ])
@@ -255,6 +300,7 @@ export function useInlineSuggest(options: UseInlineSuggestOptions): UseInlineSug
     agentComplete,
     clampedDebounce,
     sessionId,
+    home,
     cwd,
     contextKey,
   ])

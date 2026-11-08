@@ -18,6 +18,10 @@ import { hasNoLeakingPii } from "@cognia/redact"
 import type { LlmClient, LlmClientCallOptions } from "@/lib/twin/distill/llm"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt, type PromptResolutionContext } from "@/lib/prompts/types"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import { getDb } from "@/lib/db/schema"
+import { renderConversationSegments } from "@/lib/ai/generation/summarizer"
+import type { UIMessage } from "ai"
 import {
   packSegments,
   summarizeMaterial,
@@ -124,6 +128,8 @@ export interface SelectionActionProgress {
 }
 
 export interface RunSelectionActionInput {
+  /** Canonical Host-selected provenance, checked before any flattened selection is sent. */
+  source?: { sessionId: string; messageIds: readonly string[]; executionRunId?: string }
   action: SelectionAction
   /** The selected text. */
   text: string
@@ -272,6 +278,39 @@ async function runChunked(
 export async function runSelectionAction(
   input: RunSelectionActionInput
 ): Promise<SelectionActionOutcome> {
+  if (input.source) {
+    const { source } = input
+    const rows = await getDb().messages.bulkGet([...source.messageIds])
+    const canonical = rows.filter(
+      (row): row is NonNullable<typeof row> => !!row && row.sessionId === source.sessionId
+    )
+    const missing = canonical.length !== source.messageIds.length || canonical.length === 0
+    const sourceMessages: UIMessage[] = missing
+      ? [
+          {
+            id: "selection-source-unavailable",
+            role: "assistant",
+            parts: [{ type: "text", text: input.text }],
+            metadata: {
+              personalMarks: [
+                {
+                  person: { kind: "service", ref: "unavailable-selection-source" },
+                  source: "selection",
+                  markedAt: 0,
+                },
+              ],
+            },
+          },
+        ]
+      : canonical
+    const history = await preparePersonalHistory(undefined, sourceMessages, {
+      executionRunId: source.executionRunId,
+    })
+    if (history.withheldMessageIds.length) {
+      const segments = renderConversationSegments(history.messages)
+      input = { ...input, text: segments.join("\n\n"), segments, context: segments.join("\n\n") }
+    }
+  }
   const {
     action,
     text,

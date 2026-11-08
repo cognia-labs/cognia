@@ -15,6 +15,7 @@
 
 import { normalizeToolName } from "@/lib/chat/tool-summary"
 import { isToolPart, projectToolOutputText } from "./tool-output-text"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 /** Separator between the message and the part index in a result id. */
 export const RESULT_ID_SEPARATOR = ":"
@@ -70,5 +71,15 @@ export async function resultBodyText(resultId: string): Promise<string | null> {
   const { getDb } = await import("@/lib/db/schema")
   const message = await getDb().messages.get(parsed.messageId)
   if (!message || !Array.isArray(message.parts)) return null
-  return formatResultPart(message.parts[parsed.partIndex])
+  const originalPart = message.parts[parsed.partIndex]
+  if (!originalPart || !isToolPart(originalPart)) return null
+  const history = await preparePersonalHistory(undefined, [message])
+  const filtered = history.messages[0]
+  if (history.withheldMessageIds.length) {
+    return filtered.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n")
+  }
+  return formatResultPart(filtered.parts[parsed.partIndex])
 }

@@ -63,6 +63,18 @@ describe("twin-answer port", () => {
     )
   })
 
+  it("passes only the Host execution context to the twin visibility check", async () => {
+    tryBuildTwinDepsMock.mockResolvedValue({ vector: true })
+    getTwinMock.mockResolvedValue({ name: "Ada" })
+    applyTeammateTwinContextMock.mockResolvedValue({ systemPrompt: "visible persona" })
+    executeAgentMock.mockResolvedValue({ text: "answer" })
+    const personalContext = { sessionId: "room", executionRunId: "execution:job:child" }
+    await port.start({ twinId: "twin-1", question: "q", grants: [], personalContext }).outcome
+    expect(applyTeammateTwinContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ personalContext })
+    )
+  })
+
   it.each([
     ["the twin runtime is not configured", () => tryBuildTwinDepsMock.mockResolvedValue(undefined)],
     [

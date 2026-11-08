@@ -128,6 +128,7 @@ import {
   withMetadata,
 } from "./runner"
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
+import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
 import { decodeSubSession } from "@/lib/claude/team-session-id"
 
 type Msg = UIMessage & { metadata?: Record<string, unknown> }
@@ -291,6 +292,14 @@ function createWorld(init: { session?: Partial<ChatSession>; team?: Partial<Team
       resolveEffectiveCwdForSession: async () => null,
     },
     ai: {
+      preparePersonalHistory: async (_sessionId, messages) => ({
+        ...withholdForReaders(messages, []),
+        readers: [],
+      }),
+      preparePersonalDerivedHistory: async (_sessionId, messages) => ({
+        ...withholdForReaders(messages, []),
+        readers: [],
+      }),
       resolveSendOptions: async () => ({ systemPrompt: "sys", model: "m", provider: "p" }),
       tryBuildTwinDeps: async () => undefined,
       tryBuildMemoryDeps,
@@ -440,6 +449,54 @@ const textOf = (m: Msg) =>
     .join("")
 
 describe("a linear turn", () => {
+  it("withholds personal transcript tools and scratchpad from a different reader", async () => {
+    const w = createWorld({
+      session: { scratchpad: "private scratchpad" },
+      team: { members: [{ characterId: "a" }] },
+    })
+    w.seed([
+      {
+        id: "private",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "private answer" },
+          {
+            type: "tool-PrivateTool",
+            input: { title: "private title" },
+            output: "private output",
+          } as never,
+        ],
+        metadata: {
+          senderId: "a",
+          personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+        },
+      },
+    ])
+    await w.runner.send("question", { sessionId: ROOM })
+    expect(w.calls.sendPrompt).toHaveLength(1)
+    const prompt = w.calls.sendPrompt[0].options.systemPrompt
+    expect(prompt).toContain("[Withheld: personal content of Host owner]")
+    expect(prompt).not.toMatch(
+      /private answer|PrivateTool|private title|private output|private scratchpad/
+    )
+  })
+
+  it("withholds legacy shared state after its marked source message was removed", async () => {
+    const w = createWorld({
+      session: {
+        scratchpad: "private removed scratchpad",
+        workingSet: { facts: ["private removed fact"] },
+      } as never,
+      team: { members: [{ characterId: "a" }] },
+    })
+    w.seed([{ id: "public", role: "user", parts: [{ type: "text", text: "a public request" }] }])
+    await w.runner.send("a public request", { sessionId: ROOM })
+    expect(w.calls.sendPrompt).toHaveLength(1)
+    expect(JSON.stringify(w.calls.sendPrompt)).not.toMatch(
+      /private removed scratchpad|private removed fact/
+    )
+  })
+
   it("records each member before its first send and closes the entry afterwards", async () => {
     const w = createWorld({ team: { members: [{ characterId: "a" }] } })
     const binding = jest.mocked(personalMarks.bindPersonalMessageChanges).mockClear()
@@ -1941,5 +1998,90 @@ describe("the room as other writers see it (ADR-0252 §4)", () => {
       })
     ).rejects.toMatchObject({ code: "ROOM_BUSY" })
     expect(w.steerQueues.get(ROOM)).toBeUndefined()
+  })
+
+  it("retains an automated result's provenance and withholds it before embedding or dispatch", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    jest.mocked(personalMarks.bindPersonalMessageRun).mockImplementationOnce(() => undefined)
+    const project = jest.fn(async (_sessionId, messages, _source) => ({
+      ...withholdForReaders(
+        messages.map((message) => ({
+          ...message,
+          metadata: {
+            personalMarks: [
+              { person: { kind: "local-person" }, source: "twin-history", markedAt: 1 },
+            ],
+          },
+        })),
+        []
+      ),
+      readers: [],
+    })) as jest.MockedFunction<RoomRunnerDeps["ai"]["preparePersonalDerivedHistory"]>
+    w.deps.ai.preparePersonalDerivedHistory = project
+    w.deps.ai.tryBuildTwinDeps = async () => ({}) as never
+    const embed = jest.fn(async () => ({ embedding: [] }))
+    w.deps.ai.generateSafeEmbedding = embed
+    await w.runner.send("PRIVATE_SQUAD_RESULT", {
+      sessionId: ROOM,
+      targetMemberIds: ["a"],
+      automatedTurn: {
+        producer: "background-result",
+        messageId: "delivery-private",
+        personalRunIds: ["execution:team:private"],
+      },
+    })
+    expect(project).toHaveBeenCalledWith(ROOM, expect.any(Array), {
+      sessionId: ROOM,
+      runIds: ["execution:team:private"],
+      executionRunId: "",
+    })
+    expect(personalMarks.bindPersonalMessageRun).toHaveBeenCalledWith("delivery-private", [
+      "execution:team:private",
+    ])
+    expect(JSON.stringify(embed.mock.calls)).not.toContain("PRIVATE_SQUAD_RESULT")
+    expect(w.calls.sendPrompt[0]?.content).not.toContain("PRIVATE_SQUAD_RESULT")
+    expect(JSON.stringify(w.db.get(ROOM)?.find((m) => m.id === "delivery-private"))).toContain(
+      "PRIVATE_SQUAD_RESULT"
+    )
+    expect(w.db.get(ROOM)?.find((m) => m.id === "delivery-private")?.metadata).toMatchObject({
+      personalMarks: [{ person: { kind: "local-person" }, source: "withheld", markedAt: 1 }],
+    })
+  })
+
+  it("keeps an unproven result withheld even when its stored row is later read by the owner", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    jest.mocked(personalMarks.bindPersonalMessageRun).mockClear()
+    w.deps.ai.preparePersonalDerivedHistory = async (_sessionId, messages) => ({
+      ...withholdForReaders(
+        messages.map((message) => ({
+          ...message,
+          metadata: {
+            personalMarks: [
+              {
+                person: { kind: "service", ref: "unverified-personal-history" },
+                source: "unverified-derived-history",
+                markedAt: 0,
+              },
+            ],
+          },
+        })),
+        []
+      ),
+      readers: [],
+    })
+    await w.runner.send("UNPROVEN_SQUAD_RESULT", {
+      sessionId: ROOM,
+      targetMemberIds: ["a"],
+      automatedTurn: {
+        producer: "background-result",
+        messageId: "legacy-delivery",
+        personalRunIds: ["legacy-run"],
+      },
+    })
+    const row = w.db.get(ROOM)!.find((m) => m.id === "legacy-delivery")!
+    expect(personalMarks.bindPersonalMessageRun).not.toHaveBeenCalled()
+    const ownerView = withholdForReaders([row], [{ kind: "local-person" }])
+    expect(ownerView.withheldMessageIds).toEqual(["legacy-delivery"])
+    expect(JSON.stringify(ownerView.messages)).not.toContain("UNPROVEN_SQUAD_RESULT")
   })
 })

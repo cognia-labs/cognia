@@ -1,5 +1,6 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useEffect, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
@@ -133,6 +134,7 @@ export function SessionCommunicationSheet({ session, open, onOpenChange }: Props
       const context: AttachedSessionContextMode =
         contextMode === "last-n" ? { mode: "last-n", turns } : { mode: contextMode }
       const child = await createAttachedSession({
+        localAuthorization: LOCAL_PERSON_RUN,
         parentSessionId: session.id,
         title: nextTitle,
         prompt: nextPrompt,

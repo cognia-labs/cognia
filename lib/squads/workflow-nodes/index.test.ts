@@ -43,6 +43,7 @@ jest.mock("@/lib/db/characters", () => ({
 const getTeamRunContext = jest.fn()
 jest.mock("@/lib/squads/team-run-context", () => ({
   getTeamRunContext: (...args: unknown[]) => getTeamRunContext(...args),
+  visibleTeamDerivedText: async (_ctx: unknown, text: string) => text,
 }))
 
 const buildTeammatePrompt = jest.fn()
@@ -67,7 +68,8 @@ jest.mock("@/lib/squads/teammate/dispatch-teammate", () => {
 const readDependencyResults = jest.fn()
 const autoPublishTaskResult = jest.fn()
 jest.mock("@/lib/squads/memory/shared-memory-orchestrator", () => ({
-  readDependencyResults: (...args: unknown[]) => readDependencyResults(...args),
+  readDependencyResultsForRun: (ctx: { teamId: string }, ids: string[]) =>
+    readDependencyResults(ctx.teamId, ids),
   autoPublishTaskResult: (...args: unknown[]) => autoPublishTaskResult(...args),
 }))
 
@@ -398,7 +400,7 @@ describe("dispatchTeamTask", () => {
   })
 
   it("prefixes upstream results, normalizes the dispatch shape and publishes the result", async () => {
-    const teamCtx = { team }
+    const teamCtx = { team, runId: "run-1", teamId: "team-1" }
     getTeamRunContext.mockReturnValue(teamCtx)
     readDependencyResults.mockReturnValue([
       { taskId: "dep", taskTitle: "Research", writerName: "Ada", value: "found it" },
@@ -444,7 +446,8 @@ describe("dispatchTeamTask", () => {
       { id: "team-1" },
       { id: "t1", title: "Build" },
       "done",
-      { id: "mate", name: "Mate" }
+      { id: "mate", name: "Mate" },
+      "execution:team:run-1"
     )
     expect(result.output).toEqual({
       text: "done",

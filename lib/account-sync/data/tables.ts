@@ -145,6 +145,8 @@ const SESSION_FIELDS = {
   sdkSessionId: "local",
   runtimeTranscriptInvalidated: "local",
   runtimeTranscriptGeneration: "local",
+  // A visibility digest proves only the engine memory retained on this Host.
+  runtimePersonalVisibilityDigest: "local",
   sdkSessionStorage: "local",
   externalAgentSession: "local",
   externalAgentModels: "local",

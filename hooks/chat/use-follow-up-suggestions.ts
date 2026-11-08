@@ -16,6 +16,8 @@ import { suggestFollowUps } from "@/lib/chat/completion/suggestions"
 import type { GhostMessage } from "@/lib/chat/completion/ghost-prompt"
 import type { AppSettings, ChatSession } from "@cognia/agent-config-types"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
+import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"
+import type { UIMessage } from "ai"
 
 const RECENT = 6
 const CACHE_MAX = 64
@@ -94,13 +96,21 @@ async function generate(
   entry: Entry,
   session: ChatSession,
   settings: AppSettings | null | undefined,
-  recentMessages: GhostMessage[]
+  sourceMessages: UIMessage[]
 ) {
   const controller = entry.controller
   let timeout: ReturnType<typeof setTimeout> | undefined
   let abortListener: (() => void) | undefined
   const isCurrent = () => cache.get(entry.snapshot.key) === entry && entry.controller === controller
   try {
+    const history = await prepareOwnerHistory(
+      sourceMessages.map((message) => ({ ...message, sessionId: session.id }))
+    )
+    if (controller.signal.aborted || !isCurrent()) return
+    const recentMessages: GhostMessage[] = history.messages.map((message) => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      text: extractPlainText(stripPromptPreambleFromParts(message.parts)),
+    }))
     const direct = buildUtilityLlmClient({
       session,
       appSettings: settings,
@@ -203,6 +213,7 @@ export function useFollowUpSuggestions(
     // Include the visible path and its content, not just the terminal id.
     messages.map((message) => message.id),
     recentMessages,
+    messages.slice(-RECENT).map((message) => message.metadata),
     session?.model,
     session?.providerOverride,
     session?.accountId,
@@ -245,7 +256,7 @@ export function useFollowUpSuggestions(
               owned.controller = new AbortController()
               owned.settled = false
               publish(owned, "loading")
-              void generate(owned, session, settings, recentMessages)
+              void generate(owned, session, settings, messages.slice(-RECENT))
             },
       }
       entry = owned
@@ -280,7 +291,7 @@ export function useFollowUpSuggestions(
           }
         }
       }
-    } else if (created) void generate(entry, session, settings, recentMessages)
+    } else if (created) void generate(entry, session, settings, messages.slice(-RECENT))
     const subscribed = entry
     return () => {
       if (nativeTimeout !== undefined) clearTimeout(nativeTimeout)

@@ -667,6 +667,27 @@ describe("executeAgent", () => {
       expect(opts.prompt).toBeUndefined()
     })
 
+    it("withholds marked prior turns on the readerless completion rail before model dispatch", async () => {
+      primeTextChannel(["ans"])
+      await runCompletionRail("repeat", {
+        priorMessages: [
+          {
+            role: "assistant",
+            content: "secret prior answer",
+            metadata: {
+              personalMarks: [
+                { person: { kind: "local-person" }, source: "secret-tool", markedAt: 1 },
+              ],
+            },
+          },
+        ],
+      })
+      const options = mockStreamText.mock.calls[0][0]
+      expect(JSON.stringify(options)).not.toContain("secret prior answer")
+      expect(JSON.stringify(options)).not.toContain("secret-tool")
+      expect(JSON.stringify(options)).toContain("[Withheld: personal content of Host owner]")
+    })
+
     it("uses a single prompt (no messages) when no priorMessages are given", async () => {
       primeTextChannel(["ans"])
       await executeAgent("solo")

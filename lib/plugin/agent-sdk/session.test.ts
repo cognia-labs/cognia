@@ -2,6 +2,19 @@ import { createPluginAgentSession, resumePluginAgentSession } from "./session"
 import { executeAgent } from "@/lib/ai/agent/agent-executor"
 import { listMessages, persistMessages } from "@/lib/db/messages"
 import { createSession, getSession, updateSession, deleteSession } from "@/lib/db/sessions"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import {
+  startToolExecutionRun,
+  LOCAL_PERSON_RUN,
+  recordAbsorbedRequester,
+} from "@/lib/execution/acting-authority"
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
 
 jest.mock("@/lib/ai/agent/agent-executor", () => {
   // The execution service dispatches through the rail functions, not
@@ -63,6 +76,36 @@ beforeEach(() => {
 })
 
 describe("createPluginAgentSession", () => {
+  it("withholds canonical private history from completion replay and plugin reads, retaining the real owner invocation", async () => {
+    await getDb().sessions.put({ id: "s1", title: "Plugin", createdAt: 1, updatedAt: 1 })
+    const marked = {
+      id: "private",
+      role: "assistant",
+      parts: [{ type: "text", text: "secret prior answer" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "secret-tool", markedAt: 1 }],
+      },
+    }
+    mockList.mockResolvedValue([marked] as never)
+    const session = await createPluginAgentSession({}, "plugin-owner")
+    await session.send("repeat", { toolsEnabled: false })
+    expect(JSON.stringify(mockExecute.mock.calls[0])).not.toContain("secret prior answer")
+    expect(JSON.stringify(mockExecute.mock.calls[0])).not.toContain("secret-tool")
+    expect((await session.history())[0].content).toContain(
+      "Withheld: personal content of Host owner"
+    )
+    const owner = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    await withPluginExecutionContext("plugin-owner", { executionRunId: owner.id }, async () => {
+      expect((await session.history())[0].content).toBe("secret prior answer")
+      await recordAbsorbedRequester(owner.id, {
+        kind: "platform",
+        platform: "slack",
+        adapterId: "other",
+        remoteUserId: "second",
+      })
+      expect((await session.history())[0].content).not.toContain("secret prior answer")
+    })
+  })
   it("creates a durable session and exposes its id", async () => {
     const session = await createPluginAgentSession({ title: "T", characterId: "c1" })
     expect(mockCreate).toHaveBeenCalledWith(

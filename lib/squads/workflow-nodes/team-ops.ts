@@ -17,6 +17,30 @@
 
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
 import type { TeamNodeParams } from "@/lib/workflow/nodes/teams/team-runtime-port"
+import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+import { getTeamRunContext } from "../team-run-context"
+
+async function visibleTeamNodeOutput(
+  ctx: StepExecutionContext,
+  teamId: string,
+  output: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const consumer = getTeamRunContext(ctx.runId)
+  const executionRunId =
+    consumer?.personalExecutionRunId ??
+    (consumer ? `execution:team:${consumer.runId}` : `execution:workflow:${ctx.runId}`)
+  const content = JSON.stringify(output)
+  const history = await preparePersonalDerivedHistory(
+    undefined,
+    [{ id: `team-node:${teamId}:${ctx.stepId}`, content }],
+    {
+      executionRunId,
+    }
+  )
+  return history.messages[0].content === content
+    ? output
+    : { withheld: history.messages[0].content }
+}
 
 // Each node's params come from its `PARAMS_SCHEMAS` entry (ADR-0252 P2).
 type TeamComposeParams = TeamNodeParams<"action.team.compose">
@@ -142,7 +166,7 @@ export async function runTeamStatus(ctx: StepExecutionContext): Promise<StepExec
   }
 
   return {
-    output: {
+    output: await visibleTeamNodeOutput(ctx, teamId, {
       teamId,
       name: team.name,
       status: team.status,
@@ -187,7 +211,7 @@ export async function runTeamStatus(ctx: StepExecutionContext): Promise<StepExec
               })),
           }
         : {}),
-    },
+    }),
   }
 }
 
@@ -232,6 +256,12 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
   // The delegated child hangs under this workflow run when its row exists,
   // otherwise under the team's live run (`resolveDelegationParent`).
   const parentRunId = workflowExecutionRunId(ctx.runId)
+  const consumingTeam = getTeamRunContext(ctx.runId)
+  const host = {
+    executionRunId:
+      consumingTeam?.personalExecutionRunId ??
+      (consumingTeam ? `execution:team:${consumingTeam.runId}` : `execution:workflow:${ctx.runId}`),
+  }
   let launched: {
     delegation: import("@/types/agent/agent-team").TeamDelegationRecord
     completionPromise: Promise<import("@/types/agent/agent-team").TeamDelegationRecord>
@@ -240,28 +270,34 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
     case "twin": {
       const twinId = params.twinId?.trim()
       if (!twinId) throw nonRetryable("action.team.delegate: target 'twin' requires 'twinId'")
-      launched = orchestrator.delegateToTwin({
-        sourceTeamId: teamId,
-        sourceTaskId: taskId,
-        twinId,
-        prompt: prompt as string,
-        ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
-        reason,
-        parentRunId,
-        ...(params.force !== undefined ? { force: params.force } : {}),
-      })
+      launched = orchestrator.delegateToTwin(
+        {
+          sourceTeamId: teamId,
+          sourceTaskId: taskId,
+          twinId,
+          prompt: prompt as string,
+          ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
+          reason,
+          parentRunId,
+          ...(params.force !== undefined ? { force: params.force } : {}),
+        },
+        host
+      )
       break
     }
     case "background": {
-      launched = orchestrator.delegateToBackground({
-        sourceTeamId: teamId,
-        sourceTaskId: taskId,
-        prompt: prompt as string,
-        ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
-        reason,
-        parentRunId,
-        ...(params.force !== undefined ? { force: params.force } : {}),
-      })
+      launched = orchestrator.delegateToBackground(
+        {
+          sourceTeamId: teamId,
+          sourceTaskId: taskId,
+          prompt: prompt as string,
+          ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
+          reason,
+          parentRunId,
+          ...(params.force !== undefined ? { force: params.force } : {}),
+        },
+        host
+      )
       break
     }
     case "external": {
@@ -269,16 +305,19 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
       if (!targetAgentId) {
         throw nonRetryable("action.team.delegate: target 'external' requires 'targetAgentId'")
       }
-      launched = orchestrator.delegateToExternal({
-        sourceTeamId: teamId,
-        sourceTaskId: taskId,
-        targetAgentId,
-        prompt: prompt as string,
-        ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
-        reason,
-        parentRunId,
-        ...(params.force !== undefined ? { force: params.force } : {}),
-      })
+      launched = orchestrator.delegateToExternal(
+        {
+          sourceTeamId: teamId,
+          sourceTaskId: taskId,
+          targetAgentId,
+          prompt: prompt as string,
+          ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
+          reason,
+          parentRunId,
+          ...(params.force !== undefined ? { force: params.force } : {}),
+        },
+        host
+      )
       break
     }
     case "team": {
@@ -316,13 +355,14 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
     params.awaitCompletion !== false &&
     (record.status === "failed" || record.status === "timeout")
   ) {
-    throw nonRetryable(
-      `action.team.delegate: delegation ${record.id} ${record.status}${record.error ? ` — ${record.error}` : ""}`
-    )
+    const error = await visibleTeamNodeOutput(ctx, teamId, {
+      error: `action.team.delegate: delegation ${record.id} ${record.status}${record.error ? ` — ${record.error}` : ""}`,
+    })
+    throw nonRetryable(String(error.error ?? error.withheld))
   }
 
   return {
-    output: {
+    output: await visibleTeamNodeOutput(ctx, teamId, {
       delegationId: record.id,
       teamId,
       taskId,
@@ -331,7 +371,7 @@ export async function runTeamDelegate(ctx: StepExecutionContext): Promise<StepEx
       status: record.status,
       result: record.result,
       error: record.error,
-    },
+    }),
   }
 }
 

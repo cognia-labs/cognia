@@ -1,3 +1,29 @@
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: async (_sessionId: unknown, messages: readonly { id: string }[]) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(messages, [])
+  },
+  preparePersonalDerivedHistory: async (
+    _sessionId: unknown,
+    messages: readonly { id: string }[],
+    source: { sessionId?: string } = {}
+  ) => {
+    const { withholdForReaders } =
+      await import("@cognia/plugin-contract/types/execution/personal-visibility")
+    return withholdForReaders(
+      source.sessionId === "private-source"
+        ? messages.map((m) => ({
+            ...m,
+            metadata: {
+              personalMarks: [{ person: { kind: "local-person" }, source: "read", markedAt: 1 }],
+            },
+          }))
+        : messages,
+      []
+    )
+  },
+}))
 import { createWorkflowTarget } from "./workflow"
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalCase } from "@/types/eval/eval"
@@ -29,6 +55,30 @@ function caseRow(over: Partial<EvalCase>): EvalCase {
 }
 
 describe("createWorkflowTarget", () => {
+  it("withholds private workflow output and trace tool labels before model judging", async () => {
+    const target = createWorkflowTarget(
+      { label: "w", workflowId: "wf" },
+      {
+        runWorkflow: async ({ traceId }) => ({
+          runId: "r",
+          status: "succeeded",
+          output: "PRIVATE RESULT",
+          traceId,
+        }),
+        fetchSpansByTrace: async () => [
+          span({
+            sessionId: "private-source",
+            operationName: "execute_tool",
+            toolName: "PrivateTool",
+            metadata: { args: { value: "PRIVATE ARG" } },
+          }),
+        ],
+      }
+    )
+    const sample = await target.run(caseRow({}))
+    expect(sample.output).toContain("[Withheld: personal content of")
+    expect(JSON.stringify(sample)).not.toMatch(/PRIVATE|PrivateTool/)
+  })
   it("passes inputVars as the trigger payload and stringifies object output", async () => {
     const runWorkflow = jest.fn(
       async (input: { workflowId: string; payload: Record<string, unknown>; traceId: string }) => ({
@@ -59,7 +109,7 @@ describe("createWorkflowTarget", () => {
     )
     const target = createWorkflowTarget(
       { label: "wf", workflowId: "wf1" },
-      { runWorkflow, fetchSpansByTrace: async () => [] }
+      { runWorkflow, fetchSpansByTrace: async () => [span({})] }
     )
     const sample = await target.run(caseRow({ input: "hello" }))
     expect(runWorkflow.mock.calls[0][0].payload).toEqual({ input: "hello" })
@@ -83,7 +133,7 @@ describe("createWorkflowTarget", () => {
     )
     const target = createWorkflowTarget(
       { label: "wf", workflowId: "wf1", timeoutMs: 4000 },
-      { runWorkflow, fetchSpansByTrace: async () => [] }
+      { runWorkflow, fetchSpansByTrace: async () => [span({})] }
     )
     const ac = new AbortController()
     const sample = await target.run(caseRow({ input: "hello" }), ac.signal)

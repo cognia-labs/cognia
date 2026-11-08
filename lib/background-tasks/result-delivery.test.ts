@@ -798,7 +798,7 @@ describe("a character-team room's results (ADR-0252 §4)", () => {
     expect(framed).toContain('Squad "Builders" (run execution:team:r1) finished')
     expect(framed).toContain("hello.sh written")
     expect(framed).toContain("(run execution:team:r2) failed")
-    expect(personalRunIds).toEqual([])
+    expect(personalRunIds).toEqual(["execution:team:r1", "execution:team:r2"])
     expect(targets).toEqual({ memberIds: ["ava", "bee"] })
     expect(journal.every((row) => row.deliveryState === "delivered")).toBe(true)
   })

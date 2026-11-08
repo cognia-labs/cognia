@@ -335,16 +335,17 @@ export function entitySelectionFrom(
   snapshot: string,
   { capturedAt = Date.now(), fingerprint }: EntitySelectionStamp = {}
 ): EntitySelectionRef {
+  const withheld = snapshot.match(/\[Withheld: personal content of [^\]]+\]/)?.[0]
   return {
     kind: "entity",
     entityKind: candidate.entityKind,
     entityId: candidate.id,
-    title: candidate.title,
+    title: withheld ?? candidate.title,
     snapshot: entitySnapshotBody(candidate.entityKind, snapshot),
     comment: "",
     capturedAt,
     ...(fingerprint != null ? { fingerprint } : {}),
-    ...(candidate.subtitle ? { subtitle: candidate.subtitle } : {}),
+    ...(!withheld && candidate.subtitle ? { subtitle: candidate.subtitle } : {}),
     ...(candidate.href ? { href: candidate.href } : {}),
     ...(candidate.sourceSessionId ? { sourceSessionId: candidate.sourceSessionId } : {}),
   }
@@ -512,9 +513,23 @@ export async function listableSessionTitles(
     if (!session) continue
     if (!isSessionExposed(session, "global-search")) continue
     if ((session as { archivedAt?: unknown }).archivedAt != null) continue
-    titles.set(session.id, session.title || session.id)
+    titles.set(session.id, await personalSessionReferenceTitle(session))
   }
   return titles
+}
+
+/** A title can summarize private turns outside a bounded transcript window. */
+async function personalSessionReferenceTitle(session: {
+  id: string
+  title: string
+}): Promise<string> {
+  const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
+  const history = await preparePersonalDerivedHistory(
+    undefined,
+    [{ id: session.id, text: session.title || session.id }],
+    { sessionId: session.id, legacyOwnerArtifact: true }
+  )
+  return history.messages[0].text
 }
 
 /**
@@ -596,11 +611,12 @@ const LOCAL_HISTORY_REFERENCES: Record<HistoryReferenceKind, LocalHistoryReferen
         },
         { pendingRows: pendingSearchRows }
       )
+      const titles = await listableSessionTitles(outcome.results.map((hit) => hit.sessionId))
       return outcome.results.map((hit) =>
         messageCandidate({
           sessionId: hit.sessionId,
           messageId: hit.messageId,
-          sessionTitle: hit.sessionTitle || hit.sessionId,
+          sessionTitle: titles.get(hit.sessionId) ?? "Conversation",
           role: hit.role,
           createdAt: hit.createdAt,
           excerpt: hit.snippet.text,
@@ -867,7 +883,7 @@ function registerBuiltinEntityMentionSources(): void {
       const { listSessions } = await import("@/lib/db/sessions")
       const { filterExposedSessions } = await import("@/lib/chat/session-exposure")
       const rows = await listSessions()
-      return (
+      const visible =
         // A subagent's inner transcript, a resource-workbench aside and a
         // workflow-editor session are all `embedded`: they are reachable from
         // the turn that owns them, never from a list. Offering them here made
@@ -879,14 +895,18 @@ function registerBuiltinEntityMentionSources(): void {
           // every message the model can see anyway.
           .filter((s) => s.id !== ctx.sessionId)
           .filter((s) => !ctx.projectId || !s.projectId || s.projectId === ctx.projectId)
-          .map((s) => ({
+      return Promise.all(
+        visible.map(async (s) => {
+          const title = await personalSessionReferenceTitle(s)
+          return {
             entityKind: "session" as const,
             id: s.id,
-            title: s.title || s.id,
+            title,
             subtitle: new Date(s.updatedAt).toISOString().slice(0, 10),
             href: `/?session=${encodeURIComponent(s.id)}`,
-            searchText: haystack(s.title, s.id),
-          }))
+            searchText: haystack(title, s.id),
+          }
+        })
       )
     },
     async snapshot(candidate) {

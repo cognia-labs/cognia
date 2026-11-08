@@ -4,6 +4,18 @@ import {
   getSessionTranscriptText,
 } from "./entity-transcript"
 
+jest.mock("@/lib/execution/personal-visibility", () => {
+  const { withholdForReaders } = jest.requireActual<
+    typeof import("@cognia/plugin-contract/types/execution/personal-visibility")
+  >("@cognia/plugin-contract/types/execution/personal-visibility")
+  return {
+    preparePersonalHistory: async <T extends { id: string; metadata?: unknown }>(
+      _sessionId: string | undefined,
+      messages: readonly T[]
+    ) => ({ ...withholdForReaders(messages, []), readers: [] }),
+  }
+})
+
 const listRecentMessagesMock = jest.fn()
 jest.mock("@/lib/db/messages", () => ({
   listRecentMessages: (...args: unknown[]) => listRecentMessagesMock(...args),
@@ -76,6 +88,25 @@ describe("formatTranscript", () => {
 describe("getSessionTranscriptText", () => {
   beforeEach(() => {
     listRecentMessagesMock.mockReset()
+  })
+
+  it("withholds the entire personal message before projecting reference text", async () => {
+    listRecentMessagesMock.mockResolvedValue([
+      {
+        id: "private",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "private snippet" },
+          { type: "tool-PrivateTool", input: { title: "private title" }, output: "private result" },
+        ],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+        },
+      },
+    ])
+    expect(await getSessionTranscriptText("source")).toBe(
+      "assistant: [Withheld: personal content of Host owner]"
+    )
   })
 
   // The whole point of the change: `listMessages` read every row of the session

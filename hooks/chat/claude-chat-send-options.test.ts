@@ -4,6 +4,7 @@ import {
   buildSendOptions,
   buildWorkingSetPostCompaction,
   prepareTranscriptRuntimeSend,
+  preparePersonalSteer,
 } from "./claude-chat-send-options"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -16,6 +17,22 @@ import { getDb } from "@/lib/db/schema"
 import { sessionControl, mcpRuntimeConfigurationMatches } from "@/lib/claude/ipc"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { getSettings } from "@/lib/db/settings"
+import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  resolveRunActingIdentity: jest.fn(async () => undefined),
+  recordAbsorbedRequester: jest.fn(async () => undefined),
+}))
+
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalHistory: jest.fn(async (_sessionId, messages) => ({
+    messages,
+    visibilityDigest: undefined,
+    withheldMessageIds: [],
+    readers: [],
+  })),
+}))
 
 jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),
@@ -122,6 +139,163 @@ const PROJECT_B = {
 }
 
 describe("prepareTranscriptRuntimeSend", () => {
+  it("refuses stale history-derived prompt additions before dispatch after a reader joins", async () => {
+    jest
+      .mocked(preparePersonalHistory)
+      .mockResolvedValueOnce({
+        messages: [],
+        visibilityDigest: "new-history",
+        withheldMessageIds: [],
+        readers: [],
+      })
+      .mockResolvedValueOnce({
+        messages: [],
+        visibilityDigest: "new-readers",
+        withheldMessageIds: [],
+        readers: [],
+      })
+    await expect(
+      prepareTranscriptRuntimeSend("s1", {
+        provider: "anthropic",
+        appendSystemPrompt: "prior reader's private summary",
+        personalContextReadersDigest: "prior-readers",
+      })
+    ).rejects.toThrow("personal_history_context_changed")
+    expect(invalidateTranscriptRuntime).toHaveBeenCalledWith("s1")
+    expect(sessionControl).not.toHaveBeenCalled()
+  })
+  it.each(["anthropic", "openai"])(
+    "rebuilds %s instead of resuming when a second requester joins",
+    async (provider) => {
+      jest.mocked(getSession).mockResolvedValue({
+        id: "s1",
+        sdkSessionId: "owner-memory",
+        runtimeTranscriptGeneration: "g1",
+        runtimePersonalVisibilityDigest: "owner-only",
+      } as never)
+      const privateMessage = {
+        id: "private",
+        role: "assistant" as const,
+        parts: [{ type: "text" as const, text: "private salary and tool result" }],
+      }
+      jest.mocked(listMessages).mockResolvedValue([privateMessage])
+      jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+        messages: [
+          {
+            ...privateMessage,
+            parts: [{ type: "text", text: "[Withheld: personal content of Host owner]" }],
+          },
+        ],
+        visibilityDigest: "owner-and-requester",
+        withheldMessageIds: ["private"],
+        readers: [{ kind: "local-person" }],
+      } as Awaited<ReturnType<typeof preparePersonalHistory<import("ai").UIMessage>>>)
+      const result = await prepareTranscriptRuntimeSend("s1", {
+        provider,
+        resumeSessionId: "owner-memory",
+        forkFromSessionId: "owner-parent",
+      })
+      expect(invalidateTranscriptRuntime).toHaveBeenCalledWith("s1")
+      expect(result.resumeSessionId).toBeUndefined()
+      expect(result.forkFromSessionId).toBeUndefined()
+      expect(result.expectedRuntimeSessionId).toBeUndefined()
+      expect(result.personalVisibilityDigest).toBe("owner-and-requester")
+      expect(result.personalVisibilityHasWithheld).toBe(true)
+      expect(JSON.stringify(result)).toContain("[Withheld: personal content of Host owner]")
+      expect(JSON.stringify(result)).not.toContain("private salary")
+      expect(updateSession).toHaveBeenCalledWith("s1", {
+        runtimePersonalVisibilityDigest: "owner-and-requester",
+      })
+      expect(sessionControl).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([undefined, "same-owner", "previously-two-readers"])(
+    "keeps the owner's native resume when no message is withheld (retained=%s)",
+    async (retainedDigest) => {
+      jest.mocked(getSession).mockResolvedValue({
+        id: "s1",
+        sdkSessionId: "owner-memory",
+        runtimePersonalVisibilityDigest: retainedDigest,
+      } as never)
+      jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+        messages: [],
+        visibilityDigest: "same-owner",
+        withheldMessageIds: [],
+        readers: [{ kind: "local-person" }],
+      })
+      const result = await prepareTranscriptRuntimeSend("s1", {
+        provider: "anthropic",
+        resumeSessionId: "owner-memory",
+      })
+      expect(result.resumeSessionId).toBe("owner-memory")
+      expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+      expect(result.personalVisibilityHasWithheld).toBe(false)
+      if (retainedDigest !== "same-owner") {
+        expect(updateSession).toHaveBeenCalledWith("s1", {
+          runtimePersonalVisibilityDigest: "same-owner",
+        })
+      }
+    }
+  )
+
+  it.each([undefined, "two-readers"])(
+    "keeps an entirely visible steer and records its new digest (retained=%s)",
+    async (retainedDigest) => {
+      jest
+        .mocked(getSession)
+        .mockResolvedValue({ id: "s1", runtimePersonalVisibilityDigest: retainedDigest } as never)
+      jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+        messages: [],
+        visibilityDigest: "owner-only",
+        withheldMessageIds: [],
+        readers: [{ kind: "local-person" }],
+      })
+      await expect(preparePersonalSteer("s1")).resolves.toBe(true)
+      expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+      expect(updateSession).toHaveBeenCalledWith("s1", {
+        runtimePersonalVisibilityDigest: "owner-only",
+      })
+    }
+  )
+
+  it("retires a live engine before queueing a steer whose readers changed", async () => {
+    jest.mocked(getSession).mockResolvedValue({
+      id: "s1",
+      runtimePersonalVisibilityDigest: "owner-only",
+    } as never)
+    jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+      messages: [],
+      visibilityDigest: "another-reader",
+      withheldMessageIds: ["private"],
+      readers: [],
+    })
+    await expect(preparePersonalSteer("s1")).resolves.toBe(false)
+    expect(invalidateTranscriptRuntime).toHaveBeenCalledWith("s1")
+  })
+
+  it("checks the exact external engine's digest independently of the builtin engine", async () => {
+    jest.mocked(getSession).mockResolvedValue({
+      id: "s1",
+      runtimePersonalVisibilityDigest: "old-builtin",
+      externalAgentSession: {
+        agentId: "ext",
+        sessionId: "native",
+        personalVisibilityDigest: "external-current",
+      },
+    } as never)
+    jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+      messages: [],
+      visibilityDigest: "external-current",
+      withheldMessageIds: [],
+      readers: [],
+    })
+    await expect(
+      preparePersonalSteer("s1", undefined, { kind: "external", sessionId: "native" })
+    ).resolves.toBe(true)
+    expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+  })
+
   it("reconstructs protected native resumes from current canonical history even without an edit invalidation", async () => {
     jest.mocked(getSession).mockResolvedValue({ id: "s1", sdkSessionId: "old-unchecked" } as never)
     jest.mocked(listMessages).mockResolvedValue([
@@ -305,6 +479,33 @@ describe("prepareTranscriptRuntimeSend", () => {
     expect(JSON.stringify(prepared.initialConversation)).not.toContain("New request")
   })
 
+  it.each([undefined, "two-readers"])(
+    "keeps visible AI SDK history across upgrade or reader loosening (retained=%s)",
+    async (retainedDigest) => {
+      jest.mocked(getSession).mockResolvedValue({
+        id: "s1",
+        sdkSessionId: "sdk",
+        runtimeTranscriptGeneration: "g1",
+        runtimePersonalVisibilityDigest: retainedDigest,
+      } as never)
+      jest.mocked(preparePersonalHistory).mockResolvedValueOnce({
+        messages: [],
+        visibilityDigest: "owner-only",
+        withheldMessageIds: [],
+        readers: [{ kind: "local-person" }],
+      })
+      const status = await sessionControl("s1", "runtimeStatus")
+      jest
+        .mocked(sessionControl)
+        .mockResolvedValue({ ...(status as object), personalVisibilityDigest: retainedDigest })
+      const prepared = await prepareTranscriptRuntimeSend("s1", { provider: "openai" })
+      expect(prepared.expectedRuntimeSessionId).toBe("sdk")
+      expect(prepared.initialConversation).toBeUndefined()
+      expect(prepared.personalVisibilityDigest).toBe("owner-only")
+      expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+    }
+  )
+
   it("pins verified live context and removes obsolete initialization history", async () => {
     const prepared = await prepareTranscriptRuntimeSend("s1", {
       provider: "openai",
@@ -312,7 +513,7 @@ describe("prepareTranscriptRuntimeSend", () => {
     })
     expect(prepared.expectedRuntimeSessionId).toBe("sdk")
     expect(prepared.initialConversation).toBeUndefined()
-    expect(listMessages).not.toHaveBeenCalled()
+    expect(listMessages).toHaveBeenCalledWith("s1")
   })
 
   it("refuses a failed runtime probe instead of assuming that context is retained", async () => {
@@ -320,7 +521,7 @@ describe("prepareTranscriptRuntimeSend", () => {
     await expect(prepareTranscriptRuntimeSend("s1", { provider: "openai" })).rejects.toThrow(
       "sidecar exited"
     )
-    expect(listMessages).not.toHaveBeenCalled()
+    expect(listMessages).toHaveBeenCalledWith("s1")
   })
 
   it.each([
@@ -340,12 +541,12 @@ describe("prepareTranscriptRuntimeSend", () => {
   })
 
   it.each(["openai", "anthropic"])(
-    "stamps the retained generation without scanning %s history",
+    "stamps the retained generation after checking %s history visibility",
     async (provider) => {
       const prepared = await prepareTranscriptRuntimeSend("s1", { provider })
       expect(prepared.transcriptInvalidationId).toBe("g1")
       expect(prepared.initialConversation).toBeUndefined()
-      expect(listMessages).not.toHaveBeenCalled()
+      expect(listMessages).toHaveBeenCalledWith("s1")
       expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
     }
   )
@@ -401,7 +602,7 @@ describe("prepareTranscriptRuntimeSend", () => {
     await expect(
       prepareTranscriptRuntimeSend("s1", { provider: "openai" }, { replacesHistory: true })
     ).rejects.toThrow("close refused")
-    expect(listMessages).not.toHaveBeenCalled()
+    expect(listMessages).toHaveBeenCalledWith("s1")
   })
 
   it("keeps separately owned standalone or shared history while still stamping generation", async () => {
@@ -414,7 +615,7 @@ describe("prepareTranscriptRuntimeSend", () => {
     expect(prepared.initialConversation).toBe(initialConversation)
     expect(prepared.transcriptInvalidationId).toBe("g1")
     expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
-    expect(listMessages).not.toHaveBeenCalled()
+    expect(listMessages).toHaveBeenCalledWith("s1")
   })
 
   it("refuses reconstruction when the account database changes during the history read", async () => {
