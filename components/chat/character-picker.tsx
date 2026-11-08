@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/command"
 import type { Character } from "@cognia/agent-config-types"
 import { useCharacters } from "@/lib/data-hooks/context"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { isOverlayCharacterId } from "@/lib/plugin/registries/character-pack-registry"
 import { LOCAL_PACK_PLUGIN_ID } from "@/lib/plugin/character-pack/local-pack-store"
 import { isAvailableOnProfile } from "@/lib/plugin/character-pack/platform-availability"

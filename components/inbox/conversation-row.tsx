@@ -41,7 +41,7 @@ import { useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from "reac
 import { useFormatter, useNow, useTranslations } from "next-intl"
 import { MoreHorizontalIcon, PinIcon, ShieldAlertIcon, UserRoundIcon } from "lucide-react"
 import type { ConversationAssignee, ConversationStatus } from "@/lib/db/conversation-overrides"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { conversationPlatformAvatarTarget } from "@/lib/connectors/platform-avatar"
 import { usePlatformAvatar } from "@/hooks/connectors/use-platform-avatar"
 import { Badge } from "@/components/ui/badge"

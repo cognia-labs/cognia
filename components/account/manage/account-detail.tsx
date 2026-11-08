@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import type { LocalAccountRecord } from "@/lib/accounts/account-types"
 
 import { ACCOUNT_STATUS_LABEL_KEY, accountStatus } from "./account-status"

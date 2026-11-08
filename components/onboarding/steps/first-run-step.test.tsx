@@ -7,7 +7,7 @@ jest.mock("next-intl", () => ({
     params ? `${key}:${Object.values(params).join(",")}` : key,
 }))
 
-jest.mock("@/components/desktop/avatar-badge", () => ({
+jest.mock("@/components/shared/avatar-badge", () => ({
   AvatarBadge: () => <span data-testid="avatar" />,
 }))
 

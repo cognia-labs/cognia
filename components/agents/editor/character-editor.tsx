@@ -57,7 +57,7 @@ import {
 import { listNativeAnthropicToolEntries } from "@/lib/plugin/registries/native-anthropic-tool-registry"
 import { usePluginSkills } from "@/hooks/skills/use-plugin-skills"
 import { useSubscriptionAccounts } from "@/lib/subscription/core/hooks"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { TestTtsButton } from "@/components/settings/speech/test-tts-button"
 import {
   TwinBindingSection,

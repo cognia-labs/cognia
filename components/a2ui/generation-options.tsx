@@ -24,7 +24,7 @@ import { BotIcon, XIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { CharacterPicker } from "@/components/chat/character-picker"
 import { ModelSelect, composerChipTriggerClass } from "@/components/shared/model-select"
 import { useCharacters } from "@/lib/data-hooks/context"

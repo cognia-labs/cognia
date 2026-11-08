@@ -6,7 +6,7 @@ import { HoverScrollText } from "@/components/chat/ui/hover-scroll-text"
 import { JumpFlash } from "@/components/chat/jump-flash"
 import { ThreadHandoffSourceDialog } from "@/components/thread-handoff/thread-handoff-source-dialog"
 import { PlatformBadge } from "@/components/inbox/platform-badge"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { conversationPlatformAvatarTarget } from "@/lib/connectors/platform-avatar"
 import { usePlatformAvatar } from "@/hooks/connectors/use-platform-avatar"
 import {

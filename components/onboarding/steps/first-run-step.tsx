@@ -5,7 +5,7 @@ import { useState } from "react"
 import { useTranslations } from "next-intl"
 import type { Character, OnboardingShell } from "@cognia/agent-config-types"
 
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { StepHeading } from "../step-shell"

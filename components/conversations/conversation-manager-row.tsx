@@ -43,7 +43,7 @@ import {
 import { ConversationDeleteConfirm } from "@/components/chat/conversation-delete-confirm"
 import { SessionRowMenuItems } from "@/components/chat/session-row-menu-items"
 import { SessionRunIndicator } from "@/components/chat/session-run-indicator"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import type { RowDecorations } from "@/components/desktop/channel-list/row-decorations"
 import { CountPill } from "@/components/shared/count-pill"
 import { DROPDOWN_MENU_KIT } from "@/components/shared/menu-kit"

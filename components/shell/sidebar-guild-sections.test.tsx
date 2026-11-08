@@ -80,7 +80,7 @@ jest.mock("@/hooks/shell/use-guild-unread", () => ({
   markGuildRead: (target: unknown, scope: unknown) =>
     markGuildRead(target as never, scope as never),
 }))
-jest.mock("@/components/desktop/avatar-badge", () => ({
+jest.mock("@/components/shared/avatar-badge", () => ({
   AvatarBadge: ({ subject }: { subject: { name: string } }) => (
     <span data-testid={`avatar-${subject.name}`} />
   ),

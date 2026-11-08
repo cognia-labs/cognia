@@ -10,7 +10,7 @@
 import { useTranslations } from "next-intl"
 import { BotIcon, PlugZapIcon, ServerIcon } from "lucide-react"
 import type { Character, CharacterRuntimeBinding } from "@cognia/agent-config-types"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { Badge } from "@/components/ui/badge"
 import { useAgentRuntimeCatalog } from "@/hooks/agent/use-agent-runtime-catalog"
 import { findRuntimeByKey } from "@/lib/ai/agent/runtime-catalog/types"

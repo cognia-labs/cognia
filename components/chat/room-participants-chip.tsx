@@ -36,7 +36,7 @@
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import {
   DropdownMenu,
   DropdownMenuContent,

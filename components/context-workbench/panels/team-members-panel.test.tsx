@@ -53,7 +53,7 @@ jest.mock("@/lib/chat/composer-mention-request", () => ({
   requestComposerMention: (name: string) => requestComposerMention(name),
 }))
 
-jest.mock("@/components/desktop/avatar-badge", () => ({
+jest.mock("@/components/shared/avatar-badge", () => ({
   AvatarBadge: ({ subject, statusDot }: { subject: { name: string }; statusDot?: unknown }) => (
     <span data-testid={`avatar-${subject.name}`}>{statusDot as never}</span>
   ),

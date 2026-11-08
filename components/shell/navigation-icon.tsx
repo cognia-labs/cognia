@@ -2,7 +2,7 @@
 
 import { isValidElement, type ComponentType, type ReactElement } from "react"
 
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { MobileSpotIcon, type MobileSpotIconName } from "@/components/mobile/mobile-spot-icon"
 import type { AvatarSubject } from "@/lib/ui/avatar"
 import { navCatalog } from "@/lib/shell/nav-catalog"

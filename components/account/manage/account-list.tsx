@@ -13,7 +13,7 @@ import { SearchIcon } from "lucide-react"
 
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { cn } from "@/lib/utils"
 import type { LocalAccountRecord } from "@/lib/accounts/account-types"
 

@@ -43,7 +43,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { AtSignIcon, ChevronDownIcon, ChevronRightIcon, CrownIcon, UsersIcon } from "lucide-react"
 
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { Button } from "@/components/ui/button"
 import {
   ContextMenu,

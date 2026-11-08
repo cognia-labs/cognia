@@ -15,7 +15,7 @@ import { toast } from "sonner"
 import { ImagePlusIcon, Trash2Icon, UserRoundIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { isAcceptedAvatarType } from "@/lib/profile/avatar-image"
 
 import { AvatarEditDialog } from "./avatar-edit-dialog"

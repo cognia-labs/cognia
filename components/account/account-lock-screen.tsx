@@ -42,7 +42,7 @@ import {
   TriangleAlertIcon,
 } from "lucide-react"
 
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { useConfirmDialog } from "@/components/shared/confirm-dialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"

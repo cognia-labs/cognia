@@ -12,7 +12,7 @@ import { useFormatter, useNow, useTranslations } from "next-intl"
 import { AtSignIcon } from "lucide-react"
 
 import { MatchHighlight } from "@/components/chat/completion/match-highlight"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { AvatarBadge } from "@/components/shared/avatar-badge"
 import { Badge } from "@/components/ui/badge"
 import { CommandItem } from "@/components/ui/command"
 import { isReferenceable } from "@/lib/global-search/referenceable"

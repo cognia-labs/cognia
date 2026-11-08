@@ -6,7 +6,7 @@ import { AvatarBadge } from "./avatar-badge"
 // (or an image, falling back to the glyph on load error). Used by the guild rail,
 // channel list, command palette, and member list.
 const meta = {
-  title: "Desktop/AvatarBadge",
+  title: "Shared/AvatarBadge",
   component: AvatarBadge,
   parameters: { layout: "centered" },
   args: { subject: { name: "Ada Lovelace" }, size: 32 },

@@ -120,7 +120,7 @@ jest.mock("@/components/onboarding/steps/provider-step", () => ({
 jest.mock("@/components/onboarding/express-sign-in", () => ({
   ExpressSignIn: () => <div data-testid="onboarding-express-sign-in" />,
 }))
-jest.mock("@/components/desktop/avatar-badge", () => ({ AvatarBadge: () => <span /> }))
+jest.mock("@/components/shared/avatar-badge", () => ({ AvatarBadge: () => <span /> }))
 
 const advanceOnboarding = jest.fn().mockResolvedValue(undefined)
 const completeOnboarding = jest.fn().mockResolvedValue(undefined)
