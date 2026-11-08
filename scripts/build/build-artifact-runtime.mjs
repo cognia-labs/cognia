@@ -50,7 +50,7 @@ export const ARTIFACT_TAB_BOOTSTRAP_FILE = "artifact-tab-bootstrap.js"
 export const MANIFEST_FILE = "manifest.json"
 
 /**
- * Schema 4 adds the standalone tab bootstrap and redeclarable classic scripts.
+ * Schema 4 adds the standalone tab bootstrap and revision-isolated classic scripts.
  */
 export const MANIFEST_SCHEMA = 4
 
@@ -119,23 +119,6 @@ function looksLikeModule(code) {
   return /^\\s*(?:import|export)[\\s{*]/m.test(code)
 }
 
-function redeclarableClassicGlobals({ types: t }) {
-  return {
-    visitor: {
-      VariableDeclaration(path) {
-        if (path.parentPath.isProgram() && path.node.kind !== "var") path.node.kind = "var"
-      },
-      ClassDeclaration(path) {
-        if (!path.parentPath.isProgram()) return
-        const declaration = path.node
-        path.replaceWith(t.variableDeclaration("var", [
-          t.variableDeclarator(t.cloneNode(declaration.id), t.toExpression(declaration)),
-        ]))
-      },
-    },
-  }
-}
-
 /**
  * Compile artifact JSX to a classic script. Model-authored React artifacts
  * very often open with \`import React from "react"\`, which is a syntax error
@@ -146,7 +129,7 @@ export function transformArtifactJsx(code) {
   const isModule = looksLikeModule(code)
   const result = transform(code, {
     presets: [["react", { runtime: "classic" }]],
-    plugins: isModule ? [availablePlugins["transform-modules-commonjs"]] : [redeclarableClassicGlobals],
+    plugins: isModule ? [availablePlugins["transform-modules-commonjs"]] : [],
     sourceType: isModule ? "module" : "script",
     filename: "artifact.jsx",
     compact: false,

@@ -95,15 +95,18 @@ const DEFAULT_MESSAGES: ArtifactShellMessages = {
   runtimeInitFailed: "The artifact runtime failed to initialize.",
 }
 
-/** Wrap transformed React artifact code so its component reaches the picker. */
+/**
+ * Wrap transformed React artifact code so its component reaches the picker.
+ * Classic revisions have their own function scope, with the window as `this`.
+ * Top-level var/function declarations stay local, not properties on window.
+ */
 export function buildArtifactModuleSource(code: string, isModule: boolean): string {
   if (isModule) {
     // Babel downleveled ESM to CommonJS, so the code expects module/exports/require.
     return `(function () {\nconst __cogniaArtifactModule = { exports: {} };\n(function (module, exports, require) {\n${code}\n})(__cogniaArtifactModule, __cogniaArtifactModule.exports, __cogniaArtifactRequire);\n__cogniaArtifactPick(null, null, null, __cogniaArtifactModule.exports);\n})();\n`
   }
-  // The transformer makes Program-level lexical declarations redeclarable.
-  // Execute globally to retain classic var/function globals and top-level this.
-  return `${code}\n;__cogniaArtifactPick(typeof App !== "undefined" ? App : null, typeof Component !== "undefined" ? Component : null, typeof Main !== "undefined" ? Main : null, null);\n`
+  // Keep the picker in the revision's scope so earlier component bindings expire.
+  return `(function () {\n${code}\n;__cogniaArtifactPick(typeof App !== "undefined" ? App : null, typeof Component !== "undefined" ? Component : null, typeof Main !== "undefined" ? Main : null, null);\n}).call(globalThis);\n`
 }
 
 /**

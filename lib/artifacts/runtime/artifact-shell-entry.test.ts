@@ -39,18 +39,20 @@ describe("pickArtifactComponent", () => {
 })
 
 describe("buildArtifactModuleSource", () => {
-  it("preserves classic var and function globals", () => {
-    const context = createContext({ __cogniaArtifactPick: jest.fn() })
+  it("keeps classic var and function declarations local to the revision", () => {
+    const picked = jest.fn()
+    const context = createContext({ __cogniaArtifactPick: picked })
     context.window = context
     runInContext(
       buildArtifactModuleSource(
-        'var palette = "blue"; function App(){return window.palette}',
+        'var palette = "blue"; function App(){return [palette, window.palette]}',
         false
       ),
       context
     )
-    expect(context.palette).toBe("blue")
-    expect(context.App()).toBe("blue")
+    expect(picked.mock.calls[0][0]()).toEqual(["blue", undefined])
+    expect(context.palette).toBeUndefined()
+    expect(context.App).toBeUndefined()
   })
 
   it("preserves top-level this even in a strict classic script", () => {
@@ -70,26 +72,21 @@ describe("buildArtifactModuleSource", () => {
     'const App = () => "revision"',
     'function App(){return "revision"}',
     'let Component = () => "revision"',
-    'class Main { static revision = "revision" }',
-  ])("replaces repeated classic globals after the real JSX transform: %s", (code) => {
+    'class App { static label = "revision" }',
+    'class Main { static label = "revision" }',
+  ])("isolates repeated classic declarations before the JSX transform: %s", (code) => {
     const picked: unknown[] = []
     const context = createContext({
       __cogniaArtifactPick: (...candidates: unknown[]) =>
         picked.push(pickArtifactComponent(...(candidates as [unknown, unknown, unknown, unknown]))),
     })
-    runInContext(
-      buildArtifactModuleSource(transformClassic(code.replace("revision", "one")), false),
-      context
-    )
-    runInContext(
-      buildArtifactModuleSource(transformClassic(code.replace("revision", "two")), false),
-      context
-    )
+    runInContext(buildArtifactModuleSource(code.replace("revision", "one"), false), context)
+    runInContext(buildArtifactModuleSource(code.replace("revision", "two"), false), context)
     expect(picked).toHaveLength(2)
     expect(picked[1]).not.toBe(picked[0])
   })
 
-  it("hands classic code the three global names verbatim", () => {
+  it("hands classic code's three local component names to the picker", () => {
     const source = buildArtifactModuleSource("const App = () => null", false)
     expect(source).toContain("const App = () => null")
     expect(source).toContain('typeof App !== "undefined"')
@@ -240,9 +237,10 @@ describe("installArtifactShellRuntime", () => {
   })
 
   it.each([
-    'const App = () => React.createElement("p", null, "revision")',
-    'function App(){return React.createElement("p", null, "revision")}',
-    'class App extends React.Component { render(){return React.createElement("p", null, "revision")} }',
+    "const App = () => <p>revision</p>",
+    "function App(){return <p>revision</p>}",
+    "let Component = () => <p>revision</p>",
+    "class App extends React.Component { render(){return <p>revision</p>} }",
   ])("replaces revision one with revision two using generated classic code: %s", async (code) => {
     const h = harness({ realReact: true })
     const context = createContext({ React, __cogniaArtifactPick: h.pick })
@@ -268,6 +266,65 @@ describe("installArtifactShellRuntime", () => {
     }
   })
 
+  it("selects Main after a revision replaces App", async () => {
+    const h = harness({ realReact: true })
+    const context = createContext({ React, __cogniaArtifactPick: h.pick })
+    try {
+      for (const [revision, name, label] of [
+        [1, "App", "one"],
+        [2, "Main", "two"],
+      ] as const) {
+        await act(async () => {
+          h.dispatch({
+            type: "render-component",
+            revision,
+            code: transformClassic(`const ${name} = () => <p>${label}</p>`),
+          })
+          runInContext(h.blobs.at(-1)!, context)
+        })
+        expect(document.getElementById("root")).toHaveTextContent(label)
+        expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision })
+      }
+      expect(context.App).toBeUndefined()
+      expect(context.Main).toBeUndefined()
+    } finally {
+      h.dispose()
+    }
+  })
+
+  it.each([
+    ['const top = [1, 2]; const App = () => <p>{top.map(n => n * 2).join(",")}</p>', "2,4"],
+    ['const name = { color: "blue" }; const App = () => <p>{name.color}</p>', "blue"],
+    ['const status = { message: "ready" }; const App = () => <p>{status.message}</p>', "ready"],
+  ])("renders lexical bindings that share Window property names: %s", async (code, expected) => {
+    const h = harness({ realReact: true })
+    const context = createContext({ React, __cogniaArtifactPick: h.pick })
+    // Match Window's read-only top and string-coercing name/status boundaries.
+    const top = {}
+    Object.defineProperty(context, "top", { value: top, writable: false })
+    const strings: Record<string, string> = { name: "", status: "" }
+    for (const property of ["name", "status"]) {
+      Object.defineProperty(context, property, {
+        get: () => strings[property],
+        set: (value: unknown) => {
+          strings[property] = String(value)
+        },
+      })
+    }
+    try {
+      await act(async () => {
+        h.dispatch({ type: "render-component", revision: 1, code: transformClassic(code) })
+        runInContext(h.blobs.at(-1)!, context)
+      })
+      expect(document.getElementById("root")).toHaveTextContent(expected)
+      expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision: 1 })
+      expect(context.top).toBe(top)
+      expect(strings).toEqual({ name: "", status: "" })
+    } finally {
+      h.dispose()
+    }
+  })
+
   it("ignores a queued older blob's picker after a newer revision starts", () => {
     const h = harness()
     h.dispatch({ type: "render-component", code: "function App(){}", revision: 1 })
@@ -283,23 +340,32 @@ describe("installArtifactShellRuntime", () => {
   })
 
   it.each([
-    'var palette = "blue"; function App(){ return React.createElement("p", null, window.palette) }',
-    '"use strict"; const R = this.React; function App(){ return R.createElement("p", null, "blue") }',
-  ])("renders classic global semantics through the shell: %s", async (code) => {
-    const h = harness({ realReact: true })
-    const context = createContext({ React, __cogniaArtifactPick: h.pick })
-    context.window = context
-    try {
-      await act(async () => {
-        h.dispatch({ type: "render-component", revision: 1, code: transformClassic(code) })
-        runInContext(h.blobs.at(-1)!, context)
-      })
-      expect(document.getElementById("root")).toHaveTextContent("blue")
-      expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision: 1 })
-    } finally {
-      h.dispose()
+    [
+      'var palette = "blue"; function App(){ return <p>{palette}:{String(window.palette)}</p> }',
+      "blue:undefined",
+    ],
+    [
+      '"use strict"; const R = this.React; function App(){ return R.createElement("p", null, "blue") }',
+      "blue",
+    ],
+  ])(
+    "renders revision-local vars and window-bound this through the shell: %s",
+    async (code, expected) => {
+      const h = harness({ realReact: true })
+      const context = createContext({ React, __cogniaArtifactPick: h.pick })
+      context.window = context
+      try {
+        await act(async () => {
+          h.dispatch({ type: "render-component", revision: 1, code: transformClassic(code) })
+          runInContext(h.blobs.at(-1)!, context)
+        })
+        expect(document.getElementById("root")).toHaveTextContent(expected)
+        expect(h.posted).toContainEqual({ type: "artifact-preview-ready", revision: 1 })
+      } finally {
+        h.dispose()
+      }
     }
-  })
+  )
 
   it("reports ready only after the component committed, once per revision", async () => {
     const h = harness({ realReact: true })

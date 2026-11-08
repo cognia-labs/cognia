@@ -211,44 +211,52 @@ test("the committed react bundle is a production build exposing the runtime glob
   assert.ok(sandbox.__COGNIA_ARTIFACT_REACT_VERSION__.startsWith("19."))
 })
 
-test("classic transforms allow repeated lexical declarations while preserving global script semantics", () => {
+test("classic transforms preserve lexical TDZ and const assignment errors", () => {
   const sandbox = { console }
-  sandbox.globalThis = sandbox
-  sandbox.window = sandbox
   vm.createContext(sandbox)
-  vm.runInContext(readOutput(REACT_RUNTIME_FILE).toString("utf8"), sandbox)
   vm.runInContext(readOutput(JSX_TRANSFORM_FILE).toString("utf8"), sandbox)
-  for (const source of [
-    'const App = () => "revision"',
-    'let App = () => "revision"',
-    'class App extends React.Component { render(){ return "revision" } }',
-  ]) {
-    for (const label of ["one", "two"]) {
-      const result = sandbox.CogniaArtifactJsx.transform(source.replace("revision", label))
-      assert.equal(result.isModule, false)
-      vm.runInContext(result.code, sandbox)
-      assert.equal(typeof sandbox.App, "function")
-      const output = source.startsWith("class") ? new sandbox.App({}).render() : sandbox.App()
-      assert.equal(output, label)
-    }
+  for (const declaration of ["const value = 1", "let value = 1", "class value {}"]) {
+    const result = sandbox.CogniaArtifactJsx.transform(`globalThis.before = value; ${declaration}`)
+    assert.equal(result.isModule, false)
+    assert.throws(() => vm.runInNewContext(result.code, {}), { name: "ReferenceError" })
   }
-  const global = sandbox.CogniaArtifactJsx.transform('var palette="blue"; function App(){return window.palette}')
-  vm.runInContext(global.code, sandbox)
-  assert.equal(sandbox.App(), "blue")
-  const strict = sandbox.CogniaArtifactJsx.transform('"use strict"; const R=this.React; function App(){return R}')
-  vm.runInContext(strict.code, sandbox)
-  assert.equal(sandbox.App(), sandbox.React)
-  const nested = sandbox.CogniaArtifactJsx.transform('const App = () => { const local = 1; { let block = 2; class Nested {} } }; { let blockOnly = 3; }')
-  assert.match(nested.code, /const local/)
-  assert.match(nested.code, /let block/)
-  assert.match(nested.code, /class Nested/)
+  const constant = sandbox.CogniaArtifactJsx.transform("const value = 1; value = 2")
+  assert.throws(() => vm.runInNewContext(constant.code, {}), { name: "TypeError" })
   const moduleResult = sandbox.CogniaArtifactJsx.transform('export const App = () => null; class Local {}')
   assert.equal(moduleResult.isModule, true)
   assert.match(moduleResult.code, /const App/)
   assert.match(moduleResult.code, /class Local/)
 })
 
-test("the Worker face uses the same redeclarable classic transform", () => {
+test("classic lexical bindings shadow read-only and string-coercing Window properties", () => {
+  const sandbox = { console }
+  vm.createContext(sandbox)
+  vm.runInContext(readOutput(JSX_TRANSFORM_FILE).toString("utf8"), sandbox)
+  const top = {}
+  Object.defineProperty(sandbox, "top", { value: top, writable: false })
+  const strings = { name: "", status: "" }
+  for (const property of ["name", "status"]) {
+    Object.defineProperty(sandbox, property, {
+      get: () => strings[property],
+      set: (value) => { strings[property] = String(value) },
+    })
+  }
+  const result = sandbox.CogniaArtifactJsx.transform(`
+    const top = [1, 2];
+    const name = { color: "blue" };
+    const status = { message: "ready" };
+    const App = () => top.map(n => n * 2).join(",") + ":" + name.color + ":" + status.message;
+    globalThis.rendered = App();
+  `)
+  // The frame shell runs every classic revision in its own function scope with
+  // the window as `this` (buildArtifactModuleSource); mirror that shape here.
+  vm.runInContext(`(function () {\n${result.code}\n}).call(globalThis)`, sandbox)
+  assert.equal(sandbox.rendered, "2,4:blue:ready")
+  assert.equal(sandbox.top, top)
+  assert.deepEqual(strings, { name: "", status: "" })
+})
+
+test("the Worker face preserves the same classic lexical semantics", () => {
   const listeners = {}
   const replies = []
   const worker = {
@@ -259,10 +267,14 @@ test("the Worker face uses the same redeclarable classic transform", () => {
   listeners.message({ data: { type: "cognia-artifact-jsx-transform", id: 1, code: "const App = () => <p>one</p>" } })
   assert.equal(replies[0].type, "cognia-artifact-jsx-result")
   assert.equal(replies[0].isModule, false)
-  assert.match(replies[0].code, /var App/)
+  assert.match(replies[0].code, /const App/)
   listeners.message({ data: { type: "cognia-artifact-jsx-transform", id: 2, code: "export const App = () => <p>two</p>" } })
   assert.equal(replies[1].isModule, true)
   assert.match(replies[1].code, /const App/)
+  listeners.message({ data: { type: "cognia-artifact-jsx-transform", id: 3, code: "globalThis.before = value; const value = 1" } })
+  assert.equal(replies[2].type, "cognia-artifact-jsx-result")
+  assert.equal(replies[2].isModule, false)
+  assert.throws(() => vm.runInNewContext(replies[2].code, {}), { name: "ReferenceError" })
 })
 
 test("the committed tab bootstrap executes the embedded program with frame-owned blob URLs", () => {
