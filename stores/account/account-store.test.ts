@@ -2265,6 +2265,108 @@ describe("account store switching, locking, and lifecycle", () => {
     expect(result.wasActive).toBe(true)
   })
 
+  it.each(["throws", "hangs"])(
+    "finishes committed account deletion and reports a flusher that %s",
+    async (mode) => {
+      jest.useFakeTimers()
+      mockIsTauri = false
+      const store = makeStore()
+      store.setState({
+        accounts: [account("acct_alpha", "Alpha"), account("acct_beta", "Beta")],
+        activeAccountId: "acct_alpha",
+        unlockedAccountId: "acct_alpha",
+        locked: false,
+      })
+      const failure = new DOMException("storage quota exceeded", "QuotaExceededError")
+      const dispose = registerPendingAccountWriteFlusher(() => {
+        if (mode === "throws") throw failure
+        return new Promise<void>(() => {})
+      })
+      try {
+        const deleting = store
+          .getState()
+          .deleteAccount("acct_alpha", { replacementAccountId: "acct_beta" })
+        const rejection = deleting.catch((error: unknown) => error)
+        if (mode === "hangs") {
+          await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+        }
+        const error = await rejection
+        expect(mockDeleteRegistryAccount).toHaveBeenCalledWith("acct_alpha", {
+          replacementAccountId: "acct_beta",
+        })
+        expect(mockForgetCloudIdentity).toHaveBeenCalledWith("acct_alpha", { hostBound: true })
+        expect(mockLockBrowserVault).toHaveBeenCalled()
+        expect(mockStopRuntimeSubscriptions).toHaveBeenCalled()
+        expect(mockDropAccountDatabase).toHaveBeenCalledWith("acct_alpha")
+        expect(mockRemoveRuntimeTargets).toHaveBeenCalledWith("acct_alpha")
+        expect(mockPurgeAccountLocalState).toHaveBeenCalledWith("acct_alpha")
+        expect(mockPurgeAccountFiles).toHaveBeenCalledWith("acct_alpha")
+        expect(mockDeleteBrowserVault).toHaveBeenCalledWith("acct_alpha")
+        expect(mockClearActiveRuntimeTargetContext).toHaveBeenCalled()
+        expect(mockClearAccountDatabaseSelection).toHaveBeenCalled()
+        expect(mockClearAccountLocalState).toHaveBeenCalled()
+        expect(store.getState()).toMatchObject({
+          accounts: [account("acct_beta", "Beta")],
+          activeAccountId: "acct_beta",
+          unlockedAccountId: null,
+          locked: true,
+        })
+        expect(store.getState().error).toBeTruthy()
+        expect(error).toBeInstanceOf(AggregateError)
+        expect(error).toMatchObject({
+          errors: [
+            mode === "throws"
+              ? failure
+              : expect.objectContaining({ message: expect.stringContaining("timed out") }),
+          ],
+        })
+      } finally {
+        dispose()
+        jest.useRealTimers()
+      }
+    }
+  )
+
+  it("attempts every deletion cleanup and aggregates lock and cleanup failures", async () => {
+    mockIsTauri = false
+    const store = makeStore()
+    store.setState({
+      accounts: [account("acct_alpha", "Alpha"), account("acct_beta", "Beta")],
+      activeAccountId: "acct_alpha",
+      unlockedAccountId: "acct_alpha",
+      locked: false,
+    })
+    const flushFailure = new DOMException("storage quota exceeded", "QuotaExceededError")
+    const databaseFailure = new Error("database deletion failed")
+    const targetFailure = new Error("target deletion failed")
+    const stateFailure = new Error("local state purge failed")
+    const vaultFailure = new Error("vault deletion failed")
+    mockDropAccountDatabase.mockRejectedValueOnce(databaseFailure)
+    mockRemoveRuntimeTargets.mockRejectedValueOnce(targetFailure)
+    mockPurgeAccountLocalState.mockRejectedValueOnce(stateFailure)
+    mockDeleteBrowserVault.mockRejectedValueOnce(vaultFailure)
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      throw flushFailure
+    })
+    try {
+      await expect(
+        store.getState().deleteAccount("acct_alpha", { replacementAccountId: "acct_beta" })
+      ).rejects.toMatchObject({
+        errors: [flushFailure, databaseFailure, targetFailure, stateFailure, vaultFailure],
+      })
+      expect(mockPurgeAccountFiles).toHaveBeenCalledWith("acct_alpha")
+      expect(mockClearAccountLocalState).toHaveBeenCalled()
+      expect(store.getState()).toMatchObject({
+        accounts: [account("acct_beta", "Beta")],
+        activeAccountId: "acct_beta",
+        unlockedAccountId: null,
+        locked: true,
+      })
+    } finally {
+      dispose()
+    }
+  })
+
   it("uses default account-local storage helpers when no dependency override is supplied", async () => {
     const alpha = account("acct_alpha", "Alpha")
     const beta = account("acct_beta", "Beta")

@@ -282,6 +282,169 @@ describe("account write flush", () => {
     expect(artifactsTable.records.map((entry) => entry.id)).toEqual(["a"])
     expect(window.localStorage.length).toBe(0)
   })
+
+  it.each(["same-target activation", "switch rollback"])(
+    "resumes writes in order after a timeout and %s without restarting the bridge",
+    async (transition) => {
+      const dispose = startArtifactDexieBridge()
+      await settle()
+      const write = deferred<void>()
+      fakeDb.transaction.mockImplementationOnce(async (...args: unknown[]) => {
+        await write.promise
+        await (args[args.length - 1] as () => Promise<void>)()
+      })
+      const pending = artifact("a", { content: "pending before timeout" })
+      artifactStore.setState({ artifacts: { a: pending }, artifactVersions: {} })
+      const failed = expect(flushPendingAccountWrites()).rejects.toThrow("timed out")
+      await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+      await failed
+
+      if (transition === "switch rollback") {
+        getDbImpl = () => ({ ...fakeDb, name: "account-b" })
+        persistOptions.name = "cognia-artifacts:b"
+        artifactStore.setState({ artifacts: {}, artifactVersions: {} })
+      }
+      getDbImpl = () => ({ ...fakeDb })
+      persistOptions.name = "cognia-artifacts"
+      artifactStore.setState({
+        artifacts: { a: artifact("a", { content: "new edit after transition" }) },
+        artifactVersions: {},
+      })
+      await jest.advanceTimersByTimeAsync(ARTIFACT_SYNC_DEBOUNCE_MS)
+      expect(artifactsTable.bulkPut).not.toHaveBeenCalled()
+      write.resolve()
+      await settle()
+      expect(artifactsTable.bulkPut.mock.calls.map(([rows]) => rows[0].content)).toEqual([
+        "pending before timeout",
+        "new edit after transition",
+      ])
+      expect(artifactsTable.records[0].content).toBe("new edit after transition")
+
+      // A later bridge must not replay the timed-out snapshot over the commit.
+      dispose()
+      artifactStore._reset({ artifacts: {}, artifactVersions: {} })
+      startArtifactDexieBridge()
+      await settle()
+      expect(artifactStore.getState().artifacts.a.content).toBe("new edit after transition")
+    }
+  )
+
+  it("resumes hydration after a timeout when the same target remains active", async () => {
+    const read = deferred<Record<string, unknown>[]>()
+    artifactsTable.toArray.mockReturnValueOnce(read.promise)
+    startArtifactDexieBridge()
+    await settle()
+    artifactStore.setState({ artifacts: { a: artifact("a") }, artifactVersions: {} })
+    const failed = expect(flushPendingAccountWrites()).rejects.toThrow("timed out")
+    await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+    await failed
+    getDbImpl = () => ({ ...fakeDb })
+    artifactStore.setState({
+      artifacts: { a: artifact("a", { content: "new edit after timeout" }) },
+      artifactVersions: {},
+    })
+    read.resolve([])
+    await settle()
+    expect(artifactsTable.records[0]?.content).toBe("new edit after timeout")
+    await expect(flushPendingAccountWrites()).resolves.toBeUndefined()
+  })
+
+  it("retries timed-out hydration after its read finishes during a switch that rolls back", async () => {
+    const read = deferred<Record<string, unknown>[]>()
+    artifactsTable.toArray.mockReturnValueOnce(read.promise)
+    startArtifactDexieBridge()
+    await settle()
+    artifactStore.setState({ artifacts: { a: artifact("a") }, artifactVersions: {} })
+    const failed = expect(flushPendingAccountWrites()).rejects.toThrow("timed out")
+    await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+    await failed
+    getDbImpl = () => ({ ...fakeDb, name: "account-b" })
+    persistOptions.name = "cognia-artifacts:b"
+    artifactStore.setState({ artifacts: { b: artifact("b") }, artifactVersions: {} })
+    read.resolve([])
+    await settle()
+    expect(artifactsTable.records).toEqual([])
+
+    getDbImpl = () => fakeDb
+    persistOptions.name = "cognia-artifacts"
+    artifactStore.setState({
+      artifacts: { a: artifact("a", { content: "edit after rollback" }) },
+      artifactVersions: {},
+    })
+    await flushPendingAccountWrites()
+    expect(artifactsTable.records).toEqual([
+      expect.objectContaining({ id: "a", content: "edit after rollback" }),
+    ])
+    expect(Object.keys(artifactStore.getState().artifacts)).toEqual(["a"])
+  })
+
+  it("retries the latest edit when a timed-out transaction subsequently fails", async () => {
+    startArtifactDexieBridge()
+    await settle()
+    const write = deferred<void>()
+    fakeDb.transaction.mockImplementationOnce(async () => {
+      await write.promise
+      throw new Error("transaction aborted after timeout")
+    })
+    artifactStore.setState({ artifacts: { a: artifact("a") }, artifactVersions: {} })
+    const failed = expect(flushPendingAccountWrites()).rejects.toThrow("timed out")
+    await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+    await failed
+    artifactStore.setState({
+      artifacts: { a: artifact("a", { content: "latest edit" }) },
+      artifactVersions: {},
+    })
+    write.resolve()
+    await settle()
+    await jest.advanceTimersByTimeAsync(ARTIFACT_SYNC_DEBOUNCE_MS)
+    expect(artifactsTable.records).toEqual([
+      expect.objectContaining({ id: "a", content: "latest edit" }),
+    ])
+  })
+
+  it.each(["hydration", "transaction"])(
+    "keeps a timed-out %s detached after a real target switch",
+    async (phase) => {
+      const pending = deferred<Record<string, unknown>[]>()
+      if (phase === "hydration") artifactsTable.toArray.mockReturnValueOnce(pending.promise)
+      const dispose = startArtifactDexieBridge()
+      await settle()
+      if (phase === "transaction") {
+        fakeDb.transaction.mockImplementationOnce(async (...args: unknown[]) => {
+          await pending.promise
+          await (args[args.length - 1] as () => Promise<void>)()
+        })
+      }
+      artifactStore.setState({ artifacts: { a: artifact("a") }, artifactVersions: {} })
+      const failed = expect(flushPendingAccountWrites()).rejects.toThrow("timed out")
+      await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+      await failed
+      const otherDb = {
+        ...fakeDb,
+        name: "account-b",
+        artifacts: fakeTable(),
+        artifactVersions: fakeTable(),
+      }
+      getDbImpl = () => otherDb
+      persistOptions.name = "cognia-artifacts:b"
+      artifactStore.setState({ artifacts: { b: artifact("b") }, artifactVersions: {} })
+      pending.resolve([])
+      await jest.advanceTimersByTimeAsync(ARTIFACT_SYNC_DEBOUNCE_MS)
+      await settle()
+      expect(otherDb.artifacts.records).toEqual([])
+      expect(otherDb.artifacts.bulkPut).not.toHaveBeenCalled()
+      expect(artifactStore.getState().artifacts).toEqual({ b: artifact("b") })
+      expect(artifactsTable.records.map((row) => row.id)).not.toContain("b")
+
+      dispose()
+      getDbImpl = () => fakeDb
+      persistOptions.name = "cognia-artifacts"
+      artifactStore._reset({ artifacts: {}, artifactVersions: {} })
+      startArtifactDexieBridge()
+      await settle()
+      expect(artifactStore.getState().artifacts.a.content).toBe("content-a")
+    }
+  )
 })
 
 describe("diffArtifactMirror", () => {
@@ -831,33 +994,39 @@ describe("startArtifactDexieBridge", () => {
     expect(artifactsTable.records).toHaveLength(1)
   })
 
-  it("disables the mirror when hydration fails instead of deleting the table", async () => {
-    artifactsTable.toArray.mockRejectedValueOnce(new Error("DatabaseClosedError"))
-    artifactsTable.records.push({
-      id: "survivor",
-      sessionId: "s",
-      messageId: "m",
-      type: "code",
-      title: "s",
-      content: "c",
-      version: 1,
-      createdAt: 1,
-      updatedAt: 2,
-    })
+  it.each([new Error("DatabaseClosedError"), undefined])(
+    "disables the mirror when hydration fails instead of deleting the table (%s)",
+    async (failure) => {
+      artifactsTable.toArray.mockRejectedValueOnce(failure)
+      artifactsTable.records.push({
+        id: "survivor",
+        sessionId: "s",
+        messageId: "m",
+        type: "code",
+        title: "s",
+        content: "c",
+        version: 1,
+        createdAt: 1,
+        updatedAt: 2,
+      })
 
-    startArtifactDexieBridge()
-    await settle()
+      startArtifactDexieBridge()
+      await settle()
 
-    artifactStore.setState({ artifacts: {}, artifactVersions: {} })
-    jest.advanceTimersByTime(ARTIFACT_SYNC_DEBOUNCE_MS)
-    await settle()
+      artifactStore.setState({ artifacts: {}, artifactVersions: {} })
+      jest.advanceTimersByTime(ARTIFACT_SYNC_DEBOUNCE_MS)
+      await settle()
 
-    expect(artifactsTable.records.map((r) => r.id)).toEqual(["survivor"])
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("mirror disabled"),
-      expect.objectContaining({ err: expect.stringContaining("DatabaseClosedError") })
-    )
-  })
+      await expect(flushPendingAccountWrites()).rejects.toThrow()
+      expect(artifactsTable.toArray).toHaveBeenCalledTimes(1)
+
+      expect(artifactsTable.records.map((r) => r.id)).toEqual(["survivor"])
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("mirror disabled"),
+        expect.objectContaining({ err: String(failure) })
+      )
+    }
+  )
 
   it("flushes a pending write when the bridge is disposed", async () => {
     const dispose = startArtifactDexieBridge()

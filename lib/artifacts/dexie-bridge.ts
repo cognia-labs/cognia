@@ -305,7 +305,8 @@ export function startArtifactDexieBridge(): () => void {
   let queued: ArtifactSnapshot | null = null
   let writeFailure: unknown
   let hydrationFailure: unknown
-  let writesBlocked = false
+  let hydrationFailed = false
+  let ready: Promise<void> | null = null
   const initial = useArtifactStore.getState()
   let lastSeenArtifacts = initial.artifacts
   let lastSeenVersions = initial.artifactVersions
@@ -330,8 +331,7 @@ export function startArtifactDexieBridge(): () => void {
       return false
     }
   }
-  const canApply = () =>
-    !disposed && !writesBlocked && activeBridge === bridge && ownsCurrentScope()
+  const canApply = () => !disposed && activeBridge === bridge && ownsCurrentScope()
   const clearTimer = () => {
     if (timer !== null) clearTimeout(timer)
     timer = null
@@ -350,7 +350,7 @@ export function startArtifactDexieBridge(): () => void {
     const write: Promise<void> = Promise.resolve()
       .then(async () => {
         while (queued) {
-          if (writesBlocked || !ownsCurrentScope()) {
+          if (!ownsCurrentScope()) {
             retain(queued)
             queued = null
             return
@@ -464,40 +464,63 @@ export function startArtifactDexieBridge(): () => void {
     }
     lastSeenArtifacts = state.artifacts
     lastSeenVersions = state.artifactVersions
-    if (!hydrated) return
+    if (!hydrated) {
+      void hydrate()
+      return
+    }
     queued = { artifacts: state.artifacts, versions: state.artifactVersions }
     schedule(ARTIFACT_SYNC_DEBOUNCE_MS)
   })
 
-  const ready = predecessor
-    .then(async () => {
-      if (!canApply()) return
-      // The previous instance may have completed migration while we waited.
-      pending = capturePendingArtifactMigration(scope)
-      retained = retainedWrites.get(queueKey)
-      const mirror = await hydrateFromDexie(db, pending, canApply, deletedIds, changedIds, retained)
-      if (!mirror || !canApply()) return
-      mirroredArtifacts = mirror.artifacts
-      mirroredVersionIds = mirror.versionIds
-      hydrated = true
-      const initial = useArtifactStore.getState()
-      window.addEventListener("pagehide", flush)
-      queued = { artifacts: initial.artifacts, versions: initial.artifactVersions }
-      flush()
-    })
-    .catch((err) => {
-      hydrationFailure = err
-      unsubscribe()
-      // An incomplete hydration must never turn an unknown subset into deletes.
-      loggers.canvas.warn("artifact dexie-bridge hydration failed; mirror disabled", {
-        err: String(err),
+  function hydrate(): Promise<void> {
+    if (ready) return ready
+    if (hydrated || hydrationFailed || !canApply()) return Promise.resolve()
+    ready = predecessor
+      .then(async () => {
+        if (!canApply()) return
+        // The previous instance may have completed migration while we waited.
+        pending = capturePendingArtifactMigration(scope)
+        retained = retainedWrites.get(queueKey)
+        const mirror = await hydrateFromDexie(
+          db,
+          pending,
+          canApply,
+          deletedIds,
+          changedIds,
+          retained
+        )
+        if (!mirror || !canApply()) return
+        mirroredArtifacts = mirror.artifacts
+        mirroredVersionIds = mirror.versionIds
+        hydrated = true
+        const initial = useArtifactStore.getState()
+        window.addEventListener("pagehide", flush)
+        queued = { artifacts: initial.artifacts, versions: initial.artifactVersions }
+        flush()
       })
-    })
+      .catch((err) => {
+        hydrationFailure = err
+        hydrationFailed = true
+        unsubscribe()
+        // An incomplete hydration must never turn an unknown subset into deletes.
+        loggers.canvas.warn("artifact dexie-bridge hydration failed; mirror disabled", {
+          err: String(err),
+        })
+      })
+      .finally(() => {
+        // A scope mismatch can be temporary when a failed switch rolls back.
+        // Only a failed read disables hydration; the original scope may retry.
+        ready = null
+      })
+    return ready
+  }
+  void hydrate()
 
   unregisterFlusher = registerPendingAccountWriteFlusher(async (signal) => {
     const retainOnTimeout = () => {
-      writesBlocked = true
       clearTimer()
+      // A timeout ends this flush's budget, not the bridge's lifetime. The
+      // existing writer stays serialized and every later write rechecks scope.
       if (queued || inFlight || (!hydrated && changedIds.size)) {
         retain({ artifacts: lastSeenArtifacts, versions: lastSeenVersions })
       }
@@ -506,7 +529,7 @@ export function startArtifactDexieBridge(): () => void {
     try {
       // Hydration supplies the committed baseline, including deletes. Do not
       // flush an unknown subset while its read is still pending.
-      await ready
+      await hydrate()
       if (signal.aborted) return
       if (!hydrated || !ownsCurrentScope()) {
         if (changedIds.size) retain({ artifacts: lastSeenArtifacts, versions: lastSeenVersions })

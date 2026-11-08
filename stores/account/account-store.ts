@@ -1787,28 +1787,40 @@ export function createAccountStore(
             hostBound: wasUnlocked,
             ...(credentialContext ? { credentialContext } : {}),
           })
+          const failures: unknown[] = []
+          const attempt = async (step: () => void | Promise<void>) => {
+            try {
+              await step()
+            } catch (error) {
+              failures.push(error)
+            }
+          }
+          // Registry deletion is committed. A lock reports flush/teardown
+          // failures after revoking access, so keep attempting every cleanup.
           if (wasActive && wasUnlocked) {
-            await get().lock()
+            await attempt(() => get().lock())
           } else if (wasActive) {
             await settlePendingAccountWrites()
           }
-          await dependencies.dropAccountDatabase(localAccountId)
+          await attempt(() => dependencies.dropAccountDatabase(localAccountId))
           let runtimeTargetsDeleted = false
           if (shouldUseBrowserVault()) {
-            await dependencies.removeRuntimeTargets(localAccountId)
-            runtimeTargetsDeleted = true
+            await attempt(async () => {
+              await dependencies.removeRuntimeTargets(localAccountId)
+              runtimeTargetsDeleted = true
+            })
           }
-          await dependencies.purgeAccountLocalState(localAccountId)
+          await attempt(() => dependencies.purgeAccountLocalState(localAccountId))
           // The database these files belong to is gone, so a file held open
           // must not fail the deletion; the retention sweep retries it.
           const accountFilesPurged = await dependencies
             .purgeAccountFiles(localAccountId)
             .then(() => true)
             .catch(() => false)
-          await deleteBrowserVault(localAccountId)
+          await attempt(() => deleteBrowserVault(localAccountId))
           if (localAccountId === deviceLocalAccountId()) {
-            await clearDesktopLocalAccountPassword()
-            await clearDesktopLocalAccountRecoveryKey()
+            await attempt(() => clearDesktopLocalAccountPassword())
+            await attempt(() => clearDesktopLocalAccountRecoveryKey())
           } else if (isTauri()) {
             // A remembered password outlives nothing it could open once the
             // vault and database are gone, so a store that cannot be reached
@@ -1838,9 +1850,12 @@ export function createAccountStore(
           })
 
           if (wasActive) {
-            clearActiveRuntimeTargetContext()
-            clearAccountDatabaseSelection()
-            dependencies.clearAccountLocalState()
+            await attempt(() => clearActiveRuntimeTargetContext())
+            await attempt(() => clearAccountDatabaseSelection())
+            await attempt(() => dependencies.clearAccountLocalState())
+          }
+          if (failures.length > 0) {
+            throw new AggregateError(failures, "Account deletion cleanup was incomplete.")
           }
           return {
             accountId: localAccountId,
