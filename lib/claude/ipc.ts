@@ -58,7 +58,7 @@ import {
   awaitApproval as awaitLocalApproval,
   hasPendingApproval,
   resolveApproval as resolveLocalApproval,
-} from "@/lib/connectors/hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 import { stableHash } from "@/lib/notifications/result/materiality"
 
 const SIDECAR_EVENT = "claude://message"

@@ -2,7 +2,7 @@ import { settleApprovalCard } from "./approval-card-state"
 jest.mock("./approval-card-state", () => ({ settleApprovalCard: jest.fn(async () => undefined) }))
 import type { ConversationReference } from "@/types/connectors/event"
 
-import { resolveApproval } from "./approval-registry"
+import { resolveApproval } from "@/lib/claude/hitl/approval-registry"
 import {
   applyPlanApprovalCallback,
   buildPlanApprovalSurface,
@@ -216,7 +216,7 @@ it("closes the original plan card when the approval expires", async () => {
 })
 
 it("keeps existing prefix exports compatible with the shared registry", async () => {
-  const registry = await import("@/lib/connectors/hitl/callback-prefixes")
+  const registry = await import("@/lib/claude/hitl/callback-prefixes")
   expect([PLAN_APPROVE_PREFIX, PLAN_REJECT_PREFIX]).toEqual([
     registry.PLAN_APPROVE_PREFIX,
     registry.PLAN_REJECT_PREFIX,

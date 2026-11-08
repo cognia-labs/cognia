@@ -31,7 +31,7 @@ import {
   MEDIA_GRANT_SESSION_PREFIX,
   MEDIA_GRANT_ALWAYS_PREFIX,
   MEDIA_GRANT_DENY_PREFIX,
-} from "@/lib/connectors/hitl/callback-prefixes"
+} from "@/lib/claude/hitl/callback-prefixes"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
@@ -47,7 +47,7 @@ export {
   MEDIA_GRANT_SESSION_PREFIX,
   MEDIA_GRANT_ALWAYS_PREFIX,
   MEDIA_GRANT_DENY_PREFIX,
-} from "@/lib/connectors/hitl/callback-prefixes"
+} from "@/lib/claude/hitl/callback-prefixes"
 
 export type MediaGrantDecision = "allow_24h" | "allow_always" | "deny"
 

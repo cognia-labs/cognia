@@ -31,7 +31,7 @@ import {
   grantSessionBypass,
   hasSessionBypass,
   resolveApproval,
-} from "@/lib/connectors/hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 import { resolvePermissionDetailed, type Ruleset } from "@/lib/claude/permissions/ruleset"
 import { setToolRule } from "@/lib/claude/permissions/ruleset-edit"
 

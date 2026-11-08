@@ -67,7 +67,7 @@ import {
   isExternalAgentProviderId,
 } from "@/lib/ai/agent/external/session/session-models"
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
-import { registerCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
+import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { getImElicitationContext } from "@/lib/connectors/hitl/im-elicitation-context"
 import { dispatchPreToolUse, dispatchPostToolUse } from "@/lib/claude/adapter-hooks"

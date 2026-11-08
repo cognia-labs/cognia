@@ -18,7 +18,7 @@ import {
   awaitApproval,
   pendingApprovalCount,
   __resetApprovalRegistryForTesting,
-} from "./approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 
 beforeEach(async () => {
   __resetApprovalRegistryForTesting()

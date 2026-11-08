@@ -3,7 +3,7 @@
 /**
  * Live count of HITL tool-permission approvals awaiting a button press for
  * one session. Backed by the in-process approval registry
- * (`lib/connectors/hitl/approval-registry.ts`) through `useSyncExternalStore`,
+ * (`lib/claude/hitl/approval-registry.ts`) through `useSyncExternalStore`,
  * so the chip re-renders exactly when a card is projected, answered,
  * superseded, or auto-denied by its TTL — no polling.
  *
@@ -16,7 +16,7 @@ import { useCallback, useSyncExternalStore } from "react"
 import {
   pendingApprovalCountForSession,
   subscribePendingApprovals,
-} from "@/lib/connectors/hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 
 const getServerSnapshot = () => 0
 

@@ -3,7 +3,7 @@ import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
 import {
   WF_FANOUT_APPROVE_PREFIX,
   WF_FANOUT_CANCEL_PREFIX,
-} from "@/lib/connectors/hitl/callback-prefixes"
+} from "@/lib/claude/hitl/callback-prefixes"
 /** Host-governed workflow authoring and execution façade for plugins. */
 
 import { getResolvedPermissionCeiling } from "@/lib/claude/agents/dispatch-context-registry"

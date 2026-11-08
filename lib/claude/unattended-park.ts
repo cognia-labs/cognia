@@ -204,7 +204,7 @@ function defaultDeps(): UnattendedParkDeps {
       await announceRunApprovalResolved(input)
     },
     awaitDecision: async (sessionId, requestId, options) => {
-      const { awaitApproval } = await import("@/lib/connectors/hitl/approval-registry")
+      const { awaitApproval } = await import("@/lib/claude/hitl/approval-registry")
       const { isHumanParkControlDecision } = await import("./unattended-permission-responder")
       const decision = await awaitApproval(sessionId, requestId, options)
       return decision.decision === "allow" && !isHumanParkControlDecision(decision)

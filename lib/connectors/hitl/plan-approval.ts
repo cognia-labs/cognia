@@ -21,7 +21,7 @@ import { settleApprovalCard } from "./approval-card-state"
  * becomes the revision instruction.
  */
 
-import { PLAN_APPROVE_PREFIX, PLAN_REJECT_PREFIX } from "@/lib/connectors/hitl/callback-prefixes"
+import { PLAN_APPROVE_PREFIX, PLAN_REJECT_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
 import type { ApprovalDecision } from "@/lib/runtime/approval-bus"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
@@ -32,10 +32,10 @@ import { buildA2UISegment } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import { newIdempotencyKey } from "@/types/connectors/outbound"
 import { sanitizeActivityLabel } from "@/lib/execution/run-activity"
 
-import { awaitApproval } from "./approval-registry"
+import { awaitApproval } from "@/lib/claude/hitl/approval-registry"
 
 /** Action-id namespaces so the bus can route the press back here. */
-export { PLAN_APPROVE_PREFIX, PLAN_REJECT_PREFIX } from "@/lib/connectors/hitl/callback-prefixes"
+export { PLAN_APPROVE_PREFIX, PLAN_REJECT_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
 
 export type PlanApprovalDecision = "approve" | "reject"
 

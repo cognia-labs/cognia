@@ -25,7 +25,7 @@ import { usePendingDrafts } from "@/hooks/connectors/use-pending-drafts"
 import {
   pendingApprovalCount,
   subscribePendingApprovals,
-} from "@/lib/connectors/hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 import {
   pendingAskUserCount,
   subscribePendingAskUsers,

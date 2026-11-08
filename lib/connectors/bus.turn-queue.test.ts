@@ -45,7 +45,7 @@ import {
   awaitApproval,
   pendingApprovalCount,
   __resetApprovalRegistryForTesting,
-} from "./hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 import type { NormalizedInboundEvent, PlatformAdapter } from "@/types/connectors"
 import type { ConnectorCallbackEvent } from "@/types/connectors/interaction"
 import type { TriggerPolicy } from "@/types/connectors/policy"

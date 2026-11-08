@@ -17,7 +17,7 @@
  *   description so the assistant sees SOMETHING.
  */
 
-import { namespacedCallbackAction } from "@/lib/connectors/hitl/callback-prefixes"
+import { namespacedCallbackAction } from "@/lib/claude/hitl/callback-prefixes"
 import type { NormalizedInboundEvent, PlatformIdentity } from "@/types/connectors/event"
 import { buildConversationKey } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"

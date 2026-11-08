@@ -236,7 +236,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
       if (!run?.sessionId || !interrupt?.requestDigest) {
         throw new Error("Agent permission request cannot be resumed")
       }
-      const { resolveApproval } = await import("@/lib/connectors/hitl/approval-registry")
+      const { resolveApproval } = await import("@/lib/claude/hitl/approval-registry")
       if (
         !resolveApproval(
           run.sessionId,
@@ -468,7 +468,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
       // release, and `resume` is how they hand the work back. The other two
       // types park a promise in the approval registry.
       if (interrupt.type !== "human_handoff" && run.sessionId && interrupt.requestDigest) {
-        const { resolveApproval } = await import("@/lib/connectors/hitl/approval-registry")
+        const { resolveApproval } = await import("@/lib/claude/hitl/approval-registry")
         resolveApproval(run.sessionId, interrupt.requestDigest, {
           decision: command.action === "approve" ? "allow" : "deny",
         })

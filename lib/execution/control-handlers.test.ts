@@ -142,7 +142,7 @@ describe("execution source control handlers", () => {
   })
 
   it("attaches an opaque human credential only through the agent approval control", async () => {
-    const { awaitApproval } = await import("@/lib/connectors/hitl/approval-registry")
+    const { awaitApproval } = await import("@/lib/claude/hitl/approval-registry")
     const { isHumanParkControlDecision } =
       await import("@/lib/claude/unattended-permission-responder")
     await createExecutionRun({
@@ -1618,7 +1618,7 @@ describe("parked agent tool approval (ADR-0224 A7, ADR-0239)", () => {
   })
 
   it("passes an allow for the request to the parked responder, and nothing more on a deny", async () => {
-    const { awaitApproval } = await import("@/lib/connectors/hitl/approval-registry")
+    const { awaitApproval } = await import("@/lib/claude/hitl/approval-registry")
     const installed = installExecutionRunControlHandlers()
     await createExecutionRun({
       id: "parked-agent",

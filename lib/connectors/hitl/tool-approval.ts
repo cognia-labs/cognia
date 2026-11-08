@@ -26,7 +26,7 @@ import {
   TOOL_DENY_PREFIX,
   TOOL_ALLOW_SESSION_PREFIX,
   TOOL_ALLOW_REQUEST_PREFIX,
-} from "@/lib/connectors/hitl/callback-prefixes"
+} from "@/lib/claude/hitl/callback-prefixes"
 import type { PendingOutboundTarget, PermissionRequestEvent } from "@cognia/agent-config-types"
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
@@ -47,7 +47,7 @@ import {
   grantSessionBypass,
   hasSessionBypass,
   type AwaitApprovalOptions,
-} from "./approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 
 /**
  * Turn-capture timeout for a connector turn whose tool requests go through
@@ -64,7 +64,7 @@ export {
   TOOL_DENY_PREFIX,
   TOOL_ALLOW_SESSION_PREFIX,
   TOOL_ALLOW_REQUEST_PREFIX,
-} from "@/lib/connectors/hitl/callback-prefixes"
+} from "@/lib/claude/hitl/callback-prefixes"
 
 /** Decision encoded onto a `tool_approve` binding payload. */
 export type ToolApprovalDecision = "allow" | "deny" | "allow_session" | "allow_request"

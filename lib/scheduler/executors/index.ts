@@ -106,7 +106,7 @@ import {
   type UnattendedPermissionResponder,
 } from "@/lib/claude/unattended-permission-responder"
 import { createUnattendedPark } from "@/lib/claude/unattended-park"
-import { registerCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
+import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import { holdExecutionClock } from "../execution-clock"
 import type {
   AppSettings,

@@ -56,7 +56,7 @@ export interface SupersedeApprovalsDeps {
 /** Deny one in-renderer approval-registry waiter (lazy import keeps the
  * registry off this module's load path, same as the per-branch imports did). */
 async function denyViaApprovalRegistry(sessionId: string, requestId: string): Promise<void> {
-  const { resolveApproval } = await import("@/lib/connectors/hitl/approval-registry")
+  const { resolveApproval } = await import("@/lib/claude/hitl/approval-registry")
   resolveApproval(sessionId, requestId, { decision: "deny", message: SUPERSEDED_MESSAGE })
 }
 

@@ -119,7 +119,7 @@ jest.mock("@/lib/claude/adapter-hooks", () => ({
   dispatchOnAssistantMessage: jest.fn(async (message) => message),
 }))
 
-import { registerCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
+import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import { dispatchPostChatReceive, dispatchOnAssistantMessage } from "@/lib/claude/adapter-hooks"
 import { bindToolCallRun } from "@/lib/execution/acting-authority"
 

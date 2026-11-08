@@ -287,7 +287,6 @@
         "lib/connectors/bus.ts",
         "lib/connectors/circuit-breaker.ts",
         "lib/connectors/delivery-gateway.ts",
-        "lib/connectors/hitl/approval-registry.ts",
         "lib/connectors/outbound-runner.ts",
         "lib/connectors/permission-resolve.ts",
         "lib/connectors/session-bindings.ts",

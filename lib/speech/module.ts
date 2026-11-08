@@ -25,9 +25,9 @@ export default defineHostModule({
     "lib/tts/",
     "lib/voice/",
   ],
-  // Live voice tool approvals wait in the connectors' HITL registry; the
-  // settings section's drafts and the settings view are the settings store's.
-  dependsOn: ["connectors", "settings-store"],
+  // The settings section's drafts and the settings view are the settings
+  // store's. (Live voice tool approvals wait in the kernel's HITL registry.)
+  dependsOn: ["settings-store"],
   // What the composer opens (live voice), what the character editor tries a
   // voice with, and the speech preferences and provider keys others read.
   api: [

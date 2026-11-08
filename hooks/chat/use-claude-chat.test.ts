@@ -1117,7 +1117,7 @@ import {
   __resetRemoteAttachForTests,
   DEFAULT_APPROVAL_BACKSTOP_MS,
 } from "@/lib/companion/remote-attach-registry"
-import { registerCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
+import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import {
   RouterFusionInfrastructureError,
   RouterFusionRefusalError,
@@ -6144,8 +6144,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("resolves external tool-host approval in the local registry without the agent or SDK permission RPC", async () => {
-    const { awaitApproval, hasSessionBypass } =
-      await import("@/lib/connectors/hitl/approval-registry")
+    const { awaitApproval, hasSessionBypass } = await import("@/lib/claude/hitl/approval-registry")
     const pending = awaitApproval("sess-1", "external-tool-host:lease:tool-1")
     const { result } = renderHook(() => useClaudeChat())
     await flush()
@@ -6173,8 +6172,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("respondToApproval resolves builtin-skill: approvals locally, never via approveTool", async () => {
-    const { resolveApproval, awaitApproval } =
-      await import("@/lib/connectors/hitl/approval-registry")
+    const { resolveApproval, awaitApproval } = await import("@/lib/claude/hitl/approval-registry")
     void resolveApproval
     const pending = awaitApproval("sess-1", "builtin-skill:im.create_chat:x", { ttlMs: 0 })
     const { result } = renderHook(() => useClaudeChat())
@@ -6197,7 +6195,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("respondToApproval resolves realtime approvals locally and persists always-allow rules", async () => {
-    const { awaitApproval } = await import("@/lib/connectors/hitl/approval-registry")
+    const { awaitApproval } = await import("@/lib/claude/hitl/approval-registry")
     const requestId = "realtime-tool:call-1"
     const pending = awaitApproval("sess-1", requestId, { ttlMs: 0 })
     settingsState.save.mockClear()
@@ -12161,7 +12159,7 @@ describe("VS Code participant foreground dispatch", () => {
 it.each(["send", "regenerate", "edit", "steer"])(
   "refuses desktop %s while a background capture owns the session",
   async (action) => {
-    const { registerCaptureResponder } = await import("@/lib/connectors/hitl/approval-registry")
+    const { registerCaptureResponder } = await import("@/lib/claude/hitl/approval-registry")
     chatState.status = "idle"
     chatState.messages = [
       { id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] },

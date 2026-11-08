@@ -12,7 +12,7 @@ jest.mock("@/stores/chat/chat-store", () => ({
 import {
   __resetApprovalRegistryForTesting,
   resolveApproval,
-} from "@/lib/connectors/hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 import {
   BUILTIN_SKILL_APPROVAL_PREFIX,
   grantDesktopSkillSessionBypass,

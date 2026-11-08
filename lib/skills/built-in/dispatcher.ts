@@ -41,7 +41,7 @@ import { z } from "zod"
 
 import { hasNoLeakingPii } from "@cognia/redact"
 import { append as appendAudit } from "@/lib/db/connector-audit"
-import { SKILL_INVOKE_PREFIX, SKILL_CANCEL_PREFIX } from "@/lib/connectors/hitl/callback-prefixes"
+import { SKILL_INVOKE_PREFIX, SKILL_CANCEL_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { getSharedBuiltInSkillRegistry } from "./registry"
 import { resolveBuiltInSkillRunScope, resolveBuiltInSkillTurnActors } from "./context"

@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
 
-import { __resetApprovalRegistryForTesting } from "@/lib/connectors/hitl/approval-registry"
+import { __resetApprovalRegistryForTesting } from "@/lib/claude/hitl/approval-registry"
 import { createUnattendedPark } from "@/lib/claude/unattended-park"
 import { createExecutionRun } from "@/lib/db/execution-runs"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"

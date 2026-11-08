@@ -13,7 +13,7 @@ import {
   grantSessionBypass,
   hasSessionBypass,
   __resetApprovalRegistryForTesting,
-} from "../hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 
 function makeEvent(over: Partial<NormalizedInboundEvent> = {}): NormalizedInboundEvent {
   return {

@@ -30,7 +30,7 @@ import { useSchedulerStore } from "@/stores/scheduler/scheduler-store"
 import {
   __resetApprovalRegistryForTesting,
   awaitApproval,
-} from "@/lib/connectors/hitl/approval-registry"
+} from "@/lib/claude/hitl/approval-registry"
 import { DEFAULT_SIDEBAR_LAYOUT } from "@/types/shell/sidebar"
 
 const refreshAll = jest.fn(async () => {})

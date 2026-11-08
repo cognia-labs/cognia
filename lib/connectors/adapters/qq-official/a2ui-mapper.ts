@@ -11,7 +11,7 @@ import {
   resolveCallbackBinding,
   walkA2UISurface,
 } from "../_shared/a2ui-mapper"
-import { namespacedCallbackAction } from "@/lib/connectors/hitl/callback-prefixes"
+import { namespacedCallbackAction } from "@/lib/claude/hitl/callback-prefixes"
 import { getDb } from "@/lib/db/schema"
 import { escapeMarkdown } from "../_shared/inbound-markdown"
 import { QQKeyboardValidationError, validateQQKeyboard, type QQKeyboardButton } from "./keyboard"
