@@ -254,6 +254,7 @@ export function buildCanvasManifestEntries(): ModuleToolEntry[] {
 }
 
 export interface ArtifactToolContext {
+  /** An empty id explicitly leaves workflow output without a conversation owner. */
   sessionId: string
   /** The assistant message this call belongs to, used as the review request id. */
   messageId?: string
@@ -355,7 +356,7 @@ export async function runArtifactBuiltinTool(
   context: ArtifactToolContext
 ): Promise<unknown> {
   const { store } = deps
-  const sessionId = context.sessionId || deps.activeSessionId || ""
+  const sessionId = context.sessionId ?? deps.activeSessionId ?? ""
 
   try {
     switch (name) {

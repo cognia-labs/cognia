@@ -1,5 +1,6 @@
 import Dexie from "dexie"
 import type { RuntimeTargetRecord } from "./target-registry"
+import { registerPendingAccountWriteFlusher } from "@/lib/accounts/pending-write-flush"
 
 // The suite below always injects `dependencies`, so the DEFAULT dependency
 // object — the one every production caller actually uses — was never executed.
@@ -83,6 +84,164 @@ const standalone: RuntimeTargetRecord = {
   updatedAt: 1,
   lastUsedAt: 1,
 }
+
+describe("pending writes during runtime target transitions", () => {
+  it.each(["register", "switch", "rollback", "detach"])(
+    "awaits writes before each database replacement during %s",
+    async (operation) => {
+      const companion: RuntimeTargetRecord = { ...standalone, id: "host-flush", kind: "companion" }
+      const events: string[] = []
+      let registryUpdated = false
+      const flushedAfterRegistry: boolean[] = []
+      const dispose = registerPendingAccountWriteFlusher(async () => {
+        events.push("flush:start")
+        await Promise.resolve()
+        flushedAfterRegistry.push(registryUpdated)
+        events.push("flush:end")
+        registryUpdated = false
+      })
+      const registry = {
+        getActiveTarget: async () => (operation === "detach" ? companion : standalone),
+        ensureStandaloneTarget: async () => standalone,
+        activateTarget: async (_accountId: string, id: string) => {
+          registryUpdated = true
+          return id === standalone.id ? standalone : companion
+        },
+        upsertAndActivateCompanionTarget: async () => {
+          registryUpdated = true
+          return companion
+        },
+        listTargets: async () => [standalone, companion],
+        deleteTarget: async () => {},
+        deleteAccountTargets: async () => {},
+      }
+      const activateDatabase = () => {
+        events.push("database")
+      }
+      const setContext = () => {}
+      const { setActiveRuntimeTargetContext, clearActiveRuntimeTargetContext } =
+        await import("./runtime-target-context")
+      try {
+        if (operation === "register") {
+          await registerCompanionRuntimeTarget(
+            {
+              accountId: standalone.accountId,
+              targetId: companion.id,
+              baseUrl: "https://host.local",
+              deviceId: "device",
+              serverVersion: "1.0.0",
+            },
+            { registry, activateDatabase, setContext, getContext: () => null }
+          )
+        } else if (operation === "detach") {
+          setActiveRuntimeTargetContext(standalone.accountId, companion.id)
+          await detachActiveCompanionRuntimeTarget({
+            registry,
+            activateDatabase,
+            setContext,
+            stopSubscriptions: async () => {},
+            deleteDatabase: async () => {},
+            databaseExists: async () => false,
+          })
+        } else {
+          let reloads = 0
+          const switching = switchAccountRuntimeTarget(standalone.accountId, companion.id, {
+            registry,
+            activateDatabase,
+            setContext,
+            hasRunningStandaloneTurn: () => false,
+            assertCredentialAvailable: async () => {},
+            stopSubscriptions: async () => {},
+            reloadTransport: async () => {
+              if (operation === "rollback" && reloads++ === 0) throw new Error("rebind failed")
+            },
+          })
+          if (operation === "rollback") await expect(switching).rejects.toThrow("rebind failed")
+          else await switching
+        }
+        expect(events).toEqual(
+          Array.from({ length: operation === "rollback" ? 2 : 1 }, () => [
+            "flush:start",
+            "flush:end",
+            "database",
+          ]).flat()
+        )
+        expect(flushedAfterRegistry.every(Boolean)).toBe(true)
+      } finally {
+        dispose()
+        clearActiveRuntimeTargetContext()
+      }
+    }
+  )
+
+  it("still completes a switch when a pending write fails to settle", async () => {
+    const companion: RuntimeTargetRecord = { ...standalone, id: "host-failing", kind: "companion" }
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      throw new Error("disk full")
+    })
+    const activateDatabase = jest.fn()
+    const { clearActiveRuntimeTargetContext } = await import("./runtime-target-context")
+    try {
+      await expect(
+        switchAccountRuntimeTarget(standalone.accountId, companion.id, {
+          registry: {
+            getActiveTarget: async () => standalone,
+            ensureStandaloneTarget: async () => standalone,
+            activateTarget: async () => companion,
+            upsertAndActivateCompanionTarget: async () => companion,
+            listTargets: async () => [standalone, companion],
+            deleteTarget: async () => {},
+            deleteAccountTargets: async () => {},
+          },
+          activateDatabase,
+          setContext: () => {},
+          hasRunningStandaloneTurn: () => false,
+          assertCredentialAvailable: async () => {},
+          stopSubscriptions: async () => {},
+          reloadTransport: async () => {},
+        })
+      ).resolves.toEqual(companion)
+      // The bridge kept its snapshot in memory; the switch itself must not stop halfway.
+      expect(activateDatabase).toHaveBeenCalledWith(standalone.accountId, companion.id)
+    } finally {
+      dispose()
+      clearActiveRuntimeTargetContext()
+    }
+  })
+
+  it("rechecks a pairing guard after awaiting pending writes", async () => {
+    let current = true
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      current = false
+    })
+    const activateDatabase = jest.fn()
+    const upsertAndActivateCompanionTarget = jest.fn(async () => standalone)
+    try {
+      expect(
+        await registerCompanionRuntimeTarget(
+          {
+            accountId: standalone.accountId,
+            targetId: "host-flush",
+            baseUrl: "https://host.local",
+            deviceId: "device",
+            serverVersion: "1.0.0",
+          },
+          {
+            registry: { upsertAndActivateCompanionTarget },
+            getContext: () => null,
+            activateDatabase,
+            setContext: jest.fn(),
+          },
+          () => current
+        )
+      ).toBeNull()
+      expect(activateDatabase).not.toHaveBeenCalled()
+      expect(upsertAndActivateCompanionTarget).toHaveBeenCalledTimes(1)
+    } finally {
+      dispose()
+    }
+  })
+})
 
 describe("an already-active target", () => {
   const activeRegistry = () => ({
@@ -687,6 +846,32 @@ describe("default runtime lifecycle boundaries", () => {
     mockExecutionLegs = []
     const { clearActiveRuntimeTargetContext } = await import("./runtime-target-context")
     clearActiveRuntimeTargetContext()
+  })
+
+  it("flushes before migration replaces the content cipher", async () => {
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      entered()
+      await pending
+    })
+    try {
+      const preparing = prepareAccountRuntimeTarget("acct_runtime")
+      await started
+      expect(mockActivateCipher).not.toHaveBeenCalled()
+      release()
+      await preparing
+      expect(mockActivateCipher).toHaveBeenCalledTimes(1)
+    } finally {
+      release()
+      dispose()
+    }
   })
 
   it.each(["legacy-target", "account", "absent"])(

@@ -2,6 +2,7 @@
 
 import Dexie from "dexie"
 
+import { settlePendingAccountWrites } from "@/lib/accounts/pending-write-flush"
 import { removeRecentServer } from "@/lib/connectivity/recent-servers"
 import { clearAccountDatabaseSelection } from "@/lib/db/schema"
 import { clearActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
@@ -115,6 +116,11 @@ export async function removeCompanionHost(
     } else {
       await deps.deleteRuntimeTarget(input.accountId, input.hostId)
     }
+    if (removingActive && input.platform === "mobile" && alternatives.length === 0) {
+      // Revocation and registry updates may yield while edits continue. Commit
+      // just before deletion; enterUnpaired clears the selection afterwards.
+      await settlePendingAccountWrites()
+    }
     await deleteHostDatabases(input, deps)
     await deps.book.remove(hostKeyOf(record))
     deps.removeRecentAlias(record.endpoints.baseUrl)
@@ -150,6 +156,7 @@ async function forgetRuntimeTargetOnly(
   } else {
     await deps.deleteRuntimeTarget(input.accountId, input.hostId)
   }
+  if (wasActive && input.platform !== "web") await settlePendingAccountWrites()
   await deleteHostDatabases(input, deps)
   if (wasActive && input.platform !== "web") await deps.enterUnpaired()
 }

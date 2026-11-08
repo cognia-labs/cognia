@@ -131,6 +131,8 @@ import {
   startArtifactDexieBridge,
 } from "./dexie-bridge"
 import { getArtifactMigrationPendingKey } from "./localstorage-migration"
+import { flushPendingAccountWrites } from "@/lib/accounts/pending-write-flush"
+import { ACCOUNT_WRITE_FLUSH_TIMEOUT_MS } from "@/lib/accounts/pending-write-flush"
 
 function artifact(id: string, overrides: Partial<Artifact> = {}): Artifact {
   return {
@@ -190,6 +192,96 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.useRealTimers()
+})
+
+describe("account write flush", () => {
+  it.each(["debounced", "failed write"])(
+    "persists the latest add/edit/delete across a scope switch and restart (%s)",
+    async (mode) => {
+      artifactStore._reset({
+        artifacts: { a: artifact("a"), b: artifact("b") },
+        artifactVersions: { b: [version("v-b", "b")] },
+      })
+      const dispose = startArtifactDexieBridge()
+      await settle()
+      artifactStore.setState({
+        artifacts: { a: artifact("a", { content: "latest edit" }), c: artifact("c") },
+        artifactVersions: { a: [version("v-a", "a")] },
+      })
+      if (mode === "failed write") {
+        fakeDb.transaction.mockRejectedValueOnce(new Error("temporary write failure"))
+        jest.advanceTimersByTime(ARTIFACT_SYNC_DEBOUNCE_MS)
+        await settle()
+      }
+      await flushPendingAccountWrites()
+      dispose()
+      getDbImpl = () => ({
+        ...fakeDb,
+        name: "account-b",
+        artifacts: fakeTable(),
+        artifactVersions: fakeTable(),
+      })
+      persistOptions.name = "cognia-artifacts:b"
+      artifactStore._reset({ artifacts: {}, artifactVersions: {} })
+      __resetArtifactDexieBridgeForTesting()
+      expect(window.localStorage.length).toBe(0)
+
+      getDbImpl = () => fakeDb
+      persistOptions.name = "cognia-artifacts"
+      startArtifactDexieBridge()
+      await settle()
+      expect(Object.keys(artifactStore.getState().artifacts).sort()).toEqual(["a", "c"])
+      expect(artifactStore.getState().artifacts.a.content).toBe("latest edit")
+      expect(artifactStore.getState().artifactVersions.a.map((entry) => entry.id)).toEqual(["v-a"])
+      expect(artifactVersionsTable.records.map((entry) => entry.id)).toEqual(["v-a"])
+    }
+  )
+
+  it("waits for hydration before flushing a pending edit", async () => {
+    const read = deferred<Record<string, unknown>[]>()
+    artifactsTable.toArray.mockReturnValueOnce(read.promise)
+    startArtifactDexieBridge()
+    await settle()
+    artifactStore.setState({ artifacts: { a: artifact("a") }, artifactVersions: {} })
+    const flushing = flushPendingAccountWrites()
+    read.resolve([])
+    await flushing
+    expect(artifactsTable.records.map((entry) => entry.id)).toEqual(["a"])
+  })
+
+  it("reports a failed final flush and retains the snapshot for its own scope", async () => {
+    const dispose = startArtifactDexieBridge()
+    await settle()
+    artifactStore.setState({ artifacts: { a: artifact("a") }, artifactVersions: {} })
+    fakeDb.transaction.mockRejectedValueOnce(new Error("disk full"))
+    await expect(flushPendingAccountWrites()).rejects.toThrow("disk full")
+    getDbImpl = () => ({ ...fakeDb, name: "account-b" })
+    dispose()
+    await settle()
+    getDbImpl = () => fakeDb
+    artifactStore._reset({ artifacts: {}, artifactVersions: {} })
+    startArtifactDexieBridge()
+    await settle()
+    expect(artifactsTable.records.map((entry) => entry.id)).toEqual(["a"])
+  })
+
+  it("retains a timed-out hydration without writing plaintext recovery", async () => {
+    const read = deferred<Record<string, unknown>[]>()
+    artifactsTable.toArray.mockReturnValueOnce(read.promise)
+    const dispose = startArtifactDexieBridge()
+    await settle()
+    artifactStore.setState({ artifacts: { a: artifact("a") }, artifactVersions: {} })
+    const failed = expect(flushPendingAccountWrites()).rejects.toThrow("timed out")
+    await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+    await failed
+    dispose()
+    artifactStore._reset({ artifacts: {}, artifactVersions: {} })
+    startArtifactDexieBridge()
+    read.resolve([])
+    await settle()
+    expect(artifactsTable.records.map((entry) => entry.id)).toEqual(["a"])
+    expect(window.localStorage.length).toBe(0)
+  })
 })
 
 describe("diffArtifactMirror", () => {

@@ -1,5 +1,9 @@
 "use client"
 
+import {
+  flushPendingAccountWrites,
+  settlePendingAccountWrites,
+} from "@/lib/accounts/pending-write-flush"
 import { classifyWsHost } from "@/lib/connectivity/lan-classify"
 import { activateAccountDatabase, clearAccountDatabaseSelection } from "@/lib/db/schema"
 import type { Platform } from "@/lib/platform/detect"
@@ -365,8 +369,14 @@ async function switchCompanionHostNow(
     try {
       await rollback(previousHost, previousTarget, input.platform, deps)
     } catch (rollbackError) {
+      const failures = [activationError, rollbackError]
+      try {
+        await flushPendingAccountWrites()
+      } catch (error) {
+        failures.push(error)
+      }
       const aggregate = new AggregateError(
-        [activationError, rollbackError],
+        failures,
         "Companion Host activation failed and rollback was incomplete."
       )
       await deps.enterOffline(aggregate)
@@ -383,6 +393,7 @@ async function activate(
 ): Promise<void> {
   await deps.book.setActive(hostKeyOf(record))
   await deps.registry.activateTarget(record.accountNamespace, record.hostId)
+  await settlePendingAccountWrites()
   deps.activateDatabase(record.accountNamespace, record.hostId)
   deps.setContext(record.accountNamespace, record.hostId)
   deps.publishSnapshot(snapshotFor(record, platform, "connecting"))
@@ -410,6 +421,7 @@ async function rollback(
 
   if (!previousTarget) throw new Error("No previous runtime target is available for rollback.")
   await deps.registry.activateTarget(previousTarget.accountId, previousTarget.id)
+  await settlePendingAccountWrites()
   deps.activateDatabase(previousTarget.accountId, previousTarget.id)
   deps.setContext(previousTarget.accountId, previousTarget.id)
 

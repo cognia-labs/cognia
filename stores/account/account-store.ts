@@ -104,6 +104,10 @@ import {
 import { stopRuntimeTargetSubscriptions } from "@/lib/runtime/runtime-target-lifecycle"
 import { activateAccountDatabase, clearAccountDatabaseSelection } from "@/lib/db/schema"
 import {
+  flushPendingAccountWrites,
+  settlePendingAccountWrites,
+} from "@/lib/accounts/pending-write-flush"
+import {
   activateArtifactAccountStorage,
   clearArtifactAccountStorage,
   purgeArtifactAccountStorage,
@@ -430,6 +434,7 @@ export function createAccountStore(
   const rollbackNativeAccountActivation = async (localAccountId: string): Promise<unknown[]> => {
     const failures: unknown[] = []
     for (const rollback of [
+      () => flushPendingAccountWrites(),
       () => dependencies.teardownPluginRuntime(localAccountId),
       () => unbindLocalAccount(),
       () => lockAccountContentCipher(),
@@ -469,6 +474,7 @@ export function createAccountStore(
     }
 
     const prepareSelectedDatabase = async (localAccountId: string, targetId?: string) => {
+      await settlePendingAccountWrites()
       const databaseName = targetId
         ? encryptedRuntimeTargetDatabaseName(localAccountId, targetId)
         : encryptedAccountDatabaseName(localAccountId)
@@ -495,6 +501,8 @@ export function createAccountStore(
       assertCurrent?.()
       const previousUnlockedAccountId = get().unlockedAccountId
       if (previousUnlockedAccountId && previousUnlockedAccountId !== localAccountId) {
+        await settlePendingAccountWrites()
+        assertCurrent?.()
         await dependencies.teardownPluginRuntime(previousUnlockedAccountId)
         assertCurrent?.()
         await dependencies.clearSubscriptionRuntime(previousUnlockedAccountId)
@@ -994,6 +1002,7 @@ export function createAccountStore(
                   "An existing local workspace vault cannot be replaced."
                 )
               }
+              if (shouldActivate) await settlePendingAccountWrites()
               const provisioned = shouldActivate
                 ? await provisionBrowserVault(localAccountId, input.password)
                 : await provisionBrowserVault(localAccountId, input.password, false)
@@ -1037,6 +1046,7 @@ export function createAccountStore(
             })
           }
 
+          if (shouldActivate) await settlePendingAccountWrites()
           set((state) => {
             const accounts = upsertAccount(state.accounts, account)
             return {
@@ -1779,6 +1789,8 @@ export function createAccountStore(
           })
           if (wasActive && wasUnlocked) {
             await get().lock()
+          } else if (wasActive) {
+            await settlePendingAccountWrites()
           }
           await dependencies.dropAccountDatabase(localAccountId)
           let runtimeTargetsDeleted = false
@@ -1849,6 +1861,10 @@ export function createAccountStore(
       /**
        * Lock the active account.
        *
+       * Flush the user's pending edits to their own encrypted database before
+       * revoking its cipher/vault. This phase shares a bounded 1.5 s budget;
+       * failures join teardown failures and cannot prevent revocation.
+       *
        * Two properties this deliberately guarantees, both of which the earlier
        * version did not:
        *
@@ -1870,8 +1886,17 @@ export function createAccountStore(
         authenticationGeneration += 1
         const operation = (async () => {
           const failures: unknown[] = []
-          // Revoke browser crypto synchronously, before publishing the lock or
-          // yielding to subscription/plugin teardown. Keep DB closure ordered.
+          const flushing = flushPendingAccountWrites()
+          if (flushing) {
+            try {
+              await flushing
+            } catch (error) {
+              failures.push(error)
+            }
+          }
+          // Once pending edits settle (or time out), preserve revocation and
+          // subscription/database teardown ordering. With no writers this is
+          // still synchronous, before publishing the lock.
           for (const revoke of [lockAccountContentCipher, lockBrowserVault]) {
             try {
               revoke()
@@ -2009,6 +2034,7 @@ export async function unlockAccountForHost(
   if (accountContentKey?.length !== 32) {
     throw new Error("Headless account content key must be exactly 32 bytes.")
   }
+  await settlePendingAccountWrites()
   const databaseName = encryptedAccountDatabaseName(localAccountId)
   const contentKey = accountContentKey.slice()
   try {

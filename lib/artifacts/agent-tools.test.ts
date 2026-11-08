@@ -13,6 +13,8 @@ import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useProjectStore } from "@/stores/project/project-store"
+import { aggregateFilesEntries, STANDALONE_CANVAS_SESSION_ID } from "@/lib/files-library/aggregate"
+import { DEFAULT_FILES_FILTERS, filterFilesEntries } from "@/lib/files-library/filter"
 
 const mockReveal = jest.fn()
 jest.mock("@/lib/artifacts/reveal", () => ({
@@ -118,6 +120,85 @@ describe("toolFamily", () => {
 })
 
 describe("artifact_create", () => {
+  it("keeps session-less artifact and Canvas output reachable after unrelated cleanup", async () => {
+    useProjectStore.setState({ activeProjectId: "workflow-project" })
+    try {
+      const artifactResult = (await runArtifactBuiltinTool(
+        "artifact_create",
+        { type: "document", title: "Scheduled report", content: "report" },
+        deps(),
+        { sessionId: "" }
+      )) as { artifactId: string }
+      const canvasResult = (await runArtifactBuiltinTool(
+        "canvas_create",
+        { title: "Webhook draft", content: "draft", language: "markdown" },
+        deps(),
+        { sessionId: "" }
+      )) as { documentId: string }
+      const state = useArtifactStore.getState()
+      const artifact = state.artifacts[artifactResult.artifactId]
+      const canvas = state.canvasDocuments[canvasResult.documentId]
+      expect(artifact.sessionId).toBe("")
+      expect(canvas.sessionId).toBe(STANDALONE_CANVAS_SESSION_ID)
+      state.setArtifactWorkspaceScope("all")
+      expect(useArtifactStore.getState().getArtifactsForWorkspace()).toContainEqual(artifact)
+      expect(state.getCanvasDocumentsForWorkspace()).toContainEqual(canvas)
+      state.setArtifactWorkspaceScope("session", "s1")
+      expect(useArtifactStore.getState().getArtifactsForWorkspace()).not.toContainEqual(artifact)
+      expect(state.getCanvasDocumentsForWorkspace({ sessionId: "s1" })).not.toContainEqual(canvas)
+      state.clearSessionData("s1")
+      state.purgeProject("unrelated-project")
+      expect(useArtifactStore.getState().artifacts[artifact.id]).toEqual(artifact)
+      expect(useArtifactStore.getState().canvasDocuments[canvas.id]).toEqual(canvas)
+      const entries = aggregateFilesEntries({
+        artifacts: [{ ...artifact, createdAt: 1, updatedAt: 2, creator: "ai" }],
+        canvases: [{ ...canvas, createdAt: 1, updatedAt: 2, creator: "ai" }],
+        images: [],
+        sessionUploads: [],
+        libraryUploads: [],
+        generatedVideos: [],
+        items: [],
+        sessions: new Map([["s1", { projectId: "unrelated-project" }]]),
+        heldOriginals: new Set(),
+      })
+      expect(entries.every((entry) => entry.sessionIds.length === 0)).toBe(true)
+      expect(
+        filterFilesEntries(entries, {
+          section: { kind: "all" },
+          lens: "ai",
+          filters: DEFAULT_FILES_FILTERS,
+          search: "",
+          now: Date.now(),
+          activeProjectId: "workflow-project",
+        })
+          .map((entry) => entry.sourceId)
+          .sort()
+      ).toEqual([artifact.id, canvas.id].sort())
+      state.purgeProject("workflow-project")
+      expect(useArtifactStore.getState().artifacts[artifact.id]).toBeUndefined()
+      expect(useArtifactStore.getState().canvasDocuments[canvas.id]).toBeUndefined()
+    } finally {
+      useProjectStore.setState({ activeProjectId: null })
+    }
+  })
+
+  it.each(["artifact_create", "canvas_create"])(
+    "keeps an explicit interactive owner for %s when another conversation is focused",
+    async (tool) => {
+      const result = (await runArtifactBuiltinTool(
+        tool,
+        { type: "document", title: "Chat", content: "x", language: "markdown" },
+        deps(),
+        { sessionId: "calling-session" }
+      )) as { artifactId?: string; documentId?: string }
+      const state = useArtifactStore.getState()
+      const row = result.artifactId
+        ? state.artifacts[result.artifactId]
+        : state.canvasDocuments[result.documentId!]
+      expect(row.sessionId).toBe("calling-session")
+    }
+  )
+
   it("rejects an unsupported chart type before persisting an artifact", async () => {
     const before = Object.keys(useArtifactStore.getState().artifacts).length
     const result = await runArtifactBuiltinTool(

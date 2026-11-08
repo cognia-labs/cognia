@@ -1126,6 +1126,30 @@ describe("<CompanionBootProvider /> — host bindings detail", () => {
     )
   })
 
+  it("commits pending account writes before switching to the restored host's database", async () => {
+    const { registerPendingAccountWriteFlusher } =
+      await import("@/lib/accounts/pending-write-flush")
+    const order: string[] = []
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      order.push("flush")
+    })
+    activateAccountDatabaseMock.mockImplementation(() => order.push("database"))
+    try {
+      setMobile()
+      getActiveHostMock.mockResolvedValue({
+        hostId: "host-a",
+        endpoints: { baseUrl: "ws://192.168.1.10:7890" },
+      })
+      hydrateMock.mockResolvedValue(pairedConfig)
+      mount()
+      await waitFor(() => expect(activateAccountDatabaseMock).toHaveBeenCalled())
+      expect(order).toEqual(["flush", "database"])
+    } finally {
+      dispose()
+      activateAccountDatabaseMock.mockImplementation(() => {})
+    }
+  })
+
   it("restores a mobile host using the unlocked account namespace instead of the legacy default", async () => {
     setMobile()
     activeAccountNamespaceMock = "acct_mobile_second"

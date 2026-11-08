@@ -1,5 +1,6 @@
 import type { CompanionCredentialBook, CompanionHostRecord } from "./credential-book"
 import { removeCompanionHost, type HostRemovalDependencies } from "./host-removal"
+import { registerPendingAccountWriteFlusher } from "@/lib/accounts/pending-write-flush"
 
 const accountId = "local_acct_a"
 const host = (hostId: string): CompanionHostRecord => ({
@@ -72,6 +73,45 @@ function harness(
   }
   return { dependencies, removed, switched, active: () => activeId }
 }
+
+it.each(["paired", "orphan"])(
+  "flushes before deleting and deactivating a sole Mobile %s",
+  async (mode) => {
+    const { dependencies } = harness({
+      hosts: mode === "paired" ? ["host-a"] : [],
+      activeTargetId: "host-a",
+    })
+    const events: string[] = []
+    dependencies.quiesceSoleMobile = async () => {
+      events.push("quiesce")
+    }
+    dependencies.deleteDatabase = async () => {
+      events.push("delete")
+    }
+    dependencies.enterUnpaired = async () => {
+      events.push("unpaired")
+    }
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      events.push("flush:start")
+      await Promise.resolve()
+      events.push("flush:end")
+    })
+    try {
+      await removeCompanionHost({ accountId, hostId: "host-a", platform: "mobile" }, dependencies)
+      expect(events).toEqual([
+        "quiesce",
+        "flush:start",
+        "flush:end",
+        "delete",
+        "delete",
+        "delete",
+        "unpaired",
+      ])
+    } finally {
+      dispose()
+    }
+  }
+)
 
 it("requires an explicit fallback for active removal when alternatives exist", async () => {
   const { dependencies } = harness()

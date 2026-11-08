@@ -11,6 +11,16 @@ import type { EnrollArgs, VerifyArgs, QuickUnlockOutcome } from "@/lib/accounts/
 import type { ProfileCloudIdentityCleanup } from "@/lib/identity/forget-profile-identity"
 
 import type { AccountStoreDependencies } from "./account-store"
+import {
+  ACCOUNT_WRITE_FLUSH_TIMEOUT_MS,
+  registerPendingAccountWriteFlusher,
+} from "@/lib/accounts/pending-write-flush"
+import {
+  AccountContentCipher,
+  activateAccountContentCipher,
+  getActiveAccountContentCipher,
+  lockAccountContentCipher,
+} from "@/lib/accounts/content-cipher"
 
 let mockDesktopLocalEnabled = false
 // Null follows `mockDesktopLocalEnabled`; the native mobile app sets it apart,
@@ -1523,6 +1533,147 @@ describe("account store avatar", () => {
 })
 
 describe("account store switching, locking, and lifecycle", () => {
+  it.each(["reactivate", "switch", "create", "delete-locked", "delete-unlocked"])(
+    "awaits the old account's writes before %s deactivates its storage",
+    async (operation) => {
+      const accounts = [account("acct_alpha", "Alpha"), account("acct_beta", "Beta")]
+      mockListAccounts.mockResolvedValue(accounts)
+      const store = makeStore()
+      store.setState({
+        accounts,
+        loaded: true,
+        activeAccountId: "acct_alpha",
+        unlockedAccountId: operation === "delete-locked" ? null : "acct_alpha",
+        locked: operation === "delete-locked",
+      })
+      let release!: () => void
+      let entered!: () => void
+      const started = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const pending = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const dispose = registerPendingAccountWriteFlusher(async () => {
+        entered()
+        await pending
+      })
+      try {
+        const result = operation.startsWith("delete")
+          ? store.getState().deleteAccount("acct_alpha", { replacementAccountId: "acct_beta" })
+          : operation === "create"
+            ? store.getState().createAccount({
+                id: "acct_new",
+                displayName: "New",
+                password: "secret",
+                activate: true,
+              })
+            : store
+                .getState()
+                .switchAccount(operation === "switch" ? "acct_beta" : "acct_alpha", "secret")
+        await started
+        expect(mockActivateAccountDatabase).not.toHaveBeenCalled()
+        expect(mockClearAccountDatabaseSelection).not.toHaveBeenCalled()
+        expect(mockActivateContentCipher).not.toHaveBeenCalled()
+        expect(mockProvisionBrowserVault).not.toHaveBeenCalled()
+        expect(mockDropAccountDatabase).not.toHaveBeenCalled()
+        release()
+        await result
+        if (operation.startsWith("delete")) {
+          expect(mockDropAccountDatabase).toHaveBeenCalledWith("acct_alpha")
+          expect(mockClearAccountDatabaseSelection).toHaveBeenCalled()
+        } else {
+          expect(mockActivateAccountDatabase).toHaveBeenCalled()
+        }
+      } finally {
+        release()
+        dispose()
+      }
+    }
+  )
+
+  it("awaits pending writes before revoking the cipher or vault", async () => {
+    const store = makeStore()
+    store.setState({
+      accounts: [account("acct_alpha", "Alpha")],
+      activeAccountId: "acct_alpha",
+      unlockedAccountId: "acct_alpha",
+      locked: false,
+    })
+    const cipher = new AccountContentCipher(
+      "acct_alpha",
+      "cognia-account-acct_alpha-encrypted-v1",
+      {} as CryptoKey
+    )
+    activateAccountContentCipher(cipher)
+    let release!: () => void
+    const dispose = registerPendingAccountWriteFlusher(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    try {
+      const locking = store.getState().lock()
+      expect(getActiveAccountContentCipher("cognia-account-acct_alpha-encrypted-v1")).toBe(cipher)
+      expect(mockLockBrowserVault).not.toHaveBeenCalled()
+      expect(mockClearAccountDatabaseSelection).not.toHaveBeenCalled()
+      release()
+      await locking
+      expect(getActiveAccountContentCipher("cognia-account-acct_alpha-encrypted-v1")).toBeNull()
+      expect(mockLockBrowserVault).toHaveBeenCalledTimes(1)
+      expect(store.getState()).toMatchObject({ locked: true, unlockedAccountId: null })
+    } finally {
+      dispose()
+      lockAccountContentCipher()
+    }
+  })
+
+  it.each(["throws", "hangs"])(
+    "still revokes access and reports a flusher that %s",
+    async (mode) => {
+      jest.useFakeTimers()
+      const store = makeStore()
+      store.setState({
+        accounts: [account("acct_alpha", "Alpha")],
+        activeAccountId: "acct_alpha",
+        unlockedAccountId: "acct_alpha",
+        locked: false,
+      })
+      activateAccountContentCipher(
+        new AccountContentCipher(
+          "acct_alpha",
+          "cognia-account-acct_alpha-encrypted-v1",
+          {} as CryptoKey
+        )
+      )
+      const dispose = registerPendingAccountWriteFlusher(() => {
+        if (mode === "throws") throw new Error("write failed")
+        return new Promise<void>(() => {})
+      })
+      try {
+        const locking = store.getState().lock()
+        const failed = expect(locking).rejects.toThrow(
+          mode === "throws" ? "write failed" : "timed out"
+        )
+        if (mode === "hangs") {
+          await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS - 1)
+          expect(mockLockBrowserVault).not.toHaveBeenCalled()
+          await jest.advanceTimersByTimeAsync(1)
+        }
+        await failed
+        expect(getActiveAccountContentCipher("cognia-account-acct_alpha-encrypted-v1")).toBeNull()
+        expect(mockLockBrowserVault).toHaveBeenCalledTimes(1)
+        expect(mockClearAccountDatabaseSelection).toHaveBeenCalledTimes(1)
+        expect(store.getState()).toMatchObject({ locked: true, unlockedAccountId: null })
+      } finally {
+        dispose()
+        lockAccountContentCipher()
+        jest.useRealTimers()
+      }
+    }
+  )
+
   it("switches accounts only after verifying the target password", async () => {
     const alpha = account("acct_alpha", "Alpha")
     const beta = account("acct_beta", "Beta")

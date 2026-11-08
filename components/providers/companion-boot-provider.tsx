@@ -55,6 +55,7 @@ import { adoptMobileCompanionHosts } from "@/lib/companion/mobile-host-adoption"
 import { activeAccountNamespace, companionCredentialBook } from "@/lib/companion/credential-book"
 import { classifyWsHost } from "@/lib/connectivity/lan-classify"
 import { activateAccountDatabase } from "@/lib/db/schema"
+import { settlePendingAccountWrites } from "@/lib/accounts/pending-write-flush"
 import { registerCompanionRuntimeTarget } from "@/lib/runtime/account-runtime-target"
 import {
   runtimeHostSnapshotFromManifest,
@@ -333,6 +334,9 @@ export function CompanionBootProvider({ children }: { children: React.ReactNode 
       const activeHost = await companionCredentialBook().getActive(localAccountId)
       if (isStale()) return
       if (activeHost) {
+        // Commit pending edits to the database being replaced before switching.
+        await settlePendingAccountWrites()
+        if (isStale()) return
         activateAccountDatabase(localAccountId, activeHost.hostId)
         setActiveRuntimeTargetContext(localAccountId, activeHost.hostId)
         setRuntimeSnapshot({

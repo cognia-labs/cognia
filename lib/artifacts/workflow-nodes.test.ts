@@ -257,7 +257,7 @@ describe("action.canvas.create", () => {
       "canvas_create",
       expect.objectContaining({ title: "Notes", language: "markdown", type: "text" }),
       expect.anything(),
-      expect.anything()
+      expect.objectContaining({ sessionId: "" })
     )
     expect(result.output).toMatchObject({ documentId: "doc_1" })
   })

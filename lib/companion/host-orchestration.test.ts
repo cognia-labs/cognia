@@ -3,6 +3,10 @@
 import type { CompanionCredentialBook, CompanionHostRecord } from "./credential-book"
 import type { RuntimeTargetRecord } from "@/lib/runtime/target-registry"
 import {
+  ACCOUNT_WRITE_FLUSH_TIMEOUT_MS,
+  registerPendingAccountWriteFlusher,
+} from "@/lib/accounts/pending-write-flush"
+import {
   COMPANION_HOST_LABEL_EVENT,
   pairAndActivateCompanionHost,
   renameCompanionHost,
@@ -149,6 +153,80 @@ function harness(options: { failReload?: boolean; failRollback?: boolean } = {})
   }
   return { dependencies, order, targets, activeTargetId: () => activeTarget.id }
 }
+
+it.each(["activate", "rollback", "offline"])(
+  "flushes before database teardown during %s",
+  async (mode) => {
+    const { dependencies, order } = harness({
+      failReload: mode !== "activate",
+      failRollback: mode === "offline",
+    })
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      order.push("flush:start")
+      await Promise.resolve()
+      order.push("flush:end")
+    })
+    try {
+      const switching = switchCompanionHost(
+        { accountId, hostId: "host-b", platform: "mobile" },
+        dependencies
+      )
+      if (mode === "activate") await switching
+      else
+        await expect(switching).rejects.toThrow(
+          mode === "rollback" ? "reload failed" : "rollback was incomplete"
+        )
+      expect(order.filter((event) => /^(flush:|database:|offline$)/.test(event))).toEqual([
+        "flush:start",
+        "flush:end",
+        "database:host-b",
+        ...(mode === "rollback" ? ["flush:start", "flush:end"] : []),
+        ...(mode === "rollback" ? ["database:host-a"] : []),
+        ...(mode === "offline" ? ["flush:start", "flush:end", "offline"] : []),
+      ])
+    } finally {
+      dispose()
+    }
+  }
+)
+
+it.each(["throws", "hangs"])(
+  "still enters offline and reports an offline flusher that %s",
+  async (mode) => {
+    jest.useFakeTimers()
+    const { dependencies, order } = harness({ failReload: true, failRollback: true })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let calls = 0
+    const dispose = registerPendingAccountWriteFlusher(async () => {
+      if (++calls === 1) return
+      entered()
+      if (mode === "throws") throw new Error("write failed")
+      await new Promise<void>(() => {})
+    })
+    try {
+      const failed = switchCompanionHost(
+        { accountId, hostId: "host-b", platform: "mobile" },
+        dependencies
+      ).catch((error: AggregateError) => error)
+      await started
+      if (mode === "hangs") await jest.advanceTimersByTimeAsync(ACCOUNT_WRITE_FLUSH_TIMEOUT_MS)
+      const error = await failed
+      expect(error).toBeInstanceOf(AggregateError)
+      expect((error as AggregateError).errors.map((failure: Error) => failure.message)).toEqual([
+        "reload failed",
+        "rollback registry failed",
+        mode === "throws" ? "write failed" : "Pending account writes timed out.",
+      ])
+      expect(order.at(-1)).toBe("offline")
+    } finally {
+      dispose()
+      jest.useRealTimers()
+    }
+  }
+)
 
 it("switches in the required quiesce, teardown, activation, sync, bind, publish order", async () => {
   const { dependencies, order } = harness()

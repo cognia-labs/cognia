@@ -1,5 +1,6 @@
 import Dexie from "dexie"
 
+import { settlePendingAccountWrites } from "@/lib/accounts/pending-write-flush"
 import { accountDatabaseName } from "@/lib/accounts/account-db"
 import { activateAccountContentCipher } from "@/lib/accounts/content-cipher"
 import { classifyWsHost } from "@/lib/connectivity/lan-classify"
@@ -103,6 +104,7 @@ async function migrateEncryptedRuntimeTarget(input: {
   if (!vault || vault.localAccountId !== input.accountId) {
     throw new Error("Browser Vault must be unlocked before account content migration.")
   }
+  await settlePendingAccountWrites()
   const targetDbName = encryptedRuntimeTargetDatabaseName(input.accountId, input.targetId)
   activateAccountContentCipher(vault.createContentCipher(targetDbName))
   const legacyTargetDbName = runtimeTargetDatabaseName(input.accountId, input.targetId)
@@ -265,6 +267,8 @@ export async function registerCompanionRuntimeTarget(
     ? await dependencies.registry.upsertAndActivateCompanionTarget(input, isCurrent)
     : await dependencies.registry.upsertAndActivateCompanionTarget(input)
   if (isCurrent && !isCurrent()) return null
+  await settlePendingAccountWrites()
+  if (isCurrent && !isCurrent()) return null
   dependencies.activateDatabase(localAccountId, activated.id)
   dependencies.setContext(localAccountId, activated.id)
   return activated
@@ -335,6 +339,7 @@ export async function switchAccountRuntimeTarget(
   await dependencies.finalizeCaptures?.(transition)
   await dependencies.stopSubscriptions()
   const activated = await dependencies.registry.activateTarget(localAccountId, target.id)
+  await settlePendingAccountWrites()
   dependencies.activateDatabase(localAccountId, activated.id)
   dependencies.setContext(localAccountId, activated.id)
   try {
@@ -343,6 +348,7 @@ export async function switchAccountRuntimeTarget(
   } catch (error) {
     if (previous) {
       await dependencies.registry.activateTarget(localAccountId, previous.id)
+      await settlePendingAccountWrites()
       dependencies.activateDatabase(localAccountId, previous.id)
       dependencies.setContext(localAccountId, previous.id)
       await dependencies.reloadTransport().catch(() => {})
@@ -382,6 +388,7 @@ export async function detachActiveCompanionRuntimeTarget(
   })
   await dependencies.stopSubscriptions()
   const activated = await dependencies.registry.activateTarget(scope.accountId, standalone.id)
+  await settlePendingAccountWrites()
   dependencies.activateDatabase(scope.accountId, activated.id)
   dependencies.setContext(scope.accountId, activated.id)
   await dependencies.registry.deleteTarget(scope.accountId, active.id)
