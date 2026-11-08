@@ -83,16 +83,18 @@ description: "用 `.cognia/workspace.json` 声明随仓库分发的初始化脚�
   - 原来：多根 bundle 只按主根的 `.cognia/workspace.json` 解析出一份 provisioning，套到所有仓库上。
   - 现在：每个物理组使用自己根目录下声明（以及推断）的 provisioning，并各自通过信任审批。
   - 主根只声明仓库之间的关系，不规定别的仓怎么收窄、怎么链接。
-  - 未批准的根不做 provisioning，并提示用户。
+    - 未批准的根不做 provisioning，并提示用户。
+  - 主根沿用原有的审批键，现有的审批都不会重新弹出；附加根以自身路径为键，各按自己的文件审批一次。
 - **sparse 挪到检出之前。** 「provisioning 是建树的一部分」以及其中的顺序要求都不变。区别是：sparse 改为在 `--no-checkout` 的 worktree 上、首次检出之前设置（见 [ADR-0176](./0176-every-clone-shares-one-object-cache) 修订），所以 `apply_provisioning` 只剩下链接和复制两步。
 - **`dependsOn` 按身份引用另一个仓库。**
   - `roots` 仍然只能是本仓内的子包路径，写不了同级仓库，所以跨仓依赖由消费方声明：`"dependsOn": [{ "repository": "github.com/org/sdk" }]`。
   - 匹配方式：按规范化后的 origin（host/owner/name）匹配 Project 中的根。匹配不到，或匹配到多个，都明确拒绝并提示，绝不猜测。
+    - 匹配需要知道每个根的 origin，所以 `WorkspaceRoot` 新增可选的 `origin` 字段，由专门的规范化解析器生成。
   - 该字段计入 digest，修改后会重新弹出审批；不含该字段的文件 digest 不变，文件版本仍是 `version: 1`。
   - 集成阶段通过 [ADR-0227](./0227-agent-changes-integrate-through-one-host-queue) 的修订读取这个字段。
 - **mise 是可选的推断式 setup 步骤。**
   - 触发条件：根目录有 `mise.toml`（或 `.mise.toml`），且 `PATH` 上能找到 `mise`。满足时 setup 增加一步 `mise install`。
-  - 审批：与仓库声明的 setup 共用同一道审批。
+    - 审批：与仓库声明的 setup 共用同一道审批；审批 digest 同时包含 `mise.toml` 及其锁文件的内容，改动任一文件都会重新弹出审批。
   - 边界：不执行 mise 的 tasks、hooks 或 env 指令，也不负责安装 mise；本机没有 mise 时跳过并提示。
   - setup 指纹覆盖 `mise.toml` 和它的锁文件。
 

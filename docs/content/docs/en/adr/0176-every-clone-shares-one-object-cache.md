@@ -313,17 +313,24 @@ every blob of the commit before the derive.
    sandbox clone, goes through that runner. A cancel from the renderer reaches
    the blocking call, and both cancel and timeout take the existing failure
    rollback.
-2. **Failures are classified before anything retries.** `classify_failure`
-   moves down to `cognia-git-mirror` and gains `NotFound` (branch, ref or
-   repository). Only `Network` and `TimedOut` are retried, with capped
+2. **Failures are classified before anything retries.** `cognia-git-mirror`
+   gets its own failure class (`NotFound` for a branch, ref or repository,
+   `Auth`, `Network`, `TimedOut`, `Cancelled`, `Lock`, `DiskFull`, `Other`).
+   `cognia-git` maps it onto `GitError`, which cannot move down because it
+   carries git2. The mirror's git environment pins `LC_ALL=C`, so the
+   classification does not depend on locale. The mirror runner drains both
+   pipes while it polls, so a verbose child is not mistaken for a timeout. The
+   sandbox clone gains a real kill, since dropping its exec future today leaves
+   git running in the container. Only `Network` and `TimedOut` are retried, with capped
    exponential backoff, jitter and a bounded attempt count inside the deadline.
    §4 still holds for every other class: a mirror miss is not an error and
    falls through to the network. The exceptions are `Auth` and `NotFound`,
    because the network would only repeat the same answer. The class reaches the
    renderer as an error code.
 3. **Sparse is set before the first checkout.** With `sparsePaths`, a worktree
-   is added with `--no-checkout`, narrowed, then checked out. A mirror derive
-   does the same, and the mirror backfill covers only the sparse paths. Without
+   is added with `--no-checkout`, narrowed, then checked out. Remote supply passes the declared sparse paths to the
+   mirror, so its blob backfill covers only those paths. The GitHub-workspace
+   and guarded-clone derives have no sparse source and are unchanged. Without
    `sparsePaths`, nothing changes. The resulting tree must be file-for-file the
    tree today's path produces, including `workingState` overlay entries outside
    the cone. Two spikes gate this step (equivalence with the overlay; a later,
@@ -332,7 +339,8 @@ every blob of the commit before the derive.
 4. **Every phase is measured.** There are spans for mirror ensure (hit or
    miss), fetch, backfill, derive, worktree add, sparse, checkout, network clone
    and sandbox clone, and failures are recorded. Each acquisition writes a phase
-   report to its Registry row, which the perf panel reads. Attributes carry
+   report to its Registry row. The performance page lists recent acquisitions
+   from those reports. The existing `git.exec` guards call `fail()` on error. Attributes carry
    redacted remotes, phase names, durations, counts and classes only.
 5. **`checkout.workers` is measured, not assumed.** A default is set only if a
    local benchmark shows checkout of a large repository at least 20% faster with

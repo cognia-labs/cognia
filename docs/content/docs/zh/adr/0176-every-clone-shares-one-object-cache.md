@@ -169,20 +169,20 @@ PR base 在做镜像时按名字显式请求，并 fetch 进检出，因为 GitH
    - 取消令牌。
 
    每次调用的实际时限，取阶段上限和 deadline 剩余时间中较小的一个。预算放在 `cognia-git-mirror`，与 §10 中「超时会 kill 子进程」的 runner 放在一起；包括沙箱 clone 在内，所有获取路径都改走这个 runner。渲染端发出的取消能到达阻塞调用。取消和超时都走现有的失败回滚。
-2. **先分类，再决定是否重试。** `classify_failure` 下沉到 `cognia-git-mirror`，并新增 `NotFound`（分支、ref 或仓库不存在）。
+2. **先分类，再决定是否重试。** `cognia-git-mirror` 定义自己的失败类别：`NotFound`（分支、ref 或仓库不存在）、`Auth`、`Network`、`TimedOut`、`Cancelled`、`Lock`、`DiskFull`、`Other`。`GitError` 带着 git2，不能下沉，所以由 `cognia-git` 把这些类别映射到 `GitError`。mirror 的 git 环境固定 `LC_ALL=C`，分类不受 locale 影响。mirror runner 轮询时同时排空两个管道，输出多的子进程不会被误判为超时。沙箱 clone 要补一条真正的 kill 路径：现在丢弃 exec future 之后，容器里的 git 还会继续运行。
    - 只有 `Network` 和 `TimedOut` 会重试：指数退避有封顶，加 jitter，次数有上限，且总时长不超过 deadline。
    - 其他类别仍按 §4 处理：mirror 未命中不算错误，回退到网络。
    - `Auth` 和 `NotFound` 是例外，不回退，因为走网络只会得到同样的结论。
 
    错误类别以错误码的形式传到渲染端。
 3. **sparse 在首次检出之前设置。**
-   - 有 `sparsePaths` 时：worktree 先以 `--no-checkout` 创建，设好 sparse 后再检出；mirror 派生同理，而且 blob 补齐只覆盖 sparse 路径。
+   - 有 `sparsePaths` 时：worktree 先以 `--no-checkout` 创建，设好 sparse 后再检出；远程供给会把声明的 sparse 路径传给 mirror，blob 补齐只覆盖这些路径；GitHub workspace 和 guarded clone 的派生路径没有 sparse 来源，保持不变。
    - 没有 `sparsePaths` 时：行为完全不变。
 
    最终的树必须与现有路径产出的逐文件一致，cone 外的 `workingState` overlay 条目也包括在内。实施前先跑两个 spike：一是验证与 overlay 的等价性，二是验证之后范围更大的任务仍能拿到全部 blob。按 §1 的理由，`--no-hardlinks` 保留。
 4. **每个阶段都计时。**
    - 新增 span：mirror ensure（区分命中与未命中）、fetch、backfill、derive、worktree add、sparse、checkout、网络 clone、沙箱 clone。失败会被记录。
-   - 每次获取都把分段报告写到对应的 Registry 行，性能面板读取这份报告。
+   - 每次获取都把分段报告写到对应的 Registry 行，性能页据此列出最近几次获取；已有的 `git.exec` guard 在出错时调用 `fail()`。
    - span 属性只带脱敏后的 remote、阶段名、时长、计数和错误类别。
 5. **`checkout.workers` 先测再定。** 只有本地基准显示大仓检出快至少 20%、且 cognia-next 不变慢时才设默认值；用户自己配置过的值一律不覆盖。
 

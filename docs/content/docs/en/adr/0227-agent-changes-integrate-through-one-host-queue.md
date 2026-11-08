@@ -237,14 +237,20 @@ changes (reproduced against the coordinator source with mocked I/O).
 - **One dependency graph across roots.** Capture is still grouped per root, and
   publishing is still one transaction per target ref (§2). Ordering and holds,
   however, come from one graph spanning every root of the run. That graph is the
-  union of task-level `dependsOn`, the consumer repository's declared
+  union of task-level `dependencies`, the consumer repository's declared
   `dependsOn` (see the [ADR-0147](./0147-repository-declared-workspace)
-  amendment), and the Agent Team repository binding's `dependsOn`. A consumer is
-  held while any provider it depends on is held, failed or has changes
-  requested, and the reason names that provider.
-- **A changed provider obliges the consumer to verify.** When a provider
-  changed in the run, the consumer runs its declared checks (its acceptance
-  profile or `requiredChecks`) on the integration candidate that contains the
-  provider's change. The result decides. A consumer that declares no checks
-  waits for a person (`awaitingApproval`, reason: its dependency changed and it
-  has no verification checks).
+  amendment), and the Agent Team repository binding's `dependsOn`. A repository edge
+  is a root-to-root edge, expanded to every changeset of both roots, and is
+  checked for cycles. Read-only repositories produce no changeset and cannot be
+  providers. A consumer is
+  held while any provider it depends on is held, has changes requested, or
+  failed, including a provider whose capture failed (today that silently drops
+  the edge, even inside one root). Each hold records the provider's root and
+  task.
+- **A changed provider holds its consumer for a person.** Integration
+  candidates are single-repository, so no candidate yet contains a provider's
+  change next to its consumer. In the first version, every consumer of a
+  provider that changed in the run waits in `awaitingApproval`, with the
+  provider named. Running the consumer's declared checks on a composed
+  cross-repository candidate is a later phase. Per-changeset checks run as
+  today.

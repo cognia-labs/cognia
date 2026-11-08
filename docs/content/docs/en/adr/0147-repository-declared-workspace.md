@@ -180,7 +180,9 @@ Status: agreed design, not yet implemented. Plan:
   declares (and infers), behind its own trust approval. The primary root
   declares the relationship between repositories and nothing about how another
   repository is narrowed or linked. An unapproved root is not provisioned, and
-  the user is told.
+  the user is told. The primary root keeps its existing approval key, so no
+  current approval re-prompts. Each additional root is keyed by its own path
+  and is approved once against its own file.
 - **Sparse moves before the checkout.** "Provisioning is part of creating the
   tree" and its order still hold. Sparse is now configured on a `--no-checkout`
   worktree before the first checkout (see the
@@ -190,14 +192,18 @@ Status: agreed design, not yet implemented. Plan:
   sub-package paths, so a sibling repository cannot be named there. A consumer
   declares `"dependsOn": [{ "repository": "github.com/org/sdk" }]`, which is
   matched by normalised origin (host/owner/name) against the Project's roots. No
-  match, or more than one, is a visible refusal, never a guess. The field is
-  part of the digest, so changing it re-prompts. A file without it keeps its
+  match, or more than one, is a visible refusal, never a guess. Matching needs
+  each root's origin, so `WorkspaceRoot` gains an optional `origin`, parsed by a
+  dedicated normaliser. The field is part of the digest, so changing it
+  re-prompts. A file without it keeps its
   digest, and the file stays `version: 1`. Integration reads the field through
   the [ADR-0227](./0227-agent-changes-integrate-through-one-host-queue)
   amendment.
 - **mise is an optional, inferred setup step.** When a root has `mise.toml` (or
   `.mise.toml`) and `mise` is on `PATH`, setup gains `mise install`. It runs
-  behind the same approval as declared setup, never runs mise tasks, hooks or
+  behind the same approval as declared setup, and the approval digest also
+  covers the content of `mise.toml` and its lockfile, so editing either
+  re-prompts. It never runs mise tasks, hooks or
   env directives, and never installs mise. If mise is missing, the step is
   skipped with a notice. The setup fingerprint covers `mise.toml` and its
   lockfile. Process Compose and West are not adopted.

@@ -146,15 +146,19 @@ shared parent, could not resolve inside a bundle.
   sanitised, de-duplicated and confined host-side.
 - **Versioned, not migrated.** A bundle records a `layoutVersion`. A bundle
   created under the storage-key layout restores, releases and reconciles on that
-  layout until it ends.
+  layout until it ends. The scratch-session check that recomputes a bundle's
+  expected root follows the recorded version.
 - **Every root is provisioned from its own declaration.** See the
   [ADR-0147](./0147-repository-declared-workspace) amendment.
 - **More entries see every root.** Generic and sub-agent execution and Agent
   Team children pass the additional aliases alongside the primary execution
-  root, under the same confinement and trust proof. Codex receives them as
-  writable roots only when its policy already grants writes. A managed chat send
-  keeps `@`-referenced directories instead of replacing them with the aliases.
+  root, under the same confinement and trust proof. A managed chat send keeps `@`-referenced directories, pending
+  slash-command paths and the project's extra roots alongside the aliases,
+  instead of replacing them.
   The source-control root switcher lists the session's bundle worktrees first.
 - **Still one root, and labelled.** Remote code supply and sandbox runs supply
-  the primary root only. Aider and A2A refuse extra roots. Each limit is stated
+  the primary root only (the Rust supply takes the first existing root). Aider
+  and A2A refuse extra roots. Codex keeps its static, per-process writable
+  roots, because that scope is fixed at spawn and cannot change while another
+  session executes. Each limit is stated
   at the type, labelled in the UI and pinned by a test.
