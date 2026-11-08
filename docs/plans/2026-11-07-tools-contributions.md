@@ -597,3 +597,14 @@ interface ToolSurface {
 - 门禁：module gate 通过（888 条方向边），baseline-growth、colocated-tests、`check-modules.test.mjs`（83 项）、`check-unreachable-components.test.mjs`（46 项）通过；全量类型检查只有已知的外来错误。
 - 已有、与本次无关的失败：`lib/shell/workbench-panels.test.ts`（别的会话新增的 `SANDBOX_DESKTOP_PANEL_ID` 未映射）。
 - 结果：基础层与内核里不再有导入桌面壳的文件。
+
+## 30. T21：挑选移动端或桌面视图的路由归 shell（2026-11-08）
+
+- 目标：延续 `app/route-body.tsx` 的做法，还清 `app/**/route-body` 指向 mobile 的边。
+- 做法（a1de09a1b3，还清 49 条）：
+  - 22 个路由目录（agents、agents/evolution、bots、devices、discover、goals、inbox 下四个、issues、memory、plugins、projects、servers 与 servers/detail、source-control、squads、templates、workflows 与 workflows/editor、workflows/runs）各加两条 `paths` 行：`<dir>/route-body.`（含 `.mobile.tsx` 变体与测试）和 `<dir>/page.`，都归 shell。另加 `app/page.`。
+  - 只改路由主体会让每个 `page.tsx` 新增一条 `page -> shell` 边（共 22 条），所以页面也一并归 shell：页面只负责读取路由状态并渲染路由主体。
+  - G3 没有新增违规，代码无需改动。
+- 还清：43 条路由主体 → mobile；`app/page.tsx` 的五条（shell、chat、chat:ui、collab、filespace）；`app/source-control/page.tsx -> global-search`。
+- 门禁：module gate 通过（839 条方向边），baseline-growth、`check-modules.test.mjs`（83 项）通过。
+- 仍在基线里、形状不同的 app 边：`app/fleet/page.tsx`、`app/remote-sessions/page.tsx`、`app/search/page.tsx` 直接渲染 mobile 组件；`app/inbox/layout.tsx` 挂载 mobile 的访问追踪；`app/e2e/plugin-ui-surfaces/` 的测试夹具导入 shell。

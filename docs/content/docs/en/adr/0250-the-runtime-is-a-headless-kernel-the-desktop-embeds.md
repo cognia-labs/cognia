@@ -462,6 +462,7 @@ Where an existing rule already owns a field, the field follows that rule:
   - `AppRuntime` takes `shell`: the route inside the platform shell and the surface availability boundary. The root layout builds it. The full runtime renders `shell`; the lightweight and guest branches keep rendering the bare route (`children`).
   - The platform shell and its Capacitor variant moved to `components/shell/` and became client modules, because the server layout imports them. The root layout is owned by the shell.
   - This repays the three platform-shell edges and the root layout's three edges into modules. No foundation or kernel file imports the desktop shell any more.
+- **Amendment (2026-11-08): the shell owns the routes that pick a mobile or desktop view.** 22 routes have a route body that renders the mobile body on a compact layout and the module's desktop view otherwise, which is what `app/route-body.tsx` does for `/`. Their route bodies (with the `.mobile.tsx` variants) and the pages that render them are owned by the shell through `paths` rows, and so is `app/page.tsx`. This repays 49 edges (43 route body → mobile). The record is §30 of `docs/plans/2026-11-07-tools-contributions.md`.
 
 **How modules talk.**
 - **Public API files.** A module imports another module only through the concrete files listed in its `api`, plus `types/<id>/**`. There are no barrels, as `check-root-loading-boundaries` already requires. The target must be in `dependsOn`, and the `dependsOn` graph has no cycle.

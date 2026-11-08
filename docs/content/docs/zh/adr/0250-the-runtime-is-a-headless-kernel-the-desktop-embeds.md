@@ -468,6 +468,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - `AppRuntime` 新增 `shell` 参数：由根布局构建的、包在平台壳与界面可用性边界里的路由。完整运行时渲染 `shell`，轻量分支与访客分支仍渲染裸路由（`children`）。
   - 平台壳及其 Capacitor 变体移到 `components/shell/`，并标为客户端模块，因为服务端布局要导入它们。根布局归 shell 所有。
   - 还清平台壳的三条边，以及根布局指向模块的三条边。基础层与内核不再有文件导入桌面壳。
+- **修订（2026-11-08）：挑选移动端或桌面视图的路由归 shell。** 有 22 个路由的路由主体在紧凑布局下渲染移动端主体、否则渲染模块的桌面视图，与 `app/route-body.tsx` 对 `/` 做的事相同。它们的路由主体（含 `.mobile.tsx` 变体）以及渲染它们的页面经 `paths` 行归 shell，`app/page.tsx` 同样如此。还清 49 条边（其中 43 条是路由主体 → mobile）。实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §30。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
