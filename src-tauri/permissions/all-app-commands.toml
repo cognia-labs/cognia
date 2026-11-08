@@ -1122,6 +1122,8 @@ commands.allow = [
   "task_resource_upload_commit",
   "task_resource_upload_open",
   "task_resource_upload_write_chunk",
+  "task_workspace_acquisition_cancel",
+  "task_workspace_acquisition_list",
   "task_workspace_apply",
   "task_workspace_begin",
   "task_workspace_bundle_acquire",

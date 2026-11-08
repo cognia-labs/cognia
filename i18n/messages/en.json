@@ -32343,6 +32343,56 @@
     "title": "Cognia"
   },
   "performance": {
+    "acquisitions": {
+      "attempt": "attempt {attempt}",
+      "classes": {
+        "auth": "Authentication failed",
+        "cancelled": "Cancelled",
+        "diskFull": "Disk full",
+        "lock": "Locked",
+        "network": "Network error",
+        "notFound": "Not found",
+        "other": "Failed",
+        "timedOut": "Timed out"
+      },
+      "columns": {
+        "kind": "Kind",
+        "phases": "Steps",
+        "result": "Result",
+        "startedAt": "Started",
+        "subject": "Source",
+        "total": "Total"
+      },
+      "description": "The latest checkouts this host produced for runs and bundles, with how long each step took and why a failed one failed.",
+      "empty": "No acquisitions recorded yet.",
+      "error": "Could not read acquisitions from the host.",
+      "kinds": {
+        "bundle": "Bundle",
+        "remoteSource": "Remote source",
+        "restore": "Restore",
+        "run": "Task run"
+      },
+      "loading": "Loading acquisitions…",
+      "notes": {
+        "created": "created",
+        "hit": "cached",
+        "recent": "recently fetched",
+        "refreshed": "refreshed"
+      },
+      "ok": "Succeeded",
+      "phases": {
+        "backfill": "Backfill",
+        "checkout": "Checkout",
+        "clone": "Clone",
+        "derive": "Derive",
+        "fetch": "Fetch",
+        "provisioning": "Provisioning",
+        "sparse": "Sparse",
+        "worktreeAdd": "Worktree"
+      },
+      "refresh": "Refresh",
+      "title": "Recent workspace acquisitions"
+    },
     "browserDiagnostics": {
       "collection": {
         "description": "Off by default. Enabled groups collect only while the performance panel, capture or HUD requests sampling. Values stay local; this does not enable remote reporting.",

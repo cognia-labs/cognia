@@ -45,6 +45,8 @@ import type {
   BundleHandoffOutcome,
   BundleHandoffUndoOutcome,
   BundleHandoffRequest,
+  CancelWorkspaceAcquisition,
+  CancelWorkspaceAcquisitionOutcome,
   DownloadHandle,
   PatchSelection,
   PatchSet,
@@ -62,6 +64,7 @@ import type {
   TransferChunk,
   UploadHandle,
   ManagedWorkspaceRecord,
+  WorkspaceAcquisition,
   WorkspaceBundle,
   WorkspaceBundleTurnLease,
   WorkspaceBundleTurnOutcome,
@@ -122,14 +125,61 @@ export function turnRecordId(sessionId: string, runId: number): string {
   return runIdForTurn(sessionId, runId).slice("run:".length)
 }
 
+/** Options a call that acquires a checkout takes (ADR-0176 A1). */
+export interface WorkspaceAcquisitionCallOptions {
+  /**
+   * Aborting stops the acquisition on the host: the git it is waiting on is
+   * killed, the acquisition rolls back, and the call rejects with the host's
+   * "cancelled" error. Already aborted means the call is not made.
+   */
+  signal?: AbortSignal
+}
+
+/**
+ * Send the host a cancel for `target` when `signal` aborts.
+ *
+ * The cancel names the acquisition by an identity the acquiring call already
+ * carries (its run id, or its bundle owner), so the acquire input needs no
+ * cancel id of its own. Returns the listener's remover.
+ */
+function cancelAcquisitionOnAbort(
+  signal: AbortSignal | undefined,
+  target: CancelWorkspaceAcquisition | null,
+  origin?: TaskWorkspaceOrigin
+): () => void {
+  if (!signal || !target) return () => {}
+  const onAbort = () => {
+    // Best effort: a cancel that cannot be delivered leaves the acquisition
+    // to its own deadline, which is what it had before the abort.
+    void cancelWorkspaceAcquisition(target, origin).catch(() => undefined)
+  }
+  signal.addEventListener("abort", onAbort, { once: true })
+  return () => signal.removeEventListener("abort", onAbort)
+}
+
 export async function beginTaskWorkspaceTurn(
   input: BeginTaskWorkspaceTurn,
-  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin(),
+  options: WorkspaceAcquisitionCallOptions = {}
 ): Promise<TaskRun | null> {
-  const approval = hasWorkspaceApprovalScope("task_workspace_begin", origin)
-    ? null
-    : await openWorkspaceApprovalScope(undefined, origin)
+  options.signal?.throwIfAborted()
+  // Listening starts before the approval wait: an abort that lands while the
+  // scope opens must still reach a begin the host may already be running
+  // for this run id (a retry of one sent earlier).
+  const stopListening = cancelAcquisitionOnAbort(options.signal, { runId: input.runId }, origin)
+  let approval: Awaited<ReturnType<typeof openWorkspaceApprovalScope>> | null
   try {
+    approval = hasWorkspaceApprovalScope("task_workspace_begin", origin)
+      ? null
+      : await openWorkspaceApprovalScope(undefined, origin)
+  } catch (error) {
+    // A scope that cannot open fails the call as it always has, not through
+    // the host-deferred answer below.
+    stopListening()
+    throw error
+  }
+  try {
+    options.signal?.throwIfAborted()
     const run = await transport.call<TaskRun>("task_workspace_begin", { input }, origin)
     bindApprovalScopeToTurn(run.runId, approval)
     useTaskWorkspaceStore.getState().activate({
@@ -152,6 +202,8 @@ export async function beginTaskWorkspaceTurn(
     const hostDeferred = /remote.control|not authorized|unknown.command|forbidden/i.test(message)
     if (!hostDeferred) throw error
     return null
+  } finally {
+    stopListening()
   }
 }
 
@@ -677,8 +729,40 @@ export function reconcileManagedWorkspaces(): Promise<WorkspaceReconcileOutcome>
   return transport.call("task_workspace_reconcile")
 }
 
-export function acquireWorkspaceBundle(input: AcquireWorkspaceBundle): Promise<WorkspaceBundle> {
-  return transport.call("task_workspace_bundle_acquire", { input })
+export async function acquireWorkspaceBundle(
+  input: AcquireWorkspaceBundle,
+  options: WorkspaceAcquisitionCallOptions = {}
+): Promise<WorkspaceBundle> {
+  options.signal?.throwIfAborted()
+  // A bundle without an owner reference has no key a cancel could name; it
+  // is still bounded by the host's acquisition deadline.
+  const target = input.ownerRef?.trim()
+    ? { ownerType: input.ownerType, ownerRef: input.ownerRef }
+    : null
+  const stopListening = cancelAcquisitionOnAbort(options.signal, target)
+  try {
+    return await transport.call<WorkspaceBundle>("task_workspace_bundle_acquire", { input })
+  } finally {
+    stopListening()
+  }
+}
+
+/**
+ * Stop the acquisition in flight under `target` (ADR-0176 A1). Answers
+ * `cancelled: false` when nothing is in flight under it, which changes nothing.
+ */
+export function cancelWorkspaceAcquisition(
+  target: CancelWorkspaceAcquisition,
+  origin?: TaskWorkspaceOrigin
+): Promise<CancelWorkspaceAcquisitionOutcome> {
+  return transport.call("task_workspace_acquisition_cancel", { input: target }, origin)
+}
+
+/** The host's newest acquisitions with their phase timings, newest first. */
+export function listWorkspaceAcquisitions(
+  page: PageRequest = { pageSize: 50 }
+): Promise<Page<WorkspaceAcquisition>> {
+  return transport.call("task_workspace_acquisition_list", page)
 }
 
 /**

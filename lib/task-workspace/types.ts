@@ -312,6 +312,55 @@ export interface WorkspaceMaintenanceResult {
   events: WorkspaceMaintenanceEvent[]
 }
 
+/** What produced a managed checkout (ADR-0176 A1). */
+export type WorkspaceAcquisitionKind = "run" | "bundle" | "restore" | "remoteSource"
+
+/** One step of an acquisition. */
+export type WorkspaceAcquisitionPhaseName =
+  "fetch" | "clone" | "backfill" | "derive" | "worktreeAdd" | "sparse" | "checkout" | "provisioning"
+
+/** Why an acquisition step failed. The host may add classes; unknown ones read as `other`. */
+export type WorkspaceAcquisitionFailureClass =
+  "notFound" | "auth" | "network" | "timedOut" | "cancelled" | "lock" | "diskFull" | "other"
+
+export interface WorkspaceAcquisitionPhase {
+  phase: WorkspaceAcquisitionPhaseName | (string & {})
+  /** Milliseconds after the acquisition started. */
+  startedMs: number
+  durationMs: number
+  ok: boolean
+  failureClass: WorkspaceAcquisitionFailureClass | (string & {}) | null
+  /** 1 for the first attempt; a retried step has one entry per attempt. */
+  attempt: number
+  /** A short fact about the step, such as a mirror `hit`. */
+  note: string | null
+}
+
+/** One acquisition's record, as `task_workspace_acquisition_list` answers it. */
+export interface WorkspaceAcquisition {
+  acquisitionId: string
+  /** Open: a newer host may report a kind this build does not know. */
+  kind: WorkspaceAcquisitionKind | (string & {})
+  /** The checkout it was cut from, or the remote it was supplied from. */
+  subject: string
+  key: string | null
+  /** Unix milliseconds. */
+  startedAt: number
+  totalMs: number
+  ok: boolean
+  failureClass: WorkspaceAcquisitionFailureClass | (string & {}) | null
+  error: string | null
+  phases: WorkspaceAcquisitionPhase[]
+}
+
+/** Which in-flight acquisition to cancel. Name exactly one target. */
+export type CancelWorkspaceAcquisition =
+  { runId: string } | { ownerType: WorkspaceOwnerType; ownerRef: string } | { workspaceId: string }
+
+export interface CancelWorkspaceAcquisitionOutcome {
+  cancelled: boolean
+}
+
 export type WorkspaceEnvironmentOwnership = "main" | "manual" | "managed" | "imported" | "permanent"
 
 /**

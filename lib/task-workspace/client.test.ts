@@ -11,10 +11,16 @@ const userAction = jest.fn(
 // companion. Both are exercised in `user-action.test.ts`; here the point is
 // only that the settle goes THROUGH it rather than calling the Host bare.
 const closeTurnScope = jest.fn()
+// Set by a test that needs the approval scope to be slow to open.
+let mockApprovalScopeWait: Promise<null> | null = null
 jest.mock("./user-action", () => {
   const actual = jest.requireActual("./user-action")
   return {
     ...actual,
+    hasWorkspaceApprovalScope: (...args: unknown[]) =>
+      mockApprovalScopeWait ? false : actual.hasWorkspaceApprovalScope(...args),
+    openWorkspaceApprovalScope: (...args: unknown[]) =>
+      mockApprovalScopeWait ?? actual.openWorkspaceApprovalScope(...args),
     runWorkspaceUserAction: (...args: unknown[]) =>
       userAction(...(args as [string, () => Promise<unknown>])),
     closeApprovalScopeForTurn: (...args: unknown[]) => closeTurnScope(...args),
@@ -58,6 +64,8 @@ import * as workspaceClient from "./client"
 import {
   abortWorkspaceBundleTurn,
   acquireWorkspaceBundle,
+  cancelWorkspaceAcquisition,
+  listWorkspaceAcquisitions,
   acquireWorkspaceBundleFromRemote,
   archiveManagedWorkspace,
   applyTaskWorkspace,
@@ -873,6 +881,167 @@ describe("task workspace client", () => {
     await acquireWorkspaceBundle(input)
 
     expect(call).toHaveBeenCalledWith("task_workspace_bundle_acquire", { input })
+  })
+
+  describe("acquisition cancel bridge", () => {
+    const input = {
+      ownerType: "session" as const,
+      ownerRef: "session-1",
+      environmentKind: "managed" as const,
+      base: { kind: "workingState" as const },
+      roots: [{ logicalRootId: "primary", role: "primary" as const, sourceRoot: "/repo" }],
+    }
+
+    it("asks the host to cancel an aborted bundle acquisition by its owner", async () => {
+      let settle: (value: unknown) => void = () => undefined
+      call.mockImplementation((command: string) =>
+        command === "task_workspace_bundle_acquire"
+          ? new Promise((resolve) => {
+              settle = resolve
+            })
+          : Promise.resolve({ cancelled: true })
+      )
+      const controller = new AbortController()
+      const pending = acquireWorkspaceBundle(input, { signal: controller.signal })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      controller.abort()
+      // The cancel goes through the same approval-aware transport, which
+      // resolves its lease before it reaches the host.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(call).toHaveBeenCalledWith("task_workspace_acquisition_cancel", {
+        input: { ownerType: "session", ownerRef: "session-1" },
+      })
+      settle({ bundleId: "bundle-1", leases: [] })
+      await pending
+    })
+
+    it("makes no call when the signal is already aborted", async () => {
+      const controller = new AbortController()
+      controller.abort(new Error("stopped before it began"))
+
+      await expect(acquireWorkspaceBundle(input, { signal: controller.signal })).rejects.toThrow(
+        "stopped before it began"
+      )
+      expect(call).not.toHaveBeenCalled()
+    })
+
+    it("stops listening once the acquisition has finished", async () => {
+      call.mockResolvedValueOnce({ bundleId: "bundle-1", leases: [] })
+      const controller = new AbortController()
+      await acquireWorkspaceBundle(input, { signal: controller.signal })
+      controller.abort()
+
+      expect(call).toHaveBeenCalledTimes(1)
+      expect(call).not.toHaveBeenCalledWith("task_workspace_acquisition_cancel", expect.anything())
+    })
+
+    it("cannot cancel a bundle that names no owner, and still acquires it", async () => {
+      call.mockResolvedValueOnce({ bundleId: "bundle-1", leases: [] })
+      const controller = new AbortController()
+      const pending = acquireWorkspaceBundle(
+        { ...input, ownerRef: null },
+        { signal: controller.signal }
+      )
+      controller.abort()
+      await pending
+
+      expect(call).toHaveBeenCalledTimes(1)
+    })
+
+    it("sends a cancel and reads recent acquisitions through their own commands", async () => {
+      call.mockResolvedValueOnce({ cancelled: false })
+      await expect(cancelWorkspaceAcquisition({ runId: "run-1" })).resolves.toEqual({
+        cancelled: false,
+      })
+      expect(call).toHaveBeenLastCalledWith("task_workspace_acquisition_cancel", {
+        input: { runId: "run-1" },
+      })
+
+      call.mockResolvedValueOnce({ items: [] })
+      await listWorkspaceAcquisitions()
+      expect(call).toHaveBeenLastCalledWith("task_workspace_acquisition_list", { pageSize: 50 })
+    })
+
+    const begin = {
+      taskId: "task:message",
+      sessionId: "session",
+      runId: "run:session:1",
+      agentId: "built-in",
+      agentKind: "in-app",
+      workspaceRoot: "/repo",
+      base: { kind: "workingState" as const },
+    }
+
+    it("asks the host to cancel an aborted begin by its run id", async () => {
+      let settle: (value: unknown) => void = () => undefined
+      call.mockImplementation((command: string) =>
+        command === "task_workspace_begin"
+          ? new Promise((resolve) => {
+              settle = resolve
+            })
+          : Promise.resolve({ cancelled: true })
+      )
+      const controller = new AbortController()
+      const pending = beginTaskWorkspaceTurn(
+        begin,
+        { kind: "local" },
+        { signal: controller.signal }
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(call).toHaveBeenCalledWith("task_workspace_begin", expect.anything())
+      controller.abort()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(call).toHaveBeenCalledWith("task_workspace_acquisition_cancel", {
+        input: { runId: "run:session:1" },
+      })
+      settle({
+        taskId: "task:message",
+        runId: "run:session:1",
+        executionRoot: "/isolated",
+        state: "running",
+      })
+      await pending
+    })
+
+    it("does not begin when the signal is already aborted", async () => {
+      const controller = new AbortController()
+      controller.abort(new Error("stopped"))
+      await expect(
+        beginTaskWorkspaceTurn(begin, { kind: "local" }, { signal: controller.signal })
+      ).rejects.toThrow("stopped")
+      expect(call).not.toHaveBeenCalled()
+    })
+
+    it("does not begin when the signal aborts while the approval scope opens", async () => {
+      let open: (value: null) => void = () => undefined
+      mockApprovalScopeWait = new Promise((resolve) => {
+        open = resolve
+      })
+      call.mockResolvedValue({ cancelled: false })
+      try {
+        const controller = new AbortController()
+        const pending = beginTaskWorkspaceTurn(
+          begin,
+          { kind: "local" },
+          { signal: controller.signal }
+        )
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        controller.abort(new Error("stopped while waiting"))
+        open(null)
+
+        await expect(pending).rejects.toThrow("stopped while waiting")
+        expect(call).not.toHaveBeenCalledWith("task_workspace_begin", expect.anything())
+        // The cancel still goes out, in case a begin for this run id is
+        // already running on the host from an earlier attempt.
+        expect(call).toHaveBeenCalledWith("task_workspace_acquisition_cancel", {
+          input: { runId: "run:session:1" },
+        })
+      } finally {
+        mockApprovalScopeWait = null
+      }
+    })
   })
 
   it("supplies a source checkout from a remote before anything is acquired", async () => {

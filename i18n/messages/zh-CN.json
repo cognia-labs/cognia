@@ -32343,6 +32343,56 @@
     "title": "Cognia"
   },
   "performance": {
+    "acquisitions": {
+      "attempt": "第 {attempt} 次尝试",
+      "classes": {
+        "auth": "认证失败",
+        "cancelled": "已取消",
+        "diskFull": "磁盘已满",
+        "lock": "被锁定",
+        "network": "网络错误",
+        "notFound": "不存在",
+        "other": "失败",
+        "timedOut": "超时"
+      },
+      "columns": {
+        "kind": "类型",
+        "phases": "步骤",
+        "result": "结果",
+        "startedAt": "开始时间",
+        "subject": "来源",
+        "total": "总耗时"
+      },
+      "description": "所选主机最近为任务运行和工作区组完成的检出，包括每一步的耗时和失败原因。",
+      "empty": "还没有获取记录。",
+      "error": "无法从主机读取获取记录。",
+      "kinds": {
+        "bundle": "工作区组",
+        "remoteSource": "远程源",
+        "restore": "恢复",
+        "run": "任务运行"
+      },
+      "loading": "正在读取获取记录…",
+      "notes": {
+        "created": "新建",
+        "hit": "命中缓存",
+        "recent": "刚拉取过",
+        "refreshed": "已刷新"
+      },
+      "ok": "成功",
+      "phases": {
+        "backfill": "补全对象",
+        "checkout": "检出",
+        "clone": "克隆",
+        "derive": "派生",
+        "fetch": "拉取",
+        "provisioning": "环境准备",
+        "sparse": "稀疏检出",
+        "worktreeAdd": "工作树"
+      },
+      "refresh": "刷新",
+      "title": "最近的工作区检出"
+    },
     "browserDiagnostics": {
       "collection": {
         "description": "默认关闭。启用的分组仅在性能面板、录制或 HUD 请求采样时采集。数据保留在本地，此开关不会开启远程上报。",

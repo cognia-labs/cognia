@@ -1209,6 +1209,7 @@
                 "turn": {}
               }
             },
+            "acquisition": {},
             "best_of_n": {},
             "changeset": {
               "children": {

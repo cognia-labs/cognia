@@ -162,6 +162,9 @@ jest.mock("./perf-browser-diagnostics", () => ({
 jest.mock("./perf-operation-timings", () => ({
   PerfOperationTimings: () => <section aria-label="Application operations" />,
 }))
+jest.mock("./perf-recent-acquisitions", () => ({
+  PerfRecentAcquisitions: () => <section aria-label="Recent workspace acquisitions" />,
+}))
 jest.mock("./perf-host-unavailable", () => ({
   PerfHostUnavailable: ({ section, notReported }: { section: string; notReported?: boolean }) => (
     <div data-testid={`host-unavailable-${section}`} data-not-reported={Boolean(notReported)} />
@@ -301,6 +304,10 @@ describe("PerformanceDashboard", () => {
     )
     fireEvent.click(screen.getByTestId("perf-tab-diagnose"))
     expect(screen.getByTestId("host-unavailable-hotspots")).toBeInTheDocument()
+    // No host to read acquisitions from, so the table is not drawn at all.
+    expect(
+      screen.queryByRole("region", { name: "Recent workspace acquisitions" })
+    ).not.toBeInTheDocument()
   })
 
   it("marks sections the connected host's runtime does not report", () => {
@@ -329,6 +336,9 @@ describe("PerformanceDashboard", () => {
       sources: [rustHost],
     })
     render(<PerformanceDashboard />)
+    expect(
+      screen.getByRole("region", { name: "Recent workspace acquisitions" })
+    ).toBeInTheDocument()
     expect(screen.getByTestId("hot")).toHaveAttribute("data-resettable", "true")
     fireEvent.click(screen.getByTestId("hot"))
     expect(resetHotspotsMock).toHaveBeenCalledTimes(1)

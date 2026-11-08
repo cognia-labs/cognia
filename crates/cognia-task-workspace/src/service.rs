@@ -15,6 +15,7 @@ use crate::{
     WorkspaceOwnerType, WorkspaceProvisioning, WorkspaceRecord, WorkspaceRegistry,
     WorkspaceSourceBinding, WorkspaceState,
 };
+use cognia_git_mirror::{AcquisitionBudget, FailureClass, GitRun, Phase, RunError};
 use parking_lot::Mutex;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -141,6 +142,8 @@ pub struct TaskWorkspaceService {
     open_recovery_failures: Mutex<Vec<String>>,
     /// Latest non-authoritative discovery failure per cwd, exposed by snapshots.
     port_discovery_diagnostics: Mutex<BTreeMap<PathBuf, crate::PortLeaseDiagnostic>>,
+    /// Cancel tokens of the acquisitions in flight (ADR-0176 A1).
+    acquisitions: crate::acquisition::InFlightAcquisitions,
 }
 
 #[derive(Clone)]
@@ -388,6 +391,7 @@ impl TaskWorkspaceService {
             watchers: WatchManager::new(),
             lifecycle: crate::lifecycle::WorktreeLifecycleEmitter::default(),
             git_admin_locks: Mutex::new(HashMap::new()),
+            acquisitions: crate::acquisition::InFlightAcquisitions::default(),
             resource_index: Mutex::new(None),
             code_snapshot_outbox: crate::CodeSnapshotOutbox::new(snapshots_dir.join("outgoing")),
             code_snapshot_inbox,
@@ -472,7 +476,60 @@ impl TaskWorkspaceService {
             .git_admin_lock(&planned)
             .unwrap_or_else(|| Arc::new(Mutex::new(())));
         let _held = lock.lock();
-        crate::remote_source::ensure_remote_source(&self.mirrors_dir, &self.sources_dir, input)
+        let acquisition = self.acquisitions.begin(
+            crate::acquisition::WorkspaceAcquisitionKind::RemoteSource,
+            None,
+            input.remote_url.trim(),
+            crate::remote_source::supply_budget(),
+        );
+        let result = crate::remote_source::ensure_remote_source_within(
+            &self.mirrors_dir,
+            &self.sources_dir,
+            input,
+            acquisition.budget(),
+        );
+        self.record_acquisition(&acquisition, &result);
+        result
+    }
+
+    /// Stop the acquisition in flight under the named key (ADR-0176 A1).
+    ///
+    /// The git it is waiting on is killed, and the acquisition rolls back the
+    /// way it does for any other failure.
+    pub fn cancel_acquisition(
+        &self,
+        target: &crate::CancelWorkspaceAcquisition,
+    ) -> Result<crate::CancelWorkspaceAcquisitionOutcome, String> {
+        Ok(crate::CancelWorkspaceAcquisitionOutcome {
+            cancelled: self.acquisitions.cancel(target)?,
+        })
+    }
+
+    /// The newest acquisitions, newest first, at most
+    /// [`crate::ACQUISITION_RECORDS_KEPT`].
+    pub fn recent_acquisitions(
+        &self,
+        limit: Option<u32>,
+    ) -> Result<Vec<crate::WorkspaceAcquisition>, String> {
+        let limit = limit
+            .unwrap_or(crate::ACQUISITION_RECORDS_KEPT)
+            .clamp(1, crate::ACQUISITION_RECORDS_KEPT);
+        crate::acquisition::list(&self.store.lock().connection, limit)
+    }
+
+    /// Keep what an acquisition recorded. Never fails it: a record that cannot
+    /// be written is a missing row on the performance page, not a failed run.
+    fn record_acquisition<T>(
+        &self,
+        acquisition: &crate::acquisition::Acquisition<'_>,
+        result: &Result<T, String>,
+    ) {
+        let Some(record) = acquisition.record(result) else {
+            return;
+        };
+        if let Err(error) = crate::acquisition::insert(&self.store.lock().connection, &record) {
+            eprintln!("workspace acquisition not recorded: {error}");
+        }
     }
 
     /// The directory a project's work runs in on this host: one of its own
@@ -1500,6 +1557,29 @@ impl TaskWorkspaceService {
         borrowed: Option<BorrowedExecution>,
         requires_executor_stop_confirmation: bool,
     ) -> Result<TaskRun, String> {
+        let acquisition = self.acquisitions.begin(
+            crate::acquisition::WorkspaceAcquisitionKind::Run,
+            Some(crate::acquisition::run_key(&input.run_id)),
+            input.workspace_root.clone(),
+            AcquisitionBudget::standard(),
+        );
+        let result = self.begin_run_acquiring(
+            input,
+            borrowed,
+            requires_executor_stop_confirmation,
+            acquisition.budget(),
+        );
+        self.record_acquisition(&acquisition, &result);
+        result
+    }
+
+    fn begin_run_acquiring(
+        &self,
+        input: BeginTaskRun,
+        borrowed: Option<BorrowedExecution>,
+        requires_executor_stop_confirmation: bool,
+        budget: &AcquisitionBudget,
+    ) -> Result<TaskRun, String> {
         let _perf = cognia_instrument::guard("workspace.begin_run");
         validate_id("taskId", &input.task_id)?;
         validate_id("runId", &input.run_id)?;
@@ -1519,6 +1599,9 @@ impl TaskWorkspaceService {
         // their admission check and publication through the existing lock owner.
         let _capture_admission = self.lock_run_capture_admission()?;
         let _cold_acquisition = self.lock_cold_workspace_acquisition(&root, input.observe_in_place)?;
+        // Queued behind other acquisitions until here; the deadline is for
+        // the work, not the wait.
+        budget.restart_deadline();
         let tracking_policy = resolve_tracking_policy(&root, &input.tracking_policy)?;
         if borrowed.is_some() {
             self.resolve_workspace_port_lease(crate::HOST_LOOPBACK_NAMESPACE, None, &root, true)
@@ -1708,6 +1791,7 @@ impl TaskWorkspaceService {
                     // Pipeline runs never name their worktree.
                     None,
                     &tracking_policy,
+                    budget,
                 )
             };
             let (created_kind, isolation_ref) = match created {
@@ -2872,6 +2956,32 @@ impl TaskWorkspaceService {
         &self,
         input: AcquireWorkspaceBundle,
     ) -> Result<crate::WorkspaceBundle, String> {
+        let key = input
+            .owner_ref
+            .as_deref()
+            .filter(|owner_ref| !owner_ref.trim().is_empty())
+            .map(|owner_ref| crate::acquisition::bundle_key(input.owner_type, owner_ref));
+        let subject = input
+            .roots
+            .first()
+            .map(|root| root.source_root.clone())
+            .unwrap_or_default();
+        let acquisition = self.acquisitions.begin(
+            crate::acquisition::WorkspaceAcquisitionKind::Bundle,
+            key,
+            subject,
+            AcquisitionBudget::standard(),
+        );
+        let result = self.acquire_workspace_bundle_within(input, acquisition.budget());
+        self.record_acquisition(&acquisition, &result);
+        result
+    }
+
+    fn acquire_workspace_bundle_within(
+        &self,
+        input: AcquireWorkspaceBundle,
+        budget: &AcquisitionBudget,
+    ) -> Result<crate::WorkspaceBundle, String> {
         let _perf = cognia_instrument::guard("workspace.acquire_bundle");
         if input.owner_type == WorkspaceOwnerType::Imported {
             return Err("imported environments can only be registered by reconciliation".into());
@@ -2981,6 +3091,9 @@ impl TaskWorkspaceService {
                 let admin = self.git_admin_lock(source_root);
                 let created = {
                     let _admin = admin.as_ref().map(|lock| lock.lock());
+                    // Per root: the deadline bounds this root's work, not the
+                    // time spent queued behind another acquisition of it.
+                    budget.restart_deadline();
                     create_execution(
                         source_root,
                         &execution_root,
@@ -2991,6 +3104,7 @@ impl TaskWorkspaceService {
                         input.provisioning.as_ref(),
                         requested_name.as_deref(),
                         &tracking_policy,
+                        budget,
                     )
                 };
                 let (_isolation, requested_branch) = match created {
@@ -3929,6 +4043,29 @@ impl TaskWorkspaceService {
     }
 
     pub fn restore_managed_workspace(&self, workspace_id: &str) -> Result<WorkspaceRecord, String> {
+        let subject = self
+            .registry
+            .get(workspace_id)
+            .ok()
+            .flatten()
+            .map(|record| record.source_root)
+            .unwrap_or_default();
+        let acquisition = self.acquisitions.begin(
+            crate::acquisition::WorkspaceAcquisitionKind::Restore,
+            Some(crate::acquisition::restore_key(workspace_id)),
+            subject,
+            AcquisitionBudget::standard(),
+        );
+        let result = self.restore_managed_workspace_within(workspace_id, acquisition.budget());
+        self.record_acquisition(&acquisition, &result);
+        result
+    }
+
+    fn restore_managed_workspace_within(
+        &self,
+        workspace_id: &str,
+        budget: &AcquisitionBudget,
+    ) -> Result<WorkspaceRecord, String> {
         let mut record = self
             .registry
             .get(workspace_id)
@@ -3988,6 +4125,7 @@ impl TaskWorkspaceService {
         let admin = self.git_admin_lock(Path::new(&record.source_root));
         let created = {
             let _admin = admin.as_ref().map(|lock| lock.lock());
+            budget.restart_deadline();
             create_execution(
                 Path::new(&record.source_root),
                 execution_root,
@@ -4003,6 +4141,7 @@ impl TaskWorkspaceService {
                 // applies at first provisioning.
                 None,
                 &crate::ResourceTrackingPolicy::default(),
+                budget,
             )
         };
         created?;
@@ -5854,6 +5993,22 @@ pub(crate) fn apply_provisioning(
     execution_root: &Path,
     provisioning: &WorkspaceProvisioning,
 ) -> Result<(), String> {
+    apply_provisioning_within(
+        workspace_root,
+        execution_root,
+        provisioning,
+        &AcquisitionBudget::new(None),
+    )
+}
+
+/// [`apply_provisioning`] as one acquisition's `sparse` and `provisioning`
+/// phases: the sparse calls run under its limit and its cancel.
+pub(crate) fn apply_provisioning_within(
+    workspace_root: &Path,
+    execution_root: &Path,
+    provisioning: &WorkspaceProvisioning,
+    budget: &AcquisitionBudget,
+) -> Result<(), String> {
     let _perf = cognia_instrument::guard("workspace.apply_provisioning");
     if !provisioning.sparse_paths.is_empty() {
         for path in &provisioning.sparse_paths {
@@ -5862,33 +6017,39 @@ pub(crate) fn apply_provisioning(
         // Cone mode: directory-granular, orders of magnitude faster than the
         // pattern matcher on a large tree, and the only mode whose semantics a
         // repository author can predict from a path list.
-        let init = Command::new("git")
-            .args(["-C"])
-            .arg(execution_root)
-            .args(["sparse-checkout", "init", "--cone"])
-            .output()
-            .map_err(|error| format!("start git sparse-checkout init: {error}"))?;
-        if !init.status.success() {
-            return Err(format!(
-                "git sparse-checkout init failed: {}",
-                String::from_utf8_lossy(&init.stderr).trim()
-            ));
-        }
-        let set = Command::new("git")
-            .args(["-C"])
-            .arg(execution_root)
-            .args(["sparse-checkout", "set"])
-            .args(&provisioning.sparse_paths)
-            .output()
-            .map_err(|error| format!("start git sparse-checkout set: {error}"))?;
-        if !set.status.success() {
-            return Err(format!(
-                "git sparse-checkout set failed: {}",
-                String::from_utf8_lossy(&set.stderr).trim()
-            ));
-        }
+        let init = ["sparse-checkout", "init", "--cone"].map(String::from);
+        acquisition_git(budget, Phase::Sparse, execution_root, &init).map_err(|error| {
+            describe_git_step(
+                error,
+                "start git sparse-checkout init",
+                "git sparse-checkout init failed",
+            )
+        })?;
+        let set = ["sparse-checkout".to_string(), "set".to_string()]
+            .into_iter()
+            .chain(provisioning.sparse_paths.iter().cloned())
+            .collect::<Vec<_>>();
+        acquisition_git(budget, Phase::Sparse, execution_root, &set).map_err(|error| {
+            describe_git_step(
+                error,
+                "start git sparse-checkout set",
+                "git sparse-checkout set failed",
+            )
+        })?;
     }
+    budget.timed(
+        Phase::Provisioning,
+        || link_and_copy(workspace_root, execution_root, provisioning),
+        |_| FailureClass::Other,
+    )
+}
 
+/// The cache links and includes of a declaration.
+fn link_and_copy(
+    workspace_root: &Path,
+    execution_root: &Path,
+    provisioning: &WorkspaceProvisioning,
+) -> Result<(), String> {
     for link in &provisioning.cache_links {
         validate_event_relative_path(&link.source)?;
         validate_event_relative_path(&link.target)?;
@@ -6104,13 +6265,14 @@ fn create_execution(
     provisioning: Option<&WorkspaceProvisioning>,
     requested_name: Option<&str>,
     policy: &crate::ResourceTrackingPolicy,
+    budget: &AcquisitionBudget,
 ) -> Result<(IsolationKind, Option<String>), String> {
     let _perf = cognia_instrument::guard("workspace.create_execution");
     if is_git_root(workspace_root) {
         let lock_reason = lock_reason
             .filter(|reason| !reason.is_empty())
             .ok_or_else(|| "managed Git worktree requires a Registry lock reason".to_string())?;
-        let base_ref = resolve_git_base(workspace_root, base)?;
+        let base_ref = resolve_git_base(workspace_root, base, budget)?;
         if let Some(parent) = execution_root.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("create {}: {error}", parent.display()))?;
@@ -6127,16 +6289,23 @@ fn create_execution(
         args.extend(["--lock".into(), "--reason".into(), lock_reason.into()]);
         args.push(execution_root.to_string_lossy().into_owned());
         args.push(base_ref.clone());
-        let output = Command::new("git")
-            .args(["-C"])
-            .arg(workspace_root)
-            .args(&args)
-            .output()
-            .map_err(|error| format!("start git worktree add: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "git worktree add failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+        // Known before the add so a failure never deletes a branch the add
+        // did not create: `-b` refuses an existing name, and a cancel can stop
+        // the add before git runs at all.
+        let branch_existed = requested_name.is_some_and(|name| branch_exists(workspace_root, name));
+        if let Err(error) = acquisition_git(budget, Phase::WorktreeAdd, workspace_root, &args) {
+            // Every failure can leave something: a killed add whatever it had
+            // written so far, a failed post-checkout hook a whole locked
+            // worktree (git runs the hook after the tree is complete).
+            cleanup_failed_worktree_add(
+                workspace_root,
+                execution_root,
+                requested_name.filter(|_| !branch_existed),
+            );
+            return Err(describe_git_step(
+                error,
+                "start git worktree add",
+                "git worktree add failed",
             ));
         }
         if *base == WorkspaceBaseSpec::WorkingState {
@@ -6146,13 +6315,17 @@ fn create_execution(
             // blob-backed baseline still requires below — would throw away the
             // checkout that was just paid for and read the whole tree back out
             // of Git to reproduce it.
-            let result =
-                match crate::snapshot::apply_git_overlay(execution_root, baseline, blobs, policy) {
+            let result = budget.timed(
+                Phase::Checkout,
+                || match crate::snapshot::apply_git_overlay(execution_root, baseline, blobs, policy)
+                {
                     Ok(true) => Ok(()),
                     Ok(false) => clear_worktree_contents(execution_root)
                         .and_then(|_| materialize(execution_root, baseline, blobs)),
                     Err(error) => Err(error),
-                };
+                },
+                |_| FailureClass::Other,
+            );
             if let Err(error) = result {
                 unlock_git_worktree(workspace_root, execution_root, IsolationKind::GitWorktree);
                 cleanup_git_worktree(workspace_root, execution_root, requested_name.unwrap_or(""));
@@ -6164,7 +6337,9 @@ fn create_execution(
         // failure here rolls the whole acquisition back the same way a failed
         // materialize does.
         if let Some(provisioning) = provisioning.filter(|value| !value.is_empty()) {
-            if let Err(error) = apply_provisioning(workspace_root, execution_root, provisioning) {
+            if let Err(error) =
+                apply_provisioning_within(workspace_root, execution_root, provisioning, budget)
+            {
                 unlock_git_worktree(workspace_root, execution_root, IsolationKind::GitWorktree);
                 cleanup_git_worktree(workspace_root, execution_root, requested_name.unwrap_or(""));
                 return Err(error);
@@ -6180,8 +6355,118 @@ fn create_execution(
     if *base != WorkspaceBaseSpec::WorkingState {
         return Err("non-Git workspaces only support the workingState base".into());
     }
-    materialize(execution_root, baseline, blobs)?;
+    budget.timed(
+        Phase::Checkout,
+        || materialize(execution_root, baseline, blobs),
+        |_| FailureClass::Other,
+    )?;
     Ok((IsolationKind::Shadow, None))
+}
+
+/// One git step of an acquisition against the user's own checkout.
+///
+/// The user's configuration stays (credential helpers, SSH keys, `insteadOf`
+/// rules), but the step runs under the acquisition's limit for `phase`, is
+/// killed on cancel, and is timed into its report.
+fn acquisition_git(
+    budget: &AcquisitionBudget,
+    phase: Phase,
+    cwd: &Path,
+    args: &[String],
+) -> Result<String, RunError> {
+    budget.run(phase, GitRun::new(cwd, args).user_config().capture_stdout())
+}
+
+/// [`acquisition_git`] for a fetch from the network, retried on transport
+/// failures.
+///
+/// A timeout is not retried here: with the user's configuration it may be an
+/// SSH passphrase or host-key prompt that nobody can answer.
+fn acquisition_fetch(
+    budget: &AcquisitionBudget,
+    cwd: &Path,
+    args: &[String],
+) -> Result<String, RunError> {
+    budget.run_retrying_if(
+        Phase::Fetch,
+        || GitRun::new(cwd, args).user_config(),
+        || {},
+        |class| class != FailureClass::TimedOut,
+    )
+}
+
+/// Word a failed step the way that step has always been worded, so callers
+/// and people matching on the text see the same message, with a timeout or a
+/// cancel named in place of git's output.
+fn describe_git_step(error: RunError, start: &str, failed: &str) -> String {
+    match error {
+        RunError::Spawn(detail) => format!("{start}: {detail}"),
+        RunError::Failed(detail) => format!("{failed}: {detail}"),
+        RunError::TimedOut(limit) if limit.is_zero() => {
+            format!("{failed}: the acquisition deadline passed before this step started")
+        }
+        RunError::TimedOut(limit) => {
+            format!("{failed}: timed out after {}s", limit.as_secs())
+        }
+        RunError::Cancelled => format!("{failed}: the acquisition was cancelled"),
+    }
+}
+
+/// Remove what a failed `git worktree add` left behind.
+///
+/// It was started with `--lock`, so the administrative entry may be locked;
+/// a plain `remove --force` refuses a locked worktree. An add killed early
+/// can leave an entry with no removable tree. That one entry is dropped by
+/// matching its `gitdir`, not with `git worktree prune`, which would also
+/// prune the user's own unlocked worktrees on a drive that is not mounted.
+/// `created_branch` is the branch to delete, only when this add created it.
+fn cleanup_failed_worktree_add(
+    workspace_root: &Path,
+    execution_root: &Path,
+    created_branch: Option<&str>,
+) {
+    unlock_git_worktree(workspace_root, execution_root, IsolationKind::GitWorktree);
+    cleanup_git_worktree(workspace_root, execution_root, created_branch.unwrap_or(""));
+    if let Some(common) = git_common_dir(workspace_root) {
+        let link = execution_root.join(".git");
+        if let Ok(entries) = fs::read_dir(Path::new(&common).join("worktrees")) {
+            for entry in entries.flatten() {
+                let points_here = fs::read_to_string(entry.path().join("gitdir"))
+                    .is_ok_and(|gitdir| same_worktree_link(Path::new(gitdir.trim()), &link));
+                if points_here {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(execution_root);
+}
+
+/// Whether two `<worktree>/.git` paths name the same place. The worktree
+/// itself may be gone, so its parent is what gets resolved.
+fn same_worktree_link(recorded: &Path, expected: &Path) -> bool {
+    if recorded == expected {
+        return true;
+    }
+    let resolve = |path: &Path| {
+        let worktree = path.parent()?;
+        let parent = worktree.parent()?.canonicalize().ok()?;
+        Some(parent.join(worktree.file_name()?))
+    };
+    match (resolve(recorded), resolve(expected)) {
+        (Some(recorded), Some(expected)) => recorded == expected,
+        _ => false,
+    }
+}
+
+fn branch_exists(workspace_root: &Path, name: &str) -> bool {
+    Command::new("git")
+        .args(["-C"])
+        .arg(workspace_root)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("refs/heads/{name}"))
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 /// How long a `git fetch origin` is treated as still fresh.
@@ -6201,7 +6486,7 @@ static LAST_REMOTE_FETCH: std::sync::OnceLock<Mutex<HashMap<String, std::time::I
 ///
 /// Keyed by common directory so the worktrees cut from one repository share the
 /// window — they share the remote-tracking refs a fetch updates.
-fn fetch_origin_throttled(workspace_root: &Path) -> Result<(), String> {
+fn fetch_origin_throttled(workspace_root: &Path, budget: &AcquisitionBudget) -> Result<(), String> {
     let key = git_common_dir(workspace_root)
         .unwrap_or_else(|| workspace_root.to_string_lossy().into_owned());
     {
@@ -6210,22 +6495,19 @@ fn fetch_origin_throttled(workspace_root: &Path) -> Result<(), String> {
             .lock();
         if let Some(at) = seen.get(&key) {
             if at.elapsed() < REMOTE_FETCH_TTL {
+                budget.note(Phase::Fetch, "recent");
                 return Ok(());
             }
         }
     }
-    let fetch = Command::new("git")
-        .args(["-C"])
-        .arg(workspace_root)
-        .args(["fetch", "origin"])
-        .output()
-        .map_err(|error| format!("start git fetch origin: {error}"))?;
-    if !fetch.status.success() {
-        return Err(format!(
-            "refresh remote default failed: {}",
-            String::from_utf8_lossy(&fetch.stderr).trim()
-        ));
-    }
+    let args = ["fetch", "origin"].map(String::from);
+    acquisition_fetch(budget, workspace_root, &args).map_err(|error| {
+        describe_git_step(
+            error,
+            "start git fetch origin",
+            "refresh remote default failed",
+        )
+    })?;
     LAST_REMOTE_FETCH
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -6233,7 +6515,11 @@ fn fetch_origin_throttled(workspace_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_git_base(workspace_root: &Path, base: &WorkspaceBaseSpec) -> Result<String, String> {
+fn resolve_git_base(
+    workspace_root: &Path,
+    base: &WorkspaceBaseSpec,
+    budget: &AcquisitionBudget,
+) -> Result<String, String> {
     let _perf = cognia_instrument::guard("workspace.resolve_git_base");
     match base {
         WorkspaceBaseSpec::WorkingState | WorkspaceBaseSpec::LocalHead => Ok("HEAD".into()),
@@ -6242,7 +6528,7 @@ fn resolve_git_base(workspace_root: &Path, base: &WorkspaceBaseSpec) -> Result<S
         }
         WorkspaceBaseSpec::GitRef { .. } => Err("gitRef base cannot be empty".into()),
         WorkspaceBaseSpec::RemoteDefault => {
-            fetch_origin_throttled(workspace_root)?;
+            fetch_origin_throttled(workspace_root, budget)?;
             let output = Command::new("git")
                 .args(["-C"])
                 .arg(workspace_root)
@@ -6258,7 +6544,12 @@ fn resolve_git_base(workspace_root: &Path, base: &WorkspaceBaseSpec) -> Result<S
             fetch_ref,
             head_sha,
             ..
-        } => resolve_pull_request_base(workspace_root, fetch_ref.as_deref(), head_sha.as_deref()),
+        } => resolve_pull_request_base(
+            workspace_root,
+            fetch_ref.as_deref(),
+            head_sha.as_deref(),
+            budget,
+        ),
     }
 }
 
@@ -6266,6 +6557,7 @@ fn resolve_pull_request_base(
     workspace_root: &Path,
     fetch_ref: Option<&str>,
     head_sha: Option<&str>,
+    budget: &AcquisitionBudget,
 ) -> Result<String, String> {
     let fetch_ref = fetch_ref
         .map(str::trim)
@@ -6287,18 +6579,14 @@ fn resolve_pull_request_base(
     if !check_ref.status.success() || !fetch_ref.starts_with("refs/") {
         return Err("pullRequest base has an invalid provider fetch ref".into());
     }
-    let fetch = Command::new("git")
-        .args(["-C"])
-        .arg(workspace_root)
-        .args(["fetch", "origin", fetch_ref])
-        .output()
-        .map_err(|error| format!("refresh pull request head: {error}"))?;
-    if !fetch.status.success() {
-        return Err(format!(
-            "refresh pull request head failed: {}",
-            String::from_utf8_lossy(&fetch.stderr).trim()
-        ));
-    }
+    let args = ["fetch", "origin", fetch_ref].map(String::from);
+    acquisition_fetch(budget, workspace_root, &args).map_err(|error| {
+        describe_git_step(
+            error,
+            "refresh pull request head",
+            "refresh pull request head failed",
+        )
+    })?;
     let resolved = Command::new("git")
         .args(["-C"])
         .arg(workspace_root)
@@ -9892,14 +10180,20 @@ mod tests {
             .to_string();
 
         assert_eq!(
-            resolve_pull_request_base(repository.path(), Some("refs/pull/42/head"), Some(&head))
-                .unwrap(),
+            resolve_pull_request_base(
+                repository.path(),
+                Some("refs/pull/42/head"),
+                Some(&head),
+                &AcquisitionBudget::new(None),
+            )
+            .unwrap(),
             head
         );
         let error = resolve_pull_request_base(
             repository.path(),
             Some("refs/pull/42/head"),
             Some("0000000000000000000000000000000000000000"),
+            &AcquisitionBudget::new(None),
         )
         .unwrap_err();
         assert!(error.contains("changed during refresh"));
@@ -9911,13 +10205,19 @@ mod tests {
         git2::Repository::init(repository.path()).unwrap();
         seed_git_repository(repository.path());
 
-        assert!(resolve_pull_request_base(repository.path(), None, None)
-            .unwrap_err()
-            .contains("fetch ref"));
+        assert!(resolve_pull_request_base(
+            repository.path(),
+            None,
+            None,
+            &AcquisitionBudget::new(None)
+        )
+        .unwrap_err()
+        .contains("fetch ref"));
         assert!(resolve_pull_request_base(
             repository.path(),
             Some("--upload-pack=malicious"),
-            Some("0123456789abcdef0123456789abcdef01234567")
+            Some("0123456789abcdef0123456789abcdef01234567"),
+            &AcquisitionBudget::new(None),
         )
         .unwrap_err()
         .contains("invalid provider fetch ref"));
@@ -10555,7 +10855,8 @@ mod tests {
             .unwrap();
         drop(repo);
 
-        fetch_origin_throttled(clone_dir.path()).expect("first fetch should reach the remote");
+        fetch_origin_throttled(clone_dir.path(), &AcquisitionBudget::new(None))
+            .expect("first fetch should reach the remote");
 
         // Point origin at a path that does not exist. A real fetch now fails.
         let repo = Repository::open(clone_dir.path()).unwrap();
@@ -10563,7 +10864,7 @@ mod tests {
             .unwrap();
         drop(repo);
 
-        fetch_origin_throttled(clone_dir.path())
+        fetch_origin_throttled(clone_dir.path(), &AcquisitionBudget::new(None))
             .expect("the second call inside the window must not fetch");
     }
 
@@ -14866,5 +15167,334 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.starts_with("code_result_not_found"), "{error}");
+    }
+
+    /// A repository whose `post-checkout` hook sleeps, so `git worktree add`
+    /// is still running when a test's budget runs out or is cancelled.
+    #[cfg(unix)]
+    fn repository_with_a_slow_checkout() -> TempDir {
+        use std::os::unix::fs::PermissionsExt as _;
+        let repository = TempDir::new().unwrap();
+        git2::Repository::init(repository.path()).unwrap();
+        seed_git_repository(repository.path());
+        let hook = repository.path().join(".git/hooks/post-checkout");
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        fs::write(&hook, "#!/bin/sh\nsleep 30\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        // A global `core.hooksPath` would skip the hook; pin it locally.
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["config", "core.hooksPath", ".git/hooks"])
+            .status()
+            .unwrap()
+            .success());
+        repository
+    }
+
+    #[cfg(unix)]
+    fn registered_worktrees(repository: &Path) -> usize {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count()
+    }
+
+    #[cfg(unix)]
+    fn slow_checkout_execution(
+        repository: &TempDir,
+        execution_root: &Path,
+        budget: &AcquisitionBudget,
+    ) -> Result<(IsolationKind, Option<String>), String> {
+        // The temp dir is reached through a symlink on macOS; git reports the
+        // resolved path, and the root check compares the two.
+        let root = repository.path().canonicalize().unwrap();
+        let policy = crate::ResourceTrackingPolicy::default();
+        let (baseline, blobs) = capture_with_policy(&root, &policy).unwrap();
+        create_execution(
+            &root,
+            execution_root,
+            &WorkspaceBaseSpec::LocalHead,
+            &baseline,
+            &blobs,
+            Some("cognia test"),
+            None,
+            Some("slow-branch"),
+            &policy,
+            budget,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_worktree_add_that_outlives_its_budget_is_killed_and_cleaned_up() {
+        let repository = repository_with_a_slow_checkout();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("slow");
+        let budget = AcquisitionBudget::new(Some(Duration::from_secs(1)));
+        let started = std::time::Instant::now();
+        let error = slow_checkout_execution(&repository, &execution_root, &budget).unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "the hook sleeps 30s; the budget must have killed it"
+        );
+        assert!(
+            error.starts_with("git worktree add failed: timed out"),
+            "{error}"
+        );
+        assert!(!execution_root.exists(), "the half-written tree is removed");
+        assert_eq!(
+            registered_worktrees(repository.path()),
+            1,
+            "only the main checkout is left"
+        );
+        assert!(
+            !Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(["rev-parse", "--verify", "refs/heads/slow-branch"])
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "the branch the killed add created is removed"
+        );
+        let report = budget.report();
+        let step = report
+            .phases
+            .iter()
+            .find(|phase| phase.phase == Phase::WorktreeAdd)
+            .expect("the step is recorded");
+        assert_eq!(step.class, Some(FailureClass::TimedOut));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cancelled_worktree_add_stops_promptly() {
+        let repository = repository_with_a_slow_checkout();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("cancelled");
+        let budget = AcquisitionBudget::standard();
+        let cancel = budget.cancel_token();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            cancel.cancel();
+        });
+        let started = std::time::Instant::now();
+        let error = slow_checkout_execution(&repository, &execution_root, &budget).unwrap_err();
+        canceller.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(15));
+        assert_eq!(
+            error,
+            "git worktree add failed: the acquisition was cancelled"
+        );
+        assert!(!execution_root.exists());
+        assert_eq!(registered_worktrees(repository.path()), 1);
+    }
+
+    #[test]
+    fn a_git_run_is_recorded_as_a_recent_acquisition() {
+        let data = TempDir::new().unwrap();
+        let repository = TempDir::new().unwrap();
+        git2::Repository::init(repository.path()).unwrap();
+        seed_git_repository(repository.path());
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        service
+            .begin_run(input(&repository, "task-recorded", "run-recorded"))
+            .unwrap();
+
+        let recent = service.recent_acquisitions(None).unwrap();
+        assert_eq!(recent.len(), 1);
+        let record = &recent[0];
+        assert!(record.ok);
+        assert_eq!(record.kind, crate::WorkspaceAcquisitionKind::Run);
+        assert_eq!(record.key.as_deref(), Some("run:run-recorded"));
+        assert!(record
+            .phases
+            .iter()
+            .any(|phase| phase.phase == "worktreeAdd" && phase.ok));
+        assert!(record.phases.iter().any(|phase| phase.phase == "checkout"));
+
+        // Replaying the same run does no acquiring and adds no record.
+        service
+            .begin_run(input(&repository, "task-recorded", "run-recorded"))
+            .unwrap();
+        assert_eq!(service.recent_acquisitions(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_run_cancelled_as_it_starts_rolls_back_and_records_the_cancel() {
+        let data = TempDir::new().unwrap();
+        let repository = TempDir::new().unwrap();
+        git2::Repository::init(repository.path()).unwrap();
+        seed_git_repository(repository.path());
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let outcome = service
+            .cancel_acquisition(&crate::CancelWorkspaceAcquisition {
+                run_id: Some("run-early".into()),
+                owner_type: None,
+                owner_ref: None,
+                workspace_id: None,
+            })
+            .unwrap();
+        assert!(
+            outcome.cancelled,
+            "a cancel that beats its begin is remembered"
+        );
+
+        let error = service
+            .begin_run(input(&repository, "task-early", "run-early"))
+            .unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(
+            service.registry.list().unwrap().is_empty(),
+            "the reserved registry row is discarded"
+        );
+        let recent = service.recent_acquisitions(None).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert!(!recent[0].ok);
+        assert_eq!(recent[0].failure_class.as_deref(), Some("cancelled"));
+
+        // The remembered cancel is spent: the retry acquires normally.
+        service
+            .begin_run(input(&repository, "task-early", "run-early"))
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bundle_cancelled_by_its_owner_mid_checkout_rolls_back() {
+        let data = TempDir::new().unwrap();
+        let repository = repository_with_a_slow_checkout();
+        let root = repository.path().canonicalize().unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let started = std::time::Instant::now();
+        let error = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(500));
+                let outcome = service
+                    .cancel_acquisition(&crate::CancelWorkspaceAcquisition {
+                        run_id: None,
+                        owner_type: Some(WorkspaceOwnerType::Session),
+                        owner_ref: Some("session-cancelled".into()),
+                        workspace_id: None,
+                    })
+                    .unwrap();
+                assert!(outcome.cancelled, "the bundle is in flight under its owner");
+            });
+            service
+                .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                    requested_name: None,
+                    provisioning: None,
+                    project_id: None,
+                    owner_type: WorkspaceOwnerType::Session,
+                    owner_ref: Some("session-cancelled".into()),
+                    environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                    base: WorkspaceBaseSpec::LocalHead,
+                    roots: vec![crate::WorkspaceBundleRootInput {
+                        logical_root_id: "primary".into(),
+                        role: crate::WorkspaceRootRole::Primary,
+                        source_root: root.to_string_lossy().into_owned(),
+                    }],
+                })
+                .unwrap_err()
+        });
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "the hook sleeps 30s"
+        );
+        assert_eq!(
+            error,
+            "git worktree add failed: the acquisition was cancelled"
+        );
+        assert!(service.list_managed_workspaces().unwrap().is_empty());
+        assert!(service.list_workspace_bundles().unwrap().is_empty());
+        assert_eq!(registered_worktrees(&root), 1);
+        let recent = service.recent_acquisitions(None).unwrap();
+        assert_eq!(recent[0].kind, crate::WorkspaceAcquisitionKind::Bundle);
+        assert_eq!(
+            recent[0].key.as_deref(),
+            Some("bundle:session:session-cancelled")
+        );
+        assert_eq!(recent[0].failure_class.as_deref(), Some("cancelled"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_add_never_deletes_a_branch_it_did_not_create() {
+        let repository = repository_with_a_slow_checkout();
+        let root = repository.path().canonicalize().unwrap();
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["branch", "slow-branch"])
+            .status()
+            .unwrap()
+            .success());
+        let executions = TempDir::new().unwrap();
+        let budget = AcquisitionBudget::new(None);
+        budget.cancel_token().cancel();
+        let error = slow_checkout_execution(&repository, &executions.path().join("x"), &budget)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "git worktree add failed: the acquisition was cancelled"
+        );
+        assert!(
+            branch_exists(&root, "slow-branch"),
+            "the user's branch of the same name survives"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_post_checkout_hook_leaves_no_worktree_behind() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let repository = repository_with_a_slow_checkout();
+        let root = repository.path().canonicalize().unwrap();
+        let hook = root.join(".git/hooks/post-checkout");
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        let executions = TempDir::new().unwrap();
+        let execution_root = executions.path().join("hooked");
+        let error =
+            slow_checkout_execution(&repository, &execution_root, &AcquisitionBudget::new(None))
+                .unwrap_err();
+        assert!(error.starts_with("git worktree add failed"), "{error}");
+        assert!(!execution_root.exists());
+        assert_eq!(registered_worktrees(&root), 1);
+        assert!(
+            !branch_exists(&root, "slow-branch"),
+            "the add's own branch goes"
+        );
+    }
+
+    #[test]
+    fn a_step_refused_by_a_spent_deadline_says_so() {
+        assert_eq!(
+            describe_git_step(RunError::TimedOut(Duration::ZERO), "start x", "x failed"),
+            "x failed: the acquisition deadline passed before this step started"
+        );
+    }
+
+    #[test]
+    fn a_cancel_that_names_nothing_in_flight_changes_nothing() {
+        let data = TempDir::new().unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let outcome = service
+            .cancel_acquisition(&crate::CancelWorkspaceAcquisition {
+                run_id: None,
+                owner_type: Some(WorkspaceOwnerType::Session),
+                owner_ref: Some("session-idle".into()),
+                workspace_id: None,
+            })
+            .unwrap();
+        assert!(!outcome.cancelled);
     }
 }

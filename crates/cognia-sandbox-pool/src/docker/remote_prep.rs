@@ -587,7 +587,7 @@ impl DockerSandboxBackend {
             Ok(output)
         })
         .await
-        .map_err(|_| "the command timed out".to_string())?
+        .map_err(|_| format!("the command timed out after {}s", timeout.as_secs()))?
     }
 
     pub(super) async fn prepare_remote(
@@ -1409,6 +1409,11 @@ impl DockerSandboxBackend {
             .ensure_workspace_link(instance, source, user)
             .await?;
         let env = git_runtime_env()?;
+        // Only the clone itself: the branch and HEAD reads after it are local
+        // and fast. A clone that outlives `CLONE_TIMEOUT` is not left running:
+        // the error drops the caller's armed `InstanceTeardown`, and destroying
+        // the fresh instance stops everything in it.
+        let mut perf = cognia_instrument::guard("sandbox.clone");
         let clone = self
             .exec_collect(
                 instance,
@@ -1429,13 +1434,18 @@ impl DockerSandboxBackend {
                 CLONE_TIMEOUT,
             )
             .await
-            .map_err(|error| fault("sandbox_workspace_clone_failed", error))?;
+            .map_err(|error| {
+                perf.fail();
+                fault("sandbox_workspace_clone_failed", error)
+            })?;
         if !clone.succeeded() {
+            perf.fail();
             return Err(refused(
                 "sandbox_workspace_clone_failed",
                 format!("cloning {} failed: {}", source.remote_url, clone.tail()),
             ));
         }
+        drop(perf);
         let checkout = self
             .exec_collect(
                 instance,

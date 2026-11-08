@@ -3261,6 +3261,7 @@ dependencies = [
  "cognia-exec-sandbox",
  "cognia-external-agent",
  "cognia-git-mirror",
+ "cognia-instrument",
  "cognia-net",
  "cognia-sandboxd",
  "cognia-task-workspace-host",

@@ -1092,6 +1092,38 @@ pub fn task_workspace_maintenance_events(
     maintenance_events_page(&*service()?, &page)
 }
 
+/// Stop an acquisition in flight: a `task_workspace_begin` by its run id, a
+/// `task_workspace_bundle_acquire` by its owner, a restore by its workspace id
+/// (ADR-0176 A1). Synchronous: it only flips a token, and must not queue
+/// behind the acquisitions it exists to stop.
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub fn task_workspace_acquisition_cancel(
+    input: cognia_task_workspace::CancelWorkspaceAcquisition,
+) -> Result<cognia_task_workspace::CancelWorkspaceAcquisitionOutcome, String> {
+    service()?.cancel_acquisition(&input)
+}
+
+/// The newest acquisitions with their phase timings, newest first.
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub async fn task_workspace_acquisition_list(
+    page_size: Option<u32>,
+    page_token: Option<String>,
+) -> Result<cognia_problem::paging::Page<cognia_task_workspace::WorkspaceAcquisition>, String> {
+    let page = cognia_problem::paging::PageRequest::from_parts(page_size, page_token.as_deref())
+        .map_err(|error| error.to_string())?;
+    blocking(move |service| acquisitions_page(service, &page)).await
+}
+
+/// One page of the kept acquisition records, newest first. The whole set is
+/// at most `ACQUISITION_RECORDS_KEPT` rows, so it is read once and sliced.
+pub fn acquisitions_page(
+    service: &TaskWorkspaceService,
+    page: &cognia_problem::paging::PageRequest,
+) -> Result<cognia_problem::paging::Page<cognia_task_workspace::WorkspaceAcquisition>, String> {
+    let all = service.recent_acquisitions(None)?;
+    cognia_problem::paging::Page::slice_all(all, page, 50).map_err(|error| error.to_string())
+}
+
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub fn task_workspace_managed_pin(
     workspace_id: String,

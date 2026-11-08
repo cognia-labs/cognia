@@ -192,6 +192,13 @@ pub fn run_git(run: GitRun<'_>) -> Result<String, RunError> {
     for (key, value) in env.into_iter().chain(locale).chain(run.env.iter().cloned()) {
         command.env(key, value);
     }
+    // Stderr ends up in errors and in acquisition records, and git's curl
+    // traces print the `Authorization:` header. A user-config run keeps the
+    // parent's environment, so turn them off and keep redaction on whatever
+    // the parent set.
+    command.env_remove("GIT_CURL_VERBOSE");
+    command.env_remove("GIT_TRACE_CURL");
+    command.env("GIT_TRACE_REDACT", "1");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -468,6 +475,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.trim(), "C/C");
+    }
+
+    #[test]
+    fn git_s_curl_traces_are_off_and_redacted_whatever_was_asked() {
+        let dir = TempDir::new().unwrap();
+        let out = run_git(
+            GitRun::new(
+                dir.path(),
+                &args(&[
+                    "-c",
+                    "alias.probe=!echo [$GIT_TRACE_CURL][$GIT_CURL_VERBOSE][$GIT_TRACE_REDACT]",
+                    "probe",
+                ]),
+            )
+            .user_config()
+            .env("GIT_TRACE_CURL", "1")
+            .env("GIT_CURL_VERBOSE", "1")
+            .env("GIT_TRACE_REDACT", "0")
+            .capture_stdout(),
+        )
+        .unwrap();
+        assert_eq!(out.trim(), "[][][1]");
     }
 
     #[test]

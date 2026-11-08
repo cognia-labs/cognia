@@ -851,5 +851,55 @@
         }
       }
     }
+  },
+  "acquisitions": {
+    "title": "最近的工作区检出",
+    "description": "所选主机最近为任务运行和工作区组完成的检出，包括每一步的耗时和失败原因。",
+    "refresh": "刷新",
+    "loading": "正在读取获取记录…",
+    "error": "无法从主机读取获取记录。",
+    "empty": "还没有获取记录。",
+    "ok": "成功",
+    "attempt": "第 {attempt} 次尝试",
+    "columns": {
+      "startedAt": "开始时间",
+      "kind": "类型",
+      "subject": "来源",
+      "total": "总耗时",
+      "result": "结果",
+      "phases": "步骤"
+    },
+    "kinds": {
+      "run": "任务运行",
+      "bundle": "工作区组",
+      "restore": "恢复",
+      "remoteSource": "远程源"
+    },
+    "phases": {
+      "fetch": "拉取",
+      "clone": "克隆",
+      "backfill": "补全对象",
+      "derive": "派生",
+      "worktreeAdd": "工作树",
+      "sparse": "稀疏检出",
+      "checkout": "检出",
+      "provisioning": "环境准备"
+    },
+    "classes": {
+      "notFound": "不存在",
+      "auth": "认证失败",
+      "network": "网络错误",
+      "timedOut": "超时",
+      "cancelled": "已取消",
+      "lock": "被锁定",
+      "diskFull": "磁盘已满",
+      "other": "失败"
+    },
+    "notes": {
+      "hit": "命中缓存",
+      "refreshed": "已刷新",
+      "created": "新建",
+      "recent": "刚拉取过"
+    }
   }
 }

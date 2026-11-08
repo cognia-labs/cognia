@@ -31,12 +31,15 @@ it("checks a fresh committed-head checkout with no AI reviewer and archives it",
   const review = jest.fn().mockResolvedValue({ changeset, checks: [], policy: null })
   jest.mocked(createScmRuntime).mockReturnValue({ review } as never)
   const host = { getChangeset: jest.fn().mockResolvedValue(changeset) }
-  await checkBestOfNHead(group, changeset, "project", host as never, new AbortController().signal)
+  const controller = new AbortController()
+  await checkBestOfNHead(group, changeset, "project", host as never, controller.signal)
   expect(acquireWorkspaceBundle).toHaveBeenCalledWith(
     expect.objectContaining({
       base: { kind: "gitRef", gitRef: "pinned" },
       roots: [{ logicalRootId: "repo", role: "primary", sourceRoot: "/source" }],
-    })
+    }),
+    // The check's own signal reaches the checkout, so cancelling stops it.
+    { signal: controller.signal }
   )
   const input = jest.mocked(createScmRuntime).mock.calls[0][0]
   expect(input.appSettings).toBeNull()

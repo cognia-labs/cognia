@@ -1055,6 +1055,8 @@ pub fn run() {
             task_workspace::task_workspace_port_lease_list,
             task_workspace::task_workspace_maintenance_run,
             task_workspace::task_workspace_maintenance_events,
+            task_workspace::task_workspace_acquisition_cancel,
+            task_workspace::task_workspace_acquisition_list,
             task_workspace::task_workspace_managed_pin,
             task_workspace::task_workspace_managed_permanent,
             task_workspace::task_workspace_managed_adopt,

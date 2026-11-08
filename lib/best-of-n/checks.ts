@@ -16,14 +16,21 @@ export async function checkBestOfNHead(
 ) {
   signal.throwIfAborted()
   const bundle = await runWorkspaceUserAction("task_workspace_bundle_acquire", () =>
-    acquireWorkspaceBundle({
-      ownerType: "team",
-      ownerRef: `best-of-n-check:${group.groupId}:${crypto.randomUUID()}`,
-      ...(projectId ? { projectId } : {}),
-      environmentKind: "managed",
-      base: { kind: "gitRef", gitRef: changeset.headSha },
-      roots: [{ logicalRootId: group.repositoryId, role: "primary", sourceRoot: group.sourceRoot }],
-    })
+    acquireWorkspaceBundle(
+      {
+        ownerType: "team",
+        ownerRef: `best-of-n-check:${group.groupId}:${crypto.randomUUID()}`,
+        ...(projectId ? { projectId } : {}),
+        environmentKind: "managed",
+        base: { kind: "gitRef", gitRef: changeset.headSha },
+        roots: [
+          { logicalRootId: group.repositoryId, role: "primary", sourceRoot: group.sourceRoot },
+        ],
+      },
+      // Cancelling the check stops the checkout it is waiting on, not only
+      // the review after it.
+      { signal }
+    )
   )
   try {
     const lease = bundle.leases[0]

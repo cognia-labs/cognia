@@ -68,6 +68,7 @@ import { PerfRendererTimingsTable } from "./perf-renderer-timings-table"
 import { PerfWebVitalsPanel } from "./perf-web-vitals-panel"
 import { PerfBrowserDiagnostics } from "./perf-browser-diagnostics"
 import { PerfOperationTimings } from "./perf-operation-timings"
+import { PerfRecentAcquisitions } from "./perf-recent-acquisitions"
 
 /**
  * Main tabs: icon + label, but only the ACTIVE tab keeps its label below
@@ -327,6 +328,9 @@ export function PerformanceDashboard() {
             {hostAvailable ? (
               <>
                 {hotspotsSection}
+                {/* Read from the host's workspace service, so only where
+                    there is a host to ask. */}
+                <PerfRecentAcquisitions />
                 {timingsSection}
               </>
             ) : (

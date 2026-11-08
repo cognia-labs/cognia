@@ -851,5 +851,55 @@
         }
       }
     }
+  },
+  "acquisitions": {
+    "title": "Recent workspace acquisitions",
+    "description": "The latest checkouts this host produced for runs and bundles, with how long each step took and why a failed one failed.",
+    "refresh": "Refresh",
+    "loading": "Loading acquisitions…",
+    "error": "Could not read acquisitions from the host.",
+    "empty": "No acquisitions recorded yet.",
+    "ok": "Succeeded",
+    "attempt": "attempt {attempt}",
+    "columns": {
+      "startedAt": "Started",
+      "kind": "Kind",
+      "subject": "Source",
+      "total": "Total",
+      "result": "Result",
+      "phases": "Steps"
+    },
+    "kinds": {
+      "run": "Task run",
+      "bundle": "Bundle",
+      "restore": "Restore",
+      "remoteSource": "Remote source"
+    },
+    "phases": {
+      "fetch": "Fetch",
+      "clone": "Clone",
+      "backfill": "Backfill",
+      "derive": "Derive",
+      "worktreeAdd": "Worktree",
+      "sparse": "Sparse",
+      "checkout": "Checkout",
+      "provisioning": "Provisioning"
+    },
+    "classes": {
+      "notFound": "Not found",
+      "auth": "Authentication failed",
+      "network": "Network error",
+      "timedOut": "Timed out",
+      "cancelled": "Cancelled",
+      "lock": "Locked",
+      "diskFull": "Disk full",
+      "other": "Failed"
+    },
+    "notes": {
+      "hit": "cached",
+      "refreshed": "refreshed",
+      "created": "created",
+      "recent": "recently fetched"
+    }
   }
 }

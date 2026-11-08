@@ -4,6 +4,7 @@
 //! install the same service and expose it through their existing command and
 //! Companion transport surfaces.
 
+mod acquisition;
 mod best_of_n;
 mod bundle;
 mod changeset;
@@ -37,6 +38,10 @@ mod types;
 mod watcher;
 mod worker_cli;
 
+pub use acquisition::{
+    CancelWorkspaceAcquisition, CancelWorkspaceAcquisitionOutcome, WorkspaceAcquisition,
+    WorkspaceAcquisitionKind, WorkspaceAcquisitionPhase, ACQUISITION_RECORDS_KEPT,
+};
 pub use best_of_n::*;
 
 pub use ports::{
@@ -117,7 +122,7 @@ pub use project_source::{
     ProjectSource, ProjectSourceKind,
 };
 pub use remote_source::{
-    ensure_remote_source, extra_refspecs_for, EnsureRemoteSource, RemoteSourceCheckout,
+    extra_refspecs_for, EnsureRemoteSource, RemoteSourceCheckout,
     REMOTE_SUPPLY_BUDGET, UPSTREAM_REMOTE,
 };
 pub use resource::{

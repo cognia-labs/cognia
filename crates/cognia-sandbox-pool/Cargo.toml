@@ -42,6 +42,9 @@ e2b = ["dep:cognia-e2b", "dep:flate2", "cognia-environment/registry"]
 
 [dependencies]
 cognia-exec-sandbox = { path = "../cognia-exec-sandbox" }
+# ADR-0176 A1: the remote workspace clone is timed as `sandbox.clone`, next to
+# the host-side acquisition phases on the performance page.
+cognia-instrument = { path = "../cognia-instrument" }
 cognia-core = { path = "../cognia-core", features = ["workspace-env-async"] }
 cognia-e2b = { path = "../cognia-e2b", optional = true }
 # `store` only: the registry HTTP transport (and the reqwest it pulls) belongs

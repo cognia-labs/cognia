@@ -121,6 +121,7 @@ impl WorkspaceStore {
         store.apply_provenance_migration()?;
         crate::sandbox_snapshot::migrate(&store.connection)?;
         crate::sandbox_preview::migrate(&store.connection)?;
+        crate::acquisition::migrate(&store.connection)?;
         Ok(store)
     }
 

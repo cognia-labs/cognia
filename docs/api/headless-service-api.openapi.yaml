@@ -182770,6 +182770,512 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
       x-cognia-response-schema-source: contract
+  /internal/_rpc/task_workspace_acquisition_cancel:
+    post:
+      operationId: internalRpcTaskWorkspaceAcquisitionCancel
+      tags:
+        - headless-rpc
+      summary: task_workspace_acquisition_cancel (workspace.write)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - input
+              properties:
+                input:
+                  type: object
+                  properties:
+                    runId:
+                      type: string
+                      minLength: 1
+                      description: Cancel the task_workspace_begin in flight for this run id.
+                    ownerType:
+                      type: string
+                      enum:
+                        - user
+                        - imported
+                        - session
+                        - team
+                        - scheduled
+                      description: "With ownerRef: cancel the task_workspace_bundle_acquire in flight for this owner."
+                    ownerRef:
+                      type: string
+                      minLength: 1
+                    workspaceId:
+                      type: string
+                      minLength: 1
+                      description: Cancel the restore in flight for this managed workspace.
+                  additionalProperties: false
+                  description: Name exactly one of runId, ownerType with ownerRef, or workspaceId.
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                additionalProperties: false
+                description: Whether a cancel reached an acquisition.
+                properties:
+                  cancelled:
+                    description: |-
+                      `true` when an acquisition was in flight under that key and was told to
+                      stop. A run that had not registered yet is remembered and also answers
+                      `true`; anything else answers `false` and changes nothing.
+                    type: boolean
+                required:
+                  - cancelled
+                type: object
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/task_workspace_acquisition_list:
+    post:
+      operationId: internalRpcTaskWorkspaceAcquisitionList
+      tags:
+        - headless-rpc
+      summary: task_workspace_acquisition_list (performance.observe)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pageSize:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  description: How many items to answer. Absent means the command's default.
+                pageToken:
+                  type: string
+                  minLength: 1
+                  description: The nextPageToken of the previous page, handed back unchanged.
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                additionalProperties: false
+                description: |-
+                  One page of a collection.
+
+                  Sparse rather than closed: `nextPageToken` is absent on the last page, and
+                  that absence is the signal a client reads.
+                properties:
+                  items:
+                    items:
+                      additionalProperties: false
+                      description: What one acquisition recorded about itself.
+                      properties:
+                        acquisitionId:
+                          type: string
+                        error:
+                          default: null
+                          type:
+                            - string
+                            - "null"
+                        failureClass:
+                          default: null
+                          description: |-
+                            The class of the step that failed it; `other` for a failure that was
+                            not a git or provisioning step (a capacity refusal, a store error).
+                          type:
+                            - string
+                            - "null"
+                        key:
+                          default: null
+                          description: The run id, bundle owner or workspace id it was keyed by.
+                          type:
+                            - string
+                            - "null"
+                        kind:
+                          description: What produced the checkout.
+                          oneOf:
+                            - const: run
+                              description: "`task_workspace_begin`."
+                              type: string
+                            - const: bundle
+                              description: "`task_workspace_bundle_acquire`."
+                              type: string
+                            - const: restore
+                              description: Restoring an archived managed workspace.
+                              type: string
+                            - const: remoteSource
+                              description: Supplying a source checkout from a remote.
+                              type: string
+                        ok:
+                          type: boolean
+                        phases:
+                          items:
+                            additionalProperties: false
+                            description: One timed step of an acquisition, as the wire carries it.
+                            properties:
+                              attempt:
+                                description: 1 for the first attempt; a retried step has one entry per attempt.
+                                format: uint32
+                                minimum: 0
+                                type: integer
+                              durationMs:
+                                format: uint64
+                                minimum: 0
+                                type: integer
+                              failureClass:
+                                default: null
+                                description: |-
+                                  Set when the step failed: `notFound`, `auth`, `network`, `timedOut`,
+                                  `cancelled`, `lock`, `diskFull` or `other`.
+                                type:
+                                  - string
+                                  - "null"
+                              note:
+                                default: null
+                                description: A short fact about the step, such as a mirror `hit`.
+                                type:
+                                  - string
+                                  - "null"
+                              ok:
+                                type: boolean
+                              phase:
+                                description: |-
+                                  `fetch`, `clone`, `backfill`, `derive`, `worktreeAdd`, `sparse`,
+                                  `checkout` or `provisioning`.
+                                type: string
+                              startedMs:
+                                description: Milliseconds after the acquisition started.
+                                format: uint64
+                                minimum: 0
+                                type: integer
+                            required:
+                              - attempt
+                              - durationMs
+                              - failureClass
+                              - note
+                              - ok
+                              - phase
+                              - startedMs
+                            type: object
+                          type: array
+                        startedAt:
+                          description: Unix milliseconds.
+                          format: int64
+                          type: integer
+                        subject:
+                          description: |-
+                            The checkout it was cut from, or the remote it was supplied from with
+                            any userinfo removed.
+                          type: string
+                        totalMs:
+                          format: uint64
+                          minimum: 0
+                          type: integer
+                      required:
+                        - acquisitionId
+                        - error
+                        - failureClass
+                        - key
+                        - kind
+                        - ok
+                        - phases
+                        - startedAt
+                        - subject
+                        - totalMs
+                      type: object
+                    type: array
+                  nextPageToken:
+                    description: Present exactly when another page exists.
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - items
+                type: object
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
   /internal/_rpc/task_workspace_apply:
     post:
       operationId: internalRpcTaskWorkspaceApply
@@ -227965,6 +228471,8 @@ components:
           - task_resource_upload_commit
           - task_resource_upload_open
           - task_resource_upload_write_chunk
+          - task_workspace_acquisition_cancel
+          - task_workspace_acquisition_list
           - task_workspace_apply
           - task_workspace_begin
           - task_workspace_bundle_acquire
@@ -228407,10 +228915,10 @@ x-cognia-generated:
     - protocol/headless-command-dispositions.json
     - protocol/companion-command-renames.json
     - scripts/build/companion-request-schema-contracts.mjs
-  internalCommandCount: 998
-  generatedRequestSchemaCount: 998
+  internalCommandCount: 1000
+  generatedRequestSchemaCount: 1000
   runtimeInferredRequestSchemaCount: 0
-  contractRequestSchemaCount: 998
+  contractRequestSchemaCount: 1000
   genericRequestSchemaCount: 0
-  generatedResponseSchemaCount: 998
+  generatedResponseSchemaCount: 1000
   loopbackOnly: true

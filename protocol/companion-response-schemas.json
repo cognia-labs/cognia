@@ -9768,6 +9768,165 @@
       "required": ["items"],
       "type": "object"
     },
+    "CancelWorkspaceAcquisitionOutcome": {
+      "additionalProperties": false,
+      "description": "Whether a cancel reached an acquisition.",
+      "properties": {
+        "cancelled": {
+          "description": "`true` when an acquisition was in flight under that key and was told to\nstop. A run that had not registered yet is remembered and also answers\n`true`; anything else answers `false` and changes nothing.",
+          "type": "boolean"
+        }
+      },
+      "required": ["cancelled"],
+      "type": "object"
+    },
+    "Page_of_WorkspaceAcquisition": {
+      "additionalProperties": false,
+      "description": "One page of a collection.\n\nSparse rather than closed: `nextPageToken` is absent on the last page, and\nthat absence is the signal a client reads.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/WorkspaceAcquisition"
+          },
+          "type": "array"
+        },
+        "nextPageToken": {
+          "description": "Present exactly when another page exists.",
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["items"],
+      "type": "object"
+    },
+    "WorkspaceAcquisition": {
+      "additionalProperties": false,
+      "description": "What one acquisition recorded about itself.",
+      "properties": {
+        "acquisitionId": {
+          "type": "string"
+        },
+        "error": {
+          "default": null,
+          "type": ["string", "null"]
+        },
+        "failureClass": {
+          "default": null,
+          "description": "The class of the step that failed it; `other` for a failure that was\nnot a git or provisioning step (a capacity refusal, a store error).",
+          "type": ["string", "null"]
+        },
+        "key": {
+          "default": null,
+          "description": "The run id, bundle owner or workspace id it was keyed by.",
+          "type": ["string", "null"]
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkspaceAcquisitionKind"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/WorkspaceAcquisitionPhase"
+          },
+          "type": "array"
+        },
+        "startedAt": {
+          "description": "Unix milliseconds.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "subject": {
+          "description": "The checkout it was cut from, or the remote it was supplied from with\nany userinfo removed.",
+          "type": "string"
+        },
+        "totalMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "acquisitionId",
+        "error",
+        "failureClass",
+        "key",
+        "kind",
+        "ok",
+        "phases",
+        "startedAt",
+        "subject",
+        "totalMs"
+      ],
+      "type": "object"
+    },
+    "WorkspaceAcquisitionKind": {
+      "description": "What produced the checkout.",
+      "oneOf": [
+        {
+          "const": "run",
+          "description": "`task_workspace_begin`.",
+          "type": "string"
+        },
+        {
+          "const": "bundle",
+          "description": "`task_workspace_bundle_acquire`.",
+          "type": "string"
+        },
+        {
+          "const": "restore",
+          "description": "Restoring an archived managed workspace.",
+          "type": "string"
+        },
+        {
+          "const": "remoteSource",
+          "description": "Supplying a source checkout from a remote.",
+          "type": "string"
+        }
+      ]
+    },
+    "WorkspaceAcquisitionPhase": {
+      "additionalProperties": false,
+      "description": "One timed step of an acquisition, as the wire carries it.",
+      "properties": {
+        "attempt": {
+          "description": "1 for the first attempt; a retried step has one entry per attempt.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "durationMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failureClass": {
+          "default": null,
+          "description": "Set when the step failed: `notFound`, `auth`, `network`, `timedOut`,\n`cancelled`, `lock`, `diskFull` or `other`.",
+          "type": ["string", "null"]
+        },
+        "note": {
+          "default": null,
+          "description": "A short fact about the step, such as a mirror `hit`.",
+          "type": ["string", "null"]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "phase": {
+          "description": "`fetch`, `clone`, `backfill`, `derive`, `worktreeAdd`, `sparse`,\n`checkout` or `provisioning`.",
+          "type": "string"
+        },
+        "startedMs": {
+          "description": "Milliseconds after the acquisition started.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["attempt", "durationMs", "failureClass", "note", "ok", "phase", "startedMs"],
+      "type": "object"
+    },
     "PatchConflict": {
       "additionalProperties": false,
       "properties": {
@@ -20170,6 +20329,12 @@
     },
     "task_workspace_maintenance_run": {
       "$ref": "#/$defs/WorkspaceMaintenanceResult"
+    },
+    "task_workspace_acquisition_cancel": {
+      "$ref": "#/$defs/CancelWorkspaceAcquisitionOutcome"
+    },
+    "task_workspace_acquisition_list": {
+      "$ref": "#/$defs/Page_of_WorkspaceAcquisition"
     },
     "task_workspace_managed_adopt": {
       "$ref": "#/$defs/WorkspaceRecord"

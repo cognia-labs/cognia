@@ -47,6 +47,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "task_workspace_port_lease_list",
     "task_workspace_maintenance_run",
     "task_workspace_maintenance_events",
+    "task_workspace_acquisition_cancel",
+    "task_workspace_acquisition_list",
     "task_workspace_managed_pin",
     "task_workspace_managed_permanent",
     "task_workspace_managed_archive",
@@ -816,6 +818,26 @@ pub(super) async fn dispatch(
                 })
                 .map_err(RpcError::internal)
                 .and_then(to_json)
+        }
+        "task_workspace_acquisition_cancel" => {
+            let input: cognia_task_workspace::CancelWorkspaceAcquisition =
+                required(&args, "input")?;
+            input.validate().map_err(RpcError::validation_failed)?;
+            cognia_task_workspace_host::host_surface::task_workspace_acquisition_cancel(input)
+                .map_err(RpcError::internal)
+                .and_then(to_json)
+        }
+        "task_workspace_acquisition_list" => {
+            let page = page_request(&args)?;
+            tokio::task::spawn_blocking(move || {
+                cognia_task_workspace_host::host_surface::service().and_then(|service| {
+                    cognia_task_workspace_host::host_surface::acquisitions_page(&service, &page)
+                })
+            })
+            .await
+            .map_err(|error| RpcError::internal(error.to_string()))?
+            .map_err(RpcError::internal)
+            .and_then(to_json)
         }
         "task_workspace_managed_pin" => {
             let workspace_id: String = required(&args, "workspaceId")?;
@@ -2155,6 +2177,8 @@ mod tests {
             "task_workspace_integration_rollback",
             "task_workspace_managed_restore",
             "task_workspace_managed_delete",
+            "task_workspace_acquisition_cancel",
+            "task_workspace_acquisition_list",
         ] {
             assert!(COMMANDS.contains(&command), "missing {command}");
         }

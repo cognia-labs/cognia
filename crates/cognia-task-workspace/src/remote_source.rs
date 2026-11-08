@@ -32,8 +32,8 @@ use std::time::Duration;
 
 use cognia_git_mirror::credential::GitCredential;
 use cognia_git_mirror::{
-    checkout_path, derive_from_mirror, ensure_mirror, materialize_commit, resolve_commit,
-    DerivedOrigin, MirrorRequest,
+    checkout_path, ensure_mirror, materialize_commit, resolve_commit, try_derive_from_mirror,
+    try_ensure_mirror, AcquisitionBudget, DerivedOrigin, GitRun, MirrorRequest, Phase, RunError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -158,10 +158,38 @@ fn requested_ref(base: &WorkspaceBaseSpec) -> Option<String> {
 /// rather than each cloning their own. The caller is expected to hold a
 /// per-repository lock around it (`service::git_admin_lock`), since two
 /// concurrent supplies of the same remote would otherwise race on one directory.
-pub fn ensure_remote_source(
+///
+/// Test-only since ADR-0176 A1: production supplies go through
+/// `TaskWorkspaceService::ensure_remote_source`, which registers the
+/// acquisition for cancel and records it.
+#[cfg(test)]
+pub(crate) fn ensure_remote_source(
     mirror_root: &Path,
     sources_dir: &Path,
     input: &EnsureRemoteSource,
+) -> Result<RemoteSourceCheckout, String> {
+    ensure_remote_source_within(mirror_root, sources_dir, input, &supply_budget())
+}
+
+/// The budget a remote supply runs under: the standard overall deadline, and
+/// [`REMOTE_SUPPLY_BUDGET`] for each mirror step, as before the budget
+/// existed. A first mirror of a large repository is a slow fetch, not a stuck
+/// one, so the shorter incremental-fetch ceiling does not apply here.
+pub(crate) fn supply_budget() -> AcquisitionBudget {
+    AcquisitionBudget::standard()
+        .with_ceiling(Phase::Fetch, REMOTE_SUPPLY_BUDGET)
+        .with_ceiling(Phase::Clone, REMOTE_SUPPLY_BUDGET)
+        .with_ceiling(Phase::Backfill, REMOTE_SUPPLY_BUDGET)
+        .with_ceiling(Phase::Derive, REMOTE_SUPPLY_BUDGET)
+}
+
+/// [`ensure_remote_source`] as part of one acquisition: every git call runs
+/// under its limits and cancel, and is timed into its report.
+pub fn ensure_remote_source_within(
+    mirror_root: &Path,
+    sources_dir: &Path,
+    input: &EnsureRemoteSource,
+    budget: &AcquisitionBudget,
 ) -> Result<RemoteSourceCheckout, String> {
     let _perf = cognia_instrument::guard("workspace.ensure_remote_source");
     let remote = input.remote_url.trim();
@@ -182,14 +210,15 @@ pub fn ensure_remote_source(
     let request = MirrorRequest::new(mirror_root, remote)
         .maybe_credential(credential.as_ref())
         .extra_refspecs(&refspecs)
-        .budget(REMOTE_SUPPLY_BUDGET);
+        .budget(REMOTE_SUPPLY_BUDGET)
+        .acquisition(budget);
 
     // Unlike every other mirror caller, a miss here is fatal. The others fall
     // back to cloning from the network themselves. This path has no fallback,
     // because the network clone *is* the mirror, so reporting the failure is
     // the only honest answer.
-    let mirror =
-        ensure_mirror(&request).ok_or_else(|| format!("could not supply a mirror for {remote}"))?;
+    let (mirror, _) = try_ensure_mirror(&request)
+        .map_err(|failure| format!("could not supply a mirror for {remote}: {}", failure.detail))?;
 
     if is_git_checkout(&source_root) {
         // Already supplied, so nothing is cloned. The fetch below is what
@@ -200,16 +229,21 @@ pub fn ensure_remote_source(
         if source_root.exists() {
             let _ = std::fs::remove_dir_all(&source_root);
         }
-        if !derive_from_mirror(&request, &source_root, None, DerivedOrigin::Mirror) {
+        if let Err(failure) =
+            try_derive_from_mirror(&request, &source_root, None, DerivedOrigin::Mirror)
+        {
             let _ = std::fs::remove_dir_all(&source_root);
-            return Err(format!("could not derive a source checkout for {remote}"));
+            return Err(format!(
+                "could not derive a source checkout for {remote}: {}",
+                failure.detail
+            ));
         }
     }
 
     // Both paths, not just the reuse path. A fresh `git clone` of the mirror
     // brings `refs/heads/*` and nothing else, so a pull-request ref reaches the
     // mirror and stops there unless it is asked for here by name too.
-    refresh_from_mirror(&source_root, &refspecs)?;
+    refresh_from_mirror(&source_root, &refspecs, budget)?;
 
     // Credential-free, and re-set every time so a repository that moved is not
     // left claiming its old address.
@@ -304,21 +338,42 @@ pub fn prepare_source_commit(
     Ok(())
 }
 
-fn refresh_from_mirror(source_root: &Path, refspecs: &[String]) -> Result<(), String> {
-    let _ = git(source_root, &["fetch", "--prune", "origin"])?;
+fn refresh_from_mirror(
+    source_root: &Path,
+    refspecs: &[String],
+    budget: &AcquisitionBudget,
+) -> Result<(), String> {
+    let fetch =
+        |args: &[String]| budget.run(Phase::Fetch, GitRun::new(source_root, args).user_config());
+    let prune = ["fetch", "--prune", "origin"].map(String::from);
+    match fetch(&prune) {
+        // Only a failure of git's own is best effort. A step the budget
+        // stopped stops the acquisition.
+        Ok(_) | Err(RunError::Failed(_)) => {}
+        Err(RunError::Spawn(detail)) => {
+            return Err(format!("start git fetch --prune origin: {detail}"))
+        }
+        Err(error @ (RunError::TimedOut(_) | RunError::Cancelled)) => {
+            return Err(format!("refresh the source checkout: {error}"))
+        }
+    }
     if refspecs.is_empty() {
         return Ok(());
     }
-    let mut args: Vec<&str> = vec!["fetch", "origin"];
-    args.extend(refspecs.iter().map(String::as_str));
-    let output = git(source_root, &args)?;
-    if !output.status.success() {
-        return Err(format!(
-            "fetch {} into the source checkout: {}",
-            refspecs.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
+    let args = ["fetch".to_string(), "origin".to_string()]
+        .into_iter()
+        .chain(refspecs.iter().cloned())
+        .collect::<Vec<_>>();
+    fetch(&args).map_err(|error| {
+        let detail = match error {
+            RunError::Failed(detail) => detail,
+            other => other.to_string(),
+        };
+        format!(
+            "fetch {} into the source checkout: {detail}",
+            refspecs.join(" ")
+        )
+    })?;
     Ok(())
 }
 
@@ -533,7 +588,7 @@ mod tests {
         // With the real remote gone, a fetch that reached the network would
         // fail. This one reads the mirror.
         std::fs::remove_dir_all(&upstream_dir).unwrap();
-        refresh_from_mirror(&root, &[]).expect("fetch origin");
+        refresh_from_mirror(&root, &[], &AcquisitionBudget::new(None)).expect("fetch origin");
         assert!(rev_parse(&root, "HEAD").is_some());
     }
 
@@ -557,6 +612,53 @@ mod tests {
             .unwrap()
             .count();
         assert_eq!(entries, 1, "one repository is one source checkout");
+    }
+
+    #[test]
+    fn a_stopped_refresh_fails_the_supply_while_a_failed_one_is_tolerated() {
+        let tmp = TempDir::new().unwrap();
+        let remote = upstream(&tmp.path().join("upstream"));
+        let supplied = ensure(&tmp, &remote, WorkspaceBaseSpec::RemoteDefault);
+        let root = PathBuf::from(&supplied.source_root);
+
+        let stopped = AcquisitionBudget::new(None);
+        stopped.cancel_token().cancel();
+        let error = refresh_from_mirror(&root, &[], &stopped).unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+
+        // git's own failure on the plain fetch stays best effort: the checkout
+        // still has its history, and the caller's base check reports gaps.
+        sh(
+            &root,
+            &["remote", "set-url", "origin", "/nonexistent/mirror.git"],
+        );
+        refresh_from_mirror(&root, &[], &AcquisitionBudget::new(None))
+            .expect("a failed plain refresh is tolerated");
+    }
+
+    #[test]
+    fn a_supply_is_timed_into_its_acquisition() {
+        let tmp = TempDir::new().unwrap();
+        let remote = upstream(&tmp.path().join("upstream"));
+        let budget = AcquisitionBudget::standard();
+        ensure_remote_source_within(
+            &tmp.path().join("mirrors"),
+            &tmp.path().join("sources"),
+            &EnsureRemoteSource {
+                remote_url: remote,
+                base: WorkspaceBaseSpec::RemoteDefault,
+                credential: None,
+            },
+            &budget,
+        )
+        .expect("supply");
+        let phases = budget.report().phases;
+        assert!(phases
+            .iter()
+            .any(|record| record.phase == Phase::Clone && record.ok));
+        assert!(phases
+            .iter()
+            .any(|record| record.phase == Phase::Fetch && record.ok));
     }
 
     #[test]

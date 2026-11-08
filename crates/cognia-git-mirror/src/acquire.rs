@@ -335,7 +335,10 @@ fn entropy(attempt: u32) -> u64 {
 #[derive(Debug)]
 pub struct AcquisitionBudget {
     started: Instant,
-    deadline: Option<Instant>,
+    /// The overall limit, and when it runs out. The end moves when
+    /// [`Self::restart_deadline`] is called after a wait.
+    limit: Option<Duration>,
+    deadline: Mutex<Option<Instant>>,
     ceilings: [Option<Duration>; Phase::ALL.len()],
     cancel: CancelToken,
     retry: RetryPolicy,
@@ -362,7 +365,8 @@ impl AcquisitionBudget {
         let started = Instant::now();
         Self {
             started,
-            deadline: deadline.map(|limit| started + limit),
+            limit: deadline,
+            deadline: Mutex::new(deadline.map(|limit| started + limit)),
             ceilings: [None; Phase::ALL.len()],
             cancel: CancelToken::new(),
             retry: RetryPolicy::default(),
@@ -408,7 +412,23 @@ impl AcquisitionBudget {
     /// What is left of the overall deadline, `None` when there is none.
     pub fn remaining(&self) -> Option<Duration> {
         self.deadline
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    }
+
+    /// Start the overall deadline again from now.
+    ///
+    /// For a caller that queued (on an admission or repository lock) before
+    /// doing any work: the deadline bounds work that hangs, not time spent
+    /// waiting for a turn. The report's clock is not reset, so its total
+    /// still shows the wait.
+    pub fn restart_deadline(&self) {
+        *self
+            .deadline
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            self.limit.map(|limit| Instant::now() + limit);
     }
 
     /// The limit a phase may run under right now.
@@ -453,8 +473,22 @@ impl AcquisitionBudget {
     pub fn run_retrying<'a>(
         &self,
         phase: Phase,
+        make: impl FnMut() -> GitRun<'a>,
+        before_retry: impl FnMut(),
+    ) -> Result<String, RunError> {
+        self.run_retrying_if(phase, make, before_retry, FailureClass::is_retryable)
+    }
+
+    /// [`Self::run_retrying`] with the caller's own choice of which classes
+    /// are worth another attempt, a subset of the retryable ones. A fetch
+    /// with the user's configuration does not retry a timeout: it may be an
+    /// SSH prompt nobody can answer, and three of those are nine minutes.
+    pub fn run_retrying_if<'a>(
+        &self,
+        phase: Phase,
         mut make: impl FnMut() -> GitRun<'a>,
         mut before_retry: impl FnMut(),
+        retry_if: impl Fn(FailureClass) -> bool,
     ) -> Result<String, RunError> {
         let mut attempt = 1;
         loop {
@@ -462,7 +496,8 @@ impl AcquisitionBudget {
             let Err(error) = &result else {
                 return result;
             };
-            if attempt >= self.retry.attempts.max(1) || !FailureClass::of(error).is_retryable() {
+            let class = FailureClass::of(error);
+            if attempt >= self.retry.attempts.max(1) || !class.is_retryable() || !retry_if(class) {
                 return result;
             }
             let delay = backoff_delay(&self.retry, attempt, entropy(attempt));
@@ -742,6 +777,43 @@ mod tests {
         let attempts: Vec<u32> = budget.report().phases.iter().map(|p| p.attempt).collect();
         assert_eq!(attempts, vec![1, 2, 3]);
         assert_eq!(cleared, 2);
+    }
+
+    #[test]
+    fn a_caller_can_narrow_which_classes_are_retried() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let budget =
+            AcquisitionBudget::new(Some(Duration::from_secs(30))).with_retry(RetryPolicy {
+                attempts: 3,
+                base_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(20),
+            });
+        let probe = args(&["ls-remote", "http://127.0.0.1:1/o/r.git"]);
+        let err = budget
+            .run_retrying_if(
+                Phase::Fetch,
+                || GitRun::new(dir.path(), &probe),
+                || {},
+                |class| class != FailureClass::Network,
+            )
+            .unwrap_err();
+        assert_eq!(FailureClass::of(&err), FailureClass::Network);
+        assert_eq!(budget.report().phases.len(), 1, "not retried");
+    }
+
+    #[test]
+    fn a_restarted_deadline_counts_from_the_restart() {
+        let budget = AcquisitionBudget::new(Some(Duration::from_millis(50)));
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(matches!(
+            budget.limit_for(Phase::Fetch),
+            Err(RunError::TimedOut(_))
+        ));
+        budget.restart_deadline();
+        let limit = budget.limit_for(Phase::Fetch).unwrap().unwrap();
+        assert!(limit > Duration::from_millis(20) && limit <= Duration::from_millis(50));
+        // The report still counts from the start, wait included.
+        assert!(budget.report().total_ms >= 80);
     }
 
     #[test]

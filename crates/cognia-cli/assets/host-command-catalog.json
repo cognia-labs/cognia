@@ -84558,6 +84558,276 @@
       "outputTyped": true
     },
     {
+      "name": "task_workspace_acquisition_cancel",
+      "category": "tasks",
+      "resource": "task-workspaces",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "workspace.write",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "task_workspace_acquisition_cancel (workspace.write)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Cancel the task_workspace_begin in flight for this run id."
+              },
+              "ownerType": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "imported",
+                  "session",
+                  "team",
+                  "scheduled"
+                ],
+                "description": "With ownerRef: cancel the task_workspace_bundle_acquire in flight for this owner."
+              },
+              "ownerRef": {
+                "type": "string",
+                "minLength": 1
+              },
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Cancel the restore in flight for this managed workspace."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Name exactly one of runId, ownerType with ownerRef, or workspaceId."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "additionalProperties": false,
+        "description": "Whether a cancel reached an acquisition.",
+        "properties": {
+          "cancelled": {
+            "description": "`true` when an acquisition was in flight under that key and was told to\nstop. A run that had not registered yet is remembered and also answers\n`true`; anything else answers `false` and changes nothing.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "type": "object"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "task_workspace_acquisition_list",
+      "category": "tasks",
+      "resource": "task-workspaces",
+      "target": "execution",
+      "operation": "read",
+      "capability": "performance.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "task_workspace_acquisition_list (performance.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "How many items to answer. Absent means the command's default."
+          },
+          "pageToken": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The nextPageToken of the previous page, handed back unchanged."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "additionalProperties": false,
+        "description": "One page of a collection.\n\nSparse rather than closed: `nextPageToken` is absent on the last page, and\nthat absence is the signal a client reads.",
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "description": "What one acquisition recorded about itself.",
+              "properties": {
+                "acquisitionId": {
+                  "type": "string"
+                },
+                "error": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "failureClass": {
+                  "default": null,
+                  "description": "The class of the step that failed it; `other` for a failure that was\nnot a git or provisioning step (a capacity refusal, a store error).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "key": {
+                  "default": null,
+                  "description": "The run id, bundle owner or workspace id it was keyed by.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "description": "What produced the checkout.",
+                  "oneOf": [
+                    {
+                      "const": "run",
+                      "description": "`task_workspace_begin`.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "bundle",
+                      "description": "`task_workspace_bundle_acquire`.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "restore",
+                      "description": "Restoring an archived managed workspace.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "remoteSource",
+                      "description": "Supplying a source checkout from a remote.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "phases": {
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "One timed step of an acquisition, as the wire carries it.",
+                    "properties": {
+                      "attempt": {
+                        "description": "1 for the first attempt; a retried step has one entry per attempt.",
+                        "format": "uint32",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "durationMs": {
+                        "format": "uint64",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "failureClass": {
+                        "default": null,
+                        "description": "Set when the step failed: `notFound`, `auth`, `network`, `timedOut`,\n`cancelled`, `lock`, `diskFull` or `other`.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "note": {
+                        "default": null,
+                        "description": "A short fact about the step, such as a mirror `hit`.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "ok": {
+                        "type": "boolean"
+                      },
+                      "phase": {
+                        "description": "`fetch`, `clone`, `backfill`, `derive`, `worktreeAdd`, `sparse`,\n`checkout` or `provisioning`.",
+                        "type": "string"
+                      },
+                      "startedMs": {
+                        "description": "Milliseconds after the acquisition started.",
+                        "format": "uint64",
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "attempt",
+                      "durationMs",
+                      "failureClass",
+                      "note",
+                      "ok",
+                      "phase",
+                      "startedMs"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "startedAt": {
+                  "description": "Unix milliseconds.",
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "subject": {
+                  "description": "The checkout it was cut from, or the remote it was supplied from with\nany userinfo removed.",
+                  "type": "string"
+                },
+                "totalMs": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "acquisitionId",
+                "error",
+                "failureClass",
+                "key",
+                "kind",
+                "ok",
+                "phases",
+                "startedAt",
+                "subject",
+                "totalMs"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Present exactly when another page exists.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "outputTyped": true
+    },
+    {
       "name": "task_workspace_apply",
       "category": "tasks",
       "resource": "task-workspaces",
@@ -112293,5 +112563,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "af533c5b4473765f36397a63b15fcd7dd78cb0f32dc7171e1507cea9fcf443ad"
+  "catalogHash": "9220659905cc93691b47cc9fede0c08f4c3c38a311bc397844f92d5a96fcc7bd"
 }

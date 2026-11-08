@@ -3689,6 +3689,12 @@
     "task_workspace_maintenance_events": {
       "to": "task.workspace.maintenance_event.list"
     },
+    "task_workspace_acquisition_cancel": {
+      "to": "task.workspace.acquisition.cancel"
+    },
+    "task_workspace_acquisition_list": {
+      "to": "task.workspace.acquisition.list"
+    },
     "task_workspace_maintenance_run": {
       "to": "task.workspace.maintenance.run"
     },
