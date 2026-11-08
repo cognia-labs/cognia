@@ -83,6 +83,11 @@ describe("shared chat synchronization", () => {
       session.id
     )
     expect((await getDb().sessions.toArray())[0].programmaticCreator).toBe("shared-chat")
+    // Several people read a shared room: it starts with memory off.
+    expect((await getDb().sessions.toArray())[0]).toMatchObject({
+      memoryUse: false,
+      memoryLearn: false,
+    })
     const messages = await getDb().messages.toArray()
     expect(messages.find((message) => message.role === "user")?.metadata).toMatchObject(metadata)
   })

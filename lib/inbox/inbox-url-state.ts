@@ -14,12 +14,13 @@
  */
 
 /** How the conversation list is sectioned. */
-export type InboxGrouping = "status" | "adapter" | "platform"
+export type InboxGrouping = "status" | "adapter" | "platform" | "chat"
 
 export const INBOX_GROUPINGS = [
   "status",
   "adapter",
   "platform",
+  "chat",
 ] as const satisfies readonly InboxGrouping[]
 
 /** The grouping a route uses when neither the URL nor a stored choice names one. */
@@ -44,6 +45,7 @@ const LEGACY_VIEW_TO_GROUPING: Readonly<Record<string, InboxGrouping>> = {
   "by-adapter": "adapter",
   "by-platform": "platform",
   unified: "status",
+  "by-chat": "chat",
 }
 
 /** The reverse map, for surfaces (the plugin sidebar slot) that still speak `view`. */
@@ -51,6 +53,7 @@ export const GROUPING_TO_LEGACY_VIEW: Readonly<Record<InboxGrouping, string>> = 
   status: "unified",
   adapter: "by-adapter",
   platform: "by-platform",
+  chat: "by-chat",
 }
 
 export const INBOX_URL_PARAMS = {

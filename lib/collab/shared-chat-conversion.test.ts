@@ -175,6 +175,58 @@ describe("local-to-shared chat conversion", () => {
       policyRevision: 2,
       syncCursor: 2,
     })
+    // The chat is now a room several people read: memory turns off.
+    expect(await getDb().sessions.get("local_1")).toMatchObject({
+      memoryUse: false,
+      memoryLearn: false,
+    })
+  })
+
+  it("keeps the memory a room setting already chose when the chat becomes shared", async () => {
+    await getDb().sessions.update("local_1", {
+      roomSettings: { memory: true },
+      memoryUse: true,
+      memoryLearn: true,
+    })
+    let sequence = 0
+    const remote = (status: string, revision: number) => ({
+      id: "shared_1",
+      orgId: "org_1",
+      workspaceId: "workspace_1",
+      title: "Private history",
+      status,
+      createdBy: { kind: "human", id: "user_1" },
+      createdAt: 10,
+      updatedAt: 10 + revision,
+      revision,
+      policyRevision: revision,
+    })
+    const client = {
+      identity: jest.fn().mockResolvedValue({ userId: "user_1", orgId: "org_1" }),
+      createSharedSession: jest.fn().mockResolvedValue(remote("importing", 1)),
+      appendSessionEvent: jest.fn(async (_orgId, sessionId, input) => ({
+        id: `event_${++sequence}`,
+        sessionId,
+        sequence,
+        kind: input.kind,
+        actor: { kind: "human" as const, id: "user_1" },
+        payload: input.payload,
+        createdAt: 10 + sequence,
+        operationId: input.operationId,
+      })),
+      updateSharedSession: jest
+        .fn()
+        .mockImplementation(async (_o, _s, input) => remote(input.status, 2)),
+    }
+    await convertLocalSessionToShared(client, {
+      localSessionId: "local_1",
+      orgId: "org_1",
+      workspaceId: "workspace_1",
+    })
+    expect(await getDb().sessions.get("local_1")).toMatchObject({
+      memoryUse: true,
+      memoryLearn: true,
+    })
   })
 
   it("leaves the private session untouched when remote import fails", async () => {

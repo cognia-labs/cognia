@@ -143,6 +143,7 @@ describe("InboxSidebar", () => {
       expect(screen.getByTestId("group-chip-status")).toBeInTheDocument()
       expect(screen.getByTestId("group-chip-adapter")).toBeInTheDocument()
       expect(screen.getByTestId("group-chip-platform")).toBeInTheDocument()
+      expect(screen.getByTestId("group-chip-chat")).toHaveAccessibleName("groupModes.chat")
     })
 
     it("marks the grouping in force", () => {

@@ -32,6 +32,7 @@ import {
   LayersIcon,
   ListIcon,
   PlugIcon,
+  UsersIcon,
 } from "lucide-react"
 import {
   Sidebar,
@@ -84,6 +85,7 @@ const GROUPING_ICON: Record<InboxGrouping, ReactNode> = {
   status: <InboxIcon className="size-3.5" aria-hidden />,
   adapter: <PlugIcon className="size-3.5" aria-hidden />,
   platform: <LayersIcon className="size-3.5" aria-hidden />,
+  chat: <UsersIcon className="size-3.5" aria-hidden />,
 }
 
 export interface InboxSidebarProps {

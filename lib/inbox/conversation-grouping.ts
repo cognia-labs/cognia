@@ -15,7 +15,9 @@
  *  2. `status` grouping splits the live rows into Pinned / Unread / Read.
  *  3. `adapter` and `platform` grouping make one section per adapter or
  *     platform, and order each section's rows pinned → unread → read, so the
- *     triage priority survives the regrouping.
+ *     triage priority survives the regrouping. `chat` grouping does the same
+ *     with two sections, group chats first, then direct chats (ADR-0252 §6:
+ *     a group is a room, a one-to-one chat is not).
  *  4. Inside any bucket, newest activity first.
  *
  * Empty sections are dropped: a header announcing "Pinned · 0" is chrome.
@@ -23,6 +25,7 @@
 
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
+import { platformScopeOf } from "@/lib/chat/room/kind"
 import type { InboxGrouping } from "./inbox-url-state"
 
 /** One conversation as the list renders it. */
@@ -37,7 +40,15 @@ export interface ConversationRowItem {
 }
 
 export type ConversationSectionKind =
-  "pinned" | "unread" | "read" | "adapter" | "platform" | "resolved" | "archived"
+  | "pinned"
+  | "unread"
+  | "read"
+  | "adapter"
+  | "platform"
+  | "groups"
+  | "direct"
+  | "resolved"
+  | "archived"
 
 export interface ConversationSection {
   /** Stable across renders and sessions; the collapse state is keyed on it. */
@@ -79,6 +90,7 @@ export const conversationSectionId = {
   status: (bucket: "pinned" | "unread" | "read") => `status:${bucket}`,
   adapter: (adapterId: string) => `adapter:${adapterId}`,
   platform: (platform: string) => `platform:${platform}`,
+  chat: (bucket: "groups" | "direct") => `chat:${bucket}`,
   tail: (kind: "resolved" | "archived") => kind,
 } as const
 
@@ -125,6 +137,12 @@ function makeSection(
     unreadCount: countUnread(base.rows),
     collapsed: collapsed[base.id] ?? base.tail,
   }
+}
+
+/** A one-to-one chat; any other scope (and an unknown one) is a group. */
+function isDirectChat(item: ConversationRowItem): boolean {
+  const binding = item.session.platformBinding
+  return binding ? platformScopeOf(binding) === "private" : false
 }
 
 function platformOf(item: ConversationRowItem): string {
@@ -218,6 +236,26 @@ export function groupConversationRows(
             adapterId,
             adapterName: adapter?.displayName,
             platform: adapter?.type ?? bucket[0]?.session.platformBinding?.platform,
+            rows: orderByTriagePriority(bucket),
+            tail: false,
+          },
+          collapsed
+        )
+      )
+    }
+  } else if (mode === "chat") {
+    const groups = live.filter((row) => !isDirectChat(row))
+    const direct = live.filter(isDirectChat)
+    for (const [kind, bucket] of [
+      ["groups", groups],
+      ["direct", direct],
+    ] as const) {
+      if (bucket.length === 0) continue
+      sections.push(
+        makeSection(
+          {
+            id: conversationSectionId.chat(kind),
+            kind,
             rows: orderByTriagePriority(bucket),
             tail: false,
           },

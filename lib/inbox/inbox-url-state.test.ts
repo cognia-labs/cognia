@@ -25,6 +25,7 @@ describe("parseInboxUrlState", () => {
     ["by-adapter", "adapter"],
     ["by-platform", "platform"],
     ["unified", "status"],
+    ["by-chat", "chat"],
   ])("maps the legacy view=%s to group=%s", (view, group) => {
     // The old sidebar toggle wrote these and nothing ever read them; existing
     // bookmarks must now mean what they always claimed.
@@ -139,6 +140,7 @@ describe("helpers", () => {
       status: "unified",
       adapter: "by-adapter",
       platform: "by-platform",
+      chat: "by-chat",
     })
   })
 

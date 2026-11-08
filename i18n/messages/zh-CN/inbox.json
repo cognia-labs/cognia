@@ -738,7 +738,8 @@
     "groupModes": {
       "status": "按状态分组",
       "adapter": "按适配器分组",
-      "platform": "按平台分组"
+      "platform": "按平台分组",
+      "chat": "按会话类型分组"
     },
     "platforms": "平台",
     "allConversations": "全部会话",
@@ -829,6 +830,8 @@
     "pinned": "已置顶",
     "unread": "未读",
     "read": "已读",
+    "groups": "群聊",
+    "direct": "私聊",
     "resolved": "已解决",
     "archived": "已归档",
     "unknownAdapter": "已移除的适配器（{id}）",

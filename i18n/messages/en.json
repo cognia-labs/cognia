@@ -23593,7 +23593,9 @@
     "sections": {
       "archived": "Archived",
       "collapse": "Collapse {name} ({count})",
+      "direct": "Direct chats",
       "expand": "Expand {name} ({count})",
+      "groups": "Group chats",
       "openScope": "Open {name} on its own",
       "pinned": "Pinned",
       "read": "Read",
@@ -23657,6 +23659,7 @@
       "groupModeAria": "Group conversations",
       "groupModes": {
         "adapter": "Group by adapter",
+        "chat": "Group by chat type",
         "platform": "Group by platform",
         "status": "Group by status"
       },

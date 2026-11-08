@@ -30,6 +30,7 @@ import {
   publishSharedLiveFrame,
 } from "./shared-live-frames"
 import { mergeChatTurnMetadata, pickChatContinuationMetadata } from "@/lib/chat/continuation"
+import { initialRoomMemoryFields } from "@/lib/chat/room/settings"
 
 type SharedChatReader = Pick<
   CollabClient,
@@ -184,6 +185,8 @@ async function ensureLocalProjection(
     projectId: remote.workspaceId,
     title: remote.title,
     kind: "direct",
+    // Several people share this room: it starts with memory off (ADR-0177).
+    ...initialRoomMemoryFields("shared"),
     createdAt: remote.createdAt,
     updatedAt: remote.updatedAt,
     collaboration: {

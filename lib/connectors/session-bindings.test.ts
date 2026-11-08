@@ -82,6 +82,31 @@ describe("session-bindings", () => {
     expect(stored?.programmaticCreator).toBe("connector")
   })
 
+  it("records the chat's scope, and starts a group with memory off but a direct chat as the account has it", async () => {
+    const direct = await createPlatformSession(makeEvent(), "char_1")
+    expect(direct.platformBinding?.scopeKind).toBe("private")
+    expect(direct).not.toHaveProperty("memoryUse")
+    expect(direct).not.toHaveProperty("memoryLearn")
+
+    const groupEvent = makeEvent()
+    groupEvent.channel = { ...groupEvent.channel, kind: "group" }
+    groupEvent.conversationAddress = { ...groupEvent.conversationAddress!, scopeKind: "group" }
+    const group = await createPlatformSession(groupEvent, "char_1")
+    expect(group.platformBinding?.scopeKind).toBe("group")
+    expect(await getDb().sessions.get(group.id)).toMatchObject({
+      memoryUse: false,
+      memoryLearn: false,
+    })
+  })
+
+  it("restamps the scope a later event reports", async () => {
+    const session = await createPlatformSession(makeEvent(), "char_1")
+    const next = makeEvent()
+    next.channel = { ...next.channel, kind: "thread" }
+    const refreshed = await refreshPlatformSessionBinding(session, next)
+    expect(refreshed.platformBinding?.scopeKind).toBe("thread")
+  })
+
   it("refreshes the delivery anchor on every later inbound message", async () => {
     const session = await createPlatformSession(makeEvent(), "char_1")
     const next = makeEvent()

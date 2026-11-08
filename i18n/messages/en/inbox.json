@@ -738,7 +738,8 @@
     "groupModes": {
       "status": "Group by status",
       "adapter": "Group by adapter",
-      "platform": "Group by platform"
+      "platform": "Group by platform",
+      "chat": "Group by chat type"
     },
     "platforms": "Platforms",
     "allConversations": "All conversations",
@@ -829,6 +830,8 @@
     "pinned": "Pinned",
     "unread": "Unread",
     "read": "Read",
+    "groups": "Group chats",
+    "direct": "Direct chats",
     "resolved": "Resolved",
     "archived": "Archived",
     "unknownAdapter": "Removed adapter ({id})",

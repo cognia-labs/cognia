@@ -14,6 +14,7 @@ import { bytesToBase64 } from "@/lib/utils/image-bytes"
 import { getMessageMedia, parseMediaRef } from "@/lib/db/message-media"
 import { pickReferenceMetadata } from "@/lib/chat/mentions/read"
 import { pickChatContinuationMetadata } from "@/lib/chat/continuation"
+import { initialRoomMemoryFields } from "@/lib/chat/room/settings"
 import type { CollabClient } from "./client"
 import { assertSharedChatClientEnabled } from "./shared-chat-feature"
 
@@ -432,6 +433,11 @@ export async function convertLocalSessionToShared(
         policyRevision: active.policyRevision,
         syncCursor: cursor,
       },
+      // The chat becomes a room several people read: memory turns off unless
+      // its room settings already said otherwise (ADR-0177, ADR-0252 §6).
+      ...(typeof current.roomSettings?.memory === "boolean"
+        ? {}
+        : initialRoomMemoryFields("shared")),
       updatedAt: Date.now(),
     })
     const cacheKey = sharedChatCacheKey(input.orgId, active.id, client.baseUrl)

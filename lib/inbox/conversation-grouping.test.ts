@@ -19,6 +19,7 @@ interface RowOpts {
   unread?: number
   archived?: boolean
   status?: ConversationOverrideRow["status"]
+  scope?: "private" | "group" | "thread"
 }
 
 function row(id: string, opts: RowOpts = {}): ConversationRowItem {
@@ -36,6 +37,7 @@ function row(id: string, opts: RowOpts = {}): ConversationRowItem {
       platform,
       conversationKey: `${platform}:${adapterId}:${id}`,
       conversationRef: { platform, adapterId },
+      ...(opts.scope ? { scopeKind: opts.scope } : {}),
     },
   } as unknown as ChatSession
   return {
@@ -184,11 +186,40 @@ describe("groupConversationRows — platform", () => {
   })
 })
 
+describe("groupConversationRows — chat", () => {
+  it("puts group chats first and direct chats second, in triage order, a scope nobody named as a group", () => {
+    const sections = groupConversationRows(
+      [
+        row("dm-read", { scope: "private" }),
+        row("g-read", { scope: "group" }),
+        row("dm-unread", { scope: "private", unread: 2 }),
+        row("thread", { scope: "thread", pinned: true }),
+        row("unknown"),
+        row("dm-gone", { scope: "private", archived: true }),
+      ],
+      "chat"
+    )
+    expect(sections.map((s) => [s.id, s.kind, ids(s.rows)])).toEqual([
+      ["chat:groups", "groups", ["thread", "g-read", "unknown"]],
+      ["chat:direct", "direct", ["dm-unread", "dm-read"]],
+      ["archived", "archived", ["dm-gone"]],
+    ])
+    expect(sections[1]!.unreadCount).toBe(1)
+  })
+
+  it("drops a side that has no chats", () => {
+    expect(groupConversationRows([row("g", { scope: "group" })], "chat").map((s) => s.id)).toEqual([
+      "chat:groups",
+    ])
+  })
+})
+
 describe("helpers", () => {
   it("builds stable section ids", () => {
     expect(conversationSectionId.status("unread")).toBe("status:unread")
     expect(conversationSectionId.adapter("a1")).toBe("adapter:a1")
     expect(conversationSectionId.platform("lark")).toBe("platform:lark")
+    expect(conversationSectionId.chat("direct")).toBe("chat:direct")
     expect(conversationSectionId.tail("archived")).toBe("archived")
   })
 

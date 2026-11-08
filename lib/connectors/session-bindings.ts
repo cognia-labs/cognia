@@ -26,6 +26,8 @@ import {
   parseConversationKey,
 } from "@/types/connectors/event"
 import { getDb } from "@/lib/db/schema"
+import { roomKindOf } from "@/lib/chat/room/kind"
+import { initialRoomMemoryFields } from "@/lib/chat/room/settings"
 import type { SiblingConversation } from "@cognia/plugin-contract/lib/connectors/session-bindings"
 export type { SiblingConversation } from "@cognia/plugin-contract/lib/connectors/session-bindings"
 
@@ -249,19 +251,25 @@ export async function createPlatformSession(
 ): Promise<ChatSession> {
   const now = Date.now()
   const deliveryTarget = deliveryTargetFromEvent(event)
+  const platformBinding: NonNullable<ChatSession["platformBinding"]> = {
+    platform: event.platform,
+    adapterId: event.adapterId,
+    conversationKey: event.conversationKey,
+    conversationRef: event.conversationRef,
+    ...(deliveryTarget ? { deliveryTarget } : {}),
+    scopeKind: event.channel.kind,
+  }
   const session: ChatSession = {
     id: crypto.randomUUID(),
     title: event.channel.name ?? event.sender.displayName ?? event.conversationKey,
     kind: "direct",
     characterId,
-    platformBinding: {
-      platform: event.platform,
-      adapterId: event.adapterId,
-      conversationKey: event.conversationKey,
-      conversationRef: event.conversationRef,
-      ...(deliveryTarget ? { deliveryTarget } : {}),
-    },
+    platformBinding,
     platformConversationKey: event.conversationKey,
+    // A group starts with memory off: more than one person reads what an
+    // assistant recalls there (ADR-0177, ADR-0252 §6). A direct chat keeps
+    // the account's default.
+    ...initialRoomMemoryFields(roomKindOf({ platformBinding })),
     createdAt: now,
     updatedAt: now,
     programmaticCreator: "connector",
@@ -283,6 +291,7 @@ export async function refreshPlatformSessionBinding(
       ...session.platformBinding,
       conversationRef: event.conversationRef,
       ...(deliveryTarget ? { deliveryTarget } : {}),
+      scopeKind: event.channel.kind,
     },
     updatedAt: Date.now(),
   }
