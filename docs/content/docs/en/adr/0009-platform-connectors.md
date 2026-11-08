@@ -234,7 +234,7 @@ improvements. All shipped behind the same plan file under
   helper. `outbound-tab.tsx` live-queries `outboundQueue` +
   `adapterInstances` + the latest heartbeats so each pending row carries a
   derived overlay: `paused-muted`, `paused-quiet-hours` (with ETA),
-  `circuit-blocked`. Uses the same `isInQuietHours` / `msUntilQuietEnd`
+  `circuit-blocked`. Uses the same `isInQuietRange` / `msUntilQuietRangeEnd`
   helpers the runner uses, so the UI and runtime always agree.
 - **Audit conversation-key filter + export** — `audit-tab.tsx` gains a
   substring filter on `conversationKey` and an Export menu (CSV / JSON)

@@ -140,7 +140,7 @@ skills through the existing IPC channel.
 
 ### lark-cli execution
 
-`lib/skills/built-in/lark/exec-lark-cli.ts` wraps `execFile`:
+`lib/auth-providers/feishu/cli/exec-lark-cli.ts` wraps `execFile`:
 
 - Binary discovery: `LARK_CLI_BIN` env override → PATH lookup → Windows
   `%APPDATA%\npm\lark-cli.cmd` fallback.
@@ -210,8 +210,8 @@ registry on every turn.
 | Registry          | `lib/skills/built-in/registry.ts`                                  |
 | Dispatcher        | `lib/skills/built-in/dispatcher.ts`                                |
 | Manifest          | `lib/skills/built-in/manifest.ts`                                  |
-| Lark exec         | `lib/skills/built-in/lark/exec-lark-cli.ts`                        |
-| Auth bridge       | `lib/skills/built-in/lark/auth-bridge.ts`                          |
+| Lark exec         | `lib/auth-providers/feishu/cli/exec-lark-cli.ts`                        |
+| Auth bridge       | `lib/auth-providers/feishu/cli/auth-bridge.ts`                          |
 | Lark families     | `lib/skills/built-in/lark/{calendar,doc,sheets,base,task,wiki}.ts` |
 | Bus integration   | `lib/connectors/bus.ts` (skill_invoke branch)                      |
 | Sidecar bridge    | `lib/claude/plugin-tool-ipc.ts` (built-in fallback)                |

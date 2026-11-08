@@ -177,7 +177,7 @@ Schema 在 v18 → v38 之间增加了三个内容：
 **诊断/可观测性：**
 
 - **心跳携带运行时快照**——`CircuitBreaker.snapshot()`和`TokenBucket.snapshot()`是新的纯读访问者;`outbound-runner.ts`通过新的模块级`getAdapterRuntimeStateSnapshot(adapterId)`发布每个适配器的状态映射。心跳审计行的`fields`块现在包含`breakerState`、`breakerOpenedAt`、`breakerFailureRate`、`breakerEventCount`、`rateAvailable`、`rateCapacity`、`rateRefillPerSec`、`rateNextRefillAt`。
-- **出站行徽章** — 新`lib/connectors/derive-job-badge.ts`纯助手。`outbound-tab.tsx`实时查询`outboundQueue` + `adapterInstances` + 最新心跳，因此每行待处理的行都带有衍生叠加层：`paused-muted`，`paused-quiet-hours`（带ETA）、`circuit-blocked`。使用跑者使用的相同`isInQuietHours`/`msUntilQuietEnd`助手，因此UI和运行时始终一致。
+- **出站行徽章** — 新`lib/connectors/derive-job-badge.ts`纯助手。`outbound-tab.tsx`实时查询`outboundQueue` + `adapterInstances` + 最新心跳，因此每行待处理的行都带有衍生叠加层：`paused-muted`，`paused-quiet-hours`（带ETA）、`circuit-blocked`。使用跑者使用的相同`isInQuietRange`/`msUntilQuietRangeEnd`助手，因此UI和运行时始终一致。
 - **审计对话键过滤+导出**——`audit-tab.tsx`在 `conversationKey` 上增加了子字符串过滤器，并新增了导出菜单（CSV / JSON），并由新的纯`lib/connectors/audit-export.ts`支持。文件命名为`cognia-audit-<scope>-<YYYYMMDDHHmm>.{csv,json}`，并通过标准的 `URL.createObjectURL`+锚点模式进行流式处理。
 - **健康详情面板运行时卡** — 接口断路器小板（闭/半开/开，时间戳为开启）和带下一次加注ETA的速率桶表。`useAdapterHealth` hook现在显示了`breaker`和`rateBucket`从最新心跳行生成的打字快照。
 - **收件箱头适配器降级徽章 + 重新连接** — 当适配器状态为`degraded` / `down` / `unknown`时，amber/red徽章。点击后打开带有重新连接按钮的弹出覆盖，驱动现有`requeueAdapter`生命周期hook。重用`useAdapterHealth`，因此不会新增实时查询管道。

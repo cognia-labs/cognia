@@ -14,7 +14,7 @@ description: "每次 agent 运行写明其数据访问使用谁的权限：发�
 三个问题在不同地方、依据不同来源回答，彼此之间没有联系：
 
 1. **谁可以使用。** 飞书发送者要通过主体登记表准入（`lib/connectors/principal/resolve.ts`）。其他平台，以及关闭登记表开关的飞书，解析结果都是 `legacy`。
-2. **用谁的凭据。** 连接器每个适配器只保存一个用户 token。d74e413ff1 增加了一道检查（`lib/skills/built-in/lark/acting-identity.ts`）：Lark 技能读取本回合的实时发送者，拒绝连接者以外的所有人，所以其他人都用不了个人功能。Bot 安装把凭据槽绑定到集成账号（`credentialBindings`）。它没有记录任何人的字段，它的 `owner` 是运行它的机器（`lib/placement/ownership.ts`）。
+2. **用谁的凭据。** 连接器每个适配器只保存一个用户 token。d74e413ff1 增加了一道检查（`lib/auth-providers/feishu/cli/acting-identity.ts`）：Lark 技能读取本回合的实时发送者，拒绝连接者以外的所有人，所以其他人都用不了个人功能。Bot 安装把凭据槽绑定到集成账号（`credentialBindings`）。它没有记录任何人的字段，它的 `owner` 是运行它的机器（`lib/placement/ownership.ts`）。
 3. **能做到什么程度。** Bot 策略合并（`lib/bot/policy/ceilings.ts`）限制权限级别、自动化程度、写操作审批、预算和无人值守配置。能力授予（ADR-0198）限制工具、技能、MCP 服务器和模式。
 
 发起人只进入了部分决策，且来自三个不同的来源：

@@ -372,7 +372,7 @@ interface ContextSection {
 
 ## 19. C6b 实施记录：twin 成为 manifest 模块（2026-11-07）
 
-- `lib/twin/module.ts`：`dependsOn` connectors、modules、plugin、rag、share；`requires` `ocr?`、`memory-namespaces?`、`eval-benchmarks?`；`api` 在原来 11 个文件之外补 7 个（`components/twin/{source-content-preview,twin-source-preview-dialog}`、`lib/twin/{export-provenance,outbound-disclosure,profile-summary}`、`ingest/{persist,url-fetcher}`）。过渡表删掉 twin 行；share 行补 `lib/share/types.ts`，connectors 行补 `lib/skills/built-in/lark/exec-lark-cli.ts`。
+- `lib/twin/module.ts`：`dependsOn` connectors、modules、plugin、rag、share；`requires` `ocr?`、`memory-namespaces?`、`eval-benchmarks?`；`api` 在原来 11 个文件之外补 7 个（`components/twin/{source-content-preview,twin-source-preview-dialog}`、`lib/twin/{export-provenance,outbound-disclosure,profile-summary}`、`ingest/{persist,url-fetcher}`）。过渡表删掉 twin 行；share 行补 `lib/share/types.ts`，connectors 行补 `lib/auth-providers/feishu/cli/exec-lark-cli.ts`。
 - 提示词贡献 `lib/twin/prompts.ts`：15 个定义（6 个蒸馏、2 个重排、7 个系统模板），顺序与目录原来一致；还清 `lib/prompts/catalog.ts -> twin`。
 - 环：twin → memory（`lifecycle.ts` 删除分身时让 `twin:<id>` 命名空间的记忆失效）和 twin → eval（人设页的基准按钮）各成一个环，因为 memory、eval 都依赖分身。改成端口：
   - `memory-namespaces`（`types/modules/ports/memory-namespaces.ts`），memory 经 `lib/memory/namespaces-port.ts` 提供；`lib/memory/twin-lifecycle.ts` 不再是 memory 的 `api`。

@@ -289,7 +289,7 @@ interpolation**. `argsToFlags` (`_helpers.ts:17`) maps the camelCase Zod arg sha
 and `--yes` is appended only when the caller marks the invocation confirmed (`exec-lark-cli.ts:135`).
 
 ```ts
-// lib/skills/built-in/lark/exec-lark-cli.ts:142 — direct execFile, env-injected auth
+// lib/auth-providers/feishu/cli/exec-lark-cli.ts:142 — direct execFile, env-injected auth
 const result = await execFileAsync(binary, argv, {
   env: { ...process.env, ...auth.env },     // OAuth creds, ephemeral
   timeout: timeoutMs,                        // clamped to 5-min max
@@ -316,7 +316,7 @@ tenant (bot) token via `getTenantAccessToken` (`auth-bridge.ts:148`). It **never
 reasons (`auth-bridge.ts:58-64`) let the skill render an exact onboarding banner.
 
 ```ts
-// lib/skills/built-in/lark/auth-bridge.ts:135 — env overlay passed to execFile
+// lib/auth-providers/feishu/cli/auth-bridge.ts:135 — env overlay passed to execFile
 env: {
   LARK_APP_ID: appId,
   LARK_APP_SECRET: appSecret,                 // ephemeral env, never written to disk

@@ -370,9 +370,16 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 运行资源。持有逐运行资源的节点族用 `registerRunResourceReleaser`（`lib/workflow/runtime/run-resources.ts`）登记释放器，运行结束时编排器尽力调用每个释放器。终端的会话节点登记关闭本次运行终端会话的那个。
   - 首批贡献者（2026-11-08）：terminal（`lib/terminal/workflow-nodes/`：坞、会话和脚本节点）、artifact、goal、sites、knowledge-base、eval 和 pet（`lib/<module>/workflow-nodes.ts`）。把它们迁出之后工作流引擎才能成为 manifest 模块：此前如实声明它的依赖，会经由它导入其节点、触发器、提示词或辅助代码的十个 manifest 模块（artifact、eval、goal、knowledge-base、pet、sites、slash-commands、squads、templates、terminal）形成 11 个模块的环。
 
+- **修订（2026-11-08）：connectors 成为 manifest 模块；`conversation-channel` 集合端口。** IM 连接器原是归属表里的一行，因而不能提供端口；声明它的 manifest 会形成 12 个模块的 G6 环（artifact、connectors、goal、knowledge-base、memory、project-knowledge、slash-commands、squads、templates、terminal、twin、workflow）。实施记录见 `docs/plans/2026-11-07-tools-contributions.md` §21。
+  - 内核原语移出 connectors。审批登记表和 A2UI 回调前缀移到 `lib/claude/hitl/`，回合活动追踪器及其 diff 移到 `lib/claude/turn-activity/`。免打扰只剩一个求值器 `lib/notifications/policy/quiet-hours.ts`（`isInQuietHours`、`isInQuietRange`、`msUntilQuietRangeEnd`、`quietHoursReleaseAt`），`outbound-runner` 里的副本删除；夏令时开始的那一夜现在于当天早晨结束。lark-cli 传输并入飞书认证层（`lib/auth-providers/feishu/cli/`）。内置技能上限和写操作确认的默认值归技能框架（`lib/skills/built-in/channel-ceiling.ts`），代理的调度工具名归调度器（`lib/scheduler/agent-tool-names.ts`）。
+  - 反转的边。宠物经保留 topic `connectors.inbound`（`types/connectors/events.ts`）得知 IM 入站消息。连接器的 6 个 `action.connector.*` 工作流节点是它的 `workflowNodes` 贡献（`lib/connectors/workflow-nodes.ts`），能力提示词是它的 `prompts` 贡献。
+  - 端口。`conversation-channel`（`types/modules/ports/conversation-channel.ts`）是集合端口：每个绑定会话的渠道都是一个成员，并声明自己认领哪些绑定。唯一的读取方是 `lib/chat/conversation-channel.ts`（`conversationChannelFor` 取第一个认领者，重复认领记日志；`askUserInConversation` 交给正在运行该会话回合的第一个渠道）。成员回答会话的宿主能力、能力提示和可服务的能力，等待自动化暂停，列出同一远端群的兄弟会话，发送文本，追加审计，把 `ask_user` 问题投递到会话，以及投递内置技能的确认卡片。connectors 提供 IM 成员（`lib/connectors/ports/conversation-channel.ts`）。目标驱动、工作流的自动化等待、`team_post_to_chat`、`ask_user`、技能分发器的确认和 build-options 的 IM 闸门（computer use、OCR、调度工具、能力提示、技能清单的渠道能力）都经它读取。没有渠道认领的 IM 绑定会话什么也不给（失败即关闭）。连接器运行时的权限应答者根据运行的中断记录自行标注决定来源（`lib/connectors/hitl/permission-attribution.ts`），`run-and-capture` 不再读取 IM 上下文。
+  - manifest（`lib/connectors/module.ts`）拥有 `app/lark/`、`lib/skills/built-in/{im,lark}/` 下的 IM 技能族和五个连接器数据文件，依赖 21 个模块，列出 58 个 `api` 文件，`requires` `ocr` 和 `speech`，提供 `conversation-channel`。speech、pet、twin、goal、squads、workflow 不再依赖 connectors。还清方向边 12 条。
+  - 尚未解决：内置技能族在 `lib/skills/built-in/index.ts` 注册，`build-options` 和清单构建器直接探测 Lark CLI（`lib/skills/built-in/lark/capabilities.ts`），所以 `build-options`、`manifest.ts`、`index.ts -> connectors` 仍在，要等内置技能族成为 manifest 贡献。`workflow-author-api` 仍自己投递工作流运行审批卡片。
+
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
-- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`、沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
+- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、`knowledge-base-revisions`、`workflow-editor-session`，集合端口 `docs-provider` 和 `conversation-channel`，沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
 - **类型化事件。** 需要反转依赖时，用内核的事件总线，事件类型由发布方在 `types/<id>/events.ts` 中声明。
 - **贡献点。** 外壳和内核只通过 manifest 字段收集各模块的东西。
 

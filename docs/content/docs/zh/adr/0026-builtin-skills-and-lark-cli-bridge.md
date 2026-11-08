@@ -96,7 +96,7 @@ Cancel 点击则记录 `builtin_skill_hitl_rejected` 并返回。
 
 ### lark-cli 执行
 
-`lib/skills/built-in/lark/exec-lark-cli.ts` 包装 `execFile`：
+`lib/auth-providers/feishu/cli/exec-lark-cli.ts` 包装 `execFile`：
 
 - 二进制定位：`LARK_CLI_BIN` 环境变量 → PATH 查找 → Windows`%APPDATA%\npm\lark-cli.cmd` 兜底。
 - 上限：5 分钟超时（可调）、1 MB stdout 上限、`windowsHide: true`。
@@ -144,8 +144,8 @@ Cancel 点击则记录 `builtin_skill_hitl_rejected` 并返回。
 | 注册表            | `lib/skills/built-in/registry.ts`                                  |
 | Dispatcher        | `lib/skills/built-in/dispatcher.ts`                                |
 | Manifest          | `lib/skills/built-in/manifest.ts`                                  |
-| Lark exec         | `lib/skills/built-in/lark/exec-lark-cli.ts`                        |
-| Auth bridge       | `lib/skills/built-in/lark/auth-bridge.ts`                          |
+| Lark exec         | `lib/auth-providers/feishu/cli/exec-lark-cli.ts`                        |
+| Auth bridge       | `lib/auth-providers/feishu/cli/auth-bridge.ts`                          |
 | Lark 家族         | `lib/skills/built-in/lark/{calendar,doc,sheets,base,task,wiki}.ts` |
 | Bus 集成          | `lib/connectors/bus.ts`（skill_invoke 分支）                       |
 | Sidecar 桥接      | `lib/claude/plugin-tool-ipc.ts`（内置技能 fallback）               |

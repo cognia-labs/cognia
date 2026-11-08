@@ -102,7 +102,7 @@ workflow 重试的父子链接由桥从新 run 已经持久化的 `lineage.retry
 
 ## 复用的所有权
 
-没有第二套执行日志、控制门、审批 registry、权限模型或出站队列。本决定扩展的是 `executionRuns` / `executionRunEvents` / `executionRunBindings` /`executionRunInterrupts`、`executeRunControlCommand`、`lib/connectors/hitl/approval-registry.ts`、受治理的出站网关，以及 run 呈现 runner。只需要一个 Dexie 版本（**v176**），且是纯索引变更、无回填：没有 `parentRunId` 的行不出现在索引里，这正是对的 —— 它们是根。
+没有第二套执行日志、控制门、审批 registry、权限模型或出站队列。本决定扩展的是 `executionRuns` / `executionRunEvents` / `executionRunBindings` /`executionRunInterrupts`、`executeRunControlCommand`、`lib/claude/hitl/approval-registry.ts`、受治理的出站网关，以及 run 呈现 runner。只需要一个 Dexie 版本（**v176**），且是纯索引变更、无回填：没有 `parentRunId` 的行不出现在索引里，这正是对的 —— 它们是根。
 
 ## 兼容与回滚
 

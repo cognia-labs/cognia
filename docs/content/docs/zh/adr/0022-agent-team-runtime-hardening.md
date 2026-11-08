@@ -45,7 +45,7 @@ description: "通过并发预设调度、一个精简团队合成器产生Visual
 1. **单一编排器。** 工作流程运行时成为唯一的执行引擎;`runTeamLifecycle`退回到一个~120线合成器，产生`VisualWorkflow`并委派给`runWorkflow`。
 2. **工作流程获得并发调度功能。** 用现成的 + `maxConcurrency` 调度器替代顺序`for (stepId of order)`循环。默认`maxConcurrency=1`保留现有工作流行为;团队合成器将其设置为`team.config.maxConcurrentTeammates`。
 3. **每个任务重试，队友轮换。** 失败的`team.task.dispatch`节点触发工作流程的标准重试;每次重试的执行者都会从池中重新取回，自然轮换到可用的队友。
-4. **每个队友的断路器**（作曲`lib/connectors/circuit-breaker.ts`）用于临时隔离并自动恢复;**每个队友因灾难性故障（认证、配置无效）而被取消资格，需要用户干预。
+4. **每个队友的断路器**（作曲`packages/plugin-contract/src/lib/connectors/circuit-breaker.ts`）用于临时隔离并自动恢复;**每个队友因灾难性故障（认证、配置无效）而被取消资格，需要用户干预。
 5. **代币预算，实现了全部四个`onCritical`动作**：`notify`、`pause_for_review`、`reduce_concurrency`、`handoff_to_background`（定义为“降挡档位”：更便宜的型号+并发=1+静默吐司;不是“生成Worker进程”）。
 6. **现有通用`lib/runtime/approval-bus`有六HITL 门禁**：计划批准（现有）、预算覆盖、解冻僵局、团队修复（v1）;手动任务重试、pause/resume（v2后续）。
 7. **执行程序中的输出验证**：empty/whitespace输出触发重试+旋转;可配置最小长度和拒绝检测。
@@ -68,7 +68,7 @@ description: "通过并发预设调度、一个精简团队合成器产生Visual
 
 1. **`flow.split` 是一个标记节点，不是扇出原语。** `built-ins.ts:262` 的执行器会逐字返回上游;编排器的顺序 for 循环是序列化执行的关键。让编排器静默地并发将`flow.split`升级为真正的扇出——在执行者层面向下兼容，但会改变任何已使用该工作流的可观察行为。这被默认`maxConcurrency=1`缓解。
 2. **`lib/queue/retry-policy.ts`已经实现了**`decideNextAttempt`、`backoffDelayMs`、`isRetryable`，带`NON_RETRYABLE_PATTERNS`（401/403/404/400/validation/schema）。直接重用;不要在`lib/ai/agent/team/`中创建并行的`retry-policy.ts`。
-3. **`lib/connectors/circuit-breaker.ts`已经实现了**具有`closed / open / half_open`状态的滑动窗口断路器。每个队友的断路器组合（而非二元隔离布尔）严格更强。
+3. **`packages/plugin-contract/src/lib/connectors/circuit-breaker.ts`已经实现了**具有`closed / open / half_open`状态的滑动窗口断路器。每个队友的断路器组合（而非二元隔离布尔）严格更强。
 4. **`lib/runtime/approval-bus.ts`** 是通用的HITL原始元素;`plan-approval-bus.ts` 是个薄包装。同样的原始元素已经为 GitHub Delivery 的HITL卫动能了。所有新门禁（预算、僵局、队友修复）都会重复使用它。
 5. **`lib/workflow/runtime/wake-bus.ts`** 是带超时 + 信号的进程中事件订阅;这是 v2 pause/resume 和手动重试事件的正确原语。
 6. **`lib/tauri/notification.ts`**已经用权限管理包住Tauri `sendNotification`，并且降级为非操作权限，Tauri。`notify()`助手是团队通知器的OS-notification通道。
@@ -164,7 +164,7 @@ description: "通过并发预设调度、一个精简团队合成器产生Visual
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | DAG拓扑排序 | `topoSort()` 来自工作流程（由编排器使用）;团队合成器在`AgentTeamTask[]`上写入自己的~30行Kahn，以保持本地耦合 | `lib/workflow/runtime/topo-sort.ts`（仅为团队参考） |
 | 工作流程重试 + 不可重试分类 | `decideNextAttempt`，`isRetryable`，`NON_RETRYABLE_PATTERNS` | `lib/queue/retry-policy.ts` |
-| 队友断路器 | `createCircuitBreaker`（滑动窗+半开探头） | `lib/connectors/circuit-breaker.ts` |
+| 队友断路器 | `createCircuitBreaker`（滑动窗+半开探头） | `packages/plugin-contract/src/lib/connectors/circuit-breaker.ts` |
 | 每个任务超时 | `AbortSignal.timeout` + `AbortSignal.any` | 网页标准 |
 | HITL 门禁 | `waitForDecision` / `approve` / `reject` | `lib/runtime/approval-bus.ts` |
 | 计划批准（现有） | `plan-approval-bus`（薄包装纸） | `lib/ai/agent/plan-approval-bus.ts` |

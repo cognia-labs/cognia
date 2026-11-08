@@ -14,7 +14,7 @@ description: "Every agent run names whose authority its data access uses: the re
 Three questions are answered in different places, from different sources, and nothing ties the answers together:
 
 1. **Who may use it.** Feishu senders are admitted against a principal registry (`lib/connectors/principal/resolve.ts`). Other platforms, and Feishu with the registry flag off, resolve as `legacy`.
-2. **Whose credentials it uses.** A connector stores one user token per adapter. d74e413ff1 added a gate (`lib/skills/built-in/lark/acting-identity.ts`): the Lark skills read the live senders of the turn and refuse anyone but the connected user, so nobody else can use personal features. A Bot installation binds credential slots to integration accounts (`credentialBindings`). It has no field naming a person, and its `owner` is the machine that runs it (`lib/placement/ownership.ts`).
+2. **Whose credentials it uses.** A connector stores one user token per adapter. d74e413ff1 added a gate (`lib/auth-providers/feishu/cli/acting-identity.ts`): the Lark skills read the live senders of the turn and refuse anyone but the connected user, so nobody else can use personal features. A Bot installation binds credential slots to integration accounts (`credentialBindings`). It has no field naming a person, and its `owner` is the machine that runs it (`lib/placement/ownership.ts`).
 3. **How far it may go.** The Bot policy fold (`lib/bot/policy/ceilings.ts`) caps authority, autonomy, write approval, budgets and an unattended profile. The capability grant (ADR-0198) caps tools, skills, MCP servers and mode.
 
 The requester reaches some decisions, from three different sources:

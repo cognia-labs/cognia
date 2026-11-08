@@ -245,7 +245,7 @@ sequenceDiagram
 `execLarkCli`（`exec-lark-cli.ts:101`）通过 `execFile` 派生用户已安装的 `lark-cli`——**没有 shell 插值**。`argsToFlags`（`_helpers.ts:17`）把 camelCase 的 Zod 参数形态映射为 kebab-case 的 `--flag value` argv（对数组重复该标志）。身份标志被前置（`exec-lark-cli.ts:132`），而 `--yes` 仅在调用方标记该调用已确认时才追加（`exec-lark-cli.ts:135`）。
 
 ```ts
-// lib/skills/built-in/lark/exec-lark-cli.ts:142 — direct execFile, env-injected auth
+// lib/auth-providers/feishu/cli/exec-lark-cli.ts:142 — direct execFile, env-injected auth
 const result = await execFileAsync(binary, argv, {
   env: { ...process.env, ...auth.env },     // OAuth creds, ephemeral
   timeout: timeoutMs,                        // clamped to 5-min max
@@ -261,7 +261,7 @@ const result = await execFileAsync(binary, argv, {
 `resolveLarkAuth`（`auth-bridge.ts:86`）从已有的 Lark 连接器适配器中取出凭据，而不是强制进行第二次 `lark-cli auth login`。它挑选一个适配器（显式 id → 首个已启用 → 任意一个以便给出精确错误，`auth-bridge.ts:177`），从密钥环经 `connectorsKeyringGet`（`auth-bridge.ts:188`）读取应用密钥和用户令牌，优先采用窄作用域的用户令牌（`auth-bridge.ts:128`），并回退到经 `getTenantAccessToken`（`auth-bridge.ts:148`）获取的租户（机器人）令牌。它**永不抛出**——六个精确的错误原因（`auth-bridge.ts:58-64`）让技能能渲染一条精准的引导横幅。
 
 ```ts
-// lib/skills/built-in/lark/auth-bridge.ts:135 — env overlay passed to execFile
+// lib/auth-providers/feishu/cli/auth-bridge.ts:135 — env overlay passed to execFile
 env: {
   LARK_APP_ID: appId,
   LARK_APP_SECRET: appSecret,                 // ephemeral env, never written to disk

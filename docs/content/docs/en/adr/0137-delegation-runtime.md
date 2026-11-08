@@ -222,7 +222,7 @@ therefore joins the same chain as one driven through the control gate.
 No second execution journal, control gate, approval registry, permission model,
 or outbound queue. This decision extends `executionRuns` / `executionRunEvents` /
 `executionRunBindings` / `executionRunInterrupts`, `executeRunControlCommand`,
-`lib/connectors/hitl/approval-registry.ts`, the governed outbound gateway, and
+`lib/claude/hitl/approval-registry.ts`, the governed outbound gateway, and
 the run-presentation runner. Exactly one Dexie version (**v176**) and it is an
 index-only change with no backfill: rows without a `parentRunId` are absent from
 the index, which is correct — they are roots.

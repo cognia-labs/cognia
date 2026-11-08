@@ -73,7 +73,7 @@ flowchart TD
   B --> C{"adapter muted? (L358)"}
   C -->|yes| C1["markFailed 'muted' +60s<br/>(not a failure)"]
   C -->|no| D{"in quiet hours? (L375)<br/>convOverride.quietHours<br/>?? adapterRow.quietHours"}
-  D -->|yes| D1["markFailed 'quiet_hours'<br/>+msUntilQuietEnd"]
+  D -->|yes| D1["markFailed 'quiet_hours'<br/>+msUntilQuietRangeEnd"]
   D -->|no| E{"idempotency cache hit? (L408)"}
   E -->|yes| E1["markSent (cached platformMsgId)"]
   E -->|no| F{"breaker.canPass()? (L423)"}
@@ -98,7 +98,7 @@ The checks run in this order:
 
 1. **Re-fetch** the row by id (`outbound-runner.ts:351`) — a prior lane execution may have incremented `attempts`; missing row returns silently.
 2. **Muted** (`outbound-runner.ts:358`) — if `adapterRow.muted === true`, `markFailed("muted", …)` deferred `+60_000` ms. Not counted as a failure (the breaker is untouched).
-3. **Quiet hours** (`outbound-runner.ts:375`) — the effective window is `convOverride.quietHours ?? adapterRow.quietHours`, so a single bot can have different on-call windows per chat. If `isInQuietHours` is true, `markFailed("quiet_hours", …)` deferred by `msUntilQuietEnd`.
+3. **Quiet hours** (`outbound-runner.ts:375`) — the effective window is `convOverride.quietHours ?? adapterRow.quietHours`, so a single bot can have different on-call windows per chat. If `isInQuietRange` is true, `markFailed("quiet_hours", …)` deferred by `msUntilQuietRangeEnd`.
 4. **Idempotency short-circuit** (`outbound-runner.ts:408`) — if the LRU already holds this `idempotencyKey`, the platform already acked; `markSent` with the cached `platformMessageId` and audit `delivery.success` (`idempotency_cache_hit`).
 5. **Circuit breaker** (`outbound-runner.ts:423`) — if `!breaker.canPass()`, `markDeadlettered("circuit_open", …)`. Dead-letter, not retry: the breaker stays open through its cooldown.
 6. **Token bucket** (`outbound-runner.ts:437`) — if `!bucket.tryAcquire()`, `markFailed("rate_limited", …)` deferred `+1_000` ms so the next refill window re-picks it.
@@ -166,7 +166,7 @@ The runner also publishes its live per-adapter state map to a module-level regis
 
 ## Circuit Breaker
 
-Each adapter has a sliding-window circuit breaker (`lib/connectors/circuit-breaker.ts`). The runner constructs it passing only `now` + `onStateChange` (`outbound-runner.ts:307`), so **all five thresholds use their defaults**. The state machine has three states:
+Each adapter has a sliding-window circuit breaker (`packages/plugin-contract/src/lib/connectors/circuit-breaker.ts`). The runner constructs it passing only `now` + `onStateChange` (`outbound-runner.ts:307`), so **all five thresholds use their defaults**. The state machine has three states:
 
 ```mermaid
 stateDiagram-v2
@@ -180,7 +180,7 @@ stateDiagram-v2
 Transitions are evaluated lazily. `evaluateThreshold` only fires while `closed`, prunes the window, requires `minEvents`, and opens when the failure rate clears the threshold:
 
 ```ts
-// lib/connectors/circuit-breaker.ts:120 — open only from closed, on rate
+// packages/plugin-contract/src/lib/connectors/circuit-breaker.ts — open only from closed, on rate
 function evaluateThreshold(now: number): void {
   if (_state !== "closed") return
   pruneWindow(now)
@@ -226,9 +226,9 @@ Four supporting modules keep the queue healthy and observable:
 - **`daily-schedule.ts`** — generic `startDailySchedule(options)` (`lib/connectors/daily-schedule.ts`): a `setTimeout` initial delay (default 60 s, so it doesn't fight app boot) hands off to a `setInterval` (default 24 h). Returns a `{ dispose, runNow }` handle; a thrown task is caught and logged so one failure never kills the schedule. The terminal-row retention sweep (`sweepTerminalOutboundRows`) is **not** scheduled here any more — it is the managed scheduler task `connection:housekeeping:outbound-retention` in `housekeeping-scheduler.ts`, so it survives restarts and shows in the scheduler UI.
 - **`callback-binding-cleanup.ts`** — `cleanupExpiredCallbackBindings(options?)` (`lib/connectors/callback-binding-cleanup.ts:60`) prunes `connectorCallbackBindings` rows whose `expiresAt < now`, plus legacy rows with no `expiresAt` older than the 60-day grace window (`LEGACY_GRACE_MS`, `:44`). `startCallbackBindingCleanupSchedule` (`:174`) runs it on its own 24 h timer and audits each prune as `callback.binding_expired`.
 - **`dlq-export.ts`** — `buildDlqDownload(rows, format)` (`lib/connectors/dlq-export.ts:105`) renders dead-letter rows as CSV or JSON for the Settings panel to hand to the browser download flow. The CSV column set (`CSV_FIELDS`, `:13`) round-trips id / adapter / conversation / status / attempts / timestamps / `lastError` / `idempotencyKey` with RFC-4180 escaping.
-- **`derive-job-badge.ts`** — `deriveJobBadge(inputs)` (`lib/connectors/derive-job-badge.ts:76`) is a pure UI helper computing one of `normal | paused-muted | paused-quiet-hours | circuit-blocked` for a queue row. It **reuses `isInQuietHours` / `msUntilQuietEnd` from the runner** (`derive-job-badge.ts:25`) so the badge the operator sees and the deferral the runtime applies always agree — the same `etaMs` ("resumes in 42 min") comes from the same function that scheduled the defer.
+- **`derive-job-badge.ts`** — `deriveJobBadge(inputs)` (`lib/connectors/derive-job-badge.ts:76`) is a pure UI helper computing one of `normal | paused-muted | paused-quiet-hours | circuit-blocked` for a queue row. It **uses the same `isInQuietRange` / `msUntilQuietRangeEnd` as the runner** (`derive-job-badge.ts:25`) so the badge the operator sees and the deferral the runtime applies always agree — the same `etaMs` ("resumes in 42 min") comes from the same function that scheduled the defer.
 
-Those two quiet-hours helpers are exported from the runner precisely so this UI derivation can share them: `isInQuietHours(nowMs, from, to, tz)` (`outbound-runner.ts:53`) supports cross-midnight windows, and `msUntilQuietEnd(nowMs, to, tz)` (`outbound-runner.ts:100`) is an O(1) computation of the ms until the window's `to` time next occurs.
+Those two helpers are the range form of the one quiet-hours evaluator, `lib/notifications/policy/quiet-hours.ts`, which notification routing, goal pacing and the pet share too: `isInQuietRange(nowMs, from, to, tz)` supports cross-midnight windows, and `msUntilQuietRangeEnd(nowMs, to, tz)` is the ms until the range's `to` time next occurs on the wall clock of `tz`, across daylight-saving changes.
 
 ## Related
 
