@@ -3827,13 +3827,17 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
 
   type Call = { sessionId: string; prompt: unknown; options: Record<string, unknown> }
   function capture(
-    answer: (call: Call, index: number, cap: Parameters<RunAndCaptureFn>[3]) => string
+    answer: (
+      call: Call,
+      index: number,
+      cap: Parameters<RunAndCaptureFn>[3]
+    ) => string | Promise<string>
   ) {
     const calls: Call[] = []
     const run: RunAndCaptureFn = jest.fn(async (sessionId, prompt, options, cap) => {
       const call = { sessionId, prompt, options: (options ?? {}) as Record<string, unknown> }
       calls.push(call)
-      return { text: answer(call, calls.length - 1, cap), messageId: `asst-${calls.length}` }
+      return { text: await answer(call, calls.length - 1, cap), messageId: `asst-${calls.length}` }
     })
     const closeSession = jest.fn(async (_sessionId: string) => undefined)
     installRuntime(getBus(), { runAndCapture: run, closeSession })
@@ -3889,6 +3893,111 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
     expect((await getDb().sessions.get("s_room"))?.sdkSessionId).toBe("sdk_previous_voice")
     const audit = (await getDb().connectorAudit.toArray()).find((row) => row.kind === "room.turn")
     expect(audit?.fields).toMatchObject({ characterTeamId: "ct_launch", steps: 2, end: "done" })
+  })
+
+  describe("a member's hand-off to a Squad (ADR-0177 batch 5)", () => {
+    const decide = jest.fn()
+    beforeEach(async () => {
+      decide.mockReset()
+      const { getSession } = await import("@/lib/db/sessions")
+      const { __setRoomHandoffToolDepsForTesting } = await import("@/lib/squads/room-handoff/tool")
+      __setRoomHandoffToolDepsForTesting({
+        listSquads: () => [{ id: "sq_1", name: "Builders" }],
+        getSession,
+        decide,
+      })
+      const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
+      useAgentTeamStore.setState({
+        teams: { sq_1: { id: "sq_1", name: "Builders" } },
+      } as never)
+    })
+    afterEach(async () => {
+      const { __setRoomHandoffToolDepsForTesting } = await import("@/lib/squads/room-handoff/tool")
+      __setRoomHandoffToolDepsForTesting(null)
+    })
+
+    // Ana calls the tool from inside its step, as the sidecar would.
+    const anaHandsOff = async (call: Call) => {
+      if (!call.sessionId.includes("c_ana")) return "Sounds good."
+      const { roomHandoffToolFamily } = await import("@/lib/squads/room-handoff/tool")
+      await roomHandoffToolFamily.run(
+        "room_handoff_to_squad",
+        { brief: "Run the launch checklist" },
+        {
+          sessionId: call.sessionId,
+          toolUseId: "tu_ana",
+          executionRunId: "execution:agent:ana-step",
+          outboundAuthorization: {
+            kind: "tool-call",
+            sessionId: call.sessionId,
+            toolUseId: "tu_ana",
+          },
+        }
+      )
+      return "I'll hand the checklist to Builders."
+    }
+
+    it("lands on the member's reply, and the group gets a card to confirm it", async () => {
+      await seedRoom({ override: { squadId: "sq_1" } })
+      capture(anaHandsOff)
+      await callHandler(roomEvent(), "ai-run")
+
+      const ana = (await getDb().messages.toArray()).find((row) => row.senderId === "c_ana")!
+      expect(ana.parts[1]).toEqual({
+        type: "tool-room_handoff_to_squad",
+        toolCallId: "tu_ana",
+        state: "output-available",
+        // The conversation's Squad stands in for the one the member did not name.
+        input: { brief: "Run the launch checklist", squadId: "sq_1" },
+        output: {
+          status: "proposed",
+          proposalId: "tu_ana",
+          brief: "Run the launch checklist",
+          squadId: "sq_1",
+          memberRunId: "execution:agent:ana-step",
+        },
+      })
+      expect(decide).not.toHaveBeenCalled()
+
+      const card = (await getDb().outboundQueue.toArray())
+        .flatMap((job) => job.request.segments)
+        .find((segment: MessageSegment) => segment.type === "a2ui") as
+        { surfaceId: string; plainTextMirror?: string } | undefined
+      expect(card?.surfaceId).toMatch(/^room_handoff:/)
+      const bindings = await getDb().connectorCallbackBindings.toArray()
+      expect(bindings.map((row) => [row.kind, row.componentId, row.payload])).toEqual(
+        expect.arrayContaining([
+          [
+            "room_handoff",
+            "confirm0",
+            { roomId: "s_room", toolUseId: "tu_ana", decision: "confirm", squadId: "sq_1" },
+          ],
+          [
+            "room_handoff",
+            "decline",
+            { roomId: "s_room", toolUseId: "tu_ana", decision: "decline" },
+          ],
+        ])
+      )
+      expect(
+        (await getDb().connectorAudit.where("kind").equals("room.handoff_requested").toArray())[0]
+          ?.fields
+      ).toMatchObject({ roomId: "s_room", toolUseId: "tu_ana", proposerId: "c_ana" })
+    })
+
+    it("waits for the operator where replies wait for sign-off, even in an auto room", async () => {
+      await seedRoom({
+        override: { squadId: "sq_1" },
+        session: { roomSettings: { squadHandoff: "auto" } },
+      })
+      capture(anaHandsOff)
+      await callHandler(roomEvent(), "draft-prepare")
+
+      const ana = (await getDb().messages.toArray()).find((row) => row.senderId === "c_ana")!
+      expect((ana.parts[1] as { output: { status: string } }).output.status).toBe("proposed")
+      expect(decide).not.toHaveBeenCalled()
+      expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+    })
   })
 
   it("answers as the team when a Squad is bound too: the Squad is the hand-off target", async () => {

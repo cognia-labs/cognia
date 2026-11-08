@@ -6,9 +6,16 @@
 // function on the Host. The proposal is the member's `room_handoff_to_squad`
 // tool call (`types/squads/room-handoff.ts`).
 
-/** Who decided. `auto`: the room's `squadHandoff` setting is `auto`. */
+/**
+ * Who decided. `auto`: the room's `squadHandoff` setting is `auto`. `im`: a
+ * person in an IM group answered the confirmation card the connector posted
+ * there (ADR-0177 batch 5), as the platform names them.
+ */
 export type RoomSquadHandoffDecider =
-  { kind: "local" } | { kind: "device"; deviceId: string } | { kind: "auto" }
+  | { kind: "local" }
+  | { kind: "device"; deviceId: string }
+  | { kind: "auto" }
+  | { kind: "im"; adapterId: string; remoteUserId?: string }
 
 /** What was decided about one proposal. Written once; a second decision is refused. */
 export type RoomSquadHandoffDecision =
@@ -49,7 +56,7 @@ export interface RoomSquadHandoffDecideRequest {
 }
 
 export type RoomSquadHandoffDecideRefusal =
-  /** No room here, or not one this host orchestrates. */
+  /** No room here, or not one whose hand-offs this host decides. */
   | "room_not_found"
   /** The room holds no such proposal. */
   | "proposal_not_found"

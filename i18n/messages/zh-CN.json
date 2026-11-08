@@ -14796,6 +14796,10 @@
           "mention_only": "助手只回复 @ 了它或回复了它的消息。"
         },
         "imReplyModeNote": "这就是这个会话的群聊激活设置，收件箱的会话设置里能看到同一项和更细的选项。",
+        "imSquadHandoffHints": {
+          "auto": "成员一提议就立即启动小队运行；但如果这个会话的回复需要审核，也会等运营者确认。小队运行自己的审批照常提问，也照常遵循风险策略。",
+          "confirm": "成员提议把工作交给小队时，群里会出现一张卡片，被回复消息的发送者确认之前不会开始。"
+        },
         "instructions": "房间指令",
         "instructionsPlaceholder": "每位成员在每轮开始时都会读到的指引…",
         "memory": "长期记忆",
@@ -23236,7 +23240,7 @@
         "character": "角色 (id)",
         "characterPlaceholder": "（无）",
         "characterTeamBinding": "群聊中的角色团队",
-        "characterTeamBindingHelp": "在群聊中，由这个团队的成员逐个回答，每条回复都署上成员的名字，并且优先于上面的智能体团队和工作流。留空则由一个角色回答。一对一聊天始终使用其单一角色。",
+        "characterTeamBindingHelp": "在群聊中，由这个团队的成员逐个回答，每条回复都署上成员的名字，并且优先于上面的智能体团队和工作流；成员仍可在群里有人确认后把工作交给该智能体团队。留空则由一个角色回答。一对一聊天始终使用其单一角色。",
         "characterTeamBindingPlaceholder": "（无——由一个角色回答）",
         "cooldownMs": "机器人回复后冷却时间 (ms)",
         "dispatchMode": {
@@ -62427,6 +62431,7 @@
       "decidedBy": {
         "auto": "房间设置",
         "device": "配对设备",
+        "im": "IM 群里的人",
         "local": "Host 上的人"
       },
       "decline": "拒绝",

@@ -229,7 +229,8 @@
     "decidedBy": {
       "local": "Host 上的人",
       "device": "配对设备",
-      "auto": "房间设置"
+      "auto": "房间设置",
+      "im": "IM 群里的人"
     },
     "refusal": {
       "room_not_found": "这个房间已不在这台 Host 上运行。",

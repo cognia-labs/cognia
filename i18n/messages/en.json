@@ -14796,6 +14796,10 @@
           "mention_only": "The assistant answers only a message that @mentions it or replies to it."
         },
         "imReplyModeNote": "This is the chat's group activation setting, the same one the Inbox's conversation settings show with its finer choices.",
+        "imSquadHandoffHints": {
+          "auto": "A member's hand-off starts the Squad run right away, unless this conversation's replies wait for sign-off: then it waits for the operator too. The Squad run still asks for its own approvals and follows the risk policy.",
+          "confirm": "When a member proposes handing work to a Squad, the group gets a card, and nothing starts until the person whose message it answered confirms it."
+        },
         "instructions": "Room instructions",
         "instructionsPlaceholder": "Guidance every member reads at the top of each turn…",
         "memory": "Long-term memory",
@@ -23236,7 +23240,7 @@
         "character": "Character (id)",
         "characterPlaceholder": "(none)",
         "characterTeamBinding": "Character team in a group",
-        "characterTeamBindingHelp": "In a group chat, this team answers member by member, each reply signed with its name, and it outranks the Agent Team and workflow above. Leave it empty for one voice. A one-to-one chat always keeps its single character.",
+        "characterTeamBindingHelp": "In a group chat, this team answers member by member, each reply signed with its name, and it outranks the Agent Team and workflow above; a member can still hand work to the Agent Team, once someone in the group confirms. Leave it empty for one voice. A one-to-one chat always keeps its single character.",
         "characterTeamBindingPlaceholder": "(none — one voice answers)",
         "cooldownMs": "Cooldown after bot reply (ms)",
         "dispatchMode": {
@@ -62427,6 +62431,7 @@
       "decidedBy": {
         "auto": "the room's setting",
         "device": "a paired device",
+        "im": "a person in the IM group",
         "local": "a person on the Host"
       },
       "decline": "Decline",

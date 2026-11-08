@@ -283,6 +283,16 @@ export type AuditKind =
   // when the room held or stopped itself, `fields.held` (why nobody was
   // routed) or `fields.stop` (why the hand-off chain ended).
   | "room.turn"
+  // A member of an IM room bound to a character team proposed handing work to
+  // a Squad, and the connector posted the confirmation card into the group
+  // (ADR-0177 batch 5). Carries `fields.roomId`, `fields.toolUseId`,
+  // `fields.proposerId` and `fields.choices` (the Squads the card offers).
+  | "room.handoff_requested"
+  // A person answered that card. Carries `fields.roomId`, `fields.toolUseId`,
+  // `fields.decision` (`confirm` / `decline`), `fields.outcome` (the
+  // decision's status, or the refusal) and `fields.already` when the proposal
+  // had been decided before (on the desktop, a paired device, an earlier press).
+  | "room.handoff_decided"
   // Inbound dispatch rule decided the routing (W3 multi-bot 条件规则表).
   // Fired from the connector runtime's ai-run branch when a matched
   // `AdapterInstanceRow.dispatchRules` entry actually routed the turn (it

@@ -431,7 +431,7 @@
         "workflow": "Workflow"
       },
       "characterTeamBinding": "Character team in a group",
-      "characterTeamBindingHelp": "In a group chat, this team answers member by member, each reply signed with its name, and it outranks the Agent Team and workflow above. Leave it empty for one voice. A one-to-one chat always keeps its single character.",
+      "characterTeamBindingHelp": "In a group chat, this team answers member by member, each reply signed with its name, and it outranks the Agent Team and workflow above; a member can still hand work to the Agent Team, once someone in the group confirms. Leave it empty for one voice. A one-to-one chat always keeps its single character.",
       "characterTeamBindingPlaceholder": "(none — one voice answers)",
       "teamBinding": "Agent Team (id)",
       "teamBindingHelp": "When set, inbound messages dispatch to this Agent Team instead of a single character; progress streams back to the conversation.",

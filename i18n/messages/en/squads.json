@@ -229,7 +229,8 @@
     "decidedBy": {
       "local": "a person on the Host",
       "device": "a paired device",
-      "auto": "the room's setting"
+      "auto": "the room's setting",
+      "im": "a person in the IM group"
     },
     "refusal": {
       "room_not_found": "This room is not run on this Host any more.",

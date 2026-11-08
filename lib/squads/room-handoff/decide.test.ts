@@ -237,6 +237,33 @@ describe("decideRoomSquadHandoff", () => {
     })
   })
 
+  it("decides in an IM group bound to a character team, as the person who answered its card", async () => {
+    const w = world()
+    const imGroup = {
+      id: ROOM,
+      platformBinding: {
+        platform: "lark",
+        adapterId: "a1",
+        conversationKey: "k",
+        scopeKind: "group",
+      },
+    } as unknown as ChatSession
+    ;(w.deps.getSession as jest.Mock).mockResolvedValue(imGroup)
+    const decidedBy = { kind: "im" as const, adapterId: "a1", remoteUserId: "ou_1" }
+    await expect(
+      decideRoomSquadHandoff({ roomId: ROOM, toolUseId: "tu-1", decision: "confirm" }, decidedBy)
+    ).resolves.toMatchObject({ ok: true, decision: { status: "started", decidedBy } })
+    expect(w.decisionOnReply()).toMatchObject({ status: "started", decidedBy })
+    // A one-to-one chat is no room, so it holds no hand-off to decide.
+    ;(w.deps.getSession as jest.Mock).mockResolvedValue({
+      ...imGroup,
+      platformBinding: { ...imGroup.platformBinding, scopeKind: "private" },
+    })
+    await expect(
+      decideRoomSquadHandoff({ roomId: ROOM, toolUseId: "tu-1", decision: "decline" }, decidedBy)
+    ).resolves.toEqual({ ok: false, reason: "room_not_found" })
+  })
+
   it("starts an auto proposal its own call vouches for before the reply holds the part", async () => {
     const w = world({ input: {} })
     const result = await decideRoomSquadHandoff(

@@ -86,6 +86,7 @@ export default defineHostModule({
     "lib/squads/pr-feedback/resolvers.ts",
     "lib/squads/project-plugin-template.ts",
     "lib/squads/publish-template-to-platform.ts",
+    "lib/squads/room-handoff/im-room.ts",
     "lib/squads/runtime-targets.ts",
     "lib/squads/squad-readiness.ts",
     "lib/squads/squad-template-platform.ts",

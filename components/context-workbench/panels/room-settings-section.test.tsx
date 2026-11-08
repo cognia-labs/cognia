@@ -87,7 +87,7 @@ describe("RoomSettingsSection", () => {
   it("shows a control only where something reads it", () => {
     expect(ROOM_SETTINGS_CONTROLS).toEqual({
       team: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
-      im: ["replyMode", "instructions", "memory", "mutedMembers"],
+      im: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
       shared: ["memory"],
     })
   })
@@ -150,6 +150,20 @@ describe("RoomSettingsSection", () => {
     fireEvent.click(screen.getByTestId("room-mute-toggle-c-ana"))
     expect(updateSession).toHaveBeenCalledWith("s-im", {
       roomSettings: { memory: false, mutedMemberIds: ["c-ben", "c-ana"] },
+    })
+  })
+
+  it("lets an IM room bound to a character team choose how a hand-off to a Squad is confirmed", () => {
+    imMode = { mode: "auto", setMode: jest.fn(async () => {}) }
+    imTeam = { team: {}, members: [{ id: "c-ana", name: "Ana" }] }
+    render(<RoomSettingsSection sessionId="s-im" session={imSession()} defaultCollapsed={false} />)
+    expect(screen.getByTestId("room-squad-handoff-confirm")).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByTestId("room-settings-squad-handoff-hint")).toHaveTextContent(
+      "desktop.memberList.roomSettings.imSquadHandoffHints.confirm"
+    )
+    fireEvent.click(screen.getByTestId("room-squad-handoff-auto"))
+    expect(updateSession).toHaveBeenCalledWith("s-im", {
+      roomSettings: { memory: false, squadHandoff: "auto" },
     })
   })
 

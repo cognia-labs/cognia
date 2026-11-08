@@ -113,6 +113,12 @@ import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-s
 import { connectorVendor } from "@/lib/connectors/vendor-contribution"
 import { buildSteerPayload, steerBlocksOf } from "@/lib/claude/steer"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
+import {
+  listImRoomHandoffSquads,
+  openImRoomHandoffStep,
+  type ImRoomHandoffCall,
+  type ImRoomHandoffStep,
+} from "@/lib/squads/room-handoff/im-room"
 import { refreshRoomRoster } from "./room-roster"
 import {
   createReplyStream,
@@ -631,6 +637,8 @@ interface ImRoomMemberRun {
   /** The step's system-prompt section (`buildImRoomMemberSection`). */
   section: string
   permissionCeiling: AgentPermissionCeiling
+  /** The step's hand-off calls (`room_handoff_to_squad`), open while it runs. */
+  handoff: ImRoomHandoffStep
 }
 
 /** How one reply through the reply path ended. */
@@ -956,6 +964,54 @@ export async function insertInboundMessage(
   return (await insertInboundMessageWithRevision(event, sessionId, overrideTimestamp)).stored
 }
 
+/**
+ * Post the confirmation card for each hand-off a member proposed in its step
+ * (ADR-0177 batch 5). One the room's `auto` setting started, or refused, has
+ * nothing to confirm. A card that cannot be posted leaves the proposal on the
+ * member's reply, where the desktop card still answers it.
+ */
+async function postImRoomHandoffCards(input: {
+  event: NormalizedInboundEvent
+  roomId: string
+  proposer: Pick<Character, "id" | "name">
+  calls: readonly ImRoomHandoffCall[]
+}): Promise<void> {
+  const proposed = input.calls.filter((call) => call.output.status === "proposed")
+  if (proposed.length === 0) return
+  const { postRoomHandoffCard } = await import("./hitl/room-handoff-card")
+  const squads = await listImRoomHandoffSquads().catch(() => [])
+  for (const call of proposed) {
+    try {
+      await postRoomHandoffCard({
+        roomId: input.roomId,
+        toolUseId: call.toolUseId,
+        proposerId: input.proposer.id,
+        proposerName: input.proposer.name,
+        brief: call.input.brief,
+        ...(call.input.squadId ? { squadId: call.input.squadId } : {}),
+        squads,
+        adapterId: input.event.adapterId,
+        conversationKey: input.event.conversationKey,
+        conversationRef: input.event.conversationRef,
+        deliveryTarget: deliveryTargetFromEvent(input.event),
+        ...(input.event.sender.remoteUserId
+          ? { initiatorUserId: input.event.sender.remoteUserId }
+          : {}),
+      })
+    } catch (error) {
+      await appendAudit({
+        adapterId: input.event.adapterId,
+        kind: "adapter.error",
+        at: Date.now(),
+        conversationKey: input.event.conversationKey,
+        reason: "room_handoff_card_failed",
+        message: error instanceof Error ? error.message : String(error),
+        fields: { roomId: input.roomId, toolUseId: call.toolUseId },
+      }).catch(() => undefined)
+    }
+  }
+}
+
 /** How far back a room member's transcript reads (its renderer keeps 40 turns). */
 const IM_ROOM_TRANSCRIPT_SCAN_ROWS = 160
 
@@ -1013,7 +1069,9 @@ async function recordImRoomMemberReply(
     id: crypto.randomUUID(),
     sessionId: member.roomSessionId,
     role: "assistant",
-    parts: [{ type: "text", text }],
+    // A hand-off the member proposed is a tool part on its reply, as in a
+    // desktop room: where the desktop card reads it and its decision lands.
+    parts: [{ type: "text", text }, ...member.handoff.parts()],
     // The author is a column, as every transcript write keeps it.
     senderId: member.step.character.id,
     senderKind: "assistant",
@@ -3331,26 +3389,44 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             memberCeiling = await ceilingFor(step.character)
             memberCeilings.set(step.character.id, memberCeiling)
           }
-          const outcome = await runDirectReply({
-            step,
-            roomSessionId: session.id,
-            sourceMessageId: storedMsg.id,
-            sessionId: imRoomMemberSessionId(
-              session.id,
-              step.character.id,
-              `${storedMsg.id}.${step.stepKey}`
-            ),
-            section: buildImRoomMemberSection({
-              step,
-              team: roomTeam.team,
-              characters: roomTeam.characters,
-              messages: roomRows,
-              scratchpad: session.scratchpad,
-              instructions: roomSettings.instructions,
-              protection,
-            }),
-            permissionCeiling: memberCeiling,
+          const memberSessionId = imRoomMemberSessionId(
+            session.id,
+            step.character.id,
+            `${storedMsg.id}.${step.stepKey}`
+          )
+          // The member may hand work to a Squad while it speaks (ADR-0252
+          // §4): the conversation's own Squad stands in when it names none,
+          // and a conversation whose replies wait for sign-off waits for a
+          // person on the hand-off too.
+          const handoff = openImRoomHandoffStep({
+            roomId: session.id,
+            characterId: step.character.id,
+            memberSessionId,
+            ...(effectiveTeamId ? { defaultSquadId: effectiveTeamId } : {}),
+            autoAllowed: !requireAcceptance,
           })
+          let outcome: DirectReplyOutcome
+          try {
+            outcome = await runDirectReply({
+              step,
+              roomSessionId: session.id,
+              sourceMessageId: storedMsg.id,
+              sessionId: memberSessionId,
+              section: buildImRoomMemberSection({
+                step,
+                team: roomTeam.team,
+                characters: roomTeam.characters,
+                messages: roomRows,
+                scratchpad: session.scratchpad,
+                instructions: roomSettings.instructions,
+                protection,
+              }),
+              permissionCeiling: memberCeiling,
+              handoff,
+            })
+          } finally {
+            handoff.close()
+          }
           stepsRun += 1
           // The reply path already said what went wrong and, where the work
           // can be continued, parked the inbound job: the room stops there.
@@ -3359,6 +3435,17 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             break
           }
           roomTurn.record(step, outcome.text)
+          // The group answers what the member proposed on a card of its own.
+          // Where replies wait for sign-off, the operator answers on the
+          // desktop card instead, next to the draft.
+          if (!requireAcceptance) {
+            await postImRoomHandoffCards({
+              event,
+              roomId: session.id,
+              proposer: step.character,
+              calls: handoff.calls(),
+            })
+          }
         }
         const roomEnd = halted ? null : roomTurn.end
         await appendAudit({

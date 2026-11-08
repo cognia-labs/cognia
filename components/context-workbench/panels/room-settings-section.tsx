@@ -16,8 +16,10 @@
  *   memory switch and mute list on the session, where the connector runtime
  *   reads them for every reply. The mute list shows only when the
  *   conversation names a character team (`useImRoomTeam`): a plain group has
- *   one voice and nobody to mute. Their hand-off mode arrives with the IM
- *   hand-off confirmation.
+ *   one voice and nobody to mute. So does the hand-off mode (ADR-0177
+ *   batch 5), which `room_handoff_to_squad` reads when a member offers a
+ *   Squad the work: whether the group gets a card to confirm, or the run
+ *   starts at once.
  * - **Shared rooms** show the memory switch. Their reply mode and
  *   instructions arrive with the shared room's own batch.
  *
@@ -62,7 +64,7 @@ export type RoomSettingsControl =
 /** The controls each kind of room shows, in order. */
 export const ROOM_SETTINGS_CONTROLS: Record<RoomKind, readonly RoomSettingsControl[]> = {
   team: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
-  im: ["replyMode", "instructions", "memory", "mutedMembers"],
+  im: ["replyMode", "squadHandoff", "instructions", "memory", "mutedMembers"],
   shared: ["memory"],
 }
 
@@ -105,8 +107,12 @@ export function RoomSettingsSection({
   const imTeam = useImRoomTeam(session)
   const members = kind === "im" ? (imTeam?.members ?? []) : membersProp
   const controls = (kind ? ROOM_SETTINGS_CONTROLS[kind] : []).filter(
-    // A plain IM group answers with one voice: there is nobody to mute.
-    (control) => control !== "mutedMembers" || kind !== "im" || members.length > 0
+    // A plain IM group answers with one voice: there is nobody to mute, and
+    // no member to hand work to a Squad.
+    (control) =>
+      (control !== "mutedMembers" && control !== "squadHandoff") ||
+      kind !== "im" ||
+      members.length > 0
   )
 
   // An IM room's reply mode is its conversation's policy; every other kind
@@ -260,7 +266,11 @@ export function RoomSettingsSection({
                 className="text-[11px] text-muted-foreground"
                 data-testid="room-settings-squad-handoff-hint"
               >
-                {t(`roomSettings.squadHandoffHints.${resolved.squadHandoff}`)}
+                {t(
+                  kind === "im"
+                    ? `roomSettings.imSquadHandoffHints.${resolved.squadHandoff}`
+                    : `roomSettings.squadHandoffHints.${resolved.squadHandoff}`
+                )}
               </p>
             </div>
           ) : null}

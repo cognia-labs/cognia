@@ -45,13 +45,13 @@ async function defaultDeps(): Promise<RoomHandoffSettleDeps> {
     { onBackgroundJobSettled },
     { getBackgroundTaskRecord },
     executionRuns,
-    { getHostRoomRunner },
+    { readRoomHandoffTranscript },
     { useAgentTeamStore },
   ] = await Promise.all([
     import("@/lib/background-tasks/result-delivery"),
     import("@/lib/db/background-tasks"),
     import("@/lib/db/execution-runs"),
-    import("@/lib/chat/room/runner-host"),
+    import("./transcript"),
     import("@/stores/squads/agent-team-store/store"),
   ])
   return {
@@ -60,7 +60,7 @@ async function defaultDeps(): Promise<RoomHandoffSettleDeps> {
     listHandoffDelegations: () =>
       executionRuns.listExecutionRunsBySourcePrefix("delegation", DELEGATION_PREFIX),
     listAttempts: (delegationRunId) => executionRuns.listChildExecutionRuns(delegationRunId),
-    readMessages: (roomId) => getHostRoomRunner().readMessages(roomId),
+    readMessages: readRoomHandoffTranscript,
     squadResult: (squadId) => {
       const squad = useAgentTeamStore.getState().teams[squadId]
       if (!squad) return undefined

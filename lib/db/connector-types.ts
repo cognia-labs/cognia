@@ -345,7 +345,9 @@ export interface ConversationOverrideRow {
    * is a room turn: the team's routing picks who speaks, each member replies
    * through the connector's bot with its own signature, and outranks a Squad
    * bound in `squadId` and a workflow in `workflowId`, which stop being the
-   * group's responder. A direct chat ignores it (a DM is not a room).
+   * group's responder. The Squad stays the one a member hands work to by
+   * default (`room_handoff_to_squad`, ADR-0177 batch 5), after the group
+   * confirms on a card. A direct chat ignores it (a DM is not a room).
    * Non-indexed additive; absent on every row before batch 4.
    */
   characterTeamId?: string

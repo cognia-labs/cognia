@@ -16,6 +16,9 @@ export const WF_FANOUT_APPROVE_PREFIX = "wffanoutapp:"
 export const WF_FANOUT_CANCEL_PREFIX = "wffanoutcan:"
 export const SKILL_INVOKE_PREFIX = "skill_invoke:"
 export const SKILL_CANCEL_PREFIX = "skill_cancel:"
+/** The IM card that confirms a room member's hand-off to a Squad (ADR-0177 batch 5). */
+export const ROOM_HANDOFF_CONFIRM_PREFIX = "rhoc:"
+export const ROOM_HANDOFF_DECLINE_PREFIX = "rhod:"
 
 const CALLBACK_ACTIONS = {
   [TOOL_APPROVE_PREFIX]: "approve",
@@ -33,6 +36,8 @@ const CALLBACK_ACTIONS = {
   [WF_FANOUT_CANCEL_PREFIX]: "cancel",
   [SKILL_INVOKE_PREFIX]: "approve",
   [SKILL_CANCEL_PREFIX]: "cancel",
+  [ROOM_HANDOFF_CONFIRM_PREFIX]: "approve",
+  [ROOM_HANDOFF_DECLINE_PREFIX]: "cancel",
 } as const
 
 export const CALLBACK_PREFIXES: readonly string[] = Object.keys(CALLBACK_ACTIONS)

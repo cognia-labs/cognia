@@ -1,7 +1,8 @@
 /** @jest-environment node */
 import type { ChatSession, Character } from "@cognia/agent-config-types"
 import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
-import { subSessionId } from "@/lib/claude/team-session-id"
+import { imRoomMemberSessionId, subSessionId } from "@/lib/claude/team-session-id"
+import { __resetImRoomHandoffStepsForTesting, openImRoomHandoffStep } from "./im-room"
 import {
   ROOM_HANDOFF_INSTRUCTIONS,
   ROOM_HANDOFF_LISTED_SQUADS,
@@ -37,7 +38,10 @@ function world(session: ChatSession = room()) {
   return { deps, squads }
 }
 
-afterEach(() => __setRoomHandoffToolDepsForTesting(null))
+afterEach(() => {
+  __setRoomHandoffToolDepsForTesting(null)
+  __resetImRoomHandoffStepsForTesting()
+})
 
 const surfaceCtx = (
   session: ChatSession | null,
@@ -185,5 +189,131 @@ describe("roomHandoffToolFamily.run", () => {
     await expect(
       roomHandoffToolFamily.run("room_handoff_to_squad", { brief: "Go" }, call())
     ).resolves.toMatch(/room this host runs/)
+  })
+})
+
+describe("room_handoff_to_squad in an IM room bound to a character team", () => {
+  const imRoom = (extra: Partial<ChatSession> = {}) =>
+    ({
+      id: ROOM,
+      platformBinding: {
+        platform: "lark",
+        adapterId: "a1",
+        conversationKey: "k",
+        scopeKind: "group",
+      },
+      ...extra,
+    }) as unknown as ChatSession
+  const memberSession = imRoomMemberSessionId(ROOM, "ava", "m1.reply-1")
+  const open = (extra: { defaultSquadId?: string; autoAllowed?: boolean } = {}) =>
+    openImRoomHandoffStep({
+      roomId: ROOM,
+      characterId: "ava",
+      memberSessionId: memberSession,
+      autoAllowed: extra.autoAllowed ?? true,
+      ...(extra.defaultSquadId ? { defaultSquadId: extra.defaultSquadId } : {}),
+    })
+
+  it("is offered only to the member whose step is open, naming the conversation's Squad", async () => {
+    world(imRoom())
+    expect(await roomHandoffToolFamily.surface(surfaceCtx(imRoom()))).toBeNull()
+    const step = open({ defaultSquadId: "sq-1" })
+    const surface = await roomHandoffToolFamily.surface(surfaceCtx(imRoom()))
+    expect(surface?.tools[0]?.description).toContain("This conversation's Squad is Builders (sq-1)")
+    expect(
+      await roomHandoffToolFamily.surface(surfaceCtx(imRoom(), { id: "ben" } as Character))
+    ).toBeNull()
+    step.close()
+    expect(await roomHandoffToolFamily.surface(surfaceCtx(imRoom()))).toBeNull()
+  })
+
+  it("proposes the conversation's Squad when the member names none, and records the call on the step", async () => {
+    const w = world(imRoom())
+    const step = open({ defaultSquadId: "sq-1" })
+    const output = await roomHandoffToolFamily.run(
+      "room_handoff_to_squad",
+      { brief: "Ship it" },
+      call({ sessionId: memberSession })
+    )
+    expect(output).toEqual({
+      status: "proposed",
+      proposalId: "tu-1",
+      brief: "Ship it",
+      squadId: "sq-1",
+      memberRunId: "execution:tool:member",
+    })
+    expect(w.deps.decide).not.toHaveBeenCalled()
+    expect(step.calls()).toEqual([
+      { toolUseId: "tu-1", input: { brief: "Ship it", squadId: "sq-1" }, output },
+    ])
+    expect(step.parts()).toEqual([
+      {
+        type: "tool-room_handoff_to_squad",
+        toolCallId: "tu-1",
+        state: "output-available",
+        input: { brief: "Ship it", squadId: "sq-1" },
+        output,
+      },
+    ])
+  })
+
+  it("lets a person pick when the conversation's Squad was deleted", async () => {
+    world(imRoom())
+    open({ defaultSquadId: "sq-gone" })
+    await expect(
+      roomHandoffToolFamily.run(
+        "room_handoff_to_squad",
+        { brief: "Ship it" },
+        call({ sessionId: memberSession })
+      )
+    ).resolves.toEqual({
+      status: "proposed",
+      proposalId: "tu-1",
+      brief: "Ship it",
+      memberRunId: "execution:tool:member",
+    })
+  })
+
+  it("starts in an auto room, but waits for the card where replies wait for sign-off", async () => {
+    const autoRoom = imRoom({ roomSettings: { squadHandoff: "auto" } } as never)
+    const w = world(autoRoom)
+    open({ defaultSquadId: "sq-1" })
+    await expect(
+      roomHandoffToolFamily.run(
+        "room_handoff_to_squad",
+        { brief: "Ship it" },
+        call({ sessionId: memberSession })
+      )
+    ).resolves.toMatchObject({ status: "started", squadId: "sq-1" })
+    expect(w.deps.decide).toHaveBeenCalledTimes(1)
+
+    open({ defaultSquadId: "sq-1", autoAllowed: false })
+    await expect(
+      roomHandoffToolFamily.run(
+        "room_handoff_to_squad",
+        { brief: "Ship it" },
+        call({ sessionId: memberSession, toolUseId: "tu-2" })
+      )
+    ).resolves.toMatchObject({ status: "proposed", squadId: "sq-1" })
+    expect(w.deps.decide).toHaveBeenCalledTimes(1)
+  })
+
+  it("refuses a call with no open step, from another member, or after the step closed", async () => {
+    world(imRoom())
+    await expect(
+      roomHandoffToolFamily.run(
+        "room_handoff_to_squad",
+        { brief: "Go" },
+        call({ sessionId: memberSession })
+      )
+    ).resolves.toMatch(/while it speaks in the room/)
+    open()
+    await expect(
+      roomHandoffToolFamily.run(
+        "room_handoff_to_squad",
+        { brief: "Go" },
+        call({ sessionId: imRoomMemberSessionId(ROOM, "ben", "m1.reply-1") })
+      )
+    ).resolves.toMatch(/while it speaks in the room/)
   })
 })

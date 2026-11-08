@@ -113,7 +113,8 @@ export default defineHostModule({
     "lib/connectors/trigger-policy-draft.ts",
   ],
   // Inbound images are read and voice notes transcribed through ports.
-  requires: ["ocr", "speech"],
+  // `room-squad-handoff`: the IM room hand-off card decides through it.
+  requires: ["ocr", "speech", "room-squad-handoff?"],
   // The IM channel (`./ports/conversation-channel.ts`), and the vendors'
   // principal registries a sign-in reaches (`./ports/identity-principal-links.ts`).
   provides: [

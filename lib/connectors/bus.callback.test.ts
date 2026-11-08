@@ -65,6 +65,15 @@ jest.mock("./notifications/action-callback", () => ({
   handleNotificationActionCallback: (input: unknown) => mockHandleNotificationAction(input),
 }))
 
+const mockHandleRoomHandoff = jest.fn(async (_input: unknown): Promise<unknown> => ({
+  result: { ok: true },
+  state: "approved",
+  detail: "Handed to Builders",
+}))
+jest.mock("./hitl/room-handoff-card", () => ({
+  handleRoomHandoffCallback: (input: unknown) => mockHandleRoomHandoff(input),
+}))
+
 const sender: PlatformIdentity = {
   id: "id-1",
   platform: "telegram",
@@ -1755,6 +1764,77 @@ describe("ConnectorBus.dispatchConnectorCallback: notification_action kind", () 
       )
     ).resolves.not.toThrow()
     expect(handler).not.toHaveBeenCalled()
+  })
+})
+
+describe("ConnectorBus.dispatchConnectorCallback: room_handoff kind", () => {
+  // A press on the card that confirms an IM room member's hand-off to a
+  // Squad decides the proposal and closes the card; it is never a model turn.
+  const conversationKey = "telegram:adp_tg:c1"
+  async function bind(actionId: string, decision: "confirm" | "decline") {
+    await recordCallbackBinding({
+      adapterId: "adp_tg",
+      actionId,
+      kind: "room_handoff",
+      surfaceId: "room_handoff:c1:b1",
+      componentId: decision === "confirm" ? "confirm0" : "decline",
+      conversationKey,
+      payload: {
+        roomId: "s_room",
+        toolUseId: "tu-1",
+        decision,
+        ...(decision === "confirm" ? { squadId: "sq-1" } : {}),
+      },
+    })
+  }
+
+  it("decides a confirm press as the person who pressed, and closes the card on the outcome", async () => {
+    await bind("rhoc:b1.0", "confirm")
+    const bus = getBus()
+    const handler = jest.fn<ReturnType<CallbackHandler>, Parameters<CallbackHandler>>()
+    bus.callbackHandler = handler
+    await bus.dispatchConnectorCallback(
+      makeEvent({ triggerId: "rhoc:b1.0", value: "approve", conversationKey })
+    )
+    expect(handler).not.toHaveBeenCalled()
+    expect(mockHandleRoomHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cancelled: false,
+        adapterId: "adp_tg",
+        conversationKey,
+        remoteUserId: "u_999",
+        binding: expect.objectContaining({
+          payload: { roomId: "s_room", toolUseId: "tu-1", decision: "confirm", squadId: "sq-1" },
+        }),
+      })
+    )
+    expect(settleApprovalCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surfaceId: "room_handoff:c1:b1",
+        state: "approved",
+        detail: "Handed to Builders",
+      })
+    )
+  })
+
+  it("reads a decline press as a decline, and swallows a handler failure", async () => {
+    await bind("rhod:b1", "decline")
+    mockHandleRoomHandoff.mockRejectedValueOnce(new Error("port down"))
+    const bus = getBus()
+    const handler = jest.fn<ReturnType<CallbackHandler>, Parameters<CallbackHandler>>()
+    bus.callbackHandler = handler
+    await expect(
+      bus.dispatchConnectorCallback(
+        makeEvent({ triggerId: "rhod:b1", value: "cancel", conversationKey })
+      )
+    ).resolves.not.toThrow()
+    expect(handler).not.toHaveBeenCalled()
+    expect(mockHandleRoomHandoff).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cancelled: true })
+    )
+    expect(settleApprovalCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: "failed" })
+    )
   })
 })
 

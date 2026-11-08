@@ -2,8 +2,8 @@
  * Deciding a room member's hand-off proposal (ADR-0252 §4, P6).
  *
  * One function for every surface: the card on this host, a paired device
- * over `room_squad_handoff_decide`, and the room's `auto` setting inside the
- * member's own call. It runs on the Host that orchestrates the room, and
+ * over `room_squad_handoff_decide`, the confirmation card an IM group answers,
+ * and the room's `auto` setting inside the member's own call. It runs on the Host that orchestrates the room, and
  * decisions on one proposal are serialized, so two presses (or a phone and
  * the desktop) start one Squad run.
  *
@@ -12,7 +12,9 @@
  * delegation's attempt through `launchChildRun`. The Squad run keeps its own
  * approval gates and risk policy, decided by a person in the room. The
  * decision is recorded on the member's reply through the room's runner, the
- * one writer of the room's transcript.
+ * one writer of the room's transcript; in an IM room bound to a character
+ * team, which has no runner, as a metadata patch on the reply row the
+ * connector wrote (`./transcript.ts`).
  *
  * Idempotent across a crash: a delegation already accepted for the proposal
  * is reused, and its existing attempt is recorded rather than a second one
@@ -87,7 +89,7 @@ export interface RoomHandoffDecideDeps {
 async function defaultDeps(): Promise<RoomHandoffDecideDeps> {
   const [
     { getSession },
-    { getHostRoomRunner },
+    transcript,
     { useAgentTeamStore },
     delegation,
     { listChildExecutionRuns },
@@ -95,18 +97,18 @@ async function defaultDeps(): Promise<RoomHandoffDecideDeps> {
     settle,
   ] = await Promise.all([
     import("@/lib/db/sessions"),
-    import("@/lib/chat/room/runner-host"),
+    import("./transcript"),
     import("@/stores/squads/agent-team-store/store"),
     import("@/lib/execution/delegation"),
     import("@/lib/db/execution-runs"),
     import("@/lib/execution/launch-child-run"),
     import("./settle"),
   ])
-  const runner = getHostRoomRunner()
   return {
     getSession,
-    readMessages: (roomId) => runner.readMessages(roomId),
-    patchMessage: (roomId, messageId, apply) => runner.patchMessage(roomId, messageId, apply),
+    readMessages: (roomId) => transcript.readRoomHandoffTranscript(roomId),
+    patchMessage: (roomId, messageId, apply) =>
+      transcript.patchRoomHandoffMessage(roomId, messageId, apply),
     getSquad: (squadId) => {
       const squad = useAgentTeamStore.getState().teams[squadId]
       return squad ? { id: squad.id, name: squad.name } : undefined
@@ -180,9 +182,9 @@ async function decideOnce(
   options: DecideRoomSquadHandoffOptions
 ): Promise<RoomSquadHandoffDecideResult> {
   const deps = depsOverride ?? (await defaultDeps())
-  const { isLocallyOrchestratedRoom } = await import("@/lib/chat/room/kind")
+  const { roomHandoffTranscriptKind } = await import("./transcript")
   const session = await deps.getSession(request.roomId)
-  if (!session || !isLocallyOrchestratedRoom(session))
+  if (!session || !(await roomHandoffTranscriptKind(session)))
     return { ok: false, reason: "room_not_found" }
   const proposal: RoomHandoffProposal | null =
     findRoomHandoffProposal(await deps.readMessages(request.roomId), request.toolUseId) ??

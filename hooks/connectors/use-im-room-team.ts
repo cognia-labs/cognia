@@ -31,7 +31,7 @@ export function useImRoomTeam(session: ImRoomSession | null | undefined): ImRoom
   const teamId = binding ? override?.characterTeamId?.trim() || undefined : undefined
   // Loading reads as "no team" until the rows arrive, so no mute list flashes.
   return (
-    useLiveQuery<ImRoomTeam | null>(
+    useLiveQuery<ImRoomTeam | null, null>(
       async () => {
         if (typeof window === "undefined" || !teamId) return null
         const team = await getTeam(teamId)

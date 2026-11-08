@@ -3444,7 +3444,7 @@ export class ConnectorBus {
     // kind-specific short-circuit or the authoritative callbackHandler.
     this.notifyCallbackObservers(event, resolvedConversationKey)
 
-    const settleCallbackCard = async (state: ApprovalCardState) => {
+    const settleCallbackCard = async (state: ApprovalCardState, detail?: string) => {
       if (!resolvedConversationKey || !event.originatingMessageId) return
       await settleApprovalCard({
         adapterId: event.adapterId,
@@ -3456,6 +3456,7 @@ export class ConnectorBus {
         surfaceId: resolvedSurfaceId!,
         messageId: event.originatingMessageId,
         state,
+        ...(detail ? { detail } : {}),
       })
     }
 
@@ -3627,6 +3628,49 @@ export class ConnectorBus {
         await appendAudit({
           adapterId: event.adapterId,
           kind: "adapter.error",
+          at: Date.now(),
+          conversationKey: resolvedConversationKey ?? undefined,
+          reason: err instanceof Error ? err.name : "unknown",
+          message: err instanceof Error ? err.message : String(err),
+          fields: { triggerId: event.triggerId, kind: resolvedBinding.kind },
+        })
+      }
+      return true
+    }
+
+    // ── Step 4-pre-b4: room_handoff short-circuit (ADR-0177 batch 5) ──
+    //
+    // A button on the card that confirms an IM room member's hand-off to a
+    // Squad. The press decides the proposal through the `room-squad-handoff`
+    // port, as the person who pressed, and the card closes on what was
+    // decided (or what an earlier decision was). No model turn: the Squad's
+    // result comes back to the room as its own turn when the run ends.
+    if (resolvedBinding?.kind === "room_handoff") {
+      const cancelled =
+        resolvedBinding.payload?.["decision"] === "decline" ||
+        (event.value ?? "").toLowerCase() === "cancel" ||
+        event.actionType === "dismiss"
+      decide({
+        status: "accepted",
+        kind: resolvedBinding.kind,
+        action: cancelled ? "cancel" : "approve",
+      })
+      try {
+        const { handleRoomHandoffCallback } = await import("./hitl/room-handoff-card")
+        const outcome = await handleRoomHandoffCallback({
+          binding: resolvedBinding,
+          cancelled,
+          adapterId: event.adapterId,
+          ...(resolvedConversationKey ? { conversationKey: resolvedConversationKey } : {}),
+          ...(event.user.remoteUserId ? { remoteUserId: event.user.remoteUserId } : {}),
+        })
+        await settleCallbackCard(outcome.state, outcome.detail)
+      } catch (err) {
+        decide({ status: "failed" })
+        await settleCallbackCard("failed")
+        await appendAudit({
+          adapterId: event.adapterId,
+          kind: "callback.handler_failed",
           at: Date.now(),
           conversationKey: resolvedConversationKey ?? undefined,
           reason: err instanceof Error ? err.name : "unknown",

@@ -255,6 +255,16 @@ export type ConnectorCallbackBindingKind =
   // consume-once: a multi-select card legitimately takes several presses before
   // its Submit. See `lib/connectors/hitl/ask-user-question.ts`.
   | "ask_user"
+  // IM confirmation card for a room member's hand-off to a Squad (ADR-0177
+  // batch 5, ADR-0252 §4). In an IM group bound to a character team, a member
+  // that calls `room_handoff_to_squad` leaves this card in the group; a press
+  // decides the proposal through the `room-squad-handoff` port, as the person
+  // who pressed it. Payload carries `{ roomId, toolUseId, decision, squadId? }`
+  // (one confirm button per Squad the card offers). NOT consume-once: the
+  // decision is written once on the proposal, so a second press reads that
+  // decision back, and a press after a transient failure tries again. See
+  // `lib/connectors/hitl/room-handoff-card.ts`.
+  | "room_handoff"
 
 /** Routing admission reported before a callback starts long-running work. */
 export type ConnectorCallbackDecision =

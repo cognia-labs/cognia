@@ -146,7 +146,7 @@ it("lets a group's character team answer it directly, read off the bound session
 
   // Without a session to say which chat this is, the Squad keeps the turn.
   const unbound = renderHook(() =>
-    useImEffectiveConfig({ adapterId: "cai_1", override: { ...override, sessionId: undefined } })
+    useImEffectiveConfig({ adapterId: "cai_1", override: { ...override, sessionId: "" } })
   )
   await waitFor(() =>
     expect(unbound.result.current?.target.effective).toEqual({ kind: "team", id: "squad_x" })
