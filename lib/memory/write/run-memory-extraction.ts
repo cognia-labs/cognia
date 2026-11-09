@@ -36,6 +36,7 @@ import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
 import { hasNoLeakingPii, hasNoLeakingPiiDeep, redactText } from "@cognia/redact"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
+import { withConsolidationTarget } from "./guarded-consolidation-write"
 
 /**
  * The per-turn extractor's system prompt (ADR-0236). Account scope only: the
@@ -307,10 +308,12 @@ export async function buildAutoExtractionDeps(
         try {
           await vectorSink.upsert(row.id, row.text)
           await write(() =>
-            memDb.updateMemory(row.id, {
-              vectorDocId: row.id,
-              vectorTextHash: hashContent(row.text),
-            })
+            withConsolidationTarget(row.id, { expected: row }, "update", () =>
+              memDb.updateMemory(row.id, {
+                vectorDocId: row.id,
+                vectorTextHash: hashContent(row.text),
+              })
+            )
           )
         } catch {
           // BM25 recall still works without the vector.
@@ -318,33 +321,59 @@ export async function buildAutoExtractionDeps(
       }
       return row
     },
-    update: async (id, text) => {
-      if (!hasNoLeakingPii(text)) return
-      await write(async () => {
-        await memDb.updateMemory(id, { text, bumpVersion: true, revisionReason: "consolidation" })
-        await params.recordCanonicalOperation?.({ op: "UPDATE", targetId: id })
-      })
+    update: async (id, text, guard) => {
+      if (!hasNoLeakingPii(text)) return { ok: false, reason: "update_denied" }
+      const result = await write(() =>
+        withConsolidationTarget(id, guard, "update", async () => {
+          await memDb.updateMemory(id, { text, bumpVersion: true, revisionReason: "consolidation" })
+          await params.recordCanonicalOperation?.({ op: "UPDATE", targetId: id })
+        })
+      )
+      if (!result.ok) return result
       if (vectorSink) {
         try {
           await vectorSink.upsert(id, text)
           await write(() =>
-            memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
+            withConsolidationTarget(id, guard, "update", () =>
+              memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
+            )
           )
         } catch {
           // ignore — keep the Dexie update
         }
       }
+      return result
     },
-    invalidate: (id, supersededById) => write(() => memDb.invalidateMemory(id, supersededById)),
-    markConflict: (targetId, conflictId) =>
-      write(async () => {
-        const target = await memDb.getMemory(targetId)
-        if (!target) return
-        await memDb.updateMemory(targetId, {
-          reviewStatus: "conflict",
-          conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
+    invalidate: (id, replacement, guard) =>
+      write(() =>
+        withConsolidationTarget(id, guard, "forget", () =>
+          // Promotion completes a create, so require namespace stability without
+          // adding a separate update-permission requirement to DELETE.
+          withConsolidationTarget(replacement.id, { expected: replacement }, "update", async () => {
+            await memDb.invalidateMemory(id, replacement.id)
+            await memDb.updateMemory(replacement.id, {
+              reviewStatus: "unreviewed",
+              conflictWithIds: [],
+            })
+            const memory = await memDb.getMemory(replacement.id)
+            if (memory)
+              await params.recordCanonicalOperation?.({
+                op: "ADD",
+                memory,
+                candidate: { type: memory.type, text: memory.text, importance: memory.importance },
+              })
+          })
+        )
+      ),
+    markConflict: (targetId, conflictId, guard) =>
+      write(() =>
+        withConsolidationTarget(targetId, guard, "update", async (target) => {
+          await memDb.updateMemory(targetId, {
+            reviewStatus: "conflict",
+            conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
+          })
         })
-      }),
+      ),
   }
 
   return {

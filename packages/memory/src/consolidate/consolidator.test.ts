@@ -2,6 +2,7 @@ import type { Memory } from "../types/memory"
 import type { MemoryCandidate } from "../extract/extractor"
 import {
   CONSOLIDATE_DECIDE_SYSTEM_PROMPT,
+  checkConsolidationTarget,
   consolidate,
   consolidationAuditAction,
   consolidationCorroboratedId,
@@ -76,18 +77,71 @@ function makeDeps(over: Partial<ConsolidateDeps> = {}): ConsolidateDeps & {
     },
     update: async (id, text) => {
       updates.push({ id, text })
+      return { ok: true }
     },
-    invalidate: async (id, supersededById) => {
-      invalidations.push({ id, supersededById })
+    invalidate: async (id, replacement) => {
+      invalidations.push({ id, supersededById: replacement.id })
+      return { ok: true }
     },
     markConflict: async (targetId, conflictId) => {
       conflicts.push({ targetId, conflictId })
+      return { ok: true }
     },
     ...over,
   }
 }
 
 const baseInput = { scope: "global" as const, provenance: "user" as const }
+
+describe("checkConsolidationTarget", () => {
+  const snapshot = existing("fact", {
+    scope: "workspace",
+    projectId: "p1",
+    characterId: "c1",
+    agentId: "a1",
+    branch: "main",
+    pathPattern: "src",
+  })
+
+  it.each(["scope", "projectId", "characterId", "agentId", "branch", "pathPattern"] as const)(
+    "rejects a changed %s even for owner callers without permissions",
+    (field) => {
+      const current = { ...snapshot, [field]: field === "scope" ? "global" : "changed" }
+      expect(checkConsolidationTarget(current, { expected: snapshot }, "update")).toEqual({
+        ok: false,
+        reason: "target_moved",
+      })
+    }
+  )
+
+  it.each([undefined, existing("inactive", { status: "invalidated" })])(
+    "refuses a missing or inactive target",
+    (current) => {
+      expect(checkConsolidationTarget(current, { expected: snapshot }, "forget")).toEqual({
+        ok: false,
+        reason: "target_unavailable",
+      })
+    }
+  )
+
+  it.each(["update", "forget"] as const)("rechecks the current %s policy", (operation) => {
+    const scopeAllowed = jest.fn(() => false)
+    expect(
+      checkConsolidationTarget(
+        snapshot,
+        {
+          expected: snapshot,
+          permissions: { canUpdate: true, canForget: true, scopeAllowed },
+        },
+        operation
+      )
+    ).toEqual({ ok: false, reason: operation === "update" ? "update_denied" : "forget_denied" })
+    expect(scopeAllowed).toHaveBeenCalledWith(operation, "workspace")
+    expect(checkConsolidationTarget(snapshot, { expected: snapshot }, operation)).toEqual({
+      ok: true,
+    })
+  })
+})
 
 describe("sameMemoryNamespace", () => {
   it("prevents consolidation across workspaces, agents, branches, and paths", () => {
@@ -152,15 +206,18 @@ describe("consolidate", () => {
     expect(deps.updates).toEqual([{ id: "t1", text: "The user uses pnpm v9" }])
   })
 
-  it("preserves the two-argument update contract for personal memories", async () => {
-    const update = jest.fn(async () => undefined)
+  it("passes a target guard without project claim fields for personal memories", async () => {
+    const update = jest.fn(async () => ({ ok: true as const }))
     const deps = makeDeps({
       update,
       findSimilar: async () => [existing("Uses pnpm", { id: "t1" })],
       client: { complete: async () => JSON.stringify({ op: "UPDATE", targetId: "t1" }) },
     })
     const result = await consolidate({ ...baseInput, candidates: [cand("Uses pnpm v9")] }, deps)
-    expect(update).toHaveBeenCalledWith("t1", "Uses pnpm v9")
+    expect(update).toHaveBeenCalledWith("t1", "Uses pnpm v9", {
+      expected: expect.objectContaining({ id: "t1", scope: "global" }),
+      permissions: undefined,
+    })
     expect(result.applied).toEqual([{ op: "UPDATE", targetId: "t1" }])
   })
 
@@ -499,7 +556,7 @@ describe("project claim attributes", () => {
 
   it("carries updated claim provenance to persistence and the evidence recorder", async () => {
     const candidate = { ...cand("Rust is pinned to 1.77.2"), projectClaim: claim }
-    const update = jest.fn(async () => undefined)
+    const update = jest.fn(async () => ({ ok: true as const }))
     const deps = makeDeps({
       update,
       findSimilar: async () => [existing("Rust is pinned", { id: "t1" })],
@@ -512,7 +569,15 @@ describe("project claim attributes", () => {
       { candidates: [candidate], scope: "workspace", projectId: "p1", provenance: "user" },
       deps
     )
-    expect(update).toHaveBeenCalledWith("t1", "Build pins Rust 1.77.2", candidate)
+    expect(update).toHaveBeenCalledWith(
+      "t1",
+      "Build pins Rust 1.77.2",
+      {
+        expected: expect.objectContaining({ id: "t1", scope: "global" }),
+        permissions: undefined,
+      },
+      candidate
+    )
     expect(result.applied).toEqual([{ op: "UPDATE", targetId: "t1", candidate }])
   })
 

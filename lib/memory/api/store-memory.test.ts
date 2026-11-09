@@ -1,4 +1,12 @@
 import { storeExternalMemory, storeMemoryCore, clampImportance } from "./store-memory"
+import { withConsolidationTarget } from "@/lib/memory/write/guarded-consolidation-write"
+
+jest.mock("@/lib/memory/write/guarded-consolidation-write", () => ({
+  withConsolidationTarget: jest.fn(async (_id, _guard, _operation, write) => {
+    await write()
+    return { ok: true }
+  }),
+}))
 
 const mockGetSettings = jest.fn()
 jest.mock("@/lib/db/settings", () => ({
@@ -124,6 +132,48 @@ describe("clampImportance", () => {
 })
 
 describe("storeMemoryCore", () => {
+  it("keeps a moved-target downgrade as a conflict draft and audits its reason", async () => {
+    mockResolvePolicy.mockResolvedValueOnce({
+      canCreate: true,
+      canUpdate: true,
+      canForget: true,
+      writableScopes: ["workspace"],
+    })
+    mockConsolidate.mockResolvedValueOnce({
+      applied: [
+        {
+          op: "CONFLICT",
+          memory: { id: "draft" },
+          targetId: "moved",
+          reason: "target_moved",
+        },
+      ],
+    })
+    const result = await storeMemoryCore({
+      text: "new fact",
+      scope: "workspace",
+      projectId: "p1",
+      provenance: "explicit",
+    })
+    expect(result).toMatchObject({ ok: true, memoryId: "draft", applied: ["CONFLICT"] })
+    expect(mockUpdateMemory).not.toHaveBeenCalledWith("moved", expect.anything())
+    expect(mockUpdateMemory).toHaveBeenCalledWith(
+      "draft",
+      expect.objectContaining({ reviewStatus: "conflict" })
+    )
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ memoryId: "draft", action: "conflict", reason: "target_moved" })
+    )
+    expect(withConsolidationTarget).toHaveBeenCalledWith(
+      "draft",
+      {
+        expected: expect.objectContaining({ scope: "workspace", projectId: "p1" }),
+      },
+      "update",
+      expect.any(Function)
+    )
+  })
+
   it("rejects empty text and scopes missing their required identity", async () => {
     await expect(storeMemoryCore({ text: "  ", provenance: "system" })).rejects.toThrow(
       /non-empty 'text'/

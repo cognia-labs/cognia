@@ -102,6 +102,17 @@ export interface ConsolidationCandidate extends MemoryCandidate {
   projectClaim?: ProjectClaimAttributes
 }
 
+export type ConsolidationReviewReason =
+  "update_denied" | "forget_denied" | "target_moved" | "target_unavailable"
+
+export type ConsolidationMutationResult =
+  { ok: true } | { ok: false; reason: ConsolidationReviewReason }
+
+export interface ConsolidationTargetGuard {
+  expected: MemoryConsolidationNamespace
+  permissions?: ConsolidationPermissions
+}
+
 export interface ConsolidateDeps {
   client: LlmClient
   /** Top-k active memories similar to the candidate (same scope/reader). */
@@ -112,16 +123,29 @@ export interface ConsolidateDeps {
   /** ADD — create + persist a new memory; returns the row. */
   persist: (input: PersistMemoryInput) => Promise<Memory>
   /** UPDATE — replace text + bump version; project claims also refresh provenance. */
-  update: (id: string, text: string, candidate?: ConsolidationCandidate) => Promise<void>
-  /** DELETE — soft-invalidate, optionally linking the superseding memory. */
-  invalidate: (id: string, supersededById?: string) => Promise<void>
+  update: (
+    id: string,
+    text: string,
+    guard: ConsolidationTargetGuard,
+    candidate?: ConsolidationCandidate
+  ) => Promise<ConsolidationMutationResult>
+  /** DELETE — guard, invalidate, and promote the replacement draft in one transaction. */
+  invalidate: (
+    id: string,
+    replacement: Memory,
+    guard: ConsolidationTargetGuard
+  ) => Promise<ConsolidationMutationResult>
   /** Mark both sides of an unresolved contradiction for explicit review. */
-  markConflict?: (targetId: string, conflictId: string) => Promise<void>
+  markConflict?: (
+    targetId: string,
+    conflictId: string,
+    guard: ConsolidationTargetGuard
+  ) => Promise<ConsolidationMutationResult>
   /** Content-free record of a policy downgrade, after its review draft lands. */
   auditDowngrade?: (
     memoryId: string,
     targetId: string,
-    reason: "update_denied" | "forget_denied"
+    reason: ConsolidationReviewReason
   ) => Promise<void>
   /**
    * The judge's system prompt; defaults to
@@ -142,7 +166,7 @@ export type ConsolidationOp =
       memory: Memory
       targetId: string
       candidate: ConsolidationCandidate
-      reason?: "update_denied" | "forget_denied"
+      reason?: ConsolidationReviewReason
     }
   | {
       /**
@@ -264,6 +288,27 @@ export function sameMemoryNamespace(
     memory.branch === namespace.branch &&
     memory.pathPattern === namespace.pathPattern
   )
+}
+
+/** Must be called on a fresh row inside the transaction performing the mutation. */
+export function checkConsolidationTarget(
+  current: Memory | undefined,
+  guard: ConsolidationTargetGuard,
+  operation: "update" | "forget"
+): ConsolidationMutationResult {
+  if (!current || current.status !== "active") return { ok: false, reason: "target_unavailable" }
+  // Owner callers without permissions still need this check: the judge reasoned
+  // about the old namespace, so even an owner must review a moved target again.
+  if (!sameMemoryNamespace(current, guard.expected)) return { ok: false, reason: "target_moved" }
+  const permissions = guard.permissions
+  if (
+    permissions &&
+    (!(operation === "update" ? permissions.canUpdate : permissions.canForget) ||
+      !permissions.scopeAllowed(operation, current.scope))
+  ) {
+    return { ok: false, reason: operation === "update" ? "update_denied" : "forget_denied" }
+  }
+  return { ok: true }
 }
 
 /** The consolidation judge's shipped system prompt. */
@@ -405,12 +450,16 @@ export async function deferConsolidationForReview(
   input: ConsolidateInput,
   deps: ConsolidateDeps,
   targetId: string,
-  reason: "update_denied" | "forget_denied"
+  reason: ConsolidationReviewReason,
+  /** DELETE/CONFLICT already persisted a safe draft; reuse it rather than duplicating it. */
+  draft?: Memory
 ): Promise<Extract<ConsolidationOp, { op: "CONFLICT" }>> {
-  const memory = await persistCandidate(candidate, input, deps, {
-    reviewStatus: "conflict",
-    conflictWithIds: [targetId],
-  })
+  const memory =
+    draft ??
+    (await persistCandidate(candidate, input, deps, {
+      reviewStatus: "conflict",
+      conflictWithIds: [targetId],
+    }))
   try {
     await deps.auditDowngrade?.(memory.id, targetId, reason)
   } catch {
@@ -437,9 +486,9 @@ export async function consolidate(
       branch: input.branch,
       pathPattern: input.pathPattern,
     }
-    const similar = (await deps.findSimilar(candidate, namespace).catch(() => [])).filter(
-      (memory) => hasNoLeakingPii(memory.text)
-    )
+    const similar = (await deps.findSimilar(candidate, namespace).catch(() => []))
+      .filter((memory) => hasNoLeakingPii(memory.text))
+      .map((memory) => ({ ...memory }))
 
     // No neighbors → unambiguous ADD, no LLM call needed.
     if (similar.length === 0) {
@@ -468,6 +517,10 @@ export async function consolidate(
         : undefined
 
     const target = similar.find((memory) => memory.id === targetId)
+    const guard: ConsolidationTargetGuard = {
+      expected: target ?? namespace,
+      permissions: input.permissions,
+    }
     const canMutate = (operation: "update" | "forget") =>
       !input.permissions ||
       (!!target &&
@@ -490,25 +543,52 @@ export async function consolidate(
             ? decision.mergedText.trim()
             : candidate.text
           : candidate.text
-      if (candidate.projectClaim) {
-        await deps.update(targetId, mergedText, candidate)
-        applied.push({ op: "UPDATE", targetId, candidate })
-      } else {
-        await deps.update(targetId, mergedText)
-        applied.push({ op: "UPDATE", targetId })
-      }
+      const result = candidate.projectClaim
+        ? await deps.update(targetId, mergedText, guard, candidate)
+        : await deps.update(targetId, mergedText, guard)
+      applied.push(
+        result.ok
+          ? { op: "UPDATE", targetId, ...(candidate.projectClaim ? { candidate } : {}) }
+          : await deferConsolidationForReview(candidate, input, deps, targetId, result.reason)
+      )
     } else if (op === "DELETE" && targetId) {
-      const memory = await persistCandidate(candidate, input, deps)
-      await deps.invalidate(targetId, memory.id)
-      applied.push({ op: "DELETE", targetId })
-      applied.push({ op: "ADD", memory, candidate })
+      // Start review-only. The dep promotes this row atomically with target
+      // invalidation, so a refused write (or a crash) cannot leave a live duplicate.
+      const draft = await persistCandidate(candidate, input, deps, {
+        reviewStatus: "conflict",
+        conflictWithIds: [targetId],
+      })
+      const result = await deps.invalidate(targetId, draft, guard)
+      if (!result.ok) {
+        applied.push(
+          await deferConsolidationForReview(candidate, input, deps, targetId, result.reason, draft)
+        )
+      } else {
+        applied.push({ op: "DELETE", targetId })
+        applied.push({
+          op: "ADD",
+          memory: { ...draft, reviewStatus: "unreviewed", conflictWithIds: [] },
+          candidate,
+        })
+      }
     } else if (op === "CONFLICT" && targetId) {
       const memory = await persistCandidate(candidate, input, deps, {
         reviewStatus: "conflict",
         conflictWithIds: [targetId],
       })
-      if (canMutate("update")) await deps.markConflict?.(targetId, memory.id)
-      applied.push({ op: "CONFLICT", memory, targetId, candidate })
+      const result = await deps.markConflict?.(targetId, memory.id, guard)
+      applied.push(
+        result && !result.ok
+          ? await deferConsolidationForReview(
+              candidate,
+              input,
+              deps,
+              targetId,
+              result.reason,
+              memory
+            )
+          : { op: "CONFLICT", memory, targetId, candidate }
+      )
     } else if (op === "NOOP") {
       applied.push(targetId ? { op: "NOOP", targetId } : { op: "NOOP" })
     } else if (op === "ADD") {

@@ -49,6 +49,7 @@ import {
   type ConsolidationCandidate,
   type ConsolidationOp,
 } from "@/lib/memory/consolidate/consolidator"
+import { withConsolidationTarget } from "./guarded-consolidation-write"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
@@ -613,49 +614,65 @@ export async function buildProjectMiningDeps(
       if (vectorSink && hasNoLeakingPii(row.text)) {
         try {
           await vectorSink.upsert(row.id, row.text)
-          await memDb.updateMemory(row.id, {
-            vectorDocId: row.id,
-            vectorTextHash: hashContent(row.text),
-          })
+          await withConsolidationTarget(row.id, { expected: row }, "update", () =>
+            memDb.updateMemory(row.id, {
+              vectorDocId: row.id,
+              vectorTextHash: hashContent(row.text),
+            })
+          )
         } catch {
           // BM25 recall still works without the vector.
         }
       }
       return row
     },
-    update: async (id, text, candidate) => {
-      if (!hasNoLeakingPii(text)) return
+    update: async (id, text, guard, candidate) => {
+      if (!hasNoLeakingPii(text)) return { ok: false, reason: "update_denied" }
       const claim = candidate?.projectClaim
-      await memDb.updateMemory(id, {
-        text,
-        bumpVersion: true,
-        revisionReason: "consolidation",
-        ...(claim ? { projectMemoryKind: claim.projectMemoryKind } : {}),
-        ...(claim?.observedAt !== undefined ? { observedAt: claim.observedAt } : {}),
-        ...(claim?.confidence !== undefined ? { confidence: claim.confidence } : {}),
-        ...(claim?.scopeRationale !== undefined ? { scopeRationale: claim.scopeRationale } : {}),
-        ...(claim?.extractor !== undefined ? { extractor: claim.extractor } : {}),
-        ...(claim?.evidenceHash !== undefined ? { evidenceHash: claim.evidenceHash } : {}),
-        ...(claim?.sourceRevision !== undefined ? { sourceRevision: claim.sourceRevision } : {}),
+      const result = await withConsolidationTarget(id, guard, "update", async () => {
+        await memDb.updateMemory(id, {
+          text,
+          bumpVersion: true,
+          revisionReason: "consolidation",
+          ...(claim ? { projectMemoryKind: claim.projectMemoryKind } : {}),
+          ...(claim?.observedAt !== undefined ? { observedAt: claim.observedAt } : {}),
+          ...(claim?.confidence !== undefined ? { confidence: claim.confidence } : {}),
+          ...(claim?.scopeRationale !== undefined ? { scopeRationale: claim.scopeRationale } : {}),
+          ...(claim?.extractor !== undefined ? { extractor: claim.extractor } : {}),
+          ...(claim?.evidenceHash !== undefined ? { evidenceHash: claim.evidenceHash } : {}),
+          ...(claim?.sourceRevision !== undefined ? { sourceRevision: claim.sourceRevision } : {}),
+        })
       })
+      if (!result.ok) return result
       if (vectorSink) {
         try {
           await vectorSink.upsert(id, text)
-          await memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
+          await withConsolidationTarget(id, guard, "update", () =>
+            memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
+          )
         } catch {
           // ignore — keep the Dexie update
         }
       }
+      return result
     },
-    invalidate: (id, supersededById) => memDb.invalidateMemory(id, supersededById),
-    markConflict: async (targetId, conflictId) => {
-      const target = await memDb.getMemory(targetId)
-      if (!target) return
-      await memDb.updateMemory(targetId, {
-        reviewStatus: "conflict",
-        conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
-      })
-    },
+    invalidate: (id, replacement, guard) =>
+      withConsolidationTarget(id, guard, "forget", () =>
+        withConsolidationTarget(replacement.id, { expected: replacement }, "update", async () => {
+          await memDb.invalidateMemory(id, replacement.id)
+          await memDb.updateMemory(replacement.id, {
+            reviewStatus: "unreviewed",
+            conflictWithIds: [],
+          })
+        })
+      ),
+    markConflict: (targetId, conflictId, guard) =>
+      withConsolidationTarget(targetId, guard, "update", async (target) => {
+        await memDb.updateMemory(targetId, {
+          reviewStatus: "conflict",
+          conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
+        })
+      }),
   }
 
   return {
@@ -707,8 +724,30 @@ export async function buildProjectMiningDeps(
             cInput.permissions.canUpdate &&
             cInput.permissions.scopeAllowed("update", previous.scope)
           ) {
-            await consolidateDeps.update(previous.id, candidate.text, candidate)
-            replayed.push({ op: "UPDATE", targetId: previous.id, candidate })
+            const result = await consolidateDeps.update(
+              previous.id,
+              candidate.text,
+              {
+                expected: previous,
+                permissions: cInput.permissions,
+              },
+              candidate
+            )
+            replayed.push(
+              result.ok
+                ? { op: "UPDATE", targetId: previous.id, candidate }
+                : await deferConsolidationForReview(
+                    candidate,
+                    cInput,
+                    {
+                      ...judgedDeps,
+                      persist: (pInput) =>
+                        consolidateDeps.persist({ ...pInput, trustState: "quarantined" }),
+                    },
+                    previous.id,
+                    result.reason
+                  )
+            )
           } else {
             replayed.push(
               await deferConsolidationForReview(

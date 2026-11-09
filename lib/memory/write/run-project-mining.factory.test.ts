@@ -50,6 +50,12 @@ jest.mock("@/lib/db/memories", () => ({
   getMemory: (...a: unknown[]) => mockGetMemory(...a),
   listMemories: (...a: unknown[]) => mockListMemories(...a),
 }))
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({
+    memories: {},
+    transaction: (_mode: string, _table: unknown, write: () => Promise<unknown>) => write(),
+  }),
+}))
 jest.mock("@cognia/memory/extract/project-extractor", () => ({
   ...jest.requireActual("@cognia/memory/extract/project-extractor"),
   extractProjectClaims: (...a: unknown[]) => mockExtractProjectClaims(...a),
@@ -72,6 +78,7 @@ function cfg(over: Partial<MemoryConfig> = {}): MemoryConfig {
 }
 
 const params = { session: null, appSettings: null }
+const guard = { expected: { scope: "global" as const } }
 
 beforeEach(() => {
   jest.clearAllMocks()
@@ -84,12 +91,76 @@ beforeEach(() => {
   mockTryBuildMemoryDeps.mockResolvedValue({ loadCandidates: jest.fn(), loadProcedural: jest.fn() })
   mockTryBuildMemoryVectorSink.mockResolvedValue(undefined)
   mockRetrieveMemories.mockResolvedValue([{ memory: { id: "sim1", text: "existing" } }])
-  mockCreateMemory.mockResolvedValue({ id: "new1", text: "fact" })
+  mockCreateMemory.mockResolvedValue({
+    id: "new1",
+    text: "fact",
+    scope: "global",
+    status: "active",
+  })
+  mockGetMemory.mockResolvedValue({ id: "new1", scope: "global", status: "active" })
   mockListMemories.mockResolvedValue([])
   mockConsolidate.mockResolvedValue({ applied: [] })
 })
 
 describe("buildProjectMiningDeps", () => {
+  it("defers an attachment replay when the draft moved after its namespace lookup", async () => {
+    const candidate = {
+      type: "semantic" as const,
+      text: "source fact",
+      importance: 5,
+      projectClaim: {
+        projectMemoryKind: "state" as const,
+        evidenceHash: "hash",
+        evidence: [{ kind: "file" as const, sourceId: "attachment" }],
+      },
+    }
+    mockListMemories.mockResolvedValue([
+      {
+        id: "draft",
+        scope: "workspace",
+        projectId: "p1",
+        status: "active",
+        text: "source fact",
+        trustState: "quarantined",
+        projectMemoryKind: "state",
+        evidenceHash: "hash",
+      },
+    ])
+    mockGetMemory.mockResolvedValue({
+      id: "draft",
+      scope: "global",
+      status: "active",
+      text: "source fact",
+    })
+    mockCreateMemory.mockImplementation(async (input) => ({ ...input, id: "review" }))
+    const deps = await buildProjectMiningDeps(params, cfg())
+    expect(
+      await deps!.consolidate({
+        scope: "workspace",
+        projectId: "p1",
+        provenance: "user",
+        candidates: [candidate],
+      })
+    ).toMatchObject({ applied: [{ op: "CONFLICT", targetId: "draft", reason: "target_moved" }] })
+    expect(mockUpdateMemory).not.toHaveBeenCalled()
+    expect(mockCreateMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "workspace",
+        projectId: "p1",
+        trustState: "quarantined",
+        reviewStatus: "conflict",
+        conflictWithIds: ["draft"],
+      })
+    )
+    expect(mockAuditDowngrade).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryId: "review",
+        reason: "target_moved",
+        metadata: { targetId: "draft" },
+      })
+    )
+  })
+
   it("reuses only an exact attachment draft and repairs its evidence on retry", async () => {
     const candidate = {
       type: "semantic" as const,
@@ -111,6 +182,7 @@ describe("buildProjectMiningDeps", () => {
         evidenceHash: "hash",
       },
     ])
+    mockGetMemory.mockResolvedValue({ id: "draft", scope: "workspace", status: "active" })
     const deps = await buildProjectMiningDeps(params, cfg())
     expect(
       await deps!.consolidate({
@@ -214,7 +286,7 @@ describe("buildProjectMiningDeps", () => {
     const deps = await buildProjectMiningDeps(params, cfg())
     await deps!.consolidate({ candidates: [], scope: "workspace", provenance: "user" })
     const wired = mockConsolidate.mock.calls[0]![1]
-    await wired.update("existing", "corrected fact", {
+    await wired.update("existing", "corrected fact", guard, {
       type: "semantic",
       text: "corrected fact",
       importance: 8,
@@ -242,7 +314,7 @@ describe("buildProjectMiningDeps", () => {
       scopeRationale: "Only the memory subtree",
       extractor: { provider: "local", model: "utility", promptVersion: "project-v4" },
     })
-    await wired.update("existing", "revised again", {
+    await wired.update("existing", "revised again", guard, {
       type: "semantic",
       text: "revised again",
       importance: 8,
@@ -269,22 +341,30 @@ describe("buildProjectMiningDeps", () => {
     await deps!.consolidate({ candidates: [], scope: "workspace", provenance: "user" })
     const wired = mockConsolidate.mock.calls[0]![1]
     await expect(wired.persist({ text: "fact" })).resolves.toMatchObject({ id: "new1" })
-    await expect(wired.update("new1", "revised fact")).resolves.toBeUndefined()
+    await expect(wired.update("new1", "revised fact", guard)).resolves.toEqual({ ok: true })
     expect(mockUpdateMemory).toHaveBeenCalledWith("new1", {
       text: "revised fact",
       bumpVersion: true,
       revisionReason: "consolidation",
     })
-    await wired.invalidate("new1", "new2")
+    await wired.invalidate("new1", { id: "new2", scope: "global" }, guard)
     expect(mockInvalidateMemory).toHaveBeenCalledWith("new1", "new2")
-    mockGetMemory.mockResolvedValue({ id: "new1", conflictWithIds: ["other"] })
-    await wired.markConflict("new1", "other")
+    mockGetMemory.mockResolvedValue({
+      id: "new1",
+      scope: "global",
+      status: "active",
+      conflictWithIds: ["other"],
+    })
+    await wired.markConflict("new1", "other", guard)
     expect(mockUpdateMemory).toHaveBeenCalledWith("new1", {
       reviewStatus: "conflict",
       conflictWithIds: ["other"],
     })
     mockGetMemory.mockResolvedValue(undefined)
-    await wired.markConflict("missing", "other")
+    await expect(wired.markConflict("missing", "other", guard)).resolves.toEqual({
+      ok: false,
+      reason: "target_unavailable",
+    })
     expect(mockUpdateMemory).not.toHaveBeenCalledWith("missing", expect.anything())
   })
 
@@ -299,14 +379,14 @@ describe("buildProjectMiningDeps", () => {
       vectorDocId: "new1",
       vectorTextHash: hashContent("fact"),
     })
-    await wired.update("new1", "updated fact")
+    await wired.update("new1", "updated fact", guard)
     expect(sink.upsert).toHaveBeenCalledWith("new1", "updated fact")
     expect(mockUpdateMemory).toHaveBeenLastCalledWith("new1", {
       vectorDocId: "new1",
       vectorTextHash: hashContent("updated fact"),
     })
     mockUpdateMemory.mockClear()
-    await wired.update("new1", "Email owner@example.com")
+    await wired.update("new1", "Email owner@example.com", guard)
     expect(mockUpdateMemory).not.toHaveBeenCalled()
   })
 
@@ -317,9 +397,9 @@ describe("buildProjectMiningDeps", () => {
     const wired = mockConsolidate.mock.calls[0]![1]
     expect(await wired.findSimilar({ text: "fact" }, { scope: "workspace" })).toEqual([])
     await wired.persist({ text: "fact" })
-    await wired.update("new1", "updated fact")
-    mockGetMemory.mockResolvedValue({ id: "new1" })
-    await wired.markConflict("new1", "other")
+    await wired.update("new1", "updated fact", guard)
+    mockGetMemory.mockResolvedValue({ id: "new1", scope: "global", status: "active" })
+    await wired.markConflict("new1", "other", guard)
     expect(mockUpdateMemory).toHaveBeenCalledWith("new1", {
       reviewStatus: "conflict",
       conflictWithIds: ["other"],

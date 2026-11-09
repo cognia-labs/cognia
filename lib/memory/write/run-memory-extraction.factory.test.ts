@@ -23,6 +23,7 @@ const mockRetrieveMemories = jest.fn()
 const mockCreateMemory = jest.fn()
 const mockUpdateMemory = jest.fn()
 const mockInvalidateMemory = jest.fn()
+const mockGetMemory = jest.fn()
 const mockExtractMemories = jest.fn()
 const mockConsolidate = jest.fn()
 
@@ -42,6 +43,13 @@ jest.mock("@/lib/db/memories", () => ({
   createMemory: (...a: unknown[]) => mockCreateMemory(...a),
   updateMemory: (...a: unknown[]) => mockUpdateMemory(...a),
   invalidateMemory: (...a: unknown[]) => mockInvalidateMemory(...a),
+  getMemory: (...a: unknown[]) => mockGetMemory(...a),
+}))
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({
+    memories: {},
+    transaction: (_mode: string, _table: unknown, write: () => Promise<unknown>) => write(),
+  }),
 }))
 jest.mock("@/lib/memory/extract/extractor", () => ({
   ...jest.requireActual("@/lib/memory/extract/extractor"),
@@ -82,7 +90,13 @@ beforeEach(() => {
   mockTryBuildMemoryDeps.mockResolvedValue({ loadCandidates: jest.fn(), loadProcedural: jest.fn() })
   mockTryBuildMemoryVectorSink.mockResolvedValue(undefined)
   mockRetrieveMemories.mockResolvedValue([{ memory: { id: "sim1" } }])
-  mockCreateMemory.mockResolvedValue({ id: "new1", text: "fact" })
+  mockCreateMemory.mockResolvedValue({
+    id: "new1",
+    text: "fact",
+    scope: "global",
+    status: "active",
+  })
+  mockGetMemory.mockResolvedValue({ id: "id1", scope: "global", status: "active" })
 })
 
 const params = { session: null, appSettings: null }
@@ -153,13 +167,14 @@ describe("buildAutoExtractionDeps", () => {
     expect(mockUpdateMemory).not.toHaveBeenCalled() // no vectorDocId write without a sink
 
     // update / invalidate passthrough
-    await captured!.update("id1", "newtext")
+    const guard = { expected: { scope: "global" as const } }
+    await captured!.update("id1", "newtext", guard)
     expect(mockUpdateMemory).toHaveBeenCalledWith("id1", {
       text: "newtext",
       bumpVersion: true,
       revisionReason: "consolidation",
     })
-    await captured!.invalidate("id1", "sup1")
+    await captured!.invalidate("id1", { ...row, id: "sup1", scope: "global" }, guard)
     expect(mockInvalidateMemory).toHaveBeenCalledWith("id1", "sup1")
   })
 
@@ -237,7 +252,7 @@ describe("buildAutoExtractionDeps", () => {
     })
     const deps = await buildAutoExtractionDeps(params, cfg())
     await deps!.consolidate({ candidates: [], scope: "global", provenance: "user" })
-    await captured!.update("id1", "email bob@example.com")
+    await captured!.update("id1", "email bob@example.com", { expected: { scope: "global" } })
     expect(mockUpdateMemory).not.toHaveBeenCalled()
     expect(upsert).not.toHaveBeenCalled()
 

@@ -34,6 +34,7 @@ import {
   consolidationOpMemoryId,
   type ConsolidationOp,
 } from "@/lib/memory/consolidate/consolidator"
+import { withConsolidationTarget } from "@/lib/memory/write/guarded-consolidation-write"
 import type {
   StoreExternalMemoryInput,
   StoreMemoryCoreResult,
@@ -220,6 +221,14 @@ export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<Stor
   const characterId = scope === "character" ? input.characterId : undefined
   const projectId = input.projectId
   const agentId = scope === "agent" ? input.agentId : undefined
+  const expectedNamespace = {
+    scope,
+    characterId,
+    projectId,
+    agentId,
+    branch: input.branch,
+    pathPattern: input.pathPattern,
+  }
 
   // Preferred path: the shared consolidator (dedupe / ADD / UPDATE / DELETE).
   const { buildAutoExtractionDeps } = await import("@/lib/memory/write/run-memory-extraction")
@@ -255,7 +264,12 @@ export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<Stor
       for (const op of applied) {
         if (op.op === "ADD" && op.memory?.id) {
           try {
-            await memDb.updateMemory(op.memory.id, postAddPatch)
+            await withConsolidationTarget(
+              op.memory.id,
+              { expected: expectedNamespace },
+              "update",
+              () => memDb.updateMemory(op.memory.id, postAddPatch)
+            )
           } catch {
             // Best-effort, the memory row itself already landed.
           }
@@ -275,44 +289,65 @@ export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<Stor
       try {
         const governance = await import("@/lib/db/memory-governance")
         for (const id of governedIds) {
-          await memDb.updateMemory(id, {
-            evidenceState: "supported",
-            reviewStatus: applied.some((op) => op.op === "CONFLICT" && op.memory.id === id)
-              ? "conflict"
-              : input.provenance === "explicit"
-                ? "verified"
-                : "unreviewed",
-            contaminationState: input.provenance === "external" ? "external-context" : "clean",
-            sensitivity: "normal",
-          })
-          await governance.createMemoryEvidence({
-            memoryId: id,
-            kind: input.provenance === "external" ? "external" : "manual",
-            sourceId:
-              input.source?.messageId ??
-              input.source?.sessionId ??
-              input.attribution?.pluginId ??
-              input.attribution?.channel ??
-              `manual:${id}`,
-            sessionId: input.source?.sessionId,
-            messageId: input.source?.messageId,
-            contaminationState: input.provenance === "external" ? "external-context" : "clean",
-            reviewed: input.provenance === "explicit",
-          })
-          await governance.appendMemoryAuditEvent({
-            action: applied.some((op) => op.op === "CONFLICT" && op.memory.id === id)
-              ? "conflict"
-              : applied.some((op) => op.op === "UPDATE" && op.targetId === id)
-                ? "revised"
-                : "created",
-            memoryId: id,
-            sessionId: input.source?.sessionId,
-            reason:
-              applied.find(
-                (op): op is Extract<ConsolidationOp, { op: "CONFLICT" }> =>
-                  op.op === "CONFLICT" && op.memory.id === id
-              )?.reason ?? input.provenance,
-          })
+          // Consolidation committed before vector I/O. A later relocation must
+          // also fence these follow-up patches to the original target.
+          await withConsolidationTarget(
+            id,
+            {
+              expected: expectedNamespace,
+              ...(applied.some((op) => op.op === "UPDATE" && op.targetId === id)
+                ? {
+                    permissions: {
+                      canUpdate: policy.canUpdate,
+                      canForget: policy.canForget,
+                      scopeAllowed: (operation, targetScope) =>
+                        scopeAllowedByAgentMemoryPolicy(policy, operation, targetScope),
+                    },
+                  }
+                : {}),
+            },
+            "update",
+            async () => {
+              await memDb.updateMemory(id, {
+                evidenceState: "supported",
+                reviewStatus: applied.some((op) => op.op === "CONFLICT" && op.memory.id === id)
+                  ? "conflict"
+                  : input.provenance === "explicit"
+                    ? "verified"
+                    : "unreviewed",
+                contaminationState: input.provenance === "external" ? "external-context" : "clean",
+                sensitivity: "normal",
+              })
+              await governance.createMemoryEvidence({
+                memoryId: id,
+                kind: input.provenance === "external" ? "external" : "manual",
+                sourceId:
+                  input.source?.messageId ??
+                  input.source?.sessionId ??
+                  input.attribution?.pluginId ??
+                  input.attribution?.channel ??
+                  `manual:${id}`,
+                sessionId: input.source?.sessionId,
+                messageId: input.source?.messageId,
+                contaminationState: input.provenance === "external" ? "external-context" : "clean",
+                reviewed: input.provenance === "explicit",
+              })
+              await governance.appendMemoryAuditEvent({
+                action: applied.some((op) => op.op === "CONFLICT" && op.memory.id === id)
+                  ? "conflict"
+                  : applied.some((op) => op.op === "UPDATE" && op.targetId === id)
+                    ? "revised"
+                    : "created",
+                memoryId: id,
+                sessionId: input.source?.sessionId,
+                reason:
+                  applied.find(
+                    (op): op is Extract<ConsolidationOp, { op: "CONFLICT" }> =>
+                      op.op === "CONFLICT" && op.memory.id === id
+                  )?.reason ?? input.provenance,
+              })
+            }
+          )
         }
       } catch {
         // The canonical memory already landed; governance persistence retries separately.
