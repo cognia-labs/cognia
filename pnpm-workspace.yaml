@@ -32,11 +32,11 @@ packages:
 patchedDependencies:
   "capacitor-secure-storage-plugin@0.13.0": patches/capacitor-secure-storage-plugin@0.13.0.patch
   "capacitor-zeroconf@4.0.0": patches/capacitor-zeroconf@4.0.0.patch
-  "@capacitor/android@8.5.2": patches/@capacitor__android@8.5.2.patch
-  "@capacitor/push-notifications@8.1.2": patches/@capacitor__push-notifications@8.1.2.patch
-  "@capgo/capacitor-native-biometric@8.7.0": patches/@capgo__capacitor-native-biometric@8.7.0.patch
+  "@capacitor/android@8.6.0": patches/@capacitor__android@8.6.0.patch
+  "@capacitor/push-notifications@8.1.3": patches/@capacitor__push-notifications@8.1.3.patch
+  "@capgo/capacitor-native-biometric@8.9.1": patches/@capgo__capacitor-native-biometric@8.9.1.patch
   "@sinonjs/fake-timers@15.4.0": patches/@sinonjs__fake-timers@15.4.0.patch
-  "@capacitor/browser@8.0.4": patches/@capacitor__browser@8.0.4.patch
+  "@capacitor/browser@8.0.5": patches/@capacitor__browser@8.0.5.patch
   "@novnc/novnc@1.6.0": patches/@novnc__novnc@1.6.0.patch
 
 # Security floors for transitive dependencies whose direct parents currently
@@ -59,8 +59,8 @@ overrides:
   "minimatch@5.1.9>brace-expansion": "2.1.7"
   "minimatch@9.0.9>brace-expansion": "2.1.7"
   "minimatch@10.2.6>brace-expansion": "5.0.12"
-  mermaid: "12.0.0"
-  pdfjs-dist: "6.3.289"
+  mermaid: "12.3.0"
+  pdfjs-dist: "6.5.438"
   shell-quote: "1.11.0"
   tmp: "0.2.7"
   dompurify: "^3.4.12"
@@ -108,15 +108,15 @@ overrides:
 # root package.json. This block is the single source of truth for the family.
 catalog:
   # Pin local schema peers alongside the SDKs so workspace imports share one instance.
-  zod: "4.6.5"
-  ai: "7.0.128"
-  "@ai-sdk/provider": "4.0.22"
-  "@ai-sdk/openai": "4.0.84"
-  "@ai-sdk/anthropic": "4.0.72"
-  "@ai-sdk/google": "4.0.88"
-  "@ai-sdk/mistral": "4.0.57"
-  "@ai-sdk/cohere": "4.0.55"
-  "@ai-sdk/amazon-bedrock": "5.0.106"
+  zod: "4.6.7"
+  ai: "7.0.163"
+  "@ai-sdk/provider": "4.0.36"
+  "@ai-sdk/openai": "4.0.109"
+  "@ai-sdk/anthropic": "4.0.97"
+  "@ai-sdk/google": "4.0.112"
+  "@ai-sdk/mistral": "4.0.80"
+  "@ai-sdk/cohere": "4.0.76"
+  "@ai-sdk/amazon-bedrock": "5.0.133"
 
 # pnpm 11 blocks lifecycle scripts by default (ERR_PNPM_IGNORED_BUILDS).
 # Explicitly approve packages whose postinstall/install/preinstall scripts are

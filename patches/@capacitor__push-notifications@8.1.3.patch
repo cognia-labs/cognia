@@ -1,16 +1,16 @@
 diff --git a/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java b/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
-index 6d339d6dfb5105a20d2792a932c0e0edb1d7dbc5..f7af87ae0652e85c3691f8c9f1abe7ebda6d6fbf 100644
+index 63916663af..c8a70a8213 100644
 --- a/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
 +++ b/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
-@@ -15,6 +15,7 @@ import com.getcapacitor.*;
- import com.getcapacitor.annotation.CapacitorPlugin;
+@@ -19,6 +19,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  import com.getcapacitor.annotation.Permission;
  import com.getcapacitor.annotation.PermissionCallback;
+ import com.google.android.gms.tasks.Tasks;
 +import com.google.firebase.FirebaseApp;
  import com.google.firebase.messaging.CommonNotificationBuilder;
  import com.google.firebase.messaging.FirebaseMessaging;
- import com.google.firebase.messaging.NotificationParams;
-@@ -98,8 +99,23 @@ public class PushNotificationsPlugin extends Plugin {
+ import com.google.firebase.messaging.ImageDownload;
+@@ -109,8 +110,23 @@ public class PushNotificationsPlugin extends Plugin {
          }
      }
  
@@ -34,7 +34,7 @@ index 6d339d6dfb5105a20d2792a932c0e0edb1d7dbc5..f7af87ae0652e85c3691f8c9f1abe7eb
          FirebaseMessaging.getInstance().setAutoInitEnabled(true);
          FirebaseMessaging.getInstance()
              .getToken()
-@@ -115,6 +131,7 @@ public class PushNotificationsPlugin extends Plugin {
+@@ -126,6 +142,7 @@ public class PushNotificationsPlugin extends Plugin {
  
      @PluginMethod
      public void unregister(PluginCall call) {

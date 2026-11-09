@@ -491,11 +491,11 @@ export function createVideoJobEngine(deps: VideoJobEngineDeps) {
     })
     if (!claimed) return deps.store.get(row.id)
     const video = status.videos[0]
-    if (!video) {
+    if (!video || video.type === "uploaded") {
       return settleFailed(
         claimed,
         "downloading",
-        failure("generation_failed", "The provider returned no video.")
+        failure("generation_failed", "The provider returned no downloadable video.")
       )
     }
     return finish(claimed, video)

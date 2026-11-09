@@ -84,7 +84,7 @@ export default definePlugin({
         label: ctx.i18n.t("panel.title"),
         labelKey: `plugin.${PLUGIN_ID}.panel.title`,
         resourceKinds: ["session"],
-        icon: "ShieldAlert",
+        icon: "ShieldExclamationPoint",
         order: 45,
         // A scan form, a streaming console and a findings list do not fit a
         // 360px column comfortably; the panel still renders there, but this is

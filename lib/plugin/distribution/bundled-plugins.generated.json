@@ -238,8 +238,8 @@
         },
         {
           "path": "dist/plugin.css",
-          "bytes": 8146,
-          "sha256": "93566fd04ef168be3ef187c75872d16ef777e5e08932302cb384d93a9a58c0ce"
+          "bytes": 8145,
+          "sha256": "6a9d0f1add041f9c0b904f5336a96b51059ac6afd04977962d85b43d9d58e0a1"
         },
         {
           "path": "plugin.json",
@@ -253,8 +253,8 @@
         },
         {
           "path": "runtime/pnpm-lock.yaml",
-          "bytes": 10322,
-          "sha256": "48afdca2884b3335862e68be4d0ff1e0f78ae22d0238bd8037ee9e7467227a46"
+          "bytes": 10128,
+          "sha256": "e7d398f686ec49f25205595cbea03e97deb16e5f5a5384caa17a44113aabdb0c"
         },
         {
           "path": "runtime/pnpm-workspace.yaml",

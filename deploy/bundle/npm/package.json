@@ -17,6 +17,12 @@
     "pi-acp": "0.0.34"
   },
   "overrides": {
+    "@agentclientprotocol/claude-agent-acp": {
+      "zod": "4.6.7"
+    },
+    "@earendil-works/pi-coding-agent": {
+      "undici": "8.12.4"
+    },
     "sharp": "^0.35.5"
   }
 }

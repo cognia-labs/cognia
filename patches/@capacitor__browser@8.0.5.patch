@@ -1,10 +1,10 @@
 diff --git a/android/src/main/java/com/capacitorjs/plugins/browser/BrowserControllerActivity.java b/android/src/main/java/com/capacitorjs/plugins/browser/BrowserControllerActivity.java
-index 74fd599c106a85308f36d0d09fa3c9a86d8a3d1d..955de8d32eb74a35265c4caefb2eccbb1ac3b902 100644
+index 578fde6e10..18a997dd46 100644
 --- a/android/src/main/java/com/capacitorjs/plugins/browser/BrowserControllerActivity.java
 +++ b/android/src/main/java/com/capacitorjs/plugins/browser/BrowserControllerActivity.java
-@@ -15,6 +15,19 @@ public class BrowserControllerActivity extends Activity {
+@@ -19,6 +19,19 @@ public class BrowserControllerActivity extends ComponentActivity {
+     protected void onCreate(@Nullable Bundle savedInstanceState) {
          super.onCreate(savedInstanceState);
-         isCustomTabsOpen = false;
  
 +        /*
 +         * Cognia patch: BrowserPlugin.close() starts this activity with "close".
@@ -19,13 +19,13 @@ index 74fd599c106a85308f36d0d09fa3c9a86d8a3d1d..955de8d32eb74a35265c4caefb2eccbb
 +            return;
 +        }
 +
-         if (BrowserPlugin.browserControllerListener != null) {
-             BrowserPlugin.browserControllerListener.onControllerReady(this);
-         }
-@@ -47,6 +60,8 @@ public class BrowserControllerActivity extends Activity {
+         customTabLauncher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), (result) -> {
+             if (implementation != null) {
+                 implementation.notifyBrowserFinished();
+@@ -64,6 +77,8 @@ public class BrowserControllerActivity extends ComponentActivity {
      protected void onDestroy() {
          super.onDestroy();
-         isCustomTabsOpen = false;
+         implementation = null;
 +        // A close-only instance never owned the listener (see onCreate).
 +        if (getIntent() != null && getIntent().hasExtra("close")) return;
          BrowserPlugin.setBrowserControllerListener(null);

@@ -15,16 +15,16 @@
     "test:live": "node ../scripts/test/run-sidecar-tests.mjs --live"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "5.0.106",
-    "@ai-sdk/anthropic": "4.0.72",
-    "@ai-sdk/azure": "4.0.92",
-    "@ai-sdk/cohere": "4.0.55",
-    "@ai-sdk/deepseek": "3.0.59",
-    "@ai-sdk/google": "4.0.88",
-    "@ai-sdk/mcp": "2.0.67",
-    "@ai-sdk/mistral": "4.0.57",
-    "@ai-sdk/openai": "4.0.84",
-    "@ai-sdk/otel": "1.0.128",
+    "@ai-sdk/amazon-bedrock": "5.0.133",
+    "@ai-sdk/anthropic": "4.0.97",
+    "@ai-sdk/azure": "4.0.117",
+    "@ai-sdk/cohere": "4.0.76",
+    "@ai-sdk/deepseek": "3.0.80",
+    "@ai-sdk/google": "4.0.112",
+    "@ai-sdk/mcp": "2.0.91",
+    "@ai-sdk/mistral": "4.0.80",
+    "@ai-sdk/openai": "4.0.109",
+    "@ai-sdk/otel": "1.0.163",
     "@anthropic-ai/claude-agent-sdk": "0.3.305",
     "@anthropic-ai/sdk": "0.125.0",
     "@aws-sdk/client-bedrock": "^3.1141.0",
@@ -39,18 +39,18 @@
     "@langfuse/vercel-ai-sdk": "5.11.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@opencode/client": "2.0.18",
-    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/api": "~1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/sdk-trace-base": "^2.11.0",
-    "@posthog/ai": "8.13.2",
-    "ai": "7.0.128",
+    "@posthog/ai": "8.18.5",
+    "ai": "7.0.163",
     "diff": "^9.0.0",
     "fast-glob": "^3.3.3",
-    "pdfjs-dist": "^6.3.289",
+    "pdfjs-dist": "^6.5.438",
     "unbash": "4.0.11",
     "undici": "^8.11.2",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "optionalDependencies": {
     "@ast-grep/cli": "^0.45.3",
@@ -60,7 +60,7 @@
     "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "4.0.22",
+    "@ai-sdk/provider": "4.0.36",
     "esbuild": "^0.28.2"
   }
 }

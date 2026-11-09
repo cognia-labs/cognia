@@ -320,6 +320,24 @@ describe("pollVideoJob", () => {
     expect(t.materialize).toHaveBeenCalledTimes(1)
   })
 
+  it("settles when the provider reports an upload without video data", async () => {
+    const t = setup()
+    await started(t)
+    t.getVideoStatus.mockResolvedValue({
+      status: "completed",
+      videos: [{ type: "uploaded", mediaType: "video/mp4" }],
+      warnings: [],
+      response: {},
+    })
+
+    await expect(t.engine.poll("vjob_1")).resolves.toMatchObject({
+      status: "failed",
+      error: { code: "generation_failed" },
+    })
+    expect(t.fetch).not.toHaveBeenCalled()
+    expect(t.materialize).not.toHaveBeenCalled()
+  })
+
   it("settles provider failures, oversize and expired results with their codes", async () => {
     const t = setup()
     await started(t)
