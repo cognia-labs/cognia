@@ -12,6 +12,8 @@ function memory(): Memory {
     projectId: "project-1",
     type: "semantic",
     text: "The private canonical statement.",
+    vectorDocId: "vec-1",
+    vectorTextHash: "hash-of-private-text",
     tags: ["preference"],
     importance: 8,
     createdAt: 1,
@@ -38,7 +40,9 @@ it("serializes memory sync as metadata plus ciphertext without canonical text", 
   expect(row.protocolVersion).toBe(1)
   expect(row.metadata).not.toHaveProperty("text")
   expect(row.metadata).not.toHaveProperty("vectorDocId")
+  expect(row.metadata).not.toHaveProperty("vectorTextHash")
   expect(serialized).not.toContain("private canonical")
+  expect(serialized).not.toContain("hash-of-private-text")
   expect(row.envelope).toMatchObject({ algorithm: "AES-256-GCM", keyId: "dek-1" })
 })
 

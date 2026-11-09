@@ -357,6 +357,8 @@ const MEMORY_FIELDS = {
   projectId: "local",
   // Each device keeps (and rebuilds) its own vector index and access stats.
   vectorDocId: "local",
+  // Certifies THIS device's vector index; another device must re-embed.
+  vectorTextHash: "local",
   lastAccessedAt: "local",
   accessCount: "local",
 } as const satisfies Record<keyof Memory, FieldPolicy>

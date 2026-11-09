@@ -14,6 +14,7 @@ export type MemorySyncMetadataV1 = Omit<
   Memory,
   | "text"
   | "vectorDocId"
+  | "vectorTextHash"
   | "sourceSessionId"
   | "sourceMessageId"
   | "sourcePluginId"
@@ -33,6 +34,9 @@ function toMetadata(memory: Memory): MemorySyncMetadataV1 {
   const {
     text: _text,
     vectorDocId: _vectorDocId,
+    // A content hash in plaintext metadata would be a derivative of the
+    // encrypted text, and it certifies only the sender's vector index.
+    vectorTextHash: _vectorTextHash,
     sourceSessionId: _sourceSessionId,
     sourceMessageId: _sourceMessageId,
     sourcePluginId: _sourcePluginId,

@@ -53,6 +53,7 @@ describe("account sync table policies", () => {
     expect(TABLE_POLICIES.sessions.fields.sdkSessionId).toBe("local")
     expect(TABLE_POLICIES.sessions.fields.platformBinding).toBe("local")
     expect(TABLE_POLICIES.memories.fields.vectorDocId).toBe("local")
+    expect(TABLE_POLICIES.memories.fields.vectorTextHash).toBe("local")
     expect(TABLE_POLICIES.skills.fields.nativeDirectory).toBe("local")
     expect(TABLE_POLICIES.characters.fields.sandboxPolicy).toBe("local")
     expect(syncedFields(TABLE_POLICIES.messages)).toEqual([
