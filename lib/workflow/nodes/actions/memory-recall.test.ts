@@ -258,7 +258,7 @@ describe("personal workflow reader", () => {
         id: "personal-source",
         sessionId: "source",
         role: "user",
-        text: "I prefer tea",
+        parts: [{ type: "text", text: "I prefer tea" }],
         createdAt: 1,
         metadata: { personalMarkVersion: 1, personalMarks: marks },
       })

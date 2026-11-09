@@ -352,7 +352,7 @@ describe("canonical command and receipt atomicity", () => {
           command = { kind, id: initial.id }
           break
         case "restore":
-          await updateMemory(initial.id, { status: "invalidated", invalidatedAt: 1 })
+          await getDb().memories.update(initial.id, { status: "invalidated", invalidatedAt: 1 })
           command = { kind, id: initial.id }
           break
         case "relocate":
