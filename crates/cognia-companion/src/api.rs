@@ -2524,6 +2524,10 @@ struct DeviceProofClaims {
 struct VerifiedDeviceProof {
     jti: String,
     issued_at: i64,
+    /// The clock `verify_device_proof` judged freshness against. Consuming
+    /// the proof reads the same instant: a second read could land past the
+    /// replay entry's expiry although the proof was still fresh.
+    verified_at: i64,
 }
 
 fn verify_device_proof(
@@ -2573,6 +2577,7 @@ fn verify_device_proof(
     Ok(VerifiedDeviceProof {
         jti: claims.jti,
         issued_at: claims.iat,
+        verified_at: now,
     })
 }
 
@@ -2602,7 +2607,7 @@ fn consume_device_proof(
     proof: &VerifiedDeviceProof,
 ) -> Result<(), Problem> {
     let device = format!("{tenant_id}\0{device_id}");
-    let now = unix_time_secs();
+    let now = proof.verified_at;
     // A replay passes `verify_device_proof` only while `iat` is within
     // `PROOF_CLOCK_SKEW_SECS` of now (and `exp`, which comes after `iat`, is
     // within its leeway), so the entry must outlive `iat + skew` and no longer.
@@ -3189,7 +3194,7 @@ NHOGSfGvImUJsp87eHADUoTcnM3YNw6hlxze9OpZFPC7D4AB8kSk3+6hhQ==
 
     #[test]
     fn a_device_past_its_proof_quota_is_refused_alone() {
-        let proof = |jti: String| VerifiedDeviceProof { jti, issued_at: unix_time_secs() };
+        let proof = |jti: String| VerifiedDeviceProof { jti, issued_at: unix_time_secs(), verified_at: unix_time_secs() };
         for index in 0..DPOP_PROOFS_PER_DEVICE {
             consume_device_proof("tenant-quota", "device-noisy", &proof(format!("noisy-{index}"))).unwrap();
         }
@@ -3203,10 +3208,25 @@ NHOGSfGvImUJsp87eHADUoTcnM3YNw6hlxze9OpZFPC7D4AB8kSk3+6hhQ==
     }
 
     #[test]
+    fn a_replay_verified_fresh_is_refused_however_late_it_is_consumed() {
+        // Long past by the wall clock, so a second clock read inside
+        // `consume_device_proof` would find the first use's entry expired.
+        let issued_at = unix_time_secs() - 1_000;
+        let jti = uuid::Uuid::new_v4().to_string();
+        let first = VerifiedDeviceProof { jti: jti.clone(), issued_at, verified_at: issued_at };
+        assert!(consume_device_proof("tenant-late", "device-late", &first).is_ok());
+        // The latest instant `verify_device_proof` still calls this proof fresh.
+        let replay = VerifiedDeviceProof { jti, issued_at, verified_at: issued_at + PROOF_CLOCK_SKEW_SECS };
+        let refused = consume_device_proof("tenant-late", "device-late", &replay).unwrap_err();
+        assert_eq!(refused.code, "device_proof_replay");
+    }
+
+    #[test]
     fn dpop_replay_cache_is_scoped_to_tenant_and_device() {
         let proof = VerifiedDeviceProof {
             jti: uuid::Uuid::new_v4().to_string(),
             issued_at: unix_time_secs(),
+            verified_at: unix_time_secs(),
         };
 
         assert!(consume_device_proof("tenant-a", "device-a", &proof).is_ok());

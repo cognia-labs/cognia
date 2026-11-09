@@ -482,6 +482,30 @@ describe("openDurabilityStore", () => {
     await reopened.close()
   })
 
+  it("reports a failed periodic upkeep instead of dropping it", async () => {
+    const source = makeSource()
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "sqlite-v5",
+      getSources: async () => [source],
+      compactEveryCommits: 1,
+    })
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      jest.spyOn(store.backend, "maintain" as never).mockImplementation((() => {
+        throw new Error("checkpoint refused")
+      }) as never)
+      await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("periodic upkeep failed"))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("checkpoint refused"))
+    } finally {
+      warn.mockRestore()
+    }
+    await store.close()
+  })
+
   it("re-pins a sqlite store's schema with a full compaction once a table appears", async () => {
     const source = makeSource()
     const store = await openDurabilityStore({

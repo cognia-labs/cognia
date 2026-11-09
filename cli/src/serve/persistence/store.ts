@@ -386,9 +386,14 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     // Compaction is off the commit path on purpose: the transaction is already
     // durable, so folding it into a checkpoint is background work. A failure
     // here is not data loss — the journal still holds every commit — so it is
-    // swallowed rather than propagated into an event listener.
+    // kept out of the event listener. It is still reported: an upkeep that
+    // keeps failing (a WAL checkpoint, say) lets the files grow unseen.
     if (compactEvery > 0 && sinceCompaction >= compactEvery && !compacting && !closing) {
-      void periodicCompaction().catch(() => {})
+      void periodicCompaction().catch((error: unknown) => {
+        console.warn(
+          `[durability] periodic upkeep failed; every commit is still journaled: ${error instanceof Error ? error.message : String(error)}`
+        )
+      })
     }
   }
 
