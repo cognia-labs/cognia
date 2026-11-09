@@ -92,7 +92,11 @@ export function createDesktopAdapter(deps: DesktopAdapterDeps = {}): UpdateAdapt
       // The control plane had nothing for us. Ask the Tauri endpoint directly
       // so a working release feed keeps the desktop updatable on its own.
       const check = deps.checkForUpdate ?? (await import("@/lib/tauri/updater")).checkForUpdate
-      const update = await check()
+      const update = await check({
+        channel: context.channel,
+        rolloutBucket: context.rolloutBucket,
+        manual: context.manual,
+      })
       if (!update) return []
       if (
         (context.catalogStatus === "ok" ||

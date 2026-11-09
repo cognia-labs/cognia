@@ -10,7 +10,15 @@ const isTauriMock = jest.fn<boolean, []>(() => true)
 jest.mock("@/lib/tauri", () => ({ isTauri: () => isTauriMock() }))
 
 const checkMock = jest.fn()
-jest.mock("@tauri-apps/plugin-updater", () => ({ check: () => checkMock() }), { virtual: true })
+const invokeMock = jest.fn((command: string, args: unknown) => checkMock(command, args))
+jest.mock("@tauri-apps/api/core", () => ({
+  invoke: (command: string, args: unknown) => invokeMock(command, args),
+}))
+jest.mock(
+  "@tauri-apps/plugin-updater",
+  () => ({ Update: jest.fn((metadata: unknown) => metadata) }),
+  { virtual: true }
+)
 
 const relaunchMock = jest.fn(async () => {})
 jest.mock("@tauri-apps/plugin-process", () => ({ relaunch: () => relaunchMock() }), {
@@ -32,14 +40,20 @@ const defaultUpdateSettings = {
   useProxy: true,
 }
 const settingsState = {
-  settings: { updates: { ...defaultUpdateSettings } } as Record<string, unknown>,
+  settings: {
+    updates: { ...defaultUpdateSettings },
+    updateCenter: { channel: "stable", rolloutBucket: 4321 },
+  } as Record<string, unknown>,
   save: saveMock,
   saveUpdateSettings: saveUpdateSettingsMock,
 }
 jest.mock("@/stores/settings/settings-store", () => ({
   useSettingsStore: Object.assign(
     (selector: (s: typeof settingsState) => unknown) => selector(settingsState),
-    { getState: () => settingsState }
+    {
+      getState: () => settingsState,
+      setState: (patch: Partial<typeof settingsState>) => Object.assign(settingsState, patch),
+    }
   ),
 }))
 
@@ -59,7 +73,10 @@ beforeEach(() => {
   jest.clearAllMocks()
   isTauriMock.mockReturnValue(true)
   jest.mocked(detectOsFamily).mockReturnValue("windows")
-  settingsState.settings = { updates: { ...defaultUpdateSettings } }
+  settingsState.settings = {
+    updates: { ...defaultUpdateSettings },
+    updateCenter: { channel: "stable", rolloutBucket: 4321 },
+  }
   saveUpdateSettingsMock.mockImplementation(async (patch: Record<string, unknown>) => {
     const current = settingsState.settings.updates as Record<string, unknown>
     settingsState.settings = { ...settingsState.settings, updates: { ...current, ...patch } }
@@ -70,6 +87,20 @@ beforeEach(() => {
 })
 
 describe("<UpdateCard />", () => {
+  it("checks the persisted channel manually without changing the cohort (U04)", async () => {
+    settingsState.settings.updateCenter = { channel: "beta", rolloutBucket: 9876 }
+    checkMock.mockResolvedValueOnce(null)
+    render(<UpdateCard />)
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }))
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("desktop_update_check", {
+        channel: "beta",
+        bucket: 0,
+        timeoutMs: 30_000,
+      })
+    )
+    expect(settingsState.settings.updateCenter).toEqual({ channel: "beta", rolloutBucket: 9876 })
+  })
   it("hands macOS off to the displayed release without auto-downloading (U13)", async () => {
     jest.mocked(detectOsFamily).mockReturnValue("macos")
     settingsState.settings = { updates: { ...defaultUpdateSettings, autoDownload: true } }

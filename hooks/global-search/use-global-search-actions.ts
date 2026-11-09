@@ -33,7 +33,7 @@ import { detectPlatform } from "@/lib/platform/detect"
 import { getQuickAction, runQuickAction } from "@/lib/plugin/registries/quick-action-registry"
 import { trackEvent } from "@/lib/telemetry/events/track-event"
 import { isTauri } from "@/lib/tauri"
-import { checkForUpdate } from "@/lib/tauri/updater"
+import { checkForUpdate, getUpdateCheckOptions } from "@/lib/tauri/updater"
 import { openRecorder } from "@/stores/skills/recorder-store"
 import { useChatStore } from "@/stores/chat"
 import { useProjectStore } from "@/stores/project/project-store"
@@ -344,7 +344,7 @@ export function useGlobalSearchActions({
             return
           }
           try {
-            const update = await checkForUpdate()
+            const update = await checkForUpdate({ ...getUpdateCheckOptions(), manual: true })
             if (!update) {
               toast.success(t("toasts.upToDate"))
               return

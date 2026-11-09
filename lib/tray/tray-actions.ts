@@ -17,7 +17,7 @@ import {
 } from "@/lib/support-report/app-facts"
 import { writeClipboardText } from "@/lib/tauri/clipboard"
 import { openExternal, revealInExplorer } from "@/lib/tauri/opener"
-import { checkForUpdate, type AvailableUpdate } from "@/lib/tauri/updater"
+import { checkForUpdate, getUpdateCheckOptions } from "@/lib/tauri/updater"
 
 import { toggleTrayAutostart } from "./autostart-control"
 
@@ -34,7 +34,7 @@ export interface TrayActionDeps {
   writeClipboard?: (text: string) => Promise<void>
   gather?: () => Promise<DiagnosticsFacts>
   toggleAutostart?: () => Promise<boolean>
-  check?: () => Promise<AvailableUpdate | null>
+  check?: typeof checkForUpdate
   requestReport?: () => void
 }
 
@@ -92,7 +92,10 @@ export async function reportIssue(deps: TrayActionDeps = {}): Promise<void> {
  */
 export async function checkUpdates(deps: TrayActionDeps = {}): Promise<TrayUpdateOutcome> {
   try {
-    const update = await (deps.check ?? checkForUpdate)()
+    const update = await (deps.check ?? checkForUpdate)({
+      ...getUpdateCheckOptions(),
+      manual: true,
+    })
     return update ? { kind: "available", version: update.version } : { kind: "upToDate" }
   } catch (err) {
     return { kind: "error", message: err instanceof Error ? err.message : String(err) }

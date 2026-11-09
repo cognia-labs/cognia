@@ -109,6 +109,7 @@ jest.mock("@/lib/pet/commands", () => ({
 }))
 jest.mock("@/lib/tauri/updater", () => ({
   checkForUpdate: (...a: unknown[]) => checkForUpdate(...a),
+  getUpdateCheckOptions: () => ({ channel: "beta", rolloutBucket: 4321 }),
 }))
 jest.mock("@/lib/workspace/open-folder", () => ({
   openFolderAsWorkspace: (...a: unknown[]) => openFolder(...a),
@@ -337,6 +338,11 @@ describe("useGlobalSearchActions", () => {
 
     checkForUpdate.mockResolvedValueOnce(null)
     await run("check-updates")
+    expect(checkForUpdate).toHaveBeenLastCalledWith({
+      channel: "beta",
+      rolloutBucket: 4321,
+      manual: true,
+    })
     expect(toast.success).toHaveBeenCalledWith("toasts.upToDate")
     checkForUpdate.mockResolvedValueOnce({ version: "9.9" })
     await run("check-updates")

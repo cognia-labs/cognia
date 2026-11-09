@@ -2,6 +2,101 @@ use serde::Serialize;
 use tauri::window::Color;
 use tauri::{Manager, Webview};
 
+/// The plugin's check response, including a resource owned by the calling webview.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopUpdateMetadata {
+    rid: tauri::ResourceId,
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+    raw_json: serde_json::Value,
+}
+
+fn desktop_update_endpoints(
+    mut endpoints: Vec<url::Url>,
+    channel: &str,
+    bucket: i32,
+) -> Result<Vec<url::Url>, String> {
+    if !matches!(channel, "stable" | "beta" | "canary") {
+        return Err("invalid update channel".into());
+    }
+    if !(0..10_000).contains(&bucket) {
+        return Err("invalid rollout bucket: expected 0..9999".into());
+    }
+    for endpoint in &mut endpoints {
+        // Only our control plane understands rollout policy. Preserve configured
+        // endpoint order, templates and the GitHub error fallback unchanged.
+        if endpoint.host_str() != Some("update.cognia.cn") {
+            continue;
+        }
+        let other_pairs: Vec<(String, String)> = endpoint
+            .query_pairs()
+            .filter(|(key, _)| key != "channel" && key != "bucket")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        endpoint
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(other_pairs)
+            .append_pair("channel", channel)
+            .append_pair("bucket", &bucket.to_string());
+    }
+    Ok(endpoints)
+}
+
+/// Override policy on the configured feed without exposing proxy credentials to IPC.
+#[tauri::command]
+pub async fn desktop_update_check(
+    webview: Webview,
+    channel: String,
+    bucket: i32,
+    timeout_ms: u64,
+) -> Result<Option<DesktopUpdateMetadata>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let raw_config = webview
+        .app_handle()
+        .config()
+        .plugins
+        .0
+        .get("updater")
+        .cloned()
+        .ok_or("updater configuration is missing")?;
+    let config: tauri_plugin_updater::Config =
+        serde_json::from_value(raw_config).map_err(|error| error.to_string())?;
+    let endpoints = desktop_update_endpoints(config.endpoints, &channel, bucket)?;
+    // Keep the plugin's comparator, key, TLS policy and process-env proxy defaults.
+    let updater = webview
+        .updater_builder()
+        .endpoints(endpoints)
+        .map_err(|error| error.to_string())?
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    // `time` is private to the plugin; chrono is already an app dependency.
+    let date = update
+        .date
+        .map(|date| {
+            chrono::DateTime::from_timestamp(date.unix_timestamp(), date.nanosecond())
+                .map(|date| date.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+                .ok_or_else(|| "invalid updater date representation".to_string())
+        })
+        .transpose()?;
+    Ok(Some(DesktopUpdateMetadata {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date,
+        body: update.body.clone(),
+        raw_json: update.raw_json.clone(),
+        rid: webview.resources_table().add(update),
+    }))
+}
+
 #[derive(Debug, thiserror::Error, Serialize)]
 pub enum AppError {
     #[error("name cannot be empty")]
@@ -289,6 +384,51 @@ pub fn menu_action_ids() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_update_validates_channel_and_bucket() {
+        for channel in ["stable", "beta", "canary"] {
+            for bucket in [0, 9999] {
+                assert!(desktop_update_endpoints(vec![], channel, bucket).is_ok());
+            }
+        }
+        for channel in ["", "Stable", "nightly", "beta&bucket=0"] {
+            assert!(desktop_update_endpoints(vec![], channel, 0).is_err());
+        }
+        for bucket in [-1, 10_000, i32::MAX] {
+            assert!(desktop_update_endpoints(vec![], "stable", bucket).is_err());
+        }
+    }
+
+    #[test]
+    fn desktop_update_queries_only_the_control_plane() {
+        let primary = url::Url::parse(
+            "https://update.cognia.cn/v1/tauri/{{target}}/{{arch}}/{{current_version}}?keep=a%20b&channel=stable&bucket=0&channel=canary#fragment",
+        ).unwrap();
+        let fallback = url::Url::parse(
+            "https://github.com/cognia-labs/cognia/releases/latest/download/latest.json?keep=1",
+        )
+        .unwrap();
+        let other = url::Url::parse("https://update.cognia.cn.example/v1/tauri/test").unwrap();
+        let result = desktop_update_endpoints(
+            vec![primary.clone(), fallback.clone(), other.clone()],
+            "beta",
+            9876,
+        )
+        .unwrap();
+        assert_eq!(result[0].path(), primary.path());
+        assert_eq!(result[0].fragment(), Some("fragment"));
+        assert_eq!(
+            result[0].query_pairs().collect::<Vec<_>>(),
+            vec![
+                ("keep".into(), "a b".into()),
+                ("channel".into(), "beta".into()),
+                ("bucket".into(), "9876".into())
+            ]
+        );
+        assert_eq!(result[1], fallback);
+        assert_eq!(result[2], other);
+    }
 
     #[test]
     fn greet_with_name() {

@@ -473,6 +473,7 @@ commands.allow = [
   "desktop_subscribe_events",
   "desktop_type",
   "desktop_unsubscribe",
+  "desktop_update_check",
   "desktop_window_op",
   "desktop_zoom",
   "destroy_pet_window",

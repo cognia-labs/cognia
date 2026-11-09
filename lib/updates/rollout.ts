@@ -10,31 +10,12 @@
 
 import type { UpdateCandidate, UpdateRollout } from "@cognia/agent-config-types"
 
-export const ROLLOUT_BUCKET_COUNT = 10_000
-
-/** Generate a fresh device bucket from crypto randomness when available. */
-export function generateRolloutBucket(random: () => number = Math.random): number {
-  const cryptoRef = globalThis.crypto
-  if (cryptoRef && typeof cryptoRef.getRandomValues === "function") {
-    const buf = new Uint32Array(1)
-    cryptoRef.getRandomValues(buf)
-    return buf[0] % ROLLOUT_BUCKET_COUNT
-  }
-  return Math.floor(random() * ROLLOUT_BUCKET_COUNT) % ROLLOUT_BUCKET_COUNT
-}
-
-/** Normalize a persisted bucket, regenerating anything out of range. */
-export function normalizeRolloutBucket(value: unknown, random?: () => number): number {
-  if (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= 0 &&
-    value < ROLLOUT_BUCKET_COUNT
-  ) {
-    return value
-  }
-  return generateRolloutBucket(random)
-}
+export {
+  ROLLOUT_BUCKET_COUNT,
+  generateRolloutBucket,
+  normalizeRolloutBucket,
+} from "@/lib/tauri/update-cohort"
+import { ROLLOUT_BUCKET_COUNT } from "@/lib/tauri/update-cohort"
 
 export type RolloutVerdict = "offered" | "not-yet" | "paused" | "revoked"
 

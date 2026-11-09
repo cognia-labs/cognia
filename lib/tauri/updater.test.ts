@@ -2,9 +2,21 @@ const isTauriMock = jest.fn<boolean, []>(() => true)
 jest.mock("@/lib/tauri", () => ({ isTauri: () => isTauriMock() }))
 
 const checkMock = jest.fn()
+const invokeMock = jest.fn((command: string, args: unknown) => checkMock(command, args))
+jest.mock("@tauri-apps/api/core", () => ({
+  ...jest.requireActual("@tauri-apps/api/core"),
+  // Bypass the global core mapper's no-op Resource.close for the real Update test.
+  Resource: jest.requireActual("../../node_modules/@tauri-apps/api/core.cjs").Resource,
+  invoke: (command: string, args: unknown) => invokeMock(command, args),
+}))
 jest.mock(
   "@tauri-apps/plugin-updater",
-  () => ({ check: (...args: unknown[]) => checkMock(...args) }),
+  () => ({
+    check: () => {
+      throw new Error("use desktop_update_check")
+    },
+    Update: jest.fn((metadata: unknown) => metadata),
+  }),
   {
     virtual: true,
   }
@@ -12,7 +24,9 @@ jest.mock(
 
 const settingsState = {
   loaded: true,
+  save: jest.fn(async (_patch: unknown) => {}),
   settings: {
+    updateCenter: { channel: "stable", rolloutBucket: 4321 },
     updates: {
       autoCheck: true,
       checkIntervalMinutes: 360,
@@ -32,8 +46,18 @@ const settingsState = {
     },
   },
 }
+const saveSettingsMock = jest.fn(
+  async (input: unknown, _options?: unknown): Promise<unknown> => input
+)
+jest.mock("@/lib/db/settings", () => ({
+  saveSettings: (input: unknown, options?: unknown) => saveSettingsMock(input, options),
+}))
+
 jest.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: { getState: () => settingsState },
+  useSettingsStore: {
+    getState: () => settingsState,
+    setState: (patch: Partial<typeof settingsState>) => Object.assign(settingsState, patch),
+  },
 }))
 
 const relaunchMock = jest.fn(async () => {})
@@ -66,6 +90,7 @@ type UpdateHandleFixture = {
 }
 
 import { DEFAULT_UPDATE_CENTER_SETTINGS } from "@cognia/agent-config-types"
+import { Update } from "@tauri-apps/plugin-updater"
 import { UpdateCoordinator } from "@/lib/updates/coordinator"
 import { createDesktopAdapter } from "@/lib/updates/adapters/desktop-adapter"
 
@@ -74,6 +99,7 @@ import {
   downloadAndInstallUpdate,
   downloadUpdate,
   getInstalledVersionAwaitingRestart,
+  getUpdateCheckOptions,
   installUpdate,
   isUpdateErrorPhase,
   relaunchAfterUpdate,
@@ -85,6 +111,7 @@ import {
 beforeEach(() => {
   jest.clearAllMocks()
   checkMock.mockReset()
+  invokeMock.mockImplementation((command: string, args: unknown) => checkMock(command, args))
   isTauriMock.mockReturnValue(true)
   settingsState.settings.updates = {
     autoCheck: true,
@@ -95,6 +122,7 @@ beforeEach(() => {
     useProxy: true,
   }
   settingsState.loaded = true
+  settingsState.settings.updateCenter = { channel: "stable", rolloutBucket: 4321 }
   settingsState.settings.networkProxy = {
     mode: "off",
     protocol: "http",
@@ -173,7 +201,7 @@ describe("offered version and resource ownership (U02, U08)", () => {
         persistence: {
           read: () => ({
             ...DEFAULT_UPDATE_CENTER_SETTINGS,
-            rolloutBucket: 0,
+            rolloutBucket: settingsState.settings.updateCenter.rolloutBucket,
             backgroundDownloadDesktop: true,
           }),
           write: async () => {},
@@ -389,6 +417,174 @@ describe("resolveUpdateSettings", () => {
 })
 
 describe("checkForUpdate", () => {
+  it("constructs a real plugin Update with usable download/install resource ids (U04)", async () => {
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window")
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string, args: unknown) => invokeMock(command, args),
+        },
+      },
+    })
+    try {
+      const ActualUpdate = jest.requireActual<typeof import("@tauri-apps/plugin-updater")>(
+        "@tauri-apps/plugin-updater"
+      ).Update
+      jest.mocked(Update).mockImplementationOnce((metadata) => new ActualUpdate(metadata))
+      const metadata = {
+        rid: 73,
+        currentVersion: "1.0.0",
+        version: "2.0.0",
+        rawJson: {},
+        body: "notes",
+      }
+      checkMock
+        .mockResolvedValueOnce(metadata)
+        .mockResolvedValueOnce(74)
+        .mockResolvedValue(undefined)
+      await expect(checkForUpdate({ channel: "beta", rolloutBucket: 4321 })).resolves.toMatchObject(
+        { version: "2.0.0", body: "notes" }
+      )
+      await expect(downloadAndInstallUpdate(undefined, { relaunch: false })).resolves.toBe(
+        "installed"
+      )
+      expect(Update).toHaveBeenCalledWith(metadata)
+      expect(invokeMock).toHaveBeenCalledWith(
+        "plugin:updater|download",
+        expect.objectContaining({ rid: 73, timeout: 30_000 })
+      )
+      expect(invokeMock).toHaveBeenCalledWith(
+        "plugin:updater|install",
+        expect.objectContaining({ updateRid: 73, bytesRid: 74 })
+      )
+      expect(invokeMock).toHaveBeenCalledWith("plugin:resources|close", { rid: 73 })
+    } finally {
+      if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor)
+      else Reflect.deleteProperty(globalThis, "window")
+    }
+  })
+
+  it("shares only concurrent checks with the same policy (U04)", async () => {
+    let finish!: (value: UpdateHandleFixture) => void
+    checkMock.mockReturnValueOnce(
+      new Promise<UpdateHandleFixture>((resolve) => {
+        finish = resolve
+      })
+    )
+    checkMock.mockResolvedValueOnce(null)
+    const stable = checkForUpdate({ channel: "stable", rolloutBucket: 4321 })
+    const beta = checkForUpdate({ channel: "beta", rolloutBucket: 4321 })
+    await waitForMockCall(checkMock)
+    expect(checkMock).toHaveBeenCalledTimes(1)
+    const old = handle()
+    finish(old)
+    await expect(stable).resolves.toMatchObject({ version: "2.0.0" })
+    await expect(beta).resolves.toBeNull()
+    expect(old.close).toHaveBeenCalledTimes(1)
+    expect(invokeMock).toHaveBeenLastCalledWith("desktop_update_check", {
+      channel: "beta",
+      bucket: 4321,
+      timeoutMs: 30_000,
+    })
+  })
+
+  it("waits for a protected download before changing channel (U04)", async () => {
+    const old = handle()
+    let finishDownload!: () => void
+    old.download.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDownload = resolve
+        })
+    )
+    checkMock.mockResolvedValueOnce(old).mockResolvedValueOnce(null)
+    await checkForUpdate({ channel: "stable", rolloutBucket: 4321 })
+    const downloading = downloadUpdate()
+    await waitForMockCall(old.download)
+    const beta = checkForUpdate({ channel: "beta", rolloutBucket: 4321 })
+    await Promise.resolve()
+    expect(old.close).not.toHaveBeenCalled()
+    expect(checkMock).toHaveBeenCalledTimes(1)
+    finishDownload()
+    await downloading
+    await expect(beta).resolves.toBeNull()
+    expect(old.close).toHaveBeenCalledTimes(1)
+  })
+
+  it("protects a download that starts before a queued policy check resumes (U04)", async () => {
+    const original = handle()
+    let finishCheck!: (value: UpdateHandleFixture) => void
+    let finishDownload!: () => void
+    original.download.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDownload = resolve
+        })
+    )
+    checkMock
+      .mockReturnValueOnce(
+        new Promise<UpdateHandleFixture>((resolve) => {
+          finishCheck = resolve
+        })
+      )
+      .mockResolvedValueOnce(null)
+    const stable = checkForUpdate({ channel: "stable", rolloutBucket: 4321 })
+    const beta = checkForUpdate({ channel: "beta", rolloutBucket: 4321 })
+    // The channel switch is queued, but this consumer starts downloading as
+    // soon as its own check resolves, before the queued check gets another turn.
+    const downloading = stable.then(() => downloadUpdate())
+    await waitForMockCall(checkMock)
+    finishCheck(original)
+    await waitForMockCall(original.download)
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
+    const closedWhileDownloading = original.close!.mock.calls.length
+    const checksWhileDownloading = checkMock.mock.calls.length
+    finishDownload()
+    await expect(downloading).resolves.toBe("downloaded")
+    await expect(beta).resolves.toBeNull()
+    expect(closedWhileDownloading).toBe(0)
+    expect(checksWhileDownloading).toBe(1)
+    expect(original.close).toHaveBeenCalledTimes(1)
+  })
+
+  it("carries channel, cohort and timeout to the app command (U04)", async () => {
+    settingsState.settings.updates.requestTimeoutSeconds = 45
+    checkMock.mockResolvedValueOnce(null)
+    await checkForUpdate({ channel: "beta", rolloutBucket: 9876 })
+    expect(invokeMock).toHaveBeenCalledWith("desktop_update_check", {
+      channel: "beta",
+      bucket: 9876,
+      timeoutMs: 45_000,
+    })
+  })
+
+  it("uses bucket zero only for a manual native check (U04)", async () => {
+    checkMock.mockResolvedValue(null)
+    await checkForUpdate({ channel: "canary", rolloutBucket: 9876, manual: true })
+    await checkForUpdate({ channel: "canary", rolloutBucket: 9876 })
+    expect(invokeMock.mock.calls.map(([, args]) => args)).toEqual([
+      { channel: "canary", bucket: 0, timeoutMs: 30_000 },
+      { channel: "canary", bucket: 9876, timeoutMs: 30_000 },
+    ])
+    expect(settingsState.settings.updateCenter.rolloutBucket).toBe(4321)
+  })
+
+  it.each([
+    { channel: "beta" as const, rolloutBucket: 4321 },
+    { channel: "stable" as const, rolloutBucket: 9876 },
+  ])("drops downloaded handles from another policy: %j (U04)", async (policy) => {
+    const first = handle()
+    const next = handle()
+    checkMock.mockResolvedValueOnce(first).mockResolvedValueOnce(next)
+    await checkForUpdate({ channel: "stable", rolloutBucket: 4321 })
+    await downloadUpdate()
+    await checkForUpdate(policy)
+    await downloadUpdate()
+    expect(first.close).toHaveBeenCalledTimes(1)
+    expect(next.download).toHaveBeenCalledTimes(1)
+  })
+
   it("returns null off the desktop shell without touching the plugin", async () => {
     isTauriMock.mockReturnValue(false)
     expect(await checkForUpdate()).toBeNull()
@@ -426,7 +622,11 @@ describe("checkForUpdate", () => {
 
     await checkForUpdate()
 
-    expect(checkMock).toHaveBeenCalledWith({ timeout: 45_000 })
+    expect(checkMock).toHaveBeenCalledWith("desktop_update_check", {
+      channel: "stable",
+      bucket: 4321,
+      timeoutMs: 45_000,
+    })
   })
 
   it("blocks instead of bypassing an active global proxy when updater proxy use is disabled", async () => {
@@ -453,7 +653,11 @@ describe("checkForUpdate", () => {
 
     await checkForUpdate()
 
-    expect(checkMock).toHaveBeenCalledWith({ timeout: 30_000 })
+    expect(checkMock).toHaveBeenCalledWith("desktop_update_check", {
+      channel: "stable",
+      bucket: 4321,
+      timeoutMs: 30_000,
+    })
   })
 
   it("fails closed before settings hydration completes", async () => {
@@ -547,6 +751,50 @@ describe("checkForUpdate", () => {
     await expect(checkForUpdate()).rejects.toEqual(
       expect.objectContaining({ code, phase: "check" })
     )
+  })
+})
+
+describe("getUpdateCheckOptions", () => {
+  it("reads the persisted policy and keeps the cohort unchanged", () => {
+    settingsState.settings.updateCenter = { channel: "canary", rolloutBucket: 9876 }
+    expect(getUpdateCheckOptions()).toEqual({ channel: "canary", rolloutBucket: 9876 })
+    expect(saveSettingsMock).not.toHaveBeenCalled()
+  })
+
+  it("generates and persists one shared bucket on first use", () => {
+    settingsState.settings.updateCenter = {
+      channel: "beta",
+      rolloutBucket: undefined as unknown as number,
+    }
+    const first = getUpdateCheckOptions()
+    const second = getUpdateCheckOptions()
+    expect(first).toEqual(second)
+    expect(first.rolloutBucket).toBeGreaterThanOrEqual(0)
+    expect(first.rolloutBucket).toBeLessThan(10_000)
+    expect(saveSettingsMock).toHaveBeenCalledTimes(1)
+    expect(saveSettingsMock).toHaveBeenCalledWith(expect.any(Function), { mirrorToHost: false })
+    const merge = saveSettingsMock.mock.calls[0][0] as (current: unknown) => unknown
+    // Only the cohort is merged into the row read at write time, so snapshots
+    // the Update Center wrote meanwhile survive.
+    const persistedSnapshots = {
+      "desktop:app": { assetId: "app", kind: "desktop", state: "current" },
+    }
+    expect(merge({ updateCenter: { channel: "beta", snapshots: persistedSnapshots } })).toEqual({
+      updateCenter: expect.objectContaining({
+        rolloutBucket: first.rolloutBucket,
+        snapshots: persistedSnapshots,
+      }),
+    })
+  })
+
+  it("keeps a bucket another writer persisted first", () => {
+    settingsState.settings.updateCenter = {
+      channel: "stable",
+      rolloutBucket: undefined as unknown as number,
+    }
+    getUpdateCheckOptions()
+    const merge = saveSettingsMock.mock.calls[0][0] as (current: unknown) => unknown
+    expect(merge({ updateCenter: { channel: "stable", rolloutBucket: 42 } })).toEqual({})
   })
 })
 

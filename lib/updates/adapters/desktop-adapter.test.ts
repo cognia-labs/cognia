@@ -44,6 +44,22 @@ describe("desktopTarget", () => {
 })
 
 describe("check", () => {
+  it("passes the selected channel and persisted cohort to native fallback (U04)", async () => {
+    const checkForUpdate = jest.fn(async () => null)
+    const adapter = createDesktopAdapter({ checkForUpdate })
+    await adapter.check({ ...CONTEXT, channel: "beta", rolloutBucket: 9876, manual: false })
+    expect(checkForUpdate).toHaveBeenCalledWith({
+      channel: "beta",
+      rolloutBucket: 9876,
+      manual: false,
+    })
+    await adapter.check({ ...CONTEXT, channel: "canary", rolloutBucket: 9876, manual: true })
+    expect(checkForUpdate).toHaveBeenLastCalledWith({
+      channel: "canary",
+      rolloutBucket: 9876,
+      manual: true,
+    })
+  })
   it("is unsupported off the desktop shell", () => {
     const adapter = createDesktopAdapter({ isTauri: () => false })
     expect(adapter.isSupported()).toBe(false)

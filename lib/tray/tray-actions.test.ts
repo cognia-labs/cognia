@@ -2,6 +2,10 @@ const openExternalMock = jest.fn().mockResolvedValue(undefined)
 const revealMock = jest.fn().mockResolvedValue(undefined)
 const writeClipboardMock = jest.fn().mockResolvedValue(undefined)
 const toggleTrayAutostartMock = jest.fn().mockResolvedValue(true)
+const settingsState = { settings: { updateCenter: { channel: "beta", rolloutBucket: 9876 } } }
+jest.mock("@/stores/settings/settings-store", () => ({
+  useSettingsStore: { getState: () => settingsState },
+}))
 
 jest.mock("@/lib/tauri/opener", () => ({
   openExternal: (url: string) => openExternalMock(url),
@@ -94,6 +98,7 @@ describe("outbound links", () => {
   it("checkUpdates → 'available' when the injected check finds a newer release", async () => {
     const check = jest.fn().mockResolvedValue({ version: "9.9.9" })
     await expect(checkUpdates({ check })).resolves.toEqual({ kind: "available", version: "9.9.9" })
+    expect(check).toHaveBeenCalledWith({ channel: "beta", rolloutBucket: 9876, manual: true })
   })
 
   it("checkUpdates → 'upToDate' when the injected check finds nothing", async () => {

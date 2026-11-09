@@ -9454,6 +9454,23 @@
       "outputSchema": "#/components/schemas/RpcResult"
     },
     {
+      "name": "desktop_update_check",
+      "resource": "desktop.update",
+      "verb": "check",
+      "arm": "desktop_update_check",
+      "target": "client",
+      "operation": "side-effect",
+      "capability": "client.local",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "transports": ["internal"],
+      "pagination": "none",
+      "longRunning": false,
+      "inputSchema": "#/components/schemas/RpcArgs",
+      "outputSchema": "#/components/schemas/RpcResult"
+    },
+    {
       "name": "desktop_window_op",
       "resource": "desktop.window",
       "verb": "control",

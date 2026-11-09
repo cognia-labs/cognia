@@ -93,6 +93,7 @@ import type { UpdateCandidate } from "@cognia/agent-config-types"
 import { getDb } from "@/lib/db/schema"
 import { saveSettings } from "@/lib/db/settings"
 import { useSettingsStore } from "@/stores/settings/settings-store"
+import { getUpdateCheckOptions } from "@/lib/tauri/updater"
 
 function settingsWithCenter(updateCenter: Partial<UpdateCenterSettings> = {}): AppSettings {
   return {
@@ -257,6 +258,28 @@ describe("productionAdapters", () => {
 })
 
 describe("getUpdateCoordinator", () => {
+  it("exposes the generated cohort to native checks before persistence finishes (U04)", async () => {
+    settingsState.settings = settingsWithCenter({ channel: "beta" })
+    const coordinator = getUpdateCoordinator()
+    const bucket = coordinator.rolloutBucket()
+    // No microtask has run the queued save yet.
+    expect(saveSettings).not.toHaveBeenCalled()
+    expect(readUpdateCenterSettings()).toMatchObject({ channel: "beta", rolloutBucket: bucket })
+    expect(getUpdateCheckOptions()).toEqual({ channel: "beta", rolloutBucket: bucket })
+    expect(coordinator.rolloutBucket()).toBe(bucket)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(saveSettings).toHaveBeenCalledTimes(1)
+    expect(readUpdateCenterSettings().rolloutBucket).toBe(bucket)
+  })
+
+  it("uses a cohort established by a native check without generating another (U04)", () => {
+    settingsState.settings = settingsWithCenter({ channel: "canary", rolloutBucket: 9876 })
+    expect(getUpdateCheckOptions()).toEqual({ channel: "canary", rolloutBucket: 9876 })
+    expect(getUpdateCoordinator().rolloutBucket()).toBe(9876)
+    expect(saveSettings).not.toHaveBeenCalled()
+    expect(useSettingsStore.setState).not.toHaveBeenCalled()
+  })
+
   it("refuses an old coordinator's write after the database changes before the runtime scope (U10)", async () => {
     const first = await offeredPluginRows()
     const settingsB = settingsWithCenter({ channel: "beta", rolloutBucket: 1 })

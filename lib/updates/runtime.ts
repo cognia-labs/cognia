@@ -55,6 +55,24 @@ function settingsPersistence(
 ): UpdatePersistence {
   const scope = { db, assertActive }
   const write: UpdatePersistence["write"] = (patch) => {
+    // Expose a newly generated cohort before async persistence so native manual
+    // entry points cannot generate a second bucket during the first catalog check.
+    if (patch.rolloutBucket !== undefined) {
+      assertActive()
+      const current = useSettingsStore.getState().settings
+      if (current) {
+        useSettingsStore.setState({
+          settings: {
+            ...current,
+            updateCenter: {
+              ...DEFAULT_UPDATE_CENTER_SETTINGS,
+              ...current.updateCenter,
+              rolloutBucket: patch.rolloutBucket,
+            },
+          },
+        })
+      }
+    }
     const task = settingsSaveQueue
       .catch(() => undefined)
       .then(async () => {

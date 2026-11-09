@@ -666,6 +666,7 @@ pub fn run() {
         // backend panic (ADR-0020 W1).
         .invoke_handler(tauri::generate_handler![
             commands::greet,
+            commands::desktop_update_check,
             commands::menu_action_ids,
             commands::set_window_background_color,
             commands::backup_stream_temporary_path,

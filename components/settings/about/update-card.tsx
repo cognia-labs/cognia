@@ -31,6 +31,7 @@ import { detectOsFamily } from "@/lib/platform/os"
 import { openExternal } from "@/lib/tauri/opener"
 import {
   checkForUpdate,
+  getUpdateCheckOptions,
   downloadAndInstallUpdate,
   downloadUpdate,
   getInstalledVersionAwaitingRestart,
@@ -155,7 +156,7 @@ export function UpdateCard() {
     setChecking(true)
     setDownloaded(false)
     try {
-      const update = await checkForUpdate()
+      const update = await checkForUpdate({ ...getUpdateCheckOptions(), manual: true })
       await recordSuccessfulCheck()
       if (!update) {
         loggers.app.info("about.updateCheck", { status: "latest" })

@@ -1,11 +1,57 @@
 "use client"
 
-import { DEFAULT_UPDATE_SETTINGS, type UpdateSettings } from "@cognia/agent-config-types"
+import {
+  DEFAULT_UPDATE_CENTER_SETTINGS,
+  DEFAULT_UPDATE_SETTINGS,
+  type UpdateChannel,
+  type UpdateSettings,
+} from "@cognia/agent-config-types"
 
 import { isTauri } from "@/lib/tauri"
 import { isProxyActive } from "@/lib/network/proxy-config"
+import { saveSettings } from "@/lib/db/settings"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { loggers } from "@cognia/logging"
+import { isValidRolloutBucket, normalizeRolloutBucket } from "./update-cohort"
+
+/** Policy shared by native discovery and every manual entry point. */
+export interface UpdateCheckOptions {
+  channel: UpdateChannel
+  rolloutBucket: number
+  manual?: boolean
+}
+
+/**
+ * Establish one cohort synchronously, then persist it just like the coordinator.
+ * This lives in the foundation so the native bridge never imports lib/updates.
+ */
+export function getUpdateCheckOptions(): UpdateCheckOptions {
+  const state = useSettingsStore.getState()
+  if (state.loaded === false || !state.settings) {
+    throw new Error("PROXY_NOT_INITIALIZED: updater routing policy is still loading")
+  }
+  const center = { ...DEFAULT_UPDATE_CENTER_SETTINGS, ...state.settings.updateCenter }
+  const rolloutBucket = normalizeRolloutBucket(center.rolloutBucket)
+  if (rolloutBucket !== center.rolloutBucket) {
+    useSettingsStore.setState({
+      settings: { ...state.settings, updateCenter: { ...center, rolloutBucket } },
+    })
+    // Merge only the cohort into the persisted row: a whole `updateCenter`
+    // copied from memory would overwrite snapshots the Update Center is
+    // writing concurrently. A cohort generated elsewhere first wins.
+    void saveSettings(
+      (current) => {
+        const persisted = { ...DEFAULT_UPDATE_CENTER_SETTINGS, ...current.updateCenter }
+        if (isValidRolloutBucket(persisted.rolloutBucket)) return {}
+        return { updateCenter: { ...persisted, rolloutBucket } }
+      },
+      { mirrorToHost: false }
+    ).catch((error: unknown) => {
+      loggers.app.warn("update cohort persistence failed", { error: String(error) })
+    })
+  }
+  return { channel: center.channel, rolloutBucket }
+}
 
 /** Available update surfaced to the UI. */
 export interface AvailableUpdate {
@@ -81,6 +127,9 @@ const MAX_REQUEST_TIMEOUT_SECONDS = 5 * 60
 
 let pendingUpdate: UpdateHandle | null = null
 let pendingUpdateAt = 0
+let pendingPolicy: string | null = null
+let checkPolicy: string | null = null
+let lastCheckOptions: UpdateCheckOptions | undefined
 let pendingDownloaded = false
 let installedVersionAwaitingRestart: string | null = null
 const installedRestartListeners = new Set<() => void>()
@@ -186,9 +235,13 @@ async function closeHandle(handle: UpdateHandle | null): Promise<void> {
   }
 }
 
-async function replacePendingUpdate(handle: UpdateHandle | null): Promise<void> {
+async function replacePendingUpdate(
+  handle: UpdateHandle | null,
+  policy: string | null = null
+): Promise<void> {
   const previous = pendingUpdate
   pendingUpdate = handle
+  pendingPolicy = handle ? policy : null
   pendingUpdateAt = handle ? Date.now() : 0
   pendingDownloaded = false
   if (previous && previous !== handle) await closeHandle(previous)
@@ -237,20 +290,45 @@ function classifyError(error: unknown, phase: UpdatePhase): AppUpdateError {
   return new AppUpdateError(code, phase, message, error)
 }
 
+function policyKey(options: UpdateCheckOptions): string {
+  return `${options.channel}:${options.manual ? 0 : options.rolloutBucket}`
+}
+
 /**
  * Check the signed release endpoint once. Concurrent callers share the same
- * request, and checks during a download/install reuse the active native
- * resource instead of invalidating it.
+ * policy's request; active downloads and installs retain their native resource.
  */
-function startCheck(): Promise<AvailableUpdate | null> {
-  if (checkInFlight) return checkInFlight
+function startCheck(options: UpdateCheckOptions): Promise<AvailableUpdate | null> {
+  const policy = policyKey(options)
+  if (checkInFlight) {
+    if (checkPolicy === policy) return checkInFlight
+    // A consumer may start a download as the preceding check resolves. Re-enter
+    // the public guard before switching policy so that resource stays protected.
+    return checkInFlight.catch(() => undefined).then(() => checkForUpdate(options))
+  }
+  lastCheckOptions = { ...options }
+  checkPolicy = policy
 
   const task = (async () => {
     try {
-      const { check } = await import("@tauri-apps/plugin-updater")
-      const update = (await check(requestOptions().check)) as UpdateHandle | null
+      const { Update } = await import("@tauri-apps/plugin-updater")
+      const { invoke } = await import("@tauri-apps/api/core")
+      const { timeout } = requestOptions().check
+      // Native bestRolling only admits state=rolling; inRollout refuses rollout<=0.
+      // Bucket zero bypasses positive percentages for manual Check, never a pause
+      // or revocation. Keep the persisted device cohort unchanged.
+      const metadata = await invoke<ConstructorParameters<typeof Update>[0] | null>(
+        "desktop_update_check",
+        {
+          channel: options.channel,
+          bucket: options.manual ? 0 : options.rolloutBucket,
+          timeoutMs: timeout,
+        }
+      )
+      const update: UpdateHandle | null = metadata ? new Update(metadata) : null
       if (
         pendingUpdate &&
+        pendingPolicy === policy &&
         (downloadInFlight ||
           installInFlight ||
           (pendingDownloaded && update?.version === pendingUpdate.version))
@@ -259,25 +337,36 @@ function startCheck(): Promise<AvailableUpdate | null> {
         if (update !== kept) await closeHandle(update)
         return availableFromHandle(kept)
       }
-      await replacePendingUpdate(update)
+      await replacePendingUpdate(update, policy)
       return availableFromHandle(update)
     } catch (error) {
       throw classifyError(error, "check")
     } finally {
       checkInFlight = null
+      checkPolicy = null
     }
   })()
   checkInFlight = task
   return task
 }
 
-export function checkForUpdate(): Promise<AvailableUpdate | null> {
+export function checkForUpdate(options?: UpdateCheckOptions): Promise<AvailableUpdate | null> {
   if (!isTauri()) return Promise.resolve(null)
   if (installedVersionAwaitingRestart) return Promise.resolve(null)
-  if ((downloadInFlight || installInFlight) && pendingUpdate) {
-    return Promise.resolve(availableFromHandle(pendingUpdate))
+  try {
+    options ??= getUpdateCheckOptions()
+  } catch (error) {
+    return Promise.reject(classifyError(error, "check"))
   }
-  return startCheck()
+  if ((downloadInFlight || installInFlight) && pendingUpdate) {
+    if (pendingPolicy === policyKey(options))
+      return Promise.resolve(availableFromHandle(pendingUpdate))
+    // Never close a resource while the plugin is downloading/installing it.
+    return Promise.allSettled([downloadInFlight, installInFlight]).then(() =>
+      checkForUpdate(options)
+    )
+  }
+  return startCheck(options)
 }
 
 async function ensurePendingUpdate(expectedVersion?: string): Promise<UpdateHandle | null> {
@@ -297,7 +386,7 @@ async function ensurePendingUpdate(expectedVersion?: string): Promise<UpdateHand
   // This check is part of the download operation itself. Calling the public
   // function here would mistake our own `downloadInFlight` lock for a
   // competing download and skip the required fetch when the cache is empty.
-  await startCheck()
+  await startCheck(lastCheckOptions ?? getUpdateCheckOptions())
   return pendingUpdate
 }
 
@@ -442,6 +531,7 @@ export function installUpdate(options: InstallUpdateOptions = {}): Promise<Insta
     }
 
     pendingUpdate = null
+    pendingPolicy = null
     pendingUpdateAt = 0
     pendingDownloaded = false
     await closeHandle(handle)
@@ -476,10 +566,13 @@ export async function downloadAndInstallUpdate(
 export function __resetPendingUpdate(): void {
   const handle = pendingUpdate
   pendingUpdate = null
+  pendingPolicy = null
   pendingUpdateAt = 0
   pendingDownloaded = false
   setInstalledVersionAwaitingRestart(null)
   checkInFlight = null
+  checkPolicy = null
+  lastCheckOptions = undefined
   downloadInFlight = null
   installInFlight = null
   void closeHandle(handle)
