@@ -6,51 +6,75 @@ jest.mock("dexie-react-hooks", () => ({
   useLiveQuery: (...args: unknown[]) => useLiveQueryMock(...args),
 }))
 
-let dragEnd: ((event: unknown) => void) | undefined
+// The shared KanbanBoard owns the DndContext; capture its handlers so a test
+// can play a drag through it.
+type DndProps = {
+  children?: React.ReactNode
+  onDragStart?: (event: { active: { id: string } }) => void
+  onDragOver?: (event: { over: { id: string } | null }) => void
+  onDragEnd?: (event: { active: { id: string }; over: { id: string } | null }) => void
+}
+let dndProps: DndProps = {}
 jest.mock("@dnd-kit/core", () => ({
-  DndContext: ({
-    children,
-    onDragEnd,
-  }: {
-    children: React.ReactNode
-    onDragEnd: (event: unknown) => void
-  }) => {
-    dragEnd = onDragEnd
-    return <div>{children}</div>
+  DndContext: (props: DndProps) => {
+    dndProps = props
+    return <div>{props.children}</div>
   },
+  DragOverlay: ({ children }: { children?: React.ReactNode }) => (
+    <div data-testid="dnd-drag-overlay">{children}</div>
+  ),
+  KeyboardSensor: function KeyboardSensor() {},
   PointerSensor: function PointerSensor() {},
   closestCorners: jest.fn(),
+  defaultDropAnimationSideEffects: jest.fn(() => jest.fn()),
   useSensor: jest.fn(() => ({})),
   useSensors: jest.fn(() => []),
-  useDraggable: jest.fn(() => ({
+  useDroppable: jest.fn(() => ({ setNodeRef: jest.fn(), isOver: false })),
+}))
+jest.mock("@dnd-kit/sortable", () => ({
+  SortableContext: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  sortableKeyboardCoordinates: jest.fn(),
+  verticalListSortingStrategy: jest.fn(),
+  useSortable: jest.fn(() => ({
     attributes: {},
     listeners: {},
     setNodeRef: jest.fn(),
     transform: null,
+    transition: undefined,
     isDragging: false,
   })),
-  useDroppable: jest.fn(() => ({ setNodeRef: jest.fn(), isOver: false })),
 }))
+jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
 
 const createAgentTaskMock = jest.fn()
-const moveAgentTaskMock = jest.fn()
+const reorderAgentTasksMock = jest.fn()
 const addCommentMock = jest.fn()
 jest.mock("@/lib/db/agent-tasks", () => ({
   listAgentTasks: jest.fn(),
   listAgentTaskAttempts: jest.fn(),
   createAgentTask: (...args: unknown[]) => createAgentTaskMock(...args),
-  moveAgentTask: (...args: unknown[]) => moveAgentTaskMock(...args),
+  reorderAgentTasks: (...args: unknown[]) => reorderAgentTasksMock(...args),
   addAgentTaskComment: (...args: unknown[]) => addCommentMock(...args),
 }))
 const runNowMock = jest.fn()
 const ensureScheduleMock = jest.fn()
-jest.mock("@/lib/agent-tasks/runtime", () => ({
-  runAgentTaskNow: (...args: unknown[]) => runNowMock(...args),
-  ensureAgentTaskSchedule: (...args: unknown[]) => ensureScheduleMock(...args),
-  pauseAgentTask: jest.fn(),
-  resumeAgentTask: jest.fn(),
-  cancelAgentTask: jest.fn(),
-}))
+const applyMoveMock = jest.fn()
+jest.mock("@/lib/agent-tasks/runtime", () => {
+  class AgentTaskMoveDeniedError extends Error {
+    constructor(readonly reason: string) {
+      super(`Agent task move denied: ${reason}`)
+    }
+  }
+  return {
+    AgentTaskMoveDeniedError,
+    applyAgentTaskMove: (...args: unknown[]) => applyMoveMock(...args),
+    runAgentTaskNow: (...args: unknown[]) => runNowMock(...args),
+    ensureAgentTaskSchedule: (...args: unknown[]) => ensureScheduleMock(...args),
+    pauseAgentTask: jest.fn(),
+    resumeAgentTask: jest.fn(),
+    cancelAgentTask: jest.fn(),
+  }
+})
 const skillSuggestionCardMock = jest.fn((..._args: unknown[]) => (
   <div data-testid="run-skill-suggestion" />
 ))
@@ -58,6 +82,9 @@ jest.mock("@/components/chat/skill-suggestion-card", () => ({
   SkillSuggestionCard: (props: unknown) => skillSuggestionCardMock(props),
 }))
 
+import { act } from "react"
+import { toast } from "sonner"
+import { AgentTaskMoveDeniedError } from "@/lib/agent-tasks/runtime"
 import { AgentTaskBoard, AgentTaskCreateForm } from "./agent-task-board"
 
 const baseTask: AgentTask = {
@@ -79,10 +106,12 @@ const baseTask: AgentTask = {
 }
 
 beforeEach(() => {
-  dragEnd = undefined
+  dndProps = {}
+  jest.mocked(toast.error).mockClear()
   useLiveQueryMock.mockReset().mockReturnValue([])
   createAgentTaskMock.mockReset().mockResolvedValue(baseTask)
-  moveAgentTaskMock.mockReset().mockResolvedValue(undefined)
+  reorderAgentTasksMock.mockReset().mockResolvedValue(undefined)
+  applyMoveMock.mockReset().mockResolvedValue(undefined)
   addCommentMock.mockReset().mockResolvedValue(undefined)
   runNowMock.mockReset().mockResolvedValue(undefined)
   ensureScheduleMock.mockReset().mockResolvedValue("scheduled-1")
@@ -114,11 +143,73 @@ it("starts a pending card through the shared Scheduler runtime", async () => {
   await waitFor(() => expect(runNowMock).toHaveBeenCalledWith("task-1"))
 })
 
-it("uses guarded drag transitions for review verdicts", async () => {
-  useLiveQueryMock.mockReturnValueOnce([{ ...baseTask, status: "review" }]).mockReturnValueOnce([])
-  render(<AgentTaskBoard agentId="agent-1" />)
-  dragEnd?.({ active: { id: "task-1" }, over: { id: "status:completed" } })
-  await waitFor(() => expect(moveAgentTaskMock).toHaveBeenCalledWith("task-1", "completed"))
+/** Serve `tasks` to the board's live query and nothing to each card's attempts. */
+function serveTasks(tasks: AgentTask[]) {
+  useLiveQueryMock.mockImplementation((_query: unknown, deps: unknown[]) =>
+    deps[0] === "agent-1" ? tasks : []
+  )
+}
+
+it("moves a dropped card through the runtime that owns the Scheduler task", async () => {
+  serveTasks([{ ...baseTask, status: "review" }])
+  render(<AgentTaskBoard agentId="agent-1" showCreateForm={false} />)
+  act(() => dndProps.onDragEnd?.({ active: { id: "task-1" }, over: { id: "col:completed" } }))
+  await waitFor(() =>
+    expect(applyMoveMock).toHaveBeenCalledWith("task-1", "completed", undefined, 0)
+  )
+})
+
+it("records the verdict buttons through the same runtime entry", async () => {
+  serveTasks([{ ...baseTask, status: "review" }])
+  render(<AgentTaskBoard agentId="agent-1" showCreateForm={false} />)
+  fireEvent.click(screen.getByRole("button", { name: "Reject" }))
+  await waitFor(() => expect(applyMoveMock).toHaveBeenCalledWith("task-1", "failed"))
+})
+
+it("refuses a drop the guard denies, naming why, without writing", () => {
+  serveTasks([baseTask])
+  render(<AgentTaskBoard agentId="agent-1" showCreateForm={false} />)
+  act(() => dndProps.onDragEnd?.({ active: { id: "task-1" }, over: { id: "col:in_progress" } }))
+  expect(toast.error).toHaveBeenCalledWith(
+    "Only the running Agent can start a task or send it to review."
+  )
+  expect(applyMoveMock).not.toHaveBeenCalled()
+})
+
+it("names the guard's reason when the task moved on before the write", async () => {
+  applyMoveMock.mockRejectedValueOnce(new AgentTaskMoveDeniedError("illegal-transition"))
+  serveTasks([{ ...baseTask, status: "in_progress" }])
+  render(<AgentTaskBoard agentId="agent-1" showCreateForm={false} />)
+  act(() => dndProps.onDragEnd?.({ active: { id: "task-1" }, over: { id: "col:paused" } }))
+  await waitFor(() =>
+    expect(toast.error).toHaveBeenCalledWith("A task can't move from that column to this one.")
+  )
+})
+
+it("persists a reorder within a column", async () => {
+  serveTasks([
+    { ...baseTask, id: "a", order: 0 },
+    { ...baseTask, id: "b", order: 1 },
+  ])
+  render(<AgentTaskBoard agentId="agent-1" showCreateForm={false} />)
+  act(() => dndProps.onDragEnd?.({ active: { id: "b" }, over: { id: "a" } }))
+  await waitFor(() =>
+    expect(reorderAgentTasksMock).toHaveBeenCalledWith([
+      { id: "b", order: 0 },
+      { id: "a", order: 1 },
+    ])
+  )
+})
+
+it("greys out columns the dragged card may not enter and marks where it would land", () => {
+  serveTasks([{ ...baseTask, status: "in_progress" }])
+  render(<AgentTaskBoard agentId="agent-1" showCreateForm={false} />)
+  act(() => dndProps.onDragStart?.({ active: { id: "task-1" } }))
+  act(() => dndProps.onDragOver?.({ over: { id: "col:paused" } }))
+  expect(screen.getByTestId("agent-task-column-review")).toHaveAttribute("data-dimmed", "true")
+  expect(screen.getByTestId("agent-task-column-paused")).not.toHaveAttribute("data-dimmed")
+  expect(screen.getByTestId("agent-task-drop-indicator-paused")).toBeInTheDocument()
+  expect(screen.getByTestId("agent-task-overlay")).toHaveTextContent("Research")
 })
 
 it("offers successful run attempts to the Skill review flow", async () => {
@@ -200,4 +291,22 @@ it("heads each column with the tracker's status glyph and lets a host bound its 
   const pending = screen.getByTestId("agent-task-column-pending")
   expect(pending.querySelector('[data-testid="issue-status-icon-backlog"]')).not.toBeNull()
   expect(screen.getByTestId("agent-task-column-review")).toHaveTextContent("No tasks")
+})
+
+it("reports any other write failure with the generic error toast", async () => {
+  reorderAgentTasksMock.mockRejectedValueOnce(new Error("disk full"))
+  serveTasks([
+    { ...baseTask, id: "a", order: 0 },
+    { ...baseTask, id: "b", order: 1 },
+  ])
+  render(<AgentTaskBoard agentId="agent-1" showCreateForm={false} />)
+  act(() => dndProps.onDragEnd?.({ active: { id: "b" }, over: { id: "a" } }))
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Task action failed: disk full"))
+})
+
+it("shows its own empty panel when the host gives none", () => {
+  render(<AgentTaskBoard agentId="agent-1" />)
+  expect(screen.getByText("No tasks yet")).toBeInTheDocument()
+  expect(screen.getByText("Add a task above to build this Agent's queue.")).toBeInTheDocument()
+  expect(screen.queryByTestId("agent-task-columns")).not.toBeInTheDocument()
 })

@@ -2,8 +2,12 @@ import type { AgentTask } from "@/types/agent/agent-task"
 import type { TaskExecution } from "@/types/scheduler"
 import {
   acceptedStart,
+  AgentTaskMoveDeniedError,
+  applyAgentTaskMove,
   cancelAgentTask,
   ensureAgentTaskSchedule,
+  pauseAgentTask,
+  resumeAgentTask,
   reconcileAgentTaskRuntime,
   runAgentTaskNow,
   startAgentTaskNow,
@@ -39,6 +43,9 @@ function fixture(row = task()) {
     status: "running" as const,
   }))
   const deleteTask = jest.fn(async () => true)
+  const pauseTask = jest.fn(async () => true)
+  const pauseTaskIfIdle = jest.fn(async () => true)
+  const resumeTask = jest.fn(async () => true)
   const bindSchedule = jest.fn(async () => undefined)
   const moveTask = jest.fn(async () => row)
   const getExecution = jest.fn<
@@ -58,8 +65,9 @@ function fixture(row = task()) {
       createTask,
       runTaskNow: runTaskNowMock,
       startTaskNow: startTaskNowMock,
-      pauseTask: jest.fn(async () => true),
-      resumeTask: jest.fn(async () => true),
+      pauseTask,
+      pauseTaskIfIdle,
+      resumeTask,
       deleteTask,
       getExecution,
       reconcile,
@@ -68,6 +76,9 @@ function fixture(row = task()) {
     runTaskNowMock,
     startTaskNowMock,
     deleteTask,
+    pauseTask,
+    pauseTaskIfIdle,
+    resumeTask,
     bindSchedule,
     moveTask,
     reconcile,
@@ -147,6 +158,93 @@ describe("single-Agent task Scheduler runtime", () => {
 
     await expect(resolveExecution("missing")).resolves.toBeNull()
   })
+
+  it("refuses a stale cancel, pause or resume before touching the Scheduler", async () => {
+    const fx = fixture(task({ scheduledTaskId: "scheduled-existing", status: "completed" }))
+    await expect(cancelAgentTask("task-1", fx.deps)).rejects.toBeInstanceOf(
+      AgentTaskMoveDeniedError
+    )
+    await expect(pauseAgentTask("task-1", fx.deps)).rejects.toMatchObject({
+      reason: "illegal-transition",
+    })
+    await expect(resumeAgentTask("task-1", fx.deps)).rejects.toMatchObject({
+      reason: "illegal-transition",
+    })
+    expect(fx.deleteTask).not.toHaveBeenCalled()
+    expect(fx.pauseTask).not.toHaveBeenCalled()
+    expect(fx.resumeTask).not.toHaveBeenCalled()
+    expect(fx.moveTask).not.toHaveBeenCalled()
+  })
+})
+
+describe("applyAgentTaskMove", () => {
+  const scheduled = { scheduledTaskId: "scheduled-1" }
+
+  it("pauses the Scheduler task when a running task is moved to paused", async () => {
+    const fx = fixture(task({ ...scheduled, status: "in_progress" }))
+    await applyAgentTaskMove("task-1", "paused", fx.deps)
+    expect(fx.pauseTask).toHaveBeenCalledWith("scheduled-1")
+    expect(fx.moveTask).toHaveBeenCalledWith("task-1", "paused", 100)
+  })
+
+  it("deletes the Scheduler task when a task is cancelled", async () => {
+    for (const status of ["pending", "in_progress", "paused", "failed"] as const) {
+      const fx = fixture(task({ ...scheduled, status }))
+      await applyAgentTaskMove("task-1", "cancelled", fx.deps)
+      expect(fx.deleteTask).toHaveBeenCalledWith("scheduled-1")
+      expect(fx.moveTask).toHaveBeenCalledWith("task-1", "cancelled", 100)
+    }
+  })
+
+  it("resumes the Scheduler task when a paused task goes back to pending", async () => {
+    const fx = fixture(task({ ...scheduled, status: "paused" }))
+    await applyAgentTaskMove("task-1", "pending", fx.deps)
+    expect(fx.moveTask).toHaveBeenCalledWith("task-1", "pending", 100, { expectedStatus: "paused" })
+    expect(fx.resumeTask).toHaveBeenCalledWith("scheduled-1")
+  })
+
+  it("writes plain status moves without Scheduler side effects", async () => {
+    const retry = fixture(task({ ...scheduled, status: "failed" }))
+    await applyAgentTaskMove("task-1", "pending", retry.deps)
+    expect(retry.moveTask).toHaveBeenCalledWith("task-1", "pending", 100)
+    expect(retry.resumeTask).not.toHaveBeenCalled()
+
+    const verdict = fixture(task({ ...scheduled, status: "review" }))
+    await applyAgentTaskMove("task-1", "completed", verdict.deps)
+    expect(verdict.moveTask).toHaveBeenCalledWith("task-1", "completed", 100)
+    for (const fx of [retry, verdict]) {
+      expect(fx.pauseTask).not.toHaveBeenCalled()
+      expect(fx.deleteTask).not.toHaveBeenCalled()
+    }
+  })
+
+  it("does nothing for a move onto the task's own column", async () => {
+    const fx = fixture(task({ ...scheduled, status: "paused" }))
+    await applyAgentTaskMove("task-1", "paused", fx.deps)
+    expect(fx.pauseTask).not.toHaveBeenCalled()
+    expect(fx.moveTask).not.toHaveBeenCalled()
+  })
+
+  it("throws the guard's reason and touches nothing for a refused move", async () => {
+    const fx = fixture(task({ ...scheduled, status: "pending" }))
+    await expect(applyAgentTaskMove("task-1", "in_progress", fx.deps)).rejects.toMatchObject({
+      name: "AgentTaskMoveDeniedError",
+      reason: "runtime-owned",
+    })
+    await expect(applyAgentTaskMove("task-1", "blocked", fx.deps)).rejects.toMatchObject({
+      reason: "dependency-owned",
+    })
+    expect(fx.moveTask).not.toHaveBeenCalled()
+    expect(fx.deleteTask).not.toHaveBeenCalled()
+  })
+
+  it("reports a missing task", async () => {
+    const fx = fixture()
+    const deps = { ...fx.deps, getTask: async () => undefined }
+    await expect(applyAgentTaskMove("task-1", "cancelled", deps)).rejects.toThrow(
+      "Agent task not found"
+    )
+  })
 })
 
 describe("startAgentTaskNow", () => {
@@ -207,4 +305,75 @@ describe("acceptedStart", () => {
       }, "s")
     ).resolves.toMatchObject({ status: "running" })
   })
+})
+
+describe("Scheduler move refusal", () => {
+  it.each([
+    ["in_progress", "paused", "pauseTask"],
+    ["paused", "pending", "resumeTask"],
+    ["pending", "cancelled", "deleteTask"],
+  ] as const)("does not write %s -> %s when %s refuses", async (from, to, operation) => {
+    const fx = fixture(task({ status: from, scheduledTaskId: "scheduled-existing" }))
+    fx[operation].mockResolvedValue(false)
+    await expect(applyAgentTaskMove("task-1", to, fx.deps)).rejects.toThrow()
+    expect(fx.moveTask).not.toHaveBeenCalled()
+  })
+
+  it("keeps the card paused when Scheduler resume throws", async () => {
+    const fx = fixture(task({ status: "paused", scheduledTaskId: "scheduled-existing" }))
+    fx.resumeTask.mockRejectedValue(new Error("owner elsewhere"))
+    await expect(resumeAgentTask("task-1", fx.deps)).rejects.toThrow("owner elsewhere")
+    expect(fx.moveTask).not.toHaveBeenCalled()
+  })
+})
+
+it("disarms a resumed Scheduler if the conditional handoff fails", async () => {
+  const fx = fixture(task({ status: "paused", scheduledTaskId: "scheduled-1" }))
+  fx.moveTask.mockRejectedValue(new Error("database unavailable"))
+  await expect(resumeAgentTask("task-1", fx.deps)).rejects.toThrow("database unavailable")
+  expect(fx.pauseTaskIfIdle).toHaveBeenCalledWith("scheduled-1")
+})
+
+it("retains both errors if resume and its compensation fail", async () => {
+  const fx = fixture(task({ status: "paused", scheduledTaskId: "scheduled-1" }))
+  fx.resumeTask.mockRejectedValue(new Error("resume failed"))
+  fx.pauseTaskIfIdle.mockRejectedValue(new Error("disarm failed"))
+  await expect(resumeAgentTask("task-1", fx.deps)).rejects.toMatchObject({
+    errors: [
+      expect.objectContaining({ message: "resume failed" }),
+      expect.objectContaining({ message: "disarm failed" }),
+    ],
+  })
+  expect(fx.moveTask).not.toHaveBeenCalled()
+})
+
+it.each([
+  ["in_progress", "paused", "pauseTask"],
+  ["pending", "cancelled", "deleteTask"],
+] as const)("does not write %s -> %s when %s throws", async (from, to, operation) => {
+  const fx = fixture(task({ status: from, scheduledTaskId: "scheduled-existing" }))
+  fx[operation].mockRejectedValue(new Error("Scheduler unavailable"))
+  await expect(applyAgentTaskMove("task-1", to, fx.deps)).rejects.toThrow("Scheduler unavailable")
+  expect(fx.moveTask).not.toHaveBeenCalled()
+})
+
+it("never disarms a new run when the resume handoff encounters an error", async () => {
+  const row = task({ status: "paused", scheduledTaskId: "scheduled-1" })
+  const fx = fixture(row)
+  fx.resumeTask.mockImplementation(async () => {
+    row.status = "in_progress"
+    return true
+  })
+  fx.moveTask.mockRejectedValue(new Error("database unavailable"))
+  await expect(resumeAgentTask("task-1", fx.deps)).rejects.toThrow("database unavailable")
+  expect(fx.pauseTask).not.toHaveBeenCalled()
+})
+
+it("lets the Scheduler refuse compensation while a newly accepted attempt is not yet visible", async () => {
+  const fx = fixture(task({ status: "paused", scheduledTaskId: "scheduled-1" }))
+  fx.moveTask.mockRejectedValue(new Error("handoff failed"))
+  fx.pauseTaskIfIdle.mockResolvedValue(false)
+  await expect(resumeAgentTask("task-1", fx.deps)).rejects.toThrow("handoff failed")
+  expect(fx.pauseTaskIfIdle).toHaveBeenCalledWith("scheduled-1")
+  expect(fx.pauseTask).not.toHaveBeenCalled()
 })

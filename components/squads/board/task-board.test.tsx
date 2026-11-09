@@ -51,6 +51,7 @@ jest.mock("@/hooks/agent-runs/use-team-live-status", () => ({
 type DndProps = {
   children?: ReactNode
   onDragStart?: (event: { active: { id: string } }) => void
+  onDragOver?: (event: { over: { id: string } | null }) => void
   onDragEnd?: (event: { active: { id: string }; over: { id: string } | null }) => void
   onDragCancel?: (event: unknown) => void
 }
@@ -225,6 +226,39 @@ describe("TaskBoard", () => {
     )
     expect(toast.error).toHaveBeenCalledWith("denied.illegal-transition")
     expect(useAgentTeamStore.getState().tasks[ctx.pending1.id].status).toBe("pending")
+  })
+
+  it("marks where a legal cross-column drop lands, and nothing on a refusing column", () => {
+    const ctx = seed()
+    renderBoard(ctx)
+    act(() => dndProps.onDragStart?.({ active: { id: ctx.failed.id } }))
+    act(() => dndProps.onDragOver?.({ over: { id: ctx.pending2.id } }))
+    expect(screen.getByTestId("board-drop-indicator-pending")).toBeInTheDocument()
+
+    act(() => dndProps.onDragOver?.({ over: { id: "col:completed" } }))
+    expect(screen.queryByTestId("board-drop-indicator-pending")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("board-drop-indicator-completed")).not.toBeInTheDocument()
+  })
+
+  it("counts the drop marker against the cards a filter leaves visible", async () => {
+    const ctx = seed()
+    const store = useAgentTeamStore.getState()
+    store.updateTask(ctx.pending2.id, { tags: ["ui"] })
+    store.updateTask(ctx.failed.id, { tags: ["ui"] })
+    renderBoard(ctx)
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId("board-filter-trigger"))
+    await user.click(await screen.findByTestId("board-filter-tag-ui"))
+    await user.keyboard("{Escape}")
+    // pending1 is filtered out, so pending2 is the first visible pending card
+    // and the marker goes in front of it, not after it.
+    expect(screen.queryByTestId(`board-card-${ctx.pending1.id}`)).not.toBeInTheDocument()
+
+    act(() => dndProps.onDragStart?.({ active: { id: ctx.failed.id } }))
+    act(() => dndProps.onDragOver?.({ over: { id: ctx.pending2.id } }))
+    const marker = screen.getByTestId("board-drop-indicator-pending")
+    const card = screen.getByTestId(`board-card-${ctx.pending2.id}`)
+    expect(marker.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it("reorders within a column when dropping onto a sibling card", () => {

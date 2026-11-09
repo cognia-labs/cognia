@@ -1,18 +1,21 @@
 "use client"
 
-import { useMemo, useState } from "react"
+/**
+ * The single-agent task board (the agents console's `?mode=tasks`, ADR-0220).
+ *
+ * Columns, drag and drop, keyboard movement, the drag overlay and the empty
+ * states come from the shared `components/board/kanban-board.tsx`; what a
+ * drop means comes from `lib/agent-tasks/board-model.ts` (the shared reducer
+ * bound to `AGENT_TASK_MOVE_RULES`). Every move a person makes, by drag or by
+ * a card button, goes through `applyAgentTaskMove`, so stopping or resuming
+ * work pauses, deletes or resumes the Scheduler task with it.
+ */
+
+import { useCallback, useMemo, useState } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 import { useTranslations } from "next-intl"
-import {
-  DndContext,
-  PointerSensor,
-  closestCorners,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core"
+import { useSortable } from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import {
   CalendarClockIcon,
   HistoryIcon,
@@ -22,6 +25,11 @@ import {
   PlayIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import {
+  KanbanBoard,
+  type KanbanColumnModel,
+  type KanbanDragState,
+} from "@/components/board/kanban-board"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -42,16 +50,25 @@ import {
   createAgentTask,
   listAgentTaskAttempts,
   listAgentTasks,
-  moveAgentTask,
+  reorderAgentTasks,
 } from "@/lib/db/agent-tasks"
 import {
+  AgentTaskMoveDeniedError,
+  applyAgentTaskMove,
   cancelAgentTask,
   ensureAgentTaskSchedule,
   pauseAgentTask,
   resumeAgentTask,
   runAgentTaskNow,
 } from "@/lib/agent-tasks/runtime"
+import {
+  buildAgentTaskColumns,
+  reorderAgentTaskColumn,
+  resolveAgentTaskDrop,
+  resolveAgentTaskDropPreview,
+} from "@/lib/agent-tasks/board-model"
 import { allowedAgentTaskMoves } from "@/lib/agent-tasks/state-machine"
+import { columnDropId } from "@/lib/board/dnd"
 import {
   agentTaskPriorityToIssuePriority,
   agentTaskStatusToIssueStatus,
@@ -59,29 +76,59 @@ import {
 import { cn } from "@/lib/utils"
 import type { AgentTask, AgentTaskPriority, AgentTaskStatus } from "@/types/agent/agent-task"
 
-const STATUSES: readonly AgentTaskStatus[] = [
-  "pending",
-  "blocked",
-  "in_progress",
-  "review",
-  "paused",
-  "completed",
-  "failed",
-  "cancelled",
-]
+type TaskColumnModel = KanbanColumnModel<AgentTaskStatus, AgentTask>
+type TaskDrag = KanbanDragState<AgentTask>
+
 const EMPTY_TASKS: AgentTask[] = []
+const taskId = (task: AgentTask) => task.id
+const taskLabel = (task: AgentTask) => task.title
+const columnClassName = () => "rounded-lg bg-muted/40"
+
+/** A toast for a move that failed: the guard's own reason when it refused. */
+function useMoveErrorToast() {
+  const t = useTranslations("agentTaskBoard")
+  return useCallback(
+    (error: unknown) => {
+      if (error instanceof AgentTaskMoveDeniedError) {
+        toast.error(t(`denied.${error.reason}`))
+        return
+      }
+      toast.error(t("error", { message: error instanceof Error ? error.message : String(error) }))
+    },
+    [t]
+  )
+}
+
+/** The pointer-following clone: just enough of the card to recognise it. */
+function TaskCardPreview({ task }: { task: AgentTask }) {
+  return (
+    <Card className="w-62 cursor-grabbing gap-0 p-2.5 shadow-lg" data-testid="agent-task-overlay">
+      <span className="flex items-start gap-1.5">
+        <span className="mt-px shrink-0">
+          <IssuePriorityIcon priority={agentTaskPriorityToIssuePriority(task.priority)} />
+        </span>
+        <span className="line-clamp-2 text-[13px] font-medium leading-snug">{task.title}</span>
+      </span>
+    </Card>
+  )
+}
 
 function TaskCard({ task }: { task: AgentTask }) {
   const t = useTranslations("agentTaskBoard")
   const [comment, setComment] = useState("")
   const [expanded, setExpanded] = useState(false)
   const attempts = useLiveQuery(() => listAgentTaskAttempts(task.id), [task.id]) ?? []
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id })
+  // Sortable under the task id; only the title button carries the drag
+  // listeners, so the action buttons and the comment box stay clickable.
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+  })
+  const showMoveError = useMoveErrorToast()
   const run = async (operation: () => Promise<unknown>) => {
     try {
       await operation()
     } catch (error) {
-      toast.error(t("error", { message: error instanceof Error ? error.message : String(error) }))
+      showMoveError(error)
     }
   }
 
@@ -91,9 +138,7 @@ function TaskCard({ task }: { task: AgentTask }) {
     <Card
       ref={setNodeRef}
       className={cn("gap-2 p-2.5 shadow-none", isDragging && "opacity-50")}
-      style={
-        transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
-      }
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       data-testid={`agent-task-${task.id}`}
     >
       <button
@@ -165,7 +210,7 @@ function TaskCard({ task }: { task: AgentTask }) {
             <Button
               size="sm"
               className={actionClass}
-              onClick={() => void run(() => moveAgentTask(task.id, "completed"))}
+              onClick={() => void run(() => applyAgentTaskMove(task.id, "completed"))}
             >
               {t("approve")}
             </Button>
@@ -173,7 +218,7 @@ function TaskCard({ task }: { task: AgentTask }) {
               size="sm"
               variant="outline"
               className={actionClass}
-              onClick={() => void run(() => moveAgentTask(task.id, "failed"))}
+              onClick={() => void run(() => applyAgentTaskMove(task.id, "failed"))}
             >
               {t("reject")}
             </Button>
@@ -267,39 +312,6 @@ function TaskCard({ task }: { task: AgentTask }) {
         </div>
       )}
     </Card>
-  )
-}
-
-function TaskColumn({ status, tasks }: { status: AgentTaskStatus; tasks: AgentTask[] }) {
-  const t = useTranslations("agentTaskBoard")
-  const { setNodeRef, isOver } = useDroppable({ id: `status:${status}` })
-  return (
-    <section
-      ref={setNodeRef}
-      className={cn(
-        // Grow to share the width, never below a readable card; the whole
-        // column is the drop target, its list scrolls on its own.
-        "flex min-h-0 flex-[1_0_15rem] flex-col rounded-lg bg-muted/40",
-        isOver && "ring-2 ring-primary/40"
-      )}
-      data-testid={`agent-task-column-${status}`}
-    >
-      <header className="flex shrink-0 items-center gap-1.5 px-3 pb-1.5 pt-2.5 text-xs font-medium">
-        <IssueStatusIcon status={agentTaskStatusToIssueStatus(status)} className="size-3.5" />
-        <span>{t(`status.${status}`)}</span>
-        <span className="ml-auto text-muted-foreground tabular-nums">{tasks.length}</span>
-      </header>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
-        {tasks.map((task) => (
-          <TaskCard key={task.id} task={task} />
-        ))}
-        {tasks.length === 0 && (
-          <p className="rounded-md border border-dashed py-3 text-center text-[11px] text-muted-foreground">
-            {t("emptyColumn")}
-          </p>
-        )}
-      </div>
-    </section>
   )
 }
 
@@ -464,50 +476,80 @@ export function AgentTaskBoard({
 }) {
   const t = useTranslations("agentTaskBoard")
   const tasks = useLiveQuery(() => listAgentTasks(agentId), [agentId]) ?? EMPTY_TASKS
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
-  const columns = useMemo(
+  const showMoveError = useMoveErrorToast()
+  const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks])
+  const columns = useMemo<TaskColumnModel[]>(
     () =>
-      STATUSES.map((status) => ({
-        status,
-        tasks: tasks.filter((task) => task.status === status),
-      })),
+      buildAgentTaskColumns(tasks).map((column) => ({ id: column.status, items: column.tasks })),
     [tasks]
   )
 
-  const onDragEnd = (event: DragEndEvent) => {
-    const task = tasks.find((candidate) => candidate.id === String(event.active.id))
-    const over = event.over ? String(event.over.id) : ""
-    if (!task || !over.startsWith("status:")) return
-    const target = over.slice("status:".length) as AgentTaskStatus
-    if (!allowedAgentTaskMoves(task.status).includes(target)) {
-      toast.error(t("moveDenied"))
+  const columnLabel = useCallback((status: AgentTaskStatus) => t(`status.${status}`), [t])
+
+  // Only the card's own column and the guard's targets stay open mid-drag.
+  const isDimmed = useCallback((column: TaskColumnModel, drag: TaskDrag) => {
+    const active = drag.activeItem
+    if (!active || active.status === column.id) return false
+    return !allowedAgentTaskMoves(active.status).includes(column.id)
+  }, [])
+
+  /** Cross-column only: the sortable strategy's gap already shows a reorder. */
+  const insertionIndex = useCallback(
+    (column: TaskColumnModel, drag: TaskDrag) => {
+      const active = drag.activeItem
+      if (!active || active.status === column.id) return null
+      const preview = resolveAgentTaskDropPreview(drag.activeId, drag.overId, tasksById)
+      return preview !== null && preview.status === column.id ? preview.index : null
+    },
+    [tasksById]
+  )
+
+  const handleDrop = (activeId: string, overId: string | null) => {
+    const action = resolveAgentTaskDrop(activeId, overId, tasksById)
+    if (!action) return
+    if (action.type === "denied") {
+      toast.error(t(`denied.${action.reason}`))
       return
     }
-    void moveAgentTask(task.id, target).catch((error) =>
-      toast.error(t("error", { message: error instanceof Error ? error.message : String(error) }))
-    )
+    const write =
+      action.type === "reorder"
+        ? reorderAgentTasks(reorderAgentTaskColumn(tasksById, action.itemId, action.targetIndex))
+        : applyAgentTaskMove(action.itemId, action.to, undefined, action.targetIndex)
+    void write.catch(showMoveError)
   }
 
   return (
     <div className={cn("flex min-h-0 flex-col gap-4", className)} data-testid="agent-task-board">
       {showCreateForm ? <AgentTaskCreateForm agentId={agentId} /> : null}
-      {tasks.length === 0 && emptyState !== undefined ? (
-        emptyState
-      ) : tasks.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center">
-          <ListTodoIcon className="mx-auto mb-2 size-6 text-muted-foreground" />
-          <p className="text-sm font-medium">{t("emptyTitle")}</p>
-          <p className="text-xs text-muted-foreground">{t("emptyDescription")}</p>
-        </div>
-      ) : (
-        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
-          <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto pb-1">
-            {columns.map((column) => (
-              <TaskColumn key={column.status} {...column} />
-            ))}
-          </div>
-        </DndContext>
-      )}
+      <KanbanBoard<AgentTaskStatus, AgentTask>
+        columns={columns}
+        itemId={taskId}
+        itemLabel={taskLabel}
+        columnLabel={columnLabel}
+        dropId={columnDropId}
+        renderColumnIcon={(column) => (
+          <IssueStatusIcon status={agentTaskStatusToIssueStatus(column.id)} className="size-3.5" />
+        )}
+        columnClassName={columnClassName}
+        renderCard={(task) => <TaskCard key={task.id} task={task} />}
+        renderOverlay={(task) => <TaskCardPreview task={task} />}
+        isDimmed={isDimmed}
+        insertionIndex={insertionIndex}
+        onDrop={handleDrop}
+        emptyState={
+          emptyState ?? (
+            <div className="rounded-lg border border-dashed p-8 text-center">
+              <ListTodoIcon className="mx-auto mb-2 size-6 text-muted-foreground" />
+              <p className="text-sm font-medium">{t("emptyTitle")}</p>
+              <p className="text-xs text-muted-foreground">{t("emptyDescription")}</p>
+            </div>
+          )
+        }
+        emptyText={t("emptyColumn")}
+        testId="agent-task-columns"
+        testIdPrefix="agent-task"
+        className="min-h-0 flex-1 p-0 pb-1"
+      />
     </div>
   )
 }

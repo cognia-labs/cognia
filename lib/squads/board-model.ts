@@ -3,6 +3,8 @@
  * filters, WIP hints, dependency-lock badges, and the dnd drop reducer. All
  * board decision logic lives here (testable without React/dnd-kit); the
  * components in `components/squads/board/` stay thin render shells.
+ * The drop reducer and the facet filter are the shared ones in `lib/board/`,
+ * bound to this board's guard and fields.
  */
 
 import type {
@@ -12,6 +14,18 @@ import type {
   TeamTaskStatus,
 } from "@/types/agent/agent-team"
 import type { SubAgentPriority } from "@/types/agent/sub-agent"
+import {
+  resolveBoardDrop,
+  resolveBoardDropPreview,
+  type BoardDropPreview,
+  type BoardDropRules,
+} from "@/lib/board/dnd"
+import {
+  applyFacetFilter,
+  collectFacetValues,
+  isFacetFilterActive,
+  type BoardFilterSpec,
+} from "@/lib/board/filter"
 import { canMoveTask, sortColumn, type TaskMoveDenial } from "./gates/task-move-guard"
 
 /** Canonical column order — mirrors the task lifecycle left to right. */
@@ -37,24 +51,26 @@ export interface BoardFilter {
 
 export const EMPTY_BOARD_FILTER: BoardFilter = { tags: [], priorities: [], assigneeIds: [] }
 
+/** A task's owner on the board: whoever claimed it, else whom it was assigned to. */
+const ownerOf = (task: AgentTeamTask): string | undefined => task.claimedBy ?? task.assignedTo
+
+const BOARD_FILTER_SPEC: BoardFilterSpec<AgentTeamTask, BoardFilter> = {
+  facets: [
+    { selected: (filter) => filter.tags, values: (task) => task.tags },
+    { selected: (filter) => filter.priorities, values: (task) => task.priority },
+    { selected: (filter) => filter.assigneeIds, values: ownerOf },
+  ],
+}
+
 export function isFilterActive(filter: BoardFilter): boolean {
-  return filter.tags.length > 0 || filter.priorities.length > 0 || filter.assigneeIds.length > 0
+  return isFacetFilterActive(filter, BOARD_FILTER_SPEC)
 }
 
 export function applyBoardFilter(
   tasks: readonly AgentTeamTask[],
   filter: BoardFilter
 ): AgentTeamTask[] {
-  if (!isFilterActive(filter)) return [...tasks]
-  return tasks.filter((t) => {
-    if (filter.tags.length > 0 && !t.tags.some((tag) => filter.tags.includes(tag))) return false
-    if (filter.priorities.length > 0 && !filter.priorities.includes(t.priority)) return false
-    if (filter.assigneeIds.length > 0) {
-      const owner = t.claimedBy ?? t.assignedTo
-      if (!owner || !filter.assigneeIds.includes(owner)) return false
-    }
-    return true
-  })
+  return applyFacetFilter(tasks, filter, BOARD_FILTER_SPEC)
 }
 
 /** Distinct filter options present in the current task set. */
@@ -62,14 +78,10 @@ export function collectFilterOptions(tasks: readonly AgentTeamTask[]): {
   tags: string[]
   assigneeIds: string[]
 } {
-  const tags = new Set<string>()
-  const assigneeIds = new Set<string>()
-  for (const t of tasks) {
-    for (const tag of t.tags) tags.add(tag)
-    const owner = t.claimedBy ?? t.assignedTo
-    if (owner) assigneeIds.add(owner)
+  return {
+    tags: collectFacetValues(tasks, (task) => task.tags),
+    assigneeIds: collectFacetValues(tasks, ownerOf),
   }
-  return { tags: [...tags].sort(), assigneeIds: [...assigneeIds].sort() }
 }
 
 export interface BoardColumn {
@@ -179,21 +191,31 @@ export function dependencyLockInfo(
 
 // ── dnd drop reducer ────────────────────────────────────────────────────────
 
-/** Droppable id for a column. */
-export const columnDropId = (status: TeamTaskStatus): string => `col:${status}`
-
-/** Parse a droppable/sortable id back into its meaning. */
-export function parseDndId(
-  id: string
-): { kind: "column"; status: TeamTaskStatus } | { kind: "card"; taskId: string } {
-  if (id.startsWith("col:")) return { kind: "column", status: id.slice(4) as TeamTaskStatus }
-  return { kind: "card", taskId: id }
-}
-
 export type BoardDropAction =
-  | { type: "move"; taskId: string; to: TeamTaskStatus }
+  | { type: "move"; taskId: string; to: TeamTaskStatus; targetIndex: number }
   | { type: "reorder"; taskId: string; targetIndex: number }
   | { type: "denied"; taskId: string; reason: TaskMoveDenial }
+
+/**
+ * The shared reducer's rules for a Squad board. A column is one team's tasks:
+ * `tasksById` may hold several teams, and a reorder never crosses into another
+ * team's sequence.
+ */
+function teamDropRules(
+  tasksById: ReadonlyMap<string, AgentTeamTask>,
+  teamStatus: TeamStatus
+): BoardDropRules<TeamTaskStatus, AgentTeamTask, TaskMoveDenial> {
+  return {
+    itemsById: tasksById,
+    idOf: (task) => task.id,
+    statusOf: (task) => task.status,
+    columnOf: (task, status) =>
+      sortColumn(
+        [...tasksById.values()].filter((t) => t.teamId === task.teamId && t.status === status)
+      ),
+    canMove: (task, from, to) => canMoveTask(task, from, to, teamStatus),
+  }
+}
 
 /**
  * Resolve a dnd-kit drag-end into a board action, or null for a no-op.
@@ -206,30 +228,30 @@ export function resolveDrop(
   tasksById: ReadonlyMap<string, AgentTeamTask>,
   teamStatus: TeamStatus
 ): BoardDropAction | null {
-  if (!activeId || !overId || activeId === overId) return null
-  const active = parseDndId(activeId)
-  if (active.kind !== "card") return null
-  const task = tasksById.get(active.taskId)
-  if (!task) return null
-
-  const over = parseDndId(overId)
-  const targetStatus =
-    over.kind === "column" ? over.status : (tasksById.get(over.taskId)?.status ?? null)
-  if (!targetStatus) return null
-
-  if (targetStatus === task.status) {
-    if (over.kind === "column") return null // dropped back on its own column
-    const column = sortColumn(
-      [...tasksById.values()].filter((t) => t.teamId === task.teamId && t.status === task.status)
-    )
-    const targetIndex = column.findIndex((t) => t.id === over.taskId)
-    if (targetIndex === -1) return null
-    return { type: "reorder", taskId: task.id, targetIndex }
+  const action = resolveBoardDrop(activeId, overId, teamDropRules(tasksById, teamStatus))
+  if (!action) return null
+  switch (action.type) {
+    case "move":
+      return { type: "move", taskId: action.itemId, to: action.to, targetIndex: action.targetIndex }
+    case "reorder":
+      return { type: "reorder", taskId: action.itemId, targetIndex: action.targetIndex }
+    case "denied":
+      return { type: "denied", taskId: action.itemId, reason: action.reason }
   }
+}
 
-  const verdict = canMoveTask(task, task.status, targetStatus, teamStatus)
-  if (!verdict.allowed) return { type: "denied", taskId: task.id, reason: verdict.reason }
-  return { type: "move", taskId: task.id, to: targetStatus }
+/**
+ * Where the dragged task would land right now, for the cross-column insertion
+ * indicator. Null where the guard refuses it, the same rule that greys the
+ * column out.
+ */
+export function resolveDropPreview(
+  activeId: string | null,
+  overId: string | null,
+  tasksById: ReadonlyMap<string, AgentTeamTask>,
+  teamStatus: TeamStatus
+): BoardDropPreview<TeamTaskStatus> | null {
+  return resolveBoardDropPreview(activeId, overId, teamDropRules(tasksById, teamStatus))
 }
 
 /** The issue a Squad task was dispatched from, as stamped by the issue run adapter. */

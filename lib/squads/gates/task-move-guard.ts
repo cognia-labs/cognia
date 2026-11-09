@@ -19,72 +19,82 @@
  *     (human review verdict), and `failed → pending` (manual retry,
  *     ADR-0022's deferred retry surface) are the human-owned transitions.
  *   - Same-column moves (reordering) are always allowed.
+ *
+ * The rules are data (`TEAM_TASK_MOVE_RULES`) evaluated by the shared engine
+ * in `lib/board/move-guard.ts`, which the agent-task board uses for
+ * its own, deliberately different, rule set.
  */
 
 import type { AgentTeamTask, TeamStatus, TeamTaskStatus } from "@/types/agent/agent-team"
+import { allowedTargets, canMove, defineMoveRules, type MoveVerdict } from "@/lib/board/move-guard"
+import { renumberColumn } from "@/lib/board/reorder"
 import type { TaskMoveDenial } from "@cognia/plugin-contract/lib/ai/agent/team/gates/task-move-guard"
 export type {
   TaskMoveDenial,
   TaskMoveError,
 } from "@cognia/plugin-contract/lib/ai/agent/team/gates/task-move-guard"
 
-// not in the human-owned transition set
-
-export type TaskMoveVerdict = { allowed: true } | { allowed: false; reason: TaskMoveDenial }
+export type TaskMoveVerdict = MoveVerdict<TaskMoveDenial>
 
 /** Team statuses during which the runtime owns claimed/in_progress tasks. */
 const RUNTIME_ACTIVE_TEAM_STATUSES: ReadonlySet<TeamStatus> = new Set(["planning", "executing"])
 
-const ALL_TASK_STATUSES: readonly TeamTaskStatus[] = [
-  "pending",
-  "blocked",
-  "claimed",
-  "in_progress",
-  "review",
-  "completed",
-  "failed",
-  "cancelled",
-]
+/**
+ * The Squad board's rules, read by `lib/board/move-guard.ts` in its fixed
+ * order: `blocked` is closed both ways, `claimed`/`in_progress` are closed
+ * while the team runs and may only be left for `pending` at rest, and the
+ * table lists the human verdicts. They differ from the Issue tracker's
+ * permissive rules and from the agent-task board's on purpose (ADR-0066).
+ */
+export const TEAM_TASK_MOVE_RULES = defineMoveRules<TeamTaskStatus, TaskMoveDenial, TeamStatus>({
+  statuses: [
+    "pending",
+    "blocked",
+    "claimed",
+    "in_progress",
+    "review",
+    "completed",
+    "failed",
+    "cancelled",
+  ],
+  derived: { statuses: ["blocked"], reason: "blocked-column" },
+  runtime: {
+    statuses: ["claimed", "in_progress"],
+    reason: "runtime-owned",
+    active: (teamStatus) => RUNTIME_ACTIVE_TEAM_STATUSES.has(teamStatus),
+    // Unstranding after a pause or abort.
+    atRest: { exits: ["pending"], reason: "illegal-transition" },
+  },
+  humanMoves: {
+    // Drop a task.
+    pending: ["cancelled"],
+    blocked: [],
+    claimed: [],
+    in_progress: [],
+    // The human review verdict.
+    review: ["completed", "failed"],
+    completed: [],
+    // Manual retry (ADR-0022's deferred retry surface).
+    failed: ["pending"],
+    cancelled: [],
+  },
+  illegal: "illegal-transition",
+})
 
 /**
  * Decide whether a task may be moved `from` → `to` given the team's current
  * status. `from` is passed explicitly (rather than read off `task.status`) so
  * callers validating a stale snapshot (RPC round-trips) surface the mismatch
- * at their own layer.
+ * at their own layer. `task` is part of the signature every caller shares;
+ * no rule reads it today.
  */
 export function canMoveTask(
-  task: Pick<AgentTeamTask, "id" | "dependencies">,
+  _task: Pick<AgentTeamTask, "id" | "dependencies">,
   from: TeamTaskStatus,
   to: TeamTaskStatus,
   teamStatus: TeamStatus
 ): TaskMoveVerdict {
-  // Same-column: reordering — always fine.
-  if (from === to) return { allowed: true }
-
-  // `blocked` is machine-managed on both ends.
-  if (from === "blocked" || to === "blocked") {
-    return { allowed: false, reason: "blocked-column" }
-  }
-
-  const runtimeActive = RUNTIME_ACTIVE_TEAM_STATUSES.has(teamStatus)
-
-  // Runtime-owned columns: hands off while a run is active; at rest they may
-  // only be pushed back to pending (unstranding after a pause/abort).
-  if (from === "claimed" || from === "in_progress") {
-    if (runtimeActive) return { allowed: false, reason: "runtime-owned" }
-    if (to === "pending") return { allowed: true }
-    return { allowed: false, reason: "illegal-transition" }
-  }
-  if (to === "claimed" || to === "in_progress") {
-    return { allowed: false, reason: runtimeActive ? "runtime-owned" : "illegal-transition" }
-  }
-
-  // Human-owned transitions.
-  if (from === "pending" && to === "cancelled") return { allowed: true }
-  if (from === "review" && (to === "completed" || to === "failed")) return { allowed: true }
-  if (from === "failed" && to === "pending") return { allowed: true }
-
-  return { allowed: false, reason: "illegal-transition" }
+  return canMove(TEAM_TASK_MOVE_RULES, from, to, teamStatus)
 }
 
 /**
@@ -96,37 +106,21 @@ export function allowedMoveTargets(
   task: Pick<AgentTeamTask, "id" | "dependencies" | "status">,
   teamStatus: TeamStatus
 ): TeamTaskStatus[] {
-  return ALL_TASK_STATUSES.filter(
-    (to) => to !== task.status && canMoveTask(task, task.status, to, teamStatus).allowed
-  )
+  return allowedTargets(TEAM_TASK_MOVE_RULES, task.status, teamStatus)
 }
 
 /**
  * Pure same-column reorder: move `taskId` to `targetIndex` within `column`
  * (the column's tasks in current visual order) and renumber `order` 0..n-1.
  * Returns only the entries whose `order` actually changed, ready for a store
- * write. Unknown ids and out-of-range indexes are clamped/no-oped.
+ * write. The shared `renumberColumn` of `lib/board/reorder.ts`.
  */
 export function reorderColumn(
   column: ReadonlyArray<Pick<AgentTeamTask, "id" | "order">>,
   taskId: string,
   targetIndex: number
 ): Array<{ id: string; order: number }> {
-  const fromIndex = column.findIndex((t) => t.id === taskId)
-  if (fromIndex === -1) return []
-  const clamped = Math.max(0, Math.min(targetIndex, column.length - 1))
-  if (clamped === fromIndex && column.every((t, i) => t.order === i)) return []
-
-  const ids = column.map((t) => t.id)
-  ids.splice(fromIndex, 1)
-  ids.splice(clamped, 0, taskId)
-
-  const changes: Array<{ id: string; order: number }> = []
-  const orderById = new Map(column.map((t) => [t.id, t.order]))
-  ids.forEach((id, index) => {
-    if (orderById.get(id) !== index) changes.push({ id, order: index })
-  })
-  return changes
+  return renumberColumn(column, taskId, targetIndex)
 }
 
 /** Stable visual order for a column: by `order`, then creation time, then id. */

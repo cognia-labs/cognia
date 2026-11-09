@@ -8,7 +8,7 @@ import {
 } from "./agent-task-write-handlers"
 
 const mockGetAgentTask = jest.fn()
-const mockMoveAgentTask = jest.fn()
+const mockApplyAgentTaskMove = jest.fn()
 const mockAddAgentTaskComment = jest.fn()
 const mockRunAgentTaskNow = jest.fn()
 const mockPauseAgentTask = jest.fn()
@@ -17,7 +17,6 @@ const mockCancelAgentTask = jest.fn()
 
 jest.mock("@/lib/db/agent-tasks", () => ({
   getAgentTask: (...args: unknown[]) => mockGetAgentTask(...args),
-  moveAgentTask: (...args: unknown[]) => mockMoveAgentTask(...args),
   addAgentTaskComment: (...args: unknown[]) => mockAddAgentTaskComment(...args),
 }))
 
@@ -26,6 +25,7 @@ jest.mock("@/lib/agent-tasks/runtime", () => ({
   pauseAgentTask: (...args: unknown[]) => mockPauseAgentTask(...args),
   resumeAgentTask: (...args: unknown[]) => mockResumeAgentTask(...args),
   cancelAgentTask: (...args: unknown[]) => mockCancelAgentTask(...args),
+  applyAgentTaskMove: (...args: unknown[]) => mockApplyAgentTaskMove(...args),
 }))
 
 const task = { id: "task-1", agentId: "agent-1", status: "pending" }
@@ -33,7 +33,7 @@ const task = { id: "task-1", agentId: "agent-1", status: "pending" }
 beforeEach(() => {
   jest.clearAllMocks()
   mockGetAgentTask.mockResolvedValue(task)
-  mockMoveAgentTask.mockResolvedValue({ ...task, status: "completed" })
+  mockApplyAgentTaskMove.mockResolvedValue(undefined)
   mockAddAgentTaskComment.mockImplementation(async (_taskId, comment) => comment)
   mockRunAgentTaskNow.mockResolvedValue({ id: "execution-1" })
 })
@@ -85,7 +85,23 @@ describe("Agent task Companion write handlers", () => {
     await expect(
       handleAgentTaskMove({ agentId: "agent-1", taskId: "task-1", to: "completed" })
     ).resolves.toEqual({ ok: true })
-    expect(mockMoveAgentTask).toHaveBeenCalledWith("task-1", "completed")
+    expect(mockApplyAgentTaskMove).toHaveBeenCalledWith("task-1", "completed")
+  })
+
+  it("routes stop and resume moves through the runtime that owns the Scheduler task", async () => {
+    for (const to of ["paused", "cancelled", "pending"]) {
+      await expect(
+        handleAgentTaskMove({ agentId: "agent-1", taskId: "task-1", to })
+      ).resolves.toEqual({ ok: true })
+      expect(mockApplyAgentTaskMove).toHaveBeenLastCalledWith("task-1", to)
+    }
+  })
+
+  it("answers a refused move with the stable denial code", async () => {
+    mockApplyAgentTaskMove.mockRejectedValueOnce(new Error("Agent task move denied: illegal"))
+    await expect(
+      handleAgentTaskMove({ agentId: "agent-1", taskId: "task-1", to: "completed" })
+    ).resolves.toEqual({ ok: false, reason: "transition-denied" })
   })
 
   it("rejects malformed payloads and runtime-owned status moves", async () => {

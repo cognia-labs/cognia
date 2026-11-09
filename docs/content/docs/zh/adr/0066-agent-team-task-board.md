@@ -5,7 +5,7 @@ description: "赋予Agent-Team任务模型看板接口并将看板接入应用�
 
 # ADR-0066 — Agent 团队任务看板与跨界面集成（CQRS）
 
-**状态**：已接受（2026-07-08）**作者**：Max Qian + Claude Fable 5 **基于**团队运行时（ADR-0022）、插件集成（ADR-0032）、移动同步编排器（ADR-0027）、Companion 控制面（ADR-0061）以及双子 运行时 胶水（`lib/ai/agent/team/teammate/twin-context.ts`、ADR-0003）。
+**状态**：已接受（2026-07-08）**作者**：Max Qian + Claude Fable 5 **基于**团队运行时（ADR-0022）、插件集成（ADR-0032）、移动同步编排器（ADR-0027）、Companion 控制面（ADR-0061）以及双子 运行时 胶水（`lib/squads/teammate/twin-context.ts`、ADR-0003）。
 
 ## 背景
 
@@ -15,7 +15,7 @@ description: "赋予Agent-Team任务模型看板接口并将看板接入应用�
 
 ### 1. 每接口一名警卫
 
-`lib/ai/agent/team/gates/task-move-guard.ts:canMoveTask(task, from, to, teamStatus)` 是人类拥有的过渡的唯一唯一事实来源，包含桌面拖板、移动操作表、配套RPCs和插件API：
+`lib/squads/gates/task-move-guard.ts:canMoveTask(task, from, to, teamStatus)` 是人类拥有的过渡的唯一唯一事实来源，包含桌面拖板、移动操作表、配套RPCs和插件API：
 
 - 同列重序：始终允许（`order`通过`reorderColumn`重新编号）;
 - `pending → cancelled`，`review → completed | failed`（人工裁决），`failed → pending`（**手动重试**——关闭ADR-0022推迟）;
@@ -24,9 +24,13 @@ description: "赋予Agent-Team任务模型看板接口并将看板接入应用�
 
 商店操作`moveTask` / `reorderTask`会施加防护和副作用（申领释放+`→ pending`时间重置，终端完成印章）。在棋盘上，非法掉落目标在拖拽开始时会变成灰色（`allowedMoveTargets` →DND套件`useDroppable.disabled`）。
 
+**2026-11-09。** 规则改为数据：`task-move-guard.ts` 中的 `TEAM_TASK_MOVE_RULES`，由共享引擎 `lib/board/move-guard.ts` 求值。`canMoveTask` 与 `allowedMoveTargets` 签名不变，表征测试冻结了每种团队状态下的完整转移表，上述规则没有变化。单 agent 任务看板（ADR-0220）在同一引擎上运行自己的规则集，允许在运行中暂停或取消。Issue 追踪器（ADR-0132）保留独立的宽松状态机，允许用户重开和跳列。
+
 ### 2. 董事会 UI
 
-工作区任务标签获得了持久的list/board开关（`components/agent/workspace/board/`）。所有决策逻辑都存在于纯`lib/ai/agent/team/board-model.ts`中（列、队友泳道、tag/priority/assignee过滤器、WIP提示与 `maxConcurrentTeammates`、依赖锁定徽章和`resolveDrop`减少器）;组件是薄壳。游泳道模式是阅读视图——拖拽跨航道会意味着重新分配，而板块故意不这样做。两个新的规范扩展点随坐骑一起发售：`agent.team.task.actions`（卡片......菜单）和卡`agent.team.board.toolbar`;`agent.team.panel`的上下文包充满了roster/task聚合。
+工作区任务标签获得了持久的list/board开关（`components/squads/board/`）。所有决策逻辑都存在于纯`lib/squads/board-model.ts`中（列、队友泳道、tag/priority/assignee过滤器、WIP提示与 `maxConcurrentTeammates`、依赖锁定徽章和`resolveDrop`减少器）;组件是薄壳。游泳道模式是阅读视图——拖拽跨航道会意味着重新分配，而板块故意不这样做。两个新的规范扩展点随坐骑一起发售：`agent.team.task.actions`（卡片......菜单）和卡`agent.team.board.toolbar`;`agent.team.panel`的上下文包充满了roster/task聚合。
+
+**2026-11-09。** `resolveDrop` 与标签/优先级/负责人筛选改用 `lib/board/` 中共享的拖放解析与 facet 筛选（现有的 `board` 功能模块，它也拥有唯一的看板壳 `components/board/kanban-board.tsx`），`reorderColumn` 委托给 `lib/board/reorder.ts`。看板还通过 `resolveDropPreview` 画出跨列插入指示，与置灰读同一个守卫。
 
 ### 3. 队伍板CQRS：州降，上命令
 

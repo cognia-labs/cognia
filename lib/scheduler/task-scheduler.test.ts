@@ -4002,6 +4002,34 @@ describe("TaskScheduler", () => {
     })
 
     describe("runTaskNow onAccepted", () => {
+      it("does not disarm an accepted execution during idle compensation", async () => {
+        const { executor, release } = makeBlockingExecutor()
+        registerTaskExecutor("test", executor)
+        const task = makePolicyTask({ id: "compensation-race" })
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+        const onAccepted = jest.fn()
+        const running = scheduler.runTaskNow(task.id, { onAccepted })
+        await jest.advanceTimersByTimeAsync(0)
+        expect(onAccepted).toHaveBeenCalledTimes(1)
+        const pause = jest.spyOn(scheduler, "pauseTask")
+        try {
+          await expect(scheduler.pauseTaskIfIdle(task.id)).resolves.toBe(false)
+          expect(pause).not.toHaveBeenCalled()
+        } finally {
+          pause.mockRestore()
+          release()
+          await running
+        }
+      })
+
+      it("pauses an idle task when compensating a failed admission", async () => {
+        const task = makePolicyTask({ id: "idle-compensation" })
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+        await expect(scheduler.pauseTaskIfIdle(task.id)).resolves.toBe(true)
+        expect(mockSchedulerDb.updateTask).toHaveBeenCalledWith(
+          expect.objectContaining({ id: task.id, status: "paused" })
+        )
+      })
       it("hands over the running row before the run settles", async () => {
         const { executor, release } = makeBlockingExecutor()
         registerTaskExecutor("test", executor)

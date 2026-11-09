@@ -1,6 +1,7 @@
 import type { CreateScheduledTaskInput, TaskExecution } from "@/types/scheduler"
 import type { AgentTask } from "@/types/agent/agent-task"
 import {
+  type AgentTaskMoveOptions,
   bindAgentTaskSchedule,
   getAgentTask,
   moveAgentTask,
@@ -8,12 +9,29 @@ import {
 } from "@/lib/db/agent-tasks"
 import { getTaskScheduler } from "@/lib/scheduler/task-scheduler"
 import { schedulerDb } from "@/lib/scheduler/scheduler-db"
+import { guardAgentTaskMove, type AgentTaskMoveDenial } from "./state-machine"
+
+/** A person-initiated move the guard refused, carrying the guard's reason. */
+export class AgentTaskMoveDeniedError extends Error {
+  readonly reason: AgentTaskMoveDenial
+
+  constructor(reason: AgentTaskMoveDenial) {
+    super(`Agent task move denied: ${reason}`)
+    this.name = "AgentTaskMoveDeniedError"
+    this.reason = reason
+  }
+}
 
 export interface AgentTaskRuntimeDeps {
   now: () => number
   getTask: (taskId: string) => Promise<AgentTask | undefined>
   bindSchedule: (taskId: string, scheduledTaskId: string, now: number) => Promise<unknown>
-  moveTask: (taskId: string, status: AgentTask["status"], now: number) => Promise<unknown>
+  moveTask: (
+    taskId: string,
+    status: AgentTask["status"],
+    now: number,
+    options?: AgentTaskMoveOptions
+  ) => Promise<unknown>
   createTask: (input: CreateScheduledTaskInput) => Promise<{ id: string }>
   runTaskNow: (taskId: string) => Promise<unknown>
   /**
@@ -24,6 +42,7 @@ export interface AgentTaskRuntimeDeps {
    */
   startTaskNow: (taskId: string) => Promise<AgentTaskStart>
   pauseTask: (taskId: string) => Promise<boolean>
+  pauseTaskIfIdle: (taskId: string) => Promise<boolean>
   resumeTask: (taskId: string) => Promise<boolean>
   deleteTask: (taskId: string) => Promise<boolean>
   getExecution: (executionId: string) => Promise<TaskExecution | null>
@@ -141,37 +160,107 @@ export function acceptedStart(
   })
 }
 
+/**
+ * Load the task and refuse before any side effect when a person may not move
+ * it to `to` from where it is NOW, so a stale button or a phone acting on an
+ * old snapshot never pauses or deletes a Scheduler task and then fails the
+ * status write.
+ */
+async function loadMovableTask(
+  taskId: string,
+  to: AgentTask["status"],
+  deps: AgentTaskRuntimeDeps
+): Promise<AgentTask> {
+  const task = await deps.getTask(taskId)
+  if (!task) throw new Error("Agent task not found")
+  const verdict = guardAgentTaskMove(task.status, to)
+  if (!verdict.allowed) throw new AgentTaskMoveDeniedError(verdict.reason)
+  return task
+}
+
 export async function pauseAgentTask(
   taskId: string,
   providedDeps?: AgentTaskRuntimeDeps
 ): Promise<void> {
-  const deps = providedDeps ?? defaultDeps()
-  const task = await deps.getTask(taskId)
-  if (!task) throw new Error("Agent task not found")
-  if (task.scheduledTaskId) await deps.pauseTask(task.scheduledTaskId)
-  await deps.moveTask(taskId, "paused", deps.now())
+  return applyAgentTaskMove(taskId, "paused", providedDeps)
 }
 
 export async function resumeAgentTask(
   taskId: string,
   providedDeps?: AgentTaskRuntimeDeps
 ): Promise<void> {
-  const deps = providedDeps ?? defaultDeps()
-  const task = await deps.getTask(taskId)
-  if (!task) throw new Error("Agent task not found")
-  await deps.moveTask(taskId, "pending", deps.now())
-  if (task.scheduledTaskId) await deps.resumeTask(task.scheduledTaskId)
+  return applyAgentTaskMove(taskId, "pending", providedDeps)
 }
 
 export async function cancelAgentTask(
   taskId: string,
   providedDeps?: AgentTaskRuntimeDeps
 ): Promise<void> {
+  return applyAgentTaskMove(taskId, "cancelled", providedDeps)
+}
+
+export class AgentTaskScheduleActionError extends Error {
+  constructor(readonly action: "pause" | "resume" | "cancel") {
+    super(`Agent task Scheduler refused to ${action}`)
+    this.name = "AgentTaskScheduleActionError"
+  }
+}
+
+/**
+ * One move door for the board, verdict buttons and paired clients. Scheduler
+ * refusal cannot change the card's status. Placement is committed with status.
+ */
+export async function applyAgentTaskMove(
+  taskId: string,
+  to: AgentTask["status"],
+  providedDeps?: AgentTaskRuntimeDeps,
+  targetIndex?: number
+): Promise<void> {
   const deps = providedDeps ?? defaultDeps()
-  const task = await deps.getTask(taskId)
-  if (!task) throw new Error("Agent task not found")
-  if (task.scheduledTaskId) await deps.deleteTask(task.scheduledTaskId)
-  await deps.moveTask(taskId, "cancelled", deps.now())
+  const task = await loadMovableTask(taskId, to, deps)
+  if (task.status === to) return
+  const scheduleId = task.scheduledTaskId
+  const resuming = to === "pending" && task.status === "paused" && scheduleId !== undefined
+  if (scheduleId && to === "paused" && !(await deps.pauseTask(scheduleId))) {
+    throw new AgentTaskScheduleActionError("pause")
+  }
+  if (scheduleId && to === "cancelled" && !(await deps.deleteTask(scheduleId))) {
+    throw new AgentTaskScheduleActionError("cancel")
+  }
+  if (resuming) {
+    const compensate = async (error: unknown): Promise<never> => {
+      // Only disarm a failed handoff that is still paused. Never stop a new run.
+      if ((await deps.getTask(taskId))?.status === "paused") {
+        try {
+          await deps.pauseTaskIfIdle(scheduleId)
+        } catch (compensationError) {
+          throw new AggregateError(
+            [error, compensationError],
+            "Agent task resume compensation failed"
+          )
+        }
+      }
+      throw error
+    }
+    let accepted: boolean
+    try {
+      accepted = await deps.resumeTask(scheduleId)
+    } catch (error) {
+      return compensate(error)
+    }
+    if (!accepted) throw new AgentTaskScheduleActionError("resume")
+    try {
+      await deps.moveTask(taskId, to, deps.now(), {
+        expectedStatus: "paused",
+        ...(targetIndex === undefined ? {} : { targetIndex }),
+      })
+    } catch (error) {
+      return compensate(error)
+    }
+    return
+  }
+  if (targetIndex === undefined) await deps.moveTask(taskId, to, deps.now())
+  else await deps.moveTask(taskId, to, deps.now(), { targetIndex })
 }
 
 export function reconcileAgentTaskRuntime(
@@ -200,6 +289,7 @@ function defaultDeps(): AgentTaskRuntimeDeps {
     runTaskNow: (taskId) => scheduler.runTaskNow(taskId),
     startTaskNow: (taskId) => acceptedStart((id, opts) => scheduler.runTaskNow(id, opts), taskId),
     pauseTask: (taskId) => scheduler.pauseTask(taskId),
+    pauseTaskIfIdle: (taskId) => scheduler.pauseTaskIfIdle(taskId),
     resumeTask: (taskId) => scheduler.resumeTask(taskId),
     deleteTask: (taskId) => scheduler.deleteTask(taskId),
     getExecution: (executionId) => schedulerDb.getExecution(executionId),

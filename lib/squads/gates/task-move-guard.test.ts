@@ -245,3 +245,55 @@ describe("sortColumn", () => {
     expect(sortColumn(rows).map((r) => r.id)).toEqual(["a", "d", "b", "c"])
   })
 })
+
+/**
+ * Characterization: the full transition table, frozen from the hand-written
+ * guard before it moved onto `lib/board/move-guard.ts`. Rows are `from`,
+ * columns follow `ALL`; "ok" is allowed, anything else is the denial reason.
+ */
+describe("canMoveTask transition table", () => {
+  type Cell = "ok" | TaskMoveDenial
+  const B = "blocked-column"
+  const R = "runtime-owned"
+  const I = "illegal-transition"
+  const ACTIVE: Record<TeamTaskStatus, Cell[]> = {
+    pending: ["ok", B, R, R, I, I, I, "ok"],
+    blocked: [B, "ok", B, B, B, B, B, B],
+    claimed: [R, B, "ok", R, R, R, R, R],
+    in_progress: [R, B, R, "ok", R, R, R, R],
+    review: [I, B, R, R, "ok", "ok", "ok", I],
+    completed: [I, B, R, R, I, "ok", I, I],
+    failed: ["ok", B, R, R, I, I, "ok", I],
+    cancelled: [I, B, R, R, I, I, I, "ok"],
+  }
+  const AT_REST: Record<TeamTaskStatus, Cell[]> = {
+    pending: ["ok", B, I, I, I, I, I, "ok"],
+    blocked: [B, "ok", B, B, B, B, B, B],
+    claimed: ["ok", B, "ok", I, I, I, I, I],
+    in_progress: ["ok", B, I, "ok", I, I, I, I],
+    review: [I, B, I, I, "ok", "ok", "ok", I],
+    completed: [I, B, I, I, I, "ok", I, I],
+    failed: ["ok", B, I, I, I, I, "ok", I],
+    cancelled: [I, B, I, I, I, I, I, "ok"],
+  }
+  const TEAM_STATUSES: TeamStatus[] = [
+    "idle",
+    "planning",
+    "executing",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+  ]
+  const cell = (from: TeamTaskStatus, to: TeamTaskStatus, teamStatus: TeamStatus): Cell => {
+    const verdict = canMoveTask({ id: "t", dependencies: [] }, from, to, teamStatus)
+    return verdict.allowed ? "ok" : verdict.reason
+  }
+
+  it.each(TEAM_STATUSES)("matches the frozen table while the team is %s", (teamStatus) => {
+    const expected = teamStatus === "planning" || teamStatus === "executing" ? ACTIVE : AT_REST
+    for (const from of ALL) {
+      expect([from, ALL.map((to) => cell(from, to, teamStatus))]).toEqual([from, expected[from]])
+    }
+  })
+})

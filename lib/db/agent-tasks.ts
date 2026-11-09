@@ -9,6 +9,7 @@ import type {
   AgentTaskStatus,
 } from "@/types/agent/agent-task"
 import { deriveDependencyStatus, guardAgentTaskMove } from "@/lib/agent-tasks/state-machine"
+import { sortAgentTaskColumn } from "@/lib/agent-tasks/board-model"
 import { getDb } from "./schema"
 
 const MAX_COMMENTS = 100
@@ -96,17 +97,25 @@ export async function bindAgentTaskSchedule(
   })
 }
 
+export interface AgentTaskMoveOptions {
+  targetIndex?: number
+  /** A resumed Scheduler may have already advanced the task. Never rewind it. */
+  expectedStatus?: AgentTaskStatus
+}
+
 export async function moveAgentTask(
   taskId: string,
   to: AgentTaskStatus,
-  now = Date.now()
+  now = Date.now(),
+  options: AgentTaskMoveOptions = {}
 ): Promise<AgentTask> {
   return getDb().transaction("rw", getDb().agentTasks, getDb().agentTaskAttempts, async () => {
     const task = await getDb().agentTasks.get(taskId)
     if (!task) throw new Error("Agent task not found")
+    if (options.expectedStatus !== undefined && task.status !== options.expectedStatus) return task
     const verdict = guardAgentTaskMove(task.status, to)
     if (!verdict.allowed) throw new Error(`Agent task move denied: ${verdict.reason}`)
-    if (task.status === to) return task
+    if (task.status === to && options.targetIndex === undefined) return task
 
     if (task.activeAttemptId && (to === "paused" || to === "cancelled")) {
       await getDb().agentTaskAttempts.update(task.activeAttemptId, {
@@ -122,8 +131,55 @@ export async function moveAgentTask(
       updatedAt: now,
       revision: task.revision + 1,
     }
-    await getDb().agentTasks.put(next)
-    return next
+    if (options.targetIndex === undefined) {
+      await getDb().agentTasks.put(next)
+      return next
+    }
+    const column = sortAgentTaskColumn(
+      (await getDb().agentTasks.where("agentId").equals(task.agentId).toArray()).filter(
+        (row) => row.status === to && row.id !== taskId
+      )
+    )
+    const index = Math.max(0, Math.min(options.targetIndex, column.length))
+    const placed = { ...next, order: index }
+    column.splice(index, 0, placed)
+    await getDb().agentTasks.bulkPut(
+      column.flatMap((row, order) => {
+        if (row.id === taskId) return [placed]
+        return row.order === order
+          ? []
+          : [{ ...row, order, updatedAt: now, revision: row.revision + 1 }]
+      })
+    )
+    return placed
+  })
+}
+
+/**
+ * Persist a same-column reorder: the board computes the renumbered `order`
+ * of every card that moved (`reorderAgentTaskColumn`), and this writes them
+ * in one transaction. Every task must exist and belong to one Agent, so a
+ * stale board can never shuffle another Agent's column.
+ */
+export async function reorderAgentTasks(
+  changes: ReadonlyArray<{ id: string; order: number }>,
+  now = Date.now()
+): Promise<void> {
+  if (changes.length === 0) return
+  await getDb().transaction("rw", getDb().agentTasks, async () => {
+    const rows = await getDb().agentTasks.bulkGet(changes.map((change) => change.id))
+    const next: AgentTask[] = []
+    rows.forEach((row, index) => {
+      if (!row) throw new Error("Agent task not found")
+      next.push({ ...row, order: changes[index].order, updatedAt: now, revision: row.revision + 1 })
+    })
+    if (new Set(next.map((row) => row.agentId)).size > 1) {
+      throw new Error("Agent task reorder must stay within one Agent")
+    }
+    if (new Set(next.map((row) => row.status)).size > 1) {
+      throw new Error("Agent task reorder must stay within one column")
+    }
+    await getDb().agentTasks.bulkPut(next)
   })
 }
 

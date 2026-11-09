@@ -118,7 +118,13 @@
     },
     "board": {
       "class": "module",
-      "api": ["components/board/kanban-board.tsx"]
+      "api": [
+        "components/board/kanban-board.tsx",
+        "lib/board/dnd.ts",
+        "lib/board/filter.ts",
+        "lib/board/move-guard.ts",
+        "lib/board/reorder.ts"
+      ]
     },
     "boot": {
       "class": "shell"

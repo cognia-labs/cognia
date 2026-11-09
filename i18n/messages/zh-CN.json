@@ -3110,6 +3110,11 @@
     "comment": "评论",
     "commentPlaceholder": "添加审阅备注…",
     "create": "添加任务",
+    "denied": {
+      "dependency-owned": "被阻塞的任务会在依赖完成后自动移动。",
+      "illegal-transition": "任务不能从那一列移到这一列。",
+      "runtime-owned": "只有运行中的 Agent 能开始任务或把任务送去审阅。"
+    },
     "dependenciesLabel": "依赖任务",
     "dependencyCount": "{count} 个依赖",
     "descriptionLabel": "任务说明",
@@ -3118,7 +3123,6 @@
     "emptyDescription": "在上方添加任务，建立此 Agent 的任务队列。",
     "emptyTitle": "暂无任务",
     "error": "任务操作失败：{message}",
-    "moveDenied": "该状态转换由依赖关系或正在运行的 Agent 管理。",
     "pause": "暂停",
     "priority": {
       "critical": "紧急",

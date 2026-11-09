@@ -7,7 +7,7 @@ description: "Gives the Agent-Team task model its kanban surface and de-silos it
 
 **Status**: Accepted (2026-07-08)
 **Authors**: Max Qian + Claude Fable 5
-**Builds on**: the team runtime (ADR-0022), the plugin integration (ADR-0032), the mobile sync orchestrator (ADR-0027), the Companion control plane (ADR-0061), and the twin runtime glue (`lib/ai/agent/team/teammate/twin-context.ts`, ADR-0003).
+**Builds on**: the team runtime (ADR-0022), the plugin integration (ADR-0032), the mobile sync orchestrator (ADR-0027), the Companion control plane (ADR-0061), and the twin runtime glue (`lib/squads/teammate/twin-context.ts`, ADR-0003).
 
 ## Context
 
@@ -25,7 +25,7 @@ ADR-0022 had also deferred manual retry and pause/resume ("v2"), and declared
 
 ### 1. One guard, every surface
 
-`lib/ai/agent/team/gates/task-move-guard.ts:canMoveTask(task, from, to, teamStatus)` is the
+`lib/squads/gates/task-move-guard.ts:canMoveTask(task, from, to, teamStatus)` is the
 single source of truth for human-owned transitions, consumed by the desktop drag
 board, the mobile action sheet, the companion RPCs, and the plugin API:
 
@@ -41,11 +41,20 @@ The store actions `moveTask` / `reorderTask` apply the guard plus side effects
 On the board, illegal drop targets grey out at drag start
 (`allowedMoveTargets` → dnd-kit `useDroppable.disabled`).
 
+**2026-11-09.** The rules are data now: `TEAM_TASK_MOVE_RULES` in
+`task-move-guard.ts`, evaluated by the shared engine `lib/board/move-guard.ts`.
+`canMoveTask` and `allowedMoveTargets` keep their signatures, and a
+characterization test freezes the full table for every team status, so the
+rules above are unchanged. The single-agent task board (ADR-0220) evaluates
+its own rule set on the same engine and allows pausing or cancelling mid-run.
+The Issue tracker (ADR-0132) retains its separate permissive state machine,
+including reopening and skipping columns.
+
 ### 2. Board UI
 
 The workspace tasks tab gains a persisted list/board toggle
-(`components/agent/workspace/board/`). All decision logic lives in the pure
-`lib/ai/agent/team/board-model.ts` (columns, per-teammate swimlanes,
+(`components/squads/board/`). All decision logic lives in the pure
+`lib/squads/board-model.ts` (columns, per-teammate swimlanes,
 tag/priority/assignee filters, WIP hint vs `maxConcurrentTeammates`,
 dependency-lock badges, and the `resolveDrop` reducer); components are thin
 shells. Swimlane mode is a read view — dragging across lanes would imply
@@ -53,6 +62,13 @@ reassignment, which the board deliberately does not do. Two new canonical
 extension points ship with their mounts: `agent.team.task.actions` (card ⋯ menu)
 and `agent.team.board.toolbar`; `agent.team.panel`'s context bag is enriched
 with roster/task aggregates.
+
+**2026-11-09.** `resolveDrop` and the tag/priority/assignee filters bind the
+shared drop reducer and facet filter in `lib/board/` (the existing `board` feature module,
+which also owns the one board shell `components/board/kanban-board.tsx`), and
+`reorderColumn` delegates to `lib/board/reorder.ts`. The board also draws the
+cross-column insertion indicator through `resolveDropPreview`, read from the
+same guard that greys columns out.
 
 ### 3. Team-board CQRS: state down, commands up
 

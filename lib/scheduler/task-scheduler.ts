@@ -2039,6 +2039,13 @@ class TaskSchedulerImpl {
     return schedulerDb.getAllTasks()
   }
 
+  /** Compensate a failed admission without disarming an accepted execution. */
+  async pauseTaskIfIdle(taskId: string): Promise<boolean> {
+    if (this.isTaskRunning(taskId) || (this.queues.get(taskId)?.length ?? 0) > 0) return false
+    // No await between this owner-side check and pauseTask's invalidation.
+    return this.pauseTask(taskId)
+  }
+
   /**
    * Pause a task
    */

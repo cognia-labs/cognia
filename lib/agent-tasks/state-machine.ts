@@ -1,38 +1,68 @@
+/**
+ * Guarded moves for single-agent durable tasks (the agents console's task
+ * board, ADR-0220, and a paired phone's `agent_task_move`).
+ *
+ * Ownership model behind the rules:
+ *   - `blocked` is dependency-derived (`deriveDependencyStatus`), closed to
+ *     people in both directions.
+ *   - Only the runtime enters `in_progress` and `review`: a run starts through
+ *     the Scheduler, never by dragging a card.
+ *   - A person may stop work at any time: `in_progress → paused | cancelled`,
+ *     `paused → pending | cancelled`. These carry Scheduler side effects, so
+ *     every person-initiated move goes through `applyAgentTaskMove`
+ *     (`lib/agent-tasks/runtime.ts`), never straight to `moveAgentTask`.
+ *   - `review → completed | failed` is the human verdict; `failed → pending`
+ *     retries and `failed → cancelled` gives up; `completed` and `cancelled`
+ *     are terminal.
+ *
+ * The rules are data (`AGENT_TASK_MOVE_RULES`) evaluated by the shared engine
+ * in `lib/board/move-guard.ts`. They differ from the Squad board's and the
+ * Issue tracker's on purpose: a Squad locks its active columns while the team
+ * runs, an issue tracker lets its user go anywhere.
+ */
+
 import type { AgentTaskStatus } from "@/types/agent/agent-task"
+import { allowedTargets, canMove, defineMoveRules, type MoveVerdict } from "@/lib/board/move-guard"
 
 export type AgentTaskMoveDenial = "dependency-owned" | "runtime-owned" | "illegal-transition"
-export type AgentTaskMoveVerdict =
-  { allowed: true } | { allowed: false; reason: AgentTaskMoveDenial }
+export type AgentTaskMoveVerdict = MoveVerdict<AgentTaskMoveDenial>
 
-const HUMAN_MOVES: Readonly<Record<AgentTaskStatus, readonly AgentTaskStatus[]>> = {
-  pending: ["cancelled"],
-  blocked: [],
-  in_progress: ["paused", "cancelled"],
-  review: ["completed", "failed"],
-  paused: ["pending", "cancelled"],
-  completed: [],
-  failed: ["pending", "cancelled"],
-  cancelled: [],
-}
+export const AGENT_TASK_MOVE_RULES = defineMoveRules<AgentTaskStatus, AgentTaskMoveDenial>({
+  statuses: [
+    "pending",
+    "blocked",
+    "in_progress",
+    "review",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+  ],
+  derived: { statuses: ["blocked"], reason: "dependency-owned" },
+  runtimeEntered: { statuses: ["in_progress", "review"], reason: "runtime-owned" },
+  humanMoves: {
+    pending: ["cancelled"],
+    blocked: [],
+    in_progress: ["paused", "cancelled"],
+    review: ["completed", "failed"],
+    paused: ["pending", "cancelled"],
+    completed: [],
+    failed: ["pending", "cancelled"],
+    cancelled: [],
+  },
+  illegal: "illegal-transition",
+})
 
 export function guardAgentTaskMove(
   from: AgentTaskStatus,
   to: AgentTaskStatus
 ): AgentTaskMoveVerdict {
-  if (from === to) return { allowed: true }
-  if (from === "blocked" || to === "blocked") {
-    return { allowed: false, reason: "dependency-owned" }
-  }
-  if (to === "in_progress" || to === "review") {
-    return { allowed: false, reason: "runtime-owned" }
-  }
-  return HUMAN_MOVES[from].includes(to)
-    ? { allowed: true }
-    : { allowed: false, reason: "illegal-transition" }
+  return canMove(AGENT_TASK_MOVE_RULES, from, to, undefined)
 }
 
+/** Every status a task in `status` may be moved to by a person, in board order. */
 export function allowedAgentTaskMoves(status: AgentTaskStatus): AgentTaskStatus[] {
-  return [...HUMAN_MOVES[status]]
+  return allowedTargets(AGENT_TASK_MOVE_RULES, status, undefined)
 }
 
 export function deriveDependencyStatus(

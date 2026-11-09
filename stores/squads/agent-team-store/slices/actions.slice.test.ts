@@ -1623,3 +1623,26 @@ describe("duplicateSquad", () => {
     expect(useAgentTeamStore.getState().duplicateSquad("missing", { name: "x" })).toBeNull()
   })
 })
+
+it("commits a cross-column move and its preview position in one store update", () => {
+  reset()
+  const state = useAgentTeamStore.getState()
+  const team = state.createTeam({ name: "Placement", task: "t" })
+  const rows = ["first", "second", "target", "moving"].map((title) =>
+    state.createTask({ teamId: team.id, title, description: "" })
+  )
+  rows.forEach((row, index) => state.updateTask(row.id, { order: index === 3 ? 0 : index }))
+  state.updateTask(rows[3].id, { status: "failed" })
+  const snapshots: string[][] = []
+  const unsubscribe = useAgentTeamStore.subscribe((next) => {
+    snapshots.push(
+      Object.values(next.tasks)
+        .filter((row) => row.teamId === team.id && row.status === "pending")
+        .sort((a, b) => a.order - b.order)
+        .map((row) => row.title)
+    )
+  })
+  expect(state.moveTask(rows[3].id, "pending", 2)).toEqual({ ok: true })
+  unsubscribe()
+  expect(snapshots).toEqual([["first", "second", "moving", "target"]])
+})

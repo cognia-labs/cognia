@@ -65,6 +65,14 @@ product and spread little information over mostly empty pages. The console uses 
   whole body under the masthead. Issues cannot replace it: the tracker only federates tasks that
   belong to a workspace, and read-only, while the board is where a task is run, paused, reviewed
   and commented on.
+  **2026-11-05:** the board renders on the shared `components/board/kanban-board.tsx`, with the
+  drag overlay, keyboard moves and the insertion indicator. Its rules are `AGENT_TASK_MOVE_RULES`
+  (`lib/agent-tasks/state-machine.ts`) on the shared engine `lib/board/move-guard.ts`. Every move
+  a person makes, whether a drag, a verdict button or a paired phone's `agent_task_move`, goes through
+  `applyAgentTaskMove` (`lib/agent-tasks/runtime.ts`). That keeps the Scheduler in step: `paused`
+  pauses the scheduled task, `cancelled` deletes it, and `paused → pending` resumes it. Before
+  this, a drag wrote the status alone. Dropping a card on a sibling reorders the column
+  (`reorderAgentTasks`).
 
 Activity is derived, never stored: sessions by `characterId`, agent tasks by `agentId`, issues by
 assignee, spend from `sessionUsage`, live state from the chat store's run status.

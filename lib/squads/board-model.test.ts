@@ -5,11 +5,10 @@ import {
   buildBoardColumns,
   buildSwimlanes,
   collectFilterOptions,
-  columnDropId,
   dependencyLockInfo,
   isFilterActive,
-  parseDndId,
   resolveDrop,
+  resolveDropPreview,
   wipHint,
   originIssuesOfTasks,
 } from "./board-model"
@@ -160,11 +159,6 @@ describe("resolveDrop", () => {
   ]
   const map = byId(tasks)
 
-  it("round-trips dnd ids", () => {
-    expect(parseDndId(columnDropId("review"))).toEqual({ kind: "column", status: "review" })
-    expect(parseDndId("t-42")).toEqual({ kind: "card", taskId: "t-42" })
-  })
-
   it("returns null for missing/self drops", () => {
     expect(resolveDrop(null, "col:review", map, "idle")).toBeNull()
     expect(resolveDrop("p1", null, map, "idle")).toBeNull()
@@ -188,17 +182,20 @@ describe("resolveDrop", () => {
       type: "move",
       taskId: "f1",
       to: "pending",
+      targetIndex: 2,
     })
     // Dropping a failed task onto a pending CARD also means "move to pending".
     expect(resolveDrop("f1", "p2", map, "idle")).toEqual({
       type: "move",
       taskId: "f1",
       to: "pending",
+      targetIndex: 1,
     })
     expect(resolveDrop("r1", "col:completed", map, "executing")).toEqual({
       type: "move",
       taskId: "r1",
       to: "completed",
+      targetIndex: 0,
     })
   })
 
@@ -212,6 +209,42 @@ describe("resolveDrop", () => {
       type: "denied",
       taskId: "p1",
       reason: "blocked-column",
+    })
+  })
+
+  it("keeps a reorder inside the dragged task's own team", () => {
+    const mixed = byId([...tasks, task("x1", { teamId: "team-2", status: "pending", order: 0 })])
+    expect(resolveDrop("p1", "x1", mixed, "idle")).toBeNull()
+  })
+})
+
+describe("resolveDropPreview", () => {
+  const tasks = [
+    task("p1", { status: "pending", order: 0 }),
+    task("p2", { status: "pending", order: 1 }),
+    task("f1", { status: "failed" }),
+    task("r1", { status: "review" }),
+    task("x1", { teamId: "team-2", status: "pending", order: 0 }),
+  ]
+  const map = byId(tasks)
+
+  it("places a legal cross-column drop at the hovered card, or at the end of the column", () => {
+    expect(resolveDropPreview("f1", "p2", map, "idle")).toEqual({ status: "pending", index: 1 })
+    expect(resolveDropPreview("f1", "col:pending", map, "idle")).toEqual({
+      status: "pending",
+      index: 2,
+    })
+  })
+
+  it("counts only the dragged task's team", () => {
+    expect(resolveDropPreview("f1", "x1", map, "idle")).toEqual({ status: "pending", index: 2 })
+  })
+
+  it("draws nothing on a column the guard refuses", () => {
+    expect(resolveDropPreview("p1", "col:completed", map, "idle")).toBeNull()
+    expect(resolveDropPreview("r1", "col:completed", map, "idle")).toEqual({
+      status: "completed",
+      index: 0,
     })
   })
 })

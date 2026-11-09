@@ -3,8 +3,8 @@
 /**
  * The one kanban board.
  *
- * `/issues` (`components/issues/board/issue-board.tsx`) and the Squad task
- * board (`components/squads/board/task-board.tsx`) used to each carry
+ * `/issues` (`components/issues/board/issue-board.tsx`) the single-agent task board (`components/agent/agent-task-board.tsx`),
+ * and the Squad task board (`components/squads/board/task-board.tsx`) used to each carry
  * their own DndContext, column chrome, collapse strip, empty state and drag
  * overlay. This is the single copy: columns, drag and drop, keyboard movement,
  * collapse, per-column and board-level empty states, the card slot and the

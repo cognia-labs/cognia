@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid"
-import { addAgentTaskComment, getAgentTask, moveAgentTask } from "@/lib/db/agent-tasks"
+import { addAgentTaskComment, getAgentTask } from "@/lib/db/agent-tasks"
 import {
+  applyAgentTaskMove,
   cancelAgentTask,
   pauseAgentTask,
   resumeAgentTask,
@@ -110,7 +111,9 @@ export async function handleAgentTaskMove(
   const to = readString(payload, "to")
   if (!to || !REMOTE_MOVE_STATUSES.has(to)) return { ok: false, reason: "invalid-status" }
   try {
-    await moveAgentTask(resolved.task.id, to as AgentTaskStatus)
+    // Through the runtime, so a move to paused / cancelled / pending pauses,
+    // deletes or resumes the Scheduler task exactly as the board does.
+    await applyAgentTaskMove(resolved.task.id, to as AgentTaskStatus)
     return { ok: true }
   } catch {
     return { ok: false, reason: "transition-denied" }

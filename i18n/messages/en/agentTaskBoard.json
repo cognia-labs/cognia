@@ -21,6 +21,11 @@
   "comment": "Comment",
   "commentPlaceholder": "Add a review note…",
   "create": "Add task",
+  "denied": {
+    "dependency-owned": "A blocked task moves on its own once its dependencies finish.",
+    "illegal-transition": "A task can't move from that column to this one.",
+    "runtime-owned": "Only the running Agent can start a task or send it to review."
+  },
   "dependenciesLabel": "Dependencies",
   "dependencyCount": "{count} dependencies",
   "descriptionLabel": "Instructions",
@@ -29,7 +34,6 @@
   "emptyDescription": "Add a task above to build this Agent's queue.",
   "emptyTitle": "No tasks yet",
   "error": "Task action failed: {message}",
-  "moveDenied": "That move is owned by dependencies or the running Agent.",
   "pause": "Pause",
   "priority": {
     "critical": "Critical",

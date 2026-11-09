@@ -139,7 +139,11 @@ export interface AgentTeamState {
    * release + timestamp resets on `→ pending`, completion stamps on
    * terminal statuses).
    */
-  moveTask: (taskId: string, to: TeamTaskStatus) => { ok: boolean; reason?: TaskMoveError }
+  moveTask: (
+    taskId: string,
+    to: TeamTaskStatus,
+    targetIndex?: number
+  ) => { ok: boolean; reason?: TaskMoveError }
   /** Same-column reorder: place the task at `targetIndex` and renumber. */
   reorderTask: (taskId: string, targetIndex: number) => void
   assignTask: (taskId: string, teammateId: string) => void

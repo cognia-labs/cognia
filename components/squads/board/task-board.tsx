@@ -2,7 +2,8 @@
 
 // Kanban board for the workspace tasks tab. Columns = the 8 task statuses
 // (TASK_STATUS_CONFIG). Drag is guarded by canMoveTask: illegal drop targets
-// grey out the moment a drag starts. Swimlane mode is a read view (drag off):
+// grey out the moment a drag starts, and a legal cross-column target shows
+// where the card will land. Swimlane mode is a read view (drag off):
 // dragging across lanes would imply reassignment, which the board deliberately
 // does not do. Drag, columns, the overlay portal and keyboard movement come
 // from the shared `components/board/kanban-board.tsx`.
@@ -26,14 +27,15 @@ import {
   applyBoardFilter,
   buildBoardColumns,
   buildSwimlanes,
-  columnDropId,
   dependencyLockInfo,
   resolveDrop,
+  resolveDropPreview,
   type BoardFilter,
 } from "@/lib/squads/board-model"
 import { allowedMoveTargets } from "@/lib/squads/gates/task-move-guard"
 import { gatherTeamTwins } from "@/lib/squads/teammate/twin-context"
 import type { TeamTwinSummary } from "@/lib/squads/team-run-context"
+import { columnDropId } from "@/lib/board/dnd"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TASK_STATUS_CONFIG } from "@/types/agent/agent-team"
@@ -95,6 +97,7 @@ export function TaskBoard({ team, tasks, teammates }: TaskBoardProps) {
 
   const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks])
   const filtered = useMemo(() => applyBoardFilter(tasks, filter), [tasks, filter])
+  const visibleById = useMemo(() => new Map(filtered.map((task) => [task.id, task])), [filtered])
   const columns = useMemo<TaskColumn[]>(
     () => buildBoardColumns(filtered).map((column) => ({ id: column.status, items: column.tasks })),
     [filtered]
@@ -123,6 +126,21 @@ export function TaskBoard({ team, tasks, teammates }: TaskBoardProps) {
     [teamStatus]
   )
 
+  /**
+   * Cross-column only: within a column the sortable strategy's own gap already
+   * shows the insertion point. Counted against the visible (filtered) cards,
+   * since those are what the indicator sits between.
+   */
+  const insertionIndex = useCallback(
+    (column: TaskColumn, drag: TaskDrag) => {
+      const active = drag.activeItem
+      if (!active || active.status === column.id) return null
+      const preview = resolveDropPreview(drag.activeId, drag.overId, visibleById, teamStatus)
+      return preview !== null && preview.status === column.id ? preview.index : null
+    },
+    [visibleById, teamStatus]
+  )
+
   const handleDrop = (activeId: string, overId: string | null) => {
     const action = resolveDrop(activeId, overId, tasksById, teamStatus)
     if (!action) return
@@ -134,7 +152,7 @@ export function TaskBoard({ team, tasks, teammates }: TaskBoardProps) {
       reorderTask(action.taskId, action.targetIndex)
       return
     }
-    const result = moveTask(action.taskId, action.to)
+    const result = moveTask(action.taskId, action.to, action.targetIndex)
     if (!result.ok && result.reason) {
       toast.error(t(`denied.${result.reason}`))
     }
@@ -289,6 +307,7 @@ export function TaskBoard({ team, tasks, teammates }: TaskBoardProps) {
           renderCard={(task) => renderCard(task, false)}
           renderOverlay={renderOverlay}
           isDimmed={isDimmed}
+          insertionIndex={insertionIndex}
           onDrop={handleDrop}
           emptyText={t("emptyColumn")}
           testId="board-columns"

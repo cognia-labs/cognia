@@ -826,7 +826,7 @@ export const createAgentTeamActionsSlice = (
     })
   },
 
-  moveTask: (taskId, to) => {
+  moveTask: (taskId, to, targetIndex) => {
     const task = get().tasks[taskId]
     if (!task) return { ok: false, reason: "task-not-found" }
     const team = get().teams[task.teamId]
@@ -859,8 +859,17 @@ export const createAgentTeamActionsSlice = (
       const teammate = claimedBy ? state.teammates[claimedBy] : undefined
       const releaseTeammate = to === "pending" && teammate?.currentTaskId === taskId
 
+      const tasks = { ...state.tasks, [taskId]: { ...current, ...updates } }
+      if (targetIndex !== undefined) {
+        const column = sortColumn(
+          Object.values(tasks).filter((row) => row.teamId === current.teamId && row.status === to)
+        )
+        for (const change of reorderColumn(column, taskId, targetIndex)) {
+          tasks[change.id] = { ...tasks[change.id], order: change.order }
+        }
+      }
       return {
-        tasks: { ...state.tasks, [taskId]: { ...current, ...updates } },
+        tasks,
         ...(releaseTeammate && claimedBy
           ? {
               teammates: {

@@ -10,6 +10,7 @@ import {
   listAgentTasksByProject,
   moveAgentTask,
   reconcileAgentTaskAttempts,
+  reorderAgentTasks,
   settleAgentTaskAttempt,
 } from "./agent-tasks"
 
@@ -145,4 +146,121 @@ describe("single-Agent task persistence", () => {
       { id: "comment-1", author: "user", text: "Review this", createdAt: 10 },
     ])
   })
+
+  it("writes a same-column reorder in one go and bumps each moved card's revision", async () => {
+    for (const id of ["a", "b", "c"]) {
+      await createAgentTask({ id, agentId: "agent-a", title: id, description: "", now: 1 })
+    }
+    await reorderAgentTasks(
+      [
+        { id: "c", order: 0 },
+        { id: "a", order: 1 },
+        { id: "b", order: 2 },
+      ],
+      50
+    )
+    const rows = await listAgentTasks("agent-a")
+    expect(rows.map((row) => [row.id, row.order, row.revision, row.updatedAt])).toEqual(
+      expect.arrayContaining([
+        ["a", 1, 2, 50],
+        ["b", 2, 2, 50],
+        ["c", 0, 2, 50],
+      ])
+    )
+  })
+
+  it("refuses a reorder naming a missing task or spanning two Agents, writing nothing", async () => {
+    await createAgentTask({ id: "a", agentId: "agent-a", title: "a", description: "", now: 1 })
+    await createAgentTask({ id: "x", agentId: "agent-b", title: "x", description: "", now: 1 })
+    await expect(
+      reorderAgentTasks([
+        { id: "a", order: 3 },
+        { id: "missing", order: 4 },
+      ])
+    ).rejects.toThrow("Agent task not found")
+    await expect(
+      reorderAgentTasks([
+        { id: "a", order: 3 },
+        { id: "x", order: 4 },
+      ])
+    ).rejects.toThrow("within one Agent")
+    expect((await getAgentTask("a"))?.order).toBe(0)
+    expect((await getAgentTask("x"))?.order).toBe(0)
+  })
+
+  it("treats an empty reorder as a no-op", async () => {
+    await expect(reorderAgentTasks([])).resolves.toBeUndefined()
+  })
+})
+
+describe("cross-column Agent task placement", () => {
+  it("writes the preview's insertion position in the status transaction", async () => {
+    for (const [index, id] of ["first", "second", "target", "moving"].entries()) {
+      await createAgentTask({
+        id,
+        agentId: "agent-a",
+        title: id,
+        description: "",
+        order: index === 3 ? 0 : index,
+        now: index + 1,
+      })
+    }
+    await createAgentTask({
+      id: "other-agent",
+      agentId: "agent-b",
+      title: "Other",
+      description: "",
+      order: 7,
+      now: 5,
+    })
+    const other = await getAgentTask("other-agent")
+    await beginAgentTaskAttempt("moving", { now: 10 })
+    await moveAgentTask("moving", "paused", 11)
+    await moveAgentTask("moving", "pending", 12, { targetIndex: 2 })
+    const rows = await listAgentTasks("agent-a")
+    expect(rows.sort((a, b) => a.order - b.order).map((row) => row.id)).toEqual([
+      "first",
+      "second",
+      "moving",
+      "target",
+    ])
+    expect(rows.map((row) => row.order)).toEqual([0, 1, 2, 3])
+    expect(await getAgentTask("other-agent")).toEqual(other)
+  })
+})
+
+it("does not rewind an attempt that starts during Scheduler resume", async () => {
+  await createAgentTask({ id: "race", agentId: "a", title: "race", description: "" })
+  await beginAgentTaskAttempt("race", { id: "new-attempt" })
+  const before = await getAgentTask("race")
+  await expect(
+    moveAgentTask("race", "pending", 100, { expectedStatus: "paused", targetIndex: 0 })
+  ).resolves.toEqual(before)
+  expect(await getAgentTask("race")).toEqual(before)
+})
+
+it("rejects a stale reorder spanning two status columns without partial writes", async () => {
+  await createAgentTask({
+    id: "pending",
+    agentId: "a",
+    title: "Pending",
+    description: "",
+    order: 3,
+  })
+  await createAgentTask({
+    id: "running",
+    agentId: "a",
+    title: "Running",
+    description: "",
+    order: 4,
+  })
+  await beginAgentTaskAttempt("running")
+  const before = await listAgentTasks("a")
+  await expect(
+    reorderAgentTasks([
+      { id: "pending", order: 0 },
+      { id: "running", order: 1 },
+    ])
+  ).rejects.toThrow("one column")
+  expect(await listAgentTasks("a")).toEqual(before)
 })

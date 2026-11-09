@@ -52,6 +52,11 @@ description: "自定义智能体（Character 行）从设置迁到顶层 /agents
   区块链接到 `/issues?assignee=agent:<id>`，这是新增的深链接，会把议题控制台筛选到该智能体。
 - **任务看板是独立模式，不再内嵌。** `?mode=tasks` 让八列看板占满标题栏下方的整个区域。议题页无法替代它：
   追踪器只聚合属于某个工作区的任务，而且是只读的；看板才是运行、暂停、审阅和评论任务的地方。
+  **2026-11-05：** 看板改用共享的 `components/board/kanban-board.tsx`，带拖拽浮层、键盘移动和插入指示。规则是
+  `AGENT_TASK_MOVE_RULES`（`lib/agent-tasks/state-machine.ts`），由共享引擎 `lib/board/move-guard.ts` 求值。人发起的每次移动（拖放、
+  审阅按钮、已配对手机的 `agent_task_move`）都经 `applyAgentTaskMove`（`lib/agent-tasks/runtime.ts`），与调度器保持一致：`paused`
+  暂停调度任务，`cancelled` 删除它，`paused → pending` 恢复它；此前拖放只写状态。把卡片拖到同列另一张卡上即重排该列
+  （`reorderAgentTasks`）。
 
 动态由数据推导，从不单独存储：会话按 `characterId`，智能体任务按 `agentId`，议题按负责人，
 费用来自 `sessionUsage`，实时状态来自聊天存储中的运行状态。
