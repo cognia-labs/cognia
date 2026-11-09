@@ -35,6 +35,8 @@
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
+import { useProjectStore } from "@/stores/project/project-store"
+import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
 import type {
   ModuleToolEntry,
   ModuleToolFamily,
@@ -258,6 +260,8 @@ export interface ArtifactToolContext {
   sessionId: string
   /** The assistant message this call belongs to, used as the review request id. */
   messageId?: string
+  /** The workflow run's admitted project, used only when there is no conversation. */
+  projectId?: string
 }
 
 type Failure = { ok: false; code: string; error: string }
@@ -328,6 +332,24 @@ export function resolveArtifactToolDeps(): ArtifactToolDeps {
   }
 }
 
+/**
+ * The project a by-id tool call is scoped to (Q3: explicit ids are
+ * project-isolated). A background conversation keeps its own binding whatever
+ * project is focused. A conversation with no binding falls back to the active
+ * project, the same project `autoCreateFromContent` stamps onto what it makes;
+ * an execution-context session without a project stays unscoped there too.
+ */
+export async function resolveArtifactToolProjectId(
+  sessionId: string,
+  workflowProjectId?: string
+): Promise<string | null> {
+  const activeProject = useProjectStore.getState().activeProjectId
+  if (!sessionId) return workflowProjectId ?? activeProject
+  const { getSession } = await import("@/lib/db/sessions")
+  const session = await getSession(sessionId)
+  return sessionWorkspaceId(session) ?? (session?.executionContext ? null : activeProject)
+}
+
 /** The raster module's typed failures, as codes the model can act on. */
 const CAPTURE_ERROR_CODES: Record<string, string> = {
   ArtifactPreviewNotMountedError: "not_rendered",
@@ -359,6 +381,7 @@ export async function runArtifactBuiltinTool(
   const sessionId = context.sessionId ?? deps.activeSessionId ?? ""
 
   try {
+    const projectId = await resolveArtifactToolProjectId(sessionId, context.projectId)
     switch (name) {
       case ARTIFACT_CREATE_TOOL_NAME: {
         const title = str(args, "title")
@@ -406,7 +429,7 @@ export async function runArtifactBuiltinTool(
         const artifactId = str(args, "artifactId")
         const content = typeof args.content === "string" ? args.content : null
         if (!artifactId || !content) return invalidArguments("artifactId and content are required")
-        const existing = store.getArtifact(artifactId)
+        const existing = store.getArtifactForProject(artifactId, projectId)
         if (!existing) return notFound("artifact", artifactId)
 
         // The same review gate a heuristic revision passes through
@@ -432,14 +455,14 @@ export async function runArtifactBuiltinTool(
         store.saveArtifactVersion(artifactId, changeDescription)
         const title = str(args, "title")
         store.updateArtifact(artifactId, { content, ...(title ? { title } : {}) })
-        const updated = store.getArtifact(artifactId) ?? existing
+        const updated = store.getArtifactForProject(artifactId, projectId) ?? existing
         return { ok: true as const, ...artifactSummary(updated), staged: "applied" as const }
       }
 
       case ARTIFACT_READ_TOOL_NAME: {
         const artifactId = str(args, "artifactId")
         if (artifactId) {
-          const artifact = store.getArtifact(artifactId)
+          const artifact = store.getArtifactForProject(artifactId, projectId)
           if (!artifact) return notFound("artifact", artifactId)
           const body = truncate(artifact.content)
           return {
@@ -452,7 +475,11 @@ export async function runArtifactBuiltinTool(
         }
         const query = str(args, "query")?.toLowerCase()
         const rows = store
-          .getArtifactsForWorkspace({ sessionId: sessionId || null, limit: READ_LIST_MAX_ITEMS })
+          .getArtifactsForWorkspace({
+            sessionId: sessionId || null,
+            projectId,
+            limit: READ_LIST_MAX_ITEMS,
+          })
           .filter((a) => !query || a.title.toLowerCase().includes(query))
         return { ok: true as const, artifacts: rows.map(artifactSummary) }
       }
@@ -460,7 +487,8 @@ export async function runArtifactBuiltinTool(
       case ARTIFACT_DELETE_TOOL_NAME: {
         const artifactId = str(args, "artifactId")
         if (!artifactId) return invalidArguments("artifactId is required")
-        if (!store.getArtifact(artifactId)) return notFound("artifact", artifactId)
+        if (!store.getArtifactForProject(artifactId, projectId))
+          return notFound("artifact", artifactId)
         store.deleteArtifact(artifactId)
         return { ok: true as const, artifactId, deleted: true as const }
       }
@@ -468,7 +496,7 @@ export async function runArtifactBuiltinTool(
       case ARTIFACT_CAPTURE_TOOL_NAME: {
         const artifactId = str(args, "artifactId")
         if (!artifactId) return invalidArguments("artifactId is required")
-        const artifact = store.getArtifact(artifactId)
+        const artifact = store.getArtifactForProject(artifactId, projectId)
         if (!artifact) return notFound("artifact", artifactId)
         const width = optionalInteger(args, "width")
         const height = optionalInteger(args, "height")
@@ -517,7 +545,7 @@ export async function runArtifactBuiltinTool(
         if (!documentId || content === null) {
           return invalidArguments("documentId and content are required")
         }
-        const doc = store.getCanvasDocumentForWorkspace(documentId)
+        const doc = store.getCanvasDocumentForWorkspace(documentId, projectId)
         if (!doc) return notFound("canvas document", documentId)
 
         if (reviewBeforeApply()) {
@@ -549,7 +577,7 @@ export async function runArtifactBuiltinTool(
           // Workspace-scoped: a turn running in one workspace cannot read a
           // document owned by another, and gets the same "not found" it would
           // get for a made-up id rather than a distinguishable refusal.
-          const doc = store.getCanvasDocumentForWorkspace(documentId)
+          const doc = store.getCanvasDocumentForWorkspace(documentId, projectId)
           if (!doc) return notFound("canvas document", documentId)
           const body = truncate(doc.content)
           return {
@@ -563,6 +591,7 @@ export async function runArtifactBuiltinTool(
         }
         const docs = store.getCanvasDocumentsForWorkspace({
           sessionId: sessionId || null,
+          projectId,
           limit: READ_LIST_MAX_ITEMS,
         })
         return { ok: true as const, documents: docs.map(canvasSummary) }
@@ -571,8 +600,20 @@ export async function runArtifactBuiltinTool(
       case CANVAS_OPEN_TOOL_NAME: {
         const documentId = str(args, "documentId")
         if (!documentId) return invalidArguments("documentId is required")
+        const doc = store.getCanvasDocumentForWorkspace(documentId, projectId)
+        if (!doc) return notFound("canvas document", documentId)
+        // Ownership is checked against the caller above. The reveal itself
+        // still refuses a document the focused workspace's rail cannot list,
+        // so a background turn in another project does not switch the shell.
         const revealed = revealCanvasDocument(documentId)
-        if (!revealed) return notFound("canvas document", documentId)
+        if (!revealed) {
+          return {
+            ok: true as const,
+            ...canvasSummary(doc),
+            opened: false as const,
+            note: "The document belongs to this conversation's project, which is not the one on screen; it was not opened.",
+          }
+        }
         return { ok: true as const, ...canvasSummary(revealed), opened: true as const }
       }
 

@@ -35,6 +35,7 @@ import {
   ARTIFACT_UPDATE_TOOL_NAME,
   CANVAS_CREATE_TOOL_NAME,
   resolveArtifactToolDeps,
+  resolveArtifactToolProjectId,
   runArtifactBuiltinTool,
 } from "@/lib/artifacts/agent-tools"
 import { renderArtifactExport } from "@/lib/artifacts/export"
@@ -72,11 +73,12 @@ async function runTool(
   name: string,
   args: Record<string, unknown>,
   kind: string,
-  sessionId: string
+  ctx: StepExecutionContext
 ): Promise<Record<string, unknown>> {
   const deps = resolveArtifactToolDeps()
   const result = (await runArtifactBuiltinTool(name, args, deps, {
-    sessionId,
+    sessionId: stepSessionId(ctx),
+    projectId: ctx.projectId,
     // The review request id. A flow has no assistant message, so the step is
     // the thing being reviewed; without a stable id every re-run would open a
     // second pending diff for the same edit.
@@ -145,7 +147,7 @@ registerNodeExecutor({
           : {}),
       },
       kind,
-      stepSessionId(ctx)
+      ctx
     )
     return { output: result }
   },
@@ -170,7 +172,7 @@ registerNodeExecutor({
           : {}),
       },
       kind,
-      stepSessionId(ctx)
+      ctx
     )
     // `staged` is the field worth branching on: with "Review before apply" on,
     // the artifact is UNCHANGED and a diff is waiting for the user. A flow that
@@ -186,17 +188,18 @@ registerNodeExecutor({
   execute: async (ctx) => {
     const kind = "action.artifact.get"
     const store = useArtifactStore.getState()
+    const sessionId = stepSessionId(ctx)
+    const projectId = await resolveArtifactToolProjectId(sessionId, ctx.projectId)
     const artifactId = optionalString(ctx, "artifactId")
     if (artifactId) {
-      const artifact = store.getArtifact(artifactId)
+      const artifact = store.getArtifactForProject(artifactId, projectId)
       if (!artifact) throw new Error(`${kind}: no artifact with id ${artifactId}`)
       // Full content, deliberately — see the module header.
       return { output: { ...artifactOutput(artifact), content: artifact.content } }
     }
     const query = optionalString(ctx, "query")?.toLowerCase()
-    const sessionId = stepSessionId(ctx)
     const rows = store
-      .getArtifactsForWorkspace({ sessionId: sessionId || null })
+      .getArtifactsForWorkspace({ sessionId: sessionId || null, projectId })
       .filter((artifact) => !query || artifact.title.toLowerCase().includes(query))
     return { output: { artifacts: rows.map(artifactOutput) } }
   },
@@ -211,7 +214,8 @@ registerNodeExecutor({
     const kind = "action.artifact.export"
     const artifactId = requireString(ctx, "artifactId", kind)
     const format = (optionalString(ctx, "format") ?? "raw") as ArtifactExportFormat
-    const artifact = useArtifactStore.getState().getArtifact(artifactId)
+    const projectId = await resolveArtifactToolProjectId(stepSessionId(ctx), ctx.projectId)
+    const artifact = useArtifactStore.getState().getArtifactForProject(artifactId, projectId)
     if (!artifact) throw new Error(`${kind}: no artifact with id ${artifactId}`)
     const offered = getArtifactExportFormats(artifact)
     if (!offered.includes(format)) {
@@ -283,7 +287,7 @@ registerNodeExecutor({
         type: ctx.params.type === "text" ? "text" : "code",
       },
       kind,
-      stepSessionId(ctx)
+      ctx
     )
     return { output: result }
   },
@@ -296,16 +300,17 @@ registerNodeExecutor({
   execute: async (ctx) => {
     const kind = "action.canvas.get"
     const store = useArtifactStore.getState()
+    const sessionId = stepSessionId(ctx)
+    const projectId = await resolveArtifactToolProjectId(sessionId, ctx.projectId)
     const documentId = optionalString(ctx, "documentId")
     if (documentId) {
-      const doc = store.canvasDocuments[documentId]
+      const doc = store.getCanvasDocumentForWorkspace(documentId, projectId)
       if (!doc) throw new Error(`${kind}: no canvas document with id ${documentId}`)
       return { output: { ...canvasOutput(doc), content: doc.content } }
     }
-    const sessionId = stepSessionId(ctx)
     // Workspace-scoped listing — a flow running in one workspace must not
     // enumerate another's documents.
-    const rows = store.getCanvasDocumentsForWorkspace({ sessionId })
+    const rows = store.getCanvasDocumentsForWorkspace({ sessionId, projectId })
     return { output: { documents: rows.map(canvasOutput) } }
   },
 })

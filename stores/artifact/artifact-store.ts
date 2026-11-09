@@ -441,6 +441,14 @@ const INITIAL_ARTIFACT_WORKSPACE: ArtifactWorkspaceState = {
   returnContext: null,
 }
 
+/** Project-owned rows stay in their project; legacy rows remain visible everywhere. */
+export function isVisibleToProject(
+  item: { projectId?: string },
+  projectId: string | null
+): boolean {
+  return !projectId || !item.projectId || item.projectId === projectId
+}
+
 /**
  * Workspace isolation for Canvas documents — the same rule
  * {@link applyArtifactWorkspaceFilters} applies to artifacts, lifted into its
@@ -456,23 +464,22 @@ export function filterCanvasDocumentsByWorkspace(
   projectId: string | null
 ): CanvasDocument[] {
   if (!projectId) return documents
-  return documents.filter((doc) => !doc.projectId || doc.projectId === projectId)
+  return documents.filter((doc) => isVisibleToProject(doc, projectId))
 }
 
 function applyArtifactWorkspaceFilters(
   artifacts: Artifact[],
   workspace: ArtifactWorkspaceState,
-  sessionId?: string | null
+  sessionId?: string | null,
+  projectId: string | null = activeProjectId()
 ): Artifact[] {
   const activeSessionId =
     workspace.scope === "session" ? (sessionId ?? workspace.sessionId ?? null) : null
   const lowerQuery = workspace.searchQuery.trim().toLowerCase()
   // Workspace isolation (Dexie v86): hide artifacts owned by *another* project.
   // Legacy artifacts (no projectId) are grandfathered — visible everywhere.
-  const projectId = activeProjectId()
-
   return artifacts.filter((artifact) => {
-    if (projectId && artifact.projectId && artifact.projectId !== projectId) {
+    if (!isVisibleToProject(artifact, projectId)) {
       return false
     }
 
@@ -755,6 +762,7 @@ interface ArtifactActions {
    */
   purgeProject: (projectId: string) => void
   getArtifact: (id: string) => Artifact | undefined
+  getArtifactForProject: (id: string, projectId: string | null) => Artifact | undefined
   getSessionArtifacts: (sessionId: string) => Artifact[]
   /**
    * Park a session on an artifact. The session is derived from the artifact
@@ -784,7 +792,11 @@ interface ArtifactActions {
    */
   resetSessionScopedWorkspaceFilters: (sessionId: string | null) => void
   setArtifactWorkspaceReturnContext: (context: ArtifactWorkspaceReturnContext | null) => void
-  getArtifactsForWorkspace: (options?: { sessionId?: string | null; limit?: number }) => Artifact[]
+  getArtifactsForWorkspace: (options?: {
+    sessionId?: string | null
+    projectId?: string | null
+    limit?: number
+  }) => Artifact[]
 
   // Auto-detection and creation
   autoCreateFromContent: (params: {
@@ -922,15 +934,16 @@ interface ArtifactActions {
    */
   getCanvasDocumentsForWorkspace: (options?: {
     sessionId?: string | null
+    projectId?: string | null
     limit?: number
   }) => CanvasDocument[]
   /**
-   * One Canvas document by id, but only when the ACTIVE workspace owns it.
+   * One Canvas document by id, scoped to the explicit project or the active UI workspace.
    * `null` is the same answer a caller gets for an id that does not exist —
    * deliberately, so a plugin or a model tool cannot distinguish "not yours"
    * from "not there" and use the difference to enumerate another workspace.
    */
-  getCanvasDocumentForWorkspace: (id: string) => CanvasDocument | null
+  getCanvasDocumentForWorkspace: (id: string, projectId?: string | null) => CanvasDocument | null
   /**
    * Patch a document's AI workbench state (draft prompt, chosen preset, staged
    * attachments, action history, inline-command visibility).
@@ -1254,6 +1267,13 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         return artifact ? rehydrateArtifact(artifact) : undefined
       },
 
+      getArtifactForProject: (id, projectId) => {
+        const artifact = get().artifacts[id]
+        return artifact && isVisibleToProject(artifact, projectId)
+          ? rehydrateArtifact(artifact)
+          : undefined
+      },
+
       getSessionArtifacts: (sessionId) =>
         Object.values(get().artifacts)
           .filter((a) => a.sessionId === sessionId)
@@ -1378,6 +1398,7 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
 
       getArtifactsForWorkspace: ({
         sessionId = null,
+        projectId = activeProjectId(),
         limit,
       }: NonNullable<Parameters<ArtifactActions["getArtifactsForWorkspace"]>[0]> = {}) => {
         const state = get()
@@ -1392,7 +1413,12 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
               )
             : sorted
 
-        scoped = applyArtifactWorkspaceFilters(scoped, state.artifactWorkspace, sessionId)
+        scoped = applyArtifactWorkspaceFilters(
+          scoped,
+          state.artifactWorkspace,
+          sessionId,
+          projectId
+        )
 
         return typeof limit === "number" ? scoped.slice(0, limit) : scoped
       },
@@ -2330,20 +2356,20 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
         })
       },
 
-      getCanvasDocumentForWorkspace: (id) => {
+      getCanvasDocumentForWorkspace: (id, projectId = activeProjectId()) => {
         const doc = get().canvasDocuments[id]
-        if (!doc) return null
-        return filterCanvasDocumentsByWorkspace([doc], activeProjectId())[0] ?? null
+        return doc && isVisibleToProject(doc, projectId) ? doc : null
       },
 
       getCanvasDocumentsForWorkspace: ({
         sessionId = null,
+        projectId = activeProjectId(),
         limit,
       }: NonNullable<Parameters<ArtifactActions["getCanvasDocumentsForWorkspace"]>[0]> = {}) => {
         const state = get()
         const scoped = filterCanvasDocumentsByWorkspace(
           Object.values(state.canvasDocuments) as CanvasDocument[],
-          activeProjectId()
+          projectId
         )
           .filter((doc) => !sessionId || !doc.sessionId || doc.sessionId === sessionId)
           .sort((a, b) => ensureDate(b.updatedAt).getTime() - ensureDate(a.updatedAt).getTime())

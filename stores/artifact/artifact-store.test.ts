@@ -57,6 +57,8 @@ import {
   MAX_OPEN_ARTIFACTS,
   selectActiveArtifactId,
   selectOpenArtifactIds,
+  isVisibleToProject,
+  filterCanvasDocumentsByWorkspace,
   useArtifactStore,
 } from "./artifact-store"
 import { useCanvasSettingsStore } from "@/stores/canvas/canvas-settings-store"
@@ -2808,6 +2810,89 @@ describe("canvas plugin hook dispatches", () => {
     } finally {
       Date.now = realDateNow
     }
+  })
+})
+
+describe("explicit project visibility (Q3)", () => {
+  it.each([
+    ["project-A", "project-A", true],
+    ["project-A", "project-B", false],
+    [undefined, "project-A", true],
+    ["project-A", null, true],
+    [undefined, null, true],
+  ] as const)(
+    "item project %s in project %s is visible=%s",
+    (ownedProject, currentProject, visible) => {
+      expect(isVisibleToProject({ projectId: ownedProject }, currentProject)).toBe(visible)
+    }
+  )
+
+  it("keeps explicit by-id and list visibility identical while preserving UI defaults", () => {
+    const store = useArtifactStore.getState()
+    const artifacts = []
+    const documentIds = []
+    for (const projectId of ["project-A", "project-B", null]) {
+      mockActiveProjectId = projectId
+      artifacts.push(
+        store.createArtifact({
+          sessionId: "s1",
+          messageId: "m",
+          type: "code",
+          title: "a",
+          content: "x",
+        })
+      )
+      documentIds.push(
+        store.createCanvasDocument({
+          sessionId: "s1",
+          title: "d",
+          content: "x",
+          language: "markdown",
+          type: "text",
+          createdBy: "user",
+        })
+      )
+    }
+    mockActiveProjectId = "project-B"
+    const documents = documentIds.map((id) => useArtifactStore.getState().canvasDocuments[id])
+    for (const projectId of ["project-A", "project-B", null]) {
+      const expectedArtifacts = artifacts
+        .filter((a) => isVisibleToProject(a, projectId))
+        .map((a) => a.id)
+      const expectedDocuments = documents
+        .filter((d) => isVisibleToProject(d, projectId))
+        .map((d) => d.id)
+      expect(
+        store
+          .getArtifactsForWorkspace({ sessionId: "s1", projectId })
+          .map((a) => a.id)
+          .sort()
+      ).toEqual([...expectedArtifacts].sort())
+      expect(
+        store
+          .getCanvasDocumentsForWorkspace({ sessionId: "s1", projectId })
+          .map((d) => d.id)
+          .sort()
+      ).toEqual([...expectedDocuments].sort())
+      expect(filterCanvasDocumentsByWorkspace(documents, projectId).map((d) => d.id)).toEqual(
+        expectedDocuments
+      )
+      for (const artifact of artifacts) {
+        const visible = store.getArtifactForProject(artifact.id, projectId)
+        expect(visible?.id).toBe(expectedArtifacts.includes(artifact.id) ? artifact.id : undefined)
+        if (visible) expect(visible.updatedAt).toBeInstanceOf(Date)
+      }
+      for (const document of documents) {
+        expect(store.getCanvasDocumentForWorkspace(document.id, projectId)?.id ?? null).toBe(
+          expectedDocuments.includes(document.id) ? document.id : null
+        )
+      }
+    }
+    expect(store.getArtifactForProject("missing", "project-A")).toBeUndefined()
+    expect(store.getCanvasDocumentForWorkspace("missing", "project-A")).toBeNull()
+    expect(store.getCanvasDocumentForWorkspace(documentIds[0])).toBeNull()
+    expect(store.getCanvasDocumentForWorkspace(documentIds[1])?.id).toBe(documentIds[1])
+    expect(store.getArtifact(artifacts[0].id)?.id).toBe(artifacts[0].id)
   })
 })
 

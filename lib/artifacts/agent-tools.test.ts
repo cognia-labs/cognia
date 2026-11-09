@@ -13,14 +13,12 @@ import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useProjectStore } from "@/stores/project/project-store"
+import { useUIStore } from "@/stores/ui"
+import { getSession } from "@/lib/db/sessions"
 import { aggregateFilesEntries, STANDALONE_CANVAS_SESSION_ID } from "@/lib/files-library/aggregate"
 import { DEFAULT_FILES_FILTERS, filterFilesEntries } from "@/lib/files-library/filter"
 
-const mockReveal = jest.fn()
-jest.mock("@/lib/artifacts/reveal", () => ({
-  revealCanvasDocument: (...a: unknown[]) => mockReveal(...a),
-  revealArtifactInWorkspace: jest.fn(),
-}))
+jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(async () => undefined) }))
 
 const mockCapture = jest.fn()
 
@@ -41,6 +39,9 @@ function setReviewBeforeApply(value: boolean) {
 
 beforeEach(() => {
   mockCapture.mockReset()
+  jest.mocked(getSession).mockReset().mockResolvedValue(undefined)
+  useProjectStore.setState({ activeProjectId: null })
+  useUIStore.setState({ selectedGuild: { kind: "dm" } })
   useArtifactStore.setState({
     artifacts: {},
     artifactVersions: {},
@@ -50,7 +51,6 @@ beforeEach(() => {
     openArtifactIdsBySession: {},
     activeArtifactIdBySession: {},
   })
-  mockReveal.mockReset()
   setReviewBeforeApply(false)
 })
 
@@ -500,21 +500,20 @@ describe("canvas tools", () => {
     expect(result.truncated).toBe(false)
   })
 
-  it("opens a document through the shared reveal seam", async () => {
+  it("opens a document in the Canvas shell", async () => {
     const id = await seedDoc()
-    mockReveal.mockReturnValue(useArtifactStore.getState().canvasDocuments[id])
     const result = (await runArtifactBuiltinTool(
       "canvas_open",
       { documentId: id },
       deps(),
       ctx
     )) as { ok: boolean; opened: boolean }
-    expect(mockReveal).toHaveBeenCalledWith(id)
+    expect(useArtifactStore.getState().activeCanvasId).toBe(id)
+    expect(useUIStore.getState().selectedGuild).toEqual({ kind: "canvas" })
     expect(result).toMatchObject({ ok: true, opened: true })
   })
 
   it("reports not_found when the document cannot be revealed", async () => {
-    mockReveal.mockReturnValue(null)
     const result = (await runArtifactBuiltinTool(
       "canvas_open",
       { documentId: "ghost" },
@@ -545,6 +544,7 @@ describe("canvas tools", () => {
       await seedDocIn("ws-b", "Beta")
 
       useProjectStore.setState({ activeProjectId: "ws-a" })
+      jest.mocked(getSession).mockResolvedValue({ projectId: "ws-a" } as never)
       const result = (await runArtifactBuiltinTool("canvas_read", {}, deps(), ctx)) as {
         documents: Array<{ title: string }>
       }
@@ -555,6 +555,7 @@ describe("canvas tools", () => {
       const other = await seedDocIn("ws-b", "Beta")
 
       useProjectStore.setState({ activeProjectId: "ws-a" })
+      jest.mocked(getSession).mockResolvedValue({ projectId: "ws-a" } as never)
       const result = (await runArtifactBuiltinTool(
         "canvas_read",
         { documentId: other },
@@ -570,6 +571,7 @@ describe("canvas tools", () => {
       const other = await seedDocIn("ws-b", "Beta")
 
       useProjectStore.setState({ activeProjectId: "ws-a" })
+      jest.mocked(getSession).mockResolvedValue({ projectId: "ws-a" } as never)
       const result = (await runArtifactBuiltinTool(
         "canvas_update",
         { documentId: other, content: "hijacked" },
@@ -580,6 +582,194 @@ describe("canvas tools", () => {
       expect(useArtifactStore.getState().canvasDocuments[other]?.content).toBe("Beta")
     })
   })
+})
+
+describe("calling conversation project isolation (Q3)", () => {
+  const artifactTools = ["artifact_read", "artifact_update", "artifact_capture", "artifact_delete"]
+  const canvasTools = ["canvas_read", "canvas_update", "canvas_open"]
+
+  function seed(projectId: string | null = "project-A") {
+    useProjectStore.setState({ activeProjectId: projectId })
+    const store = useArtifactStore.getState()
+    const artifact = store.createArtifact({
+      sessionId: ctx.sessionId,
+      messageId: "source",
+      type: "code",
+      title: "Owned artifact",
+      content: "old",
+    })
+    const documentId = store.createCanvasDocument({
+      sessionId: ctx.sessionId,
+      title: "Owned document",
+      content: "old",
+      language: "markdown",
+      type: "text",
+      createdBy: "agent",
+    })
+    useProjectStore.setState({ activeProjectId: "project-B" })
+    mockCapture.mockResolvedValue({ data: "png", mimeType: "image/png" })
+    return { artifactId: artifact.id, documentId }
+  }
+
+  function expectAllowed(name: string, result: unknown) {
+    if (name === "artifact_capture") {
+      expect(result).toMatchObject({
+        content: expect.arrayContaining([{ type: "image", data: "png", mimeType: "image/png" }]),
+      })
+      expect(mockCapture).toHaveBeenCalledTimes(1)
+    } else {
+      expect(result).toMatchObject({ ok: true })
+    }
+    if (name === "canvas_open") {
+      // The shell only switches when the focused workspace can list the
+      // document; ownership by the calling conversation alone does not.
+      const docProject =
+        useArtifactStore.getState().canvasDocuments[(result as { documentId: string }).documentId]
+          ?.projectId
+      const focused = useProjectStore.getState().activeProjectId
+      const visible = !focused || !docProject || docProject === focused
+      expect(result).toMatchObject({ opened: visible })
+      expect(useUIStore.getState().selectedGuild).toEqual(
+        visible ? { kind: "canvas" } : { kind: "dm" }
+      )
+    }
+  }
+
+  it.each([...artifactTools, ...canvasTools])(
+    "%s refuses another project's id before any side effect",
+    async (name) => {
+      const ids = seed()
+      jest.mocked(getSession).mockResolvedValue({ projectId: "project-B" } as never)
+      const before = useArtifactStore.getState()
+      for (const review of [false, true]) {
+        setReviewBeforeApply(review)
+        const result = await runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), ctx)
+        const kind = name.startsWith("canvas_") ? "canvas document" : "artifact"
+        const id = name.startsWith("canvas_") ? ids.documentId : ids.artifactId
+        expect(result).toEqual({ ok: false, code: "not_found", error: `no ${kind} with id ${id}` })
+        const after = useArtifactStore.getState()
+        expect(after.artifacts).toEqual(before.artifacts)
+        expect(after.canvasDocuments).toEqual(before.canvasDocuments)
+        expect(after.artifactVersions).toEqual(before.artifactVersions)
+        expect(after.pendingReviews).toEqual(before.pendingReviews)
+        expect(after.activeCanvasId).toBe(before.activeCanvasId)
+        expect(useUIStore.getState().selectedGuild).toEqual({ kind: "dm" })
+        expect(mockCapture).not.toHaveBeenCalled()
+      }
+    }
+  )
+
+  it.each([...artifactTools, ...canvasTools])(
+    "%s allows the owning conversation while another project is focused",
+    async (name) => {
+      const ids = seed()
+      jest.mocked(getSession).mockResolvedValue({ projectId: "project-A" } as never)
+      expectAllowed(
+        name,
+        await runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), ctx)
+      )
+      expect(getSession).toHaveBeenCalledTimes(1)
+      expect(getSession).toHaveBeenCalledWith(ctx.sessionId)
+      expect(useProjectStore.getState().activeProjectId).toBe("project-B")
+    }
+  )
+
+  it.each([...artifactTools, ...canvasTools])(
+    "%s allows grandfathered items without a project",
+    async (name) => {
+      const ids = seed(null)
+      jest
+        .mocked(getSession)
+        .mockResolvedValue({ executionContext: { projectId: "project-A" } } as never)
+      expectAllowed(
+        name,
+        await runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), ctx)
+      )
+    }
+  )
+
+  it.each([...artifactTools, ...canvasTools])(
+    "%s uses the focused project only for a session-less call",
+    async (name) => {
+      const ids = seed()
+      await expect(
+        runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), { sessionId: "" })
+      ).resolves.toMatchObject({ ok: false, code: "not_found" })
+      useProjectStore.setState({ activeProjectId: "project-A" })
+      expectAllowed(
+        name,
+        await runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), { sessionId: "" })
+      )
+      expect(getSession).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(["artifact_read", "canvas_read"])(
+    "%s lists the calling project's rows while the focus changes",
+    async (name) => {
+      const owned = seed()
+      const foreign = seed("project-B")
+      let resolveSession!: (session: Awaited<ReturnType<typeof getSession>>) => void
+      jest.mocked(getSession).mockReturnValue(
+        new Promise((resolve) => {
+          resolveSession = resolve
+        })
+      )
+      const pending = runArtifactBuiltinTool(name, {}, deps(), ctx)
+      useProjectStore.setState({ activeProjectId: "project-C" })
+      resolveSession({ projectId: "project-A" } as never)
+      const result = await pending
+      if (name === "artifact_read") {
+        expect(result).toMatchObject({
+          artifacts: [expect.objectContaining({ artifactId: owned.artifactId })],
+        })
+        expect(result).not.toEqual(
+          expect.objectContaining({
+            artifacts: expect.arrayContaining([
+              expect.objectContaining({ artifactId: foreign.artifactId }),
+            ]),
+          })
+        )
+      } else {
+        expect(result).toMatchObject({
+          documents: [expect.objectContaining({ documentId: owned.documentId })],
+        })
+      }
+      expect(getSession).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it.each([...artifactTools, ...canvasTools])(
+    "%s scopes an unbound conversation to the focused project, like auto-creation",
+    async (name) => {
+      const ids = seed()
+      for (const session of [{}, undefined]) {
+        jest.mocked(getSession).mockResolvedValue(session as never)
+        useProjectStore.setState({ activeProjectId: "project-B" })
+        await expect(
+          runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), ctx)
+        ).resolves.toMatchObject({ ok: false, code: "not_found" })
+      }
+      useProjectStore.setState({ activeProjectId: "project-A" })
+      jest.mocked(getSession).mockResolvedValue({} as never)
+      expectAllowed(
+        name,
+        await runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), ctx)
+      )
+    }
+  )
+
+  it.each([...artifactTools, ...canvasTools])(
+    "%s allows all projects when the conversation has no project",
+    async (name) => {
+      const ids = seed()
+      jest.mocked(getSession).mockResolvedValue({ executionContext: {} } as never)
+      expectAllowed(
+        name,
+        await runArtifactBuiltinTool(name, { ...ids, content: "new" }, deps(), ctx)
+      )
+    }
+  )
 })
 
 describe("failure contract", () => {

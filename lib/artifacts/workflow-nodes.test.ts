@@ -1,11 +1,21 @@
+/** @jest-environment jsdom */
 import type { StepExecutionContext } from "@/types/workflow/visual"
+import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { useProjectStore } from "@/stores/project/project-store"
+import { useSettingsStore } from "@/stores/settings"
+import { getSession } from "@/lib/db/sessions"
+
+jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(async () => undefined) }))
 
 const runArtifactBuiltinTool = jest.fn()
 jest.mock("@/lib/artifacts/agent-tools", () => ({
   ARTIFACT_CREATE_TOOL_NAME: "artifact_create",
   ARTIFACT_UPDATE_TOOL_NAME: "artifact_update",
   CANVAS_CREATE_TOOL_NAME: "canvas_create",
-  resolveArtifactToolDeps: () => ({ store: {}, activeSessionId: null }),
+  resolveArtifactToolDeps: () =>
+    jest.requireActual("@/lib/artifacts/agent-tools").resolveArtifactToolDeps(),
+  resolveArtifactToolProjectId: (...args: unknown[]) =>
+    jest.requireActual("@/lib/artifacts/agent-tools").resolveArtifactToolProjectId(...args),
   runArtifactBuiltinTool: (...args: unknown[]) => runArtifactBuiltinTool(...args),
 }))
 
@@ -19,38 +29,13 @@ jest.mock("@/components/artifacts/runtime-adapters", () => ({
   getArtifactExportFormats: () => exportFormats,
 }))
 
-interface StoreState {
-  artifacts: Record<string, unknown>
-  canvasDocuments: Record<string, unknown>
-  getArtifact: (id: string) => unknown
-  getArtifactsForWorkspace: () => unknown[]
-  getCanvasDocumentsForWorkspace: (options?: { sessionId?: string | null }) => unknown[]
-}
-// Annotated: `getArtifact` reads `storeState` from inside its own initializer,
-// which leaves TypeScript with no way to infer the shape (TS7022).
-const storeState: StoreState = {
-  artifacts: {},
-  canvasDocuments: {},
-  getArtifact: (id: string) => storeState.artifacts[id],
-  getArtifactsForWorkspace: jest.fn(() => Object.values(storeState.artifacts)),
-  // Mirrors the real selector: workspace scope first, then the session narrow.
-  getCanvasDocumentsForWorkspace: jest.fn(({ sessionId = null } = {}) =>
-    (Object.values(storeState.canvasDocuments) as Array<{ sessionId?: string }>).filter(
-      (doc) => !sessionId || !doc.sessionId || doc.sessionId === sessionId
-    )
-  ),
-}
-jest.mock("@/stores/artifact/artifact-store", () => ({
-  useArtifactStore: { getState: () => storeState },
-}))
-
 import "./workflow-nodes"
 import { getExecutor } from "@/lib/workflow/nodes/registry"
 
-function run(kind: string, params: Record<string, unknown>) {
+function run(kind: string, params: Record<string, unknown>, projectId?: string) {
   const registered = getExecutor(kind as never, 1)
   if (!registered) throw new Error(`no executor for ${kind}`)
-  return registered.execute({ params } as unknown as StepExecutionContext)
+  return registered.execute({ params, projectId } as unknown as StepExecutionContext)
 }
 
 const ARTIFACT = {
@@ -79,8 +64,14 @@ const CANVAS_DOC = {
 
 beforeEach(() => {
   jest.clearAllMocks()
-  storeState.artifacts = {}
-  storeState.canvasDocuments = {}
+  useArtifactStore.setState({
+    artifacts: {},
+    canvasDocuments: {},
+    artifactVersions: {},
+    pendingReviews: {},
+  })
+  useProjectStore.setState({ activeProjectId: null })
+  jest.mocked(getSession).mockReset().mockResolvedValue(undefined)
   exportFormats = ["raw", "png", "pdf"]
   runArtifactBuiltinTool.mockResolvedValue({ ok: true, artifactId: "art_1", title: "Revenue" })
 })
@@ -169,17 +160,19 @@ describe("action.artifact.get", () => {
     // `artifact_read` truncates because its consumer is a context window. A
     // `get → write to file` step that silently lost everything past 8 KB would
     // be worse than no node at all.
-    storeState.artifacts = { art_1: ARTIFACT }
+    useArtifactStore.setState({ artifacts: { art_1: ARTIFACT } } as never)
     const result = await run("action.artifact.get", { artifactId: "art_1" })
     expect((result.output as { content: string }).content).toHaveLength(20_000)
     expect(runArtifactBuiltinTool).not.toHaveBeenCalled()
   })
 
   it("lists and filters by title when no id is given", async () => {
-    storeState.artifacts = {
-      art_1: ARTIFACT,
-      art_2: { ...ARTIFACT, id: "art_2", title: "Costs" },
-    }
+    useArtifactStore.setState({
+      artifacts: {
+        art_1: ARTIFACT,
+        art_2: { ...ARTIFACT, id: "art_2", title: "Costs" },
+      },
+    } as never)
     const result = await run("action.artifact.get", { query: "reven" })
     expect((result.output as { artifacts: Array<{ artifactId: string }> }).artifacts).toEqual([
       expect.objectContaining({ artifactId: "art_1" }),
@@ -195,7 +188,7 @@ describe("action.artifact.get", () => {
 
 describe("action.artifact.export", () => {
   it("returns text formats inline", async () => {
-    storeState.artifacts = { art_1: { ...ARTIFACT, content: "hello" } }
+    useArtifactStore.setState({ artifacts: { art_1: { ...ARTIFACT, content: "hello" } } } as never)
     renderArtifactExport.mockResolvedValue({
       data: "hello",
       mimeType: "text/plain;charset=utf-8",
@@ -211,7 +204,7 @@ describe("action.artifact.export", () => {
   })
 
   it("base64-encodes a rendered blob for a later step to write or send", async () => {
-    storeState.artifacts = { art_1: ARTIFACT }
+    useArtifactStore.setState({ artifacts: { art_1: ARTIFACT } } as never)
     renderArtifactExport.mockResolvedValue({
       data: {
         arrayBuffer: async () => new Uint8Array([0xde, 0xad, 0xbe, 0xef]).buffer,
@@ -229,7 +222,7 @@ describe("action.artifact.export", () => {
   })
 
   it("names the formats this artifact actually offers when refusing", async () => {
-    storeState.artifacts = { art_1: ARTIFACT }
+    useArtifactStore.setState({ artifacts: { art_1: ARTIFACT } } as never)
     exportFormats = ["raw"]
     await expect(
       run("action.artifact.export", { artifactId: "art_1", format: "png" })
@@ -238,7 +231,7 @@ describe("action.artifact.export", () => {
   })
 
   it("defaults to the source text rather than a render", async () => {
-    storeState.artifacts = { art_1: ARTIFACT }
+    useArtifactStore.setState({ artifacts: { art_1: ARTIFACT } } as never)
     renderArtifactExport.mockResolvedValue({ data: "x", mimeType: "text/plain", filename: "a.txt" })
     await run("action.artifact.export", { artifactId: "art_1" })
     expect(renderArtifactExport).toHaveBeenCalledWith(expect.anything(), "raw")
@@ -277,16 +270,18 @@ describe("action.canvas.create", () => {
 
 describe("action.canvas.get", () => {
   it("returns the whole document", async () => {
-    storeState.canvasDocuments = { doc_1: CANVAS_DOC }
+    useArtifactStore.setState({ canvasDocuments: { doc_1: CANVAS_DOC } } as never)
     const result = await run("action.canvas.get", { documentId: "doc_1" })
     expect((result.output as { content: string }).content).toHaveLength(20_000)
   })
 
   it("lists the conversation's documents when no id is given", async () => {
-    storeState.canvasDocuments = {
-      doc_1: CANVAS_DOC,
-      doc_2: { ...CANVAS_DOC, id: "doc_2", sessionId: "other" },
-    }
+    useArtifactStore.setState({
+      canvasDocuments: {
+        doc_1: CANVAS_DOC,
+        doc_2: { ...CANVAS_DOC, id: "doc_2", sessionId: "other" },
+      },
+    } as never)
     const result = await run("action.canvas.get", { sessionId: "s_1" })
     expect((result.output as { documents: Array<{ documentId: string }> }).documents).toEqual([
       expect.objectContaining({ documentId: "doc_1" }),
@@ -298,6 +293,117 @@ describe("action.canvas.get", () => {
       /no canvas document with id ghost/
     )
   })
+})
+
+describe("workflow project isolation (Q3)", () => {
+  const kinds = [
+    "action.artifact.get",
+    "action.artifact.export",
+    "action.artifact.update",
+    "action.canvas.get",
+  ]
+
+  function seed(projectId: string | undefined = "project-A") {
+    useArtifactStore.setState({
+      artifacts: { art_1: { ...ARTIFACT, projectId } },
+      canvasDocuments: { doc_1: { ...CANVAS_DOC, projectId } },
+    } as never)
+    useProjectStore.setState({ activeProjectId: "project-B" })
+    runArtifactBuiltinTool.mockImplementation((...args: unknown[]) =>
+      jest.requireActual("@/lib/artifacts/agent-tools").runArtifactBuiltinTool(...args)
+    )
+    renderArtifactExport.mockResolvedValue({
+      data: "rendered",
+      mimeType: "text/plain",
+      filename: "a.txt",
+    })
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        artifacts: { reviewBeforeApply: false },
+      },
+    } as never)
+  }
+
+  const params = { artifactId: "art_1", documentId: "doc_1", content: "new" }
+
+  it.each(kinds)(
+    "%s refuses a cross-project conversation before reading or mutating",
+    async (kind) => {
+      seed()
+      jest.mocked(getSession).mockResolvedValue({ projectId: "project-B" } as never)
+      const before = useArtifactStore.getState()
+      await expect(run(kind, { ...params, sessionId: "s_1" })).rejects.toThrow(
+        /no (artifact|canvas document) with id/
+      )
+      const after = useArtifactStore.getState()
+      expect(after.artifacts).toEqual(before.artifacts)
+      expect(after.canvasDocuments).toEqual(before.canvasDocuments)
+      expect(after.artifactVersions).toEqual(before.artifactVersions)
+      expect(after.pendingReviews).toEqual(before.pendingReviews)
+      expect(renderArtifactExport).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(kinds)(
+    "%s uses the conversation binding even when focus and run project differ",
+    async (kind) => {
+      seed()
+      jest
+        .mocked(getSession)
+        .mockResolvedValue({ executionContext: { projectId: "project-A" } } as never)
+      await expect(run(kind, { ...params, sessionId: "s_1" }, "project-C")).resolves.toHaveProperty(
+        "output"
+      )
+      expect(getSession).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it.each(kinds)("%s uses a session-less run's own project ahead of focus", async (kind) => {
+    seed()
+    await expect(run(kind, params, "project-B")).rejects.toThrow(
+      /no (artifact|canvas document) with id/
+    )
+    await expect(run(kind, params, "project-A")).resolves.toHaveProperty("output")
+    expect(getSession).not.toHaveBeenCalled()
+  })
+
+  it.each(kinds)(
+    "%s falls back to focus only when neither session nor run has a project",
+    async (kind) => {
+      seed()
+      await expect(run(kind, params)).rejects.toThrow(/no (artifact|canvas document) with id/)
+      useProjectStore.setState({ activeProjectId: "project-A" })
+      await expect(run(kind, params)).resolves.toHaveProperty("output")
+    }
+  )
+
+  it.each(kinds)("%s permits a legacy item from any project", async (kind) => {
+    seed()
+    useArtifactStore.setState({
+      artifacts: { art_1: ARTIFACT },
+      canvasDocuments: { doc_1: CANVAS_DOC },
+    } as never)
+    await expect(run(kind, params, "project-B")).resolves.toHaveProperty("output")
+  })
+
+  it.each(["action.artifact.get", "action.canvas.get"])(
+    "%s scopes listing to the calling conversation",
+    async (kind) => {
+      seed()
+      jest.mocked(getSession).mockResolvedValue({ projectId: "project-A" } as never)
+      const result = await run(kind, { sessionId: "s_1" })
+      expect(result.output).toMatchObject(
+        kind === "action.artifact.get"
+          ? { artifacts: [expect.objectContaining({ artifactId: "art_1" })] }
+          : { documents: [expect.objectContaining({ documentId: "doc_1" })] }
+      )
+      const other = await run(kind, {}, "project-B")
+      expect(other.output).toEqual(
+        kind === "action.artifact.get" ? { artifacts: [] } : { documents: [] }
+      )
+    }
+  )
 })
 
 describe("the family's boundaries", () => {
