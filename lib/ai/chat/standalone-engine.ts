@@ -31,7 +31,6 @@ import {
   requestedRuntimeCapabilities,
   runtimeFeatureValidationError,
 } from "@cognia/agent-contracts/session-operations"
-import { loggers } from "@cognia/logging"
 import { RoutingAttemptController } from "@cognia/provider-routing"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { useSettingsStore } from "@/stores/settings/settings-store"
@@ -42,7 +41,12 @@ import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 import { resolveStandaloneProvider } from "./resolve-standalone-provider"
 import { createSdkEventMapper } from "./sdk-event-mapper"
-import { buildStandaloneTools, STANDALONE_MAX_STEPS } from "./standalone-tools"
+import {
+  buildStandaloneTools,
+  hasUnsupportedStandalonePolicy,
+  sanitizeStandaloneToolName,
+  STANDALONE_MAX_STEPS,
+} from "./standalone-tools"
 import {
   FINISH_RETRY_MAX_ATTEMPTS,
   finishRetryDelayMs,
@@ -183,7 +187,9 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
     if (invalidFeature) throw new Error(invalidFeature)
     // This engine has neither the host permission ladder nor native extension
     // or subagent execution. A caller-supplied frozen grant cannot add them.
-    const [unsupportedFeature] = requestedRuntimeCapabilities(sendOptions)
+    const unsupportedFeature =
+      requestedRuntimeCapabilities(sendOptions)[0] ??
+      (hasUnsupportedStandalonePolicy(sendOptions) ? "tools.permission-policy" : undefined)
     if (unsupportedFeature) {
       await emit({
         type: "capability_error",
@@ -230,10 +236,40 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
       )
 
       const system = composeSystem(sendOptions.systemPrompt, sendOptions.appendSystemPrompt)
+      const resolvedTools = buildStandaloneTools(sendOptions, sessionId, { emit, signal })
+      const modelNames = new Map(
+        [...(resolvedTools?.aliases ?? [])].map(([safe, original]) => [original, safe])
+      )
+      const modelToolName = (name: string) =>
+        modelNames.get(name) ?? sanitizeStandaloneToolName(name)
       // Provider selection and message conversion may yield after the caller's
       // preparation. Only the live Host root decides this attempt's audience.
       const personalHistory = await preparePersonalHistory(sessionId, messages)
-      const modelMessages = await convertToModelMessages(personalHistory.messages)
+      const modelMessages = (await convertToModelMessages(personalHistory.messages)).map(
+        (message) => {
+          if (message.role === "assistant" && Array.isArray(message.content)) {
+            return {
+              ...message,
+              content: message.content.map((part) =>
+                part.type === "tool-call"
+                  ? { ...part, toolName: modelToolName(part.toolName) }
+                  : part
+              ),
+            }
+          }
+          if (message.role === "tool") {
+            return {
+              ...message,
+              content: message.content.map((part) =>
+                part.type === "tool-result"
+                  ? { ...part, toolName: modelToolName(part.toolName) }
+                  : part
+              ),
+            }
+          }
+          return message
+        }
+      )
       const assertCurrentAudience = async () => {
         if (sendOptions.personalContextReadersDigest !== undefined) {
           const readers = await preparePersonalHistory(sessionId, [])
@@ -274,15 +310,10 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
         sdkSessionId: globalThis.crypto.randomUUID(),
         model: modelId,
         provider: resolution.providerId,
+        maxSteps: STANDALONE_MAX_STEPS,
+        toolNameAliases: resolvedTools?.aliases,
       })
       mapper.reset()
-
-      const resolvedTools = buildStandaloneTools(sendOptions, sessionId)
-      if (resolvedTools?.rejected.length) {
-        loggers.chat.warn("standalone: dropped tools with provider-invalid names", {
-          names: resolvedTools.rejected.join(", "),
-        })
-      }
 
       try {
         await assertCurrentAudience()
@@ -363,11 +394,15 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
           )
         }
 
+        // The result promise also covers providers that omit a finish part.
+        mapper.handle({ type: "finish", finishReason })
         for (const env of mapper.sealAssistant()) {
           await emit({ type: "event", sessionId, event: env })
         }
 
-        const usage = await Promise.resolve(result.usage).catch(() => undefined)
+        const usage = await Promise.resolve(result.totalUsage ?? result.usage).catch(
+          () => undefined
+        )
         for (const env of mapper.finish(usage ? { usage } : undefined)) {
           await emit({ type: "event", sessionId, event: env })
         }

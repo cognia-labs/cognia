@@ -10,6 +10,7 @@ import {
   startToolExecutionRun,
 } from "@/lib/execution/acting-authority"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider"
 import { MockLanguageModelV4 } from "ai/test"
 import { abortableStreamModel } from "@/lib/ai/webview-stream-fixtures"
 
@@ -40,9 +41,10 @@ jest.mock("ai", () => ({
   // `standalone-tools` builds real tool defs off these; identity wrappers keep
   // the assertions readable while still proving what gets handed to streamText.
   tool: (def: unknown) => def,
-  jsonSchema: (schema: unknown) => schema,
+  jsonSchema: jest.requireActual("ai").jsonSchema,
   // v7 renamed `stepCountIs` to `isStepCount`.
-  isStepCount: (n: number) => ({ __stopAfterSteps: n }),
+  isStepCount: (n: number) =>
+    Object.assign(jest.requireActual("ai").isStepCount(n), { __stopAfterSteps: n }),
 }))
 jest.mock("@/lib/claude/plugin-tool-ipc", () => ({
   handlePluginToolExec: jest.fn(async () => ({ result: "ok" })),
@@ -766,7 +768,7 @@ describe("runStandaloneTurn", () => {
     const args = (impl as unknown as jest.Mock).mock.calls[0][0]
     expect(Object.keys(args.tools)).toEqual(["web_search"])
     expect(args.tools.web_search.description).toBe("Search the web")
-    expect(args.stopWhen).toEqual({ __stopAfterSteps: 8 })
+    expect(args.stopWhen.__stopAfterSteps).toBe(8)
   })
 
   it("stays single-shot when the turn carries no tools", async () => {
@@ -779,7 +781,98 @@ describe("runStandaloneTurn", () => {
     expect(args).not.toHaveProperty("stopWhen")
   })
 
-  it("warns about and skips tools a provider would reject", async () => {
+  it("sanitizes prior transcript names for the provider and restores streamed names", async () => {
+    const impl = jest.fn(
+      fakeStream([
+        { type: "tool-call", toolCallId: "new-ocr", toolName: "ocr_extract_2", input: {} },
+        { type: "tool-result", toolCallId: "new-ocr", output: "text" },
+      ]) as never
+    )
+    const prior = [
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "prior", toolName: "ocr.extract", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "prior",
+            toolName: "ocr.extract",
+            output: { type: "text", value: "prior result" },
+          },
+        ],
+      },
+    ]
+    const { promise, events } = run({
+      messages: prior as never,
+      streamTextImpl: impl as never,
+      sendOptions: {
+        pluginTools: ["ocr.extract", "ocr_extract"].map((name) => ({ ...manifest[0], name })),
+      },
+    })
+    await promise
+    expect(impl).toHaveBeenCalled()
+    const args = impl.mock.calls[0][0] as unknown as {
+      messages: Array<{ content: Array<{ toolName?: string }> }>
+    }
+    expect(
+      args.messages.flatMap((message) => message.content).map((part) => part.toolName)
+    ).toEqual(["ocr_extract_2", "ocr_extract_2"])
+    expect(prior[0].content[0].toolName).toBe("ocr.extract")
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: "assistant",
+          message: expect.objectContaining({
+            content: expect.arrayContaining([expect.objectContaining({ name: "ocr.extract" })]),
+          }),
+        }),
+      })
+    )
+  })
+
+  it("refuses unattended permission profiles before a provider is called", async () => {
+    const impl = jest.fn(fakeStream([]))
+    const { promise, events } = run({
+      streamTextImpl: impl as never,
+      sendOptions: { permissionProfile: { workspace: "sandbox" } } as SendOptions,
+    })
+    await promise
+    expect(events).toContainEqual({
+      type: "capability_error",
+      sessionId: "s1",
+      capability: "tools.permission-policy",
+      command: "send",
+    })
+    expect(impl).not.toHaveBeenCalled()
+  })
+
+  it("runs an ordinary project turn with confinement, process sandbox and GitHub enforcement", async () => {
+    const impl = jest.fn(fakeStream([{ type: "text-delta", text: "project answer" }]))
+    const { promise, events } = run({
+      streamTextImpl: impl as never,
+      sendOptions: {
+        cwd: "/workspace",
+        confinement: { enabled: true, roots: ["/workspace"] },
+        builtinProcessSandbox: {
+          launcher: "sandbox",
+          writableRoots: ["/workspace"],
+          readableRoots: [],
+          network: false,
+        },
+        alwaysExplicitGithubWritesMode: "enforce",
+        pluginTools: manifest,
+      },
+    })
+    await promise
+    expect(impl).toHaveBeenCalled()
+    expect(events.some((event) => event.type === "capability_error")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "session_ended", sessionId: "s1" })
+  })
+
+  it("sanitizes tools a provider would reject without dropping them", async () => {
     const warn = jest.spyOn(loggers.chat, "warn").mockImplementation(() => {})
     const impl = jest.fn(fakeStream([{ type: "text-delta", text: "hi" }]) as never)
     const { promise } = run({
@@ -791,10 +884,8 @@ describe("runStandaloneTurn", () => {
     await promise
 
     const args = (impl as unknown as jest.Mock).mock.calls[0][0]
-    expect(Object.keys(args.tools)).toEqual(["web_search"])
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("dropped tools"), {
-      names: "not a valid name",
-    })
+    expect(Object.keys(args.tools)).toEqual(["web_search", "not_a_valid_name"])
+    expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
 
@@ -916,6 +1007,77 @@ describe("runStandaloneTurn with the real AI SDK stream (webview runtime)", () =
   })
 
   const drainRejectionReports = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+  it.each(["tool-calls", "length"] as const)(
+    "reports real SDK %s termination with its real terminal state",
+    async (reason) => {
+      let calls = 0
+      const model = new MockLanguageModelV4({
+        doStream: async () => {
+          calls++
+          const parts: LanguageModelV4StreamPart[] =
+            reason === "tool-calls"
+              ? [{ type: "tool-call", toolCallId: `tc${calls}`, toolName: "fixture", input: "{}" }]
+              : [
+                  { type: "text-start", id: "text" },
+                  { type: "text-delta", id: "text", delta: "partial" },
+                  { type: "text-end", id: "text" },
+                ]
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue({ type: "stream-start", warnings: [] })
+                for (const part of parts) controller.enqueue(part)
+                controller.enqueue({
+                  type: "finish",
+                  finishReason: { unified: reason, raw: reason },
+                  usage: {
+                    inputTokens: {
+                      total: 1,
+                      noCache: 1,
+                      cacheRead: undefined,
+                      cacheWrite: undefined,
+                    },
+                    outputTokens: { total: 1, text: 1, reasoning: undefined },
+                  },
+                })
+                controller.close()
+              },
+            }),
+          }
+        },
+      })
+      mockModel.mockReturnValueOnce(model as never)
+      const { events, promise } = run({
+        messages: history,
+        streamTextImpl: actualAi.streamText,
+        sendOptions: {
+          permissionMode: "bypassPermissions",
+          pluginTools: [
+            {
+              name: "fixture",
+              description: "Fixture",
+              pluginId: "fixture",
+              jsonSchema: { type: "object" },
+            },
+          ],
+        },
+      })
+      await promise
+      const result = events.find((event) => event.type === "event" && event.event.type === "result")
+      expect(result).toMatchObject({
+        event: {
+          subtype: reason === "tool-calls" ? "error_max_turns" : "success",
+          is_error: reason === "tool-calls",
+          num_turns: reason === "tool-calls" ? 8 : 1,
+          stop_reason: reason === "length" ? "max_tokens" : null,
+        },
+      })
+      expect(calls).toBe(reason === "tool-calls" ? 8 : 1)
+      expect(events.at(-1)).toEqual({ type: "session_ended", sessionId: "s1" })
+      await drainRejectionReports()
+    }
+  )
 
   it("denies the real SDK model step before any provider call", async () => {
     registerInterceptor(

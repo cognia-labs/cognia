@@ -80,6 +80,7 @@ interface AiSdkStreamPart {
   sourceType?: string
   usage?: AiSdkUsage
   totalUsage?: AiSdkUsage
+  finishReason?: string
 }
 
 type ProviderMetadata = Record<string, Record<string, unknown>>
@@ -147,6 +148,8 @@ export interface SdkEventMapperContext {
   model?: string
   provider: string
   startedAt?: number
+  maxSteps?: number
+  toolNameAliases?: ReadonlyMap<string, string>
 }
 
 export interface SdkEventMapper {
@@ -167,18 +170,17 @@ export interface SdkEventMapper {
 /**
  * Shape a tool-result payload for the renderer's `tool_result` content block.
  *
- * Text/plugin results stay a plain string. An image result (e.g. the built-in
- * `read` on an image returns an MCP `CallToolResult` `{ content:[{ type:'image',
- * data, mimeType }] }`) is forwarded verbatim so the renderer can show it inline
- * instead of JSON-stringifying a base64 wall.
+ * Text/plugin results stay a plain string. MCP envelopes with any non-text
+ * block retain their content array for the renderer's image/audio/resource
+ * extractors, matching the sidecar's events-payload.ts.
  */
 export function shapeToolResultContent(payload: unknown): string | unknown[] {
   if (
     payload &&
     typeof payload === "object" &&
     Array.isArray((payload as { content?: unknown }).content) &&
-    (payload as { content: Array<{ type?: string; data?: unknown }> }).content.some(
-      (b) => b && b.type === "image" && typeof b.data === "string"
+    (payload as { content: Array<{ type?: string }> }).content.some(
+      (b) => b && typeof b.type === "string" && b.type !== "text"
     )
   ) {
     return (payload as { content: unknown[] }).content
@@ -251,6 +253,58 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
   // delta path seeds the renderer's in-progress preview once per assistant
   // message. Reset whenever `messageId` rotates.
   let streamStartId: string | null = null
+  let startedSteps = 0
+  let finishedSteps = 0
+  let stepHadToolCalls = false
+  let lastStepFinishReason: string | undefined
+  let lastFinishReason: string | undefined
+  // Canonical assistant replacement currently rebuilds tool parts. Reapply
+  // their results after each snapshot so sealing cannot reopen a finished call.
+  const toolResults = new Map<string, SDKMessage>()
+
+  function stopReason(): "max_tokens" | "refusal" | null {
+    if (lastFinishReason === "length") return "max_tokens"
+    if (lastFinishReason === "content-filter") return "refusal"
+    return null
+  }
+
+  function clearMessageContent(): void {
+    activeBlockKind = null
+    textBuf = ""
+    reasoningBuf = ""
+    commentaryBuf = ""
+    textProviderMetadata = undefined
+    reasoningProviderMetadata = undefined
+    completedToolUses.length = 0
+    streamedToolInputs.clear()
+    sourceCitations.length = 0
+    sourceKeys.clear()
+    toolResults.clear()
+  }
+
+  function assistantSnapshots(): SDKMessage[] {
+    return [buildAssistantSnapshot(), ...toolResults.values()]
+  }
+
+  function splitAfterTools(out: SDKMessage[]): void {
+    if (activeBlockKind !== "tool_use") return
+    out.push(...assistantSnapshots())
+    clearMessageContent()
+    messageId = randomUUID()
+    streamStartId = null
+    messageMetadata = undefined
+    lastFinishReason = undefined
+  }
+
+  function toolResult(
+    id: string | undefined,
+    content: string | unknown[],
+    isError: boolean
+  ): SDKMessage {
+    const result = buildToolResultMessage(id, content, isError)
+    if (id) toolResults.set(id, result)
+    return result
+  }
 
   function sourceToCitation(event: AiSdkStreamPart): Citation | null {
     const isUrl =
@@ -351,11 +405,13 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
   }
 
   function getToolName(event: AiSdkStreamPart, fallback = "unknown"): string {
-    return typeof event.toolName === "string"
-      ? event.toolName
-      : typeof event.toolCall?.toolName === "string"
-        ? event.toolCall.toolName
-        : fallback
+    const name =
+      typeof event.toolName === "string"
+        ? event.toolName
+        : typeof event.toolCall?.toolName === "string"
+          ? event.toolCall.toolName
+          : fallback
+    return ctx.toolNameAliases?.get(name) ?? name
   }
 
   function getToolInput(event: AiSdkStreamPart, fallback: unknown = {}): unknown {
@@ -513,7 +569,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
         role: "assistant",
         model: ctx.model,
         content,
-        stop_reason: null,
+        stop_reason: stopReason(),
         stop_sequence: null,
         ...(messageMetadata !== undefined ? { metadata: messageMetadata } : {}),
       },
@@ -531,20 +587,16 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
      * into the old message. `initEmitted` is intentionally NOT reset.
      */
     reset(): void {
+      clearMessageContent()
       messageId = randomUUID()
-      activeBlockKind = null
-      textBuf = ""
-      reasoningBuf = ""
-      commentaryBuf = ""
-      textProviderMetadata = undefined
-      reasoningProviderMetadata = undefined
       messageMetadata = undefined
-      completedToolUses.length = 0
-      streamedToolInputs.clear()
-      sourceCitations.length = 0
-      sourceKeys.clear()
       lastUsage = null
       streamStartId = null
+      startedSteps = 0
+      finishedSteps = 0
+      stepHadToolCalls = false
+      lastStepFinishReason = undefined
+      lastFinishReason = undefined
     },
 
     setModel(nextModel: string): void {
@@ -555,7 +607,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
       const out: SDKMessage[] = []
       emitInitIfNeeded(out)
       emitStreamStartIfNeeded(out)
-      out.push(buildAssistantSnapshot())
+      out.push(...assistantSnapshots())
       return out
     },
 
@@ -576,7 +628,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
       ) {
         return []
       }
-      return [buildAssistantSnapshot()]
+      return assistantSnapshots()
     },
 
     handle(rawEvent: unknown): SDKMessage[] {
@@ -602,12 +654,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
           return out
         }
         case "text-delta": {
-          if (activeBlockKind === "tool_use") {
-            // Boundary change — start a new message id so the renderer doesn't
-            // merge text after a tool_use into the same block.
-            messageId = randomUUID()
-            streamStartId = null
-          }
+          splitAfterTools(out)
           activeBlockKind = "text"
           // v6 high-level fullStream uses `text`; v4 used `textDelta`; the
           // low-level model stream uses `delta`. Accept all three.
@@ -632,6 +679,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
           // Raw chain-of-thought is provider-internal state. Provenance-aware
           // middleware marks it before this persistence/rendering boundary.
           if (isRawAnalysis(event)) return out
+          splitAfterTools(out)
           activeBlockKind = "reasoning"
           const chunk = event.text ?? event.textDelta ?? event.delta ?? ""
           reasoningBuf += chunk
@@ -646,11 +694,15 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
           return out
         }
         case "start-step": {
+          startedSteps += 1
+          stepHadToolCalls = false
           emitStreamStartIfNeeded(out)
           out.push(streamEnvelope({ type: "step_start" }))
           return out
         }
         case "finish-step": {
+          finishedSteps += 1
+          lastStepFinishReason = event.finishReason ?? (stepHadToolCalls ? "tool-calls" : undefined)
           out.push(streamEnvelope({ type: "step_finish" }))
           return out
         }
@@ -667,7 +719,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
             state: "input-streaming",
             ...getToolMetadata(event),
           })
-          out.push(buildAssistantSnapshot())
+          out.push(...assistantSnapshots())
           return out
         }
         case "tool-input-delta": {
@@ -700,10 +752,11 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
             input: prior.input ?? {},
             ...getToolMetadata(event),
           })
-          out.push(buildAssistantSnapshot())
+          out.push(...assistantSnapshots())
           return out
         }
         case "tool-input-available": {
+          stepHadToolCalls = true
           activeBlockKind = "tool_use"
           const id = getToolCallId(event) ?? randomUUID()
           upsertToolUse({
@@ -714,7 +767,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
             ...getToolMetadata(event),
           })
           streamedToolInputs.delete(id)
-          out.push(buildAssistantSnapshot())
+          out.push(...assistantSnapshots())
           return out
         }
         case "tool-input-error": {
@@ -722,10 +775,11 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
             typeof event.errorText === "string" && event.errorText
               ? event.errorText
               : "tool input error"
-          out.push(buildToolResultMessage(getToolCallId(event), message, true))
+          out.push(toolResult(getToolCallId(event), message, true))
           return out
         }
         case "tool-call": {
+          stepHadToolCalls = true
           activeBlockKind = "tool_use"
           const id = getToolCallId(event) ?? randomUUID()
           const prior = streamedToolInputs.get(id)
@@ -737,7 +791,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
             ...getToolMetadata(event),
           })
           streamedToolInputs.delete(id)
-          out.push(buildAssistantSnapshot())
+          out.push(...assistantSnapshots())
           return out
         }
         case "tool-approval-request": {
@@ -763,7 +817,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
             ...(approval ? { approval } : {}),
           })
           streamedToolInputs.delete(id)
-          out.push(buildAssistantSnapshot())
+          out.push(...assistantSnapshots())
           return out
         }
         case "tool-result": {
@@ -772,7 +826,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
           const payload = event.output ?? event.result
           const shaped = shapeToolResultContent(payload)
           finalizeToolUseState(getToolCallId(event))
-          out.push(buildToolResultMessage(event.toolCallId, shaped, Boolean(event.isError)))
+          out.push(toolResult(getToolCallId(event), shaped, Boolean(event.isError)))
           return out
         }
         case "tool-error": {
@@ -780,15 +834,13 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
           const msg =
             err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err)
           finalizeToolUseState(getToolCallId(event))
-          out.push(buildToolResultMessage(event.toolCallId, msg, true))
+          out.push(toolResult(getToolCallId(event), msg, true))
           return out
         }
         case "tool-output-available": {
           const payload = event.output ?? event.result
           finalizeToolUseState(getToolCallId(event))
-          out.push(
-            buildToolResultMessage(getToolCallId(event), shapeToolResultContent(payload), false)
-          )
+          out.push(toolResult(getToolCallId(event), shapeToolResultContent(payload), false))
           return out
         }
         case "tool-output-error": {
@@ -797,14 +849,13 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
               ? event.errorText
               : "tool output error"
           finalizeToolUseState(getToolCallId(event))
-          out.push(buildToolResultMessage(getToolCallId(event), message, true))
+          out.push(toolResult(getToolCallId(event), message, true))
           return out
         }
         case "tool-output-denied": {
-          const name =
-            typeof event.toolName === "string" && event.toolName ? event.toolName : "tool"
+          const name = getToolName(event, "tool")
           finalizeToolUseState(getToolCallId(event))
-          out.push(buildToolResultMessage(event.toolCallId, `${name} output denied`, true))
+          out.push(toolResult(getToolCallId(event), `${name} output denied`, true))
           return out
         }
         case "file": {
@@ -844,11 +895,12 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
               sourceCitations.push(cit)
             }
           }
-          out.push(buildAssistantSnapshot())
+          out.push(...assistantSnapshots())
           return out
         }
         case "finish": {
-          lastUsage = event.usage ?? event.totalUsage ?? null
+          lastUsage = event.totalUsage ?? event.usage ?? lastUsage
+          lastFinishReason = event.finishReason ?? lastFinishReason
           updateMessageMetadata(event.messageMetadata)
           // Don't emit `result` here — the caller invokes `.finish()` after the
           // loop exits cleanly.
@@ -872,14 +924,33 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
       const out: SDKMessage[] = []
       emitInitIfNeeded(out)
       const usage: AiSdkUsage = info?.usage ?? lastUsage ?? {}
+      const steps = Math.max(startedSteps, finishedSteps, 1)
+      const budgetExhausted =
+        ctx.maxSteps !== undefined &&
+        steps >= ctx.maxSteps &&
+        (lastStepFinishReason ?? lastFinishReason) === "tool-calls"
+      // A length or content-filter stop is a definitive provider answer: like
+      // the sidecar mapper it stays a success and carries `stop_reason`. Only
+      // an exhausted step budget or an abnormal end (error/other/unknown after
+      // committed output) is reported as a failed turn.
+      const incomplete =
+        budgetExhausted ||
+        (lastFinishReason !== undefined &&
+          !["stop", "tool-calls", "length", "content-filter"].includes(lastFinishReason))
       const result = {
         type: "result",
-        subtype: "success",
+        subtype: budgetExhausted
+          ? "error_max_turns"
+          : incomplete
+            ? "error_during_execution"
+            : "success",
         session_id: ctx.sdkSessionId,
-        is_error: false,
+        is_error: incomplete,
+        stop_reason: stopReason(),
+        ...(lastFinishReason ? { finish_reason: lastFinishReason } : {}),
         duration_ms: Date.now() - startedAt,
         duration_api_ms: Date.now() - startedAt,
-        num_turns: 1,
+        num_turns: steps,
         total_cost_usd: info?.totalCostUsd ?? 0,
         // Shared with the sidecar's `usage-normalize.ts` mirror (pinned by
         // `usage-normalize.parity.test.ts`) so both dispatch paths surface the

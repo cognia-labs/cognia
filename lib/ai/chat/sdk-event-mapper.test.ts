@@ -1,4 +1,7 @@
 import { createSdkEventMapper, shapeToolResultContent } from "./sdk-event-mapper"
+import { applySdkEvent } from "@/lib/claude/adapter"
+import { convertToModelMessages, streamText } from "ai"
+import { completedStreamModel } from "@/lib/ai/webview-stream-fixtures"
 
 // Deterministic ids so we can assert snapshot identity within a turn and that a
 // fresh id is minted across boundaries / turns.
@@ -39,6 +42,10 @@ function assistantContent(msgs: AnyMsg[]): Array<Record<string, unknown>> {
 }
 
 describe("shapeToolResultContent", () => {
+  it.each(["audio", "resource", "resource_link"])("preserves MCP %s arrays", (type) => {
+    const payload = { content: [{ type, data: "bytes", resource: { text: "resource" } }] }
+    expect(shapeToolResultContent(payload)).toBe(payload.content)
+  })
   it("passes a plain string through unchanged", () => {
     expect(shapeToolResultContent("hello")).toBe("hello")
   })
@@ -52,6 +59,106 @@ describe("shapeToolResultContent", () => {
 })
 
 describe("createSdkEventMapper", () => {
+  it("keeps exactly one completed tool in adapter history and accepts the next real SDK send", async () => {
+    const m = createSdkEventMapper({
+      ...ctx,
+      toolNameAliases: new Map([["ocr_extract", "ocr.extract"]]),
+    })
+    let history = [{ id: "u1", role: "user", parts: [{ type: "text", text: "go" }] }] as Parameters<
+      typeof applySdkEvent
+    >[0]
+    const apply = (events: ReturnType<typeof m.handle>) => {
+      for (const event of events) history = applySdkEvent(history, event).messages
+    }
+    apply(m.handle({ type: "text-delta", text: "before" }))
+    apply(m.handle({ type: "tool-call", toolCallId: "tc1", toolName: "ocr_extract", input: {} }))
+    apply(m.handle({ type: "tool-result", toolCallId: "tc1", output: "done" }))
+    apply(m.handle({ type: "text-delta", text: "after" }))
+    apply(m.sealAssistant())
+    const tools = history
+      .flatMap((message) => message.parts)
+      .filter((part) => part && "toolCallId" in part)
+    expect(tools).toHaveLength(1)
+    expect(tools[0]).toMatchObject({
+      type: "tool-ocr.extract",
+      state: "output-available",
+      output: "done",
+    })
+    const messages = await convertToModelMessages(history as never)
+    const model = completedStreamModel("next answer")
+    const result = streamText({ model, messages, telemetry: { isEnabled: false } })
+    for await (const _part of result.stream) {
+      /* Drain the real SDK validation path. */
+    }
+    expect(model.doStreamCalls).toHaveLength(1)
+    expect(await result.text).toBe("next answer")
+  })
+  it.each(["text-delta", "reasoning-delta"])("clears message-scoped tools before %s", (type) => {
+    const m = createSdkEventMapper(ctx)
+    m.handle({ type: "text-delta", text: "before" })
+    const before = m.handle({
+      type: "tool-call",
+      toolCallId: "tc1",
+      toolName: "search",
+      input: {},
+    }) as AnyMsg[]
+    m.handle({ type: "tool-result", toolCallId: "tc1", output: "done" })
+    m.handle({ type, text: "after" })
+    const after = m.sealAssistant() as AnyMsg[]
+    expect(assistantContent(after).some((b) => b.type === "tool_use")).toBe(false)
+    expect(JSON.stringify(assistantContent(after))).not.toContain("before")
+    expect(after.find((x) => x.type === "assistant")!.message!.id).not.toBe(
+      before.find((x) => x.type === "assistant")!.message!.id
+    )
+  })
+
+  it("reports exhausted tool steps and preserves truncation reasons", () => {
+    const m = createSdkEventMapper({ ...ctx, maxSteps: 8 })
+    for (let i = 0; i < 8; i++) {
+      m.handle({ type: "start-step" })
+      m.handle({ type: "finish-step", finishReason: "tool-calls" })
+    }
+    m.handle({ type: "finish", finishReason: "tool-calls" })
+    expect(m.finish()).toContainEqual(
+      expect.objectContaining({ subtype: "error_max_turns", is_error: true, num_turns: 8 })
+    )
+    m.reset()
+    m.handle({ type: "text-delta", text: "partial" })
+    m.handle({ type: "finish", finishReason: "length" })
+    expect(m.sealAssistant()).toContainEqual(
+      expect.objectContaining({ message: expect.objectContaining({ stop_reason: "max_tokens" }) })
+    )
+    expect(m.finish()).toContainEqual(
+      expect.objectContaining({
+        subtype: "success",
+        is_error: false,
+        stop_reason: "max_tokens",
+        finish_reason: "length",
+      })
+    )
+    m.reset()
+    m.handle({ type: "text-delta", text: "partial" })
+    m.handle({ type: "finish", finishReason: "content-filter" })
+    expect(m.finish()).toContainEqual(
+      expect.objectContaining({ subtype: "success", is_error: false, stop_reason: "refusal" })
+    )
+  })
+
+  it.each(["error", "unknown", "other", "network_error"])(
+    "does not call a %s finish successful",
+    (finishReason) => {
+      const mapper = createSdkEventMapper(ctx)
+      mapper.handle({ type: "text-delta", text: "partial" })
+      mapper.handle({ type: "finish", finishReason })
+      expect(mapper.finish()).toContainEqual(
+        expect.objectContaining({
+          subtype: "error_during_execution",
+          is_error: true,
+          finish_reason: finishReason,
+        })
+      )
+    }
+  )
   it("emits the init system message exactly once, before the first snapshot", () => {
     const m = createSdkEventMapper(ctx)
     const first = m.handle({ type: "text-delta", text: "hi" }) as AnyMsg[]

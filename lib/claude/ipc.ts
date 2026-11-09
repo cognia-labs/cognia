@@ -66,16 +66,45 @@ const SIDECAR_EVENT = "claude://message"
 const AGENT_EVENT = "agent://message"
 const remoteApprovalContexts = new Map<string, RemoteExecutionContext>()
 
-/** Local AI SDK turns use the same approval card, response funnel and review receipts. */
-export async function requestLocalToolApproval(input: {
+interface LocalApprovalRequest {
   sessionId: string
-  reason: string
-  step: number
   signal: AbortSignal
   ttlMs?: number
   emit(event: ClaudeEvent): void | Promise<void>
-}): Promise<boolean> {
+}
+
+interface LocalTurnApprovalRequest extends LocalApprovalRequest {
+  reason: string
+  step: number
+  toolName?: never
+}
+
+interface LocalToolApprovalRequest extends LocalApprovalRequest {
+  toolName: string
+  toolUseId: string
+  input: Record<string, unknown>
+  requiresApproval?: boolean
+  requiresHumanApproval?: boolean
+  requiresPerCallApproval?: boolean
+  suppressAlwaysAllowRule?: boolean
+  defaultToNo?: boolean
+}
+
+export type LocalToolApprovalResult = { allowed: true; input: unknown } | { allowed: false }
+
+/** Local AI SDK turns use the same approval card, response funnel and review receipts. */
+export function requestLocalToolApproval(input: LocalTurnApprovalRequest): Promise<boolean>
+export function requestLocalToolApproval(
+  input: LocalToolApprovalRequest
+): Promise<LocalToolApprovalResult>
+export async function requestLocalToolApproval(
+  input: LocalTurnApprovalRequest | LocalToolApprovalRequest
+): Promise<boolean | LocalToolApprovalResult> {
   input.signal.throwIfAborted()
+  const toolRequest =
+    typeof input.toolName === "string" ? (input as LocalToolApprovalRequest) : undefined
+  const toolName = toolRequest?.toolName ?? "agent.turn.decide"
+  const denied = () => (toolRequest ? { allowed: false as const } : false)
   const requestId = `local:${globalThis.crypto.randomUUID()}`
   let answered = false
   let expired = false
@@ -91,24 +120,39 @@ export async function requestLocalToolApproval(input: {
     await openChatToolReview({
       sessionId: input.sessionId,
       requestId,
-      toolName: "agent.turn.decide",
+      toolName,
     })
     input.signal.throwIfAborted()
-    if (!hasPendingApproval(input.sessionId, requestId)) return false
+    if (!hasPendingApproval(input.sessionId, requestId)) return denied()
     await input.emit({
       type: "permission_request",
       sessionId: input.sessionId,
       requestId,
-      toolUseID: requestId,
-      toolName: "agent.turn.decide",
-      input: { step: input.step, reason: input.reason },
-      requiresPerCallApproval: true,
-      suppressAlwaysAllowRule: true,
-      defaultToNo: true,
+      toolUseID: toolRequest?.toolUseId ?? requestId,
+      toolName,
+      input: toolRequest?.input ?? {
+        step: (input as LocalTurnApprovalRequest).step,
+        reason: (input as LocalTurnApprovalRequest).reason,
+      },
+      ...(toolRequest
+        ? {
+            requiresApproval: toolRequest.requiresApproval,
+            requiresHumanApproval: toolRequest.requiresHumanApproval,
+            requiresPerCallApproval: toolRequest.requiresPerCallApproval,
+            suppressAlwaysAllowRule: toolRequest.suppressAlwaysAllowRule,
+            defaultToNo: toolRequest.defaultToNo,
+          }
+        : { requiresPerCallApproval: true, suppressAlwaysAllowRule: true, defaultToNo: true }),
     })
     const answer = await promise
     answered = !expired
-    return answer.decision === "allow"
+    if (answer.decision !== "allow") return denied()
+    return toolRequest
+      ? {
+          allowed: true,
+          input: answer.updatedInput ?? toolRequest.input,
+        }
+      : true
   } finally {
     resolveLocalApproval(input.sessionId, requestId, {
       decision: "deny",
@@ -1166,6 +1210,8 @@ export async function approveTool(
         remoteExecutionContext ||
         !resolveLocalApproval(sessionId, requestId, {
           decision: decision === "allow" ? "allow" : "deny",
+          message,
+          updatedInput,
         })
       )
         throw new Error("Local approval identity changed")

@@ -262,6 +262,73 @@ describe("connector approval review settlement", () => {
     await expect(approveTool("session-approval", ask.requestId, "allow")).rejects.toThrow("expired")
   })
 
+  it("projects the real local tool, input and consent flags and returns approved rewrites", async () => {
+    const events: import("@cognia/agent-config-types").ClaudeEvent[] = []
+    const waiting = requestLocalToolApproval({
+      sessionId: "session-approval",
+      toolName: "artifact_delete",
+      toolUseId: "model-call-1",
+      input: { artifactId: "draft" },
+      requiresApproval: true,
+      requiresPerCallApproval: true,
+      suppressAlwaysAllowRule: true,
+      defaultToNo: true,
+      signal: new AbortController().signal,
+      emit: (event) => {
+        events.push(event)
+      },
+    })
+    await waitFor(() =>
+      expect(events.some((event) => event.type === "permission_request")).toBe(true)
+    )
+    const ask = events.find(
+      (event) => event.type === "permission_request"
+    ) as import("@cognia/agent-config-types").PermissionRequestEvent
+    expect(ask).toMatchObject({
+      toolName: "artifact_delete",
+      toolUseID: "model-call-1",
+      input: { artifactId: "draft" },
+      requiresApproval: true,
+      requiresPerCallApproval: true,
+      suppressAlwaysAllowRule: true,
+      defaultToNo: true,
+    })
+    await approveTool(
+      "session-approval",
+      ask.requestId,
+      "allow",
+      undefined,
+      { artifactId: "reviewed" },
+      undefined,
+      { authority: "human" }
+    )
+    await expect(waiting).resolves.toEqual({ allowed: true, input: { artifactId: "reviewed" } })
+    expect(await getActionReviewReceipt(ask.requestId)).toMatchObject({ authority: "human" })
+  })
+
+  it("expires real local tool cards and records the existing timeout receipt", async () => {
+    const events: import("@cognia/agent-config-types").ClaudeEvent[] = []
+    await expect(
+      requestLocalToolApproval({
+        sessionId: "session-approval",
+        toolName: "artifact_delete",
+        toolUseId: "expired-call",
+        input: {},
+        ttlMs: 1,
+        signal: new AbortController().signal,
+        emit: (event) => {
+          events.push(event)
+        },
+      })
+    ).resolves.toEqual({ allowed: false })
+    const interrupted = events.find((event) => event.type === "permission_interrupted") as
+      import("@cognia/agent-config-types").PermissionRequestEvent | undefined
+    expect(interrupted).toMatchObject({ reason: "timeout" })
+    expect(await getActionReviewReceipt(interrupted!.requestId)).toMatchObject({
+      authority: "timeout",
+    })
+  })
+
   async function requestReview() {
     const handlers: Array<(event: unknown) => void> = []
     jest.spyOn(transport, "subscribe").mockImplementation((_channel, handler) => {
