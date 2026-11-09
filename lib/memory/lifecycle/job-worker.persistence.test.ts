@@ -8,10 +8,20 @@ import {
   getMemoryJob,
 } from "@/lib/db/memory-governance"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
-import { createMemory, getMemory, updateMemory } from "@/lib/db/memories"
+import { createMemory, getMemory, moveMemoryToNamespace, updateMemory } from "@/lib/db/memories"
 import { buildAutoExtractionDeps } from "@/lib/memory/write/run-memory-extraction"
-import { DEFAULT_MEMORY_CONFIG } from "@/types/memory/memory"
-import { drainMemoryJobs } from "./job-worker"
+import {
+  consolidate,
+  consolidationOpMemoryId,
+  type ConsolidateInput,
+  type ConsolidationCandidate,
+} from "@/lib/memory/consolidate/consolidator"
+import type {
+  RunProjectMiningDeps,
+  RunProjectMiningInput,
+} from "@/lib/memory/write/run-project-mining"
+import { DEFAULT_MEMORY_CONFIG, type Memory } from "@/types/memory/memory"
+import { drainMemoryJobs, processMemoryJob } from "./job-worker"
 import { revokeClaimsForDeletedSession } from "./claim-deletion-closure"
 
 // Keep the real extractor, consolidator, worker, and Dexie writes. Only the
@@ -52,6 +62,12 @@ jest.mock("@/lib/memory/runtime/build-deps", () => ({
 jest.mock("@/lib/memory/retrieve/retriever", () => ({
   retrieveMemories: () => mockRetrieveMemories(),
 }))
+jest.mock("@/lib/memory/write/run-project-mining", () => ({
+  buildProjectMiningDeps: async () => ({
+    consolidate: (input: ConsolidateInput) => mockConsolidateProjectClaims(input),
+  }),
+  runProjectMining: (...args: unknown[]) => mockRunProjectMining(...args),
+}))
 
 const mockComplete = jest.fn()
 const mockUpsert = jest.fn()
@@ -59,6 +75,8 @@ const mockBuildMemoryDeps = jest.fn()
 const mockRetrieveMemories = jest.fn()
 const mockListVectorIds = jest.fn()
 const mockRemoveVectors = jest.fn()
+const mockRunProjectMining = jest.fn()
+const mockConsolidateProjectClaims = jest.fn()
 const fixture = createDbTestFixture()
 beforeAll(fixture.initialize)
 beforeEach(async () => {
@@ -397,14 +415,197 @@ describe("durable turn-extraction persistence", () => {
     })
     expect(await getMemory("indexed")).toMatchObject({
       text: newText,
-      vectorTextHash: hashContent(oldText),
     })
-    const { processMemoryJob } = await import("./job-worker")
+    expect(await getMemory("indexed")).not.toHaveProperty("vectorTextHash")
     await processMemoryJob({ ...(await enqueue()), kind: "vector-reconcile" })
     expect(await getMemory("indexed")).toMatchObject({ vectorTextHash: hashContent(newText) })
     expect(mockUpsert).toHaveBeenLastCalledWith("indexed", newText)
     // A later text edit, without any vector transport, still exposes drift.
     await updateMemory("indexed", { text: "The user uses bun" })
-    expect((await getMemory("indexed"))?.vectorTextHash).toBe(hashContent(newText))
+    expect(await getMemory("indexed")).not.toHaveProperty("vectorTextHash")
+  })
+
+  it("re-embeds A after A → B → A when B's upsert succeeds but cancellation fences its receipt", async () => {
+    const textA = "The user uses npm"
+    const textB = "The user uses pnpm"
+    const existing = await createMemory({
+      id: "indexed",
+      text: textA,
+      scope: "global",
+      type: "semantic",
+      provenance: "user",
+      importance: 5,
+      vectorDocId: "indexed",
+      vectorTextHash: hashContent(textA),
+    })
+    const vectors = new Map([[existing.id, textA]])
+    mockBuildMemoryDeps.mockResolvedValue({})
+    mockRetrieveMemories.mockResolvedValue([{ memory: existing }])
+    mockComplete
+      .mockResolvedValueOnce(reply)
+      .mockResolvedValueOnce(
+        JSON.stringify({ op: "UPDATE", targetId: existing.id, mergedText: textB })
+      )
+    const job = await enqueue()
+    mockUpsert.mockImplementationOnce(async (id: string, text: string) => {
+      expect(Dexie.currentTransaction).toBeNull()
+      vectors.set(id, text)
+      await cancelMemoryJob(job.id)
+    })
+    await drainMemoryJobs({ workerId: "worker", maxJobs: 1 })
+    expect(await getMemoryJob(job.id)).toMatchObject({ status: "cancelled" })
+    expect(await getMemory(existing.id)).toMatchObject({ text: textB })
+    expect(vectors.get(existing.id)).toBe(textB)
+
+    // A manual edit has no vector transport. It must not revive A's old receipt.
+    await updateMemory(existing.id, { text: textA })
+    expect(await getMemory(existing.id)).not.toHaveProperty("vectorTextHash")
+    mockListVectorIds.mockResolvedValue([existing.id])
+    mockUpsert.mockImplementation(async (id: string, text: string) => {
+      vectors.set(id, text)
+    })
+    await expect(processMemoryJob({ ...job, kind: "vector-reconcile" })).resolves.toEqual({
+      status: "succeeded",
+      resultCode: "vectors_reconciled",
+    })
+    expect(mockUpsert).toHaveBeenLastCalledWith(existing.id, textA)
+    expect(vectors.get(existing.id)).toBe(textA)
+    expect((await getMemory(existing.id))?.vectorTextHash).toBe(hashContent(textA))
+  })
+})
+
+describe("project-mining governance fence", () => {
+  describe.each(["ADD", "CONFLICT", "QUARANTINE", "UPDATE"] as const)("%s", (op) => {
+    it.each(["unchanged", "moved", "branch-moved", "path-moved", "cancelled"] as const)(
+      "uses the written namespace with character/agent jobs and branch/path claims: %s",
+      async (change) => {
+        await getDb().sessions.update("source", { projectId: "p1", characterId: "c1" })
+        const existing =
+          op === "ADD"
+            ? undefined
+            : await createMemory({
+                id: "claim",
+                text: "old constraint",
+                scope: "workspace",
+                projectId: "p1",
+                branch: "main",
+                pathPattern: "src/**",
+                type: "semantic",
+                provenance: "user",
+                importance: 5,
+                projectMemoryKind: "constraint",
+                reviewStatus: "verified",
+                evidenceState: "legacy",
+                contaminationState: "unknown",
+                vectorDocId: "claim",
+                vectorTextHash: hashContent("old constraint"),
+              })
+        const job = await enqueueMemoryJob({
+          dedupeKey: "project-mining:source:user:assistant:2",
+          kind: "project-mining",
+          sessionId: "source",
+          // The miner targets workspace, without the queued character/agent ids.
+          scope: "character",
+          characterId: "c1",
+          agentId: "a1",
+          provenance: "user",
+          evidenceIds: [],
+        })
+        const candidate: ConsolidationCandidate = {
+          type: "semantic",
+          text: "new constraint",
+          importance: 5,
+          projectClaim: {
+            projectMemoryKind: "constraint",
+            evidence: [{ kind: "message", sourceId: "user" }],
+          },
+        }
+        // Exercise persistCandidate's actual scope rules and the real UPDATE
+        // operation shape, rather than reproducing those rules in a fixture.
+        mockConsolidateProjectClaims.mockImplementationOnce((input: ConsolidateInput) =>
+          consolidate(input, {
+            client: {
+              complete: async () =>
+                op === "QUARANTINE"
+                  ? "invalid JSON"
+                  : JSON.stringify({ op, targetId: existing?.id, mergedText: candidate.text }),
+            },
+            findSimilar: async () => (existing ? [existing] : []),
+            persist: (input) => createMemory({ ...input, id: "created-claim" }),
+            update: async (id, text) => {
+              await updateMemory(id, { text, bumpVersion: true })
+              return { ok: true }
+            },
+            invalidate: async () => {
+              throw new Error("unexpected_forget")
+            },
+          })
+        )
+        let memoryId!: string
+        let afterCanonical!: Memory
+        mockRunProjectMining.mockImplementationOnce(
+          async (input: RunProjectMiningInput, deps: RunProjectMiningDeps) => {
+            const result = await deps.consolidate({
+              scope: input.scope,
+              projectId: input.projectId,
+              characterId: input.characterId,
+              agentId: input.agentId,
+              provenance: input.provenance,
+              candidates: [candidate],
+              branch: "main",
+              pathPattern: "src/**",
+              failureMode: "quarantine",
+            })
+            expect(result.applied[0]?.op).toBe(op)
+            memoryId = consolidationOpMemoryId(result.applied[0]!)!
+            expect(await getMemory(memoryId)).toMatchObject({
+              scope: "workspace",
+              projectId: "p1",
+              branch: "main",
+              pathPattern: "src/**",
+            })
+            expect((await getMemory(memoryId))?.characterId).toBeUndefined()
+            expect((await getMemory(memoryId))?.agentId).toBeUndefined()
+            if (change === "moved") await moveMemoryToNamespace(memoryId, { scope: "global" })
+            if (change === "branch-moved")
+              await getDb().memories.update(memoryId, { branch: "release" })
+            if (change === "path-moved")
+              await getDb().memories.update(memoryId, { pathPattern: "docs/**" })
+            if (change === "cancelled") await cancelMemoryJob(job.id)
+            afterCanonical = (await getMemory(memoryId))!
+            return {
+              ...result,
+              redactedExcerpts: new Map([["user", "constraint evidence"]]),
+            }
+          }
+        )
+        await drainMemoryJobs({ workerId: "worker", maxJobs: 1 })
+        expect(await getMemory(memoryId)).toMatchObject({ text: "new constraint" })
+        expect(await getMemory(memoryId)).not.toHaveProperty("vectorTextHash")
+        if (change === "unchanged") {
+          expect(await getMemory(memoryId)).toMatchObject({
+            scope: "workspace",
+            projectId: "p1",
+            evidenceState: "supported",
+            reviewStatus: op === "CONFLICT" ? "conflict" : "unreviewed",
+          })
+          expect(await getDb().memoryEvidence.count()).toBe(1)
+          expect(await getDb().memoryAuditEvents.toArray()).toEqual([
+            expect.objectContaining({ memoryId, reason: "project_mining" }),
+          ])
+        } else {
+          expect(await getMemory(memoryId)).toEqual(afterCanonical)
+          expect(await getDb().memoryEvidence.count()).toBe(0)
+          expect(await getDb().memoryAuditEvents.toArray()).toEqual(
+            change === "cancelled"
+              ? []
+              : [expect.objectContaining({ memoryId, reason: "target_moved" })]
+          )
+        }
+        expect(await getMemoryJob(job.id)).toMatchObject({
+          status: change === "cancelled" ? "cancelled" : "succeeded",
+        })
+      }
+    )
   })
 })

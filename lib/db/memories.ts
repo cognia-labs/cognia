@@ -54,12 +54,14 @@ export async function preserveRevisionIfTextChanges(
   nextText: string | undefined,
   reason: MemoryRevisionReason,
   now: number
-): Promise<Pick<Memory, "revisedAt"> | Record<string, never>> {
+): Promise<Pick<Memory, "revisedAt" | "vectorTextHash"> | Record<string, never>> {
   if (nextText === undefined || nextText === existing.text) return {}
   // A snapshot is history; editing one would rewrite the past.
   if (isRevisionSnapshot(existing)) throw new Error("memory_revision_is_immutable")
   await getDb().memories.add(buildRevisionSnapshot(existing, { id: newMemoryId(), now, reason }))
-  return { revisedAt: now }
+  // Keep the explicit undefined: Dexie update deletes the key, and a put
+  // spreading these fields over the old row must not retain its receipt.
+  return { revisedAt: now, vectorTextHash: undefined }
 }
 
 /**
@@ -275,6 +277,9 @@ export async function updateMemory(id: string, patch: MemoryUpdatePatch): Promis
         next,
         await preserveRevisionIfTextChanges(existing, rest.text, revisionReason ?? "edit", now)
       )
+    } else if (existing && rest.text !== undefined && rest.text !== existing.text) {
+      // Mirrored edits skip history, but still invalidate the local vector.
+      next.vectorTextHash = undefined
     }
     if (bumpVersion) next.version = (existing?.version ?? 0) + 1
     await db.memories.update(id, next)

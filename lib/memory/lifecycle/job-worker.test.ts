@@ -2,6 +2,11 @@ import type { MemoryJob } from "@/types/memory/governance"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
 import { attachmentEvidenceSourceId } from "@cognia/memory/extract/project-attachment-evidence"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
+import type {
+  RunProjectMiningDeps,
+  RunProjectMiningInput,
+  RunProjectMiningResult,
+} from "@/lib/memory/write/run-project-mining"
 
 jest.mock("@/lib/execution/personal-visibility", () => {
   const { withholdForReaders } = jest.requireActual<
@@ -40,6 +45,11 @@ const mockRunLifecycleSweep = jest.fn()
 const mockInvalidateMemory = jest.fn()
 const mockListEvidence = jest.fn()
 const mockNoteVectorFailure = jest.fn()
+const mockWithConsolidationTarget = jest.fn()
+
+jest.mock("@/lib/memory/write/guarded-consolidation-write", () => ({
+  withConsolidationTarget: (...args: unknown[]) => mockWithConsolidationTarget(...args),
+}))
 
 jest.mock("@/lib/db/settings", () => ({ getSettings: () => mockGetSettings() }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: () => mockGetSession() }))
@@ -337,6 +347,12 @@ describe("startMemoryJobWorker namespace repair", () => {
 describe("memory job worker", () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockWithConsolidationTarget.mockImplementation(
+      async (_id: string, _guard: unknown, _operation: string, write: () => Promise<void>) => {
+        await write()
+        return { ok: true }
+      }
+    )
     mockGetSettings.mockResolvedValue({ memory: { enabled: true, learnFromChats: true } })
     mockGetSession.mockResolvedValue({ id: "s1", projectId: "p1" })
     mockGetProject.mockResolvedValue({ id: "p1", name: "Cognia", roots: [] })
@@ -748,6 +764,26 @@ describe("memory job worker", () => {
       }
     }
 
+    function mockConsolidatedOutcome(result: RunProjectMiningResult) {
+      mockBuildMiningDeps.mockResolvedValue({
+        extract: jest.fn(),
+        consolidate: jest.fn(async () => ({ applied: result.applied })),
+      })
+      mockRunMining.mockImplementation(
+        async (input: RunProjectMiningInput, deps: RunProjectMiningDeps) => {
+          await deps.consolidate({
+            scope: input.scope,
+            projectId: input.projectId,
+            characterId: input.characterId,
+            agentId: input.agentId,
+            provenance: input.provenance,
+            candidates: [],
+          })
+          return result
+        }
+      )
+    }
+
     it("routes a project-mining job to the miner, not to the vector reconciler", async () => {
       mockListMessages.mockResolvedValue(mined)
       await processMemoryJob(miningJob())
@@ -949,7 +985,7 @@ describe("memory job worker", () => {
     it("attaches fresh evidence to an updated claim without truncating imported message ids", async () => {
       const messageId = "import:m2"
       mockListMessages.mockResolvedValue([mined[0], { ...mined[1], id: messageId }])
-      mockRunMining.mockResolvedValue({
+      mockConsolidatedOutcome({
         applied: [
           {
             op: "UPDATE",
@@ -989,6 +1025,50 @@ describe("memory job worker", () => {
         })
         expect(evidence.excerptHash).toEqual(expect.any(String))
       }
+    })
+
+    it("skips governance and evidence with an audit reason when the mined target moved", async () => {
+      mockListMessages.mockResolvedValue(mined)
+      mockWithConsolidationTarget.mockResolvedValueOnce({ ok: false, reason: "target_moved" })
+      mockConsolidatedOutcome({
+        applied: [
+          {
+            op: "UPDATE",
+            targetId: "moved-claim",
+            candidate: {
+              type: "semantic",
+              text: "Updated constraint",
+              importance: 5,
+              projectClaim: {
+                projectMemoryKind: "constraint",
+                evidence: [{ kind: "message", sourceId: "m2" }],
+              },
+            },
+          },
+        ],
+      })
+      await processMemoryJob(miningJob({ scope: "global", projectId: undefined }))
+      expect(mockWithConsolidationTarget).toHaveBeenCalledWith(
+        "moved-claim",
+        {
+          expected: {
+            scope: "workspace",
+            projectId: "p1",
+            characterId: undefined,
+            agentId: undefined,
+          },
+        },
+        "update",
+        expect.any(Function)
+      )
+      expect(mockUpdateMemory).not.toHaveBeenCalled()
+      expect(mockCreateEvidence).not.toHaveBeenCalled()
+      expect(mockAppendAudit).toHaveBeenCalledWith({
+        action: "conflict",
+        memoryId: "moved-claim",
+        sessionId: "s1",
+        reason: "target_moved",
+      })
     })
 
     it("reports the miner's skip reason instead of a generic empty result", async () => {

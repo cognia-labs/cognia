@@ -345,6 +345,7 @@ describe("memoryOperationRequestHash", () => {
 describe("runMemoryMutation revision snapshots", () => {
   it("preserves the outgoing text with reason 'external-update' by default", async () => {
     await seedMemory()
+    await getDb().memories.update("m1", { vectorDocId: "doc", vectorTextHash: "old-receipt" })
     const outcome = await runMemoryMutation({
       memoryId: "m1",
       seen: seen(),
@@ -353,6 +354,8 @@ describe("runMemoryMutation revision snapshots", () => {
     expect(outcome).toEqual({ ok: true, version: 2 })
     const live = await getMemory("m1")
     expect(live).toMatchObject({ text: "updated", version: 2 })
+    expect(live).not.toHaveProperty("vectorTextHash")
+    expect(live?.vectorDocId).toBe("doc")
     expect(live?.revisedAt).toBe(live?.updatedAt)
 
     const revisions = await listMemoryRevisions("m1")
@@ -381,6 +384,7 @@ describe("runMemoryMutation revision snapshots", () => {
 
   it("writes no snapshot for a patch that leaves the text alone", async () => {
     await seedMemory()
+    await getDb().memories.update("m1", { vectorTextHash: "receipt" })
     const outcome = await runMemoryMutation({
       memoryId: "m1",
       seen: seen(),
@@ -396,6 +400,7 @@ describe("runMemoryMutation revision snapshots", () => {
     const live = await getMemory("m1")
     expect(live).toMatchObject({ text: "fact", importance: 9, version: 3 })
     expect(live?.revisedAt).toBeUndefined()
+    expect(live?.vectorTextHash).toBe("receipt")
   })
 })
 

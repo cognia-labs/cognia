@@ -63,6 +63,8 @@ describe("syncMemories", () => {
       status: "active",
       pinned: false,
       provenance: "user",
+      vectorDocId: `host-${id}`,
+      vectorTextHash: `host-receipt-${id}`,
     })
     const rows = await Promise.all(
       ["m1", "m2"].map((id) =>
@@ -73,11 +75,21 @@ describe("syncMemories", () => {
         })
       )
     )
+    await getDb().memories.put({
+      ...memory("m1"),
+      text: "older local text",
+      vectorDocId: "local-doc",
+      vectorTextHash: "local-receipt",
+    })
     const out = await syncMemories(makeTransport(rows), { since: 0 }, { loadDek: async () => key })
     expect(out.ok).toBe(true)
     if (!out.ok) return
     expect(out.result.applied).toBe(2)
     expect(await getDb().memories.get("m1")).toMatchObject({ text: "private m1" })
+    for (const id of ["m1", "m2"]) {
+      expect(await getDb().memories.get(id)).not.toHaveProperty("vectorTextHash")
+      expect(await getDb().memories.get(id)).not.toHaveProperty("vectorDocId")
+    }
   })
 
   it("fails closed without the paired profile DEK", async () => {

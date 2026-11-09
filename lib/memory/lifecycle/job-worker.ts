@@ -15,6 +15,7 @@ import {
 } from "@/lib/db/memory-governance"
 import { listMemories, listProjectClaimsNeedingRecheck, updateMemory } from "@/lib/db/memories"
 import { memoryTranscriptProse } from "@/lib/memory/write/project-transcript-text"
+import { withConsolidationTarget } from "@/lib/memory/write/guarded-consolidation-write"
 import { resolveMemoryConfig, type MemoryConfig } from "@/types/memory/memory"
 import type { MemoryEvidence, MemoryJob } from "@/types/memory/governance"
 import { startMemoryJobHeartbeat } from "@/lib/memory/lifecycle/job-heartbeat"
@@ -28,6 +29,7 @@ import {
   consolidationAuditAction,
   consolidationOpMemoryId,
   type ConsolidationOp,
+  type MemoryConsolidationNamespace,
 } from "@/lib/memory/consolidate/consolidator"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 import { hasNoLeakingPii } from "@cognia/redact"
@@ -622,6 +624,7 @@ async function processProjectMining(job: MemoryJob): Promise<MemoryJobProcessOut
       parts: entry.parts,
     }))
 
+  const updateNamespaces = new Map<ConsolidationOp, MemoryConsolidationNamespace>()
   const result = await runProjectMining(
     {
       messages,
@@ -638,19 +641,63 @@ async function processProjectMining(job: MemoryJob): Promise<MemoryJobProcessOut
       transcriptRevision: context.session.transcriptRevision,
       config: context.config,
     },
-    deps
+    {
+      ...deps,
+      consolidate: async (input) => {
+        // Capture each group's target before consolidation. UPDATE has no row
+        // snapshot, and the job alone cannot recover its branch/path narrowing.
+        const expected: MemoryConsolidationNamespace = {
+          scope: input.scope,
+          projectId: input.projectId,
+          characterId: input.scope === "character" ? input.characterId : undefined,
+          agentId: input.scope === "agent" ? input.agentId : undefined,
+          branch: input.branch,
+          pathPattern: input.pathPattern,
+        }
+        const consolidated = await deps.consolidate(input)
+        for (const operation of consolidated.applied) {
+          if (operation.op === "UPDATE") updateNamespaces.set(operation, expected)
+        }
+        return consolidated
+      },
+    }
   )
 
   const roleByMessageId = new Map(messages.map((message) => [message.id, message.role]))
+  const sourceIds = messages.map((message) => message.id)
   for (const operation of result.applied) {
-    await recordProjectClaimOutcome({
-      job,
-      operation,
-      contaminationState: context.contaminationState,
-      transcriptRevision: context.session.transcriptRevision,
-      roleByMessageId,
-      excerpts: result.redactedExcerpts,
-      toolExcerpts: result.redactedToolExcerpts,
+    const memoryId = consolidationOpMemoryId(operation)
+    if (!memoryId || !consolidationAuditAction(operation)) continue
+    await withMemoryJobWrite(job, sourceIds, async () => {
+      // Creation ops carry the row as written; UPDATE carries its group's
+      // captured namespace. Never infer the expected namespace from a fresh
+      // read, which would authorize a row that moved after consolidation.
+      const expected =
+        operation.op === "UPDATE"
+          ? updateNamespaces.get(operation)
+          : "memory" in operation
+            ? operation.memory
+            : undefined
+      if (!expected) throw new MemoryJobProcessingError("project_mining_namespace_unavailable")
+      const target = await withConsolidationTarget(memoryId, { expected }, "update", () =>
+        recordProjectClaimOutcome({
+          job,
+          operation,
+          contaminationState: context.contaminationState,
+          transcriptRevision: context.session.transcriptRevision,
+          roleByMessageId,
+          excerpts: result.redactedExcerpts,
+          toolExcerpts: result.redactedToolExcerpts,
+        })
+      )
+      if (!target.ok) {
+        await appendMemoryAuditEvent({
+          action: "conflict",
+          memoryId,
+          sessionId: job.sessionId,
+          reason: target.reason,
+        })
+      }
     })
   }
 

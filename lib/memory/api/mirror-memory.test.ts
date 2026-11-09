@@ -46,7 +46,7 @@ describe("applyMirroredMemoryCommand", () => {
   })
 
   it("edits text with a version bump and no local revision snapshot", async () => {
-    await createMemory(row({ id: "m1", text: "old" }))
+    await createMemory(row({ id: "m1", text: "old", vectorTextHash: "old-receipt" }))
     await applyMirroredMemoryCommand({
       kind: "update",
       id: "m1",
@@ -54,6 +54,7 @@ describe("applyMirroredMemoryCommand", () => {
     })
     const got = await getMemory("m1")
     expect(got).toMatchObject({ text: "new", tags: ["t"], importance: 8, version: 2 })
+    expect(got).not.toHaveProperty("vectorTextHash")
     expect(
       await getDb()
         .memories.filter((m) => m.revisionOf === "m1")
@@ -127,7 +128,13 @@ describe("applyMirroredMemoryCommand", () => {
     "resolves a conflict (%s) by verifying the winner and archiving the loser",
     async (mode) => {
       await createMemory(
-        row({ id: "a", text: "tea", reviewStatus: "conflict", conflictWithIds: ["b"] })
+        row({
+          id: "a",
+          text: "tea",
+          vectorTextHash: "tea-receipt",
+          reviewStatus: "conflict",
+          conflictWithIds: ["b"],
+        })
       )
       await createMemory(
         row({ id: "b", text: "coffee", reviewStatus: "conflict", conflictWithIds: ["a"] })
@@ -141,7 +148,12 @@ describe("applyMirroredMemoryCommand", () => {
       })
       const keep = await getMemory("a")
       expect(keep).toMatchObject({ reviewStatus: "verified", conflictWithIds: [] })
-      if (mode === "merge") expect(keep?.text).toBe("tea and coffee")
+      if (mode === "merge") {
+        expect(keep?.text).toBe("tea and coffee")
+        expect(keep).not.toHaveProperty("vectorTextHash")
+      } else {
+        expect(keep?.vectorTextHash).toBe("tea-receipt")
+      }
       expect(await getMemory("b")).toMatchObject({ status: "invalidated", supersededById: "a" })
     }
   )

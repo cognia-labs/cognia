@@ -25,6 +25,7 @@ import {
   listMemoriesBySourceMessageId,
   listMemoryRevisions,
   moveMemoryToNamespace,
+  preserveRevisionIfTextChanges,
   recordRetrievalFeedback,
   restoreArchivedMemory,
   restoreMemoryRevision,
@@ -98,10 +99,8 @@ describe("memories CRUD", () => {
       })
     )
     await updateMemory("indexed", { text: "new text" })
-    expect(await getMemory("indexed")).toMatchObject({
-      text: "new text",
-      vectorTextHash: hashContent("old text"),
-    })
+    expect(await getMemory("indexed")).toMatchObject({ text: "new text", vectorDocId: "doc" })
+    expect(await getMemory("indexed")).not.toHaveProperty("vectorTextHash")
     await updateMemory("indexed", { vectorTextHash: hashContent("new text") })
     expect(await getMemory("indexed")).toMatchObject({ vectorTextHash: hashContent("new text") })
     expect(getDb().memories.schema.indexes.some((index) => index.name === "vectorTextHash")).toBe(
@@ -704,12 +703,32 @@ async function onlyRevisionOf(ownerId: string): Promise<Memory> {
 }
 
 describe("revision snapshots", () => {
+  it("clears the vector receipt when the preserved fields are spread into a put", async () => {
+    const existing = await createMemory(
+      buildInput({ id: "m1", text: "old", vectorDocId: "doc", vectorTextHash: hashContent("old") })
+    )
+    const db = getDb()
+    await db.transaction("rw", db.memories, async () => {
+      const preserved = await preserveRevisionIfTextChanges(existing, "new", "edit", 100)
+      await db.memories.put({ ...existing, text: "new", ...preserved })
+    })
+    expect(await getMemory("m1")).toMatchObject({ text: "new", vectorDocId: "doc" })
+    expect((await getMemory("m1"))?.vectorTextHash).toBeUndefined()
+  })
+
+  it("does not accept an old vector receipt alongside a text change", async () => {
+    await createMemory(buildInput({ id: "m1", text: "old", vectorTextHash: hashContent("old") }))
+    await updateMemory("m1", { text: "new", vectorTextHash: hashContent("old") })
+    expect(await getMemory("m1")).not.toHaveProperty("vectorTextHash")
+  })
+
   it("preserves the outgoing text as an invalidated snapshot with reason 'edit' by default", async () => {
     const owner = await createMemory(
       buildInput({
         id: "m1",
         text: "old text",
         vectorDocId: "v1",
+        vectorTextHash: hashContent("old text"),
         key: "pkg",
         sourceMessageId: "msg-1",
         sourceSessionId: "sess-1",
@@ -739,6 +758,7 @@ describe("revision snapshots", () => {
       tags: ["a"],
     })
     expect(snapshot.vectorDocId).toBeUndefined()
+    expect(snapshot).not.toHaveProperty("vectorTextHash")
     expect(snapshot.key).toBeUndefined()
     expect(snapshot.sourceMessageId).toBeUndefined()
     expect(snapshot.sourceSessionId).toBeUndefined()
@@ -751,17 +771,18 @@ describe("revision snapshots", () => {
   })
 
   it("writes no snapshot for a paired device's mirrored edit (skipRevision)", async () => {
-    await createMemory(buildInput({ id: "m1", text: "a" }))
+    await createMemory(buildInput({ id: "m1", text: "a", vectorTextHash: hashContent("a") }))
     await updateMemory("m1", { text: "b", bumpVersion: true, skipRevision: true })
     expect(await listMemoryRevisions("m1")).toEqual([])
     const live = await getMemory("m1")
     expect(live?.text).toBe("b")
     expect(live?.revisedAt).toBeUndefined()
     expect(live).not.toHaveProperty("skipRevision")
+    expect(live).not.toHaveProperty("vectorTextHash")
   })
 
   it("writes no snapshot when the text is unchanged or absent", async () => {
-    await createMemory(buildInput({ id: "m1", text: "same" }))
+    await createMemory(buildInput({ id: "m1", text: "same", vectorTextHash: hashContent("same") }))
     await updateMemory("m1", { text: "same", tags: ["x"] })
     await updateMemory("m1", { importance: 9 })
     await updateMemory("m1", { importance: 8, bumpVersion: true })
@@ -769,6 +790,7 @@ describe("revision snapshots", () => {
     const live = await getMemory("m1")
     expect(live?.revisedAt).toBeUndefined()
     expect(live?.version).toBe(2)
+    expect(live?.vectorTextHash).toBe(hashContent("same"))
     expect(await listMemories({ includeRevisions: true })).toHaveLength(1)
   })
 
@@ -882,7 +904,9 @@ describe("restoreArchivedMemory", () => {
   })
 
   it("keeps the archived interval out of historical recall", async () => {
-    await createMemory(buildInput({ id: "m1", createdAt: 1_000 }))
+    await createMemory(
+      buildInput({ id: "m1", createdAt: 1_000, vectorDocId: "doc", vectorTextHash: "receipt" })
+    )
     await invalidateMemory("m1")
     const archivedAt = (await getMemory("m1"))!.invalidatedAt!
     const restored = await restoreArchivedMemory("m1")
@@ -898,6 +922,9 @@ describe("restoreArchivedMemory", () => {
       version: 1,
     })
     expect(live.revisedAt).toBeGreaterThanOrEqual(archivedAt)
+    expect(snapshot).not.toHaveProperty("vectorDocId")
+    expect(snapshot).not.toHaveProperty("vectorTextHash")
+    expect(live.vectorTextHash).toBe("receipt")
 
     const liveAt = async (asOf: number) =>
       (await listHistoricalForReader()).filter((row) => wasLiveAt(row, asOf)).map((row) => row.id)
@@ -942,6 +969,7 @@ describe("restoreMemoryRevision", () => {
   it("puts the earlier text back, bumps version, and preserves the replaced text as 'restore'", async () => {
     await createMemory(buildInput({ id: "m1", text: "original" }))
     await updateMemory("m1", { text: "mistake" })
+    await updateMemory("m1", { vectorTextHash: hashContent("mistake") })
     const earlier = await onlyRevisionOf("m1")
     await tick()
 
@@ -952,6 +980,8 @@ describe("restoreMemoryRevision", () => {
 
     const live = await getMemory("m1")
     expect(live).toMatchObject({ text: "original", version: 2 })
+    expect(live).not.toHaveProperty("vectorTextHash")
+    expect(result.memory.vectorTextHash).toBeUndefined()
     expect(live?.revisedAt).toBe(live?.updatedAt)
     const revisions = await listMemoryRevisions("m1")
     expect(revisions.map((r) => [r.text, r.revisionReason])).toEqual([
