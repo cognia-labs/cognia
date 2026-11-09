@@ -555,12 +555,15 @@ pub(super) async fn dispatch(
                 Some(value) => Some(value),
                 None => optional(&args, "expires_at")?,
             };
+            let expected_account_id: Option<String> =
+                optional_aliased(&args, "expected_account_id", "expectedAccountId")?;
             let grant = cognia_plugin_runtime::permissions::grant_permission_for_state(
                 host.plugin_runtime(),
                 plugin_id,
                 permission,
                 granted_by,
                 expires_at,
+                expected_account_id,
             )
             .map_err(|error| RpcError::internal(error.to_string()))?;
             to_json(grant)
@@ -577,10 +580,13 @@ pub(super) async fn dispatch(
         "plugin_permission_revoke" => {
             let plugin_id: String = required_aliased(&args, "plugin_id", "pluginId")?;
             let permission: String = required(&args, "permission")?;
+            let expected_account_id: Option<String> =
+                optional_aliased(&args, "expected_account_id", "expectedAccountId")?;
             cognia_plugin_runtime::permissions::revoke_permission_for_state(
                 host.plugin_runtime(),
                 plugin_id,
                 permission,
+                expected_account_id,
             )
             .map(|_| Value::Null)
             .map_err(|error| RpcError::internal(error.to_string()))

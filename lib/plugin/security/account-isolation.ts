@@ -4,10 +4,12 @@ import { getPluginConsentBroker, resetPluginConsentBroker } from "./consent-brok
 import { resetPermissionGuard } from "./permission-guard"
 import { blockPluginRuntimeAccount, clearPluginRuntimeAccount } from "./account-runtime-gate"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
+import { clearPermissionRequests } from "./permission-requests"
 
 interface PluginAccountTeardownDependencies {
   block: (localAccountId: string) => void
   rejectPendingConsent: () => void
+  rejectPendingPermissions: () => void
   runtimePluginIds: () => string[]
   unload: (pluginId: string) => Promise<void>
   clearConsent: () => void
@@ -21,6 +23,7 @@ function defaultDependencies(): PluginAccountTeardownDependencies {
   return {
     block: blockPluginRuntimeAccount,
     rejectPendingConsent: () => getPluginConsentBroker().rejectAllPending(),
+    rejectPendingPermissions: clearPermissionRequests,
     runtimePluginIds: () =>
       Object.values(usePluginStore.getState().plugins)
         .filter((plugin) => !["discovered", "installed"].includes(plugin.status))
@@ -45,6 +48,7 @@ export async function teardownPluginAccountRuntime(
 ): Promise<void> {
   const deps = { ...defaultDependencies(), ...overrides }
   deps.block(localAccountId)
+  deps.rejectPendingPermissions()
   deps.rejectPendingConsent()
   const failures: unknown[] = []
   for (const pluginId of deps.runtimePluginIds()) {

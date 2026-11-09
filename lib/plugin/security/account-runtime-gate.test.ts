@@ -3,6 +3,8 @@ import {
   blockPluginRuntimeAccount,
   clearPluginRuntimeAccount,
   pluginRuntimeAccountAvailable,
+  getPluginRuntimeAccountId,
+  getPluginRuntimeAccountRevision,
 } from "./account-runtime-gate"
 
 beforeEach(() => clearPluginRuntimeAccount())
@@ -10,12 +12,17 @@ afterEach(() => clearPluginRuntimeAccount())
 
 it("fails closed until an account is activated and blocks immediately during teardown", () => {
   expect(pluginRuntimeAccountAvailable()).toBe(false)
+  expect(getPluginRuntimeAccountId()).toBeNull()
 
   activatePluginRuntimeAccount("acct_a")
   expect(pluginRuntimeAccountAvailable()).toBe(true)
+  expect(getPluginRuntimeAccountId()).toBe("acct_a")
+  const revision = getPluginRuntimeAccountRevision()
 
   blockPluginRuntimeAccount("acct_a")
   expect(pluginRuntimeAccountAvailable()).toBe(false)
+  expect(getPluginRuntimeAccountId()).toBeNull()
+  expect(getPluginRuntimeAccountRevision()).toBeGreaterThan(revision)
 })
 
 it("does not let a stale account teardown block the current account", () => {

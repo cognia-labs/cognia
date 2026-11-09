@@ -74,6 +74,11 @@ import {
 } from "@/lib/plugin/registries/view-container-registry"
 import { useUIStore } from "@/stores/ui"
 import { getPluginConsentBroker } from "../security/consent-broker"
+import {
+  clearPermissionRequests,
+  resolvePluginPermission,
+  subscribePermissionRequests,
+} from "../security/permission-requests"
 import { createElement } from "react"
 import { createWorkflowAuthorAPI } from "../api/workflow-author-api"
 import { fireEvent, render, screen } from "@testing-library/react"
@@ -2476,6 +2481,37 @@ describe("createPluginContext", () => {
       expect(() => context.fs.readText("notes.txt")).toThrow(PermissionError)
     })
 
+    it("B05: a manifest optional grant unlocks the full context's filesystem API", async () => {
+      resetPermissionGuard()
+      getPermissionGuard().registerPlugin("test-plugin", [])
+      revokePluginPermissions("test-plugin")
+      clearPermissionRequests()
+      const context = createFullPluginContext(
+        createMockPlugin({
+          manifest: {
+            ...mockManifest,
+            permissions: [],
+            optionalPermissions: ["filesystem:read"],
+          },
+        }),
+        mockManager
+      )
+      expect(context.permissions.hasPermission("filesystem:read")).toBe(false)
+      expect(() => context.fs.readText("notes.txt")).toThrow(PermissionError)
+      const unsubscribe = subscribePermissionRequests((state) => {
+        if (state.current) resolvePluginPermission(state.current.id, true)
+      })
+      try {
+        await expect(context.permissions.requestPermission("filesystem:read")).resolves.toBe(true)
+        mockIsTauri.mockReturnValue(true)
+        ;(invoke as jest.Mock).mockResolvedValueOnce(okEnvelope("contents"))
+        await expect(context.fs.readText("notes.txt")).resolves.toBe("contents")
+      } finally {
+        unsubscribe()
+        clearPermissionRequests()
+      }
+    })
+
     it("network egress is denied when the plugin never declared network:fetch", () => {
       resetPermissionGuard()
       getPermissionGuard().registerPlugin("test-plugin", [])
@@ -3525,6 +3561,34 @@ describe("agent imperative API", () => {
           networkAccess: networkAccess as Plugin["manifest"]["networkAccess"],
         },
       })
+
+    it("B04: blocks PII emitted by toJSON before browser dispatch", async () => {
+      const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      const toJSON = jest.fn(() => ({ prompt: "contact alice@example.com" }))
+      await expect(
+        ctx.network.post("https://api.example.com", { toJSON }, { piiPolicy: "block" })
+      ).rejects.toBeInstanceOf(pluginPiiGate.PluginPiiError)
+      expect(toJSON).toHaveBeenCalledTimes(1)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("B04: sends only the inspected JSON snapshot after credential resolution", async () => {
+      ;(getSecret as jest.Mock).mockResolvedValue("stored-token")
+      const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      const toJSON = jest.fn(() => ({
+        prompt: "contact alice@example.com",
+        api_key: secretRef("token"),
+        omitted: () => "uninspected",
+      }))
+      await ctx.network.post("https://api.example.com", { toJSON })
+      expect(toJSON).toHaveBeenCalledTimes(1)
+      const body = fetchMock.mock.calls[0][1].body
+      expect(JSON.parse(body)).toEqual({
+        prompt: "contact <EMAIL_001>",
+        api_key: expect.any(String),
+      })
+      expect(body).not.toContain("alice@example.com")
+    })
 
     it("uses frozen gate snapshots while earlier secret reads are pending", async () => {
       const mutable = Object.defineProperty(

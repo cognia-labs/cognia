@@ -303,6 +303,20 @@ describe("grantPluginPermission", () => {
     jest.clearAllMocks()
   })
 
+  it("R1: forwards the expected account across the asynchronous transport import", async () => {
+    mockTransportCall.mockResolvedValue(undefined)
+
+    await grantPluginPermission("my-plugin", "network:fetch", "user", undefined, "acct_a")
+
+    expect(mockTransportCall).toHaveBeenCalledWith("plugin_permission_grant", {
+      pluginId: "my-plugin",
+      permission: "network:fetch",
+      grantedBy: "user",
+      expiresAt: null,
+      expectedAccountId: "acct_a",
+    })
+  })
+
   it("routes flat Rust-signature args through the active host transport", async () => {
     mockTransportCall.mockResolvedValue(undefined)
 
@@ -345,6 +359,18 @@ describe("grantPluginPermission", () => {
 describe("revokePluginPermission", () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it("R1: forwards the expected account for revocation", async () => {
+    mockTransportCall.mockResolvedValue(undefined)
+
+    await revokePluginPermission("my-plugin", "network:fetch", "acct_a")
+
+    expect(mockTransportCall).toHaveBeenCalledWith("plugin_permission_revoke", {
+      pluginId: "my-plugin",
+      permission: "network:fetch",
+      expectedAccountId: "acct_a",
+    })
   })
 
   it("routes flat args through the active host transport", async () => {

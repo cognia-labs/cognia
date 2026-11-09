@@ -5,6 +5,7 @@
  */
 
 import { nanoid } from "nanoid"
+import { isHeadlessHost } from "@/lib/platform/detect"
 
 export type PluginPermissionRequestKind = "manifest" | "api"
 
@@ -68,6 +69,7 @@ function dequeueNext() {
 export function requestPluginPermission(
   input: Omit<PluginPermissionRequest, "id" | "timestamp">
 ): Promise<boolean> {
+  if (isHeadlessHost()) return Promise.resolve(false)
   const request: PluginPermissionRequest = {
     ...input,
     id: nanoid(),
@@ -100,8 +102,10 @@ export function resolvePluginPermission(requestId: string, granted: boolean): vo
 }
 
 export function clearPermissionRequests(): void {
+  const pending = [...resolvers.values()]
   resolvers.clear()
   state = { current: null, queue: [] }
+  for (const resolve of pending) resolve(false)
   notifyListeners()
 }
 

@@ -13,15 +13,25 @@ import {
   clearAllPluginApiPermissions,
 } from "./permission-api"
 import type { PluginAPIPermission } from "@/types/plugin/plugin"
-import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
+import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import { requestPluginPermission } from "@/lib/plugin/security/permission-requests"
+import { isHeadlessHost } from "@/lib/platform/detect"
 import {
   activatePluginRuntimeAccount,
+  blockPluginRuntimeAccount,
   clearPluginRuntimeAccount,
+  getPluginRuntimeAccountId,
 } from "@/lib/plugin/security/account-runtime-gate"
 
 jest.mock("@/lib/plugin/security/permission-requests", () => ({
   requestPluginPermission: jest.fn(),
+}))
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isHeadlessHost: jest.fn(() => false),
+}))
+jest.mock("@/lib/tauri/transport-routing", () => ({
+  isRemoteHostActive: jest.fn().mockReturnValue(false),
 }))
 jest.mock("@/lib/plugin/core/transport", () => ({
   grantPluginPermission: jest.fn().mockResolvedValue(undefined),
@@ -55,7 +65,8 @@ describe("Permission API", () => {
   const testPluginId = "test-plugin"
 
   beforeEach(() => {
-    getPermissionGuard().clear()
+    resetPermissionGuard()
+    ;(isHeadlessHost as jest.Mock).mockReturnValue(false)
     activatePluginRuntimeAccount("acct-permission-test")
     // Revoke all permissions before each test
     clearAllPluginApiPermissions()
@@ -113,7 +124,7 @@ describe("Permission API", () => {
     it("keeps browser permission changes local when the plugin gateway is unavailable", async () => {
       transport.isPluginGatewayAvailable.mockReturnValue(false)
       ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
-      const api = createPermissionAPI(testPluginId, [])
+      const api = createPermissionAPI(testPluginId, [], ["canvas:write"])
 
       await expect(api.requestPermission("canvas:write", "browser test")).resolves.toBe(true)
       grantPermission(testPluginId, "vector:write")
@@ -170,6 +181,246 @@ describe("Permission API", () => {
   })
 
   describe("requestPermission", () => {
+    it.each(["canvas:write", "shell:execute", "network:fetch"] as const)(
+      "returns false without granting or writing %s when runtime grants are disabled",
+      async (permission) => {
+        const guard = getPermissionGuard({ allowRuntimeGrants: false })
+        ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+        const api = createPermissionAPI(testPluginId, [], [permission])
+
+        await expect(api.requestPermission(permission)).resolves.toBe(false)
+
+        expect(api.hasPermission(permission)).toBe(false)
+        expect(guard.check(testPluginId, permission)).toBe(false)
+        expect(transport.grantPluginPermission).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each(["canvas:write", "shell:execute", "network:fetch"] as const)(
+      "H01: refuses a new %s grant on Headless with an expected diagnostic",
+      async (permission) => {
+        ;(isHeadlessHost as jest.Mock).mockReturnValue(true)
+        ;(requestPluginPermission as jest.Mock).mockImplementation(() => new Promise(() => {}))
+        const api = createPermissionAPI(testPluginId, [], [permission])
+        let result: boolean | undefined
+        const pending = api.requestPermission(permission).then((value) => {
+          result = value
+        })
+        await Promise.resolve()
+
+        expect(result).toBe(false)
+        await pending
+        expect(requestPluginPermission).not.toHaveBeenCalled()
+        expect(api.hasPermission(permission)).toBe(false)
+        expect(getPermissionGuard().check(testPluginId, permission)).toBe(false)
+        expect(transport.grantPluginPermission).not.toHaveBeenCalled()
+        expect(diag.recordSilentFailure).toHaveBeenCalledWith(
+          testPluginId,
+          expect.objectContaining({
+            expected: true,
+            message: expect.stringMatching(/interactive client/i),
+          }),
+          expect.any(Error)
+        )
+      }
+    )
+
+    it("H01: permits already granted permissions on Headless without a prompt or diagnostic", async () => {
+      ;(isHeadlessHost as jest.Mock).mockReturnValue(true)
+      const api = createPermissionAPI(testPluginId, ["canvas:write"])
+
+      await expect(api.requestPermission("canvas:write")).resolves.toBe(true)
+
+      expect(requestPluginPermission).not.toHaveBeenCalled()
+      expect(transport.grantPluginPermission).not.toHaveBeenCalled()
+      expect(diag.recordSilentFailure).not.toHaveBeenCalled()
+    })
+
+    it.each(["blocked", "same-profile-unlocked"])(
+      "B02: refuses old approvals after %s",
+      async (transition) => {
+        let approve!: (value: boolean) => void
+        ;(requestPluginPermission as jest.Mock).mockImplementationOnce(
+          () =>
+            new Promise<boolean>((resolve) => {
+              approve = resolve
+            })
+        )
+        const api = createPermissionAPI(testPluginId, [], ["filesystem:read"])
+        const pending = api.requestPermission("filesystem:read")
+        blockPluginRuntimeAccount()
+        if (transition === "same-profile-unlocked")
+          activatePluginRuntimeAccount("acct-permission-test")
+        approve(true)
+        await expect(pending).resolves.toBe(false)
+        expect(api.hasPermission("filesystem:read")).toBe(false)
+        expect(transport.grantPluginPermission).not.toHaveBeenCalled()
+      }
+    )
+
+    it("B05: preserves revocation and forbid tiers for declared optional permissions", async () => {
+      const guard = getPermissionGuard()
+      guard.registerPlugin(testPluginId, [])
+      const api = createPermissionAPI(testPluginId, [], ["filesystem:read"])
+      ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+      await expect(api.requestPermission("filesystem:read")).resolves.toBe(true)
+      revokePermission(testPluginId, "filesystem:read")
+      await expect(api.requestPermission("filesystem:read")).resolves.toBe(true)
+      expect(guard.isRevoked(testPluginId, "filesystem:read")).toBe(false)
+      expect(guard.check(testPluginId, "filesystem:read")).toBe(true)
+      guard.setTier(testPluginId, "filesystem:read", "forbid")
+      await expect(api.requestPermission("filesystem:read")).resolves.toBe(false)
+      expect(guard.check(testPluginId, "filesystem:read")).toBe(false)
+      expect(requestPluginPermission).toHaveBeenCalledTimes(2)
+    })
+
+    it("B05: optional aliases are requestable without being granted at initialization", async () => {
+      const api = createPermissionAPI(testPluginId, [], ["filesystem"])
+      expect(api.hasPermission("filesystem:read")).toBe(false)
+      ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+      await expect(api.requestPermission("filesystem:read")).resolves.toBe(true)
+      expect(getPermissionGuard().check(testPluginId, "filesystem:read")).toBe(true)
+    })
+
+    it("B02: refuses a stale approval after the active account changes", async () => {
+      let approve!: (value: boolean) => void
+      ;(requestPluginPermission as jest.Mock).mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            approve = resolve
+          })
+      )
+      const api = createPermissionAPI(testPluginId, [], ["filesystem:read"])
+      const pending = api.requestPermission("filesystem:read")
+      clearPluginRuntimeAccount()
+      clearAllPluginApiPermissions()
+      activatePluginRuntimeAccount("acct_b")
+      approve(true)
+      await expect(pending).resolves.toBe(false)
+      expect(api.hasPermission("filesystem:read")).toBe(false)
+      expect(transport.grantPluginPermission).not.toHaveBeenCalled()
+    })
+
+    it("B02: refuses a grant when the account changes during host persistence", async () => {
+      let finish!: () => void
+      transport.grantPluginPermission.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve
+          })
+      )
+      ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+      const api = createPermissionAPI(testPluginId, [], ["network:fetch"])
+      const pending = api.requestPermission("network:fetch")
+      await Promise.resolve()
+      clearPluginRuntimeAccount()
+      clearAllPluginApiPermissions()
+      activatePluginRuntimeAccount("acct_b")
+      finish()
+      await expect(pending).resolves.toBe(false)
+      expect(api.hasPermission("network:fetch")).toBe(false)
+      expect(getPermissionGuard().check(testPluginId, "network:fetch")).toBe(false)
+    })
+
+    it.each(["network:fetch", "shell:execute", "canvas:write"] as const)(
+      "R1: binds the delayed %s host write to the approving account",
+      async (permission) => {
+        let finish!: () => void
+        const hostGrants: string[] = []
+        transport.grantPluginPermission.mockImplementationOnce(
+          (_pluginId, _permission, _grantedBy, _expiresAt, expectedAccountId) =>
+            new Promise<void>((resolve, reject) => {
+              finish = () => {
+                const accountId = getPluginRuntimeAccountId()
+                if (expectedAccountId !== undefined && expectedAccountId !== accountId) {
+                  reject(new Error("Plugin permission account changed"))
+                } else {
+                  hostGrants.push(accountId!)
+                  resolve()
+                }
+              }
+            })
+        )
+        ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+        const api = createPermissionAPI(testPluginId, [], [permission])
+        const pending = api.requestPermission(permission)
+        await Promise.resolve()
+        activatePluginRuntimeAccount("acct_b")
+        finish()
+        await pending
+        await Promise.resolve()
+
+        expect(hostGrants).toEqual([])
+        expect(transport.grantPluginPermission).toHaveBeenCalledWith(
+          testPluginId,
+          permission,
+          "user",
+          undefined,
+          "acct-permission-test"
+        )
+      }
+    )
+
+    it("R1: a paired client's grant does not name its own profile to the Host", async () => {
+      const { isRemoteHostActive } = jest.requireMock("@/lib/tauri/transport-routing") as {
+        isRemoteHostActive: jest.Mock
+      }
+      isRemoteHostActive.mockReturnValue(true)
+      try {
+        ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+        const api = createPermissionAPI(testPluginId, [], ["network:fetch"])
+        await expect(api.requestPermission("network:fetch")).resolves.toBe(true)
+        expect(transport.grantPluginPermission).toHaveBeenCalledWith(
+          testPluginId,
+          "network:fetch",
+          "user",
+          undefined,
+          undefined
+        )
+      } finally {
+        isRemoteHostActive.mockReturnValue(false)
+      }
+    })
+
+    it.each(["required", "optional"] as const)(
+      "R4: re-requests an implied permission from a %s legacy declaration",
+      async (declaration) => {
+        const required = declaration === "required" ? ["session:write"] : []
+        const optional = declaration === "optional" ? ["session:write"] : []
+        getPermissionGuard().registerPlugin(
+          testPluginId,
+          declaration === "required" ? ["session:write"] : []
+        )
+        const api = createPermissionAPI(testPluginId, required, optional)
+        getPermissionGuard().revoke(testPluginId, "session:delete")
+        ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+
+        await expect(api.requestPermission("session:delete")).resolves.toBe(true)
+        expect(requestPluginPermission).toHaveBeenCalledWith(
+          expect.objectContaining({ permission: "session:delete" })
+        )
+        expect(api.hasPermission("session:delete")).toBe(true)
+        expect(getPermissionGuard().check(testPluginId, "session:delete")).toBe(true)
+      }
+    )
+
+    it("B05: a first optional grant also authorizes guard-enforced APIs", async () => {
+      getPermissionGuard().registerPlugin(testPluginId, [])
+      const api = createPermissionAPI(testPluginId, [], ["filesystem:read"])
+      ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+      await expect(api.requestPermission("filesystem:read")).resolves.toBe(true)
+      expect(api.hasPermission("filesystem:read")).toBe(true)
+      expect(() => getPermissionGuard().require(testPluginId, "filesystem:read")).not.toThrow()
+    })
+
+    it("B05: refuses undeclared permissions without prompting or writing host grants", async () => {
+      const api = createPermissionAPI(testPluginId, [])
+      ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
+      await expect(api.requestPermission("filesystem:write")).resolves.toBe(false)
+      expect(requestPluginPermission).not.toHaveBeenCalled()
+      expect(transport.grantPluginPermission).not.toHaveBeenCalled()
+    })
+
     it.each(["shell:execute", "network:fetch"] as const)(
       "waits for the explicit %s host grant before exposing it to runtime calls",
       async (permission) => {
@@ -181,11 +432,17 @@ describe("Permission API", () => {
             })
         )
         ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
-        const api = createPermissionAPI(testPluginId, [])
+        const api = createPermissionAPI(testPluginId, [], [permission])
         const pending = api.requestPermission(permission, "Prepare an optional plugin runtime")
         await Promise.resolve()
         expect(api.hasPermission(permission)).toBe(false)
-        expect(transport.grantPluginPermission).toHaveBeenCalledWith(testPluginId, permission)
+        expect(transport.grantPluginPermission).toHaveBeenCalledWith(
+          testPluginId,
+          permission,
+          "user",
+          undefined,
+          "acct-permission-test"
+        )
         finish()
         await expect(pending).resolves.toBe(true)
         expect(api.hasPermission(permission)).toBe(true)
@@ -198,7 +455,7 @@ describe("Permission API", () => {
       async (permission) => {
         transport.grantPluginPermission.mockRejectedValueOnce(new Error("host unavailable"))
         ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
-        const api = createPermissionAPI(testPluginId, [])
+        const api = createPermissionAPI(testPluginId, [], [permission])
         await expect(api.requestPermission(permission)).resolves.toBe(false)
         expect(api.hasPermission(permission)).toBe(false)
         expect(diag.recordSilentFailure).toHaveBeenCalledWith(
@@ -210,7 +467,7 @@ describe("Permission API", () => {
     )
 
     it("should grant requested permission", async () => {
-      const api = createPermissionAPI(testPluginId, [])
+      const api = createPermissionAPI(testPluginId, [], ["canvas:write"])
 
       expect(api.hasPermission("canvas:write")).toBe(false)
       ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
@@ -227,7 +484,7 @@ describe("Permission API", () => {
     })
 
     it("should deny permission when request is rejected", async () => {
-      const api = createPermissionAPI(testPluginId, [])
+      const api = createPermissionAPI(testPluginId, [], ["artifact:write"])
 
       ;(requestPluginPermission as jest.Mock).mockResolvedValue(false)
       const granted = await api.requestPermission("artifact:write", "Need to update artifact")
@@ -440,7 +697,7 @@ describe("Permission API", () => {
     it("routes requestPermission host-grant failure through recordSilentFailure", async () => {
       transport.grantPluginPermission.mockRejectedValueOnce(new Error("persist failed"))
       ;(requestPluginPermission as jest.Mock).mockResolvedValue(true)
-      const api = createPermissionAPI("p-req", [])
+      const api = createPermissionAPI("p-req", [], ["canvas:write"])
       const granted = await api.requestPermission("canvas:write", "test")
       expect(granted).toBe(true)
       await Promise.resolve()

@@ -354,7 +354,11 @@ export function createFullPluginContext(
   // Get the base context (with optional debug mode)
   const baseContext = createPluginContext(plugin, manager, options)
 
-  const permissionsAPI = createPermissionAPI(pluginId, plugin.manifest.permissions || [])
+  const permissionsAPI = createPermissionAPI(
+    pluginId,
+    plugin.manifest.permissions || [],
+    plugin.manifest.optionalPermissions || []
+  )
   const templateRuntime = getTemplateRuntime()
   // Resolved before the feature APIs are built, not after: `ctx.commands`
   // registers into a process-global registry and needs the plugin's own

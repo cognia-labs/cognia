@@ -49,16 +49,28 @@ export async function deriveKey(pluginId: string, salt?: string): Promise<Crypto
 /**
  * Derive the AES-GCM key for `setSecure` from the per-install master key
  * (the stable per-install credential root — the same root `ctx.secrets` uses on
- * web) combined with the plugin id. Confidentiality now rests on a secret
+ * web) combined with the plugin id and, for browser/desktop storage, the
+ * LocalProfile id. The unscoped form remains for Headless and legacy reads.
+ * Confidentiality now rests on a secret
  * that never leaves the device rather than on the public plugin id.
  *
  * Throws when no master key is available (SSR) — callers must not silently
  * fall back to the legacy public-id key.
  */
-export async function deriveInstallKey(pluginId: string): Promise<CryptoKey> {
+export async function deriveInstallKey(
+  pluginId: string,
+  localAccountId?: string
+): Promise<CryptoKey> {
   const master = await getInstallEncryptionPassphrase()
   if (!master) {
     throw new Error("Secure plugin storage unavailable: no per-install master key (SSR context)")
+  }
+  if (localAccountId !== undefined) {
+    const coordinates = JSON.stringify([localAccountId, pluginId])
+    return deriveKeyFromMaterial(
+      JSON.stringify([master, localAccountId, pluginId]),
+      `${SALT_PREFIX}v3:${coordinates}`
+    )
   }
   return deriveKeyFromMaterial(`${master}:${pluginId}`, `${SALT_PREFIX}v2:${pluginId}`)
 }

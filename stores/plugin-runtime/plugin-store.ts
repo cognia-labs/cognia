@@ -36,6 +36,7 @@ import { loggers } from "@cognia/logging"
 import { installPluginRecordReader } from "@/lib/plugin/registries/plugin-liveness"
 import { installHostPluginDispatch } from "@/lib/plugin/core/install-plugin-host-dispatch"
 import { resolvePluginIcon } from "@/lib/plugin/utils/icon"
+import { purgePluginAccountData } from "@/lib/plugin/api/storage-api"
 
 const PLUGIN_POLICY_STORAGE_KEY = "cognia.plugins.policy"
 
@@ -1297,6 +1298,7 @@ export function purgePluginAccountStorage(localAccountId: string): void {
   // A pending write would otherwise land after the removal and resurrect it.
   pluginPersistStorage.cancel(storageKey)
   window.localStorage.removeItem(storageKey)
+  purgePluginAccountData(localAccountId)
 }
 
 function readPluginAccountState(storageKey: string): Partial<PluginState> {

@@ -28,6 +28,17 @@ jest.mock("@/lib/data/backup-key", () => ({
 
 import { deriveKey, deriveInstallKey, encrypt, decrypt } from "./crypto-helpers"
 
+it("B01: binds the install key to both profile and plugin", async () => {
+  const key = await deriveInstallKey("plugin-a", "acct_a")
+  const ciphertext = await encrypt("profile data", key)
+  await expect(decrypt(ciphertext, await deriveInstallKey("plugin-a", "acct_a"))).resolves.toBe(
+    "profile data"
+  )
+  await expect(decrypt(ciphertext, await deriveInstallKey("plugin-a", "acct_b"))).rejects.toThrow()
+  await expect(decrypt(ciphertext, await deriveInstallKey("plugin-b", "acct_a"))).rejects.toThrow()
+  await expect(decrypt(ciphertext, await deriveInstallKey("plugin-a"))).rejects.toThrow()
+})
+
 it("derives live plugin encryption from the persistent install root with plugin isolation", async () => {
   const ciphertext = await encrypt("saved plugin state", await deriveInstallKey("plugin-a"))
   await expect(decrypt(ciphertext, await deriveInstallKey("plugin-a"))).resolves.toBe(

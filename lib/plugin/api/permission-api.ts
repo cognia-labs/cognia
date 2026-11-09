@@ -11,7 +11,7 @@ import type {
 } from "@/types/plugin/plugin"
 import type { PluginPermission } from "@/types/plugin"
 import { createPluginSystemLogger } from "@/lib/plugin/core/logger"
-import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
+import { expandLegacyPermissions, getPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import { requestPluginPermission } from "@/lib/plugin/security/permission-requests"
 import {
   grantPluginPermission as grantHostPermission,
@@ -21,7 +21,13 @@ import {
 } from "@/lib/plugin/core/transport"
 import { recordSilentFailure } from "../contracts/diagnostics-store"
 import { contextPanelRegistry } from "@/lib/context-workbench/panel-registry"
-import { pluginRuntimeAccountAvailable } from "@/lib/plugin/security/account-runtime-gate"
+import { isHeadlessHost } from "@/lib/platform/detect"
+import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
+import {
+  getPluginRuntimeAccountId,
+  getPluginRuntimeAccountRevision,
+  pluginRuntimeAccountAvailable,
+} from "@/lib/plugin/security/account-runtime-gate"
 
 // Permission grants by plugin
 const grantedPermissions = new Map<string, Set<PluginAPIPermission>>()
@@ -192,7 +198,8 @@ function persistToHost(
  */
 export function createPermissionAPI(
   pluginId: string,
-  manifestPermissions: string[]
+  manifestPermissions: string[],
+  optionalPermissions: string[] = []
 ): PluginPermissionAPI {
   const logger = createPluginSystemLogger(pluginId)
   // Initialize permissions if not already done
@@ -209,6 +216,13 @@ export function createPermissionAPI(
   )
 
   const getPermissions = () => grantedPermissions.get(pluginId) || new Set()
+  const requestablePermissions = new Set(
+    expandLegacyPermissions(
+      [...manifestPermissions, ...optionalPermissions].flatMap(
+        expandManifestPermission
+      ) as PluginPermission[]
+    ).flatMap((permission) => permissionMapping[permission] ?? [])
+  )
 
   // Introspection must agree with enforcement: `ctx.git.commit()` is gated by
   // the PermissionGuard (manifest-level perms like `git:write`), which the
@@ -226,11 +240,36 @@ export function createPermissionAPI(
       permission: PluginAPIPermission,
       reason?: string
     ): Promise<boolean> => {
+      const accountId = getPluginRuntimeAccountId()
+      const accountRevision = getPluginRuntimeAccountRevision()
+      const accountIsCurrent = () =>
+        pluginRuntimeAccountAvailable() &&
+        getPluginRuntimeAccountId() === accountId &&
+        getPluginRuntimeAccountRevision() === accountRevision
+      // The native ledger is bound to the same LocalProfile only when this
+      // process is the Host; a paired client's profile id names nothing there.
+      const hostAccountId = () =>
+        accountId === null || isRemoteHostActive() ? undefined : accountId
+      if (!accountIsCurrent()) return false
       if (getPermissionGuard().getTier(pluginId, permission as PluginPermission) === "forbid")
         return false
       const existing = getPermissions()
       if (checkEither(permission)) {
         return true
+      }
+      if (!requestablePermissions.has(permission)) return false
+      if (isHeadlessHost()) {
+        recordSilentFailure(
+          pluginId,
+          {
+            site: "permission.request",
+            message: `Permission ${permission} must be granted from an interactive client.`,
+            expected: true,
+          },
+          new Error("Headless hosts have no interactive permission surface")
+        )
+        logger.info(`Denied permission: ${permission}`)
+        return false
       }
 
       const granted = await requestPluginPermission({
@@ -240,10 +279,17 @@ export function createPermissionAPI(
         kind: "api",
       })
 
+      if (!accountIsCurrent()) return false
       if (getPermissionGuard().getTier(pluginId, permission as PluginPermission) === "forbid")
         return false
 
       if (granted) {
+        try {
+          getPermissionGuard().assertGrantAllowed("user")
+        } catch {
+          logger.info(`Denied permission: ${permission}`)
+          return false
+        }
         // These grants authorize immediate native execution/download, rather
         // than a local UI API. Do not report success until the host has stored
         // the user's decision, or an immediately following prepare/probe races
@@ -251,7 +297,7 @@ export function createPermissionAPI(
         const hostExecutionGrant = permission === "shell:execute" || permission === "network:fetch"
         if (hostExecutionGrant && isPluginGatewayAvailable()) {
           try {
-            await grantHostPermission(pluginId, permission)
+            await grantHostPermission(pluginId, permission, "user", undefined, hostAccountId())
           } catch (error) {
             recordSilentFailure(
               pluginId,
@@ -264,11 +310,14 @@ export function createPermissionAPI(
             )
             return false
           }
+          if (!accountIsCurrent()) return false
           if (getPermissionGuard().getTier(pluginId, permission as PluginPermission) === "forbid") {
             return false
           }
         }
-        if (getPermissionGuard().isRevoked(pluginId, permission as PluginPermission)) {
+        if (
+          !getPermissionGuard().check(pluginId, permission as PluginPermission, "permission-api")
+        ) {
           getPermissionGuard().grant(pluginId, permission as PluginPermission, {
             grantedBy: "user",
           })
@@ -278,7 +327,7 @@ export function createPermissionAPI(
         if (!hostExecutionGrant) {
           persistToHost(
             pluginId,
-            () => grantHostPermission(pluginId, permission),
+            () => grantHostPermission(pluginId, permission, "user", undefined, hostAccountId()),
             "permission.grantHost",
             `Failed to persist grant for ${permission}`
           )

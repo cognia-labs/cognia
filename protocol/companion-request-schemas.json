@@ -17859,6 +17859,9 @@
             "null"
           ],
           "format": "date-time"
+        },
+        "expectedAccountId": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -17886,6 +17889,9 @@
           "type": "string"
         },
         "permission": {
+          "type": "string"
+        },
+        "expectedAccountId": {
           "type": "string"
         }
       },

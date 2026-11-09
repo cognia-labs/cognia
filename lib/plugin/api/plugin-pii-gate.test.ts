@@ -10,6 +10,7 @@ import {
   sanitizePluginNetworkEgress,
 } from "./plugin-pii-gate"
 import { secretRef } from "@cognia/plugin-sdk"
+import { resolveNetworkCredentials } from "./network-credentials"
 import { createPluginContext } from "@/lib/plugin/core/context"
 import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import type { Plugin } from "@/types/plugin"
@@ -57,6 +58,74 @@ describe("assertNoLeakingPii", () => {
 })
 
 describe("sanitizePluginNetworkEgress", () => {
+  it("B04: inspects the result of toJSON before allowing a structured body", () => {
+    const toJSON = jest.fn(() => ({ prompt: "contact alice@example.com" }))
+    expect(() =>
+      sanitizePluginNetworkEgress(
+        "p",
+        {
+          url: "https://api.example.com",
+          body: { toJSON },
+          piiPolicy: "block",
+        },
+        { literalCredentials: "inspect" }
+      )
+    ).toThrow(PluginPiiError)
+    expect(toJSON).toHaveBeenCalledTimes(1)
+  })
+
+  it("B04: retains JSON semantics for getters, dates, omitted functions and non-finite numbers", async () => {
+    const getter = jest.fn(() => "alice@example.com")
+    const toJSON = jest.fn(() => ({
+      get owner() {
+        return getter()
+      },
+      when: new Date("2026-11-09T00:00:00Z"),
+      omitted: () => "never sent",
+      array: [undefined, () => "never sent", NaN],
+      api_key: secretRef("key"),
+    }))
+    const egress = sanitizePluginNetworkEgress("p", {
+      url: "https://api.example.com",
+      body: { toJSON },
+    })
+    const resolved = await resolveNetworkCredentials(egress, async () => "stored-secret")
+    const wire = JSON.stringify(resolved.body)
+    expect(JSON.parse(wire)).toEqual({
+      owner: "<EMAIL_001>",
+      when: "2026-11-09T00:00:00.000Z",
+      array: [null, null, null],
+      api_key: "stored-secret",
+    })
+    expect(toJSON).toHaveBeenCalledTimes(1)
+    expect(getter).toHaveBeenCalledTimes(1)
+  })
+
+  it("B04: retains JSON string encoding when toJSON returns a primitive string", () => {
+    const body = sanitizePluginNetworkEgress("p", {
+      url: "https://api.example.com",
+      body: { toJSON: () => "alice@example.com" },
+    }).body
+    expect(body).toBe(JSON.stringify("<EMAIL_001>"))
+  })
+
+  it("B04: snapshots credential refs before later JSON callbacks can mutate them", async () => {
+    const ref = secretRef("original-key")
+    const body = {
+      nested: { api_key: ref },
+      later: {
+        toJSON() {
+          Object.assign(ref, { $secretRef: "changed-key" })
+          return "safe"
+        },
+      },
+    }
+    const egress = sanitizePluginNetworkEgress("p", { url: "https://api.example.com", body })
+    const readSecret = jest.fn(async () => "stored-secret")
+    await resolveNetworkCredentials(egress, readSecret)
+    expect(readSecret).toHaveBeenCalledWith("original-key")
+  })
+
   it("blocks a real builtin plugin network.fetch refresh request before transport", async () => {
     const pluginId = "feishu-auth"
     const url = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"

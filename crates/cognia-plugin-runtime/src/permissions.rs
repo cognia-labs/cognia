@@ -39,9 +39,9 @@ fn open_ledger_dir(
     state: &PluginRuntimeState,
     plugin_id: &str,
     create: bool,
+    local_account_id: &str,
 ) -> Result<Option<Dir>> {
     let plugin_id = crate::validate_plugin_id_path_component(plugin_id)?;
-    let local_account_id = state.active_account_id()?;
     fs::create_dir_all(&state.plugin_install_dir)?;
     let install = Dir::open_ambient_dir(&state.plugin_install_dir, ambient_authority())?;
     if create {
@@ -69,13 +69,13 @@ fn open_ledger_dir(
         Err(error) => return Err(error.into()),
     };
     if create {
-        match accounts.create_dir(&local_account_id) {
+        match accounts.create_dir(local_account_id) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
     }
-    let account = match accounts.open_dir_nofollow(&local_account_id) {
+    let account = match accounts.open_dir_nofollow(local_account_id) {
         Ok(dir) => dir,
         Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -98,8 +98,9 @@ fn write_ledger(
     state: &PluginRuntimeState,
     plugin_id: &str,
     grants: &[PermissionGrant],
+    local_account_id: &str,
 ) -> Result<()> {
-    let dir = open_ledger_dir(state, plugin_id, true)?.ok_or_else(|| {
+    let dir = open_ledger_dir(state, plugin_id, true, local_account_id)?.ok_or_else(|| {
         PluginError::Internal("failed to create plugin permission ledger directory".into())
     })?;
     let temporary = format!(".permissions-{}.tmp", uuid::Uuid::new_v4());
@@ -125,7 +126,15 @@ pub(crate) fn read_ledger(
     state: &PluginRuntimeState,
     plugin_id: &str,
 ) -> Result<Vec<PermissionGrant>> {
-    let Some(dir) = open_ledger_dir(state, plugin_id, false)? else {
+    read_ledger_for_account(state, plugin_id, &state.active_account_id()?)
+}
+
+fn read_ledger_for_account(
+    state: &PluginRuntimeState,
+    plugin_id: &str,
+    local_account_id: &str,
+) -> Result<Vec<PermissionGrant>> {
+    let Some(dir) = open_ledger_dir(state, plugin_id, false, local_account_id)? else {
         return Ok(Vec::new());
     };
     let mut options = OpenOptions::new();
@@ -161,9 +170,24 @@ pub fn grant_permission_for_state(
     permission: String,
     granted_by: String,
     expires_at: Option<String>,
+    expected_account_id: Option<String>,
 ) -> Result<PermissionGrant> {
     crate::validate_plugin_id_path_component(&plugin_id)?;
     crate::contract::validate_permission_name(&permission).map_err(PluginError::InvalidArgument)?;
+    // Keep account selection stable through the ledger write and cache commit.
+    // Use the same lock order as activate_account: account, then permissions.
+    let active_account = state.active_account.read();
+    let account_id = active_account
+        .as_deref()
+        .ok_or_else(|| PluginError::Internal("plugin account is locked or unbound".into()))?;
+    if expected_account_id
+        .as_deref()
+        .is_some_and(|expected| expected != account_id)
+    {
+        return Err(PluginError::InvalidArgument(
+            "plugin permission account changed".into(),
+        ));
+    }
     let grant = PermissionGrant {
         plugin_id: plugin_id.clone(),
         permission: permission.clone(),
@@ -174,7 +198,7 @@ pub fn grant_permission_for_state(
     let mut all = state.permissions.write();
     let mut next = match all.get(&plugin_id) {
         Some(grants) => grants.clone(),
-        None => read_ledger(state, &plugin_id)?,
+        None => read_ledger_for_account(state, &plugin_id, account_id)?,
     };
     // Re-granting what is already recorded changes nothing, so it writes
     // nothing: the renderer re-mirrors every declared permission each time a
@@ -191,7 +215,7 @@ pub fn grant_permission_for_state(
     }
     next.retain(|existing| existing.permission != permission);
     next.push(grant.clone());
-    write_ledger(state, &plugin_id, &next)?;
+    write_ledger(state, &plugin_id, &next, account_id)?;
     all.insert(plugin_id, next);
     Ok(grant)
 }
@@ -200,16 +224,29 @@ pub fn revoke_permission_for_state(
     state: &PluginRuntimeState,
     plugin_id: String,
     permission: String,
+    expected_account_id: Option<String>,
 ) -> Result<()> {
     crate::validate_plugin_id_path_component(&plugin_id)?;
     crate::contract::validate_permission_name(&permission).map_err(PluginError::InvalidArgument)?;
+    let active_account = state.active_account.read();
+    let account_id = active_account
+        .as_deref()
+        .ok_or_else(|| PluginError::Internal("plugin account is locked or unbound".into()))?;
+    if expected_account_id
+        .as_deref()
+        .is_some_and(|expected| expected != account_id)
+    {
+        return Err(PluginError::InvalidArgument(
+            "plugin permission account changed".into(),
+        ));
+    }
     let mut all = state.permissions.write();
     let mut next = match all.get(&plugin_id) {
         Some(grants) => grants.clone(),
-        None => read_ledger(state, &plugin_id)?,
+        None => read_ledger_for_account(state, &plugin_id, account_id)?,
     };
     next.retain(|grant| grant.permission != permission);
-    write_ledger(state, &plugin_id, &next)?;
+    write_ledger(state, &plugin_id, &next, account_id)?;
     all.insert(plugin_id, next);
     Ok(())
 }
@@ -222,10 +259,18 @@ pub async fn plugin_permission_grant(
     permission: String,
     granted_by: String,
     expires_at: Option<String>,
+    expected_account_id: Option<String>,
 ) -> Result<PermissionGrant> {
     let state = state.inner().clone();
     on_blocking_pool(move || {
-        grant_permission_for_state(&state, plugin_id, permission, granted_by, expires_at)
+        grant_permission_for_state(
+            &state,
+            plugin_id,
+            permission,
+            granted_by,
+            expires_at,
+            expected_account_id,
+        )
     })
     .await
 }
@@ -266,9 +311,13 @@ pub async fn plugin_permission_revoke(
     state: State<'_, PluginRuntimeState>,
     plugin_id: String,
     permission: String,
+    expected_account_id: Option<String>,
 ) -> Result<()> {
     let state = state.inner().clone();
-    on_blocking_pool(move || revoke_permission_for_state(&state, plugin_id, permission)).await
+    on_blocking_pool(move || {
+        revoke_permission_for_state(&state, plugin_id, permission, expected_account_id)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -284,6 +333,111 @@ mod tests {
         state
     }
 
+    #[test]
+    fn stale_account_grant_does_not_write_the_next_profiles_ledger() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let expected_account_id = state.active_account_id().unwrap();
+        state.activate_account("acct_b").unwrap();
+        assert_ne!(state.active_account_id().unwrap(), expected_account_id);
+
+        let result = grant_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            "user".into(),
+            None,
+            Some(expected_account_id),
+        );
+
+        assert!(result.is_err());
+        assert!(state.permissions.read().is_empty());
+        assert!(!state.plugin_state_dir.join("accounts/acct_b/demo").exists());
+    }
+
+    #[test]
+    fn stale_account_revoke_preserves_the_next_profiles_cached_grant() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let expected_account_id = state.active_account_id().unwrap();
+        state.activate_account("acct_b").unwrap();
+        assert_ne!(state.active_account_id().unwrap(), expected_account_id);
+        grant_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            "user".into(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let result = revoke_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            Some(expected_account_id),
+        );
+
+        assert!(result.is_err());
+        assert!(state.has_permission("demo", "network:fetch"));
+        assert_eq!(read_ledger(&state, "demo").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn expected_account_is_checked_before_an_identical_cached_regrant() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        grant_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            "user".into(),
+            None,
+            Some("acct_test".into()),
+        )
+        .unwrap();
+        let written = ledger_mtime(&state, "demo");
+
+        assert!(grant_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            "user".into(),
+            None,
+            Some("acct_other".into()),
+        )
+        .is_err());
+        assert_eq!(ledger_mtime(&state, "demo"), written);
+
+        revoke_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            Some("acct_test".into()),
+        )
+        .unwrap();
+        assert!(!state.has_permission("demo", "network:fetch"));
+
+        state.clear_account();
+        assert!(grant_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            "user".into(),
+            None,
+            Some("acct_test".into()),
+        )
+        .is_err());
+        assert!(revoke_permission_for_state(
+            &state,
+            "demo".into(),
+            "network:fetch".into(),
+            Some("acct_test".into()),
+        )
+        .is_err());
+    }
+
     #[tokio::test]
     async fn grant_persists_and_lists() {
         let tmp = TempDir::new().unwrap();
@@ -296,7 +450,13 @@ mod tests {
             granted_at: Utc::now().to_rfc3339(),
             expires_at: None,
         };
-        write_ledger(&state, "demo", std::slice::from_ref(&grant)).unwrap();
+        write_ledger(
+            &state,
+            "demo",
+            std::slice::from_ref(&grant),
+            &state.active_account_id().unwrap(),
+        )
+        .unwrap();
         let from_disk = read_ledger(&state, "demo").unwrap();
         assert_eq!(from_disk.len(), 1);
         assert_eq!(from_disk[0].permission, "filesystem:read");
@@ -313,15 +473,23 @@ mod tests {
             granted_at: Utc::now().to_rfc3339(),
             expires_at: None,
         };
-        write_ledger(&state, "demo", &[grant]).unwrap();
+        write_ledger(
+            &state,
+            "demo",
+            &[grant],
+            &state.active_account_id().unwrap(),
+        )
+        .unwrap();
         let mut grants = read_ledger(&state, "demo").unwrap();
         grants.retain(|g| g.permission != "filesystem:read");
-        write_ledger(&state, "demo", &grants).unwrap();
+        write_ledger(&state, "demo", &grants, &state.active_account_id().unwrap()).unwrap();
         assert!(read_ledger(&state, "demo").unwrap().is_empty());
     }
 
     fn ledger_mtime(state: &PluginRuntimeState, plugin_id: &str) -> std::time::SystemTime {
-        let dir = open_ledger_dir(state, plugin_id, false).unwrap().unwrap();
+        let dir = open_ledger_dir(state, plugin_id, false, &state.active_account_id().unwrap())
+            .unwrap()
+            .unwrap();
         dir.metadata(LEDGER_FILE)
             .unwrap()
             .modified()
@@ -339,6 +507,7 @@ mod tests {
             "filesystem:read".into(),
             "manifest".into(),
             None,
+            None,
         )
         .unwrap();
         let written = ledger_mtime(&state, "demo");
@@ -349,6 +518,7 @@ mod tests {
             "demo".into(),
             "filesystem:read".into(),
             "manifest".into(),
+            None,
             None,
         )
         .unwrap();
@@ -367,6 +537,7 @@ mod tests {
             "filesystem:read".into(),
             "manifest".into(),
             None,
+            None,
         )
         .unwrap();
         let written = ledger_mtime(&state, "demo");
@@ -378,6 +549,7 @@ mod tests {
             "demo".into(),
             "filesystem:read".into(),
             "manifest".into(),
+            None,
             None,
         )
         .unwrap();
@@ -395,6 +567,7 @@ mod tests {
             "filesystem:read".into(),
             "manifest".into(),
             None,
+            None,
         )
         .unwrap();
         let by_user = grant_permission_for_state(
@@ -402,6 +575,7 @@ mod tests {
             "demo".into(),
             "filesystem:read".into(),
             "user".into(),
+            None,
             None,
         )
         .unwrap();
@@ -422,10 +596,16 @@ mod tests {
             granted_at: Utc::now().to_rfc3339(),
             expires_at: None,
         };
-        write_ledger(&state, "demo", &[grant]).unwrap();
+        write_ledger(
+            &state,
+            "demo",
+            &[grant],
+            &state.active_account_id().unwrap(),
+        )
+        .unwrap();
         assert!(state.permissions.read().is_empty());
 
-        revoke_permission_for_state(&state, "demo".into(), "filesystem:read".into()).unwrap();
+        revoke_permission_for_state(&state, "demo".into(), "filesystem:read".into(), None).unwrap();
 
         assert!(read_ledger(&state, "demo").unwrap().is_empty());
         assert!(state
@@ -452,6 +632,7 @@ mod tests {
             "filesystem:write".into(),
             "user".into(),
             None,
+            None,
         );
 
         assert!(result.is_err());
@@ -469,7 +650,8 @@ mod tests {
         assert!(revoke_permission_for_state(
             &state,
             "_marketplace_cache".into(),
-            "filesystem:read".into()
+            "filesystem:read".into(),
+            None,
         )
         .is_err());
     }
@@ -485,12 +667,24 @@ mod tests {
             granted_at: Utc::now().to_rfc3339(),
             expires_at: None,
         };
-        write_ledger(&state, "demo", &[grant.clone()]).unwrap();
+        write_ledger(
+            &state,
+            "demo",
+            &[grant.clone()],
+            &state.active_account_id().unwrap(),
+        )
+        .unwrap();
         assert!(read_ledger(&state, "demo").is_err());
 
         grant.permission = "filesystem:read".into();
         grant.plugin_id = "someone-else".into();
-        write_ledger(&state, "demo", &[grant]).unwrap();
+        write_ledger(
+            &state,
+            "demo",
+            &[grant],
+            &state.active_account_id().unwrap(),
+        )
+        .unwrap();
         assert!(read_ledger(&state, "demo").is_err());
 
         assert!(grant_permission_for_state(
@@ -498,6 +692,7 @@ mod tests {
             "demo".into(),
             "unknown:permission".into(),
             "attacker".into(),
+            None,
             None,
         )
         .is_err());
@@ -514,6 +709,7 @@ mod tests {
             "demo".into(),
             "filesystem:read".into(),
             "user".into(),
+            None,
             None,
         )
         .unwrap();

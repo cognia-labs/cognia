@@ -206,6 +206,41 @@ function sanitizeValue(
   return value
 }
 
+/** Apply JSON semantics once, retaining branded references only at their actual paths. */
+function snapshotNetworkBody(body: unknown): unknown {
+  const paths = new WeakMap<object, string[]>()
+  const references: Array<{ path: string[]; value: PluginCredentialRef }> = []
+  let root = true
+  const serialized = JSON.stringify(body, function (key, value: unknown) {
+    const path = root ? [] : [...(paths.get(this) ?? []), key]
+    root = false
+    if (isPluginCredentialRef(value)) {
+      // Capture before any later getters/toJSON callbacks can mutate the ref.
+      const snapshot: PluginCredentialRef = {
+        $secretRef: value.$secretRef,
+        ...(value.prefix !== undefined ? { prefix: value.prefix } : {}),
+      }
+      Object.defineProperty(snapshot, SECRET_REF_BRAND, { value: true })
+      references.push({ path, value: Object.freeze(snapshot) })
+      return null
+    }
+    if (value && typeof value === "object") paths.set(value, path)
+    return value
+  })
+  if (serialized === undefined) return undefined
+  let snapshot = JSON.parse(serialized) as unknown
+  for (const { path, value } of references) {
+    if (!path.length) {
+      snapshot = value
+      continue
+    }
+    let parent = snapshot as Record<string, unknown>
+    for (const key of path.slice(0, -1)) parent = parent[key] as Record<string, unknown>
+    parent[path[path.length - 1]] = value
+  }
+  return snapshot
+}
+
 function sanitizeNetworkBody(
   pluginId: string,
   body: unknown,
@@ -349,7 +384,10 @@ export function sanitizePluginNetworkEgress(
       ? JSON.stringify(sanitizeNetworkBody(pluginId, parsed, policy, host))
       : sanitizeString(pluginId, "ctx.network.body", rawBody, policy)
   } else if (body !== undefined) {
-    body = sanitizeNetworkBody(pluginId, body, policy, host)
+    body = sanitizeNetworkBody(pluginId, snapshotNetworkBody(body), policy, host)
+    // A structured value whose toJSON returns a string is still a JSON body,
+    // whereas a caller-supplied string above is already a wire body.
+    if (typeof body === "string") body = JSON.stringify(body)
   }
 
   return {

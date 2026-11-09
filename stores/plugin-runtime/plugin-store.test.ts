@@ -23,6 +23,34 @@ import {
 import { PERSIST_COALESCE_MAX_WAIT_MS } from "@/stores/persist-storage"
 import * as barrel from "./"
 import type { PluginStatus } from "@/types/plugin/plugin"
+import { createStorageAPI } from "@/lib/plugin/api/storage-api"
+import {
+  activatePluginRuntimeAccount,
+  clearPluginRuntimeAccount,
+} from "@/lib/plugin/security/account-runtime-gate"
+
+it("B01: account purge removes only that profile's plugin payloads", async () => {
+  activatePluginRuntimeAccount("acct_payload_a")
+  const api = createStorageAPI("payload-plugin")
+  await api.set("private", "profile-a")
+  activatePluginRuntimeAccount("acct_payload_b")
+  await api.set("private", "profile-b")
+  purgePluginAccountStorage("acct_payload_a")
+  expect(await api.get("private")).toBe("profile-b")
+  activatePluginRuntimeAccount("acct_payload_a")
+  expect(await api.keys()).toEqual([])
+  clearPluginRuntimeAccount()
+})
+
+it("B01: account purge invalidates queued plugin storage writes", async () => {
+  activatePluginRuntimeAccount("acct_pending_purge")
+  const api = createStorageAPI("purged-plugin")
+  const pending = api.set("private", "queued")
+  purgePluginAccountStorage("acct_pending_purge")
+  await expect(pending).rejects.toThrow(/account/i)
+  expect(await api.keys()).toEqual([])
+  clearPluginRuntimeAccount()
+})
 
 it("barrel re-exports usePluginStore", () => {
   expect(barrel.usePluginStore).toBe(usePluginStore)
