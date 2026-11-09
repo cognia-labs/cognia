@@ -3,6 +3,10 @@
 // dispatches back into exactly the defs this session assembled.
 import { test } from "node:test"
 import assert from "node:assert/strict"
+
+import childProcess from "node:child_process"
+import { syncBuiltinESMExports } from "node:module"
+import { after, mock } from "node:test"
 import { z } from "zod"
 
 // A real exec wrapper that passes fds through — exercises the launcher path
@@ -39,13 +43,36 @@ function reset() {
 type PresentedTool = CallableTool & { description: string }
 
 function present(defs: ToolDefinition[], presentation: string): PresentedTool[] {
-  return applyToolPresentation(defs, presentation) as unknown as PresentedTool[]
+  return applyToolPresentation(defs, presentation, {
+    authorizeTool: async (_name, input) => input,
+  }) as unknown as PresentedTool[]
 }
 
 /** The `result` field of a `run_code` answer. */
 function resultOf(result: { content: unknown[] }): unknown {
   return firstJson<{ result: unknown }>(result).result
 }
+
+// Broker tests exercise dispatch, not OS RSS accounting (which has its own
+// supervisor tests). Keep real child execution while supplying process usage.
+const processGroups = new Set<number>()
+const spawn = childProcess.spawn
+const spawnSync = childProcess.spawnSync
+mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
+  const child = spawn(...args)
+  if (child.pid) processGroups.add(child.pid)
+  return child
+})
+mock.method(childProcess, "spawnSync", (...args: Parameters<typeof spawnSync>) =>
+  args[0] === "ps"
+    ? { status: 0, stdout: [...processGroups].map((pid) => `${pid} ${pid} 1`).join("\n") }
+    : spawnSync(...args)
+)
+syncBuiltinESMExports()
+after(() => {
+  mock.restoreAll()
+  syncBuiltinESMExports()
+})
 
 test("native presentation returns the surface untouched", () => {
   const defs = nativeDefs()
@@ -264,6 +291,48 @@ test("the declaration carries the real schema, not an invented one", () => {
     )
     assert.match(runCode!.description, /path: string/)
     assert.match(runCode!.description, /Absolute path/)
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+test("nested authorization receives namespaced identity and signal, then rewrites are parsed", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = LAUNCHER
+  const controller = new AbortController()
+  const calls: unknown[] = []
+  try {
+    const defs = [
+      {
+        name: "read",
+        inputSchema: { path: z.string() },
+        handler: async () => {
+          throw new Error("must not execute")
+        },
+      },
+    ]
+    const [code] = applyToolPresentation(defs, "code", {
+      authorizeTool: async (name, input, extra) => {
+        calls.push([name, input, extra?.signal])
+        return { path: 42 }
+      },
+    })
+    const result = await code!.handler(
+      { source: 'return await cognia.read({path:"safe"})' },
+      { signal: controller.signal }
+    )
+    assert.match(JSON.stringify(result), /invalid arguments/)
+    assert.deepEqual(calls, [["mcp__cognia-tools__read", { path: "safe" }, controller.signal]])
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+test("Code calls fail closed when no nested authorizer is supplied", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = LAUNCHER
+  try {
+    const [code] = applyToolPresentation([def("read")], "code")
+    const result = await code!.handler({ source: "return await cognia.read({})" })
+    assert.match(JSON.stringify(result), /no nested-call authorizer/)
   } finally {
     delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
   }

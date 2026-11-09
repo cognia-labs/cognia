@@ -516,7 +516,7 @@ sdk doom-sequence plan b.read                 A A QA QA
 ai reply allow-unmodified                     input | frames request(mcp__cognia-tools__write) | doom 1
 ai reply allow-updated                        {file_path:"<root>/src/a.ts",content:"y"} | frames request(mcp__cognia-tools__write) | doom 1
 ai reply allow-no-input                       input | frames request(mcp__cognia-tools__write) | doom 1
-ai reply allow-updated-credential             {file_path:"<root>/.ssh/id_rsa",content:"x"} | frames request(mcp__cognia-tools__write) | doom 1
+ai reply allow-updated-credential             reject denied: "mcp__cognia-tools__write" resolves into a protected credential path (workspace confinement) | frames request(mcp__cognia-tools__write) | doom 1
 ai reply allow-updated-pii                    {file_path:"<root>/src/a.ts",content:"bob@example.com"} | frames request(mcp__cognia-tools__write) | doom 1
 ai reply deny-message                         reject nope | frames request(mcp__cognia-tools__write) | doom 1
 ai reply deny-bare                            reject denied: mcp__cognia-tools__write | frames request(mcp__cognia-tools__write) | doom 1

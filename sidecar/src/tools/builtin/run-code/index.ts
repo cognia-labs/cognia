@@ -10,6 +10,7 @@
 
 import { z } from "zod"
 import { tool } from "../../kernel/define.ts"
+import type { ToolHandlerExtra } from "../../kernel/define.ts"
 
 import { toolError, toolText } from "../../kernel/result.ts"
 import type { SandboxProbe } from "./supervisor.ts"
@@ -31,7 +32,7 @@ const runCodeShape = {
 /**
 /** What `run_code` needs from the host. */
 export interface RunCodeDeps {
-  callTool: (name: string, input: unknown) => Promise<unknown>
+  callTool: (name: string, input: unknown, extra?: ToolHandlerExtra) => Promise<unknown>
   probe?: (() => SandboxProbe) | undefined
   /**
    * The eligible tools, for the generated SDK declaration. Empty means the
@@ -47,11 +48,11 @@ export function createRunCodeTool({ callTool, probe = probeSandbox, sdkTools = [
     "Run read-only JavaScript against the typed tool SDK. Cannot write, spawn, or reach the network." +
     (sdkTools.length > 0 ? `\n\n${generateSdkDeclaration(sdkTools)}` : "")
 
-  return tool(RUN_CODE_TOOL_NAME, description, runCodeShape, async (args) => {
+  return tool(RUN_CODE_TOOL_NAME, description, runCodeShape, async (args, extra) => {
     try {
       const outcome = await runCodeProgram({
         source: String(args?.source ?? ""),
-        callTool,
+        callTool: (name, input) => callTool(name, input, extra),
         probe: probe(),
       })
 

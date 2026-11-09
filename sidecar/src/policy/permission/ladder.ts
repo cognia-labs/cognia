@@ -176,6 +176,8 @@ export type LadderStep =
 
 export interface RailProfile {
   steps: readonly LadderStep[]
+  /** Whether dontAsk implicitly pre-approves read-only built-ins on this rail. */
+  dontAskAllowsReadOnly?: boolean
   /**
    * What a throwing confinement classifier means: fail the call, or treat it
    * as no verdict. The classifier only throws on non-JSON policy objects.
@@ -488,7 +490,9 @@ function runStep(step: LadderStep, state: CallState): LadderOutcome | undefined 
       // A doomed repeat cannot be asked about here, so it is denied outright.
       if (
         !state.doomed &&
-        (isReadOnlyBuiltin(toolName) || state.granted() || state.sandboxAllows())
+        ((state.profile.dontAskAllowsReadOnly !== false && isReadOnlyBuiltin(toolName)) ||
+          state.granted() ||
+          state.sandboxAllows())
       )
         return ALLOW
       return deny({ code: "dont-ask" })

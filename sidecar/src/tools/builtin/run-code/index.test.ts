@@ -1,6 +1,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
+import childProcess from "node:child_process"
+import { syncBuiltinESMExports } from "node:module"
+import { after, mock } from "node:test"
+
 import { RUN_CODE_TOOL_NAME, codeModeToolDefs, createRunCodeTool } from "./index.ts"
 import { asCallable, firstJson, firstText } from "../../../../test-support/tool-result.ts"
 
@@ -19,6 +23,27 @@ interface RunCodePayload {
 function payload(result: { content: unknown[] }): RunCodePayload {
   return firstJson<RunCodePayload>(result)
 }
+
+// Broker tests exercise dispatch, not OS RSS accounting (which has its own
+// supervisor tests). Keep real child execution while supplying process usage.
+const processGroups = new Set<number>()
+const spawn = childProcess.spawn
+const spawnSync = childProcess.spawnSync
+mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
+  const child = spawn(...args)
+  if (child.pid) processGroups.add(child.pid)
+  return child
+})
+mock.method(childProcess, "spawnSync", (...args: Parameters<typeof spawnSync>) =>
+  args[0] === "ps"
+    ? { status: 0, stdout: [...processGroups].map((pid) => `${pid} ${pid} 1`).join("\n") }
+    : spawnSync(...args)
+)
+syncBuiltinESMExports()
+after(() => {
+  mock.restoreAll()
+  syncBuiltinESMExports()
+})
 
 test("exposes exactly one tool in Code presentation", () => {
   const defs = codeModeToolDefs({ callTool: async () => null, probe: SANDBOXED })
@@ -73,4 +98,18 @@ test("surfaces program logs alongside the result", async () => {
   const tool = asCallable(createRunCodeTool({ callTool: async () => null, probe: SANDBOXED }))
   const result = await tool.handler({ source: 'console.log("hi"); return 1' })
   assert.deepEqual(payload(result).logs, [{ level: "info", text: "hi" }])
+})
+
+test("run_code forwards call context to nested authorization", async () => {
+  const controller = new AbortController()
+  const tool = createRunCodeTool({
+    callTool: async (_name, _input, extra) => extra?.signal === controller.signal,
+    probe: SANDBOXED,
+  })
+  const result = await tool.handler(
+    { source: "return await cognia.read({})" },
+    { signal: controller.signal }
+  )
+  assert.notEqual(result.isError, true)
+  assert.equal(payload(result).result, true)
 })

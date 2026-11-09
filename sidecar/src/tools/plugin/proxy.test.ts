@@ -87,10 +87,8 @@ test("isCallToolResult rejects ordinary plugin return values", () => {
   assert.equal(isCallToolResult(42), false)
 })
 
-test("isCallToolResult rejects a malformed or empty content array", () => {
-  // An empty array carries nothing, so flattening it to `{"content":[]}` text
-  // is no worse — and keeps the passthrough honest about what it accepts.
-  assert.equal(isCallToolResult({ content: [] }), false)
+test("isCallToolResult accepts an empty envelope and rejects malformed content", () => {
+  assert.equal(isCallToolResult({ content: [] }), true)
   assert.equal(isCallToolResult({ content: "not an array" }), false)
   assert.equal(isCallToolResult({ content: [{ text: "no type field" }] }), false)
   assert.equal(isCallToolResult({ content: [null] }), false)
@@ -201,4 +199,45 @@ test("server-wide always-load marks every plugin definition resident", () => {
     alwaysLoad: true,
   })!
   assert.equal(definitions[0]!.alwaysLoad, true)
+})
+
+test("empty MCP envelopes preserve error and structured content", async () => {
+  const pendingPluginToolCalls = new Map()
+  const result = { content: [], isError: true, structuredContent: { error: "fixture failed" } }
+  const [definition] = buildPluginToolDefinitions({
+    sessionId: "empty-envelope",
+    tools: [{ name: "fixture" }],
+    pendingPluginToolCalls,
+    emit(frame) {
+      pendingPluginToolCalls.get(frame.toolUseId)?.resolve({ result })
+    },
+  })!
+  assert.deepEqual(await definition!.handler({}), result)
+})
+
+test("plugin definitions keep a full runtime schema for root JSON Schema constraints", async () => {
+  const pendingPluginToolCalls = new Map()
+  const definitions = buildPluginToolDefinitions({
+    sessionId: "root-schema",
+    pendingPluginToolCalls,
+    tools: [
+      {
+        name: "fixture",
+        jsonSchema: {
+          type: "object",
+          patternProperties: { "^safe_": { type: "string" } },
+          additionalProperties: false,
+        },
+      },
+    ],
+    emit() {},
+  })!
+  const schema = definitions[0]!.inputSchema as {
+    safeParse(input: unknown): { success: boolean; data?: unknown }
+  }
+  const parsed = schema.safeParse({ safe_name: "ok" })
+  assert.equal(parsed.success, true)
+  assert.deepEqual(parsed.data, { safe_name: "ok" })
+  assert.equal(schema.safeParse({ safe_name: 42 }).success, false)
+  assert.equal(schema.safeParse({ other: "ok" }).success, false)
 })

@@ -525,3 +525,17 @@ test("an enforced list leaves unlisted tools to the ordinary ladder", () => {
     { kind: "allow" }
   )
 })
+
+test("SDK preflight can require explicit approval for read-only dontAsk calls", () => {
+  const invocation = call(READ, {}, { policy: policy({ mode: "dontAsk" }) })
+  assert.equal(decidePermission(profile(["dont-ask"]), invocation).kind, "allow")
+  assert.deepEqual(
+    decidePermission(profile(["dont-ask"], { dontAskAllowsReadOnly: false }), invocation),
+    { kind: "deny", reason: { code: "dont-ask" } }
+  )
+  invocation.policy.alwaysAllow = [READ]
+  assert.equal(
+    decidePermission(profile(["dont-ask"], { dontAskAllowsReadOnly: false }), invocation).kind,
+    "allow"
+  )
+})

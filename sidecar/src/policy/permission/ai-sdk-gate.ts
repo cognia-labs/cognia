@@ -32,6 +32,7 @@ import {
   buildApprovalRequiredSet,
   buildPerCallApprovalSet,
   decidePermission,
+  firstHardDenial,
   requiresPerCallApproval,
   toolPermissionDecision,
 } from "./ladder.ts"
@@ -145,7 +146,8 @@ export interface ToolPermissionGateOptions {
 export type ToolPermissionGate = (
   toolName: string,
   input: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  validateInput?: (input: unknown) => unknown
 ) => Promise<unknown>
 
 /**
@@ -198,10 +200,10 @@ export function createToolPermissionGate({
     sendOptions?.alwaysExplicitGithubTools
   )
 
-  return async function gate(toolName, input, signal) {
-    const outcome = decidePermission(AI_SDK_RAIL, {
+  return async function gate(toolName, input, signal, validateInput) {
+    const call = (effectiveInput = input) => ({
       toolName,
-      input,
+      input: effectiveInput,
       signal,
       doomGuard,
       canPrompt,
@@ -223,6 +225,7 @@ export function createToolPermissionGate({
         explicitTools,
       },
     })
+    const outcome = decidePermission(AI_SDK_RAIL, call())
     if (outcome.kind === "allow") {
       // Shadow mode: the call runs as before, and the host hears about it.
       if (explicitToolObserved(toolName, explicitTools, input) && typeof emit === "function") {
@@ -282,6 +285,17 @@ export function createToolPermissionGate({
     if (decision && decision.behavior === "deny") {
       throw new Error((decision.message as string | undefined) ?? `denied: ${toolName}`)
     }
-    return decision && decision.updatedInput !== undefined ? decision.updatedInput : input
+    const updated = decision && decision.updatedInput !== undefined ? decision.updatedInput : input
+    const effective = validateInput ? validateInput(updated) : updated
+    // Approval cannot grant authority over a rewritten target. Do not climb
+    // the approval/doom steps again: only this rail's mandatory denials are
+    // re-evaluated (it has no input-PII step, so none is added here).
+    const reason = firstHardDenial(
+      AI_SDK_RAIL,
+      ["interrupted", "ruleset", "sandbox-scope", "credential-path", "profile"],
+      call(effective)
+    )
+    if (reason) throw denialError(reason, toolName)
+    return effective
   }
 }

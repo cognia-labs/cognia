@@ -1,171 +1,333 @@
-// JSON Schema → zod, for the plugin tool manifest.
-//
-// A plugin declares each tool's arguments as JSON Schema, but the Claude Agent
-// SDK's `tool()` takes a zod raw shape, and the model-visible MCP schema is
-// derived from THAT shape, not from the manifest. So anything this converter
-// drops is invisible to the model on the Claude Agent SDK rail.
+// JSON Schema → Zod for both plugin-tool rails. Keep the original schema as
+// metadata: converting declarations through a narrower Zod shape must never
+// hide legal inputs from the model.
 
 import { z } from "zod"
 
-/** A zod literal value. */
-type Literal = string | number | bigint | boolean | null | undefined
-
-/** The JSON Schema keywords the converter reads. */
-type JsonSchemaNode = Record<string, unknown>
-
-/** `z.union` needs at least two members; callers check the length first. */
-const unionOf = (branches: z.ZodType[]): z.ZodType =>
-  z.union(branches as unknown as readonly [z.ZodType, z.ZodType, ...z.ZodType[]])
-
-/**
- * Lightweight JSON Schema → zod shape conversion. The shape object is
- * exactly what `tool()` expects — keys map to zod schemas, NOT a wrapping
- * `z.object(...)`. For anything that isn't a JSON object schema we return
- * an empty shape; the underlying execute call still receives the raw args
- * unchanged because the SDK only uses the shape for validation /
- * autocompletion.
- */
-export function jsonSchemaToZodShape(schema: unknown): Record<string, z.ZodType> {
-  if (!schema || typeof schema !== "object") return {}
-  const s = schema as JsonSchemaNode
-  if (s.type !== "object" || !s.properties || typeof s.properties !== "object") {
-    return {}
-  }
-  const required: unknown[] = Array.isArray(s.required) ? s.required : []
-  const shape: Record<string, z.ZodType> = {}
-  for (const [key, prop] of Object.entries(s.properties)) {
-    shape[key] = jsonSchemaPropToZod(prop, required.includes(key))
-  }
-  return shape
+type SchemaNode = Record<string, unknown>
+interface CompiledSchema {
+  schema: z.ZodType
+  relaxed: boolean
 }
 
-/**
- * Map a single JSON-Schema property to a zod type. Unknown types fall
- * back to `z.unknown()`. Optional fields (those not in `required`) are
- * wrapped with `.optional()`.
- */
-export function jsonSchemaPropToZod(prop: unknown, required: boolean): z.ZodType {
-  let zodType: z.ZodType
-  if (!prop || typeof prop !== "object") {
-    zodType = z.unknown()
-  } else {
-    const p = prop as JsonSchemaNode
-    // `enum` / `const` are checked BEFORE `type`: the enum IS the contract, and
-    // for several tools it is also the discovery mechanism (dispatch_agent's
-    // `subagentId` enumerates the available subagents). Dropping it left the
-    // model a bare string on this rail while the ai-sdk rail saw the real
-    // constraint — the same tool validated differently per provider.
-    if (Array.isArray(p.enum) && p.enum.length > 0) {
-      // `null` is a legal enum member and a common one: `enum: ["a","b",null]`
-      // is how a schema says "one of these, or explicitly cleared". Filtering it
-      // out (rather than mapping it to `z.null()`) made this rail reject a value
-      // the schema declares, and left `enum: [null]` with no members at all.
-      const members: unknown[] = p.enum
-      const literals = members.filter((v) => v !== null && v !== undefined)
-      const hasNull = members.includes(null)
-      if (!hasNull && literals.length > 0 && literals.every((v) => typeof v === "string")) {
-        zodType = z.enum(literals as [string, ...string[]])
-      } else {
-        const branches: z.ZodType[] = [
-          ...literals.map((v) => z.literal(v as Literal)),
-          ...(hasNull ? [z.null()] : []),
-        ]
-        // A single member is a literal, not a union: `z.union` needs two, and
-        // duplicating the member to satisfy it only obscured the empty case.
-        zodType =
-          branches.length === 1
-            ? branches[0]!
-            : branches.length > 1
-              ? unionOf(branches)
-              : z.unknown()
-      }
-    } else if (p.const !== undefined) {
-      zodType = z.literal(p.const as Literal)
-    } else if (Array.isArray(p.oneOf) || Array.isArray(p.anyOf)) {
-      // A discriminated union renders as `oneOf`. Without this branch it fell
-      // to `z.unknown()` below, and because the model-visible MCP schema is
-      // derived from THIS zod shape (not from the manifest JSON Schema), every
-      // union-typed argument reached the model as an opaque blob — which is
-      // exactly how computer-use's whole action vocabulary went missing.
-      const variants = (p.oneOf ?? p.anyOf) as unknown[]
-      const branches = variants.map((v) => jsonSchemaPropToZod(v, true))
-      zodType =
-        branches.length === 1 ? branches[0]! : branches.length > 1 ? unionOf(branches) : z.unknown()
-    } else {
-      switch (p.type) {
-        case "string": {
-          let s = z.string()
-          if (typeof p.minLength === "number") s = s.min(p.minLength)
-          if (typeof p.maxLength === "number") s = s.max(p.maxLength)
-          if (typeof p.pattern === "string") {
-            try {
-              s = s.regex(new RegExp(p.pattern))
-            } catch {
-              /* an unsupported pattern must not brick the tool */
-            }
-          }
-          zodType = s
-          break
-        }
-        case "number":
-        case "integer": {
-          let n = p.type === "integer" ? z.number().int() : z.number()
-          if (typeof p.minimum === "number") n = n.min(p.minimum)
-          if (typeof p.maximum === "number") n = n.max(p.maximum)
-          if (typeof p.exclusiveMinimum === "number") n = n.gt(p.exclusiveMinimum)
-          if (typeof p.exclusiveMaximum === "number") n = n.lt(p.exclusiveMaximum)
-          zodType = n
-          break
-        }
-        case "boolean":
-          zodType = z.boolean()
-          break
-        case "array": {
-          const itemSchema =
-            p.items && typeof p.items === "object"
-              ? jsonSchemaPropToZod(p.items, true)
-              : z.unknown()
-          let a = z.array(itemSchema)
-          if (typeof p.minItems === "number") a = a.min(p.minItems)
-          if (typeof p.maxItems === "number") a = a.max(p.maxItems)
-          zodType = a
-          break
-        }
-        case "object": {
-          // Recurse into nested `properties`/`required` instead of collapsing
-          // the whole object to an opaque record. `working_set.entry` carries
-          // three enums, a `required` list and `refs.maxItems` that all
-          // vanished under the old `z.record(z.string(), z.unknown())`.
-          if (p.properties && typeof p.properties === "object") {
-            const nestedRequired: unknown[] = Array.isArray(p.required) ? p.required : []
-            const nestedShape: Record<string, z.ZodType> = {}
-            for (const [k, v] of Object.entries(p.properties)) {
-              nestedShape[k] = jsonSchemaPropToZod(v, nestedRequired.includes(k))
-            }
-            const obj = z.object(nestedShape)
-            // Only close the object when the schema says so; JSON Schema's
-            // default is open, and tightening it would reject valid calls.
-            zodType = p.additionalProperties === false ? obj.strict() : obj.passthrough()
-          } else {
-            zodType = z.record(z.string(), z.unknown())
-          }
-          break
-        }
-        case "null":
-          zodType = z.null()
-          break
-        default:
-          zodType = z.unknown()
-      }
-    }
-    if (typeof p.description === "string" && p.description.length > 0) {
-      zodType = zodType.describe(p.description)
-    }
-    // `default` implies the field is optional to the caller; apply it last so
-    // it wraps whatever constraint was built above.
-    if (p.default !== undefined && !required) {
-      return zodType.optional().default(p.default)
-    }
+const HANDLED_KEYWORDS = new Set([
+  "$schema",
+  "$id",
+  "$defs",
+  "definitions",
+  "$ref",
+  "title",
+  "description",
+  "default",
+  "examples",
+  "type",
+  "nullable",
+  "const",
+  "enum",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "properties",
+  "required",
+  "patternProperties",
+  "additionalProperties",
+  "propertyNames",
+  "dependentRequired",
+  "minProperties",
+  "maxProperties",
+  "minLength",
+  "maxLength",
+  "pattern",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "items",
+  "prefixItems",
+  "additionalItems",
+  "minItems",
+  "maxItems",
+])
+const KNOWN_TYPES = new Set(["string", "number", "integer", "boolean", "null", "object", "array"])
+
+function isObject(value: unknown): value is SchemaNode {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false
+  if (Array.isArray(left) !== Array.isArray(right)) return false
+  const a = left as SchemaNode
+  const b = right as SchemaNode
+  const keys = Object.keys(a)
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && sameJson(a[key], b[key]))
+  )
+}
+
+function matchesType(type: unknown, value: unknown): boolean {
+  switch (type) {
+    case "string":
+      return typeof value === "string"
+    case "number":
+      return typeof value === "number" && Number.isFinite(value)
+    case "integer":
+      return typeof value === "number" && Number.isInteger(value)
+    case "boolean":
+      return typeof value === "boolean"
+    case "null":
+      return value === null
+    case "object":
+      return isObject(value)
+    case "array":
+      return Array.isArray(value)
+    default:
+      return true
   }
-  return required ? zodType : zodType.optional()
+}
+
+function patternOf(pattern: unknown): RegExp | undefined {
+  if (typeof pattern !== "string") return undefined
+  try {
+    return new RegExp(pattern, "u")
+  } catch {
+    return undefined
+  }
+}
+
+function resolveRef(root: unknown, ref: unknown): unknown {
+  if (typeof ref !== "string" || !ref.startsWith("#")) return undefined
+  if (ref === "#") return root
+  if (!ref.startsWith("#/")) return undefined
+  let current = root
+  for (const segment of ref.slice(2).split("/")) {
+    const key = segment.replace(/~1/g, "/").replace(/~0/g, "~")
+    if (!isObject(current) || !Object.hasOwn(current, key)) return undefined
+    current = current[key]
+  }
+  return current
+}
+
+function compileSchema(
+  prop: unknown,
+  required: boolean,
+  root: unknown,
+  ancestors: ReadonlySet<unknown>
+): CompiledSchema {
+  if (prop === false) return { schema: required ? z.never() : z.never().optional(), relaxed: false }
+  if (!isObject(prop)) return { schema: z.unknown(), relaxed: prop !== true }
+  // Recursive/unresolved references are permissive at that reference only.
+  if (ancestors.has(prop)) return { schema: z.unknown(), relaxed: true }
+  const seen = new Set([...ancestors, prop])
+  const child = (value: unknown, isRequired = true) => compileSchema(value, isRequired, root, seen)
+  // These keywords are not runtime assertions here. In particular `format`
+  // is an annotation by default; Zod's URL/email checks can be narrower.
+  const declaredTypes = Array.isArray(prop.type)
+    ? prop.type
+    : prop.type === undefined
+      ? []
+      : [prop.type]
+  let relaxed =
+    Object.keys(prop).some((key) => !HANDLED_KEYWORDS.has(key)) ||
+    declaredTypes.some((type) => typeof type !== "string" || !KNOWN_TYPES.has(type)) ||
+    prop.nullable === true
+  const requiredKeys = Array.isArray(prop.required)
+    ? prop.required.filter((key): key is string => typeof key === "string")
+    : []
+  const properties = isObject(prop.properties) ? prop.properties : {}
+  const shape = Object.fromEntries(
+    Object.entries(properties).map(([key, value]) => {
+      const compiled = child(value, requiredKeys.includes(key))
+      relaxed ||= compiled.relaxed
+      return [key, compiled.schema]
+    })
+  )
+  const objectSchema = z.object(shape).passthrough()
+  const patterns = Object.entries(
+    isObject(prop.patternProperties) ? prop.patternProperties : {}
+  ).map(([pattern, value]) => {
+    const regex = patternOf(pattern)
+    const compiled = child(value)
+    relaxed ||= !regex || compiled.relaxed
+    return { regex, compiled }
+  })
+  const additional =
+    prop.additionalProperties === undefined ? undefined : child(prop.additionalProperties)
+  const propertyNames = prop.propertyNames === undefined ? undefined : child(prop.propertyNames)
+  const refTarget = resolveRef(root, prop.$ref)
+  const reference = refTarget === undefined ? undefined : child(refTarget)
+  if (prop.$ref !== undefined && !reference) relaxed = true
+  const compositions = ["allOf", "anyOf", "oneOf"].map((keyword) => ({
+    keyword,
+    branches: Array.isArray(prop[keyword])
+      ? prop[keyword].map((branch) => child(branch))
+      : undefined,
+  }))
+  const tuple = Array.isArray(prop.prefixItems)
+    ? prop.prefixItems
+    : Array.isArray(prop.items)
+      ? prop.items
+      : undefined
+  const positional = tuple?.map((item) => child(item))
+  const rest = tuple ? (Array.isArray(prop.items) ? prop.additionalItems : prop.items) : prop.items
+  const items = rest === undefined ? undefined : child(rest)
+  const stringPattern = patternOf(prop.pattern)
+  if (prop.pattern !== undefined && !stringPattern) relaxed = true
+  relaxed ||= [
+    ...patterns.map(({ compiled }) => compiled),
+    additional,
+    propertyNames,
+    reference,
+    items,
+    ...(positional ?? []),
+    ...compositions.flatMap(({ branches }) => branches ?? []),
+  ].some((compiled) => compiled?.relaxed)
+
+  let schema: z.ZodType = z
+    .unknown()
+    .check((payload) => {
+      const value = payload.value
+      const fail = (message: string, path: PropertyKey[] = []) => {
+        payload.issues.push({ code: "custom", input: value, message, path })
+      }
+      const validate = (compiled: CompiledSchema, input: unknown, path: PropertyKey[] = []) => {
+        const parsed = compiled.schema.safeParse(input)
+        if (!parsed.success)
+          for (const issue of parsed.error.issues) fail(issue.message, [...path, ...issue.path])
+        return parsed
+      }
+      if (value === null && prop.nullable === true) return
+      const types = Array.isArray(prop.type) ? prop.type : [prop.type]
+      if (!types.some((type) => matchesType(type, value))) fail(`expected ${types.join(" or ")}`)
+      if (Object.hasOwn(prop, "const") && !sameJson(value, prop.const)) fail("does not match const")
+      if (Array.isArray(prop.enum) && !prop.enum.some((member) => sameJson(value, member)))
+        fail("does not match enum")
+      if (reference) validate(reference, value)
+      for (const { keyword, branches } of compositions) {
+        if (!branches) continue
+        const count = branches.filter((branch) => branch.schema.safeParse(value).success).length
+        // A widened unsupported branch can create a spurious XOR overlap.
+        const valid =
+          keyword === "allOf"
+            ? count === branches.length
+            : keyword === "oneOf" && !relaxed
+              ? count === 1
+              : count > 0
+        if (!valid) fail(`does not match ${keyword}`)
+      }
+      if (typeof value === "string") {
+        const length = Array.from(value).length
+        if (typeof prop.minLength === "number" && length < prop.minLength)
+          fail(`must contain at least ${prop.minLength} characters`)
+        if (typeof prop.maxLength === "number" && length > prop.maxLength)
+          fail(`must contain at most ${prop.maxLength} characters`)
+        if (stringPattern && !stringPattern.test(value)) fail("does not match pattern")
+      }
+      if (typeof value === "number") {
+        if (
+          typeof prop.minimum === "number" &&
+          (value < prop.minimum || (prop.exclusiveMinimum === true && value === prop.minimum))
+        )
+          fail("below minimum")
+        if (
+          typeof prop.maximum === "number" &&
+          (value > prop.maximum || (prop.exclusiveMaximum === true && value === prop.maximum))
+        )
+          fail("above maximum")
+        if (typeof prop.exclusiveMinimum === "number" && value <= prop.exclusiveMinimum)
+          fail("below exclusive minimum")
+        if (typeof prop.exclusiveMaximum === "number" && value >= prop.exclusiveMaximum)
+          fail("above exclusive maximum")
+      }
+      if (isObject(value)) {
+        for (const key of requiredKeys)
+          if (!Object.hasOwn(value, key)) fail("required property is missing", [key])
+        const keys = Object.keys(value)
+        if (typeof prop.minProperties === "number" && keys.length < prop.minProperties)
+          fail("below minProperties")
+        if (typeof prop.maxProperties === "number" && keys.length > prop.maxProperties)
+          fail("above maxProperties")
+        for (const key of keys) {
+          if (propertyNames) validate(propertyNames, key, [key])
+          let matched = Object.hasOwn(properties, key)
+          for (const { regex, compiled } of patterns) {
+            if (!regex) {
+              matched = true
+              continue
+            }
+            if (regex.test(key)) {
+              matched = true
+              validate(compiled, value[key], [key])
+            }
+          }
+          if (!matched && additional) validate(additional, value[key], [key])
+        }
+        if (isObject(prop.dependentRequired))
+          for (const [key, dependencies] of Object.entries(prop.dependentRequired)) {
+            if (Object.hasOwn(value, key) && Array.isArray(dependencies))
+              for (const dependency of dependencies) {
+                if (typeof dependency === "string" && !Object.hasOwn(value, dependency))
+                  fail(`required by ${key}`, [dependency])
+              }
+          }
+        const parsed = validate({ schema: objectSchema, relaxed: false }, value)
+        if (parsed.success) payload.value = parsed.data
+      }
+      if (Array.isArray(value)) {
+        if (typeof prop.minItems === "number" && value.length < prop.minItems)
+          fail("below minItems")
+        if (typeof prop.maxItems === "number" && value.length > prop.maxItems)
+          fail("above maxItems")
+        for (const [index, entry] of value.entries()) {
+          const compiled = positional?.[index] ?? items
+          if (compiled) validate(compiled, entry, [index])
+        }
+      }
+    })
+    .meta(prop)
+  if (typeof prop.description === "string") schema = schema.describe(prop.description)
+  if (!required)
+    schema =
+      prop.default === undefined ? schema.optional() : schema.optional().default(prop.default)
+  return { schema, relaxed }
+}
+
+/** The raw-shape API retained for existing callers, with root reference scope. */
+export function jsonSchemaToZodShape(schema: unknown): Record<string, z.ZodType> {
+  if (!isObject(schema) || schema.type !== "object" || !isObject(schema.properties)) return {}
+  const required = Array.isArray(schema.required) ? schema.required : []
+  return Object.fromEntries(
+    Object.entries(schema.properties).map(([key, prop]) => [
+      key,
+      compileSchema(prop, required.includes(key), schema, new Set()).schema,
+    ])
+  )
+}
+
+export function jsonSchemaPropToZod(prop: unknown, required: boolean): z.ZodType {
+  return compileSchema(prop, required, prop, new Set()).schema
+}
+
+/** MCP needs a ZodObject, including when the manifest has root compositions. */
+export function jsonSchemaToZodObject(schema: unknown) {
+  const source = schema ?? { type: "object" }
+  const validator = jsonSchemaPropToZod(source, true)
+  return z
+    .object({})
+    .passthrough()
+    .check((payload) => {
+      const parsed = validator.safeParse(payload.value)
+      if (parsed.success) payload.value = parsed.data as Record<string, unknown>
+      else
+        for (const issue of parsed.error.issues)
+          payload.issues.push({
+            code: "custom",
+            path: issue.path,
+            message: issue.message,
+            input: payload.value,
+          })
+    })
+    .meta(isObject(source) ? source : {})
 }

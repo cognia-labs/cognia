@@ -289,3 +289,35 @@ test("the registry gives unsandboxed process tools the session host port resolve
   assert.equal(calls.length, 1)
   assert.equal((calls[0] as unknown[])[0], "workspace.portEnv")
 })
+
+test("registry filters native definitions before generating the Code SDK declaration", () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  try {
+    for (const dispatchPath of ["ai-sdk", "anthropic"] as const) {
+      const defs = collectCogniaToolDefs({
+        enabled: { fileExtras: true },
+        dispatchPath,
+        toolPresentation: "both",
+        isToolAllowed: (name) => name === "run_code" || name === "file_search",
+        authorizeTool: async (_name, input) => input,
+      })
+      assert.ok(defs.some((def) => def.name === "run_code"))
+      assert.equal(
+        defs.some((def) => def.name === "file_info"),
+        false
+      )
+      const code = defs.find((def) => def.name === "run_code")!
+      assert.ok(!code.description?.includes("file_info("))
+    }
+    assert.equal(
+      collectCogniaToolDefs({
+        enabled: { fileExtras: true },
+        toolPresentation: "code",
+        isToolAllowed: () => false,
+      }).length,
+      0
+    )
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})

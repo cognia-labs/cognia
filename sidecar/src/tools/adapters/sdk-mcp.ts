@@ -46,7 +46,21 @@ export interface BuildToolsServerOptions extends CollectToolDefsOptions {
 export function buildCogniaToolsServer(options: BuildToolsServerOptions) {
   const { enabled, alwaysLoad, toolExecutionTimeoutMs, maxToolResultTokens } = options
   if (!enabled || typeof enabled !== "object") return null
-  const tools = collectCogniaToolDefs(options)
+  const tools = collectCogniaToolDefs({
+    ...options,
+    executeTool: async (def, input, extra) => {
+      const bounded = wrapDefsWithReadOnlyTimeout(
+        [def],
+        toolExecutionTimeoutMs ?? DEFAULT_BUILTIN_TOOL_TIMEOUT_MS,
+        READ_ONLY_TOOL_NAMES
+      )
+      const capped = wrapDefsWithResultCap(bounded, maxToolResultTokens)
+      return wrapNativeToolResults(capped, options.contentSafety?.injectionProtection)[0]!.handler(
+        input,
+        extra
+      )
+    },
+  })
   if (tools.length === 0) return null
   // Per-tool execution deadline for READ-ONLY built-ins (see
   // `src/tools/middleware/read-only-timeout.ts`). The Anthropic SDK calls each

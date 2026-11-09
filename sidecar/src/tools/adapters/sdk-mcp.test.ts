@@ -189,3 +189,28 @@ test("native MCP handlers enforce injection policy and honor false at the final 
   const result = await wrapNativeToolResults(defs, false)[0]!.handler({})
   assert.match(JSON.stringify(result), /Ignore all previous instructions/)
 })
+
+test("SDK MCP registration exposes only the final permitted Code surface", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  const server = buildCogniaToolsServer({
+    enabled: { fileExtras: true },
+    toolPresentation: "both",
+    isToolAllowed: (name) => name !== "file_info",
+  })!
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: "code-surface-test", version: "1" })
+  try {
+    await server.instance.connect(serverTransport)
+    await client.connect(clientTransport)
+    const tools = (await client.listTools()).tools
+    assert.equal(
+      tools.some((tool) => tool.name === "file_info"),
+      false
+    )
+    assert.ok(!tools.find((tool) => tool.name === "run_code")!.description?.includes("file_info("))
+  } finally {
+    await client.close()
+    await server.instance.close()
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})

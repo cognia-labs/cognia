@@ -9,6 +9,8 @@ import { buildSubprocessEnv } from "./subprocess-env.ts"
 
 import { foldSystemPrompt, thinkingFromBudget } from "./system-prompt.ts"
 import { createAnthropicCanUseTool } from "../../policy/permission/sdk-can-use-tool.ts"
+import { splitToolName } from "../../policy/tool-catalog/names.ts"
+import { toolNameCandidates } from "../../tools/adapters/allow-list.ts"
 import {
   enforceAnthropicPermissionChannel,
   type DelegatingSdkOptions,
@@ -143,6 +145,22 @@ export function buildAnthropicOptions({
     doomGuard,
     profileApprovals,
     explicitSeen,
+  })
+  surface.setNestedToolAuthorizer(async (name, input, extra, validateInput) => {
+    const { server, bare } = splitToolName(name)
+    const candidates = server ? toolNameCandidates(bare, server) : [name]
+    const decision = await sessionCanUseTool(name, input as Record<string, unknown>, {
+      signal: extra?.signal,
+      toolUseID: randomUUID(),
+      displayName: name,
+      validateInput,
+      sdkPreflight: true,
+      sdkPreapproved: candidates.some((candidate) => modelAllowedTools?.includes(candidate)),
+    })
+    if (decision.behavior !== "allow") {
+      throw new Error(String(decision.message ?? `Nested tool denied: ${name}`))
+    }
+    return decision.updatedInput ?? input
   })
   let options: Options & Record<string, unknown> = {
     cwd: sendOptions.cwd,

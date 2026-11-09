@@ -383,3 +383,158 @@ test("an observed shell gh write a grant allows is reported once and marked seen
   await gate("Bash", { command: "gh issue view 4" }, { toolUseID: "tu-11" })
   assert.equal(frames.length, 1)
 })
+
+test("Anthropic approval rewrites cannot enter protected credential paths", async () => {
+  const root = mkRoot()
+  try {
+    const pendingApprovals = new Map<string, PendingApproval>()
+    const gate = mkGate(
+      {
+        cwd: root,
+        confinement: { enabled: true, roots: [root] },
+        pluginTools: [{ name: "reader", access: "read", pathParams: ["path"] }],
+      },
+      { pendingApprovals }
+    )
+    const result = gate("mcp__cognia-plugin-tools__reader", { path: path.join(root, "safe") }, {})
+    const entry = [...pendingApprovals.values()][0]!
+    entry.resolve({ behavior: "allow", updatedInput: { path: path.join(root, ".ssh", "id_rsa") } })
+    const decision = await result
+    assert.equal(decision.behavior, "deny")
+    assert.match(String(decision.message), /protected credential/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("nested approval schemas validate rewrites before hard authority checks", async () => {
+  const pendingApprovals = new Map<string, PendingApproval>()
+  const gate = mkGate({}, { pendingApprovals })
+  const result = gate(
+    "mcp__cognia-tools__file_info",
+    { path: "safe" },
+    {
+      validateInput() {
+        throw new Error("invalid arguments for file_info")
+      },
+    }
+  )
+  const entry = [...pendingApprovals.values()][0]!
+  entry.resolve({ behavior: "allow", updatedInput: { path: 42 } })
+  const decision = await result
+  assert.equal(decision.behavior, "deny")
+  assert.match(String(decision.message), /invalid arguments/)
+})
+
+test("nested SDK preflight reuses modes, preapproval and mandatory denials", async () => {
+  const read = "mcp__cognia-tools__file_info"
+  const edit = "mcp__cognia-tools__directory_create"
+  for (const fixture of [
+    {
+      options: { permissionMode: "bypassPermissions" },
+      tool: read,
+      approved: false,
+      expected: "allow",
+    },
+    { options: { permissionMode: "dontAsk" }, tool: read, approved: false, expected: "deny" },
+    { options: { permissionMode: "dontAsk" }, tool: read, approved: true, expected: "allow" },
+    { options: {}, tool: read, approved: true, expected: "allow" },
+    { options: { permissionMode: "acceptEdits" }, tool: edit, approved: false, expected: "allow" },
+    { options: { permissionMode: "plan" }, tool: read, approved: false, expected: "allow" },
+    { options: { permissionMode: "plan" }, tool: edit, approved: true, expected: "deny" },
+    {
+      options: { permissionMode: "bypassPermissions", permissionRuleset: { [read]: "deny" } },
+      tool: read,
+      approved: true,
+      expected: "deny",
+    },
+  ]) {
+    const pending = new Map<string, PendingApproval>()
+    const frames: Record<string, unknown>[] = []
+    const gate = mkGate(fixture.options, {
+      pendingApprovals: pending,
+      emit(frame) {
+        frames.push(frame)
+        queueMicrotask(() => pending.get(frame.requestId as string)?.resolve({ behavior: "deny" }))
+      },
+    })
+    const decision = await gate(
+      fixture.tool,
+      { path: "." },
+      { sdkPreflight: true, sdkPreapproved: fixture.approved }
+    )
+    assert.equal(decision.behavior, fixture.expected, JSON.stringify(fixture))
+    assert.equal(frames.length, 0, "mode/preapproval decisions must not prompt")
+  }
+})
+
+test("nested bypass and preapproval preserve hard authority and per-call requirements", async () => {
+  const root = mkRoot()
+  const read = "mcp__cognia-tools__file_info"
+  try {
+    for (const options of [
+      { permissionMode: "bypassPermissions", confinement: { enabled: true, roots: [root] } },
+      { permissionMode: "bypassPermissions", builtinProcessSandbox: { writableRoots: [root] } },
+    ]) {
+      const result = await mkGate(options)(
+        "mcp__cognia-tools__directory_create",
+        { path: path.join(root, ".ssh", "id_rsa") },
+        { sdkPreflight: true, sdkPreapproved: true }
+      )
+      assert.equal(result.behavior, "deny")
+    }
+    for (const permissionMode of ["bypassPermissions", "dontAsk"]) {
+      const pending = new Map<string, PendingApproval>()
+      const frames: Record<string, unknown>[] = []
+      const gate = mkGate(
+        { permissionMode, toolPermissionRules: [{ tool: read, decision: "ask" }] },
+        {
+          pendingApprovals: pending,
+          emit(frame) {
+            frames.push(frame)
+            queueMicrotask(() =>
+              pending.get(frame.requestId as string)?.resolve({ behavior: "allow" })
+            )
+          },
+        }
+      )
+      const decision = await gate(
+        read,
+        { path: root },
+        { sdkPreflight: true, sdkPreapproved: true }
+      )
+      assert.equal(decision.behavior, permissionMode === "dontAsk" ? "deny" : "allow")
+      assert.equal(frames.length, permissionMode === "dontAsk" ? 0 : 1)
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("nested mode shortcuts never bypass always-ask permission classes", async () => {
+  const tool = "mcp__cognia-plugin-tools__notify_fixture"
+  for (const permissionMode of ["bypassPermissions", "dontAsk"]) {
+    const pending = new Map<string, PendingApproval>()
+    const frames: Record<string, unknown>[] = []
+    const gate = mkGate(
+      {
+        permissionMode,
+        permissionProfile: { outbound: "ask" },
+        pluginTools: [{ name: "notify_fixture", permissionClasses: ["outbound"] }],
+      },
+      {
+        pendingApprovals: pending,
+        emit(frame) {
+          frames.push(frame)
+          queueMicrotask(() =>
+            pending.get(frame.requestId as string)?.resolve({ behavior: "allow" })
+          )
+        },
+      }
+    )
+    const decision = await gate(tool, {}, { sdkPreflight: true, sdkPreapproved: true })
+    assert.equal(decision.behavior, permissionMode === "dontAsk" ? "deny" : "allow")
+    assert.equal(frames.length, permissionMode === "dontAsk" ? 0 : 1)
+    if (frames.length) assert.equal(frames[0]!.requiresPerCallApproval, true)
+  }
+})

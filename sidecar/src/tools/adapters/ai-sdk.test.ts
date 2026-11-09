@@ -2,13 +2,41 @@
 // manifests into native AI SDK tools for the non-Anthropic dispatch path.
 
 import { test } from "node:test"
+import { generateText } from "ai"
+import { MockLanguageModelV4 } from "ai/test"
+import { createEventAdapter } from "../../runtimes/ai-sdk/events.ts"
 import assert from "node:assert/strict"
+
+import childProcess from "node:child_process"
+import { syncBuiltinESMExports } from "node:module"
+import { after, mock } from "node:test"
 import { buildAiSdkTools, __testing__ } from "./ai-sdk.ts"
 import { createAiSdkToolSearchController } from "./ai-sdk-tool-search.ts"
 import { createSessionTaskStore } from "../state/tasks.ts"
 import type { ReadTracker } from "../state/read-tracker.ts"
 import { createVerificationBudget } from "../../shared/verification-budget.ts"
 import { createReadTracker } from "../state/read-tracker.ts"
+
+// Broker tests exercise dispatch, not OS RSS accounting (which has its own
+// supervisor tests). Keep real child execution while supplying process usage.
+const processGroups = new Set<number>()
+const spawn = childProcess.spawn
+const spawnSync = childProcess.spawnSync
+mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
+  const child = spawn(...args)
+  if (child.pid) processGroups.add(child.pid)
+  return child
+})
+mock.method(childProcess, "spawnSync", (...args: Parameters<typeof spawnSync>) =>
+  args[0] === "ps"
+    ? { status: 0, stdout: [...processGroups].map((pid) => `${pid} ${pid} 1`).join("\n") }
+    : spawnSync(...args)
+)
+syncBuiltinESMExports()
+after(() => {
+  mock.restoreAll()
+  syncBuiltinESMExports()
+})
 
 test("production AI SDK tools preserve closed process admission for Bash and PTY", async () => {
   const closed = new AbortController()
@@ -30,6 +58,7 @@ test("production AI SDK tools preserve closed process admission for Bash and PTY
   )
   await assert.rejects(
     tools.terminal_repl_spawn!.execute({
+      agentId: "closed-tools",
       shell: "/bin/sh",
       cwd: process.cwd(),
       cols: 80,
@@ -1044,4 +1073,354 @@ test("verification batch aggregate stdout and stderr retain the output PII gate"
   const result = JSON.stringify(await tools.verification_batch!.execute({ commands }))
   assert.match(result, /batch_passed/)
   assert.doesNotMatch(result, /alice@example\.com|bob@example\.com/)
+})
+
+test("Claude aliases deny the same built-in surface they allow", () => {
+  for (const alias of ["Read", "Write", "Edit", "MultiEdit", "Bash", "Grep", "Glob", "LS"]) {
+    const common = {
+      sessionId: "alias-parity",
+      emit() {},
+      readTracker: createReadTracker(),
+      sendOptions: { builtinTools: { coreFiles: true }, allowedTools: [alias] },
+    }
+    const allowed = build(common)
+    assert.equal(Object.keys(allowed).length, 1, alias)
+    assert.deepEqual(
+      build({ ...common, sendOptions: { ...common.sendOptions, disallowedTools: [alias] } }),
+      {},
+      alias
+    )
+  }
+})
+
+test("plugin MCP execution errors are reviewed and thrown; domain refusals remain results", async () => {
+  const pending = new Map()
+  const reviews: unknown[][] = []
+  let payload: unknown = { content: [{ type: "text", text: "fixture failed" }], isError: true }
+  const tools = build({
+    sessionId: "plugin-errors",
+    pendingPluginToolCalls: pending,
+    emit(frame) {
+      if (frame.type === "plugin_tool_exec")
+        pending.get(frame.toolUseId).resolve({ result: payload })
+    },
+    reviewToolOutput(...args) {
+      reviews.push(args)
+      return args[3] ? "reviewed failure" : undefined
+    },
+    sendOptions: {
+      permissionMode: "bypassPermissions",
+      pluginTools: [{ name: "fixture", jsonSchema: { type: "object" } }],
+    },
+  })
+  await assert.rejects(tools.fixture!.execute({}), /reviewed failure/)
+  assert.equal(reviews[0]?.[3], true)
+  assert.equal(reviews[0]?.[2], "fixture failed")
+  payload = { ok: false }
+  assert.equal(await tools.fixture!.execute({}), '{"ok":false}')
+})
+
+test("plugin runtime validation rejects invalid inputs before permission or relay and applies defaults", async () => {
+  const pending = new Map()
+  const emitted: Frame[] = []
+  const approvals = new Map()
+  const tools = build({
+    sessionId: "plugin-schema",
+    pendingPluginToolCalls: pending,
+    pendingApprovals: approvals,
+    emit(frame) {
+      emitted.push(frame)
+      if (frame.type === "permission_request")
+        queueMicrotask(() => approvals.get(frame.requestId)?.resolve({ behavior: "allow" }))
+      if (frame.type === "plugin_tool_exec") pending.get(frame.toolUseId).resolve({ result: "ok" })
+    },
+    sendOptions: {
+      permissionMode: "default",
+      pluginTools: [
+        {
+          name: "fixture",
+          jsonSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string", minLength: 2 },
+              limit: { type: "integer", minimum: 1, maximum: 2, default: 1 },
+            },
+            required: ["query"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    },
+  })
+  for (const args of [
+    { query: 123 },
+    { query: "a" },
+    { query: "ok", limit: 3 },
+    { query: "ok", limit: 0 },
+    { query: "ok", limit: 1.5 },
+    {},
+    { query: "ok", extra: true },
+  ]) {
+    await assert.rejects(tools.fixture!.execute(args), /invalid arguments/i)
+  }
+  assert.equal(emitted.length, 0)
+  assert.equal(await tools.fixture!.execute({ query: "ok" }), "ok")
+  assert.deepEqual(emitted.find((frame) => frame.type === "plugin_tool_exec")?.args, {
+    query: "ok",
+    limit: 1,
+  })
+})
+
+test("Code declarations and nested calls respect the final allow and deny lists", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  try {
+    for (const policy of [{ disallowedTools: ["file_info"] }, { allowedTools: ["run_code"] }]) {
+      const tools = build({
+        sessionId: "code-policy",
+        emit() {},
+        sendOptions: {
+          builtinTools: { fileExtras: true },
+          permissionMode: "bypassPermissions",
+          execution: { composition: { toolPresentation: "both" } },
+          ...policy,
+        },
+      })
+      assert.ok(tools.run_code)
+      assert.equal(tools.file_info, undefined)
+      assert.ok(!tools.run_code.description?.includes("file_info("))
+      const result = JSON.parse(
+        String(
+          await tools.run_code.execute({
+            source:
+              'try { return await cognia.file_info({path:"."}) } catch (e) { return e.message }',
+          })
+        )
+      )
+      assert.match(result.result, /not enabled|not permitted/)
+    }
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+test("nested Code calls use the namespaced permission ruleset", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  try {
+    const tools = build({
+      sessionId: "nested-ruleset",
+      emit() {},
+      sendOptions: {
+        builtinTools: { fileExtras: true },
+        permissionMode: "bypassPermissions",
+        permissionRuleset: { "mcp__cognia-tools__file_info": "deny" },
+        execution: { composition: { toolPresentation: "both" } },
+      },
+    })
+    const result = JSON.parse(
+      String(
+        await tools.run_code!.execute({
+          source:
+            'try { return await cognia.file_info({path:"."}) } catch (e) { return e.message }',
+        })
+      )
+    )
+    assert.match(result.result, /denied by permission ruleset/)
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+test("built-in approval rewrites are schema-validated before the handler", async () => {
+  let calls = 0
+  const converted = convert(
+    {
+      name: "read",
+      inputSchema: { path: (await import("zod")).z.string() },
+      handler: async () => {
+        calls++
+        return { content: [] }
+      },
+    },
+    async () => ({ path: 42 }),
+    0
+  )
+  await assert.rejects(converted.execute({ path: "safe" }), /invalid arguments/i)
+  assert.equal(calls, 0)
+})
+
+test("the installed AI SDK rejects schema-invalid plugin calls and projects MCP failures as tool errors", async () => {
+  const pending = new Map()
+  const received: unknown[] = []
+  const tools = buildAiSdkTools({
+    sessionId: "real-sdk",
+    pendingPluginToolCalls: pending,
+    emit(frame) {
+      received.push(frame.args)
+      pending.get(frame.toolUseId)?.resolve({
+        result: { content: [{ type: "text", text: "fixture failure" }], isError: true },
+      })
+    },
+    sendOptions: {
+      permissionMode: "bypassPermissions",
+      pluginTools: [
+        {
+          name: "fixture",
+          jsonSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string", minLength: 2 },
+              limit: { type: "integer", minimum: 1, maximum: 2, default: 1 },
+            },
+            required: ["query"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    },
+  })
+  for (const input of [
+    { query: 123 },
+    { query: "a" },
+    { query: "ok", limit: 999 },
+    {},
+    { query: "ok", extra: true },
+    { query: "ok" },
+  ]) {
+    const before = received.length
+    const model = new MockLanguageModelV4({
+      doGenerate: {
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "fixture-call",
+            toolName: "fixture",
+            input: JSON.stringify(input),
+          },
+        ],
+        finishReason: { unified: "tool-calls", raw: "tool_calls" },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      },
+    })
+    const result = await generateText({
+      model,
+      messages: [{ role: "user", content: "Exercise fixture" }],
+      tools,
+    })
+    const error = result.content.find((part) => part.type === "tool-error")
+    assert.ok(error)
+    const valid = input.query === "ok" && Object.keys(input).length === 1
+    assert.equal(received.length, before + (valid ? 1 : 0))
+    assert.match(
+      String(error.error),
+      valid ? /fixture failure/ : /invalid arguments|Invalid input|validation/i
+    )
+    const mapper = createEventAdapter({
+      sessionId: "real-sdk",
+      sdkSessionId: "real-sdk",
+      provider: "fixture",
+    })
+    const frames = mapper.handle({
+      type: "tool-error",
+      toolCallId: "fixture-call",
+      error: error.error,
+    })
+    assert.equal(frames.find((frame) => frame.type === "user")?.message?.content[0]?.is_error, true)
+  }
+  assert.deepEqual(received, [{ query: "ok", limit: 1 }])
+})
+
+test("plugin approval rewrites are parsed before relay", async () => {
+  const pending = new Map()
+  const approvals = new Map()
+  let relayed = false
+  const tools = build({
+    sessionId: "rewrite-schema",
+    pendingPluginToolCalls: pending,
+    pendingApprovals: approvals,
+    emit(frame) {
+      if (frame.type === "permission_request")
+        queueMicrotask(() =>
+          approvals.get(frame.requestId)?.resolve({ behavior: "allow", updatedInput: { path: 42 } })
+        )
+      if (frame.type === "plugin_tool_exec") {
+        relayed = true
+        pending.get(frame.toolUseId)?.resolve({ result: "must not run" })
+      }
+    },
+    sendOptions: {
+      pluginTools: [
+        {
+          name: "fixture",
+          jsonSchema: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
+        },
+      ],
+    },
+  })
+  await assert.rejects(tools.fixture!.execute({ path: "safe" }), /invalid arguments/)
+  assert.equal(relayed, false)
+})
+
+test("nested Code results pass through the per-tool output reviewer", async () => {
+  process.env.COGNIA_CODE_SANDBOX_LAUNCHER = JSON.stringify(["/usr/bin/env"])
+  const reviewed: string[] = []
+  try {
+    const tools = build({
+      sessionId: "nested-review",
+      emit() {},
+      sendOptions: {
+        builtinTools: { fileExtras: true },
+        permissionMode: "bypassPermissions",
+        execution: { composition: { toolPresentation: "both" } },
+      },
+      reviewToolOutput(name) {
+        reviewed.push(name)
+        return name.endsWith("__file_info") ? { reviewed: true } : undefined
+      },
+    })
+    const result = JSON.parse(
+      String(await tools.run_code!.execute({ source: 'return await cognia.file_info({path:"."})' }))
+    )
+    assert.deepEqual(result.result, { reviewed: true })
+    assert.deepEqual(reviewed, ["mcp__cognia-tools__file_info", "mcp__cognia-tools__run_code"])
+  } finally {
+    delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
+  }
+})
+
+test("AI SDK plugin validation accepts pattern keys and preserves their values", async () => {
+  const pending = new Map()
+  const received: unknown[] = []
+  const tools = build({
+    sessionId: "pattern-schema",
+    pendingPluginToolCalls: pending,
+    emit(frame) {
+      received.push(frame.args)
+      pending.get(frame.toolUseId)?.resolve({ result: "ok" })
+    },
+    sendOptions: {
+      permissionMode: "bypassPermissions",
+      pluginTools: [
+        {
+          name: "fixture",
+          jsonSchema: {
+            type: "object",
+            patternProperties: { "^safe_": { type: "string" } },
+            additionalProperties: false,
+          },
+        },
+      ],
+    },
+  })
+  assert.equal(await tools.fixture!.execute({ safe_name: "ok" }), "ok")
+  for (const args of [{ safe_name: 42 }, { other: "ok" }])
+    await assert.rejects(tools.fixture!.execute(args), /invalid arguments/)
+  assert.deepEqual(received, [{ safe_name: "ok" }])
 })

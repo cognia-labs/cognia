@@ -24,6 +24,8 @@ import {
 import { guardAnthropicRemoteMcpServers } from "../../mcp/relay/sdk-servers.ts"
 import { splitToolName } from "../../policy/tool-catalog/names.ts"
 import { toolPermissionDecision } from "../../policy/permission/ladder.ts"
+import { passesToolLists } from "../../tools/adapters/allow-list.ts"
+import type { ToolPresentationOptions } from "../../tools/middleware/presentation.ts"
 
 const nativeToolNames = new Set<string>(BUILTIN_TOOL_NAMES)
 const nativeToolAliases = new Map(
@@ -128,6 +130,12 @@ export function buildToolSurface({
   const { lsp, codeGraph } = toolSession
   const { lspEnabled, lspResolver } = lsp
 
+  // The session's canUseTool is bound by options.ts before query starts.
+  // Until then the broker fails closed rather than dispatching ungated calls.
+  let nestedToolAuthorizer: ToolPresentationOptions["authorizeTool"]
+  const allowed = sendOptions.allowedTools?.length ? new Set(sendOptions.allowedTools) : null
+  const denied = new Set(sendOptions.disallowedTools ?? [])
+
   const builtinServer = buildCogniaToolsServer({
     enabled: builtinEnabled,
     contentSafety: sendOptions.contentSafety,
@@ -135,6 +143,11 @@ export function buildToolSurface({
     alwaysLoad: serverAlwaysLoad(BUILTIN_SERVER_NAME),
     alwaysLoadTools: alwaysLoadToolNames,
     ...toolSession.toolContext(),
+    isToolAllowed: (name) => passesToolLists(name, BUILTIN_SERVER_NAME, allowed, denied),
+    authorizeTool: async (name, input, extra, validateInput) => {
+      if (!nestedToolAuthorizer) throw new Error(`Nested tool authorization unavailable: ${name}`)
+      return nestedToolAuthorizer(name, input, extra, validateInput)
+    },
     cwd: sendOptions.cwd,
     dispatchPath: "anthropic",
     model: sendOptions.model,
@@ -278,6 +291,9 @@ export function buildToolSurface({
   }
 
   return {
+    setNestedToolAuthorizer(authorize: NonNullable<ToolPresentationOptions["authorizeTool"]>) {
+      nestedToolAuthorizer = authorize
+    },
     mergedMcpServers: applySdkToolPermissionPolicies(
       mergedMcpServers,
       sendOptions.toolPermissionRules?.map((rule) => ({

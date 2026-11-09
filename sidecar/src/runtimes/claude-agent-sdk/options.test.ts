@@ -5,6 +5,9 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { buildAnthropicOptions } from "./options.ts"
+import { buildToolSurface } from "./tool-surface.ts"
+import type { ToolPresentationOptions } from "../../tools/middleware/presentation.ts"
+import type { SendOptions } from "../../shared/wire/inbound.ts"
 import { makeLazyLspResolver } from "../../services/lsp/lazy-resolver.ts"
 import { createLspResolver } from "../../services/lsp/resolver.ts"
 import { withProcessSandbox } from "../../platform/process/exec.ts"
@@ -207,6 +210,7 @@ test("native PostToolUse starts LSP with host ports before the first tool reques
     doomGuard: createDoomLoopGuard(),
     interruptForLedger() {},
     surface: {
+      setNestedToolAuthorizer() {},
       mergedMcpServers: {},
       pluginToolNameAliases: new Map(),
       modelAllowedTools: [],
@@ -250,4 +254,74 @@ test("native PostToolUse starts LSP with host ports before the first tool reques
     { contents: "hover" }
   )
   assert.equal(starts.length, 1)
+})
+
+test("options bind nested authorization to the session canUseTool with approval context", async (t) => {
+  const toolName = "mcp__cognia-tools__file_info"
+  const sendOptions: SendOptions = {
+    builtinTools: { fileExtras: true },
+    toolPermissionRules: [{ tool: toolName, decision: "ask" as const }],
+  }
+  const sessionId = "nested-options"
+  const pendingApprovals = new Map()
+  const frames: Record<string, unknown>[] = []
+  const emit = (frame: Record<string, unknown>) => {
+    frames.push(frame)
+  }
+  const log = () => {}
+  const toolSession = createToolSessionContext({
+    sendOptions,
+    sessionId,
+    log,
+  })
+  t.after(() => toolSession.dispose())
+  const surface = buildToolSurface({
+    sendOptions,
+    sessionId,
+    emit,
+    log,
+    toolSession,
+    pendingPluginToolCalls: new Map(),
+  })
+  let authorize: NonNullable<ToolPresentationOptions["authorizeTool"]> | undefined
+  const bind = surface.setNestedToolAuthorizer
+  surface.setNestedToolAuthorizer = (callback) => {
+    authorize = callback
+    bind(callback)
+  }
+  buildAnthropicOptions({
+    sendOptions,
+    sessionId,
+    emit,
+    log,
+    toolSession,
+    surface,
+    mcpStderrSink: createStderrLogSink({
+      sessionId,
+      emit: (event) => emit({ ...event }),
+      source: "stderr",
+    }),
+    ledgerGate: createCallLedgerGate({ ledger: null, sessionId, emit }),
+    sdkFallbackModel: undefined,
+    sdkMaxBudgetUsd: undefined,
+    pendingApprovals,
+    pendingPluginHookCalls: new Map(),
+    doomGuard: createDoomLoopGuard(),
+    interruptForLedger() {},
+  })
+  assert.ok(authorize)
+  const controller = new AbortController()
+  const call = authorize(toolName, { path: "." }, { signal: controller.signal })
+  const entry = [...pendingApprovals.values()][0]
+  assert.ok(entry)
+  const request = frames.find((frame) => frame.type === "permission_request")!
+  assert.equal(request.toolName, toolName)
+  assert.equal(typeof request.toolUseID, "string")
+  entry.resolve({ behavior: "deny", message: "person refused nested call" })
+  await assert.rejects(call, /person refused nested call/)
+  controller.abort()
+  await assert.rejects(
+    authorize(toolName, { path: "." }, { signal: controller.signal }),
+    /interrupted/
+  )
 })

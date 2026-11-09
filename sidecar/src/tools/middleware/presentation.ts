@@ -1,11 +1,28 @@
 // The Code tool presentation (ADR-0117 Phase 4), folded over an assembled
 // native tool surface.
 
-import type { ToolDefinition } from "../kernel/define.ts"
+import type { ToolDefinition, ToolHandlerExtra } from "../kernel/define.ts"
 import { parseToolArgs, toolInputJsonSchema } from "../kernel/args.ts"
 import { codeModeToolDefs } from "../builtin/run-code/index.ts"
 import { isProgrammaticReadOnly } from "../builtin/run-code/eligibility.ts"
 import { bareToolName } from "../../policy/confinement/classify.ts"
+import { BUILTIN_SERVER_NAME } from "../../policy/tool-catalog/catalog.ts"
+
+export interface ToolPresentationOptions {
+  isToolAllowed?: ((name: string) => boolean) | undefined
+  authorizeTool?:
+    | ((
+        name: string,
+        input: unknown,
+        extra?: ToolHandlerExtra,
+        validateInput?: (input: unknown) => unknown
+      ) => Promise<unknown>)
+    | undefined
+  /** Rail-specific execution review and output safety, after authorization. */
+  executeTool?:
+    | ((def: ToolDefinition, input: unknown, extra?: ToolHandlerExtra) => Promise<unknown>)
+    | undefined
+}
 
 /**
  * Fold the Code presentation over an assembled native tool list.
@@ -21,14 +38,18 @@ import { bareToolName } from "../../policy/confinement/classify.ts"
  */
 export function applyToolPresentation<D extends ToolDefinition>(
   nativeDefs: readonly D[],
-  presentation: string | undefined
+  presentation: string | undefined,
+  options: ToolPresentationOptions = {}
 ): readonly (D | ToolDefinition)[] {
   if (presentation !== "code" && presentation !== "both") return nativeDefs
 
-  const byName = new Map(nativeDefs.map((def) => [bareToolName(def.name), def]))
-  const callTool = async (name: string, input: unknown) => {
+  const permitted = nativeDefs.filter(
+    (def) => options.isToolAllowed?.(bareToolName(def.name)) !== false
+  )
+  const byName = new Map(permitted.map((def) => [bareToolName(def.name), def]))
+  const callTool = async (name: string, input: unknown, extra?: ToolHandlerExtra) => {
     const def = byName.get(name)
-    if (!def) {
+    if (!def || options.isToolAllowed?.(name) === false) {
       // Reached when the tool is eligible in principle but its category is
       // switched off for this session. Saying so beats a generic failure.
       throw new Error(`tool "${name}" is not enabled in this session`)
@@ -43,7 +64,23 @@ export function applyToolPresentation<D extends ToolDefinition>(
     // applies" claim true rather than aspirational.
     const parsed = parseToolArgs(def.inputSchema, input)
     if (!parsed.ok) throw new Error(`invalid arguments for "${name}": ${parsed.message}`)
-    return await def.handler(parsed.value)
+    if (!options.authorizeTool) throw new Error(`tool "${name}" has no nested-call authorizer`)
+    const effective = await options.authorizeTool(
+      `mcp__${BUILTIN_SERVER_NAME}__${name}`,
+      parsed.value,
+      extra,
+      (input) => {
+        const rewritten = parseToolArgs(def.inputSchema, input)
+        if (!rewritten.ok) throw new Error(`invalid arguments for "${name}": ${rewritten.message}`)
+        return rewritten.value
+      }
+    )
+    const reparsed = parseToolArgs(def.inputSchema, effective)
+    if (!reparsed.ok) throw new Error(`invalid arguments for "${name}": ${reparsed.message}`)
+    if (extra?.signal?.aborted) throw new Error(`tool "${name}" interrupted`)
+    return options.executeTool
+      ? await options.executeTool(def, reparsed.value, extra)
+      : await def.handler(reparsed.value, extra)
   }
 
   // The SDK declaration is rendered from the defs this session actually
@@ -51,7 +88,7 @@ export function applyToolPresentation<D extends ToolDefinition>(
   // user disabled never appears in the API the model is shown. The defs carry
   // zod raw shapes; the renderer reads JSON Schema, so convert here or every
   // signature silently degrades to `input: unknown`.
-  const sdkTools = nativeDefs
+  const sdkTools = permitted
     .filter((def) => isProgrammaticReadOnly(bareToolName(def.name)))
     .map((def) => ({
       name: bareToolName(def.name),
@@ -60,5 +97,5 @@ export function applyToolPresentation<D extends ToolDefinition>(
     }))
 
   const codeDefs = codeModeToolDefs({ callTool, sdkTools }) as ToolDefinition[]
-  return presentation === "code" ? codeDefs : [...nativeDefs, ...codeDefs]
+  return presentation === "code" ? codeDefs : [...permitted, ...codeDefs]
 }

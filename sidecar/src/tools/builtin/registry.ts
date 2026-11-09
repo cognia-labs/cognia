@@ -28,6 +28,7 @@ import { createExitPlanTool } from "./plan/exit-plan.ts"
 import { createPlanTools } from "./plan/plan-tools.ts"
 import { wrapDefsWithConfinement } from "../middleware/confinement.ts"
 import { applyToolPresentation } from "../middleware/presentation.ts"
+import type { ToolPresentationOptions } from "../middleware/presentation.ts"
 import { defineCategory, type ToolDefinition } from "../kernel/define.ts"
 import type { ReadTracker } from "../state/read-tracker.ts"
 import type { SessionTaskStore } from "../state/tasks.ts"
@@ -38,7 +39,7 @@ import type { CodeGraphIndex } from "../../services/code-graph/index-service.ts"
 import type { VerificationBudget } from "../../shared/verification-budget.ts"
 
 /** What `collectCogniaToolDefs` assembles a session's built-in surface from. */
-export interface CollectToolDefsOptions {
+export interface CollectToolDefsOptions extends ToolPresentationOptions {
   verificationBudget?: VerificationBudget | undefined
   authorizeVerificationCommand?:
     ((input: unknown, signal?: AbortSignal) => Promise<unknown>) | undefined
@@ -196,6 +197,9 @@ export function collectCogniaToolDefs(context: CollectToolDefsOptions = {}): Too
 
   // Presentation runs over the confined surface so generated code cannot reach
   // disabled tools or bypass the same confinement as native tool calls.
-  const confined = wrapDefsWithConfinement(tools, builtinProcessSandbox, cwd, context)
-  return [...applyToolPresentation(confined, toolPresentation)]
+  const permitted = tools.filter((def) => context.isToolAllowed?.(def.name) !== false)
+  const confined = wrapDefsWithConfinement(permitted, builtinProcessSandbox, cwd, context)
+  return [...applyToolPresentation(confined, toolPresentation, context)].filter(
+    (def) => context.isToolAllowed?.(def.name) !== false
+  )
 }

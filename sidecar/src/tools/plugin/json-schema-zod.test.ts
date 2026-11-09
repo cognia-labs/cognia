@@ -170,3 +170,183 @@ test("jsonSchemaPropToZod maps const to a literal", () => {
   assert.equal(schema.safeParse("fixed").success, true)
   assert.equal(schema.safeParse("other").success, false)
 })
+
+test("object conversion respects closed empty objects and typed additional properties", () => {
+  const closed = jsonSchemaPropToZod({ type: "object", additionalProperties: false }, true)
+  assert.equal(closed.safeParse({}).success, true)
+  assert.equal(closed.safeParse({ extra: 1 }).success, false)
+  const typed = jsonSchemaPropToZod(
+    { type: "object", additionalProperties: { type: "integer", maximum: 2 } },
+    true
+  )
+  assert.equal(typed.safeParse({ extra: 1 }).success, true)
+  assert.equal(typed.safeParse({ extra: 3 }).success, false)
+})
+
+const schemaCompatibilityCases = [
+  {
+    name: "patternProperties",
+    schema: {
+      type: "object",
+      patternProperties: { "^safe_": { type: "string" } },
+      additionalProperties: false,
+    },
+    legal: [{ safe_name: "ok" }],
+    illegal: [{ safe_name: 42 }, { other: "ok" }],
+  },
+  {
+    name: "overlapping patterns",
+    schema: {
+      type: "object",
+      patternProperties: { "^safe_": { type: "string" }, name$: { minLength: 2 } },
+      additionalProperties: { type: "number" },
+    },
+    legal: [{ safe_name: "ok", other: 1 }],
+    illegal: [{ safe_name: "x" }, { other: "bad" }],
+  },
+  {
+    name: "oneOf",
+    schema: { oneOf: [{ type: "number" }, { type: "integer" }] },
+    legal: [1.5],
+    illegal: [1, "bad"],
+  },
+  {
+    name: "anyOf",
+    schema: {
+      anyOf: [
+        { type: "string", minLength: 2 },
+        { type: "number", maximum: 2 },
+      ],
+    },
+    legal: ["ok", 1],
+    illegal: [true, 3, "x"],
+  },
+  {
+    name: "allOf",
+    schema: {
+      allOf: [
+        { type: "object", properties: { value: { type: "number" } }, required: ["value"] },
+        { properties: { value: { maximum: 2 } } },
+      ],
+    },
+    legal: [{ value: 1 }],
+    illegal: [{ value: 3 }, {}],
+  },
+  {
+    name: "structured const",
+    schema: { const: { list: [1, null] } },
+    legal: [{ list: [1, null] }],
+    illegal: [{ list: [2, null] }, {}],
+  },
+  {
+    name: "mixed enum",
+    schema: { enum: ["fixed", 2, null, { ok: true }, [1, 2]] },
+    legal: ["fixed", 2, null, { ok: true }, [1, 2]],
+    illegal: [false, { ok: false }, [2, 1]],
+  },
+  {
+    name: "nullable",
+    schema: { type: "string", nullable: true, minLength: 2 },
+    legal: [null, "ok"],
+    illegal: [1, "x"],
+  },
+  {
+    name: "type arrays",
+    schema: { type: ["string", "null"], minLength: 2 },
+    legal: [null, "ok"],
+    illegal: [true, "x"],
+  },
+  {
+    name: "dependentRequired",
+    schema: { type: "object", dependentRequired: { token: ["owner"] } },
+    legal: [{}, { token: "t", owner: "o" }],
+    illegal: [{ token: "t" }],
+  },
+  {
+    name: "propertyNames",
+    schema: { type: "object", propertyNames: { pattern: "^safe_" } },
+    legal: [{ safe_name: "ok" }],
+    illegal: [{ other: "ok" }],
+  },
+  {
+    name: "local references",
+    schema: {
+      type: "object",
+      $defs: { label: { type: "string", minLength: 2 } },
+      properties: { name: { $ref: "#/$defs/label" } },
+      required: ["name"],
+    },
+    legal: [{ name: "ok" }],
+    illegal: [{ name: 1 }, { name: "x" }],
+  },
+  {
+    name: "Unicode lengths",
+    schema: { type: "string", minLength: 1, maxLength: 1 },
+    legal: ["😀"],
+    illegal: ["", "ab"],
+  },
+  {
+    name: "JSON integers",
+    schema: { type: "integer" },
+    legal: [Number.MAX_SAFE_INTEGER + 1],
+    illegal: [1.5],
+  },
+]
+for (const fixture of schemaCompatibilityCases) {
+  test(`runtime JSON Schema compatibility: ${fixture.name}`, () => {
+    const schema = jsonSchemaPropToZod(fixture.schema, true)
+    for (const value of fixture.legal)
+      assert.equal(schema.safeParse(value).success, true, JSON.stringify(value))
+    for (const value of fixture.illegal)
+      assert.equal(schema.safeParse(value).success, false, JSON.stringify(value))
+  })
+}
+
+test("unsupported annotations and evaluation keywords never narrow legal inputs", () => {
+  for (const schema of [
+    { type: "string", format: "uri-reference" },
+    { type: "string", format: "future-format" },
+    {
+      type: "object",
+      allOf: [{ properties: { safe_name: { type: "string" } } }],
+      unevaluatedProperties: false,
+    },
+    { type: "string", $ref: "https://fixture.invalid/schema.json" },
+  ]) {
+    const validator = jsonSchemaPropToZod(schema, true)
+    assert.equal(
+      validator.safeParse(schema.type === "object" ? { safe_name: "ok" } : "relative/path").success,
+      true
+    )
+    assert.equal(validator.safeParse(42).success, false, "supported sibling type still applies")
+  }
+  // Widening an unsupported oneOf branch must not turn a legal unique match
+  // into an illegal overlap with the now-permissive branch.
+  const relaxed = jsonSchemaPropToZod(
+    { oneOf: [{ $ref: "https://fixture.invalid/schema.json" }, { type: "string" }] },
+    true
+  )
+  assert.equal(relaxed.safeParse("ok").success, true)
+})
+
+test("unsupported constraints stay permissive inside exclusive alternatives", () => {
+  for (const branch of [{ type: "future-type" }, { futureConstraint: true }]) {
+    const schema = jsonSchemaPropToZod({ oneOf: [branch, { type: "string" }] }, true)
+    assert.equal(schema.safeParse("ok").success, true)
+  }
+})
+
+test("compositions validate raw input before optional defaults change object keys", () => {
+  const schema = jsonSchemaPropToZod(
+    {
+      type: "object",
+      properties: { name: { type: "string", default: "default" } },
+      propertyNames: { pattern: "^other$" },
+      maxProperties: 0,
+      oneOf: [{ required: ["name"] }, { maxProperties: 0 }],
+    },
+    true
+  )
+  assert.deepEqual(schema.parse({}), { name: "default" })
+  assert.equal(schema.safeParse({ name: "explicit" }).success, false)
+})

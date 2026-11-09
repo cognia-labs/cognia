@@ -92,6 +92,22 @@ export const CLAUDE_AGENT_SDK_RAIL: RailProfile = {
   acceptsEdit: (toolName) => ACCEPT_EDITS_TOOLS.has(toolName),
 }
 
+/** Code calls do not pass through the SDK's permission-mode preflight. */
+const CLAUDE_NESTED_TOOL_RAIL: RailProfile = {
+  ...CLAUDE_AGENT_SDK_RAIL,
+  dontAskAllowsReadOnly: false,
+  steps: [
+    ...HARD_CHECKS,
+    "ask-user",
+    "doom",
+    "plan-mode-emulated",
+    "dont-ask",
+    "sandbox",
+    "bypass",
+    "grants",
+  ],
+}
+
 /** Every option read live: a `claude_set_mode` lands on the next call. */
 function livePolicy(sendOptions: PermissionSendOptions): LadderPolicy {
   return {
@@ -173,6 +189,11 @@ export function anthropicToolDenial(
 
 /** The permission-relevant slice of the Agent SDK's `canUseTool` options. */
 export interface CanUseToolContext {
+  /** Reproduce the SDK preflight for a host-brokered nested Code call. */
+  sdkPreflight?: boolean
+  sdkPreapproved?: boolean
+  /** Nested Code calls parse approval rewrites before the authority re-check. */
+  validateInput?: ((input: unknown) => unknown) | undefined
   requiresInteraction?: boolean
   signal?: AbortSignal
   toolUseID?: string
@@ -249,15 +270,21 @@ export function createAnthropicCanUseTool({
       modelToolName
     )
     const policy = livePolicy(sendOptions)
-    const outcome = decidePermission(CLAUDE_AGENT_SDK_RAIL, {
-      toolName,
-      input,
-      signal: ctx?.signal,
-      doomGuard,
-      canPrompt: true,
-      requiresInteraction: ctx.requiresInteraction,
-      policy,
-    })
+    if (ctx.sdkPreflight && ctx.sdkPreapproved) {
+      policy.alwaysAllow = [...(policy.alwaysAllow ?? []), toolName]
+    }
+    const outcome = decidePermission(
+      ctx.sdkPreflight ? CLAUDE_NESTED_TOOL_RAIL : CLAUDE_AGENT_SDK_RAIL,
+      {
+        toolName,
+        input,
+        signal: ctx?.signal,
+        doomGuard,
+        canPrompt: true,
+        requiresInteraction: ctx.requiresInteraction,
+        policy,
+      }
+    )
     if (outcome.kind === "deny") {
       return Promise.resolve({ behavior: "deny", message: renderDenial(outcome.reason, toolName) })
     }
@@ -371,6 +398,16 @@ export function createAnthropicCanUseTool({
           )
         }
         if (answer?.behavior === "allow") {
+          if (ctx.validateInput) {
+            try {
+              answer = { ...answer, updatedInput: ctx.validateInput(answer.updatedInput ?? input) }
+            } catch (error) {
+              return {
+                behavior: "deny",
+                message: error instanceof Error ? error.message : String(error),
+              }
+            }
+          }
           const reason = anthropicToolDenial(
             sendOptions,
             toolName,

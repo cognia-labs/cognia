@@ -18,6 +18,7 @@
 import { randomUUID } from "node:crypto"
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js"
 import { assertSafeExternalContent } from "@cognia/content-safety"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 
@@ -27,7 +28,7 @@ import { PLUGIN_TOOLS_SERVER_NAME } from "../../policy/tool-catalog/names.ts"
 import { awaitPending } from "../../shared/pending.ts"
 import { tool, type ToolDefinition } from "../kernel/define.ts"
 import { toolError, toolText } from "../kernel/result.ts"
-import { jsonSchemaToZodShape } from "./json-schema-zod.ts"
+import { jsonSchemaToZodObject, jsonSchemaToZodShape } from "./json-schema-zod.ts"
 
 export const SERVER_NAME = PLUGIN_TOOLS_SERVER_NAME
 export const SERVER_VERSION = "0.1.0"
@@ -73,14 +74,10 @@ export type PendingPluginToolCalls = Map<
  */
 export function isCallToolResult(result: unknown): result is CallToolResult {
   if (!result || typeof result !== "object" || Array.isArray(result)) return false
-  const content = (result as { content?: unknown }).content
+  // Require the envelope field: the MCP schema supplies a default when absent.
   return (
-    Array.isArray(content) &&
-    content.length > 0 &&
-    content.every(
-      (b: unknown) =>
-        !!b && typeof b === "object" && typeof (b as { type?: unknown }).type === "string"
-    )
+    Array.isArray((result as { content?: unknown }).content) &&
+    CallToolResultSchema.safeParse(result).success
   )
 }
 
@@ -194,7 +191,7 @@ export function buildPluginToolDefinitions({
 
   return tools.map((t) => {
     const zodShape = jsonSchemaToZodShape(t.jsonSchema)
-    return tool(
+    const definition = tool(
       modelNameOf.get(t.name) ?? t.name,
       t.description ?? "",
       zodShape,
@@ -244,5 +241,6 @@ export function buildPluginToolDefinitions({
       },
       { alwaysLoad: alwaysLoad === true || perToolAlways.has(t.name) }
     )
+    return { ...definition, inputSchema: jsonSchemaToZodObject(t.jsonSchema) }
   })
 }

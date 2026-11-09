@@ -898,3 +898,83 @@ test("an observed shell gh write runs as before and is reported; unset, nothing 
   assert.equal(await unset("Bash", GH_WRITE), GH_WRITE)
   assert.deepEqual(quiet, [])
 })
+
+test("approval rewrites cannot enter protected credential paths", async () => {
+  const root = mkConfRoot()
+  try {
+    const pendingApprovals = new Map()
+    const gate = createToolPermissionGate({
+      sessionId: "rewrite",
+      pendingApprovals,
+      sendOptions: {
+        cwd: root,
+        confinement: { enabled: true, roots: [root] },
+        pluginTools: [{ name: "reader", access: "read", pathParams: ["path"] }],
+      },
+      emit(frame) {
+        queueMicrotask(() =>
+          pendingApprovals.get(frame.requestId)?.resolve({
+            behavior: "allow",
+            updatedInput: { path: path.join(root, ".ssh", "id_rsa") },
+          })
+        )
+      },
+    })
+    await assert.rejects(
+      gate("mcp__cognia-plugin-tools__reader", { path: path.join(root, "safe") }),
+      /protected credential path/
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("rewritten inputs re-run mandatory ruleset, sandbox scope and interruption checks", async () => {
+  const root = mkConfRoot()
+  try {
+    for (const check of ["ruleset", "scope", "aborted", "parsed-target"]) {
+      const pending = new Map()
+      const controller = new AbortController()
+      const ruleset: Record<string, "deny"> = {}
+      const name = "mcp__cognia-plugin-tools__reader"
+      const sendOptions = {
+        cwd: root,
+        confinement: { enabled: true, roots: [root] },
+        permissionRuleset: ruleset,
+        builtinProcessSandbox: check === "scope" ? { writableRoots: [root] } : undefined,
+        pluginTools: [{ name: "reader", access: "write", pathParams: ["path"] }],
+      }
+      const gate = createToolPermissionGate({
+        sendOptions,
+        sessionId: "rewrite-hard",
+        pendingApprovals: pending,
+        emit(frame) {
+          queueMicrotask(() => {
+            if (check === "ruleset") ruleset[name] = "deny"
+            if (check === "aborted") controller.abort()
+            pending.get(frame.requestId)?.resolve({
+              behavior: "allow",
+              updatedInput: {
+                path: check === "scope" ? path.join(root, "..", "outside") : "safe",
+              },
+            })
+          })
+        },
+      })
+      await assert.rejects(
+        gate(
+          name,
+          { path: path.join(root, "safe") },
+          controller.signal,
+          check === "parsed-target"
+            ? () => ({ path: path.join(root, ".ssh", "id_rsa") })
+            : undefined
+        ),
+        /permission ruleset|outside|scope|root|aborted|interrupted|protected credential/i,
+        check
+      )
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

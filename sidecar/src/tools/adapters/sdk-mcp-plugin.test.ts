@@ -385,3 +385,45 @@ test("MCP discovery reports allowlisted and server-wide always-load plugin tools
   })
   assert.deepEqual(await discover({ alwaysLoad: true }), { pinned: true, deferred: true })
 })
+
+test("Anthropic MCP plugin validation accepts pattern keys and rejects invalid input before relay", async () => {
+  const pending: PendingPluginToolCalls = new Map()
+  const received: unknown[] = []
+  const server = buildPluginToolsServer({
+    sessionId: "pattern-schema",
+    pendingPluginToolCalls: pending,
+    emit(frame) {
+      received.push(frame.args)
+      answer(pending, frame.toolUseId as string, { result: "ok" })
+    },
+    tools: [
+      {
+        name: "fixture",
+        jsonSchema: {
+          type: "object",
+          patternProperties: { "^safe_": { type: "string" } },
+          additionalProperties: false,
+        },
+      },
+    ],
+  })!
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: "pattern-schema-test", version: "1" })
+  try {
+    await server.instance.connect(serverTransport)
+    await client.connect(clientTransport)
+    const advertised = (await client.listTools()).tools[0]!.inputSchema
+    assert.deepEqual(advertised.patternProperties, { "^safe_": { type: "string" } })
+    assert.equal(advertised.additionalProperties, false)
+    const valid = await client.callTool({ name: "fixture", arguments: { safe_name: "ok" } })
+    assert.notEqual(valid.isError, true)
+    for (const args of [{ safe_name: 42 }, { other: "ok" }]) {
+      const invalid = await client.callTool({ name: "fixture", arguments: args })
+      assert.equal(invalid.isError, true)
+    }
+    assert.deepEqual(received, [{ safe_name: "ok" }])
+  } finally {
+    await client.close()
+    await server.instance.close()
+  }
+})

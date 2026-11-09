@@ -25,3 +25,14 @@ test("shapeToolResultContent stringifies text/object results but keeps image blo
   ]
   assert.deepEqual(shapeToolResultContent({ content: blocks }), blocks)
 })
+
+test("MCP audio, embedded resources and resource links remain structured without images", () => {
+  for (const block of [
+    { type: "audio", data: "QUJD", mimeType: "audio/wav" },
+    { type: "resource", resource: { uri: "fixture://text", text: "fixture" } },
+    { type: "resource_link", uri: "fixture://link", name: "fixture" },
+  ]) {
+    const content = [{ type: "text", text: "caption" }, block]
+    assert.deepEqual(shapeToolResultContent({ content }), content)
+  }
+})

@@ -28,6 +28,8 @@ import {
 } from "../middleware/read-only-timeout.ts"
 
 import { awaitPluginToolResponse } from "../plugin/proxy.ts"
+import { jsonSchemaPropToZod } from "../plugin/json-schema-zod.ts"
+import { parseToolArgs } from "../kernel/args.ts"
 import { createToolPermissionGate } from "../../policy/permission/ai-sdk-gate.ts"
 import { createPreMutationReporter } from "../middleware/file-checkpoint.ts"
 import { createDoomLoopGuard } from "../../policy/doom-loop.ts"
@@ -35,7 +37,7 @@ import { prepareModelToolOutput as assertModelSafeToolOutput } from "../../polic
 import { assertSafeExternalContent } from "@cognia/content-safety"
 import { markAiSdkToolSource } from "./ai-sdk-tool-search.ts"
 import { builtinToModelOutput, callToolResultToText, hasRichContentBlock } from "./ai-sdk-output.ts"
-import { CLAUDE_TOOL_NAME_BY_COGNIA_BARE, passesAllowList } from "./allow-list.ts"
+import { passesToolLists } from "./allow-list.ts"
 import type { ToolDefinition } from "../kernel/define.ts"
 import type { ReadTracker } from "../state/read-tracker.ts"
 import type { SessionTaskStore } from "../state/tasks.ts"
@@ -157,6 +159,12 @@ async function applyOutputReview(
   }
 }
 
+function validatedToolInput(name: string, schema: unknown, input: unknown): unknown {
+  const parsed = parseToolArgs(schema, input)
+  if (!parsed.ok) throw new Error(`invalid arguments for "${name}": ${parsed.message}`)
+  return parsed.value
+}
+
 /**
  * Convert one built-in `SdkMcpToolDefinition` into an AI SDK tool. The built-in
  * handler returns an MCP `CallToolResult`; we flatten it to text and re-throw on
@@ -168,19 +176,24 @@ function builtinDefToAiSdkTool(
   gate: ToolPermissionGate | null | undefined,
   timeoutMs: number,
   reviewToolOutput?: ToolOutputReview,
-  injectionProtection = true
+  injectionProtection = true,
+  preserveMcpResult = false
 ): AiSdkTool {
   const namespaced = `mcp__${SERVER_NAME}__${def.name}`
   return tool({
     description: def.description ?? "",
     inputSchema: z.object((def.inputSchema ?? {}) as z.ZodRawShape),
     execute: async (args: unknown, options) => {
+      const parsed = validatedToolInput(def.name, def.inputSchema, args)
       const effective = gate
-        ? await gate(namespaced, args ?? {}, options?.abortSignal)
-        : (args ?? {})
+        ? await gate(namespaced, parsed, options?.abortSignal, (input) =>
+            validatedToolInput(def.name, def.inputSchema, input)
+          )
+        : parsed
+      const validated = validatedToolInput(def.name, def.inputSchema, effective)
       let result: unknown
       try {
-        result = await runBuiltinHandler(def, effective, timeoutMs, options?.abortSignal)
+        result = await runBuiltinHandler(def, validated, timeoutMs, options?.abortSignal)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         const reviewed = await applyOutputReview(
@@ -207,7 +220,8 @@ function builtinDefToAiSdkTool(
       }
       // Structured content passes through as the raw MCP object for
       // toModelOutput; text-only results keep the established flattening.
-      const out = hasRichContentBlock(result) ? result : callToolResultToText(result)
+      const out =
+        preserveMcpResult || hasRichContentBlock(result) ? result : callToolResultToText(result)
       const reviewed = await applyOutputReview(
         reviewToolOutput,
         namespaced,
@@ -255,18 +269,36 @@ function pluginToolToAiSdkTool(
   } = context
   const namespaced = `mcp__${PLUGIN_TOOLS_SERVER_NAME}__${manifest.name}`
   assertSafeExternalContent(manifest, injectionProtection)
+  const validator = jsonSchemaPropToZod(manifest.jsonSchema ?? { type: "object" }, true)
   return tool({
     description: manifest.description ?? "",
     inputSchema: jsonSchema(
       (manifest.jsonSchema ?? { type: "object", properties: {} }) as Parameters<
         typeof jsonSchema
-      >[0]
+      >[0],
+      {
+        validate: async (value) => {
+          const parsed = validator.safeParse(value)
+          return parsed.success
+            ? { success: true, value: parsed.data }
+            : {
+                success: false,
+                error: new Error(
+                  `invalid arguments for "${manifest.name}": ${parsed.error.message}`
+                ),
+              }
+        },
+      }
     ),
     execute: async (args: unknown, options) => {
       const remoteExecutionContext = context.remoteExecutionContext
+      const parsed = validatedToolInput(manifest.name, validator, args)
       const effective = gate
-        ? await gate(namespaced, args ?? {}, options?.abortSignal)
-        : (args ?? {})
+        ? await gate(namespaced, parsed, options?.abortSignal, (input) =>
+            validatedToolInput(manifest.name, validator, input)
+          )
+        : parsed
+      const validated = validatedToolInput(manifest.name, validator, effective)
       const toolUseId = randomUUID()
       // Preserve the manifest's lifecycle contract on the AI SDK rail just as
       // buildPluginToolsServer does on the Anthropic rail. In particular,
@@ -284,15 +316,23 @@ function pluginToolToAiSdkTool(
         sessionId,
         toolUseId,
         name: manifest.name,
-        args: effective,
+        args: validated,
         ...(turnId ? { turnId } : {}),
         ...(attemptId ? { attemptId } : {}),
         ...(sandboxRuntimeRef ? { sandboxRuntimeRef } : {}),
         ...(remoteExecutionContext ? { remoteExecutionContext } : {}),
       })
       const response = await pending
-      if (response && response.error) {
-        const msg = String(response.error)
+      const payload = response ? response.result : null
+      const mcpError =
+        payload &&
+        typeof payload === "object" &&
+        Array.isArray((payload as { content?: unknown }).content) &&
+        (payload as { isError?: unknown }).isError === true
+      if (response?.error || mcpError) {
+        const msg = response?.error
+          ? String(response.error)
+          : callToolResultToText(payload) || `${manifest.name} failed`
         const reviewed = await applyOutputReview(
           reviewToolOutput,
           namespaced,
@@ -303,7 +343,6 @@ function pluginToolToAiSdkTool(
         const safe = assertModelSafeToolOutput(reviewed, injectionProtection)
         throw new Error(String(safe))
       }
-      const payload = response ? response.result : null
       // A plugin that already speaks MCP passes its content blocks straight
       // through for `builtinToModelOutput` to map — the same treatment built-in
       // tools get above. Without this a plugin can only ever return text, so an
@@ -406,8 +445,8 @@ export function buildAiSdkTools({
         })
       : null
   const gate: ToolPermissionGate = reportPreMutation
-    ? async (toolName, input, signal) => {
-        const effective = await permissionGate(toolName, input, signal)
+    ? async (toolName, input, signal, validateInput) => {
+        const effective = await permissionGate(toolName, input, signal, validateInput)
         reportPreMutation(toolName, effective)
         return effective
       }
@@ -421,8 +460,6 @@ export function buildAiSdkTools({
   const disallowed = new Set<unknown>(
     Array.isArray(sendOptions.disallowedTools) ? sendOptions.disallowedTools : []
   )
-  const isDisallowed = (bareName: string) =>
-    disallowed.has(bareName) || disallowed.has(`mcp__${SERVER_NAME}__${bareName}`)
 
   // Allow-list enforcement (parity with the Anthropic path, where the agent
   // SDK applies `allowedTools` itself). When a character / skill / mode scopes
@@ -443,9 +480,9 @@ export function buildAiSdkTools({
       ? sendOptions.toolExecutionTimeoutMs
       : DEFAULT_BUILTIN_TOOL_TIMEOUT_MS
 
-  const bashPalette = ["bash", `mcp__${SERVER_NAME}__bash`, "Bash"]
-  const bashVisible = () =>
-    !bashPalette.some((name) => disallowed.has(name)) && passesAllowList(allowSet, bashPalette)
+  const isToolAllowed = (name: string, server = SERVER_NAME) =>
+    passesToolLists(name, server, allowSet, disallowed)
+  const bashVisible = () => isToolAllowed("bash")
 
   for (const def of collectCogniaToolDefs({
     ...(bashVisible() && verificationBudget
@@ -458,6 +495,25 @@ export function buildAiSdkTools({
         }
       : {}),
     enabled: sendOptions.builtinTools,
+    isToolAllowed,
+    authorizeTool: (name, input, extra, validateInput) =>
+      gate(name, input, extra?.signal, validateInput),
+    executeTool: async (def, input, extra) => {
+      const nested = builtinDefToAiSdkTool(
+        def,
+        undefined,
+        builtinToolTimeoutMs,
+        reviewToolOutput,
+        sendOptions.contentSafety?.injectionProtection,
+        true
+      )
+      return nested.execute!(input, {
+        toolCallId: randomUUID(),
+        messages: [],
+        abortSignal: extra?.signal,
+        context: {},
+      })
+    },
     // The send spec carries the whole launch policy, a ProcessSandboxScope.
     builtinProcessSandbox: (sendOptions.builtinProcessSandbox ?? undefined) as
       ProcessSandboxScope | undefined,
@@ -481,11 +537,7 @@ export function buildAiSdkTools({
     // ADR-0045 plan authoring — same default as the Anthropic path.
     planTools: sendOptions.planTools !== false,
   })) {
-    if (!def || !def.name || isDisallowed(def.name)) continue
-    const candidates = [def.name, `mcp__${SERVER_NAME}__${def.name}`]
-    const alias = CLAUDE_TOOL_NAME_BY_COGNIA_BARE[def.name]
-    if (alias) candidates.push(alias)
-    if (!passesAllowList(allowSet, candidates)) continue
+    if (!def || !def.name || !isToolAllowed(def.name)) continue
     tools[def.name] = markAiSdkToolSource(
       builtinDefToAiSdkTool(
         def,
@@ -504,20 +556,7 @@ export function buildAiSdkTools({
   if (Array.isArray(sendOptions.pluginTools) && pendingPluginToolCalls) {
     for (const manifest of sendOptions.pluginTools as (PluginToolManifestEntry | null)[]) {
       if (!manifest || !manifest.name) continue
-      if (
-        disallowed.has(manifest.name) ||
-        disallowed.has(`mcp__${PLUGIN_TOOLS_SERVER_NAME}__${manifest.name}`)
-      ) {
-        continue
-      }
-      if (
-        !passesAllowList(allowSet, [
-          manifest.name,
-          `mcp__${PLUGIN_TOOLS_SERVER_NAME}__${manifest.name}`,
-        ])
-      ) {
-        continue
-      }
+      if (!isToolAllowed(manifest.name, PLUGIN_TOOLS_SERVER_NAME)) continue
       tools[manifest.name] = markAiSdkToolSource(
         pluginToolToAiSdkTool(manifest, {
           emit,

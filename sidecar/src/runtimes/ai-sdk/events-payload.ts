@@ -1,28 +1,15 @@
 import type { AiStreamEvent, EventBlock } from "./events-types.ts"
+import { hasRichContentBlock } from "../../tools/adapters/ai-sdk-output.ts"
 
 /**
  * Shape a tool-result payload for the renderer's `tool_result` content block.
  *
- * Text/plugin results stay a plain string (unchanged behavior). But an image
- * result (the built-in `read` on an image file returns an MCP `CallToolResult`,
- * `{ content:[{ type:'image', data, mimeType }, …] }`) must NOT be JSON-
- * stringified — that buries a multi-KB base64 blob in the transcript and hides
- * it from the TUI's image extractor (`cli/.../format/result-images.ts`), which
- * needs the structured blocks to render the picture inline and elide the base64.
- * So when image blocks are present we forward the MCP content array verbatim
- * (the extractor already understands the `{ type:'image', data, mimeType }`
- * shape, matching the Anthropic path which also delivers array content).
+ * Rich MCP results keep their content array for the renderer's image, audio
+ * and resource extractors. Text-only results retain their existing encoding.
  *
  */
 export function shapeToolResultContent(payload: unknown) {
-  if (
-    payload &&
-    typeof payload === "object" &&
-    Array.isArray((payload as { content?: unknown }).content) &&
-    ((payload as { content: unknown[] }).content as { type?: string; data?: unknown }[]).some(
-      (b) => b && b.type === "image" && typeof b.data === "string"
-    )
-  ) {
+  if (hasRichContentBlock(payload)) {
     return (payload as { content: unknown[] }).content
   }
   if (typeof payload === "string") return payload
