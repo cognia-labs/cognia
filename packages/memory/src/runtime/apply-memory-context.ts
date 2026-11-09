@@ -20,6 +20,7 @@ import type {
   MemoryType,
 } from "../types/memory"
 import {
+  applyStableKeyPrecedence,
   retrieveMemoriesWithOutcome,
   isMemoryEligibleForRetrieval,
   type MemoryRetrieverDeps,
@@ -206,10 +207,17 @@ export async function applyMemoryContext(
       ? Math.max(0, input.proceduralMaxTokens!)
       : 600
     const proceduralBudget = Math.min(proceduralLimit, Math.floor(maxTokens * 0.4))
-    const safeProcedural = proceduralAll.filter(
-      (memory) => isMemoryEligibleForRetrieval(memory, now) && hasNoLeakingPii(memory.text)
+    const eligibleProcedural = proceduralAll.filter((memory) =>
+      isMemoryEligibleForRetrieval(memory, now)
     )
-    const withheldProceduralCount = proceduralAll.length - safeProcedural.length
+    // Key precedence after eligibility: an unverified, expired or quarantined
+    // narrow instruction must not hide the broader one it would override. A
+    // PII-bearing winner is still the user's override, so it keeps its key and
+    // is only withheld from the prompt (as recalled rows are).
+    const keyWinners = applyStableKeyPrecedence(eligibleProcedural)
+    const safeProcedural = keyWinners.filter((memory) => hasNoLeakingPii(memory.text))
+    const withheldProceduralCount =
+      proceduralAll.length - eligibleProcedural.length + (keyWinners.length - safeProcedural.length)
     const procedural = assembleProceduralContext(safeProcedural, {
       maxTokens: proceduralBudget,
       preamble: PROCEDURAL_PRECEDENCE_NOTE,

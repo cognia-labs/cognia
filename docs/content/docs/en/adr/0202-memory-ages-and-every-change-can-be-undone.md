@@ -53,7 +53,10 @@ memory deletes its history. Clearing forgotten memories also clears their histor
 The live row keeps its id and version counter, so MCP/plugin/device callers and
 compare-and-swap checks are unaffected. `restore-revision` puts an earlier text
 back and keeps the replaced text as the newest revision, so a restore is itself
-undoable.
+undoable. Restoring an archived (forgotten) memory keeps its history the same
+way: the pre-archive life becomes a revision snapshot ending at the archive
+instant, and the restored row is live from the restore on. Historical recall
+therefore returns nothing for an instant inside the archived interval.
 
 ### 2. Historical (`asOf`) recall
 
@@ -62,9 +65,12 @@ undoable.
 searches `loadHistoricalCandidates` filtered by `wasLiveAt` plus the governance
 exclusions the row had then — lexical only (a vector describes today's text),
 no access bump, no rerank. Exposed on `searchMemoriesExternal`, MCP
-`memory_search(asOf)` and plugin `ctx.memory.search({ asOf })`; hits whose text
-was an earlier wording carry `revisionId` / `validFrom` / `validTo` while `id`
-stays the memory's id.
+`memory_search(asOf)`, plugin `ctx.memory.search({ asOf })` and the paired-device
+(Companion) `memory_search` RPC. MCP and Companion accept epoch milliseconds or
+an ISO 8601 timestamp (`lib/memory/api/as-of.ts`). The Companion request schema
+carries the field, and the dispatcher applies the same device memory grants as
+live search. Hits whose text was an earlier wording carry `revisionId` /
+`validFrom` / `validTo` while `id` stays the memory's id.
 
 ### 3. Retention drives forgetting, not ranking
 
@@ -152,9 +158,6 @@ routing never costs a non-episode question. `pnpm memory:eval` prints the table.
   (ADR-0103); ai-memory's version solves multi-CLI continuity via a shared server.
 - **Rule-based session summaries, path/kind authority multipliers** — Cognia's
   memories have no page kinds, and its LLM episode distillation is PII-gated.
-- **Companion RPC `asOf`** — the paired-device `memory_search` contract is
-  generated across protocol, OpenAPI, CLI and Rust catalogs; left for a
-  follow-up so that change lands with its own contract review.
 
 ## Consequences
 

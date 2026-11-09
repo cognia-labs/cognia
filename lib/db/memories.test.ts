@@ -3,6 +3,11 @@ import { createDbTestFixture } from "./test-fixture"
 import { getDb } from "./schema"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 import { onMemoryWritten } from "@/lib/memory/memory-event-bus"
+import { wasLiveAt } from "@cognia/memory/lifecycle/revision"
+import {
+  applyStableKeyPrecedence,
+  isMemoryEligibleForRetrieval,
+} from "@cognia/memory/retrieve/retriever"
 import {
   ACCESS_BUMP_COOLDOWN_MS,
   clearMemories,
@@ -352,8 +357,11 @@ describe("listing & scope-union", () => {
         branch: "main",
         path: "src/a.ts",
       },
+      // Both `same`-key agent rows: the loader does not narrow by key; the
+      // consumers apply `applyStableKeyPrecedence` after their own filters.
       ids: [
         "Z-agent",
+        "a-agent",
         "path-character",
         "a-character",
         "c-unbound",
@@ -366,7 +374,7 @@ describe("listing & scope-union", () => {
   ]
 
   it.each(readerCases)(
-    "preserves reader visibility, union deduplication and tied key winners for $reader",
+    "preserves reader visibility, union deduplication and specificity order for $reader",
     async ({ reader, ids }) => {
       const rows: MemoryCreateInput[] = [
         buildInput({ id: "g0" }),
@@ -432,9 +440,43 @@ describe("listing & scope-union", () => {
     )
 
     const rows = await listActiveForReader({ projectId: "project-a", characterId: "char-a" })
+    // Most specific first, so the consumers' key precedence keeps the narrowest.
     expect(
       rows.filter((memory) => memory.key === "package-manager").map((memory) => memory.id)
+    ).toEqual(["character", "workspace", "global"])
+    expect(
+      applyStableKeyPrecedence(rows)
+        .filter((memory) => memory.key === "package-manager")
+        .map((memory) => memory.id)
     ).toEqual(["character"])
+  })
+
+  it("keeps the global fallback when the scoped override is ineligible", async () => {
+    const now = Date.now()
+    await createMemory(buildInput({ id: "global", key: "package-manager", text: "Use pnpm" }))
+    await createMemory(
+      buildInput({
+        id: "expired-override",
+        scope: "workspace",
+        projectId: "p1",
+        key: "package-manager",
+        text: "Use npm",
+        expiresAt: now - 1,
+      })
+    )
+    const recallable = (await listActiveForReader({ projectId: "p1" })).filter((memory) =>
+      isMemoryEligibleForRetrieval(memory, now)
+    )
+    expect(applyStableKeyPrecedence(recallable).map((memory) => memory.id)).toEqual(["global"])
+
+    await getDb().memories.update("expired-override", {
+      trustState: "quarantined",
+      expiresAt: undefined,
+    })
+    const quarantined = (await listActiveForReader({ projectId: "p1" })).filter((memory) =>
+      isMemoryEligibleForRetrieval(memory, now)
+    )
+    expect(applyStableKeyPrecedence(quarantined).map((memory) => memory.id)).toEqual(["global"])
   })
 
   it("preserves results as an empty or global-only pool gains and loses other namespaces", async () => {
@@ -836,6 +878,48 @@ describe("restoreArchivedMemory", () => {
     expect(got?.status).toBe("active")
     expect(got?.invalidatedAt).toBeUndefined()
     expect(got?.supersededById).toBeUndefined()
+    expect(got?.version).toBe(2)
+  })
+
+  it("keeps the archived interval out of historical recall", async () => {
+    await createMemory(buildInput({ id: "m1", createdAt: 1_000 }))
+    await invalidateMemory("m1")
+    const archivedAt = (await getMemory("m1"))!.invalidatedAt!
+    const restored = await restoreArchivedMemory("m1")
+    expect(restored.ok).toBe(true)
+    const live = (await getMemory("m1"))!
+    const [snapshot] = await listMemoryRevisions("m1")
+    expect(snapshot).toMatchObject({
+      revisionOf: "m1",
+      revisionReason: "restore",
+      text: live.text,
+      invalidatedAt: archivedAt,
+      revisedAt: 1_000,
+      version: 1,
+    })
+    expect(live.revisedAt).toBeGreaterThanOrEqual(archivedAt)
+
+    const liveAt = async (asOf: number) =>
+      (await listHistoricalForReader()).filter((row) => wasLiveAt(row, asOf)).map((row) => row.id)
+    // Before the archive the preserved snapshot answers; the restored row does not.
+    expect(await liveAt(archivedAt - 1)).toEqual([snapshot!.id])
+    // While archived nothing answers.
+    if (live.revisedAt! > archivedAt) expect(await liveAt(archivedAt)).toEqual([])
+    // From the restore on, the live row answers.
+    expect(await liveAt(live.revisedAt!)).toEqual(["m1"])
+  })
+
+  it("skips the snapshot for a mirror restore and for a legacy row without an archive time", async () => {
+    await createMemory(buildInput({ id: "m1" }))
+    await invalidateMemory("m1")
+    await restoreArchivedMemory("m1", { skipRevision: true })
+    expect(await listMemoryRevisions("m1")).toEqual([])
+
+    await createMemory(buildInput({ id: "legacy", status: "invalidated" }))
+    expect((await getMemory("legacy"))?.invalidatedAt).toBeUndefined()
+    await restoreArchivedMemory("legacy")
+    expect(await listMemoryRevisions("legacy")).toEqual([])
+    expect((await getMemory("legacy"))?.status).toBe("active")
   })
 
   it("reports already_active for a live row and leaves it untouched", async () => {

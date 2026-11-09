@@ -1,4 +1,5 @@
-import { discoverExternalMemory } from "./discover"
+import { discoverExternalMemory, externalMemoryWriteRoots } from "./discover"
+import { isWithinAllowedRoots } from "./edit"
 import type { DiscoverCtx, ExternalFs } from "./types"
 
 function makeFs(files: Record<string, number>, dirs: Record<string, string[]> = {}): ExternalFs {
@@ -67,5 +68,42 @@ describe("discoverExternalMemory", () => {
     const claude = files.filter((f) => f.agent === "claude-code")
     expect(claude[0].scope).toBe("user")
     expect(claude.some((f) => f.scope === "project")).toBe(true)
+  })
+})
+
+describe("externalMemoryWriteRoots", () => {
+  it("covers every editable global file discovery returns", async () => {
+    const home = "/home/u"
+    const files = await discoverExternalMemory(ctx({ home, fs: makeFs({}) }))
+    const roots = externalMemoryWriteRoots({ home, roots: ["/proj"] })
+    const editableGlobals = files.filter((f) => f.editable && f.scope !== "project")
+    expect(editableGlobals.map((f) => f.agent)).toEqual(expect.arrayContaining(["opencode", "pi"]))
+    for (const file of editableGlobals) {
+      expect(isWithinAllowedRoots(file.absPath, roots)).toBe(true)
+    }
+  })
+
+  it("follows relocated vendor roots and drops duplicates", () => {
+    expect(
+      externalMemoryWriteRoots({
+        home: "/home/u",
+        roots: ["/proj", "/cfg/codex"],
+        vendorRoots: {
+          claudeConfigDir: "",
+          codexHome: "/cfg/codex",
+          opencodeConfigDir: "/xdg/opencode",
+          opencodeDataDir: "",
+          piAgentDir: "/cfg/pi",
+          piSessionDir: "",
+          geminiDir: "",
+          continueDir: "",
+          cursorDir: "",
+        },
+      })
+    ).toEqual(["/proj", "/cfg/codex", "/home/u/.claude", "/xdg/opencode", "/cfg/pi"])
+  })
+
+  it("adds no agent dir without a home", () => {
+    expect(externalMemoryWriteRoots({ home: "", roots: ["/proj"] })).toEqual(["/proj"])
   })
 })

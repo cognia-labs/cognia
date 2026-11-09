@@ -1,5 +1,7 @@
 import type { Memory } from "../types/memory"
 import {
+  applyStableKeyPrecedence,
+  memoryScopeSpecificity,
   retrieveMemories,
   retrieveMemoriesWithOutcome,
   __resetMemoryBm25Cache,
@@ -67,6 +69,65 @@ describe("retrieveMemories", () => {
       )
     ).toBe(true)
   })
+  it("ranks namespace specificity agent > character > workspace > global, path then branch", () => {
+    expect(memoryScopeSpecificity({ scope: "global" })).toBe(0)
+    expect(memoryScopeSpecificity({ scope: "workspace", pathPattern: "src/" })).toBe(15)
+    expect(memoryScopeSpecificity({ scope: "character", branch: "main" })).toBe(21)
+    expect(memoryScopeSpecificity({ scope: "agent" })).toBe(30)
+  })
+
+  it("keeps the most specific row per stable key, newest on a tie, and every keyless row", () => {
+    const rows = [
+      mem("global", { id: "g", key: "pm", updatedAt: 1 }),
+      mem("old workspace", { id: "w-old", scope: "workspace", key: " PM ", updatedAt: 1 }),
+      mem("new workspace", { id: "w-new", scope: "workspace", key: "pm", updatedAt: 2 }),
+      mem("keyless", { id: "k" }),
+    ]
+    expect(applyStableKeyPrecedence(rows).map((r) => r.id)).toEqual(["w-new", "k"])
+  })
+
+  it("recalls the global fallback when the scoped override with the same key is ineligible", async () => {
+    const now = 1_700_000_000_000
+    const global = mem("The user prefers pnpm", { id: "global", key: "package-manager" })
+    for (const override of [
+      { expiresAt: now - 1 },
+      { trustState: "quarantined" as const },
+      { reviewStatus: "conflict" as const },
+    ]) {
+      __resetMemoryBm25Cache()
+      const deps: MemoryRetrieverDeps = {
+        loadCandidates: async () => [
+          mem("The user prefers npm", {
+            id: "workspace",
+            scope: "workspace",
+            projectId: "p1",
+            key: "package-manager",
+            ...override,
+          }),
+          global,
+        ],
+      }
+      const out = await retrieveMemories({ queryText: "prefers", now, ...base }, deps)
+      expect(out.map((r) => r.memory.id)).toEqual(["global"])
+    }
+  })
+
+  it("still lets an eligible scoped override hide the global row", async () => {
+    const deps: MemoryRetrieverDeps = {
+      loadCandidates: async () => [
+        mem("The user prefers pnpm", { id: "global", key: "package-manager" }),
+        mem("The user prefers bun", {
+          id: "workspace",
+          scope: "workspace",
+          projectId: "p1",
+          key: "package-manager",
+        }),
+      ],
+    }
+    const out = await retrieveMemories({ queryText: "prefers", ...base }, deps)
+    expect(out.map((r) => r.memory.id)).toEqual(["workspace"])
+  })
+
   it("returns [] for blank query", async () => {
     const deps: MemoryRetrieverDeps = { loadCandidates: async () => [mem("pnpm")] }
     expect(await retrieveMemories({ queryText: "   ", ...base }, deps)).toEqual([])
@@ -100,6 +161,36 @@ describe("retrieveMemories", () => {
       deps
     )
     expect(out.map((r) => r.memory.id)).toContain("hit")
+  })
+
+  it("keeps a hit query expansion found through a synonym only", async () => {
+    // "delete file" expands to "remove" / "document"; the stopword gate used to
+    // demand overlap with the ORIGINAL wording and threw this hit away.
+    const deps: MemoryRetrieverDeps = {
+      loadCandidates: async () => [
+        mem("Remove document drafts after review", { id: "syn" }),
+        mem("The user lives in Shanghai", { id: "miss" }),
+      ],
+    }
+    const expanded = await retrieveMemories(
+      { queryText: "delete file", enableQueryExpansion: true, ...base },
+      deps
+    )
+    expect(expanded.map((r) => r.memory.id)).toEqual(["syn"])
+    // Without expansion the synonym-only row stays out, as before.
+    const plain = await retrieveMemories({ queryText: "delete file", ...base }, deps)
+    expect(plain).toEqual([])
+  })
+
+  it("still drops stopword-only overlap with query expansion enabled", async () => {
+    const deps: MemoryRetrieverDeps = {
+      loadCandidates: async () => [mem("The user is happy with the onboarding", { id: "noise" })],
+    }
+    const out = await retrieveMemories(
+      { queryText: "is the deploy done", enableQueryExpansion: true, ...base },
+      deps
+    )
+    expect(out).toEqual([])
   })
 
   it("filters by type when `types` is set", async () => {
@@ -192,6 +283,58 @@ describe("retrieveMemories", () => {
       deps
     )
     expect(out.map((r) => r.memory.id)).toEqual(["sem"])
+  })
+
+  it("never injects a vector hit with no semantic agreement", async () => {
+    // A lone candidate ranks first in fusion whatever its cosine, and min-max
+    // normalization used to turn that into relevance 1 — past a 0.99 floor.
+    const deps: MemoryRetrieverDeps = {
+      loadCandidates: async () => [
+        mem("Quarterly tax filing deadline", { id: "opposite", vectorDocId: "vopp" }),
+      ],
+      embed: async () => [1, 0],
+      vectorSearch: async () => [{ id: "vopp", score: -1 }],
+    }
+    const out = await retrieveMemories(
+      { queryText: "favourite pizza topping", topK: 5, relevanceFloor: 0.99 },
+      deps
+    )
+    expect(out).toEqual([])
+    const zero = await retrieveMemories(
+      { queryText: "favourite pizza topping", topK: 5, relevanceFloor: 0 },
+      { ...deps, vectorSearch: async () => [{ id: "vopp", score: 0 }] }
+    )
+    expect(zero).toEqual([])
+  })
+
+  it("caps a vector-only hit's relevance at its cosine", async () => {
+    const candidates = [
+      mem("The customer churned last quarter", { id: "sem", vectorDocId: "vsem" }),
+    ]
+    const at = (score: number) =>
+      retrieveMemories(
+        { queryText: "retention numbers", topK: 5, relevanceFloor: 0.99 },
+        {
+          loadCandidates: async () => candidates,
+          embed: async () => [0.1, 0.2],
+          vectorSearch: async () => [{ id: "vsem", score }],
+        }
+      )
+    expect(await at(0.5)).toEqual([])
+    const strong = await at(0.995)
+    expect(strong.map((r) => r.memory.id)).toEqual(["sem"])
+    expect(strong[0].relevance).toBeCloseTo(0.995)
+  })
+
+  it("keeps full normalized relevance for a hit both legs found", async () => {
+    const deps: MemoryRetrieverDeps = {
+      loadCandidates: async () => [mem("The user prefers pnpm", { id: "both", vectorDocId: "vb" })],
+      embed: async () => [0.1, 0.2],
+      vectorSearch: async () => [{ id: "vb", score: 0.3 }],
+    }
+    const out = await retrieveMemories({ queryText: "pnpm", topK: 5, relevanceFloor: 0.99 }, deps)
+    expect(out.map((r) => r.memory.id)).toEqual(["both"])
+    expect(out[0].relevance).toBe(1)
   })
 
   it("reuses the BM25 index for an unchanged corpus (rebuilds when it changes)", async () => {

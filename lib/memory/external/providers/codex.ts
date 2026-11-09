@@ -45,12 +45,16 @@ async function fileEntry(
   }
 }
 
+/** `$CODEX_HOME` relocates the whole tree; `vendorRoots` carries it. Otherwise `<home>/.codex`. */
+export function codexHomeDir(ctx: Pick<DiscoverCtx, "home" | "vendorRoots">): string {
+  return ctx.vendorRoots?.codexHome || joinPath(ctx.home, ".codex")
+}
+
 /** Enumerate Codex memory files for the given context. */
 export async function discoverCodex(ctx: DiscoverCtx): Promise<ExternalMemoryFile[]> {
-  const { home, roots, cwd, fs } = ctx
+  const { roots, cwd, fs } = ctx
   const out: ExternalMemoryFile[] = []
-  // `$CODEX_HOME` relocates the whole tree; `vendorRoots` carries it.
-  const codexDir = ctx.vendorRoots?.codexHome || joinPath(home, ".codex")
+  const codexDir = codexHomeDir(ctx)
 
   // 1. Global — surface AGENTS.md slot even when absent; override only when present.
   const override = await fileEntry(

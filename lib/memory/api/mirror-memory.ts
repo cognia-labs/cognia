@@ -79,7 +79,8 @@ export async function applyMirroredMemoryCommand(
         await auditMirror(command.id, "invalidated")
         return { ok: true }
       case "restore": {
-        const restored = await restoreArchivedMemory(command.id)
+        // No local revision: the host keeps the archive-interval snapshot.
+        const restored = await restoreArchivedMemory(command.id, { skipRevision: true })
         if (restored.ok) await auditMirror(command.id, "restored")
         return { ok: true }
       }

@@ -28,6 +28,7 @@ import {
   type RetrievalFeedbackVerdict,
 } from "@cognia/memory/lifecycle/retrieval-feedback"
 import { buildRevisionSnapshot, isRevisionSnapshot } from "@cognia/memory/lifecycle/revision"
+import { memoryScopeSpecificity } from "@cognia/memory/retrieve/retriever"
 import { getDb } from "./schema"
 import { recordTombstones } from "./tombstones"
 
@@ -401,25 +402,55 @@ export async function moveMemoryToNamespace(
  *
  * The inverse of {@link invalidateMemory}: status, `invalidatedAt` and the
  * supersession link are cleared together, so the row reads exactly like a live
- * one again. Revision snapshots are history and never restorable on their own
- * (their owner's revision restore is the path for those), so they report
+ * one again. Its pre-archive live window is kept as a revision snapshot (see
+ * the body), so historical recall still sees the archived gap. Revision
+ * snapshots are history and never restorable on their own (their owner's
+ * revision restore is the path for those), so they report
  * `not_found`; a row that is already active reports `already_active` rather
  * than being rewritten.
  */
 export async function restoreArchivedMemory(
-  id: string
+  id: string,
+  options: {
+    /**
+     * Paired-client mirror: the host writes the archive-interval snapshot and
+     * syncs it down, so a local copy would duplicate it.
+     */
+    skipRevision?: boolean
+  } = {}
 ): Promise<{ ok: true; memory: Memory } | { ok: false; reason: "not_found" | "already_active" }> {
   const db = getDb()
   return db.transaction("rw", db.memories, async () => {
     const row = await db.memories.get(id)
     if (!row || row.revisionOf !== undefined) return { ok: false, reason: "not_found" } as const
     if (row.status !== "invalidated") return { ok: false, reason: "already_active" } as const
+    const now = Date.now()
+    // Restoring must not rewrite history. The archived row's only end marker
+    // is `invalidatedAt`; clearing it alone would make `asOf` recall report the
+    // memory live during the interval it was archived. Keep the pre-archive
+    // life as a revision snapshot ending at the archive instant, and start the
+    // restored row's live window now, so `wasLiveAt` answers: before archive →
+    // the snapshot, while archived → nothing, after restore → the live row.
+    // A legacy row without `invalidatedAt` was never answerable by `asOf`, so
+    // there is no interval to preserve.
+    if (row.invalidatedAt !== undefined && !options.skipRevision) {
+      const snapshot = buildRevisionSnapshot(row, {
+        id: newMemoryId(),
+        now: row.invalidatedAt,
+        reason: "restore",
+      })
+      await db.memories.add({ ...snapshot, updatedAt: now })
+    }
     const next: Memory = {
       ...row,
       status: "active",
       invalidatedAt: undefined,
       supersededById: undefined,
-      updatedAt: Date.now(),
+      revisedAt: now,
+      // The snapshot keeps the pre-archive version; the live row moves past it
+      // so optimistic-concurrency callers see the change.
+      version: row.version + 1,
+      updatedAt: now,
     }
     await db.memories.put(next)
     return { ok: true, memory: next } as const
@@ -621,14 +652,17 @@ function isVisibleToReader(memory: Memory, reader: MemoryReaderContext): boolean
   }
 }
 
-function scopeSpecificity(memory: Memory): number {
-  const base = { global: 0, workspace: 10, character: 20, agent: 30 }[memory.scope]
-  return base + (memory.pathPattern ? 5 : 0) + (memory.branch ? 1 : 0)
-}
-
 /**
- * Resolve visible active rows from broadest storage into a narrow-wins view.
- * The string overload preserves the pre-workspace character-only API.
+ * Every visible active row for a reader, most specific namespace first (the
+ * most recently updated breaking ties). The string overload preserves the
+ * pre-workspace character-only API.
+ *
+ * Deliberately NOT narrowed by stable key. Which row wins a key depends on
+ * filters applied after this read (retrieval eligibility, the caller's
+ * readable scopes, personal visibility, types), so the consumers resolve it
+ * with `applyStableKeyPrecedence` once those have run. Narrowing here let an
+ * expired or quarantined override hide the global fallback, and then the
+ * override itself was filtered out.
  */
 export async function listActiveForReader(
   readerOrCharacterId: MemoryReaderContext | string = {}
@@ -671,7 +705,8 @@ export async function listActiveForReader(
       )
     }
     // The old status scan yielded primary-key order. Restore that order before
-    // the stable specificity/time sort so tied stable keys keep the same winner.
+    // the stable specificity/time sort so tied stable keys keep the same winner
+    // (`applyStableKeyPrecedence` keeps the first of equals).
     const groups = await Promise.all(sources)
     const ids = [...new Set(groups.flat())].sort()
     // When every active row is a candidate, the original range read avoids
@@ -685,19 +720,11 @@ export async function listActiveForReader(
   // No narrowing: retain the original read's transaction lifetime. The earlier
   // counts only select a plan; all returned rows come from this one range read.
   const active = scoped ?? (await db.memories.where("status").equals("active").toArray())
-  const visible = active
+  return active
     .filter((memory) => isVisibleToReader(memory, reader))
-    .sort((a, b) => scopeSpecificity(b) - scopeSpecificity(a) || b.updatedAt - a.updatedAt)
-
-  const stableKeys = new Set<string>()
-  return visible.filter((memory) => {
-    if (memory.key) {
-      const key = memory.key.trim().toLocaleLowerCase()
-      if (stableKeys.has(key)) return false
-      stableKeys.add(key)
-    }
-    return true
-  })
+    .sort(
+      (a, b) => memoryScopeSpecificity(b) - memoryScopeSpecificity(a) || b.updatedAt - a.updatedAt
+    )
 }
 
 /**

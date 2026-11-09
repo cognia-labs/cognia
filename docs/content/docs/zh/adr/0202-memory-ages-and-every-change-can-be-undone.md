@@ -26,11 +26,11 @@ description: "长期记忆从 ai-memory 引入老化与可逆机制。文本修�
 
 不新增表、不升级 schema 版本：`invalidated` 行本就被召回、淘汰和所有活动行查询排除；新字段（`revisionOf`、`revisionReason`、`revisedAt`、`compactedAt`、`beliefInputs`）不建索引；快照随表继承加密、同步与备份。`listMemories` 默认隐藏快照（除非 `includeRevisions`）；外部接口从不按 id 暴露快照，也拒绝编辑或遗忘快照。删除记忆时一并删除该记忆的历史。清空已遗忘记忆也会清空历史。
 
-活动行保持 id 与版本计数不变，因此 MCP / 插件 / 设备调用方与比较并交换校验不受影响。`restore-revision` 把较早的文本放回，并把被替换的文本保留为最新修订，所以恢复本身也可撤销。
+活动行保持 id 与版本计数不变，因此 MCP / 插件 / 设备调用方与比较并交换校验不受影响。`restore-revision` 把较早的文本放回，并把被替换的文本保留为最新修订，所以恢复本身也可撤销。恢复已归档（已遗忘）的记忆同样保留历史：归档前的生效期保存为一条截止于归档时刻的修订快照，恢复后的行从恢复时刻起生效，因此对归档期间内某一时刻的历史召回不返回该记忆。
 
 ### 2. 历史（`asOf`）召回
 
-`[revisedAt ?? createdAt, invalidatedAt)` 是一行文本处于生效状态的窗口（按录入时间，与 ai-memory 的 bi-temporal-lite 一致）。带 `asOf` 时，检索器在 `loadHistoricalCandidates` 中按 `wasLiveAt` 以及该行当时的治理排除条件过滤——只走词法（向量描述的是当前文本），不累加访问、不重排。通过 `searchMemoriesExternal`、MCP `memory_search(asOf)` 与插件 `ctx.memory.search({ asOf })` 暴露；命中若为较早措辞，会带 `revisionId` / `validFrom` / `validTo`，而 `id` 仍是记忆本身的 id。
+`[revisedAt ?? createdAt, invalidatedAt)` 是一行文本处于生效状态的窗口（按录入时间，与 ai-memory 的 bi-temporal-lite 一致）。带 `asOf` 时，检索器在 `loadHistoricalCandidates` 中按 `wasLiveAt` 以及该行当时的治理排除条件过滤——只走词法（向量描述的是当前文本），不累加访问、不重排。通过 `searchMemoriesExternal`、MCP `memory_search(asOf)`、插件 `ctx.memory.search({ asOf })` 与配对设备（Companion）`memory_search` RPC 暴露。MCP 与 Companion 接受毫秒时间戳或 ISO 8601 时间（`lib/memory/api/as-of.ts`）；Companion 请求 schema 已包含该字段，调度器沿用与实时搜索相同的设备记忆授权。命中若为较早措辞，会带 `revisionId` / `validFrom` / `validTo`，而 `id` 仍是记忆本身的 id。
 
 ### 3. 保留分数驱动遗忘，而不是排序
 
@@ -73,7 +73,6 @@ description: "长期记忆从 ai-memory 引入老化与可逆机制。文本修�
 - **通过 hook 把工具输出捕获为记忆**——违反污染规则（外部上下文绝不会自动生成记忆）。
 - **跨工具的一次性认领交接**——Cognia 已有会话交接（ADR-0103）；ai-memory 的方案是借助共享服务器解决多 CLI 连续性。
 - **基于规则的会话摘要、按路径/类型的权威乘数**——Cognia 的记忆没有页面类型，其 LLM 情节提炼受 PII 门控。
-- **配对设备 RPC 的 `asOf`**——配对设备的 `memory_search` 契约需跨协议、OpenAPI、CLI 与 Rust 目录生成；留待后续单独完成契约评审。
 
 ## 影响
 

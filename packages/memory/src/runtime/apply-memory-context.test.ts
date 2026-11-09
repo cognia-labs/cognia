@@ -313,6 +313,51 @@ describe("independent recall sources and delivery governance", () => {
     expect(result.withheldCount).toBe(4)
   })
 
+  it("lets a verified broader instruction stand when its narrower override is unverified", async () => {
+    const result = await applyMemoryContext({
+      ...base,
+      userMessage: "",
+      now: 100,
+      deps: deps({
+        loadProcedural: async () => [
+          mem("Use npm", {
+            type: "procedural",
+            scope: "workspace",
+            projectId: "p1",
+            key: "package-manager",
+            reviewStatus: "pending_instruction",
+          }),
+          mem("Use pnpm", { type: "procedural", key: "package-manager" }),
+        ],
+      }),
+    })
+    expect(result.systemPromptSection).toContain("- Use pnpm")
+    expect(result.systemPromptSection).not.toContain("Use npm")
+    expect(result.proceduralCount).toBe(1)
+  })
+
+  it("still lets an eligible narrower instruction override the broader one", async () => {
+    const result = await applyMemoryContext({
+      ...base,
+      userMessage: "",
+      now: 100,
+      deps: deps({
+        loadProcedural: async () => [
+          mem("Use pnpm", { type: "procedural", key: "package-manager" }),
+          mem("Use bun", {
+            type: "procedural",
+            scope: "workspace",
+            projectId: "p1",
+            key: "Package-Manager ",
+          }),
+        ],
+      }),
+    })
+    expect(result.systemPromptSection).toContain("- Use bun")
+    expect(result.systemPromptSection).not.toContain("Use pnpm")
+    expect(result.proceduralCount).toBe(1)
+  })
+
   it("counts multiline procedural rows once and records their delivered versions", async () => {
     const result = await applyMemoryContext({
       ...base,

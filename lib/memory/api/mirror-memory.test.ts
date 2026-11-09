@@ -67,6 +67,12 @@ describe("applyMirroredMemoryCommand", () => {
     expect((await getMemory("m1"))?.status).toBe("invalidated")
     await applyMirroredMemoryCommand({ kind: "restore", id: "m1" })
     expect((await getMemory("m1"))?.status).toBe("active")
+    // The host writes the archive-interval snapshot and syncs it down.
+    expect(
+      await getDb()
+        .memories.filter((m) => m.revisionOf === "m1")
+        .count()
+    ).toBe(0)
     await applyMirroredMemoryCommand({
       kind: "relocate",
       id: "m1",

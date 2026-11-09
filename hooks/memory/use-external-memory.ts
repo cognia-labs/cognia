@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { isTauri } from "@/lib/tauri"
 import { useProjectStore } from "@/stores/project/project-store"
 import { allRootPaths, primaryRootOf } from "@/lib/workspace/roots"
-import { discoverExternalMemory } from "@/lib/memory/external/discover"
+import { resolveVendorRoots, type VendorRoots } from "@/lib/agent-roots"
+import { discoverExternalMemory, externalMemoryWriteRoots } from "@/lib/memory/external/discover"
 import { detectPlatform, resolveHome } from "@/lib/memory/external/home"
-import { joinPath } from "@/lib/claude/instructions/paths"
 import type { ExternalFs, ExternalMemoryFile } from "@/lib/memory/external/types"
 
 /** Real fs adapter over `lib/file/file-operations.ts` (mirrors instructions/load.realFs). */
@@ -44,6 +44,8 @@ export interface UseExternalMemoryDeps {
   discover?: typeof discoverExternalMemory
   /** Inject home resolution (tests). */
   resolveHomeFn?: typeof resolveHome
+  /** Inject vendor-root resolution (tests). */
+  resolveVendorRootsFn?: () => Promise<VendorRoots>
   /** Inject fs (tests). */
   fs?: ExternalFs
   /** Override desktop detection (tests). */
@@ -74,6 +76,7 @@ export function useExternalMemory(deps: UseExternalMemoryDeps = {}): UseExternal
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [home, setHome] = useState<string | null>(null)
+  const [vendorRoots, setVendorRoots] = useState<VendorRoots | undefined>(undefined)
   const [nonce, setNonce] = useState(0)
 
   const refresh = useCallback(() => setNonce((n) => n + 1), [])
@@ -96,6 +99,14 @@ export function useExternalMemory(deps: UseExternalMemoryDeps = {}): UseExternal
           setError("home-unresolved")
           return
         }
+        // Relocated agent dirs (`$CODEX_HOME`, `$XDG_CONFIG_HOME`, ...). An
+        // unresolvable answer falls back to the home-relative defaults, which
+        // is what every provider does without it.
+        const resolvedVendorRoots = await (deps.resolveVendorRootsFn ?? resolveVendorRoots)().catch(
+          () => undefined
+        )
+        if (cancelled) return
+        setVendorRoots(resolvedVendorRoots)
         const discover = deps.discover ?? discoverExternalMemory
         const result = await discover({
           home: resolved,
@@ -103,6 +114,7 @@ export function useExternalMemory(deps: UseExternalMemoryDeps = {}): UseExternal
           cwd,
           platform: deps.platform ?? detectPlatform(),
           fs,
+          ...(resolvedVendorRoots ? { vendorRoots: resolvedVendorRoots } : {}),
         })
         if (!cancelled) setFiles(result)
       } catch (e) {
@@ -119,14 +131,12 @@ export function useExternalMemory(deps: UseExternalMemoryDeps = {}): UseExternal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktop, rootsKey, cwd, nonce])
 
-  // Writes are confined to the agent home dirs plus the active workspace roots.
-  const allowedRoots = useMemo(() => {
-    const list = [...roots]
-    if (home) {
-      list.push(joinPath(home, ".claude"), joinPath(home, ".codex"))
-    }
-    return list
-  }, [roots, home])
+  // Writes are confined to the active workspace roots plus every agent's
+  // config dir, resolved exactly as discovery resolved them.
+  const allowedRoots = useMemo(
+    () => externalMemoryWriteRoots({ home: home ?? "", roots, vendorRoots }),
+    [roots, home, vendorRoots]
+  )
 
   return {
     files,

@@ -60,12 +60,19 @@ async function fileEntry(
   }
 }
 
+/**
+ * `$CLAUDE_CONFIG_DIR` relocates the whole tree; `vendorRoots` carries it.
+ * Otherwise `<home>/.claude`.
+ */
+export function claudeConfigDir(ctx: Pick<DiscoverCtx, "home" | "vendorRoots">): string {
+  return ctx.vendorRoots?.claudeConfigDir || joinPath(ctx.home, ".claude")
+}
+
 /** Enumerate Claude Code memory files for the given context. */
 export async function discoverClaudeCode(ctx: DiscoverCtx): Promise<ExternalMemoryFile[]> {
-  const { home, roots, cwd, platform, fs } = ctx
+  const { roots, cwd, platform, fs } = ctx
   const out: ExternalMemoryFile[] = []
-  // `$CLAUDE_CONFIG_DIR` relocates the whole tree; `vendorRoots` carries it.
-  const claudeDir = ctx.vendorRoots?.claudeConfigDir || joinPath(home, ".claude")
+  const claudeDir = claudeConfigDir(ctx)
 
   // 1. User-global — surfaced even when absent so the user knows the slot exists.
   const user = await fileEntry(

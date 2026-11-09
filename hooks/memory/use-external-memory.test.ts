@@ -84,6 +84,75 @@ describe("useExternalMemory", () => {
     )
   })
 
+  it("lets the editor save every global file discovery marks editable", async () => {
+    setActiveProjectWithRoot("/proj")
+    const discover = jest.fn().mockResolvedValue([])
+    const { result } = renderHook(() =>
+      useExternalMemory({
+        isDesktop: true,
+        platform: "macos",
+        fs: {} as never,
+        discover,
+        resolveHomeFn: async () => "/Users/x",
+        resolveVendorRootsFn: async () => {
+          throw new Error("no ipc")
+        },
+      })
+    )
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.allowedRoots).toEqual([
+      "/proj",
+      "/Users/x/.claude",
+      "/Users/x/.codex",
+      "/Users/x/.config/opencode",
+      "/Users/x/.pi/agent",
+    ])
+    const { isWithinAllowedRoots } = await import("@/lib/memory/external/edit")
+    for (const path of [
+      "/Users/x/.config/opencode/AGENTS.md",
+      "/Users/x/.pi/agent/SYSTEM.md",
+      "/Users/x/.pi/agent/APPEND_SYSTEM.md",
+    ]) {
+      expect(isWithinAllowedRoots(path, result.current.allowedRoots)).toBe(true)
+    }
+    expect(isWithinAllowedRoots("/Users/x/.ssh/config", result.current.allowedRoots)).toBe(false)
+  })
+
+  it("passes relocated vendor roots to discovery and to the save allowlist", async () => {
+    setActiveProjectWithRoot("/proj")
+    const discover = jest.fn().mockResolvedValue([])
+    const vendorRoots = {
+      claudeConfigDir: "/cfg/claude",
+      codexHome: "/cfg/codex",
+      opencodeConfigDir: "/xdg/opencode",
+      opencodeDataDir: "",
+      piAgentDir: "/cfg/pi",
+      piSessionDir: "",
+      geminiDir: "",
+      continueDir: "",
+      cursorDir: "",
+    }
+    const { result } = renderHook(() =>
+      useExternalMemory({
+        isDesktop: true,
+        platform: "linux",
+        fs: {} as never,
+        discover,
+        resolveHomeFn: async () => "/home/u",
+        resolveVendorRootsFn: async () => vendorRoots,
+      })
+    )
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(discover).toHaveBeenCalledWith(expect.objectContaining({ vendorRoots }))
+    expect(result.current.allowedRoots).toEqual([
+      "/proj",
+      "/cfg/claude",
+      "/cfg/codex",
+      "/xdg/opencode",
+      "/cfg/pi",
+    ])
+  })
+
   it("surfaces an error when the home dir cannot be resolved", async () => {
     const discover = jest.fn()
     const { result } = renderHook(() =>

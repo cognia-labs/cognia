@@ -190,6 +190,8 @@ export interface MemoryRetrieverDeps {
   embed?: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>
   /**
    * Vector search returning `{ id: vectorDocId, score }`; absent → BM25-only.
+   * `score` is the cosine similarity in [-1, 1]: the retriever drops hits with
+   * no semantic agreement (≤ 0) and caps a vector-only hit's relevance at it.
    *
    * When `plan.vectorDocIds` is supplied the implementation MUST restrict its
    * search to that set — the eligible corpus the reader is authorized for. An
@@ -431,6 +433,46 @@ function onePerIdentity(rows: Memory[]): Memory[] {
 }
 
 /**
+ * How narrow a row's namespace is: agent > character > workspace > global,
+ * with a path restriction and then a branch restriction breaking ties inside a
+ * scope. The stable-key winner is the most specific row.
+ */
+export function memoryScopeSpecificity(
+  memory: Pick<Memory, "scope" | "pathPattern" | "branch">
+): number {
+  const base = { global: 0, workspace: 10, character: 20, agent: 30 }[memory.scope]
+  return base + (memory.pathPattern ? 5 : 0) + (memory.branch ? 1 : 0)
+}
+
+/**
+ * Stable-key precedence: among rows sharing a `key` (trimmed, case-folded),
+ * only the most specific survives, the most recently updated breaking ties.
+ * Rows without a key all pass. Input order is otherwise preserved.
+ *
+ * Callers apply this AFTER every eligibility, scope, personal-visibility and
+ * type filter. A narrow override that is expired, quarantined, unverified or
+ * unreadable for this caller is not a candidate, so it must not hide the
+ * broader fallback either — resolving keys first used to drop both.
+ */
+export function applyStableKeyPrecedence<T extends Memory>(rows: readonly T[]): T[] {
+  const winners = new Map<string, T>()
+  for (const row of rows) {
+    if (!row.key) continue
+    const key = row.key.trim().toLocaleLowerCase()
+    const current = winners.get(key)
+    if (
+      !current ||
+      memoryScopeSpecificity(row) > memoryScopeSpecificity(current) ||
+      (memoryScopeSpecificity(row) === memoryScopeSpecificity(current) &&
+        row.updatedAt > current.updatedAt)
+    ) {
+      winners.set(key, row)
+    }
+  }
+  return rows.filter((row) => !row.key || winners.get(row.key.trim().toLocaleLowerCase()) === row)
+}
+
+/**
  * Compatibility wrapper. Seven call sites read the plain array, and four test
  * factories mock this shape, so the richer return is opt-in.
  */
@@ -555,6 +597,9 @@ export async function retrieveMemoriesWithOutcome(
     const wantProject = input.claimFilter === "project-only"
     candidates = candidates.filter((m) => isProjectClaim(m) === wantProject)
   }
+  // Live recall only: historical rows resolve one per memory identity instead,
+  // because which row held a key changes over time.
+  if (asOf === undefined) candidates = applyStableKeyPrecedence(candidates)
   if (candidates.length === 0) return finish([], [], [], query)
 
   const byId = new Map(candidates.map((m) => [m.id, m]))
@@ -581,7 +626,10 @@ export async function retrieveMemoriesWithOutcome(
   // below would promote such a lone weak hit to relevance 1.0 — injecting an
   // off-topic memory on a shared "the" / "用户". Require ≥1 shared MEANINGFUL
   // term. Skipped for a degenerate all-stopword query (keep prior behavior).
-  const queryTerms = meaningfulTerms(query)
+  // The gate reads the query BM25 actually searched: with expansion on, a hit
+  // found only through a synonym ("delete file" → "remove document") shares no
+  // term with the original wording and would otherwise be thrown away.
+  const queryTerms = meaningfulTerms(keywordQuery)
   const keywordHits =
     queryTerms.size === 0
       ? rawKeywordHits
@@ -600,9 +648,14 @@ export async function retrieveMemoriesWithOutcome(
       ? { hits: [], reasons: [] }
       : await retrieveVectorLeg(query, [...byVectorDocId.keys()], input, deps)
   reasons.push(...vectorOutcome.reasons)
+  // A non-positive cosine is no semantic agreement at all. Fusion only reads
+  // ranks, so such a hit would otherwise rank first in an empty field and
+  // normalize to relevance 1, past any floor.
   const vectorHits = vectorOutcome.hits.flatMap((hit) => {
     const memory = byVectorDocId.get(hit.id)
-    return memory && Number.isFinite(hit.score) ? [{ id: memory.id, score: hit.score }] : []
+    return memory && Number.isFinite(hit.score) && hit.score > 0
+      ? [{ id: memory.id, score: hit.score }]
+      : []
   })
 
   // Fuse (or pass through the single leg), then normalize to [0,1] for the floor.
@@ -620,7 +673,17 @@ export async function retrieveMemoriesWithOutcome(
     }))
   if (fused.length === 0) return finish([], candidateIds, scoreTrace(), query)
 
-  const normalized = normalizeScores(fused)
+  // Min-max normalization is relative to the fused set. A hit only the vector
+  // leg found keeps no more relevance than its own cosine, so the floor still
+  // means something when it is the lone (or best) candidate.
+  const lexicalIds = new Set(keywordHits.map((hit) => hit.id))
+  const cosineById = new Map(vectorHits.map((hit) => [hit.id, hit.score]))
+  const normalized = normalizeScores(fused).map((n) => {
+    const cosine = cosineById.get(n.id)
+    return cosine !== undefined && !lexicalIds.has(n.id)
+      ? { id: n.id, score: Math.min(n.score, Math.min(1, cosine)) }
+      : n
+  })
   const relevanceById = new Map(normalized.map((n) => [n.id, n.score]))
 
   const floored = normalized.filter((n) => n.score >= input.relevanceFloor)

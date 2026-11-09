@@ -6,10 +6,10 @@
  */
 
 import { pathKey } from "@/lib/claude/instructions/paths"
-import { discoverClaudeCode } from "./providers/claude-code"
-import { discoverCodex } from "./providers/codex"
-import { discoverOpencode } from "./providers/opencode"
-import { discoverPi } from "./providers/pi"
+import { claudeConfigDir, discoverClaudeCode } from "./providers/claude-code"
+import { codexHomeDir, discoverCodex } from "./providers/codex"
+import { discoverOpencode, opencodeConfigDir } from "./providers/opencode"
+import { discoverPi, piAgentDir } from "./providers/pi"
 import type { DiscoverCtx, ExternalAgentId, ExternalMemoryFile, ExternalMemoryScope } from "./types"
 
 /**
@@ -63,6 +63,32 @@ export async function discoverExternalMemory(ctx: DiscoverCtx): Promise<External
     if (!consumers.includes(file.agent)) existing.consumers = [...consumers, file.agent]
   }
   return [...byKey.values()].sort(compareFiles)
+}
+
+/**
+ * The directories the guarded editor may write under: the active workspace
+ * roots plus every agent's global config dir, resolved by the SAME functions
+ * discovery uses. A provider that marks a global file editable must have its
+ * dir here, or the save guard refuses the file it just offered (OpenCode's
+ * `AGENTS.md`, Pi's `SYSTEM.md` used to). Editability is still decided per
+ * file by the provider; this list only bounds where any write may land.
+ */
+export function externalMemoryWriteRoots(
+  ctx: Pick<DiscoverCtx, "home" | "roots" | "vendorRoots">
+): string[] {
+  const agentDirs = ctx.home
+    ? [claudeConfigDir(ctx), codexHomeDir(ctx), opencodeConfigDir(ctx), piAgentDir(ctx)]
+    : []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const dir of [...ctx.roots, ...agentDirs]) {
+    if (!dir) continue
+    const key = pathKey(dir)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(dir)
+  }
+  return out
 }
 
 function compareFiles(a: ExternalMemoryFile, b: ExternalMemoryFile): number {
