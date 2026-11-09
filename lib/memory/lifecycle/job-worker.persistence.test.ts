@@ -124,6 +124,57 @@ async function enqueue() {
 }
 
 describe("durable turn-extraction persistence", () => {
+  it.each(["outside", "inside"])(
+    "fences exactly the recent extractor window when a message %s it is deleted",
+    async (position) => {
+      await getDb().messages.bulkPut(
+        Array.from({ length: 12 }, (_, index) => ({
+          id: `older-${index}`,
+          sessionId: "source",
+          role: "user",
+          createdAt: index - 12,
+          parts: [{ type: "text", text: `earlier context ${index}` }],
+        })) as never
+      )
+      let started!: () => void
+      let release!: (text: string) => void
+      const entered = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      mockComplete.mockImplementationOnce(() => {
+        started()
+        return new Promise<string>((resolve) => {
+          release = resolve
+        })
+      })
+      const job = await enqueueMemoryJob({
+        dedupeKey: "turn-extraction:source:turn:14",
+        kind: "turn-extraction",
+        sessionId: "source",
+        scope: "global",
+        provenance: "user",
+        evidenceIds: [],
+      })
+      const running = drainMemoryJobs({ workerId: "worker", maxJobs: 1 })
+      await Promise.race([
+        entered,
+        running.then(() => {
+          throw new Error("Extractor was not called")
+        }),
+      ])
+      await getDb().messages.delete(position === "outside" ? "older-0" : "older-11")
+      release(reply)
+      await running
+      expect(await getMemoryJob(job.id)).toMatchObject(
+        position === "outside"
+          ? { status: "succeeded" }
+          : { status: "skipped", resultCode: "source_deleted" }
+      )
+      expect(await getDb().memories.count()).toBe(position === "outside" ? 1 : 0)
+      expect(mockUpsert).toHaveBeenCalledTimes(position === "outside" ? 1 : 0)
+    }
+  )
+
   it.each(["session-deleted", "message-deleted", "cancelled", "reclaimed"])(
     "writes no canonical memory, evidence or vectors after %s during the provider call",
     async (change) => {

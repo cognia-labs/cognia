@@ -104,7 +104,32 @@ export function clampImportance(value: number | undefined): number {
   return Math.min(10, Math.max(1, Math.round(value)))
 }
 
+/** Only this failure proves that retrying cannot duplicate a canonical write. */
+export class MemoryPreWriteError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = "MemoryPreWriteError"
+  }
+}
+
 export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<StoreMemoryCoreResult> {
+  let writeStarted = false
+  try {
+    return await applyStoreMemory(input, () => {
+      writeStarted = true
+    })
+  } catch (error) {
+    // A consolidator may commit one candidate before a later step throws.
+    // Never infer rollback from its rejection (or from a direct insert's).
+    if (!writeStarted) throw new MemoryPreWriteError(error)
+    throw error
+  }
+}
+
+async function applyStoreMemory(
+  input: StoreMemoryCoreInput,
+  beforeWrite: () => void
+): Promise<StoreMemoryCoreResult> {
   const rawText = input.text.trim()
   if (!rawText) throw new Error("memory store requires a non-empty 'text'")
   const scope = input.scope ?? "global"
@@ -235,6 +260,7 @@ export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<Stor
   const deps = await buildAutoExtractionDeps({ session: null, appSettings: settings }, config)
   const memDb = await import("@/lib/db/memories")
   if (deps) {
+    beforeWrite()
     const { applied } = await deps.consolidate({
       permissions: {
         canUpdate: policy.canUpdate,
@@ -392,6 +418,7 @@ export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<Stor
   // Degraded path: no utility LLM client → direct insert (BM25-findable) +
   // best-effort vector upsert. The fact still lands; only dedupe is skipped.
   const { tryBuildMemoryVectorSink } = await import("@/lib/memory/runtime/build-deps")
+  beforeWrite()
   const row = await memDb.createMemory({
     scope,
     characterId,
@@ -539,22 +566,27 @@ export async function storeExternalMemory(
       ...(receipt.memoryId ? { memoryId: receipt.memoryId } : {}),
       applied: (receipt.resultApplied ?? []) as ConsolidationOp["op"][],
     })
-    const reservation = await reserveMemoryOperation({
+    const binding = {
       principalId,
       operationId,
       requestHash,
-      kind: "store",
-    })
+      kind: "store" as const,
+    }
+    let reservation = await reserveMemoryOperation(binding)
+    if (reservation.state === "in_flight") {
+      const settled = await awaitMemoryOperation(principalId, operationId)
+      // The owner may have released after a pre-write failure. Only an atomic
+      // reserve can admit this caller; elapsed time never transfers ownership.
+      reservation = settled
+        ? { state: "replay", receipt: settled }
+        : await reserveMemoryOperation(binding)
+    }
     if (reservation.state === "conflict") {
       return { ok: false, reason: "idempotency_key_reused" }
     }
     if (reservation.state === "replay") return replay(reservation.receipt)
     if (reservation.state === "in_flight") {
-      // The twin of this request is applying right now — wait for its receipt
-      // and replay it. A timeout means the other caller crashed mid-apply:
-      // proceed and let the consolidator's dedupe settle the overlap.
-      const settled = await awaitMemoryOperation(principalId, operationId)
-      if (settled) return replay(settled)
+      throw new Error("memory_store: operation still in flight")
     }
   }
 
@@ -582,10 +614,8 @@ export async function storeExternalMemory(
       attribution,
     })
   } catch (error) {
-    // A thrown store left no receipt, so the reservation must go too —
-    // otherwise the pending row pins the key and every retry pays the
-    // in-flight wait before re-entering here.
-    if (operationId && requestHash) {
+    // Only failures before consolidation/persistence are safe to retry.
+    if (error instanceof MemoryPreWriteError && operationId && requestHash) {
       const { releaseMemoryOperation } = await import("@/lib/db/memory-operations")
       await releaseMemoryOperation(principalId, operationId, requestHash).catch(() => undefined)
     }
@@ -600,18 +630,29 @@ export async function storeExternalMemory(
     const { recordMemoryOperation, releaseMemoryOperation } =
       await import("@/lib/db/memory-operations")
     if (result.ok && result.stored) {
-      await recordMemoryOperation({
+      const receipt = {
         id: `${principalId}:${operationId}`,
         principalId,
         operationId,
-        kind: "store",
+        kind: "store" as const,
         requestHash,
         memoryId: result.memoryId ?? "",
-        resultCode: "ok",
+        resultCode: "ok" as const,
         resultConsolidated: result.consolidated,
         resultApplied: result.applied,
         createdAt: Date.now(),
-      }).catch(() => undefined)
+      }
+      let receiptError: unknown
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await recordMemoryOperation(receipt)
+          return result
+        } catch (error) {
+          receiptError = error
+        }
+      }
+      const { MemoryReceiptCommitError } = await import("./manage-for-caller")
+      throw new MemoryReceiptCommitError(receiptError, "memory_store")
     } else {
       await releaseMemoryOperation(principalId, operationId, requestHash).catch(() => undefined)
     }

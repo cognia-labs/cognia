@@ -315,7 +315,9 @@ async function loadJobContext(job: MemoryJob): Promise<{
 
 function lastCompletedPair(
   transcript: Array<{ id?: string; role: string; text: string }>
-): { userText: string; assistantText: string; assistantMessageId?: string } | undefined {
+):
+  | { userText: string; assistantText: string; userMessageId?: string; assistantMessageId?: string }
+  | undefined {
   let assistantIndex = -1
   for (let index = transcript.length - 1; index >= 0; index -= 1) {
     if (transcript[index]?.role === "assistant" && transcript[index]?.text.trim()) {
@@ -329,6 +331,7 @@ function lastCompletedPair(
     if (message?.role === "user" && message.text.trim()) {
       return {
         userText: message.text,
+        userMessageId: message.id,
         assistantText: transcript[assistantIndex]!.text,
         assistantMessageId: transcript[assistantIndex]!.id,
       }
@@ -367,7 +370,18 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
   if (!pair) throw new MemoryJobProcessingError("turn_pair_unavailable")
   const { buildAutoExtractionDeps, runMemoryExtraction } =
     await import("@/lib/memory/write/run-memory-extraction")
-  const sourceIds = context.transcript.map((message) => message.id!)
+  const recentMessages = context.transcript
+    .slice(-10)
+    .filter(
+      (message) => context.contaminationState !== "external-context" || message.role === "user"
+    )
+  const sourceIds = [
+    ...new Set([
+      pair.userMessageId!,
+      pair.assistantMessageId!,
+      ...recentMessages.map((message) => message.id!),
+    ]),
+  ]
   const recordedMemoryIds = new Set<string>()
   const recordOperations = (operations: readonly ConsolidationOp[]) =>
     recordMemoryJobOutcome({
@@ -398,11 +412,7 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
         userText: pair.userText,
         assistantText: context.contaminationState === "external-context" ? "" : pair.assistantText,
       },
-      recentMessages: context.transcript
-        .slice(-10)
-        .filter(
-          (message) => context.contaminationState !== "external-context" || message.role === "user"
-        ),
+      recentMessages,
       scope: job.scope,
       characterId: job.characterId,
       projectId: job.projectId,

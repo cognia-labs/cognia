@@ -319,6 +319,89 @@ describe("canonical command and receipt atomicity", () => {
   })
 
   it.each([
+    { kind: "create", text: "" },
+    { kind: "create", text: "fact", scope: "workspace" },
+  ] as const)(
+    "releases pre-write validation failures and permits a corrected retry: %o",
+    async (command) => {
+      const context = { caller: device, operationId: "validation" }
+      await expect(manageMemoryForCaller(command, context)).rejects.toThrow()
+      expect(await findMemoryOperation(device.principalId, context.operationId)).toBeUndefined()
+      mockManage.mockResolvedValueOnce({ ok: true, memoryId: "corrected" })
+      await expect(
+        manageMemoryForCaller({ kind: "create", text: "corrected fact" }, context)
+      ).resolves.toMatchObject({ ok: true })
+    }
+  )
+
+  it("keeps the key fenced when conflict resolution throws after its first write", async () => {
+    await createMemory(row({ id: "keep" }))
+    await createMemory(row({ id: "drop" }))
+    const fail = () => {
+      throw new Error("audit failed after canonical write")
+    }
+    const db = getDb()
+    db.memoryAuditEvents.hook("creating", fail)
+    try {
+      await expect(
+        manageMemoryForCaller(
+          { kind: "resolve-conflict", keepId: "keep", dropId: "drop", mode: "keep" },
+          { caller: device, operationId: "after-write" }
+        )
+      ).rejects.toThrow("audit failed")
+      expect(await getMemory("keep")).toMatchObject({ reviewStatus: "verified" })
+      expect(await findMemoryOperation(device.principalId, "after-write")).toMatchObject({
+        resultCode: "pending",
+      })
+    } finally {
+      db.memoryAuditEvents.hook("creating").unsubscribe(fail)
+    }
+  })
+
+  it("does not reserve an invalid conflict merge and accepts its corrected retry", async () => {
+    await createMemory(row({ id: "keep" }))
+    await createMemory(row({ id: "drop" }))
+    const command = {
+      kind: "resolve-conflict" as const,
+      keepId: "keep",
+      dropId: "drop",
+      mode: "merge" as const,
+    }
+    const context = { caller: device, operationId: "invalid-merge" }
+    await expect(manageMemoryForCaller(command, context)).rejects.toThrow(
+      "requires non-empty mergedText"
+    )
+    expect(await findMemoryOperation(device.principalId, context.operationId)).toBeUndefined()
+    await expect(
+      manageMemoryForCaller({ ...command, mergedText: "merged fact" }, context)
+    ).resolves.toMatchObject({ ok: true })
+  })
+
+  it("releases a clear that cannot load its first row and permits a retry", async () => {
+    await createMemory(row({ id: "clear-target" }))
+    const db = getDb()
+    const fail = jest.spyOn(db.memories, "toCollection").mockImplementationOnce(() => {
+      throw new Error("list unavailable")
+    })
+    const context = { caller: device, operationId: "clear-read" }
+    try {
+      await expect(manageMemoryForCaller({ kind: "clear" }, context)).rejects.toThrow(
+        "list unavailable"
+      )
+      expect(fail).toHaveBeenCalledTimes(1)
+      expect(await findMemoryOperation(device.principalId, context.operationId)).toBeUndefined()
+    } finally {
+      fail.mockRestore()
+    }
+    expect(await getMemory("clear-target")).toBeDefined()
+    await expect(manageMemoryForCaller({ kind: "clear" }, context)).resolves.toMatchObject({
+      ok: true,
+      clearedCount: 1,
+    })
+    expect(await getMemory("clear-target")).toBeUndefined()
+  })
+
+  it.each([
     "pin",
     "review",
     "update",

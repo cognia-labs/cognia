@@ -23,11 +23,12 @@ import type { MemoryRecallSources, ProjectContinuitySources } from "@/types/memo
 import { resolveAgentMemoryPolicy } from "./agent-policy"
 import { resolveMemoryAgentNamespace } from "./twin-namespace"
 import type { ApplyMemoryContextDeps } from "./runtime/apply-memory-context"
+import type { PersonalMemoryContextDeps } from "./runtime/build-deps"
 
 declare module "@/lib/modules/manifest-types" {
   interface ContextHostDepsMap {
     /** The memory store and retriever the caller resolved for this turn. */
-    memory: ApplyMemoryContextDeps
+    memory: PersonalMemoryContextDeps
     /**
      * The turn's text for memory recall. The caller leaves it out when the
      * text may not be embedded, and recall then does not run.
@@ -115,6 +116,8 @@ export const contributions: readonly ContextContribution[] = [
         ...(ctx.query.embedding ? { precomputedQueryEmbedding: [...ctx.query.embedding] } : {}),
         deps: scopedDeps,
       })
+      if (result.systemPromptSection?.trim())
+        await deps.markInjectedMemories?.(result.snapshot.memoryRefs.map((ref) => ref.id))
       const handoff: RecallHandoff = { limit: result.budget.limit, used: result.budget.used }
       const reported =
         result.retrievedMemories.length > 0 || result.proceduralCount > 0 || result.degraded
@@ -186,6 +189,8 @@ export const contributions: readonly ContextContribution[] = [
         ...(ctx.query.embedding ? { precomputedQueryEmbedding: [...ctx.query.embedding] } : {}),
         deps,
       })
+      if (result.systemPromptSection?.trim())
+        await deps.markInjectedMemories?.(result.claims.map((claim) => claim.id))
       const reported = result.claims.length > 0 || result.degraded
       const sources: ProjectContinuitySources = {
         claims: result.claims,

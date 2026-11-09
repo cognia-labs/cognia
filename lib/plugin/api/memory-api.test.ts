@@ -155,6 +155,14 @@ describe("createMemoryAPI", () => {
   describe("mutations", () => {
     beforeEach(() => guard.registerPlugin(PLUGIN, ["memory:write"]))
 
+    it("propagates a pending store failure so a plugin can retry its operation id", async () => {
+      const error = new Error("memory_store: operation still in flight")
+      mockStoreExternal.mockRejectedValueOnce(error)
+      await expect(
+        createMemoryAPI(PLUGIN).store({ text: "fact", operationId: "pending" })
+      ).rejects.toBe(error)
+    })
+
     it("store stamps plugin attribution and delegates under the plugin caller", async () => {
       const api = createMemoryAPI(PLUGIN)
       const result = await api.store({ text: "User prefers dark mode", type: "episodic" })

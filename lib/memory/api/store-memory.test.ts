@@ -1,5 +1,8 @@
+/** @jest-environment jsdom */
 import { storeExternalMemory, storeMemoryCore, clampImportance } from "./store-memory"
 import { withConsolidationTarget } from "@/lib/memory/write/guarded-consolidation-write"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
 
 jest.mock("@/lib/memory/write/guarded-consolidation-write", () => ({
   withConsolidationTarget: jest.fn(async (_id, _guard, _operation, write) => {
@@ -636,11 +639,107 @@ describe("storeExternalMemory", () => {
       expect(mockConsolidate).not.toHaveBeenCalled()
     })
 
-    it("proceeds with its own execution when the in-flight wait times out", async () => {
+    it("refuses execution when the in-flight wait times out and the key is still held", async () => {
       mockReserve.mockResolvedValue({ state: "in_flight" })
       mockAwaitOp.mockResolvedValue(undefined)
-      const result = await storeExternalMemory({ text: "fact", operationId: "op-1" }, ATTRIBUTION)
-      expect(result.ok).toBe(true)
+      await expect(
+        storeExternalMemory({ text: "fact", operationId: "op-1" }, ATTRIBUTION)
+      ).rejects.toThrow("operation still in flight")
+      expect(mockReserve).toHaveBeenCalledTimes(2)
+      expect(mockConsolidate).not.toHaveBeenCalled()
+      expect(mockReleaseOp).not.toHaveBeenCalled()
+    })
+
+    it("executes after a timed-out waiter atomically acquires a released key", async () => {
+      mockReserve
+        .mockResolvedValueOnce({ state: "in_flight" })
+        .mockResolvedValueOnce({ state: "reserved" })
+      mockAwaitOp.mockResolvedValue(undefined)
+      await expect(
+        storeExternalMemory({ text: "fact", operationId: "op-1" }, ATTRIBUTION)
+      ).resolves.toMatchObject({ ok: true })
+      expect(mockConsolidate).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(["consolidation", "direct insert"])(
+      "keeps concurrent same-key %s to one ADD",
+      async (path) => {
+        let started!: () => void
+        let release!: () => void
+        const entered = new Promise<void>((resolve) => {
+          started = resolve
+        })
+        const wait = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        mockReserve
+          .mockResolvedValue({ state: "in_flight" })
+          .mockResolvedValueOnce({ state: "reserved" })
+        mockAwaitOp.mockResolvedValue(undefined)
+        if (path === "consolidation") {
+          mockConsolidate.mockImplementationOnce(async () => {
+            started()
+            await wait
+            return { applied: [{ op: "ADD", memory: { id: "only-add" } }] }
+          })
+        } else {
+          mockBuildDeps.mockResolvedValue(undefined)
+          mockCreateMemory.mockImplementationOnce(async () => {
+            started()
+            await wait
+            return { id: "only-add", text: "fact" }
+          })
+        }
+        const first = storeExternalMemory({ text: "fact", operationId: "concurrent" }, ATTRIBUTION)
+        await entered
+        try {
+          await expect(
+            storeExternalMemory({ text: "fact", operationId: "concurrent" }, ATTRIBUTION)
+          ).rejects.toThrow("operation still in flight")
+        } finally {
+          release()
+          await expect(first).resolves.toMatchObject({ ok: true, applied: ["ADD"] })
+        }
+        expect(path === "consolidation" ? mockConsolidate : mockCreateMemory).toHaveBeenCalledTimes(
+          1
+        )
+      }
+    )
+
+    it("keeps the key fenced after consolidation may have written", async () => {
+      mockConsolidate.mockRejectedValueOnce(new Error("failed after ADD"))
+      await expect(
+        storeExternalMemory({ text: "fact", operationId: "op-1" }, ATTRIBUTION)
+      ).rejects.toThrow("failed after ADD")
+      expect(mockReleaseOp).not.toHaveBeenCalled()
+    })
+
+    it("releases a failure before consolidation starts", async () => {
+      mockBuildDeps.mockRejectedValueOnce(new Error("dependencies unavailable"))
+      await expect(
+        storeExternalMemory({ text: "fact", operationId: "op-1" }, ATTRIBUTION)
+      ).rejects.toThrow("dependencies unavailable")
+      expect(mockReleaseOp).toHaveBeenCalledWith("local-user", "op-1", "req-hash")
+    })
+
+    it("retries only the receipt and reports exhausted retries without releasing the key", async () => {
+      mockRecordOp.mockRejectedValue(new Error("receipt unavailable"))
+      await expect(
+        storeExternalMemory({ text: "fact", operationId: "op-1" }, ATTRIBUTION)
+      ).rejects.toMatchObject({ code: "memory_receipt_commit_failed" })
+      expect(mockRecordOp).toHaveBeenCalledTimes(3)
+      expect(mockConsolidate).toHaveBeenCalledTimes(1)
+      expect(mockReleaseOp).not.toHaveBeenCalled()
+    })
+
+    it("recovers a transient receipt failure without executing the store twice", async () => {
+      mockRecordOp
+        .mockRejectedValueOnce(new Error("receipt unavailable"))
+        .mockRejectedValueOnce(new Error("receipt unavailable"))
+      await expect(
+        storeExternalMemory({ text: "fact", operationId: "op-1" }, ATTRIBUTION)
+      ).resolves.toMatchObject({ ok: true })
+      expect(mockRecordOp).toHaveBeenCalledTimes(3)
       expect(mockConsolidate).toHaveBeenCalledTimes(1)
     })
 
@@ -677,6 +776,75 @@ describe("storeExternalMemory", () => {
       expect(mockRecordOp).not.toHaveBeenCalled()
     })
   })
+})
+
+describe("same-key stores with the canonical operation ledger", () => {
+  const fixture = createDbTestFixture()
+  beforeAll(fixture.initialize)
+  beforeEach(async () => {
+    await fixture.restore()
+    const ledger = jest.requireActual("@/lib/db/memory-operations")
+    mockReserve.mockImplementation(ledger.reserveMemoryOperation)
+    mockAwaitOp.mockImplementation((principalId, operationId) =>
+      ledger.awaitMemoryOperation(principalId, operationId, { timeoutMs: 0 })
+    )
+    mockRequestHash.mockImplementation(ledger.memoryOperationRequestHash)
+    mockRecordOp.mockImplementation(ledger.recordMemoryOperation)
+    mockReleaseOp.mockImplementation(ledger.releaseMemoryOperation)
+  })
+  afterAll(fixture.dispose)
+
+  it.each(["consolidation", "direct insert"])(
+    "persists one ADD while a slow %s holds its reservation",
+    async (path) => {
+      let started!: () => void
+      let release!: () => void
+      const entered = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      const wait = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const persist = async () => {
+        started()
+        await wait
+        return jest.requireActual("@/lib/db/memories").createMemory({
+          text: "fact",
+          type: "semantic",
+          scope: "global",
+          provenance: "external",
+          importance: 7,
+        })
+      }
+      if (path === "consolidation")
+        mockConsolidate.mockImplementation(async () => ({
+          applied: [{ op: "ADD", memory: await persist() }],
+        }))
+      else {
+        mockBuildDeps.mockResolvedValue(undefined)
+        mockCreateMemory.mockImplementation(persist)
+      }
+      const input = { text: "fact", operationId: "same-key" }
+      const first = storeExternalMemory(input, ATTRIBUTION)
+      await entered
+      try {
+        await expect(storeExternalMemory(input, ATTRIBUTION)).rejects.toThrow(
+          "operation still in flight"
+        )
+        expect(await getDb().memories.count()).toBe(0)
+      } finally {
+        release()
+        await first
+      }
+      expect(await getDb().memories.count()).toBe(1)
+      expect(await storeExternalMemory(input, ATTRIBUTION)).toMatchObject({
+        ok: true,
+        applied: ["ADD"],
+        consolidated: path === "consolidation",
+      })
+      expect(await getDb().memories.count()).toBe(1)
+    }
+  )
 })
 
 it("passes the create-only operation ceiling to the consolidator and preserves downgrade review/audit", async () => {

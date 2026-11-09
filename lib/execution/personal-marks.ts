@@ -11,7 +11,7 @@ import {
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 import { getDb } from "@/lib/db/schema"
-import { resolveExecutingRun } from "./acting-authority"
+import { resolveExecutingRun, resolveRunActingIdentity } from "./acting-authority"
 import type { PersonalCredentialContext, PersonalCredentialSource } from "./personal-credential"
 import { effectivePersonalMarks } from "@cognia/plugin-contract/types/execution/personal-visibility"
 export { effectivePersonalMarks } from "@cognia/plugin-contract/types/execution/personal-visibility"
@@ -28,9 +28,31 @@ export async function markPersonalCredential(
     delivery: source === "lark-user" && context.delivery,
   })
   if (!run || getDb() !== db) throw new Error("Personal mark execution unavailable")
+  const mark: PersonalMarkV1 = { person, source, markedAt: Date.now() }
+  await persistRunPersonalMarks(db, run, identity, [mark])
+}
+
+/** Host recall must commit its source taint before releasing context or tool output. */
+export async function addPersonalMarksToRun(
+  context: { sessionId?: string; executionRunId?: string },
+  marks: readonly PersonalMarkV1[]
+): Promise<void> {
+  if (!marks.length) return
+  const db = getDb()
+  const run = await resolveExecutingRun(context.sessionId, context.executionRunId)
+  const identity = await resolveRunActingIdentity(context.sessionId, context.executionRunId)
+  if (!run || !identity || getDb() !== db) throw new Error("Personal mark execution unavailable")
+  await persistRunPersonalMarks(db, run, identity, marks)
+}
+
+async function persistRunPersonalMarks(
+  db: ReturnType<typeof getDb>,
+  run: ExecutionRun,
+  identity: ActingIdentityV1,
+  incoming: readonly PersonalMarkV1[]
+): Promise<void> {
   const { appendRunEventInsideTransaction, semanticRunEvent } =
     await import("@/lib/db/execution-runs")
-  const mark: PersonalMarkV1 = { person, source, markedAt: Date.now() }
   await db.transaction(
     "rw",
     db.executionRuns,
@@ -53,8 +75,11 @@ export async function markPersonalCredential(
             throw new Error("Personal mark authority changed")
           reachedRoot = true
         }
-        const marks = mergePersonalMarks(current.personalMarks, [mark])
-        if (JSON.stringify(marks) !== JSON.stringify(current.personalMarks ?? [])) {
+        let marks = current.personalMarks ?? []
+        for (const mark of incoming) {
+          const merged = mergePersonalMarks(marks, [mark])
+          if (JSON.stringify(merged) === JSON.stringify(marks)) continue
+          marks = merged
           await db.executionRuns.update(id, { personalMarks: marks })
           await appendRunEventInsideTransaction(
             db,

@@ -51,7 +51,15 @@ export async function filterPersonalMemories(
   sessionId?: string,
   executionRunId?: string
 ): Promise<Memory[]> {
-  if (!memories.length) return []
+  return (await readPersonalMemories(memories, sessionId, executionRunId)).memories
+}
+
+async function readPersonalMemories(
+  memories: readonly Memory[],
+  sessionId?: string,
+  executionRunId?: string
+): Promise<{ memories: Memory[]; marks: Map<string, PersonalMarkV1[]> }> {
+  if (!memories.length) return { memories: [], marks: new Map() }
   const db = getDb()
   const sources = await Promise.all(
     memories.map(async (memory): Promise<PersonalHistoryMessage[]> => {
@@ -100,8 +108,20 @@ export async function filterPersonalMemories(
   )
   if (getDb() !== db) throw new Error("Personal memory database changed")
   const history = await preparePersonalHistory(sessionId, sources.flat(), { executionRunId })
+  if (getDb() !== db) throw new Error("Personal memory database changed")
   const withheld = new Set(history.withheldMessageIds)
-  return memories.filter((memory) => !withheld.has(memory.id))
+  const marks = new Map<string, PersonalMarkV1[]>()
+  for (const message of history.messages) {
+    if (withheld.has(message.id)) continue
+    const metadata = message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined
+    marks.set(message.id, mergePersonalMarks(marks.get(message.id), metadata?.personalMarks))
+  }
+  return { memories: memories.filter((memory) => !withheld.has(memory.id)), marks }
+}
+
+/** App-side receipt hook; pure memory assembly keeps its existing contract. */
+export interface PersonalMemoryContextDeps extends ApplyMemoryContextDeps {
+  markInjectedMemories?: (ids: readonly string[]) => Promise<void>
 }
 
 /** Carry the consuming Host identity through each candidate leg, ahead of model reranking. */
@@ -109,23 +129,35 @@ export function withPersonalMemoryVisibility(
   deps: ApplyMemoryContextDeps,
   sessionId?: string,
   executionRunId?: string
-): ApplyMemoryContextDeps {
+): PersonalMemoryContextDeps {
+  const db = getDb()
+  const sourceMarks = new Map<string, PersonalMarkV1[]>()
+  const visible = async (memories: Memory[]) => {
+    if (getDb() !== db) throw new Error("Personal memory database changed")
+    const result = await readPersonalMemories(memories, sessionId, executionRunId)
+    for (const [id, marks] of result.marks)
+      sourceMarks.set(id, mergePersonalMarks(sourceMarks.get(id), marks))
+    return result.memories
+  }
   return {
     ...deps,
-    loadCandidates: async (reader) =>
-      filterPersonalMemories(await deps.loadCandidates(reader), sessionId, executionRunId),
-    loadProcedural: async (reader) =>
-      filterPersonalMemories(await deps.loadProcedural(reader), sessionId, executionRunId),
+    markInjectedMemories: async (ids) => {
+      if (getDb() !== db) throw new Error("Personal memory database changed")
+      const marks = ids.flatMap((id) => {
+        const known = sourceMarks.get(id)
+        if (!known) throw new Error("Personal memory source unavailable")
+        return known
+      })
+      const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+      await addPersonalMarksToRun({ sessionId, executionRunId }, mergePersonalMarks(marks))
+    },
+    loadCandidates: async (reader) => visible(await deps.loadCandidates(reader)),
+    loadProcedural: async (reader) => visible(await deps.loadProcedural(reader)),
     ...(deps.loadHistoricalCandidates
       ? {
           loadHistoricalCandidates: async (
             reader: Parameters<NonNullable<ApplyMemoryContextDeps["loadHistoricalCandidates"]>>[0]
-          ) =>
-            filterPersonalMemories(
-              await deps.loadHistoricalCandidates!(reader),
-              sessionId,
-              executionRunId
-            ),
+          ) => visible(await deps.loadHistoricalCandidates!(reader)),
         }
       : {}),
   }

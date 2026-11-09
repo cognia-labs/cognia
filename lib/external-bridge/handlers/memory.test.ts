@@ -156,6 +156,11 @@ describe("memoryList", () => {
 })
 
 describe("memoryStore", () => {
+  it("propagates an in-flight failure to the MCP error envelope instead of acknowledging a store", async () => {
+    const error = new Error("memory_store: operation still in flight")
+    mockStoreExternal.mockRejectedValueOnce(error)
+    await expect(memoryStore({ text: "fact", operationId: "pending" })).rejects.toBe(error)
+  })
   it("validates length and stamps the mcp channel", async () => {
     await expect(memoryStore({ text: "x".repeat(MAX_MEMORY_TEXT_CHARS + 1) })).rejects.toThrow(
       /exceeds/

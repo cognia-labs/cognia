@@ -97,6 +97,45 @@ it("declares recall and continuity as turn sections in their slots, continuity a
 })
 
 describe("recall", () => {
+  it("marks only the snapshot's injected facts and procedures before returning context", async () => {
+    const markInjectedMemories = jest.fn(async () => undefined)
+    mockApplyMemory.mockResolvedValue({
+      ...recallResult,
+      snapshot: { memoryRefs: [{ id: "fact" }, { id: "procedure" }] },
+    })
+    await recall.produce(
+      turn({
+        hostDeps: { memory: { ...memoryDeps(), markInjectedMemories }, memoryQuery: "releases" },
+      })
+    )
+    expect(markInjectedMemories).toHaveBeenCalledWith(["fact", "procedure"])
+    mockApplyMemory.mockResolvedValue({ ...recallResult, systemPromptSection: null })
+    markInjectedMemories.mockClear()
+    await recall.produce(
+      turn({
+        hostDeps: { memory: { ...memoryDeps(), markInjectedMemories }, memoryQuery: "releases" },
+      })
+    )
+    expect(markInjectedMemories).not.toHaveBeenCalled()
+  })
+
+  it("withholds context when its personal marks cannot commit", async () => {
+    mockApplyMemory.mockResolvedValue({
+      ...recallResult,
+      snapshot: { memoryRefs: [{ id: "fact" }] },
+    })
+    const markInjectedMemories = jest.fn(async () => {
+      throw new Error("mark unavailable")
+    })
+    await expect(
+      recall.produce(
+        turn({
+          hostDeps: { memory: { ...memoryDeps(), markInjectedMemories }, memoryQuery: "releases" },
+        })
+      )
+    ).rejects.toThrow("mark unavailable")
+  })
+
   it("recalls for the agent's namespace, deduplicates against the twin, and hands its budget on", async () => {
     mockApplyMemory.mockResolvedValue(recallResult)
     const section = await recall.produce(turn())
@@ -207,6 +246,18 @@ describe("continuity", () => {
   } as unknown as ContextTurnContext["settings"]
   const withPrior = (prior: RecallHandoff | undefined) =>
     prior === undefined ? turn({ settings: on }) : { ...turn({ settings: on }), prior }
+
+  it("marks only claims actually assembled into project continuity", async () => {
+    const markInjectedMemories = jest.fn(async () => undefined)
+    mockApplyContinuity.mockResolvedValue(continuityResult)
+    await continuity.produce(
+      turn({
+        settings: on,
+        hostDeps: { memory: { ...memoryDeps(), markInjectedMemories }, memoryQuery: "releases" },
+      })
+    )
+    expect(markInjectedMemories).toHaveBeenCalledWith(["c1"])
+  })
 
   it("borrows what recall left unspent and reports the claims", async () => {
     mockApplyContinuity.mockResolvedValue(continuityResult)

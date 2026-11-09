@@ -3,6 +3,10 @@ import type { Memory } from "@/types/memory/memory"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
+import { commitMessageDelta, listMessages } from "@/lib/db/messages"
+import { contributions } from "@/lib/memory/context"
+import type { ContextTurnContext } from "@/lib/modules/manifest-types"
 
 const mockTryBuildTwinDeps = jest.fn()
 const mockCreateProviderEmbeddingAdapter = jest.fn()
@@ -87,6 +91,146 @@ describe("personal memory provenance", () => {
   })
   const memory = (id: string, extra: Record<string, unknown> = {}) =>
     ({ id, text: `${id} remembered prose`, ...extra }) as unknown as Memory
+
+  it.each(["semantic", "procedural", "project"] as const)(
+    "propagates injected %s provenance through the run tree, persisted reply and readerless consumers",
+    async (kind) => {
+      const db = getDb()
+      const sourceMark = mark({ kind: "local-person" })
+      await db.sessions.bulkPut([
+        { id: "source-session", title: "Source", projectId: "p" },
+        { id: "reader", title: "Reader", projectId: "p" },
+      ] as never)
+      await db.messages.put({
+        id: "personal-source",
+        sessionId: "source-session",
+        role: "user",
+        createdAt: 1,
+        parts: [{ type: "text", text: "pnpm releases happen Tuesday" }],
+        metadata: { personalMarks: [sourceMark] },
+      } as never)
+      const root = await startToolExecutionRun("root", { localAuthorization: LOCAL_PERSON_RUN })
+      const child = await startToolExecutionRun("reader", { parentRunId: root.id })
+      const fact = (await jest.requireActual("@/lib/db/memories").createMemory({
+        text: "pnpm releases happen Tuesday",
+        type: kind === "procedural" ? "procedural" : "semantic",
+        scope: kind === "project" ? "workspace" : "global",
+        projectId: kind === "project" ? "p" : undefined,
+        projectMemoryKind: kind === "project" ? "decision" : undefined,
+        provenance: "explicit",
+        importance: 8,
+        reviewStatus: "verified",
+        trustState: "trusted",
+        sourceSessionId: "source-session",
+        sourceMessageId: "personal-source",
+      })) as Memory
+      const deps = withPersonalMemoryVisibility(
+        {
+          loadCandidates: async () => (kind === "procedural" ? [] : [fact]),
+          loadProcedural: async () => (kind === "procedural" ? [fact] : []),
+        },
+        "reader",
+        child.id
+      )
+      const ctx = {
+        session: { id: "reader", projectId: "p" },
+        agent: null,
+        settings: { memory: { enableProjectContinuity: true, relevanceFloor: 0.01 } },
+        activeGoal: null,
+        prompts: { snapshot: null, context: {} },
+        host: "desktop",
+        activeProject: null,
+        query: { text: "pnpm releases", embedding: null },
+        grant: null,
+        hostDeps: { memory: deps, memoryQuery: "pnpm releases" },
+        kernelRetrieval: { identityTexts: [] },
+      } as unknown as ContextTurnContext
+      const section = await contributions
+        .find((c) => c.id === (kind === "project" ? "continuity" : "recall"))!
+        .produce(ctx)
+      expect(section?.text).toContain(fact.text)
+      for (const runId of [root.id, child.id])
+        expect((await db.executionRuns.get(runId))?.personalMarks).toEqual([sourceMark])
+      const reply = {
+        id: "reply",
+        role: "assistant" as const,
+        parts: [{ type: "text" as const, text: fact.text }],
+      }
+      bindPersonalMessageRun(reply.id, child.id)
+      await commitMessageDelta("reader", { upserts: [reply] })
+      const [persisted] = await listMessages("reader")
+      expect(persisted.metadata).toMatchObject({ personalMarks: [sourceMark] })
+      expect(
+        await filterPersonalMemories([
+          memory("repeated", { sourceMessageId: reply.id, sourceSessionId: "reader" }),
+        ])
+      ).toEqual([])
+      await import("@/lib/workflow/nodes/sessions")
+      const { getExecutor } = await import("@/lib/workflow/nodes/registry")
+      const result = await getExecutor("action.session.get", 1)!.execute({
+        params: { sessionId: "reader", messageLimit: 10 },
+        workflowId: "wf",
+        runId: "readerless",
+        stepId: "read",
+      } as never)
+      expect(JSON.stringify(result.output)).not.toContain(fact.text)
+      expect(JSON.stringify(result.output)).toContain("Withheld")
+    }
+  )
+
+  it("leaves a run and its reply unmarked when recall injects only public provenance", async () => {
+    const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })
+    await getDb().sessions.put({ id: "reader", projectId: "p", title: "Reader" } as never)
+    await getDb().messages.put({
+      id: "public",
+      sessionId: "source",
+      createdAt: 1,
+      metadata: { personalMarkVersion: 1 },
+    } as never)
+    const fact = (await jest.requireActual("@/lib/db/memories").createMemory({
+      text: "pnpm releases happen Tuesday",
+      scope: "global",
+      type: "semantic",
+      provenance: "explicit",
+      importance: 8,
+      sourceMessageId: "public",
+    })) as Memory
+    const deps = withPersonalMemoryVisibility(
+      { loadCandidates: async () => [fact], loadProcedural: async () => [] },
+      "reader",
+      run.id
+    )
+    const section = await contributions[0].produce({
+      session: { id: "reader" },
+      agent: null,
+      settings: null,
+      hostDeps: { memory: deps, memoryQuery: "pnpm releases" },
+      query: { text: "pnpm releases", embedding: null },
+      kernelRetrieval: { identityTexts: [] },
+    } as unknown as ContextTurnContext)
+    expect(section?.text).toContain(fact.text)
+    expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+    bindPersonalMessageRun("public-reply", run.id)
+    await commitMessageDelta("reader", {
+      upserts: [
+        { id: "public-reply", role: "assistant", parts: [{ type: "text", text: fact.text }] },
+      ],
+    })
+    expect((await listMessages("reader"))[0].metadata).not.toHaveProperty("personalMarks")
+  })
+
+  it("does not taint a run merely for loading personal candidates that are not injected", async () => {
+    const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })
+    const fact = memory("candidate", { personalMarks: [mark({ kind: "local-person" })] })
+    const deps = withPersonalMemoryVisibility(
+      { loadCandidates: async () => [fact], loadProcedural: async () => [] },
+      "reader",
+      run.id
+    )
+    expect(await deps.loadCandidates()).toEqual([fact])
+    await deps.markInjectedMemories?.([])
+    expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+  })
 
   it("keeps unproven legacy memories with the owner and withholds them from another requester", async () => {
     const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })

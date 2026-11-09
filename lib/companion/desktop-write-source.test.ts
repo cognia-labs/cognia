@@ -2722,6 +2722,14 @@ describe("dispatchCommand: memory_* (ADR-0069)", () => {
     })
   })
 
+  it("memory_store preserves an in-flight failure for the RPC retry path", async () => {
+    const error = new Error("memory_store: operation still in flight")
+    mockMemoryStore.mockRejectedValueOnce(error)
+    await expect(
+      dispatchCommand("memory_store", { text: "fact", operationId: "pending" })
+    ).rejects.toBe(error)
+  })
+
   it("memory_store validates text and stamps the rpc channel", async () => {
     await expect(dispatchCommand("memory_store", { text: "  " })).rejects.toThrow(
       /text is required/

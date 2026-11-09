@@ -1546,6 +1546,96 @@ describe("call() — 4xx errors", () => {
 describe("call() — retries", () => {
   beforeEach(() => setConfig())
 
+  it.each(["memory_store", "memory_mutate"])(
+    "retries %s in-flight errors with the same operation and idempotency key",
+    async (command) => {
+      jest.useFakeTimers()
+      __setBackoffRandomForTests(() => 0)
+      fetchSpy
+        .mockResolvedValueOnce(
+          mockResponse(
+            {
+              code: "memory_operation_in_flight",
+              message: `${command}: operation still in flight`,
+              retryable: true,
+            },
+            503
+          )
+        )
+        .mockResolvedValueOnce(mockResponse({ ok: true }, 200))
+      const args = {
+        operationId: "memory-operation",
+        ...(command === "memory_store"
+          ? { text: "fact" }
+          : { command: { kind: "pin", id: "m1", pinned: true } }),
+      }
+      transport = new CompanionTransport()
+      const result = transport.call(command, args, { idempotencyKey: args.operationId })
+      await jest.advanceTimersByTimeAsync(250)
+
+      await expect(result).resolves.toEqual({ ok: true })
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      const attempts = fetchSpy.mock.calls.map(([, init]) => init as RequestInit)
+      expect(attempts.map((init) => init.body)).toEqual([
+        JSON.stringify(args),
+        JSON.stringify(args),
+      ])
+      expect(
+        attempts.map((init) => (init.headers as Record<string, string>)["Idempotency-Key"])
+      ).toEqual([args.operationId, args.operationId])
+    }
+  )
+
+  it.each(["memory_store", "memory_mutate"])(
+    "keeps an exhausted %s in-flight error retryable for the outbox",
+    async (command) => {
+      jest.useFakeTimers()
+      __setBackoffRandomForTests(() => 0)
+      fetchSpy.mockResolvedValue(
+        mockResponse(
+          {
+            code: "memory_operation_in_flight",
+            message: `${command}: operation still in flight`,
+            retryable: true,
+          },
+          503
+        )
+      )
+      transport = new CompanionTransport()
+      const result = transport.call(command, { operationId: "memory-operation" })
+      const rejected = expect(result).rejects.toMatchObject({
+        code: "memory_operation_in_flight",
+        retryable: true,
+      })
+      await jest.runAllTimersAsync()
+
+      await rejected
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
+    }
+  )
+
+  it.each(["memory_store", "memory_mutate"])(
+    "does not retry a %s receipt commit failure",
+    async (command) => {
+      fetchSpy.mockResolvedValue(
+        mockResponse(
+          {
+            code: "internal_error",
+            message: `${command}: command applied but receipt commit failed; operation remains pending`,
+            retryable: false,
+          },
+          500
+        )
+      )
+      transport = new CompanionTransport()
+
+      await expect(
+        transport.call(command, { operationId: "memory-operation" })
+      ).rejects.toMatchObject({ code: "internal_error", retryable: false })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    }
+  )
+
   it("classifies a failed auth challenge as a transport failure", async () => {
     __setAuthorizationHeadersProviderForTests(async () => {
       throw new TypeError("Load failed")

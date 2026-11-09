@@ -133,6 +133,16 @@ fn map_desktop_write_bridge_error(command: &str, detail: String) -> (StatusCode,
             )),
         );
     }
+    if matches!(
+        (command, detail.as_str()),
+        ("memory_store", "memory_store: operation still in flight")
+            | ("memory_mutate", "memory_mutate: operation still in flight")
+    ) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(RpcError::new("memory_operation_in_flight", detail).retryable()),
+        );
+    }
     RpcError::internal(detail)
 }
 

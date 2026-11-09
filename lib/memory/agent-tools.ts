@@ -17,6 +17,12 @@
  */
 
 import type { ModuleToolFamily } from "@/lib/modules/manifest-types"
+import type { UIMessage } from "ai"
+import type { ProjectHistoryEvidence } from "@/lib/claude/project-history-evidence-registry"
+import {
+  mergePersonalMarks,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import {
   projectHistoryToolEntries,
@@ -24,7 +30,14 @@ import {
   type ProjectHistoryToolDeps,
 } from "./project-history-tool"
 
-type ProjectHistoryDepsResolver = () => Promise<ProjectHistoryToolDeps> | ProjectHistoryToolDeps
+interface PersonalProjectHistoryDeps extends ProjectHistoryToolDeps {
+  markEvidence?: (
+    evidence: readonly ProjectHistoryEvidence[],
+    context: { sessionId: string; executionRunId?: string }
+  ) => Promise<void>
+}
+type ProjectHistoryDepsResolver = () =>
+  Promise<PersonalProjectHistoryDeps> | PersonalProjectHistoryDeps
 
 let depsOverride: ProjectHistoryDepsResolver | null = null
 
@@ -36,17 +49,17 @@ export function __setProjectHistoryToolDepsForTesting(fn: ProjectHistoryDepsReso
 /**
  * Build the project-history tool's host deps.
  *
- * Everything here is an existing reader used as-is: the chat-search engine, the
- * result index, the indexer drain, and the `@msg:` window builder. The tool
- * adds filtering and framing on top; it owns no storage of its own.
+ * Reuse the chat-search engine, result index, indexer drain and `@msg:` window
+ * formatting. Host source receipts stay beside the reads until the returned
+ * evidence determines which marks the consuming run must inherit.
  */
-async function resolveProjectHistoryToolDeps(): Promise<ProjectHistoryToolDeps> {
+async function resolveProjectHistoryToolDeps(): Promise<PersonalProjectHistoryDeps> {
   if (depsOverride) return depsOverride()
   const [
     { searchChatHistory },
     { drainSearchIndex },
     { searchChatResults },
-    { buildMessageReferenceText },
+    { clampSpan, formatMessageReference, projectMessageBody },
     { getDb },
   ] = await Promise.all([
     import("@/lib/chat/search/engine"),
@@ -55,7 +68,23 @@ async function resolveProjectHistoryToolDeps(): Promise<ProjectHistoryToolDeps> 
     import("@/lib/chat/mentions/message-reference"),
     import("@/lib/db/schema"),
   ])
+  const db = getDb()
+  const messageMarks = new Map<string, PersonalMarkV1[]>()
+  const titleMarks = new Map<string, PersonalMarkV1[]>()
+  const windowMarks = new Map<string, PersonalMarkV1[]>()
   return {
+    markEvidence: async (evidence, context) => {
+      if (getDb() !== db) throw new Error("Personal history database changed")
+      const marks = mergePersonalMarks(
+        ...evidence.flatMap((item) => [
+          messageMarks.get(item.messageId),
+          item.kind === "message" ? titleMarks.get(item.sessionId) : undefined,
+          item.id === `window:${item.messageId}` ? windowMarks.get(item.messageId) : undefined,
+        ])
+      )
+      const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+      await addPersonalMarksToRun(context, marks)
+    },
     resolveProjectId: async (sessionId) => {
       const { getSession } = await import("@/lib/db/sessions")
       const session = await getSession(sessionId).catch(() => null)
@@ -82,6 +111,12 @@ async function resolveProjectHistoryToolDeps(): Promise<ProjectHistoryToolDeps> 
       const history = await preparePersonalHistory(context.sessionId, [row], {
         executionRunId: context.executionRunId,
       })
+      if (!history.withheldMessageIds.length)
+        messageMarks.set(
+          messageId,
+          (history.messages[0].metadata as { personalMarks?: PersonalMarkV1[] } | undefined)
+            ?.personalMarks ?? []
+        )
       return history.withheldMessageIds.length === 0
     },
     readSessionTitle: async (sessionId, context) => {
@@ -93,9 +128,90 @@ async function resolveProjectHistoryToolDeps(): Promise<ProjectHistoryToolDeps> 
         [{ id: session.id, text: session.title }],
         { sessionId, executionRunId: context.executionRunId, legacyOwnerArtifact: true }
       )
+      if (!history.withheldMessageIds.length)
+        titleMarks.set(
+          sessionId,
+          (history.messages[0] as { metadata?: { personalMarks?: PersonalMarkV1[] } }).metadata
+            ?.personalMarks ?? []
+        )
       return history.withheldMessageIds.length ? "Conversation" : session.title
     },
-    buildWindow: (input) => buildMessageReferenceText(input),
+    buildWindow: async (input) => {
+      // The text-only reference builder drops source identities. Keep its
+      // bounded, branch-aware selection here and reuse its formatter so the
+      // Host can receipt the exact readable messages that make the window.
+      const anchor = await db.messages.get(input.messageId)
+      if (!anchor || anchor.sessionId !== input.sessionId) return null
+      const { before, after } = clampSpan(input.span)
+      const table = db.messages.where("[sessionId+createdAt]")
+      const earlier = before
+        ? (
+            await table
+              .between([input.sessionId, 0], [input.sessionId, anchor.createdAt], true, true)
+              .reverse()
+              .limit(before + 1)
+              .toArray()
+          )
+            .filter((row) => row.id !== anchor.id)
+            .slice(0, before)
+            .reverse()
+        : []
+      const later = after
+        ? (
+            await table
+              .between(
+                [input.sessionId, anchor.createdAt],
+                [input.sessionId, Number.MAX_SAFE_INTEGER],
+                true,
+                true
+              )
+              .limit(after + 1)
+              .toArray()
+          )
+            .filter((row) => row.id !== anchor.id)
+            .slice(0, after)
+        : []
+      let selected = [...earlier, anchor, ...later]
+      let anchorIndex = earlier.length
+      if (
+        selected.some(
+          (row) =>
+            row.metadata?.branchGroupId !== undefined || row.metadata?.branchOwnerId !== undefined
+        )
+      ) {
+        const { selectVisibleMessages, useChatStore } = await import("@/stores/chat/chat-store")
+        const rows = await table
+          .between([input.sessionId, 0], [input.sessionId, Number.MAX_SAFE_INTEGER], true, true)
+          .toArray()
+        const visible = selectVisibleMessages(
+          rows as unknown as UIMessage[],
+          useChatStore.getState().sessions[input.sessionId]?.activeBranchByGroup ?? {}
+        )
+        const at = visible.findIndex((row) => row.id === anchor.id)
+        if (at >= 0) {
+          const start = Math.max(0, at - before)
+          selected = visible.slice(start, at + after + 1) as unknown as typeof selected
+          anchorIndex = at - start
+        }
+      }
+      const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+      const history = await preparePersonalHistory(input.readerSessionId, selected, {
+        executionRunId: input.executionRunId,
+      })
+      const withheld = new Set(history.withheldMessageIds)
+      windowMarks.set(
+        input.messageId,
+        mergePersonalMarks(
+          ...history.messages
+            .filter((row) => !withheld.has(row.id) && projectMessageBody(row.parts))
+            .map(
+              (row) =>
+                (row.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)?.personalMarks
+            )
+        )
+      )
+      return formatMessageReference(history.messages, anchorIndex)
+    },
     now: () => Date.now(),
   }
 }
@@ -111,15 +227,27 @@ export const toolFamily: ModuleToolFamily = {
   run: async (_name, args, call) => {
     const { recordProjectHistoryEvidence } =
       await import("@/lib/claude/project-history-evidence-registry")
-    return runProjectHistorySearch(
+    const deps = await resolveProjectHistoryToolDeps()
+    let consumed: readonly ProjectHistoryEvidence[] = []
+    const result = await runProjectHistorySearch(
       args,
       {
-        ...(await resolveProjectHistoryToolDeps()),
+        ...deps,
         // Bound per call rather than in the resolver: the evidence is keyed by
         // the CALLING session, which only the call carries.
-        recordEvidence: (evidence) => recordProjectHistoryEvidence(call.sessionId, evidence),
+        recordEvidence: (evidence) => {
+          consumed = evidence
+        },
       },
       { sessionId: call.sessionId, executionRunId: call.executionRunId }
     )
+    if (result.ok) {
+      await deps.markEvidence?.(consumed, {
+        sessionId: call.sessionId,
+        executionRunId: call.executionRunId,
+      })
+      recordProjectHistoryEvidence(call.sessionId, consumed)
+    }
+    return result
   },
 }

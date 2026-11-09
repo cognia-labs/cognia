@@ -14,6 +14,9 @@ const ROOT = join(__dirname, "..", "..")
 // room hand-off transcripts retain control parts and marks for decide/delivery;
 // catch-up is an explicit owner read; background/room delivery has no personal
 // reader. Centralized steer calls still pass through IPC's visibility check.
+// Memory additions: the job fence reads only source existence/session identity;
+// workflow recall filters through its Host execution reader. Memory tool windows
+// filter their exact selected rows and receipt returned evidence before output.
 const REVIEWED_SITES: Record<string, string> = {
   "cli/src/agent/cli-host-runtime.ts": "complete:1",
   "cli/src/agent/external-agent-session.ts":
@@ -182,6 +185,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/data/import-merge.ts": "stored-message-read:2",
   "lib/db/chat-search-text.ts": "stored-message-read:1",
   "lib/db/connector-inbound-jobs.ts": "stored-message-read:1",
+  "lib/db/memory-governance.ts": "stored-message-read:1",
   "lib/db/messages.ts": "stored-message-read:15",
   "lib/db/mobile-outbound-queue.ts": "stored-message-read:1",
   "lib/db/plugin-bridge.ts": "stored-message-read:6",
@@ -213,7 +217,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/issues/ai-issue-assist.ts": "complete:5",
   "lib/media/agent-tools.ts": "listMessages:2;preparePersonalHistory:1",
   "lib/memory/agent-tools.ts":
-    "preparePersonalDerivedHistory:1;preparePersonalHistory:1;stored-message-read:2",
+    "preparePersonalDerivedHistory:1;preparePersonalHistory:2;stored-message-read:6",
   "lib/memory/backfill/backfill-service.ts": "listMessages:1;preparePersonalHistory:1",
   "lib/memory/lifecycle/job-worker.ts": "listMessages:1;preparePersonalHistory:1",
   "lib/memory/lifecycle/revalidate-claim.ts": "stored-message-read:3",
@@ -306,6 +310,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/wiki/agents/index-page-agent.ts": "complete:1",
   "lib/wiki/agents/module-article-agent.ts": "complete:1",
   "lib/work-submission/paired-turn-adapter.ts": "stored-message-read:1",
+  "lib/workflow/nodes/actions/memory-recall.ts": "withPersonalMemoryVisibility:1",
   "lib/workflow/nodes/ai/ai-prompt-routed.ts": "complete:3",
   "lib/workflow/nodes/ai/ai-prompt-v2.ts": "complete:1",
   "lib/workflow/nodes/ai/executors.ts": "complete:1",
@@ -748,7 +753,16 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "agent.visibilityDigest !== history.visibilityDigest",
     "history.hasWithheld",
   ],
-  "lib/memory/runtime/build-deps.ts": ["preparePersonalHistory", "withPersonalMemoryVisibility"],
+  "lib/memory/runtime/build-deps.ts": [
+    "preparePersonalHistory",
+    "withPersonalMemoryVisibility",
+    "addPersonalMarksToRun",
+  ],
+  "lib/memory/context.ts": [
+    "deps.markInjectedMemories",
+    "result.snapshot.memoryRefs",
+    "result.claims",
+  ],
   "lib/memory/backfill/backfill-service.ts": ["preparePersonalHistory"],
   "lib/memory/lifecycle/job-worker.ts": ["preparePersonalHistory", "filterPersonalMemories"],
   "lib/memory/write/run-memory-extraction.ts": ["withPersonalMemoryVisibility"],
@@ -758,6 +772,8 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "preparePersonalHistory",
     "preparePersonalDerivedHistory",
     "legacyOwnerArtifact: true",
+    "addPersonalMarksToRun",
+    "await deps.markEvidence",
   ],
   "lib/chat/mentions/entity-transcript.ts": ["preparePersonalHistory"],
   "lib/chat/mentions/entity-sources.ts": [

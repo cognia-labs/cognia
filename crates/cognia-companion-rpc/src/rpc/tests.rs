@@ -5421,6 +5421,50 @@ fn twin_draft_review_conflict_is_non_retryable_at_the_rpc_boundary() {
 }
 
 #[test]
+fn memory_operation_in_flight_is_retryable_only_for_exact_command_sentinels() {
+    for command in ["memory_store", "memory_mutate"] {
+        let detail = format!("{command}: operation still in flight");
+        let (status, Json(error)) = map_desktop_write_bridge_error(command, detail.clone());
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code, "memory_operation_in_flight");
+        assert_eq!(error.message, detail);
+        assert!(error.retryable);
+    }
+
+    for (command, detail) in [
+        ("memory_store", "memory_mutate: operation still in flight"),
+        ("memory_mutate", "memory_store: operation still in flight"),
+        ("memory_update", "memory_mutate: operation still in flight"),
+        ("twin_source_create", "memory_store: operation still in flight"),
+        (
+            "memory_store",
+            "wrapped: memory_store: operation still in flight",
+        ),
+        (
+            "memory_mutate",
+            "memory_mutate: operation still in flight; another failure",
+        ),
+        (
+            "memory_store",
+            "memory_store: command applied but receipt commit failed; operation remains pending",
+        ),
+        (
+            "memory_mutate",
+            "memory_mutate: command applied but receipt commit failed; operation remains pending",
+        ),
+        ("memory_mutate", "memory_receipt_commit_failed"),
+        ("memory_store", "offline"),
+    ] {
+        let (expected_status, Json(expected_error)) = RpcError::internal(detail.to_string());
+        let (status, Json(error)) = map_desktop_write_bridge_error(command, detail.to_string());
+        assert_eq!(status, expected_status, "{command}: {detail}");
+        assert_eq!(error.code, expected_error.code, "{command}: {detail}");
+        assert_eq!(error.message, expected_error.message, "{command}: {detail}");
+        assert!(!error.retryable, "{command}: {detail}");
+    }
+}
+
+#[test]
 fn single_agent_task_commands_are_control_gated() {
     for command in [
         "agent_task_start",

@@ -21,6 +21,7 @@ import {
   effectivePersonalMarks,
   personalMessageMetadata,
   personalMessageForCopy,
+  addPersonalMarksToRun,
 } from "./personal-marks"
 
 const fixture = createDbTestFixture()
@@ -32,6 +33,41 @@ const message = (id: string): UIMessage => ({
   id,
   role: "assistant",
   parts: [{ type: "text", text: "private" }],
+})
+
+it("widens source marks on every ancestor, preserves existing marks, and leaves empty reads unmarked", async () => {
+  const root = await startToolExecutionRun("root", { localAuthorization: LOCAL_PERSON_RUN })
+  const parent = await startToolExecutionRun("parent", { parentRunId: root.id })
+  const child = await startToolExecutionRun("child", { parentRunId: parent.id })
+  const existing = { ...mark, source: "existing-source" }
+  await getDb().executionRuns.update(root.id, { personalMarks: [existing] })
+  await addPersonalMarksToRun({ executionRunId: child.id }, [mark])
+  await addPersonalMarksToRun({ executionRunId: child.id }, [mark])
+  expect((await getDb().executionRuns.get(root.id))?.personalMarks).toEqual([existing, mark])
+  for (const id of [parent.id, child.id])
+    expect((await getDb().executionRuns.get(id))?.personalMarks).toEqual([mark])
+  const clean = await startToolExecutionRun("clean", { localAuthorization: LOCAL_PERSON_RUN })
+  await addPersonalMarksToRun({ executionRunId: clean.id }, [])
+  expect((await getDb().executionRuns.get(clean.id))?.personalMarks).toBeUndefined()
+})
+
+it("rolls back recalled marks on all ancestors when their journal cannot commit", async () => {
+  const root = await startToolExecutionRun("root", { localAuthorization: LOCAL_PERSON_RUN })
+  const child = await startToolExecutionRun("child", { parentRunId: root.id })
+  const fail = () => {
+    throw new Error("journal unavailable")
+  }
+  const db = getDb()
+  db.executionRunEvents.hook("creating", fail)
+  try {
+    await expect(addPersonalMarksToRun({ executionRunId: child.id }, [mark])).rejects.toThrow(
+      "journal unavailable"
+    )
+    expect((await db.executionRuns.get(root.id))?.personalMarks).toBeUndefined()
+    expect((await db.executionRuns.get(child.id))?.personalMarks).toBeUndefined()
+  } finally {
+    db.executionRunEvents.hook("creating").unsubscribe(fail)
+  }
 })
 
 it("marks a child's read on every team/plan/delegation ancestor before releasing its credential", async () => {

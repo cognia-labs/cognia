@@ -32,6 +32,7 @@ import type {
   ManageMemoryCommitContext,
 } from "@/lib/memory/control-plane/manage"
 import { resolveMemoryCaller } from "./caller"
+import { MemoryPreWriteError } from "./store-memory"
 
 export interface ManageMemoryForCallerContext {
   /** Host-bound identity — `companionCaller(callerDeviceId)` for RPC. */
@@ -45,8 +46,8 @@ export type ManageMemoryForCallerResult = ManageMemoryResult
 
 export class MemoryReceiptCommitError extends Error {
   readonly code = "memory_receipt_commit_failed"
-  constructor(cause: unknown) {
-    super("memory_mutate: command applied but receipt commit failed; operation remains pending", {
+  constructor(cause: unknown, surface = "memory_mutate") {
+    super(`${surface}: command applied but receipt commit failed; operation remains pending`, {
       cause,
     })
     this.name = "MemoryReceiptCommitError"
@@ -113,11 +114,13 @@ export async function manageMemoryForCaller(
   const config = resolveMemoryConfig(settings?.memory)
   const caller = resolveMemoryCaller(context.caller, config)
   const namespaces = caller.namespaces
+  const touched = new Map<string, Memory>()
 
   // An unknown id is `not_found` from `manageMemory`, exactly as it is locally;
   // only rows that exist can be outside the caller's namespaces.
   for (const rowId of touchedIds(command)) {
     const row = await memDb.getMemory(rowId)
+    if (row) touched.set(rowId, row)
     if (row && !memoryRowWithinNamespaces(row, namespaces)) {
       return { ok: false, reason: "unauthorized_namespace" }
     }
@@ -126,6 +129,18 @@ export async function manageMemoryForCaller(
   if (destination && !memoryRowWithinNamespaces(destination, namespaces)) {
     return { ok: false, reason: "unauthorized_namespace" }
   }
+  // This is the conflict command's only validation throw. Reject it before
+  // reserving, preserving the control plane's not-found precedence.
+  if (
+    command.kind === "resolve-conflict" &&
+    command.mode === "merge" &&
+    !command.mergedText?.trim() &&
+    [command.keepId, command.dropId].every((id) => {
+      const row = touched.get(id)
+      return row && row.revisionOf === undefined
+    })
+  )
+    throw new MemoryPreWriteError(new Error("resolve-conflict merge requires non-empty mergedText"))
 
   const effective: ManageMemoryCommand =
     command.kind === "resolve-conflict" ? { ...command, actorId: caller.principalId } : command
@@ -142,7 +157,9 @@ export async function manageMemoryForCaller(
   let reservation = await ledger.reserveMemoryOperation(binding)
   if (reservation.state === "in_flight") {
     const settled = await ledger.awaitMemoryOperation(binding.principalId, binding.operationId)
-    reservation = settled ? { state: "replay", receipt: settled } : reservation
+    reservation = settled
+      ? { state: "replay", receipt: settled }
+      : await ledger.reserveMemoryOperation(binding)
   }
   if (reservation.state === "conflict") return { ok: false, reason: "idempotency_key_reused" }
   if (reservation.state === "replay") {
@@ -199,9 +216,9 @@ export async function manageMemoryForCaller(
   try {
     result = await runCommand(effective, atomic ? commit : undefined)
   } catch (error) {
-    // An atomic envelope rolled back, so no canonical write survived. A
-    // multi-step command may already have committed; keep its key fenced.
-    if (atomic)
+    // An atomic envelope rolled back, and the store core explicitly identifies
+    // pre-write failures. Other multi-step failures keep their key fenced.
+    if (atomic || error instanceof MemoryPreWriteError)
       await ledger.releaseMemoryOperation(
         binding.principalId,
         binding.operationId,
@@ -240,13 +257,27 @@ export async function manageMemoryForCaller(
     next: ManageMemoryCommand,
     commit?: ManageMemoryCommitContext["commit"]
   ): Promise<ManageMemoryForCallerResult> {
-    if (next.kind !== "clear" || !namespaces)
-      return commit ? manageMemory(next, { commit }) : manageMemory(next)
+    if (next.kind !== "clear" || !namespaces) {
+      try {
+        return await (commit ? manageMemory(next, { commit }) : manageMemory(next))
+      } catch (error) {
+        // clear catches every per-row write failure as partial_failure. Its
+        // only escaping failure is the initial list, before any delete.
+        if (next.kind === "clear") throw new MemoryPreWriteError(error)
+        throw error
+      }
+    }
     // A restricted device clears only what it may see: one governed delete per
     // row, never the unscoped table-wide clear.
-    const rows = await memDb.listMemories(
-      next.query?.status === "invalidated" ? { ...next.query, includeRevisions: true } : next.query
-    )
+    const rows = await memDb
+      .listMemories(
+        next.query?.status === "invalidated"
+          ? { ...next.query, includeRevisions: true }
+          : next.query
+      )
+      .catch((error) => {
+        throw new MemoryPreWriteError(error)
+      })
     const allowed = rows.filter((row) => memoryRowWithinNamespaces(row, namespaces))
     const allowedIds = new Set(allowed.map((row) => row.id))
     let clearedCount = 0
