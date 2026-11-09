@@ -6,6 +6,7 @@
  */
 
 import { DEFAULT_MEMORY_CONFIG, type MemoryConfig } from "@/types/memory/memory"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 import type { ConsolidateDeps } from "@/lib/memory/consolidate/consolidator"
 
 const mockResolveMemoryPolicy = jest.fn()
@@ -181,7 +182,10 @@ describe("buildAutoExtractionDeps", () => {
       provenance: "user",
     })
     expect(upsert).toHaveBeenCalledWith("new1", "fact")
-    expect(mockUpdateMemory).toHaveBeenCalledWith("new1", { vectorDocId: "new1" })
+    expect(mockUpdateMemory).toHaveBeenCalledWith("new1", {
+      vectorDocId: "new1",
+      vectorTextHash: hashContent("fact"),
+    })
   })
 
   it("findSimilar returns [] when no memory deps are available", async () => {

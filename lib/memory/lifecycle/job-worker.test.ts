@@ -48,6 +48,8 @@ jest.mock("@/lib/db/characters", () => ({
 }))
 jest.mock("@/lib/db/messages", () => ({ listMessages: () => mockListMessages() }))
 jest.mock("@/lib/db/memory-governance", () => ({
+  MemoryJobWriteError: jest.requireActual("@/lib/db/memory-governance").MemoryJobWriteError,
+  withMemoryJobWrite: (_job: unknown, _ids: unknown, write: () => Promise<unknown>) => write(),
   appendMemoryAuditEvent: (...args: unknown[]) => mockAppendAudit(...args),
   claimNextMemoryJob: jest.fn(),
   finishMemoryJob: jest.fn(),
@@ -106,6 +108,7 @@ import {
   __resetMemoryDrainLock,
   drainMemoryJobs,
   drainMemoryJobsAfterTurn,
+  MAX_VECTOR_RECONCILE_UPSERTS,
   processMemoryJob,
   startMemoryJobWorker,
   type MemoryJobWorkerDeps,
@@ -540,12 +543,20 @@ describe("memory job worker", () => {
     mockListMemories.mockResolvedValue([
       { id: "safe", text: "Uses pnpm" },
       { id: "unsafe", text: "Email bob@example.com" },
-      { id: "done", text: "Already indexed", vectorDocId: "done" },
+      {
+        id: "done",
+        text: "Already indexed",
+        vectorDocId: "done",
+        vectorTextHash: hashContent("Already indexed"),
+      },
     ])
     await processMemoryJob({ ...job("vector"), kind: "vector-reconcile" })
     expect(upsert).toHaveBeenCalledTimes(1)
     expect(upsert).toHaveBeenCalledWith("safe", "Uses pnpm")
-    expect(mockUpdateMemory).toHaveBeenCalledWith("safe", { vectorDocId: "safe" })
+    expect(mockUpdateMemory).toHaveBeenCalledWith("safe", {
+      vectorDocId: "safe",
+      vectorTextHash: hashContent("Uses pnpm"),
+    })
   })
 
   it("vector-reconcile heals backend-missing docs and sweeps orphans when the sink can list", async () => {
@@ -556,7 +567,12 @@ describe("memory job worker", () => {
     const listIds = jest.fn(async () => ["done", "orphan"])
     mockTryBuildVectorSink.mockResolvedValue({ upsert, delete: del, listIds })
     mockListMemories.mockResolvedValue([
-      { id: "done", text: "Already indexed", vectorDocId: "done" },
+      {
+        id: "done",
+        text: "Already indexed",
+        vectorDocId: "done",
+        vectorTextHash: hashContent("Already indexed"),
+      },
       { id: "lost", text: "Backend lost me", vectorDocId: "lost" },
       { id: "fresh", text: "Never indexed" },
     ])
@@ -564,10 +580,119 @@ describe("memory job worker", () => {
     // "lost" re-upserted under its existing doc id; "fresh" indexed anew.
     expect(upsert).toHaveBeenCalledWith("lost", "Backend lost me")
     expect(upsert).toHaveBeenCalledWith("fresh", "Never indexed")
-    expect(mockUpdateMemory).toHaveBeenCalledWith("fresh", { vectorDocId: "fresh" })
+    expect(mockUpdateMemory).toHaveBeenCalledWith("fresh", {
+      vectorDocId: "fresh",
+      vectorTextHash: hashContent("Never indexed"),
+    })
     // Only the orphan is swept.
     expect(del).toHaveBeenCalledWith(["orphan"])
   })
+
+  it("re-embeds stale and legacy vectors even when their backend document still exists", async () => {
+    const upsert = jest.fn(async () => undefined)
+    mockTryBuildVectorSink.mockResolvedValue({
+      upsert,
+      listIds: async () => ["stale", "legacy", "current"],
+    })
+    mockListMemories.mockResolvedValue([
+      {
+        id: "stale",
+        text: "new wording",
+        vectorDocId: "stale",
+        vectorTextHash: hashContent("old wording"),
+      },
+      { id: "legacy", text: "legacy wording", vectorDocId: "legacy" },
+      {
+        id: "current",
+        text: "current wording",
+        vectorDocId: "current",
+        vectorTextHash: hashContent("current wording"),
+      },
+    ])
+    expect(await processMemoryJob({ ...job("drift"), kind: "vector-reconcile" })).toEqual({
+      status: "succeeded",
+      resultCode: "vectors_reconciled",
+    })
+    expect(upsert.mock.calls).toEqual([
+      ["stale", "new wording"],
+      ["legacy", "legacy wording"],
+    ])
+    expect(mockUpdateMemory).toHaveBeenCalledWith("stale", {
+      vectorDocId: "stale",
+      vectorTextHash: hashContent("new wording"),
+    })
+  })
+
+  it("bounds legacy hash backfill and heals the remaining rows on a later reconciliation", async () => {
+    const ids = Array.from(
+      { length: MAX_VECTOR_RECONCILE_UPSERTS + 1 },
+      (_, index) => `legacy-${index}`
+    )
+    const hashes = new Map<string, string>()
+    const upsert = jest.fn(async () => undefined)
+    const remove = jest.fn(async () => undefined)
+    mockTryBuildVectorSink.mockResolvedValue({ upsert, delete: remove, listIds: async () => ids })
+    mockListMemories.mockImplementation(async () =>
+      ids.map((id) => ({ id, vectorDocId: id, text: id, vectorTextHash: hashes.get(id) }))
+    )
+    mockUpdateMemory.mockImplementation(async (id, patch) => {
+      hashes.set(id, patch.vectorTextHash)
+    })
+    await processMemoryJob({ ...job("backfill"), kind: "vector-reconcile" })
+    expect(upsert).toHaveBeenCalledTimes(MAX_VECTOR_RECONCILE_UPSERTS)
+    expect(remove).not.toHaveBeenCalled()
+    upsert.mockClear()
+    await processMemoryJob({ ...job("later-backfill"), kind: "vector-reconcile" })
+    expect(upsert).toHaveBeenCalledTimes(1)
+    expect(hashes.size).toBe(ids.length)
+  })
+
+  it.each([
+    "turn-extraction",
+    "session-distill",
+    "project-mining",
+    "memory-lifecycle-sweep",
+  ] as const)("skips queued %s text work after temporary mode is entered", async (kind) => {
+    mockGetSettings.mockResolvedValue({ memory: { enabled: true, temporary: true } })
+    expect(await processMemoryJob({ ...job("temporary"), kind })).toEqual({
+      status: "skipped",
+      resultCode: "memory_temporary",
+    })
+    expect(mockBuildExtractionDeps).not.toHaveBeenCalled()
+    expect(mockBuildMaintenanceDeps).not.toHaveBeenCalled()
+    expect(mockBuildMiningDeps).not.toHaveBeenCalled()
+    expect(mockRunLifecycleSweep).not.toHaveBeenCalled()
+  })
+
+  it.each([{ temporary: true }, { enabled: false }])(
+    "keeps privacy cleanup running under hard gates: %j",
+    async (gate) => {
+      mockGetSettings.mockResolvedValue({ memory: { enabled: true, ...gate } })
+      mockRevalidateClaim.mockResolvedValue({ status: "invalidated" })
+      await processMemoryJob({
+        ...job("revocation"),
+        kind: "project-claim-revalidate",
+        memoryId: "claim",
+      })
+      expect(mockRevalidateClaim).toHaveBeenCalledWith("claim", expect.anything())
+      const upsert = jest.fn(async () => undefined)
+      const remove = jest.fn(async () => undefined)
+      mockTryBuildVectorSink.mockResolvedValue({
+        upsert,
+        delete: remove,
+        listIds: async () => ["live", "deleted"],
+      })
+      mockListMemories.mockResolvedValue([
+        { id: "live", text: "current text", vectorDocId: "live" },
+      ])
+      await processMemoryJob({ ...job("cleanup"), kind: "vector-reconcile" })
+      expect(upsert).not.toHaveBeenCalled()
+      expect(remove).toHaveBeenCalledWith(["deleted"])
+      expect(mockTryBuildVectorSink).toHaveBeenCalledWith(expect.objectContaining(gate), {
+        cleanupOnly: true,
+      })
+    }
+  )
 
   it("does not embed personal memories or purge their existing owner-scoped vector", async () => {
     const upsert = jest.fn(async () => undefined)
@@ -1301,13 +1426,20 @@ describe("memory-lifecycle-sweep job", () => {
 
     await deps.reviseText(row(), "compacted text", "compaction", 1)
     expect(upsert).toHaveBeenCalledWith("m1", "compacted text")
-    expect(mockUpdateMemory).toHaveBeenLastCalledWith("m1", { vectorDocId: "m1" })
+    expect(mockUpdateMemory).toHaveBeenLastCalledWith("m1", {
+      vectorDocId: "m1",
+      vectorTextHash: hashContent("compacted text"),
+    })
 
     mockUpdateMemory.mockClear()
     await deps.reviseText(row({ id: "m2", vectorDocId: "doc-2" }), "next text", "compaction", 2)
     expect(upsert).toHaveBeenLastCalledWith("doc-2", "next text")
-    // Already indexed: only the text patch, no vectorDocId write.
-    expect(mockUpdateMemory).toHaveBeenCalledTimes(1)
+    // Existing ids also need a receipt for the replacement text.
+    expect(mockUpdateMemory).toHaveBeenCalledTimes(2)
+    expect(mockUpdateMemory).toHaveBeenLastCalledWith("m2", {
+      vectorDocId: "doc-2",
+      vectorTextHash: hashContent("next text"),
+    })
   })
 
   it("reviseText never sends leaking PII to the vector sink", async () => {

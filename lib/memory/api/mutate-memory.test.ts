@@ -1,5 +1,6 @@
 import { updateExternalMemory, forgetExternalMemory } from "./mutate-memory"
 import type { Memory } from "@/types/memory/memory"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 
 const mockGetSettings = jest.fn()
 jest.mock("@/lib/db/settings", () => ({
@@ -7,8 +8,10 @@ jest.mock("@/lib/db/settings", () => ({
 }))
 
 const mockGetMemory = jest.fn()
+const mockUpdateMemory = jest.fn()
 jest.mock("@/lib/db/memories", () => ({
   getMemory: (...args: unknown[]) => mockGetMemory(...(args as [])),
+  updateMemory: (...args: unknown[]) => mockUpdateMemory(...args),
 }))
 
 const mockVectorSink = jest.fn()
@@ -294,11 +297,17 @@ describe("updateExternalMemory", () => {
     mockVectorSink.mockResolvedValue({ upsert })
     await updateExternalMemory("m1", { text: "new text" })
     expect(upsert).toHaveBeenCalledWith("m1", "new text")
+    expect(mockUpdateMemory).toHaveBeenLastCalledWith("m1", {
+      vectorDocId: "m1",
+      vectorTextHash: hashContent("new text"),
+    })
+    mockUpdateMemory.mockClear()
 
     mockVectorSink.mockResolvedValue({
       upsert: jest.fn().mockRejectedValue(new Error("vec down")),
     })
     expect(await updateExternalMemory("m1", { text: "again" })).toEqual({ ok: true, version: 4 })
+    expect(mockUpdateMemory).not.toHaveBeenCalled()
   })
 
   it("skips the vector sink for non-text patches and rows without a vector doc", async () => {

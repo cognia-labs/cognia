@@ -13,6 +13,7 @@
  * invariants.
  */
 
+import Dexie from "dexie"
 import {
   PROJECT_MEMORY_KINDS,
   type Memory,
@@ -113,26 +114,38 @@ export async function createMemory(input: MemoryCreateInput): Promise<Memory> {
   // Published after the write commits, so a subscriber never sees a memory
   // that is not in the table. Ids and classification only: the row's `text` is
   // a durable fact about the user, and the bus is not the place to carry one.
-  void import("@/lib/memory/memory-event-bus")
-    .then(({ emitMemoryWritten }) =>
-      emitMemoryWritten({
-        memoryId: row.id,
-        type: row.type,
-        scope: row.scope,
-        provenance: row.provenance,
-        importance: row.importance,
-        ...(row.sourceChannel ? { sourceChannel: row.sourceChannel } : {}),
-        ...(row.characterId ? { characterId: row.characterId } : {}),
-        ...(row.projectId ? { projectId: row.projectId } : {}),
-        ...(row.agentId ? { agentId: row.agentId } : {}),
-        ...(row.key ? { key: row.key } : {}),
-        at: now,
-        ...(input.writeOrigin ? { origin: input.writeOrigin } : {}),
+  const publish = () => {
+    void import("@/lib/memory/memory-event-bus")
+      .then(({ emitMemoryWritten }) =>
+        emitMemoryWritten({
+          memoryId: row.id,
+          type: row.type,
+          scope: row.scope,
+          provenance: row.provenance,
+          importance: row.importance,
+          ...(row.sourceChannel ? { sourceChannel: row.sourceChannel } : {}),
+          ...(row.characterId ? { characterId: row.characterId } : {}),
+          ...(row.projectId ? { projectId: row.projectId } : {}),
+          ...(row.agentId ? { agentId: row.agentId } : {}),
+          ...(row.key ? { key: row.key } : {}),
+          at: now,
+          ...(input.writeOrigin ? { origin: input.writeOrigin } : {}),
+        })
+      )
+      .catch(() => {
+        // A bus nobody loaded is not a reason to fail a memory write.
       })
-    )
-    .catch(() => {
-      // A bus nobody loaded is not a reason to fail a memory write.
+  }
+  const transaction = Dexie.currentTransaction
+  if (transaction) {
+    // Durable workers bind evidence in an enclosing transaction. A failed
+    // binding must not publish a memory that was rolled back with it.
+    transaction.on("complete", () => {
+      Dexie.ignoreTransaction(publish)
     })
+  } else {
+    publish()
+  }
   return row
 }
 
@@ -197,6 +210,7 @@ export interface MemoryUpdatePatch {
   tags?: string[]
   importance?: number
   vectorDocId?: string
+  vectorTextHash?: string
   pinned?: boolean
   evidenceState?: Memory["evidenceState"]
   reviewStatus?: Memory["reviewStatus"]

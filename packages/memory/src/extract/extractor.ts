@@ -9,12 +9,23 @@
  * never produce a behavior-changing procedural memory. The prompt is also told
  * the allowed types so the model self-restricts.
  *
- * Fail-open: returns `[]` on any LLM / parse failure (memory is best-effort and
- * must never break the turn).
+ * Provider/parse failures are explicit so durable jobs can retry. Foreground
+ * callers must contain rejection at their fire-and-forget boundary.
  */
 
 import { extractJson, type LlmClient } from "../llm"
 import { isMemoryType, type MemoryType } from "../types/memory"
+
+export class MemoryExtractionError extends Error {
+  constructor(
+    readonly code:
+      "extraction_provider_failed" | "extraction_parse_failed" | "extraction_consolidation_failed",
+    cause?: unknown
+  ) {
+    super(code, { cause })
+    this.name = "MemoryExtractionError"
+  }
+}
 
 export interface MemoryCandidate {
   type: MemoryType
@@ -82,16 +93,23 @@ export async function extractMemories(
 ): Promise<MemoryCandidate[]> {
   if (input.allowTypes.length === 0) return []
   if (!input.newPair.userText.trim()) return []
+  let raw: string
   try {
-    const raw = await client.complete(buildUserPrompt(input), {
+    raw = await client.complete(buildUserPrompt(input), {
       system: input.systemPrompt ?? MEMORY_EXTRACT_SYSTEM_PROMPT,
       temperature: 0,
       maxTokens: 512,
     })
+  } catch (error) {
+    throw new MemoryExtractionError("extraction_provider_failed", error)
+  }
+  try {
     const parsed = extractJson<RawExtraction>(raw)
+    if (!parsed || !Array.isArray(parsed.memories)) throw new Error("invalid_memories_array")
     const allow = new Set(input.allowTypes)
     const out: MemoryCandidate[] = []
-    for (const m of parsed.memories ?? []) {
+    for (const m of parsed.memories) {
+      if (!m || typeof m !== "object") continue
       if (!isMemoryType(m.type)) continue
       if (!allow.has(m.type)) continue
       const text = typeof m.text === "string" ? m.text.trim() : ""
@@ -102,7 +120,7 @@ export async function extractMemories(
       out.push({ type: m.type, text, importance, ...(key ? { key } : {}) })
     }
     return out
-  } catch {
-    return []
+  } catch (error) {
+    throw new MemoryExtractionError("extraction_parse_failed", error)
   }
 }

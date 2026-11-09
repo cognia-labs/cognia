@@ -1,6 +1,7 @@
 /**
  * Background memory-extraction orchestrator (the per-turn write path). Fire-and-
- * forget from the chat hook after a turn completes; it must NEVER throw.
+ * forget via the durable job queue after a turn completes. Failures propagate
+ * to the worker's retry path; the foreground only enqueues and never waits.
  *
  * Pipeline (gates short-circuit cheaply, left → right):
  *   enabled/autoExtract/!temporary  →  provenance (inbound excluded)
@@ -18,6 +19,7 @@ import type { MemoryConfig, MemoryProvenance, MemoryScope, MemoryType } from "@/
 import { assessSalience } from "@/lib/memory/extract/salience"
 import {
   extractMemories,
+  MemoryExtractionError,
   MEMORY_EXTRACT_SYSTEM_PROMPT,
   type ExtractMemoriesInput,
   type MemoryCandidate,
@@ -33,6 +35,7 @@ import {
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
 import { hasNoLeakingPii, hasNoLeakingPiiDeep, redactText } from "@cognia/redact"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 
 /**
  * The per-turn extractor's system prompt (ADR-0236). Account scope only: the
@@ -48,13 +51,13 @@ export const MEMORY_EXTRACT_PROMPT = definePrompt({
   operation: "replace-template",
   scopes: ["account"],
   activation: "next-operation",
-  // The reply is parsed as JSON; a reply that is not JSON extracts nothing.
+  // Invalid protocol output is a retryable extraction failure.
   risk: "protocol",
   hosts: ["app"],
   maxChars: 4_000,
   requiredFragments: ["JSON"],
   outputContract:
-    "Sent as the system prompt of the per-turn extraction; the reply is parsed as JSON `memories` and a parse failure extracts nothing.",
+    "Sent as the system prompt of the per-turn extraction; the reply is parsed as JSON `memories` and a parse failure is retried by the durable job.",
   consumers: ["lib/memory/write/run-memory-extraction.ts"],
   defaultBody: MEMORY_EXTRACT_SYSTEM_PROMPT,
 })
@@ -134,6 +137,8 @@ export async function runMemoryExtraction(
   deps: RunMemoryExtractionDeps
 ): Promise<{ applied: ConsolidationOp[] }> {
   const empty = { applied: [] as ConsolidationOp[] }
+  let phase: "extraction_provider_failed" | "extraction_consolidation_failed" =
+    "extraction_provider_failed"
   try {
     const { config } = input
     if (!config.enabled || !config.autoExtract || config.temporary) return empty
@@ -169,6 +174,7 @@ export async function runMemoryExtraction(
     const safe = candidates.filter((c) => isPiiSafe(c.text))
     if (safe.length === 0) return empty
 
+    phase = "extraction_consolidation_failed"
     return await deps.consolidate({
       candidates: safe,
       scope: input.scope,
@@ -180,8 +186,9 @@ export async function runMemoryExtraction(
       provenance: input.provenance,
       source: input.source,
     })
-  } catch {
-    return empty
+  } catch (error) {
+    if (error instanceof MemoryExtractionError) throw error
+    throw new MemoryExtractionError(phase, error)
   }
 }
 
@@ -201,6 +208,10 @@ export function sessionProvenance(session: ChatSession | null | undefined): Memo
 export interface BuildAutoExtractionDepsParams {
   session: ChatSession | null | undefined
   appSettings: AppSettings | null | undefined
+  /** Durable workers fence each canonical mutation in a source/claim transaction. */
+  withCanonicalWrite?: <T>(write: () => Promise<T>) => Promise<T>
+  /** Runs inside that same transaction, before any vector I/O or next candidate. */
+  recordCanonicalOperation?: (operation: ConsolidationOp) => Promise<void>
 }
 
 /**
@@ -243,12 +254,15 @@ export async function buildAutoExtractionDeps(
       sessionId: params.session?.id,
     })
   )
+  const write = params.withCanonicalWrite ?? (<T>(operation: () => Promise<T>) => operation())
 
   const consolidateDeps: ConsolidateDeps = {
     client,
     auditDowngrade: async (memoryId, targetId, reason) => {
       const { appendMemoryAuditEvent } = await import("@/lib/db/memory-governance")
-      await appendMemoryAuditEvent({ action: "conflict", memoryId, reason, metadata: { targetId } })
+      await write(() =>
+        appendMemoryAuditEvent({ action: "conflict", memoryId, reason, metadata: { targetId } })
+      )
     },
     findSimilar: async (candidate, namespace) => {
       if (!memDeps) return []
@@ -276,13 +290,28 @@ export async function buildAutoExtractionDeps(
       return hits.map((h) => h.memory).filter((memory) => sameMemoryNamespace(memory, namespace))
     },
     persist: async (pInput) => {
-      const row = await memDb.createMemory(pInput)
+      const row = await write(async () => {
+        const memory = await memDb.createMemory(pInput)
+        const candidate = { type: pInput.type, text: pInput.text, importance: pInput.importance }
+        const targetId = pInput.conflictWithIds?.[0]
+        await params.recordCanonicalOperation?.(
+          pInput.reviewStatus === "conflict" && targetId
+            ? { op: "CONFLICT", memory, targetId, candidate }
+            : { op: "ADD", memory, candidate }
+        )
+        return memory
+      })
       // Make the new memory semantically searchable when embeddings are
       // configured. Best-effort: a vector failure must not lose the memory.
       if (vectorSink && hasNoLeakingPii(row.text)) {
         try {
           await vectorSink.upsert(row.id, row.text)
-          await memDb.updateMemory(row.id, { vectorDocId: row.id })
+          await write(() =>
+            memDb.updateMemory(row.id, {
+              vectorDocId: row.id,
+              vectorTextHash: hashContent(row.text),
+            })
+          )
         } catch {
           // BM25 recall still works without the vector.
         }
@@ -291,24 +320,31 @@ export async function buildAutoExtractionDeps(
     },
     update: async (id, text) => {
       if (!hasNoLeakingPii(text)) return
-      await memDb.updateMemory(id, { text, bumpVersion: true, revisionReason: "consolidation" })
+      await write(async () => {
+        await memDb.updateMemory(id, { text, bumpVersion: true, revisionReason: "consolidation" })
+        await params.recordCanonicalOperation?.({ op: "UPDATE", targetId: id })
+      })
       if (vectorSink) {
         try {
           await vectorSink.upsert(id, text)
+          await write(() =>
+            memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
+          )
         } catch {
           // ignore — keep the Dexie update
         }
       }
     },
-    invalidate: (id, supersededById) => memDb.invalidateMemory(id, supersededById),
-    markConflict: async (targetId, conflictId) => {
-      const target = await memDb.getMemory(targetId)
-      if (!target) return
-      await memDb.updateMemory(targetId, {
-        reviewStatus: "conflict",
-        conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
-      })
-    },
+    invalidate: (id, supersededById) => write(() => memDb.invalidateMemory(id, supersededById)),
+    markConflict: (targetId, conflictId) =>
+      write(async () => {
+        const target = await memDb.getMemory(targetId)
+        if (!target) return
+        await memDb.updateMemory(targetId, {
+          reviewStatus: "conflict",
+          conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
+        })
+      }),
   }
 
   return {

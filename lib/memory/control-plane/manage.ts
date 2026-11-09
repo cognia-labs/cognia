@@ -22,6 +22,7 @@ import { storeMemoryCore } from "@/lib/memory/api/store-memory"
 import { resolveMemoryConfig, type MemoryScope, type MemoryType } from "@/types/memory/memory"
 import { recordMemoryConflictGovernance } from "@/lib/governance/producers/memory"
 import { reportGovernanceProjectionFailure } from "@/lib/db/governance-ledger"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 
 export type ManageMemoryCommand =
   | {
@@ -217,7 +218,11 @@ export async function manageMemory(
       })
       try {
         const sink = await tryBuildMemoryVectorSink(config)
-        await sink?.upsert(keep.vectorDocId ?? keep.id, redacted)
+        if (sink) {
+          const docId = keep.vectorDocId ?? keep.id
+          await sink.upsert(docId, redacted)
+          await updateMemory(keep.id, { vectorDocId: docId, vectorTextHash: hashContent(redacted) })
+        }
       } catch {
         // Canonical update remains BM25-searchable.
         noteMemoryVectorFailure()
@@ -428,7 +433,14 @@ export async function manageMemory(
     try {
       const sink = await tryBuildMemoryVectorSink(config)
       if (hasNoLeakingPii(restored.memory.text)) {
-        await sink?.upsert(existing.vectorDocId ?? existing.id, restored.memory.text)
+        if (sink) {
+          const docId = existing.vectorDocId ?? existing.id
+          await sink.upsert(docId, restored.memory.text)
+          await updateMemory(existing.id, {
+            vectorDocId: docId,
+            vectorTextHash: hashContent(restored.memory.text),
+          })
+        }
       } else if (existing.vectorDocId) {
         // Never embed it — and drop the vector of the text it replaced, which
         // would otherwise keep matching.
@@ -459,7 +471,14 @@ export async function manageMemory(
     if (hasNoLeakingPii(restored.memory.text)) {
       try {
         const sink = await tryBuildMemoryVectorSink(config)
-        await sink?.upsert(existing.vectorDocId ?? existing.id, restored.memory.text)
+        if (sink) {
+          const docId = existing.vectorDocId ?? existing.id
+          await sink.upsert(docId, restored.memory.text)
+          await updateMemory(existing.id, {
+            vectorDocId: docId,
+            vectorTextHash: hashContent(restored.memory.text),
+          })
+        }
       } catch {
         // Canonical restore remains BM25-searchable.
         noteMemoryVectorFailure()
@@ -546,7 +565,14 @@ export async function manageMemory(
   if (redactedText !== undefined) {
     try {
       const sink = await tryBuildMemoryVectorSink(config)
-      await sink?.upsert(existing.vectorDocId ?? existing.id, redactedText)
+      if (sink) {
+        const docId = existing.vectorDocId ?? existing.id
+        await sink.upsert(docId, redactedText)
+        await updateMemory(existing.id, {
+          vectorDocId: docId,
+          vectorTextHash: hashContent(redactedText),
+        })
+      }
     } catch {
       // Canonical update remains BM25-searchable.
       noteMemoryVectorFailure()

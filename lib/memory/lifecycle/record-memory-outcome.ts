@@ -37,6 +37,8 @@ export interface RecordMemoryJobOutcomeInput {
   }
   /** Audit reason for every row this outcome touches. */
   auditReason: string
+  /** Canonical writers require the evidence to commit with the mutation. */
+  propagateErrors?: boolean
 }
 
 /**
@@ -112,7 +114,8 @@ export async function recordMemoryJobOutcome(input: RecordMemoryJobOutcomeInput)
           reason: input.auditReason,
         },
       })
-    } catch {
+    } catch (error) {
+      if (input.propagateErrors) throw error
       // `bindMemoryGovernanceOutcome` throws when the row vanished between
       // consolidation and write-back, which a user deleting a memory mid-run
       // can cause. `updateMemory` used to no-op there. Failing the whole job

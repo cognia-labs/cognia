@@ -453,9 +453,10 @@ export interface MemoryVectorSink {
  * (or privacy-gated) — the memory still persists to Dexie and is BM25-findable.
  */
 export async function tryBuildMemoryVectorSink(
-  config: MemoryConfig
+  config: MemoryConfig,
+  options: { cleanupOnly?: boolean } = {}
 ): Promise<MemoryVectorSink | undefined> {
-  if (!config.enabled || config.temporary) return undefined
+  if ((!config.enabled || config.temporary) && !options.cleanupOnly) return undefined
   try {
     const backend = await resolveMemoryBackend(config)
     if (!backend) return undefined
@@ -467,9 +468,10 @@ export async function tryBuildMemoryVectorSink(
         options?: { offset?: number; limit?: number }
       ) => Promise<{ documents: Array<{ id: string }>; hasMore: boolean }>
     }
-    if (typeof store.addDocuments !== "function") return undefined
+    if (!options.cleanupOnly && typeof store.addDocuments !== "function") return undefined
     const sink: MemoryVectorSink = {
       upsert: async (id, text) => {
+        if (options.cleanupOnly) throw new Error("memory_vector_cleanup_only")
         if (!hasNoLeakingPii(text)) throw new Error("memory_vector_pii_blocked")
         await store.addDocuments!(MEMORY_VECTOR_COLLECTION, [{ id, content: text }])
       },

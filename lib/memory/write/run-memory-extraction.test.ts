@@ -162,14 +162,28 @@ describe("runMemoryExtraction", () => {
     expect(res.applied).toEqual([])
   })
 
-  it("swallows errors and returns empty", async () => {
+  it("surfaces extraction failures to the durable retry path", async () => {
     const d = deps({
       extract: jest.fn(async () => {
         throw new Error("LLM down")
       }),
     })
-    const res = await runMemoryExtraction(input(), d)
-    expect(res.applied).toEqual([])
+    await expect(runMemoryExtraction(input(), d)).rejects.toMatchObject({
+      name: "MemoryExtractionError",
+      code: "extraction_provider_failed",
+    })
+  })
+
+  it("surfaces consolidation failures instead of reporting no output", async () => {
+    const d = deps({
+      consolidate: jest.fn(async () => {
+        throw new Error("storage failed")
+      }),
+    })
+    await expect(runMemoryExtraction(input(), d)).rejects.toMatchObject({
+      name: "MemoryExtractionError",
+      code: "extraction_consolidation_failed",
+    })
   })
 })
 

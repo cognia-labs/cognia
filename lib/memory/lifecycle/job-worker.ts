@@ -10,6 +10,8 @@ import {
   finishMemoryJob,
   createMemoryEvidence,
   failMemoryJob,
+  withMemoryJobWrite,
+  MemoryJobWriteError,
 } from "@/lib/db/memory-governance"
 import { listMemories, listProjectClaimsNeedingRecheck, updateMemory } from "@/lib/db/memories"
 import { memoryTranscriptProse } from "@/lib/memory/write/project-transcript-text"
@@ -29,6 +31,7 @@ import {
 } from "@/lib/memory/consolidate/consolidator"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 import { hasNoLeakingPii } from "@cognia/redact"
+import { MemoryExtractionError } from "@cognia/memory/extract/extractor"
 
 export interface MemoryJobWorkerDeps {
   claimNext: (workerId: string) => Promise<MemoryJob | undefined>
@@ -84,11 +87,12 @@ export async function drainMemoryJobs(
       // what keeps that guarantee when the same worker id reclaimed the row.
       if (!lost) await deps.finish(job.id, outcome, workerId, job.fencingEpoch)
     } catch (error) {
-      if (error instanceof MemoryJobTerminalError) {
+      const terminal = error instanceof MemoryExtractionError ? error.cause : error
+      if (terminal instanceof MemoryJobTerminalError || terminal instanceof MemoryJobWriteError) {
         if (!lost)
           await deps.finish(
             job.id,
-            { status: "skipped", resultCode: error.code },
+            { status: "skipped", resultCode: terminal.code },
             workerId,
             job.fencingEpoch
           )
@@ -96,7 +100,9 @@ export async function drainMemoryJobs(
         continue
       }
       const code =
-        error instanceof MemoryJobProcessingError ? error.code : "memory_job_processing_failed"
+        error instanceof MemoryJobProcessingError || error instanceof MemoryExtractionError
+          ? error.code
+          : "memory_job_processing_failed"
       if (!lost) await deps.fail(job.id, code, workerId, job.fencingEpoch)
     } finally {
       stopHeartbeat?.()
@@ -359,8 +365,28 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
   if (!pair) throw new MemoryJobProcessingError("turn_pair_unavailable")
   const { buildAutoExtractionDeps, runMemoryExtraction } =
     await import("@/lib/memory/write/run-memory-extraction")
+  const sourceIds = context.transcript.map((message) => message.id!)
+  const recordedMemoryIds = new Set<string>()
+  const recordOperations = (operations: readonly ConsolidationOp[]) =>
+    recordMemoryJobOutcome({
+      job,
+      operations,
+      contaminationState: context.contaminationState,
+      evidence: { kind: "message", sourceId: turnIdentityOf(job), sourceRole: "user" },
+      auditReason: "automatic_learning",
+      propagateErrors: true,
+    })
   const deps = await buildAutoExtractionDeps(
-    { session: context.session, appSettings: context.settings },
+    {
+      session: context.session,
+      appSettings: context.settings,
+      withCanonicalWrite: (write) => withMemoryJobWrite(job, sourceIds, write),
+      recordCanonicalOperation: async (operation) => {
+        await recordOperations([operation])
+        const id = consolidationOpMemoryId(operation)
+        if (id) recordedMemoryIds.add(id)
+      },
+    },
     context.config
   )
   if (!deps) throw new MemoryJobProcessingError("dependencies_unavailable")
@@ -385,13 +411,16 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
     },
     deps
   )
-  await recordMemoryJobOutcome({
-    job,
-    operations: result.applied,
-    contaminationState: context.contaminationState,
-    evidence: { kind: "message", sourceId: turnIdentityOf(job), sourceRole: "user" },
-    auditReason: "automatic_learning",
-  })
+  // Mutations already bound their evidence inside the canonical transaction.
+  // NOOP corroboration (and compatibility deps without the callback) is fenced
+  // here too, so cancellation cannot append a witness after source deletion.
+  await withMemoryJobWrite(job, sourceIds, () =>
+    recordOperations(
+      result.applied.filter(
+        (operation) => !recordedMemoryIds.has(consolidationOpMemoryId(operation) ?? "")
+      )
+    )
+  )
   return result.applied.some((operation) => operation.op !== "NOOP")
     ? {
         status: "succeeded",
@@ -717,12 +746,16 @@ async function processClaimRevalidation(job: MemoryJob): Promise<MemoryJobProces
   return { status: "no_output", resultCode: "nothing_to_recheck" }
 }
 
-async function processVectorReconcile(): Promise<MemoryJobProcessOutcome> {
-  const settings = await getSettings()
-  const config = resolveMemoryConfig(settings?.memory)
+/** A lazy legacy-hash backfill must not send the entire corpus in one job. */
+export const MAX_VECTOR_RECONCILE_UPSERTS = 500
+
+async function processVectorReconcile(config: MemoryConfig): Promise<MemoryJobProcessOutcome> {
+  const cleanupOnly = !config.enabled || config.temporary
   const { tryBuildMemoryVectorSink, filterPersonalMemories } =
     await import("@/lib/memory/runtime/build-deps")
-  const sink = await tryBuildMemoryVectorSink(config)
+  const sink = cleanupOnly
+    ? await tryBuildMemoryVectorSink(config, { cleanupOnly: true })
+    : await tryBuildMemoryVectorSink(config)
   if (!sink) throw new MemoryJobProcessingError("vector_backend_unavailable")
 
   // Backend snapshot first (when the store can list) so both healing legs and
@@ -733,6 +766,7 @@ async function processVectorReconcile(): Promise<MemoryJobProcessOutcome> {
   const readableIds = new Set((await filterPersonalMemories(rows)).map((memory) => memory.id))
   const activeDocIds = new Set<string>()
   let changes = 0
+  let upserts = 0
   for (const row of rows) {
     if (!readableIds.has(row.id)) {
       // Keep existing owner-scoped derived vectors; the recall boundary checks
@@ -743,19 +777,18 @@ async function processVectorReconcile(): Promise<MemoryJobProcessOutcome> {
     // PII-bearing text must not live in the vector store; skipping the row
     // also lets the orphan sweep below remove any legacy embedding of it.
     if (!hasNoLeakingPii(row.text)) continue
-    if (!row.vectorDocId) {
-      // Never indexed (e.g. upsert failed at write time) — index it now.
-      await sink.upsert(row.id, row.text)
-      await updateMemory(row.id, { vectorDocId: row.id })
+    const docId = row.vectorDocId ?? row.id
+    activeDocIds.add(docId)
+    const textHash = hashContent(row.text)
+    // Missing hashes on legacy rows mean unknown freshness. Apply exactly the
+    // same visibility/PII gates as missing ids, including during lazy backfill.
+    const drift =
+      !row.vectorDocId || row.vectorTextHash !== textHash || (backendIds && !backendIds.has(docId))
+    if (drift && !cleanupOnly && upserts < MAX_VECTOR_RECONCILE_UPSERTS) {
+      await sink.upsert(docId, row.text)
+      await updateMemory(row.id, { vectorDocId: docId, vectorTextHash: textHash })
+      upserts += 1
       changes += 1
-      activeDocIds.add(row.id)
-    } else {
-      activeDocIds.add(row.vectorDocId)
-      // Indexed on our side but missing backend-side — re-upsert.
-      if (backendIds && !backendIds.has(row.vectorDocId)) {
-        await sink.upsert(row.vectorDocId, row.text)
-        changes += 1
-      }
     }
   }
 
@@ -773,10 +806,7 @@ async function processVectorReconcile(): Promise<MemoryJobProcessOutcome> {
     : { status: "no_output", resultCode: "already_consistent" }
 }
 
-async function processLifecycleSweep(): Promise<MemoryJobProcessOutcome> {
-  const settings = await getSettings()
-  const config = resolveMemoryConfig(settings?.memory)
-  if (!config.enabled) return { status: "skipped", resultCode: "memory_disabled" }
+async function processLifecycleSweep(config: MemoryConfig): Promise<MemoryJobProcessOutcome> {
   if (!config.compactColdEpisodic && !config.dedupColdClusters) {
     return { status: "no_output", resultCode: "lifecycle_sweep_disabled" }
   }
@@ -807,9 +837,10 @@ async function processLifecycleSweep(): Promise<MemoryJobProcessOutcome> {
         try {
           if (hasNoLeakingPii(text)) {
             await sink.upsert(memory.vectorDocId ?? memory.id, text)
-            if (!memory.vectorDocId) {
-              await memDb.updateMemory(memory.id, { vectorDocId: memory.id })
-            }
+            await memDb.updateMemory(memory.id, {
+              vectorDocId: memory.vectorDocId ?? memory.id,
+              vectorTextHash: hashContent(text),
+            })
           } else if (memory.vectorDocId) {
             // The new text may not be embedded, and the old vector would keep
             // matching the text that was just replaced.
@@ -857,6 +888,17 @@ async function processLifecycleSweep(): Promise<MemoryJobProcessOutcome> {
  * a compile error at exactly the place that has to handle it.
  */
 export async function processMemoryJob(job: MemoryJob): Promise<MemoryJobProcessOutcome> {
+  const config = resolveMemoryConfig((await getSettings())?.memory)
+  // Text-writing: turn-extraction, session-distill, project-mining and
+  // memory-lifecycle-sweep (compaction/dedup) require enabled && !temporary.
+  // Cleanup: project-claim-revalidate revokes source support without rewriting
+  // text; vector-reconcile may delete orphan/unsafe vectors under either hard
+  // gate, but must not re-embed. Tombstone/deleted-data retention cleanup runs
+  // outside this dispatcher and remains allowed. These are all six job kinds.
+  if (job.kind !== "project-claim-revalidate" && job.kind !== "vector-reconcile") {
+    if (!config.enabled) return { status: "skipped", resultCode: "memory_disabled" }
+    if (config.temporary) return { status: "skipped", resultCode: "memory_temporary" }
+  }
   switch (job.kind) {
     case "turn-extraction":
       return processTurnExtraction(job)
@@ -867,9 +909,9 @@ export async function processMemoryJob(job: MemoryJob): Promise<MemoryJobProcess
     case "project-claim-revalidate":
       return processClaimRevalidation(job)
     case "vector-reconcile":
-      return processVectorReconcile()
+      return processVectorReconcile(config)
     case "memory-lifecycle-sweep":
-      return processLifecycleSweep()
+      return processLifecycleSweep(config)
     default: {
       const exhaustive: never = job.kind
       throw new MemoryJobTerminalError(`unknown_job_kind:${String(exhaustive)}`)

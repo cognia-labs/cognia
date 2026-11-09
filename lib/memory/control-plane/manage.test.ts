@@ -58,6 +58,7 @@ jest.mock("@/lib/db/governance-ledger", () => ({
 }))
 
 import { manageMemory } from "./manage"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 import { getSettings } from "@/lib/db/settings"
 
 const getSettingsMock = getSettings as jest.Mock
@@ -111,6 +112,21 @@ describe("manageMemory", () => {
     expect(mockSinkUpsert).toHaveBeenCalled()
     expect(mockEvidence).toHaveBeenCalledWith(expect.objectContaining({ memoryId: "m1" }))
     expect(result).toMatchObject({ ok: true, piiRedacted: true })
+    const [, text] = mockSinkUpsert.mock.calls[0]
+    expect(mockUpdate).toHaveBeenLastCalledWith("m1", {
+      vectorDocId: "m1",
+      vectorTextHash: hashContent(text),
+    })
+  })
+
+  it("keeps an edit durable without certifying vector freshness when upsert fails", async () => {
+    mockSinkUpsert.mockRejectedValueOnce(new Error("vector unavailable"))
+    await expect(
+      manageMemory({ kind: "update", id: "m1", patch: { text: "new text" } })
+    ).resolves.toMatchObject({ ok: true })
+    expect(mockUpdate).toHaveBeenCalledTimes(1)
+    expect(mockUpdate.mock.calls[0][1]).not.toHaveProperty("vectorTextHash")
+    expect(mockNoteVectorFailure).toHaveBeenCalledTimes(1)
   })
 
   it("deletes canonical, vector, and evidence state while retaining an audit event", async () => {

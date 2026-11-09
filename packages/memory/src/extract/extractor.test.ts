@@ -87,14 +87,31 @@ describe("extractMemories", () => {
     expect(out).toEqual([])
   })
 
-  it("returns [] on non-JSON / LLM failure", async () => {
-    expect(
-      await extractMemories({ newPair, allowTypes: ["semantic"] }, client("not json"))
-    ).toEqual([])
+  it.each(["not json", "{}", "null", '{"memories":{}}'])(
+    "rejects malformed extraction output: %s",
+    async (reply) => {
+      await expect(
+        extractMemories({ newPair, allowTypes: ["semantic"] }, client(reply))
+      ).rejects.toMatchObject({ name: "MemoryExtractionError", code: "extraction_parse_failed" })
+    }
+  )
+
+  it("surfaces provider failures instead of reporting no durable output", async () => {
     const thrower = client(async () => {
       throw new Error("LLM down")
     })
-    expect(await extractMemories({ newPair, allowTypes: ["semantic"] }, thrower)).toEqual([])
+    await expect(
+      extractMemories({ newPair, allowTypes: ["semantic"] }, thrower)
+    ).rejects.toMatchObject({
+      name: "MemoryExtractionError",
+      code: "extraction_provider_failed",
+    })
+  })
+
+  it("returns no output when the model explicitly found nothing durable", async () => {
+    await expect(
+      extractMemories({ newPair, allowTypes: ["semantic"] }, client('{"memories":[]}'))
+    ).resolves.toEqual([])
   })
 
   it("includes rolling summary + recent messages in the prompt", async () => {

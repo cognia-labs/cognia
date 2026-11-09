@@ -1,6 +1,8 @@
 import type { Memory, MemoryReaderContext } from "@/types/memory/memory"
 import { createDbTestFixture } from "./test-fixture"
 import { getDb } from "./schema"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
+import { onMemoryWritten } from "@/lib/memory/memory-event-bus"
 import {
   ACCESS_BUMP_COOLDOWN_MS,
   clearMemories,
@@ -49,6 +51,58 @@ beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
 
 describe("memories CRUD", () => {
+  it("does not publish a canonical write that its enclosing evidence transaction rolls back", async () => {
+    const events: string[] = []
+    let published!: () => void
+    const committedEvent = new Promise<void>((resolve) => {
+      published = resolve
+    })
+    const off = onMemoryWritten((event) => {
+      events.push(event.memoryId)
+      if (event.memoryId === "committed") published()
+    })
+    try {
+      const db = getDb()
+      await expect(
+        db.transaction("rw", db.memories, async () => {
+          await createMemory(buildInput({ id: "rolled-back" }))
+          await db.memories.get("rolled-back")
+          throw new Error("evidence failed")
+        })
+      ).rejects.toThrow("evidence failed")
+      expect(events).toEqual([])
+      expect(await getMemory("rolled-back")).toBeUndefined()
+      await db.transaction("rw", db.memories, async () => {
+        await createMemory(buildInput({ id: "committed" }))
+        await db.memories.get("committed")
+        expect(events).toEqual([])
+      })
+      await committedEvent
+      expect(events).toEqual(["committed"])
+    } finally {
+      off()
+    }
+  })
+  it("stores a non-indexed vector receipt without certifying later text edits", async () => {
+    await createMemory(
+      buildInput({
+        id: "indexed",
+        vectorDocId: "doc",
+        vectorTextHash: hashContent("old text"),
+        text: "old text",
+      })
+    )
+    await updateMemory("indexed", { text: "new text" })
+    expect(await getMemory("indexed")).toMatchObject({
+      text: "new text",
+      vectorTextHash: hashContent("old text"),
+    })
+    await updateMemory("indexed", { vectorTextHash: hashContent("new text") })
+    expect(await getMemory("indexed")).toMatchObject({ vectorTextHash: hashContent("new text") })
+    expect(getDb().memories.schema.indexes.some((index) => index.name === "vectorTextHash")).toBe(
+      false
+    )
+  })
   it("createMemory stamps defaults and timestamps", async () => {
     const before = Date.now()
     const row = await createMemory(buildInput({ id: "m1" }))

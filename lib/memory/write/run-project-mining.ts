@@ -613,7 +613,10 @@ export async function buildProjectMiningDeps(
       if (vectorSink && hasNoLeakingPii(row.text)) {
         try {
           await vectorSink.upsert(row.id, row.text)
-          await memDb.updateMemory(row.id, { vectorDocId: row.id })
+          await memDb.updateMemory(row.id, {
+            vectorDocId: row.id,
+            vectorTextHash: hashContent(row.text),
+          })
         } catch {
           // BM25 recall still works without the vector.
         }
@@ -638,6 +641,7 @@ export async function buildProjectMiningDeps(
       if (vectorSink) {
         try {
           await vectorSink.upsert(id, text)
+          await memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
         } catch {
           // ignore — keep the Dexie update
         }

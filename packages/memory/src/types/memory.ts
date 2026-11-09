@@ -178,6 +178,8 @@ export interface Memory {
   importance: number
   /** Link to the vector store doc; absent in BM25-only mode. */
   vectorDocId?: string
+  /** Hash of the text last successfully embedded. Unindexed; legacy rows heal lazily. */
+  vectorTextHash?: string
 
   createdAt: number
   updatedAt: number

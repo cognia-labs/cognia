@@ -197,6 +197,97 @@ describe("durable memory jobs", () => {
     expect(await claimNextMemoryJob("worker-2", 1_001, 500)).toBeUndefined()
   })
 
+  it("keeps backing-off work active for deduplication", async () => {
+    await enqueueMemoryJob(draft)
+    await claimMemoryJob("j1", "worker", 1_000)
+    await failMemoryJob("j1", "transient", 1_100)
+    const duplicate = await enqueueMemoryJob({ ...draft, id: "j2" }, { reuseCompleted: true })
+    expect(duplicate).toMatchObject({ id: "j1", status: "retry_wait", nextAttemptAt: 2_100 })
+    expect(await claimNextMemoryJob("other", 1_200)).toBeUndefined()
+    expect(await listMemoryJobs()).toHaveLength(1)
+  })
+
+  it("reuses a daily reconciliation while its first job backs off", async () => {
+    const { enqueueDailyVectorReconcile } = await import("@/lib/memory/lifecycle/enqueue-reconcile")
+    await enqueueDailyVectorReconcile(1_000)
+    const first = await claimNextMemoryJob("worker", 1_100)
+    await failMemoryJob(first!.id, "backend_down", 1_200)
+    await enqueueDailyVectorReconcile(1_300)
+    expect(await listMemoryJobs()).toHaveLength(1)
+    expect(await claimNextMemoryJob("other", 1_400)).toBeUndefined()
+    expect(await claimNextMemoryJob("other", 2_200)).toMatchObject({ id: first!.id, attempt: 2 })
+  })
+
+  it("uses maxAttempts rather than a separate default processing-failure cap", async () => {
+    await enqueueMemoryJob({ ...draft, maxAttempts: 6 })
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      const now = attempt * 100_000
+      expect(await claimMemoryJob("j1", "worker", now)).toMatchObject({ attempt })
+      expect(await failMemoryJob("j1", "provider_down", now + 1)).toBe(
+        attempt === 6 ? "failed" : "retry_wait"
+      )
+    }
+  })
+
+  it("allows settlement of an expired but unreclaimed epoch while refusing heartbeat renewal", async () => {
+    await enqueueMemoryJob(draft)
+    const claimed = await claimMemoryJob("j1", "worker", 1_000, 10)
+    expect(
+      await heartbeatMemoryJob("j1", "worker", 1_020, 10, claimed!.fencingEpoch)
+    ).toBeUndefined()
+    expect(
+      await finishMemoryJob("j1", "succeeded", "late", 1_020, {
+        workerId: "worker",
+        fencingEpoch: claimed!.fencingEpoch,
+      })
+    ).toBe("finished")
+  })
+
+  it.each(["next", "specific"])(
+    "bounds mixed lease and processing failures through %s claims",
+    async (mode) => {
+      await enqueueMemoryJob({ ...draft, maxAttempts: 4 })
+      const claim = (now: number) =>
+        mode === "next"
+          ? claimNextMemoryJob("worker", now, 10)
+          : claimMemoryJob("j1", "worker", now, 10)
+      await claim(1_000) // crashed claim
+      for (const [now, expected] of [
+        [1_100, "retry_wait"],
+        [2_200, "retry_wait"],
+        [4_300, "failed"],
+      ] as const) {
+        await claim(now)
+        expect(await failMemoryJob("j1", "provider_failed", now + 1)).toBe(expected)
+      }
+      expect(await getMemoryJob("j1")).toMatchObject({
+        status: "failed",
+        attempt: 4,
+        resultCode: "retry_exhausted",
+      })
+      expect(await claim(20_000)).toBeUndefined()
+    }
+  )
+
+  it.each(["next", "specific"])(
+    "refuses an exhausted retry_wait row through %s claims",
+    async (mode) => {
+      await enqueueMemoryJob({
+        ...draft,
+        status: "retry_wait",
+        attempt: 4,
+        maxAttempts: 4,
+        nextAttemptAt: 1,
+      })
+      const claimed =
+        mode === "next"
+          ? await claimNextMemoryJob("worker", 100)
+          : await claimMemoryJob("j1", "worker", 100)
+      expect(claimed).toBeUndefined()
+      expect(await getMemoryJob("j1")).toMatchObject({ status: "failed", attempt: 4 })
+    }
+  )
+
   it("refuses a completion from a worker that no longer owns the job", async () => {
     await enqueueMemoryJob(draft)
     await claimNextMemoryJob("worker-1", 1_000, 50)

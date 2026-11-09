@@ -367,7 +367,9 @@ export async function enqueueMemoryJob(
     scope?.assertActive()
     const sameKey = await db.memoryJobs.where("dedupeKey").equals(draft.dedupeKey).toArray()
     scope?.assertActive()
-    const active = sameKey.find((job) => job.status === "queued" || job.status === "running")
+    const active = sameKey.find(
+      (job) => job.status === "queued" || job.status === "running" || job.status === "retry_wait"
+    )
     if (active) return active
     if (options.reuseCompleted) {
       const completed = sameKey
@@ -395,6 +397,67 @@ export async function getMemoryJob(id: string): Promise<MemoryJob | undefined> {
   return getDb().memoryJobs.get(id)
 }
 
+export class MemoryJobWriteError extends Error {
+  constructor(readonly code: "job_claim_lost" | "source_deleted") {
+    super(code)
+    this.name = "MemoryJobWriteError"
+  }
+}
+
+/**
+ * Fence a canonical mutation AFTER model work, in the transaction that writes
+ * it. Source deletion/cancellation and a newer claim cannot interleave between
+ * this check and the write. Never run a provider/vector call in this callback:
+ * the returned promise resolves only after the root transaction commits.
+ * Lease expiry alone does not revoke an epoch (the same rule as completion).
+ */
+export async function withMemoryJobWrite<T>(
+  claimed: MemoryJob,
+  sourceMessageIds: readonly string[],
+  write: () => Promise<T>
+): Promise<T> {
+  const db = getDb()
+  return db.transaction(
+    "rw",
+    [db.memoryJobs, db.sessions, db.messages, db.memories, db.memoryEvidence, db.memoryAuditEvents],
+    async () => {
+      const current = await db.memoryJobs.get(claimed.id)
+      if (
+        !current ||
+        current.status !== "running" ||
+        !claimed.leaseOwner ||
+        current.leaseOwner !== claimed.leaseOwner ||
+        current.fencingEpoch !== claimed.fencingEpoch ||
+        current.cancellationRequestedAt !== undefined
+      ) {
+        throw new MemoryJobWriteError("job_claim_lost")
+      }
+      if (!claimed.sessionId || !(await db.sessions.get(claimed.sessionId))) {
+        throw new MemoryJobWriteError("source_deleted")
+      }
+      const sources = await db.messages.bulkGet([...new Set(sourceMessageIds)])
+      if (sources.some((source) => !source || source.sessionId !== claimed.sessionId)) {
+        throw new MemoryJobWriteError("source_deleted")
+      }
+      return write()
+    }
+  )
+}
+
+/** Both explicit claims and lease recovery share the same claim budget. */
+async function settleExhaustedMemoryJob(job: MemoryJob, now: number): Promise<void> {
+  await getDb().memoryJobs.update(job.id, {
+    status: "failed",
+    completedAt: now,
+    leaseOwner: undefined,
+    leaseExpiresAt: undefined,
+    heartbeatAt: undefined,
+    nextAttemptAt: undefined,
+    errorCode: job.status === "running" ? "lease_expired_max_attempts" : "max_attempts_exhausted",
+    resultCode: "retry_exhausted",
+  })
+}
+
 export async function claimMemoryJob(
   id: string,
   workerId: string,
@@ -410,6 +473,10 @@ export async function claimMemoryJob(
         (job.status === "retry_wait" && (job.nextAttemptAt ?? Number.POSITIVE_INFINITY) <= now) ||
         (job.status === "running" && job.leaseExpiresAt !== undefined && job.leaseExpiresAt <= now))
     if (!job || !claimable) return undefined
+    if ((job.attempt ?? 0) >= (job.maxAttempts ?? 4)) {
+      await settleExhaustedMemoryJob(job, now)
+      return undefined
+    }
     const claimed: MemoryJob = {
       ...job,
       status: "running",
@@ -462,23 +529,10 @@ export async function claimNextMemoryJob(
       .sort((left, right) => left.queuedAt - right.queuedAt)[0]
     if (!next) return undefined
 
-    // Reclaiming an expired lease is how a crashed worker's job gets finished,
-    // but nothing bounded it: a job that kills its worker every time was
-    // re-claimed forever, incrementing `attempt` and never reaching a terminal
-    // state. `maxAttempts` has been written on every job since the table
-    // existed and this is the first thing to read it.
-    if (next === expiredLease && (next.attempt ?? 0) >= (next.maxAttempts ?? 4)) {
-      const exhausted: MemoryJob = {
-        ...next,
-        status: "failed",
-        completedAt: now,
-        leaseOwner: undefined,
-        leaseExpiresAt: undefined,
-        heartbeatAt: undefined,
-        errorCode: "lease_expired_max_attempts",
-        resultCode: "retry_exhausted",
-      }
-      await db.memoryJobs.put(exhausted)
+    // Fresh claims, scheduled retries, and expired-lease recovery all consume
+    // the same attempt budget. Legacy retry rows may already be exhausted.
+    if ((next.attempt ?? 0) >= (next.maxAttempts ?? 4)) {
+      await settleExhaustedMemoryJob(next, now)
       return undefined
     }
 
@@ -683,8 +737,13 @@ export async function failMemoryJob(
     }
 
     const retryCount = job.retryCount + 1
-    const maxRetries = options.maxRetries ?? 3
-    if (retryCount <= maxRetries) {
+    // The compatibility option may lower the claim budget, but processing
+    // errors and lease recovery consume the very same `attempt` counter.
+    const maxAttempts = Math.min(
+      job.maxAttempts ?? 4,
+      options.maxRetries === undefined ? Number.POSITIVE_INFINITY : options.maxRetries + 1
+    )
+    if ((job.attempt ?? 0) < maxAttempts) {
       const baseDelayMs = options.baseDelayMs ?? 1_000
       await db.memoryJobs.update(id, {
         status: "retry_wait",
@@ -703,6 +762,7 @@ export async function failMemoryJob(
       status: "failed",
       retryCount,
       completedAt: now,
+      nextAttemptAt: undefined,
       errorCode,
       leaseOwner: undefined,
       leaseExpiresAt: undefined,

@@ -20,6 +20,7 @@ import type { TrustedMemoryCaller } from "@cognia/memory/types/caller"
 import { memoryRowWithinNamespaces } from "@cognia/memory/types/caller"
 import { clampImportance } from "./store-memory"
 import { localUserCaller, resolveMemoryCaller } from "./caller"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 import type {
   MutateExternalMemoryResult,
   UpdateExternalMemoryPatch,
@@ -181,7 +182,14 @@ export async function updateExternalMemory(
     try {
       const { tryBuildMemoryVectorSink } = await import("@/lib/memory/runtime/build-deps")
       const sink = await tryBuildMemoryVectorSink(config)
-      await sink?.upsert(existing.vectorDocId, text)
+      if (sink) {
+        await sink.upsert(existing.vectorDocId, text)
+        const { updateMemory } = await import("@/lib/db/memories")
+        await updateMemory(id, {
+          vectorDocId: existing.vectorDocId,
+          vectorTextHash: hashContent(text),
+        })
+      }
     } catch {
       // ignore — keep the Dexie update
       const { noteMemoryVectorFailure } = await import("@/lib/memory/lifecycle/enqueue-reconcile")

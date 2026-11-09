@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_MEMORY_CONFIG, type MemoryConfig } from "@/types/memory/memory"
+import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
 
 const mockResolveMemoryPolicy = jest.fn()
 jest.mock("@/lib/memory/agent-policy", () => ({
@@ -294,9 +295,16 @@ describe("buildProjectMiningDeps", () => {
     await deps!.consolidate({ candidates: [], scope: "workspace", provenance: "user" })
     const wired = mockConsolidate.mock.calls[0]![1]
     await wired.persist({ text: "fact" })
-    expect(mockUpdateMemory).toHaveBeenCalledWith("new1", { vectorDocId: "new1" })
+    expect(mockUpdateMemory).toHaveBeenCalledWith("new1", {
+      vectorDocId: "new1",
+      vectorTextHash: hashContent("fact"),
+    })
     await wired.update("new1", "updated fact")
     expect(sink.upsert).toHaveBeenCalledWith("new1", "updated fact")
+    expect(mockUpdateMemory).toHaveBeenLastCalledWith("new1", {
+      vectorDocId: "new1",
+      vectorTextHash: hashContent("updated fact"),
+    })
     mockUpdateMemory.mockClear()
     await wired.update("new1", "Email owner@example.com")
     expect(mockUpdateMemory).not.toHaveBeenCalled()

@@ -40,6 +40,20 @@ beforeEach(() => {
 })
 
 describe("recordMemoryJobOutcome", () => {
+  it("propagates binding failures when evidence is part of a canonical transaction", async () => {
+    mockBind.mockRejectedValueOnce(new Error("evidence storage failed"))
+    await expect(
+      recordMemoryJobOutcome({
+        job: JOB,
+        operations: [add("m1")],
+        contaminationState: "clean",
+        evidence: EVIDENCE,
+        auditReason: "automatic_learning",
+        propagateErrors: true,
+      })
+    ).rejects.toThrow("evidence storage failed")
+    expect(mockAudit).not.toHaveBeenCalled()
+  })
   it("writes the patch, evidence and audit in one transaction", async () => {
     await record([add("m1")])
     expect(mockBind).toHaveBeenCalledTimes(1)

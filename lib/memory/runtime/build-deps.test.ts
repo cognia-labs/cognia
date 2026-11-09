@@ -694,6 +694,22 @@ describe("tryBuildMemoryVectorReader", () => {
 })
 
 describe("tryBuildMemoryVectorSink", () => {
+  it.each([{ enabled: false }, { temporary: true }])(
+    "permits deletion but refuses embedding in cleanup-only mode: %j",
+    async (gate) => {
+      const addDocuments = jest.fn(async () => undefined)
+      const deleteDocuments = jest.fn(async () => undefined)
+      mockTryBuildTwinDeps.mockResolvedValue({
+        store: { searchByEmbedding: mockSearchByEmbedding, addDocuments, deleteDocuments },
+        embedding: { provider: "transformersjs", model: "x", apiKey: "" },
+      })
+      const sink = await tryBuildMemoryVectorSink(cfg(gate), { cleanupOnly: true })
+      await sink!.delete(["deleted"])
+      expect(deleteDocuments).toHaveBeenCalledWith(MEMORY_VECTOR_COLLECTION, ["deleted"])
+      await expect(sink!.upsert("live", "safe text")).rejects.toThrow("memory_vector_cleanup_only")
+      expect(addDocuments).not.toHaveBeenCalled()
+    }
+  )
   it("blocks unsafe content at the sink before provider embedding or persistence", async () => {
     const addDocuments = jest.fn(async () => undefined)
     mockTryBuildTwinDeps.mockResolvedValue({
