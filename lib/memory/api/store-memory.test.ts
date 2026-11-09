@@ -25,6 +25,7 @@ jest.mock("@/lib/memory/runtime/build-deps", () => ({
 
 const mockAppendAudit = jest.fn()
 jest.mock("@/lib/db/memory-governance", () => ({
+  createMemoryEvidence: jest.fn(async () => ({ id: "evidence" })),
   appendMemoryAuditEvent: (...args: unknown[]) => mockAppendAudit(...(args as [])),
 }))
 
@@ -55,10 +56,20 @@ const mockResolvePolicy = jest.fn()
 jest.mock("@/lib/memory/agent-policy", () => ({
   resolvePersistedAgentMemoryPolicy: (...args: unknown[]) => mockResolvePolicy(...args),
   scopeAllowedByAgentMemoryPolicy: (
-    policy: { canCreate: boolean; writableScopes: string[] },
-    _operation: string,
+    policy: {
+      canCreate: boolean
+      canUpdate: boolean
+      canForget: boolean
+      writableScopes: string[]
+    },
+    operation: string,
     scope: string
-  ) => policy.canCreate && policy.writableScopes.includes(scope),
+  ) =>
+    (operation === "update"
+      ? policy.canUpdate
+      : operation === "forget"
+        ? policy.canForget
+        : policy.canCreate) && policy.writableScopes.includes(scope),
 }))
 
 const PII_TEXT = "reach me at bob@example.com"
@@ -92,6 +103,8 @@ beforeEach(() => {
   mockRecordCorroboration.mockResolvedValue(undefined)
   mockResolvePolicy.mockResolvedValue({
     canCreate: true,
+    canUpdate: true,
+    canForget: true,
     writableScopes: ["global", "workspace", "character", "agent"],
   })
   mockReserve.mockResolvedValue({ state: "reserved" })
@@ -203,14 +216,16 @@ describe("storeMemoryCore", () => {
     await storeMemoryCore({ text: PII_TEXT, provenance: "user", piiGate: "redact" })
     // Redaction may or may not clear the text; either way a block must audit and
     // a success must not.
-    const blocked = mockAppendAudit.mock.calls.length > 0
+    const blocked = mockAppendAudit.mock.calls.some(([event]) => event.action === "learn-denied")
     const stored = mockConsolidate.mock.calls.length > 0
     expect(blocked).toBe(!stored)
   })
 
-  it("does not audit anything when the gate lets the write through", async () => {
+  it("does not audit a PII block when the gate lets the write through", async () => {
     await storeMemoryCore({ text: "User ships on Fridays", provenance: "user" })
-    expect(mockAppendAudit).not.toHaveBeenCalled()
+    expect(mockAppendAudit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "learn-denied" })
+    )
   })
 
   it("still blocks when the audit write itself fails", async () => {
@@ -612,4 +627,36 @@ describe("storeExternalMemory", () => {
       expect(mockRecordOp).not.toHaveBeenCalled()
     })
   })
+})
+
+it("passes the create-only operation ceiling to the consolidator and preserves downgrade review/audit", async () => {
+  mockResolvePolicy.mockResolvedValue({
+    canCreate: true,
+    canUpdate: false,
+    canForget: false,
+    writableScopes: ["global"],
+  })
+  mockConsolidate.mockResolvedValue({
+    applied: [
+      {
+        op: "CONFLICT",
+        reason: "update_denied",
+        targetId: "trusted",
+        memory: { id: "draft" },
+        candidate: { type: "semantic" },
+      },
+    ],
+  })
+  const result = await storeMemoryCore({ text: "new fact", provenance: "explicit" })
+  const permissions = mockConsolidate.mock.calls[0][0].permissions
+  expect(permissions).toMatchObject({ canUpdate: false, canForget: false })
+  expect(permissions.scopeAllowed("update", "global")).toBe(false)
+  expect(permissions.scopeAllowed("forget", "global")).toBe(false)
+  expect(result).toMatchObject({ ok: true, memoryId: "draft", applied: ["CONFLICT"] })
+  expect(mockUpdateMemory).toHaveBeenCalledWith(
+    "draft",
+    expect.objectContaining({ reviewStatus: "conflict" })
+  )
+  expect(mockUpdateMemory).not.toHaveBeenCalledWith("trusted", expect.anything())
+  expect(mockAppendAudit).toHaveBeenCalledWith(expect.objectContaining({ reason: "update_denied" }))
 })

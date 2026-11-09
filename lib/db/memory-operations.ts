@@ -31,7 +31,11 @@
  */
 
 import type { Memory, MemoryRevisionReason } from "@/types/memory/memory"
-import type { MemoryAuditAction, MemoryOperationRow } from "@/types/memory/governance"
+import type {
+  MemoryAuditAction,
+  MemoryOperationRow,
+  MemoryOperationResultPayload,
+} from "@/types/memory/governance"
 import { preserveRevisionIfTextChanges } from "./memories"
 import { getDb } from "./schema"
 
@@ -46,7 +50,7 @@ export interface MemoryOperationBinding {
 }
 
 export type MemoryMutationOutcome =
-  | { ok: true; version: number }
+  | { ok: true; version: number; reviewRequired?: boolean }
   | {
       ok: false
       reason: "not_found" | "version_conflict" | "idempotency_key_reused"
@@ -65,6 +69,7 @@ export interface MemoryMutationRequest {
    * Dexie-only, no imports, no I/O. `existing` is the freshly re-read row.
    */
   apply: (existing: Memory) => {
+    reviewRequired?: boolean
     patch: Partial<Memory>
     audits?: { action: MemoryAuditAction; reason: string }[]
     /**
@@ -119,7 +124,11 @@ export async function runMemoryMutation(
           // key; identical request → apply normally, our receipt replaces the
           // marker. Only a RECORDED receipt short-circuits.
           if (prior.resultCode !== MEMORY_OPERATION_PENDING) {
-            return { ok: true, version: prior.resultVersion ?? 0 }
+            return {
+              ok: true,
+              version: prior.resultVersion ?? 0,
+              ...(prior.resultPayload?.reviewRequired ? { reviewRequired: true } : {}),
+            }
           }
         }
       }
@@ -178,11 +187,16 @@ export async function runMemoryMutation(
           memoryId: request.memoryId,
           resultCode: "ok",
           resultVersion: version,
+          resultPayload: {
+            ok: true,
+            version,
+            ...(applied.reviewRequired ? { reviewRequired: true } : {}),
+          },
           createdAt: now,
         }
         await db.memoryOperations.put(receipt)
       }
-      return { ok: true, version }
+      return { ok: true, version, ...(applied.reviewRequired ? { reviewRequired: true } : {}) }
     }
   )
 }
@@ -232,8 +246,8 @@ export async function findMemoryOperation(
 /**
  * Record an applied operation after a write that could not share the
  * mutation transaction. Best-effort by construction — the write is already
- * durable; a lost receipt just means the next replay re-runs the (dedupe-
- * capable) apply path.
+ * durable. The caller must retry a failed receipt write and retain its pending
+ * reservation on exhaustion; a missing receipt is not permission to reapply.
  */
 export async function recordMemoryOperation(row: MemoryOperationRow): Promise<void> {
   await getDb().memoryOperations.put(row)
@@ -333,4 +347,23 @@ export async function awaitMemoryOperation(
     if (Date.now() >= deadline) return undefined
     await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
+}
+
+/** Explicit projection keeps future command text/metadata out of durable receipts. */
+export function memoryOperationResultPayload(
+  result: MemoryOperationResultPayload
+): MemoryOperationResultPayload {
+  const payload: MemoryOperationResultPayload = { ok: true }
+  if (result.memoryId !== undefined) payload.memoryId = result.memoryId
+  for (const field of ["version", "clearedCount"] as const) {
+    const value = result[field]
+    if (value !== undefined) {
+      if (!Number.isFinite(value)) throw new Error(`Invalid memory receipt field: ${field}`)
+      payload[field] = value
+    }
+  }
+  for (const field of ["reviewRequired", "piiRedacted"] as const) {
+    if (result[field] !== undefined) payload[field] = result[field]
+  }
+  return payload
 }

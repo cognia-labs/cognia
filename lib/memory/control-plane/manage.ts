@@ -119,7 +119,27 @@ export type ManageMemoryResult =
         | "unauthorized_namespace"
     }
 
-export async function manageMemory(command: ManageMemoryCommand): Promise<ManageMemoryResult> {
+export interface ManageMemoryCommitContext {
+  /** Host receipt envelope: Dexie-only work, canonical write + receipt commit together. */
+  commit?: (apply: () => Promise<ManageMemoryResult>) => Promise<ManageMemoryResult>
+}
+
+/**
+ * Receipt paths by command kind:
+ * - update, pin, review, retrieval-feedback, delete, restore-revision, invalidate,
+ *   restore, relocate: `commit` encloses canonical Dexie work and the receipt.
+ *   Vector I/O remains outside; its failure cannot undo an applied command.
+ * - create: consolidation spans judge/vector calls and multiple writes.
+ * - clear: multiple per-row deletes with partial-failure reporting.
+ * - resolve-conflict: multiple canonical writes interleaved with vector and
+ *   governance projection I/O. These three use bounded receipt retries in
+ *   manageMemoryForCaller and retain pending keys on uncertain completion.
+ */
+export async function manageMemory(
+  command: ManageMemoryCommand,
+  context: ManageMemoryCommitContext = {}
+): Promise<ManageMemoryResult> {
+  const commit = context.commit ?? ((apply: () => Promise<ManageMemoryResult>) => apply())
   if (command.kind === "create") {
     const result = await storeMemoryCore({
       text: command.text,
@@ -300,34 +320,53 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
   }
 
   if (command.kind === "pin") {
-    await setMemoryPinned(command.id, command.pinned)
-    await appendMemoryAuditEvent({
-      action: command.pinned ? "pinned" : "unpinned",
-      memoryId: command.id,
-      reason: "user",
+    return commit(async () => {
+      await setMemoryPinned(command.id, command.pinned)
+      await appendMemoryAuditEvent({
+        action: command.pinned ? "pinned" : "unpinned",
+        memoryId: command.id,
+        reason: "user",
+      })
+      return { ok: true, memoryId: command.id }
     })
-    return { ok: true, memoryId: command.id }
   }
 
   if (command.kind === "review") {
-    await updateMemory(command.id, { reviewStatus: command.status })
-    await appendMemoryAuditEvent({
-      action: command.status === "verified" ? "promoted" : "conflict",
-      memoryId: command.id,
-      reason: "user_review",
+    return commit(async () => {
+      await updateMemory(command.id, { reviewStatus: command.status })
+      await appendMemoryAuditEvent({
+        action: command.status === "verified" ? "promoted" : "conflict",
+        memoryId: command.id,
+        reason: "user_review",
+      })
+      return { ok: true, memoryId: command.id }
     })
-    return { ok: true, memoryId: command.id }
   }
 
   if (command.kind === "retrieval-feedback") {
-    const written = await recordRetrievalFeedback(command.id, command.verdict)
-    if (!written) return { ok: false, reason: "not_found" }
-    await appendMemoryAuditEvent({
-      action: "feedback",
-      memoryId: command.id,
-      reason: `retrieval_${command.verdict}`,
+    return commit(async () => {
+      const written = await recordRetrievalFeedback(command.id, command.verdict)
+      if (!written) return { ok: false, reason: "not_found" }
+      const audit = () =>
+        appendMemoryAuditEvent({
+          action: "feedback",
+          memoryId: command.id,
+          reason: `retrieval_${command.verdict}`,
+        })
+      if (context.commit) {
+        // Audit and receipt failures roll back the feedback in the Host envelope.
+        await audit()
+      } else {
+        // Local callers have already committed feedback. Never present an audit
+        // projection failure as permission to increment the counter again.
+        try {
+          await audit()
+        } catch {
+          console.warn("Memory feedback audit append failed")
+        }
+      }
+      return { ok: true, memoryId: command.id }
     })
-    return { ok: true, memoryId: command.id }
   }
 
   const settings = await getSettings().catch(() => undefined)
@@ -353,22 +392,37 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
       // Canonical deletion still proceeds; reconciliation removes stale vectors later.
       noteMemoryVectorFailure()
     }
-    await hardDeleteMemory(command.id)
-    // The canonical transaction already deletes evidence/history and appends
-    // the audit event. A second projection must not turn a committed delete
-    // into an apparent failure.
-    return { ok: true, memoryId: command.id }
+    return commit(async () => {
+      await hardDeleteMemory(command.id)
+      // The canonical transaction owns evidence/history/tombstones and audit.
+      return { ok: true, memoryId: command.id }
+    })
   }
 
   if (command.kind === "restore-revision") {
     if (config.temporary) return { ok: false, reason: "temporary" }
-    const restored = await restoreMemoryRevision(command.id, command.revisionId)
-    if (!restored.ok) {
-      // `unchanged` means the live text already equals the revision — the
-      // user's intent is already true, so it is not an error.
-      if (restored.reason === "unchanged") return { ok: true, memoryId: command.id }
-      return { ok: false, reason: "not_found" }
-    }
+    let restored: Awaited<ReturnType<typeof restoreMemoryRevision>> | undefined
+    const outcome = await commit(async () => {
+      restored = await restoreMemoryRevision(command.id, command.revisionId)
+      if (!restored.ok && restored.reason !== "unchanged") return { ok: false, reason: "not_found" }
+      if (restored.ok) {
+        await createMemoryEvidence({
+          memoryId: command.id,
+          kind: "manual",
+          sourceId: `restore:${command.id}:${command.revisionId}`,
+          contaminationState: "clean",
+          reviewed: true,
+        })
+        await appendMemoryAuditEvent({
+          action: "revised",
+          memoryId: command.id,
+          reason: "restored",
+          metadata: { revisionId: command.revisionId, version: restored.memory.version },
+        })
+      }
+      return { ok: true, memoryId: command.id }
+    })
+    if (!outcome.ok || !restored?.ok) return outcome
     // Restored text was PII-gated when it was first written; re-check anyway,
     // because the vector sink sends it to the embedder.
     try {
@@ -384,30 +438,21 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
       // Canonical restore remains BM25-searchable.
       noteMemoryVectorFailure()
     }
-    await createMemoryEvidence({
-      memoryId: command.id,
-      kind: "manual",
-      sourceId: `restore:${command.id}:${command.revisionId}`,
-      contaminationState: "clean",
-      reviewed: true,
-    })
-    await appendMemoryAuditEvent({
-      action: "revised",
-      memoryId: command.id,
-      reason: "restored",
-      metadata: { revisionId: command.revisionId, version: restored.memory.version },
-    })
-    return { ok: true, memoryId: command.id }
+    return outcome
   }
 
   if (command.kind === "restore") {
     if (config.temporary) return { ok: false, reason: "temporary" }
-    const restored = await restoreArchivedMemory(command.id)
-    if (!restored.ok) {
-      // Already live is the state the user asked for.
-      if (restored.reason === "already_active") return { ok: true, memoryId: command.id }
-      return { ok: false, reason: "not_found" }
-    }
+    let restored: Awaited<ReturnType<typeof restoreArchivedMemory>> | undefined
+    const outcome = await commit(async () => {
+      restored = await restoreArchivedMemory(command.id)
+      if (!restored.ok && restored.reason !== "already_active")
+        return { ok: false, reason: "not_found" }
+      if (restored.ok)
+        await appendMemoryAuditEvent({ action: "restored", memoryId: command.id, reason: "user" })
+      return { ok: true, memoryId: command.id }
+    })
+    if (!outcome.ok || !restored?.ok) return outcome
     // `invalidate` dropped the vector doc; put it back so semantic recall finds
     // the row again. Its text was gated when written, but the embedder is an
     // outbound call, so it is checked again rather than trusted.
@@ -420,8 +465,7 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
         noteMemoryVectorFailure()
       }
     }
-    await appendMemoryAuditEvent({ action: "restored", memoryId: command.id, reason: "user" })
-    return { ok: true, memoryId: command.id }
+    return outcome
   }
 
   if (command.kind === "relocate") {
@@ -435,19 +479,29 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
             ? target.agentId
             : "global"
     if (!namespaceId?.trim()) return { ok: false, reason: "scope_denied" }
-    const moved = await moveMemoryToNamespace(command.id, target)
-    if (!moved) return { ok: false, reason: "not_found" }
-    await appendMemoryAuditEvent({
-      action: "relocated",
-      memoryId: command.id,
-      reason: "user",
-      metadata: { from: existing.scope, to: target.scope },
+    return commit(async () => {
+      const moved = await moveMemoryToNamespace(command.id, target)
+      if (!moved) return { ok: false, reason: "not_found" }
+      await appendMemoryAuditEvent({
+        action: "relocated",
+        memoryId: command.id,
+        reason: "user",
+        metadata: { from: existing.scope, to: target.scope },
+      })
+      return { ok: true, memoryId: command.id }
     })
-    return { ok: true, memoryId: command.id }
   }
 
   if (command.kind === "invalidate") {
-    await invalidateMemory(command.id, command.supersededById)
+    const outcome = await commit(async () => {
+      await invalidateMemory(command.id, command.supersededById)
+      await appendMemoryAuditEvent({
+        action: "invalidated",
+        memoryId: command.id,
+        reason: "user_undo",
+      })
+      return { ok: true, memoryId: command.id }
+    })
     if (existing.vectorDocId) {
       try {
         const sink = await tryBuildMemoryVectorSink({ ...config, enabled: true, temporary: false })
@@ -458,12 +512,7 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
         noteMemoryVectorFailure()
       }
     }
-    await appendMemoryAuditEvent({
-      action: "invalidated",
-      memoryId: command.id,
-      reason: "user_undo",
-    })
-    return { ok: true, memoryId: command.id }
+    return outcome
   }
 
   if (config.temporary) return { ok: false, reason: "temporary" }
@@ -472,12 +521,27 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
   const redactedText = rawText ? redactText(rawText).redacted : undefined
   if (redactedText && !hasNoLeakingPii(redactedText)) return { ok: false, reason: "pii_blocked" }
 
-  await updateMemory(command.id, {
-    ...command.patch,
-    ...(redactedText !== undefined ? { text: redactedText, bumpVersion: true } : {}),
-    evidenceState: "supported",
-    reviewStatus: "verified",
-    contaminationState: "clean",
+  const outcome = await commit(async () => {
+    await updateMemory(command.id, {
+      ...command.patch,
+      ...(redactedText !== undefined ? { text: redactedText, bumpVersion: true } : {}),
+      evidenceState: "supported",
+      reviewStatus: "verified",
+      contaminationState: "clean",
+    })
+    await createMemoryEvidence({
+      memoryId: command.id,
+      kind: "manual",
+      sourceId: `manual:${command.id}:v${existing.version + 1}`,
+      contaminationState: "clean",
+      reviewed: true,
+    })
+    await appendMemoryAuditEvent({ action: "revised", memoryId: command.id, reason: "user" })
+    return {
+      ok: true,
+      memoryId: command.id,
+      piiRedacted: rawText !== undefined && rawText !== redactedText,
+    }
   })
   if (redactedText !== undefined) {
     try {
@@ -488,17 +552,5 @@ export async function manageMemory(command: ManageMemoryCommand): Promise<Manage
       noteMemoryVectorFailure()
     }
   }
-  await createMemoryEvidence({
-    memoryId: command.id,
-    kind: "manual",
-    sourceId: `manual:${command.id}:v${existing.version + 1}`,
-    contaminationState: "clean",
-    reviewed: true,
-  })
-  await appendMemoryAuditEvent({ action: "revised", memoryId: command.id, reason: "user" })
-  return {
-    ok: true,
-    memoryId: command.id,
-    piiRedacted: rawText !== undefined && rawText !== redactedText,
-  }
+  return outcome
 }

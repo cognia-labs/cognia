@@ -323,6 +323,16 @@ export interface MemoryAuditEvent {
   metadata?: Record<string, string | number | boolean>
 }
 
+/** JSON-safe, content-free success fields. Never store command text or patches. */
+export interface MemoryOperationResultPayload {
+  ok: true
+  memoryId?: string
+  version?: number
+  reviewRequired?: boolean
+  piiRedacted?: boolean
+  clearedCount?: number
+}
+
 /**
  * Idempotent-mutation receipt for external surfaces.
  *
@@ -355,6 +365,8 @@ export interface MemoryOperationRow {
   resultCode: string
   /** The row's `version` after the operation applied. */
   resultVersion?: number
+  /** Absent on legacy receipts, which replay their original scalar fields. */
+  resultPayload?: MemoryOperationResultPayload
   /**
    * `store`-kind receipts record the outcome fields the first call returned,
    * so a replay answers the SAME result rather than a generic success shape —

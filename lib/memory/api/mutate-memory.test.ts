@@ -93,6 +93,38 @@ function appliedPatch(row: Partial<Memory> = {}) {
 }
 
 describe("updateExternalMemory", () => {
+  it.each([{ text: "new instruction" }, { key: "new-key" }])(
+    "requires review when external callers change procedural authority: %o",
+    async (patch) => {
+      const row = { ...ROW, type: "procedural" as const, reviewStatus: "verified" as const }
+      mockGetMemory.mockResolvedValue(row)
+      mockRunMutation.mockImplementation(async (request) => {
+        const applied = request.apply(row)
+        expect(applied.patch.reviewStatus).toBe("pending_instruction")
+        expect(applied.audits).toContainEqual({
+          action: "revised",
+          reason: "external_procedural_edit_requires_review",
+        })
+        return { ok: true, version: 4, reviewRequired: true }
+      })
+      await expect(updateExternalMemory("m1", patch)).resolves.toEqual({
+        ok: true,
+        version: 4,
+        reviewRequired: true,
+      })
+    }
+  )
+
+  it.each([{ importance: 8 }, { tags: ["work"] }, { pinned: true }, { text: "old" }])(
+    "preserves procedural review for a non-authority change: %o",
+    async (patch) => {
+      await updateExternalMemory("m1", patch)
+      expect(
+        appliedPatch({ type: "procedural", reviewStatus: "verified" }).patch
+      ).not.toHaveProperty("reviewStatus")
+    }
+  )
+
   it("rechecks stored grants for both update and forgetting", async () => {
     mockGetSettings.mockResolvedValue({
       memory: { principalGrants: { "plugin:p": { scopes: [] } } },

@@ -722,3 +722,17 @@ describe("manageMemory relocate", () => {
     expect(mockAudit).not.toHaveBeenCalled()
   })
 })
+
+it("keeps committed local feedback successful when its audit projection fails", async () => {
+  mockAudit.mockRejectedValueOnce(new Error("audit unavailable"))
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+  try {
+    await expect(
+      manageMemory({ kind: "retrieval-feedback", id: "m1", verdict: "helpful" })
+    ).resolves.toEqual({ ok: true, memoryId: "m1" })
+    expect(mockFeedback).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith("Memory feedback audit append failed")
+  } finally {
+    warn.mockRestore()
+  }
+})

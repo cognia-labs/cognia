@@ -10,7 +10,7 @@ export interface UpdateExternalMemoryPatch {
 }
 
 export type MutateExternalMemoryResult =
-  | { ok: true; version: number }
+  | { ok: true; version: number; reviewRequired?: boolean }
   | {
       ok: false
       reason:

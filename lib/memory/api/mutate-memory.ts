@@ -138,13 +138,23 @@ export async function updateExternalMemory(
         patch.importance !== undefined ||
         patch.tags !== undefined ||
         patch.key !== undefined
+      const reviewRequired =
+        row.type === "procedural" &&
+        ((text !== undefined && text !== row.text) ||
+          (patch.key !== undefined && patch.key !== row.key))
       const audits: { action: "revised" | "pinned" | "unpinned"; reason: string }[] = []
-      if (contentChanged) audits.push({ action: "revised", reason: "external_update" })
+      if (contentChanged)
+        audits.push({
+          action: "revised",
+          reason: reviewRequired ? "external_procedural_edit_requires_review" : "external_update",
+        })
       if (patch.pinned !== undefined && patch.pinned !== row.pinned) {
         audits.push({ action: patch.pinned ? "pinned" : "unpinned", reason: "external_update" })
       }
       return {
+        ...(reviewRequired ? { reviewRequired: true } : {}),
         patch: {
+          ...(reviewRequired ? { reviewStatus: "pending_instruction" as const } : {}),
           ...(text !== undefined ? { text } : {}),
           ...(patch.importance !== undefined
             ? { importance: clampImportance(patch.importance) }
@@ -178,7 +188,11 @@ export async function updateExternalMemory(
       noteMemoryVectorFailure()
     }
   }
-  return { ok: true, version: outcome.version }
+  return {
+    ok: true,
+    version: outcome.version,
+    ...(outcome.reviewRequired ? { reviewRequired: true } : {}),
+  }
 }
 
 export async function forgetExternalMemory(

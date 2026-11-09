@@ -722,3 +722,153 @@ describe("consolidate judge system prompt", () => {
     ])
   })
 })
+
+describe("consolidation operation ceiling", () => {
+  it.each(["UPDATE", "DELETE"] as const)(
+    "keeps the target unchanged when %s is denied",
+    async (op) => {
+      const target = existing("trusted fact", { id: "target", scope: "workspace" })
+      const deps = makeDeps({
+        findSimilar: async () => [target],
+        client: {
+          complete: async () => JSON.stringify({ op, targetId: target.id, mergedText: "rewrite" }),
+        },
+      })
+      const { applied } = await consolidate(
+        {
+          ...baseInput,
+          candidates: [cand("candidate")],
+          permissions: { canUpdate: false, canForget: false, scopeAllowed: () => true },
+        },
+        deps
+      )
+      expect(deps.updates).toEqual([])
+      expect(deps.invalidations).toEqual([])
+      expect(deps.conflicts).toEqual([])
+      expect(deps.persistInputs).toEqual([
+        expect.objectContaining({
+          text: "candidate",
+          reviewStatus: "conflict",
+          conflictWithIds: ["target"],
+        }),
+      ])
+      expect(applied).toEqual([
+        expect.objectContaining({
+          op: "CONFLICT",
+          targetId: "target",
+          reason: op === "UPDATE" ? "update_denied" : "forget_denied",
+        }),
+      ])
+      expect(consolidationOpMemoryId(applied[0])).toBe("new1")
+      expect(consolidationAuditAction(applied[0])).toBe("conflict")
+    }
+  )
+
+  it.each(["UPDATE", "DELETE"] as const)("checks %s against the target scope", async (op) => {
+    const target = existing("fact", { id: "target", scope: "workspace" })
+    const scopeAllowed = jest.fn((_operation, scope) => scope === "global")
+    const deps = makeDeps({
+      findSimilar: async () => [target],
+      client: { complete: async () => JSON.stringify({ op, targetId: target.id }) },
+    })
+    const { applied } = await consolidate(
+      {
+        ...baseInput,
+        candidates: [cand("candidate")],
+        permissions: { canUpdate: true, canForget: true, scopeAllowed },
+      },
+      deps
+    )
+    expect(scopeAllowed).toHaveBeenCalledWith(op === "UPDATE" ? "update" : "forget", "workspace")
+    expect(applied[0]).toMatchObject({ op: "CONFLICT" })
+    expect(deps.updates).toEqual([])
+    expect(deps.invalidations).toEqual([])
+  })
+
+  it("does not mark the target of CONFLICT when update is denied", async () => {
+    const deps = makeDeps({
+      findSimilar: async () => [existing("fact", { id: "target" })],
+      client: { complete: async () => '{"op":"CONFLICT","targetId":"target"}' },
+    })
+    const { applied } = await consolidate(
+      {
+        ...baseInput,
+        candidates: [cand("candidate")],
+        permissions: { canUpdate: false, canForget: true, scopeAllowed: () => true },
+      },
+      deps
+    )
+    expect(applied[0]).toMatchObject({ op: "CONFLICT", reason: "update_denied" })
+    expect(deps.conflicts).toEqual([])
+    expect(deps.persistInputs[0]).toMatchObject({ reviewStatus: "conflict" })
+  })
+})
+
+it.each(["UPDATE", "DELETE"] as const)("applies an explicitly authorized %s", async (op) => {
+  const deps = makeDeps({
+    findSimilar: async () => [existing("fact", { id: "target" })],
+    client: {
+      complete: async () => JSON.stringify({ op, targetId: "target", mergedText: "new fact" }),
+    },
+  })
+  const { applied } = await consolidate(
+    {
+      ...baseInput,
+      candidates: [cand("candidate")],
+      permissions: {
+        canUpdate: op === "UPDATE",
+        canForget: op === "DELETE",
+        scopeAllowed: () => true,
+      },
+    },
+    deps
+  )
+  expect(applied[0]).toMatchObject({ op, targetId: "target" })
+  expect(deps.updates).toHaveLength(op === "UPDATE" ? 1 : 0)
+  expect(deps.invalidations).toHaveLength(op === "DELETE" ? 1 : 0)
+})
+
+it("reports the downgrade even if the content-free audit fails", async () => {
+  const auditDowngrade = jest.fn(async () => {
+    throw new Error("audit unavailable")
+  })
+  const deps = makeDeps({
+    auditDowngrade,
+    findSimilar: async () => [existing("fact", { id: "target" })],
+    client: { complete: async () => '{"op":"UPDATE","targetId":"target"}' },
+  })
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+  try {
+    const { applied } = await consolidate(
+      {
+        ...baseInput,
+        candidates: [cand("candidate")],
+        permissions: { canUpdate: false, canForget: true, scopeAllowed: () => true },
+      },
+      deps
+    )
+    expect(applied[0]).toMatchObject({ op: "CONFLICT", reason: "update_denied" })
+    expect(auditDowngrade).toHaveBeenCalledWith("new1", "target", "update_denied")
+    expect(deps.persisted).toHaveLength(1)
+    expect(deps.updates).toEqual([])
+  } finally {
+    warn.mockRestore()
+  }
+})
+
+it("requires update permission, rather than forget permission, to mark a conflict target", async () => {
+  const deps = makeDeps({
+    findSimilar: async () => [existing("fact", { id: "target" })],
+    client: { complete: async () => '{"op":"CONFLICT","targetId":"target"}' },
+  })
+  const { applied } = await consolidate(
+    {
+      ...baseInput,
+      candidates: [cand("candidate")],
+      permissions: { canUpdate: true, canForget: false, scopeAllowed: () => true },
+    },
+    deps
+  )
+  expect(applied[0]).not.toHaveProperty("reason")
+  expect(deps.conflicts).toEqual([{ targetId: "target", conflictId: "new1" }])
+})

@@ -26,7 +26,11 @@
 import type { TrustedMemoryCaller } from "@cognia/memory/types/caller"
 import { memoryRowWithinNamespaces } from "@cognia/memory/types/caller"
 import type { Memory } from "@/types/memory/memory"
-import type { ManageMemoryCommand, ManageMemoryResult } from "@/lib/memory/control-plane/manage"
+import type {
+  ManageMemoryCommand,
+  ManageMemoryResult,
+  ManageMemoryCommitContext,
+} from "@/lib/memory/control-plane/manage"
 import { resolveMemoryCaller } from "./caller"
 
 export interface ManageMemoryForCallerContext {
@@ -38,6 +42,23 @@ export interface ManageMemoryForCallerContext {
 
 /** `manageMemory`'s result — its failure set already names both remote refusals. */
 export type ManageMemoryForCallerResult = ManageMemoryResult
+
+export class MemoryReceiptCommitError extends Error {
+  readonly code = "memory_receipt_commit_failed"
+  constructor(cause: unknown) {
+    super("memory_mutate: command applied but receipt commit failed; operation remains pending", {
+      cause,
+    })
+    this.name = "MemoryReceiptCommitError"
+  }
+}
+
+/** Commands whose canonical Dexie work accepts the atomic receipt envelope. */
+function hasAtomicReceipt(command: ManageMemoryCommand): boolean {
+  return (
+    command.kind !== "create" && command.kind !== "clear" && command.kind !== "resolve-conflict"
+  )
+}
 
 type NamespaceRow = Pick<Memory, "scope" | "projectId" | "characterId" | "agentId">
 
@@ -125,10 +146,12 @@ export async function manageMemoryForCaller(
   }
   if (reservation.state === "conflict") return { ok: false, reason: "idempotency_key_reused" }
   if (reservation.state === "replay") {
-    return {
-      ok: true,
-      ...(reservation.receipt.memoryId ? { memoryId: reservation.receipt.memoryId } : {}),
-    }
+    return (
+      reservation.receipt.resultPayload ?? {
+        ok: true,
+        ...(reservation.receipt.memoryId ? { memoryId: reservation.receipt.memoryId } : {}),
+      }
+    )
   }
   if (reservation.state === "in_flight") {
     // The first attempt is still applying (or died holding the key). Answering
@@ -137,41 +160,88 @@ export async function manageMemoryForCaller(
     throw new Error("memory_mutate: operation still in flight")
   }
 
+  let receiptCommitted = false
+  const writeReceipt = async (result: Extract<ManageMemoryResult, { ok: true }>) => {
+    await ledger.recordMemoryOperation({
+      id: `${binding.principalId}:${binding.operationId}`,
+      ...binding,
+      memoryId: result.memoryId ?? "",
+      resultCode: "ok",
+      resultPayload: ledger.memoryOperationResultPayload(result),
+      createdAt: Date.now(),
+    })
+  }
+  const commit: ManageMemoryCommitContext["commit"] = async (apply) => {
+    const { getDb } = await import("@/lib/db/schema")
+    const db = getDb()
+    const result = await db.transaction(
+      "rw",
+      [
+        db.memories,
+        db.memoryEvidence,
+        db.memoryAuditEvents,
+        db.memoryOperations,
+        db.retrievalEncryptedContent,
+        db.retrievalTombstones,
+        db.syncTombstones,
+      ],
+      async () => {
+        const outcome = await apply()
+        if (outcome.ok) await writeReceipt(outcome)
+        return outcome
+      }
+    )
+    if (result.ok) receiptCommitted = true
+    return result
+  }
+  const atomic = hasAtomicReceipt(effective)
   let result: ManageMemoryForCallerResult
   try {
-    result = await runCommand(effective)
+    result = await runCommand(effective, atomic ? commit : undefined)
   } catch (error) {
-    await ledger.releaseMemoryOperation(
-      binding.principalId,
-      binding.operationId,
-      binding.requestHash
-    )
+    // An atomic envelope rolled back, so no canonical write survived. A
+    // multi-step command may already have committed; keep its key fenced.
+    if (atomic)
+      await ledger.releaseMemoryOperation(
+        binding.principalId,
+        binding.operationId,
+        binding.requestHash
+      )
     throw error
   }
   if (!result.ok) {
     // A refused command changed nothing, so its key must free up for a
     // corrected retry (the same rule `runMemoryMutation` applies).
-    await ledger.releaseMemoryOperation(
-      binding.principalId,
-      binding.operationId,
-      binding.requestHash
-    )
+    if (result.reason !== "partial_failure")
+      await ledger.releaseMemoryOperation(
+        binding.principalId,
+        binding.operationId,
+        binding.requestHash
+      )
     return result
   }
-  await ledger.recordMemoryOperation({
-    id: `${binding.principalId}:${binding.operationId}`,
-    principalId: binding.principalId,
-    operationId: binding.operationId,
-    kind: "manage",
-    requestHash: binding.requestHash,
-    memoryId: result.memoryId ?? "",
-    resultCode: "ok",
-    createdAt: Date.now(),
-  })
+  if (!receiptCommitted) {
+    // Non-atomic command kinds have already applied. Retry only the receipt,
+    // never the command, and never free the key after a successful command.
+    let receiptError: unknown
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await writeReceipt(result)
+        return result
+      } catch (error) {
+        receiptError = error
+      }
+    }
+    throw new MemoryReceiptCommitError(receiptError)
+  }
   return result
 
-  async function runCommand(next: ManageMemoryCommand): Promise<ManageMemoryForCallerResult> {
-    if (next.kind !== "clear" || !namespaces) return manageMemory(next)
+  async function runCommand(
+    next: ManageMemoryCommand,
+    commit?: ManageMemoryCommitContext["commit"]
+  ): Promise<ManageMemoryForCallerResult> {
+    if (next.kind !== "clear" || !namespaces)
+      return commit ? manageMemory(next, { commit }) : manageMemory(next)
     // A restricted device clears only what it may see: one governed delete per
     // row, never the unscoped table-wide clear.
     const rows = await memDb.listMemories(

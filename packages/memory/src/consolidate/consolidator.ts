@@ -117,6 +117,12 @@ export interface ConsolidateDeps {
   invalidate: (id: string, supersededById?: string) => Promise<void>
   /** Mark both sides of an unresolved contradiction for explicit review. */
   markConflict?: (targetId: string, conflictId: string) => Promise<void>
+  /** Content-free record of a policy downgrade, after its review draft lands. */
+  auditDowngrade?: (
+    memoryId: string,
+    targetId: string,
+    reason: "update_denied" | "forget_denied"
+  ) => Promise<void>
   /**
    * The judge's system prompt; defaults to
    * {@link CONSOLIDATE_DECIDE_SYSTEM_PROMPT}. A host that lets the user
@@ -131,7 +137,13 @@ export type ConsolidationOp =
   | { op: "ADD"; memory: Memory; candidate: ConsolidationCandidate }
   | { op: "UPDATE"; targetId: string; candidate?: ConsolidationCandidate }
   | { op: "DELETE"; targetId: string }
-  | { op: "CONFLICT"; memory: Memory; targetId: string; candidate: ConsolidationCandidate }
+  | {
+      op: "CONFLICT"
+      memory: Memory
+      targetId: string
+      candidate: ConsolidationCandidate
+      reason?: "update_denied" | "forget_denied"
+    }
   | {
       /**
        * The judge could not decide anything at all, and the caller asked to fail
@@ -195,7 +207,15 @@ export function consolidationCorroboratedId(op: ConsolidationOp): string | undef
   return op.op === "NOOP" ? op.targetId : undefined
 }
 
+export interface ConsolidationPermissions {
+  canUpdate: boolean
+  canForget: boolean
+  scopeAllowed: (operation: "update" | "forget", targetScope: MemoryScope) => boolean
+}
+
 export interface ConsolidateInput {
+  /** Omitted only by in-process owner callers retaining the historical behavior. */
+  permissions?: ConsolidationPermissions
   candidates: ConsolidationCandidate[]
   scope: MemoryScope
   characterId?: string
@@ -379,6 +399,28 @@ async function failClosed(
   return { op: "QUARANTINE", memory, candidate, reason }
 }
 
+/** Preserve a denied rewrite as a draft without changing any target fields. */
+export async function deferConsolidationForReview(
+  candidate: ConsolidationCandidate,
+  input: ConsolidateInput,
+  deps: ConsolidateDeps,
+  targetId: string,
+  reason: "update_denied" | "forget_denied"
+): Promise<Extract<ConsolidationOp, { op: "CONFLICT" }>> {
+  const memory = await persistCandidate(candidate, input, deps, {
+    reviewStatus: "conflict",
+    conflictWithIds: [targetId],
+  })
+  try {
+    await deps.auditDowngrade?.(memory.id, targetId, reason)
+  } catch {
+    // The draft already landed. Its applied reason survives a lost audit, and
+    // an audit failure must not cause the canonical write to be retried.
+    console.warn("Memory consolidation downgrade audit append failed")
+  }
+  return { op: "CONFLICT", memory, targetId, candidate, reason }
+}
+
 export async function consolidate(
   input: ConsolidateInput,
   deps: ConsolidateDeps
@@ -425,6 +467,22 @@ export async function consolidate(
         ? decision.targetId
         : undefined
 
+    const target = similar.find((memory) => memory.id === targetId)
+    const canMutate = (operation: "update" | "forget") =>
+      !input.permissions ||
+      (!!target &&
+        (operation === "update" ? input.permissions.canUpdate : input.permissions.canForget) &&
+        input.permissions.scopeAllowed(operation, target.scope))
+    if (
+      targetId &&
+      (op === "UPDATE" || op === "DELETE" || op === "CONFLICT") &&
+      !canMutate(op === "DELETE" ? "forget" : "update")
+    ) {
+      const reason = op === "DELETE" ? "forget_denied" : "update_denied"
+      applied.push(await deferConsolidationForReview(candidate, input, deps, targetId, reason))
+      continue
+    }
+
     if (op === "UPDATE" && targetId) {
       const mergedText =
         typeof decision.mergedText === "string" && decision.mergedText.trim()
@@ -449,7 +507,7 @@ export async function consolidate(
         reviewStatus: "conflict",
         conflictWithIds: [targetId],
       })
-      await deps.markConflict?.(targetId, memory.id)
+      if (canMutate("update")) await deps.markConflict?.(targetId, memory.id)
       applied.push({ op: "CONFLICT", memory, targetId, candidate })
     } else if (op === "NOOP") {
       applied.push(targetId ? { op: "NOOP", targetId } : { op: "NOOP" })

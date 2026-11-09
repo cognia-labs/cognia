@@ -1,3 +1,6 @@
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+
 import { runMemoryRecall } from "./memory-recall"
 import type { StepExecutionContext } from "@/types/workflow/visual"
 
@@ -8,8 +11,20 @@ jest.mock("@/lib/db/settings", () => ({
 
 const mockTryBuildMemoryDeps = jest.fn()
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
+  ...jest.requireActual("@/lib/memory/runtime/build-deps"),
   tryBuildMemoryDeps: (...args: unknown[]) => mockTryBuildMemoryDeps(...(args as [])),
 }))
+
+const mockResolveIdentity = jest.fn()
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  resolveRunActingIdentity: (...args: unknown[]) => mockResolveIdentity(...args),
+}))
+
+const dbFixture = createDbTestFixture()
+beforeAll(dbFixture.initialize)
+afterAll(dbFixture.dispose)
+beforeEach(dbFixture.restore)
 
 const mockRetrieveMemories = jest.fn()
 jest.mock("@/lib/memory/retrieve/retriever", () => ({
@@ -37,6 +52,7 @@ function makeCtx(params: Record<string, unknown>): StepExecutionContext {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockResolveIdentity.mockResolvedValue(undefined)
   mockGetSettings.mockResolvedValue({ memory: { enabled: true } })
   mockResolvePolicy.mockResolvedValue({
     canRecall: true,
@@ -231,4 +247,71 @@ describe("runMemoryRecall", () => {
       expect.anything()
     )
   })
+})
+
+describe("personal workflow reader", () => {
+  it.each([false, true])(
+    "withholds personal source facts unless the canonical run has an owner reader (%s)",
+    async (owner) => {
+      const marks = [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }]
+      await getDb().messages.put({
+        id: "personal-source",
+        sessionId: "source",
+        role: "user",
+        text: "I prefer tea",
+        createdAt: 1,
+        metadata: { personalMarkVersion: 1, personalMarks: marks },
+      })
+      const memory = {
+        id: "personal-fact",
+        sourceMessageId: "personal-source",
+        sourceSessionId: "source",
+        scope: "global",
+        type: "semantic",
+        text: "I prefer tea",
+        importance: 5,
+      }
+      mockResolveIdentity.mockImplementation(
+        jest.requireActual("@/lib/execution/acting-authority").resolveRunActingIdentity
+      )
+      await getDb().executionRuns.put({
+        id: "execution:workflow:run1",
+        kind: "workflow",
+        sourceId: "run1",
+        title: "Recall",
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+        actingIdentity: {
+          schemaVersion: 1,
+          rootRunId: "execution:workflow:run1",
+          authorityRevision: 0,
+          lane: owner ? "bound-person" : "service",
+          trigger: owner ? "local" : "external-event",
+          requesters: [],
+          ...(owner ? { authorizingPrincipal: { kind: "local-person" } } : {}),
+        },
+      })
+      mockTryBuildMemoryDeps.mockResolvedValue({
+        loadCandidates: async () => [memory],
+        loadProcedural: async () => [],
+      })
+      mockRetrieveMemories.mockImplementation(async (_input, deps) =>
+        (await deps.loadCandidates({})).map((memory: unknown) => ({
+          memory,
+          relevance: 1,
+          score: 1,
+        }))
+      )
+      const ctx = makeCtx({ query: "tea" })
+      ctx.trigger = {
+        kind: owner ? "trigger.manual" : "trigger.webhook",
+        payload: {},
+      } as typeof ctx.trigger
+      const result = await runMemoryRecall(ctx)
+      expect((result.output as { entries: unknown[] }).entries).toHaveLength(owner ? 1 : 0)
+      expect(mockResolveIdentity).toHaveBeenCalledWith(undefined, "execution:workflow:run1")
+    }
+  )
 })

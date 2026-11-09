@@ -126,3 +126,14 @@ export async function resolvePersistedAgentMemoryPolicy(input: {
     externalContext: input.externalContext,
   })
 }
+
+/** Carry the resolved operation ceiling into every target chosen by the judge. */
+export function consolidationPermissionsForAgent(
+  policy: ResolvedAgentMemoryPolicy
+): import("@cognia/memory/consolidate/consolidator").ConsolidationPermissions {
+  return {
+    canUpdate: policy.canUpdate,
+    canForget: policy.canForget,
+    scopeAllowed: (operation, scope) => scopeAllowedByAgentMemoryPolicy(policy, operation, scope),
+  }
+}

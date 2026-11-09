@@ -234,8 +234,22 @@ export async function buildAutoExtractionDeps(
     tryBuildMemoryVectorSink(config),
   ])
 
+  const { resolvePersistedAgentMemoryPolicy, consolidationPermissionsForAgent } =
+    await import("@/lib/memory/agent-policy")
+  const permissions = consolidationPermissionsForAgent(
+    await resolvePersistedAgentMemoryPolicy({
+      config,
+      characterId: params.session?.characterId,
+      sessionId: params.session?.id,
+    })
+  )
+
   const consolidateDeps: ConsolidateDeps = {
     client,
+    auditDowngrade: async (memoryId, targetId, reason) => {
+      const { appendMemoryAuditEvent } = await import("@/lib/db/memory-governance")
+      await appendMemoryAuditEvent({ action: "conflict", memoryId, reason, metadata: { targetId } })
+    },
     findSimilar: async (candidate, namespace) => {
       if (!memDeps) return []
       const hits = await retrieveMemories(
@@ -304,9 +318,12 @@ export async function buildAutoExtractionDeps(
         client
       ),
     consolidate: async (cInput) =>
-      consolidate(cInput, {
-        ...consolidateDeps,
-        decideSystemPrompt: await resolveConsolidateSystemPrompt(),
-      }),
+      consolidate(
+        { ...cInput, permissions: cInput.permissions ?? permissions },
+        {
+          ...consolidateDeps,
+          decideSystemPrompt: await resolveConsolidateSystemPrompt(),
+        }
+      ),
   }
 }

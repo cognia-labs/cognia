@@ -6,6 +6,17 @@
 
 import { DEFAULT_MEMORY_CONFIG, type MemoryConfig } from "@/types/memory/memory"
 
+const mockResolveMemoryPolicy = jest.fn()
+jest.mock("@/lib/memory/agent-policy", () => ({
+  ...jest.requireActual("@/lib/memory/agent-policy"),
+  resolvePersistedAgentMemoryPolicy: (...args: unknown[]) => mockResolveMemoryPolicy(...args),
+}))
+
+const mockAuditDowngrade = jest.fn(async () => undefined)
+jest.mock("@/lib/db/memory-governance", () => ({
+  appendMemoryAuditEvent: (...args: unknown[]) => mockAuditDowngrade(...(args as [])),
+}))
+
 const mockBuildAgentBacked = jest.fn()
 const mockTryBuildMemoryDeps = jest.fn()
 const mockTryBuildMemoryVectorSink = jest.fn()
@@ -63,6 +74,11 @@ const params = { session: null, appSettings: null }
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockResolveMemoryPolicy.mockResolvedValue({
+    canUpdate: true,
+    canForget: true,
+    writableScopes: ["global", "workspace", "agent", "character"],
+  })
   mockBuildAgentBacked.mockResolvedValue({ complete: jest.fn() })
   mockTryBuildMemoryDeps.mockResolvedValue({ loadCandidates: jest.fn(), loadProcedural: jest.fn() })
   mockTryBuildMemoryVectorSink.mockResolvedValue(undefined)
@@ -87,6 +103,7 @@ describe("buildProjectMiningDeps", () => {
     mockListMemories.mockResolvedValue([
       {
         id: "draft",
+        scope: "workspace",
         text: "source fact",
         trustState: "quarantined",
         projectMemoryKind: "state",
@@ -358,4 +375,70 @@ describe("buildProjectMiningDeps — Prompt Center system prompts", () => {
       "Choose one op for the claim. Return STRICT JSON only."
     )
   })
+})
+
+it("passes the resolved operation ceiling into consolidation", async () => {
+  mockResolveMemoryPolicy.mockResolvedValueOnce({
+    canUpdate: false,
+    canForget: false,
+    writableScopes: ["global"],
+  })
+  const deps = await buildProjectMiningDeps(params, cfg())
+  await deps!.consolidate({ candidates: [], scope: "global", provenance: "user" })
+  const permissions = mockConsolidate.mock.calls.at(-1)![0].permissions
+  expect(permissions).toMatchObject({ canUpdate: false, canForget: false })
+  expect(permissions.scopeAllowed("update", "global")).toBe(false)
+  expect(permissions.scopeAllowed("forget", "global")).toBe(false)
+})
+
+it("does not rewrite an attachment draft when the project miner cannot update", async () => {
+  mockResolveMemoryPolicy.mockResolvedValueOnce({
+    canUpdate: false,
+    canForget: false,
+    writableScopes: ["workspace"],
+  })
+  const candidate = {
+    type: "semantic" as const,
+    text: "source fact",
+    importance: 5,
+    projectClaim: {
+      projectMemoryKind: "state" as const,
+      evidenceHash: "hash",
+      evidence: [{ kind: "file" as const, sourceId: "attachment" }],
+    },
+  }
+  mockListMemories.mockResolvedValue([
+    {
+      id: "draft",
+      scope: "workspace",
+      text: "source fact",
+      trustState: "quarantined",
+      projectMemoryKind: "state",
+      evidenceHash: "hash",
+    },
+  ])
+  const deps = await buildProjectMiningDeps(params, cfg())
+  const result = await deps!.consolidate({
+    scope: "workspace",
+    projectId: "p1",
+    provenance: "user",
+    candidates: [candidate],
+  })
+  expect(mockUpdateMemory).not.toHaveBeenCalled()
+  expect(mockCreateMemory).toHaveBeenCalledWith(
+    expect.objectContaining({
+      reviewStatus: "conflict",
+      conflictWithIds: ["draft"],
+      trustState: "quarantined",
+      projectMemoryKind: "state",
+    })
+  )
+  expect(result.applied[0]).toMatchObject({
+    op: "CONFLICT",
+    targetId: "draft",
+    reason: "update_denied",
+  })
+  expect(mockAuditDowngrade).toHaveBeenCalledWith(
+    expect.objectContaining({ reason: "update_denied" })
+  )
 })

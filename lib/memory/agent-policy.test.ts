@@ -1,4 +1,8 @@
-import { resolveAgentMemoryPolicy, scopeAllowedByAgentMemoryPolicy } from "./agent-policy"
+import {
+  resolveAgentMemoryPolicy,
+  scopeAllowedByAgentMemoryPolicy,
+  consolidationPermissionsForAgent,
+} from "./agent-policy"
 import { DEFAULT_MEMORY_CONFIG } from "@/types/memory/memory"
 
 const restrictive = {
@@ -134,4 +138,18 @@ describe("resolveAgentMemoryPolicy", () => {
       }).canAutoLearn
     ).toBe(false)
   })
+})
+
+it("preserves operation and target-scope ceilings in consolidation permissions", () => {
+  const policy = resolveAgentMemoryPolicy({
+    config: DEFAULT_MEMORY_CONFIG,
+    agentPolicy: restrictive,
+  })
+  const permissions = consolidationPermissionsForAgent(policy)
+  expect(permissions.canUpdate).toBe(false)
+  expect(permissions.canForget).toBe(false)
+  expect(permissions.scopeAllowed("update", "agent")).toBe(false)
+  const allowed = consolidationPermissionsForAgent({ ...policy, canUpdate: true, canForget: true })
+  expect(allowed.scopeAllowed("update", "agent")).toBe(true)
+  expect(allowed.scopeAllowed("forget", "global")).toBe(false)
 })

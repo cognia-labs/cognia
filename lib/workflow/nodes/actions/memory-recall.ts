@@ -10,6 +10,7 @@
  */
 
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 import type { MemoryScope, MemoryType } from "@/types/memory/memory"
 
 export interface MemoryRecallParams {
@@ -86,7 +87,8 @@ export async function runMemoryRecall(ctx: StepExecutionContext): Promise<StepEx
     return { output: { entries: [], degraded: true, reason: "unauthorized_namespace" } }
   }
 
-  const { tryBuildMemoryDeps } = await import("@/lib/memory/runtime/build-deps")
+  const { tryBuildMemoryDeps, withPersonalMemoryVisibility } =
+    await import("@/lib/memory/runtime/build-deps")
   const baseDeps = await tryBuildMemoryDeps(config)
   if (!baseDeps) {
     ctx.log("warn", "action.memory.recall: memory backend unavailable — returning no entries.")
@@ -95,10 +97,18 @@ export async function runMemoryRecall(ctx: StepExecutionContext): Promise<StepEx
   // Candidates are authorized before scoring; hits are re-checked after, the
   // same defense-in-depth the external search surface applies. (Procedural
   // lines are not part of recall — the retriever only reads `loadCandidates`.)
+  // The canonical execution run carries the verified reader, including inherited
+  // identity. Node params and trigger payloads cannot establish a person; a
+  // missing projection/identity is readerless, including webhook/scheduled runs.
+  const visibleDeps = withPersonalMemoryVisibility(
+    baseDeps,
+    undefined,
+    workflowExecutionRunId(ctx.runId)
+  )
   const deps = {
-    ...baseDeps,
+    ...visibleDeps,
     loadCandidates: async (candidateReader: Parameters<typeof baseDeps.loadCandidates>[0]) =>
-      (await baseDeps.loadCandidates(candidateReader)).filter((memory) =>
+      (await visibleDeps.loadCandidates(candidateReader)).filter((memory) =>
         read.isAuthorized(memory)
       ),
   }

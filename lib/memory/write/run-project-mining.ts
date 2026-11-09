@@ -42,6 +42,7 @@ import {
 import type { ProjectWindowMessage } from "@cognia/memory/extract/project-windows"
 import {
   consolidate,
+  deferConsolidationForReview,
   sameMemoryNamespace,
   type ConsolidateDeps,
   type ConsolidateInput,
@@ -563,8 +564,22 @@ export async function buildProjectMiningDeps(
     tryBuildMemoryVectorSink(config),
   ])
 
+  const { resolvePersistedAgentMemoryPolicy, consolidationPermissionsForAgent } =
+    await import("@/lib/memory/agent-policy")
+  const permissions = consolidationPermissionsForAgent(
+    await resolvePersistedAgentMemoryPolicy({
+      config,
+      characterId: params.session?.characterId,
+      sessionId: params.session?.id,
+    })
+  )
+
   const consolidateDeps: ConsolidateDeps = {
     client,
+    auditDowngrade: async (memoryId, targetId, reason) => {
+      const { appendMemoryAuditEvent } = await import("@/lib/db/memory-governance")
+      await appendMemoryAuditEvent({ action: "conflict", memoryId, reason, metadata: { targetId } })
+    },
     findSimilar: async (candidate, namespace) => {
       if (!memDeps) return []
       const hits = await retrieveMemories(
@@ -646,7 +661,8 @@ export async function buildProjectMiningDeps(
         propagateErrors: true,
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       }),
-    consolidate: async (cInput) => {
+    consolidate: async (requestedInput) => {
+      const cInput = { ...requestedInput, permissions: requestedInput.permissions ?? permissions }
       const judgedDeps: ConsolidateDeps = {
         ...consolidateDeps,
         decideSystemPrompt: await resolveConsolidateSystemPrompt(),
@@ -683,8 +699,27 @@ export async function buildProjectMiningDeps(
           }
           // A replay still repairs evidence if the previous worker persisted the
           // draft but stopped before attaching its provenance rows.
-          await consolidateDeps.update(previous.id, candidate.text, candidate)
-          replayed.push({ op: "UPDATE", targetId: previous.id, candidate })
+          if (
+            cInput.permissions.canUpdate &&
+            cInput.permissions.scopeAllowed("update", previous.scope)
+          ) {
+            await consolidateDeps.update(previous.id, candidate.text, candidate)
+            replayed.push({ op: "UPDATE", targetId: previous.id, candidate })
+          } else {
+            replayed.push(
+              await deferConsolidationForReview(
+                candidate,
+                cInput,
+                {
+                  ...judgedDeps,
+                  persist: (pInput) =>
+                    consolidateDeps.persist({ ...pInput, trustState: "quarantined" }),
+                },
+                previous.id,
+                "update_denied"
+              )
+            )
+          }
         }
       }
       if (!candidates.length) return { applied: replayed }

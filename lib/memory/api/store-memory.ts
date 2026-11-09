@@ -227,6 +227,12 @@ export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<Stor
   const memDb = await import("@/lib/db/memories")
   if (deps) {
     const { applied } = await deps.consolidate({
+      permissions: {
+        canUpdate: policy.canUpdate,
+        canForget: policy.canForget,
+        scopeAllowed: (operation, targetScope) =>
+          scopeAllowedByAgentMemoryPolicy(policy, operation, targetScope),
+      },
       candidates: [candidate],
       scope,
       characterId,
@@ -301,7 +307,11 @@ export async function storeMemoryCore(input: StoreMemoryCoreInput): Promise<Stor
                 : "created",
             memoryId: id,
             sessionId: input.source?.sessionId,
-            reason: input.provenance,
+            reason:
+              applied.find(
+                (op): op is Extract<ConsolidationOp, { op: "CONFLICT" }> =>
+                  op.op === "CONFLICT" && op.memory.id === id
+              )?.reason ?? input.provenance,
           })
         }
       } catch {

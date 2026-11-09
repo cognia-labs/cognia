@@ -8,6 +8,12 @@
 import { DEFAULT_MEMORY_CONFIG, type MemoryConfig } from "@/types/memory/memory"
 import type { ConsolidateDeps } from "@/lib/memory/consolidate/consolidator"
 
+const mockResolveMemoryPolicy = jest.fn()
+jest.mock("@/lib/memory/agent-policy", () => ({
+  ...jest.requireActual("@/lib/memory/agent-policy"),
+  resolvePersistedAgentMemoryPolicy: (...args: unknown[]) => mockResolveMemoryPolicy(...args),
+}))
+
 const mockBuildClient = jest.fn()
 const mockTryBuildMemoryDeps = jest.fn()
 const mockTryBuildMemoryVectorSink = jest.fn()
@@ -66,6 +72,11 @@ function cfg(over: Partial<MemoryConfig> = {}): MemoryConfig {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockResolveMemoryPolicy.mockResolvedValue({
+    canUpdate: true,
+    canForget: true,
+    writableScopes: ["global", "workspace", "agent", "character"],
+  })
   mockBuildClient.mockReturnValue({ complete: jest.fn() })
   mockTryBuildMemoryDeps.mockResolvedValue({ loadCandidates: jest.fn(), loadProcedural: jest.fn() })
   mockTryBuildMemoryVectorSink.mockResolvedValue(undefined)
@@ -300,4 +311,18 @@ describe("buildAutoExtractionDeps — Prompt Center system prompts", () => {
       "Pick one memory op. Return STRICT JSON only."
     )
   })
+})
+
+it("passes the resolved operation ceiling into consolidation", async () => {
+  mockResolveMemoryPolicy.mockResolvedValueOnce({
+    canUpdate: false,
+    canForget: false,
+    writableScopes: ["global"],
+  })
+  const deps = await buildAutoExtractionDeps(params, cfg())
+  await deps!.consolidate({ candidates: [], scope: "global", provenance: "user" })
+  const permissions = mockConsolidate.mock.calls.at(-1)![0].permissions
+  expect(permissions).toMatchObject({ canUpdate: false, canForget: false })
+  expect(permissions.scopeAllowed("update", "global")).toBe(false)
+  expect(permissions.scopeAllowed("forget", "global")).toBe(false)
 })

@@ -3,6 +3,7 @@ import {
   awaitMemoryOperation,
   findMemoryOperation,
   memoryOperationRequestHash,
+  memoryOperationResultPayload,
   MEMORY_OPERATION_PENDING,
   recordMemoryOperation,
   releaseMemoryOperation,
@@ -396,4 +397,62 @@ describe("runMemoryMutation revision snapshots", () => {
     expect(live).toMatchObject({ text: "fact", importance: 9, version: 3 })
     expect(live?.revisedAt).toBeUndefined()
   })
+})
+
+it("stores and replays the procedural review requirement with the mutation receipt", async () => {
+  await createMemory({
+    id: "procedure",
+    scope: "global",
+    type: "procedural",
+    text: "old",
+    importance: 5,
+    provenance: "explicit",
+    reviewStatus: "verified",
+  })
+  const request = {
+    memoryId: "procedure",
+    seen: seen(),
+    operation: binding(),
+    apply: () => ({
+      reviewRequired: true,
+      patch: { text: "edited", reviewStatus: "pending_instruction" as const },
+      audits: [{ action: "revised" as const, reason: "external_procedural_edit_requires_review" }],
+    }),
+  }
+  await expect(runMemoryMutation(request)).resolves.toMatchObject({
+    ok: true,
+    reviewRequired: true,
+  })
+  const replay = await runMemoryMutation({
+    ...request,
+    apply: () => {
+      throw new Error("must replay")
+    },
+  })
+  expect(replay).toMatchObject({ ok: true, version: 2, reviewRequired: true })
+  expect((await getMemory("procedure"))?.reviewStatus).toBe("pending_instruction")
+})
+
+it("projects the complete content-free success result and rejects non-JSON numbers", () => {
+  const result = {
+    ok: true as const,
+    memoryId: "m1",
+    version: 2,
+    clearedCount: 4,
+    piiRedacted: true,
+    reviewRequired: false,
+    text: "never persist this",
+    patch: { text: "private" },
+  }
+  expect(memoryOperationResultPayload(result)).toEqual({
+    ok: true,
+    memoryId: "m1",
+    version: 2,
+    clearedCount: 4,
+    piiRedacted: true,
+    reviewRequired: false,
+  })
+  expect(() => memoryOperationResultPayload({ ok: true, clearedCount: NaN })).toThrow(
+    "Invalid memory receipt field"
+  )
 })
