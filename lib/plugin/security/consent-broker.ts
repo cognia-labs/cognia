@@ -119,6 +119,11 @@ interface BrokerOptions {
   emit?: (event: PluginConsentRequestEvent) => void
 }
 
+interface ConsentDeliveryOptions {
+  signal?: AbortSignal
+  emit?: (event: PluginConsentRequestEvent) => void | Promise<void>
+}
+
 export class PluginConsentBroker {
   private readonly pending = new Map<
     string,
@@ -128,6 +133,7 @@ export class PluginConsentBroker {
       permission: PluginPermission
       scope?: string
       timeoutHandle: ReturnType<typeof setTimeout>
+      cleanup?: () => void
     }
   >()
   private readonly sessionGrants = new Set<string>()
@@ -149,8 +155,8 @@ export class PluginConsentBroker {
    * via existing session grant or user response), `false` otherwise.
    * Never rejects — the caller can rely on the boolean.
    */
-  async request(req: PluginConsentRequest): Promise<boolean> {
-    const outcome = await this.ask(req)
+  async request(req: PluginConsentRequest, options?: ConsentDeliveryOptions): Promise<boolean> {
+    const outcome = await this.ask(req, options)
     return outcome.granted
   }
 
@@ -169,41 +175,45 @@ export class PluginConsentBroker {
     return this.ask(req)
   }
 
-  private async ask(req: PluginConsentRequest): Promise<BinaryConsentOutcome> {
+  private async ask(
+    req: PluginConsentRequest,
+    options?: ConsentDeliveryOptions
+  ): Promise<BinaryConsentOutcome> {
+    const signal = options?.signal
+    if (signal?.aborted) return DENIED
     if (this.hasSessionGrant(req.pluginId, req.permission, req.scope)) {
       return { granted: true, remember: false }
     }
     const requestId = generateRequestId()
     return new Promise<BinaryConsentOutcome>((resolve) => {
-      const timeoutHandle = setTimeout(() => {
-        const row = this.pending.get(requestId)
-        if (row) {
-          this.pending.delete(requestId)
-          row.resolve(DENIED)
-        }
-      }, this.timeoutMs)
+      const reject = () => {
+        this.respond(requestId, { allow: false, persist: false })
+      }
+      const timeoutHandle = setTimeout(reject, this.timeoutMs)
       this.pending.set(requestId, {
         resolve,
         pluginId: req.pluginId,
         permission: req.permission,
         scope: req.scope,
         timeoutHandle,
+        cleanup: signal ? () => signal.removeEventListener("abort", reject) : undefined,
       })
+      signal?.addEventListener("abort", reject, { once: true })
       try {
-        this.emit({
-          requestId,
-          pluginId: req.pluginId,
-          permission: req.permission,
-          reason: req.reason,
-          scope: req.scope,
-          binary: req.binary,
-          timeoutMs: this.timeoutMs,
-        })
+        void Promise.resolve(
+          (options?.emit ?? this.emit)({
+            requestId,
+            pluginId: req.pluginId,
+            permission: req.permission,
+            reason: req.reason,
+            scope: req.scope,
+            binary: req.binary,
+            timeoutMs: this.timeoutMs,
+          })
+        ).catch(reject)
       } catch {
         // Emit failed — auto-reject so the caller doesn't hang.
-        this.pending.delete(requestId)
-        clearTimeout(timeoutHandle)
-        resolve(DENIED)
+        reject()
       }
     })
   }
@@ -218,6 +228,7 @@ export class PluginConsentBroker {
     if (!row) return false
     this.pending.delete(requestId)
     clearTimeout(row.timeoutHandle)
+    row.cleanup?.()
     if (response.allow && response.persist) {
       this.sessionGrants.add(sessionKey(row.pluginId, row.permission, row.scope))
     }
@@ -251,6 +262,7 @@ export class PluginConsentBroker {
   rejectAllPending(): void {
     for (const [, row] of this.pending) {
       clearTimeout(row.timeoutHandle)
+      row.cleanup?.()
       row.resolve(DENIED)
     }
     this.pending.clear()

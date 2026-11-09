@@ -87,7 +87,9 @@ export const useShortcutStore = create<ShortcutRegistryState>((set, get) => ({
       // bindings the user saved last session before they're lost for good.
       const persisted = (await getPref<Record<string, Chord>>(CUSTOM_SHORTCUTS_PREF_KEY)) ?? {}
       for (const [id, chord] of Object.entries(persisted)) {
-        if (bindings[id]) continue // Rust already reports this id — nothing to redo
+        // The selection monitor can install its defaults before hydration.
+        // A saved selection override remains authoritative for that scope.
+        if (bindings[id] && (!id.startsWith("selection.") || bindings[id] === chord)) continue
         try {
           await invoke("shortcut_bind", { id, chord })
           bindings[id] = chord

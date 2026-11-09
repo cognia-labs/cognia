@@ -120,7 +120,10 @@ function maybeRemoveBrowserListener(): void {
  * removes any wrapper command.
  */
 export async function bindPluginShortcut(args: BindPluginShortcutArgs): Promise<() => void> {
-  if (!isTauri()) return bindPluginShortcutInner(args)
+  if (!isTauri()) {
+    if (args.existingCommandId?.startsWith("selection.action:")) return () => {}
+    return bindPluginShortcutInner(args)
+  }
   let epoch = desktopEpochs.get(args.pluginId)
   if (!epoch) {
     epoch = {}

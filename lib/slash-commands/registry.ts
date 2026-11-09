@@ -1,3 +1,4 @@
+import type { SelectionSlashDispatch } from "@cognia/plugin-contract/lib/plugin/core/plugin-host-dispatch"
 import {
   hostCommandExecution,
   withPluginExecutionContext,
@@ -145,7 +146,8 @@ export function listCommandsByPlugin(pluginId: string): SlashCommandDefinition[]
  */
 export async function dispatchSlashCommand(
   line: string,
-  ctx?: SlashCommandContext
+  ctx?: SlashCommandContext,
+  selection?: SelectionSlashDispatch
 ): Promise<SlashCommandResult | null> {
   const trimmed = line.trim()
   if (!trimmed.startsWith("/")) return null
@@ -153,6 +155,14 @@ export async function dispatchSlashCommand(
   const id = (space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)).trim()
   const args = space === -1 ? "" : trimmed.slice(space + 1)
   let def = registry.get(id)
+  const assertDispatch = selection?.verify ? await selection.verify() : undefined
+  if (selection) {
+    assertDispatch?.()
+    def = registry.get(id)
+    if (def?.pluginId !== selection.pluginId) {
+      throw new Error("Selection slash command must belong to the action owner")
+    }
+  }
   if (!def) {
     // Lazy activation: a plugin gated on `onCommand:<id>` is not enabled until
     // its command is first invoked. Fire the activation event, then re-resolve.

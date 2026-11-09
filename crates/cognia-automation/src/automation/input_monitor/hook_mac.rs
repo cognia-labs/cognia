@@ -113,8 +113,8 @@ unsafe impl Send for SendRunLoop {}
 /// Translate a macOS virtual keycode (`kVK_ANSI_*`) into the Windows virtual-key
 /// code the shared reducer understands. Returns `0` for every key the reducer
 /// ignores — `vk_to_char` drops it and `is_commit_key` is false — so modifiers,
-/// arrows, function keys, etc. fold away exactly as a non-printable Windows vk
-/// would.
+/// function keys and other unmapped keys fold away. Navigation keys remain
+/// visible to consumers such as the selection toolbar.
 pub(crate) fn cg_keycode_to_vk(keycode: i64) -> u32 {
     match keycode {
         // Letters → VK 'A'..'Z' (0x41..=0x5A).
@@ -164,6 +164,15 @@ pub(crate) fn cg_keycode_to_vk(keycode: i64) -> u32 {
         // but the selection toolbar dismisses on it, and folding it into the
         // unmapped `0` bucket made that check unreachable on macOS.
         0x35 => 0x1B,
+        // Navigation keys build selections and must not dismiss the toolbar.
+        0x74 => 0x21, // Page Up
+        0x79 => 0x22, // Page Down
+        0x77 => 0x23, // End
+        0x73 => 0x24, // Home
+        0x7B => 0x25, // Left
+        0x7E => 0x26, // Up
+        0x7C => 0x27, // Right
+        0x7D => 0x28, // Down
         _ => 0,
     }
 }
@@ -410,6 +419,22 @@ mod tests {
         assert_eq!(cg_keycode_to_vk(0x35), 0x1B); // Escape
                                                   // Unmapped (e.g. Left Shift 0x38) → 0 (reducer ignores).
         assert_eq!(cg_keycode_to_vk(0x38), 0);
+    }
+
+    #[test]
+    fn selection_navigation_maps_to_the_shared_virtual_keys() {
+        for (native, vk) in [
+            (0x74, 0x21),
+            (0x79, 0x22),
+            (0x77, 0x23),
+            (0x73, 0x24),
+            (0x7B, 0x25),
+            (0x7E, 0x26),
+            (0x7C, 0x27),
+            (0x7D, 0x28),
+        ] {
+            assert_eq!(cg_keycode_to_vk(native), vk);
+        }
     }
 
     #[test]

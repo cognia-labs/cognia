@@ -123,6 +123,16 @@ mod platform {
     }
 }
 
+/// Classify a fresh accessibility preflight without reading a cached window snapshot.
+pub fn selection_context_is_sensitive(
+    process_name: Option<&str>,
+    window_title: Option<&str>,
+    secure_field: bool,
+) -> bool {
+    credential_context_is_sensitive(Some((process_name, window_title, secure_field)))
+        || cfg!(target_os = "windows") && is_credential_window_focused()
+}
+
 fn credential_context_is_sensitive(context: Option<(Option<&str>, Option<&str>, bool)>) -> bool {
     let Some((process_name, window_title, secure_text_field)) = context else {
         // A frame whose foreground owner cannot be established is not safe to

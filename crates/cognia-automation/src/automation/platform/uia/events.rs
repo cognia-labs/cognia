@@ -308,6 +308,12 @@ fn register_handlers(
                 element_is_in_scope(&callback_automation, &walker, scope, sender)
             }) {
                 emit_element_event(id, "focus-changed", sender, None, None, None);
+                selection_events::publish(SelectionSignal {
+                    kind: SelectionSignalKind::FocusChanged,
+                    pid: sender.get_process_id().ok(),
+                    selected_len: 0,
+                    at_ms: now_ms(),
+                });
             }
             Ok(())
         });

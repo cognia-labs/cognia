@@ -33,6 +33,11 @@ describe("lib/tauri/overlay-windows — command mapping", () => {
     expect(mockInvoke).toHaveBeenCalledWith("show_main_window")
   })
 
+  it("requests checked native reveal for an acknowledged handoff", async () => {
+    await expect(showMainWindow({ checked: true })).resolves.toBe(true)
+    expect(mockInvoke).toHaveBeenCalledWith("show_main_window", { checked: true })
+  })
+
   it("revealPetWindow identifies the popup target to the native window owner", async () => {
     mockInvoke.mockResolvedValue(undefined)
     await expect(revealPetWindow(true, "pet-popup")).resolves.toBe(true)

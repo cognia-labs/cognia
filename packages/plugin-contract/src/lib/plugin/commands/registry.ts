@@ -183,6 +183,10 @@ export type UiActionOrigin = "user" | "model" | "automation"
 
 export interface ExecuteCommandOptions {
   origin?: UiActionOrigin
+  /** Host projection of arguments visible to command interceptors. */
+  guardArgs?: readonly unknown[]
+  /** Revalidate the protected dispatch after the interceptor chain has settled. */
+  beforeDispatch?: () => Promise<() => void>
 }
 
 /**
@@ -223,11 +227,13 @@ export async function invokeGuardedCommand<T = unknown>(
         commandId: entry.id,
         ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
         origin: options.origin ?? "user",
-        args,
+        args: options.guardArgs ?? args,
       },
       { operationId: `command:${entry.id}` }
     )
   }
+  const assertDispatch = options.beforeDispatch ? await options.beforeDispatch() : undefined
+  assertDispatch?.()
   const result = await entry.handler(...args)
   return result as T
 }

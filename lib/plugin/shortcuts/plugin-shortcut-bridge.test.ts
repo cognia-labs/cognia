@@ -52,6 +52,17 @@ afterEach(async () => {
 })
 
 describe("browser fallback", () => {
+  it("leaves a desktop selection-only accelerator unbound in the browser", async () => {
+    const before = listPluginShortcuts("plugin-a")
+    const dispose = await bindPluginShortcut({
+      pluginId: "plugin-a",
+      chord: "Ctrl+K",
+      existingCommandId: "selection.action:plugin-a:inspect",
+    })
+    expect(listPluginShortcuts("plugin-a")).toEqual(before)
+    dispose()
+  })
+
   it("reserves a paused consumer's chord without running its old handler", async () => {
     const original = jest.fn()
     const replacement = jest.fn()

@@ -23,6 +23,7 @@ export interface SpeakSelectionArgs {
   /** Candidate id — becomes the orchestrator's `activeSourceId`. */
   candidateId: string
   text: string
+  beforeStart?: () => void | Promise<void>
 }
 
 /**
@@ -30,10 +31,15 @@ export interface SpeakSelectionArgs {
  * fails (the orchestrator raises its own toast in that case). A no-op for empty
  * text, and silently short-circuited by the orchestrator when TTS is disabled.
  */
-export async function speakSelection({ candidateId, text }: SpeakSelectionArgs): Promise<void> {
+export async function speakSelection({
+  candidateId,
+  text,
+  beforeStart,
+}: SpeakSelectionArgs): Promise<void> {
   if (!text.trim()) return
 
   await ensureSpeechProviderKeys()
+  if (beforeStart) await beforeStart()
 
   await ttsOrchestrator.speak(text, {
     source: "selection",

@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useRef } from "react"
-import { emitTo, listen } from "@tauri-apps/api/event"
+import { listen } from "@tauri-apps/api/event"
 import { useRouter } from "next/navigation"
 import { useLocale, useTranslations } from "next-intl"
 
@@ -26,6 +26,12 @@ import { loadPort } from "@/lib/modules/ports"
 import {
   SELECTION_RESULT_EVENT,
   SELECTION_ACTION_CATALOG_EVENT,
+  SELECTION_ACTION_CATALOG_REQUEST_EVENT,
+  SELECTION_ACTION_CANCEL_EVENT,
+  SELECTION_CONSENT_EVENT,
+  SELECTION_CONSENT_RESPONSE_EVENT,
+  SELECTION_OPEN_RESULT_ACK_EVENT,
+  SELECTION_REQUEST_TIMEOUT_MS,
   SELECTION_ACTION_REQUEST_EVENT,
   SELECTION_ACTION_RESULT_EVENT,
   SELECTION_OPEN_RESULT_EVENT,
@@ -34,15 +40,18 @@ import {
   SELECTION_SPEECH_EVENT,
   SELECTION_SPEECH_STOP_EVENT,
   SELECTION_STAGE_EVENT,
-  SELECTION_TOOLBAR_LABEL,
-  takePendingSelectionStage,
   getCurrentSelectionCandidate,
+  selectionActionResult,
+  listenSelectionControl,
+  sendSelectionControl,
   type SelectionActionRequestPayload,
+  type SelectionActionExecutionPayload,
+  finishSelectionToolbar,
   type SelectionOpenResultPayload,
   type ExternalSelectionCandidate,
-  type SelectionStagePayload,
+  type SelectionLiveStagePayload,
 } from "@/lib/tauri/selection-toolbar"
-import { useChatStore } from "@/stores/chat"
+import { selectComposerContextSelections, useChatStore } from "@/stores/chat"
 import { useComposerIntentStore } from "@/stores/chat/composer-intent-store"
 import type { ExternalSelectionRef } from "@/types/artifact/artifact"
 import { classifySelection } from "@/lib/selection/classify-selection"
@@ -65,9 +74,14 @@ import { getPref } from "@/lib/tauri/store"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { buildHeadlessTurnLlmClient } from "@/lib/ai/headless-turn-llm-client"
 import { enhancePrompt, ENHANCE_MODES, type EnhanceMode } from "@/lib/chat/completion/enhance"
+import { useAccountStore } from "@/stores/account/account-store"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 
-const PLUGIN_ACTION_TIMEOUT_MS = 30_000
+import { showMainWindow } from "@/lib/tauri/overlay-windows"
+import {
+  getPluginConsentBroker,
+  type PluginConsentResponse,
+} from "@/lib/plugin/security/consent-broker"
 
 function localizedPluginActionTitle(
   pluginId: string,
@@ -135,7 +149,7 @@ function rewriteDescriptor(
 }
 
 function promptForAction(
-  action: SelectionStagePayload["action"],
+  action: SelectionLiveStagePayload["action"],
   candidate: ExternalSelectionCandidate,
   locale: string,
   t: ReturnType<typeof useTranslations<"selectionToolbar">>
@@ -171,7 +185,7 @@ function promptForAction(
 }
 
 async function reportResult(candidateId: string, ok: boolean, reason?: string): Promise<void> {
-  await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_RESULT_EVENT, { candidateId, ok, reason })
+  await sendSelectionControl(SELECTION_RESULT_EVENT, { candidateId, ok, reason })
 }
 
 async function rememberSelection(candidate: ExternalSelectionCandidate): Promise<void> {
@@ -193,6 +207,8 @@ async function rememberSelection(candidate: ExternalSelectionCandidate): Promise
 export function SelectionToolbarInitializer() {
   const router = useRouter()
   const locale = useLocale()
+  const accountRevision = useAccountStore((state) => state.accountRevision)
+  const unlockedAccountId = useAccountStore((state) => state.unlockedAccountId)
   const t = useTranslations("selectionToolbar")
   const tRef = useRef(t)
   const localeRef = useRef(locale)
@@ -203,16 +219,38 @@ export function SelectionToolbarInitializer() {
 
   useEffect(() => {
     let alive = true
+    const owner = useAccountStore.getState()
+    const assertOwner = () => {
+      const current = useAccountStore.getState()
+      if (
+        !alive ||
+        !owner.unlockedAccountId ||
+        current.locked ||
+        current.unlockedAccountId !== owner.unlockedAccountId ||
+        current.accountRevision !== owner.accountRevision
+      ) {
+        throw new SelectionQuickActionError("ineligible", "Selection account is no longer active")
+      }
+    }
     const unlistens: Array<() => void | Promise<void>> = []
     // One playback subscription at a time — a second `speak` supersedes the
     // first, exactly as the single orchestrator does.
     let stopWatching: (() => void) | null = null
+    const requests = new Map<string, AbortController>()
     const handledRequests = new Set<string>()
+    const pendingPrompts = new Map<string, string>()
+    let catalogCandidateId: string | null = null
 
-    const publishPluginCatalog = async (candidate?: ExternalSelectionCandidate | null) => {
-      const current = candidate ?? (await getCurrentSelectionCandidate())
-      if (!alive || !current) return
-      await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_CATALOG_EVENT, {
+    const publishPluginCatalog = async () => {
+      assertOwner()
+      const current = await getCurrentSelectionCandidate()
+      assertOwner()
+      if (!current) return
+      if (catalogCandidateId !== current.id) {
+        catalogCandidateId = current.id
+        handledRequests.clear()
+      }
+      await sendSelectionControl(SELECTION_ACTION_CATALOG_EVENT, {
         candidateId: current.id,
         actions: pluginCatalogForCandidate(
           current,
@@ -222,154 +260,156 @@ export function SelectionToolbarInitializer() {
       })
     }
 
-    const executeRewrite = async (
-      request: SelectionActionRequestPayload,
-      candidate: ExternalSelectionCandidate,
-      mode: EnhanceMode
-    ) => {
-      const appSettings = useSettingsStore.getState().settings
-      const client =
-        buildUtilityLlmClient({
-          session: null,
-          appSettings,
-          override: appSettings?.composerAssistance?.model,
-          featureId: "selection-rewrite",
-        }) ?? buildHeadlessTurnLlmClient({ session: null, label: "Selection rewrite" })
-      if (!client) {
-        await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
-          ...request,
-          ok: false,
-          error: "noModel",
-        })
-        return
+    const requireCandidate = async (id: string, signal?: AbortSignal) => {
+      assertOwner()
+      const candidate = await getCurrentSelectionCandidate()
+      assertOwner()
+      signal?.throwIfAborted()
+      if (!candidate || candidate.id !== id || selectionIsSecure(candidate)) {
+        throw new SelectionQuickActionError("ineligible", "Selection is no longer active")
       }
-      const enhanced = await enhancePrompt(candidate.text, mode, { client })
-      if (enhanced.kind === "skipped") {
-        await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
-          ...request,
-          ok: false,
-          error: enhanced.reason === "pii" ? "piiBlocked" : "noOutput",
-        })
-        return
-      }
-      const allowlist = (await getPref<string[]>(SELECTION_DIRECT_REPLACE_ALLOWLIST_PREF)) ?? []
-      await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
-        ...request,
-        ok: true,
-        result:
-          enhanced.kind === "variants"
-            ? { kind: "variants", variants: enhanced.variants }
-            : { kind: "text", text: enhanced.text },
-        attribution: tRef.current("cogniaAttribution"),
-        output: "replace",
-        directReplaceAllowed:
-          allowlist.includes("cognia:rewrite") || allowlist.includes(request.actionId),
-      })
+      return candidate
     }
 
     const executePluginAction = async (request: SelectionActionRequestPayload) => {
-      if (handledRequests.has(request.requestId)) return
-      handledRequests.add(request.requestId)
-      const candidate = await getCurrentSelectionCandidate()
-      const rewriteMode = request.actionId.startsWith("cognia:rewrite:")
-        ? (request.actionId.slice("cognia:rewrite:".length) as EnhanceMode)
-        : null
-      const entry = getQuickAction(request.actionId)
-      if (!alive) return
-      if (
-        !candidate ||
-        candidate.id !== request.candidateId ||
-        // The catalog for a password field is empty, so no button can reach
-        // here. The gate is repeated on the execution path anyway because this
-        // is the last point before the text is handed to a plugin or a model,
-        // and "the UI would never ask" is not a property worth staking a
-        // password on.
-        selectionIsSecure(candidate) ||
-        (rewriteMode === null &&
-          (!entry || !entry.surfaces.includes("selection") || !entry.selection))
-      ) {
-        await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
-          ...request,
-          ok: false,
-          error: "stale",
-        })
-        return
+      if (handledRequests.has(request.requestId) || requests.has(request.requestId)) return
+      const controller = new AbortController()
+      const { signal } = controller
+      requests.set(request.requestId, controller)
+      const forgetRequest = () => {
+        requests.delete(request.requestId)
+        pendingPrompts.delete(request.requestId)
       }
-      if (rewriteMode && ENHANCE_MODES.includes(rewriteMode)) {
-        try {
-          await executeRewrite(request, candidate, rewriteMode)
-        } catch {
-          await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
+      signal.addEventListener("abort", forgetRequest, { once: true })
+      const timeout = setTimeout(() => controller.abort(), SELECTION_REQUEST_TIMEOUT_MS)
+      const emitResult = async (
+        result: Omit<SelectionActionExecutionPayload, keyof SelectionActionRequestPayload>
+      ) => {
+        if (result.result) {
+          await selectionActionResult(request.candidateId, request.requestId, {
             ...request,
-            ok: false,
-            error: "failed",
+            ...result,
+          })
+          signal.throwIfAborted()
+          assertOwner()
+          await sendSelectionControl(SELECTION_ACTION_RESULT_EVENT, {
+            ...request,
+            ok: true,
+            stored: true,
+          })
+        } else {
+          await sendSelectionControl(SELECTION_ACTION_RESULT_EVENT, {
+            ...request,
+            ...result,
           })
         }
-        return
-      }
-      // Reachable for a `cognia:rewrite:` id whose suffix is not an enhance
-      // mode (a stale overlay, a renamed mode, a replayed request): the guard
-      // above lets it through because `rewriteMode` is non-null, and the branch
-      // above skips it because the mode is unknown. Returning silently left the
-      // overlay spinning forever, and `handledRequests` already suppressed the
-      // retry. Every path out of here has to settle the request.
-      if (!entry?.selection) {
-        await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
-          ...request,
-          ok: false,
-          error: "stale",
-        })
-        return
       }
       try {
-        const classification = classifySelection(candidate.text, { uiLocale: localeRef.current })
-        const result = await Promise.race([
-          executePluginSelectionQuickAction(entry, candidate, classification, {
-            reason: tRef.current("permissionRequest", {
-              title: localizedPluginActionTitle(
-                entry.pluginId,
-                localeRef.current,
-                entry.labelKey,
-                entry.title
-              ),
-            }),
-          }),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error("selection plugin action timed out")),
-              PLUGIN_ACTION_TIMEOUT_MS
-            )
-          ),
-        ])
-        // Disable/uninstall during execution invalidates the result rather than
-        // letting a now-untrusted action paint or replace text.
-        if (getQuickAction(request.actionId) !== entry) {
-          throw new SelectionQuickActionError("ineligible", "selection action became stale")
+        const candidate = await requireCandidate(request.candidateId, signal)
+        handledRequests.add(request.requestId)
+        const rewriteMode = request.actionId.startsWith("cognia:rewrite:")
+          ? (request.actionId.slice("cognia:rewrite:".length) as EnhanceMode)
+          : null
+        if (rewriteMode !== null) {
+          if (!ENHANCE_MODES.includes(rewriteMode)) {
+            await emitResult({ ok: false, error: "stale" })
+            return
+          }
+          const appSettings = useSettingsStore.getState().settings
+          const client =
+            buildUtilityLlmClient({
+              session: null,
+              appSettings,
+              override: appSettings?.composerAssistance?.model,
+              featureId: "selection-rewrite",
+            }) ?? buildHeadlessTurnLlmClient({ session: null, label: "Selection rewrite" })
+          if (!client) {
+            await emitResult({ ok: false, error: "noModel" })
+            return
+          }
+          const enhanced = await enhancePrompt(candidate.text, rewriteMode, { client, signal })
+          await requireCandidate(candidate.id, signal)
+          if (enhanced.kind === "skipped") {
+            await emitResult({
+              ok: false,
+              error: enhanced.reason === "pii" ? "piiBlocked" : "noOutput",
+            })
+            return
+          }
+          const allowlist = (await getPref<string[]>(SELECTION_DIRECT_REPLACE_ALLOWLIST_PREF)) ?? []
+          await requireCandidate(candidate.id, signal)
+          await emitResult({
+            ok: true,
+            result:
+              enhanced.kind === "variants"
+                ? { kind: "variants", variants: enhanced.variants }
+                : { kind: "text", text: enhanced.text },
+            attribution: tRef.current("cogniaAttribution"),
+            output: "replace",
+            directReplaceAllowed:
+              allowlist.includes("cognia:rewrite") || allowlist.includes(request.actionId),
+          })
+          return
         }
+
+        const entry = getQuickAction(request.actionId)
+        if (!entry?.selection || !entry.surfaces.includes("selection")) {
+          await emitResult({ ok: false, error: "stale" })
+          return
+        }
+        const classification = classifySelection(candidate.text, { uiLocale: localeRef.current })
+        const result = await executePluginSelectionQuickAction(entry, candidate, classification, {
+          signal,
+          validate: async () => {
+            await requireCandidate(candidate.id, signal)
+          },
+          assertCurrent: assertOwner,
+          emitConsent: async (prompt) => {
+            await requireCandidate(candidate.id, signal)
+            pendingPrompts.set(request.requestId, prompt.requestId)
+            await sendSelectionControl(SELECTION_CONSENT_EVENT, {
+              candidateId: candidate.id,
+              actionRequestId: request.requestId,
+              promptId: prompt.requestId,
+              pluginId: prompt.pluginId,
+              reason: prompt.reason,
+            })
+          },
+          reason: tRef.current("permissionRequest", {
+            title: localizedPluginActionTitle(
+              entry.pluginId,
+              localeRef.current,
+              entry.labelKey,
+              entry.title
+            ),
+          }),
+        })
         const allowlist = (await getPref<string[]>(SELECTION_DIRECT_REPLACE_ALLOWLIST_PREF)) ?? []
-        await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
-          ...request,
+        await requireCandidate(candidate.id, signal)
+        if (getQuickAction(request.actionId) !== entry) {
+          throw new SelectionQuickActionError("ineligible", "Selection action became stale")
+        }
+        await emitResult({
           ok: true,
-          result,
+          result: result || undefined,
           attribution: entry.pluginId,
           output: entry.selection.output,
           directReplaceAllowed:
             entry.selection.output === "replace" && allowlist.includes(entry.fullId),
         })
       } catch (error) {
+        if (!alive || signal.aborted) return
         const code =
           error instanceof SelectionQuickActionError
-            ? error.code === "permissionDenied"
-              ? "permissionDenied"
-              : error.code === "invalidResult"
-                ? "invalidResult"
-                : "stale"
+            ? error.code === "permissionDenied" || error.code === "invalidResult"
+              ? error.code
+              : "stale"
             : "failed"
-        await emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_ACTION_RESULT_EVENT, {
-          ...request,
-          ok: false,
-          error: code,
-        })
+        await emitResult({ ok: false, error: code }).catch(() => {})
+      } finally {
+        clearTimeout(timeout)
+        forgetRequest()
+        signal.removeEventListener("abort", forgetRequest)
       }
     }
 
@@ -377,51 +417,84 @@ export function SelectionToolbarInitializer() {
     // provides it, the toolbar hears at once that nothing is playing.
     const beginSpeaking = (candidate: ExternalSelectionCandidate) => {
       stopWatching?.()
-      stopWatching = null
+      let started = false
+      let settled = false
+      let stopPlayback: (() => void) | undefined
+      let unwatch: (() => void) | undefined
+      const retire = () => {
+        settled = true
+        unwatch?.()
+        if (stopWatching === cancelSpeech) stopWatching = null
+      }
+      const cancelSpeech = () => {
+        retire()
+        stopPlayback?.()
+      }
+      stopWatching = cancelSpeech
       const ended = () => {
-        void emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_SPEECH_EVENT, {
+        if (settled || !alive) return
+        retire()
+        void sendSelectionControl(SELECTION_SPEECH_EVENT, {
           candidateId: candidate.id,
           playing: false,
-        })
+        }).catch(() => {})
       }
       void loadPort("speech")
-        .then((speech) => {
-          if (!alive) return
+        .then(async (speech) => {
+          await requireCandidate(candidate.id)
+          if (settled) return
           if (!speech) {
             ended()
             return
           }
-          stopWatching?.()
-          stopWatching = speech.readAloud.watchSelection(candidate.id, (update) => {
-            void emitTo(SELECTION_TOOLBAR_LABEL, SELECTION_SPEECH_EVENT, {
-              candidateId: candidate.id,
-              playing: update.playing,
-              progress: update.progress,
-            })
+          unwatch = speech.readAloud.watchSelection(candidate.id, (update) => {
+            if (settled || !alive) return
             if (!update.playing) {
-              stopWatching?.()
-              stopWatching = null
+              ended()
+              return
             }
+            started = true
+            void sendSelectionControl(SELECTION_SPEECH_EVENT, {
+              candidateId: candidate.id,
+              playing: true,
+              progress: update.progress,
+            }).catch(() => {})
           })
-          return speech.readAloud.speakSelection({
+          if (settled) {
+            unwatch()
+            return
+          }
+          stopPlayback = () => {
+            void speech.readAloud.stopSelection(candidate.id)
+          }
+          await speech.readAloud.speakSelection({
             candidateId: candidate.id,
             text: candidate.text,
+            beforeStart: async () => {
+              await requireCandidate(candidate.id)
+              if (settled) throw new Error("Selection playback was canceled")
+            },
           })
+          if (!started) ended()
         })
         .catch(ended)
     }
 
-    const stageIntoComposer = async (payload: SelectionStagePayload) => {
-      const { candidate, action } = payload
-      const current = useChatStore.getState().activeSessionId
-      const sessionId = current ?? (await startNewSession()).id
-      if (!alive) return
-
+    const stageIntoComposer = async (
+      candidate: ExternalSelectionCandidate,
+      action: SelectionLiveStagePayload["action"]
+    ) => {
+      const sessionId = useChatStore.getState().activeSessionId ?? (await startNewSession()).id
+      await requireCandidate(candidate.id)
+      if (!(await showMainWindow({ checked: true })))
+        throw new Error("Could not show the main window")
+      assertOwner()
       const chat = useChatStore.getState()
-      const alreadyStaged = chat.contextSelections.some(
-        (selection) => selection.kind === "external" && selection.candidateId === candidate.id
-      )
-      if (!alreadyStaged) {
+      if (
+        !selectComposerContextSelections(chat, sessionId).some(
+          (selection) => selection.kind === "external" && selection.candidateId === candidate.id
+        )
+      ) {
         const selection: ExternalSelectionRef = {
           kind: "external",
           candidateId: candidate.id,
@@ -435,97 +508,141 @@ export function SelectionToolbarInitializer() {
           origin: candidate.origin,
           truncated: candidate.truncated,
         }
-        chat.addContextSelection(selection)
+        chat.addContextSelection(selection, sessionId)
       }
-
       useComposerIntentStore.getState().stage(sessionId, {
         candidateId: candidate.id,
         prompt: promptForAction(action, candidate, localeRef.current, tRef.current),
       })
-      router.push("/")
+      if (useChatStore.getState().activeSessionId === sessionId) router.push("/")
+      await finishSelectionToolbar(candidate.id)
     }
 
     const openGeneratedResult = async (payload: SelectionOpenResultPayload) => {
-      const candidate = await getCurrentSelectionCandidate()
-      if (!alive || !candidate || candidate.id !== payload.candidateId) return
-      const current = useChatStore.getState().activeSessionId
-      const sessionId = current ?? (await startNewSession()).id
-      if (!alive) return
-      const resultCandidateId = `${candidate.id}:result`
-      const chat = useChatStore.getState()
-      if (
-        !chat.contextSelections.some(
-          (selection) =>
-            selection.kind === "external" && selection.candidateId === resultCandidateId
+      if (requests.has(payload.requestId) || handledRequests.has(payload.requestId)) return
+      const controller = new AbortController()
+      const { signal } = controller
+      const timeout = setTimeout(() => controller.abort(), SELECTION_REQUEST_TIMEOUT_MS)
+      requests.set(payload.requestId, controller)
+      handledRequests.add(payload.requestId)
+      let ok = false
+      try {
+        const candidate = await requireCandidate(payload.candidateId, signal)
+        const stored = await selectionActionResult(candidate.id, payload.resultRequestId)
+        const result = stored?.result
+        const text =
+          result?.kind === "text" && payload.variantIndex === 0
+            ? result.text
+            : result?.kind === "variants"
+              ? result.variants[payload.variantIndex]
+              : undefined
+        if (!text) return
+        const attribution = stored?.attribution ?? tRef.current("cogniaAttribution")
+        const sessionId = useChatStore.getState().activeSessionId ?? (await startNewSession()).id
+        await requireCandidate(candidate.id, signal)
+        if (!(await showMainWindow({ checked: true }))) return
+        signal.throwIfAborted()
+        assertOwner()
+        const resultCandidateId = `${candidate.id}:result:${payload.requestId}`
+        useChatStore.getState().addContextSelection(
+          {
+            kind: "external",
+            candidateId: resultCandidateId,
+            title: attribution,
+            snapshot: text,
+            comment: "",
+            sourceApp: attribution,
+            sourceTitle: candidate.sourceTitle,
+            sourceUrl: candidate.sourceUrl,
+            capturedAt: Date.now(),
+            origin: candidate.origin,
+            truncated: false,
+          },
+          sessionId
         )
-      ) {
-        chat.addContextSelection({
-          kind: "external",
+        useComposerIntentStore.getState().stage(sessionId, {
           candidateId: resultCandidateId,
-          title: payload.attribution,
-          snapshot: payload.text,
-          comment: "",
-          sourceApp: payload.attribution,
-          sourceTitle: candidate.sourceTitle,
-          sourceUrl: candidate.sourceUrl,
-          capturedAt: Date.now(),
-          origin: candidate.origin,
-          truncated: false,
+          prompt: null,
         })
-      }
-      useComposerIntentStore.getState().stage(sessionId, {
-        candidateId: resultCandidateId,
-        prompt: null,
-      })
-      router.push("/")
-    }
-
-    const consumePendingStage = async () => {
-      const payload = await takePendingSelectionStage()
-      if (!alive || !payload) return
-      switch (payload.action.kind) {
-        case "remember":
-          await rememberSelection(payload.candidate)
-          return
-        case "speak":
-          beginSpeaking(payload.candidate)
-          return
-        default:
-          await stageIntoComposer(payload)
-      }
-    }
-
-    void Promise.all([
-      listen<ExternalSelectionCandidate>(SELECTION_CANDIDATE_EVENT, (event) => {
-        if (alive) void publishPluginCatalog(event.payload)
-      }).then((dispose) => {
-        if (alive) unlistens.push(dispose)
-        else safeUnlisten(dispose)
-      }),
-      listen<SelectionActionRequestPayload>(SELECTION_ACTION_REQUEST_EVENT, (event) => {
-        if (alive) void executePluginAction(event.payload)
-      }).then((dispose) => {
-        if (alive) unlistens.push(dispose)
-        else safeUnlisten(dispose)
-      }),
-      listen<SelectionOpenResultPayload>(SELECTION_OPEN_RESULT_EVENT, (event) => {
-        if (alive) void openGeneratedResult(event.payload)
-      }).then((dispose) => {
-        if (alive) unlistens.push(dispose)
-        else safeUnlisten(dispose)
-      }),
-      listen(SELECTION_STAGE_EVENT, () => {
-        if (alive) void consumePendingStage()
-      }).then((dispose) => {
-        if (!alive) {
-          safeUnlisten(dispose)
-          return
+        if (useChatStore.getState().activeSessionId === sessionId) router.push("/")
+        ok = true
+      } finally {
+        clearTimeout(timeout)
+        requests.delete(payload.requestId)
+        if (alive && !signal.aborted) {
+          await sendSelectionControl(SELECTION_OPEN_RESULT_ACK_EVENT, {
+            requestId: payload.requestId,
+            candidateId: payload.candidateId,
+            ok,
+          }).catch(() => {})
         }
-        unlistens.push(dispose)
-        // Drain anything staged while this window was still booting.
-        void consumePendingStage()
-      }),
-      listen<{ candidateId: string }>(SELECTION_SPEECH_STOP_EVENT, (event) => {
+      }
+    }
+
+    const consumeStage = async ({ candidateId, action }: SelectionLiveStagePayload) => {
+      try {
+        const candidate = await requireCandidate(candidateId)
+        switch (action.kind) {
+          case "remember":
+            assertOwner()
+            await rememberSelection(candidate)
+            return
+          case "speak":
+            beginSpeaking(candidate)
+            return
+          default:
+            await stageIntoComposer(candidate, action)
+        }
+      } catch {
+        if (alive) await reportResult(candidateId, false).catch(() => {})
+      }
+    }
+
+    const track = (dispose: () => void | Promise<void>) => {
+      if (alive) unlistens.push(dispose)
+      else safeUnlisten(dispose)
+    }
+    void Promise.all([
+      listen(SELECTION_CANDIDATE_EVENT, () => {
+        if (alive) void publishPluginCatalog().catch(() => {})
+      }).then(track),
+      listen(SELECTION_ACTION_CATALOG_REQUEST_EVENT, () => {
+        if (alive) void publishPluginCatalog().catch(() => {})
+      }).then(track),
+      listenSelectionControl<SelectionActionRequestPayload>(
+        SELECTION_ACTION_REQUEST_EVENT,
+        (event) => {
+          if (alive) void executePluginAction(event.payload)
+        }
+      ).then(track),
+      listenSelectionControl<{ requestId: string }>(
+        SELECTION_ACTION_CANCEL_EVENT,
+        ({ payload }) => {
+          handledRequests.add(payload.requestId)
+          requests.get(payload.requestId)?.abort()
+        }
+      ).then(track),
+      listenSelectionControl<PluginConsentResponse & { actionRequestId: string; promptId: string }>(
+        SELECTION_CONSENT_RESPONSE_EVENT,
+        ({ payload }) => {
+          if (alive && pendingPrompts.get(payload.actionRequestId) === payload.promptId) {
+            getPluginConsentBroker().respond(payload.promptId, {
+              allow: payload.allow,
+              persist: payload.persist,
+            })
+          }
+        }
+      ).then(track),
+      listenSelectionControl<SelectionOpenResultPayload>(
+        SELECTION_OPEN_RESULT_EVENT,
+        ({ payload }) => {
+          if (alive) void openGeneratedResult(payload).catch(() => {})
+        }
+      ).then(track),
+      listenSelectionControl<SelectionLiveStagePayload>(SELECTION_STAGE_EVENT, ({ payload }) => {
+        if (alive && payload?.candidateId) void consumeStage(payload)
+      }).then(track),
+      listenSelectionControl<{ candidateId: string }>(SELECTION_SPEECH_STOP_EVENT, (event) => {
         if (!alive) return
         const { candidateId } = event.payload
         void loadPort("speech")
@@ -536,18 +653,32 @@ export function SelectionToolbarInitializer() {
         else safeUnlisten(dispose)
       }),
     ])
-    const unsubscribeCatalog = subscribeQuickActions(() => {
-      if (alive) void publishPluginCatalog()
+      .then(publishPluginCatalog)
+      .catch(() => {})
+    const unsubscribeAccount = useAccountStore.subscribe((account) => {
+      if (
+        account.locked ||
+        account.accountRevision !== owner.accountRevision ||
+        account.unlockedAccountId !== owner.unlockedAccountId
+      ) {
+        for (const controller of requests.values()) controller.abort()
+        stopWatching?.()
+        if (catalogCandidateId) void finishSelectionToolbar(catalogCandidateId).catch(() => {})
+      }
     })
-    void publishPluginCatalog()
+    const unsubscribeCatalog = subscribeQuickActions(() => {
+      if (alive) void publishPluginCatalog().catch(() => {})
+    })
 
     return () => {
       alive = false
+      for (const controller of requests.values()) controller.abort()
       stopWatching?.()
+      unsubscribeAccount()
       unsubscribeCatalog()
       unlistens.forEach(safeUnlisten)
     }
-  }, [router])
+  }, [accountRevision, router, unlockedAccountId])
 
   return null
 }

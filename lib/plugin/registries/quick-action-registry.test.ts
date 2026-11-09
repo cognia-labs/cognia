@@ -22,6 +22,10 @@ import {
   registerCommand,
 } from "@/lib/plugin/commands/registry"
 import { registerSlashCommand, unregisterSlashCommand } from "@/lib/slash-commands/registry"
+import {
+  getPluginHostDispatch,
+  installPluginHostDispatch,
+} from "@cognia/plugin-contract/lib/plugin/core/plugin-host-dispatch"
 import { usePluginStore } from "@/stores/plugin-runtime"
 
 afterEach(() => {
@@ -40,6 +44,28 @@ describe("registerQuickAction", () => {
       title: "Sync now",
       surfaces: ["palette", "composer", "tray"],
     })
+  })
+
+  it("binds a selection-only accelerator on the native selection rail", async () => {
+    const host = getPluginHostDispatch()
+    const bindPluginShortcut = jest.fn(async () => () => {})
+    installPluginHostDispatch({ ...host, bindPluginShortcut })
+    try {
+      registerQuickAction("plug-a", {
+        id: "inspect",
+        title: "Inspect",
+        run: () => {},
+        accelerator: "Ctrl+Shift+Y",
+        surfaces: ["selection"],
+      })
+      expect(bindPluginShortcut).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingCommandId: "selection.action:plug-a:inspect",
+        })
+      )
+    } finally {
+      installPluginHostDispatch(host)
+    }
   })
 
   it("keeps selection opt-in while allowing an explicitly declared selection surface", () => {
@@ -184,7 +210,7 @@ describe("runQuickAction", () => {
 
   it("passes selection context through the command registry", async () => {
     const handler = jest.fn(async () => ({ kind: "variants" as const, variants: ["A", "B"] }))
-    registerCommand({ id: "demo.target", pluginId: null, handler })
+    registerCommand({ id: "demo.target", pluginId: "plug-a", handler })
     registerQuickAction("plug-a", {
       id: "x",
       title: "X",
@@ -197,6 +223,21 @@ describe("runQuickAction", () => {
       { kind: "variants", variants: ["A", "B"] }
     )
     expect(handler).toHaveBeenCalledWith(selectionInvocation)
+  })
+
+  it("refuses to pass selection text to another plugin's command", async () => {
+    const handler = jest.fn()
+    registerCommand({ id: "foreign.read", pluginId: "plug-b", handler })
+    registerQuickAction("plug-a", {
+      id: "x",
+      title: "X",
+      command: "foreign.read",
+      surfaces: ["selection"],
+    })
+    await expect(runQuickAction(getQuickAction("plug-a:x")!, selectionInvocation)).rejects.toThrow(
+      "action owner"
+    )
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it("dispatches slash targets through the slash registry (leading slash optional)", async () => {
@@ -225,7 +266,8 @@ describe("runQuickAction", () => {
       id: "qa-selection",
       name: "qa-selection",
       description: "test",
-      source: "builtin",
+      source: "plugin",
+      pluginId: "plug-a",
       handler,
     })
     try {

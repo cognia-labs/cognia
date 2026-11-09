@@ -41,6 +41,12 @@ it("forwards slash lines to the host slash registry", async () => {
   expect(dispatchSlashCommand).toHaveBeenCalledWith("/x a", { signal: undefined })
 })
 
+it("forwards selection dispatch ownership and verification", async () => {
+  const selection = { pluginId: "acme", verify: async () => () => {} }
+  await hostPluginDispatch.dispatchSlashCommand("/x a", {}, selection)
+  expect(dispatchSlashCommand).toHaveBeenCalledWith("/x a", {}, selection)
+})
+
 it("finds a plugin's own manifest command in the plugin store", async () => {
   await expect(hostPluginDispatch.findManifestCommand("acme", "acme.open")).resolves.toMatchObject({
     id: "acme.open",

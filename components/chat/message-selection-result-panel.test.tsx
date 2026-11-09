@@ -179,6 +179,7 @@ describe("MessageSelectionResultPanel", () => {
 
   it.each([
     ["no-client", result.unavailable.noClient],
+    ["source-unavailable", result.unavailable.sourceUnavailable],
     ["pii", result.unavailable.pii],
     ["no-output", result.unavailable.noOutput],
     ["empty", result.unavailable.empty],
@@ -209,7 +210,7 @@ describe("MessageSelectionResultPanel", () => {
   it("has every reason and title in both catalogues", () => {
     for (const catalogue of [enChat, zhChat]) {
       const r = catalogue.selection.result
-      for (const key of ["empty", "noClient", "noOutput", "pii"] as const) {
+      for (const key of ["empty", "noClient", "noOutput", "pii", "sourceUnavailable"] as const) {
         expect(r.unavailable[key]).toEqual(expect.any(String))
       }
       for (const key of ["explain", "summarize", "translate"] as const) {

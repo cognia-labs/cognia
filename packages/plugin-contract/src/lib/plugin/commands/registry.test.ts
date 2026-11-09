@@ -235,6 +235,28 @@ describe("ui.action.invoke guard (ADR-0189)", () => {
     })
   }
 
+  it("keeps protected input out of interceptors and rechecks before release", async () => {
+    const handler = jest.fn()
+    registerCommand({ id: "cmd.a", pluginId: "policy-target", handler })
+    const inspect = jest.fn(() => ({ decision: "pass" }))
+    guard("g1", inspect)
+    const entry = getCommand("cmd.a")!
+    await expect(
+      invokeGuardedCommand(
+        entry,
+        {
+          guardArgs: [],
+          beforeDispatch: async () => () => {
+            throw new Error("authorization retired")
+          },
+        },
+        "protected input"
+      )
+    ).rejects.toThrow("authorization retired")
+    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ args: [] }), expect.anything())
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   it("runs the handler when every guard passes", async () => {
     const handler = jest.fn(() => "ran")
     registerCommand({ id: "cmd.a", pluginId: "policy-target", handler })

@@ -180,8 +180,8 @@ describe("comparableExcerptText", () => {
     )
   })
 
-  it("keeps CJK text", () => {
-    expect(comparableExcerptText("变量，名称")).toBe("变量名称")
+  it("keeps CJK punctuation", () => {
+    expect(comparableExcerptText("变量，名称")).toBe("变量，名称")
   })
 })
 
@@ -207,6 +207,23 @@ describe("refreshMessageExcerpt", () => {
     expect(outcome.selection).not.toHaveProperty("stale")
     expect(outcome.selection.fingerprint).not.toBe(sel.fingerprint)
     await expect(isEntitySelectionStale(outcome.selection)).resolves.toBe(false)
+  })
+
+  it.each(["count <= 10", "count >= 100", "count >= 10.5"])(
+    "rejects a changed literal even when it shares words with %s",
+    async (changed) => {
+      await seed("m1", "Check `count >= 10`.")
+      const selection = await staged("count >= 10")
+      await edit("m1", `Check \`${changed}\`.`)
+      expect((await refreshMessageExcerpt(selection)).kind).toBe("changed")
+    }
+  )
+
+  it("recognizes an unchanged excerpt within a Chinese sentence", async () => {
+    await seed("m1", "请保持缓存温热。")
+    const selection = await staged("缓存")
+    await edit("m1", "请保持缓存温热。谢谢。")
+    expect((await refreshMessageExcerpt(selection)).kind).toBe("current")
   })
 
   it("says the message changed when it no longer says what was selected", async () => {

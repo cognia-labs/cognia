@@ -13,9 +13,9 @@ import {
 } from "@cognia/plugin-contract/lib/plugin/core/plugin-host-dispatch"
 
 export const hostPluginDispatch: PluginHostDispatch = {
-  async dispatchSlashCommand(line, ctx) {
+  async dispatchSlashCommand(line, ctx, selection) {
     const { dispatchSlashCommand } = await import("@/lib/slash-commands/registry")
-    return dispatchSlashCommand(line, ctx)
+    return selection ? dispatchSlashCommand(line, ctx, selection) : dispatchSlashCommand(line, ctx)
   },
   async findManifestCommand(pluginId, commandId) {
     const { usePluginStore } = await import("@/stores/plugin-runtime")

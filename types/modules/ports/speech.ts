@@ -36,7 +36,11 @@ export interface SpeechReadAloud {
   /** The pet speaks. Text that fails the PII gate is not read. */
   speakPet(text: string, character?: SpeechVoice): Promise<void>
   /** Read a desktop selection; `candidateId` becomes the active source id. */
-  speakSelection(args: { candidateId: string; text: string }): Promise<void>
+  speakSelection(args: {
+    candidateId: string
+    text: string
+    beforeStart?: () => void | Promise<void>
+  }): Promise<void>
   /** Stop reading the selection, if it is still the one playing. */
   stopSelection(candidateId: string): void
   /**

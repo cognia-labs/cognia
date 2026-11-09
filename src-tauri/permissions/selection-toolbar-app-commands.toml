@@ -8,6 +8,8 @@ description = "Allows the least-privilege selection toolbar webview to read and 
 # failing to compile.
 commands.allow = [
   "selection_toolbar_current_candidate",
+  "selection_toolbar_action_result",
+  "selection_toolbar_control",
   "selection_toolbar_copy_result",
   "selection_toolbar_execute",
   "selection_toolbar_replace",

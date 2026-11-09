@@ -1182,7 +1182,15 @@ pub async fn pet_window_get_work_area(
 /// Surface the main window (used by the overlay's "show main window" menu
 /// item). Reuses the shared bring-to-front helper.
 #[tauri::command]
-pub async fn show_main_window(app: AppHandle) -> Result<(), String> {
+pub async fn show_main_window(app: AppHandle, checked: Option<bool>) -> Result<(), String> {
+    if checked == Some(true) {
+        let window = app
+            .get_webview_window("main")
+            .ok_or("main window is unavailable")?;
+        window.show().map_err(|error| error.to_string())?;
+        window.unminimize().map_err(|error| error.to_string())?;
+        return window.set_focus().map_err(|error| error.to_string());
+    }
     crate::window_utils::bring_main_window_to_front(&app);
     Ok(())
 }

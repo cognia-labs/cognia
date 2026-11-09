@@ -40,6 +40,26 @@ describe("PluginConsentBroker", () => {
     await expect(promise).resolves.toBe(true)
   })
 
+  it("cancels a scoped prompt and rejects any late approval", async () => {
+    const controller = new AbortController()
+    const overlay: PluginConsentRequestEvent[] = []
+    const promise = broker.request(
+      { pluginId: "p1", permission: "selection:read", scope: "selection:grant" },
+      {
+        signal: controller.signal,
+        emit: (event) => {
+          overlay.push(event)
+        },
+      }
+    )
+    expect(captured).toEqual([])
+    expect(overlay).toHaveLength(1)
+    controller.abort()
+    await expect(promise).resolves.toBe(false)
+    expect(broker.respond(overlay[0].requestId, { allow: true, persist: true })).toBe(false)
+    expect(broker.hasSessionGrant("p1", "selection:read", "selection:grant")).toBe(false)
+  })
+
   it("resolves false when the user rejects", async () => {
     const promise = broker.request({ pluginId: "p1", permission: "filesystem:write" })
     broker.respond(captured[0].requestId, { allow: false, persist: false })

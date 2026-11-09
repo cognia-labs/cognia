@@ -1,21 +1,27 @@
 import type { SelectionClassification } from "./classify-selection"
 import type {
-  PluginPermission,
   PluginQuickActionInvocation,
   PluginQuickActionResult,
   PluginSelectionOrigin,
   PluginSelectionReplaceCapability,
 } from "@/types/plugin"
 import {
+  getQuickAction,
   type QuickActionEntry,
   runQuickAction,
 } from "@/lib/plugin/registries/quick-action-registry"
-import { getPluginConsentBroker } from "@/lib/plugin/security/consent-broker"
+import {
+  getPluginConsentBroker,
+  type PluginConsentRequest,
+  type PluginConsentRequestEvent,
+} from "@/lib/plugin/security/consent-broker"
 import { getPermissionGuard, type PermissionGuard } from "@/lib/plugin/security/permission-guard"
 
 const MAX_RESULT_CHARS = 20_000
 const MAX_STATUS_CHARS = 1_000
 const MAX_VARIANTS = 8
+const grantScopes = new WeakMap<object, string>()
+let nextGrantScope = 0
 
 export type SelectionQuickActionErrorCode =
   "notSelectionAction" | "ineligible" | "permissionDenied" | "invalidResult"
@@ -52,13 +58,20 @@ interface SelectionActionDependencies {
    * `strictFunctionTypes`.
    */
   broker?: {
-    request: (request: {
-      pluginId: string
-      permission: PluginPermission
-      reason?: string
-    }) => Promise<boolean>
+    request: (
+      request: PluginConsentRequest,
+      options?: {
+        signal?: AbortSignal
+        emit?: (event: PluginConsentRequestEvent) => void | Promise<void>
+      }
+    ) => Promise<boolean>
   }
   reason?: string
+  /** Revalidate the host selection after consent and before crossing a dispatch boundary. */
+  validate?: () => void | Promise<void>
+  assertCurrent?: () => void
+  signal?: AbortSignal
+  emitConsent?: (event: PluginConsentRequestEvent) => void | Promise<void>
 }
 
 function characterCount(value: string): number {
@@ -176,20 +189,73 @@ export async function executePluginSelectionQuickAction(
     throw new SelectionQuickActionError("ineligible", "Selection exceeds the action limit")
   }
 
-  let text: string | undefined
-  if (spec.input === "text") {
-    const guard = dependencies.guard ?? getPermissionGuard()
-    const broker = dependencies.broker ?? getPluginConsentBroker()
-    const allowed = await guard.checkWithConsent(entry.pluginId, "selection:read", broker, {
-      reason: dependencies.reason ?? `Allow ${entry.title} to read the current desktop selection`,
-      context: `selection quick action:${entry.fullId}`,
-    })
-    if (!allowed) {
-      throw new SelectionQuickActionError(
-        "permissionDenied",
-        `${entry.fullId} was not allowed to read the selection`
-      )
+  const guard = dependencies.guard ?? getPermissionGuard()
+  const permission = "selection:read"
+  const readsText = spec.input === "text"
+  let consentConfirmed = false
+  const currentGrant = () =>
+    guard.getPluginGrants(entry.pluginId).find((grant) => grant.permission === permission)
+  const grant = readsText ? currentGrant() : undefined
+  const denyText = () => {
+    throw new SelectionQuickActionError(
+      "permissionDenied",
+      `${entry.fullId} was not allowed to read the selection`
+    )
+  }
+  const assertCurrent = () => {
+    dependencies.assertCurrent?.()
+    dependencies.signal?.throwIfAborted()
+    if (getQuickAction(entry.fullId) !== entry) {
+      throw new SelectionQuickActionError("ineligible", "Selection action is no longer registered")
     }
+    if (
+      readsText &&
+      (!grant || currentGrant() !== grant || !guard.check(entry.pluginId, permission))
+    ) {
+      denyText()
+    }
+  }
+  const verify = async () => {
+    await dependencies.validate?.()
+    return () => {
+      assertCurrent()
+      if (readsText && guard.getTier(entry.pluginId, permission) === "confirm" && !consentConfirmed)
+        denyText()
+    }
+  }
+  await dependencies.validate?.()
+  assertCurrent()
+
+  let text: string | undefined
+  if (readsText) {
+    const broker = dependencies.broker ?? getPluginConsentBroker()
+    const activeGrant = grant ?? denyText()
+    let scope = grantScopes.get(activeGrant)
+    if (!scope) {
+      scope = `selection:${++nextGrantScope}`
+      grantScopes.set(activeGrant, scope)
+    }
+    const allowed = await guard.checkWithConsent(
+      entry.pluginId,
+      permission,
+      {
+        request: async (request) => {
+          consentConfirmed = await broker.request(
+            { ...request, scope },
+            {
+              signal: dependencies.signal,
+              emit: dependencies.emitConsent,
+            }
+          )
+          return consentConfirmed
+        },
+      },
+      {
+        reason: dependencies.reason ?? `Allow ${entry.title} to read the current desktop selection`,
+        context: `selection quick action:${entry.fullId}`,
+      }
+    )
+    if (!allowed) denyText()
     text = candidate.text
   }
 
@@ -210,5 +276,5 @@ export async function executePluginSelectionQuickAction(
     },
   }
 
-  return normalizeResult(await runQuickAction(entry, invocation), spec.output)
+  return normalizeResult(await runQuickAction(entry, invocation, verify), spec.output)
 }

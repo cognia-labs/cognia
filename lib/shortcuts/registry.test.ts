@@ -43,6 +43,17 @@ describe("useShortcutStore", () => {
     expect(bindings["tray.open-logs"]).toBe("ctrl+shift+l")
   })
 
+  it("restores a saved selection override over an already-bound native default", async () => {
+    invoke.mockResolvedValueOnce([{ id: "selection.copy", chord: "alt+shift+1" }])
+    getPref.mockResolvedValueOnce({ "selection.copy": "ctrl+alt+c" })
+    await useShortcutStore.getState().hydrate()
+    expect(invoke).toHaveBeenCalledWith("shortcut_bind", {
+      id: "selection.copy",
+      chord: "ctrl+alt+c",
+    })
+    expect(useShortcutStore.getState().bindings["selection.copy"]).toBe("ctrl+alt+c")
+  })
+
   it("hydrate tolerates IPC failure by marking hydrated with empty bindings", async () => {
     invoke.mockRejectedValueOnce(new Error("boom"))
     await useShortcutStore.getState().hydrate()

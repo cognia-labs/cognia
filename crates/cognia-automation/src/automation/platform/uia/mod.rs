@@ -5,12 +5,12 @@
 //! from that thread — the trait being `Send + !Sync` is enforced naturally
 //! because `UIAutomation` is `Send` but not `Sync`.
 
-use uiautomation::UIAutomation;
 use uiautomation::types::TreeScope;
+use uiautomation::UIAutomation;
 
 use crate::automation::backend::{
-    ActionTargetContext, ApplicationScreenshot, AutomationBackend, SelectionPreflight,
-    TargetActionKind, validate_live_element, validate_live_surface,
+    validate_live_element, validate_live_surface, ActionTargetContext, ApplicationScreenshot,
+    AutomationBackend, SelectionPreflight, TargetActionKind,
 };
 use crate::automation::platform::shared::tree_shape::{self, TreeBudget};
 use crate::automation::session::{AppLocator, ResolvedApplication};
@@ -24,8 +24,8 @@ mod pattern;
 mod text_selection;
 
 use crate::automation::platform::shared::screenshot;
-use crate::automation::selection::{TextSelectionSnapshot, build_text_selection};
-use element::{ElementCache, element_info};
+use crate::automation::selection::{build_text_selection, TextSelectionSnapshot};
+use element::{element_info, ElementCache};
 
 pub struct UiaBackend {
     automation: UIAutomation,
@@ -112,7 +112,7 @@ impl UiaBackend {
     }
 
     fn require_foreground_element(&self, element: &uiautomation::UIElement) -> Result<()> {
-        use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetForegroundWindow};
+        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
         if element.is_offscreen().unwrap_or(true) {
             return Err(AutomationError::StaleElement);
         }
@@ -182,12 +182,12 @@ impl UiaBackend {
 }
 
 fn process_path(pid: u32) -> Option<String> {
+    use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows::core::PWSTR;
 
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     let mut buffer = vec![0_u16; 32_768];
@@ -225,6 +225,44 @@ fn web_document_url(control_type: Option<&str>, value: &str) -> Option<String> {
     }
     let parsed = url::Url::parse(value).ok()?;
     matches!(parsed.scheme(), "http" | "https").then(|| parsed.to_string())
+}
+
+impl UiaBackend {
+    fn selection_window_and_url(
+        &self,
+        focused: &uiautomation::UIElement,
+        read_url: bool,
+    ) -> (Option<String>, Option<String>) {
+        use uiautomation::patterns::UIValuePattern;
+        let walker = self.automation.get_control_view_walker().ok();
+        let mut ancestor = focused.clone();
+        let mut window_title = None;
+        let mut source_url = None;
+        for _ in 0..=8 {
+            let control_type = ancestor
+                .get_control_type()
+                .ok()
+                .map(|value| format!("{value:?}"));
+            if window_title.is_none() && control_type.as_deref() == Some("Window") {
+                window_title = ancestor.get_name().ok().filter(|value| !value.is_empty());
+            }
+            if read_url && source_url.is_none() && control_type.as_deref() == Some("Document") {
+                source_url = ancestor
+                    .get_pattern::<UIValuePattern>()
+                    .ok()
+                    .and_then(|pattern| pattern.get_value().ok())
+                    .and_then(|value| web_document_url(control_type.as_deref(), &value));
+            }
+            let Some(parent) = walker
+                .as_ref()
+                .and_then(|walker| walker.get_parent(&ancestor).ok())
+            else {
+                break;
+            };
+            ancestor = parent;
+        }
+        (window_title, source_url)
+    }
 }
 
 impl AutomationBackend for UiaBackend {
@@ -373,7 +411,7 @@ impl AutomationBackend for UiaBackend {
         kind: TargetActionKind,
     ) -> Result<()> {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GA_ROOT, GetAncestor, GetForegroundWindow, WindowFromPoint,
+            GetAncestor, GetForegroundWindow, WindowFromPoint, GA_ROOT,
         };
         let id = u32::try_from(
             target
@@ -953,12 +991,19 @@ impl AutomationBackend for UiaBackend {
                 message: format!("get_focused_element: {error}"),
             }
         })?;
-        let focused_info = element_info(&self.cache, &focused);
-        let source_process = focused
-            .get_process_id()
-            .ok()
-            .and_then(process_name)
-            .or(focused_info.process_name.clone());
+        let pid = focused.get_process_id().ok();
+        let source_process = pid.and_then(process_name);
+        let secure_field = focused.is_password().unwrap_or(true);
+        let (window_title, source_url) = self.selection_window_and_url(&focused, !secure_field);
+        if super::shared::credential_window::selection_context_is_sensitive(
+            source_process.as_deref(),
+            window_title.as_deref(),
+            secure_field,
+        ) {
+            return Err(AutomationError::PermissionDenied {
+                reason: "focused window contains a credential control".into(),
+            });
+        }
         let Some((_container, ranges)) =
             text_selection::selected_ranges(&self.automation, &focused)
         else {
@@ -967,12 +1012,17 @@ impl AutomationBackend for UiaBackend {
         let Some(text) = text_selection::selected_text(&ranges) else {
             return Ok(None);
         };
-        Ok(build_text_selection(
+        let mut snapshot = build_text_selection(
             &text,
             source_process.as_deref().unwrap_or("Unknown"),
-            focused_info.window_title.as_deref(),
+            window_title.as_deref(),
             text_selection::last_visible_bounds(&ranges),
-        ))
+        );
+        if let Some(snapshot) = snapshot.as_mut() {
+            snapshot.source_pid = pid;
+            snapshot.source_url = source_url;
+        }
+        Ok(snapshot)
     }
 
     fn selection_preflight(&self) -> Result<SelectionPreflight> {
@@ -983,7 +1033,7 @@ impl AutomationBackend for UiaBackend {
                 message: format!("get_focused_element: {error}"),
             }
         })?;
-        let secure_field = focused.is_password().unwrap_or(false);
+        let secure_field = focused.is_password().unwrap_or(true);
         let source_subrole = focused
             .get_control_type()
             .ok()
@@ -994,33 +1044,7 @@ impl AutomationBackend for UiaBackend {
                 .ok()
                 .and_then(|pattern| pattern.is_readonly().ok())
                 .is_some_and(|read_only| !read_only);
-        let walker = self.automation.get_control_view_walker().ok();
-        let mut ancestor = focused.clone();
-        let mut window_title = None;
-        let mut source_url = None;
-        for _ in 0..=8 {
-            let control_type = ancestor
-                .get_control_type()
-                .ok()
-                .map(|value| format!("{value:?}"));
-            if window_title.is_none() && control_type.as_deref() == Some("Window") {
-                window_title = ancestor.get_name().ok().filter(|value| !value.is_empty());
-            }
-            if source_url.is_none() {
-                source_url = ancestor
-                    .get_pattern::<UIValuePattern>()
-                    .ok()
-                    .and_then(|pattern| pattern.get_value().ok())
-                    .and_then(|value| web_document_url(control_type.as_deref(), &value));
-            }
-            let Some(parent) = walker
-                .as_ref()
-                .and_then(|walker| walker.get_parent(&ancestor).ok())
-            else {
-                break;
-            };
-            ancestor = parent;
-        }
+        let (window_title, source_url) = self.selection_window_and_url(&focused, !secure_field);
         let pid = focused.get_process_id().ok();
         Ok(SelectionPreflight {
             pid,

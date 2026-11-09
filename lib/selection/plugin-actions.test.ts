@@ -71,7 +71,8 @@ it("requires consent before exposing selection text", async () => {
     )
   ).resolves.toEqual({ kind: "text", text: "summary" })
   expect(broker.request).toHaveBeenCalledWith(
-    expect.objectContaining({ pluginId: "plug-a", permission: "selection:read" })
+    expect.objectContaining({ pluginId: "plug-a", permission: "selection:read" }),
+    expect.any(Object)
   )
   expect(run).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -291,4 +292,31 @@ it("accepts a bounded status message and drops unusable source URLs", async () =
       { types: [] }
     )
   ).resolves.toEqual({ kind: "status", message: "done" })
+})
+
+it("rejects approval arriving after the action's text grant is revoked", async () => {
+  const run = jest.fn()
+  const guard = registeredGuard(["selection:read"])
+  registerQuickAction("plug-a", {
+    id: "inspect",
+    title: "Inspect",
+    run,
+    surfaces: ["selection"],
+    selection: { input: "text", output: "status" },
+  })
+  const broker = {
+    request: jest.fn(async () => {
+      guard.revoke("plug-a", "selection:read")
+      return true
+    }),
+  }
+  await expect(
+    executePluginSelectionQuickAction(
+      getQuickAction("plug-a:inspect")!,
+      candidate,
+      { types: ["term"] },
+      { broker, guard }
+    )
+  ).rejects.toMatchObject({ code: "permissionDenied" })
+  expect(run).not.toHaveBeenCalled()
 })

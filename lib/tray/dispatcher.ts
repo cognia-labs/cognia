@@ -127,10 +127,8 @@ export async function dispatchTrayClick(payload: TrayActionPayload | undefined):
  */
 export async function dispatchShortcut(id: string): Promise<void> {
   if (!id) return
-  if (id.startsWith("tray.")) {
-    // Built-in tray bindings — Rust already did the work. Renderer-side
-    // mirrors (toast, badge updates) happen via the legacy `tray://*`
-    // events emitted alongside.
+  if (id.startsWith("tray.") || id.startsWith("selection.")) {
+    // Rust owns the tray and selection shortcut routes.
     return
   }
   if (hasCommand(id)) {

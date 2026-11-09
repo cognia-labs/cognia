@@ -880,6 +880,8 @@ pub fn run() {
             selection_toolbar::selection_toolbar_stop,
             selection_toolbar::selection_toolbar_status,
             selection_toolbar::selection_toolbar_current_candidate,
+            selection_toolbar::selection_toolbar_action_result,
+            selection_toolbar::selection_toolbar_control,
             selection_toolbar::selection_toolbar_capture_clipboard,
             selection_toolbar::selection_toolbar_execute,
             selection_toolbar::selection_toolbar_replace,

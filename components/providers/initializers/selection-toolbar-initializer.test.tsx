@@ -5,8 +5,21 @@ import { act, render, waitFor } from "@testing-library/react"
 
 import { SelectionToolbarInitializer } from "./selection-toolbar-initializer"
 
+let owner = { unlockedAccountId: "account-1", accountRevision: 1, locked: false }
+jest.mock("@/stores/account/account-store", () => ({
+  useAccountStore: Object.assign((selector: (state: typeof owner) => unknown) => selector(owner), {
+    getState: () => owner,
+    subscribe: () => jest.fn(),
+  }),
+}))
+
 const handlers = new Map<string, (event: { payload: unknown }) => void>()
 const takePendingStageMock = jest.fn()
+const stagePayloadMock = jest.fn()
+const selectionActionResultMock = jest.fn().mockResolvedValue(null)
+const showMainWindowMock = jest.fn(async () => true)
+const finishMock = jest.fn(async (_candidateId: string) => undefined)
+jest.mock("@/lib/tauri/overlay-windows", () => ({ showMainWindow: () => showMainWindowMock() }))
 const getCurrentCandidateMock = jest.fn()
 const emitToMock = jest.fn().mockResolvedValue(undefined)
 jest.mock("@tauri-apps/api/event", () => ({
@@ -18,6 +31,13 @@ jest.mock("@tauri-apps/api/event", () => ({
 }))
 
 jest.mock("@/lib/tauri/selection-toolbar", () => ({
+  ...jest.requireActual("@/lib/tauri/selection-toolbar"),
+  sendSelectionControl: (event: string, payload: unknown) =>
+    emitToMock("selection-toolbar", event, payload),
+  listenSelectionControl: (event: string, handler: (event: { payload: unknown }) => void) =>
+    jest.requireMock("@tauri-apps/api/event").listen(event, handler),
+  selectionActionResult: (...args: unknown[]) => selectionActionResultMock(...args),
+  finishSelectionToolbar: (candidateId: string) => finishMock(candidateId),
   SELECTION_STAGE_EVENT: "selection://stage",
   SELECTION_RESULT_EVENT: "selection://result",
   SELECTION_SPEECH_EVENT: "selection://speech",
@@ -31,6 +51,15 @@ jest.mock("@/lib/tauri/selection-toolbar", () => ({
   SELECTION_TOOLBAR_LABEL: "selection-toolbar",
   takePendingSelectionStage: () => takePendingStageMock(),
   getCurrentSelectionCandidate: () => getCurrentCandidateMock(),
+}))
+
+const enhancePromptMock = jest.fn()
+jest.mock("@/lib/ai/generation/utility-client", () => ({
+  buildUtilityLlmClient: () => ({}),
+}))
+jest.mock("@/lib/chat/completion/enhance", () => ({
+  ...jest.requireActual("@/lib/chat/completion/enhance"),
+  enhancePrompt: (...args: unknown[]) => enhancePromptMock(...args),
 }))
 
 const listQuickActionsMock = jest.fn()
@@ -126,9 +155,15 @@ const candidate = {
 }
 
 const stage = () => handlers.get("selection://stage")
+function deliverStage() {
+  const payload = stagePayloadMock()
+  getCurrentCandidateMock.mockResolvedValue(payload.candidate)
+  stage()?.({ payload: { candidateId: payload.candidate.id, action: payload.action } })
+}
 
 beforeEach(() => {
   handlers.clear()
+  owner = { unlockedAccountId: "account-1", accountRevision: 1, locked: false }
   speechSubscriber = null
   jest.clearAllMocks()
   takePendingStageMock.mockResolvedValue(null)
@@ -191,7 +226,7 @@ it("publishes eligible plugin descriptors and executes them only in the main win
       expect.objectContaining({
         requestId: "request-1",
         ok: true,
-        result: { kind: "text", text: "Summary" },
+        stored: true,
       })
     )
   )
@@ -205,6 +240,11 @@ it("publishes eligible plugin descriptors and executes them only in the main win
     })
   })
   expect(executePluginSelectionQuickActionMock).toHaveBeenCalledTimes(1)
+  expect(selectionActionResultMock).toHaveBeenCalledWith(
+    "candidate-1",
+    "request-1",
+    expect.objectContaining({ result: { kind: "text", text: "Summary" } })
+  )
 })
 
 it("settles an unknown rewrite mode instead of leaving the overlay spinning", async () => {
@@ -240,12 +280,12 @@ it("stages an external context and explain intent in the active session", async 
   render(<SelectionToolbarInitializer />)
   await waitFor(() => expect(stage()).toBeDefined())
 
-  takePendingStageMock.mockResolvedValueOnce({
+  stagePayloadMock.mockReturnValueOnce({
     candidate,
     action: { kind: "explain" },
   })
   await act(async () => {
-    stage()?.({ payload: null })
+    deliverStage()
   })
 
   expect(useChatStore.getState().contextSelections).toEqual([
@@ -262,6 +302,8 @@ it("stages an external context and explain intent in the active session", async 
     prompt: "prompts.explain",
   })
   expect(pushMock).toHaveBeenCalledWith("/")
+  expect(showMainWindowMock).toHaveBeenCalled()
+  expect(finishMock).toHaveBeenCalledWith("candidate-1")
 })
 
 it("uses the code-specific prompt and preserves source provenance", async () => {
@@ -269,7 +311,7 @@ it("uses the code-specific prompt and preserves source provenance", async () => 
   render(<SelectionToolbarInitializer />)
   await waitFor(() => expect(stage()).toBeDefined())
 
-  takePendingStageMock.mockResolvedValueOnce({
+  stagePayloadMock.mockReturnValueOnce({
     candidate: {
       ...candidate,
       text: "const answer = value => value + 1;",
@@ -279,7 +321,7 @@ it("uses the code-specific prompt and preserves source provenance", async () => 
     action: { kind: "explain" },
   })
   await act(async () => {
-    stage()?.({ payload: null })
+    deliverStage()
   })
 
   expect(useChatStore.getState().contextSelections).toEqual([
@@ -299,12 +341,12 @@ it("creates a session when needed and localizes a translation intent", async () 
   render(<SelectionToolbarInitializer />)
   await waitFor(() => expect(stage()).toBeDefined())
 
-  takePendingStageMock.mockResolvedValueOnce({
+  stagePayloadMock.mockReturnValueOnce({
     candidate,
     action: { kind: "translate", targetLocale: "zh-CN" },
   })
   await act(async () => {
-    stage()?.({ payload: null })
+    deliverStage()
     await Promise.resolve()
   })
 
@@ -319,23 +361,23 @@ it("sharpens detected-language and measurement prompts", async () => {
   render(<SelectionToolbarInitializer />)
   await waitFor(() => expect(stage()).toBeDefined())
 
-  takePendingStageMock.mockResolvedValueOnce({
+  stagePayloadMock.mockReturnValueOnce({
     candidate: { ...candidate, id: "foreign", text: "こんにちは世界" },
     action: { kind: "translate", targetLocale: "en" },
   })
   await act(async () => {
-    stage()?.({ payload: null })
+    deliverStage()
   })
   expect(useComposerIntentStore.getState().pendingBySession["session-1"]?.prompt).toBe(
     "prompts.translateDetected:languages.en"
   )
 
-  takePendingStageMock.mockResolvedValueOnce({
+  stagePayloadMock.mockReturnValueOnce({
     candidate: { ...candidate, id: "measurement", text: "12.5 km" },
     action: { kind: "convertUnit" },
   })
   await act(async () => {
-    stage()?.({ payload: null })
+    deliverStage()
   })
   expect(useComposerIntentStore.getState().pendingBySession["session-1"]?.prompt).toBe(
     "prompts.convertMeasurement"
@@ -347,13 +389,13 @@ it("deduplicates a candidate and leaves ask without a stock prompt", async () =>
   render(<SelectionToolbarInitializer />)
   await waitFor(() => expect(stage()).toBeDefined())
 
-  takePendingStageMock
-    .mockResolvedValueOnce({ candidate, action: { kind: "ask" } })
-    .mockResolvedValueOnce({ candidate, action: { kind: "ask" } })
+  stagePayloadMock
+    .mockReturnValueOnce({ candidate, action: { kind: "ask" } })
+    .mockReturnValueOnce({ candidate, action: { kind: "ask" } })
   await act(async () => {
-    stage()?.({ payload: null })
+    deliverStage()
     await Promise.resolve()
-    stage()?.({ payload: null })
+    deliverStage()
   })
 
   expect(useChatStore.getState().contextSelections).toHaveLength(1)
@@ -365,9 +407,9 @@ describe("remember", () => {
     render(<SelectionToolbarInitializer />)
     await waitFor(() => expect(stage()).toBeDefined())
 
-    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "remember" } })
+    stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "remember" } })
     await act(async () => {
-      stage()?.({ payload: null })
+      deliverStage()
     })
 
     expect(storeExternalMemoryMock).toHaveBeenCalledWith(
@@ -389,9 +431,9 @@ describe("remember", () => {
     render(<SelectionToolbarInitializer />)
     await waitFor(() => expect(stage()).toBeDefined())
 
-    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "remember" } })
+    stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "remember" } })
     await act(async () => {
-      stage()?.({ payload: null })
+      deliverStage()
     })
 
     expect(emitToMock).toHaveBeenCalledWith("selection-toolbar", "selection://result", {
@@ -406,9 +448,9 @@ describe("remember", () => {
     render(<SelectionToolbarInitializer />)
     await waitFor(() => expect(stage()).toBeDefined())
 
-    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "remember" } })
+    stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "remember" } })
     await act(async () => {
-      stage()?.({ payload: null })
+      deliverStage()
     })
 
     expect(emitToMock).toHaveBeenCalledWith("selection-toolbar", "selection://result", {
@@ -421,17 +463,21 @@ describe("remember", () => {
 
 describe("speak", () => {
   it("plays here and streams playback state to the toolbar", async () => {
+    speakSelectionMock.mockImplementationOnce(async () => {
+      speechSubscriber?.({ playing: true })
+    })
     render(<SelectionToolbarInitializer />)
     await waitFor(() => expect(stage()).toBeDefined())
 
-    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "speak" } })
+    stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "speak" } })
     await act(async () => {
-      stage()?.({ payload: null })
+      deliverStage()
     })
 
     expect(speakSelectionMock).toHaveBeenCalledWith({
       candidateId: "candidate-1",
       text: "selected text",
+      beforeStart: expect.any(Function),
     })
     expect(pushMock).not.toHaveBeenCalled()
 
@@ -446,12 +492,15 @@ describe("speak", () => {
   })
 
   it("drops the subscription once playback ends", async () => {
+    speakSelectionMock.mockImplementationOnce(async () => {
+      speechSubscriber?.({ playing: true })
+    })
     render(<SelectionToolbarInitializer />)
     await waitFor(() => expect(stage()).toBeDefined())
 
-    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "speak" } })
+    stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "speak" } })
     await act(async () => {
-      stage()?.({ payload: null })
+      deliverStage()
     })
     await act(async () => {
       speechSubscriber?.({ playing: false })
@@ -464,9 +513,9 @@ describe("speak", () => {
     render(<SelectionToolbarInitializer />)
     await waitFor(() => expect(stage()).toBeDefined())
 
-    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "speak" } })
+    stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "speak" } })
     await act(async () => {
-      stage()?.({ payload: null })
+      deliverStage()
     })
 
     await waitFor(() =>
@@ -482,9 +531,9 @@ describe("speak", () => {
     render(<SelectionToolbarInitializer />)
     await waitFor(() => expect(stage()).toBeDefined())
 
-    takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "speak" } })
+    stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "speak" } })
     await act(async () => {
-      stage()?.({ payload: null })
+      deliverStage()
     })
 
     await waitFor(() =>
@@ -530,8 +579,91 @@ it("disposes listeners that resolve after unmount, and drains no stage", async (
     release?.()
   })
 
-  expect(disposers).toHaveLength(5)
+  expect(disposers).toHaveLength(8)
   for (const dispose of disposers) expect(dispose).toHaveBeenCalled()
   // The boot drain must not run for a window that is already gone.
   expect(takePendingStageMock).not.toHaveBeenCalled()
+})
+
+it("settles Speak when disabled synthesis returns without playback", async () => {
+  render(<SelectionToolbarInitializer />)
+  await waitFor(() => expect(stage()).toBeDefined())
+  stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "speak" } })
+  await act(async () => deliverStage())
+  expect(emitToMock).toHaveBeenCalledWith("selection-toolbar", "selection://speech", {
+    candidateId: candidate.id,
+    playing: false,
+  })
+})
+
+it("never replays a native mailbox or writes during a lock transition", async () => {
+  takePendingStageMock.mockResolvedValueOnce({ candidate, action: { kind: "remember" } })
+  render(<SelectionToolbarInitializer />)
+  await waitFor(() => expect(stage()).toBeDefined())
+  expect(takePendingStageMock).not.toHaveBeenCalled()
+  owner = { ...owner, locked: true, accountRevision: owner.accountRevision + 1 }
+  stagePayloadMock.mockReturnValueOnce({ candidate, action: { kind: "remember" } })
+  await act(async () => deliverStage())
+  expect(storeExternalMemoryMock).not.toHaveBeenCalled()
+})
+
+it("opens stored result variants only after a successful native reveal", async () => {
+  useChatStore.getState().setActiveSession("session-1")
+  getCurrentCandidateMock.mockResolvedValue(candidate)
+  selectionActionResultMock
+    .mockResolvedValueOnce({ result: { kind: "variants", variants: ["First", "Second"] } })
+    .mockResolvedValueOnce({ result: { kind: "variants", variants: ["First", "Second"] } })
+    .mockResolvedValueOnce({ result: { kind: "variants", variants: ["First", "Second"] } })
+  showMainWindowMock.mockResolvedValueOnce(false)
+  render(<SelectionToolbarInitializer />)
+  await waitFor(() => expect(handlers.has("selection://open-result")).toBe(true))
+  const open = (requestId: string, variantIndex: number) =>
+    act(async () => {
+      handlers.get("selection://open-result")?.({
+        payload: {
+          requestId,
+          candidateId: candidate.id,
+          resultRequestId: "generate-1",
+          variantIndex,
+        },
+      })
+    })
+  await open("failed", 0)
+  expect(useChatStore.getState().contextSelections).toEqual([])
+  await open("first", 0)
+  await open("second", 1)
+  expect(useChatStore.getState().contextSelections).toEqual([
+    expect.objectContaining({ candidateId: "candidate-1:result:first", snapshot: "First" }),
+    expect.objectContaining({ candidateId: "candidate-1:result:second", snapshot: "Second" }),
+  ])
+})
+
+it("aborts a running Rewrite and drops its late completion", async () => {
+  getCurrentCandidateMock.mockResolvedValue(candidate)
+  let resolveModel: ((result: { kind: "text"; text: string }) => void) | undefined
+  enhancePromptMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveModel = resolve
+      })
+  )
+  render(<SelectionToolbarInitializer />)
+  await waitFor(() => expect(handlers.has("selection://action-request")).toBe(true))
+  await act(async () => {
+    handlers.get("selection://action-request")?.({
+      payload: {
+        requestId: "rewrite-1",
+        candidateId: candidate.id,
+        actionId: "cognia:rewrite:improve",
+      },
+    })
+  })
+  const options = enhancePromptMock.mock.calls[0][2] as { signal: AbortSignal }
+  expect(options.signal.aborted).toBe(false)
+  await act(async () => {
+    handlers.get("selection://action-cancel")?.({ payload: { requestId: "rewrite-1" } })
+    resolveModel?.({ kind: "text", text: "late result" })
+  })
+  expect(options.signal.aborted).toBe(true)
+  expect(selectionActionResultMock).not.toHaveBeenCalled()
 })

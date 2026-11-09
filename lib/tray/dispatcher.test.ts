@@ -107,6 +107,13 @@ describe("handleTrayUsageCommand", () => {
 })
 
 describe("dispatchShortcut", () => {
+  it("leaves selection shortcut dispatch to the native toolbar", async () => {
+    const handler = jest.fn()
+    registerCommand({ id: "selection.action:plugin:inspect", pluginId: "plugin", handler })
+    await dispatchShortcut("selection.action:plugin:inspect")
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   it("no-ops for empty id", async () => {
     await expect(dispatchShortcut("")).resolves.toBeUndefined()
   })

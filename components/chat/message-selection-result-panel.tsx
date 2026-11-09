@@ -49,6 +49,7 @@ const UNAVAILABLE_KEYS = {
   "no-client": "noClient",
   pii: "pii",
   "no-output": "noOutput",
+  "source-unavailable": "sourceUnavailable",
 } as const
 
 function textOf(run: ActiveRun): string {

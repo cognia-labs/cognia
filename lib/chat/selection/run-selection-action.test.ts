@@ -47,7 +47,7 @@ describe("canonical selection visibility", () => {
         },
       } as never)
       const client = completeClient(() => "Withheld source.")
-      await runSelectionAction(
+      const outcome = await runSelectionAction(
         input({
           action,
           client,
@@ -57,10 +57,8 @@ describe("canonical selection visibility", () => {
           source: { sessionId: "source", messageIds: ["private"] },
         })
       )
-      expect(JSON.stringify(client.calls)).toContain("[Withheld: personal content of Host owner]")
-      expect(JSON.stringify(client.calls)).not.toMatch(
-        /private canonical source|private selected quote|private source context|private selected segment/
-      )
+      expect(outcome).toEqual({ kind: "unavailable", reason: "source-unavailable" })
+      expect(client.calls).toHaveLength(0)
     }
   )
 
@@ -93,7 +91,7 @@ describe("canonical selection visibility", () => {
   it("does not trust flattened text after its selected canonical source disappears", async () => {
     const run = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
     const client = completeClient(() => "Withheld source.")
-    await runSelectionAction(
+    const outcome = await runSelectionAction(
       input({
         client,
         text: "deleted private quote",
@@ -101,10 +99,8 @@ describe("canonical selection visibility", () => {
         source: { sessionId: "source", messageIds: ["deleted"], executionRunId: run.id },
       })
     )
-    expect(JSON.stringify(client.calls)).toContain("[Withheld: personal content of person ")
-    expect(JSON.stringify(client.calls)).not.toMatch(
-      /deleted private quote|deleted private context/
-    )
+    expect(outcome).toEqual({ kind: "unavailable", reason: "source-unavailable" })
+    expect(client.calls).toHaveLength(0)
     await finishToolExecutionRun(run.id)
   })
 })

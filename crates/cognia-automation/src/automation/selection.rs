@@ -21,6 +21,11 @@ pub struct TextSelectionSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor_rect: Option<Rect>,
     pub truncated: bool,
+    /// Native provenance captured from the same element as the selected range.
+    #[serde(skip)]
+    pub source_pid: Option<u32>,
+    #[serde(skip)]
+    pub source_url: Option<String>,
 }
 
 pub fn build_text_selection(
@@ -45,6 +50,8 @@ pub fn build_text_selection(
             .filter(|title| !title.is_empty()),
         anchor_rect,
         truncated,
+        source_pid: None,
+        source_url: None,
     })
 }
 

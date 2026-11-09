@@ -28,6 +28,21 @@ afterEach(() => {
   __resetDiagnosticsStoreForTesting()
 })
 
+it("rejects selection dispatch to a slash command owned by a different plugin", async () => {
+  const handler = jest.fn()
+  registerSlashCommand({
+    id: "other-plugin",
+    name: "Other",
+    pluginId: "other",
+    source: "plugin",
+    handler,
+  })
+  await expect(
+    dispatchSlashCommand("/other-plugin", {}, { pluginId: "selection-owner" })
+  ).rejects.toThrow("action owner")
+  expect(handler).not.toHaveBeenCalled()
+})
+
 it("backgrounds runless Host slash dispatch instead of using the owner exception", async () => {
   registerSlashCommand({
     id: "bound-background",

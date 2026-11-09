@@ -48,8 +48,8 @@ mod raw;
 mod screen_capture;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use enigo::{Direction, Enigo, Keyboard, Mouse, Settings};
@@ -58,14 +58,14 @@ use objc2_app_kit::NSWorkspace;
 use once_cell::sync::Lazy;
 
 use crate::automation::backend::{
-    ActionTargetContext, TargetActionKind, validate_live_element, validate_live_surface,
+    validate_live_element, validate_live_surface, ActionTargetContext, TargetActionKind,
 };
 use crate::automation::backend::{ApplicationScreenshot, AutomationBackend, SelectionPreflight};
 use crate::automation::platform::shared::element_locator;
-use crate::automation::platform::shared::keymap::{KeyToken, Modifier, NamedKey, parse_chord};
+use crate::automation::platform::shared::keymap::{parse_chord, KeyToken, Modifier, NamedKey};
 use crate::automation::platform::shared::screenshot;
 use crate::automation::platform::shared::tree_shape::{self, TreeBudget};
-use crate::automation::selection::{TextSelectionSnapshot, build_text_selection};
+use crate::automation::selection::{build_text_selection, TextSelectionSnapshot};
 use crate::automation::session::{AppLocator, ResolvedApplication, UiSurface};
 use crate::automation::types::*;
 
@@ -1044,8 +1044,7 @@ impl AutomationBackend for AxBackend {
                 reason: "macOS Accessibility permission not granted".into(),
             });
         }
-        let focused = read_focused_window()?;
-        let Some(pid) = focused.pid else {
+        let Some(pid) = raw::system_wide_focused_pid() else {
             return Ok(None);
         };
         let app = AxElement::application(pid);
@@ -1053,21 +1052,32 @@ impl AutomationBackend for AxBackend {
         let Some(element) = raw::focused_ui_element(&app) else {
             return Ok(None);
         };
-        if element
-            .subrole()
-            .is_some_and(|subrole| subrole == "AXSecureTextField")
-        {
-            return Ok(None);
+        let process_name = app.title();
+        let window_title = raw::resolve_window_root(&app).title();
+        if super::shared::credential_window::selection_context_is_sensitive(
+            process_name.as_deref(),
+            window_title.as_deref(),
+            element.subrole().as_deref() == Some("AXSecureTextField"),
+        ) {
+            return Err(AutomationError::PermissionDenied {
+                reason: "focused window contains a credential control".into(),
+            });
         }
+        let source_url = raw::web_area_url(&element);
         let Some(text) = raw::selected_text(&element) else {
             return Ok(None);
         };
-        Ok(build_text_selection(
+        let mut snapshot = build_text_selection(
             &text,
-            focused.process_name.as_deref().unwrap_or("Unknown"),
-            focused.window_title.as_deref(),
+            process_name.as_deref().unwrap_or("Unknown"),
+            window_title.as_deref(),
             raw::selected_text_bounds(&element),
-        ))
+        );
+        if let Some(snapshot) = snapshot.as_mut() {
+            snapshot.source_pid = Some(pid);
+            snapshot.source_url = source_url;
+        }
+        Ok(snapshot)
     }
 
     /// Answered entirely through AX — no `osascript`.

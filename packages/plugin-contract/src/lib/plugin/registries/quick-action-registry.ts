@@ -24,7 +24,7 @@ import {
   invokeGuardedCommand,
   registerCommand,
 } from "../commands/registry"
-import { getPluginHostDispatch } from "../core/plugin-host-dispatch"
+import { getPluginHostDispatch, type VerifySelectionDispatch } from "../core/plugin-host-dispatch"
 import { reportRegistryConflict } from "../contracts/conflict-reporter"
 import { createOverlayRegistry } from "./createOverlayRegistry"
 
@@ -86,13 +86,39 @@ function invalidateSnapshot(): void {
 /** Run a quick action: inline handler → command id → slash line. */
 export async function runQuickAction(
   entry: QuickActionEntry,
-  invocation?: PluginQuickActionInvocation
+  invocation?: PluginQuickActionInvocation,
+  verify?: VerifySelectionDispatch
 ): Promise<PluginQuickActionResult> {
+  const selection = invocation?.surface === "selection"
   if (entry.run) {
+    const assertDispatch = verify ? await verify() : undefined
+    assertDispatch?.()
     return entry.run(invocation)
   }
   if (entry.command) {
-    if (getCommand(entry.command)) {
+    const command = getCommand(entry.command)
+    if (command) {
+      if (selection) {
+        if (command.pluginId !== entry.pluginId) {
+          throw new Error("Selection command must belong to the action owner")
+        }
+        return invokeGuardedCommand<PluginQuickActionResult>(
+          command,
+          {
+            guardArgs: [],
+            beforeDispatch: async () => {
+              const assertDispatch = verify ? await verify() : undefined
+              return () => {
+                assertDispatch?.()
+                if (getCommand(command.id) !== command) {
+                  throw new Error("Selection command changed before dispatch")
+                }
+              }
+            },
+          },
+          invocation
+        )
+      }
       return executeCommand<PluginQuickActionResult>(entry.command, invocation)
     }
     // A manifest `commands[]` entry is registered with the plugin registry and
@@ -102,19 +128,21 @@ export async function runQuickAction(
     if (own) {
       await invokeGuardedCommand(
         { id: own.id, pluginId: entry.pluginId, handler: () => own.execute() },
-        {},
+        selection ? { guardArgs: [], beforeDispatch: verify } : {},
         invocation
       )
       return undefined
     }
+    if (selection) throw new Error("Selection command is unavailable")
     return executeCommand<PluginQuickActionResult>(entry.command, invocation)
   }
   if (entry.slash) {
     const line = entry.slash.startsWith("/") ? entry.slash : `/${entry.slash}`
-    const result = await getPluginHostDispatch().dispatchSlashCommand(
-      line,
-      invocation ? { quickAction: invocation } : undefined
-    )
+    const host = getPluginHostDispatch()
+    const context = invocation ? { quickAction: invocation } : undefined
+    const result = selection
+      ? await host.dispatchSlashCommand(line, context, { pluginId: entry.pluginId, verify })
+      : await host.dispatchSlashCommand(line, context)
     return result?.message ? { kind: "text", text: result.message } : undefined
   }
   loggers.plugin.warn("quick action has no dispatch target", {
@@ -147,6 +175,13 @@ export function registerQuickAction(pluginId: string, action: PluginQuickActionI
 
   const entry: QuickActionEntry = {
     ...action,
+    ...(action.selection && {
+      selection: {
+        ...action.selection,
+        contentTypes: action.selection.contentTypes?.slice(),
+        origins: action.selection.origins?.slice(),
+      },
+    }),
     fullId,
     pluginId,
     commandId,
@@ -170,9 +205,8 @@ export function registerQuickAction(pluginId: string, action: PluginQuickActionI
     handler: () => runQuickAction(entry),
   })
 
-  // Optional accelerator — bound through the plugin shortcut bridge onto
-  // the live shortcut rail (the binding id IS the mirrored command id, so
-  // an OS press dispatches the same handler as palette/tray/composer).
+  // Selection-only actions require a live candidate from the native rail.
+  // Other surfaces keep the existing mirrored-command accelerator.
   let disposeAccelerator: (() => void) | null = null
   let acceleratorDisposed = false
   if (action.accelerator) {
@@ -180,7 +214,10 @@ export function registerQuickAction(pluginId: string, action: PluginQuickActionI
       .bindPluginShortcut({
         pluginId,
         chord: action.accelerator,
-        existingCommandId: commandId,
+        existingCommandId:
+          surfaces.length === 1 && surfaces[0] === "selection"
+            ? `selection.action:${fullId}`
+            : commandId,
         options: { when: action.when },
       })
       .then((d) => {

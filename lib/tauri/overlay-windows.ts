@@ -54,10 +54,11 @@ export async function revealIslandWindow(focus = false): Promise<boolean> {
 }
 
 /** Bring the main app window back to the foreground (overlay "show main"). */
-export async function showMainWindow(): Promise<boolean> {
+export async function showMainWindow(options?: { checked: true }): Promise<boolean> {
   if (!isTauri()) return false
   try {
-    await invoke("show_main_window")
+    if (options?.checked) await invoke("show_main_window", { checked: true })
+    else await invoke("show_main_window")
     return true
   } catch (err) {
     console.warn("showMainWindow failed", err)

@@ -58,6 +58,17 @@ describe("speakSelection", () => {
     expect(mockSpeak).not.toHaveBeenCalled()
   })
 
+  it("checks cancellation after provider keys are prepared", async () => {
+    const beforeStart = jest.fn(() => {
+      expect(ensureProviderKeys).toHaveBeenCalled()
+      throw new Error("selection canceled")
+    })
+    await expect(
+      speakSelection({ candidateId: "c1", text: "read me", beforeStart })
+    ).rejects.toThrow("selection canceled")
+    expect(mockSpeak).not.toHaveBeenCalled()
+  })
+
   it("loads provider keys then speaks tagged with the candidate", async () => {
     await speakSelection({ candidateId: "c1", text: "read me" })
     expect(ensureProviderKeys).toHaveBeenCalledTimes(1)

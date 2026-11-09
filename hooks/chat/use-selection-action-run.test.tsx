@@ -116,12 +116,11 @@ describe("useSelectionActionRun", () => {
     await act(() =>
       result.current.run(request({ quote: "private quote", context: "private context" }))
     )
-    expect(JSON.stringify((llm.complete as jest.Mock).mock.calls)).toContain(
-      "[Withheld: personal content of person "
-    )
-    expect(JSON.stringify((llm.complete as jest.Mock).mock.calls)).not.toMatch(
-      /private source|private quote|private context/
-    )
+    expect(llm.complete).not.toHaveBeenCalled()
+    expect(result.current.state).toMatchObject({
+      status: "unavailable",
+      reason: "source-unavailable",
+    })
     expect(startToolExecutionRun).toHaveBeenCalledWith(undefined, {
       localAuthorization: LOCAL_PERSON_RUN,
       title: "Selection explanation",

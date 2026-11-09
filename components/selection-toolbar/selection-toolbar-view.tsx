@@ -24,6 +24,7 @@ import { emitTo, listen } from "@tauri-apps/api/event"
 import { useLocale, useTranslations } from "next-intl"
 import { MoreHorizontalIcon, PuzzleIcon, WandSparklesIcon } from "lucide-react"
 
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { resolveLucideIcon } from "@/lib/icons/lucide-catalog"
 import { getPref, setPref } from "@/lib/tauri/store"
@@ -39,11 +40,21 @@ import {
   getCurrentSelectionCandidate,
   listShortcutChords,
   revealSelectionToolbar,
+  selectionActionResult,
+  listenSelectionControl,
+  sendSelectionControl,
   SELECTION_CANDIDATE_EVENT,
   SELECTION_DISMISS_EVENT,
   SELECTION_ESCAPE_EVENT,
   SELECTION_RESULT_EVENT,
   SELECTION_ACTION_CATALOG_EVENT,
+  SELECTION_ACTION_CATALOG_REQUEST_EVENT,
+  SELECTION_ACTION_CANCEL_EVENT,
+  SELECTION_CONSENT_EVENT,
+  SELECTION_CONSENT_RESPONSE_EVENT,
+  SELECTION_OPEN_RESULT_ACK_EVENT,
+  SELECTION_REQUEST_TIMEOUT_MS,
+  type SelectionConsentPayload,
   SELECTION_ACTION_REQUEST_EVENT,
   SELECTION_ACTION_RESULT_EVENT,
   SELECTION_ACTION_LAYOUT_PREF,
@@ -71,6 +82,7 @@ import {
 import {
   findAction,
   findActionByShortcutId,
+  isActionSuppressed,
   initialTargetLocale,
   resolveVisibleActions,
   selectionIsSecure,
@@ -129,6 +141,7 @@ function toAction(
 
 export function SelectionToolbarView() {
   const t = useTranslations("selectionToolbar")
+  const tConsent = useTranslations("plugins.consent")
   const locale = useLocale()
   const reduceMotion = useReducedMotion() ?? false
 
@@ -154,6 +167,31 @@ export function SelectionToolbarView() {
   const [resultError, setResultError] = useState<string | undefined>()
   const pendingRequestRef = useRef<string | null>(null)
   const candidateIdRef = useRef<string | null>(null)
+  const [consent, setConsent] = useState<SelectionConsentPayload | null>(null)
+  const [shortcut, setShortcut] = useState<SelectionShortcutPayload | null>(null)
+  const [catalogId, setCatalogId] = useState<string | null>(null)
+  const [preferencesId, setPreferencesId] = useState<string | null>(null)
+  const [listenersId, setListenersId] = useState<string | null>(null)
+  const responseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const openRequest = useRef<string | null>(null)
+
+  const clearResponseTimer = useCallback(() => {
+    if (responseTimer.current) clearTimeout(responseTimer.current)
+    responseTimer.current = null
+  }, [])
+
+  const cancelPending = useCallback(
+    (preserveOpen = false) => {
+      const requestId = pendingRequestRef.current ?? (preserveOpen ? null : openRequest.current)
+      pendingRequestRef.current = null
+      if (!preserveOpen) openRequest.current = null
+      if (!openRequest.current) clearResponseTimer()
+      if (requestId) {
+        void sendSelectionControl(SELECTION_ACTION_CANCEL_EVENT, { requestId }).catch(() => {})
+      }
+    },
+    [clearResponseTimer]
+  )
   const isMac = useMemo(() => isMacPlatform(), [])
 
   // Pure and synchronous, so the buttons a selection deserves are known on the
@@ -217,9 +255,13 @@ export function SelectionToolbarView() {
     let primaryIds = [...slots.primaryIds]
     const moreIds = [...slots.overflowIds]
     if (moreIds.length > 0) {
-      const removable = [...primaryIds]
-        .reverse()
-        .find((id) => id !== "copy" && !actionLayout.pinned.includes(id))
+      const removable =
+        [...primaryIds]
+          .reverse()
+          .find(
+            (id) => id !== "copy" && !actionLayout.pinned.includes(id) && !findAction(id)?.requires
+          ) ??
+        [...primaryIds].reverse().find((id) => id !== "copy" && !actionLayout.pinned.includes(id))
       const evicted = removable ?? primaryIds[primaryIds.length - 1]
       if (evicted) {
         primaryIds = primaryIds.filter((id) => id !== evicted)
@@ -257,6 +299,7 @@ export function SelectionToolbarView() {
   // every change and pushes the result to Rust.
   const contentKey = [
     candidate?.id ?? "none",
+    consent?.promptId ?? "",
     // The row itself. The plugin catalog arrives asynchronously and can add a
     // More button and evict an action, and the panels are sized from the same
     // measurement — leaving this out left a window measured for the row the
@@ -296,60 +339,108 @@ export function SelectionToolbarView() {
       else safeUnlisten(unlisten)
     }
 
+    let preferenceRead = 0
+    let currentRead = Promise.resolve()
+    let dismissRevision = 0
+    const refreshPreferences = (id: string) => {
+      const read = ++preferenceRead
+      void Promise.all([
+        listShortcutChords().catch(() => ({})),
+        getPref<string>(SELECTION_TRANSLATE_LOCALE_PREF).catch(() => undefined),
+        getPref<boolean>(SELECTION_CONTEXTUAL_ACTIONS_PREF).catch(() => false),
+        getPref<string>(SELECTION_SEARCH_ENGINE_PREF).catch(() => undefined),
+        getPref<SelectionActionLayout>(SELECTION_ACTION_LAYOUT_PREF).catch(() => undefined),
+      ]).then(([bound, target, contextual, engine, layout]) => {
+        if (!alive || read !== preferenceRead || candidateIdRef.current !== id) return
+        setChords(bound)
+        setTargetLocale(
+          TARGET_LOCALES.includes(target as TargetLocale)
+            ? (target as TargetLocale)
+            : initialTargetLocale(locale)
+        )
+        setContextualEnabled(contextual !== false)
+        setSearchEngine(isSearchEngineId(engine) ? engine : defaultSearchEngine(locale))
+        setActionLayout(normalizeSelectionActionLayout(layout))
+        setPreferencesId(id)
+      })
+    }
+
+    const syncCurrent = () => {
+      const revision = dismissRevision
+      currentRead = currentRead
+        .then(async () => {
+          if (!alive || revision !== dismissRevision) return
+          const current = await getCurrentSelectionCandidate()
+          if (!alive || revision !== dismissRevision || !current) return
+          if (candidateIdRef.current !== current.id) {
+            clearDwell()
+            cancelPending()
+            setConsent(null)
+            setPluginActions([])
+            setCatalogId(null)
+            candidateIdRef.current = current.id
+            refreshPreferences(current.id)
+            setCandidate(current)
+            setPhase({ kind: "idle" })
+            setHovered(null)
+            setLocaleOpen(false)
+            setMoreOpen(false)
+            setSubmenuActionId(null)
+            setExecution(null)
+            setUndoAvailable(false)
+            setReplaceUnavailableReason(undefined)
+            setResultError(undefined)
+          }
+          if (current.activationShortcut) {
+            setShortcut({ candidateId: current.id, shortcutId: current.activationShortcut })
+          }
+          await emitTo(MAIN_WINDOW_LABEL, SELECTION_ACTION_CATALOG_REQUEST_EVENT, null)
+        })
+        .catch(() => {})
+    }
+
     void Promise.all([
-      getCurrentSelectionCandidate().then((current) => {
-        if (alive) {
-          candidateIdRef.current = current?.id ?? null
-          setCandidate(current)
-        }
-      }),
-      listShortcutChords().then((bound) => {
-        if (alive) setChords(bound)
-      }),
-      getPref<string>(SELECTION_TRANSLATE_LOCALE_PREF).then((saved) => {
-        if (alive && TARGET_LOCALES.includes(saved as TargetLocale)) {
-          setTargetLocale(saved as TargetLocale)
-        }
-      }),
-      // Both default on / locale-derived, so an unset pref is not an error —
-      // only an explicit `false` or a recognized engine id changes anything.
-      getPref<boolean>(SELECTION_CONTEXTUAL_ACTIONS_PREF).then((saved) => {
-        if (alive && saved === false) setContextualEnabled(false)
-      }),
-      getPref<string>(SELECTION_SEARCH_ENGINE_PREF).then((saved) => {
-        if (alive && isSearchEngineId(saved)) setSearchEngine(saved)
-      }),
-      getPref<SelectionActionLayout>(SELECTION_ACTION_LAYOUT_PREF).then((saved) => {
-        if (alive) setActionLayout(normalizeSelectionActionLayout(saved))
-      }),
-      listen<ExternalSelectionCandidate>(SELECTION_CANDIDATE_EVENT, (event) => {
-        if (!alive) return
-        clearDwell()
-        candidateIdRef.current = event.payload.id
-        setCandidate(event.payload)
-        setPhase({ kind: "idle" })
-        setHovered(null)
-        setLocaleOpen(false)
-        setMoreOpen(false)
-        setSubmenuActionId(null)
-        setExecution(null)
-        setUndoAvailable(false)
-        setReplaceUnavailableReason(undefined)
-        setResultError(undefined)
+      listenSelectionControl<SelectionShortcutPayload>(SELECTION_SHORTCUT_EVENT, ({ payload }) => {
+        if (alive) setShortcut(payload)
       }).then(track),
-      listen<SelectionActionCatalogPayload>(SELECTION_ACTION_CATALOG_EVENT, (event) => {
-        if (alive && candidateIdRef.current === event.payload.candidateId) {
-          setPluginActions(event.payload.actions)
-        }
+      listenSelectionControl<SelectionConsentPayload>(SELECTION_CONSENT_EVENT, ({ payload }) => {
+        if (
+          alive &&
+          candidateIdRef.current === payload.candidateId &&
+          pendingRequestRef.current === payload.actionRequestId
+        )
+          setConsent(payload)
       }).then(track),
+      listen(SELECTION_CANDIDATE_EVENT, syncCurrent).then(track),
+      listenSelectionControl<SelectionActionCatalogPayload>(
+        SELECTION_ACTION_CATALOG_EVENT,
+        (event) => {
+          if (alive && candidateIdRef.current === event.payload.candidateId) {
+            setPluginActions(event.payload.actions)
+            setCatalogId(event.payload.candidateId)
+          }
+        }
+      ).then(track),
       listen(SELECTION_ESCAPE_EVENT, () => {
         // Rust only routes Escape here while a sub-panel owns focus; closing it
         // hands Escape back, so a second press dismisses the toolbar.
-        if (alive) setLocaleOpen(false)
+        if (!alive) return
+        setLocaleOpen(false)
+        setMoreOpen(false)
+        if (pendingRequestRef.current) {
+          cancelPending()
+          setConsent(null)
+          setPhase({ kind: "idle" })
+        }
       }).then(track),
       listen(SELECTION_DISMISS_EVENT, () => {
         if (!alive) return
+        dismissRevision += 1
         clearDwell()
+        cancelPending(true)
+        setConsent(null)
+        setShortcut(null)
+        setCatalogId(null)
         candidateIdRef.current = null
         // Unmounting drives the AnimatePresence exit; Rust holds the native
         // hide back by EXIT_ANIMATION_MS for idle/completed dismissals so the
@@ -366,13 +457,16 @@ export function SelectionToolbarView() {
         setResultError(undefined)
       }).then(track),
     ])
+      .then(syncCurrent)
+      .catch(() => {})
 
     return () => {
       alive = false
+      cancelPending()
       document.documentElement.removeAttribute("data-selection-toolbar")
       unlistens.forEach(safeUnlisten)
     }
-  }, [clearDwell])
+  }, [cancelPending, clearDwell, locale])
 
   // Reveal only once the window has been sized to its content. Replaces a
   // double-rAF guess, and on Windows the resize doubles as the recomposite
@@ -380,34 +474,56 @@ export function SelectionToolbarView() {
   // (see `lib/tauri/overlay-reveal.ts` for the same quirk on the pet windows).
   const measured = geometry.measured
   useEffect(() => {
-    if (!candidate || !measured) return
+    if (!candidate || !measured || preferencesId !== candidate.id || listenersId !== candidate.id)
+      return
     void revealSelectionToolbar(candidate.id).catch((error: unknown) => {
       if (candidateIdRef.current === candidate.id) {
         console.warn("selection toolbar reveal failed", error)
       }
     })
-  }, [candidate, measured])
+  }, [candidate, listenersId, measured, preferencesId])
 
   // Freeze the idle countdown whenever the user is engaged with the toolbar or
   // something is still in flight.
   const busy = phase.kind !== "idle" || execution !== null
   useEffect(() => {
     if (!candidate) return
-    void setSelectionToolbarKeepAlive(hovered !== null || localeOpen || moreOpen || busy)
+    void setSelectionToolbarKeepAlive(hovered !== null || localeOpen || moreOpen || busy).catch(
+      () => {}
+    )
   }, [candidate, hovered, localeOpen, moreOpen, busy])
 
   useEffect(() => {
     if (!candidate) return
-    void setSelectionToolbarInteractive(localeOpen || moreOpen)
-  }, [candidate, localeOpen, moreOpen])
+    void setSelectionToolbarInteractive(localeOpen || moreOpen || consent !== null).catch(() => {})
+  }, [candidate, consent, localeOpen, moreOpen])
 
   const finish = useCallback((candidateId: string) => {
-    void finishSelectionToolbar(candidateId)
+    void finishSelectionToolbar(candidateId).catch(() => {})
   }, [])
 
+  const failAction = useCallback(
+    (candidateId: string, action: string) => {
+      if (candidateIdRef.current !== candidateId) return
+      cancelPending()
+      setConsent(null)
+      clearDwell()
+      setPhase({ kind: "error", action, reason: t("errors.generic") })
+      dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), ERROR_DWELL_MS)
+    },
+    [cancelPending, clearDwell, t]
+  )
+
   const runAction = useCallback(
-    (id: string) => {
-      if (!candidate) return
+    (id: string, target = targetLocale) => {
+      if (
+        !candidate ||
+        preferencesId !== candidate.id ||
+        listenersId !== candidate.id ||
+        phase.kind === "pending" ||
+        responseTimer.current !== null
+      )
+        return
       if (id === "__more") {
         setLocaleOpen(false)
         setSubmenuActionId(null)
@@ -430,54 +546,62 @@ export function SelectionToolbarView() {
         setLocaleOpen(false)
         setExecution(null)
         setPhase({ kind: "pending", action: id })
-        void emitTo(MAIN_WINDOW_LABEL, SELECTION_ACTION_REQUEST_EVENT, {
+        responseTimer.current = setTimeout(
+          () => failAction(candidate.id, id),
+          SELECTION_REQUEST_TIMEOUT_MS
+        )
+        void sendSelectionControl(SELECTION_ACTION_REQUEST_EVENT, {
           requestId,
           candidateId: candidate.id,
           actionId: id,
-        })
+        }).catch(() => failAction(candidate.id, id))
         return
       }
       const descriptor = findAction(id)
-      if (!descriptor || phase.kind === "pending") return
-      const action = toAction(id as SelectionActionId, targetLocale, classification, searchEngine)
+      if (
+        !descriptor ||
+        isActionSuppressed(descriptor, candidate) ||
+        (descriptor.requires &&
+          (!contextualEnabled || !classification.types.includes(descriptor.requires)))
+      )
+        return
+      const action = toAction(id as SelectionActionId, target, classification, searchEngine)
       // The classification that made a contextual button visible has gone
       // missing. Doing nothing beats guessing a URL to open.
       if (!action) return
       setLocaleOpen(false)
       clearDwell()
 
-      if (descriptor.mode === "handoff" || descriptor.mode === "launch") {
-        // Rust dismisses both itself: `handoff` once the main window has the
-        // payload, `launch` once it has handed off to the browser or mail
-        // client. Either way the user's attention has already moved.
-        void executeSelectionToolbarAction(candidate.id, action)
-        return
-      }
-
       setPhase({ kind: "pending", action: id })
+      responseTimer.current = setTimeout(
+        () => failAction(candidate.id, id),
+        SELECTION_REQUEST_TIMEOUT_MS
+      )
       void executeSelectionToolbarAction(candidate.id, action)
         .then(() => {
-          if (descriptor.mode !== "local") return
-          // Copy completes inside Rust, so there is nothing to wait for — show
-          // the checkmark, then leave.
-          setPhase({ kind: "ok", action: id })
-          dwellRef.current = setTimeout(() => finish(candidate.id), SUCCESS_DWELL_MS)
+          if (candidateIdRef.current !== candidate.id || !responseTimer.current) return
+          if (descriptor.mode === "local") {
+            clearResponseTimer()
+            setPhase({ kind: "ok", action: id })
+            dwellRef.current = setTimeout(() => finish(candidate.id), SUCCESS_DWELL_MS)
+          }
         })
-        .catch(() => {
-          setPhase({ kind: "error", action: id, reason: t("errors.generic") })
-          dwellRef.current = setTimeout(() => finish(candidate.id), ERROR_DWELL_MS)
-        })
+        .catch(() => failAction(candidate.id, id))
     },
     [
       candidate,
       pluginActions,
       phase.kind,
+      preferencesId,
+      listenersId,
       targetLocale,
       classification,
+      contextualEnabled,
       searchEngine,
       clearDwell,
+      clearResponseTimer,
+      failAction,
       finish,
-      t,
     ]
   )
 
@@ -529,15 +653,25 @@ export function SelectionToolbarView() {
 
   const openGeneratedResult = useCallback(
     (text: string) => {
-      if (!candidate || !execution) return
-      void emitTo(MAIN_WINDOW_LABEL, SELECTION_OPEN_RESULT_EVENT, {
+      if (!candidate || !execution || openRequest.current) return
+      const requestId = globalThis.crypto.randomUUID()
+      openRequest.current = requestId
+      setResultError(undefined)
+      const failed = () => {
+        if (openRequest.current !== requestId) return
+        cancelPending()
+        if (candidateIdRef.current === candidate.id) setResultError(t("errors.generic"))
+      }
+      responseTimer.current = setTimeout(failed, SELECTION_REQUEST_TIMEOUT_MS)
+      void sendSelectionControl(SELECTION_OPEN_RESULT_EVENT, {
+        requestId,
         candidateId: candidate.id,
-        text,
-        attribution: execution.attribution ?? t("cogniaAttribution"),
-      })
-      setExecution(null)
+        resultRequestId: execution.requestId,
+        variantIndex:
+          execution.result?.kind === "variants" ? execution.result.variants.indexOf(text) : 0,
+      }).catch(failed)
     },
-    [candidate, execution, t]
+    [cancelPending, candidate, execution, t]
   )
 
   const undoReplacement = useCallback(() => {
@@ -562,8 +696,9 @@ export function SelectionToolbarView() {
     }
 
     void Promise.all([
-      listen<SelectionResultPayload>(SELECTION_RESULT_EVENT, (event) => {
+      listenSelectionControl<SelectionResultPayload>(SELECTION_RESULT_EVENT, (event) => {
         if (!alive || event.payload.candidateId !== candidate.id) return
+        clearResponseTimer()
         clearDwell()
         if (event.payload.ok) {
           setPhase({ kind: "ok", action: "remember" })
@@ -575,72 +710,93 @@ export function SelectionToolbarView() {
         setPhase({ kind: "error", action: "remember", reason })
         dwellRef.current = setTimeout(() => finish(candidate.id), ERROR_DWELL_MS)
       }).then(track),
-      listen<SelectionActionExecutionPayload>(SELECTION_ACTION_RESULT_EVENT, (event) => {
-        if (
-          !alive ||
-          event.payload.candidateId !== candidate.id ||
-          event.payload.requestId !== pendingRequestRef.current
-        ) {
-          return
-        }
-        pendingRequestRef.current = null
-        clearDwell()
-        if (!event.payload.ok) {
-          setPhase({ kind: "error", action: event.payload.actionId, reason: t("errors.generic") })
-          dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), ERROR_DWELL_MS)
-          return
-        }
-        const result = event.payload.result
-        if (!result || result.kind === "status") {
-          if (result?.kind === "status" && result.message) {
-            setPhase({ kind: "status", action: event.payload.actionId, message: result.message })
+      listenSelectionControl<SelectionActionExecutionPayload & { stored?: boolean }>(
+        SELECTION_ACTION_RESULT_EVENT,
+        async ({ payload }) => {
+          if (
+            !alive ||
+            payload.candidateId !== candidate.id ||
+            payload.requestId !== pendingRequestRef.current
+          ) {
+            return
+          }
+          if (payload.stored) {
+            const stored = await selectionActionResult(
+              payload.candidateId,
+              payload.requestId
+            ).catch(() => null)
+            if (
+              !alive ||
+              payload.requestId !== pendingRequestRef.current ||
+              candidateIdRef.current !== candidate.id
+            )
+              return
+            if (!stored) {
+              failAction(candidate.id, payload.actionId)
+              return
+            }
+            payload = stored
+          }
+          pendingRequestRef.current = null
+          if (!payload.ok || payload.output !== "copy" || payload.result?.kind !== "text") {
+            clearResponseTimer()
+          }
+          setConsent(null)
+          clearDwell()
+          if (!payload.ok) {
+            setPhase({ kind: "error", action: payload.actionId, reason: t("errors.generic") })
             dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), ERROR_DWELL_MS)
             return
           }
-          setPhase({ kind: "ok", action: event.payload.actionId })
-          dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), SUCCESS_DWELL_MS)
-          return
+          const result = payload.result
+          if (!result || result.kind === "status") {
+            if (result?.kind === "status" && result.message) {
+              setPhase({ kind: "status", action: payload.actionId, message: result.message })
+              dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), ERROR_DWELL_MS)
+              return
+            }
+            setPhase({ kind: "ok", action: payload.actionId })
+            dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), SUCCESS_DWELL_MS)
+            return
+          }
+          if (payload.output === "copy" && result.kind === "text") {
+            void copySelectionActionResult(candidate.id, result.text)
+              .then(() => {
+                if (!alive || !responseTimer.current || candidateIdRef.current !== candidate.id)
+                  return
+                clearResponseTimer()
+                setPhase({ kind: "ok", action: payload.actionId })
+                dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), SUCCESS_DWELL_MS)
+              })
+              .catch(() => failAction(candidate.id, payload.actionId))
+            return
+          }
+          setPhase({ kind: "idle" })
+          setExecution(payload)
+          setReplaceUnavailableReason(
+            candidate.origin === "ocr"
+              ? "replaceUnavailable.ocr"
+              : candidate.origin === "clipboard"
+                ? "replaceUnavailable.clipboard"
+                : canReplaceCandidate
+                  ? undefined
+                  : candidate.editable
+                    ? "replaceUnavailable.rolloutDisabled"
+                    : "replaceUnavailable.notEditable"
+          )
+          if (
+            payload.directReplaceAllowed &&
+            payload.output === "replace" &&
+            result.kind === "text" &&
+            canReplaceCandidate
+          ) {
+            void replaceResult(result.text)
+          }
         }
-        if (event.payload.output === "copy" && result.kind === "text") {
-          void copySelectionActionResult(candidate.id, result.text)
-            .then(() => {
-              if (!alive) return
-              setPhase({ kind: "ok", action: event.payload.actionId })
-              dwellRef.current = setTimeout(() => setPhase({ kind: "idle" }), SUCCESS_DWELL_MS)
-            })
-            .catch(() => {
-              if (alive) {
-                setPhase({
-                  kind: "error",
-                  action: event.payload.actionId,
-                  reason: t("errors.generic"),
-                })
-              }
-            })
-          return
-        }
-        setPhase({ kind: "idle" })
-        setExecution(event.payload)
-        setReplaceUnavailableReason(
-          candidate.origin === "ocr"
-            ? "replaceUnavailable.ocr"
-            : candidate.origin === "clipboard"
-              ? "replaceUnavailable.clipboard"
-              : canReplaceCandidate
-                ? undefined
-                : "replaceUnavailable.notEditable"
-        )
-        if (
-          event.payload.directReplaceAllowed &&
-          event.payload.output === "replace" &&
-          result.kind === "text" &&
-          canReplaceCandidate
-        ) {
-          void replaceResult(result.text)
-        }
-      }).then(track),
-      listen<SelectionSpeechPayload>(SELECTION_SPEECH_EVENT, (event) => {
+      ).then(track),
+      listenSelectionControl<SelectionSpeechPayload>(SELECTION_SPEECH_EVENT, (event) => {
         if (!alive || event.payload.candidateId !== candidate.id) return
+        clearResponseTimer()
         if (event.payload.playing) {
           setPhase({ kind: "speaking", progress: event.payload.progress })
           return
@@ -648,22 +804,70 @@ export function SelectionToolbarView() {
         clearDwell()
         finish(candidate.id)
       }).then(track),
-      listen<SelectionShortcutPayload>(SELECTION_SHORTCUT_EVENT, (event) => {
-        if (!alive || event.payload.candidateId !== candidate.id) return
-        if (event.payload.shortcutId.startsWith("selection.action:")) {
-          runAction(event.payload.shortcutId.slice("selection.action:".length))
-          return
+      listenSelectionControl<SelectionResultPayload & { requestId: string }>(
+        SELECTION_OPEN_RESULT_ACK_EVENT,
+        ({ payload }) => {
+          if (
+            !alive ||
+            payload.candidateId !== candidate.id ||
+            payload.requestId !== openRequest.current
+          )
+            return
+          openRequest.current = null
+          clearResponseTimer()
+          if (payload.ok) {
+            setExecution(null)
+            finish(candidate.id)
+          } else {
+            setResultError(t("errors.generic"))
+          }
         }
-        const descriptor = findActionByShortcutId(event.payload.shortcutId)
-        if (descriptor) runAction(descriptor.id)
-      }).then(track),
+      ).then(track),
     ])
+      .then(() => {
+        if (alive) setListenersId(candidate.id)
+      })
+      .catch(() => {})
 
     return () => {
       alive = false
       unlistens.forEach(safeUnlisten)
     }
-  }, [candidate, canReplaceCandidate, clearDwell, finish, replaceResult, runAction, t])
+  }, [
+    candidate,
+    canReplaceCandidate,
+    clearDwell,
+    clearResponseTimer,
+    failAction,
+    finish,
+    replaceResult,
+    t,
+  ])
+
+  useEffect(() => {
+    if (
+      !candidate ||
+      !shortcut ||
+      shortcut.candidateId !== candidate.id ||
+      preferencesId !== candidate.id ||
+      listenersId !== candidate.id
+    )
+      return
+    const configured = shortcut.shortcutId.startsWith("selection.action:")
+    const id = configured
+      ? shortcut.shortcutId.slice("selection.action:".length)
+      : findActionByShortcutId(shortcut.shortcutId)?.id
+    if (id && !findAction(id) && catalogId !== candidate.id) return
+    let active = true
+    queueMicrotask(() => {
+      if (!active || candidateIdRef.current !== candidate.id) return
+      setShortcut((current) => (current === shortcut ? null : current))
+      if (id) runAction(id)
+    })
+    return () => {
+      active = false
+    }
+  }, [candidate, catalogId, listenersId, preferencesId, runAction, shortcut])
 
   useEffect(() => clearDwell, [clearDwell])
 
@@ -671,17 +875,29 @@ export function SelectionToolbarView() {
     (next: TargetLocale) => {
       setTargetLocale(next)
       setLocaleOpen(false)
-      void setPref(SELECTION_TRANSLATE_LOCALE_PREF, next)
-      if (!candidate) return
-      void executeSelectionToolbarAction(candidate.id, { kind: "translate", targetLocale: next })
+      void setPref(SELECTION_TRANSLATE_LOCALE_PREF, next).catch(() => {})
+      runAction("translate", next)
     },
-    [candidate]
+    [runAction]
   )
 
   const stopSpeech = useCallback(() => {
     if (!candidate) return
-    void emitTo(MAIN_WINDOW_LABEL, SELECTION_SPEECH_STOP_EVENT, { candidateId: candidate.id })
-  }, [candidate])
+    void sendSelectionControl(SELECTION_SPEECH_STOP_EVENT, {
+      candidateId: candidate.id,
+    }).catch(() => failAction(candidate.id, "speak"))
+  }, [candidate, failAction])
+
+  const answerConsent = (allow: boolean, persist: boolean) => {
+    if (!consent) return
+    setConsent(null)
+    void sendSelectionControl(SELECTION_CONSENT_RESPONSE_EVENT, {
+      actionRequestId: consent.actionRequestId,
+      promptId: consent.promptId,
+      allow,
+      persist,
+    }).catch(() => failAction(consent.candidateId, "__more"))
+  }
 
   const generatedResult =
     execution?.result?.kind === "text" || execution?.result?.kind === "variants"
@@ -716,7 +932,29 @@ export function SelectionToolbarView() {
           to click that is not there.
         */}
         {candidate && (generatedResult || visibleActions.length > 0) ? (
-          generatedResult ? (
+          consent ? (
+            <SelectionResultPanelShell geometry={geometry}>
+              <section
+                role="alertdialog"
+                aria-label={tConsent("ariaLabel")}
+                className="pointer-events-auto w-80 space-y-3 rounded-lg border bg-popover p-3 text-popover-foreground"
+              >
+                <p className="text-sm">{consent.reason}</p>
+                <p className="text-xs text-muted-foreground">{consent.pluginId}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => answerConsent(false, false)}>
+                    {tConsent("actions.reject")}
+                  </Button>
+                  <Button size="sm" onClick={() => answerConsent(true, false)}>
+                    {tConsent("actions.allowOnce")}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => answerConsent(true, true)}>
+                    {tConsent("actions.allowSession")}
+                  </Button>
+                </div>
+              </section>
+            </SelectionResultPanelShell>
+          ) : generatedResult ? (
             <SelectionResultPanelShell geometry={geometry}>
               <SelectionResultPanel
                 candidate={candidate}
@@ -730,6 +968,7 @@ export function SelectionToolbarView() {
                 onOpen={openGeneratedResult}
                 onReplace={(text) => void replaceResult(text)}
                 onCancel={() => {
+                  cancelPending()
                   setExecution(null)
                   setUndoAvailable(false)
                   setResultError(undefined)

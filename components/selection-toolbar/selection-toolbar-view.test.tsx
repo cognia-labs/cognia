@@ -27,8 +27,13 @@ const finishMock = jest.fn().mockResolvedValue(undefined)
 const chordsMock = jest.fn()
 const replaceMock = jest.fn()
 const undoMock = jest.fn()
+const actionResultMock = jest.fn()
 const copyResultMock = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/tauri/selection-toolbar", () => ({
+  ...jest.requireActual("@/lib/tauri/selection-toolbar"),
+  sendSelectionControl: (event: string, payload: unknown) => emitToMock("main", event, payload),
+  listenSelectionControl: (event: string, handler: (event: { payload: unknown }) => void) =>
+    jest.requireMock("@tauri-apps/api/event").listen(event, handler),
   SELECTION_CANDIDATE_EVENT: "selection://candidate",
   SELECTION_DISMISS_EVENT: "selection://dismiss",
   SELECTION_ESCAPE_EVENT: "selection://escape",
@@ -48,6 +53,7 @@ jest.mock("@/lib/tauri/selection-toolbar", () => ({
   setSelectionToolbarInteractive: (...args: unknown[]) => interactiveMock(...args),
   setSelectionToolbarKeepAlive: (...args: unknown[]) => keepAliveMock(...args),
   finishSelectionToolbar: (...args: unknown[]) => finishMock(...args),
+  selectionActionResult: (...args: unknown[]) => actionResultMock(...args),
   listShortcutChords: () => chordsMock(),
   replaceCurrentSelection: (...args: unknown[]) => replaceMock(...args),
   undoSelectionReplacement: (...args: unknown[]) => undoMock(...args),
@@ -106,6 +112,8 @@ const candidate = {
 }
 
 function emit(event: string, payload: unknown) {
+  if (event === "selection://candidate") currentMock.mockResolvedValue(payload)
+  if (event === "selection://dismiss") currentMock.mockResolvedValue(null)
   return act(async () => {
     listeners.get(event)?.({ payload })
   })
@@ -175,13 +183,29 @@ describe("SelectionToolbarView", () => {
       expect.objectContaining({ candidateId: "candidate-1", actionId: "plug-a:summarize" })
     )
 
-    await emit("selection://action-result", {
+    await emit("selection://consent", {
+      candidateId: candidate.id,
+      actionRequestId: request.requestId,
+      promptId: "consent-1",
+      pluginId: "plug-a",
+      reason: "Allow selection access?",
+    })
+    expect(screen.getByText("Allow selection access?")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "actions.allowOnce" }))
+    expect(emitToMock).toHaveBeenCalledWith(
+      "main",
+      "selection://consent-response",
+      expect.objectContaining({ promptId: "consent-1", allow: true, persist: false })
+    )
+
+    actionResultMock.mockResolvedValueOnce({
       ...request,
       ok: true,
       result: { kind: "text", text: "A concise summary" },
       attribution: "plug-a",
       output: "preview",
     })
+    await emit("selection://action-result", { ...request, ok: true, stored: true })
     expect(screen.getByText("A concise summary")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "replace" })).not.toBeInTheDocument()
   })
@@ -527,4 +551,52 @@ it("reuses the capsule layout when an equal-sized selection replaces the candida
   await emit("selection://candidate", { ...candidate, id: "candidate-2" })
   expect(screen.getByTestId("selection-toolbar-capsule")).toBe(original)
   await waitFor(() => expect(revealMock).toHaveBeenCalledWith("candidate-2"))
+})
+
+it("runs a cold shortcut after authoritative candidate hydration", async () => {
+  currentMock.mockResolvedValueOnce({ ...candidate, activationShortcut: "selection.copy" })
+  render(<SelectionToolbarView />)
+  await waitFor(() => expect(executeMock).toHaveBeenCalledWith(candidate.id, { kind: "copy" }))
+  expect(executeMock).toHaveBeenCalledTimes(1)
+})
+
+it("blocks an OCR link even when directly targeted by a configured chord", async () => {
+  currentMock.mockResolvedValue({ ...candidate, text: "https://example.com", origin: "ocr" })
+  render(<SelectionToolbarView />)
+  await waitFor(() => expect(revealMock).toHaveBeenCalled())
+  await emit("selection://shortcut", {
+    candidateId: candidate.id,
+    shortcutId: "selection.action:openLink",
+  })
+  expect(executeMock).not.toHaveBeenCalled()
+})
+
+it("shows an error if the native action has no live receiver", async () => {
+  jest.useFakeTimers()
+  try {
+    render(<SelectionToolbarView />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole("button", { name: "remember" }))
+    expect(executeMock).toHaveBeenCalled()
+    await act(async () => jest.advanceTimersByTime(60_000))
+    expect(screen.getByRole("alert")).toHaveTextContent("errors.generic")
+  } finally {
+    jest.useRealTimers()
+  }
+})
+
+it("reloads translation preferences before enabling a new candidate", async () => {
+  getPrefMock.mockImplementation(async (key: string) =>
+    key.includes("translateLocale") ? "de" : null
+  )
+  render(<SelectionToolbarView />)
+  await waitFor(() => expect(revealMock).toHaveBeenCalledWith(candidate.id))
+  getPrefMock.mockImplementation(async (key: string) =>
+    key.includes("translateLocale") ? "ja" : null
+  )
+  const next = { ...candidate, id: "candidate-2" }
+  await emit("selection://candidate", next)
+  await waitFor(() => expect(revealMock).toHaveBeenCalledWith(next.id))
+  await emit("selection://shortcut", { candidateId: next.id, shortcutId: "selection.translate" })
+  expect(executeMock).toHaveBeenCalledWith(next.id, { kind: "translate", targetLocale: "ja" })
 })

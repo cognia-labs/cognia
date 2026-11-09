@@ -20,8 +20,6 @@ import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt, type PromptResolutionContext } from "@/lib/prompts/types"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import { getDb } from "@/lib/db/schema"
-import { renderConversationSegments } from "@/lib/ai/generation/summarizer"
-import type { UIMessage } from "ai"
 import {
   packSegments,
   summarizeMaterial,
@@ -171,7 +169,7 @@ export type SelectionActionOutcome =
   | {
       kind: "unavailable"
       /** Same vocabulary as `SummaryOutcome` so the panel explains both one way. */
-      reason: "empty" | "no-client" | "pii" | "no-output"
+      reason: "empty" | "no-client" | "pii" | "no-output" | "source-unavailable"
     }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -284,31 +282,14 @@ export async function runSelectionAction(
     const canonical = rows.filter(
       (row): row is NonNullable<typeof row> => !!row && row.sessionId === source.sessionId
     )
-    const missing = canonical.length !== source.messageIds.length || canonical.length === 0
-    const sourceMessages: UIMessage[] = missing
-      ? [
-          {
-            id: "selection-source-unavailable",
-            role: "assistant",
-            parts: [{ type: "text", text: input.text }],
-            metadata: {
-              personalMarks: [
-                {
-                  person: { kind: "service", ref: "unavailable-selection-source" },
-                  source: "selection",
-                  markedAt: 0,
-                },
-              ],
-            },
-          },
-        ]
-      : canonical
-    const history = await preparePersonalHistory(undefined, sourceMessages, {
+    if (!canonical.length || canonical.length !== source.messageIds.length) {
+      return { kind: "unavailable", reason: "source-unavailable" }
+    }
+    const history = await preparePersonalHistory(undefined, canonical, {
       executionRunId: source.executionRunId,
     })
     if (history.withheldMessageIds.length) {
-      const segments = renderConversationSegments(history.messages)
-      input = { ...input, text: segments.join("\n\n"), segments, context: segments.join("\n\n") }
+      return { kind: "unavailable", reason: "source-unavailable" }
     }
   }
   const {

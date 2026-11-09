@@ -24,6 +24,7 @@ import {
   referencedEntityIds,
 } from "@/lib/chat/mentions/entity-sources"
 import {
+  contentFingerprint,
   messageRefId,
   parseMessageRefId,
   projectMessageBody,
@@ -51,6 +52,7 @@ export interface StoredMessageRow {
   id: string
   sessionId: string
   role: string
+  createdAt: number
   parts: unknown
 }
 
@@ -161,19 +163,35 @@ export async function buildMessageExcerptSelection(
   }
 }
 
-/**
- * Letters and digits only, case-folded and compatibility-normalized.
- *
- * A selection is copied off the RENDERED message, and a message is stored as
- * Markdown: `**bold**` selects as `bold`, a link selects as its text, a list
- * loses its markers. What the two reliably share is the words, so that is what
- * is compared.
- */
+/** Project common Markdown delimiters while keeping literal text, including operators. */
 export function comparableExcerptText(text: string): string {
-  return text
-    .normalize("NFKC")
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "")
+  return (
+    text
+      .normalize("NFC")
+      .replace(/\r\n?/g, "\n")
+      // Process code spans and fences as one match so later formatting rules
+      // cannot change the characters inside them.
+      .replace(
+        /(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\1|`([^`\n]+)`|\[([^\]\n]+)\]\([^\n)]+\)|(\*\*|__)([^\n]+?)\5/g,
+        (_match, _fence, block, inline, link, _emphasis, formatted) =>
+          block ?? inline ?? link ?? formatted
+      )
+      .trim()
+  )
+}
+
+function containsExcerpt(body: string, quote: string): boolean {
+  if (!quote) return false
+  const word = /[A-Za-z0-9_]/
+  for (let at = body.indexOf(quote); at >= 0; at = body.indexOf(quote, at + 1)) {
+    if (word.test(quote[0]!) && word.test(body[at - 1] ?? "")) continue
+    const end = at + quote.length
+    if (word.test(quote.at(-1)!) && word.test(body[end] ?? "")) continue
+    if (/\d$/.test(quote) && /^\.\d/.test(body.slice(end, end + 2))) continue
+    if (/^\d/.test(quote) && /\d\.$/.test(body.slice(Math.max(0, at - 2), at))) continue
+    return true
+  }
+  return false
 }
 
 export type MessageExcerptRefresh =
@@ -212,16 +230,21 @@ export async function refreshMessageExcerpt(
   const haystack = comparableExcerptText(
     rows.map((row) => projectMessageBody(row!.parts)).join("\n")
   )
-  if (!haystack.includes(comparableExcerptText(selection.excerpt.quote))) {
+  if (
+    !containsExcerpt(
+      haystack,
+      selection.excerpt.quote.normalize("NFC").replace(/\r\n?/g, "\n").trim()
+    )
+  ) {
     return { kind: "changed" }
   }
 
-  const fingerprint = storableFingerprint(
-    await fingerprintEntityRecords("message", referencedEntityIds(selection))
-  )
+  // Match the message source's fingerprint format using the rows just checked.
+  const fingerprint = rows
+    .map((row) => `${row!.createdAt}:${contentFingerprint(JSON.stringify(row!.parts))}`)
+    .join("\n")
   const next: EntitySelectionRef = { ...selection, capturedAt: Date.now() }
   delete next.stale
-  if (fingerprint !== undefined) next.fingerprint = fingerprint
-  else delete next.fingerprint
+  next.fingerprint = fingerprint
   return { kind: "current", selection: next }
 }

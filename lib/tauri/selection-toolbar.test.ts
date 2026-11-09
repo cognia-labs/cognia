@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
 
 import {
@@ -15,6 +16,9 @@ import {
   startSelectionToolbar,
   stopSelectionToolbar,
   takePendingSelectionStage,
+  selectionActionResult,
+  listenSelectionControl,
+  sendSelectionControl,
   replaceCurrentSelection,
   undoSelectionReplacement,
 } from "./selection-toolbar"
@@ -26,6 +30,8 @@ jest.mock("@/lib/tauri", () => ({
 jest.mock("@tauri-apps/api/core", () => ({
   invoke: jest.fn(),
 }))
+
+jest.mock("@tauri-apps/api/event", () => ({ listen: jest.fn() }))
 
 const invokeMock = jest.mocked(invoke)
 
@@ -230,5 +236,47 @@ describe("off Tauri", () => {
     await bridge.finishSelectionToolbar("c1")
 
     expect(invokeMock).not.toHaveBeenCalled()
+  })
+})
+
+it("reads stored action content by candidate and request ID", async () => {
+  await selectionActionResult("c1", "r1")
+  expect(invokeMock).toHaveBeenCalledWith("selection_toolbar_action_result", {
+    candidateId: "c1",
+    requestId: "r1",
+    result: undefined,
+  })
+})
+
+it("treats a control event as a token and requires a native one-shot reply", async () => {
+  const listener = jest.mocked(listen)
+  listener.mockResolvedValue(() => {})
+  const handler = jest.fn()
+  await listenSelectionControl("selection://stage", handler)
+  const notify = listener.mock.calls.at(-1)![1] as (event: { payload: unknown }) => void
+  notify({ payload: { candidateId: "spoofed", action: { kind: "remember" } } })
+  expect(invokeMock).not.toHaveBeenCalled()
+  const token = "12345678-1234-1234-1234-123456789abc"
+  invokeMock.mockResolvedValueOnce(null)
+  notify({ payload: token })
+  await Promise.resolve()
+  expect(handler).not.toHaveBeenCalled()
+  const payload = { candidateId: "c1", action: { kind: "remember" } }
+  invokeMock.mockResolvedValueOnce(payload)
+  notify({ payload: token })
+  await Promise.resolve()
+  expect(invokeMock).toHaveBeenCalledWith("selection_toolbar_control", {
+    eventName: "selection://stage",
+    token,
+  })
+  expect(handler).toHaveBeenCalledWith({ payload })
+})
+
+it("sends consent responses via the caller-checked command", async () => {
+  const payload = { actionRequestId: "r1", promptId: "p1", allow: true, persist: false }
+  await sendSelectionControl("selection://consent-response", payload)
+  expect(invokeMock).toHaveBeenCalledWith("selection_toolbar_control", {
+    eventName: "selection://consent-response",
+    payload,
   })
 })

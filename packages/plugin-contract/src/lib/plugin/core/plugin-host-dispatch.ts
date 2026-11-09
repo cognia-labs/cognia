@@ -37,9 +37,21 @@ export interface PluginShortcutBindRequest {
   options?: ShortcutOptions
 }
 
+/** Verify the asynchronous prerequisites and return a synchronous release check. */
+export type VerifySelectionDispatch = () => Promise<() => void>
+
+export interface SelectionSlashDispatch {
+  pluginId: string
+  verify?: VerifySelectionDispatch
+}
+
 export interface PluginHostDispatch {
   /** Run a slash line (`/id args`) through the host slash registry. */
-  dispatchSlashCommand(line: string, ctx?: SlashCommandContext): Promise<SlashCommandResult | null>
+  dispatchSlashCommand(
+    line: string,
+    ctx?: SlashCommandContext,
+    selection?: SelectionSlashDispatch
+  ): Promise<SlashCommandResult | null>
   /** Look up one of `pluginId`'s manifest `commands[]` entries. */
   findManifestCommand(
     pluginId: string,

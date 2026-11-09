@@ -2584,7 +2584,8 @@
         "empty": "There's no readable text in the selection.",
         "noClient": "No model can run here. Add a provider key, or pair with a desktop.",
         "noOutput": "The model returned nothing.",
-        "pii": "The selection looks like it contains personal or secret information, so nothing was sent."
+        "pii": "The selection looks like it contains personal or secret information, so nothing was sent.",
+        "sourceUnavailable": "The selected messages are unavailable to this run."
       },
       "working": "Working…"
     },

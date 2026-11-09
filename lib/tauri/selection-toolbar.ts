@@ -1,6 +1,7 @@
 "use client"
 
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 
 import { isTauri } from "@/lib/tauri"
 import { SHORTCUT_LIST_COMMAND } from "@/lib/shortcuts/ipc"
@@ -33,6 +34,12 @@ export const SELECTION_ACTION_CATALOG_EVENT = "selection://action-catalog"
 export const SELECTION_ACTION_REQUEST_EVENT = "selection://action-request"
 export const SELECTION_ACTION_RESULT_EVENT = "selection://action-result"
 export const SELECTION_OPEN_RESULT_EVENT = "selection://open-result"
+export const SELECTION_OPEN_RESULT_ACK_EVENT = "selection://open-result-ack"
+export const SELECTION_ACTION_CANCEL_EVENT = "selection://action-cancel"
+export const SELECTION_CONSENT_EVENT = "selection://consent"
+export const SELECTION_CONSENT_RESPONSE_EVENT = "selection://consent-response"
+export const SELECTION_ACTION_CATALOG_REQUEST_EVENT = "selection://action-catalog-request"
+export const SELECTION_REQUEST_TIMEOUT_MS = 60_000
 
 /**
  * Where the selected text came from, and therefore how much to trust it.
@@ -64,6 +71,8 @@ export interface SelectionAnchorRect {
 }
 
 export interface ExternalSelectionCandidate {
+  /** One-shot action requested with the initial native capture. Overlay only. */
+  activationShortcut?: string
   id: string
   text: string
   sourceApp: string
@@ -108,6 +117,11 @@ export type SelectionToolbarAction =
   // would just be a second copy to keep in sync.
   | { kind: "searchWeb"; engine: string }
   | { kind: "convertUnit" }
+
+export interface SelectionLiveStagePayload {
+  candidateId: string
+  action: SelectionToolbarAction
+}
 
 export interface SelectionStagePayload {
   candidate: ExternalSelectionCandidate
@@ -183,8 +197,17 @@ export interface SelectionActionExecutionPayload extends SelectionActionRequestP
 
 export interface SelectionOpenResultPayload {
   candidateId: string
-  text: string
-  attribution: string
+  requestId: string
+  resultRequestId: string
+  variantIndex: number
+}
+
+export interface SelectionConsentPayload {
+  candidateId: string
+  actionRequestId: string
+  promptId: string
+  pluginId: string
+  reason?: string
 }
 
 export interface SelectionToolbarStatus {
@@ -245,6 +268,8 @@ export interface SelectionToolbarStartOptions {
  */
 export const OVERLAY_COMMANDS = {
   currentCandidate: "selection_toolbar_current_candidate",
+  actionResult: "selection_toolbar_action_result",
+  control: "selection_toolbar_control",
   execute: "selection_toolbar_execute",
   finish: "selection_toolbar_finish",
   resize: "selection_toolbar_resize",
@@ -333,6 +358,36 @@ export async function repairSelectionToolbarPermission(
 export async function takePendingSelectionStage(): Promise<SelectionStagePayload | null> {
   if (!isTauri()) return null
   return invoke<SelectionStagePayload | null>("selection_toolbar_take_pending_stage")
+}
+
+/** Send a toolbar control through the native caller-bound route. */
+export async function sendSelectionControl(eventName: string, payload: object): Promise<void> {
+  if (!isTauri()) return
+  await invoke(OVERLAY_COMMANDS.control, { eventName, payload })
+}
+
+/** Only a native one-shot reply authorizes handling a control notification. */
+export function listenSelectionControl<T>(
+  eventName: string,
+  handler: (event: { payload: T }) => void
+) {
+  return listen<string>(eventName, ({ payload: token }) => {
+    if (typeof token !== "string" || token.length !== 36) return
+    void invoke<T | null>(OVERLAY_COMMANDS.control, { eventName, token })
+      .then((payload) => {
+        if (payload !== null) return handler({ payload })
+      })
+      .catch(() => {})
+  })
+}
+
+export async function selectionActionResult(
+  candidateId: string,
+  requestId: string,
+  result?: SelectionActionExecutionPayload
+): Promise<SelectionActionExecutionPayload | null> {
+  if (!isTauri()) return null
+  return invoke(OVERLAY_COMMANDS.actionResult, { candidateId, requestId, result })
 }
 
 export async function executeSelectionToolbarAction(
