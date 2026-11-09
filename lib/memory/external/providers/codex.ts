@@ -4,7 +4,9 @@
  * Verified locations (docs: developers.openai.com/codex/guides/agents-md, /memories):
  *   - global    ~/.codex/AGENTS.override.md (preferred), then ~/.codex/AGENTS.md (editable)
  *   - project   root→cwd per dir: AGENTS.override.md, then AGENTS.md            (editable)
- *   - memories  ~/.codex/memories/*                                            (read-only)
+ *   - memories  ~/.codex/memories_v2/**.md and ~/.codex/memories/**.md         (read-only)
+ *               (current layouts nest `rollout_summaries/` and
+ *               `extensions/<name>/instructions.md` under each root)
  *
  * Pure + fs-injected (see {@link DiscoverCtx}); no real disk access here.
  */
@@ -96,19 +98,69 @@ export async function discoverCodex(ctx: DiscoverCtx): Promise<ExternalMemoryFil
   return out
 }
 
+/** Codex memory roots under `$CODEX_HOME`, newest layout first. */
+const MEMORY_ROOTS = ["memories_v2", "memories"] as const
+
+/**
+ * Directories below a memory root that are walked. Current layouts reach
+ * `extensions/<name>/notes/<file>.md`; the bound also stops a symlink cycle.
+ */
+const MAX_MEMORY_DEPTH = 6
+
+/**
+ * Every Markdown file under each Codex memory root, read-only. Codex writes
+ * its memory as Markdown (`MEMORY.md`, `raw_memories.md`, rollout summaries,
+ * extension instructions); everything else under the roots (extension
+ * resources, sqlite side files) is not memory text and is skipped, as are
+ * dot entries such as the `.codex-baseline` git dir. Directories are walked,
+ * never listed as files: the viewer can only open a file.
+ */
 async function discoverMemories(fs: ExternalFs, codexDir: string): Promise<ExternalMemoryFile[]> {
-  const memoriesDir = joinPath(codexDir, "memories")
-  let names: string[]
-  try {
-    names = await fs.readDir(memoriesDir)
-  } catch {
-    return []
-  }
   const out: ExternalMemoryFile[] = []
-  for (const name of names.sort()) {
-    const abs = joinPath(memoriesDir, name)
-    const entry = await fileEntry(fs, "memories", false, abs, `memories/${name}`)
-    if (entry) out.push(entry)
+  for (const root of MEMORY_ROOTS) {
+    await walkMemoryDir(fs, joinPath(codexDir, root), root, 0, out)
   }
   return out
+}
+
+async function walkMemoryDir(
+  fs: ExternalFs,
+  dir: string,
+  label: string,
+  depth: number,
+  out: ExternalMemoryFile[]
+): Promise<void> {
+  let names: string[]
+  try {
+    names = await fs.readDir(dir)
+  } catch {
+    return
+  }
+  for (const name of [...names].sort()) {
+    if (name.startsWith(".")) continue
+    const abs = joinPath(dir, name)
+    const childLabel = `${label}/${name}`
+    let stat: { size: number; isFile: boolean } | undefined
+    try {
+      stat = await fs.stat(abs)
+    } catch {
+      stat = undefined
+    }
+    if (stat?.isFile) {
+      if (!name.toLowerCase().endsWith(".md")) continue
+      out.push({
+        id: pathKey(abs),
+        agent: "codex",
+        scope: "memories",
+        absPath: abs,
+        label: childLabel,
+        editable: false,
+        exists: true,
+        bytes: stat.size,
+      })
+    } else if (depth < MAX_MEMORY_DEPTH) {
+      // Not a readable file: a directory, or an entry stat cannot describe.
+      await walkMemoryDir(fs, abs, childLabel, depth + 1, out)
+    }
+  }
 }

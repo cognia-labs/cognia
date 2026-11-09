@@ -452,6 +452,9 @@ export async function restoreArchivedMemory(
       invalidatedAt: undefined,
       supersededById: undefined,
       revisedAt: now,
+      // Archiving dropped the vector doc. Until the restore's re-upsert records
+      // a fresh receipt, the old one must not vouch for a vector that is gone.
+      vectorTextHash: undefined,
       // The snapshot keeps the pre-archive version; the live row moves past it
       // so optimistic-concurrency callers see the change.
       version: row.version + 1,

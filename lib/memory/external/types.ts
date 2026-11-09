@@ -21,7 +21,8 @@ export type ExternalAgentId = "claude-code" | "codex" | "opencode" | "pi"
  * - `auto`     — Claude Code auto-memory under `~/.claude/projects/<repo>/memory`
  * - `global`   — Codex global `~/.codex/AGENTS[.override].md`, OpenCode global
  *                `~/.config/opencode/AGENTS.md`
- * - `memories` — Codex-managed `~/.codex/memories/*` (always read-only)
+ * - `memories` — Codex-managed Markdown under `~/.codex/memories_v2/` and
+ *                `~/.codex/memories/` (always read-only)
  */
 export type ExternalMemoryScope = "user" | "managed" | "project" | "auto" | "global" | "memories"
 

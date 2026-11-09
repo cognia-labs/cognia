@@ -61,6 +61,65 @@ describe("discoverCodex", () => {
     expect(memories.every((f) => f.editable === false)).toBe(true)
   })
 
+  it("walks both memory roots for Markdown, skipping dot dirs and non-memory files", async () => {
+    const v2 = "/Users/x/.codex/memories_v2"
+    const v1 = "/Users/x/.codex/memories"
+    const fs = makeFs(
+      {
+        [`${v2}/MEMORY.md`]: 1,
+        [`${v2}/rollout_summaries/2026-11-08-a.md`]: 2,
+        [`${v2}/extensions/ad_hoc/instructions.md`]: 3,
+        [`${v2}/extensions/ad_hoc/notes/n.md`]: 4,
+        [`${v2}/extensions/ad_hoc/resources/blob.sample`]: 5,
+        [`${v2}/.codex-baseline/x.md`]: 6,
+        [`${v1}/raw_memories.md`]: 7,
+      },
+      {
+        [v2]: ["MEMORY.md", "rollout_summaries", "extensions", ".codex-baseline"],
+        [`${v2}/rollout_summaries`]: ["2026-11-08-a.md"],
+        [`${v2}/extensions`]: ["ad_hoc"],
+        [`${v2}/extensions/ad_hoc`]: ["instructions.md", "notes", "resources"],
+        [`${v2}/extensions/ad_hoc/notes`]: ["n.md"],
+        [`${v2}/extensions/ad_hoc/resources`]: ["blob.sample"],
+        [`${v2}/.codex-baseline`]: ["x.md"],
+        [v1]: ["raw_memories.md"],
+      }
+    )
+    const memories = (await discoverCodex(ctx({ fs }))).filter((f) => f.scope === "memories")
+    expect(memories.map((f) => f.label)).toEqual([
+      "memories_v2/MEMORY.md",
+      "memories_v2/extensions/ad_hoc/instructions.md",
+      "memories_v2/extensions/ad_hoc/notes/n.md",
+      "memories_v2/rollout_summaries/2026-11-08-a.md",
+      "memories/raw_memories.md",
+    ])
+    expect(memories.every((f) => !f.editable && f.exists)).toBe(true)
+    expect(
+      memories.find((f) => f.label === "memories_v2/extensions/ad_hoc/notes/n.md")?.bytes
+    ).toBe(4)
+  })
+
+  it("stops walking at the depth bound", async () => {
+    const root = "/Users/x/.codex/memories"
+    const dirs: Record<string, string[]> = { [root]: ["d"] }
+    let dir = root
+    for (let i = 0; i < 10; i += 1) {
+      dirs[`${dir}/d`] = ["d", "m.md"]
+      dir = `${dir}/d`
+    }
+    const files: Record<string, number> = {}
+    let at = root
+    for (let i = 0; i < 10; i += 1) {
+      at = `${at}/d`
+      files[`${at}/m.md`] = 1
+    }
+    const memories = (await discoverCodex(ctx({ fs: makeFs(files, dirs) }))).filter(
+      (f) => f.scope === "memories"
+    )
+    // Root (depth 0) plus six nested levels may be listed; deeper ones are not.
+    expect(memories).toHaveLength(6)
+  })
+
   it("tolerates a missing memories directory", async () => {
     const files = await discoverCodex(ctx({ fs: makeFs({}) }))
     expect(files.some((f) => f.scope === "memories")).toBe(false)

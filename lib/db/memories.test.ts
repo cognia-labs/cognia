@@ -924,7 +924,9 @@ describe("restoreArchivedMemory", () => {
     expect(live.revisedAt).toBeGreaterThanOrEqual(archivedAt)
     expect(snapshot).not.toHaveProperty("vectorDocId")
     expect(snapshot).not.toHaveProperty("vectorTextHash")
-    expect(live.vectorTextHash).toBe("receipt")
+    // Archiving dropped the vector; only the restore's re-upsert may vouch again.
+    expect(live.vectorDocId).toBe("doc")
+    expect(live.vectorTextHash).toBeUndefined()
 
     const liveAt = async (asOf: number) =>
       (await listHistoricalForReader()).filter((row) => wasLiveAt(row, asOf)).map((row) => row.id)
