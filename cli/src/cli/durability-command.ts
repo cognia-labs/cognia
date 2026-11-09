@@ -2,7 +2,7 @@
  * `cognia-agent durability …` — headless recovery tooling for ADR-0059's
  * durability ladder.
  *
- * Five verbs, all account-scoped:
+ * Six verbs, all account-scoped:
  *
  * ```
  * durability verify   --account <id>
@@ -10,6 +10,7 @@
  * durability recover  --account <id> --from auto|snapshot|journal|sqlite [--activate]
  * durability rollback --account <id> --to <generation>
  * durability finalize --account <id> --generation <id> --confirm
+ * durability compact  --account <id>
  * ```
  *
  * The tooling never runs the brain: it operates on files while `serve` is
@@ -17,10 +18,8 @@
  * under `--json`, because these are the commands an operator reaches for during
  * an incident and both audiences are real.
  */
-import os from "node:os"
-
-import { resolveHome } from "../config/load"
-import { durabilityRoot } from "../serve/persistence/backend"
+import { durabilityRoot, resolveServeHome } from "../serve/persistence/backend"
+import { compactSqlite } from "../serve/persistence/sqlite"
 import {
   finalizeDurability,
   migrateDurability,
@@ -43,9 +42,10 @@ export const DURABILITY_HELP = `cognia-agent durability — headless persistence
   durability recover  --account <id> --from auto|snapshot|journal|sqlite [--activate]
   durability rollback --account <id> --to <generation>       re-point at an existing generation
   durability finalize --account <id> --generation <id> --confirm
+  durability compact  --account <id>                         VACUUM SQLite while the writer is stopped
 
 Flags:
-  --home <dir>   durability root parent (default: COGNIA_HOME or ~/.cognia)
+  --home <dir>   explicit persistence home (default: COGNIA_DATA_DIR/serve or ~/.cognia/serve)
   --json         emit one machine-readable record instead of the summary
 `
 
@@ -80,7 +80,7 @@ export async function durabilityCommand(args: ParsedArgs, deps: DurabilityDeps):
     out.error("durability: --account <id> is required\n")
     return 2
   }
-  const home = stringFlag(args, "home") ?? resolveHome(env, os.homedir())
+  const home = resolveServeHome(env, stringFlag(args, "home"))
   const root = durabilityRoot(home, accountId)
 
   try {
@@ -102,6 +102,15 @@ export async function durabilityCommand(args: ParsedArgs, deps: DurabilityDeps):
         return runRollback(root, stringFlag(args, "to"), out, json, now)
       case "finalize":
         return runFinalize(root, args, out, json, now)
+      case "compact": {
+        const result = compactSqlite(root)
+        if (json) out.json({ ok: true, ...result })
+        else {
+          out.write(`bytes before:    ${result.bytesBefore}\n`)
+          out.write(`bytes after:     ${result.bytesAfter}\n`)
+        }
+        return 0
+      }
       default:
         out.error(`durability: unknown subcommand "${verb}"\n`)
         out.write(DURABILITY_HELP)

@@ -147,15 +147,18 @@ describe("durability verify", () => {
     expect(out.err.join("")).toContain("journal-checksum-mismatch")
   })
 
-  it("prints dashes for an account that has never been written", async () => {
+  it("fails verification for a nonexistent account", async () => {
     const out = sink()
-    expect(await run(["verify", "--account", "brand-new"], out, home)).toBe(0)
+    expect(await run(["verify", "--account", "brand-new"], out, home)).toBe(1)
     const text = out.out.join("")
     expect(text).toContain("shadow backend:  -")
     expect(text).toContain("generations:     -")
     expect(text).toContain("checkpoint seq:  -")
     expect(text).toContain("sqlite:          absent")
     expect(text).toContain("rollback mark:   -")
+    const json = sink()
+    expect(await run(["verify", "--account", "brand-new", "--json"], json, home)).toBe(1)
+    expect(json.records[0]).toMatchObject({ ok: false })
   })
 
   it("reports sqlite once it exists, plus the parity verdict", async () => {
@@ -169,6 +172,7 @@ describe("durability verify", () => {
   })
 
   it("falls back to the real env and clock when deps omit them", async () => {
+    await seed(home)
     const out = sink()
     const code = await durabilityCommand(
       parseArgv(["durability", "verify", "--account", "acct", "--home", home]),
@@ -202,14 +206,40 @@ describe("durability verify", () => {
   })
 
   it("falls back to the default home when --home is omitted", async () => {
+    await seed(path.join(home, ".cognia", "serve"))
+    const homedir = jest.spyOn(os, "homedir").mockReturnValue(home)
     const out = sink()
-    const code = await durabilityCommand(parseArgv(["durability", "verify", "--account", "acct"]), {
-      out,
-      env: { COGNIA_HOME: home },
-      now: () => 1,
-    })
-    expect(code).toBe(0)
-    expect(out.out.join("")).toContain(path.join(home, "durability", "acct"))
+    try {
+      const code = await durabilityCommand(
+        parseArgv(["durability", "verify", "--account", "acct"]),
+        {
+          out,
+          env: { COGNIA_HOME: path.join(home, "cli") },
+          now: () => 1,
+        }
+      )
+      expect(code).toBe(0)
+      expect(out.out.join("")).toContain(path.join(home, ".cognia", "serve", "durability", "acct"))
+    } finally {
+      homedir.mockRestore()
+    }
+  })
+
+  it("uses the serve data directory ahead of COGNIA_HOME", async () => {
+    const root = await seed(path.join(home, "data", "serve"))
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(42))
+    await sqlite.close()
+    const { writeManifest, defaultManifest } = await import("../serve/persistence/manifest")
+    writeManifest(root, { ...defaultManifest(), activeBackend: "sqlite-v5" })
+    const out = sink()
+    expect(
+      await durabilityCommand(parseArgv(["durability", "verify", "--account", "acct", "--json"]), {
+        out,
+        env: { COGNIA_HOME: path.join(home, "cli"), COGNIA_DATA_DIR: path.join(home, "data") },
+      })
+    ).toBe(0)
+    expect(out.records[0]).toMatchObject({ ok: true, root, sqliteSequence: 42 })
   })
 
   it("reports the discarded torn tail", async () => {
@@ -245,7 +275,7 @@ describe("durability migrate", () => {
   it("opts an account into the journal rung by pinning the manifest", async () => {
     const root = await seed(home, [commit(1, "s:a", 1)])
     const { resolveDurabilityBackend } = await import("../serve/durability")
-    expect(resolveDurabilityBackend(home, "acct", {})).toBe("snapshot-v3")
+    expect(resolveDurabilityBackend(home, "acct", {})).toBe("journal-v4")
 
     const out = sink()
     expect(await run(["migrate", "--account", "acct", "--to", "journal"], out, home)).toBe(0)
@@ -452,6 +482,57 @@ describe("durability migrate", () => {
       await run(["migrate", "--account", "acct", "--to", "postgres", "--json"], out, home)
     ).toBe(1)
     expect(out.records[0]).toMatchObject({ ok: false, code: "manifest-corrupt" })
+  })
+})
+
+describe("durability compact", () => {
+  let home: string
+  beforeEach(() => {
+    home = tempHome()
+  })
+  afterEach(() => fs.rmSync(home, { recursive: true, force: true }))
+
+  it("VACUUMs SQLite and reports bytes before and after without changing rows", async () => {
+    const root = accountRoot(home)
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(0))
+    sqlite.commitSync(commit(1, "s:large", { text: "x".repeat(4 * 1024 * 1024) }))
+    sqlite.maintain!()
+    sqlite.commitSync(commit(2, "s:large", null))
+    sqlite.maintain!()
+    await sqlite.close()
+    const out = sink()
+    expect(await run(["compact", "--account", "acct", "--json"], out, home)).toBe(0)
+    const result = out.records[0] as { ok: boolean; bytesBefore: number; bytesAfter: number }
+    expect(result.ok).toBe(true)
+    expect(result.bytesAfter).toBeLessThan(result.bytesBefore)
+    const reopened = openBackend("sqlite-v5", root)
+    try {
+      expect((await reopened.load()).sequence).toBe(2)
+    } finally {
+      await reopened.close()
+    }
+    const human = sink()
+    expect(await run(["compact", "--account", "acct"], human, home)).toBe(0)
+    expect(human.out.join("")).toContain("bytes before:")
+    expect(human.out.join("")).toContain("bytes after:")
+    expect(DURABILITY_HELP).toContain("durability compact")
+  })
+
+  it("refuses while a SQLite writer owns the store", async () => {
+    const writer = openBackend("sqlite-v5", accountRoot(home))
+    try {
+      await writer.compact(state(1))
+      const out = sink()
+      expect(await run(["compact", "--account", "acct", "--json"], out, home)).toBe(1)
+      expect(out.records[0]).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("writer"),
+      })
+      writer.commitSync(commit(2, "s:a", 1))
+    } finally {
+      await writer.close()
+    }
   })
 })
 

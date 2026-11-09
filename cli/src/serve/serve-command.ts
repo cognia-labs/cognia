@@ -57,6 +57,7 @@ import { resolveBrainProfile } from "./brain-profile"
 import { BridgeClient, type BridgeClientOptions, type WebSocketLike } from "./bridge-client"
 import { startHeadlessCollabReader } from "./collab-reader"
 import { startDurability } from "./durability"
+import { resolveServeHome } from "./persistence/backend"
 import { createNodePluginRuntimeAdapter } from "./plugin-runtime-adapter"
 import { installRuntimeControl } from "./runtime-control"
 
@@ -140,11 +141,7 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   const localAccountId =
     stringFlag(args, "account") ?? env.COGNIA_LOCAL_ACCOUNT_ID ?? HEADLESS_LOCAL_ACCOUNT_ID
   const bridgeUrl = env.COGNIA_BRIDGE_URL ?? deriveBridgeUrl(serverUrl)
-  const home =
-    stringFlag(args, "home") ??
-    (env.COGNIA_DATA_DIR
-      ? path.join(env.COGNIA_DATA_DIR, "serve")
-      : path.join(os.homedir(), ".cognia", "serve"))
+  const home = resolveServeHome(env, stringFlag(args, "home"))
   const flushDebounce = numberFlag(args, "flush-debounce")
 
   // ── 1. Headless marker + IndexedDB shim ────────────────────────────────────

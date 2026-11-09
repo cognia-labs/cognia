@@ -1,12 +1,15 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { createHash } from "node:crypto"
+import { DatabaseSync } from "node:sqlite"
 
-import { openBackend } from "./backend"
+import { openBackend, resolveBackend } from "./backend"
 import { BINARY_PRUNE_GRACE_MS, binaryDir, writeBinarySync } from "./binary-store"
 import { generationDir, listGenerations, readCheckpoint, writeCheckpoint } from "./checkpoint"
 import { encodeCommitLine, journalFile } from "./journal"
-import { readManifest, writeManifest } from "./manifest"
+import { manifestFile, readManifest, writeManifest } from "./manifest"
+import { openSqliteBackend, sqliteFile } from "./sqlite"
 import {
   finalizeDurability,
   firstGeneration,
@@ -20,7 +23,8 @@ import {
   writeRollbackBundle,
 } from "./operations"
 import type { DurabilityCommit, DurabilityState } from "./types"
-import { readLegacyValueReport } from "./value-codec"
+import { decodeDurableValue, encodeDurableValue, readLegacyValueReport } from "./value-codec"
+import { hasLiveWriter } from "./writer-lock"
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cognia-ops-"))
@@ -63,6 +67,130 @@ describe("verifyDurability", () => {
     expect(status.faults).toEqual([])
     expect(status.generations).toEqual([])
     expect(status.sqlitePresent).toBe(false)
+  })
+
+  it("faults on a nonexistent root without creating it", async () => {
+    const missing = path.join(root, "missing")
+    expect((await verifyDurability(missing)).faults).not.toEqual([])
+    expect(fs.existsSync(missing)).toBe(false)
+  })
+
+  it.each([
+    ["sqlite-v5", null],
+    ["journal-v4", "sqlite-v5"],
+    ["sqlite-v5", "journal-v4"],
+  ] as const)(
+    "faults when a manifest names an absent backend (%s / %s)",
+    async (activeBackend, shadowBackend) => {
+      if (activeBackend === "journal-v4" || shadowBackend === null)
+        writeCheckpoint(root, "gen-0001", state(1))
+      else {
+        const sqlite = openBackend("sqlite-v5", root)
+        await sqlite.compact(state(1))
+        await sqlite.close()
+      }
+      writeManifest(root, { ...readManifest(root), activeBackend, shadowBackend })
+      expect((await verifyDurability(root)).faults).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ message: expect.stringContaining("missing") }),
+        ])
+      )
+    }
+  )
+
+  it("faults on the same unpinned journal/SQLite ambiguity boot refuses", async () => {
+    writeCheckpoint(root, "gen-0001", state(1))
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(1))
+    await sqlite.close()
+    expect((await verifyDurability(root)).faults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "manifest-corrupt",
+          message: expect.stringContaining("both journal and sqlite"),
+        }),
+      ])
+    )
+  })
+
+  it("reports both missing stores instead of stopping at the first", async () => {
+    writeManifest(root, {
+      ...readManifest(root),
+      activeBackend: "journal-v4",
+      shadowBackend: "sqlite-v5",
+    })
+    expect((await verifyDurability(root)).faults.map((fault) => fault.message)).toEqual([
+      "manifest backend journal-v4 is missing",
+      "manifest backend sqlite-v5 is missing",
+    ])
+  })
+
+  it.each(["journal-v4", "sqlite-v5"] as const)(
+    "reports a missing content-addressed binary in %s",
+    async (id) => {
+      const value = encodeDurableValue(new Uint8Array(65536), root)
+      if (id === "journal-v4") writeCheckpoint(root, "gen-0001", state(1, { "s:a": value }))
+      else {
+        const sqlite = openBackend(id, root)
+        try {
+          await sqlite.compact(state(1, { "s:a": value }))
+        } finally {
+          await sqlite.close()
+        }
+      }
+      fs.rmSync(binaryDir(root), { recursive: true })
+      expect((await verifyDurability(root)).faults).toEqual([
+        expect.objectContaining({ message: expect.stringContaining("is missing") }),
+      ])
+    }
+  )
+
+  it("inspects legacy SQLite without migrating it or changing its hash", async () => {
+    const file = sqliteFile(root)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const db = new DatabaseSync(file)
+    db.exec(`
+      CREATE TABLE durability_schema (database TEXT PRIMARY KEY, version INTEGER, tables TEXT);
+      INSERT INTO durability_schema VALUES ('CogniaDB', 141, '["sessions"]');
+      CREATE TABLE durability_rows (database TEXT, table_name TEXT, row_key TEXT, value TEXT);
+      INSERT INTO durability_rows VALUES ('CogniaDB', 'sessions', 's:a', '{"id":"a"}');
+    `)
+    db.close()
+    const hash = () => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+    const before = hash()
+    expect((await verifyDurability(root)).faults).toEqual([])
+    expect(hash()).toBe(before)
+    const reader = new DatabaseSync(file, { readOnly: true })
+    try {
+      expect(
+        reader.prepare("SELECT type FROM sqlite_master WHERE name='durability_rows'").get()
+      ).toEqual({ type: "table" })
+      expect(
+        reader.prepare("SELECT name FROM sqlite_master WHERE name='durability_rows_codec1'").get()
+      ).toBeUndefined()
+    } finally {
+      reader.close()
+    }
+  })
+
+  it("does not compare SQLite with a deliberately detached journal", async () => {
+    writeCheckpoint(root, "gen-0001", state(1))
+    const sqlite = openBackend("sqlite-v5", root)
+    try {
+      await sqlite.compact(state(1))
+      writeManifest(root, {
+        ...readManifest(root),
+        activeBackend: "sqlite-v5",
+        shadowBackend: "journal-v4",
+      })
+      finalizeDurability(root, "gen-0001", { confirm: true })
+      sqlite.commitSync(commit(2, "s:a", { id: "a" }))
+    } finally {
+      await sqlite.close()
+    }
+    const status = await verifyDurability(root)
+    expect(status.parity).toBeNull()
+    expect(status.faults).toEqual([])
   })
 
   it("reports generations, checkpoint and journal sequences", async () => {
@@ -130,6 +258,7 @@ describe("verifyDurability", () => {
       await sqlite.compact(state(0))
       for (const late of commits) sqlite.commitSync(late)
       await sqlite.close()
+      writeManifest(root, { ...readManifest(root), shadowBackend: "sqlite-v5" })
       const status = await verifyDurability(root)
       // Both list a table from its first commit; before, the journal dropped it and sqlite left it unlisted.
       expect(status.parity).toMatchObject({ ok: true, mismatches: [] })
@@ -142,6 +271,7 @@ describe("verifyDurability", () => {
     fs.writeFileSync(path.join(root, "backend-manifest.json"), "{oops")
     const status = await verifyDurability(root)
     expect(status.manifest.activeBackend).toBe("journal-v4")
+    expect(status.faults).toEqual([expect.objectContaining({ code: "manifest-corrupt" })])
   })
 
   it("records a non-fault error as a manifest-corrupt entry", async () => {
@@ -208,6 +338,30 @@ describe("migrateDurability", () => {
     root = tempRoot()
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it("preserves an unpinned SQLite store on SQLite self-migration", async () => {
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(42, { "s:a": { id: "a" } }))
+    await sqlite.close()
+    expect(fs.existsSync(manifestFile(root))).toBe(false)
+    const before = fs.readFileSync(sqliteFile(root))
+    await expect(migrateDurability(root, "sqlite-v5")).rejects.toThrow(/already on sqlite-v5/)
+    expect(fs.readFileSync(sqliteFile(root))).toEqual(before)
+    const reopened = openBackend("sqlite-v5", root)
+    try {
+      expect(await reopened.load()).toEqual(state(42, { "s:a": { id: "a" } }))
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it("uses the unpinned SQLite inventory when migrating to journal", async () => {
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(42, { "s:a": { id: "a" } }))
+    await sqlite.close()
+    expect((await migrateDurability(root, "journal-v4")).from).toBe("sqlite-v5")
+    expect(readJournalState(root)).toEqual(state(42, { "s:a": { id: "a" } }))
+  })
 
   it("copies the journal into sqlite, verifies parity, and promotes", async () => {
     await seedJournal(root, [commit(1, "s:a", { id: "a" }), commit(2, "s:b", { id: "b" })])
@@ -279,6 +433,248 @@ describe("recoverDurability", () => {
     root = tempRoot()
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it("pins candidate binaries while an online writer deletes the last reference before publication", async () => {
+    const bytes = new Uint8Array(65536).fill(17)
+    const encoded = encodeDurableValue(bytes, root)
+    const writer = openSqliteBackend({ root })
+    await writer.compact(state(1, { "s:binary": encoded }))
+    writeManifest(root, { ...readManifest(root), activeBackend: "sqlite-v5" })
+    const file = path.join(binaryDir(root), createHash("sha256").update(bytes).digest("hex"))
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    fs.utimesSync(file, old, old)
+    try {
+      // Candidate collection runs before recover's first await continuation.
+      const recovery = recoverDurability(root, "sqlite")
+      writer.commitSync(commit(2, "s:binary", null))
+      const maintenance = writer.maintain()
+      const result = await recovery
+      expect(maintenance.prunedBinaries).toEqual([])
+      expect(result).toMatchObject({ activated: false, parity: { ok: true }, sequence: 1 })
+      const staged = readCheckpoint(root, result.generation)
+      expect(decodeDurableValue(staged.dbs.CogniaDB.rows.sessions["s:binary"], root)).toEqual(bytes)
+      expect(hasLiveWriter(root, "binary")).toBe(false)
+      expect(writer.maintain().prunedBinaries).toEqual([])
+    } finally {
+      await writer.close()
+    }
+  })
+
+  it("rejects a staged checkpoint whose binary disappears during publication", async () => {
+    const value = encodeDurableValue(new Uint8Array(65536), root)
+    writeCheckpoint(root, "gen-0001", state(1, { "s:binary": value }))
+    const rename = fs.renameSync.bind(fs)
+    const fault = jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      rename(from, to)
+      if (String(to) === generationDir(root, "gen-0002"))
+        fs.rmSync(binaryDir(root), { recursive: true })
+    })
+    try {
+      await expect(recoverDurability(root, "snapshot")).rejects.toThrow(/binary.*missing/)
+      expect(hasLiveWriter(root, "binary")).toBe(false)
+    } finally {
+      fault.mockRestore()
+    }
+  })
+
+  it("activates through one pointer without deleting a staged marker", async () => {
+    writeCheckpoint(root, "gen-0001", state(1))
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(42, { "s:kept": 42 }))
+    await sqlite.close()
+    writeManifest(root, { ...readManifest(root), activeBackend: "sqlite-v5", shadowBackend: null })
+    const rm = fs.rmSync.bind(fs)
+    const fault = jest.spyOn(fs, "rmSync").mockImplementation((file, options) => {
+      if (String(file).endsWith("/staged"))
+        throw Object.assign(new Error("injected EIO"), { code: "EIO" })
+      rm(file, options)
+    })
+    try {
+      expect((await recoverDurability(root, "sqlite", { activate: true })).activated).toBe(true)
+      expect(readJournalState(root)).toEqual(state(42, { "s:kept": 42 }))
+    } finally {
+      fault.mockRestore()
+    }
+  })
+
+  it.each([
+    "open",
+    "write",
+    "file-fsync",
+    "file-close",
+    "rename",
+    "rename-after",
+    "directory-open",
+    "directory-fsync",
+    "directory-close",
+  ])("boots complete old or new state after activation %s fails", async (step) => {
+    writeCheckpoint(root, "gen-0001", state(1))
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(42, { "s:kept": 42 }))
+    await sqlite.close()
+    writeManifest(root, { ...readManifest(root), activeBackend: "sqlite-v5", shadowBackend: null })
+    const descriptors = new Map<number, string>()
+    const isManifestStaging = (file: string | undefined) =>
+      file?.startsWith(`${manifestFile(root)}.staging`) === true
+    const injected = () => Object.assign(new Error(`injected ${step} EIO`), { code: "EIO" })
+    const open = fs.openSync.bind(fs)
+    const write = fs.writeFileSync.bind(fs)
+    const sync = fs.fsyncSync.bind(fs)
+    const rename = fs.renameSync.bind(fs)
+    const close = fs.closeSync.bind(fs)
+    const openSpy = jest.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+      if (step === "open" && isManifestStaging(String(file))) throw injected()
+      if (step === "directory-open" && String(file) === root) throw injected()
+      const fd = open(file, flags, mode)
+      descriptors.set(fd, String(file))
+      return fd
+    })
+    const writeSpy = jest.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      if (step === "write" && typeof file === "number" && isManifestStaging(descriptors.get(file)))
+        throw injected()
+      write(file, data, options)
+    })
+    const syncSpy = jest.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      if (
+        (step === "file-fsync" && isManifestStaging(descriptors.get(fd))) ||
+        (step === "directory-fsync" && descriptors.get(fd) === root)
+      )
+        throw injected()
+      sync(fd)
+    })
+    const renameSpy = jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (step === "rename" && isManifestStaging(String(from))) throw injected()
+      rename(from, to)
+      if (step === "rename-after" && isManifestStaging(String(from))) throw injected()
+    })
+    const closeSpy = jest.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      close(fd)
+      if (
+        (step === "file-close" && isManifestStaging(descriptors.get(fd))) ||
+        (step === "directory-close" && descriptors.get(fd) === root)
+      )
+        throw injected()
+    })
+    try {
+      await expect(recoverDurability(root, "sqlite", { activate: true })).rejects.toThrow(
+        /injected .* EIO/
+      )
+    } finally {
+      closeSpy.mockRestore()
+      renameSpy.mockRestore()
+      syncSpy.mockRestore()
+      writeSpy.mockRestore()
+      openSpy.mockRestore()
+    }
+    const reopened = await resolveBackend({ root })
+    try {
+      expect(reopened.state).toEqual(state(42, { "s:kept": 42 }))
+    } finally {
+      await reopened.backend.close()
+    }
+  })
+
+  it("advances the atomic journal head on compaction after recovery", async () => {
+    await seedJournal(root, [commit(1, "s:a", 1)])
+    await recoverDurability(root, "journal", { activate: true })
+    const writer = openBackend("journal-v4", root)
+    try {
+      await writer.load()
+      writer.commitSync(commit(2, "s:b", 2))
+      await writer.compact(await writer.load())
+      writer.commitSync(commit(3, "s:c", 3))
+    } finally {
+      await writer.close()
+    }
+    expect(readJournalState(root)).toEqual(state(3, { "s:a": 1, "s:b": 2, "s:c": 3 }))
+  })
+
+  it("keeps a staged checkpoint rollback out of the next boot", async () => {
+    await seedJournal(root, [commit(1, "s:a", 1), commit(2, "s:b", 2)])
+    const staged = await recoverDurability(root, "snapshot")
+    expect(staged.activated).toBe(false)
+    expect(staged.sequence).toBe(0)
+    const reopened = openBackend("journal-v4", root)
+    try {
+      expect((await reopened.load()).sequence).toBe(2)
+      expect(readCheckpoint(root, staged.generation).sequence).toBe(0)
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it("keeps an unpinned SQLite account on SQLite when staging without activation", async () => {
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(42, { "s:kept": 42 }))
+    await sqlite.close()
+    const recovered = await recoverDurability(root, "sqlite")
+    expect(recovered.activated).toBe(false)
+    const reopened = await resolveBackend({ root, seed: state(0) })
+    try {
+      expect(reopened.backend.id).toBe("sqlite-v5")
+      expect(reopened.state).toEqual(state(42, { "s:kept": 42 }))
+    } finally {
+      await reopened.backend.close()
+    }
+  })
+
+  it.each(["journal-v4", "sqlite-v5"] as const)(
+    "refuses recovery activation beside a live %s writer",
+    async (id) => {
+      writeCheckpoint(root, "gen-0001", state(1))
+      const writer = openBackend(id, root)
+      try {
+        if (id === "sqlite-v5") await writer.compact(state(1))
+        else await writer.load()
+        await expect(recoverDurability(root, "auto", { activate: true })).rejects.toThrow(
+          /live writer/
+        )
+        expect(listGenerations(root)).toEqual(["gen-0001"])
+        writer.commitSync(commit(2, "s:a", 2))
+      } finally {
+        await writer.close()
+      }
+    }
+  )
+
+  it("does not recover a generation with a missing binary even if its journal later deletes the row", async () => {
+    writeCheckpoint(root, "gen-0001", state(1))
+    const value = encodeDurableValue(new Uint8Array(65536), root)
+    writeCheckpoint(root, "gen-0002", state(2, { "s:b": value }))
+    const journal = openBackend("journal-v4", root)
+    try {
+      await journal.load()
+      journal.commitSync(commit(3, "s:b", null))
+    } finally {
+      await journal.close()
+    }
+    fs.rmSync(binaryDir(root), { recursive: true })
+    expect((await recoverDurability(root, "auto")).sequence).toBe(1)
+  })
+
+  it.each(["manifest", "binary"])(
+    "auto recovery skips a newest generation with broken %s",
+    async (broken) => {
+      writeCheckpoint(root, "gen-0001", state(1, { "s:a": 1 }))
+      const value = encodeDurableValue(new Uint8Array(65536), root)
+      writeCheckpoint(root, "gen-0002", state(2, { "s:b": value }))
+      if (broken === "manifest") {
+        fs.writeFileSync(path.join(generationDir(root, "gen-0002"), "checkpoint.json"), "bad json")
+      } else {
+        fs.rmSync(binaryDir(root), { recursive: true })
+      }
+      const recovered = await recoverDurability(root, "auto", { activate: true })
+      expect(recovered).toMatchObject({ sequence: 1, activated: true })
+      const reopened = openBackend("journal-v4", root)
+      try {
+        expect(await reopened.load()).toEqual(state(1, { "s:a": 1 }))
+      } finally {
+        await reopened.close()
+      }
+      finalizeDurability(root, recovered.generation, { confirm: true })
+      expect(readCheckpoint(root, recovered.generation)).toEqual(state(1, { "s:a": 1 }))
+    }
+  )
 
   it("stages the journal into a new generation without activating", async () => {
     await seedJournal(root, [commit(1, "s:a", { id: "a" })])
@@ -378,6 +774,18 @@ describe("rollbackDurability", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
+  it("refuses a live journal writer instead of silently staging its rollback", async () => {
+    writeCheckpoint(root, "gen-0001", state(1))
+    const writer = openBackend("journal-v4", root)
+    try {
+      await writer.load()
+      expect(() => rollbackDurability(root, "gen-0001")).toThrow(/live writer/)
+      expect(listGenerations(root)).toEqual(["gen-0001"])
+    } finally {
+      await writer.close()
+    }
+  })
+
   it("re-cuts an older generation as the newest and keeps everything", async () => {
     writeCheckpoint(root, "gen-0001", state(1, { "s:old": 1 }))
     writeCheckpoint(root, "gen-0002", state(9, { "s:new": 1 }))
@@ -440,6 +848,61 @@ describe("finalizeDurability", () => {
     })
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it.each(["backend manifest", "checkpoint", "binary"])(
+    "deletes nothing when the retained %s is broken",
+    (broken) => {
+      if (broken === "backend manifest") fs.writeFileSync(manifestFile(root), "bad json")
+      else if (broken === "checkpoint") {
+        fs.writeFileSync(path.join(generationDir(root, "gen-0002"), "checkpoint.json"), "bad json")
+      } else {
+        fs.rmSync(generationDir(root, "gen-0002"), { recursive: true })
+        const value = encodeDurableValue(new Uint8Array(65536), root)
+        writeCheckpoint(root, "gen-0002", state(2, { "s:a": value }))
+        fs.rmSync(binaryDir(root), { recursive: true })
+      }
+      const abandoned = generationDir(root, "gen-0004")
+      fs.mkdirSync(abandoned)
+      fs.mkdirSync(`${abandoned}.staging-interrupted`)
+      fs.writeFileSync(path.join(`${abandoned}.staging-interrupted`, "rows.json"), "partial rows")
+      const before = fs.readdirSync(root, { recursive: true }).map(String).sort()
+      expect(() => finalizeDurability(root, "gen-0002", { confirm: true })).toThrow()
+      expect(fs.readdirSync(root, { recursive: true }).map(String).sort()).toEqual(before)
+      expect(listGenerations(root)).toEqual(["gen-0001", "gen-0002", "gen-0003"])
+    }
+  )
+
+  it("reclaims interrupted checkpoint files only after validating the retained generations", () => {
+    const abandoned = generationDir(root, "gen-0004")
+    fs.mkdirSync(abandoned)
+    fs.mkdirSync(`${abandoned}.staging-interrupted`)
+    fs.writeFileSync(path.join(`${abandoned}.staging-interrupted`, "rows.json"), "partial rows")
+    finalizeDurability(root, "gen-0002", { confirm: true })
+    expect(fs.readdirSync(path.join(root, "generations"))).toEqual(["gen-0002", "gen-0003"])
+  })
+
+  it("refuses a live writer and preserves every accepted sequence after reopen", async () => {
+    fs.rmSync(generationDir(root, "gen-0001"), { recursive: true })
+    writeCheckpoint(root, "gen-0001", state(2))
+    fs.rmSync(generationDir(root, "gen-0002"), { recursive: true })
+    fs.rmSync(generationDir(root, "gen-0003"), { recursive: true })
+    const writer = openBackend("journal-v4", root)
+    try {
+      await writer.load()
+      writeCheckpoint(root, "gen-0002", state(2))
+      writer.commitSync(commit(3, "s:a", 3))
+      expect(() => finalizeDurability(root, "gen-0002", { confirm: true })).toThrow(/writer/)
+      writer.commitSync(commit(4, "s:a", 4))
+    } finally {
+      await writer.close()
+    }
+    const reopened = openBackend("journal-v4", root)
+    try {
+      expect((await reopened.load()).sequence).toBe(4)
+    } finally {
+      await reopened.close()
+    }
+  })
 
   it("requires --confirm", () => {
     expect(() => finalizeDurability(root, "gen-0002", { confirm: false })).toThrow(/--confirm/)

@@ -34,7 +34,10 @@ import path from "node:path"
 
 import { canonicalJson, sha256Hex } from "./canonical"
 import { LegacyValueReport, normalizeLegacyValue, VALUE_CODEC } from "./value-codec"
-import { latestGeneration, nextGeneration, readCheckpoint, writeCheckpoint } from "./checkpoint"
+import { latestGeneration, listGenerations, readCheckpoint, writeCheckpoint } from "./checkpoint"
+import { acquireWriterLease } from "./writer-lock"
+import { collectBinaryReferences } from "./binary-store"
+import { readManifest, writeManifest } from "./manifest"
 import {
   DurabilityFault,
   emptyDurabilityState,
@@ -261,6 +264,7 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
   let descriptor: number | null = null
   let sequence = 0
   let loaded = false
+  let release: (() => void) | null = null
   /** The append target predates value codec 1 (see `DurabilityState.legacyValueCodec`). */
   let legacyGeneration = false
 
@@ -278,24 +282,37 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
   }
 
   async function load(): Promise<DurabilityState> {
-    if (!generation) {
+    release ??= acquireWriterLease(root, "journal")
+    try {
+      generation = latestGeneration(root)
+      if (!generation) {
+        loaded = true
+        sequence = 0
+        return emptyDurabilityState()
+      }
+      const report = new LegacyValueReport()
+      const state = readCheckpoint(root, generation, report)
+      const file = journalFile(root, generation)
+      if (fs.existsSync(file)) {
+        const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence, report)
+        applyCommits(state, commits)
+      }
+      sequence = state.sequence
       loaded = true
-      sequence = 0
-      return emptyDurabilityState()
+      legacyGeneration = state.legacyValueCodec === true
+      const findings = report.findings()
+      if (findings.length > 0) state.legacyValueFindings = findings
+      return state
+    } catch (error) {
+      loaded = false
+      if (descriptor !== null) {
+        fs.closeSync(descriptor)
+        descriptor = null
+      }
+      release()
+      release = null
+      throw error
     }
-    const report = new LegacyValueReport()
-    const state = readCheckpoint(root, generation, report)
-    const file = journalFile(root, generation)
-    if (fs.existsSync(file)) {
-      const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence, report)
-      applyCommits(state, commits)
-    }
-    sequence = state.sequence
-    loaded = true
-    legacyGeneration = state.legacyValueCodec === true
-    const findings = report.findings()
-    if (findings.length > 0) state.legacyValueFindings = findings
-    return state
   }
 
   function commitSync(commit: DurabilityCommit): void {
@@ -340,12 +357,16 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
     },
     lastSequence: () => sequence,
     async compact(state: DurabilityState): Promise<CompactionResult> {
+      release ??= acquireWriterLease(root, "journal")
       const previousGeneration = generation
-      const target = nextGeneration(root)
+      const manifest = readManifest(root)
       // `state.sequence` — not the backend's own counter — is authoritative:
       // during a migration this backend is the *target* and was never loaded,
       // so its counter is 0 while the incoming state may be at any sequence.
-      writeCheckpoint(root, target, state)
+      const target = writeCheckpoint(root, null, state, {
+        writer: true,
+        staged: manifest.journalGeneration !== undefined,
+      })
       // Verify the new generation is readable *before* it becomes the append
       // target; a compaction that cannot be read back is not a checkpoint.
       const verified = readCheckpoint(root, target)
@@ -355,6 +376,16 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
           `compaction wrote sequence ${verified.sequence} but the state is at ${state.sequence}`,
           state.sequence
         )
+      }
+      if (manifest.journalGeneration) {
+        try {
+          writeManifest(root, { ...manifest, journalGeneration: target })
+        } catch (error) {
+          // A rename may have succeeded before directory fsync failed. Do not
+          // accept another append against the previous head in that case.
+          loaded = false
+          throw error
+        }
       }
       if (descriptor !== null) {
         fs.closeSync(descriptor)
@@ -371,8 +402,29 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
         fs.closeSync(descriptor)
         descriptor = null
       }
+      release?.()
+      release = null
+      loaded = false
     },
   }
+}
+
+/** All retained checkpoints and journal entries protect their binary files. */
+export function collectJournalBinaryReferences(
+  root: string,
+  into: Set<string>,
+  generations = listGenerations(root)
+): Set<string> {
+  for (const generation of generations) {
+    const checkpoint = readCheckpoint(root, generation)
+    collectBinaryReferences(checkpoint.dbs, into)
+    const file = journalFile(root, generation)
+    if (fs.existsSync(file)) {
+      const replay = replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence)
+      for (const commit of replay.commits) collectBinaryReferences(commit.mutations, into)
+    }
+  }
+  return into
 }
 
 /**
@@ -385,5 +437,5 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
 export function seedCheckpoint(root: string, state: DurabilityState): string {
   const existing = latestGeneration(root)
   if (existing) return existing
-  return writeCheckpoint(root, nextGeneration(root), state)
+  return writeCheckpoint(root, null, state)
 }

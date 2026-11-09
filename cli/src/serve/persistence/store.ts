@@ -208,24 +208,30 @@ export async function readSourcesState(
   prefetcher?: BinaryPrefetcher
 ): Promise<DurabilityState> {
   const state: DurabilityState = { sequence, dbs: {} }
-  for (const source of sources) {
-    const tables = includedTables(source)
-    const rows: Record<string, Record<string, unknown>> = {}
-    for (const table of tables) {
-      // One prefetch scope per table read: its rows are fresh clones, read once.
-      const scope = {}
-      rows[table.name] = await readTableRows(
-        table,
-        (value) => encodeDurableValue(value, root, prefetcher ? { prefetcher, scope } : undefined),
-        prefetcher ? (values) => prefetcher.settle(values, scope) : undefined
-      )
+  try {
+    for (const source of sources) {
+      const tables = includedTables(source)
+      const rows: Record<string, Record<string, unknown>> = {}
+      for (const table of tables) {
+        // Retain these files until the caller publishes the complete state.
+        const scope = state
+        rows[table.name] = await readTableRows(
+          table,
+          (value) =>
+            encodeDurableValue(value, root, prefetcher ? { prefetcher, scope } : undefined),
+          prefetcher ? (values) => prefetcher.settle(values, scope) : undefined
+        )
+      }
+      state.dbs[source.name] = {
+        schema: { version: source.db.verno, tables: tables.map((t) => t.name).sort() },
+        rows,
+      }
     }
-    state.dbs[source.name] = {
-      schema: { version: source.db.verno, tables: tables.map((t) => t.name).sort() },
-      rows,
-    }
+    return state
+  } catch (error) {
+    prefetcher?.release(state)
+    throw error
   }
-  return state
 }
 
 /** Overlay persisted rows onto the (already open, already seeded) databases. */
@@ -345,6 +351,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   }
 
   function onCommit(mutations: DurabilityMutation[]): void {
+    const scopes = mutations
     mutations = mutations.filter(
       (mutation) =>
         !SNAPSHOT_DERIVED_TABLES.includes(mutation.table) &&
@@ -370,6 +377,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     sequence += 1
     const commit = { sequence, committedAt: now(), mutations }
     backend.commitSync(commit)
+    for (const scope of scopes) prefetcher.release(scope)
     // Match the bytes already committed, rather than retaining mutable Dexie
     // values while the authoritative snapshot's promise settles.
     compactionTail?.push(JSON.parse(canonicalJson(commit)) as DurabilityCommit)
@@ -403,6 +411,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
         excludeTables: [...SNAPSHOT_DERIVED_TABLES, ...(source.excludeTables ?? [])],
         onRecord,
         onCommit,
+        onSettled: (trans) => prefetcher.releaseGroup(trans),
         drain,
       })
     )
@@ -417,58 +426,73 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   // Seed the immutable generation from whatever the freshly-opened (seeded)
   // databases hold, so a first boot has a checkpoint to append against.
   const seed = await readSourcesState(sources, 0, root, prefetcher)
-  const resolved: ResolvedBackend = await resolveBackend({
-    root,
-    seed,
-    initialBackend: opts.backend,
-  })
+  let resolved: ResolvedBackend
+  try {
+    resolved = await resolveBackend({ root, seed, initialBackend: opts.backend })
+  } finally {
+    prefetcher.release(seed)
+  }
   backendRef = resolved.backend
   sequence = resolved.backend.lastSequence()
-  // Rows written before value codec 1 that look like lost binary data. The
-  // report is kept before anything can compact those rows into codec 1 and
-  // erase the evidence; the bytes themselves are gone and are not invented.
-  const legacyReport = recordLegacyValueFindings(root, resolved.state.legacyValueFindings, now)
-  if (legacyReport) {
-    console.warn(
-      `[durability] ${resolved.state.legacyValueFindings!.length} field path(s) hold values written ` +
-        "before value codec 1 that look like lost binary data; `cognia-agent durability verify` lists them:\n" +
-        resolved.state
-          .legacyValueFindings!.map((finding) => `  ${formatLegacyValueFinding(finding)}`)
-          .join("\n")
-    )
-  }
+  try {
+    // Rows written before value codec 1 that look like lost binary data. The
+    // report is kept before anything can compact those rows into codec 1 and
+    // erase the evidence; the bytes themselves are gone and are not invented.
+    const legacyReport = recordLegacyValueFindings(root, resolved.state.legacyValueFindings, now)
+    if (legacyReport) {
+      console.warn(
+        `[durability] ${resolved.state.legacyValueFindings!.length} field path(s) hold values written ` +
+          "before value codec 1 that look like lost binary data; `cognia-agent durability verify` lists them:\n" +
+          resolved.state
+            .legacyValueFindings!.map((finding) => `  ${formatLegacyValueFinding(finding)}`)
+            .join("\n")
+      )
+    }
 
-  await withAllSuppressed(captures, async () => {
-    if (opts.prepareDynamicSchema) {
-      await opts.prepareDynamicSchema(
-        sources,
-        Object.fromEntries(
-          Object.entries(resolved.state.dbs).map(([name, entry]) => [name, entry.schema.version])
-        ),
-        Object.fromEntries(
-          Object.entries(resolved.state.dbs).map(([name, entry]) => [name, entry.schema.tables])
+    await withAllSuppressed(captures, async () => {
+      if (opts.prepareDynamicSchema) {
+        await opts.prepareDynamicSchema(
+          sources,
+          Object.fromEntries(
+            Object.entries(resolved.state.dbs).map(([name, entry]) => [name, entry.schema.version])
+          ),
+          Object.fromEntries(
+            Object.entries(resolved.state.dbs).map(([name, entry]) => [name, entry.schema.tables])
+          )
         )
-      )
+      }
+      await restoreState(sources, resolved.state, root)
+      await prepareRestoredSessionLists(sources)
+      // Pin a forward move once; future boots need not reinterpret an older
+      // checkpoint version. A generation written before value codec 1 is
+      // rewritten the same way, before any commit can be appended to it (the
+      // journal refuses that), now that its findings are on record above.
+      // Restore/rebuild remains capture-suppressed.
+      pinned = resolved.state.dbs
+      if (
+        resolved.legacyValueCodec ||
+        sources.some((source) =>
+          isForwardMove(source, resolved.state.dbs[source.name]?.schema.version)
+        )
+      ) {
+        const state = await readSourcesState(sources, sequence, root, prefetcher)
+        try {
+          await resolved.backend.compact(state)
+        } finally {
+          prefetcher.release(state)
+        }
+        pinned = state.dbs
+      }
+    })
+  } catch (error) {
+    backendRef = null
+    try {
+      await resolved.backend.close()
+    } finally {
+      await prefetcher.close()
     }
-    await restoreState(sources, resolved.state, root)
-    await prepareRestoredSessionLists(sources)
-    // Pin a forward move once; future boots need not reinterpret an older
-    // checkpoint version. A generation written before value codec 1 is
-    // rewritten the same way, before any commit can be appended to it (the
-    // journal refuses that), now that its findings are on record above.
-    // Restore/rebuild remains capture-suppressed.
-    pinned = resolved.state.dbs
-    if (
-      resolved.legacyValueCodec ||
-      sources.some((source) =>
-        isForwardMove(source, resolved.state.dbs[source.name]?.schema.version)
-      )
-    ) {
-      const state = await readSourcesState(sources, sequence, root, prefetcher)
-      await resolved.backend.compact(state)
-      pinned = state.dbs
-    }
-  })
+    throw error
+  }
 
   function compact(): Promise<void> {
     if (compacting) return compacting
@@ -492,7 +516,11 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
         compactionTail.filter((commit) => commit.sequence > checkpoint.sequence)
       )
       compactionTail = null
-      await backend.compact(checkpoint)
+      try {
+        await backend.compact(checkpoint)
+      } finally {
+        prefetcher.release(checkpoint)
+      }
       pinned = checkpoint.dbs
       sinceCompaction = sequence - checkpoint.sequence
     })().finally(() => {
@@ -538,7 +566,11 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     sequence: () => sequence,
     commitCount: () => commits,
     compact,
-    readLiveState: () => readSourcesState(sources, sequence, root, prefetcher),
+    readLiveState: async () => {
+      const state = await readSourcesState(sources, sequence, root, prefetcher)
+      prefetcher.release(state)
+      return state
+    },
     close,
   }
 }

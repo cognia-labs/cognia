@@ -11,11 +11,43 @@
  * Writes are synchronous and durable (temp file, `fsync`, rename, directory
  * `fsync`) because they run on the commit path, before the line or row that
  * references them. Files are immutable and shared by every backend under the
- * root; only `durability finalize` removes the ones nothing references.
+ * root; `durability finalize` and SQLite upkeep remove the ones nothing references.
  */
 import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { acquireWriterLease } from "./writer-lock"
+import { DurabilityFault } from "./types"
+
+type PinReader = () => ReadonlySet<string> | null
+const binaryPins = new Map<string, Set<PinReader>>()
+
+/** A null pin set protects every hash until a worker has published its hash. */
+export function pinBinaryReferences(root: string, read: PinReader): () => void {
+  const releaseLease = acquireWriterLease(root, "binary", { shared: true })
+  const key = fs.realpathSync(root)
+  let readers = binaryPins.get(key)
+  if (!readers) binaryPins.set(key, (readers = new Set()))
+  readers.add(read)
+  let released = false
+  return () => {
+    if (released) return
+    readers.delete(read)
+    if (readers.size === 0) binaryPins.delete(key)
+    releaseLease()
+    released = true
+  }
+}
+
+function pinnedReferences(root: string): Set<string> | null {
+  const references = new Set<string>()
+  for (const read of binaryPins.get(fs.realpathSync(root)) ?? []) {
+    const pins = read()
+    if (pins === null) return null
+    for (const reference of pins) references.add(reference)
+  }
+  return references
+}
 
 /** Binary values up to this many bytes stay inline in the row. */
 export const INLINE_BINARY_LIMIT = 16 * 1024
@@ -38,40 +70,45 @@ function syncDirectory(dir: string): void {
 
 /** Persist `bytes` and return their reference. Idempotent per content. */
 export function writeBinarySync(root: string, bytes: Uint8Array): string {
-  const reference = createHash("sha256").update(bytes).digest("hex")
-  const dir = binaryDir(root)
-  const file = path.join(dir, reference)
-  if (fs.existsSync(file) && fs.statSync(file).size === bytes.byteLength) {
-    // Re-referenced: refresh the mtime so a concurrent finalize, which spares
-    // young files, cannot prune it between here and the line that names it.
-    const at = new Date()
-    fs.utimesSync(file, at, at)
-    // The file may be another writer's (a prefetch worker's) rename whose
-    // directory entry is not durable yet; the record about to name it must
-    // not outlive it.
+  const release = acquireWriterLease(root, "binary", { shared: true })
+  try {
+    const reference = createHash("sha256").update(bytes).digest("hex")
+    const dir = binaryDir(root)
+    const file = path.join(dir, reference)
+    if (fs.existsSync(file) && fs.statSync(file).size === bytes.byteLength) {
+      // Re-referenced: refresh the mtime so a concurrent finalize, which spares
+      // young files, cannot prune it between here and the line that names it.
+      const at = new Date()
+      fs.utimesSync(file, at, at)
+      // The file may be another writer's (a prefetch worker's) rename whose
+      // directory entry is not durable yet; the record about to name it must
+      // not outlive it.
+      syncDirectory(dir)
+      return reference
+    }
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const staging = path.join(dir, `.tmp-${randomUUID()}`)
+    const descriptor = fs.openSync(staging, "wx", 0o600)
+    try {
+      let written = 0
+      while (written < bytes.byteLength) {
+        written += fs.writeSync(descriptor, bytes, written, bytes.byteLength - written)
+      }
+      fs.fsyncSync(descriptor)
+    } finally {
+      fs.closeSync(descriptor)
+    }
+    try {
+      fs.renameSync(staging, file)
+    } catch (error) {
+      fs.rmSync(staging, { force: true })
+      throw error
+    }
     syncDirectory(dir)
     return reference
-  }
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const staging = path.join(dir, `.tmp-${randomUUID()}`)
-  const descriptor = fs.openSync(staging, "wx", 0o600)
-  try {
-    let written = 0
-    while (written < bytes.byteLength) {
-      written += fs.writeSync(descriptor, bytes, written, bytes.byteLength - written)
-    }
-    fs.fsyncSync(descriptor)
   } finally {
-    fs.closeSync(descriptor)
+    release()
   }
-  try {
-    fs.renameSync(staging, file)
-  } catch (error) {
-    fs.rmSync(staging, { force: true })
-    throw error
-  }
-  syncDirectory(dir)
-  return reference
 }
 
 /** Read and verify one side file. Throws if it is missing, short or altered. */
@@ -109,18 +146,16 @@ export function collectBinaryReferences(value: unknown, into: Set<string>): Set<
 }
 
 /**
- * How old an unreferenced side file must be before it may go. A running brain
- * writes a side file a moment before the line that references it, and nothing
- * stops `finalize` from running beside it; a file younger than this may be one
- * of those, so it stays until a later finalize.
+ * How old an unreferenced side file must be before it may go. Pins protect
+ * active prefetches; the grace period also spares recently abandoned writes
+ * and staging files.
  */
 export const BINARY_PRUNE_GRACE_MS = 60 * 60 * 1000
 
 /**
  * Remove side files (and abandoned staging files) that `keep` does not name and
- * that are older than the grace period. Only `durability finalize` calls this,
- * after it has collected the references of every generation, journal and
- * SQLite row it keeps.
+ * that are older than the grace period. Callers first collect the references
+ * of every generation, journal and SQLite row they keep.
  */
 export function pruneBinaries(
   root: string,
@@ -130,15 +165,32 @@ export function pruneBinaries(
 ): string[] {
   const dir = binaryDir(root)
   if (!fs.existsSync(dir)) return []
-  const removed: string[] = []
-  for (const name of fs.readdirSync(dir)) {
-    if (keep.has(name)) continue
-    if (!REFERENCE.test(name) && !name.startsWith(".tmp-")) continue
-    const file = path.join(dir, name)
-    if (now - fs.statSync(file).mtimeMs < graceMs) continue
-    fs.rmSync(file, { force: true })
-    removed.push(name)
+  let release: () => void
+  try {
+    // Local prefetches share the kernel lease and publish pins. A prefetch in
+    // another process excludes this sweep until its commit or abandonment.
+    release = acquireWriterLease(root, "binary", { shared: true })
+  } catch (error) {
+    if (error instanceof DurabilityFault && error.code === "writer-busy") return []
+    throw error
   }
-  if (removed.length > 0) syncDirectory(dir)
-  return removed.sort()
+  try {
+    const pins = pinnedReferences(root)
+    if (pins === null) return []
+    const removed: string[] = []
+    for (const name of fs.readdirSync(dir)) {
+      if (keep.has(name) || pins.has(name)) continue
+      if (!REFERENCE.test(name) && !name.startsWith(".tmp-")) continue
+      const file = path.join(dir, name)
+      if (now - fs.statSync(file).mtimeMs < graceMs) continue
+      const currentPins = pinnedReferences(root)
+      if (currentPins === null || currentPins.has(name)) continue
+      fs.rmSync(file, { force: true })
+      removed.push(name)
+    }
+    if (removed.length > 0) syncDirectory(dir)
+    return removed.sort()
+  } finally {
+    release()
+  }
 }

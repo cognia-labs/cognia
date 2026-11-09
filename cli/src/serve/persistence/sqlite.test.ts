@@ -2,6 +2,11 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { execFileSync } from "node:child_process"
+import { BINARY_PRUNE_GRACE_MS, binaryDir } from "./binary-store"
+import { generationDir, writeCheckpoint } from "./checkpoint"
+import { encodeDurableValue, decodeDurableValue } from "./value-codec"
+import { BinaryPrefetcher } from "./binary-prefetch"
 
 import {
   assertIntegrity,
@@ -45,6 +50,103 @@ describe("openSqliteBackend", () => {
     root = tempRoot()
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it("reclaims interrupted checkpoint reservations and staging rows during maintenance", async () => {
+    const backend = openSqliteBackend({ root })
+    writeCheckpoint(root, "gen-0001", state(1))
+    const reservation = generationDir(root, "gen-0002")
+    const staging = `${reservation}.staging-interrupted`
+    fs.mkdirSync(reservation)
+    fs.mkdirSync(staging)
+    fs.writeFileSync(path.join(staging, "partial.rows.json"), "interrupted row dump")
+    try {
+      backend.maintain()
+      expect(fs.readdirSync(path.join(root, "generations"))).toEqual(["gen-0001"])
+    } finally {
+      await backend.close()
+    }
+  })
+
+  it("excludes cross-process binary publication while discovering GC references", async () => {
+    const backend = openSqliteBackend({ root })
+    writeCheckpoint(root, "gen-0001", state(1))
+    encodeDurableValue(new Uint8Array(65536), root)
+    const file = path.join(binaryDir(root), fs.readdirSync(binaryDir(root))[0])
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    fs.utimesSync(file, old, old)
+    const read = fs.readFileSync.bind(fs)
+    let excluded = false
+    const fault = jest.spyOn(fs, "readFileSync").mockImplementation(((
+      filename: fs.PathOrFileDescriptor,
+      options?: unknown
+    ) => {
+      if (String(filename) === path.join(generationDir(root, "gen-0001"), "checkpoint.json")) {
+        const script = `
+          const loaded = await import(${JSON.stringify(path.join(__dirname, "writer-lock.ts"))});
+          const { acquireWriterLease } = loaded.default ?? loaded;
+          try {
+            acquireWriterLease(${JSON.stringify(root)}, "binary", { shared: true })();
+            console.log("acquired");
+          } catch (error) {
+            if (error.code !== "writer-busy") throw error;
+            console.log("excluded");
+          }
+        `
+        excluded =
+          execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+            encoding: "utf8",
+          }).trim() === "excluded"
+      }
+      return read(filename, options as never)
+    }) as typeof fs.readFileSync)
+    try {
+      expect(backend.maintain().prunedBinaries).toHaveLength(1)
+      expect(excluded).toBe(true)
+    } finally {
+      fault.mockRestore()
+      await backend.close()
+    }
+  })
+
+  it("pins a worker's reused binary across GC's old stat and the durable commit", async () => {
+    const backend = openSqliteBackend({ root })
+    const prefetcher = new BinaryPrefetcher(root, { poolSize: 1 })
+    const bytes = new Uint8Array(65536).fill(17)
+    encodeDurableValue(bytes, root)
+    const file = path.join(binaryDir(root), fs.readdirSync(binaryDir(root))[0])
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    fs.utimesSync(file, old, old)
+    const scope = {}
+    const stat = fs.statSync.bind(fs)
+    let reads = 0
+    let reused = false
+    const fault = jest.spyOn(fs, "statSync").mockImplementation(((
+      target: fs.PathLike,
+      options?: unknown
+    ) => {
+      const captured = stat(target, options as never)
+      if (String(target) === file && ++reads === 2) {
+        prefetcher.prefetch(bytes, scope)
+        prefetcher.resolve(bytes, scope)
+        reused = true
+      }
+      return captured
+    }) as typeof fs.statSync)
+    try {
+      await backend.compact(state(0))
+      backend.maintain()
+      expect(reused).toBe(true)
+      const encoded = encodeDurableValue(bytes, root, { prefetcher, scope })
+      backend.commitSync(commit(1, "s:reused", encoded))
+      expect(
+        decodeDurableValue((await backend.load()).dbs.CogniaDB.rows.sessions["s:reused"], root)
+      ).toEqual(bytes)
+    } finally {
+      fault.mockRestore()
+      await prefetcher.close()
+      await backend.close()
+    }
+  })
 
   it("starts empty", async () => {
     const backend = openSqliteBackend({ root })
@@ -198,6 +300,71 @@ describe("openSqliteBackend", () => {
     const loaded = await backend.load()
     await backend.close()
     expect(loaded.sequence).toBe(3)
+  })
+
+  it("collects old orphan binaries without requiring a journal generation", async () => {
+    const backend = openSqliteBackend({ root })
+    try {
+      await backend.compact(state(0))
+      const value = encodeDurableValue(new Uint8Array(65536).fill(1), root)
+      backend.commitSync(commit(1, "s:binary", value))
+      const referenced = fs.readdirSync(binaryDir(root))[0]
+      encodeDurableValue(new Uint8Array(65536).fill(2), root)
+      const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+      for (const name of fs.readdirSync(binaryDir(root))) {
+        fs.utimesSync(path.join(binaryDir(root), name), old, old)
+      }
+      backend.maintain!()
+      expect(fs.readdirSync(binaryDir(root))).toEqual([referenced])
+      backend.commitSync(commit(2, "s:binary", null))
+      backend.maintain!()
+      expect(fs.readdirSync(binaryDir(root))).toEqual([])
+    } finally {
+      await backend.close()
+    }
+  })
+
+  it("keeps binaries still referenced by rollback checkpoints", async () => {
+    const value = encodeDurableValue(new Uint8Array(65536).fill(3), root)
+    const snapshot = state(1)
+    snapshot.dbs.CogniaDB.rows.sessions = { "s:binary": value }
+    writeCheckpoint(root, "gen-0001", snapshot)
+    const file = path.join(binaryDir(root), fs.readdirSync(binaryDir(root))[0])
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    fs.utimesSync(file, old, old)
+    const backend = openSqliteBackend({ root })
+    try {
+      await backend.compact(state(1))
+      backend.maintain!()
+      expect(fs.existsSync(file)).toBe(true)
+    } finally {
+      await backend.close()
+    }
+  })
+
+  it("surfaces a busy WAL checkpoint while a reader retains its snapshot", async () => {
+    const backend = openSqliteBackend({ root })
+    const warning = jest.spyOn(console, "warn").mockImplementation(() => {})
+    let reader: DatabaseSync | undefined
+    try {
+      await backend.compact(state(1))
+      reader = new DatabaseSync(sqliteFile(root), { readOnly: true })
+      reader.exec("BEGIN")
+      reader.prepare("SELECT * FROM durability_meta").all()
+      backend.commitSync(commit(2, "s:large", { text: "x".repeat(1024 * 1024) }))
+      const bytes = fs.statSync(`${sqliteFile(root)}-wal`).size
+      expect(bytes).toBeGreaterThan(0)
+      expect(backend.maintain!()).toMatchObject({ busy: true })
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("busy"))
+      expect(fs.statSync(`${sqliteFile(root)}-wal`).size).toBe(bytes)
+      reader.exec("ROLLBACK")
+      expect(backend.maintain!()).toMatchObject({ busy: false })
+      expect(fs.statSync(`${sqliteFile(root)}-wal`).size).toBe(0)
+    } finally {
+      reader?.close()
+      await backend.close()
+      warning.mockRestore()
+    }
   })
 
   it("closes idempotently", async () => {

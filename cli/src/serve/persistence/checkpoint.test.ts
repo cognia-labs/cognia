@@ -1,9 +1,14 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
+import { pathToFileURL } from "node:url"
 
 import {
+  cleanupCheckpointStaging,
   formatGeneration,
+  activateGeneration,
   generationDir,
   latestGeneration,
   listGenerations,
@@ -13,6 +18,7 @@ import {
   readLatestCheckpoint,
   writeCheckpoint,
 } from "./checkpoint"
+import { resolveBackend } from "./backend"
 import { DurabilityFault, type DurabilityState } from "./types"
 import { LegacyValueReport } from "./value-codec"
 
@@ -74,6 +80,88 @@ describe("writeCheckpoint / readCheckpoint", () => {
     expect(fs.existsSync(path.join(root, "generations", "gen-0001.staging"))).toBe(false)
   })
 
+  it("removes its partial rows and reservation after repeated ENOSPC failures", () => {
+    const open = fs.openSync.bind(fs)
+    const failure = jest.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+      if (String(file).endsWith("checkpoint.json"))
+        throw Object.assign(new Error("injected ENOSPC"), { code: "ENOSPC" })
+      return open(file, flags, mode)
+    })
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(() => writeCheckpoint(root, null, state(7))).toThrow("injected ENOSPC")
+        expect(fs.readdirSync(path.join(root, "generations"))).toEqual([])
+      }
+    } finally {
+      failure.mockRestore()
+    }
+    expect(writeCheckpoint(root, null, state(8))).toBe("gen-0001")
+    expect(readCheckpoint(root, "gen-0001").sequence).toBe(8)
+  })
+
+  it("preserves a published checkpoint when rename reports an error after succeeding", () => {
+    const rename = fs.renameSync.bind(fs)
+    const failure = jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      rename(from, to)
+      throw Object.assign(new Error("published then EIO"), { code: "EIO" })
+    })
+    try {
+      expect(() => writeCheckpoint(root, null, state(7))).toThrow("published then EIO")
+    } finally {
+      failure.mockRestore()
+    }
+    expect(readCheckpoint(root, "gen-0001").sequence).toBe(7)
+    expect(fs.readdirSync(path.join(root, "generations"))).toEqual(["gen-0001"])
+  })
+
+  it("defers cleanup while a child publishes, then reclaims its SIGKILL leftovers at startup", async () => {
+    writeCheckpoint(root, "gen-0001", state(1))
+    const moduleUrl = pathToFileURL(path.join(__dirname, "checkpoint.ts")).href
+    const script = `
+      import fs from "node:fs";
+      const loaded = await import(${JSON.stringify(moduleUrl)});
+      const { writeCheckpoint } = loaded.default ?? loaded;
+      const write = fs.writeFileSync;
+      fs.writeFileSync = (...args) => {
+        write(...args);
+        process.stdout.write("ready\\n");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      };
+      writeCheckpoint(${JSON.stringify(root)}, null, ${JSON.stringify(state(2))}, { staged: true });
+    `
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    )
+    try {
+      const [ready] = await once(child.stdout!, "data")
+      expect(String(ready)).toContain("ready")
+      const paths = fs.readdirSync(path.join(root, "generations"))
+      expect(paths).toHaveLength(3)
+      expect(cleanupCheckpointStaging(root)).toEqual([])
+      expect(fs.readdirSync(path.join(root, "generations"))).toEqual(paths)
+      const exited = once(child, "exit")
+      child.kill("SIGKILL")
+      await exited
+      const reopened = await resolveBackend({ root })
+      try {
+        expect(reopened.state.sequence).toBe(1)
+        expect(fs.readdirSync(path.join(root, "generations"))).toEqual(["gen-0001"])
+      } finally {
+        await reopened.backend.close()
+      }
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit")
+        child.kill("SIGKILL")
+        await exited
+      }
+    }
+  })
+
   it("ignores an abandoned staging directory when listing", () => {
     writeCheckpoint(root, "gen-0001", state())
     fs.mkdirSync(path.join(root, "generations", "gen-0002.staging"), { recursive: true })
@@ -91,6 +179,16 @@ describe("writeCheckpoint / readCheckpoint", () => {
   it("reports gen-0001 as the next generation on an empty root", () => {
     expect(nextGeneration(root)).toBe("gen-0001")
     expect(latestGeneration(root)).toBeNull()
+  })
+
+  it("reserves staged ids without making them boot candidates", () => {
+    writeCheckpoint(root, "gen-0001", state(2))
+    writeCheckpoint(root, "gen-0002", state(1), { staged: true })
+    expect(listGenerations(root)).toEqual(["gen-0001", "gen-0002"])
+    expect(latestGeneration(root)).toBe("gen-0001")
+    expect(nextGeneration(root)).toBe("gen-0003")
+    activateGeneration(root, "gen-0002")
+    expect(latestGeneration(root)).toBe("gen-0002")
   })
 })
 

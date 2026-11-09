@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { canonicalJson, sha256Hex } from "./canonical"
-import { writeCheckpoint } from "./checkpoint"
+import { generationDir, nextGeneration, writeCheckpoint } from "./checkpoint"
 import {
   applyCommits,
   encodeCommitLine,
@@ -13,6 +13,99 @@ import {
   seedCheckpoint,
 } from "./journal"
 import { DurabilityFault, type DurabilityCommit, type DurabilityState } from "./types"
+import { hasLiveWriter } from "./writer-lock"
+import { manifestFile, readManifest, writeManifest } from "./manifest"
+
+describe("journal writer ownership", () => {
+  it("fences appends if compaction's pointer rename succeeded but publication reported EIO", async () => {
+    const root = tempRoot()
+    writeCheckpoint(root, "gen-0001", baseState(0))
+    writeManifest(root, { ...readManifest(root), journalGeneration: "gen-0001" })
+    const writer = openJournalBackend({ root })
+    await writer.load()
+    writer.commitSync(commit(1, "s:accepted", { id: "accepted" }))
+    const snapshot = await writer.load()
+    const rename = fs.renameSync.bind(fs)
+    const failure = jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      rename(from, to)
+      if (String(to) === manifestFile(root))
+        throw Object.assign(new Error("published then EIO"), { code: "EIO" })
+    })
+    try {
+      await expect(writer.compact(snapshot)).rejects.toThrow("published then EIO")
+      expect(() => writer.commitSync(commit(2, "s:rejected", 2))).toThrow(/before load/)
+    } finally {
+      failure.mockRestore()
+      await writer.close()
+    }
+    const reopened = openJournalBackend({ root })
+    try {
+      const state = await reopened.load()
+      expect(state.sequence).toBe(1)
+      expect(state.dbs.CogniaDB.rows.sessions).toEqual({ "s:accepted": { id: "accepted" } })
+    } finally {
+      await reopened.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("keeps accepted rows by refusing a staged recovery during compaction publication", async () => {
+    const root = tempRoot()
+    writeCheckpoint(root, "gen-0001", baseState(1))
+    const writer = openJournalBackend({ root })
+    await writer.load()
+    writer.commitSync(commit(2, "s:accepted", { id: "accepted" }))
+    const snapshot = await writer.load()
+    const descriptors = new Map<number, string>()
+    const open = fs.openSync.bind(fs)
+    const write = fs.writeFileSync.bind(fs)
+    let interrupted = false
+    const openSpy = jest.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+      const fd = open(file, flags, mode)
+      descriptors.set(fd, String(file))
+      return fd
+    })
+    const writeSpy = jest.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      const filename = typeof file === "number" ? descriptors.get(file) : String(file)
+      write(file, data, options)
+      if (!interrupted && filename?.endsWith(".rows.json")) {
+        interrupted = true
+        expect(() =>
+          writeCheckpoint(root, nextGeneration(root), baseState(1), { staged: true })
+        ).toThrow(/live writer/)
+      }
+    })
+    try {
+      await writer.compact(snapshot)
+      expect(interrupted).toBe(true)
+    } finally {
+      writeSpy.mockRestore()
+      openSpy.mockRestore()
+      await writer.close()
+    }
+    const reopened = openJournalBackend({ root })
+    try {
+      const state = await reopened.load()
+      expect(state.sequence).toBe(2)
+      expect(state.dbs.CogniaDB.rows.sessions["s:accepted"]).toEqual({ id: "accepted" })
+    } finally {
+      await reopened.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("releases a failed load's lease so repair can proceed", async () => {
+    const root = tempRoot()
+    const backend = openJournalBackend({ root })
+    try {
+      writeCheckpoint(root, "gen-0001", baseState(1))
+      fs.writeFileSync(path.join(generationDir(root, "gen-0001"), "checkpoint.json"), "bad json")
+      await expect(backend.load()).rejects.toThrow(/not valid JSON/)
+      expect(hasLiveWriter(root, "journal")).toBe(false)
+    } finally {
+      await backend.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cognia-journal-"))

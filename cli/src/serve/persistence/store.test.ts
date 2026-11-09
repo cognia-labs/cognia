@@ -12,6 +12,7 @@ import { durabilityRoot, openBackend } from "./backend"
 import { canonicalJson, encodeKey, sha256Hex } from "./canonical"
 import { verifyDurability } from "./operations"
 import { readLegacyValueReport } from "./value-codec"
+import { hasLiveWriter } from "./writer-lock"
 import type { CaptureCoreLike, CaptureMutateRequest, CaptureTableLike } from "./capture"
 import {
   openDurabilityStore,
@@ -297,6 +298,28 @@ describe("openDurabilityStore", () => {
   })
   afterEach(() => fs.rmSync(home, { recursive: true, force: true }))
 
+  it("releases prefetched hash pins after the captured commit is durable", async () => {
+    const source = makeSource()
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "sqlite-v5",
+      getSources: async () => [source],
+    })
+    const root = durabilityRoot(home, "acct")
+    try {
+      await source.db.commit("sessions", {
+        type: "put",
+        values: [{ id: "binary", bytes: new Uint8Array(65536).fill(5) }],
+      })
+      expect(store.sequence()).toBe(1)
+      expect(hasLiveWriter(root, "binary")).toBe(false)
+      expect((await verifyDurability(root)).faults).toEqual([])
+    } finally {
+      await store.close()
+    }
+  })
+
   it("journals every committed transaction and reloads it after a crash", async () => {
     const source = makeSource()
     const store = await openDurabilityStore({
@@ -309,6 +332,9 @@ describe("openDurabilityStore", () => {
     expect(store.sequence()).toBe(2)
     expect(store.commitCount()).toBe(2)
     // No close(): the process is killed right after the second commit resolved.
+    // Drop only the backend's OS handles, as process death does, without
+    // calling the store's graceful close or performing a compaction.
+    await store.backend.close()
 
     const revived = makeSource()
     const second = await openDurabilityStore({
@@ -727,6 +753,7 @@ describe("openDurabilityStore", () => {
     await expect(
       openDurabilityStore({ home, accountId: "acct", getSources: async () => [bare] })
     ).rejects.toThrow(expect.objectContaining({ code: "checkpoint-schema-mismatch" }))
+    expect(hasLiveWriter(durabilityRoot(home, "acct"), "journal")).toBe(false)
 
     const revived = makeSource("CogniaDB", 141)
     const prepared: Array<Record<string, number>> = []

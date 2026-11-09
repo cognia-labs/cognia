@@ -17,7 +17,15 @@ import fs from "node:fs"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 
-import { collectBinaryReferences } from "./binary-store"
+import {
+  BINARY_PRUNE_GRACE_MS,
+  binaryDir,
+  collectBinaryReferences,
+  pruneBinaries,
+} from "./binary-store"
+import { collectJournalBinaryReferences } from "./journal"
+import { cleanupCheckpointStaging } from "./checkpoint"
+import { acquireWriterLease } from "./writer-lock"
 import { canonicalJson } from "./canonical"
 import { LegacyValueReport, normalizeLegacyValue, VALUE_CODEC } from "./value-codec"
 import {
@@ -149,10 +157,15 @@ export interface SqliteBackendOptions {
 function defaultOpen(file: string): SqliteDatabaseLike {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const db = new DatabaseSync(file) as unknown as SqliteDatabaseLike
-  db.exec("PRAGMA journal_mode = WAL;")
-  db.exec("PRAGMA synchronous = FULL;")
-  db.exec("PRAGMA foreign_keys = ON;")
-  return db
+  try {
+    db.exec("PRAGMA journal_mode = WAL;")
+    db.exec("PRAGMA synchronous = FULL;")
+    db.exec("PRAGMA foreign_keys = ON;")
+    return db
+  } catch (error) {
+    db.close()
+    throw error
+  }
 }
 
 function restrictPermissions(file: string): void {
@@ -179,14 +192,35 @@ export function assertIntegrity(db: SqliteDatabaseLike): void {
   }
 }
 
-export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilityBackend {
+export interface SqliteMaintenanceResult {
+  busy: boolean
+  logFrames: number
+  checkpointedFrames: number
+  prunedBinaries: string[]
+}
+
+export function openSqliteBackend(
+  opts: SqliteBackendOptions
+): Omit<HeadlessDurabilityBackend, "maintain"> & { maintain(): SqliteMaintenanceResult } {
   const file = sqliteFile(opts.root)
-  const db = (opts.open ?? defaultOpen)(file)
-  db.exec(SCHEMA_SQL)
-  // Check before the layout migration copies and drops the old rows table.
-  assertIntegrity(db)
-  ensureRowsTable(db)
-  restrictPermissions(file)
+  // Injected databases have no on-disk store to own.
+  const release = opts.open ? () => {} : acquireWriterLease(opts.root, "sqlite", { shared: true })
+  let opened: SqliteDatabaseLike | undefined
+  try {
+    opened = (opts.open ?? defaultOpen)(file)
+    opened.exec(SCHEMA_SQL)
+    assertIntegrity(opened)
+    ensureRowsTable(opened)
+    restrictPermissions(file)
+  } catch (error) {
+    try {
+      opened?.close()
+    } finally {
+      release()
+    }
+    throw error
+  }
+  const db = opened
 
   const selectSequence = db.prepare("SELECT value FROM durability_meta WHERE key = 'sequence'")
   const upsertSequence = db.prepare(
@@ -197,13 +231,9 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
     "INSERT INTO durability_schema (database, version, tables) VALUES (?, ?, ?) " +
       "ON CONFLICT(database) DO UPDATE SET version = excluded.version, tables = excluded.tables"
   )
-  const selectSchemas = db.prepare("SELECT database, version, tables FROM durability_schema")
   const selectSchemaTables = db.prepare("SELECT tables FROM durability_schema WHERE database = ?")
   const updateSchemaTables = db.prepare(
     "UPDATE durability_schema SET tables = ? WHERE database = ?"
-  )
-  const selectRows = db.prepare(
-    `SELECT database, table_name, row_key, value, value_codec FROM ${SQLITE_ROWS_TABLE}`
   )
   // Values arrive in codec-1 form (the store encodes them at the Dexie boundary).
   const upsertRow = db.prepare(
@@ -235,65 +265,7 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
   }
 
   async function load(): Promise<DurabilityState> {
-    const state: DurabilityState = { sequence, dbs: {} }
-    const report = new LegacyValueReport()
-    for (const raw of selectSchemas.all() as Array<Record<string, unknown>>) {
-      const database = String(raw.database)
-      let tables: string[] = []
-      try {
-        const parsed: unknown = JSON.parse(String(raw.tables))
-        if (Array.isArray(parsed)) tables = parsed.filter((t): t is string => typeof t === "string")
-      } catch {
-        throw new DurabilityFault(
-          "sqlite-integrity-failure",
-          `sqlite schema row for ${database} has an unreadable table list`
-        )
-      }
-      const schema: DurabilitySchema = { version: Number(raw.version), tables }
-      const rows: Record<string, Record<string, unknown>> = {}
-      for (const table of tables) rows[table] = {}
-      state.dbs[database] = { schema, rows }
-    }
-    for (const raw of selectRows.all() as Array<Record<string, unknown>>) {
-      const entry = state.dbs[String(raw.database)]
-      if (!entry) continue
-      const tableName = String(raw.table_name)
-      const key = String(raw.row_key)
-      // A store written before `listTouchedTables` may hold rows of a table
-      // its schema row never listed. List it, as the journal does, so a
-      // restart re-declares it and the checkpoint writer keeps its rows.
-      if (!entry.rows[tableName] && !entry.schema.tables.includes(tableName)) {
-        entry.schema.tables = [...entry.schema.tables, tableName].sort()
-      }
-      const table = (entry.rows[tableName] ??= {})
-      let value: unknown
-      try {
-        value = JSON.parse(String(raw.value))
-      } catch {
-        throw new DurabilityFault(
-          "sqlite-integrity-failure",
-          `sqlite row ${String(raw.database)}.${tableName} holds unreadable JSON`
-        )
-      }
-      const codec = Number(raw.value_codec)
-      if (codec === 0) {
-        value = normalizeLegacyValue(value, {
-          database: String(raw.database),
-          table: tableName,
-          key,
-          report,
-        })
-      } else if (codec !== VALUE_CODEC) {
-        throw new DurabilityFault(
-          "sqlite-integrity-failure",
-          `sqlite row ${String(raw.database)}.${tableName} uses unsupported value codec ${codec}`
-        )
-      }
-      table[key] = value
-    }
-    const findings = report.findings()
-    if (findings.length > 0) state.legacyValueFindings = findings
-    return state
+    return materializeSqlite(db, sequence)
   }
 
   /**
@@ -395,7 +367,10 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
     sequence = state.sequence
   }
 
-  const backend: HeadlessDurabilityBackend & { replaceAll(state: DurabilityState): void } = {
+  const backend: Omit<HeadlessDurabilityBackend, "maintain"> & {
+    replaceAll(state: DurabilityState): void
+    maintain(): SqliteMaintenanceResult
+  } = {
     id: "sqlite-v5",
     load,
     commitSync,
@@ -411,17 +386,46 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
       return { generation: "sqlite", previousGeneration: null, sequence }
     },
     maintain() {
-      // Commits keep each schema's table list current and SQLite folds its WAL
-      // as it goes (`wal_autocheckpoint`). What is left is handing the WAL
-      // file's space back; the full rewrite and `integrity_check` are kept for
-      // schema changes, explicit compaction and every open.
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE);")
+      cleanupCheckpointStaging(opts.root)
+      const result = checkpointWal(db)
+      if (result.busy)
+        console.warn("durability: SQLite WAL checkpoint busy; a reader retains WAL frames")
+      const now = Date.now()
+      const directory = binaryDir(opts.root)
+      if (
+        !fs.existsSync(directory) ||
+        !fs
+          .readdirSync(directory)
+          .some(
+            (name) => now - fs.statSync(path.join(directory, name)).mtimeMs >= BINARY_PRUNE_GRACE_MS
+          )
+      )
+        return { ...result, prunedBinaries: [] }
+      let releaseBinaries: () => void
+      try {
+        releaseBinaries = acquireWriterLease(opts.root, "binary", { shared: true })
+      } catch (error) {
+        if (error instanceof DurabilityFault && error.code === "writer-busy")
+          return { ...result, prunedBinaries: [] }
+        throw error
+      }
+      try {
+        const references = collectJournalBinaryReferences(opts.root, new Set<string>())
+        collectSqliteBinaryReferences(opts.root, references)
+        return { ...result, prunedBinaries: pruneBinaries(opts.root, references, now) }
+      } finally {
+        releaseBinaries()
+      }
     },
     async close() {
       if (closed) return
       closed = true
-      db.close()
-      restrictPermissions(file)
+      try {
+        db.close()
+        restrictPermissions(file)
+      } finally {
+        release()
+      }
     },
   }
   return backend
@@ -459,4 +463,143 @@ export function collectSqliteBinaryReferences(root: string, into: Set<string>): 
     db.close()
   }
   return into
+}
+
+function materializeSqlite(
+  db: SqliteDatabaseLike,
+  sequence: number,
+  legacyRows = false
+): DurabilityState {
+  const state: DurabilityState = { sequence, dbs: {} }
+  const report = new LegacyValueReport()
+  for (const raw of db
+    .prepare("SELECT database, version, tables FROM durability_schema")
+    .all() as Array<Record<string, unknown>>) {
+    const database = String(raw.database)
+    let tables: string[] = []
+    try {
+      const parsed: unknown = JSON.parse(String(raw.tables))
+      if (Array.isArray(parsed)) tables = parsed.filter((t): t is string => typeof t === "string")
+    } catch {
+      throw new DurabilityFault(
+        "sqlite-integrity-failure",
+        `sqlite schema row for ${database} has an unreadable table list`
+      )
+    }
+    const schema: DurabilitySchema = { version: Number(raw.version), tables }
+    const rows: Record<string, Record<string, unknown>> = {}
+    for (const table of tables) rows[table] = {}
+    state.dbs[database] = { schema, rows }
+  }
+  for (const raw of db
+    .prepare(
+      legacyRows
+        ? "SELECT database, table_name, row_key, value, 0 AS value_codec FROM durability_rows"
+        : `SELECT database, table_name, row_key, value, value_codec FROM ${SQLITE_ROWS_TABLE}`
+    )
+    .all() as Array<Record<string, unknown>>) {
+    const entry = state.dbs[String(raw.database)]
+    if (!entry) continue
+    const tableName = String(raw.table_name)
+    const key = String(raw.row_key)
+    // A store written before `listTouchedTables` may hold rows of a table
+    // its schema row never listed. List it, as the journal does, so a
+    // restart re-declares it and the checkpoint writer keeps its rows.
+    if (!entry.rows[tableName] && !entry.schema.tables.includes(tableName)) {
+      entry.schema.tables = [...entry.schema.tables, tableName].sort()
+    }
+    const table = (entry.rows[tableName] ??= {})
+    let value: unknown
+    try {
+      value = JSON.parse(String(raw.value))
+    } catch {
+      throw new DurabilityFault(
+        "sqlite-integrity-failure",
+        `sqlite row ${String(raw.database)}.${tableName} holds unreadable JSON`
+      )
+    }
+    const codec = Number(raw.value_codec)
+    if (codec === 0) {
+      value = normalizeLegacyValue(value, {
+        database: String(raw.database),
+        table: tableName,
+        key,
+        report,
+      })
+    } else if (codec !== VALUE_CODEC) {
+      throw new DurabilityFault(
+        "sqlite-integrity-failure",
+        `sqlite row ${String(raw.database)}.${tableName} uses unsupported value codec ${codec}`
+      )
+    }
+    table[key] = value
+  }
+  const findings = report.findings()
+  if (findings.length > 0) state.legacyValueFindings = findings
+  return state
+}
+
+/** Read both SQLite layouts without migration, chmod, or a write-capable handle. */
+export function readSqliteState(root: string): DurabilityState {
+  const db = new DatabaseSync(sqliteFile(root), { readOnly: true }) as unknown as SqliteDatabaseLike
+  try {
+    db.exec("BEGIN")
+    assertIntegrity(db)
+    const exists = (name: string) =>
+      db.prepare("SELECT type FROM sqlite_master WHERE name = ?").get(name) as
+        { type: string } | undefined
+    const meta = exists("durability_meta")
+      ? (db.prepare("SELECT value FROM durability_meta WHERE key = 'sequence'").get() as
+          { value: string } | undefined)
+      : undefined
+    const codecRows = exists(SQLITE_ROWS_TABLE)
+    if (!codecRows && exists("durability_rows")?.type !== "table") {
+      throw new DurabilityFault(
+        "sqlite-integrity-failure",
+        "sqlite store has no readable rows table"
+      )
+    }
+    return materializeSqlite(db, Number(meta?.value ?? 0), !codecRows)
+  } finally {
+    db.close()
+  }
+}
+
+function checkpointWal(db: SqliteDatabaseLike): Omit<SqliteMaintenanceResult, "prunedBinaries"> {
+  const result = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+    busy: number
+    log: number
+    checkpointed: number
+  }
+  return { busy: result.busy !== 0, logFrames: result.log, checkpointedFrames: result.checkpointed }
+}
+
+/** Explicit offline VACUUM: routine maintenance only checkpoints and collects binaries. */
+export function compactSqlite(root: string): { bytesBefore: number; bytesAfter: number } {
+  const file = sqliteFile(root)
+  if (!fs.existsSync(file))
+    throw new DurabilityFault("sqlite-integrity-failure", "no SQLite store exists to compact")
+  const release = acquireWriterLease(root, "sqlite")
+  let db: SqliteDatabaseLike | undefined
+  try {
+    db = new DatabaseSync(file) as unknown as SqliteDatabaseLike
+    assertIntegrity(db)
+    if (checkpointWal(db).busy)
+      throw new DurabilityFault(
+        "writer-busy",
+        "SQLite WAL checkpoint busy; close readers before compaction"
+      )
+    const bytesBefore = fs.statSync(file).size
+    db.exec("VACUUM")
+    if (checkpointWal(db).busy)
+      throw new DurabilityFault("writer-busy", "SQLite WAL checkpoint busy after VACUUM")
+    assertIntegrity(db)
+    return { bytesBefore, bytesAfter: fs.statSync(file).size }
+  } finally {
+    try {
+      db?.close()
+    } finally {
+      release()
+    }
+  }
 }

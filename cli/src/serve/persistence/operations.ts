@@ -3,30 +3,45 @@
  *
  * One invariant governs all of them: **no tool overwrites the only valid
  * generation.** Every operation adds — a generation, a rollback bundle, a
- * manifest revision — and the single destructive operation (`finalize`)
+ * manifest revision — and the generation-pruning operation (`finalize`)
  * requires an explicit confirmation flag and reports the watermark it leaves
  * behind.
  */
 import fs from "node:fs"
 import path from "node:path"
 
-import { openBackend } from "./backend"
+import { backendHeldByUnpinnedRoot, inspectDurabilityRoot, openBackend } from "./backend"
 import {
+  activateGeneration,
+  cleanupCheckpointStaging,
+  isStagedGeneration,
   formatGeneration,
   generationDir,
   latestGeneration,
   listGenerations,
-  nextGeneration,
   parseGeneration,
   readCheckpoint,
   writeCheckpoint,
 } from "./checkpoint"
-import { journalFile, replayJournal, applyCommits } from "./journal"
-import { manifestFile, readManifest, writeManifest, type BackendManifest } from "./manifest"
-import { formatParityReport, verifyParity, type ParityReport } from "./parity"
-import { collectBinaryReferences, pruneBinaries } from "./binary-store"
-import { collectSqliteBinaryReferences, sqliteFile } from "./sqlite"
+import { journalFile, replayJournal, applyCommits, collectJournalBinaryReferences } from "./journal"
+import { acquireWriterLease } from "./writer-lock"
 import {
+  defaultManifest,
+  manifestFile,
+  readManifest,
+  writeManifest,
+  type BackendManifest,
+} from "./manifest"
+import { formatParityReport, verifyParity, type ParityReport } from "./parity"
+import {
+  binaryDir,
+  collectBinaryReferences,
+  pinBinaryReferences,
+  pruneBinaries,
+} from "./binary-store"
+import { collectSqliteBinaryReferences, readSqliteState, sqliteFile } from "./sqlite"
+import {
+  decodeDurableValue,
   LegacyValueReport,
   readLegacyValueReport,
   recordLegacyValueFindings,
@@ -85,7 +100,7 @@ function recordFault(status: DurabilityStatus, error: unknown): void {
 export async function verifyDurability(root: string): Promise<DurabilityStatus> {
   const status: DurabilityStatus = {
     root,
-    manifest: readManifestSafely(root),
+    manifest: defaultManifest(),
     generations: [],
     latestGeneration: null,
     checkpointSequence: null,
@@ -99,23 +114,58 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     legacyValueLoss: [],
   }
   const legacy = new LegacyValueReport()
+  try {
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+      throw new DurabilityFault("manifest-corrupt", `durability root does not exist: ${root}`)
+    }
+    status.manifest = readManifest(root)
+    const inventory = inspectDurabilityRoot(root)
+    const held = backendHeldByUnpinnedRoot(inventory)
+    if (held) status.manifest.activeBackend = held
+    if (inventory.manifest) {
+      for (const backend of [status.manifest.activeBackend, status.manifest.shadowBackend]) {
+        if (!backend) continue
+        const generation = latestGeneration(root, status.manifest)
+        const present =
+          backend === "sqlite-v5"
+            ? inventory.sqlite
+            : generation !== null && listGenerations(root).includes(generation)
+        if (!present)
+          recordFault(
+            status,
+            new DurabilityFault("manifest-corrupt", `manifest backend ${backend} is missing`)
+          )
+      }
+    }
+  } catch (error) {
+    recordFault(status, error)
+  }
 
   let journalState: DurabilityState | null = null
   try {
     status.generations = listGenerations(root)
-    status.latestGeneration = latestGeneration(root)
-    if (status.latestGeneration) {
-      const checkpoint = readCheckpoint(root, status.latestGeneration, legacy)
-      status.checkpointSequence = checkpoint.sequence
-      const file = journalFile(root, status.latestGeneration)
-      if (fs.existsSync(file)) {
-        const replay = replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence, legacy)
-        status.journalCommits = replay.commits.length
-        status.journalDiscardedBytes = replay.discardedBytes
+    status.latestGeneration = latestGeneration(root, status.manifest)
+    for (const generation of status.generations) {
+      try {
+        const checkpoint = readCheckpoint(root, generation, legacy)
+        assertDecodable(root, checkpoint)
+        const checkpointSequence = checkpoint.sequence
+        const file = journalFile(root, generation)
+        const replay = fs.existsSync(file)
+          ? replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence, legacy)
+          : { commits: [], discardedBytes: 0 }
+        for (const commit of replay.commits) decodeDurableValue(commit.mutations, root)
         applyCommits(checkpoint, replay.commits)
+        if (generation === status.latestGeneration) {
+          status.checkpointSequence = checkpointSequence
+          status.journalCommits = replay.commits.length
+          status.journalDiscardedBytes = replay.discardedBytes
+          status.journalSequence = checkpoint.sequence
+          journalState = checkpoint
+        }
+      } catch (error) {
+        recordFault(status, error)
       }
-      status.journalSequence = checkpoint.sequence
-      journalState = checkpoint
     }
   } catch (error) {
     recordFault(status, error)
@@ -123,20 +173,19 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
 
   let sqliteState: DurabilityState | null = null
   if (status.sqlitePresent) {
-    let backend: ReturnType<typeof openBackend> | null = null
     try {
-      backend = openBackend("sqlite-v5", root)
-      sqliteState = await backend.load()
+      sqliteState = readSqliteState(root)
+      assertDecodable(root, sqliteState)
       status.sqliteSequence = sqliteState.sequence
       for (const finding of sqliteState.legacyValueFindings ?? []) legacy.merge(finding)
     } catch (error) {
       recordFault(status, error)
-    } finally {
-      await backend?.close()
     }
   }
 
-  if (journalState && sqliteState) {
+  const compatibilityWindow =
+    !fs.existsSync(manifestFile(root)) || status.manifest.shadowBackend !== null
+  if (journalState && sqliteState && compatibilityWindow) {
     status.parity = verifyParity(journalState, sqliteState)
     if (!status.parity.ok) {
       status.faults.push({
@@ -157,31 +206,27 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
   return status
 }
 
-function readManifestSafely(root: string): BackendManifest {
-  try {
-    return readManifest(root)
-  } catch {
-    // A corrupt manifest must not stop the report — `verify` is precisely the
-    // tool an operator reaches for when the manifest is the broken thing.
-    return {
-      manifestFormat: 1,
-      activeBackend: "journal-v4",
-      shadowBackend: null,
-      rollbackWatermark: null,
-      updatedAt: 0,
+function assertDecodable(root: string, state: DurabilityState): void {
+  for (const entry of Object.values(state.dbs)) {
+    for (const rows of Object.values(entry.rows)) {
+      for (const value of Object.values(rows)) decodeDurableValue(value, root)
     }
   }
 }
 
 /** Materialise the journal stack (checkpoint + replay). */
-export function readJournalState(root: string): DurabilityState {
-  const generation = latestGeneration(root)
+export function readJournalState(
+  root: string,
+  generation = latestGeneration(root)
+): DurabilityState {
   if (!generation) return emptyDurabilityState()
   const report = new LegacyValueReport()
   const state = readCheckpoint(root, generation, report)
+  assertDecodable(root, state)
   const file = journalFile(root, generation)
   if (fs.existsSync(file)) {
     const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence, report)
+    for (const commit of commits) decodeDurableValue(commit.mutations, root)
     applyCommits(state, commits)
   }
   const findings = report.findings()
@@ -220,7 +265,17 @@ export function writeRollbackBundle(root: string, reason: string, now = Date.now
     .sort()
   const index = existing.length + 1
   const id = `bundle-${String(index).padStart(4, "0")}`
-  const generation = latestGeneration(root)
+  const generation =
+    listGenerations(root)
+      .reverse()
+      .find((candidate) => {
+        try {
+          assertDecodable(root, readCheckpoint(root, candidate))
+          return !isStagedGeneration(root, candidate)
+        } catch {
+          return false
+        }
+      }) ?? null
   const bundle: RollbackBundle = {
     id,
     createdAt: now(),
@@ -286,15 +341,16 @@ export async function migrateDurability(
   const now = opts.now ?? Date.now
   const verify = opts.verify ?? verifyParity
   const manifest = readManifest(root)
-  const pinned = fs.existsSync(manifestFile(root))
+  const inventory = inspectDurabilityRoot(root)
+  const pinned = inventory.manifest
+  const held = backendHeldByUnpinnedRoot(inventory)
+  if (held) manifest.activeBackend = held
   if (manifest.activeBackend === to) {
-    if (pinned) {
+    if (pinned || held === "sqlite-v5") {
       throw new DurabilityFault("parity-mismatch", `account is already on ${to}`)
     }
-    // No manifest on disk yet: the account still boots on the `snapshot-v3`
-    // default, and `readManifest` only *reported* the in-memory default. Pin it
-    // so `serve` actually resolves this backend — that is the documented way to
-    // opt an account into the ladder without an env gate.
+    // Existing journal data already selects journal-v4. Pin that choice so
+    // later boots no longer need to infer it from the inventory.
     writeManifest(root, { ...manifest, activeBackend: to, shadowBackend: null }, now)
     return {
       from: manifest.activeBackend,
@@ -310,6 +366,7 @@ export async function migrateDurability(
   let sourceState: DurabilityState
   try {
     sourceState = await sourceBackend.load()
+    assertDecodable(root, sourceState)
   } finally {
     await sourceBackend.close()
   }
@@ -333,7 +390,7 @@ export async function migrateDurability(
   writeManifest(
     root,
     {
-      ...manifest,
+      ...readManifest(root),
       activeBackend: to,
       // Keep the incumbent live as the shadow: the compatibility window is what
       // makes `rollback` a manifest rewrite instead of a restore.
@@ -370,34 +427,77 @@ export async function recoverDurability(
   opts: { activate?: boolean; now?: () => number } = {}
 ): Promise<RecoverResult> {
   const now = opts.now ?? Date.now
-  const candidates = await collectRecoveryCandidates(root, from)
-  if (candidates.length === 0) {
-    throw new DurabilityFault("checkpoint-corrupt", "no readable recovery source was found")
-  }
-  candidates.sort((a, b) => b.state.sequence - a.state.sequence)
-  const chosen = candidates[0]
-  recordLegacyValueFindings(root, chosen.state.legacyValueFindings, now)
+  let releaseSqlite: (() => void) | undefined
+  let releaseJournal: (() => void) | undefined
+  let releaseBinaries: (() => void) | undefined
+  try {
+    if (opts.activate) {
+      releaseSqlite = acquireWriterLease(root, "sqlite")
+      releaseJournal = acquireWriterLease(root, "journal")
+    }
+    // Protect the read itself, before the selected candidate's hashes are known.
+    let pins: Set<string> | null = null
+    releaseBinaries = pinBinaryReferences(root, () => pins)
+    const candidates = await collectRecoveryCandidates(root, from)
+    if (candidates.length === 0) {
+      throw new DurabilityFault("checkpoint-corrupt", "no readable recovery source was found")
+    }
+    candidates.sort((a, b) => b.state.sequence - a.state.sequence)
+    const chosen = candidates[0]
+    pins = collectBinaryReferences(chosen.state.dbs, new Set<string>())
+    recordLegacyValueFindings(root, chosen.state.legacyValueFindings, now)
 
-  const generation = nextGeneration(root)
-  writeCheckpoint(root, generation, chosen.state)
-  const staged = readCheckpoint(root, generation)
-  const parity = verifyParity(chosen.state, staged)
-  if (!parity.ok) {
-    throw new DurabilityFault(
-      "parity-mismatch",
-      `staged generation ${generation} does not match the recovered state:\n${formatParityReport(parity)}`
-    )
-  }
+    const inventory = inspectDurabilityRoot(root)
+    if (
+      !opts.activate &&
+      !inventory.manifest &&
+      inventory.sqlite &&
+      !inventory.journal &&
+      !inventory.stagedJournal
+    ) {
+      // Pin the incumbent before adding staged journal data so the next boot
+      // still selects SQLite instead of refusing an ambiguous unpinned root.
+      const release = acquireWriterLease(root, "sqlite")
+      try {
+        const current = inspectDurabilityRoot(root)
+        if (!current.manifest && backendHeldByUnpinnedRoot(current) === "sqlite-v5") {
+          writeManifest(root, { ...readManifest(root), activeBackend: "sqlite-v5" }, now)
+        }
+      } finally {
+        release()
+      }
+    }
 
-  let activated = false
-  if (opts.activate) {
-    writeRollbackBundle(root, `recover ${chosen.source} -> ${generation}`, now)
-    const manifest = readManifest(root)
-    writeManifest(root, { ...manifest, activeBackend: "journal-v4", shadowBackend: null }, now)
-    activated = true
-  }
+    const generation = writeCheckpoint(root, null, chosen.state, { staged: true })
+    const staged = readCheckpoint(root, generation)
+    assertDecodable(root, staged)
+    const parity = verifyParity(chosen.state, staged)
+    if (!parity.ok) {
+      throw new DurabilityFault(
+        "parity-mismatch",
+        `staged generation ${generation} does not match the recovered state:\n${formatParityReport(parity)}`
+      )
+    }
 
-  return { source: chosen.source, generation, sequence: staged.sequence, activated, parity }
+    let activated = false
+    if (opts.activate) {
+      writeRollbackBundle(root, `recover ${chosen.source} -> ${generation}`, now)
+      activateGeneration(root, generation, now)
+      activated = true
+    }
+
+    return { source: chosen.source, generation, sequence: staged.sequence, activated, parity }
+  } finally {
+    try {
+      releaseJournal?.()
+    } finally {
+      try {
+        releaseSqlite?.()
+      } finally {
+        releaseBinaries?.()
+      }
+    }
+  }
 }
 
 async function collectRecoveryCandidates(
@@ -408,12 +508,16 @@ async function collectRecoveryCandidates(
     from === "auto" || from === source
   const out: Array<{ source: Exclude<RecoverySource, "auto">; state: DurabilityState }> = []
 
-  if (wanted("snapshot")) {
-    const generation = latestGeneration(root)
-    if (generation) {
+  const generations =
+    from === "auto"
+      ? listGenerations(root).reverse()
+      : [latestGeneration(root)].filter((generation): generation is string => generation !== null)
+  for (const generation of generations) {
+    if (wanted("snapshot")) {
       try {
         const report = new LegacyValueReport()
         const state = readCheckpoint(root, generation, report)
+        assertDecodable(root, state)
         const findings = report.findings()
         if (findings.length > 0) state.legacyValueFindings = findings
         out.push({ source: "snapshot", state })
@@ -421,23 +525,23 @@ async function collectRecoveryCandidates(
         if (from !== "auto") throw error
       }
     }
-  }
-  if (wanted("journal")) {
-    try {
-      const state = readJournalState(root)
-      if (Object.keys(state.dbs).length > 0) out.push({ source: "journal", state })
-    } catch (error) {
-      if (from !== "auto") throw error
+    if (wanted("journal")) {
+      try {
+        const state = readJournalState(root, generation)
+        assertDecodable(root, state)
+        out.push({ source: "journal", state })
+      } catch (error) {
+        if (from !== "auto") throw error
+      }
     }
   }
   if (wanted("sqlite") && fs.existsSync(sqliteFile(root))) {
-    const backend = openBackend("sqlite-v5", root)
     try {
-      out.push({ source: "sqlite", state: await backend.load() })
+      const state = readSqliteState(root)
+      assertDecodable(root, state)
+      out.push({ source: "sqlite", state })
     } catch (error) {
       if (from !== "auto") throw error
-    } finally {
-      await backend.close()
     }
   }
   return out
@@ -469,29 +573,40 @@ export function rollbackDurability(
   if (!fs.existsSync(path.join(generationDir(root, generation), "checkpoint.json"))) {
     throw new DurabilityFault("checkpoint-corrupt", `generation ${generation} is not on disk`)
   }
-  // The target is usually older than the current generation, so it may predate
-  // value codec 1. Re-cutting it below rewrites its rows as codec 1, after which
-  // nothing on disk says they were lossy: record the report first.
-  const report = new LegacyValueReport()
-  const state = readCheckpoint(root, generation, report)
-  recordLegacyValueFindings(root, report.findings(), now)
-  writeRollbackBundle(root, `rollback -> ${generation}`, now)
+  const releaseSqlite = acquireWriterLease(root, "sqlite")
+  let releaseJournal: (() => void) | undefined
+  try {
+    releaseJournal = acquireWriterLease(root, "journal")
+    // The target is usually older than the current generation, so it may predate
+    // value codec 1. Re-cutting it below rewrites its rows as codec 1, after which
+    // nothing on disk says they were lossy: record the report first.
+    const report = new LegacyValueReport()
+    const state = readCheckpoint(root, generation, report)
+    recordLegacyValueFindings(root, report.findings(), now)
+    writeRollbackBundle(root, `rollback -> ${generation}`, now)
 
-  // Re-cut the target as the newest generation so the journal appends against
-  // it: generations are immutable, and re-opening an older one for append would
-  // interleave two histories in a single file.
-  const target = nextGeneration(root)
-  writeCheckpoint(root, target, state)
+    // Re-cut the target as the newest generation so the journal appends against
+    // it: generations are immutable, and re-opening an older one for append would
+    // interleave two histories in a single file.
+    const target = writeCheckpoint(root, null, state, { writer: true, staged: true })
 
-  const manifest = readManifest(root)
-  const next: BackendManifest = {
-    ...manifest,
-    activeBackend: "journal-v4",
-    shadowBackend: null,
-    rollbackWatermark: manifest.rollbackWatermark,
+    const manifest = readManifest(root)
+    const next: BackendManifest = {
+      ...manifest,
+      activeBackend: "journal-v4",
+      journalGeneration: target,
+      shadowBackend: null,
+      rollbackWatermark: manifest.rollbackWatermark,
+    }
+    writeManifest(root, next, now)
+    return { generation: target, sequence: state.sequence, manifest: next }
+  } finally {
+    try {
+      releaseJournal?.()
+    } finally {
+      releaseSqlite()
+    }
   }
-  writeManifest(root, next, now)
-  return { generation: target, sequence: state.sequence, manifest: next }
 }
 
 // ── finalize ────────────────────────────────────────────────────────────────
@@ -529,53 +644,66 @@ export function finalizeDurability(
   if (index === null) {
     throw new DurabilityFault("checkpoint-corrupt", `"${generation}" is not a generation id`)
   }
-  const all = listGenerations(root)
-  if (!all.includes(generation)) {
-    throw new DurabilityFault("checkpoint-corrupt", `generation ${generation} is not on disk`)
-  }
-  // No "is it the newest?" guard is needed: `all.includes(generation)` already
-  // proves the watermark is on disk, and everything above it is kept.
-  const pruned: string[] = []
-  for (const candidate of all) {
-    if ((parseGeneration(candidate) ?? 0) >= index) continue
-    fs.rmSync(generationDir(root, candidate), { recursive: true, force: true })
-    fs.rmSync(journalFile(root, candidate), { force: true })
-    pruned.push(candidate)
-  }
-
-  const manifest = readManifest(root)
-  const next: BackendManifest = {
-    ...manifest,
-    shadowBackend: null,
-    rollbackWatermark: generation,
-  }
-  writeManifest(root, next, now)
-
-  // Side files nothing kept still names: every remaining generation (its
-  // checkpoint and its journal) and every SQLite row, whichever backend is
-  // active, since any of them can be rolled back to.
-  const kept = listGenerations(root)
-  const references = new Set<string>()
-  for (const candidate of kept) {
-    const checkpoint = readCheckpoint(root, candidate)
-    for (const entry of Object.values(checkpoint.dbs)) {
-      for (const rows of Object.values(entry.rows)) collectBinaryReferences(rows, references)
+  const release = acquireWriterLease(root, "journal")
+  let releaseBinaries: (() => void) | undefined
+  try {
+    if (fs.existsSync(binaryDir(root)))
+      releaseBinaries = acquireWriterLease(root, "binary", { shared: true })
+    const all = listGenerations(root)
+    if (!all.includes(generation)) {
+      throw new DurabilityFault("checkpoint-corrupt", `generation ${generation} is not on disk`)
     }
-    const file = journalFile(root, candidate)
-    if (fs.existsSync(file)) {
-      const { commits } = replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence)
-      for (const commit of commits) collectBinaryReferences(commit.mutations, references)
+    const manifest = readManifest(root)
+    const kept = all.filter((candidate) => (parseGeneration(candidate) ?? 0) >= index)
+    if (isStagedGeneration(root, generation)) {
+      throw new DurabilityFault(
+        "checkpoint-corrupt",
+        `generation ${generation} is staged; activate it before finalize`
+      )
     }
-  }
-  collectSqliteBinaryReferences(root, references)
-  const prunedBinaries = pruneBinaries(root, references, now())
-
-  return {
-    keptGenerations: kept,
-    prunedGenerations: pruned,
-    prunedBinaries,
-    rollbackWatermark: generation,
-    manifest: next,
+    // All validation and reference discovery precedes the first destructive step.
+    // Check the checkpoint itself as well as the replayed view: rollback still
+    // needs a binary even when a later journal commit deleted its row.
+    for (const candidate of kept) {
+      assertDecodable(root, readCheckpoint(root, candidate))
+      const file = journalFile(root, candidate)
+      if (fs.existsSync(file)) {
+        const checkpoint = readCheckpoint(root, candidate)
+        const replay = replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence)
+        for (const commit of replay.commits) decodeDurableValue(commit.mutations, root)
+      }
+    }
+    const references = collectJournalBinaryReferences(root, new Set<string>(), kept)
+    collectSqliteBinaryReferences(root, references)
+    if (fs.existsSync(sqliteFile(root))) assertDecodable(root, readSqliteState(root))
+    const next: BackendManifest = {
+      ...manifest,
+      shadowBackend: null,
+      rollbackWatermark: generation,
+    }
+    writeManifest(root, next, now)
+    const pruned: string[] = []
+    for (const candidate of all) {
+      if ((parseGeneration(candidate) ?? 0) >= index) continue
+      fs.rmSync(generationDir(root, candidate), { recursive: true, force: true })
+      fs.rmSync(journalFile(root, candidate), { force: true })
+      pruned.push(candidate)
+    }
+    const prunedBinaries = pruneBinaries(root, references, now())
+    cleanupCheckpointStaging(root)
+    return {
+      keptGenerations: kept,
+      prunedGenerations: pruned,
+      prunedBinaries,
+      rollbackWatermark: generation,
+      manifest: next,
+    }
+  } finally {
+    try {
+      releaseBinaries?.()
+    } finally {
+      release()
+    }
   }
 }
 

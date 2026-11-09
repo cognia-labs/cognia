@@ -12,6 +12,7 @@
  */
 import fs from "node:fs"
 import path from "node:path"
+import { randomUUID } from "node:crypto"
 
 import { canonicalJson } from "./canonical"
 import { DurabilityFault, isDurabilityBackendId, type DurabilityBackendId } from "./types"
@@ -22,6 +23,8 @@ export interface BackendManifest {
   manifestFormat: typeof MANIFEST_FORMAT
   /** Backend the brain reads and writes on boot. */
   activeBackend: DurabilityBackendId
+  /** Explicit journal head, published atomically with the backend during recovery. */
+  journalGeneration?: string
   /**
    * Backend that is being populated alongside `activeBackend`.
    *
@@ -80,9 +83,21 @@ export function parseManifest(text: string): BackendManifest {
       `backend manifest names an unknown shadow backend ${String(shadow)}`
     )
   }
+  if (
+    root.journalGeneration !== undefined &&
+    (typeof root.journalGeneration !== "string" || !/^gen-\d{4,}$/.test(root.journalGeneration))
+  ) {
+    throw new DurabilityFault(
+      "manifest-corrupt",
+      "backend manifest names an invalid journal generation"
+    )
+  }
   return {
     manifestFormat: MANIFEST_FORMAT,
     activeBackend: root.activeBackend,
+    ...(typeof root.journalGeneration === "string"
+      ? { journalGeneration: root.journalGeneration }
+      : {}),
     shadowBackend: isDurabilityBackendId(shadow) ? shadow : null,
     rollbackWatermark: typeof root.rollbackWatermark === "string" ? root.rollbackWatermark : null,
     updatedAt: typeof root.updatedAt === "number" ? root.updatedAt : 0,
@@ -99,7 +114,7 @@ export function readManifest(root: string): BackendManifest {
 export function writeManifest(root: string, manifest: BackendManifest, now = Date.now): void {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const file = manifestFile(root)
-  const staging = `${file}.staging`
+  const staging = `${file}.staging-${randomUUID()}`
   const payload = canonicalJson({ ...manifest, updatedAt: now() })
   const descriptor = fs.openSync(staging, "w", 0o600)
   try {

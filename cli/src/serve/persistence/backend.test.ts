@@ -11,10 +11,12 @@ import {
   isFreshDurabilityRoot,
   openBackend,
   resolveBackend,
+  resolveServeHome,
 } from "./backend"
 import { writeCheckpoint } from "./checkpoint"
 import { manifestFile, readManifest, writeManifest } from "./manifest"
 import type { DurabilityCommit, DurabilityState, HeadlessDurabilityBackend } from "./types"
+import { hasLiveWriter } from "./writer-lock"
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cognia-backend-"))
@@ -38,6 +40,18 @@ function commit(sequence: number, key: string, value: unknown): DurabilityCommit
 }
 
 describe("durabilityRoot", () => {
+  it("shares serve's environment, default and explicit home resolution", () => {
+    expect(
+      resolveServeHome({ COGNIA_DATA_DIR: "/data", COGNIA_HOME: "/cli" }, undefined, "/user")
+    ).toBe(path.join("/data", "serve"))
+    expect(resolveServeHome({ COGNIA_HOME: "/cli" }, undefined, "/user")).toBe(
+      path.join("/user", ".cognia", "serve")
+    )
+    expect(resolveServeHome({ COGNIA_DATA_DIR: "" }, undefined, "/user")).toBe(
+      path.join("/user", ".cognia", "serve")
+    )
+    expect(resolveServeHome({ COGNIA_DATA_DIR: "/data" }, "/override", "/user")).toBe("/override")
+  })
   it("scopes by account and escapes path-hostile ids", () => {
     expect(durabilityRoot("/home", "local")).toBe(path.join("/home", "durability", "local"))
     expect(durabilityRoot("/home", "a/b")).toBe(path.join("/home", "durability", "a%2Fb"))
@@ -180,6 +194,26 @@ describe("durability root inventory", () => {
     root = tempRoot()
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it("refuses to reseed staged data after the activation manifest is lost", async () => {
+    writeCheckpoint(root, "gen-0001", state(42), { staged: true })
+    const inventory = inspectDurabilityRoot(root)
+    expect(isFreshDurabilityRoot(inventory)).toBe(false)
+    expect(() => backendHeldByUnpinnedRoot(inventory)).toThrow(/only staged journal data/)
+    await expect(
+      resolveBackend({ root, initialBackend: "sqlite-v5", seed: state(0) })
+    ).rejects.toThrow(/only staged journal data/)
+  })
+
+  it("refuses to guess between staged journal data and SQLite after manifest loss", async () => {
+    writeCheckpoint(root, "gen-0001", state(43), { staged: true })
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(42))
+    await sqlite.close()
+    expect(() => backendHeldByUnpinnedRoot(inspectDurabilityRoot(root))).toThrow(
+      /both journal and sqlite/
+    )
+  })
 
   it("treats a missing or empty root as fresh", () => {
     expect(isFreshDurabilityRoot(inspectDurabilityRoot(path.join(root, "absent")))).toBe(true)
@@ -439,5 +473,7 @@ describe("resolveBackend", () => {
       updatedAt: 0,
     })
     await expect(resolveBackend({ root })).rejects.toThrow(/ahead of the journal/)
+    expect(hasLiveWriter(root, "journal")).toBe(false)
+    expect(hasLiveWriter(root, "sqlite")).toBe(false)
   })
 })

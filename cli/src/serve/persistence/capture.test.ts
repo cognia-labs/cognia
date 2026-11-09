@@ -10,6 +10,7 @@ import {
   type CaptureMutateRequest,
   type CaptureMutateResponse,
   type CaptureTableLike,
+  type CaptureOptions,
 } from "./capture"
 import type { DurabilityMutation } from "./types"
 
@@ -74,7 +75,11 @@ function fakeTable(
 
 function harness(
   tables: Record<string, CaptureTableLike>,
-  opts: { database?: string; excludeTables?: string[] } = {}
+  opts: {
+    database?: string
+    excludeTables?: string[]
+    onSettled?: CaptureOptions["onSettled"]
+  } = {}
 ): {
   core: CaptureCoreLike
   commits: DurabilityMutation[][]
@@ -96,11 +101,36 @@ function harness(
     database: opts.database ?? "CogniaDB",
     excludeTables: opts.excludeTables,
     onCommit: (mutations) => commits.push(mutations),
+    onSettled: opts.onSettled,
   })
   return { core: created!, commits, capture }
 }
 
 describe("installTransactionCapture", () => {
+  it("releases a failed versionchange write that never joins the commit", async () => {
+    const settled = jest.fn()
+    const { core } = harness(
+      { sessions: fakeTable("sessions", { keyPath: "id", failures: [0] }) },
+      { onSettled: settled }
+    )
+    const trans = new FakeTransaction()
+    await core.table("sessions").mutate({ type: "put", trans, values: [{ id: "failed" }] })
+    trans.dispatch("complete")
+    expect(settled).toHaveBeenCalledWith(trans)
+  })
+  it.each(["complete", "abort", "error"])("releases transaction pins after %s", async (outcome) => {
+    const settled = jest.fn()
+    const { core, commits } = harness(
+      { sessions: fakeTable("sessions", { keyPath: "id" }) },
+      { onSettled: settled }
+    )
+    const trans = core.transaction(["sessions"], "readwrite") as unknown as FakeTransaction
+    await core.table("sessions").mutate({ type: "put", trans, values: [{ id: "a" }] })
+    expect(settled).not.toHaveBeenCalled()
+    trans.dispatch(outcome)
+    expect(settled).toHaveBeenCalledWith(trans)
+    expect(commits).toHaveLength(outcome === "complete" ? 1 : 0)
+  })
   it("records inbound-key puts synchronously and emits one commit per transaction", async () => {
     const { core, commits } = harness({ sessions: fakeTable("sessions", { keyPath: "id" }) })
     const trans = core.transaction(["sessions"], "readwrite") as unknown as FakeTransaction

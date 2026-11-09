@@ -111,7 +111,8 @@ export interface HeadlessDurabilityBackend {
    * Routine upkeep that stands in for {@link compact} on the commit-count
    * cadence, for a backend with no journal to fold (SQLite). The store calls
    * it only while the schema the backend holds matches the live one. It runs
-   * on the brain's event loop, so it must not read or rewrite the data set.
+   * on the brain's event loop, so it must not rewrite the data set. Binary
+   * garbage collection may inspect retained references.
    */
   maintain?(): void
   /** Release file handles. Safe to call more than once. */
@@ -136,6 +137,7 @@ export type DurabilityFaultCode =
   | "sqlite-integrity-failure"
   | "manifest-corrupt"
   | "parity-mismatch"
+  | "writer-busy"
 
 export class DurabilityFault extends Error {
   readonly code: DurabilityFaultCode

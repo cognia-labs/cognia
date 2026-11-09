@@ -77,6 +77,14 @@ describe("readManifest", () => {
 })
 
 describe("parseManifest", () => {
+  it("reads the journal head with its backend and rejects invalid heads", () => {
+    expect(
+      parseManifest(JSON.stringify({ ...defaultManifest(), journalGeneration: "gen-0003" }))
+    ).toMatchObject({ activeBackend: "journal-v4", journalGeneration: "gen-0003" })
+    expect(() =>
+      parseManifest(JSON.stringify({ ...defaultManifest(), journalGeneration: "../outside" }))
+    ).toThrow(/invalid journal generation/)
+  })
   it("rejects non-JSON", () => {
     expect(() => parseManifest("{oops")).toThrow(
       expect.objectContaining({ code: "manifest-corrupt" })

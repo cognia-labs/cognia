@@ -10,6 +10,7 @@ import {
   pruneBinaries,
   readBinarySync,
   writeBinarySync,
+  pinBinaryReferences,
 } from "./binary-store"
 
 describe("binary side files", () => {
@@ -90,5 +91,19 @@ describe("binary side files", () => {
     expect(pruneBinaries(root, new Set([kept]))).toEqual([".tmp-abandoned", stale].sort())
     expect(fs.readdirSync(binaryDir(root)).sort()).toEqual([kept, fresh, "README"].sort())
     expect(pruneBinaries(path.join(root, "absent"), new Set())).toEqual([])
+  })
+
+  it("keeps pinned hashes and defers unknown worker hashes until publication", () => {
+    const pinned = writeBinarySync(root, bytes)
+    const orphan = writeBinarySync(root, Uint8Array.from([5]))
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    for (const name of [pinned, orphan]) fs.utimesSync(path.join(binaryDir(root), name), old, old)
+    const unknown = pinBinaryReferences(root, () => null)
+    expect(pruneBinaries(root, new Set())).toEqual([])
+    unknown()
+    const release = pinBinaryReferences(root, () => new Set([pinned]))
+    expect(pruneBinaries(root, new Set())).toEqual([orphan])
+    release()
+    expect(pruneBinaries(root, new Set())).toEqual([pinned])
   })
 })

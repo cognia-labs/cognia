@@ -38,7 +38,7 @@ import os from "node:os"
 import { MessageChannel, Worker, receiveMessageOnPort, type MessagePort } from "node:worker_threads"
 
 import { builtinTag, isBinaryValue } from "../../db/snapshot"
-import { binaryDir, INLINE_BINARY_LIMIT } from "./binary-store"
+import { binaryDir, INLINE_BINARY_LIMIT, pinBinaryReferences } from "./binary-store"
 import { BLOB_READ_TIMEOUT_MS } from "./blob-sync"
 
 /** What the encoder gets for a prefetched binary. */
@@ -47,7 +47,7 @@ export type PreparedBinary = { fileRef: string; byteLength: number } | { bytes: 
 const PENDING = 0
 const DONE = 1
 const FAILED = 2
-/** Header: Int32 state, Int32 result kind (1 inline bytes, 2 file ref). */
+/** Header: state, result kind (1 inline, 2 file ref), and published-hash fence. */
 const HEADER_BYTES = 16
 const REF_BYTES = 64
 
@@ -55,7 +55,7 @@ const REF_BYTES = 64
  * Worker body. Self-contained (an eval'd worker cannot import the TypeScript
  * modules), so it repeats `writeBinarySync`'s protocol: temp file, write,
  * `fsync`, rename, directory `fsync`; an existing file of the right size is
- * reused, its mtime refreshed so a concurrent finalize spares it, and the
+ * reused under a hash pin, its mtime refreshed, and the
  * directory `fsync`ed as well, since that file may be another job's rename
  * whose entry is not durable yet. A job is DONE only once its file's name is
  * durable, so a record that names it never outlives it.
@@ -94,8 +94,11 @@ function syncDir(dir) {
     if (Atomics.compareExchange(sync, 1, covered, upTo) === covered) break
   }
 }
-function writeSide(dir, bytes) {
+function writeSide(dir, bytes, shared, header) {
   const reference = crypto.createHash("sha256").update(bytes).digest("hex")
+  // Publish the immutable pin BEFORE reading or refreshing the side file.
+  new Uint8Array(shared, ${HEADER_BYTES}, ${REF_BYTES}).set(Buffer.from(reference, "ascii"))
+  Atomics.store(header, 2, 1)
   const file = path.join(dir, reference)
   if (fs.existsSync(file) && fs.statSync(file).size === bytes.byteLength) {
     const at = new Date()
@@ -136,8 +139,7 @@ parentPort.on("message", async ({ shared, reply, dir, inlineLimit, blob, buffer,
       new Uint8Array(shared, ${HEADER_BYTES}, bytes.byteLength).set(bytes)
       Atomics.store(header, 1, 1)
     } else {
-      const reference = writeSide(dir, bytes)
-      new Uint8Array(shared, ${HEADER_BYTES}, ${REF_BYTES}).set(Buffer.from(reference, "ascii"))
+      writeSide(dir, bytes, shared, header)
       Atomics.store(header, 1, 2)
     }
     Atomics.store(header, 0, ${DONE})
@@ -161,6 +163,7 @@ interface Job {
   byteLength: number
   /** Set when the job's worker died: why the job can never finish. */
   failure?: string
+  complete?: () => void
   /** Its transaction's counters (see {@link BinaryPrefetcher.groupBacklog}) and its share. */
   group: Int32Array
   kib: number
@@ -200,6 +203,8 @@ const isPending = (job: Job) => Atomics.load(job.header, 0) === PENDING
 export class BinaryPrefetcher {
   /** Per scope (a recorded mutation, a table read): its binaries' jobs. */
   private readonly jobs = new WeakMap<object, Map<object, Job>>()
+  private readonly pins = new Map<object, { release: () => void; abandoned: boolean }>()
+  private readonly pinGroups = new WeakMap<object, Set<object>>()
   /**
    * Per group (a transaction): unfinished jobs and KiB, in shared memory. The
    * main thread adds on post, the worker subtracts when the job ends, so
@@ -245,13 +250,16 @@ export class BinaryPrefetcher {
         const index = this.workers.indexOf(created)
         if (index >= 0) this.workers.splice(index, 1)
         for (const job of created.inflight) {
-          if (!isPending(job)) continue
-          job.failure = reason
-          Atomics.store(job.header, 0, FAILED)
-          Atomics.sub(job.group, 0, 1)
-          Atomics.sub(job.group, 1, job.kib)
-          Atomics.notify(job.header, 0)
-          Atomics.notify(job.group, 0)
+          if (isPending(job)) {
+            job.failure = reason
+            Atomics.store(job.header, 0, FAILED)
+            Atomics.sub(job.group, 0, 1)
+            Atomics.sub(job.group, 1, job.kib)
+            Atomics.notify(job.header, 0)
+            Atomics.notify(job.group, 0)
+          }
+          job.complete?.()
+          job.port.close()
         }
         created.inflight.clear()
       }
@@ -278,7 +286,65 @@ export class BinaryPrefetcher {
       jobs = new Map()
       this.jobs.set(scope, jobs)
     }
-    this.walk(value, jobs, this.counters(group), new Set())
+    if (group) {
+      let scopes = this.pinGroups.get(group)
+      if (!scopes) this.pinGroups.set(group, (scopes = new Set()))
+      scopes.add(scope)
+    }
+    try {
+      this.walk(value, jobs, this.counters(group), new Set(), scope)
+    } catch (error) {
+      this.release(scope)
+      throw error
+    }
+  }
+
+  private pin(scope: object, jobs: Map<object, Job>): void {
+    if (this.pins.has(scope)) return
+    const release = pinBinaryReferences(this.root, () => {
+      const references = new Set<string>()
+      for (const job of jobs.values()) {
+        if (job.byteLength <= this.inlineLimit) continue
+        if (Atomics.load(job.header, 2) !== 1) return null
+        references.add(
+          Buffer.from(new Uint8Array(job.shared, HEADER_BYTES, REF_BYTES)).toString("ascii")
+        )
+      }
+      return references
+    })
+    this.pins.set(scope, { release, abandoned: false })
+  }
+
+  /** Release only after the durable commit, or after abandoned workers stop writing. */
+  release(scope: object): void {
+    const pin = this.pins.get(scope)
+    if (!pin) return
+    pin.abandoned = true
+    if ([...(this.jobs.get(scope)?.values() ?? [])].some(isPending)) return
+    pin.release()
+    this.pins.delete(scope)
+  }
+
+  releaseGroup(group: object): void {
+    const scopes = this.pinGroups.get(group)
+    if (!scopes) return
+    for (const scope of scopes) this.release(scope)
+    scopes.clear()
+    this.pinGroups.delete(group)
+  }
+
+  private observeCompletion(scope: object, job: Job): void {
+    job.complete = () => {
+      if (!isPending(job)) delete job.complete
+      if (this.pins.get(scope)?.abandoned) this.release(scope)
+    }
+    // Drain failures even when an aborted transaction will never resolve its
+    // jobs: queued messages otherwise prevent the receiving port from closing.
+    job.port.on("message", (message: unknown) => {
+      job.failure = String(message)
+    })
+    job.port.once("close", job.complete)
+    job.port.unref()
   }
 
   private counters(group: object | undefined): Int32Array {
@@ -291,18 +357,29 @@ export class BinaryPrefetcher {
     return counters
   }
 
-  private walk(value: unknown, jobs: Map<object, Job>, group: Int32Array, seen: Set<object>): void {
+  private walk(
+    value: unknown,
+    jobs: Map<object, Job>,
+    group: Int32Array,
+    seen: Set<object>,
+    scope: object
+  ): void {
     if (!value || typeof value !== "object") return
     if (isBinaryValue(value)) {
       if (!jobs.has(value)) {
+        const bytes = value instanceof Blob ? value.size : (value as ArrayBuffer).byteLength
+        if (bytes > this.inlineLimit) this.pin(scope, jobs)
         const job = this.start(value, group)
-        if (job) jobs.set(value, job)
+        if (job) {
+          jobs.set(value, job)
+          this.observeCompletion(scope, job)
+        }
       }
       return
     }
     if (seen.has(value)) return
     seen.add(value)
-    for (const item of children(value) ?? []) this.walk(item, jobs, group, seen)
+    for (const item of children(value) ?? []) this.walk(item, jobs, group, seen, scope)
   }
 
   private start(value: Blob | ArrayBuffer | ArrayBufferView, group: Int32Array): Job | undefined {
@@ -458,9 +535,12 @@ export class BinaryPrefetcher {
       }
       for (const binary of binaries) {
         if (jobs.has(binary)) continue
+        const bytes = binary instanceof Blob ? binary.size : binary.byteLength
+        if (bytes > this.inlineLimit) this.pin(scope, jobs)
         const job = this.start(binary, this.ungrouped)
         if (!job) continue
         jobs.set(binary, job)
+        this.observeCompletion(scope, job)
         inFlight.push(job)
         if (inFlight.length >= window) await awaitOldest()
       }
@@ -472,6 +552,9 @@ export class BinaryPrefetcher {
           throw new Error("writing binaries for the durability store timed out")
         }
       }
+    } catch (error) {
+      this.release(scope)
+      throw error
     } finally {
       clearInterval(keepAlive)
     }
@@ -490,5 +573,7 @@ export class BinaryPrefetcher {
   async close(): Promise<void> {
     const workers = this.workers.splice(0)
     await Promise.all(workers.map((worker) => worker.thread.terminate()))
+    for (const pin of this.pins.values()) pin.release()
+    this.pins.clear()
   }
 }

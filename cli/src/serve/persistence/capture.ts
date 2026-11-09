@@ -89,6 +89,8 @@ export interface CaptureOptions {
    * throw; it is not called while suppressed.
    */
   onRecord?: (mutation: DurabilityMutation, trans: object) => void
+  /** Release prefetch pins after commit, abort, or a failed request. */
+  onSettled?: (trans: object) => void
   /**
    * Asked after each write request on `trans` succeeds. A gate means "keep
    * this transaction open until `released()`": the capture keeps issuing a
@@ -168,8 +170,12 @@ export function installTransactionCapture(
     if (armed.has(trans) || readOnly.has(trans)) return
     armed.add(trans)
     trans.addEventListener?.("complete", () => flush(trans))
-    trans.addEventListener?.("abort", () => pending.delete(trans))
-    trans.addEventListener?.("error", () => pending.delete(trans))
+    const abandon = () => {
+      pending.delete(trans)
+      opts.onSettled?.(trans)
+    }
+    trans.addEventListener?.("abort", abandon)
+    trans.addEventListener?.("error", abandon)
   }
 
   /**
@@ -186,11 +192,15 @@ export function installTransactionCapture(
   }
 
   function flush(trans: object): void {
-    const mutations = pending.get(trans)
-    pending.delete(trans)
-    if (!mutations || mutations.length === 0) return
-    if (suppressed > 0) return
-    opts.onCommit(mutations)
+    try {
+      const mutations = pending.get(trans)
+      pending.delete(trans)
+      if (!mutations || mutations.length === 0) return
+      if (suppressed > 0) return
+      opts.onCommit(mutations)
+    } finally {
+      opts.onSettled?.(trans)
+    }
   }
 
   db.use({
@@ -307,6 +317,7 @@ export function installTransactionCapture(
       key: complete ? encodeKey(knownKeys[index]) : "",
       value: value ?? null,
     }))
+    arm(req.trans as CaptureTransactionLike)
     for (const write of writes) opts.onRecord?.(write, req.trans)
     return abortOnReject(
       req.trans,

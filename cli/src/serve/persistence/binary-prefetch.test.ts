@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
+import { once } from "node:events"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { Worker, type MessagePort } from "node:worker_threads"
 
 import { BinaryPrefetcher } from "./binary-prefetch"
-import { binaryDir, readBinarySync } from "./binary-store"
+import { BINARY_PRUNE_GRACE_MS, binaryDir, pruneBinaries, readBinarySync } from "./binary-store"
+import { hasLiveWriter } from "./writer-lock"
 
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 
@@ -19,6 +22,119 @@ describe("BinaryPrefetcher", () => {
   afterEach(async () => {
     await prefetcher.close()
     fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  it("holds pins through prepared encoding until commit or transaction abandonment", () => {
+    const scope = {}
+    const group = {}
+    const bytes = new Uint8Array(4096).fill(12)
+    prefetcher.prefetch(bytes, scope, group)
+    prefetcher.resolve(bytes, scope)
+    const file = path.join(binaryDir(root), sha(bytes))
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    fs.utimesSync(file, old, old)
+    expect(pruneBinaries(root, new Set())).toEqual([])
+    prefetcher.releaseGroup(group)
+    expect(pruneBinaries(root, new Set())).toEqual([sha(bytes)])
+  })
+
+  it("keeps an abandoned worker pinned until it stops touching the file", async () => {
+    const slow = new BinaryPrefetcher(root, { inlineLimit: 1024, poolSize: 1, fsyncDelayMs: 50 })
+    try {
+      const bytes = new Uint8Array(4096).fill(13)
+      const scope = {}
+      const group = {}
+      slow.prefetch(bytes, scope, group)
+      slow.releaseGroup(group)
+      expect(hasLiveWriter(root, "binary")).toBe(true)
+      slow.resolve(bytes, scope)
+      for (let attempt = 0; attempt < 100 && hasLiveWriter(root, "binary"); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      expect(hasLiveWriter(root, "binary")).toBe(false)
+    } finally {
+      await slow.close()
+    }
+  })
+
+  it("releases an abandoned failed job without a caller consuming its real reply port", async () => {
+    let posted!: {
+      reply: MessagePort
+      shared: SharedArrayBuffer
+      group: SharedArrayBuffer
+      kib: number
+    }
+    const post = jest.spyOn(Worker.prototype, "postMessage").mockImplementation((message) => {
+      posted = message
+    })
+    try {
+      const scope = {}
+      const group = {}
+      prefetcher.prefetch(new Uint8Array(4096), scope, group)
+      prefetcher.releaseGroup(group)
+      expect(hasLiveWriter(root, "binary")).toBe(true)
+      // The real MessageChannel queues the error before the sender closes.
+      posted.reply.postMessage("injected ENOSPC after abandonment")
+      Atomics.store(new Int32Array(posted.shared), 0, 2)
+      Atomics.sub(new Int32Array(posted.group), 0, 1)
+      Atomics.sub(new Int32Array(posted.group), 1, posted.kib)
+      posted.reply.close()
+      for (let attempt = 0; attempt < 100 && hasLiveWriter(root, "binary"); attempt += 1)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(hasLiveWriter(root, "binary")).toBe(false)
+    } finally {
+      post.mockRestore()
+    }
+  })
+
+  it("releases abandoned jobs when their worker exits before replying", async () => {
+    const scope = {}
+    const group = {}
+    let reply!: MessagePort
+    const post = jest.spyOn(Worker.prototype, "postMessage").mockImplementation((message) => {
+      reply = message.reply
+    })
+    try {
+      const bytes = new Uint8Array(4096)
+      prefetcher.prefetch(bytes, scope, group)
+      prefetcher.releaseGroup(group)
+      const jobs = (
+        prefetcher as unknown as { jobs: WeakMap<object, Map<object, { port: MessagePort }>> }
+      ).jobs
+      const closed = once(jobs.get(scope)!.get(bytes)!.port, "close")
+      reply.close()
+      await closed
+      expect(hasLiveWriter(root, "binary")).toBe(true)
+      const workers = (prefetcher as unknown as { workers: { thread: Worker }[] }).workers
+      await workers[0].thread.terminate()
+      expect(hasLiveWriter(root, "binary")).toBe(false)
+      expect(prefetcher.groupBacklog(group)).toEqual({ jobs: 0, kib: 0 })
+    } finally {
+      post.mockRestore()
+    }
+  })
+
+  it("excludes GC in another process until a prepared hash is released", () => {
+    const bytes = new Uint8Array(4096).fill(14)
+    const scope = {}
+    prefetcher.prefetch(bytes, scope)
+    prefetcher.resolve(bytes, scope)
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    fs.utimesSync(path.join(binaryDir(root), sha(bytes)), old, old)
+    const script = `
+      const module = await import(${JSON.stringify(path.resolve(__dirname, "binary-store.ts"))});
+      const { pruneBinaries } = module.default ?? module;
+      console.log(JSON.stringify(pruneBinaries(${JSON.stringify(root)}, new Set())));
+    `
+    const collect = () =>
+      JSON.parse(
+        execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+          encoding: "utf8",
+        })
+      )
+    expect(collect()).toEqual([])
+    prefetcher.release(scope)
+    expect(collect()).toEqual([sha(bytes)])
   })
 
   it("writes a large Blob's side file in the pool and hands back its reference", () => {
@@ -155,8 +271,7 @@ describe("BinaryPrefetcher", () => {
         `const p = new BinaryPrefetcher(${JSON.stringify(root)}, { inlineLimit: 16, poolSize: 1, fsyncDelayMs: 300 })\n` +
         `p.settle([new Blob([new Uint8Array(64).fill(1)])], {}).then(() => { console.log("settled"); return p.close() })\n`
     )
-    const tsx = path.resolve(__dirname, "../../../../node_modules/tsx/dist/cli.mjs")
-    const out = execFileSync(process.execPath, [tsx, script], { encoding: "utf8" })
+    const out = execFileSync(process.execPath, ["--import", "tsx", script], { encoding: "utf8" })
     expect(out.trim()).toBe("settled")
   })
 

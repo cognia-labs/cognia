@@ -13,8 +13,9 @@
  */
 import fs from "node:fs"
 import path from "node:path"
+import os from "node:os"
 
-import { latestGeneration } from "./checkpoint"
+import { cleanupCheckpointStaging, listGenerations } from "./checkpoint"
 import { openJournalBackend, seedCheckpoint } from "./journal"
 import {
   defaultManifest,
@@ -36,6 +37,15 @@ import {
 /** Per-account durability root: `<home>/durability/<accountId>`. */
 export function durabilityRoot(home: string, accountId: string): string {
   return path.join(home, "durability", encodeURIComponent(accountId))
+}
+
+/** The persistence home used by both serve and its operator commands. */
+export function resolveServeHome(
+  env: Record<string, string | undefined>,
+  override?: string,
+  userHome = os.homedir()
+): string {
+  return override ?? path.join(env.COGNIA_DATA_DIR || path.join(userHome, ".cognia"), "serve")
 }
 
 export function ensureDurabilityRoot(root: string): string {
@@ -95,23 +105,33 @@ export function createDualWriteBackend(
 /** What an account's durability root already holds, before anything is opened. */
 export interface DurabilityRootInventory {
   manifest: boolean
-  /** At least one journal checkpoint generation exists. */
+  /** At least one journal checkpoint is eligible without an activation pointer. */
   journal: boolean
   /** The SQLite store file exists. */
   sqlite: boolean
+  /** Staged checkpoints remain data if their activation pointer is lost. */
+  stagedJournal?: boolean
 }
 
 export function inspectDurabilityRoot(root: string): DurabilityRootInventory {
+  const generations = fs.existsSync(root) ? listGenerations(root) : []
   return {
     manifest: fs.existsSync(manifestFile(root)),
-    journal: fs.existsSync(root) && latestGeneration(root) !== null,
+    journal:
+      fs.existsSync(root) &&
+      generations.some(
+        (generation) => !fs.existsSync(path.join(root, "generations", generation, "staged"))
+      ),
     sqlite: fs.existsSync(sqliteFile(root)),
+    stagedJournal: generations.some((generation) =>
+      fs.existsSync(path.join(root, "generations", generation, "staged"))
+    ),
   }
 }
 
 /** A root that has never persisted anything: no manifest and no backend data. */
 export function isFreshDurabilityRoot(inventory: DurabilityRootInventory): boolean {
-  return !inventory.manifest && !inventory.journal && !inventory.sqlite
+  return !inventory.manifest && !inventory.journal && !inventory.sqlite && !inventory.stagedJournal
 }
 
 /**
@@ -126,7 +146,7 @@ export function backendHeldByUnpinnedRoot(
   inventory: DurabilityRootInventory
 ): Exclude<DurabilityBackendId, "snapshot-v3"> | null {
   if (inventory.manifest) return null
-  if (inventory.journal && inventory.sqlite) {
+  if ((inventory.journal || inventory.stagedJournal) && inventory.sqlite) {
     throw new DurabilityFault(
       "manifest-corrupt",
       "durability root holds both journal and sqlite data but no backend manifest; " +
@@ -135,6 +155,12 @@ export function backendHeldByUnpinnedRoot(
   }
   if (inventory.sqlite) return "sqlite-v5"
   if (inventory.journal) return "journal-v4"
+  if (inventory.stagedJournal) {
+    throw new DurabilityFault(
+      "manifest-corrupt",
+      "only staged journal data remains without a backend manifest; recover or restore the manifest before starting"
+    )
+  }
   return null
 }
 
@@ -178,52 +204,66 @@ export interface ResolveBackendOptions {
  */
 export async function resolveBackend(opts: ResolveBackendOptions): Promise<ResolvedBackend> {
   const root = ensureDurabilityRoot(opts.root)
-  if (opts.initialBackend && !fs.existsSync(manifestFile(root))) {
-    return pinInitialBackend(root, opts.initialBackend, opts.seed)
+  cleanupCheckpointStaging(root)
+  const inventory = inspectDurabilityRoot(root)
+  const held = backendHeldByUnpinnedRoot(inventory)
+  if (opts.initialBackend && !inventory.manifest) {
+    return pinInitialBackend(root, held ?? opts.initialBackend, opts.seed)
   }
   const manifest = readManifest(root)
+  if (held) manifest.activeBackend = held
   if (opts.seed) seedCheckpoint(root, opts.seed)
 
   const primary = openBackend(manifest.activeBackend, root)
-  const state = await primary.load()
+  let shadow: HeadlessDurabilityBackend | undefined
+  try {
+    const state = await primary.load()
 
-  if (!manifest.shadowBackend) {
+    if (!manifest.shadowBackend) {
+      return {
+        backend: primary,
+        manifest,
+        state,
+        shadowCatchUp: 0,
+        legacyValueCodec: state.legacyValueCodec === true,
+      }
+    }
+    if (manifest.shadowBackend === manifest.activeBackend) {
+      throw new DurabilityFault(
+        "manifest-corrupt",
+        `backend manifest shadows ${manifest.shadowBackend} onto itself`
+      )
+    }
+
+    shadow = openBackend(manifest.shadowBackend, root)
+    const shadowState = await shadow.load()
+    // The shadow's codec-0 findings belong to the same account: hand them to the
+    // caller with the primary's, so they are on record before compaction
+    // rewrites the rows that show them.
+    if (shadowState.legacyValueFindings?.length) {
+      const merged = new LegacyValueReport()
+      for (const finding of [
+        ...(state.legacyValueFindings ?? []),
+        ...shadowState.legacyValueFindings,
+      ])
+        merged.merge(finding)
+      state.legacyValueFindings = merged.findings()
+    }
+    const catchUp = await catchUpShadow(root, shadow, shadowState, state)
     return {
-      backend: primary,
+      backend: createDualWriteBackend(primary, shadow),
       manifest,
       state,
-      shadowCatchUp: 0,
-      legacyValueCodec: state.legacyValueCodec === true,
+      shadowCatchUp: catchUp,
+      legacyValueCodec: state.legacyValueCodec === true || shadowState.legacyValueCodec === true,
     }
-  }
-  if (manifest.shadowBackend === manifest.activeBackend) {
-    throw new DurabilityFault(
-      "manifest-corrupt",
-      `backend manifest shadows ${manifest.shadowBackend} onto itself`
-    )
-  }
-
-  const shadow = openBackend(manifest.shadowBackend, root)
-  const shadowState = await shadow.load()
-  // The shadow's codec-0 findings belong to the same account: hand them to the
-  // caller with the primary's, so they are on record before compaction
-  // rewrites the rows that show them.
-  if (shadowState.legacyValueFindings?.length) {
-    const merged = new LegacyValueReport()
-    for (const finding of [
-      ...(state.legacyValueFindings ?? []),
-      ...shadowState.legacyValueFindings,
-    ])
-      merged.merge(finding)
-    state.legacyValueFindings = merged.findings()
-  }
-  const catchUp = await catchUpShadow(root, shadow, shadowState, state)
-  return {
-    backend: createDualWriteBackend(primary, shadow),
-    manifest,
-    state,
-    shadowCatchUp: catchUp,
-    legacyValueCodec: state.legacyValueCodec === true || shadowState.legacyValueCodec === true,
+  } catch (error) {
+    try {
+      await shadow?.close()
+    } finally {
+      await primary.close()
+    }
+    throw error
   }
 }
 
