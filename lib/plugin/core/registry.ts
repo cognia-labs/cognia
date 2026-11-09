@@ -30,6 +30,7 @@ import {
 } from "@/lib/plugin/registries/createOverlayRegistry"
 import { reportRegistryConflict } from "@/lib/plugin/contracts/conflict-reporter"
 import { loggers } from "./logger"
+import { toolOwnerBeforePlugin } from "@/lib/claude/tool-contributions"
 
 // Build a first-wins-cross-plugin conflict handler that both logs (dev
 // console) and records a diagnostic (plugins panel) for a given registry label.
@@ -83,6 +84,22 @@ export class PluginRegistry {
   // ===========================================================================
 
   registerTool(pluginId: string, tool: PluginTool): void {
+    const hostOwner = toolOwnerBeforePlugin(tool.name)
+    if (hostOwner) {
+      reportRegistryConflict({
+        pluginId,
+        attemptedId: tool.name,
+        registry: "tool",
+        winnerPluginId: `host:${hostOwner}`,
+      })
+      // Same contract as a cross-plugin collision: record it and skip this one
+      // tool rather than throw, so a Python/WASM plugin keeps its other tools.
+      // `ctx.agent.registerTool` still throws when its tool did not land.
+      loggers.registry.warn(
+        `Tool "${tool.name}" is reserved by host owner "${hostOwner}"; plugin "${pluginId}" must choose another name`
+      )
+      return
+    }
     this.tools.register(tool.name, tool, { pluginId })
   }
 

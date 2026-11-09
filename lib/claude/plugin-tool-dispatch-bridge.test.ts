@@ -1,7 +1,11 @@
 /** @jest-environment node */
 
-import { subscribePluginToolDispatchBridge } from "./plugin-tool-dispatch-bridge"
+import {
+  abortPluginToolCallsForSession,
+  subscribePluginToolDispatchBridge,
+} from "./plugin-tool-dispatch-bridge"
 import type { PluginToolExecRequest, PluginToolExecResponse } from "./plugin-tool-ipc"
+import { runAskUser, useAskUserStore } from "@/stores/agent/ask-user-store"
 
 jest.mock("./ipc", () => ({
   subscribePluginToolExec: jest.fn(),
@@ -44,6 +48,174 @@ function harness() {
 }
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+it("provides a per-call signal, clears a stopped question, drops its answer and opens the next question", async () => {
+  const h = harness()
+  const settled = jest.fn()
+  h.handle.mockImplementation(async (req) => {
+    const result = await runAskUser(
+      { question: "Choose?", options: ["Yes", "No"] },
+      { sessionId: req.sessionId, signal: req.abortSignal }
+    )
+    settled()
+    return { ...response, toolUseId: req.toolUseId, result }
+  })
+  const stop = await subscribePluginToolDispatchBridge(h)
+  try {
+    h.emit({ ...request, remoteExecutionContext: undefined })
+    await flush()
+    expect(h.handle.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal)
+    const oldQuestion = useAskUserStore.getState().active!
+    expect(oldQuestion).not.toBeNull()
+    abortPluginToolCallsForSession(request.sessionId, "interrupted")
+    await flush()
+    expect(useAskUserStore.getState().active).toBeNull()
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(h.send).not.toHaveBeenCalled()
+    h.emit({ ...request, toolUseId: "next-question", remoteExecutionContext: undefined })
+    await flush()
+    const nextQuestion = useAskUserStore.getState().active!
+    expect(nextQuestion.id).not.toBe(oldQuestion.id)
+    oldQuestion.resolve({ selected: [], text: "late", cancelled: false })
+    await flush()
+    expect(useAskUserStore.getState().active).toBe(nextQuestion)
+    expect(h.send).not.toHaveBeenCalled()
+    useAskUserStore
+      .getState()
+      .resolveActive({ selected: [], text: "next answer", cancelled: false })
+    await flush()
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(h.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolUseId: "next-question",
+        result: expect.stringContaining("next answer"),
+      }),
+      undefined
+    )
+  } finally {
+    abortPluginToolCallsForSession(request.sessionId, "cleanup")
+    useAskUserStore.setState({ active: null, queue: [] })
+    stop()
+  }
+})
+
+it("cancels only matching remote session/host/device/generation calls and drops non-cooperative late responses", async () => {
+  const h = harness()
+  const finish: Array<() => void> = []
+  h.handle.mockImplementation(
+    (req) =>
+      new Promise((resolve) =>
+        finish.push(() => resolve({ ...response, sessionId: req.sessionId }))
+      )
+  )
+  const stop = await subscribePluginToolDispatchBridge(h)
+  try {
+    h.emit()
+    h.emit({ ...request, sessionId: "other" })
+    h.emit({
+      ...request,
+      remoteExecutionContext: { ...request.remoteExecutionContext!, hostId: "other" },
+    })
+    h.emit({
+      ...request,
+      remoteExecutionContext: { ...request.remoteExecutionContext!, originDeviceId: "other" },
+    })
+    h.emit({
+      ...request,
+      remoteExecutionContext: { ...request.remoteExecutionContext!, generation: 2 },
+    })
+    h.emit({ ...request, remoteExecutionContext: undefined })
+    await flush()
+    abortPluginToolCallsForSession(request.sessionId, "interrupted", request.remoteExecutionContext)
+    expect(h.handle.mock.calls.map(([req]) => req.abortSignal?.aborted)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ])
+    finish.forEach((done) => done())
+    await flush()
+    expect(h.send).toHaveBeenCalledTimes(5)
+    expect(
+      h.send.mock.calls.some(([, context]) => context === request.remoteExecutionContext)
+    ).toBe(true)
+    expect(
+      h.send.mock.calls.filter(
+        ([resp, context]) =>
+          resp.sessionId === request.sessionId && context === request.remoteExecutionContext
+      )
+    ).toHaveLength(0)
+  } finally {
+    stop()
+  }
+})
+
+it.each(["original", "prepared", "bridge"])("combines signals when %s cancels", async (source) => {
+  const h = harness()
+  const original = new AbortController()
+  const prepared = new AbortController()
+  h.handle.mockImplementation(() => new Promise(() => {}))
+  const stop = await subscribePluginToolDispatchBridge({
+    ...h,
+    prepareRequest: (req) => ({ ...req, abortSignal: prepared.signal }),
+  })
+  h.emit({ ...request, abortSignal: original.signal })
+  await flush()
+  const signal = h.handle.mock.calls[0][0].abortSignal!
+  expect(signal).toBeDefined()
+  if (source === "original") original.abort()
+  else if (source === "prepared") prepared.abort()
+  else
+    abortPluginToolCallsForSession(request.sessionId, "interrupted", request.remoteExecutionContext)
+  await flush()
+  expect(signal.aborted).toBe(true)
+  expect(h.send).not.toHaveBeenCalled()
+  stop()
+})
+
+it("does not cancel a newer turn on a delayed session-ended event", async () => {
+  const h = harness()
+  h.handle.mockImplementation(() => new Promise(() => {}))
+  const stop = await subscribePluginToolDispatchBridge(h)
+  try {
+    h.emit({ ...request, turnId: "new-turn" })
+    h.emit({ ...request, toolUseId: "legacy" })
+    await flush()
+    abortPluginToolCallsForSession(
+      request.sessionId,
+      "session ended",
+      request.remoteExecutionContext,
+      "old-turn"
+    )
+    expect(h.handle.mock.calls.map(([req]) => req.abortSignal?.aborted)).toEqual([false, true])
+    abortPluginToolCallsForSession(request.sessionId, "interrupted", request.remoteExecutionContext)
+    await flush()
+    expect(h.handle.mock.calls[0][0].abortSignal?.aborted).toBe(true)
+    expect(h.send).not.toHaveBeenCalled()
+  } finally {
+    stop()
+  }
+})
+
+it("answers preparation failures safely and never executes the handler", async () => {
+  const h = harness()
+  const stop = await subscribePluginToolDispatchBridge({
+    ...h,
+    prepareRequest: () => {
+      throw new Error("private request")
+    },
+  })
+  h.emit()
+  await flush()
+  expect(h.handle).not.toHaveBeenCalled()
+  expect(h.send).toHaveBeenCalledWith(
+    expect.objectContaining({ error: "Plugin tool executor failed" }),
+    request.remoteExecutionContext
+  )
+  stop()
+})
 
 it("shares one consumer and executes a call only once, including completed duplicates", async () => {
   const h = harness()
@@ -102,7 +274,11 @@ it("prefers a session owner over a global consumer and preserves the original co
   h.emit()
   await flush()
   expect(h.handle).not.toHaveBeenCalled()
-  expect(localHandle).toHaveBeenCalledWith({ ...request, sandboxRuntimeRef: "sandbox-a" })
+  expect(localHandle).toHaveBeenCalledWith({
+    ...request,
+    sandboxRuntimeRef: "sandbox-a",
+    abortSignal: expect.any(AbortSignal),
+  })
   expect(h.send).toHaveBeenCalledWith(response, request.remoteExecutionContext)
   stopSession()
   h.emit({ ...request, toolUseId: "next-call" })

@@ -7,7 +7,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event"
 import type { UIMessage } from "@/types"
 import { transport } from "@/lib/tauri"
 import { detectHostProfile } from "@/lib/platform/capabilities"
-import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
+import { getActiveRemoteTransport, isRemoteHostActive } from "@/lib/tauri/transport-routing"
 import { reportGovernanceProjectionFailure } from "@/lib/db/governance-ledger"
 import type {
   AgentId,
@@ -60,11 +60,25 @@ import {
   resolveApproval as resolveLocalApproval,
 } from "@/lib/claude/hitl/approval-registry"
 import { stableHash } from "@/lib/notifications/result/materiality"
+import { abortPluginToolCallsForSession } from "./plugin-tool-dispatch-bridge"
 
 const SIDECAR_EVENT = "claude://message"
 /** Canonical agent-event channel (ADR-0090 Phase 3). */
 const AGENT_EVENT = "agent://message"
 const remoteApprovalContexts = new Map<string, RemoteExecutionContext>()
+// The transport route is part of ownership: an identically named session on
+// another host must survive this renderer's Stop or late session-ended event.
+const pluginToolSessionContexts = new WeakMap<object, Map<string, RemoteExecutionContext>>()
+
+function currentPluginToolSessionContexts(): Map<string, RemoteExecutionContext> {
+  const route = getActiveRemoteTransport() ?? transport
+  let contexts = pluginToolSessionContexts.get(route)
+  if (!contexts) {
+    contexts = new Map()
+    pluginToolSessionContexts.set(route, contexts)
+  }
+  return contexts
+}
 
 interface LocalApprovalRequest {
   sessionId: string
@@ -531,6 +545,10 @@ export async function interruptSession(
   sessionId: string,
   options?: { commandId?: string }
 ): Promise<void> {
+  const context = currentPluginToolSessionContexts().get(sessionId)
+  // An unknown remote identity must never fall through to local cancellation.
+  if (context || !getActiveRemoteTransport())
+    abortPluginToolCallsForSession(sessionId, "interrupted", context)
   const command = options?.commandId ? "agent_interrupt" : "claude_interrupt"
   await transport.call(command, {
     sessionId,
@@ -1409,6 +1427,10 @@ export async function closeSession(
   sessionId: string,
   options?: { commandId?: string }
 ): Promise<void> {
+  const contexts = currentPluginToolSessionContexts()
+  const context = contexts.get(sessionId)
+  if (context || !getActiveRemoteTransport())
+    abortPluginToolCallsForSession(sessionId, "session closed", context)
   // Always the canonical command (ADR-0090): it is the one a person brain's
   // channel and a member device's grant admit (P6c, ADR-0253 G12), and it
   // closes exactly as the legacy `claude_close_session` alias does. Its
@@ -1418,6 +1440,7 @@ export async function closeSession(
     commandId: options?.commandId ?? crypto.randomUUID(),
   })
   sentMcpConfigurations.delete(sessionId)
+  if (contexts.get(sessionId) === context) contexts.delete(sessionId)
 }
 
 export async function getSidecarStatus(): Promise<{ ready: boolean }> {
@@ -1498,6 +1521,19 @@ export async function restartSidecar(): Promise<void> {
 export async function onClaudeMessage(handler: (evt: ClaudeEvent) => void): Promise<UnlistenFn> {
   return transport.subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
     const routed = event as ClaudeEvent & { remoteExecutionContext?: unknown }
+    const remoteContext = isRemoteExecutionContext(routed.remoteExecutionContext)
+      ? routed.remoteExecutionContext
+      : undefined
+    if (isPluginToolExecEvent(event)) {
+      const contexts = currentPluginToolSessionContexts()
+      if (remoteContext) contexts.set(event.sessionId, remoteContext)
+      else contexts.delete(event.sessionId)
+    }
+    if (event.type === "session_ended") {
+      const context = remoteContext ?? currentPluginToolSessionContexts().get(event.sessionId)
+      if (context || !getActiveRemoteTransport())
+        abortPluginToolCallsForSession(event.sessionId, "session ended", context, event.turnId)
+    }
     if (
       (routed as { type?: string }).type === "permission_request" &&
       "sessionId" in routed &&

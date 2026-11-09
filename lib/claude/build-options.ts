@@ -2828,7 +2828,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // In-process tools feature modules contribute (ADR-0250 §14 amendment). One
   // answer per family gates both its manifest entries below and the tier
   // derived from their declarations here, so neither appears without the other.
-  const { collectContributedTools, toolSurfaceHost } = await import("./tool-contributions")
+  const { collectContributedTools, toolSurfaceHost, toolOwnerBeforePlugin, mergeContributedTools } =
+    await import("./tool-contributions")
   const contributedTools = await collectContributedTools({
     session: session ?? null,
     agent: character,
@@ -3471,17 +3472,12 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       if (!browserAllowedForChat) {
         manifest = manifest.filter((entry) => entry.pluginId !== "cognia-browser-tools")
       }
-      // Always drop the plugin's duplicate web_search/web_fetch. The promoted
-      // tools are appended later only when web access resolves on; otherwise a
-      // stale plugin registration would bypass the master switch.
-      // The plugin's own web_download / web_research survive.
-      manifest = manifest.filter(
-        (entry) =>
-          !(
-            entry.pluginId === "cognia-web-tools" &&
-            (entry.name === "web_search" || entry.name === "web_fetch")
-          )
-      )
+      // Drop stale registrations of host-owned names even when their host
+      // surface is disabled; otherwise the manifest and dispatcher disagree.
+      manifest = manifest.filter((entry) => {
+        const owner = toolOwnerBeforePlugin(entry.name)
+        return !owner || owner === entry.pluginId
+      })
       if (appSettings?.webTools?.enabled === false) {
         manifest = manifest.filter((entry) => entry.pluginId !== "cognia-deep-research")
       }
@@ -3812,11 +3808,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // session-stable instructions of the families that offered this run
   // anything, gated on the same answer as their tier above.
   if (contributedTools.tools.length > 0) {
-    const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
-    opts.pluginTools = [
-      ...(opts.pluginTools ?? []),
-      ...contributedTools.tools.filter((entry) => !existing.has(entry.name)),
-    ]
+    opts.pluginTools = mergeContributedTools(opts.pluginTools ?? [], contributedTools.tools)
     if (contributedTools.instructions.length > 0)
       opts.appendSystemPrompt = [opts.appendSystemPrompt?.trim(), ...contributedTools.instructions]
         .filter(Boolean)
@@ -5208,6 +5200,13 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   } else if (session?.id && ctx.skillRenderMode !== "name") {
     ;(await import("@/lib/skills/runtime-loader")).clearSkillLoadContext(session.id)
   }
+
+  // A module may reserve a host name without offering it on this turn. Never
+  // advertise a later built-in entry whose calls would route to that module.
+  opts.pluginTools = opts.pluginTools?.filter((entry) => {
+    const owner = toolOwnerBeforePlugin(entry.name)
+    return !owner || owner === entry.pluginId
+  })
 
   // Seal the user-selected tool policy after surface Skills, workflow overlays,
   // plugin hooks, and parent ceilings have all contributed candidates. No code

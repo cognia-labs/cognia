@@ -28,7 +28,12 @@ import {
   beginOutboundToolExecution,
   endOutboundToolExecution,
 } from "@/lib/policy/action-review/authorized-tool-calls"
-import { findContributedTool, runContributedTool } from "./tool-contributions"
+import {
+  contributedToolPluginId,
+  findContributedTool,
+  runContributedTool,
+  toolOwnerBeforePlugin,
+} from "./tool-contributions"
 import type { DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { ASK_USER_TOOL_NAME } from "./ask-user-tool"
 import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "./agents/dispatch-agent-tool"
@@ -89,7 +94,7 @@ export interface PluginToolExecRequest {
   runId?: string
   attemptId?: string
   sandboxRuntimeRef?: string
-  /** Cooperative cancellation for direct renderer callers such as live voice. */
+  /** Cooperative cancellation for renderer-hosted calls, including the sidecar bridge. */
   abortSignal?: AbortSignal
   remoteExecutionContext?: RemoteExecutionContext
 }
@@ -407,7 +412,8 @@ async function runPluginToolExec(
     // registry, so a plugin cannot shadow one; a `precedence: "fallback"`
     // tool waits until the registry has had its turn (below).
     const contributed = findContributedTool(request.name)
-    if (contributed && contributed.declaration.precedence !== "fallback") {
+    const preferredOwner = toolOwnerBeforePlugin(request.name)
+    if (contributed && preferredOwner === contributedToolPluginId(contributed.module)) {
       const result = await runModuleToolCall(contributed, request)
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
@@ -473,7 +479,7 @@ async function runPluginToolExec(
       )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
-    if (resolverOverride) {
+    if (!preferredOwner && resolverOverride) {
       // Test seam — execute through the injected resolver directly so
       // suites that stub resolution + execution in one object keep their
       // historical contract. Production never takes this branch.
@@ -503,7 +509,7 @@ async function runPluginToolExec(
           invocationProject.dispose()
         }
       }
-    } else {
+    } else if (!preferredOwner) {
       // Production path — resolve the owning plugin by bare tool name,
       // then route through the unified invocation seam so lazy
       // `onTool:` activation, the permission consent gate, and error
@@ -550,7 +556,7 @@ async function runPluginToolExec(
     // ── Module-contributed fallbacks ───────────────────────────────────
     // A tool a plugin normally registers under the same name, which the
     // registry did not resolve: run the module's own.
-    if (contributed) {
+    if (contributed && !preferredOwner) {
       const result = await runModuleToolCall(contributed, request)
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
@@ -596,7 +602,7 @@ async function runPluginToolExec(
         sessionId: request.sessionId,
         toolUseId: request.toolUseId,
         args: request.args,
-        // Cooperative cancellation for direct renderer callers — combined
+        // Cooperative cancellation for renderer-hosted calls — combined
         // with the channel turn's own run-lifetime signal.
         ...(request.abortSignal ? { signal: request.abortSignal } : {}),
       })

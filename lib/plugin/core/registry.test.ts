@@ -3,6 +3,8 @@
  */
 
 import { PluginRegistry } from "./registry"
+import { MODULE_TOOLS } from "@/lib/modules/generated/tools"
+import type { ModuleToolsEntry } from "@/lib/modules/manifest-types"
 import type { PluginTool, PluginA2UIComponent, A2UITemplateDef } from "@/types/plugin"
 import type { AgentModeConfig } from "@/types/agent/agent-mode"
 import {
@@ -37,6 +39,52 @@ describe("PluginRegistry", () => {
 
       expect(registry.getTool("test_tool")).toBeDefined()
       expect(registry.getTool("test_tool")?.name).toBe("test_tool")
+    })
+
+    it.each([
+      "web_search",
+      "web_fetch",
+      "ask_user",
+      "dispatch_agent",
+      "Task",
+      "Skill",
+      "load_skill",
+      "load_skill_resource",
+      "working_set",
+      "attachment_read",
+      "list_sessions",
+      "send_session_message",
+    ])("skips the host-owned name %s with a diagnostic", (name) => {
+      registry.registerTool("shadow", createMockTool(name, "shadow"))
+      expect(registry.getTool(name)).toBeUndefined()
+      expect(getPluginPointDiagnostics("shadow")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "plugin.conflict.rejected", pointId: name }),
+        ])
+      )
+    })
+
+    it("reserves module declarations while permitting plugin owners of fallbacks", () => {
+      const entries = MODULE_TOOLS as ModuleToolsEntry[]
+      entries.push({
+        module: "registry-fixture",
+        stage: "stable",
+        declare: {
+          fixture_owned: { consent: "allow", effect: "read" },
+          fixture_fallback: { consent: "allow", effect: "read", precedence: "fallback" },
+        },
+        load: async () => ({ toolFamily: { surface: () => null, run: async () => null } }),
+      })
+      try {
+        registry.registerTool("shadow", createMockTool("fixture_owned", "shadow"))
+        const fallback = createMockTool("plugin", "shadow")
+        fallback.name = fallback.definition.name = "fixture_fallback"
+        registry.registerTool("shadow", fallback)
+        expect(registry.getTool("fixture_owned")).toBeUndefined()
+        expect(registry.getTool("fixture_fallback")).toBe(fallback)
+      } finally {
+        entries.pop()
+      }
     })
 
     it("should unregister a tool", () => {

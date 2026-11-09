@@ -6,7 +6,12 @@
 import { hostCommandExecution } from "@/lib/plugin/core/invocation-identity"
 import { MODULE_TOOLS } from "@/lib/modules/generated/tools"
 import type { ModuleToolFamily, ModuleToolsEntry } from "@/lib/modules/manifest-types"
-import { __resetContributedToolsForTests } from "./tool-contributions"
+import {
+  __resetContributedToolsForTests,
+  collectContributedTools,
+  mergeContributedTools,
+  type ContributedPluginTool,
+} from "./tool-contributions"
 import { __setFilespaceToolDepsForTesting } from "@/lib/filespace/agent-tools"
 import { __setProjectCoordinatorToolDepsForTesting } from "@/lib/project-coordinator/agent-tools"
 import {
@@ -1171,7 +1176,8 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
 
     const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
       await import("./plugin-tool-ipc")
-    freshSet({ getTool: () => undefined })
+    const shadow = jest.fn().mockResolvedValue("plugin result")
+    freshSet({ getTool: () => ({ pluginId: "stale-plugin", execute: shadow }) })
 
     const controller = new AbortController()
     const response = await freshHandle({
@@ -1189,6 +1195,7 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
     )
     expect(response.result).toBe("Selected: Apple")
     expect(response.error).toBeUndefined()
+    expect(shadow).not.toHaveBeenCalled()
   })
 
   it("routes ask_user to the conversation channel whose turn owns the session", async () => {
@@ -1544,6 +1551,14 @@ function useModuleTools(module: string, toolFamily: ModuleToolFamily) {
 }
 
 describe("handlePluginToolExec — artifact built-ins", () => {
+  let fixture: import("@/lib/db/test-fixture").DbTestFixture
+  beforeAll(async () => {
+    // Earlier suites reset modules; enable the DB instance the live imports use.
+    fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+  })
+  beforeEach(() => fixture.restore())
+  afterAll(() => fixture.dispose())
   afterEach(() => {
     __setPluginToolResolverForTesting(null)
     ;(MODULE_TOOLS as ModuleToolsEntry[]).length = 0
@@ -2113,6 +2128,52 @@ describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
     const fallback = await handlePluginToolExec(makeRequest({ name: "crate_stand_in" }))
     expect(fallback.result).toEqual({ ok: true, from: "module" })
   })
+
+  it.each(["crate_list", "crate_stand_in"])(
+    "executes the owner advertised for %s",
+    async (name) => {
+      const moduleEntry = registry().find((entry) => entry.module === "crate")!
+      moduleEntry.load = async () => ({
+        toolFamily: {
+          surface: () => ({
+            tools: [{ name, description: "Module", jsonSchema: { type: "object" }, timeoutMs: 0 }],
+          }),
+          run,
+        },
+      })
+      const contributed = await collectContributedTools(
+        {
+          session: null,
+          agent: null,
+          settings: null,
+          activeGoal: null,
+          prompts: { snapshot: null, context: {} },
+          host: "web",
+          activeProject: null,
+        },
+        [moduleEntry]
+      )
+      const plugin: ContributedPluginTool = {
+        name,
+        description: "Plugin",
+        jsonSchema: { type: "object" },
+        pluginId: "fixture-plugin",
+        timeoutMs: 100,
+      }
+      const advertised = mergeContributedTools([plugin], contributed.tools)
+      run.mockResolvedValue({ from: "cognia-crate-builtin" })
+      const execute = jest.fn().mockResolvedValue({ from: plugin.pluginId })
+      __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: plugin.pluginId, execute }) })
+      const response = await handlePluginToolExec(makeRequest({ name }))
+      expect(response.result).toEqual({ from: advertised[0].pluginId })
+      expect(advertised).toHaveLength(1)
+      expect(advertised[0]).toMatchObject(
+        name === "crate_list"
+          ? { description: "Module", timeoutMs: 0 }
+          : { description: "Plugin", timeoutMs: 100 }
+      )
+    }
+  )
 
   it("holds a module's result to the PII gate and reports a thrown run as an error", async () => {
     run.mockResolvedValueOnce({ text: "Contact alice@example.com" })

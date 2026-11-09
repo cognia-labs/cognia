@@ -75,6 +75,29 @@ function preserveStepStartParts(preview: UIMessage | undefined, finalParts: Part
   return [...stepStarts, ...finalParts]
 }
 
+function preserveTerminalToolParts(preview: UIMessage | undefined, finalParts: Parts): Parts {
+  const terminal = new Map(
+    (preview?.parts ?? []).flatMap((part) => {
+      const tool = part as Part & { toolCallId?: string; state?: string }
+      return tool.type.startsWith("tool-") &&
+        tool.toolCallId &&
+        (tool.state === "output-available" || tool.state === "output-error")
+        ? [[tool.toolCallId, tool] as const]
+        : []
+    })
+  )
+  return finalParts.map((part) => {
+    const tool = part as Part & { toolCallId?: string; state?: string }
+    if (!tool.type.startsWith("tool-") || !tool.toolCallId) return part
+    const previous = terminal.get(tool.toolCallId)
+    // A seal commonly carries only tool inputs after a separate result event.
+    // Keep the completed part intact, including approval and timing metadata.
+    return previous && tool.state !== "output-available" && tool.state !== "output-error"
+      ? ({ ...part, ...previous } as Part)
+      : part
+  })
+}
+
 /**
  * Walk every text block of the assistant message and combine
  *  - Anthropic Citations API entries
@@ -230,12 +253,20 @@ function blockToPart(block: BetaContentBlock): Part | null {
     case "file":
       return sdkMediaPart(block)
     case "tool_use": {
-      const b = block as BetaToolUseBlock
+      const b = block as Omit<BetaToolUseBlock, "state"> & {
+        state?: string
+        output?: unknown
+        errorText?: string
+        mcpContent?: McpResultBlock[]
+      }
       // Deliberately NOT the place an artifact part is emitted: the call has
       // not run yet, so any id here is the model's guess and the card would
       // point at a row that does not exist. See `updateToolPart` below.
       const state =
-        b.state === "input-streaming" || b.state === "approval-requested"
+        b.state === "input-streaming" ||
+        b.state === "approval-requested" ||
+        b.state === "output-available" ||
+        b.state === "output-error"
           ? b.state
           : "input-available"
       return {
@@ -243,6 +274,9 @@ function blockToPart(block: BetaContentBlock): Part | null {
         toolCallId: b.id,
         state,
         input: b.input,
+        ...(state === "output-available" ? { output: b.output } : {}),
+        ...(state === "output-error" ? { errorText: b.errorText } : {}),
+        ...(b.mcpContent ? { mcpContent: b.mcpContent } : {}),
         ...(b.providerExecuted !== undefined ? { providerExecuted: b.providerExecuted } : {}),
         ...(b.providerMetadata ? { providerMetadata: b.providerMetadata } : {}),
         ...(b.toolMetadata ? { toolMetadata: b.toolMetadata } : {}),
@@ -904,7 +938,10 @@ function appendAssistantMessage(messages: UIMessage[], evt: SDKAssistantMessage)
   // version is in the list, replace it with the canonical full version.
   const id = evt.message.id ?? evt.uuid
   const idx = messages.findIndex((m) => m.id === id)
-  const parts = preserveStepStartParts(messages[idx], buildAssistantParts(evt.message))
+  const parts = preserveStepStartParts(
+    messages[idx],
+    preserveTerminalToolParts(messages[idx], buildAssistantParts(evt.message))
+  )
   const previousMetadata = (messages[idx]?.metadata ?? {}) as Record<string, unknown>
   const incomingMetadata = (evt.message.metadata ?? {}) as Record<string, unknown>
   const createdAt =

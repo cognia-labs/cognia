@@ -775,8 +775,13 @@ describe("resolveSendOptions — semantic tool routing exempts flow-control tool
     // flow-control tools plus 30 topical plugin tools.
     const dummies = Array.from({ length: 30 }, (_, i) => manifestEntry(`tool_${i}`))
     ;(buildPluginToolsManifest as jest.Mock).mockReturnValueOnce([
-      manifestEntry("ask_user"),
-      manifestEntry("dispatch_agent"),
+      { name: "ask_user", description: "Ask", jsonSchema: {}, pluginId: "cognia-ask-user" },
+      {
+        name: "dispatch_agent",
+        description: "Dispatch",
+        jsonSchema: {},
+        pluginId: "cognia-dispatch-agent",
+      },
       ...dummies,
     ])
     // Deps that score everything at 0 → nothing clears the 0.5 threshold, so the
@@ -5987,6 +5992,35 @@ describe("resolveSendOptions — first-class web tools supersede the plugin", ()
     expect(names).toContain("deep_research")
   })
 
+  it("also rejects stale web registrations from other plugin ids", async () => {
+    mBuildManifest.mockReturnValue([
+      {
+        name: "web_search",
+        description: "Shadow",
+        jsonSchema: {},
+        pluginId: "other-plugin",
+        timeoutMs: 1,
+      },
+      {
+        name: "web_fetch",
+        description: "Shadow",
+        jsonSchema: {},
+        pluginId: "other-plugin",
+        timeoutMs: 1,
+      },
+    ])
+    const opts = await resolveSendOptions({
+      session: makeSession({ id: "web-collision" }),
+      character: makeChar(),
+      appSettings: COGNIA_WEB_SETTINGS,
+    })
+    const tools = opts.pluginTools?.filter(
+      (tool) => tool.name === "web_search" || tool.name === "web_fetch"
+    )
+    expect(tools).toHaveLength(2)
+    expect(tools?.every((tool) => tool.pluginId === "cognia-web-builtin")).toBe(true)
+  })
+
   it("drops plugin search/fetch when the master switch is off but keeps exclusive tools", async () => {
     const opts = await resolveSendOptions({
       session: makeSession({ id: "s-disabled" }),
@@ -9947,7 +9981,65 @@ describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
       registry.findIndex((entry) => entry.module === "crate"),
       1
     )
+    jest.mocked(buildPluginToolsManifest).mockReturnValue([])
   })
+
+  it.each([false, true])(
+    "advertises the dispatch owner on a same-name collision (fallback=%s)",
+    async (fallback) => {
+      const registry = moduleToolRegistry()
+      const declaration = registry.find((entry) => entry.module === "crate")!.declare.crate_list
+      if (fallback) declaration.precedence = "fallback"
+      const plugin = {
+        name: "crate_list",
+        description: "Plugin schema",
+        jsonSchema: { type: "object", properties: { plugin: { type: "string" } } },
+        pluginId: "fixture-plugin",
+        timeoutMs: 99,
+      }
+      const moduleTool = {
+        name: "crate_list",
+        description: "Module schema",
+        jsonSchema: { type: "object", properties: { module: { type: "number" } } },
+        timeoutMs: 0,
+      }
+      jest.mocked(buildPluginToolsManifest).mockReturnValue([plugin])
+      surface.mockResolvedValue({ tools: [moduleTool] })
+      const opts = await resolveSendOptions({
+        session: makeSession({ id: "collision" }),
+        character: makeChar(),
+      })
+      expect(opts.pluginTools?.filter((tool) => tool.name === "crate_list")).toEqual([
+        fallback ? plugin : { ...moduleTool, pluginId: "cognia-crate-builtin" },
+      ])
+    }
+  )
+
+  it.each([false, true])(
+    "keeps a promoted web manifest aligned with a module declaration (offered=%s)",
+    async (offered) => {
+      const moduleEntry = moduleToolRegistry().find((entry) => entry.module === "crate")!
+      moduleEntry.declare = {
+        ...moduleEntry.declare,
+        web_search: { consent: "allow", effect: "read" },
+      }
+      const tool = {
+        name: "web_search",
+        description: "Module search",
+        jsonSchema: schema,
+        timeoutMs: 0,
+      }
+      surface.mockResolvedValue(offered ? { tools: [tool] } : null)
+      const opts = await resolveSendOptions({
+        session: makeSession({ id: "module-web" }),
+        character: makeChar(),
+        appSettings: COGNIA_WEB_SETTINGS,
+      })
+      expect(opts.pluginTools?.filter((entry) => entry.name === tool.name)).toEqual(
+        offered ? [{ ...tool, pluginId: "cognia-crate-builtin" }] : []
+      )
+    }
+  )
 
   it("offers a family's tools with the tier derived from them and its instructions", async () => {
     surface.mockResolvedValue({

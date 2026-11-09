@@ -5,6 +5,10 @@ import {
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { setAgentTraceWriter } from "@cognia/agent-trace/emitter"
 import type { UIMessage } from "ai"
+import { createSdkEventMapper } from "@/lib/ai/chat/sdk-event-mapper"
+import { createEventAdapter } from "@/sidecar/src/runtimes/ai-sdk/events"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { listMessages, persistMessages } from "@/lib/db/messages"
 
 import {
   applySdkEvent,
@@ -34,6 +38,126 @@ function asAssistant(message: BetaMessage, uuid = "evt-1"): SDKAssistantMessage 
 function asResult(extra: Partial<SDKResultMessage> & Record<string, unknown>): SDKResultMessage {
   return { type: "result", ...extra } as unknown as SDKResultMessage
 }
+
+describe("final assistant tool snapshots", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+
+  const call = (id: string) => ({ type: "tool_use", id, name: "fixture_tool", input: { id } })
+  const snapshot = (content: Record<string, unknown>[]) =>
+    asAssistant({ id: "snapshot", role: "assistant", content } as unknown as BetaMessage)
+  const result = (id: string, isError = false) =>
+    ({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: id, content: "completed output", is_error: isError },
+        ],
+      },
+    }) as SDKUserMessage
+
+  it.each([false, true])(
+    "preserves a terminal result and its metadata (error=%s)",
+    async (isError) => {
+      let messages = applySdkEvent([], snapshot([call("done")])).messages
+      messages = applySdkEvent(messages, result("done", isError)).messages
+      const terminal = {
+        ...messages[0].parts[0],
+        approval: { id: "approval", approved: true },
+        toolMetadata: { startedAt: 1, completedAt: 2 },
+        mcpContent: [{ type: "resource_link", uri: "fixture://result", name: "result" }],
+      }
+      messages = [{ ...messages[0], parts: [terminal as never] }]
+      await persistMessages("snapshot-session", messages)
+      const sealed = applySdkEvent(messages, snapshot([call("done")])).messages
+      expect(sealed[0].parts[0]).toEqual(terminal)
+      expect(messages[0].parts[0]).toEqual(terminal)
+      await persistMessages("snapshot-session", sealed)
+      expect((await listMessages("snapshot-session"))[0].parts[0]).toEqual(terminal)
+    }
+  )
+
+  it("preserves only the completed member of parallel tools", () => {
+    const content = [call("done"), call("running")]
+    let messages = applySdkEvent([], snapshot(content)).messages
+    messages = applySdkEvent(messages, result("done")).messages
+    const sealed = applySdkEvent(messages, snapshot(content)).messages
+    expect(sealed[0].parts).toEqual([
+      expect.objectContaining({
+        toolCallId: "done",
+        state: "output-available",
+        output: "completed output",
+      }),
+      expect.objectContaining({ toolCallId: "running", state: "input-available" }),
+    ])
+  })
+
+  it.each(["output-available", "output-error"])("accepts a newer %s snapshot result", (state) => {
+    let messages = applySdkEvent([], snapshot([call("done")])).messages
+    messages = applySdkEvent(messages, result("done", state === "output-available")).messages
+    const next = {
+      ...call("done"),
+      state,
+      ...(state === "output-available" ? { output: "new output" } : { errorText: "new error" }),
+    }
+    const sealed = applySdkEvent(messages, snapshot([next])).messages
+    expect(sealed[0].parts[0]).toMatchObject(
+      next.state === "output-available"
+        ? { state, output: "new output" }
+        : { state, errorText: "new error" }
+    )
+    expect(sealed[0].parts[0]).not.toHaveProperty(
+      state === "output-available" ? "errorText" : "output"
+    )
+  })
+
+  it.each(["standalone", "sidecar"])(
+    "retains the ledger's %s call/result/seal/finish sequence in Dexie",
+    async (rail) => {
+      const ctx = {
+        sessionId: "snapshot-session",
+        sdkSessionId: "sdk",
+        model: "fixture",
+        provider: "openai",
+      }
+      const mapper = rail === "standalone" ? createSdkEventMapper(ctx) : createEventAdapter(ctx)
+      let messages: UIMessage[] = []
+      const apply = (events: unknown[]) => {
+        for (const event of events)
+          messages = applySdkEvent(messages, event as SDKUserMessage).messages
+      }
+      apply(
+        mapper.handle({
+          type: "tool-call",
+          toolCallId: "done",
+          toolName: "fixture_tool",
+          input: {},
+        })
+      )
+      apply(
+        mapper.handle({ type: "tool-result", toolCallId: "done", output: "completed tool output" })
+      )
+      expect(messages[0].parts[0]).toMatchObject({
+        state: "output-available",
+        output: "completed tool output",
+      })
+      apply(mapper.sealAssistant())
+      apply(mapper.finish())
+      expect(messages[0].parts[0]).toMatchObject({
+        state: "output-available",
+        output: "completed tool output",
+      })
+      await persistMessages(ctx.sessionId, messages)
+      expect((await listMessages(ctx.sessionId))[0].parts[0]).toMatchObject({
+        state: "output-available",
+        output: "completed tool output",
+      })
+    }
+  )
+})
 
 describe("SDK 0.3.302 tool result compatibility", () => {
   const call = (): UIMessage[] => [

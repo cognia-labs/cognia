@@ -12,6 +12,7 @@ import {
   rulesetForTools,
   runContributedTool,
   toolSurfaceHost,
+  toolOwnerBeforePlugin,
 } from "./tool-contributions"
 import {
   __resetContextSessionStateForTests,
@@ -69,6 +70,51 @@ beforeEach(() => {
   jest.spyOn(console, "warn").mockImplementation(() => {})
 })
 afterEach(() => jest.restoreAllMocks())
+
+describe("tool ownership before plugins", () => {
+  it("reserves non-fallback declarations and leaves fallback names to plugins", () => {
+    const entries = [
+      entry(
+        "owner",
+        {
+          owned: { consent: "allow", effect: "read" },
+          fallback: { consent: "allow", effect: "read", precedence: "fallback" },
+          web_search: { consent: "allow", effect: "read", precedence: "fallback" },
+        },
+        family()
+      ),
+    ]
+    expect(toolOwnerBeforePlugin("owned", entries)).toBe("cognia-owner-builtin")
+    expect(toolOwnerBeforePlugin("fallback", entries)).toBeUndefined()
+    expect(toolOwnerBeforePlugin("web_search", entries)).toBe("cognia-web-builtin")
+    expect(toolOwnerBeforePlugin("unclaimed", entries)).toBeUndefined()
+    expect(toolOwnerBeforePlugin("toString", entries)).toBeUndefined()
+    entries[0].declare.web_search.precedence = undefined
+    expect(toolOwnerBeforePlugin("web_search", entries)).toBe("cognia-owner-builtin")
+  })
+
+  it("matches the existing host manifest names and owner ids", async () => {
+    const { buildWebBuiltinManifestEntries } = await import("./web-builtin-tools")
+    const { buildAskUserManifestEntry } = await import("./ask-user-tool")
+    const { buildDispatchAgentManifestEntry, TASK_TOOL_NAME, DISPATCH_AGENT_PLUGIN_ID } =
+      await import("./agents/dispatch-agent-tool")
+    const { buildSkillManifestEntries } = await import("./skill-builtin-tools")
+    const { buildSessionPeerManifestEntries } = await import("./session-peer-builtin-tools")
+    const { buildAttachmentManifestEntries } = await import("./attachment-builtin-tools")
+    const { buildWorkingSetManifestEntries } = await import("./working-set-tool")
+    const manifests = [
+      ...buildWebBuiltinManifestEntries(),
+      buildAskUserManifestEntry(),
+      buildDispatchAgentManifestEntry([]),
+      { name: TASK_TOOL_NAME, pluginId: DISPATCH_AGENT_PLUGIN_ID },
+      ...buildSkillManifestEntries(),
+      ...buildSessionPeerManifestEntries(),
+      ...buildAttachmentManifestEntries(),
+      ...buildWorkingSetManifestEntries(),
+    ]
+    for (const tool of manifests) expect(toolOwnerBeforePlugin(tool.name, [])).toBe(tool.pluginId)
+  })
+})
 
 describe("collectContributedTools", () => {
   it("offers what a family surfaces, with the tier derived from those tools alone", async () => {

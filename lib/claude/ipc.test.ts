@@ -6,6 +6,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createExecutionRun, listExecutionRunEvents } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
 import { getActionReviewReceipt } from "@/lib/db/action-review-receipts"
+import { abortPluginToolCallsForSession } from "./plugin-tool-dispatch-bridge"
 import { __resetChatToolReviewsForTesting } from "@/lib/policy/action-review/chat-tool-channel"
 import {
   __resetAuthorizedToolCallsForTesting,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/policy/action-review/authorized-tool-calls"
 
 const mockRecordToolAuthorizationGovernance = jest.fn().mockResolvedValue("decision-1")
+jest.mock("./plugin-tool-dispatch-bridge", () => ({ abortPluginToolCallsForSession: jest.fn() }))
 const mockReportGovernanceProjectionFailure = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/governance/producers/tool-authorization", () => ({
   recordToolAuthorizationGovernance: (...args: unknown[]) =>
@@ -1071,9 +1073,28 @@ describe("Claude session commands", () => {
   })
 
   it("interruptSession invokes the interrupt command with the id", async () => {
-    callSpy.mockResolvedValueOnce(undefined)
+    jest.mocked(abortPluginToolCallsForSession).mockClear()
+    callSpy.mockImplementationOnce(async () => {
+      expect(abortPluginToolCallsForSession).toHaveBeenCalledWith(
+        "sess-2",
+        "interrupted",
+        undefined
+      )
+    })
     await interruptSession("sess-2")
     expect(callSpy).toHaveBeenCalledWith("claude_interrupt", { sessionId: "sess-2" })
+  })
+
+  it("cancels renderer calls before session disposal even when the host close rejects", async () => {
+    callSpy.mockImplementationOnce(async () => {
+      expect(abortPluginToolCallsForSession).toHaveBeenCalledWith(
+        "disposed",
+        "session closed",
+        undefined
+      )
+      throw new Error("disconnected")
+    })
+    await expect(closeSession("disposed")).rejects.toThrow("disconnected")
   })
 
   it("routes idempotent lifecycle mutations through canonical commands", async () => {
@@ -1274,6 +1295,71 @@ describe("Claude session commands", () => {
 })
 
 describe("onClaudeMessage", () => {
+  it("cancels ended turns and routes Stop to the captured remote host identity", async () => {
+    let receive!: (event: never) => void
+    jest.spyOn(transport, "subscribe").mockImplementation((_channel, handler) => {
+      receive = handler
+      return () => undefined
+    })
+    const context = {
+      hostId: "host-a",
+      originDeviceId: "device-a",
+      sessionId: "tool-session",
+      generation: 2,
+      requestId: "request",
+      issuedAt: 1,
+      expiresAt: 2,
+    }
+    const handler = jest.fn()
+    await onClaudeMessage(handler)
+    receive({
+      type: "plugin_tool_exec",
+      sessionId: context.sessionId,
+      toolUseId: "call",
+      name: "ask_user",
+      args: {},
+      remoteExecutionContext: context,
+    } as never)
+    callSpy.mockResolvedValue(undefined)
+    await interruptSession(context.sessionId)
+    expect(abortPluginToolCallsForSession).toHaveBeenLastCalledWith(
+      context.sessionId,
+      "interrupted",
+      context
+    )
+    await closeSession(context.sessionId)
+    expect(abortPluginToolCallsForSession).toHaveBeenLastCalledWith(
+      context.sessionId,
+      "session closed",
+      context
+    )
+    const event = {
+      type: "session_ended",
+      sessionId: context.sessionId,
+      turnId: "turn-old",
+      remoteExecutionContext: { ...context, generation: 1 },
+    }
+    receive(event as never)
+    expect(abortPluginToolCallsForSession).toHaveBeenLastCalledWith(
+      context.sessionId,
+      "session ended",
+      event.remoteExecutionContext,
+      "turn-old"
+    )
+    expect(handler).toHaveBeenLastCalledWith(event)
+
+    const remote = { call: jest.fn(), subscribe: jest.fn() } as unknown as Parameters<
+      typeof setActiveRemoteTransport
+    >[0]
+    setActiveRemoteTransport(remote)
+    jest.mocked(abortPluginToolCallsForSession).mockClear()
+    await interruptSession(context.sessionId)
+    await closeSession(context.sessionId)
+    receive({ type: "session_ended", sessionId: context.sessionId } as never)
+    expect(abortPluginToolCallsForSession).not.toHaveBeenCalled()
+    setActiveRemoteTransport(null)
+  })
+
   it("subscribes via transport.subscribe with the channel + caller handler", async () => {
     const unlistenSpy = jest.fn()
     let captured: ((payload: unknown) => void) | undefined

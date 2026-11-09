@@ -2,6 +2,7 @@
 import { loggers } from "@cognia/logging"
 import { sendPluginToolResponse, subscribePluginToolExec } from "./ipc"
 import type { PluginToolExecRequest, PluginToolExecResponse } from "./plugin-tool-ipc"
+import type { RemoteExecutionContext } from "./remote-execution"
 
 export interface PluginToolDispatchBridgeDeps {
   sessionId?: string
@@ -19,6 +20,7 @@ interface DispatchSubscription {
   unsubscribe?: () => void
   /** Completed ids are bounded; in-flight calls are never evicted. */
   calls: Map<string, boolean>
+  inFlight: Map<string, { request: PluginToolExecRequest; controller: AbortController }>
   pending: number
 }
 
@@ -38,9 +40,33 @@ function callKey(request: PluginToolExecRequest): string {
   ])
 }
 
+/** Cancel only this session's calls on the named host incarnation (or locally). */
+export function abortPluginToolCallsForSession(
+  sessionId: string,
+  reason: string,
+  remoteExecutionContext?: RemoteExecutionContext,
+  turnId?: string
+): void {
+  for (const state of subscriptions.values()) {
+    for (const { request, controller } of state.inFlight.values()) {
+      const remote = request.remoteExecutionContext
+      if (request.sessionId !== sessionId) continue
+      if (turnId && request.turnId && request.turnId !== turnId) continue
+      if (
+        remote?.hostId !== remoteExecutionContext?.hostId ||
+        remote?.originDeviceId !== remoteExecutionContext?.originDeviceId ||
+        remote?.generation !== remoteExecutionContext?.generation
+      )
+        continue
+      controller.abort(reason)
+    }
+  }
+}
+
 async function execute(
   request: PluginToolExecRequest,
-  owner: PluginToolDispatchBridgeDeps
+  owner: PluginToolDispatchBridgeDeps,
+  controller: AbortController
 ): Promise<void> {
   const failure = (error: string): PluginToolExecResponse => ({
     type: "plugin_tool_response",
@@ -48,19 +74,43 @@ async function execute(
     toolUseId: request.toolUseId,
     error,
   })
-  let response: PluginToolExecResponse
+  let removeAbortListener: (() => void) | undefined
+  let signal = controller.signal
+  let response: PluginToolExecResponse | undefined
   try {
-    if (request.remoteExecutionContext && owner.canExecuteRemote?.() === false) {
-      response = failure("REMOTE_FEATURE_UNSUPPORTED: controller tool proxy is not advertised")
-    } else {
+    const prepared = owner.prepareRequest?.(request) ?? request
+    signal = AbortSignal.any(
+      [controller.signal, request.abortSignal, prepared.abortSignal].filter(
+        (value): value is AbortSignal => value !== undefined
+      )
+    )
+    const cancelled = new Promise<undefined>((resolve) => {
+      const onAbort = () => resolve(undefined)
+      signal.addEventListener("abort", onAbort, { once: true })
+      removeAbortListener = () => signal.removeEventListener("abort", onAbort)
+      if (signal.aborted) onAbort()
+    })
+    const run = async (): Promise<PluginToolExecResponse> => {
+      signal.throwIfAborted()
+      if (request.remoteExecutionContext && owner.canExecuteRemote?.() === false)
+        return failure("REMOTE_FEATURE_UNSUPPORTED: controller tool proxy is not advertised")
       const handle = owner.handle ?? (await import("./plugin-tool-ipc")).handlePluginToolExec
-      response = await handle(owner.prepareRequest?.(request) ?? request)
+      signal.throwIfAborted()
+      return handle({ ...prepared, abortSignal: signal })
     }
+    // Release the bridge even when a handler ignores cancellation. Its eventual
+    // result is observed by the race but never sent after the signal aborts.
+    response = await Promise.race([
+      run().catch(() => failure("Plugin tool executor failed")),
+      cancelled,
+    ])
   } catch {
-    // Exception messages can contain arguments, credentials or provider bodies.
-    // Keep the existing error field useful without reflecting any of that data.
+    // Neither preparation nor execution may reflect private exception text.
     response = failure("Plugin tool executor failed")
+  } finally {
+    removeAbortListener?.()
   }
+  if (!response || signal.aborted) return
   try {
     await (owner.send ?? sendPluginToolResponse)(response, request.remoteExecutionContext)
   } catch {
@@ -75,7 +125,7 @@ export async function subscribePluginToolDispatchBridge(
   const subscribe = deps.subscribe ?? subscribePluginToolExec
   let subscription = subscriptions.get(subscribe)
   if (!subscription) {
-    subscription = { owners: new Set(), calls: new Map(), pending: 0 }
+    subscription = { owners: new Set(), calls: new Map(), inFlight: new Map(), pending: 0 }
     subscriptions.set(subscribe, subscription)
   }
   const state = subscription
@@ -102,8 +152,11 @@ export async function subscribePluginToolDispatchBridge(
         const key = callKey(request)
         if (state.calls.has(key)) return
         state.calls.set(key, false)
+        const controller = new AbortController()
+        state.inFlight.set(key, { request, controller })
         state.pending += 1
-        void execute(request, selected).finally(() => {
+        void execute(request, selected, controller).finally(() => {
+          state.inFlight.delete(key)
           state.pending -= 1
           state.calls.set(key, true)
           for (const [completedKey, completed] of state.calls) {

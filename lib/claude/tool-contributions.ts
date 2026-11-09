@@ -86,6 +86,52 @@ export function contributedToolPluginId(module: string): string {
   return `cognia-${module}-builtin`
 }
 
+// Host tools not owned by a module declaration. Keep discovery, registration
+// and dispatch on the same precedence without loading any tool implementation.
+const HOST_TOOL_OWNERS: Readonly<Record<string, string>> = {
+  web_search: "cognia-web-builtin",
+  web_fetch: "cognia-web-builtin",
+  ask_user: "cognia-ask-user",
+  dispatch_agent: "cognia-dispatch-agent",
+  Task: "cognia-dispatch-agent",
+  Skill: "cognia-skill-builtin",
+  load_skill: "cognia-skill-builtin",
+  load_skill_resource: "cognia-skill-builtin",
+  list_sessions: "cognia-session-peer-builtin",
+  send_session_message: "cognia-session-peer-builtin",
+  attachment_list: "cognia-attachment-builtin",
+  attachment_search: "cognia-attachment-builtin",
+  attachment_read: "cognia-attachment-builtin",
+  working_set: "cognia-working-set-builtin",
+}
+
+/** The owner that precedes plugins; a fallback declaration leaves plugins first. */
+export function toolOwnerBeforePlugin(
+  name: string,
+  entries: readonly ModuleToolsEntry[] = MODULE_TOOLS
+): string | undefined {
+  const declared = findDeclaredModuleTool(
+    name,
+    entries.filter((entry) => Object.hasOwn(entry.declare, name))
+  )
+  if (declared && declared.declaration.precedence !== "fallback")
+    return contributedToolPluginId(declared.module)
+  return Object.hasOwn(HOST_TOOL_OWNERS, name) ? HOST_TOOL_OWNERS[name] : undefined
+}
+
+/** Merge advertised entries with exactly the ownership rule used at dispatch. */
+export function mergeContributedTools<T extends { name: string; pluginId: string }>(
+  existing: readonly T[],
+  contributed: readonly T[]
+): T[] {
+  const tools = new Map(existing.map((tool) => [tool.name, tool]))
+  for (const tool of contributed) {
+    if (!tools.has(tool.name) || toolOwnerBeforePlugin(tool.name) === tool.pluginId)
+      tools.set(tool.name, tool)
+  }
+  return [...tools.values()]
+}
+
 /**
  * The consent tier of a declaration: `"per-call"` asks, and more (see
  * `requiresApproval`); `"default"` has none, so no rule is written for it.
