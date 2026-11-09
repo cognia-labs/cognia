@@ -147,6 +147,15 @@ export async function applyMemoryContext(
       now,
     })
   try {
+    // One candidate read serves recall AND the stable-key resolution of the
+    // procedural block, so both sections agree on which same-key row won.
+    let sharedCandidates: Promise<Memory[]> | undefined
+    const loadSharedCandidates = () =>
+      (sharedCandidates ??= Promise.resolve().then(() => input.deps.loadCandidates(reader)))
+    const recallDeps: ApplyMemoryContextDeps = {
+      ...input.deps,
+      loadCandidates: () => loadSharedCandidates(),
+    }
     const [recallResult, proceduralResult] = await Promise.allSettled([
       Promise.resolve().then(() =>
         query
@@ -173,7 +182,7 @@ export async function applyMemoryContext(
                 rerank: input.rerank,
                 now,
               },
-              input.deps
+              recallDeps
             )
           : null
       ),
@@ -211,10 +220,29 @@ export async function applyMemoryContext(
       isMemoryEligibleForRetrieval(memory, now)
     )
     // Key precedence after eligibility: an unverified, expired or quarantined
-    // narrow instruction must not hide the broader one it would override. A
-    // PII-bearing winner is still the user's override, so it keeps its key and
-    // is only withheld from the prompt (as recalled rows are).
-    const keyWinners = applyStableKeyPrecedence(eligibleProcedural)
+    // narrow instruction must not hide the broader one it would override. It
+    // is resolved over every eligible row the reader can see, not procedural
+    // rows alone, the same set recall resolved over: a narrower same-key fact
+    // overrides a broader instruction and vice versa, so only one layer of a
+    // key reaches the prompt. A PII-bearing winner is still the user's
+    // override, so it keeps its key and is only withheld from the prompt.
+    let keyScope: Memory[] = []
+    try {
+      keyScope = (await loadSharedCandidates()).filter((memory) =>
+        isMemoryEligibleForRetrieval(memory, now)
+      )
+    } catch {
+      // Recall already reports the failed read as degraded; resolve the
+      // procedural block among its own rows.
+    }
+    const inScope = new Set(keyScope.map((memory) => memory.id))
+    const winnerIds = new Set(
+      applyStableKeyPrecedence([
+        ...keyScope,
+        ...eligibleProcedural.filter((memory) => !inScope.has(memory.id)),
+      ]).map((memory) => memory.id)
+    )
+    const keyWinners = eligibleProcedural.filter((memory) => winnerIds.has(memory.id))
     const safeProcedural = keyWinners.filter((memory) => hasNoLeakingPii(memory.text))
     const withheldProceduralCount =
       proceduralAll.length - eligibleProcedural.length + (keyWinners.length - safeProcedural.length)

@@ -358,6 +358,55 @@ describe("independent recall sources and delivery governance", () => {
     expect(result.proceduralCount).toBe(1)
   })
 
+  it("injects only the override layer of a key split across fact and instruction", async () => {
+    const rule = mem("Use npm in this repo", {
+      id: "workspace-rule",
+      type: "procedural",
+      scope: "workspace",
+      projectId: "p1",
+      key: "package-manager",
+    })
+    const fact = mem("The user prefers pnpm for package installs", {
+      id: "global-fact",
+      key: "package-manager",
+    })
+    const result = await applyMemoryContext({
+      ...base,
+      userMessage: "which package manager installs",
+      reader: { projectId: "p1" },
+      deps: deps({
+        loadCandidates: async () => [fact, rule],
+        loadProcedural: async () => [rule],
+      }),
+    })
+    expect(result.systemPromptSection).toContain("Use npm in this repo")
+    expect(result.systemPromptSection).not.toContain("pnpm")
+    expect(result.snapshot.memoryRefs.map((ref) => ref.id)).toEqual(["workspace-rule"])
+  })
+
+  it("lets a narrower same-key fact override a broader instruction", async () => {
+    const rule = mem("Always use pnpm", { id: "global-rule", type: "procedural", key: "pm" })
+    const fact = mem("This repo installs packages with npm", {
+      id: "workspace-fact",
+      scope: "workspace",
+      projectId: "p1",
+      key: "pm",
+    })
+    const result = await applyMemoryContext({
+      ...base,
+      userMessage: "installs packages",
+      reader: { projectId: "p1" },
+      deps: deps({
+        loadCandidates: async () => [rule, fact],
+        loadProcedural: async () => [rule],
+      }),
+    })
+    expect(result.systemPromptSection).toContain("npm")
+    expect(result.systemPromptSection).not.toContain("Always use pnpm")
+    expect(result.proceduralCount).toBe(0)
+    expect(result.snapshot.memoryRefs.map((ref) => ref.id)).toEqual(["workspace-fact"])
+  })
+
   it("counts multiline procedural rows once and records their delivered versions", async () => {
     const result = await applyMemoryContext({
       ...base,

@@ -449,10 +449,12 @@ export function memoryScopeSpecificity(
  * only the most specific survives, the most recently updated breaking ties.
  * Rows without a key all pass. Input order is otherwise preserved.
  *
- * Callers apply this AFTER every eligibility, scope, personal-visibility and
- * type filter. A narrow override that is expired, quarantined, unverified or
- * unreadable for this caller is not a candidate, so it must not hide the
- * broader fallback either — resolving keys first used to drop both.
+ * Callers apply this AFTER every eligibility, scope and personal-visibility
+ * filter, and BEFORE partitioning by type or corpus. A narrow override that is
+ * expired, quarantined, unverified or unreadable for this caller is not a
+ * candidate, so it must not hide the broader fallback (resolving before
+ * eligibility used to drop both). A live override in another partition still
+ * wins, so its fallback never reaches the same prompt beside it.
  */
 export function applyStableKeyPrecedence<T extends Memory>(rows: readonly T[]): T[] {
   const winners = new Map<string, T>()
@@ -584,6 +586,13 @@ export async function retrieveMemoriesWithOutcome(
     candidates = (await deps.loadCandidates(reader)).filter((memory) =>
       isMemoryEligibleForRetrieval(memory, input.now)
     )
+    // Key winners over the whole eligible, reader-visible set, BEFORE the type
+    // and corpus partitions below. Resolving inside a partition would let a
+    // narrow override in another partition (a workspace procedural rule, a
+    // project claim) leave its broader same-key fallback recallable here, and
+    // both would reach one prompt. Historical rows resolve one per memory
+    // identity instead, because which row held a key changes over time.
+    candidates = applyStableKeyPrecedence(candidates)
   }
   if (input.types) {
     const allow = new Set(input.types)
@@ -597,9 +606,6 @@ export async function retrieveMemoriesWithOutcome(
     const wantProject = input.claimFilter === "project-only"
     candidates = candidates.filter((m) => isProjectClaim(m) === wantProject)
   }
-  // Live recall only: historical rows resolve one per memory identity instead,
-  // because which row held a key changes over time.
-  if (asOf === undefined) candidates = applyStableKeyPrecedence(candidates)
   if (candidates.length === 0) return finish([], [], [], query)
 
   const byId = new Map(candidates.map((m) => [m.id, m]))

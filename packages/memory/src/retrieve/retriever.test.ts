@@ -112,6 +112,60 @@ describe("retrieveMemories", () => {
     }
   })
 
+  it("resolves key winners before the type partition", async () => {
+    // A workspace procedural rule overrides the global same-key fact: recall of
+    // facts must not bring the fallback back beside the rule.
+    const deps: MemoryRetrieverDeps = {
+      loadCandidates: async () => [
+        mem("The user prefers pnpm", { id: "global-fact", key: "package-manager" }),
+        mem("The user prefers npm", {
+          id: "workspace-rule",
+          type: "procedural",
+          scope: "workspace",
+          projectId: "p1",
+          key: "package-manager",
+          reviewStatus: "verified",
+        }),
+      ],
+    }
+    const out = await retrieveMemories(
+      { queryText: "prefers", ...base, types: ["semantic", "episodic"] },
+      deps
+    )
+    expect(out).toEqual([])
+  })
+
+  it("resolves key winners before the personal/project corpus split", async () => {
+    const deps: MemoryRetrieverDeps = {
+      loadCandidates: async () => [
+        mem("The user prefers pnpm", { id: "personal", key: "package-manager" }),
+        mem("The repo uses npm", {
+          id: "claim",
+          scope: "workspace",
+          projectId: "p1",
+          key: "package-manager",
+          projectMemoryKind: "decision",
+        }),
+      ],
+    }
+    const personal = await retrieveMemories(
+      { queryText: "pnpm npm", ...base, claimFilter: "personal-only" },
+      deps
+    )
+    expect(personal).toEqual([])
+    __resetMemoryBm25Cache()
+    const project = await retrieveMemories(
+      {
+        queryText: "pnpm npm",
+        ...base,
+        reader: { projectId: "p1" },
+        claimFilter: "project-only",
+      },
+      deps
+    )
+    expect(project.map((r) => r.memory.id)).toEqual(["claim"])
+  })
+
   it("still lets an eligible scoped override hide the global row", async () => {
     const deps: MemoryRetrieverDeps = {
       loadCandidates: async () => [
