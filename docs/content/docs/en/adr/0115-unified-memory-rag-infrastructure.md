@@ -109,6 +109,48 @@ RAG answers produce claim-to-chunk support and exact offsets. Interactive chat a
 
 Compaction reuses working set, boundary, undo, and Optical Archive. `CompactionCheckpointV1` records goal, completed work, active state, decisions/rationale, evidence refs, blockers, next steps, constraints, do-not-repeat items, exact reinjection versions, and token counts. Resume/fork/model-switch deterministically re-injects policy, verified instruction, working set, selected Skills, and eligible Memory/RAG within budget.
 
+### 11. Recovery semantics, made precise (2026-11-09 amendment)
+
+A memory support audit (`docs/evidence/2026-11-08-memory-support-audit.md`)
+reproduced jobs that reported failure as `no_output`, retried past their
+budget, or wrote after their source was gone. §6 and §7 now mean:
+
+- **A failure is not an empty result.** Turn extraction raises a typed
+  `MemoryExtractionError` for a provider error, malformed output, or a
+  consolidation failure, and the job takes the `retry_wait` path to `failed`.
+  `no_output` is reserved for a model that found nothing and for the
+  intentional gates (disabled, inbound provenance, not salient, PII-unsafe).
+- **One attempt budget.** Every claim, whether fresh, a scheduled retry, or
+  expired-lease recovery, consumes `attempt`; claim, reclaim and failure
+  handling all stop at `maxAttempts`. A lease that expired but was not
+  reclaimed may still settle: staleness is defined by the fencing epoch, and
+  a stale epoch is refused.
+- **Deduplication includes waiting jobs.** A same-key job in `retry_wait` is
+  active, so the daily vector reconcile is not queued twice.
+- **Hard gates are checked when a job runs, not when it was queued.**
+  Text-writing kinds (turn extraction, session distillation, project mining,
+  lifecycle sweep) skip under `enabled: false` or temporary mode. Vector
+  reconcile only cleans up then, and claim revalidation (which only revokes
+  support) still runs.
+- **Canonical writes are fenced by their source.** A durable extraction
+  re-checks, inside the transaction that writes memory, that its claim epoch
+  is current, the job was not cancelled, and the session and the messages
+  the extractor actually read still exist. A source deleted during the model
+  call leaves no memory, evidence or vector. Evidence and audit commit with
+  the mutation.
+- **Vectors carry a receipt.** `Memory.vectorTextHash` is the hash of the
+  text a vector was built from, written only after a successful upsert and
+  cleared by every text change. Reconciliation re-embeds rows whose receipt
+  is missing or stale (at most 500 per run, under the existing visibility
+  and PII gates), so a failed upsert cannot leave an old embedding vouching
+  for new text. The receipt certifies one device's index: account sync
+  classifies it `local` and paired sync strips it from plaintext metadata.
+- **Relevance has an absolute floor.** Vector hits with cosine ≤ 0 are
+  dropped before fusion, and a hit found only by the vector leg cannot score
+  above its raw cosine; rank normalization alone no longer lifts an
+  unrelated singleton to relevance 1. Query expansion gates on the expanded
+  query's meaningful terms, still rejecting stopword-only matches.
+
 ## Storage and migration
 
 Dexie v163 adds profiles, generations, active pointers, jobs, traces, encrypted content, tombstones, and a migration journal. Dexie v164 adds Memory governance indexes and migrates the job state model. Dexie v165 indexes derived RAG chunks by generation, v166 adds the shared rollout kill switch, and v167 indexes Memory updates for bounded Companion sync. Legacy confidence/expiry/staleness remains explicitly unknown. Legacy unreviewed procedural content becomes pending review.

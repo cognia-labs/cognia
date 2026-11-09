@@ -29,7 +29,7 @@ description: "记录了自主长期记忆子系统（Dexie v65 + v118治理、�
 ### 2. 信任不变量（全部接口）
 
 - **来源`external`**——每写API-surface为新一个`MemoryProvenance`值，检索真实度排名介于`explicit`至`system`之间（0.85）。混凝土接口被印在新的无索引行字段`sourceChannel: "plugin" | "mcp" | "rpc"`和`sourcePluginId`中（无Dexie版本凸起——加法且无索引）。
-- **绝不程序化**——外部写入只能创建`semantic`/`episodic`;`storeMemoryCore`中强制执行了只有`user`/`explicit`源才能重写代理行为的既有不变量。
+- **绝不程序化**——外部写入只能创建`semantic`/`episodic`;`storeMemoryCore`中强制执行了只有`user`/`explicit`源才能重写代理行为的既有不变量。外部修改已有 procedural 行的文本或 key 时，该行会退回待审核（§9）。
 - **PII block 门禁** — 外部存储和文本更新必须传递`hasNoLeakingPii`（仅块;由于外部调用者无法代表用户同意，涂黑选项仍保持本地工作流）。
 - **配置 门禁** — `memory.enabled` 门禁一切;`temporary` 阻断读写（忘了允许的停留——它只减少数据量）。
 
@@ -71,6 +71,19 @@ Dexie v118 在规范的`memories`表上增加了`memoryEvidence`、`memoryJobs`�
 主机执行 `manageMemoryForCaller()`：严格解析命令（`command-wire.ts` 从不接受线上的 `actorId` 或 `commandId`），检查调用方对每一条被触及的行以及目标命名空间的授权，把 `clear` 收窄到该设备可见的行，通过操作账本（kind `"manage"`）重放，并把设备记录为操作者。主机应答后，出站执行器结算该操作（`remote-outcomes.ts`）：成功则安排一次后续 `memories` 拉取；被拒绝则回退 `memories` 同步游标（`rewindSyncTable`，进行中的拉取无法覆盖它），重新拉取规范行，并告诉用户原因。
 
 管理词汇新增 `restore`（把已归档记忆恢复为活跃，PII 干净时重新写入向量，审计 `restored`）与 `relocate`（把记忆移到另一个命名空间；分支与路径限制只在同一工作区内保留，审计 `relocated` 并记录 from/to）。归档立即生效并可撤销；删除是唯一需要先确认的操作，所有入口一致——上下文工作台此前删除时不做确认。
+
+### 9. 写权限按操作逐一生效（2026-11-09 修订）
+
+一次记忆支持审计（`docs/evidence/2026-11-08-memory-support-audit.md`）发现，外部写入和自动写入会保留超出调用方实际权限的能力。以下规则将其关闭。
+
+- **外部修改 procedural 记忆需要重新审核。** 插件、MCP 和 Companion `memory_update` 经 `updateExternalMemory` 修改 procedural 行的文本或 key 时，会在同一事务中将 `reviewStatus` 置为 `"pending_instruction"`，记录审计原因 `external_procedural_edit_requires_review`，并返回 `reviewRequired: true`。该行在有人从控制台重新验证前不会注入。只改重要度、标签或置顶不影响审核状态。
+- **Consolidation 遵守操作上限。** 凡是解析了 Agent 策略的入口，都会把 `canUpdate` / `canForget` 及 scope 检查传入 `consolidate()`。调用方无权执行的判定（UPDATE、DELETE，以及 CONFLICT 对目标一侧的标记）不会改动目标：候选内容以待审核草稿落库（`reviewStatus: "conflict"`、`conflictWithIds: [target]`），操作结果标注 `update_denied` 或 `forget_denied`。因此只有创建权限的调用方无法改写或归档已有记忆。
+- **在写入处重新读取目标。** 判定依据的是模型调用之前的快照。每次变更都会在写入它的同一事务中重新读取目标（并加入持久任务的围栏），确认目标仍然有效、仍在同一命名空间，且其当前 scope 允许该操作；否则候选内容转为待审核草稿，原因为 `target_moved` 或 `target_unavailable`。DELETE 先把替代内容存为草稿，再与失效操作原子地一起提升，因此被拒绝的写入不会留下活跃的重复行。后续的治理补丁（store、项目挖掘）也使用同样的围栏。
+- **同一 key 只有一层进入提示词。** Stable-key 优先级在资格与读者可见性过滤之后、按类型和 personal/project 分区之前解析，并与 procedural 块共用同一次候选读取。不合格的窄层不再遮住其回退层，覆盖层与回退层也不会同时出现。
+- **操作账本从不猜测。** 同一 key 的重试不会因为等待超时而接管仍在 pending 的 key：`storeExternalMemory` 与 `manageMemoryForCaller` 会重新原子预约，否则报告操作仍在进行。Companion 只把这两个错误精确映射为可重试的 `memory_operation_in_flight`（503）。只有在命令首次规范写入之前失败时才会释放 key。规范写入是单个 Dexie 事务的命令（update、pin、review、检索反馈、delete、restore-revision、invalidate、restore、relocate）在该事务中提交回执。`create`、`clear` 和 `resolve-conflict` 做不到（consolidation 跨越模型调用）；回执写入连续失败三次后抛出 `memory_receipt_commit_failed`，并保留 pending key 直到 30 天清理，而不冒重复执行的风险。重放返回完整的无正文结果（`memoryId`、`version`、`clearedCount`、`piiRedacted`、`reviewRequired`），绝不返回记忆文本。
+- **Workflow 召回应用读者过滤。** `action.memory.recall` 按工作流运行的已验证读者套用个人可见性过滤；webhook 和定时运行没有个人读者，看不到来源带个人标记的记忆（ADR-0243 §5）。
+
+推迟到 ADR-0243 决定 owner 与 member 设备之后处理：Companion `memory_mutate` 的 `update` / `review` 对任何已配对设备仍设为 `verified`（在已配对设备就是 owner 控制台时正确）；`sync_pull` 仍按账户镜像全部记忆，不按设备的记忆授权过滤。插件 `ctx.memory.search` 和 MCP `memory_search` 是显式授予 `memory:read` 的数据 API，按契约只做命名空间过滤。
 
 ## 后果
 

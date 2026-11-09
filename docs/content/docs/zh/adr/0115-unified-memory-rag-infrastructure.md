@@ -94,6 +94,18 @@ RAG 回答生成 claim→chunk 支持和精确 offset。交互聊天在流结束
 
 Compaction 复用 working set、boundary、undo 与 Optical Archive。`CompactionCheckpointV1` 保存 goal、已完成工作、活动状态、决策/依据、evidence ref、阻塞、下一步、约束、do-not-repeat、精确重注入版本与 token 计数。resume/fork/model-switch 在预算内确定性重注入 policy、verified instruction、working set、selected Skill 和 eligible Memory/RAG。
 
+### 11. 恢复语义的精确化（2026-11-09 修订）
+
+一次记忆支持审计（`docs/evidence/2026-11-08-memory-support-audit.md`）复现了把失败记为 `no_output`、超出重试预算、或在来源消失后仍写入的任务。§6 与 §7 现在的含义如下：
+
+- **失败不是空结果。** 回合提取在 provider 出错、输出格式错误或 consolidation 失败时抛出带类型的 `MemoryExtractionError`，任务经 `retry_wait` 走到 `failed`。`no_output` 只用于模型确实没有提取到内容，以及有意的门禁（关闭、入站来源、不显著、PII 不安全）。
+- **统一的尝试预算。** 每次领取（首次、计划重试或过期租约恢复）都消耗 `attempt`；领取、回收和失败处理都在 `maxAttempts` 处停止。已过期但未被回收的租约仍可结算：过期由 fencing epoch 定义，旧 epoch 会被拒绝。
+- **去重包含等待中的任务。** 处于 `retry_wait` 的同 key 任务视为活跃，每日向量对账不会被重复排队。
+- **硬门禁在任务执行时检查，而不是入队时。** 会写文本的任务（回合提取、会话蒸馏、项目挖掘、生命周期清理）在 `enabled: false` 或临时模式下跳过；此时向量对账只做清理；断言重新校验（只会撤销支持）照常运行。
+- **规范写入由其来源围栏保护。** 持久提取在写入记忆的事务内重新确认：领取 epoch 仍是当前的、任务未被取消、会话以及提取器实际读取的消息仍然存在。模型调用期间删除来源不会留下任何记忆、证据或向量。证据与审计随变更一起提交。
+- **向量带有回执。** `Memory.vectorTextHash` 是生成向量所用文本的哈希，只在 upsert 成功后写入，任何文本变化都会清除它。对账会重新嵌入回执缺失或过期的行（每次最多 500 条，沿用现有可见性与 PII 门禁），因此失败的 upsert 不会让旧向量为新文本作证。该回执只证明本设备的索引：账户同步将其归类为 `local`，配对同步会从明文元数据中剥离它。
+- **相关性有绝对下限。** 余弦 ≤ 0 的向量命中在融合前丢弃，只由向量路命中的结果相关性不得超过其原始余弦；单纯的排名归一化不再把无关的唯一结果抬到相关性 1。查询扩展按扩展后查询的有效词进行门控，仍拒绝只匹配停用词的结果。
+
 ## 存储、迁移与回滚
 
 Dexie v163 新增 profile、generation、active pointer、job、trace、encrypted content、tombstone 与 migration journal。v164 新增 Memory 治理索引并迁移 job 状态，v165 为派生 RAG chunk 增加 generation 索引，v166 增加共享上线 kill switch，v167 为 Companion 有界同步增加 Memory updatedAt 索引。旧 confidence/expiry/staleness 明确保持 unknown；旧未审阅 procedural 进入 pending review。

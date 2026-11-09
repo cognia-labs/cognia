@@ -63,6 +63,8 @@ caller programming errors throw.
 - **Never procedural** — external writes may only create `semantic` /
   `episodic`; the pre-existing invariant that only `user`/`explicit`
   provenance may rewrite agent behavior is enforced in `storeMemoryCore`.
+  An external edit of an existing procedural row's text or key sends it
+  back to review instead (§9).
 - **PII block gate** — external stores and text updates must pass
   `hasNoLeakingPii` (block-only; the redact option stays workflow-local
   because external callers cannot consent on the user's behalf).
@@ -186,6 +188,68 @@ memory to another namespace; branch and path restrictions survive only within
 the same workspace, audit `relocated` with from/to). Archive is immediate with
 Undo; delete is the only action that asks first, from every surface — the
 context workbench used to delete without asking.
+
+### 9. Write authority holds per operation (2026-11-09 amendment)
+
+A memory support audit (`docs/evidence/2026-11-08-memory-support-audit.md`)
+found external and automatic writes that kept more authority than the caller
+had. The rules below close them.
+
+- **External edits of procedural memory need review.** `updateExternalMemory`
+  (plugin, MCP, Companion `memory_update`) that changes a procedural row's
+  text or key sets `reviewStatus: "pending_instruction"` in the same
+  transaction, audits `external_procedural_edit_requires_review`, and returns
+  `reviewRequired: true`. The row is excluded from injection until a person
+  verifies it again from the console. Importance, tags and pinning keep the
+  row's review state.
+- **Consolidation obeys the operation ceiling.** Every surface that resolves
+  an agent policy passes its `canUpdate` / `canForget` and scope check into
+  `consolidate()`. A judge decision the caller may not perform (UPDATE,
+  DELETE, or the target side of CONFLICT) never touches the target: the
+  candidate lands as a review draft (`reviewStatus: "conflict"`,
+  `conflictWithIds: [target]`) and the op reports `update_denied` or
+  `forget_denied`. Create-only callers therefore cannot rewrite or archive
+  existing rows.
+- **The target is re-read where it is written.** The judge reasons about a
+  snapshot taken before a model call. Each mutation re-reads its target in
+  the transaction that writes it (joining a durable job's fence) and checks
+  that it is still active, in the same namespace, and permitted for its
+  current scope. Otherwise the candidate becomes a review draft with
+  `target_moved` or `target_unavailable`. DELETE persists its replacement as
+  a draft first and promotes it atomically with the invalidation, so a
+  refused write cannot leave a live duplicate. Follow-up governance patches
+  (store, project mining) are fenced the same way.
+- **One layer per key reaches a prompt.** Stable-key precedence is resolved
+  after eligibility and reader visibility and before the type and
+  personal/project partitions, over the same candidate read the procedural
+  block uses. An ineligible narrow row no longer hides its fallback, and an
+  override and its fallback never appear together.
+- **The operation ledger never guesses.** A same-key retry never takes over a
+  pending key because a wait timed out: `storeExternalMemory` and
+  `manageMemoryForCaller` re-reserve atomically and otherwise report the
+  operation as still in flight. Companion maps exactly those two errors to a
+  retryable `memory_operation_in_flight` (503). A key is released only when
+  the command failed before its first canonical write. Commands whose
+  canonical write is one Dexie transaction (update, pin, review, retrieval
+  feedback, delete, restore-revision, invalidate, restore, relocate) commit
+  their receipt in that transaction. `create`, `clear` and `resolve-conflict`
+  cannot (consolidation spans model calls); after three failed receipt writes
+  they raise `memory_receipt_commit_failed` and keep the key pending until the
+  30-day prune rather than risk a second apply. A replay returns the full
+  content-free result (`memoryId`, `version`, `clearedCount`, `piiRedacted`,
+  `reviewRequired`), never memory text.
+- **Workflow recall applies the reader filter.** `action.memory.recall`
+  wraps its dependencies with the personal-visibility filter for the
+  workflow run's verified readers; webhook and scheduled runs have none and
+  do not see memories derived from personal-marked sources (ADR-0243 §5).
+
+Deferred until ADR-0243 decides owner versus member devices: Companion
+`memory_mutate` `update` / `review` still set `verified` for any paired
+device (correct while a paired device is the owner's console), and
+`sync_pull` mirrors the whole account memory profile regardless of
+per-device memory grants. Plugin `ctx.memory.search` and MCP
+`memory_search` are explicitly granted `memory:read` data APIs and keep
+namespace-only filtering by contract.
 
 ## Consequences
 

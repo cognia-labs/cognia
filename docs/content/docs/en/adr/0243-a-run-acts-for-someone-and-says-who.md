@@ -132,6 +132,9 @@ The lane is chosen per IM adapter and per Bot installation, by the operator. Cha
 - to a child's result returned to its parent;
 - to messages persisted in the conversation history.
 
+A recalled personal memory is such a read: injecting it marks the run (see
+Implementation status, 2026-11-09).
+
 **Who reads the history.** Each turn has an effective reader:
 
 - with requesters, the full set of them;
@@ -271,6 +274,8 @@ Before phases 4 and 5 ship, the attack scenarios behind this ADR run as acceptan
 - an unmetered engine under a finite budget.
 
 ## Implementation status
+
+Memory recall marking (2026-11-09): Filtering recalled memories by reader was not enough, because the reply built from a recalled personal fact was persisted unmarked and later readerless consumers could read the fact through it. When personal-marked memories are actually injected into a run (recall, the procedural block, project continuity, and the memory agent tools' search and window results), `addPersonalMarksToRun` merges their source marks into the consuming run and every structural ancestor before the context or tool output is released, through the same transaction and private journal event as credential marks. A failed commit withholds that context. The existing persistence chain then marks the reply. Workflow `action.memory.recall` applies the same reader filter, so webhook and scheduled runs (no personal reader) do not see such memories. Plugin `ctx.memory.search` and MCP `memory_search` are explicit `memory:read` grants and stay namespace-filtered by contract. Paired `sync_pull` and Companion `memory_mutate` trust stay with the open phase 2B-2 owner-versus-member distinction.
 
 Phase 2B (2026-11-08, non-Rust slice): The portable, pure `withholdForReaders` filter replaces an entire explicit- or legacy-marked message with a fixed English person placeholder unless every live root reader matches every marked person. Tool results, attachments, titles and arbitrary metadata cannot survive a withheld projection. `preparePersonalHistory` resolves Host identity and source-session legacy attribution; `preparePersonalDerivedHistory` retains ancestor/source taint for summaries and older unproven artifacts. It also unions retained source-session run marks after message deletion; remaining unmarked rows cannot declassify old derived fields. Host-owned UI/jobs read through explicit owner helpers. Old owner titles, branch seeds, post-compaction instructions and generated skills keep a Host-owner legacy attribution; known source-session/run/message marks are still unioned, and later model consumers re-derive that taint at `resolveSendOptions` or the corresponding search/reference boundary. Other unproven shared or replay artifacts retain an unverified-person sentinel, which grants no reader access. Native SDK, AI SDK (including standalone browser), external-agent and CLI history builders use this filter, as do Bot/plugin and connector turns, rooms, the headless person agent, compaction, recent-history prompts, branch/Aside/handoff seeds, memory recall and distillation, search results/references, recorded skills, deferred titles, eval replay/judging, background/delegation/plan/teammate/peer summaries and shared-memory reads. CLI suggestion and Explore/Plan history and plugin-session completion replay are filtered before flattening. Model-facing search rechecks canonical messages and their derived titles; the local owner search index remains intact. Direct owner IM-to-desktop continuation keeps its history. A phase-2D disclosure type seam has no grant-bearing variant and grants no reader access. Delivery targets and sinks remain phase 2C.
 

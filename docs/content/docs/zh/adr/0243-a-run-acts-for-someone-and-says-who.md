@@ -132,6 +132,8 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 - 子 agent 返回给父级的结果；
 - 持久化到会话历史中的消息。
 
+召回的个人记忆也属于这类读取：将其注入运行即会标记该运行（见实现状态，2026-11-09）。
+
 **谁读取历史。** 每个回合有一个有效读者：
 
 - 有发起人时，是全部发起人；
@@ -271,6 +273,8 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 - 有限预算下无法计量的引擎。
 
 ## 实现状态
+
+记忆召回标记（2026-11-09）：只按读者过滤召回的记忆还不够——基于个人记忆生成的回复会以无标记状态持久化，之后没有个人读者的消费方可以经由回复读到该事实。现在，带个人标记的记忆被实际注入运行时（召回、procedural 块、项目连续性，以及记忆 agent 工具的搜索与窗口结果），`addPersonalMarksToRun` 会在释放上下文或工具输出之前，把这些记忆的来源标记合并到消费运行及其每个结构祖先上，使用与凭据标记相同的事务和私有 journal 事件；提交失败则不提供该上下文。随后现有的持久化链会为回复加上标记。Workflow `action.memory.recall` 应用同样的读者过滤，webhook 与定时运行（没有个人读者）看不到这类记忆。插件 `ctx.memory.search` 和 MCP `memory_search` 是显式的 `memory:read` 授权，按契约保持命名空间过滤。配对 `sync_pull` 与 Companion `memory_mutate` 的信任问题仍归入尚未完成的 phase 2B-2 owner/member 区分。
 
 Phase 2B（2026-11-08，非 Rust 部分）：可移植纯函数 `withholdForReaders` 对显式及 legacy 标记逐消息过滤，只有当前 root 的每个读者都与每个被标记的人相等时才保留原文，否则以固定英文归属占位符替换整条消息。被隐藏的消息不保留工具结果、附件、标题或任意 metadata。`preparePersonalHistory` 解析 Host identity 与源 session 的 legacy 归属；`preparePersonalDerivedHistory` 为摘要及旧的未证明产物保留祖先／来源标记；消息删除后仍合并源 session 保留的 run 标记，剩余未标记消息不能解除旧派生字段的归属。Host 自有 UI／job 通过显式 owner helper 读取；旧 owner 标题、branch seed、post-compaction instructions 与 generated skill 使用 Host-owner legacy 归属，仍合并已知源 session／run／message 标记。后续模型消费者在 `resolveSendOptions` 或相应 search／reference 边界重新推导来源 taint。其他来源未证明的共享或 replay 产物仍使用不授予任何读者访问的 unverified-person sentinel。过滤覆盖 native SDK、AI SDK（含 standalone browser）、external agent、CLI、Bot／plugin、connector、room、headless person agent，以及 compaction、recent history、branch／Aside／handoff seed、memory recall 与 distillation、search result／reference、recorded skill、延迟 title、eval replay／judging、后台／delegation／plan／teammate／peer 摘要和 shared-memory 读取。CLI suggestion 与 Explore／Plan 历史以及 plugin-session completion replay 均先过滤再展平。模型搜索入口重新检查 canonical 消息及其派生标题，本地 owner 的搜索索引保持完整。本人从 IM 转到桌面继续会话仍可读取自己的历史。phase 2D 的 disclosure 类型接缝没有携带 grant 的分支，不授予任何读者访问；delivery target 与 sink 仍在 phase 2C。
 

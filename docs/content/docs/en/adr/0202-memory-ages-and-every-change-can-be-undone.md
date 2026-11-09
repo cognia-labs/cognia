@@ -110,7 +110,9 @@ retention below `coldRetentionThreshold` — coldest first, at most 500:
   durable tokens (URLs, paths, filenames, error codes, HTTP codes, inline code,
   constants, identifiers).
 
-Both write through the revision path; nothing is hard-deleted.
+Both write through the revision path; nothing is hard-deleted. The sweep
+re-reads `enabled` and temporary mode when it runs, so a pass queued before
+temporary mode was entered does not rewrite memory (2026-11-09, ADR-0115 §11).
 
 ### 6. Memory lint
 
