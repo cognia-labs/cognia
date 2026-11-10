@@ -1451,6 +1451,179 @@ describe("PluginManager", () => {
       return { store, old, result, manager: new PluginManager({ pluginDirectory: "/plugins" }) }
     }
 
+    function setupGit(prior = false) {
+      const state = setup(prior)
+      const result = { ...state.result, resolvedCommit: PINNED_SHA }
+      const invoke = mockInvoke.getMockImplementation()!
+      mockInvoke.mockImplementation(async (command, args) =>
+        command === "plugin_wasm_install_from_git" ? result : invoke(command, args)
+      )
+      jest.requireMock("@/lib/db/plugin-install-origins").putInstallOrigin.mockClear()
+      return { ...state, result }
+    }
+
+    it("B16 registers staged Git WASM installs in the live store and database", async () => {
+      const { store, manager, result } = setupGit()
+      const review = jest.fn(async () => {
+        expect(mockInvoke).not.toHaveBeenCalledWith(
+          "plugin_commit_staged_update",
+          expect.anything()
+        )
+        return decision
+      })
+      await manager.installWasmPluginFromGit({ repoUrl: "https://example.com/p.git" }, review)
+      expect(review).toHaveBeenCalledWith(
+        expect.objectContaining({
+          manifest: result.manifest,
+          path: result.path,
+          transactionId: result.transactionId,
+          resolvedCommit: PINNED_SHA,
+        })
+      )
+      expect(store.plugins[manifest.id]).toMatchObject({
+        manifest,
+        source: "git",
+        status: "installed",
+      })
+      expect(upsertPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: manifest.id,
+          version: "2.0.0",
+          source: "git",
+        })
+      )
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "plugin_wasm_install_from_git",
+        expect.objectContaining({ deferCommit: true })
+      )
+      expect(mockApplyWasmCapabilityGrant).toHaveBeenCalledWith(decision)
+      expect(mockInvoke).toHaveBeenLastCalledWith("plugin_finalize_staged_update", {
+        pluginId: manifest.id,
+        transactionId: result.transactionId,
+      })
+      expect(
+        jest.requireMock("@/lib/db/plugin-install-origins").putInstallOrigin
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          origin: { kind: "git", url: "https://example.com/p.git", commit: PINNED_SHA },
+        })
+      )
+    })
+
+    it.each(["cancel", "reject", "wrong-plugin"])(
+      "B15 preserves the old Git runtime on review %s",
+      async (outcome) => {
+        const { store, old, manager, result } = setupGit(true)
+        old.status = "enabled"
+        const disable = jest.spyOn(manager, "disablePlugin")
+        const unload = jest.spyOn(manager, "unloadPlugin")
+        const review = jest.fn(async () => {
+          expect(store.plugins[manifest.id]).toBe(old)
+          if (outcome === "reject") throw new Error("review failed")
+          return outcome === "cancel" ? null : { ...decision, pluginId: "another-plugin" }
+        })
+        const install = manager.installWasmPluginFromGit(
+          { repoUrl: "https://example.com/p.git" },
+          review
+        )
+        if (outcome === "cancel") await expect(install).resolves.toBeNull()
+        else
+          await expect(install).rejects.toThrow(
+            outcome === "reject" ? "review failed" : "does not match"
+          )
+        expect(mockInvoke).toHaveBeenCalledWith("plugin_discard_staged_update", {
+          pluginId: manifest.id,
+          transactionId: result.transactionId,
+        })
+        expect(mockInvoke).not.toHaveBeenCalledWith(
+          "plugin_commit_staged_update",
+          expect.anything()
+        )
+        expect(disable).not.toHaveBeenCalled()
+        expect(unload).not.toHaveBeenCalled()
+        expect(store.plugins[manifest.id]).toBe(old)
+        expect(upsertPlugin).not.toHaveBeenCalled()
+        expect(mockApplyWasmCapabilityGrant).not.toHaveBeenCalled()
+        expect(
+          jest.requireMock("@/lib/db/plugin-install-origins").putInstallOrigin
+        ).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each([false, true])(
+      "B16 reloads the enabled Git replacement and rolls back a registration failure (%s)",
+      async (fail) => {
+        const { store, old, manager, result } = setupGit(true)
+        old.status = "enabled"
+        const row = {
+          id: manifest.id,
+          manifest: old.manifest,
+          version: old.manifest.version,
+          source: "git",
+          path: old.path,
+        }
+        ;(getPlugin as jest.Mock).mockResolvedValueOnce(row)
+        const events: string[] = []
+        jest.spyOn(manager, "disablePlugin").mockImplementation(async () => {
+          events.push("disable")
+          store.plugins[manifest.id] = { ...store.plugins[manifest.id], status: "disabled" }
+        })
+        jest.spyOn(manager, "unloadPlugin").mockImplementation(async () => {
+          events.push("unload")
+          store.plugins[manifest.id] = { ...store.plugins[manifest.id], status: "installed" }
+        })
+        jest.spyOn(manager, "enablePlugin").mockImplementation(async () => {
+          events.push(`enable:${store.plugins[manifest.id].manifest.version}`)
+          store.plugins[manifest.id] = { ...store.plugins[manifest.id], status: "enabled" }
+        })
+        const invoke = mockInvoke.getMockImplementation()!
+        mockInvoke.mockImplementation(async (command, args) => {
+          if (command === "plugin_commit_staged_update") {
+            expect(events).toEqual(["review", "disable", "unload"])
+            events.push("commit")
+          }
+          return invoke(command, args)
+        })
+        if (fail) store.installPlugin.mockRejectedValueOnce(new Error("registration failed"))
+        const install = manager.installWasmPluginFromGit(
+          { repoUrl: "https://example.com/p.git" },
+          async () => {
+            events.push("review")
+            return decision
+          }
+        )
+        if (fail) {
+          await expect(install).rejects.toThrow("registration failed")
+          expect(store.plugins[manifest.id]).toMatchObject({
+            manifest: old.manifest,
+            status: "enabled",
+          })
+          expect(mockInvoke).toHaveBeenCalledWith("plugin_discard_staged_update", {
+            pluginId: manifest.id,
+            transactionId: result.transactionId,
+          })
+          expect(upsertPlugin).toHaveBeenCalledWith(expect.objectContaining({ version: "1.0.0" }))
+          expect(events).toContain("enable:1.0.0")
+        } else {
+          await expect(install).resolves.toMatchObject({ manifest })
+          expect(store.plugins[manifest.id]).toMatchObject({ manifest, status: "enabled" })
+          expect(events).toContain("enable:2.0.0")
+        }
+      }
+    )
+
+    it("B15 surfaces a failed cancellation cleanup instead of reporting success", async () => {
+      const { manager } = setupGit()
+      const invoke = mockInvoke.getMockImplementation()!
+      mockInvoke.mockImplementation(async (command, args) => {
+        if (command === "plugin_discard_staged_update") throw new Error("discard failed")
+        return invoke(command, args)
+      })
+      await expect(
+        manager.installWasmPluginFromGit({ repoUrl: "https://example.com/p.git" }, async () => null)
+      ).rejects.toThrow("discard failed")
+    })
+
     it("blocks replacement before committing staged files when an installed provider has active consumers", async () => {
       const { store, old, manager } = setup(true)
       store.plugins.consumer = {

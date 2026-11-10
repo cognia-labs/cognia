@@ -39,13 +39,16 @@ import {
   usePluginBackupIndexRevision,
 } from "@/hooks/plugins/use-plugin-rollback-availability"
 import { getPluginBackupManager, type PluginBackup } from "@/lib/plugin/lifecycle/backup"
+import { getPluginRollbackManager } from "@/lib/plugin/lifecycle/rollback"
 import { isTauri } from "@/lib/tauri"
 
 interface BackupClient {
   createBackup: (
     pluginId: string
   ) => Promise<{ success: boolean; backup?: PluginBackup; error?: string }>
-  restore: (backupId: string) => Promise<unknown>
+  restore: (
+    backupId: string
+  ) => Promise<{ success: boolean; error?: string; requiresRestart?: boolean }>
   getBackups: (pluginId: string) => PluginBackup[]
   deleteBackup: (backupId: string) => Promise<boolean>
 }
@@ -57,7 +60,7 @@ function getClient(): BackupClient {
   const manager = getPluginBackupManager()
   cachedClient = {
     createBackup: (pluginId) => manager.createBackup(pluginId),
-    restore: (backupId) => manager.restore(backupId),
+    restore: (backupId) => getPluginRollbackManager().restoreBackup(backupId),
     getBackups: (pluginId) => manager.getBackups(pluginId),
     deleteBackup: (backupId) => manager.deleteBackup(backupId),
   }
@@ -89,6 +92,7 @@ export function PluginBackupPanel({ pluginId }: Props) {
   const indexRevision = usePluginBackupIndexRevision()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [requiresRestart, setRequiresRestart] = useState(false)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [showAll, setShowAll] = useState(false)
   const tauri = isTauri()
@@ -133,9 +137,12 @@ export function PluginBackupPanel({ pluginId }: Props) {
     setPending(null)
     if (!action) return
     void run(async () => {
-      if (action.kind === "restore") await getClient().restore(action.backup.id)
-      else await getClient().deleteBackup(action.backup.id)
-      return null
+      if (action.kind === "restore") {
+        const result = await getClient().restore(action.backup.id)
+        setRequiresRestart(result.requiresRestart === true)
+        return result.success ? null : result.error || t("restoreFailed")
+      }
+      return (await getClient().deleteBackup(action.backup.id)) ? null : t("deleteFailed")
     })
   }
 
@@ -170,6 +177,12 @@ export function PluginBackupPanel({ pluginId }: Props) {
       </div>
 
       {!tauri && <p className="text-xs text-muted-foreground">{t("desktopOnlyHint")}</p>}
+
+      {requiresRestart && (
+        <p className="text-xs text-muted-foreground" role="status">
+          {t("restartRequired")}
+        </p>
+      )}
 
       {shownError && (
         <p

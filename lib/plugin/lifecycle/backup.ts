@@ -296,6 +296,8 @@ export class PluginBackupManager {
     options: {
       reason?: BackupReason
       metadata?: Record<string, unknown>
+      /** Keep the restore target and this safety snapshot through restoration. */
+      preserveBackupId?: string
     } = {}
   ): Promise<BackupResult> {
     const startTime = Date.now()
@@ -334,7 +336,11 @@ export class PluginBackupManager {
       this.addBackupToIndex(backup)
 
       // Cleanup old backups
-      await this.cleanupOldBackups(pluginId)
+      await this.cleanupOldBackups(
+        pluginId,
+        undefined,
+        options.preserveBackupId ? [options.preserveBackupId, backup.id] : []
+      )
 
       return {
         success: true,
@@ -412,6 +418,16 @@ export class PluginBackupManager {
       }
     }
 
+    // Raw restores cannot refresh an already-running module. Lifecycle callers
+    // pass a stopped runtime and take responsibility for scanning and reload.
+    let requiresRestart = [
+      "loading",
+      "loaded",
+      "enabling",
+      "enabled",
+      "disabling",
+      "suspended",
+    ].includes(this.getPluginRuntime(backup.pluginId)?.status ?? "")
     try {
       if (backup.metadata?.hostStateRestorePending === true && !stoppedRuntime) {
         const { getPluginManager } = await import("../core/manager")
@@ -431,6 +447,7 @@ export class PluginBackupManager {
             this.getPluginRuntime(backup.pluginId)?.status ?? ""
           )
         ) {
+          requiresRestart = true
           throw new Error(
             `Pending restore from backup ${backupId}; stop the plugin and complete runtime cleanup first`
           )
@@ -460,7 +477,7 @@ export class PluginBackupManager {
         pluginId: backup.pluginId,
         restoredVersion: backup.version,
         duration: Date.now() - startTime,
-        requiresRestart: false,
+        requiresRestart,
       }
     } catch (error) {
       return {
@@ -469,7 +486,7 @@ export class PluginBackupManager {
         restoredVersion: backup.version,
         error: error instanceof Error ? error.message : String(error),
         duration: Date.now() - startTime,
-        requiresRestart: false,
+        requiresRestart,
       }
     }
   }
@@ -574,7 +591,11 @@ export class PluginBackupManager {
     return deleted
   }
 
-  async cleanupOldBackups(pluginId: string, keepCount?: number): Promise<number> {
+  async cleanupOldBackups(
+    pluginId: string,
+    keepCount?: number,
+    preservedIds: string[] = []
+  ): Promise<number> {
     const backups = this.backups.get(pluginId)
     if (!backups) return 0
 
@@ -583,7 +604,9 @@ export class PluginBackupManager {
 
     while (backups.length > maxToKeep) {
       const index = backups.findLastIndex(
-        (backup) => this.getBackup(backup.id)?.metadata?.hostStateRestorePending !== true
+        (backup) =>
+          !preservedIds.includes(backup.id) &&
+          this.getBackup(backup.id)?.metadata?.hostStateRestorePending !== true
       )
       if (index === -1) break
       const [oldest] = backups.splice(index, 1)

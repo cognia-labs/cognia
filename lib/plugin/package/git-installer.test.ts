@@ -33,6 +33,23 @@ beforeEach(() => {
 })
 
 describe("installFromGit", () => {
+  it("B15 defers native commit and origin persistence for capability review", async () => {
+    invokeMock.mockResolvedValueOnce({
+      manifest: { id: "demo.wasm", type: "wasm", version: "1.0.0" },
+      path: "/plugins/demo.wasm",
+      transactionId: "git-stage",
+      resolvedCommit: SHA,
+    })
+    const result = await installFromGit({ repoUrl: "https://x/y.git", deferCommit: true })
+    expect(invokeMock).toHaveBeenCalledWith("plugin_wasm_install_from_git", {
+      repoUrl: "https://x/y.git",
+      branch: null,
+      commit: null,
+      deferCommit: true,
+    })
+    expect(result.transactionId).toBe("git-stage")
+    expect(putInstallOrigin).not.toHaveBeenCalled()
+  })
   it("throws in browser mode", async () => {
     setTauri(false)
     await expect(installFromGit({ repoUrl: "https://x/y.git" })).rejects.toThrow(
@@ -59,6 +76,7 @@ describe("installFromGit", () => {
       repoUrl: "https://github.com/example/plugin.git",
       branch: "main",
       commit: null,
+      deferCommit: false,
     })
     // No commit came back, so nothing claims the install is reproducible.
     expect(putInstallOrigin).toHaveBeenCalledWith(
@@ -84,6 +102,7 @@ describe("installFromGit", () => {
       repoUrl: "https://github.com/example/plugin.git",
       branch: null,
       commit: SHA,
+      deferCommit: false,
     })
     expect(putInstallOrigin).toHaveBeenCalledWith(
       expect.objectContaining({

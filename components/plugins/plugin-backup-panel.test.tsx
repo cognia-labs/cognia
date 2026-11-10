@@ -56,6 +56,18 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(() => true),
 }))
 
+const mockRawRestore = jest.fn()
+const mockRestoreBackup = jest.fn()
+jest.mock("@/lib/plugin/lifecycle/backup", () => ({
+  getPluginBackupManager: () => ({
+    getBackups: () => [sampleBackup],
+    restore: mockRawRestore,
+  }),
+}))
+jest.mock("@/lib/plugin/lifecycle/rollback", () => ({
+  getPluginRollbackManager: () => ({ restoreBackup: mockRestoreBackup }),
+}))
+
 import { PluginBackupPanel, __resetPluginBackupClientForTests } from "./plugin-backup-panel"
 import { isTauri } from "@/lib/tauri"
 
@@ -71,10 +83,53 @@ const sampleBackup = {
 
 beforeEach(() => {
   __resetPluginBackupClientForTests(null)
+  mockRawRestore.mockReset().mockResolvedValue({ success: true })
+  mockRestoreBackup.mockReset().mockResolvedValue({ success: true, requiresRestart: false })
   ;(isTauri as jest.Mock).mockReturnValue(true)
 })
 
 describe("PluginBackupPanel", () => {
+  it("B18 restores the selected snapshot through the lifecycle owner", async () => {
+    render(<PluginBackupPanel pluginId="alpha" />)
+    fireEvent.click(screen.getByRole("button", { name: /^restoreAria/ }))
+    const confirm = await screen.findByRole("alertdialog")
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "restore" }))
+    })
+    expect(mockRestoreBackup).toHaveBeenCalledWith(sampleBackup.id)
+    expect(mockRawRestore).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["restore", { success: false, error: "restore refused" }, "restore refused"],
+    ["restore", { success: false }, "restoreFailed"],
+    ["delete", false, "deleteFailed"],
+  ])("B19 surfaces normal %s failure results (%j)", async (kind, result, message) => {
+    __resetPluginBackupClientForTests({
+      createBackup: jest.fn(),
+      restore: jest.fn().mockResolvedValue(result),
+      deleteBackup: jest.fn().mockResolvedValue(result),
+      getBackups: () => [sampleBackup],
+    })
+    render(<PluginBackupPanel pluginId="alpha" />)
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${kind}Aria`) }))
+    const confirm = await screen.findByRole("alertdialog")
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: kind as string }))
+    })
+    expect(screen.getByRole("alert")).toHaveTextContent(message as string)
+  })
+
+  it("B18 surfaces a restart requirement returned by lifecycle restore", async () => {
+    mockRestoreBackup.mockResolvedValue({ success: true, requiresRestart: true })
+    render(<PluginBackupPanel pluginId="alpha" />)
+    fireEvent.click(screen.getByRole("button", { name: /^restoreAria/ }))
+    const confirm = await screen.findByRole("alertdialog")
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "restore" }))
+    })
+    expect(screen.getByRole("status")).toHaveTextContent("restartRequired")
+  })
   it("renders empty state when no backups exist", () => {
     __resetPluginBackupClientForTests({
       createBackup: jest.fn(),
@@ -203,7 +258,7 @@ describe("PluginBackupPanel", () => {
   // Restore overwrote the plugin's state and delete was permanent, each on a
   // single tap. Both confirm first now.
   it("restore + delete ask first, then call into the client", async () => {
-    const restore = jest.fn(async () => undefined)
+    const restore = jest.fn(async () => ({ success: true }))
     const deleteBackup = jest.fn(async () => true)
     __resetPluginBackupClientForTests({
       createBackup: jest.fn(),

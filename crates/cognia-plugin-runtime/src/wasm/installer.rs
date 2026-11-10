@@ -817,14 +817,19 @@ pub async fn plugin_wasm_install_from_git(
     repo_url: String,
     branch: Option<String>,
     commit: Option<String>,
+    defer_commit: Option<bool>,
 ) -> Result<WasmInstallResult, String> {
     let install_root = state.plugin_install_dir.clone();
+    let state_root = state.plugin_state_dir.clone();
     tokio::task::spawn_blocking(move || {
         install_prebuilt_wasm_from_git(
             &install_root,
             &repo_url,
             branch.as_deref(),
             commit.as_deref(),
+            defer_commit
+                .unwrap_or(false)
+                .then_some(state_root.as_path()),
         )
     })
     .await
@@ -957,6 +962,7 @@ fn install_prebuilt_wasm_from_git(
     repo_url: &str,
     branch: Option<&str>,
     commit: Option<&str>,
+    deferred_state_root: Option<&Path>,
 ) -> Result<WasmInstallResult, String> {
     let staging = tempfile::tempdir().map_err(|e| format!("create temp dir: {e}"))?;
     let staging_path = staging.path().to_path_buf();
@@ -994,7 +1000,15 @@ fn install_prebuilt_wasm_from_git(
     let plugin_id =
         crate::validate_plugin_id_path_component(&parsed.id).map_err(|error| error.to_string())?;
     let plugin_dir = install_root.join(plugin_id);
-    atomically_install_tree(prepared.path(), &plugin_dir, &manifest_value)?;
+    let transaction_id = if let Some(state_root) = deferred_state_root {
+        Some(
+            crate::marketplace::stage_tree_install(state_root, prepared.path(), &manifest_value)
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        atomically_install_tree(prepared.path(), &plugin_dir, &manifest_value)?;
+        None
+    };
 
     let (author_pk, author_fp) = match parsed.author.as_ref().and_then(|a| {
         a.get("publicKey")
@@ -1016,7 +1030,7 @@ fn install_prebuilt_wasm_from_git(
         install_root_kind: "installed".into(),
         signature_verified: false,
         bundle_sha256: None,
-        transaction_id: None,
+        transaction_id,
         author_public_key: author_pk,
         author_fingerprint: author_fp,
         resolved_commit: Some(resolved_commit),
@@ -1170,6 +1184,53 @@ mod tests {
         let error = checkout_git_source(staging.path(), "file:///nowhere", None, Some("abc123"))
             .unwrap_err();
         assert!(error.contains("full 40-character SHA"), "{error}");
+    }
+
+    #[test]
+    fn deferred_git_install_preserves_previous_package_until_commit_and_can_discard() {
+        if !git_available() {
+            return;
+        }
+        let (repo, _, _) = two_commit_repo();
+        let manifest = r#"{"id":"demo.wasm","version":"2.0.0","type":"wasm","wasmMain":"main.wasm","wasm":{"apiVersion":"0.1.0"}}"#;
+        std::fs::write(repo.path().join("plugin.json"), manifest).unwrap();
+        std::fs::write(repo.path().join("main.wasm"), b"new").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "--quiet", "-m", "prebuilt"]);
+        let commit = git(repo.path(), &["rev-parse", "HEAD"]);
+        let url = format!("file://{}", repo.path().display());
+
+        for promote in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = crate::PluginRuntimeState::new(root.path().to_path_buf());
+            let old = root.path().join("demo.wasm");
+            std::fs::create_dir(&old).unwrap();
+            std::fs::write(old.join("main.wasm"), b"old").unwrap();
+            let result = install_prebuilt_wasm_from_git(
+                root.path(),
+                &url,
+                None,
+                Some(&commit),
+                Some(&state.plugin_state_dir),
+            )
+            .unwrap();
+            assert_eq!(result.manifest["version"], "2.0.0");
+            assert_eq!(result.resolved_commit.as_deref(), Some(commit.as_str()));
+            assert_eq!(std::fs::read(old.join("main.wasm")).unwrap(), b"old");
+            let transaction = result.transaction_id.unwrap();
+            if promote {
+                crate::marketplace::commit_staged_update_for_state(
+                    &state,
+                    "demo.wasm",
+                    &transaction,
+                )
+                .unwrap();
+                assert_eq!(std::fs::read(old.join("main.wasm")).unwrap(), b"new");
+            }
+            crate::marketplace::discard_staged_update_for_state(&state, "demo.wasm", &transaction)
+                .unwrap();
+            assert_eq!(std::fs::read(old.join("main.wasm")).unwrap(), b"old");
+        }
     }
 
     fn make_test_zip(plugin_json: &str, wasm_bytes: &[u8]) -> Vec<u8> {

@@ -272,7 +272,29 @@ export class PluginRollbackManager {
   // Rollback Execution
   // ===========================================================================
 
-  async rollback(pluginId: string, targetVersion: string): Promise<RollbackResult> {
+  /** Restore the selected snapshot, including multiple backups of one version. */
+  async restoreBackup(backupId: string): Promise<RollbackResult> {
+    const backup = getPluginBackupManager().getBackup(backupId)
+    if (!backup) {
+      return {
+        success: false,
+        pluginId: "",
+        fromVersion: "",
+        toVersion: "",
+        duration: 0,
+        error: "Backup not found",
+        migrationApplied: false,
+        requiresRestart: false,
+      }
+    }
+    return this.rollback(backup.pluginId, backup.version, backupId)
+  }
+
+  async rollback(
+    pluginId: string,
+    targetVersion: string,
+    backupId?: string
+  ): Promise<RollbackResult> {
     const startTime = Date.now()
     const info = await this.getRollbackInfo(pluginId)
     const fromVersion = info.currentVersion
@@ -289,6 +311,7 @@ export class PluginRollbackManager {
         const backupResult = await backupManager.createBackup(pluginId, {
           reason: "pre-update",
           metadata: { rollbackTo: targetVersion },
+          ...(backupId ? { preserveBackupId: backupId } : {}),
         })
 
         if (!backupResult.success) {
@@ -306,7 +329,9 @@ export class PluginRollbackManager {
       await lifecycle.unloadPlugin(pluginId)
 
       // Step 3: Restore target version
-      const versionInfo = info.availableVersions.find((v) => v.version === targetVersion)
+      const versionInfo = backupId
+        ? { source: "backup" as const }
+        : info.availableVersions.find((v) => v.version === targetVersion)
 
       const assertStopped = async () => {
         const state = await lifecycle.getPluginLifecycleState(pluginId, {
@@ -330,11 +355,10 @@ export class PluginRollbackManager {
           await assertStopped()
           // Restore from backup
           const backupManager = getPluginBackupManager()
-          const restoreResult = await backupManager.restoreToVersion(
-            pluginId,
-            targetVersion,
-            lifecycle
-          )
+          const restoreResult = backupId
+            ? await backupManager.restore(backupId, lifecycle)
+            : await backupManager.restoreToVersion(pluginId, targetVersion, lifecycle)
+          pendingRestore ||= restoreResult.requiresRestart
           if (!restoreResult.success) {
             throw new Error(`Restore failed: ${restoreResult.error}`)
           }
@@ -386,6 +410,10 @@ export class PluginRollbackManager {
         }
       }
 
+      if (backupId && this.config.createBackupBeforeRollback) {
+        await getPluginBackupManager().cleanupOldBackups(pluginId)
+      }
+
       const result: RollbackResult = {
         success: true,
         pluginId,
@@ -393,7 +421,7 @@ export class PluginRollbackManager {
         toVersion: targetVersion,
         duration: Date.now() - startTime,
         migrationApplied,
-        requiresRestart: await this.checkRequiresRestart(),
+        requiresRestart: pendingRestore || (await this.checkRequiresRestart(pluginId)),
       }
 
       this.recordRollback(result)
@@ -451,8 +479,13 @@ export class PluginRollbackManager {
     return this.getPluginVersion(pluginId) === expectedVersion
   }
 
-  private async checkRequiresRestart(): Promise<boolean> {
-    return false
+  private async checkRequiresRestart(pluginId: string): Promise<boolean> {
+    const lifecycle = getPluginManager()
+    const state = await lifecycle.getPluginLifecycleState(pluginId)
+    return (
+      lifecycle.hasUnresolvedActivationResources(pluginId) ||
+      ["activating", "stopping", "dirty"].includes(state.actual)
+    )
   }
 
   // ===========================================================================

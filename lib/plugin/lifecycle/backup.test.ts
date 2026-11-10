@@ -50,6 +50,24 @@ describe("PluginBackupManager", () => {
   })
 
   describe("Backup Creation", () => {
+    it("B18 preserves the restore target while creating a safety backup at the retention limit", async () => {
+      manager = new PluginBackupManager({ maxBackupsPerPlugin: 1 })
+      const payload = (id: string) => ({
+        backupId: id,
+        pluginId: "plugin-a",
+        createdAt: new Date().toISOString(),
+        label: "manual",
+        sizeBytes: 1,
+        path: `/backups/${id}`,
+      })
+      mockInvoke.mockResolvedValueOnce(payload("plugin-a-selected"))
+      await manager.createBackup("plugin-a")
+      mockInvoke.mockResolvedValueOnce(payload("plugin-a-safety"))
+      await manager.createBackup("plugin-a", { preserveBackupId: "plugin-a-selected" })
+      expect(manager.getBackup("plugin-a-selected")).toBeDefined()
+      expect(manager.getBackup("plugin-a-safety")).toBeDefined()
+      expect(mockInvoke).not.toHaveBeenCalledWith("plugin_backup_delete", expect.anything())
+    })
     it("should create a backup", async () => {
       mockInvoke.mockResolvedValueOnce({
         backupId: "plugin-a-backup-1",
@@ -115,6 +133,26 @@ describe("PluginBackupManager", () => {
   })
 
   describe("Backup Restoration", () => {
+    it("B18 reports a restart when raw restore leaves an active runtime stale", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        backupId: "plugin-a-active-backup",
+        pluginId: "plugin-a",
+        createdAt: new Date().toISOString(),
+        label: "manual",
+        sizeBytes: 1,
+        path: "/backups/active-backup",
+      })
+      const created = await manager.createBackup("plugin-a")
+      Object.assign(mockPlugins["plugin-a"], { status: "enabled" })
+      try {
+        expect(await manager.restore(created.backup!.id)).toMatchObject({
+          success: true,
+          requiresRestart: true,
+        })
+      } finally {
+        delete (mockPlugins["plugin-a"] as { status?: string }).status
+      }
+    })
     it("should restore from backup", async () => {
       // restore takes only backupId
       const result = await manager.restore("backup-1")

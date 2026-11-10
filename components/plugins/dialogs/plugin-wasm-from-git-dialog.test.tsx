@@ -10,6 +10,10 @@ jest.mock("next-intl", () => ({
 }))
 
 const installFromGitMock = jest.fn()
+const installWasmPluginFromGitMock = jest.fn()
+jest.mock("@/lib/plugin/core/manager", () => ({
+  getPluginManager: () => ({ installWasmPluginFromGit: installWasmPluginFromGitMock }),
+}))
 // Preserve the real GitToolchainMissingError class so `instanceof` checks work.
 jest.mock("@/lib/plugin/package/git-installer", () => {
   const actual = jest.requireActual("@/lib/plugin/package/git-installer")
@@ -38,11 +42,34 @@ const sampleResult = {
 
 beforeEach(() => {
   installFromGitMock.mockReset()
+  installWasmPluginFromGitMock.mockReset().mockImplementation(async (args, review) => {
+    const staged = await installFromGitMock(args)
+    return (await review(staged)) ? staged : null
+  })
   requestGrantMock.mockReset()
-  requestGrantMock.mockResolvedValue({ granted: true })
+  requestGrantMock.mockResolvedValue({
+    decision: { pluginId: sampleResult.manifest.id, grantedPermissions: [], grantedPreopens: [] },
+    preopens: [],
+  })
 })
 
 describe("PluginWasmFromGitDialog", () => {
+  it("B15 does not report installation or close after capability review is cancelled", async () => {
+    installFromGitMock.mockResolvedValue(sampleResult)
+    requestGrantMock.mockResolvedValue(null)
+    const onInstalled = jest.fn()
+    const onOpenChange = jest.fn()
+    render(<PluginWasmFromGitDialog open onInstalled={onInstalled} onOpenChange={onOpenChange} />)
+    fireEvent.change(screen.getByLabelText("repoUrlLabel"), {
+      target: { value: "https://github.com/owner/repo" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "install" }))
+    await waitFor(() => expect(requestGrantMock).toHaveBeenCalled())
+    expect(requestGrantMock).toHaveBeenCalledWith(expect.objectContaining({ persist: false }))
+    await waitFor(() => expect(screen.getByLabelText("repoUrlLabel")).toBeInTheDocument())
+    expect(onInstalled).not.toHaveBeenCalled()
+    expect(onOpenChange).not.toHaveBeenCalled()
+  })
   it("does not render when closed", () => {
     render(<PluginWasmFromGitDialog open={false} onOpenChange={() => {}} />)
     expect(screen.queryByText("title")).not.toBeInTheDocument()
@@ -140,5 +167,9 @@ describe("PluginWasmFromGitDialog", () => {
       repoUrl: "https://github.com/owner/repo",
       branch: undefined,
     })
+    expect(installWasmPluginFromGitMock).toHaveBeenCalledWith(
+      { repoUrl: "https://github.com/owner/repo", branch: undefined },
+      expect.any(Function)
+    )
   })
 })

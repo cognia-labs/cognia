@@ -3,11 +3,8 @@
 /**
  * "Install WASM plugin from Git" dialog.
  *
- * Wires the previously-dormant `installFromGit` path into the UI: the user
- * provides a repo URL (+ optional branch/tag/commit), we drive the Rust
- * `plugin_wasm_install_from_git` command (shallow clone → `cargo component
- * build` → copy `.wasm` + manifest), then surface the WASM capability grant
- * sheet — identical post-install consent to the signed-URL WASM path.
+ * Fetches a prebuilt component into staging, reviews its capabilities, then
+ * commits through PluginManager's shared install and runtime transaction.
  *
  * A missing toolchain (git / cargo-component) surfaces as a
  * `GitToolchainMissingError`, which we render with install-help text rather
@@ -28,11 +25,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import {
-  installFromGit,
-  GitToolchainMissingError,
-  type GitInstallResult,
-} from "@/lib/plugin/package/git-installer"
+import { GitToolchainMissingError, type GitInstallResult } from "@/lib/plugin/package/git-installer"
+import { getPluginManager } from "@/lib/plugin/core/manager"
 import { shortFingerprint } from "@/lib/plugin/security/signature"
 import { useWasmCapabilityGrant } from "@/hooks/plugins/use-wasm-capability-grant"
 
@@ -65,10 +59,11 @@ export function PluginWasmFromGitDialog({
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
+      if (stage === "installing") return
       if (!next) reset()
       onOpenChange(next)
     },
-    [onOpenChange, reset]
+    [onOpenChange, reset, stage]
   )
 
   const handleInstall = useCallback(async () => {
@@ -81,19 +76,26 @@ export function PluginWasmFromGitDialog({
     setErrorMessage(null)
     setStage("installing")
     try {
-      const result = await installFromGit({
-        repoUrl: trimmedUrl,
-        branch: branch.trim() || undefined,
-      })
-      // Same post-install consent as every other WASM install path.
-      await grant.requestGrant({
-        manifest: result.manifest,
-        authorFingerprint: result.authorFingerprint
-          ? shortFingerprint(result.authorFingerprint)
-          : undefined,
-      })
+      const result = await getPluginManager().installWasmPluginFromGit(
+        { repoUrl: trimmedUrl, branch: branch.trim() || undefined },
+        async (staged) => {
+          const reviewed = await grant.requestGrant({
+            manifest: staged.manifest,
+            authorFingerprint: staged.authorFingerprint
+              ? shortFingerprint(staged.authorFingerprint)
+              : undefined,
+            persist: false,
+          })
+          return reviewed?.decision ?? null
+        }
+      )
+      if (!result) {
+        setStage("input")
+        return
+      }
       onInstalled?.(result)
-      handleOpenChange(false)
+      reset()
+      onOpenChange(false)
     } catch (error) {
       if (error instanceof GitToolchainMissingError) {
         setErrorMessage(error.message)
@@ -103,7 +105,7 @@ export function PluginWasmFromGitDialog({
       setErrorMessage(error instanceof Error ? error.message : String(error))
       setStage("error")
     }
-  }, [repoUrl, branch, grant, onInstalled, handleOpenChange, t])
+  }, [repoUrl, branch, grant, onInstalled, onOpenChange, reset, t])
 
   return (
     <>

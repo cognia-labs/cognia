@@ -34986,6 +34986,7 @@
       "deleteAria": "Delete the v{version} backup from {date}",
       "deleteConfirmBody": "The v{version} backup from {date} is deleted for good. You can't roll back to it afterwards.",
       "deleteConfirmTitle": "Delete this backup?",
+      "deleteFailed": "Could not delete the backup.",
       "desktopOnlyHint": "Backups run through the native bridge and are only writable in the desktop build.",
       "reason": {
         "auto": "Automatic",
@@ -34995,10 +34996,12 @@
         "pre-update": "Before update",
         "scheduled": "Scheduled"
       },
+      "restartRequired": "Restart Cognia to finish cleaning up the plugin runtime, then retry the restore if needed.",
       "restore": "Restore",
       "restoreAria": "Restore the v{version} backup from {date}",
       "restoreConfirmBody": "The plugin's current files, settings and data are replaced with the v{version} backup from {date}. Anything changed since then is lost.",
       "restoreConfirmTitle": "Restore this backup?",
+      "restoreFailed": "Could not restore the backup.",
       "rowDetail": "<time>{date}</time> · {size}",
       "showAll": "Show all {count}",
       "showLess": "Show fewer",

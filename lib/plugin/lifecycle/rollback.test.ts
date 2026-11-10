@@ -14,6 +14,7 @@ const mockInvoke = jest.fn()
 const mockGetBackups = jest.fn()
 const mockCreateBackup = jest.fn()
 const mockRestoreToVersion = jest.fn()
+const mockRestore = jest.fn()
 const mockGetVersions = jest.fn()
 const mockInstallPlugin = jest.fn()
 const mockStoreGetState = jest.fn()
@@ -44,6 +45,9 @@ jest.mock("./backup", () => ({
     getBackups: (...args: unknown[]) => mockGetBackups(...args),
     createBackup: (...args: unknown[]) => mockCreateBackup(...args),
     restoreToVersion: (...args: unknown[]) => mockRestoreToVersion(...args),
+    restore: (...args: unknown[]) => mockRestore(...args),
+    getBackup: (id: string) => mockGetBackups().find((backup: { id: string }) => backup.id === id),
+    cleanupOldBackups: jest.fn(async () => 0),
     getPendingUpdateRestore: () => undefined,
   }),
 }))
@@ -115,6 +119,7 @@ describe("PluginRollbackManager", () => {
     mockGetBackups.mockReturnValue([])
     mockCreateBackup.mockResolvedValue({ success: true })
     mockRestoreToVersion.mockResolvedValue({ success: true })
+    mockRestore.mockReset().mockResolvedValue({ success: true, requiresRestart: false })
     mockGetVersions.mockResolvedValue([])
     mockInstallPlugin.mockResolvedValue({ success: true })
     mockInvoke.mockResolvedValue(null)
@@ -143,6 +148,32 @@ describe("PluginRollbackManager", () => {
         }[status]
       })
     }
+  })
+
+  it("B18 quiesces, restores the exact snapshot, rescans and reactivates", async () => {
+    mockGetBackups.mockReturnValue([
+      { id: "newer", pluginId: "plugin-a", version: "1.0.0" },
+      { id: "selected", pluginId: "plugin-a", version: "1.0.0" },
+    ])
+    mockRestore.mockImplementation(async () => {
+      expect(storeState.plugins["plugin-a"].status).toBe("installed")
+      expect(mockManager.unloadPlugin).toHaveBeenCalledWith("plugin-a")
+      return { success: true, requiresRestart: false }
+    })
+    const result = await manager.restoreBackup("selected")
+    expect(result).toMatchObject({ success: true, requiresRestart: false })
+    expect(mockRestore).toHaveBeenCalledWith("selected", mockManager)
+    expect(mockRestoreToVersion).not.toHaveBeenCalled()
+    expect(mockCreateBackup).toHaveBeenCalledWith(
+      "plugin-a",
+      expect.objectContaining({
+        preserveBackupId: "selected",
+      })
+    )
+    expect(mockManager.scanPlugins).toHaveBeenCalled()
+    expect(storeState.plugins["plugin-a"].status).toBe("enabled")
+    expect(mockManager.reservePluginRuntimeGraph).toHaveBeenCalledWith("plugin-a")
+    expect(mockManager.releasePluginRuntimeGraph).toHaveBeenCalled()
   })
 
   describe("getRollbackInfo", () => {

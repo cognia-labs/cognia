@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 
 // The cogset switcher has its own suite; here it only needs to render.
 jest.mock("@/components/plugins/cogsets/cogset-switcher", () => ({
@@ -58,9 +58,25 @@ jest.mock("./dialogs/plugin-vsix-install-dialog", () => ({
     open ? <div data-testid="vsix-dialog" /> : null,
 }))
 
+let renderRealWasmGitDialog = false
+const mockInstallWasmGit = jest.fn()
+const mockRequestWasmGrant = jest.fn()
+jest.mock("@/lib/plugin/core/manager", () => ({
+  getPluginManager: () => ({ installWasmPluginFromGit: mockInstallWasmGit }),
+}))
+jest.mock("@/hooks/plugins/use-wasm-capability-grant", () => ({
+  useWasmCapabilityGrant: () => ({ sheet: null, requestGrant: mockRequestWasmGrant }),
+}))
 jest.mock("./dialogs/plugin-wasm-from-git-dialog", () => ({
-  PluginWasmFromGitDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="wasm-git-dialog" /> : null,
+  PluginWasmFromGitDialog: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => {
+    if (renderRealWasmGitDialog) {
+      const { PluginWasmFromGitDialog } = jest.requireActual(
+        "./dialogs/plugin-wasm-from-git-dialog"
+      )
+      return <PluginWasmFromGitDialog {...props} />
+    }
+    return props.open ? <div data-testid="wasm-git-dialog" /> : null
+  },
 }))
 
 // The radix DropdownMenu uses pointer events that fireEvent.click does not
@@ -159,10 +175,36 @@ function spyOnInputCreation(): {
 
 describe("PluginPanelToolbar", () => {
   beforeEach(() => {
+    renderRealWasmGitDialog = false
+    mockInstallWasmGit.mockReset()
+    mockRequestWasmGrant.mockReset()
     setImportStaging.mockClear()
     wasmTriggerMock.mockClear()
     canUseTauriInvokeMock.mockReset()
     canUseTauriInvokeMock.mockReturnValue(true)
+  })
+
+  it("B16 reconciles the toolbar's Git install through the manager without an onInstalled callback", async () => {
+    renderRealWasmGitDialog = true
+    const staged = { manifest: { id: "demo.wasm", type: "wasm" }, path: "/plugins/demo.wasm" }
+    const decision = { pluginId: "demo.wasm", grantedPermissions: [], grantedPreopens: [] }
+    mockRequestWasmGrant.mockResolvedValue({ decision })
+    mockInstallWasmGit.mockImplementation(async (_args, review) => {
+      expect(await review(staged)).toEqual(decision)
+      return staged
+    })
+    render(<PluginPanelToolbar />)
+    fireEvent.click(screen.getByRole("button", { name: "fromWasmGit" }))
+    fireEvent.change(await screen.findByLabelText("repoUrlLabel"), {
+      target: { value: "https://example.com/plugin.git" },
+    })
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "install" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+    expect(mockInstallWasmGit).toHaveBeenCalledWith(
+      { repoUrl: "https://example.com/plugin.git", branch: undefined },
+      expect.any(Function)
+    )
+    expect(mockRequestWasmGrant).toHaveBeenCalledWith(expect.objectContaining({ persist: false }))
   })
 
   it("renders one primary action, Check for updates, and an overflow for the registry sync", () => {

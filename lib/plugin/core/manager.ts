@@ -222,6 +222,12 @@ import {
 } from "@/lib/plugin/security/wasm-grant"
 import { canUseTauriInvoke, isTauri } from "@/lib/native/utils"
 import {
+  installFromGit,
+  GitToolchainMissingError,
+  type GitInstallArgs,
+  type GitInstallResult,
+} from "@/lib/plugin/package/git-installer"
+import {
   installFromLocalFile,
   installPluginBundleFromLocalFile,
   type LocalInstallArgs,
@@ -571,6 +577,8 @@ interface StagedBackendInstallResult {
   installRootKind?: PluginInstallRootKind
   transactionId?: string
 }
+
+class PluginInstallCancelledError extends Error {}
 
 interface InstallTransactionState {
   wasmPreloadGeneration?: string
@@ -3685,6 +3693,39 @@ export class PluginManager {
     return installed.result
   }
 
+  /** Review the fetched Git package before committing or stopping the old runtime. */
+  async installWasmPluginFromGit(
+    args: GitInstallArgs,
+    review: (staged: GitInstallResult) => Promise<WasmCapabilityGrantDecision | null>
+  ): Promise<GitInstallResult | null> {
+    try {
+      const installed = await this.installStagedBundle(
+        () => installFromGit({ ...args, deferCommit: true }),
+        "git",
+        undefined,
+        false,
+        undefined,
+        review
+      )
+      await recordInstallOrigin({
+        pluginId: installed.result.manifest.id,
+        version: installed.result.manifest.version,
+        origin: isFullCommitSha(installed.result.resolvedCommit)
+          ? {
+              kind: "git",
+              url: args.repoUrl,
+              commit: installed.result.resolvedCommit.toLowerCase(),
+            }
+          : { kind: "local", via: "unpinned" },
+        viaCogpack: args.viaCogpack,
+      })
+      return installed.result
+    } catch (error) {
+      if (error instanceof PluginInstallCancelledError) return null
+      throw error
+    }
+  }
+
   /** Commit a registry package through the same rollback-safe runtime transaction. */
   async installPluginFromRegistry(
     stage: () => Promise<import("../package/marketplace").StagedPluginUpdate>,
@@ -3715,7 +3756,8 @@ export class PluginManager {
     source: "local" | "marketplace" | "git",
     grantDecision?: WasmCapabilityGrantDecision,
     allowFrontend = false,
-    initialConfig?: Record<string, unknown>
+    initialConfig?: Record<string, unknown>,
+    reviewStaged?: (staged: T) => Promise<WasmCapabilityGrantDecision | null>
   ): Promise<{ plugin: Plugin; result: T }> {
     const txn: InstallTransactionState = {
       pluginId: null,
@@ -3756,6 +3798,17 @@ export class PluginManager {
         throw new Error(`Invalid plugin manifest: ${validation.errors.join(", ")}`)
       const compatibility = this.applyCompatibilityPolicy(result.manifest, `install:${source}`)
       if (compatibility.blocked) throw new Error("The plugin is incompatible with this host")
+
+      if (reviewStaged) {
+        if (result.manifest.type !== "wasm")
+          throw new Error('The bundle did not declare type: "wasm"')
+        const decision = await reviewStaged(result)
+        if (!decision) throw new PluginInstallCancelledError("Capability review cancelled")
+        if (decision.pluginId !== result.manifest.id) {
+          throw new Error("The capability decision does not match the previewed plugin")
+        }
+        grantDecision = decision
+      }
 
       const pluginId = result.manifest.id
       graphReservation = this.reservePluginRuntimeGraph(pluginId)
@@ -3949,15 +4002,21 @@ export class PluginManager {
             failures.push(`runtime rollback: ${String(rollbackError)}`)
           }
         }
-        dispatchPluginError({
-          pluginId,
-          pluginName: result.manifest.name,
-          stage: "install",
-          message: reason,
-          severity: "error",
-          recoverable: failures.length === 0,
-        })
+        if (!(error instanceof PluginInstallCancelledError))
+          dispatchPluginError({
+            pluginId,
+            pluginName: result.manifest.name,
+            stage: "install",
+            message: reason,
+            severity: "error",
+            recoverable: failures.length === 0,
+          })
       }
+      if (
+        (error instanceof PluginInstallCancelledError && failures.length === 0) ||
+        (!result && error instanceof GitToolchainMissingError)
+      )
+        throw error
       throw new Error(`Failed to install plugin: ${[reason, ...failures].join("; ")}`)
     } finally {
       if (graphReservation) this.releasePluginRuntimeGraph(graphReservation)

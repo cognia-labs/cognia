@@ -1,12 +1,8 @@
 /**
  * Git-repo WASM plugin installer.
  *
- * Drives the `plugin_wasm_install_from_git` Tauri command which (a) shallow-
- * clones the repo, (b) runs `cargo component build --release` when the
- * Cargo manifest declares a `[package.metadata.component]` block, and
- * (c) copies the produced `.wasm` + `plugin.json` into the canonical
- * plugins dir. Toolchain absence surfaces as a structured error the UI
- * renders alongside install-help text.
+ * Fetches a prebuilt WASM component through `plugin_wasm_install_from_git`.
+ * Manager-owned installs defer replacement until capability review completes.
  */
 
 import type { PluginManifest } from "@/types/plugin"
@@ -26,11 +22,14 @@ export interface GitInstallArgs {
   commit?: string
   /** Set when a cogpack import drives this install (ADR-0209). */
   viaCogpack?: CogpackProvenance
+  /** Stage for PluginManager without replacing an existing package. */
+  deferCommit?: boolean
 }
 
 export interface GitInstallResult {
   manifest: PluginManifest
   path: string
+  transactionId?: string
   authorPublicKey?: string
   authorFingerprint?: string
   /** The exact commit the host checked out. */
@@ -70,10 +69,8 @@ function classifyError(message: string): Error {
 }
 
 /**
- * Install a WASM plugin by cloning a Git repository and building it
- * locally via `cargo-component`. Throws a `GitToolchainMissingError` when
- * either `git` or `cargo-component` is missing so the UI can render the
- * "install Rust + cargo-component" help bubble.
+ * Fetch an already-built WASM plugin from Git. Missing host toolchain errors
+ * retain their structured type for the install dialog's help surface.
  */
 export async function installFromGit(args: GitInstallArgs): Promise<GitInstallResult> {
   if (!canUseTauriInvoke()) {
@@ -92,19 +89,22 @@ export async function installFromGit(args: GitInstallArgs): Promise<GitInstallRe
         repoUrl: args.repoUrl,
         branch: args.commit ? null : (args.branch ?? null),
         commit: args.commit ?? null,
+        deferCommit: args.deferCommit ?? false,
       }
     )
-    await recordInstallOrigin({
-      pluginId: result.manifest.id,
-      version: result.manifest.version,
-      origin: isFullCommitSha(result.resolvedCommit)
-        ? { kind: "git", url: args.repoUrl, commit: result.resolvedCommit.toLowerCase() }
-        : { kind: "local", via: "unpinned" },
-      viaCogpack: args.viaCogpack,
-    })
+    if (!args.deferCommit)
+      await recordInstallOrigin({
+        pluginId: result.manifest.id,
+        version: result.manifest.version,
+        origin: isFullCommitSha(result.resolvedCommit)
+          ? { kind: "git", url: args.repoUrl, commit: result.resolvedCommit.toLowerCase() }
+          : { kind: "local", via: "unpinned" },
+        viaCogpack: args.viaCogpack,
+      })
     return {
       manifest: result.manifest,
       path: result.path,
+      transactionId: result.transactionId ?? undefined,
       authorPublicKey: result.authorPublicKey,
       authorFingerprint: result.authorFingerprint,
       ...(result.resolvedCommit ? { resolvedCommit: result.resolvedCommit } : {}),
