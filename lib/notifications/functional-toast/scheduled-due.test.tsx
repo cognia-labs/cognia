@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   SCHEDULED_DUE_META_KEY,
   buildScheduledDueMeta,
@@ -42,6 +43,7 @@ function makeRecord(
   actions?: NotificationAction[]
 ): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "system",
     level: "info",

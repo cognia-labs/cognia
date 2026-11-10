@@ -1,6 +1,6 @@
 const runtimeNotify = jest.fn().mockResolvedValue("rt-1")
 jest.mock("@/lib/notifications/runtime", () => ({
-  notify: (input: unknown) => runtimeNotify(input),
+  notify: (...args: unknown[]) => runtimeNotify(...args),
 }))
 
 import {
@@ -18,17 +18,20 @@ describe("notifyPetInteractionUnavailable", () => {
       { notify }
     )
     expect(ok).toBe(true)
-    expect(notify).toHaveBeenCalledWith({
-      source: "system",
-      level: "info",
-      title: "Your pet is switched off",
-      body: "Turn it on in Settings → Pet.",
-      dedupeKey: PET_UNAVAILABLE_DEDUPE_KEY,
-      href: PET_UNAVAILABLE_HREF,
-      icon: "PawPrint",
-      directed: false,
-      ttlMs: PET_UNAVAILABLE_TTL_MS,
-    })
+    expect(notify).toHaveBeenCalledWith(
+      {
+        source: "system",
+        level: "info",
+        title: "Your pet is switched off",
+        body: "Turn it on in Settings → Pet.",
+        dedupeKey: PET_UNAVAILABLE_DEDUPE_KEY,
+        href: PET_UNAVAILABLE_HREF,
+        icon: "PawPrint",
+        directed: false,
+        ttlMs: PET_UNAVAILABLE_TTL_MS,
+      },
+      expect.objectContaining({ personalContext: expect.any(Object) })
+    )
     expect(PET_UNAVAILABLE_HREF).toBe("/settings?section=pet&petView=appearance")
   })
 
@@ -43,7 +46,8 @@ describe("notifyPetInteractionUnavailable", () => {
   it("defaults to the notification center runtime when no notify is injected", async () => {
     await expect(notifyPetInteractionUnavailable({ title: "off" })).resolves.toBe(true)
     expect(runtimeNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "off", dedupeKey: PET_UNAVAILABLE_DEDUPE_KEY })
+      expect.objectContaining({ title: "off", dedupeKey: PET_UNAVAILABLE_DEDUPE_KEY }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 

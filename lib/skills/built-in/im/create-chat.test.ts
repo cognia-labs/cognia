@@ -1,3 +1,12 @@
+jest.mock("@/lib/connectors/personal-delivery", () => ({
+  ...jest.requireActual("@/lib/connectors/personal-delivery"),
+  checkConnectorPersonalSink: jest.fn(async () => ({ outcome: "allow" })),
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  checkPersonalSink: jest.fn(async () => ({ outcome: "allow" })),
+  readRunPersonalTaint: jest.fn(async () => ({ verified: true, marks: [] })),
+}))
 jest.mock("./_helpers", () => ({
   ...jest.requireActual("./_helpers"),
   resolveChatCapableAdapter: jest.fn(),
@@ -134,7 +143,7 @@ describe("im.create_chat execute", () => {
       expect.objectContaining({
         authorizedBy: { receiptId: "req_1", authority: "human", grantScope: "once" },
       }),
-      { signal: undefined, executionContext: { sessionId: "s", executionRunId: "" } }
+      { signal: undefined, executionContext: { sessionId: "s", executionRunId: undefined } }
     )
     expect(out).toMatchObject({ firstMessage: "sent" })
   })

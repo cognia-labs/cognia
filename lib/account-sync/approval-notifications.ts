@@ -8,6 +8,7 @@
  * `approval-notifications.test.ts` pins that.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NotificationChannel } from "@/types/notifications"
 import { findByDedupeKey } from "@/lib/db/notifications"
 import { notify } from "@/lib/notifications/runtime"
@@ -39,27 +40,30 @@ export async function notifyIncomingRequest(
   text: RequestNotificationText
 ): Promise<string> {
   const key = requestNotificationKey(request.requestId)
-  return notify({
-    source: "system",
-    level: "warning",
-    title: text.title,
-    body: text.body,
-    channels: [...APPROVAL_CHANNELS],
-    dedupeKey: key,
-    logicalKey: key,
-    directed: true,
-    validUntil: request.expiresAt,
-    icon: "smartphone",
-    actions: [
-      {
-        id: "open",
-        label: text.open,
-        command: OPEN_APPROVAL_COMMAND,
-        args: { requestId: request.requestId },
-        variant: "primary",
-      },
-    ],
-  })
+  return notify(
+    {
+      source: "system",
+      level: "warning",
+      title: text.title,
+      body: text.body,
+      channels: [...APPROVAL_CHANNELS],
+      dedupeKey: key,
+      logicalKey: key,
+      directed: true,
+      validUntil: request.expiresAt,
+      icon: "smartphone",
+      actions: [
+        {
+          id: "open",
+          label: text.open,
+          command: OPEN_APPROVAL_COMMAND,
+          args: { requestId: request.requestId },
+          variant: "primary",
+        },
+      ],
+    },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+  )
 }
 
 /** Archives the prompt once the request is approved, denied, cancelled or expired. */

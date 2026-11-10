@@ -24,6 +24,7 @@
 
 import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
 import { redactText } from "@cognia/redact"
+import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 import {
   sendPrompt,
   interruptSession,
@@ -977,7 +978,16 @@ async function captureAssistantReplyCore(
     const respond = cap?.onPermissionRequest
     const endCapturedTurn = beginCapturedTurn(sessionId, {
       turnId,
-      outboundPolicy: cap?.outboundPolicy ?? { unattended: true },
+      outboundPolicy: {
+        ...(cap?.outboundPolicy ?? { unattended: true }),
+        get executionRunId() {
+          return (
+            cap?.outboundPolicy?.executionRunId ??
+            toolCallExecutionRunId(sessionId, turnId, options?.execution?.identity?.attemptId) ??
+            ""
+          )
+        },
+      },
       ...(respond ? { respond: (request) => respond(request) } : {}),
       holdWallClock: () => {
         pauseWallClock()
@@ -1208,8 +1218,20 @@ async function captureAssistantReplyCore(
               outcome = mayBeOutboundCall(ask.toolName, ask.input)
                 ? await (
                     await import("@/lib/policy/action-review/plan-tool-call")
-                  ).answerWithOutboundPolicy(ask, cap.outboundPolicy ?? { unattended: true }, (r) =>
-                    cap.onPermissionRequest!(r)
+                  ).answerWithOutboundPolicy(
+                    ask,
+                    {
+                      ...(cap.outboundPolicy ?? { unattended: true }),
+                      executionRunId:
+                        cap.outboundPolicy?.executionRunId ??
+                        toolCallExecutionRunId(
+                          sessionId,
+                          turnId,
+                          options?.execution?.identity?.attemptId
+                        ) ??
+                        "",
+                    },
+                    (r) => cap.onPermissionRequest!(r)
                   )
                 : await cap.onPermissionRequest!(ask)
               if (outcome.decision !== "deny" && rewritten && outcome.updatedInput === undefined) {
@@ -1535,7 +1557,17 @@ async function captureAssistantReplyCore(
         if (cap?.onPermissionRequest) {
           void import("@/lib/policy/action-review/plan-tool-call")
             .then(({ recordOutboundShadowObservation }) =>
-              recordOutboundShadowObservation(evt, cap.outboundPolicy ?? { unattended: true })
+              recordOutboundShadowObservation(evt, {
+                ...(cap.outboundPolicy ?? { unattended: true }),
+                executionRunId:
+                  cap.outboundPolicy?.executionRunId ??
+                  toolCallExecutionRunId(
+                    sessionId,
+                    turnId,
+                    options?.execution?.identity?.attemptId
+                  ) ??
+                  "",
+              })
             )
             .catch(() => undefined)
         }
@@ -2307,8 +2339,8 @@ async function captureHostExternalReply(
         void (async () => {
           let decision: CapturePermissionDecision = { decision: "deny" }
           try {
-            if (cap?.onPermissionRequest)
-              decision = await cap.onPermissionRequest({
+            if (cap?.onPermissionRequest) {
+              const ask: PermissionRequestEvent = {
                 type: "permission_request",
                 sessionId,
                 requestId,
@@ -2317,7 +2349,27 @@ async function captureHostExternalReply(
                 input: request.rawInput ?? request.toolInfo?.parameters ?? {},
                 title: request.title,
                 description: request.reason,
-              })
+              }
+              const { answerWithOutboundPolicy } =
+                await import("@/lib/policy/action-review/plan-tool-call")
+              decision = mayBeOutboundCall(ask.toolName, ask.input)
+                ? await answerWithOutboundPolicy(
+                    ask,
+                    {
+                      ...(cap.outboundPolicy ?? { unattended: true }),
+                      executionRunId:
+                        cap.outboundPolicy?.executionRunId ??
+                        toolCallExecutionRunId(
+                          sessionId,
+                          options?.turnId,
+                          options?.execution?.identity?.attemptId
+                        ) ??
+                        "",
+                    },
+                    cap.onPermissionRequest
+                  )
+                : await cap.onPermissionRequest(ask)
+            }
             // This protocol cannot rewrite tool arguments. Never approve the original
             // when the responder only approved a different input.
             const outcome = await resolveRemotePermission(
@@ -2454,6 +2506,13 @@ async function captureHostExternalReply(
                     await import("@/hooks/chat/claude-chat-send-options")
                   ).prepareTranscriptRuntimeSend(sessionId, options ?? {}, {
                     currentMessageId: cap.currentMessageId,
+                    executionRunId:
+                      cap.outboundPolicy?.executionRunId ??
+                      toolCallExecutionRunId(
+                        sessionId,
+                        options?.turnId,
+                        options?.execution?.identity?.attemptId
+                      ),
                   })
                 : options
               await cap.beforeSend?.()

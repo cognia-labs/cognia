@@ -1,3 +1,4 @@
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 /**
  * Terminal handling for bot-menu outcomes that must not reach the model
  * (plan 2026-07-24 P4.2): `unknown` event_keys get a fixed bilingual notice
@@ -69,6 +70,7 @@ function p2pReply(
 ): Parameters<typeof enqueueOutbound>[0] {
   const conversationKey = `lark:${adapterId}:${outcome.chatId ?? outcome.openId}`
   return {
+    personalContext: explicitHostPersonalSinkContext("fixed-notice"),
     adapterId,
     conversationKey,
     request: {

@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 /**
  * The IM card that confirms a room member's hand-off to a Squad (ADR-0177
  * batch 5, ADR-0252 §4).
@@ -143,6 +144,9 @@ export function buildRoomHandoffSurface(input: RoomHandoffSurfaceInput): A2UISeg
 }
 
 export interface PostRoomHandoffCardInput {
+  /** The member execution held by the Host's room runner, never proposal fields. */
+  executionRunId?: string
+  sessionId?: string
   roomId: string
   /** The proposal: the member's tool call id. */
   toolUseId: string
@@ -234,6 +238,10 @@ export async function postRoomHandoffCard(
     )
   )
   await enqueue({
+    personalContext: personalSinkHost.personalSinkContextForRun(
+      { sessionId: input.sessionId, executionRunId: input.executionRunId },
+      "handoff source run unavailable"
+    ),
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     request: {

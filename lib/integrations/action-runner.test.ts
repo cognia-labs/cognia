@@ -1,4 +1,8 @@
 /** @jest-environment jsdom */
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
 
 import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import "fake-indexeddb/auto"
@@ -1898,6 +1902,20 @@ describe("Integration action runner", () => {
       const account = await setup(async (_input, context) =>
         context.authenticatedRequest(url, { method: "DELETE" })
       )
+      const hostCaller =
+        caller?.kind === "tool-call"
+          ? {
+              ...caller,
+              executionRunId: (
+                await startToolExecutionRun(caller.sessionId, { automation: "service" })
+              ).id,
+            }
+          : caller
+      if (caller?.kind === "workflow")
+        await startToolExecutionRun(undefined, {
+          runId: `execution:workflow:${caller.runId}`,
+          automation: "schedule",
+        })
       const held = await executeIntegrationAction(
         "example-delivery",
         {
@@ -1907,7 +1925,7 @@ describe("Integration action runner", () => {
           input: {},
           idempotencyKey: "calendar-delete",
         },
-        caller
+        hostCaller
       )
       const failed = await approveIntegrationActionJob(held.id)
       expect(failed).toMatchObject({
@@ -2052,10 +2070,11 @@ describe("Integration action runner", () => {
     it("holds a chat call's write even after its capability grant approves it", async () => {
       outboundSettings = enforceGithub
       const account = await setupGithub()
+      const hostRun = await startToolExecutionRun("s1", { automation: "service" })
       const held = await executeIntegrationAction(
         "github-delivery",
         { ...comment(account.id, "k1", 13), source: "chat" },
-        { kind: "tool-call", sessionId: "s1" }
+        { kind: "tool-call", sessionId: "s1", executionRunId: hostRun.id }
       )
       expect(held.outbound?.ownerRef).toBe("tool-call:s1")
       await expect(approveIntegrationActionJob(held.id)).resolves.toMatchObject({
@@ -2213,6 +2232,10 @@ describe("Integration action runner", () => {
       outboundSettings = enforceGithub
       const account = await setupGithub()
       const workflow = { kind: "workflow", workflowId: "wf_1", runId: "wr_1" } as const
+      await startToolExecutionRun(undefined, {
+        runId: "execution:workflow:wr_1",
+        automation: "schedule",
+      })
       const held = await executeIntegrationAction(
         "github-delivery",
         comment(account.id, "k1"),
@@ -2246,6 +2269,10 @@ describe("Integration action runner", () => {
         )
       ).toBe(true)
       // A new run is a new request.
+      await startToolExecutionRun(undefined, {
+        runId: "execution:workflow:wr_2",
+        automation: "schedule",
+      })
       await expect(
         executeIntegrationAction("github-delivery", comment(account.id, "k3", 40), {
           ...workflow,

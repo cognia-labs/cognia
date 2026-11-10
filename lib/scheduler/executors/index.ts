@@ -988,6 +988,7 @@ async function runChatPrompt(
   // (its root, its person-edit epoch, the conversation `/schedule` came from).
   const outboundPolicy: OutboundToolPlannerOptions = {
     unattended: true,
+    executionRunId: execution.id,
     origin: async () => {
       const { taskPlanOrigin } = await import("@/lib/policy/action-review/plan-context")
       return taskPlanOrigin(task)

@@ -1,3 +1,8 @@
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
+
 import type { BrowserEngine } from "@/lib/browser/agent-engine"
 import {
   isSubmissionGuardedEngine,
@@ -218,7 +223,7 @@ describe("gateBrowserEngine", () => {
   })
 
   describe("on an engine with a submission signal", () => {
-    it("observes under shadow mode: the action is unchanged, its submission planned", async () => {
+    it("holds under shadow mode so the personal gate can refuse before sending", async () => {
       const engine = guardedEngine({ submits: [report()] })
       const { gateDeps, plan, askPerson } = deps(SHADOW, "proceed")
       const gated = gateBrowserEngine(asEngine(engine), chat, {}, gateDeps)
@@ -227,7 +232,7 @@ describe("gateBrowserEngine", () => {
         error: null,
         generation: 3,
       })
-      expect(engine.configureSubmissionGuard).toHaveBeenCalledWith("observe")
+      expect(engine.configureSubmissionGuard).toHaveBeenCalledWith("hold")
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(plan).toHaveBeenCalledWith({
         url: "https://forms.example.com/submit",
@@ -236,7 +241,7 @@ describe("gateBrowserEngine", () => {
         asker: chat,
       })
       expect(askPerson).not.toHaveBeenCalled()
-      expect(engine.resolveSubmission).not.toHaveBeenCalled()
+      expect(engine.resolveSubmission).toHaveBeenCalledWith("h1", "allow")
     })
 
     it("holds under enforcement, asks, and lets the allowed submission go", async () => {
@@ -392,7 +397,7 @@ describe("gateBrowserEngine", () => {
       await gated.act("r1", "click", {})
       settings = ENFORCE
       await gated.act("r1", "click", {})
-      expect(engine.configureSubmissionGuard.mock.calls).toEqual([["observe"], ["hold"]])
+      expect(engine.configureSubmissionGuard.mock.calls).toEqual([["hold"]])
     })
   })
 

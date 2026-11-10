@@ -16,6 +16,8 @@
 import { createShareLink, revokeShareLink, getShareStats } from "@/lib/share/client"
 import { listSharedLinks, getSharedLinkByCode, deleteSharedLink } from "@/lib/db/shared-links"
 import { createGuardedAPI } from "@/lib/plugin/security/permission-guard"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { assertPersonalSink, personalSinkContextForRun } from "@/lib/execution/personal-sink"
 import type { PluginShareAPI } from "@cognia/plugin-contract/lib/plugin/api/share-api"
 export type { PluginShareAPI } from "@cognia/plugin-contract/lib/plugin/api/share-api"
 
@@ -25,7 +27,20 @@ export type { PluginShareAPI } from "@cognia/plugin-contract/lib/plugin/api/shar
  */
 export function createShareAPI(pluginId: string): PluginShareAPI {
   const api: PluginShareAPI = {
-    create: (input) => createShareLink(input),
+    create: async (input) => {
+      await assertPersonalSink(
+        personalSinkContextForRun(
+          pluginExecutionContext(pluginId) ?? {},
+          "plugin invocation unavailable"
+        ),
+        { kind: "unknown", label: "public share" },
+        // Plugins may supply file streams as well as JSON; the exact outbound
+        // bytes are not available at this boundary, so no disclosure is possible.
+        undefined,
+        { kind: "public-share", pluginId }
+      )
+      return createShareLink(input)
+    },
     revoke: (code) => revokeShareLink(code),
     list: (opts) => listSharedLinks(opts),
     getByCode: async (code) => (await getSharedLinkByCode(code)) ?? null,

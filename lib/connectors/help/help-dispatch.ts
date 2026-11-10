@@ -21,6 +21,7 @@
  * Dexie / enqueue dependencies are injectable for tests.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { parseConversationKey, deliveryTargetFromEvent } from "@/types/connectors/event"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
@@ -150,6 +151,7 @@ export async function maybeHandleHelpCommand(
   // first-contact dedup or changes whether a future first welcome is sent.
   const { segment } = buildSurfaceForRow(event, row, override, mode, behaviour)
   await enqueue({
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: event.adapterId,
     conversationKey: event.conversationKey,
     request: {
@@ -205,6 +207,7 @@ export async function maybeSendWelcome(
   const behaviour = resolveDisclosedBehaviour(row, override)
   const { segment } = buildSurfaceForRow(event, row, override, "welcome", behaviour)
   await enqueue({
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: event.adapterId,
     conversationKey: event.conversationKey,
     request: {

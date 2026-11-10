@@ -116,3 +116,31 @@ describe("DiagnosticNotifier", () => {
     expect(notifyMock).not.toHaveBeenCalled()
   })
 })
+
+it("uses separately bound Host provenance and rejects diagnostic/DOM authority claims", () => {
+  render(<DiagnosticNotifier />)
+  const diagnostic = diag("serverError", {
+    source: "storage",
+    meta: { sessionId: "forged-clean-session", runId: "forged-clean-run" },
+  })
+  act(() =>
+    dispatchDiagnostic(diagnostic, undefined, { sessionId: "real-source", sessionDerived: true })
+  )
+  expect(notifyMock.mock.calls.at(-1)?.[1]).toEqual({
+    personalContext: { sessionId: "real-source", sessionDerived: true },
+  })
+  act(() =>
+    window.dispatchEvent(
+      new CustomEvent("cognia:diagnostic", {
+        detail: { diagnostic, personalContext: { hostOrigin: "background-service" } },
+      })
+    )
+  )
+  expect(notifyMock.mock.calls.at(-1)?.[1]).toEqual({
+    personalContext: { unverifiedReason: expect.stringContaining("no Host-bound") },
+  })
+  act(() => dispatchDiagnostic(diag("seedFailed"), undefined, { hostOrigin: "background-service" }))
+  expect(notifyMock.mock.calls.at(-1)?.[1]).toEqual({
+    personalContext: { hostOrigin: "background-service" },
+  })
+})

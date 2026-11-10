@@ -2080,3 +2080,24 @@ it("tracks credential maps only after dispatch and forgets them on close", async
   await closeSession("credential-transition")
   expect(mcpRuntimeConfigurationMatches("credential-transition", options)).toBe(false)
 })
+
+it("threads only the exact Host-correlated consuming run to history preparation", async () => {
+  const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+  bindToolCallRun("personal-ipc", "known-turn", "exact-consumer", "known-attempt")
+  callSpy.mockResolvedValue(undefined)
+  await sendPrompt("personal-ipc", "continue", {
+    turnId: "known-turn",
+    execution: { identity: { runId: "wire", attemptId: "known-attempt" } },
+  } as Parameters<typeof sendPrompt>[2])
+  expect(mockPrepareTranscriptRuntimeSend).toHaveBeenLastCalledWith(
+    "personal-ipc",
+    expect.anything(),
+    expect.objectContaining({ executionRunId: "exact-consumer" })
+  )
+  await sendPrompt("personal-ipc", "unknown", { turnId: "unknown-turn" })
+  expect(mockPrepareTranscriptRuntimeSend).toHaveBeenLastCalledWith(
+    "personal-ipc",
+    expect.anything(),
+    expect.objectContaining({ executionRunId: undefined })
+  )
+})

@@ -1,3 +1,4 @@
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 // IndexedDB schema (via Dexie) for cognia-next — the single `CogniaDB`
 // instance backing chat, plugins, connectors, workflows, twin, and more.
 //
@@ -2639,11 +2640,14 @@ export function whenSeeded(): Promise<void> {
       if (isDatabaseClosedError(err)) return
       _seedPromise = null
       console.error("seedBuiltIns failed", err)
+      // Built-in seed failure is Host storage initialization, never run output.
       dispatchDiagnostic(
         createDiagnostic("seedFailed", {
           source: "storage",
           message: err instanceof Error ? err.message : String(err),
-        })
+        }),
+        undefined,
+        explicitHostPersonalSinkContext("background-service")
       )
       throw err
     }

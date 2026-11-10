@@ -16,6 +16,7 @@
  * `lib/workflow/runtime/approval-notify.ts`).
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { HarnessEvolutionRun, HarnessEvolutionStep } from "@/types/harness/evolution"
 import { isTerminalRunStatus, transitionRun } from "../machine"
 import { harnessEvolutionSettingsOf } from "../settings"
@@ -288,13 +289,25 @@ export interface HarnessNotifyDeps {
 
 export const HARNESS_APPROVAL_REF_KIND = "harness-evolution-approval"
 
-/** Announce a run waiting for approval. Content-free beyond the agent name and risk. */
+/** The decision includes model evidence, so retain its originating session taint. */
 export async function notifyHarnessApproval(
   run: HarnessEvolutionRun,
   deps?: HarnessNotifyDeps
 ): Promise<void> {
   const notify =
-    deps?.notify ?? (async (input) => (await import("@/lib/notifications/runtime")).notify(input))
+    deps?.notify ??
+    (async (input) =>
+      (await import("@/lib/notifications/runtime")).notify(input, {
+        personalContext:
+          run.sessionId ||
+          (run.task.source.kind === "session" ? run.task.source.sessionId : undefined)
+            ? personalSinkHost.sessionPersonalSinkContext(
+                run.sessionId ?? (run.task.source as { sessionId: string }).sessionId
+              )
+            : personalSinkHost.unverifiedPersonalSinkContext(
+                "harness decision has no source session"
+              ),
+      }))
   const decision = run.decision
   try {
     await notify({

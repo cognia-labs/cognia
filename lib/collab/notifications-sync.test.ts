@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NotificationInput, NotificationRecord } from "@/types/notifications"
 
 import type {
@@ -187,6 +188,7 @@ function harness(account: string, server = fakeServer()) {
 
 function record(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "rec_1",
     source: "collab",
     level: "info",

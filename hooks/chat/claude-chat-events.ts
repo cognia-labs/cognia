@@ -404,13 +404,17 @@ function denyTimedOutApproval(approval: PendingApproval, ownerSessionId: string)
  * Plan an outbound tool call before any allow list, auto-mode answer or card
  * sees it (ADR-0239); see `planOutboundAsk` for what each answer means.
  */
-async function planOutboundAsk(evt: PermissionRequestEvent, unattended: boolean) {
+async function planOutboundAsk(
+  evt: PermissionRequestEvent,
+  unattended: boolean,
+  executionRunId: string
+) {
   // A GitHub write (ADR-0239 phase 2) is told apart by its arguments there.
   if (!mayBeOutboundCall(evt.toolName, evt.input)) return null
   const { planOutboundAsk: plan } = await import("@/lib/policy/action-review/plan-tool-call")
   return plan(
     evt,
-    { unattended, settings: () => useSettingsStore.getState().settings },
+    { unattended, executionRunId, settings: () => useSettingsStore.getState().settings },
     (decision, message, attribution) =>
       approveTool(
         evt.sessionId,
@@ -930,7 +934,13 @@ export async function handleEvent(
           }
           return
         }
-        if (!perCall && pre.action === "modify" && pre.modifiedArgs) {
+        if (
+          !perCall &&
+          !mayBeOutboundCall(evt.toolName, evt.input) &&
+          pre.action === "modify" &&
+          !mayBeOutboundCall(evt.toolName, pre.modifiedArgs) &&
+          pre.modifiedArgs
+        ) {
           try {
             await approveTool(
               evt.sessionId,
@@ -956,7 +966,8 @@ export async function handleEvent(
         evt,
         !getSubagentApprovalRoute(evt.sessionId) &&
           !isSessionOpen(evt.sessionId) &&
-          !isSessionAttached(evt.sessionId)
+          !isSessionAttached(evt.sessionId),
+        toolCallExecutionRunId(evt.sessionId, frame.turnId, frame.attemptId) ?? ""
       )
       if (outbound?.answered) return
       const personOnly = outbound?.personOnly === true

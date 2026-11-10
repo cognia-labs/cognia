@@ -74,7 +74,7 @@ export const emitCenterFromDerivedFact: EmitCenterRecord = async ({ derived, run
     logicalKey: derived.fact.factKey,
     category: derived.fact.category,
   }
-  await notify(input)
+  await notify(input, { personalContext: { executionRunId: run.id } })
 }
 
 /** Convenience wrapper matching the coordinator's `EmitCenterRecord` shape. */

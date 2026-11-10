@@ -8,6 +8,7 @@
  * PII-gated first message through the durable outbound queue.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { z } from "zod"
 
 import { registerBuiltInSkill } from "../registry"
@@ -102,6 +103,13 @@ const skill: BuiltInSkill<typeof schema> = {
         const runScope = resolveBuiltInSkillRunScope(ctx)
         const delivered = await enqueueAuthorized(
           {
+            personalContext: personalSinkHost.personalSinkContextForRun(
+              {
+                sessionId: resolveBuiltInSkillRunScope(ctx).sessionId,
+                executionRunId: resolveBuiltInSkillRunScope(ctx).runId,
+              },
+              "skill run unavailable"
+            ),
             adapterId: resolved.adapterId,
             conversationKey: bootstrap.conversationKey,
             request: {
@@ -124,7 +132,7 @@ const skill: BuiltInSkill<typeof schema> = {
             signal: ctx.signal,
             executionContext: {
               sessionId: runScope.sessionId,
-              executionRunId: runScope.runId ?? "",
+              executionRunId: runScope.runId,
             },
           }
         )

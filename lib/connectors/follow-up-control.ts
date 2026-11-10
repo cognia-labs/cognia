@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type {
   ExecutionRun,
@@ -96,9 +97,11 @@ async function reply(
   deps: FollowUpControlDependencies,
   event: NormalizedInboundEvent,
   text: string,
-  suffix: string
+  suffix: string,
+  personalContext: personalSinkHost.PersonalSinkContext
 ): Promise<void> {
   await deps.enqueue({
+    personalContext: personalContext,
     adapterId: event.adapterId,
     conversationKey: event.conversationKey,
     request: {
@@ -209,8 +212,7 @@ export async function maybeHandleRunControlFollowUp(
       candidates.some(({ binding }) => binding.locale?.startsWith("zh"))
     const choices = await Promise.all(
       candidates.map(async ({ followUp }) => {
-        const run = await deps.getRun(followUp.runId)
-        return `${run?.title ?? followUp.runId}: [run:${encodeURIComponent(followUp.runId)}] ${text}`
+        return `${followUp.runId}: [run:${encodeURIComponent(followUp.runId)}] ${text}`
       })
     )
     await reply(
@@ -220,7 +222,8 @@ export async function maybeHandleRunControlFollowUp(
         ? "有多个任务可以接收此操作。请回复对应任务的消息，或发送以下完整指令之一：\n"
         : "More than one task can receive this control. Reply to its message, or send one complete command below:\n") +
         choices.join("\n"),
-      "choose-run"
+      "choose-run",
+      personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
     )
     return true
   }
@@ -231,7 +234,8 @@ export async function maybeHandleRunControlFollowUp(
       /[\u4e00-\u9fff]/.test(text)
         ? "目标任务或操作已失效，请查看最新任务消息。"
         : "The selected task or control is no longer available. Check its latest message.",
-      "unknown-run"
+      "unknown-run",
+      personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
     )
     return true
   }
@@ -248,7 +252,7 @@ export async function maybeHandleRunControlFollowUp(
         text.startsWith(item.localizedContent) ||
         binding.locale?.toLowerCase().startsWith("zh")
       if (item.action === "status") {
-        await reply(deps, event, statusText(run, Boolean(zh)), "status")
+        await reply(deps, event, statusText(run, Boolean(zh)), "status", { executionRunId: run.id })
         return true
       }
 
@@ -263,7 +267,8 @@ export async function maybeHandleRunControlFollowUp(
           zh
             ? "该操作已失效，请查看最新运行状态。"
             : "That action is no longer available. View the latest run status.",
-          "stale"
+          "stale",
+          personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
         )
         return true
       }
@@ -300,7 +305,8 @@ export async function maybeHandleRunControlFollowUp(
           zh
             ? "操作未被接受，请查看最新运行状态或联系操作员。"
             : "The control was not accepted. View the latest status or contact an operator.",
-          `rejected:${result.reason ?? "unknown"}`
+          `rejected:${result.reason ?? "unknown"}`,
+          personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
         )
       } else if (matched.consumes) {
         // A failed dispatch or refused actor must not consume another

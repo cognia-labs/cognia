@@ -1,4 +1,5 @@
 import { registerNodeExecutor } from "../registry"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 import { iterationCacheKey } from "@/lib/workflow/runtime/idempotency"
 import { getRunBudget } from "@/lib/workflow/runtime/run-budget"
 import { respondToWebhook } from "@/lib/workflow/runtime/tauri-bridge"
@@ -594,6 +595,12 @@ registerNodeExecutor({
     // `proxyFetch`: the URL comes from the workflow author, so it is never on
     // the packaged shell's `connect-src` allowlist, and an HTTP node is the
     // most literal case of traffic the configured proxy must carry.
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "workflow HTTP request" },
+      { method, headers, body },
+      guarded.value.url
+    )
     const response = await proxyFetch(guarded.value.url, {
       method,
       headers,
@@ -766,6 +773,12 @@ registerNodeExecutor({
       // Serialize non-string bodies to JSON so the HTTP response carries a
       // real payload (the Rust side delivers the string verbatim).
       const wireBody = typeof body === "string" ? body : JSON.stringify(body ?? null)
+      await assertPersonalSink(
+        { executionRunId: `execution:workflow:${ctx.runId}` },
+        { kind: "unknown", label: "workflow webhook response" },
+        { status, body: wireBody, headers },
+        correlationId
+      )
       const delivered = await respondToWebhook(correlationId, { status, body: wireBody, headers })
       return { output: { status, body, headers, delivered } }
     }

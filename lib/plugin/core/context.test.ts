@@ -708,12 +708,12 @@ describe("createPluginContext", () => {
       __resetPluginCatalogForTesting()
     })
 
-    it("constructs the host workflow author API without plugin-scoped relay state", () => {
+    it("binds the host workflow author API to its owning plugin", () => {
       createPluginContext(
         createMockPlugin({ manifest: { ...mockManifest, id: "workflow-owner" } }),
         mockManager
       )
-      expect(createWorkflowAuthorAPI).toHaveBeenLastCalledWith()
+      expect(createWorkflowAuthorAPI).toHaveBeenLastCalledWith("workflow-owner")
     })
 
     it("surfaces plugin node default params and binds execution to its exact workflow run", async () => {

@@ -21,6 +21,7 @@ import { PiiGateBlocked } from "@/lib/connectors/ai-loop/safe-send-prompt"
 import { getConnectorDeliveryGateway } from "./delivery-gateway"
 import { getBus, __resetBusForTesting } from "./bus"
 import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
+import { startToolExecutionRun } from "@/lib/execution/acting-authority"
 
 // ── module mocks (hoisted) ──────────────────────────────────────────────────
 
@@ -217,6 +218,8 @@ beforeEach(async () => {
   await getDb().delete()
   __resetDbForTesting()
   getDb()
+  await startToolExecutionRun(undefined, { runId: "e1", automation: "schedule" })
+  await startToolExecutionRun(mockSession.id, { runId: "digest-fixture", automation: "schedule" })
   registeredExecutors.clear()
   sessionLookup = jest.fn(async (_key: string) => mockSession)
   resolveSendOptionsImpl = jest.fn(async () => ({
@@ -225,6 +228,9 @@ beforeEach(async () => {
     mcpServers: [],
     anthropicTools: [],
     containerSkillIds: [],
+    execution: {
+      identity: { sessionId: mockSession.id, runId: "digest-fixture", attemptId: "a1" },
+    },
   }))
   getAdapterImpl = jest.fn(async () => undefined)
   readOverrideImpl = jest.fn(async () => undefined)
@@ -341,6 +347,7 @@ describe("QQ C2C callback stream ownership", () => {
       conversationRef: h.ref,
       streamKey: expect.any(String),
       text: "Hello",
+      conversationKey: "qq-official:adp_discord:user",
     })
     const jobs = await getDb().outboundQueue.toArray()
     expect(jobs).toHaveLength(1)

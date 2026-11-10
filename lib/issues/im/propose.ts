@@ -1,3 +1,5 @@
+import { getDb } from "@/lib/db/schema"
+import type { PersonalSinkContext } from "@/lib/execution/personal-sink"
 /**
  * "File this as an issue?" — the IM-side proposal (ADR-0132 slice ③).
  *
@@ -25,6 +27,7 @@ import type { IssueImPushDeps } from "./push"
 export const MAX_PROJECT_BUTTONS = 5
 
 export interface ProposeIssueInput {
+  personalContext: PersonalSinkContext
   adapterId: string
   conversationKey: string
   /** Owning workspace the issue would land in. */
@@ -133,8 +136,27 @@ export async function proposeIssueFromIm(
     })
     return { status: "pii_blocked" }
   }
+  // This sentinel is Host-owned storage, separate from all component/model hints.
+  // Replays use it to recheck the live producer, including marks added after proposal.
+  const now = deps.push.now()
+  await getDb().connectorCallbackBindings.put({
+    id: `${input.adapterId}:issue-source:${draft.draftId}`,
+    actionId: `issue-source:${draft.draftId}`,
+    adapterId: input.adapterId,
+    surfaceId,
+    kind: "issue_action",
+    conversationKey: input.conversationKey,
+    createdAt: now,
+    expiresAt: now + 30 * 24 * 60 * 60 * 1000,
+    issueProposalSource: {
+      personalContext: structuredClone(input.personalContext),
+      draft,
+      issueProjectIds: projects.map((project) => project.id),
+    },
+  })
   const platform = parseConversationKey(input.conversationKey).platform
   await deps.push.enqueue({
+    personalContext: input.personalContext,
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     request: {

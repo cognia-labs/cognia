@@ -8,6 +8,8 @@
 // widget mounted in two windows) into a single durable record.
 
 /** Already-localized notification copy supplied by the caller. */
+
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 export interface CareNotifyStrings {
   title: string
   body?: string
@@ -39,15 +41,18 @@ export async function notifyBecameUnwell(
 ): Promise<boolean> {
   try {
     const notify = deps.notify ?? (await import("@/lib/notifications/runtime")).notify
-    await notify({
-      source: "system",
-      level: "info",
-      title: strings.title,
-      body: strings.body,
-      dedupeKey: CARE_UNWELL_DEDUPE_KEY,
-      icon: "Heart",
-      directed: true,
-    })
+    await notify(
+      {
+        source: "system",
+        level: "info",
+        title: strings.title,
+        body: strings.body,
+        dedupeKey: CARE_UNWELL_DEDUPE_KEY,
+        icon: "Heart",
+        directed: true,
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+    )
     return true
   } catch {
     return false

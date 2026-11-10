@@ -1,5 +1,14 @@
 const mockEnqueueAuthorized = jest.fn()
 const mockForwardGoverned = jest.fn()
+const mockCreateDraft = jest.fn(async () => ({ id: "draft-personal" }))
+const mockAssertPersonalSink = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: (...args: unknown[]) => mockAssertPersonalSink(...args),
+}))
+jest.mock("@/lib/db/connector-drafts", () => ({
+  createDraft: (...args: unknown[]) => mockCreateDraft(...(args as [])),
+}))
 jest.mock("@/lib/connectors/delivery-gateway", () => ({
   CONNECTOR_DELIVERY_DENIED_CODE: "connector_delivery_denied",
   enqueueAuthorized: (...args: unknown[]) => mockEnqueueAuthorized(...args),
@@ -63,6 +72,7 @@ describe("action.connector.send and the outbound policy (ADR-0239)", () => {
     expect(mockEnqueueAuthorized).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "workflow",
+        personalContext: { executionRunId: "execution:workflow:run-1" },
         authorization: {
           kind: "unattended",
           ownerRef: "workflow:wf-1",
@@ -72,7 +82,8 @@ describe("action.connector.send and the outbound policy (ADR-0239)", () => {
             originThread: expect.objectContaining({ kind: "conversation", channel: "bot-a" }),
           },
         },
-      })
+      }),
+      { executionContext: { executionRunId: "execution:workflow:run-1" } }
     )
     expect(output).toMatchObject({ jobId: "job-1" })
   })
@@ -121,6 +132,7 @@ describe("action.connector.forward and the outbound policy (ADR-0239)", () => {
       adapterId: "bot-a",
       forward: { messageId: "om_1", target: "lark:bot-a:oc_2" },
       source: "workflow",
+      personalContext: { executionRunId: "execution:workflow:run-1" },
       authorization: {
         kind: "unattended",
         ownerRef: "workflow:wf-1",
@@ -143,4 +155,25 @@ describe("action.connector.forward and the outbound policy (ADR-0239)", () => {
       message: expect.stringContaining("connector_delivery_denied"),
     })
   })
+})
+
+it("retains the Host workflow execution on a draft instead of accepting a parameter-supplied run", async () => {
+  await getExecutor("action.connector.draft" as never, 1)!.execute({
+    runId: "host-workflow",
+    params: {
+      conversationKey: "lark:bot:oc_group",
+      sessionId: "session",
+      content: "private draft",
+      executionRunId: "forged",
+    },
+  } as never)
+  expect(mockCreateDraft).toHaveBeenCalledWith(
+    expect.objectContaining({ personalExecutionRunId: "execution:workflow:host-workflow" })
+  )
+  expect(mockAssertPersonalSink).toHaveBeenCalledWith(
+    { executionRunId: "execution:workflow:host-workflow" },
+    { kind: "host-local" },
+    "private draft",
+    { kind: "connector-draft", conversationKey: "lark:bot:oc_group" }
+  )
 })

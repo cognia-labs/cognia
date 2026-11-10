@@ -23,6 +23,10 @@
  */
 
 import {
+  personalSinkContextForRun,
+  sessionPersonalSinkContext,
+} from "@/lib/execution/personal-sink"
+import {
   createReplyStream,
   discloseReplyStreamText,
   discloseReplyStreamSegments,
@@ -164,26 +168,30 @@ async function handleOutboundSend(
   }
 
   try {
-    const result = await enqueueAuthorized({
-      adapterId,
-      conversationKey,
-      request: {
-        conversationRef: deliveryTarget.conversationRef,
-        deliveryTarget,
-        segments: sanitizeOutboundSegments(segments),
-        metadata: {
-          idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+    const result = await enqueueAuthorized(
+      {
+        adapterId,
+        conversationKey,
+        request: {
+          conversationRef: deliveryTarget.conversationRef,
+          deliveryTarget,
+          segments: sanitizeOutboundSegments(segments),
+          metadata: {
+            idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+          },
         },
+        source: payload.source ?? "manual",
+        sourceWorkflow: payload.source === "workflow" ? payload.sourceWorkflow : undefined,
+        // Whoever wrote the task, nobody is watching when it fires (ADR-0239).
+        authorization: {
+          kind: "unattended",
+          ownerRef: `task:${task.id}`,
+          origin: taskPlanOrigin(task),
+        },
+        personalContext: { executionRunId: execution.id },
       },
-      source: payload.source ?? "manual",
-      sourceWorkflow: payload.source === "workflow" ? payload.sourceWorkflow : undefined,
-      // Whoever wrote the task, nobody is watching when it fires (ADR-0239).
-      authorization: {
-        kind: "unattended",
-        ownerRef: `task:${task.id}`,
-        origin: taskPlanOrigin(task),
-      },
-    })
+      { executionContext: { executionRunId: execution.id } }
+    )
     if (result.kind === "drafted") {
       // Held for a person to approve: the task did what it can, so it is not
       // retried into a second draft.
@@ -329,6 +337,7 @@ function digestPermissions(
   approver: DigestApprover,
   turn: {
     sessionId: string
+    runId?: string
     projectId?: string
     adapterId: string
     conversationKey: string
@@ -389,6 +398,7 @@ function digestPermissions(
   }
   const card = makeImPermissionResponder({
     sessionId: turn.sessionId,
+    ...(turn.runId ? { runId: turn.runId } : {}),
     adapterId: turn.adapterId,
     conversationKey: turn.conversationKey,
     conversationRef,
@@ -512,6 +522,15 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
   }
 
   // ── Step 4: drive the AI turn (PII gate + capture) ──────────────────
+  // The resolver minted this exact Host execution spec before capture. Keep
+  // its id after the run closes; active-session inference cannot prove a final.
+  const personalContext = sendOptions.execution?.identity.runId
+    ? personalSinkContextForRun(
+        { sessionId: session.id, executionRunId: sendOptions.execution.identity.runId },
+        "scheduled digest execution unavailable"
+      )
+    : sessionPersonalSinkContext(session.id)
+
   // Register the IM elicitation context for the duration of the capture so a
   // digest/callback-fed `ask_user` call lands on an interactive card in this
   // conversation instead of the unwatched desktop dialog. Digest turns have
@@ -537,6 +556,9 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
     input.approver ?? { kind: "none", surface: "connector digest" },
     {
       sessionId: session.id,
+      ...(sendOptions.execution?.identity.runId
+        ? { runId: sendOptions.execution.identity.runId }
+        : {}),
       ...(session.projectId ? { projectId: session.projectId } : {}),
       adapterId,
       conversationKey,
@@ -557,6 +579,9 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
   const unregisterImElicitation = elicitationPlatform
     ? registerImElicitationContext({
         sessionId: session.id,
+        ...(sendOptions.execution?.identity.runId
+          ? { runId: sendOptions.execution.identity.runId }
+          : {}),
         adapterId,
         conversationKey,
         conversationRef: digestDeliveryTarget?.conversationRef ?? {
@@ -585,6 +610,8 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         })
       : undefined
   const replyStream = createReplyStream({
+    personalContext,
+    conversationKey,
     adapter: getBus().getAdapter(adapterId),
     conversationRef: digestDeliveryTarget?.conversationRef ?? {
       platform: "qq-official",
@@ -636,7 +663,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
     })
     return { success: false, error: msg }
   } finally {
-    replyStream?.captured()
+    await replyStream?.captured()
     // The context dies with the turn — abort settles a prompt still pending
     // (defensive; a suspended ask_user blocks the capture above) and hides
     // the registration from any late plugin_tool_exec event.
@@ -694,27 +721,31 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
   // a payload field — the conversationKey format is the single source of
   // truth (it round-trips through `buildConversationKey`).
   try {
-    const delivered = await enqueueAuthorized({
-      adapterId,
-      conversationKey,
-      request: {
-        conversationRef: deliveryTarget.conversationRef,
-        deliveryTarget,
-        segments: outboundSegments,
-        metadata: {
-          idempotencyKey,
-          ...(replyStream ? { streamKey: replyStream.streamKey } : {}),
-          ...(twinDisclosure ? { provenance: twinDisclosure.provenance } : {}),
-          scheduledTaskId: sourceTaskId,
+    const delivered = await enqueueAuthorized(
+      {
+        adapterId,
+        conversationKey,
+        request: {
+          conversationRef: deliveryTarget.conversationRef,
+          deliveryTarget,
+          segments: outboundSegments,
+          metadata: {
+            idempotencyKey,
+            ...(replyStream ? { streamKey: replyStream.streamKey } : {}),
+            ...(twinDisclosure ? { provenance: twinDisclosure.provenance } : {}),
+            scheduledTaskId: sourceTaskId,
+          },
         },
+        source: "ai-run",
+        authorization: input.authorization ?? {
+          kind: "unattended",
+          ownerRef: `digest:${sourceTaskId ?? conversationKey}`,
+          sessionId: session.id,
+        },
+        personalContext,
       },
-      source: "ai-run",
-      authorization: input.authorization ?? {
-        kind: "unattended",
-        ownerRef: `digest:${sourceTaskId ?? conversationKey}`,
-        sessionId: session.id,
-      },
-    })
+      { executionContext: personalContext }
+    )
     if (delivered.kind === "drafted") {
       await replyStream?.cancel()
       return settle({

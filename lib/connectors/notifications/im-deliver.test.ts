@@ -4,12 +4,14 @@
  * `lib/notifications/im-deliver.ts`.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { deliverNotificationToConversation } from "./im-deliver"
 import type { NotificationRecord } from "@/types/notifications"
 import type { ChatSession } from "@cognia/agent-config-types"
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "connector",
     level: "info",
@@ -61,6 +63,7 @@ interface Harness {
     idempotencyKey?: string
     segments: Array<Record<string, unknown>>
     authorization?: unknown
+    personalContext?: NotificationRecord["personalContext"]
   }>
   audits: string[]
   deps: NonNullable<Parameters<typeof deliverNotificationToConversation>[1]>
@@ -90,6 +93,7 @@ function harness(opts: {
         segments: Array<Record<string, unknown>>
       }
       authorization?: unknown
+      personalContext?: NotificationRecord["personalContext"]
     }) => {
       enqueued.push({
         adapterId: job.adapterId,
@@ -97,6 +101,7 @@ function harness(opts: {
         idempotencyKey: job.request.metadata?.idempotencyKey,
         segments: job.request.segments,
         authorization: job.authorization,
+        personalContext: job.personalContext,
       })
       if (opts.heldAsDraft) return { kind: "drafted", draft: { id: "cdr_1" } }
       return { kind: "queued", job: { id: "job-1" } }
@@ -116,6 +121,17 @@ function deliver(record: NotificationRecord, deps: Harness["deps"]) {
 }
 
 describe("deliverNotificationToConversation", () => {
+  it("passes the persisted Host execution to the final delivery gate", async () => {
+    const h = harness({ proactivePush: true })
+    await deliver(rec({ personalContext: { executionRunId: "host-run" } }), h.deps)
+    expect(h.enqueued[0]?.personalContext).toEqual({ executionRunId: "host-run" })
+  })
+
+  it("does not establish execution identity from plugin metadata", async () => {
+    const h = harness({ proactivePush: true })
+    await deliver(rec({ meta: { executionRunId: "forged-run" } }), h.deps)
+    expect(h.enqueued[0]?.personalContext).toEqual({ hostOrigin: "fixed-notice" })
+  })
   it("enqueues a text push when opted in + PII-safe", async () => {
     const h = harness({ proactivePush: true, piiSafe: true })
     expect(await deliver(rec(), h.deps)).toEqual({ status: "pushed", conversationKey: KEY })

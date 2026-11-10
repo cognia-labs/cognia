@@ -93,7 +93,10 @@ describe("installPushNotificationBridge", () => {
     handler(delivery({ title: "Ping" }))
 
     expect(observer).toHaveBeenCalledWith(expect.objectContaining({ title: "Ping" }))
-    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ title: "Ping" }))
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Ping" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
+    )
 
     await cleanup()
     expect(unsubscribe).toHaveBeenCalledTimes(1)

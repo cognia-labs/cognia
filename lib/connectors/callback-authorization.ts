@@ -24,6 +24,7 @@
  *                 default.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type {
   CallbackActorScope,
@@ -494,6 +495,7 @@ export async function notifyCallbackDenied(
   const text = DENY_NOTICE[reason] ?? DENY_NOTICE.actor_forbidden
   const parsed = tryParseKey(conversationKey)
   await enqueue({
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: event.adapterId,
     conversationKey,
     request: {

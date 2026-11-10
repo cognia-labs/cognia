@@ -31,6 +31,7 @@
  * bilingual "zh / en" (this runs on the sweep, outside React).
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { EscalationAction } from "@/types/connectors/escalation"
 import { isUrgentCapablePlatform } from "@/types/connectors/escalation"
@@ -47,6 +48,7 @@ import {
   urgentGoverned as urgentGovernedGateway,
 } from "@/lib/connectors/delivery-gateway"
 import type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 import {
   conversationTarget,
   outboundFingerprint,
@@ -115,19 +117,22 @@ async function runNotify(
 ): Promise<EscalationActionOutcome> {
   const notify = deps.notify ?? notifyCenter
   try {
-    await notify({
-      source: "connector",
-      level: "warning",
-      title: SLA_ESCALATION_NOTICE.overdue.title,
-      body: SLA_ESCALATION_NOTICE.overdue.body(ctx.overdueMinutes, ctx.stepIndex),
-      channels: ["center", "toast"],
-      href: assignmentHref(ctx.conversationKey),
-      groupKey: ctx.conversationKey,
-      dedupeKey: `sla:${ctx.conversationKey}:${ctx.stepIndex}`,
-      sourceRef: { kind: "conversation", id: ctx.conversationKey },
-      directed: true,
-      meta: { kind: "sla-escalation", step: ctx.stepIndex, overdueMinutes: ctx.overdueMinutes },
-    })
+    await notify(
+      {
+        source: "connector",
+        level: "warning",
+        title: SLA_ESCALATION_NOTICE.overdue.title,
+        body: SLA_ESCALATION_NOTICE.overdue.body(ctx.overdueMinutes, ctx.stepIndex),
+        channels: ["center", "toast"],
+        href: assignmentHref(ctx.conversationKey),
+        groupKey: ctx.conversationKey,
+        dedupeKey: `sla:${ctx.conversationKey}:${ctx.stepIndex}`,
+        sourceRef: { kind: "conversation", id: ctx.conversationKey },
+        directed: true,
+        meta: { kind: "sla-escalation", step: ctx.stepIndex, overdueMinutes: ctx.overdueMinutes },
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+    )
     return { ok: true }
   } catch (err) {
     return fail("notify_failed", err)
@@ -280,6 +285,7 @@ async function runUrgent(
         },
         source: "manual",
         authorization,
+        personalContext: explicitHostPersonalSinkContext("fixed-notice"),
       },
       { executionContext: { sessionId: session.id, automation: "service" } }
     )
@@ -300,6 +306,7 @@ async function runUrgent(
     conversationKey: targetKey,
     source: "manual",
     authorization,
+    personalContext: explicitHostPersonalSinkContext("fixed-notice"),
     auditFields: { slaConversationKey: ctx.conversationKey, step: ctx.stepIndex },
   })
   if (!result.ok) return fail(result.error?.code ?? "urgent_failed", result.error?.message)

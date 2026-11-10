@@ -99,6 +99,9 @@ import {
 } from "./policy"
 import { jobAuthorizationOf, outboundReceipt, type OutboundReceipt } from "./outbound-receipt"
 import { resolveSessionRequestOrigin } from "./resolve-request-origin"
+import type { PersonalSinkContext } from "@/lib/execution/personal-sink"
+import { checkConnectorPersonalSink } from "@/lib/connectors/personal-delivery"
+import type { OutboundRequest } from "@/types/connectors"
 
 export const OUTBOUND_DELIVERY_POLICY_VERSION = "adr-0239.delivery.v1"
 
@@ -173,6 +176,11 @@ export type OutboundAuthorization =
   | ReroutedAuthorization
 
 export interface DeliveryPlanInput {
+  /** Host invocation/job provenance, kept outside the plugin's message fields. */
+  personalContext: PersonalSinkContext
+  payload?: unknown
+  /** Only a Host reply/proactive delivery with a private rerouting implementation sets this. */
+  canNarrowPersonal?: boolean
   deliveryMode?: "reply" | "proactive" | "reengagement"
   adapterId: string
   /** Empty when the delivery names no conversation the host can check. */
@@ -197,6 +205,7 @@ export interface DeliveryPlanInput {
 export type DeliveryReceipt = OutboundReceipt
 
 export type DeliveryDenyReason =
+  | "personal"
   /** A person refused this recipient for the current request. */
   | "fenced"
   /** A reply, notice or reroute named a conversation other than its own. */
@@ -215,6 +224,7 @@ export type DeliveryDecision =
   | { action: "deny"; reason: DeliveryDenyReason; receipt: DeliveryReceipt }
 
 export interface PlanDeliveryDeps {
+  checkPersonal?: typeof checkConnectorPersonalSink
   /** App settings, for the mode. Default: the settings store. */
   settings?: () => OutboundSettingsLike | Promise<OutboundSettingsLike>
   /** A session's origin. Default: `resolveSessionRequestOrigin`. */
@@ -510,6 +520,7 @@ async function planUnattended(
 
 /** What {@link planUnplannedStream} decides for one stream. */
 export interface UnplannedStreamDecision {
+  personalWithheld?: boolean
   /** Whether it may stream: only while messaging is not enforced. */
   stream: boolean
   /** In shadow mode, the record that enforcement would not have let it stream. */
@@ -523,13 +534,27 @@ export interface UnplannedStreamDecision {
  * platform reference names.
  */
 export async function planUnplannedStream(
-  input: { adapterId: string; ownerRef: string; source: OutboundJobSource },
-  deps: Pick<PlanDeliveryDeps, "settings" | "now" | "newRequestId"> = {}
+  input: {
+    adapterId: string
+    ownerRef: string
+    source: OutboundJobSource
+    personalContext: PersonalSinkContext
+    payload?: unknown
+  },
+  deps: Pick<PlanDeliveryDeps, "settings" | "now" | "newRequestId" | "checkPersonal"> = {}
 ): Promise<UnplannedStreamDecision> {
+  const personal = await (deps.checkPersonal ?? checkConnectorPersonalSink)(
+    input.personalContext,
+    input.adapterId,
+    undefined,
+    input.payload
+  )
+  if (personal.outcome !== "allow") return { stream: false, personalWithheld: true }
   const settings = await (deps.settings ?? readAppSettings)()
   const mode = readOutboundAuthorizationMode(settings)
   if (mode === "enforce") return { stream: false }
   const planInput: DeliveryPlanInput = {
+    personalContext: input.personalContext,
     adapterId: input.adapterId,
     conversationKey: "",
     source: input.source,
@@ -584,6 +609,30 @@ export async function planDelivery(
     now: deps.now?.() ?? Date.now(),
     deps,
   }
+
+  const personalContext = input.personalContext
+  const personal = await (deps.checkPersonal ?? checkConnectorPersonalSink)(
+    personalContext,
+    input.adapterId,
+    input.conversationKey,
+    input.payload,
+    {
+      recipients: input.recipients,
+      request: input.payload as OutboundRequest | undefined,
+      canNarrow: input.canNarrowPersonal,
+    }
+  )
+  if (personal.outcome === "withhold")
+    return {
+      action: "deny",
+      reason: "personal",
+      receipt: receiptFor(env, {
+        plan: "deny",
+        outcome: "deny",
+        authority: "policy-default",
+        reason: "Personal content withheld: only its person may disclose it to another audience",
+      }),
+    }
 
   if (!auth && HUMAN_SOURCES.has(input.source)) return sendDecision(env, "exempt")
   if (!auth) return planUnattended(env, { ownerRef: `source:${input.source}` })

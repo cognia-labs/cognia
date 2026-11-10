@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 /**
  * Local (connector-host) inbox writes — ADR-0131 cross-shell inbox relay.
  *
@@ -19,6 +20,7 @@
  */
 
 import type { LocalPersonRun } from "@/lib/execution/acting-authority"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 import type { StoredMessage, MessageReplyTo } from "@cognia/agent-config-types"
 import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
 import { approveDraft, getDraft, rejectDraft } from "@/lib/db/connector-drafts"
@@ -193,6 +195,7 @@ async function persistManualReplyLocally(
           ...(input.threadId ? { threadId: input.threadId } : {}),
         },
         source: "manual",
+        personalContext: explicitHostPersonalSinkContext("typed-send"),
       },
       { executionContext: { sessionId: input.sessionId, localAuthorization } }
     )
@@ -351,8 +354,20 @@ export async function approveDraftLocally(
         conversationKey: draft.conversationKey,
         request: resolved.request,
         source: "draft-approved",
+        // The persisted Host execution survives edits and operator approval.
+        // A legacy draft without this provenance is unverified, never a new
+        // typed send and never attributed to an unrelated current turn.
+        personalContext: personalSinkHost.personalSinkContextForRun(
+          { executionRunId: draft.personalExecutionRunId },
+          "legacy draft source unavailable"
+        ),
       },
-      { executionContext: { sessionId: draft.sessionId, localAuthorization } }
+      {
+        executionContext: {
+          executionRunId: draft.personalExecutionRunId ?? "",
+          localAuthorization,
+        },
+      }
     )
     jobId = job.id
   }

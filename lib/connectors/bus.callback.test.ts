@@ -66,7 +66,7 @@ jest.mock("./notifications/action-callback", () => ({
 }))
 
 const mockHandleRoomHandoff = jest.fn(async (_input: unknown): Promise<unknown> => ({
-  result: { ok: true },
+  result: { ok: true, decision: { status: "started", squadName: "Builders" } },
   state: "approved",
   detail: "Handed to Builders",
 }))

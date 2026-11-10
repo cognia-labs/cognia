@@ -61,7 +61,7 @@ describe("im.broadcast", () => {
           request: expect.objectContaining({ sendOptions: { mode: "proactive" } }),
         }),
       ],
-      { signal: undefined, executionContext: { sessionId: "s", executionRunId: "" } }
+      { signal: undefined, executionContext: { sessionId: "s", executionRunId: undefined } }
     )
   })
   it("fans out to every target with a DISTINCT idempotency key", async () => {

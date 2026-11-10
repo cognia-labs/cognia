@@ -38,6 +38,7 @@ import {
   startToolExecutionRun,
   finishToolExecutionRun,
   LOCAL_PERSON_RUN,
+  resolveExecutingRun,
 } from "@/lib/execution/acting-authority"
 
 export interface ProductionRoomDepsOptions {
@@ -58,7 +59,12 @@ export function createProductionRoomDeps(opts: ProductionRoomDepsOptions = {}): 
     outbound: {
       plan: async (request, approve) => {
         const { planOutboundAsk } = await import("@/lib/policy/action-review/plan-tool-call")
-        return planOutboundAsk(request, { unattended: false }, approve)
+        const run = await resolveExecutingRun(request.sessionId)
+        return planOutboundAsk(
+          request,
+          { unattended: false, executionRunId: run?.id ?? "" },
+          approve
+        )
       },
     },
     db: {

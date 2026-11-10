@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { settleApprovalCard } from "./approval-card-state"
 import { buildLarkClosedApprovalSegment } from "@/lib/connectors/adapters/lark/approval-card"
 import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
@@ -7,6 +8,7 @@ jest.mock("@/lib/connectors/delivery-gateway", () => ({ enqueueGoverned: jest.fn
 jest.mock("@/lib/db/outbound-jobs", () => ({ waitForOutboundTerminal: jest.fn() }))
 jest.mock("@/lib/connectors/audit", () => ({ appendAudit: jest.fn(async () => undefined) }))
 const input = {
+  personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
   adapterId: "lark-1",
   conversationKey: "chat",
   conversationRef: { platform: "lark" as const, adapterId: "lark-1" },

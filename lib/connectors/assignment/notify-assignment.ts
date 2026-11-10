@@ -14,6 +14,7 @@
  * "zh / en" and live in ONE named table for a future locale-bag refactor.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { ConversationAssignee } from "@/lib/db/conversation-overrides"
 import { notify } from "@/lib/notifications/runtime"
 
@@ -73,20 +74,23 @@ export async function notifyAssignmentChanged(input: NotifyAssignmentChangedInpu
         ? ASSIGNMENT_NOTICE.reassigned.body(describeAssignee(from), describeAssignee(to))
         : ASSIGNMENT_NOTICE.unassigned.body(describeAssignee(from))
   try {
-    await notify({
-      source: "connector",
-      level: input.via === "sla-escalation" ? "warning" : "info",
-      title: notice.title,
-      body: `${body}（${input.via}）`,
-      channels: ["center", "toast"],
-      href: assignmentHref(input.conversationKey),
-      groupKey: input.conversationKey,
-      dedupeKey: `assign:${input.conversationKey}`,
-      sourceRef: { kind: "conversation", id: input.conversationKey },
-      // "You now hold this conversation" is directed; everything else is ambient.
-      directed: to?.kind === "human",
-      meta: { kind, via: input.via, from, to },
-    })
+    await notify(
+      {
+        source: "connector",
+        level: input.via === "sla-escalation" ? "warning" : "info",
+        title: notice.title,
+        body: `${body}（${input.via}）`,
+        channels: ["center", "toast"],
+        href: assignmentHref(input.conversationKey),
+        groupKey: input.conversationKey,
+        dedupeKey: `assign:${input.conversationKey}`,
+        sourceRef: { kind: "conversation", id: input.conversationKey },
+        // "You now hold this conversation" is directed; everything else is ambient.
+        directed: to?.kind === "human",
+        meta: { kind, via: input.via, from, to },
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+    )
   } catch {
     // Best-effort — see doc comment.
   }

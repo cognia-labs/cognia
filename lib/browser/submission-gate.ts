@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 /**
  * The browser submission gate (ADR-0239 phase 2b): every engine the host
  * hands an agent goes through here, so what its actions send to a site is
@@ -32,6 +33,8 @@
  */
 
 import type { BrowserEngine } from "@/lib/browser/agent-engine"
+import { assertPersonalSink, isPersonalSinkWithheldError } from "@/lib/execution/personal-sink"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import {
   isSubmissionGuardedEngine,
   type BrowserActionResult,
@@ -42,8 +45,10 @@ import {
 import { capturedTurnOf as defaultCapturedTurnOf } from "@/lib/policy/action-review/captured-turns"
 import { outboundFingerprint } from "@/lib/policy/action-review/outbound-targets"
 import { readAppSettings, type OutboundSettingsLike } from "@/lib/policy/action-review/plan-context"
+import { readOutboundAuthorizationMode } from "@/lib/policy/action-review/policy"
 import {
   BROWSER_SUBMISSION_REFUSED_ERROR,
+  browserAskerRef,
   browserSubmissionAnswerReceipt,
   planBrowserSubmission as defaultPlan,
   submissionSiteTarget,
@@ -51,7 +56,6 @@ import {
   type BrowserSubmissionPlanInput,
   type BrowserSubmissionReceipt,
 } from "@/lib/policy/action-review/plan-browser"
-import { readOutboundAuthorizationMode } from "@/lib/policy/action-review/policy"
 
 import {
   askAboutBrowserSubmission as defaultAsk,
@@ -71,6 +75,14 @@ const DRAIN_WAIT_MS = 1_000
 
 /** The engine methods whose actions the gate watches. */
 type GatedMethod =
+  | "navigate"
+  | "createPage"
+  | "fillCredential"
+  | "setStorage"
+  | "clearStorage"
+  | "clearCookies"
+  | "emulate"
+  | "openExtension"
   | "act"
   | "pressKey"
   | "drag"
@@ -82,6 +94,14 @@ type GatedMethod =
   | "handleDialog"
 
 const GATED_METHODS: ReadonlySet<string> = new Set<GatedMethod>([
+  "navigate",
+  "createPage",
+  "fillCredential",
+  "setStorage",
+  "clearStorage",
+  "clearCookies",
+  "emulate",
+  "openExtension",
   "act",
   "pressKey",
   "drag",
@@ -111,6 +131,7 @@ const SUBMITTING_KEYS: ReadonlySet<string> = new Set([
 ])
 
 export interface SubmissionGateDeps {
+  personalSink?: typeof assertPersonalSink
   settings?: () => OutboundSettingsLike | Promise<OutboundSettingsLike>
   plan?: typeof defaultPlan
   ask?: typeof defaultAsk
@@ -258,16 +279,25 @@ class PageDrainer {
   }
 
   private async decide(report: BrowserSubmissionReport): Promise<void> {
-    const target = submissionSiteTarget(report.url)
-    const key = outboundFingerprint(target)
-    let decision = this.sites.get(key)
+    // Personal marks can change during this page's life. Every report must
+    // re-read them, including reports for a site authorized earlier.
+    let personalAllowed = true
+    try {
+      await this.gate.assertOpaqueAction(report.method, report.url)
+    } catch {
+      personalAllowed = false
+    }
+    const key = outboundFingerprint(submissionSiteTarget(report.url))
+    let decision = personalAllowed ? this.sites.get(key) : undefined
     if (!decision) {
-      decision = this.gate.decide({
-        url: report.url,
-        basis: "request",
-        operation: report.method,
-      })
-      this.sites.set(key, decision)
+      decision = personalAllowed
+        ? this.gate.decide({
+            url: report.url,
+            basis: "request",
+            operation: report.method,
+          })
+        : Promise.resolve({ allowed: false, site: report.url })
+      if (personalAllowed) this.sites.set(key, decision)
     }
     const { allowed, site } = await decision
     if (!report.held) return
@@ -302,9 +332,29 @@ class GateCore {
       kind: "turn",
       sessionId: this.asker.sessionId,
       unattended: policy.unattended,
+      executionRunId: policy.executionRunId ?? this.asker.executionRunId,
       ...(policy.origin ? { origin: policy.origin } : {}),
       ...(policy.policyGrants ? { policyGrants: policy.policyGrants } : {}),
     }
+  }
+
+  async assertOpaqueAction(operation: string, target?: string): Promise<void> {
+    const asker = this.resolvedAsker()
+    await (this.deps.personalSink ?? assertPersonalSink)(
+      personalSinkHost.personalSinkContextForRun(
+        asker.kind === "workflow"
+          ? { executionRunId: `execution:workflow:${asker.runId}` }
+          : {
+              sessionId:
+                asker.kind === "chat" || asker.kind === "turn" ? asker.sessionId : undefined,
+              executionRunId: asker.executionRunId,
+            },
+        "lib/browser/submission-gate.ts"
+      ),
+      { kind: "unknown", label: "opaque browser action" },
+      undefined,
+      target ?? { kind: "unknown", label: "browser page", asker: browserAskerRef(asker), operation }
+    )
   }
 
   private record(receipt: BrowserSubmissionReceipt | undefined): void {
@@ -315,9 +365,15 @@ class GateCore {
   /** Plan one submission and, when the policy asks, ask a person. */
   async decide(input: Omit<BrowserSubmissionPlanInput, "asker">): Promise<SiteDecision> {
     const asker = this.resolvedAsker()
-    const decision = await (this.deps.plan ?? defaultPlan)({ ...input, asker })
     const site =
       siteOf(submissionSiteTarget(input.url)) ?? (input.url || "a page with no web address")
+    let decision: Awaited<ReturnType<typeof defaultPlan>>
+    try {
+      decision = await (this.deps.plan ?? defaultPlan)({ ...input, asker })
+    } catch (error) {
+      if (isPersonalSinkWithheldError(error)) return { allowed: false, site }
+      throw error
+    }
     switch (decision.action) {
       case "proceed":
         this.record(decision.receipt)
@@ -379,25 +435,31 @@ function gatedEngine(engine: BrowserEngine, core: GateCore): BrowserEngine {
   }
 
   /** Plan an action that may submit before it runs; the refused sites, or none. */
-  const planPossible = async (operation: string): Promise<string[]> => {
-    let url = ""
-    try {
-      url = (await engine.getPage()).url ?? ""
-    } catch {
-      // A page that cannot say where it is has no site: asked per call.
-    }
+  const planPossible = async (operation: string, url: string): Promise<string[]> => {
     const { allowed, site } = await core.decide({ url, basis: "possible", operation })
     return allowed ? [] : [site]
   }
 
   const run = async (method: GatedMethod, args: unknown[]): Promise<unknown> => {
+    let personalTarget: string | undefined
+    if ((method === "navigate" || method === "createPage") && typeof args[0] === "string")
+      personalTarget = args[0]
+    else {
+      try {
+        personalTarget = (await engine.getPage()).url
+      } catch {
+        /* Unknown page stays fail-closed. */
+      }
+    }
+    await core.assertOpaqueAction(method, personalTarget)
     const call = () => (engine[method] as (...a: unknown[]) => Promise<unknown>).apply(engine, args)
     const enforce = (await core.mode()) === "enforce"
     const possible = possibleSubmissionOperation(method, args)
 
-    if (!guarded || !(await ensureGuardMode(guarded, enforce ? "hold" : "observe"))) {
+    // Personal enforcement needs the request held even while ADR-0239 only observes.
+    if (!guarded || !(await ensureGuardMode(guarded, "hold"))) {
       if (!possible) return call()
-      const refused = await planPossible(possible)
+      const refused = await planPossible(possible, personalTarget ?? "")
       return refused.length > 0 ? refusedResult(method, undefined, refused) : call()
     }
 
@@ -408,13 +470,13 @@ function gatedEngine(engine: BrowserEngine, core: GateCore): BrowserEngine {
       // The guard cannot report for this action. Shadow mode only observes,
       // so the action runs as it would have; enforcement decides before it.
       if (!enforce || !possible) return call()
-      const refused = await planPossible(possible)
+      const refused = await planPossible(possible, personalTarget ?? "")
       return refused.length > 0 ? refusedResult(method, undefined, refused) : call()
     }
     const drainer = drainerFor(first.pageId)
     drainer.handle(first.reports)
     if (first.unguarded && possible) {
-      const refused = await planPossible(possible)
+      const refused = await planPossible(possible, personalTarget ?? "")
       if (refused.length > 0) return refusedResult(method, undefined, refused)
     }
     const refusedBefore = drainer.refused.length
@@ -485,7 +547,7 @@ export function gateBrowserEngine(
 ): BrowserEngine {
   const byAsker = gated.get(engine) ?? new Map<string, BrowserEngine>()
   gated.set(engine, byAsker)
-  const key = askerKey(asker)
+  const key = `${askerKey(asker)}:execution:${asker.executionRunId ?? "active"}`
   const existing = byAsker.get(key)
   if (existing) return existing
   const wrapped = gatedEngine(engine, new GateCore(asker, options, deps))
@@ -501,9 +563,14 @@ export function browserToolsAsker(
   pluginId: string,
   chatSessionId: string | undefined
 ): BrowserSubmissionAsker {
+  const executionRunId = pluginExecutionContext(pluginId)?.executionRunId
   if (chatSessionId?.startsWith(BRIDGE_SESSION_PREFIX)) {
-    return { kind: "external-bridge", clientId: chatSessionId.slice(BRIDGE_SESSION_PREFIX.length) }
+    return {
+      kind: "external-bridge",
+      clientId: chatSessionId.slice(BRIDGE_SESSION_PREFIX.length),
+      executionRunId,
+    }
   }
-  if (chatSessionId) return { kind: "chat", sessionId: chatSessionId }
-  return { kind: "plugin", pluginId }
+  if (chatSessionId) return { kind: "chat", sessionId: chatSessionId, executionRunId }
+  return { kind: "plugin", pluginId, executionRunId }
 }

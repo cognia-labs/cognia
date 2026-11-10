@@ -24,6 +24,7 @@
  * mobile shell has no connector runtime, so IM goals are desktop/CLI-only.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { ConversationDeliveryTarget, NormalizedInboundEvent } from "@/types/connectors/event"
 import type { ChatSession, AppSettings } from "@cognia/agent-config-types"
 import type { Goal, GoalStatus } from "@/types/goal"
@@ -217,6 +218,7 @@ export function startConnectorGoalDriver(
       throw new Error("Connector goal output blocked by PII gate")
     }
     return enqueue({
+      personalContext: personalSinkHost.sessionPersonalSinkContext(args.sessionId),
       adapterId: args.adapterId,
       conversationKey: args.conversationKey,
       request: {

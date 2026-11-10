@@ -1,4 +1,8 @@
 /** @jest-environment jsdom */
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
 
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"

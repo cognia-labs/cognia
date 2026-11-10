@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
 jest.mock("@/lib/browser/agent-engine", () => ({
   routeEngine: jest.fn(() => ({ engine: {} })),
   primeLocalBrowserRouting: jest.fn(async () => undefined),
@@ -39,6 +43,8 @@ import {
   PRIVILEGED_BROWSER_ENGINE_METHODS,
 } from "./browser-api"
 import type { BrowserEngine } from "@/lib/browser/agent-engine"
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 
 /** A fake engine: every member is a jest.fn except the data properties. */
 function fakeEngine(): BrowserEngine & Record<string, jest.Mock> {
@@ -57,6 +63,23 @@ function fakeEngine(): BrowserEngine & Record<string, jest.Mock> {
 }
 
 describe("createBrowserAPI", () => {
+  it("captures the Host invocation's execution instead of plugin routing claims", async () => {
+    const engine = fakeEngine()
+    jest.mocked(routeEngine).mockReturnValueOnce({ engine } as never)
+    const api = createBrowserAPI({ pluginId: "provenance-plugin" })
+    const routed = withPluginExecutionContext(
+      "provenance-plugin",
+      { executionRunId: "host-execution" },
+      () => api.routeEngine("https://example.com", { botRunId: "plugin-claim" }).engine
+    )
+    await routed.navigate("https://example.com")
+    expect(assertPersonalSink).toHaveBeenCalledWith(
+      { sessionId: undefined, executionRunId: "host-execution" },
+      { kind: "unknown", label: "opaque browser action" },
+      undefined,
+      "https://example.com"
+    )
+  })
   it("delegates routing and domain consent to the host", async () => {
     const api = createBrowserAPI({ firstParty: true })
 

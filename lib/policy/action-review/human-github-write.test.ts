@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
 import { outboundFingerprint, repositoryTarget, unknownGithubTarget } from "./outbound-targets"
 import { recordHumanGithubWrite } from "./human-github-write"
 

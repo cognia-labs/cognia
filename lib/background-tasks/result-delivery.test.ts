@@ -133,7 +133,8 @@ describe("onBackgroundRunSettled", () => {
         title: "T:explore:done:3s",
         body: "B:run-1",
         groupKey: "run-1",
-      })
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 
@@ -148,7 +149,10 @@ describe("onBackgroundRunSettled", () => {
     )
     await flush()
 
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ level: "error" }))
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "error" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
+    )
     const [framed] = send.mock.calls[0]
     expect(framed).toContain("(error):")
     expect(framed).toContain("half done")
@@ -512,7 +516,8 @@ describe("background job ends (ADR-0249)", () => {
     expect(send).toHaveBeenCalledTimes(WAKE_CAP_PER_HOUR)
     expect(notify).toHaveBeenCalledTimes(1)
     expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceRef: { kind: "session", id: "chat-1" }, level: "info" })
+      expect.objectContaining({ sourceRef: { kind: "session", id: "chat-1" }, level: "info" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
     // A person's turn settles: the waiting end goes with that boundary.
     maybeDrainBackgroundResults("chat-1", { turnSettled: true })
@@ -531,7 +536,8 @@ describe("background job ends (ADR-0249)", () => {
     expect(isBudgetExhausted).toHaveBeenCalledWith("proj-1")
     expect(send).not.toHaveBeenCalled()
     expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ dedupeKey: "background-wake:chat-1:budget" })
+      expect.objectContaining({ dedupeKey: "background-wake:chat-1:budget" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 

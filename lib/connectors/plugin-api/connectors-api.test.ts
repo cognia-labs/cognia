@@ -21,6 +21,13 @@ import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
 import { routePythonHostRequest } from "@/lib/plugin/python/host-request-router"
 import type { PluginContext } from "@/types/plugin/plugin"
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+
+const mockPersonalSink = jest.fn(async (..._args: unknown[]) => ({ outcome: "allow" as string }))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  checkPersonalSink: (...args: unknown[]) => mockPersonalSink(...args),
+}))
 
 const appendAudit = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock("@/lib/connectors/audit", () => ({
@@ -352,6 +359,7 @@ describe("createConnectorsAPI", () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    mockPersonalSink.mockReset().mockResolvedValue({ outcome: "allow" })
     inboundObservers.clear()
     callbackObservers.clear()
     runningEntries.clear()
@@ -370,6 +378,76 @@ describe("createConnectorsAPI", () => {
   })
 
   describe("permission gating", () => {
+    it("withholds opaque adapter edits without treating their descriptors as disclosure content", async () => {
+      guard.registerPlugin(PLUGIN, ["connectors:send"])
+      const api = createConnectorsAPI(PLUGIN)
+      mockPersonalSink.mockResolvedValueOnce({
+        outcome: "withhold",
+        persons: [],
+        reason: "payload-not-disclosable",
+      } as never)
+      const patch = {
+        conversationRef: {},
+        segments: [{ type: "image", url: "file:///private-image" }],
+        metadata: { idempotencyKey: "opaque-edit", executionRunId: "forged-run" },
+      }
+      await expect(
+        withPluginExecutionContext(PLUGIN, { executionRunId: "host-run" }, () =>
+          api.editMessage("tg", "pm_private", patch as never)
+        )
+      ).rejects.toThrow("must disclose")
+      expect(editOutbound).not.toHaveBeenCalled()
+      expect(mockPersonalSink).toHaveBeenCalledWith(
+        { executionRunId: "host-run" },
+        { kind: "unknown", label: "connector message edit" },
+        undefined,
+        { pluginId: PLUGIN, label: "connector message edit" }
+      )
+    })
+
+    it("withholds uploads from the Host-bound invocation and ignores plugin message provenance", async () => {
+      guard.registerPlugin(PLUGIN, ["connectors:send"])
+      const api = createConnectorsAPI(PLUGIN)
+      mockPersonalSink.mockResolvedValueOnce({
+        outcome: "withhold",
+        persons: [],
+        reason: "private",
+      } as never)
+      await expect(
+        withPluginExecutionContext(PLUGIN, { executionRunId: "host-run" }, () =>
+          api.uploadFile("tg", { url: "file:///private" })
+        )
+      ).rejects.toThrow("must disclose")
+      expect(uploadFileOutbound).not.toHaveBeenCalled()
+      expect(mockPersonalSink).toHaveBeenCalledWith(
+        { executionRunId: "host-run" },
+        { kind: "unknown", label: "connector upload" },
+        undefined,
+        { pluginId: PLUGIN, label: "connector upload" }
+      )
+    })
+
+    it("passes the Host run to direct sends regardless of a request's claimed run", async () => {
+      guard.registerPlugin(PLUGIN, ["connectors:send"])
+      const api = createConnectorsAPI(PLUGIN)
+      await withPluginExecutionContext(PLUGIN, { executionRunId: "host-run" }, () =>
+        api.send("tg", {
+          conversationRef: { platform: "telegram", adapterId: "tg", chatId: 42 },
+          segments: [{ type: "text", text: "hello" }],
+          metadata: { idempotencyKey: "host-proof", executionRunId: "forged-run" },
+        } as never)
+      )
+      expect(
+        mockPersonalSink.mock.calls.some(
+          (call) => (call[0] as { executionRunId?: string }).executionRunId === "host-run"
+        )
+      ).toBe(true)
+      expect(
+        mockPersonalSink.mock.calls.some(
+          (call) => (call[0] as { executionRunId?: string }).executionRunId === "forged-run"
+        )
+      ).toBe(false)
+    })
     it("exposes link creation only through the manage permission and named capability", async () => {
       const link = { purpose: "add-contact", url: "https://example.org/invite" }
       const execute = jest.fn(async () => ({ status: "ok" as const, link }))
@@ -821,6 +899,7 @@ describe("createConnectorsAPI", () => {
           via: "phone",
           source: "plugin",
           authorization: { kind: "plugin", pluginId: PLUGIN, botRunId: "run-1" },
+          personalContext: { unverifiedReason: "plugin invocation unavailable" },
           auditFields: { pluginId: PLUGIN },
         },
         {
@@ -828,6 +907,7 @@ describe("createConnectorsAPI", () => {
           messageId: "om_1",
           userIds: ["ou_a"],
           source: "plugin",
+          personalContext: { unverifiedReason: "plugin invocation unavailable" },
           authorization: { kind: "plugin", pluginId: PLUGIN },
           auditFields: { pluginId: PLUGIN },
         },
@@ -858,8 +938,12 @@ describe("createConnectorsAPI", () => {
           conversationRef: { conv: "c1" },
           source: "plugin",
           ownerRef: `plugin:${PLUGIN}`,
+          personalContext: { unverifiedReason: "plugin invocation unavailable" },
+          payload: req,
+          streamKey: undefined,
           auditFields: { pluginId: PLUGIN },
         },
+        expect.any(Function),
         expect.any(Function)
       )
 
@@ -869,6 +953,34 @@ describe("createConnectorsAPI", () => {
       expect(await api.streamReply("sl", req as never)).toBe(false)
       expect(streamReplyOutbound).not.toHaveBeenCalled()
       spy.mockRestore()
+    })
+    it("closes a withheld plugin preview with only the fixed notice and an empty authoritative final", async () => {
+      const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
+      const spy = jest
+        .spyOn(getConnectorDeliveryGateway(), "streamUnplanned")
+        .mockImplementationOnce(async (_input, _stream, finish) => {
+          await finish?.()
+          return false
+        })
+      try {
+        const api = createConnectorsAPI(PLUGIN)
+        expect(
+          await api.streamReply("sl", {
+            conversationRef: { platform: "slack", adapterId: "sl", channelId: "C1" },
+            streamKey: "preview",
+            text: "NEW_PRIVATE_PATCH",
+          } as never)
+        ).toBe(false)
+        expect(streamReplyOutbound).toHaveBeenCalledWith(
+          "sl",
+          expect.objectContaining({ text: expect.stringContaining("withheld") })
+        )
+        expect(sendOutbound).toHaveBeenCalledWith("sl", expect.objectContaining({ segments: [] }))
+        expect(JSON.stringify(sendOutbound.mock.calls)).not.toContain("NEW_PRIVATE_PATCH")
+        expect(JSON.stringify(streamReplyOutbound.mock.calls)).not.toContain("NEW_PRIVATE_PATCH")
+      } finally {
+        spy.mockRestore()
+      }
     })
     it("plans explicit stream intent against the canonical host destination before streaming", async () => {
       const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
@@ -1288,18 +1400,27 @@ describe("createConnectorsAPI", () => {
         nextAttemptAt: 555,
       })
       expect(hasNoLeakingPiiDeep).toHaveBeenCalledWith(req.segments)
-      expect(enqueueOutbound).toHaveBeenCalledWith({
-        adapterId: "tg",
-        conversationKey: "telegram:tg:42",
-        // The stored target, not the plugin's own reference (ADR-0239).
-        request: {
-          ...req,
-          conversationRef: TARGET_42.conversationRef,
-          deliveryTarget: TARGET_42,
-        },
-        source: "plugin",
-        nextAttemptAt: 555,
-      })
+      expect(enqueueOutbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          adapterId: "tg",
+          conversationKey: "telegram:tg:42",
+          // The stored target, not the plugin's own reference (ADR-0239).
+          request: {
+            ...req,
+            conversationRef: TARGET_42.conversationRef,
+            deliveryTarget: TARGET_42,
+          },
+          source: "plugin",
+          nextAttemptAt: 555,
+          authorizationProvenance: expect.objectContaining({
+            mode: "shadow",
+            plan: "draft",
+            authorization: { kind: "plugin", pluginId: PLUGIN },
+          }),
+          receipt: expect.objectContaining({ channel: "connector-delivery", outcome: "allow" }),
+        }),
+        { executionContext: { unverifiedReason: "plugin invocation unavailable" } }
+      )
       expect(job).toEqual({
         jobId: "oqj_1",
         adapterId: "tg",
@@ -1323,7 +1444,8 @@ describe("createConnectorsAPI", () => {
       }
       await api.enqueueSend("tg", "telegram:tg:42", req as never)
       expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ authorization: { kind: "plugin", pluginId: PLUGIN } })
+        expect.objectContaining({ authorization: { kind: "plugin", pluginId: PLUGIN } }),
+        { executionContext: { unverifiedReason: "plugin invocation unavailable" } }
       )
 
       // A handler Bot's send names its run, which lends its installation's list.
@@ -1331,7 +1453,8 @@ describe("createConnectorsAPI", () => {
       expect(spy).toHaveBeenLastCalledWith(
         expect.objectContaining({
           authorization: { kind: "plugin", pluginId: PLUGIN, botRunId: "run-7" },
-        })
+        }),
+        { executionContext: { unverifiedReason: "plugin invocation unavailable" } }
       )
 
       spy.mockResolvedValueOnce({ kind: "drafted", draft: { id: "cdr_9" } as never })
@@ -1365,7 +1488,8 @@ describe("createConnectorsAPI", () => {
         expect.objectContaining({
           request: { ...req, deliveryTarget: TARGET_LARK },
           source: "plugin",
-        })
+        }),
+        { executionContext: { unverifiedReason: "plugin invocation unavailable" } }
       )
       expect(sendOutbound).not.toHaveBeenCalled()
     })
@@ -1428,7 +1552,8 @@ describe("createConnectorsAPI", () => {
       expect(enqueueOutbound).toHaveBeenCalledWith(
         expect.objectContaining({
           request: expect.objectContaining({ replyTo: { messageId: "pm_seen" } }),
-        })
+        }),
+        { executionContext: { unverifiedReason: "plugin invocation unavailable" } }
       )
     })
 
@@ -1454,7 +1579,8 @@ describe("createConnectorsAPI", () => {
               pendingPlacement: [{ use: "reply", messageId: "pm_later" }],
             }),
           }),
-        })
+        }),
+        { executionContext: { unverifiedReason: "plugin invocation unavailable" } }
       )
     })
 

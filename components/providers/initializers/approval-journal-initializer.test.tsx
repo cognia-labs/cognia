@@ -58,7 +58,8 @@ it("announces interrupted approvals restored at boot, counting only unannounced 
       level: "warning",
       dedupeKey: "approval-journal-interrupted-boot",
       title: expect.stringContaining("interruptedOnBoot"),
-    })
+    }),
+    expect.objectContaining({ personalContext: expect.any(Object) })
   )
   expect(notify.mock.calls[0][0].title).toContain('"count":2')
   // Claimed per entry, and the entries stay in the journal (still listed).

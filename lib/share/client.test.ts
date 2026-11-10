@@ -26,6 +26,7 @@ import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import type { SharePayload, ShareEnvelopeV1 } from "./types"
+import { bindPersonalShareSnapshot } from "./personal-snapshot"
 
 const ENDPOINT: ShareEndpoint = { baseUrl: "https://share.test", uploadSecret: "sekret" }
 
@@ -47,6 +48,7 @@ beforeEach(async () => {
   await getDb().sharedLinks.clear()
   fetchMock = jest.fn()
   ;(globalThis as { fetch: unknown }).fetch = fetchMock
+  bindPersonalShareSnapshot(PAYLOAD, async () => undefined)
   // Cold Dexie open walks every schema version and can exceed 5s.
 }, 30_000)
 
@@ -62,6 +64,23 @@ function mockFetchOnce(status: number, json: unknown): void {
 afterAll(dbFixture.dispose)
 
 describe("createShareLink", () => {
+  it("rejects an unproven raw transcript snapshot before any external request", async () => {
+    await expect(createShareLink({ payload: { ...PAYLOAD } }, ENDPOINT)).rejects.toThrow(
+      "Host projection proof"
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("rechecks cached personal visibility after encryption immediately before publishing", async () => {
+    const check = jest
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("Personal share snapshot changed"))
+    const payload = bindPersonalShareSnapshot({ ...PAYLOAD }, check)
+    await expect(createShareLink({ payload }, ENDPOINT)).rejects.toThrow("snapshot changed")
+    expect(check).toHaveBeenCalledTimes(2)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
   it("rejects an encrypted request body that exceeds the upload limit", () => {
     expect(() => assertShareRequestSize("12345678901", 10)).toThrow(SharePayloadTooLargeError)
     expect(() => assertShareRequestSize("1234567890", 10)).not.toThrow()

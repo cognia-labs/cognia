@@ -1,3 +1,5 @@
+import { personalSinkContextForRun } from "@/lib/execution/personal-sink"
+import { resolveBuiltInSkillRunScope } from "../context"
 /**
  * `issue.create` — file an issue from chat (ADR-0132 slice ③).
  *
@@ -59,9 +61,15 @@ const skill: BuiltInSkill<typeof schema> = {
   inputSchema: schema,
   execute: async (args, ctx) => {
     const workspaceId = await resolveWorkspaceId(ctx)
+    const scope = resolveBuiltInSkillRunScope(ctx)
+    const personalContext = personalSinkContextForRun(
+      { sessionId: scope.sessionId, executionRunId: scope.runId },
+      "issue source run unavailable"
+    )
     if (ctx.imBinding && !args.issueProjectId) {
       const { proposeIssueFromIm } = await import("@/lib/issues/im/propose")
       const result = await proposeIssueFromIm({
+        personalContext,
         adapterId: ctx.imBinding.adapterId,
         conversationKey: ctx.imBinding.conversationKey,
         workspaceId,
@@ -118,6 +126,7 @@ const skill: BuiltInSkill<typeof schema> = {
     if (ctx.imBinding) {
       const { pushIssueCard } = await import("@/lib/issues/im/push")
       await pushIssueCard({
+        personalContext,
         adapterId: ctx.imBinding.adapterId,
         conversationKey: ctx.imBinding.conversationKey,
         issue,

@@ -112,6 +112,7 @@ export const port: ConversationChannel = {
       channelId: parsed.remoteChatId,
     }
     const result = await enqueueAuthorized({
+      personalContext: input.personalContext,
       adapterId,
       conversationKey,
       request: {

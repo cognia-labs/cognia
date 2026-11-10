@@ -9,12 +9,14 @@ import {
   effectivePersonalMarks,
   personalReaderKey,
   personalReaders,
+  personalVisibilityDigest,
   withholdForReaders,
   type PersonalHistoryMessage,
+  type PersonalVisibilityContext,
 } from "@cognia/plugin-contract/types/execution/personal-visibility"
 import { getDb } from "@/lib/db/schema"
 import { resolveRunActingIdentity } from "./acting-authority"
-import { personalMarkContextForSession } from "./personal-marks"
+import { addPersonalMarksToRun, personalMarkContextForSession } from "./personal-marks"
 import type { RerankerOptions } from "@/lib/twin/runtime/reranker"
 import type { ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 
@@ -132,7 +134,8 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
   sessionId: string | undefined,
   messages: readonly T[],
   options: { executionRunId?: string; session?: Pick<ChatSession, "platformBinding"> },
-  ownerReaders?: PrincipalRefV1[]
+  ownerReaders?: PrincipalRefV1[],
+  contextMarks?: ReadonlyMap<string, readonly PersonalMarkV1[]>
 ): ReturnType<typeof preparePersonalHistory<T>> {
   const db = getDb()
   const assertCurrent = () => {
@@ -171,6 +174,7 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
     [sessionId, consumerSession],
   ])
   const canonical: T[] = []
+  const explicitById = new Map<string, PersonalMarkV1[]>()
   for (const message of messages) {
     const metadata = message.metadata as Record<string, unknown> | undefined
     const sourceSessionId =
@@ -192,29 +196,75 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
       sourceSession ?? {},
       contexts.get(sourceSessionId)!
     )
+    // A copy returned by an earlier preparation carries the legacy read-time
+    // attribution materialized in metadata.personalMarks. It is still legacy,
+    // so it never taints a consuming run (phase 2C-1 D1).
+    const inferred = effectivePersonalMarks(
+      { ...message, metadata: { ...metadata, personalMarks: undefined } },
+      sourceSession ?? {},
+      contexts.get(sourceSessionId)!
+    )
+    const stored = metadata?.personalMarks as PersonalMarkV1[] | undefined
+    if (
+      stored?.length &&
+      JSON.stringify(mergePersonalMarks(stored)) !== JSON.stringify(mergePersonalMarks(inferred))
+    )
+      explicitById.set(message.id, mergePersonalMarks(stored))
     canonical.push(
       marks.length ? { ...message, metadata: { ...metadata, personalMarks: marks } } : message
     )
   }
   assertCurrent()
+  // Reader resolution is phase 2B's and unchanged here; only the mark commit
+  // below needs the exact consuming run.
   const readers =
     ownerReaders ??
     personalReaders(await resolveRunActingIdentity(sessionId, options.executionRunId))
   assertCurrent()
-  const result = withholdForReaders(
-    canonical,
-    readers,
-    {},
-    {
-      samePerson: (left, right) => samePersonForHost(left, right, host),
-      personKey: (person) =>
-        samePersonForHost(person, { kind: "local-person" }, host)
-          ? "host-owner"
-          : person.kind === "platform" && person.unionId
-            ? JSON.stringify([person.platform, "union", person.unionId])
-            : personalReaderKey(person),
+  const visibility: PersonalVisibilityContext = {
+    samePerson: (left, right) => samePersonForHost(left, right, host),
+    personKey: (person) =>
+      samePersonForHost(person, { kind: "local-person" }, host)
+        ? "host-owner"
+        : person.kind === "platform" && person.unionId
+          ? JSON.stringify([person.platform, "union", person.unionId])
+          : personalReaderKey(person),
+  }
+  let result = withholdForReaders(canonical, readers, {}, visibility)
+  if (!ownerReaders) {
+    const withheld = new Set(result.withheldMessageIds)
+    // Only producer-explicit marks taint runs. Legacy read-time attribution
+    // still controls visibility, but is not a new personal read in phase 2C.
+    const explicitMarks = (message: T) =>
+      contextMarks?.get(message.id) ?? explicitById.get(message.id) ?? []
+    const consumed = messages.filter(
+      (message) => !withheld.has(message.id) && explicitMarks(message).length > 0
+    )
+    if (consumed.length && options.executionRunId) {
+      // The commit is awaited before releasing any context. A failed transaction
+      // rejects this preparation, just as a failed memory-recall mark does.
+      await addPersonalMarksToRun(
+        { sessionId, executionRunId: options.executionRunId },
+        mergePersonalMarks(...consumed.map(explicitMarks))
+      )
+      assertCurrent()
+    } else if (consumed.length) {
+      // No exact Host-held consuming run: never pick an ambient active run to
+      // carry the taint. Withhold the explicitly marked context instead.
+      const ids = new Set(consumed.map(({ id }) => id))
+      const forced = withholdForReaders(canonical, [], {}, visibility)
+      const placeholders = new Map(
+        forced.messages.filter(({ id }) => ids.has(id)).map((message) => [message.id, message])
+      )
+      const messagesOut = result.messages.map((message) => placeholders.get(message.id) ?? message)
+      const withheldMessageIds = [...result.withheldMessageIds, ...ids]
+      result = {
+        messages: messagesOut,
+        withheldMessageIds,
+        visibilityDigest: personalVisibilityDigest(readers, withheldMessageIds, visibility),
+      }
     }
-  )
+  }
   return { ...result, readers }
 }
 
@@ -268,8 +318,11 @@ async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
       }
       if (!run.actingIdentity) proven = false
       marksFromRuns.push(...(run.personalMarks ?? []))
-      if (run.actingIdentity?.rootRunId === id) break
-      id = run.parentRunId ?? run.actingIdentity?.rootRunId
+      // A confirmed action has a new identity root, but still consumes its
+      // structural source. Later marks on that source must remain visible.
+      id =
+        run.parentRunId ??
+        (run.actingIdentity?.rootRunId !== id ? run.actingIdentity?.rootRunId : undefined)
     }
   }
   const sourceSessions: (ChatSession | undefined)[] = []
@@ -294,6 +347,7 @@ async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
   // Message deletion does not erase a title, seed or working set. Preserve the
   // source session's durable run taint even after its marked rows are gone.
   const retainedMarks: PersonalMarkV1[][] = []
+  const explicitSourceMarks: PersonalMarkV1[][] = [marksFromRuns]
   const legacy: PersonalMarkV1[][] = []
   for (const [index, id] of [...sourceSessionIds].entries()) {
     const session = sourceSessions[index]
@@ -304,6 +358,14 @@ async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
     retainedMarks.push(
       ...sourceRuns.map((run) => run.personalMarks ?? []),
       ...stored.map((message) => effectivePersonalMarks(message, session ?? {}, context))
+    )
+    explicitSourceMarks.push(
+      ...sourceRuns.map((run) => run.personalMarks ?? []),
+      ...stored.map(
+        (message) =>
+          (message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)?.personalMarks ??
+          []
+      )
     )
   }
   const legacyMarks = mergePersonalMarks(...legacy)
@@ -340,7 +402,22 @@ async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
     },
   }))
   if (ownerRead) return prepareOwnerHistory(marked)
-  return preparePersonalHistory(sessionId, marked, { executionRunId: source.executionRunId })
+  const knownMarks = mergePersonalMarks(...explicitSourceMarks)
+  return prepareHistoryForReaders(
+    sessionId,
+    marked,
+    { executionRunId: source.executionRunId },
+    undefined,
+    new Map(
+      messages.map((message) => [
+        message.id,
+        mergePersonalMarks(
+          (message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)?.personalMarks,
+          knownMarks
+        ),
+      ])
+    )
+  )
 }
 
 /** Paired session fields share the explicit interim owner read policy. */

@@ -87,6 +87,25 @@ function makeAdapter(transport: "socket-mode" | "events-api-webhook" = "socket-m
 }
 
 describe("runtime capabilities", () => {
+  it("resolves IM peers from verified chat info and opens only the requested private peer", async () => {
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: { req?: { url?: string; body?: string } }) => {
+        if (cmd !== "connectors_http_request") return undefined
+        const url = args?.req?.url ?? ""
+        const channel = url.includes("conversations.open")
+          ? { id: "D1", is_im: true, user: "UOWNER" }
+          : { is_im: true, user: "UOWNER" }
+        return { status: 200, headers: {}, body: JSON.stringify({ ok: true, channel }) }
+      }
+    )
+    const adapter = makeAdapter()
+    await expect(adapter.resolvePersonalAudience!("slack:sl-1:D1")).resolves.toMatchObject({
+      kind: "person",
+      person: { remoteUserId: "UOWNER" },
+    })
+    await expect(adapter.personalDirectConversation!("UOWNER")).resolves.toBe("slack:sl-1:D1")
+    await expect(adapter.personalDirectConversation!("UOTHER")).resolves.toBeUndefined()
+  })
   it("gates assistant-only presentation features without disabling live steering", () => {
     const basic = makeAdapter()
     expect(basic.runPresentation).toBeUndefined()

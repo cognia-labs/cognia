@@ -152,6 +152,7 @@ export interface ConversationChannel {
    * delivery. `drafted`: the outbound policy (ADR-0239) held it for a person.
    */
   postText(input: {
+    personalContext: import("@/lib/execution/personal-sink").PersonalSinkContext
     binding: ConversationChannelBinding & { adapterId: string }
     text: string
     authorization: OutboundAuthorization
@@ -189,6 +190,7 @@ export interface ConversationChannel {
    * live delivery target, the adapter is gone, the hold was refused).
    */
   approveWorkflowRun(input: {
+    personalContext: import("@/lib/execution/personal-sink").PersonalSinkContext
     workflowId: string
     runParams?: Record<string, unknown>
     triggeredFrom: ConversationWorkflowOrigin
@@ -199,6 +201,7 @@ export interface ConversationChannel {
    * Throws when the card cannot reach the conversation.
    */
   approveWorkflowFanout(input: {
+    personalContext: import("@/lib/execution/personal-sink").PersonalSinkContext
     workflowId: string
     workflowName: string
     triggeredFrom: ConversationWorkflowOrigin

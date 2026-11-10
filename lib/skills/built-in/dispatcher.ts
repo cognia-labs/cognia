@@ -1,9 +1,11 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   createUnattendedPermissionResponder,
   isVerifiedHumanApproval,
 } from "@/lib/claude/unattended-permission-responder"
 import { createUnattendedPark, type UnattendedPark } from "@/lib/claude/unattended-park"
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 /**
  * Built-in skill dispatcher (ADR-0026).
  *
@@ -100,6 +102,31 @@ export async function runBuiltInSkill(
     return { status: "denied", reason: "invalid_args", message }
   }
   const validArgs = parsed.data as unknown
+
+  // Lark writes have no Host permission-list reader. A confirmation can
+  // authorize an operation, but cannot disclose somebody else's content.
+  if ((skill.family.startsWith("lark") || skill.family === "issue") && skill.mutation !== "read") {
+    const scope = resolveBuiltInSkillRunScope(ctx)
+    try {
+      await assertPersonalSink(
+        personalSinkHost.personalSinkContextForRun(
+          { sessionId: scope.sessionId, executionRunId: scope.runId },
+          "lib/skills/built-in/dispatcher.ts"
+        ),
+        { kind: "unknown", label: skill.id },
+        // Arguments may reference files or be transformed by the CLI handler;
+        // they are not the exact outbound document/message bytes.
+        undefined,
+        { skillId: skill.id }
+      )
+    } catch (error) {
+      return {
+        status: "denied",
+        reason: "personal_content_withheld",
+        message: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
 
   // 3 — PII gate on serialised args. Skill authors are encouraged to keep
   // arg shapes tight; this catches anything that leaks through despite that.
@@ -400,6 +427,23 @@ export async function runBuiltInSkill(
 
   try {
     ctx.signal?.throwIfAborted()
+    // A run (or ancestor) can acquire a mark while its confirmation waits.
+    // Recheck immediately before the write, even after an operator approved it.
+    if (
+      (skill.family.startsWith("lark") || skill.family === "issue") &&
+      skill.mutation !== "read"
+    ) {
+      const scope = resolveBuiltInSkillRunScope(ctx)
+      await assertPersonalSink(
+        personalSinkHost.personalSinkContextForRun(
+          { sessionId: scope.sessionId, executionRunId: scope.runId },
+          "lib/skills/built-in/dispatcher.ts"
+        ),
+        { kind: "unknown", label: skill.id },
+        undefined,
+        { skillId: skill.id }
+      )
+    }
     const data = await skill.execute(validArgs as never, {
       ...ctx,
       ...(parkedApproved ? { hitlBypass: true } : {}),

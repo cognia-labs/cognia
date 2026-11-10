@@ -14,6 +14,7 @@
  * / enqueue dependencies are injectable for tests.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
@@ -247,9 +248,14 @@ export async function maybeHandleControlCommand(
   const reply = async (
     content: string | MessageSegment[],
     kind: "applied" | "denied" | "unknown",
-    extraFields?: Record<string, unknown>
+    extraFields?: Record<string, unknown>,
+    // Default replies contain command arguments/configuration, never execution output.
+    personalContext: personalSinkHost.PersonalSinkContext = personalSinkHost.explicitHostPersonalSinkContext(
+      "background-service"
+    )
   ): Promise<void> => {
     await enqueue({
+      personalContext,
       adapterId: event.adapterId,
       conversationKey: event.conversationKey,
       request: {
@@ -274,8 +280,22 @@ export async function maybeHandleControlCommand(
     })
   }
 
+  // These call sites render product copy only; retained titles and run outputs
+  // use `reply` and must keep their producer provenance or remain withheld.
+  const replyFixed = (
+    content: string | MessageSegment[],
+    kind: "applied" | "denied" | "unknown",
+    extraFields?: Record<string, unknown>
+  ) =>
+    reply(
+      content,
+      kind,
+      extraFields,
+      personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
+    )
+
   if (parsed.kind === "unknown") {
-    await reply(R.renderUnknown(parsed.name), "unknown")
+    await replyFixed(R.renderUnknown(parsed.name), "unknown")
     return true
   }
 
@@ -285,11 +305,11 @@ export async function maybeHandleControlCommand(
   // Scheduler writes always require explicit allowlist membership, even when
   // the adapter's general command mode is `everyone` or `private-only`.
   if (name === "schedule" && !isSenderInCommandAllowlist(event, policy)) {
-    await reply(R.renderDenied(), "denied", { reason: "schedule_allowlist_required" })
+    await replyFixed(R.renderDenied(), "denied", { reason: "schedule_allowlist_required" })
     return true
   }
   if (name !== "agent" && !isReadonlyCommand(name) && !isCommandAllowed(event, policy)) {
-    await reply(R.renderDenied(), "denied")
+    await replyFixed(R.renderDenied(), "denied")
     return true
   }
 
@@ -321,11 +341,14 @@ export async function maybeHandleControlCommand(
   switch (name) {
     case "automation": {
       if (!["pause", "resume", "cancel", "status"].includes(arg)) {
-        await reply(R.renderUsage("automation"), "applied")
+        await replyFixed(R.renderUsage("automation"), "applied")
         return true
       }
       if (arg === "status") {
-        await reply(R.renderAutomation("status", override?.automationPaused === true), "applied")
+        await replyFixed(
+          R.renderAutomation("status", override?.automationPaused === true),
+          "applied"
+        )
         return true
       }
       if (arg === "cancel") {
@@ -351,7 +374,7 @@ export async function maybeHandleControlCommand(
           else await getBus().resumeAutomationFanOuts()
         }
       }
-      await reply(
+      await replyFixed(
         R.renderAutomation(
           arg as "pause" | "resume" | "cancel",
           arg === "pause" || (arg === "cancel" && override?.automationPaused === true)
@@ -368,7 +391,7 @@ export async function maybeHandleControlCommand(
       return false
 
     case "commands":
-      await reply(R.renderHelp(), "applied")
+      await replyFixed(R.renderHelp(), "applied")
       return true
 
     case "status": {
@@ -489,12 +512,20 @@ export async function maybeHandleControlCommand(
         sessionIdPrefix: active ? idPrefix(active.id) : "—",
         assignee: R.renderAssignee(override?.assignee),
       }
+      const sessionContext = active
+        ? personalSinkHost.sessionPersonalSinkContext(active.id)
+        : personalSinkHost.explicitHostPersonalSinkContext("background-service")
+      // Character, team and rule names are Host configuration labels, not run output
+      // (ADR-0243 2C-1 residual: a name a marked run wrote into configuration).
+      const statusContext = sessionContext
       // A vendor may draw the view natively; elsewhere it is the bilingual text.
       await reply(
         vendor?.commands?.renderStatus
           ? [await vendor.commands.renderStatus(statusView)]
           : R.renderStatus(statusView),
-        "applied"
+        "applied",
+        undefined,
+        statusContext
       )
       return true
     }
@@ -511,7 +542,16 @@ export async function maybeHandleControlCommand(
           })),
           chatSessions ? "chat" : "conversation"
         ),
-        "applied"
+        "applied",
+        undefined,
+        sessions.reduce<personalSinkHost.PersonalSinkContext>(
+          (context, session) =>
+            personalSinkHost.mergePersonalSinkContexts(
+              context,
+              personalSinkHost.sessionPersonalSinkContext(session.id)
+            ),
+          personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
+        )
       )
       return true
     }
@@ -520,7 +560,14 @@ export async function maybeHandleControlCommand(
       const summary = active?.workingDir
         ? active.workingDir
         : "此会话未绑定本机目录 / no host directory bound to this conversation"
-      await reply(R.renderDir(summary), "applied")
+      await reply(
+        R.renderDir(summary),
+        "applied",
+        undefined,
+        active
+          ? personalSinkHost.sessionPersonalSinkContext(active.id)
+          : personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
+      )
       return true
     }
 
@@ -538,7 +585,9 @@ export async function maybeHandleControlCommand(
       if (prior && prior.id !== created.id) clearSessionBypass(prior.id)
       await reply(
         R.confirmNewSession(created.title, idPrefix(created.id), privateThread),
-        "applied"
+        "applied",
+        undefined,
+        personalSinkHost.sessionPersonalSinkContext(created.id)
       )
       return true
     }
@@ -546,7 +595,7 @@ export async function maybeHandleControlCommand(
     case "switch":
     case "resume": {
       if (!arg) {
-        await reply(R.renderUsage("switch"), "applied")
+        await replyFixed(R.renderUsage("switch"), "applied")
         return true
       }
       const sessions = await listSessions(event.conversationKey)
@@ -554,7 +603,7 @@ export async function maybeHandleControlCommand(
         sessions.find((s) => s.id === arg || s.id.startsWith(arg)) ??
         sessions.find((s) => s.title.toLowerCase().includes(arg.toLowerCase()))
       if (!target) {
-        await reply(R.renderUsage("switch"), "applied")
+        await replyFixed(R.renderUsage("switch"), "applied")
         return true
       }
       // Preserve the session's origin key while refreshing its delivery and
@@ -565,13 +614,18 @@ export async function maybeHandleControlCommand(
       // Session rotation — same bypass-drop contract as `/new` above.
       if (active && active.id !== target.id) clearSessionBypass(active.id)
       active = target
-      await reply(R.confirmSwitched(target.title, idPrefix(target.id), privateThread), "applied")
+      await reply(
+        R.confirmSwitched(target.title, idPrefix(target.id), privateThread),
+        "applied",
+        undefined,
+        personalSinkHost.sessionPersonalSinkContext(target.id)
+      )
       return true
     }
 
     case "model": {
       if (!arg) {
-        await reply(R.renderUsage("model"), "applied")
+        await replyFixed(R.renderUsage("model"), "applied")
         return true
       }
       // Accept `provider/model` or a bare model id. The MODEL is trusted —
@@ -595,7 +649,7 @@ export async function maybeHandleControlCommand(
         const isKnownExplicit =
           deps.isKnownProvider ?? ((p: string) => Promise.resolve(isBuiltInProviderId(p)))
         if (!explicitModel) {
-          await reply(R.renderUsage("model"), "applied")
+          await replyFixed(R.renderUsage("model"), "applied")
           return true
         }
         if (!(await isKnownExplicit(explicitProvider))) {
@@ -645,7 +699,7 @@ export async function maybeHandleControlCommand(
         }
       }
       if (!model) {
-        await reply(R.renderUsage("model"), "applied")
+        await replyFixed(R.renderUsage("model"), "applied")
         return true
       }
       await persist(
@@ -663,7 +717,7 @@ export async function maybeHandleControlCommand(
         // field, so a client that predates the axis keeps reading the same
         // answer and the two cannot drift while both exist.
         await persist({ authority: authorityFromApprovalMode(v), approvalMode: v })
-        await reply(R.confirmApprovalMode(v), "applied")
+        await replyFixed(R.confirmApprovalMode(v), "applied")
         return true
       }
       const preset = (IM_MODE_PRESET_IDS as readonly string[]).includes(v)
@@ -681,7 +735,7 @@ export async function maybeHandleControlCommand(
           scope: event.channel.kind,
         }).target.effective.kind
         if (imModePresetUnavailableReason(preset, targetKind) !== null) {
-          await reply(R.denyDelegateWithoutTarget(), "denied", {
+          await replyFixed(R.denyDelegateWithoutTarget(), "denied", {
             reason: "delegate_needs_target",
             preset,
           })
@@ -697,27 +751,27 @@ export async function maybeHandleControlCommand(
           ...imModePresetPatch(preset),
           ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
         })
-        await reply(R.confirmMode(preset), "applied")
+        await replyFixed(R.confirmMode(preset), "applied")
         return true
       }
-      await reply(R.renderUsage("mode"), "applied")
+      await replyFixed(R.renderUsage("mode"), "applied")
       return true
     }
 
     case "reasoning": {
       const v = arg.toLowerCase()
       if (!REASONING_LEVELS.has(v)) {
-        await reply(R.renderUsage("reasoning"), "applied")
+        await replyFixed(R.renderUsage("reasoning"), "applied")
         return true
       }
       await persist({ reasoningOverride: v as ConversationOverrideRow["reasoningOverride"] })
-      await reply(R.confirmReasoning(v), "applied")
+      await replyFixed(R.confirmReasoning(v), "applied")
       return true
     }
 
     case "character": {
       if (!arg) {
-        await reply(R.renderUsage("character"), "applied")
+        await replyFixed(R.renderUsage("character"), "applied")
         return true
       }
       const normalized = arg.toLowerCase()
@@ -727,7 +781,7 @@ export async function maybeHandleControlCommand(
           characterDisabled: true,
           ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
         })
-        await reply(R.confirmCharacterDisabled(), "applied")
+        await replyFixed(R.confirmCharacterDisabled(), "applied")
         return true
       }
       if (normalized === "inherit") {
@@ -736,7 +790,7 @@ export async function maybeHandleControlCommand(
           characterDisabled: undefined,
           ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
         })
-        await reply(R.confirmCharacterInherited(), "applied")
+        await replyFixed(R.confirmCharacterInherited(), "applied")
         return true
       }
       const byId = await getCharacterById(arg).catch(() => undefined)
@@ -746,7 +800,7 @@ export async function maybeHandleControlCommand(
         match = all.find((c) => c.name.toLowerCase() === arg.toLowerCase())
       }
       if (!match) {
-        await reply(R.renderUsage("character"), "applied")
+        await replyFixed(R.renderUsage("character"), "applied")
         return true
       }
       // Explicit routing edit: the assignment ↔ routing marker is dropped so
@@ -756,7 +810,12 @@ export async function maybeHandleControlCommand(
         characterDisabled: undefined,
         ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
       })
-      await reply(R.confirmCharacter(match.name), "applied")
+      await reply(
+        R.confirmCharacter(match.name),
+        "applied",
+        undefined,
+        personalSinkHost.explicitHostPersonalSinkContext("background-service")
+      )
       return true
     }
 
@@ -778,7 +837,7 @@ export async function maybeHandleControlCommand(
       }
       const team = await resolveTeam(arg)
       if (!team) {
-        await reply(R.renderUsage("team"), "applied")
+        await replyFixed(R.renderUsage("team"), "applied")
         return true
       }
       await persist({
@@ -788,7 +847,12 @@ export async function maybeHandleControlCommand(
         workflowDisabled: true,
         ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
       })
-      await reply(R.confirmTeam(team.name), "applied")
+      await reply(
+        R.confirmTeam(team.name),
+        "applied",
+        undefined,
+        personalSinkHost.explicitHostPersonalSinkContext("background-service")
+      )
       return true
     }
 
@@ -804,23 +868,33 @@ export async function maybeHandleControlCommand(
           workflowDisabled: true,
           ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
         })
-        await reply(R.confirmWorkflowCleared(), "applied")
+        await replyFixed(R.confirmWorkflowCleared(), "applied")
         return true
       }
       const res = await resolveWorkflow(arg)
       if (!res.ok) {
         if (res.reason === "ambiguous") {
-          await reply(R.renderWorkflowAmbiguous(res.candidates), "applied")
+          await reply(
+            R.renderWorkflowAmbiguous(res.candidates),
+            "applied",
+            undefined,
+            personalSinkHost.explicitHostPersonalSinkContext("background-service")
+          )
           return true
         }
-        await reply(R.renderUsage("workflow"), "applied")
+        await replyFixed(R.renderUsage("workflow"), "applied")
         return true
       }
       if (!(await isWorkflowExecutable(res.workflowId))) {
-        await reply(R.denyWorkflowNotDeployed(res.name), "denied", {
-          reason: "workflow_not_deployed",
-          workflowId: res.workflowId,
-        })
+        await reply(
+          R.denyWorkflowNotDeployed(res.name),
+          "denied",
+          {
+            reason: "workflow_not_deployed",
+            workflowId: res.workflowId,
+          },
+          personalSinkHost.explicitHostPersonalSinkContext("background-service")
+        )
         return true
       }
       await persist({
@@ -830,7 +904,12 @@ export async function maybeHandleControlCommand(
         squadDisabled: true,
         ...ASSIGNMENT_ROUTING_MARKER_CLEAR,
       })
-      await reply(R.confirmWorkflow(res.name), "applied")
+      await reply(
+        R.confirmWorkflow(res.name),
+        "applied",
+        undefined,
+        personalSinkHost.explicitHostPersonalSinkContext("background-service")
+      )
       return true
     }
 
@@ -839,13 +918,26 @@ export async function maybeHandleControlCommand(
       // in `commands/goal.ts`. It shares this scope's `reply` (confirmation +
       // audit) and `ensureSession` (the IM-bound session the guard checks).
       const handleGoal = deps.handleGoal ?? handleGoalCommand
-      await handleGoal({ event, arg, ensureSession, reply })
+      await handleGoal({
+        event,
+        arg,
+        ensureSession,
+        reply: (content, kind) =>
+          reply(
+            content,
+            kind,
+            undefined,
+            active
+              ? personalSinkHost.sessionPersonalSinkContext(active.id)
+              : personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
+          ),
+      })
       return true
     }
 
     case "delegate": {
       const handleDelegate = deps.handleDelegate ?? handleDelegateCommand
-      await handleDelegate({ event, arg, reply })
+      await handleDelegate({ event, arg, reply: replyFixed })
       return true
     }
 
@@ -856,7 +948,15 @@ export async function maybeHandleControlCommand(
       await handleHandoff({
         event,
         arg,
-        reply,
+        // Acknowledgements contain fixed copy and the person's typed assignee;
+        // the generated brief has its own exact-run delivery gate in handoff.ts.
+        reply: (content, kind, extra) =>
+          reply(
+            content,
+            kind,
+            extra,
+            personalSinkHost.explicitHostPersonalSinkContext("typed-send")
+          ),
         deps: {
           operatorIds: Array.isArray(adapterRow.settings.runOperatorUserIds)
             ? adapterRow.settings.runOperatorUserIds.filter(
@@ -898,23 +998,25 @@ export async function maybeHandleControlCommand(
         const isActivator =
           status.activatedBy === event.sender.id || status.activatedBy === event.sender.remoteUserId
         if (!isActivator && !isCommandAllowed(event, policy)) {
-          await reply(R.renderDenied(), "denied", { reason: "agent_off_not_authorized" })
+          await replyFixed(R.renderDenied(), "denied", { reason: "agent_off_not_authorized" })
           return true
         }
         await (deps.closeAgentTopic ?? closeConnectorConversation)(event.conversationKey, {
           now: at,
         })
-        await reply(R.confirmAgentOff(), "applied")
+        await replyFixed(R.confirmAgentOff(), "applied")
         return true
       }
 
       if (action === "verify") {
         if (!isCommandAllowed(event, policy)) {
-          await reply(R.renderDenied(), "denied", { reason: "agent_verify_not_authorized" })
+          await replyFixed(R.renderDenied(), "denied", { reason: "agent_verify_not_authorized" })
           return true
         }
         if (vendor?.conversations?.deliveryProbe?.(event) !== true) {
-          await reply(R.renderUsage("agent"), "denied", { reason: "probe_requires_lark_group" })
+          await replyFixed(R.renderUsage("agent"), "denied", {
+            reason: "probe_requires_lark_group",
+          })
           return true
         }
         const expiresAt = at + 10 * 60 * 1000
@@ -929,11 +1031,11 @@ export async function maybeHandleControlCommand(
             },
           },
         })
-        await reply(R.confirmAgentProbeStarted(), "applied", { expiresAt })
+        await replyFixed(R.confirmAgentProbeStarted(), "applied", { expiresAt })
         return true
       }
 
-      await reply(R.renderUsage("agent"), "applied")
+      await replyFixed(R.renderUsage("agent"), "applied")
       return true
     }
   }

@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 // Router + Fusion boot wiring (ADR-0188 D38/D39), desktop window only.
 //
@@ -55,17 +56,24 @@ export function RouterFusionInitializer() {
       notifyTripped: (surface, trip) => {
         void import("@/lib/notifications/runtime")
           .then(({ notify }) =>
-            notify({
-              source: "system",
-              level: "warning",
-              title: t("breakerToast.title", {
-                surface: t(`settings.surface.${surface}.label` as never),
-              }),
-              body: t("breakerToast.body", { reason: trip.reason }),
-              channels: ["center", "toast"],
-              dedupeKey: `router-fusion-breaker-${surface}`,
-              href: settingsHref("ai-connections"),
-            })
+            notify(
+              {
+                source: "system",
+                level: "warning",
+                title: t("breakerToast.title", {
+                  surface: t(`settings.surface.${surface}.label` as never),
+                }),
+                body: t("breakerToast.body", { reason: trip.reason }),
+                channels: ["center", "toast"],
+                dedupeKey: `router-fusion-breaker-${surface}`,
+                href: settingsHref("ai-connections"),
+              },
+              {
+                // Breaker reasons are infrastructure fault codes, not run error/output text.
+                personalContext:
+                  personalSinkHost.explicitHostPersonalSinkContext("background-service"),
+              }
+            )
           )
           .catch((error) => console.warn("[router-fusion] breaker notice failed", error))
       },

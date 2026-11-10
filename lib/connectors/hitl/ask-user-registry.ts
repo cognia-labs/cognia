@@ -48,6 +48,9 @@ export interface AskUserSettlement {
  * re-deriving context.
  */
 export interface PendingAskUserMeta {
+  /** Host-bound originating session, retained even when no exact turn run exists. */
+  sessionId?: string
+  executionRunId?: string
   surfaceId: string
   request: AskUserRequest
   adapterId: string

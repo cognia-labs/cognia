@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => undefined),
+}))
 /**
  * `ctx.issues`: the plugin face of the tracker. The service is mocked, so
  * what is pinned here is the gate map, the actor stamp, and how a patch

@@ -1,5 +1,7 @@
 "use client"
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
+
 import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type {
   ChatSession,
@@ -10,6 +12,7 @@ import type {
   ApprovalDecision,
   SessionEvent,
   SharedToolDetail,
+  SessionMembership,
 } from "@cognia/agent-config-types"
 import {
   getSharedRunJournal,
@@ -49,6 +52,17 @@ import {
   SHARED_LIVE_FRAME_INTERVAL_MS,
   type SharedRunLivePublisher,
 } from "./shared-run-live-publisher"
+import {
+  readHostPersonContext,
+  readRunPersonalTaint,
+  recordPersonalSinkReceipt,
+} from "@/lib/execution/personal-sink"
+import { effectivePersonalMarks } from "@cognia/plugin-contract/types/execution/personal-visibility"
+import {
+  projectSharedPersonalMessages,
+  sharedPersonalReaders,
+  UNVERIFIED_SHARED_PERSONAL_MARK,
+} from "./shared-personal-projection"
 
 const log = loggers.shell
 
@@ -77,6 +91,10 @@ interface ActiveSharedRun {
   onApprovalDecision?: (approval: PendingApproval, decision: "allow" | "deny") => Promise<void>
   journalRef: string
   orgId: string
+  hostUserId: string
+  /** Pinned from the Host execution table, never the shared server's run id. */
+  executionRunId?: string
+  personalReceipts: Set<string>
   sharedSessionId: string
   runId: string
   leaseId: string
@@ -269,6 +287,8 @@ export async function recoverSharedSessionRun(
     journalRef: ref,
     client: context.client,
     orgId: context.orgId,
+    hostUserId: context.userId,
+    personalReceipts: new Set(),
     sharedSessionId: binding.sessionId,
     baselineMessageIds: new Set(journal.baselineMessageIds),
     published: new Map(),
@@ -654,6 +674,8 @@ export async function beginSharedSessionRun(
     db,
     journalRef: journalRef(context, session.id),
     orgId: context.orgId,
+    hostUserId: context.userId,
+    personalReceipts: new Set(),
     sharedSessionId: binding.sessionId,
     runId,
     leaseId: acquired.lease.id,
@@ -847,6 +869,69 @@ function runReplies(active: ActiveSharedRun, messages: SharedRunMessage[]): Shar
   )
 }
 
+async function sharedRunPersonalContext(active: ActiveSharedRun, localSessionId: string) {
+  const context = active.executionRunId
+    ? personalSinkHost.personalSinkContextForRun(
+        { sessionId: localSessionId, executionRunId: active.executionRunId },
+        "shared run execution unavailable"
+      )
+    : personalSinkHost.sessionPersonalSinkContext(localSessionId)
+  const [taint, host, members] = await Promise.all([
+    readRunPersonalTaint(context),
+    readHostPersonContext(),
+    // Re-read membership: someone joining must tighten the very next frame.
+    active.client.listSessionMembers
+      ? active.client.listSessionMembers(active.orgId, active.sharedSessionId).catch(() => [])
+      : Promise.resolve([] as SessionMembership[]),
+  ])
+  assertCurrentDatabase(active.db)
+  const marks = taint.verified ? taint.marks : [...taint.marks, UNVERIFIED_SHARED_PERSONAL_MARK]
+  const readers = sharedPersonalReaders(
+    members.filter((member) => member.sessionId === active.sharedSessionId),
+    active.hostUserId,
+    `${active.client.baseUrl}:${active.orgId}`
+  )
+  return { context, marks, readers, host, stamp: JSON.stringify([marks, readers]) }
+}
+
+async function sharedPersonalMessage(
+  active: ActiveSharedRun,
+  message: SharedRunMessage,
+  privacy: Awaited<ReturnType<typeof sharedRunPersonalContext>>,
+  persistent = false
+): Promise<{ message: SharedRunMessage; withheld: boolean }> {
+  // Persistent events have unknown future readers. Live frames are ephemeral,
+  // but their POST has no member-revision fence: a member can join between
+  // this Host's membership read and the relay. Neither proves the actual full
+  // reader set at disclosure time, so both conservatively have no readers.
+  const projection = projectSharedPersonalMessages([message], [], privacy.host, {
+    marks: privacy.marks,
+  })
+  if (projection.withheldMessageIds.length) {
+    const payload = JSON.stringify(message.parts ?? [])
+    const target = {
+      kind: "shared-session",
+      orgId: active.orgId,
+      sessionId: active.sharedSessionId,
+    }
+    const key = `${persistent ? "stored" : "live"}:${message.id}:${privacy.stamp}:${payload}`
+    if (!active.personalReceipts.has(key)) {
+      await recordPersonalSinkReceipt(
+        personalSinkHost.personalSinkContextForRun(
+          privacy.context,
+          "lib/collab/shared-run-coordinator.ts"
+        ),
+        effectivePersonalMarks(projection.messages[0], {}, {}).map((mark) => mark.person),
+        "withhold",
+        payload,
+        target
+      )
+      active.personalReceipts.add(key)
+    }
+  }
+  return { message: projection.messages[0], withheld: projection.withheldMessageIds.length > 0 }
+}
+
 /**
  * End a reply's live frames once its stored record is final: a `settled`
  * keyframe that members keep drawing until their pull reads past the final
@@ -855,6 +940,7 @@ function runReplies(active: ActiveSharedRun, messages: SharedRunMessage[]): Shar
  */
 async function endLiveReply(
   active: ActiveSharedRun,
+  localSessionId: string,
   message: SharedRunMessage,
   projector: SharedAssistantProjector
 ): Promise<void> {
@@ -869,9 +955,11 @@ async function endLiveReply(
     return
   }
   const sequence = active.storedSequence.get(message.id)
+  const privacy = await sharedRunPersonalContext(active, localSessionId)
+  const projected = await sharedPersonalMessage(active, message, privacy)
   await live.settle(
     { messageId: message.id, replyTo: active.requestMessageId },
-    projector.project(message.id, message.parts ?? [], "settled") as TranscriptLivePart[],
+    projector.project(message.id, projected.message.parts ?? [], "settled") as TranscriptLivePart[],
     sequence === undefined ? undefined : sequence - 1
   )
 }
@@ -879,7 +967,7 @@ async function endLiveReply(
 /**
  * The 250 ms live tick: the run's newest reply, projected and held back like
  * its stored record, as a live frame. Reads the chat store only, never the
- * database: this is the hot path while tokens stream. A reply starts only
+ * database except for the fresh Host taint and member proof. A reply starts only
  * once the server knows it (its `message.created` landed) and every earlier
  * reply of the run has ended, so members never see two at once (R7).
  */
@@ -896,9 +984,15 @@ async function streamSharedRunLive(localSessionId: string): Promise<void> {
   const last = replies.at(-1)
   if (!last || !active.published.has(last.id)) return
   if (replies.slice(0, -1).some((reply) => !live.ended(reply.id))) return
+  const privacy = await sharedRunPersonalContext(active, localSessionId)
+  const projected = await sharedPersonalMessage(active, last, privacy)
   await live.stream(
     { messageId: last.id, replyTo: active.requestMessageId },
-    active.projector.project(last.id, last.parts ?? [], "streaming") as TranscriptLivePart[]
+    active.projector.project(
+      last.id,
+      projected.message.parts ?? [],
+      projected.withheld ? "settled" : "streaming"
+    ) as TranscriptLivePart[]
   )
 }
 
@@ -918,11 +1012,15 @@ export async function publishSharedSessionRun(localSessionId: string): Promise<v
     if (!current()) return
     const projector = await runProjector(active, localSessionId)
     if (!current()) return
+    const privacy = await sharedRunPersonalContext(active, localSessionId)
+    if (!current()) return
     const replies = runReplies(active, messages)
     for (const [index, message] of replies.entries()) {
       // A reply is settled once the run ended or a newer reply started: only
       // the last reply of a live run is still being written.
       const phase = active.terminalStatus || index < replies.length - 1 ? "settled" : "streaming"
+      const projected = await sharedPersonalMessage(active, message, privacy, true)
+      const raw = `${privacy.stamp}\u0000${phase}\u0000${JSON.stringify(projected.message.parts ?? [])}`
       // While live frames carry the reply (ADR-0241), the stored record of a
       // streaming reply is refreshed at most every 10s; the settle is always
       // written at once. A server without live keeps the 1s cadence.
@@ -932,7 +1030,8 @@ export async function publishSharedSessionRun(localSessionId: string): Promise<v
         active.live &&
         !active.live.disabled &&
         storedAt !== undefined &&
-        active.now() - storedAt < STORED_WHILE_LIVE_INTERVAL_MS
+        active.now() - storedAt < STORED_WHILE_LIVE_INTERVAL_MS &&
+        active.rawSeen.get(message.id)?.startsWith(`${privacy.stamp}\u0000`)
       )
         continue
       // Raw compare FIRST. The projection redacts every text part and runs the
@@ -940,11 +1039,14 @@ export async function publishSharedSessionRun(localSessionId: string): Promise<v
       // for an already-published message on every 1s tick is the whole cost
       // of this loop. Identical raw parts in the same phase cannot produce a
       // different snapshot, so this skip is exact rather than a heuristic.
-      const raw = `${phase}\u0000${JSON.stringify(message.parts ?? [])}`
       const unchanged = active.rawSeen.get(message.id) === raw && active.published.has(message.id)
       const parts = unchanged
         ? undefined
-        : projector.project(message.id, message.parts ?? [], phase)
+        : projector.project(
+            message.id,
+            projected.message.parts ?? [],
+            projected.withheld ? "settled" : phase
+          )
       const snapshot = parts ? JSON.stringify(parts) : undefined
       const previous = active.published.get(message.id)
       if (parts && snapshot !== undefined && previous !== snapshot) {
@@ -1030,7 +1132,7 @@ export async function publishSharedSessionRun(localSessionId: string): Promise<v
         // stops before the redaction pass instead of re-deriving this answer.
         active.rawSeen.set(message.id, raw)
       }
-      if (phase === "settled") await endLiveReply(active, message, projector)
+      if (phase === "settled") await endLiveReply(active, localSessionId, message, projector)
     }
   }
   if (active.publishing) {

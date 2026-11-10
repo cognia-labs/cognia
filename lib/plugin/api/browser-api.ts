@@ -12,6 +12,7 @@ import { requestBrowserDownloadAttach } from "@/lib/browser/downloads-client"
 import { isBrowserSurfaceVisible, requestBrowserUrl } from "@/lib/browser/open-url-request"
 import { saveBrowserAnnotation } from "@/lib/db/browser-annotations"
 import { browserToolsAsker, gateBrowserEngine } from "@/lib/browser/submission-gate"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import type { PluginSource } from "@/types/plugin"
 import type {
   PluginBrowserAPI,
@@ -152,7 +153,12 @@ export function createBrowserAPI(options: CreateBrowserAPIOptions = {}): PluginB
     const asker =
       options.firstParty === true
         ? browserToolsAsker(pluginId, chatSessionId)
-        : ({ kind: "plugin", pluginId, ...(botRunId ? { botRunId } : {}) } as const)
+        : ({
+            kind: "plugin",
+            pluginId,
+            executionRunId: pluginExecutionContext(pluginId)?.executionRunId,
+            ...(botRunId ? { botRunId } : {}),
+          } as const)
     const gated = gateBrowserEngine(engine, asker)
     return options.firstParty === true ? gated : createPluginBrowserEngineFacade(gated)
   }

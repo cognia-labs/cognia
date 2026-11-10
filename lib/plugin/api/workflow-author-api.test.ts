@@ -187,6 +187,7 @@ describe("workflow approval cards", () => {
       adapterId: "ad",
     })
     expect(channel.approveWorkflowRun).toHaveBeenCalledWith({
+      personalContext: { unverifiedReason: "workflow plugin invocation unavailable" },
       workflowId: "wf",
       runParams: { a: 1 },
       triggeredFrom: resolved,
@@ -213,6 +214,7 @@ describe("workflow approval cards", () => {
     })
     expect(approvalActorScope).toHaveBeenCalledWith(resolved)
     expect(channel.approveWorkflowFanout).toHaveBeenCalledWith({
+      personalContext: { unverifiedReason: "workflow plugin invocation unavailable" },
       workflowId: "wf",
       workflowName: "Daily",
       triggeredFrom: resolved,
@@ -509,4 +511,54 @@ it("refuses a callback binding no conversation channel serves", async () => {
       actorScope: { mode: "operators" },
     })
   ).rejects.toThrow("No conversation channel serves this callback binding")
+})
+
+it("keeps Host plugin execution provenance on workflow approval cards", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const api = createWorkflowAuthorAPI("workflow-producer")
+  await withPluginExecutionContext(
+    "workflow-producer",
+    { executionRunId: "host-private-run" },
+    () =>
+      api.prepareWorkflowApproval({
+        workflowId: "wf",
+        triggeredFrom: {
+          source: "im",
+          sessionId: "root",
+          adapterId: "ad",
+          conversationKey: "lark:ad:chat",
+        },
+      } as never)
+  )
+  expect(channel.approveWorkflowRun).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      personalContext: {
+        sessionId: undefined,
+        executionRunId: "host-private-run",
+        receiptAttemptId: undefined,
+      },
+    })
+  )
+})
+
+it("keeps the Host invocation on fanout cards before asynchronous origin lookup", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const api = createWorkflowAuthorAPI("fanout-producer")
+  await withPluginExecutionContext("fanout-producer", { executionRunId: "fanout-host-run" }, () =>
+    api.prepareFanoutApproval({
+      workflowId: "wf",
+      workflowName: "Private title",
+      triggeredFrom: {
+        source: "im",
+        sessionId: "root",
+        adapterId: "ad",
+        conversationKey: "lark:ad:chat",
+      },
+    } as never)
+  )
+  expect(channel.approveWorkflowFanout).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      personalContext: expect.objectContaining({ executionRunId: "fanout-host-run" }),
+    })
+  )
 })

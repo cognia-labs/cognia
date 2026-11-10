@@ -693,7 +693,11 @@ describe("Integration event publication", () => {
             extra: expect.objectContaining({ step: "workflow", eventId: "wf-fail" }),
           }),
         }),
-        { kind: "background" }
+        { kind: "background" },
+        {
+          unverifiedReason:
+            "integration projection error may contain plugin/run output without a producer",
+        }
       )
       const pending = await getDb().integrationEvents.get("wf-fail")
       expect(pending).toMatchObject({ projectionState: "pending", projectionAttempts: 1 })

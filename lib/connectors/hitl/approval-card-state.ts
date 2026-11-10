@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
 import { waitForOutboundTerminal } from "@/lib/db/outbound-jobs"
 import { appendAudit } from "@/lib/connectors/audit"
@@ -13,6 +14,7 @@ export type ApprovalCardState =
  * card stays as sent and the decision still stands.
  */
 export async function settleApprovalCard(input: {
+  personalContext: personalSinkHost.PersonalSinkContext
   adapterId: string
   conversationKey: string
   conversationRef: ConversationReference
@@ -31,6 +33,7 @@ export async function settleApprovalCard(input: {
     const messageId = input.messageId ?? delivery?.platformMessageId
     if (!messageId) return
     await enqueueGoverned({
+      personalContext: input.personalContext,
       adapterId: delivery?.adapterId ?? input.adapterId,
       conversationKey: delivery?.conversationKey ?? input.conversationKey,
       request: {

@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import { port } from "./conversation-channel"
 
@@ -137,6 +138,7 @@ describe("the IM conversation channel", () => {
     const authorization = { kind: "origin-reply", inboundConversationKey: KEY } as const
     await expect(
       port.postText({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         binding: { adapterId: "adp_1", conversationKey: KEY },
         text: "hi",
         authorization,
@@ -166,6 +168,7 @@ describe("the IM conversation channel", () => {
     mockFindSessionByConversationKey.mockResolvedValue({ platformBinding: { conversationRef } })
     mockEnqueueAuthorized.mockResolvedValue({ kind: "queued" })
     await port.postText({
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       binding: { adapterId: "adp_1", conversationKey: KEY },
       text: "hi",
       authorization: { kind: "origin-reply", inboundConversationKey: KEY },
@@ -238,10 +241,16 @@ describe("the IM conversation channel", () => {
       adapterId: "adp_1",
       conversationKey: KEY,
     }
-    const run = { workflowId: "wf_1", runParams: { a: 1 }, triggeredFrom }
+    const run = {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
+      workflowId: "wf_1",
+      runParams: { a: 1 },
+      triggeredFrom,
+    }
     await expect(port.approveWorkflowRun(run)).resolves.toBe(card)
     expect(mockPostWorkflowRunApproval).toHaveBeenCalledWith(run)
     const fanout = {
+      personalContext: { executionRunId: "host-fanout-port" },
       workflowId: "wf_1",
       workflowName: "Digest",
       triggeredFrom,

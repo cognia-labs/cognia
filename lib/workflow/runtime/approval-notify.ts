@@ -1,3 +1,4 @@
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 /**
  * Fan-out for `action.approval.request` (ADR 0061 P2).
  *
@@ -35,31 +36,35 @@ export const APPROVAL_RESOLVED_CHANNEL = "workflow://approval-resolved"
 export const APPROVAL_RESPOND_COMMAND = "workflow.approval.respond"
 
 export interface ApprovalNotifyDeps {
-  notify?: (input: {
-    source: "workflow"
-    level: "warning"
-    title: string
-    body?: string
-    href: string
-    dedupeKey: string
-    directed: true
-    sourceRef: { kind: string; id: string }
-    actions: Array<{
-      id: string
-      label: string
-      command: string
-      args: Record<string, unknown>
-      variant?: "primary" | "secondary"
-    }>
-  }) => Promise<string>
+  notify?: (
+    input: {
+      source: "workflow"
+      level: "warning"
+      title: string
+      body?: string
+      href: string
+      dedupeKey: string
+      directed: true
+      sourceRef: { kind: string; id: string }
+      actions: Array<{
+        id: string
+        label: string
+        command: string
+        args: Record<string, unknown>
+        variant?: "primary" | "secondary"
+      }>
+    },
+    host: import("@/lib/notifications/notify").NotifyHostOptions
+  ) => Promise<string>
   emit?: (event: string, payload: unknown) => Promise<void>
 }
 
 async function defaultNotify(
-  input: Parameters<NonNullable<ApprovalNotifyDeps["notify"]>>[0]
+  input: Parameters<NonNullable<ApprovalNotifyDeps["notify"]>>[0],
+  host: import("@/lib/notifications/notify").NotifyHostOptions
 ): Promise<string> {
   const { notify } = await import("@/lib/notifications/runtime")
-  return notify(input)
+  return notify(input, host)
 }
 
 /** Announce a fresh approval on every surface. Best-effort, never throws. */
@@ -68,32 +73,35 @@ export async function notifyApprovalRequested(
   deps: ApprovalNotifyDeps = {}
 ): Promise<void> {
   try {
-    await (deps.notify ?? defaultNotify)({
-      source: "workflow",
-      level: "warning",
-      title: `Approval requested: ${entry.title}`,
-      ...(entry.message ? { body: entry.message } : {}),
-      href: `/workflows/${entry.workflowId}/runs/${entry.runId}`,
-      dedupeKey: entry.approvalId,
-      directed: true,
-      sourceRef: { kind: "workflow-approval", id: entry.approvalId },
-      actions: [
-        {
-          id: "approve",
-          label: "Approve",
-          command: APPROVAL_RESPOND_COMMAND,
-          args: { approvalId: entry.approvalId, decision: "approved" },
-          variant: "primary",
-        },
-        {
-          id: "reject",
-          label: "Reject",
-          command: APPROVAL_RESPOND_COMMAND,
-          args: { approvalId: entry.approvalId, decision: "rejected" },
-          variant: "secondary",
-        },
-      ],
-    })
+    await (deps.notify ?? defaultNotify)(
+      {
+        source: "workflow",
+        level: "warning",
+        title: `Approval requested: ${entry.title}`,
+        ...(entry.message ? { body: entry.message } : {}),
+        href: `/workflows/${entry.workflowId}/runs/${entry.runId}`,
+        dedupeKey: entry.approvalId,
+        directed: true,
+        sourceRef: { kind: "workflow-approval", id: entry.approvalId },
+        actions: [
+          {
+            id: "approve",
+            label: "Approve",
+            command: APPROVAL_RESPOND_COMMAND,
+            args: { approvalId: entry.approvalId, decision: "approved" },
+            variant: "primary",
+          },
+          {
+            id: "reject",
+            label: "Reject",
+            command: APPROVAL_RESPOND_COMMAND,
+            args: { approvalId: entry.approvalId, decision: "rejected" },
+            variant: "secondary",
+          },
+        ],
+      },
+      { personalContext: { executionRunId: workflowExecutionRunId(entry.runId) } }
+    )
   } catch (err) {
     console.warn("approval notify: notification center delivery failed", err)
   }

@@ -101,7 +101,8 @@ describe("runEscalationAction — notify", () => {
         dedupeKey: "sla:lark:adp-1:oc_1:1",
         groupKey: "lark:adp-1:oc_1",
         directed: true,
-      })
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
     expect(SLA_ESCALATION_NOTICE.overdue.body(20, 1)).toContain("L2")
   })
@@ -243,6 +244,7 @@ describe("runEscalationAction — urgent (Lark only; inert elsewhere)", () => {
         adapterId: "adp-1",
         conversationKey: "lark:adp-1:oc_1",
         source: "manual",
+        personalContext: { hostOrigin: "fixed-notice" },
         authorization,
         request: expect.objectContaining({
           conversationRef: { platform: "lark", adapterId: "adp-1", chatId: "oc_1" },
@@ -261,6 +263,7 @@ describe("runEscalationAction — urgent (Lark only; inert elsewhere)", () => {
       via: "sms",
       conversationKey: "lark:adp-1:oc_1",
       source: "manual",
+      personalContext: { hostOrigin: "fixed-notice" },
       authorization,
       auditFields: { slaConversationKey: "lark:adp-1:oc_1", step: 1 },
     })

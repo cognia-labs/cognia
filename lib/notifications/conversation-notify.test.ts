@@ -3,6 +3,7 @@
  * The Notification Center runtime is mocked so we assert only the input shape.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 const notifyMock = jest.fn(async (..._args: unknown[]) => "rec_1")
 jest.mock("./runtime", () => ({
   __esModule: true,
@@ -14,12 +15,26 @@ import { notifyConversationOverIM } from "./conversation-notify"
 beforeEach(() => notifyMock.mockClear())
 
 describe("notifyConversationOverIM", () => {
-  it("funnels through notify() with center+im channels and a conversation sourceRef", async () => {
-    const id = await notifyConversationOverIM({
-      conversationKey: "telegram:tg-1:9",
-      title: "Done",
-      body: "Build finished",
+  it("forwards Host provenance separately from public content", async () => {
+    await notifyConversationOverIM(
+      { conversationKey: "lark:a:oc_group", title: "Result" },
+      {
+        personalContext: { executionRunId: "host-run" },
+      }
+    )
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Result" }), {
+      personalContext: { executionRunId: "host-run" },
     })
+  })
+  it("funnels through notify() with center+im channels and a conversation sourceRef", async () => {
+    const id = await notifyConversationOverIM(
+      {
+        conversationKey: "telegram:tg-1:9",
+        title: "Done",
+        body: "Build finished",
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     expect(id).toBe("rec_1")
     const input = notifyMock.mock.calls[0][0] as Record<string, unknown>
     expect(input).toMatchObject({
@@ -33,14 +48,17 @@ describe("notifyConversationOverIM", () => {
   })
 
   it("honors an explicit level + source + dedupeKey + directed", async () => {
-    await notifyConversationOverIM({
-      conversationKey: "telegram:tg-1:9",
-      title: "Need input",
-      level: "warning",
-      source: "agent-team",
-      dedupeKey: "k1",
-      directed: true,
-    })
+    await notifyConversationOverIM(
+      {
+        conversationKey: "telegram:tg-1:9",
+        title: "Need input",
+        level: "warning",
+        source: "agent-team",
+        dedupeKey: "k1",
+        directed: true,
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     const input = notifyMock.mock.calls[0][0] as Record<string, unknown>
     expect(input).toMatchObject({
       level: "warning",
@@ -51,11 +69,14 @@ describe("notifyConversationOverIM", () => {
   })
 
   it("records in the center only when the caller already answered the conversation", async () => {
-    await notifyConversationOverIM({
-      conversationKey: "telegram:tg-1:9",
-      title: "Reply failed",
-      centerOnly: true,
-    })
+    await notifyConversationOverIM(
+      {
+        conversationKey: "telegram:tg-1:9",
+        title: "Reply failed",
+        centerOnly: true,
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     const input = notifyMock.mock.calls[0][0] as Record<string, unknown>
     expect(input.channels).toEqual(["center"])
   })

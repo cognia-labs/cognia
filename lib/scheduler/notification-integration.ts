@@ -4,6 +4,13 @@
  */
 
 import type { ScheduledTask, TaskExecution, NotificationChannel } from "@/types/scheduler"
+import {
+  assertPersonalSink,
+  explicitHostPersonalSinkContext,
+  type PersonalSinkContext,
+} from "@/lib/execution/personal-sink"
+import { resolveConnectorSinkAudience } from "@/lib/connectors/personal-delivery"
+import { parseConversationKey } from "@/types/connectors/event"
 import type { NotificationChannel as CenterChannel, NotificationLevel } from "@/types/notifications"
 import type { OutboundWebhookEvent, WebhookHeader } from "@/types/webhooks"
 import { notify } from "@/lib/tauri/notification"
@@ -105,6 +112,21 @@ export async function notifyTaskEvent(
   const wantsDesktop = channels.includes("desktop")
   const wantsIm = channels.includes("im")
   const imConversationKey = wantsIm ? await resolveImConversationKey(task) : undefined
+  let imAllowed = Boolean(imConversationKey)
+  if (imConversationKey) {
+    try {
+      const { adapterId } = parseConversationKey(imConversationKey)
+      await assertPersonalSink(
+        { executionRunId: execution.id },
+        await resolveConnectorSinkAudience(adapterId, imConversationKey),
+        { title, body },
+        imConversationKey
+      )
+    } catch (error) {
+      imAllowed = false
+      log.error("Scheduler IM notification withheld by personal content policy:", error)
+    }
+  }
   // A center-eligible channel was requested (toast/desktop/im). The `im` arm
   // only lands a push when a conversation resolved — but an IM-only request
   // with no configured target must STILL write the center record, or the
@@ -113,29 +135,32 @@ export async function notifyTaskEvent(
     const coreChannels: CenterChannel[] = ["center"]
     if (wantsToast) coreChannels.push("toast")
     if (wantsDesktop) coreChannels.push("os")
-    if (imConversationKey) coreChannels.push("im")
+    if (imAllowed) coreChannels.push("im")
     try {
-      await centerNotify({
-        source: "scheduler",
-        level: centerLevelFor(eventType),
-        title,
-        body,
-        channels: coreChannels,
-        // Recurring tasks: one updating row per task + event type, however
-        // far apart the runs are (the default 45 s window added a row per
-        // run). One-shot tasks: per-execution identity.
-        dedupeKey: taskEventDedupeKey(task, execution.id, eventType),
-        ...(recurring ? { coalesceWindowMs: COALESCE_UNTIL_ARCHIVED } : {}),
-        groupKey: `task:${task.id}`,
-        // `im-deliver.ts` resolves its destination from a `"conversation"`
-        // sourceRef and nothing else, so an IM-bound notification has to carry
-        // that instead of the task ref. Emitting two records (one per ref) would
-        // double every entry in the feed, so the conversation wins and
-        // `groupKey` keeps the task grouping intact either way.
-        sourceRef: imConversationKey
-          ? { kind: "conversation", id: imConversationKey }
-          : { kind: "task", id: task.id },
-      })
+      await centerNotify(
+        {
+          source: "scheduler",
+          level: centerLevelFor(eventType),
+          title,
+          body,
+          channels: coreChannels,
+          // Recurring tasks: one updating row per task + event type, however
+          // far apart the runs are (the default 45 s window added a row per
+          // run). One-shot tasks: per-execution identity.
+          dedupeKey: taskEventDedupeKey(task, execution.id, eventType),
+          ...(recurring ? { coalesceWindowMs: COALESCE_UNTIL_ARCHIVED } : {}),
+          groupKey: `task:${task.id}`,
+          // `im-deliver.ts` resolves its destination from a `"conversation"`
+          // sourceRef and nothing else, so an IM-bound notification has to carry
+          // that instead of the task ref. Emitting two records (one per ref) would
+          // double every entry in the feed, so the conversation wins and
+          // `groupKey` keeps the task grouping intact either way.
+          sourceRef: imConversationKey
+            ? { kind: "conversation", id: imConversationKey }
+            : { kind: "task", id: task.id },
+        },
+        { personalContext: { executionRunId: execution.id } }
+      )
     } catch (error) {
       log.error("Failed to dispatch scheduler notification to the center:", error)
     }
@@ -144,17 +169,21 @@ export async function notifyTaskEvent(
   // Webhook — scheduler-owned outbound integration, retained verbatim.
   if (channels.includes("webhook") && task.notification.webhookUrl) {
     try {
-      await sendWebhookNotification(task.notification.webhookUrl, {
-        task: { id: task.id, name: task.name, type: task.type },
-        execution: {
-          id: execution.id,
-          status: execution.status,
-          duration: execution.duration,
-          error: execution.error,
+      await sendWebhookNotification(
+        task.notification.webhookUrl,
+        {
+          task: { id: task.id, name: task.name, type: task.type },
+          execution: {
+            id: execution.id,
+            status: execution.status,
+            duration: execution.duration,
+            error: execution.error,
+          },
+          eventType,
+          timestamp: new Date().toISOString(),
         },
-        eventType,
-        timestamp: new Date().toISOString(),
-      })
+        { executionRunId: execution.id }
+      )
     } catch (error) {
       log.error("Failed to send webhook notification:", error)
     }
@@ -325,7 +354,8 @@ function toHeaderList(headers?: Record<string, string>): WebhookHeader[] {
  */
 async function sendWebhookNotification(
   url: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  personalContext: PersonalSinkContext
 ): Promise<void> {
   const [
     { getWebhookOutboundConfig },
@@ -347,6 +377,12 @@ async function sendWebhookNotification(
     payload,
     occurredAt: new Date().toISOString(),
   }
+  await assertPersonalSink(
+    personalContext,
+    { kind: "unknown", label: "scheduler webhook" },
+    JSON.stringify(event),
+    url
+  )
 
   // Deliver to the task's own webhook URL (per-task), signed + with the user's
   // custom default headers.
@@ -409,13 +445,16 @@ export async function testNotificationChannel(
           }
         }
         const { notifyConversationOverIM } = await import("@/lib/notifications/conversation-notify")
-        await notifyConversationOverIM({
-          conversationKey,
-          source: "scheduler",
-          title: "Notification Test",
-          body: "This is a test notification from the scheduler.",
-          dedupeKey: `scheduler-im-test:${conversationKey}`,
-        })
+        await notifyConversationOverIM(
+          {
+            conversationKey,
+            source: "scheduler",
+            title: "Notification Test",
+            body: "This is a test notification from the scheduler.",
+            dedupeKey: `scheduler-im-test:${conversationKey}`,
+          },
+          { personalContext: explicitHostPersonalSinkContext("fixed-notice") }
+        )
         // Honest wording: the push is opt-in and asynchronous (it goes through
         // the durable outbound queue), so a queued test is NOT proof of arrival.
         // `proactivePush` being off on the conversation is audited downstream as
@@ -444,11 +483,15 @@ export async function testNotificationChannel(
         if (!webhookUrl) {
           return { success: false, error: "Webhook URL is required" }
         }
-        await sendWebhookNotification(webhookUrl, {
-          test: true,
-          message: "This is a test notification from the scheduler.",
-          timestamp: new Date().toISOString(),
-        })
+        await sendWebhookNotification(
+          webhookUrl,
+          {
+            test: true,
+            message: "This is a test notification from the scheduler.",
+            timestamp: new Date().toISOString(),
+          },
+          explicitHostPersonalSinkContext("fixed-notice")
+        )
         break
 
       case "none":

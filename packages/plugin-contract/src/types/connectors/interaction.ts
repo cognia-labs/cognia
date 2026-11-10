@@ -299,6 +299,13 @@ export type ConnectorCallbackDecision =
  *   - Discord:  `actionId` = the `custom_id` we generated.
  */
 export interface ConnectorCallbackBindingRow {
+  /** Host-only proposal proof. Never copied from component/model binding hints. Unindexed. */
+  issueProposalSource?: {
+    personalContext: import("../execution/personal-sink").PersonalSinkContext
+    draft: { draftId: string; title: string; description?: string; sourceMessageId?: string }
+    issueProjectIds: string[]
+  }
+
   /** `${adapterId}:${actionId}` */
   id: string
   adapterId: string

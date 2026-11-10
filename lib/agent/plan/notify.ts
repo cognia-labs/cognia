@@ -82,10 +82,11 @@ const TERMINAL_COPY: Partial<Record<PlanStatus, { level: "success" | "error"; ve
 }
 
 async function centerNotify(
-  input: Parameters<typeof import("@/lib/notifications/runtime").notify>[0]
+  input: Parameters<typeof import("@/lib/notifications/runtime").notify>[0],
+  plan: AgentPlan
 ) {
   const { notify } = await import("@/lib/notifications/runtime")
-  return notify(input)
+  return notify(input, { personalContext: { executionRunId: `execution:plan:${plan.id}` } })
 }
 
 /**
@@ -96,35 +97,38 @@ async function centerNotify(
 export async function notifyPlanAwaitingApproval(plan: AgentPlan): Promise<void> {
   if (plan.status !== "awaiting_approval") return
   try {
-    await centerNotify({
-      source: "session",
-      level: "warning",
-      title: `Plan awaiting approval: ${plan.title}`,
-      body: `${plan.totalSteps} step(s) · ${plan.source.replace(/_/g, " ")}`,
-      href: `/?session=${plan.sessionId}`,
-      dedupeKey: `plan-approval:${plan.id}`,
-      groupKey: plan.sessionId,
-      directed: true,
-      icon: "ListChecks",
-      sourceRef: { kind: "plan", id: plan.id },
-      actions: [
-        {
-          id: "approve",
-          label: "Approve",
-          command: PLAN_RESPOND_COMMAND,
-          args: { planId: plan.id, decision: "approve" },
-          variant: "primary",
-        },
-        {
-          // A real rejection (terminal `rejected`), not a disguised cancel.
-          id: "reject",
-          label: "Reject",
-          command: PLAN_RESPOND_COMMAND,
-          args: { planId: plan.id, decision: "reject" },
-          variant: "secondary",
-        },
-      ],
-    })
+    await centerNotify(
+      {
+        source: "session",
+        level: "warning",
+        title: `Plan awaiting approval: ${plan.title}`,
+        body: `${plan.totalSteps} step(s) · ${plan.source.replace(/_/g, " ")}`,
+        href: `/?session=${plan.sessionId}`,
+        dedupeKey: `plan-approval:${plan.id}`,
+        groupKey: plan.sessionId,
+        directed: true,
+        icon: "ListChecks",
+        sourceRef: { kind: "plan", id: plan.id },
+        actions: [
+          {
+            id: "approve",
+            label: "Approve",
+            command: PLAN_RESPOND_COMMAND,
+            args: { planId: plan.id, decision: "approve" },
+            variant: "primary",
+          },
+          {
+            // A real rejection (terminal `rejected`), not a disguised cancel.
+            id: "reject",
+            label: "Reject",
+            command: PLAN_RESPOND_COMMAND,
+            args: { planId: plan.id, decision: "reject" },
+            variant: "secondary",
+          },
+        ],
+      },
+      plan
+    )
   } catch {
     // Center unavailable (headless / web) — the dock still shows the plan.
   }
@@ -154,18 +158,21 @@ export async function notifyPlanStepHalted(
 ): Promise<void> {
   try {
     const subject = step ? `step "${step.title}"` : "the plan run"
-    await centerNotify({
-      source: "session",
-      level: "error",
-      title: `Plan ${subject} ${HALT_HEADLINE[halt.cause]}: ${plan.title}`,
-      body: halt.detail,
-      href: `/?session=${plan.sessionId}`,
-      dedupeKey: `plan-halt:${plan.id}:${halt.at}`,
-      groupKey: plan.sessionId,
-      directed: true,
-      icon: "ListChecks",
-      sourceRef: { kind: "plan", id: plan.id },
-    })
+    await centerNotify(
+      {
+        source: "session",
+        level: "error",
+        title: `Plan ${subject} ${HALT_HEADLINE[halt.cause]}: ${plan.title}`,
+        body: halt.detail,
+        href: `/?session=${plan.sessionId}`,
+        dedupeKey: `plan-halt:${plan.id}:${halt.at}`,
+        groupKey: plan.sessionId,
+        directed: true,
+        icon: "ListChecks",
+        sourceRef: { kind: "plan", id: plan.id },
+      },
+      plan
+    )
   } catch {
     // Best-effort: the tracker card in the conversation shows the halt.
   }
@@ -180,17 +187,20 @@ export async function notifyPlanTerminal(plan: AgentPlan, status: PlanStatus): P
   const copy = TERMINAL_COPY[status]
   if (!copy) return
   try {
-    await centerNotify({
-      source: "session",
-      level: copy.level,
-      title: `Plan ${copy.verb}: ${plan.title}`,
-      body: `${plan.completedSteps}/${plan.totalSteps} steps`,
-      href: `/?session=${plan.sessionId}`,
-      dedupeKey: `plan-exit:${plan.id}`,
-      groupKey: plan.sessionId,
-      icon: "ListChecks",
-      sourceRef: { kind: "plan", id: plan.id },
-    })
+    await centerNotify(
+      {
+        source: "session",
+        level: copy.level,
+        title: `Plan ${copy.verb}: ${plan.title}`,
+        body: `${plan.completedSteps}/${plan.totalSteps} steps`,
+        href: `/?session=${plan.sessionId}`,
+        dedupeKey: `plan-exit:${plan.id}`,
+        groupKey: plan.sessionId,
+        icon: "ListChecks",
+        sourceRef: { kind: "plan", id: plan.id },
+      },
+      plan
+    )
   } catch {
     // Best-effort.
   }

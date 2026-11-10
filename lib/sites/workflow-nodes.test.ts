@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => undefined),
+}))
 import type { StepExecutionContext } from "@/types/workflow/visual"
 
 let tauri = true

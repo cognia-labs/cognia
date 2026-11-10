@@ -89,7 +89,7 @@ describe("postSkillConfirmation", () => {
         authorization: { kind: "system-notice", inboundConversationKey: imBinding.conversationKey },
         request: expect.objectContaining({ conversationRef }),
       }),
-      { executionContext: { sessionId: "s_x", executionRunId: "" } }
+      { executionContext: { sessionId: "s_x", executionRunId: undefined } }
     )
     expect(
       await getDb().connectorAudit.where("kind").equals("builtin_skill_hitl_pending").count()

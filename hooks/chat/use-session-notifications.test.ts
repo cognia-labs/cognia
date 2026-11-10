@@ -5,7 +5,7 @@ import { renderHook } from "@testing-library/react"
 
 const notifyMock = jest.fn()
 jest.mock("@/lib/notifications/runtime", () => ({
-  notify: (args: unknown) => notifyMock(args),
+  notify: (...args: unknown[]) => notifyMock(...args),
 }))
 
 jest.mock("next-intl", () => ({
@@ -126,7 +126,8 @@ describe("useSessionNotifications", () => {
         channels: ["center", "os"],
         sourceRef: { kind: "session", id: "s1" },
         href: expect.stringContaining("s1"),
-      })
+      }),
+      { personalContext: { sessionId: "s1", sessionDerived: true } }
     )
   })
 
@@ -159,7 +160,8 @@ describe("useSessionNotifications", () => {
         directed: true,
         channels: ["center", "toast"],
         dedupeKey: "session-approval:t1",
-      })
+      }),
+      { personalContext: { sessionId: "t1", sessionDerived: true } }
     )
   })
 
@@ -172,7 +174,8 @@ describe("useSessionNotifications", () => {
     )
     await flush()
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ level: "error", title: "errorTitle", body: "errorBody" })
+      expect.objectContaining({ level: "error", title: "errorTitle", body: "errorBody" }),
+      { personalContext: { sessionId: "s1", sessionDerived: true } }
     )
   })
 

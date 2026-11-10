@@ -1,3 +1,4 @@
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 /**
  * Notification-centre action nodes: `action.notify.{send,list,resolve}`
  * (ADR-0042).
@@ -93,24 +94,27 @@ registerNodeExecutor({
     // authored button would be a button that does not work. A flow that needs
     // a decision has `action.approval.request`, which owns a registered
     // command and a waitpoint.
-    const id = await notify({
-      source: "workflow",
-      level,
-      title,
-      body: str(p, "body"),
-      href: str(p, "href"),
-      icon: str(p, "icon"),
-      directed: bool(p, "directed") ?? false,
-      groupKey: str(p, "groupKey") ?? ctx.workflowId,
-      // A retry of the same step is the same event. Coalescing on the step
-      // bumps the existing row's count instead of stacking duplicates.
-      dedupeKey: str(p, "dedupeKey") ?? `${ctx.runId}:${ctx.stepId}`,
-      ttlMs: int(p, "ttlMs"),
-      // ADR-0144 attribution: a notification that cannot name its workspace
-      // makes the user click through to find out which one it came from.
-      projectId: ctx.projectId,
-      sourceRef: { kind: "workflow-run", id: ctx.runId },
-    })
+    const id = await notify(
+      {
+        source: "workflow",
+        level,
+        title,
+        body: str(p, "body"),
+        href: str(p, "href"),
+        icon: str(p, "icon"),
+        directed: bool(p, "directed") ?? false,
+        groupKey: str(p, "groupKey") ?? ctx.workflowId,
+        // A retry of the same step is the same event. Coalescing on the step
+        // bumps the existing row's count instead of stacking duplicates.
+        dedupeKey: str(p, "dedupeKey") ?? `${ctx.runId}:${ctx.stepId}`,
+        ttlMs: int(p, "ttlMs"),
+        // ADR-0144 attribution: a notification that cannot name its workspace
+        // makes the user click through to find out which one it came from.
+        projectId: ctx.projectId,
+        sourceRef: { kind: "workflow-run", id: ctx.runId },
+      },
+      { personalContext: { executionRunId: workflowExecutionRunId(ctx.runId) } }
+    )
 
     const record = await getNotification(id)
     return {

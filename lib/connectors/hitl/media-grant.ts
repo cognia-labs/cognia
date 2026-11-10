@@ -27,6 +27,7 @@
  * chat that sends photos all day is not carpeted with consent prompts.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   MEDIA_GRANT_SESSION_PREFIX,
   MEDIA_GRANT_ALWAYS_PREFIX,
@@ -188,6 +189,7 @@ export async function requestMediaGrant(input: RequestMediaGrantInput): Promise<
     )
   )
   await enqueue({
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     request: {

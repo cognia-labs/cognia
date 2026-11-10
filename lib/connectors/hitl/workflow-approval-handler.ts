@@ -1,3 +1,4 @@
+import { ConnectorDeliveryDeniedError } from "@/lib/connectors/delivery-gateway"
 /**
  * Bus-side dispatcher for `wf_approve` / `wf_cancel` callback bindings.
  *
@@ -13,6 +14,7 @@
  * an already answered card.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
@@ -78,6 +80,7 @@ async function pushOutboundText(args: {
   idempotencyKey: string
 }): Promise<void> {
   await enqueueOutbound({
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: args.adapterId,
     conversationKey: args.conversationKey,
     request: {
@@ -92,6 +95,8 @@ async function pushOutboundText(args: {
     source: "workflow",
     // A confirmation of the click, in the conversation it came from.
     authorization: { kind: "system-notice", inboundConversationKey: args.conversationKey },
+  }).catch((error) => {
+    if (!(error instanceof ConnectorDeliveryDeniedError) || error.reason !== "personal") throw error
   })
 }
 
@@ -181,7 +186,7 @@ async function dispatchAcceptedApproval(input: HandleWorkflowApprovalInput): Pro
       platform,
       conversationKey,
       ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-      text: `⊘ ${payload.workflowName ?? "Workflow"} 已取消`,
+      text: "⊘ Workflow 已取消",
       idempotencyKey: `wfcan:${input.binding.surfaceId}`,
     })
     await settle()
@@ -220,9 +225,7 @@ async function dispatchAcceptedApproval(input: HandleWorkflowApprovalInput): Pro
       platform,
       conversationKey,
       ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-      text: `✗ 无法启动「${payload.workflowName ?? payload.workflowId}」：${
-        result.reason === "workflow-not-found" ? "workflow not found" : "unknown error"
-      }`,
+      text: "✗ 无法启动 / Could not start workflow",
       idempotencyKey: `wferr:${input.binding.surfaceId}`,
     })
     await settle()
@@ -238,7 +241,7 @@ async function dispatchAcceptedApproval(input: HandleWorkflowApprovalInput): Pro
     platform,
     conversationKey,
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-    text: `✅ ${payload.workflowName ?? "Workflow"} 已启动 (runId=${result.runId})`,
+    text: "✅ Workflow 已启动",
     idempotencyKey: `wfok:${input.binding.surfaceId}`,
   })
   // Admission is durable before the driver starts. Keep this receipt until

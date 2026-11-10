@@ -16,6 +16,7 @@ import type {
   NotificationSource,
 } from "@/types/notifications"
 import { notify } from "./runtime"
+import type { NotifyHostOptions } from "./notify"
 
 export interface NotifyConversationInput {
   conversationKey: string
@@ -43,17 +44,21 @@ export interface NotifyConversationInput {
  * Notification Center record id. The IM push itself is best-effort + opt-in;
  * the center record is always written.
  */
-export async function notifyConversationOverIM(input: NotifyConversationInput): Promise<string> {
-  return notify({
-    source: input.source ?? "connector",
-    level: input.level ?? "info",
+export async function notifyConversationOverIM(
+  input: NotifyConversationInput,
+  host: NotifyHostOptions
+): Promise<string> {
+  const notification = {
+    source: input.source ?? ("connector" as const),
+    level: input.level ?? ("info" as const),
     title: input.title,
     body: input.body,
-    channels: input.centerOnly ? ["center"] : ["center", "im"],
+    channels: input.centerOnly ? ["center" as const] : ["center" as const, "im" as const],
     dedupeKey: input.dedupeKey,
     actions: input.actions,
     directed: input.directed,
     icon: input.icon,
     sourceRef: { kind: "conversation", id: input.conversationKey },
-  })
+  }
+  return notify(notification, host)
 }

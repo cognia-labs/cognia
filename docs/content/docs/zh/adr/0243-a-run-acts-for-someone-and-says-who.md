@@ -274,6 +274,38 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 
 ## 实现状态
 
+Phase 2C-1（2026-11-10）：可移植的 personal-sink 判定与 Host 边界检查，在 connector 能证明私有目的地时，将仅属于一个人的回答收窄至本人；否则隐藏。run 的 taint 合并本身及沿结构父链到固定 identity root 的全部祖先标记；confirmation 创建的新 identity root 仍保留实时结构来源祖先，审批不会截断后续来源标记。声称存在但无法解析的 job parent 在创建新 job 前即被拒绝，不能洗成无标记的新根；execution 无法解析、祖先读取失败或出现环时隐藏。history 与 derived-context preparation 在释放上下文前，将实际仍可见来源的显式标记提交到消费 run；提交失败则隐藏该上下文。仅供 Host 本人 UI 使用的 owner helper 不污染 run。**D1 legacy 残余：**`effectivePersonalMarks` 对缺少版本标记的 connector 旧行所推断的读取时归属，仍过滤历史，但其推断本身不会污染消费 run；显式来源 message／artifact／run 标记会污染。公开快照继续包含这些 legacy 推断，并隐藏相应旧行。
+
+第一轮复核修正：gateway 与 notification 入口必须显式传递 Host provenance。缺少精确消费 run 时隐藏 marked context，不再从同 session 的其他 active run 推断。已证明的本人受众可以接收 opaque payload；未知受众仍 withheld 且无 `contentHash`，因此 disclosure 不能解锁。confirmation 的读取标记会沿结构链跨 identity segment 提交。共享标题和编辑后的摘要草稿在来源消息删除后仍保留来源 run taint。流式回复合并过期 frame 并在 final 重读；native presentation 在每次 driver 写入前重查。收窄会清除原会话 placement/edit 指针；回执区分被隐藏的原内容与实际收窄内容，并在同一次 attempt 内去重。模型侧拒绝文案不含平台 ID。调用点清单包含 `app/**`，plugin `prepareEgress` 明确列为 2C-2。缺少可信 run binding 的旧 producer 继续 withheld，不将 session 或 wire run ID 提升为权限。
+
+补充复核修正：workflow run／fanout 卡片在等待 origin resolution 前捕获 Host plugin invocation；team notification 保留 canonical team execution。固定命令和关闭状态文案与来源不明的旧标题／可选回答 detail 分别分类。新的人类入站消息预览显式归为 typed action，不推断为 run output。companion broadcast／push 独立检查未知受众：owner-local notification 不授权远端 reader，native push-by-ID 属于 opaque payload，不记录披露 hash。stream drain 也保留上一 promise 结算间隙到达的 final。Fumadocs 集合外的`docs/evidence/2026-11-10-adr-0243-phase2c1-caller-inventory.md`逐项记录调用分类与来源限制。
+
+个人内容检查独立于 ADR-0239 的 `off`／`shadow`／`enforce`，operator 权限和工具／审批对话框都不能披露他人的内容。execution id 仅来自 Host 持有的 job、tool 和 invocation binding；plugin、model 或 message 提供的 run-id 字段不构成来源证明。sink 清单如下：
+
+| 边界 | 受众证明与个人内容结果 |
+| --- | --- |
+| Connector delivery gateway、queued runner、reply stream 与 run-presentation 更新 | 经验证的 Lark p2p／ephemeral 及 connected-owner Slack IM 目的地可以匹配标记本人。单人回答可收窄至受支持的 ephemeral card 或经验证的同 adapter DM，否则隐藏；每次后续 stream／update 重新检查 taint。群聊仅收到固定且不含内容的通知。reaction、typing 与删除不携带 run 内容。 |
+| Outbound tool planner、integration execution 与 Squad GitHub delivery | 每个提取出的收件人都须有证明；integration／document write 及未证明目标视为受众未知并隐藏，覆盖已批准／重放 job。直接本人写入使用显式 Host-origin 分类。 |
+| Lark built-in dispatcher | 读取仍可使用；document、sheet、wiki、base、task、calendar 和 drive mutation 视为受众未知，在 CLI 执行或审批前隐藏。不新增 permission-list reader 或 Lark scope。 |
+| Workflow HTTP／webhook 与 send／write node、scheduler、plugin Host invocation | 保留 Host execution binding，应用同一未知受众或 connector 判定。 |
+| Browser submission | 未知受众的提交隐藏。opaque／无法精确 hash 的 browser payload 记录不含 `contentHash` 的 `withheld` receipt；该 receipt 不能用于披露。 |
+| Shared conversation import 与持久化 assistant event | 持久化 event history 的未来成员未知，因此个人内容以无 reader 投影，在准备附件前隐藏。若旧 append-only import 已含个人原文，则拒绝接管／激活；correction 无法抹去原始字节。本地 canonical 行保留。 |
+| ADR-0241 ephemeral live frame | 每帧重新读取认证成员集和 Host taint，再先用 `withholdForReaders` 过滤，后进入 assistant／PII 投影。live POST 缺少原子的 member-revision fence，仅读取当前成员不能证明实际发送时受众。因此保守使用无 reader 投影，即使当前仅有 owner，个人内容整条消息（含 tool part）仍变为占位符。 |
+| 公开单／多会话 share snapshot | 无 reader 的匿名投影包含 legacy 标记，并在 materialize media 前执行。删除消息后，标题仍保留 source-session／祖先 run taint。准确 Host payload 对象绑定内存中的 projection proof，并在 upload 前重新检查；过期缓存和没有证明的原始 transcript snapshot 拒绝。仅延长 link 有效期的 renewal 不会重新构建既有 snapshot。 |
+| Plugin `ctx.share.create` | execution 来源取自 Host invocation，未知公开受众在 share client 之前隐藏；opaque payload receipt 不记录可用于披露的 hash。 |
+
+收窄／隐藏判定将个人记录写入既有 action-review 或 delivery receipt 的无索引 `personal` 字段：persons、outcome、已知精确 payload 的 SHA-256 与 original target。无法取得精确 payload 时省略 hash，不授予任何披露可能性。无需 Dexie version／index 或依赖变更。source-scan 清单固定 typed send／stream／edit／upload、planner、Lark 与 collab／share writer 的调用位置和次数（含 alias），并单独检查权威 Host 边界；清单也登记 transport 实现及显式本人／固定通知路径，不把所有通用 `send` 方法都当作模型出站。
+
+通用 tool 参数、Lark CLI 参数、plugin action input 和 adapter mutation descriptor 是 opaque handler descriptor，不能证明实际发送的字节；其前置检查隐藏 tainted call，且不记录披露 hash。固定的 raw HTTP 字符串 body 仍可在 Host transport 边界计算 hash。
+
+后续义务：phase 2C-2 负责 opaque shell／sandbox network、`web_fetch` 与第三方 MCP egress；本阶段不证明这些渠道安全。phase 2D 仍需实现本人授权、绑定内容和目标的 disclosure、过期与内容／目标变化后的重新核验。当前 typed seam 没有携带 grant 的分支，任何现有本人／operator 审批都不能覆盖隐藏。phase 2B-2 的 native／paired-owner 义务继续开放。当前验证边界为定向本地回归与 source guard，不能据此宣称真实 provider send、collab-server 部署或 native desktop 验收通过。
+
+保守的可用性限制：没有经验证的持久化 Host execution 的旧 agent／plugin scheduled job 及直接 external-CLI rail 隐藏出站写入；task／model 标签不会凭空生成无 taint 的 service run，恢复这些发送需要 durable Host admission／provenance。共享个人 live frame 还需 server-side audience-revision fence，才能安全地按成员集释放个人内容。既有公开 link 是独立快照，延长有效期不会追溯隐藏旧快照中的内容。
+
+公开 quote-card link 在现有仅接收文本的 builder 无法提供 Host 来源投影证明时也拒绝；本地渲染／下载仍可使用。transcript proof 同时绑定 payload 对象与准确的序列化内容，修改已检查 payload 不能复用原证明。
+
+Notification Center、toast 与 OS 输出在持久化／展示前检查 Host-local 受众；他人的个人内容替换为本地化固定通知，移除携带内容的链接、action 和 metadata。IM 发送单独复核实际收件人。配置为以用户身份发送的 Lark adapter 可能拒绝缺少 run credential authority 的排队固定通知；Host 不会借用其他 run 的凭证或降级身份来强行显示通知。此时受保护的回答仍保持隐藏。
+
 记忆召回标记（2026-11-09）：只按读者过滤召回的记忆还不够——基于个人记忆生成的回复会以无标记状态持久化，之后没有个人读者的消费方可以经由回复读到该事实。现在，带个人标记的记忆被实际注入运行时（召回、procedural 块、项目连续性，以及记忆 agent 工具的搜索与窗口结果），`addPersonalMarksToRun` 会在释放上下文或工具输出之前，把这些记忆的来源标记合并到消费运行及其每个结构祖先上，使用与凭据标记相同的事务和私有 journal 事件；提交失败则不提供该上下文。随后现有的持久化链会为回复加上标记。Workflow `action.memory.recall` 应用同样的读者过滤，webhook 与定时运行（没有个人读者）看不到这类记忆。插件 `ctx.memory.search` 和 MCP `memory_search` 是显式的 `memory:read` 授权，按契约保持命名空间过滤。配对 `sync_pull` 与 Companion `memory_mutate` 的信任问题仍归入尚未完成的 phase 2B-2 owner/member 区分。
 
 Phase 2B（2026-11-08，非 Rust 部分）：可移植纯函数 `withholdForReaders` 对显式及 legacy 标记逐消息过滤，只有当前 root 的每个读者都与每个被标记的人相等时才保留原文，否则以固定英文归属占位符替换整条消息。被隐藏的消息不保留工具结果、附件、标题或任意 metadata。`preparePersonalHistory` 解析 Host identity 与源 session 的 legacy 归属；`preparePersonalDerivedHistory` 为摘要及旧的未证明产物保留祖先／来源标记；消息删除后仍合并源 session 保留的 run 标记，剩余未标记消息不能解除旧派生字段的归属。Host 自有 UI／job 通过显式 owner helper 读取；旧 owner 标题、branch seed、post-compaction instructions 与 generated skill 使用 Host-owner legacy 归属，仍合并已知源 session／run／message 标记。后续模型消费者在 `resolveSendOptions` 或相应 search／reference 边界重新推导来源 taint。其他来源未证明的共享或 replay 产物仍使用不授予任何读者访问的 unverified-person sentinel。过滤覆盖 native SDK、AI SDK（含 standalone browser）、external agent、CLI、Bot／plugin、connector、room、headless person agent，以及 compaction、recent history、branch／Aside／handoff seed、memory recall 与 distillation、search result／reference、recorded skill、延迟 title、eval replay／judging、后台／delegation／plan／teammate／peer 摘要和 shared-memory 读取。CLI suggestion 与 Explore／Plan 历史以及 plugin-session completion replay 均先过滤再展平。模型搜索入口重新检查 canonical 消息及其派生标题，本地 owner 的搜索索引保持完整。本人从 IM 转到桌面继续会话仍可读取自己的历史。phase 2D 的 disclosure 类型接缝没有携带 grant 的分支，不授予任何读者访问；delivery target 与 sink 仍在 phase 2C。
@@ -437,3 +469,8 @@ Phase 2-0 关闭子会话绑定和模型伪造绑定漏洞：子会话技能继�
 **剩余风险。** 默认标题、`agentTurnOwner`、`origin`、`integrationBinding` 可识别的旧插件会话不会获得本地 personal authority。经 plugin agent SDK 恢复时，Host 在继续执行前补记缺失标记；SDK fork 保留已知非本地来源。旧插件会话若使用自定义或修改过的标题且没有剩余来源字段，在经 SDK 恢复之前仍无法与桌面会话可靠区分；没有批量改写旧记录。队列与绑定测试不代表真实 IM provider 交付验收。
 
 **生成契约。** 使用 `scripts/plugin/generate-contract.mjs` 生成 Rust CLI catalog、Python contract、TypeScript resource effects、plugin-point catalog 和 plugin-dev API reference。沙箱禁止 tsx CLI 的 IPC socket，因此通过 `node --import tsx` 启动其子任务并调用同一 `generate` 导出完成生成和检查。已执行包含 codeserver extension NLS 的 `pnpm i18n:build`。另一会话暂存的 `crates/cognia-cli/assets/author-types.json` 未修改也未重新生成；其中尚无 `prepareFanoutApproval`，reviewer 后续执行 `pnpm author-types:bundle` 会加入该方法和 `sent` 返回字段。
+
+
+Phase 2C-1 第二轮复核（2026-11-10）：会话标题、状态/错误、目标输出、自动提案和共享摘要使用该会话所有显式消息/run 标记及其结构祖先的并集，不使用旧数据的推断归属，也不选择环境中的活跃 run。已验证通知来源合并后保留实时并集；未知来源仍为未知。排队投递持久化原始来源供重试检查。Host 存储、配置、传输生命周期通知显式归为后台服务；Issue/site 通知采用该分类的前提是带标记的内置技能、插件及工作流写入均在持久化前被拒绝。Phase 2A-0 个人凭据仅属于 Host owner，因此未知来源可显示在 owner 本地 feed/toast/OS，已知外部人物标记仍被投影。Phase 4/5 开放其他人的个人访问时必须重新审视此前提；配对成员设备属于 2B-2，不等同本地 owner。Fumadocs 内容集合之外的`docs/evidence/2026-11-10-adr-0243-phase2c1-caller-inventory.md`记录已恢复来源与真实剩余缺口。 IM 命令回复（`/status`、`/character`、`/team`、`/workflow`）中的角色、团队、工作流和规则名称属于 Host 配置标签，按 Host 后台内容分类；残余风险是带标记的运行自己写进配置的名称，本阶段不追踪。
+
+Issue 创建确认使用独立 Host proposal source 记录，在点击时核对原草稿、项目、会话并重读来源标记；组件/model payload 不能提供该证明，旧提案缺失证明时拒绝。重路由保留 session/composite 来源；派生会话沿 canonical parent 读取显式标记。

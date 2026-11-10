@@ -19,6 +19,9 @@ import { buildA2UISegment } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import { buildFollowUpItems, FOLLOW_UP_TTL_MS } from "./follow-up-items"
 import { countPendingConnectorInboundJobs } from "@/lib/db/connector-inbound-jobs"
 import { readForResolution } from "@/lib/db/conversation-overrides"
+import { checkConnectorPersonalSink } from "@/lib/connectors/personal-delivery"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
+import { resolveScheduledNoticeI18n } from "@/lib/connectors/scheduled-notice-i18n"
 import {
   buildRunActivitySurface,
   formatRunActivityTimeline,
@@ -55,6 +58,8 @@ const IMMEDIATE_EVENT_TYPES = new Set<RunEventType>([
 ])
 
 export interface ProjectionDependencies {
+  checkPersonal(binding: ExecutionRunBinding, snapshot: RunProjectionSnapshot): Promise<boolean>
+  deliverPersonalNotice?(binding: ExecutionRunBinding): Promise<void>
   resolveDriver(binding: ExecutionRunBinding): RunPresentationDriver | undefined
   deliverFallback(
     binding: ExecutionRunBinding,
@@ -324,6 +329,19 @@ export async function projectExecutionRunBinding(
   if (binding.status === "disabled" || snapshot.revision <= binding.lastProjectedRevision) {
     return binding
   }
+  const withholdPersonal = async (): Promise<ExecutionRunBinding> => {
+    if (!binding.presentationState?.personalWithheld) await deps.deliverPersonalNotice?.(binding)
+    const withheld: ExecutionRunBinding = {
+      ...binding,
+      lastProjectedRevision: snapshot.revision,
+      status: TERMINAL.has(snapshot.status) ? "finished" : "degraded",
+      presentationState: { ...binding.presentationState, personalWithheld: true },
+      updatedAt: Date.now(),
+    }
+    await deps.saveBinding(withheld)
+    return withheld
+  }
+  if (!(await deps.checkPersonal(binding, snapshot))) return withholdPersonal()
   const contextualSnapshot: RunProjectionSnapshot = {
     ...snapshot,
     ...(!snapshot.locale && binding.locale ? { locale: binding.locale } : {}),
@@ -353,6 +371,7 @@ export async function projectExecutionRunBinding(
         }
         await deps.saveBinding(latestBinding)
       }
+      if (!(await deps.checkPersonal(binding, snapshot))) return withholdPersonal()
       const ref = binding.platformMessageId
         ? TERMINAL.has(snapshot.status)
           ? await driver.finish(presentationRef(binding), projectedSnapshot, { checkpoint })
@@ -373,6 +392,7 @@ export async function projectExecutionRunBinding(
             }
           )
       if (TERMINAL.has(snapshot.status) && snapshot.kind !== "agent-turn") {
+        if (!(await deps.checkPersonal(binding, snapshot))) return withholdPersonal()
         await deps.deliverMilestone?.(binding, projectedSnapshot)
       }
       const next: ExecutionRunBinding = {
@@ -390,6 +410,11 @@ export async function projectExecutionRunBinding(
     }
   }
 
+  // A failed native call may have awaited while a parallel read marked the run.
+  if (!(await deps.checkPersonal(binding, snapshot))) {
+    await deps.deliverPersonalNotice?.(binding)
+    return latestBinding
+  }
   const fallback = await deps.deliverFallback(latestBinding, projectedSnapshot)
   const fallbackRef = fallback.ref
   const next: ExecutionRunBinding = {
@@ -423,38 +448,42 @@ async function deliverMilestone(
         }),
       ]
     : [{ type: "markdown", md: markdown(snapshot) }]
-  const job = await enqueueOutbound({
-    adapterId: binding.adapterId,
-    conversationKey: binding.conversationKey,
-    request: {
-      conversationRef: deliveryConversationRef(binding),
-      deliveryTarget: binding.deliveryTarget,
-      segments,
-      metadata: {
-        idempotencyKey: `execution-run:${binding.id}:${snapshot.revision}:final`,
-        ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
-        // Terminal-card marker for the `onConnectorOutbound` result-card seam.
-        ...(vendorCards
-          ? {
-              resultCard: {
-                runId: snapshot.runId,
-                status:
-                  snapshot.status === "completed"
-                    ? ("done" as const)
-                    : snapshot.status === "cancelled"
-                      ? ("interrupted" as const)
-                      : ("error" as const),
-                ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
-              },
-            }
-          : {}),
+  const job = await enqueueOutbound(
+    {
+      personalContext: { executionRunId: binding.runId },
+      adapterId: binding.adapterId,
+      conversationKey: binding.conversationKey,
+      request: {
+        conversationRef: deliveryConversationRef(binding),
+        deliveryTarget: binding.deliveryTarget,
+        segments,
+        metadata: {
+          idempotencyKey: `execution-run:${binding.id}:${snapshot.revision}:final`,
+          ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
+          // Terminal-card marker for the `onConnectorOutbound` result-card seam.
+          ...(vendorCards
+            ? {
+                resultCard: {
+                  runId: snapshot.runId,
+                  status:
+                    snapshot.status === "completed"
+                      ? ("done" as const)
+                      : snapshot.status === "cancelled"
+                        ? ("interrupted" as const)
+                        : ("error" as const),
+                  ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
+                },
+              }
+            : {}),
+        },
       },
+      source: snapshot.kind === "workflow" ? "workflow" : "ai-run",
+      // A binding is where this run reports: the conversation it was started
+      // from, or one a person subscribed to its progress (ADR-0239).
+      authorization: { kind: "system-notice", inboundConversationKey: binding.conversationKey },
     },
-    source: snapshot.kind === "workflow" ? "workflow" : "ai-run",
-    // A binding is where this run reports: the conversation it was started
-    // from, or one a person subscribed to its progress (ADR-0239).
-    authorization: { kind: "system-notice", inboundConversationKey: binding.conversationKey },
-  })
+    { executionContext: { executionRunId: binding.runId } }
+  )
   const terminal = await waitForOutboundTerminal(job.id, 30_000)
   if (terminal?.status !== "sent") {
     throw new Error(`Execution run milestone delivery failed: ${terminal?.status ?? "missing"}`)
@@ -508,47 +537,51 @@ async function deliverFallback(
   const vendorFallback = vendorCards
     ? await vendorCards.fallback(snapshot, await getDb().adapterInstances.get(binding.adapterId))
     : undefined
-  const job = await enqueueOutbound({
-    adapterId: binding.adapterId,
-    conversationKey: binding.conversationKey,
-    request: {
-      conversationRef: deliveryConversationRef(binding),
-      deliveryTarget: binding.deliveryTarget,
-      segments: [
-        vendorFallback
-          ? vendorFallback
-          : readableGroupProgress
-            ? { type: "markdown", md: markdown(snapshot) }
-            : buildA2UISegment(`execution-run:${snapshot.runId}`, surface),
-      ],
-      ...(readableGroupTurn && binding.sourceMessageId
-        ? { replyTo: { messageId: binding.sourceMessageId } }
-        : {}),
-      ...(editTargetMessageId ? { editTargetMessageId } : {}),
-      metadata: {
-        // Heartbeats need distinct, retry-stable slots even without a new revision.
-        idempotencyKey: `execution-run:${binding.id}:${snapshot.revision}${
-          readableGroupProgress
-            ? `:progress:${Math.floor(snapshot.elapsedMs / APPEND_UPDATE_INTERVAL_MS)}`
-            : ""
-        }`,
-        ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
+  const job = await enqueueOutbound(
+    {
+      personalContext: { executionRunId: binding.runId },
+      adapterId: binding.adapterId,
+      conversationKey: binding.conversationKey,
+      request: {
+        conversationRef: deliveryConversationRef(binding),
+        deliveryTarget: binding.deliveryTarget,
+        segments: [
+          vendorFallback
+            ? vendorFallback
+            : readableGroupProgress
+              ? { type: "markdown", md: markdown(snapshot) }
+              : buildA2UISegment(`execution-run:${snapshot.runId}`, surface),
+        ],
+        ...(readableGroupTurn && binding.sourceMessageId
+          ? { replyTo: { messageId: binding.sourceMessageId } }
+          : {}),
+        ...(editTargetMessageId ? { editTargetMessageId } : {}),
+        metadata: {
+          // Heartbeats need distinct, retry-stable slots even without a new revision.
+          idempotencyKey: `execution-run:${binding.id}:${snapshot.revision}${
+            readableGroupProgress
+              ? `:progress:${Math.floor(snapshot.elapsedMs / APPEND_UPDATE_INTERVAL_MS)}`
+              : ""
+          }`,
+          ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
+        },
       },
+      source: snapshot.kind === "workflow" ? "workflow" : "ai-run",
+      // A binding is where this run reports: the conversation it was started
+      // from, or one a person subscribed to its progress (ADR-0239).
+      authorization: { kind: "system-notice", inboundConversationKey: binding.conversationKey },
+      ...(snapshot.kind === "workflow"
+        ? {
+            sourceWorkflow: {
+              workflowId: snapshot.runId,
+              runId: snapshot.runId,
+              nodeId: "run-projection",
+            },
+          }
+        : {}),
     },
-    source: snapshot.kind === "workflow" ? "workflow" : "ai-run",
-    // A binding is where this run reports: the conversation it was started
-    // from, or one a person subscribed to its progress (ADR-0239).
-    authorization: { kind: "system-notice", inboundConversationKey: binding.conversationKey },
-    ...(snapshot.kind === "workflow"
-      ? {
-          sourceWorkflow: {
-            workflowId: snapshot.runId,
-            runId: snapshot.runId,
-            nodeId: "run-projection",
-          },
-        }
-      : {}),
-  })
+    { executionContext: { executionRunId: binding.runId } }
+  )
   const terminal = await waitForOutboundTerminal(job.id, 30_000)
   if (terminal?.status !== "sent") {
     throw new Error(
@@ -596,6 +629,42 @@ function nativeEnabled(): boolean {
 }
 
 const defaultDependencies: ProjectionDependencies = {
+  async checkPersonal(binding) {
+    const result = await checkConnectorPersonalSink(
+      { executionRunId: binding.runId },
+      binding.adapterId,
+      binding.conversationKey,
+      // Native drivers generate vendor payloads internally; no exact bytes are
+      // available here. A refusal is deliberately not disclosable.
+      undefined,
+      { adapter: getRunningAdapter(binding.adapterId)?.adapter }
+    )
+    return result.outcome === "allow"
+  },
+  async deliverPersonalNotice(binding) {
+    if (!binding.deliveryTarget) return
+    await enqueueOutbound(
+      {
+        adapterId: binding.adapterId,
+        conversationKey: binding.conversationKey,
+        source: "ai-run",
+        authorization: { kind: "system-notice", inboundConversationKey: binding.conversationKey },
+        personalContext: explicitHostPersonalSinkContext("fixed-notice"),
+        request: {
+          conversationRef: deliveryConversationRef(binding),
+          deliveryTarget: binding.deliveryTarget,
+          segments: [
+            {
+              type: "text",
+              text: resolveScheduledNoticeI18n(binding.locale).personalDelivery(false),
+            },
+          ],
+          metadata: { idempotencyKey: `execution-run:${binding.id}:personal-notice` },
+        },
+      },
+      { executionContext: { automation: "service" } }
+    )
+  },
   resolveDriver(binding) {
     return getRunningAdapter(binding.adapterId)?.adapter.runPresentation
   },
@@ -786,6 +855,16 @@ async function runHeartbeatExecutionRunBinding(bindingId: string): Promise<void>
   }
   const snapshot = (await getDb().executionRuns.get(binding.runId))?.latestSnapshot
   if (!snapshot || TERMINAL.has(snapshot.status)) return
+  if (!(await defaultDependencies.checkPersonal(binding, snapshot))) {
+    if (!binding.presentationState?.personalWithheld)
+      await defaultDependencies.deliverPersonalNotice?.(binding)
+    await defaultDependencies.saveBinding({
+      ...binding,
+      presentationState: { ...binding.presentationState, personalWithheld: true },
+      updatedAt: Date.now(),
+    })
+    return
+  }
   if (binding.deliveryMode === "append") {
     try {
       const contextualSnapshot: RunProjectionSnapshot = {
@@ -842,6 +921,10 @@ async function runHeartbeatExecutionRunBinding(bindingId: string): Promise<void>
         updatedAt: Date.now(),
       }
       await defaultDependencies.saveBinding(latestBinding)
+    }
+    if (!(await defaultDependencies.checkPersonal(latestBinding, snapshot))) {
+      await defaultDependencies.deliverPersonalNotice?.(latestBinding)
+      return
     }
     const ref = await driver.update(presentationRef(latestBinding), projectedSnapshot, {
       checkpoint,

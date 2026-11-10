@@ -149,7 +149,8 @@ describe("recordHostDispatchFailure", () => {
     })
 
     expect(notifyRuntime.notify).toHaveBeenCalledWith(
-      expect.objectContaining({ dedupeKey: "host-dispatch.deadletter:job-1" })
+      expect.objectContaining({ dedupeKey: "host-dispatch.deadletter:job-1" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
     expect(eventLog.appendEvent).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-1", type: "run_log", level: "error" })

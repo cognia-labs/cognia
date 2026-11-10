@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 import { useEffect } from "react"
 import { useTranslations } from "next-intl"
@@ -42,13 +43,16 @@ export function ApprovalJournalInitializer() {
       )
       try {
         const { notify } = await import("@/lib/notifications/runtime")
-        await notify({
-          source: "session",
-          level: "warning",
-          title: t("interruptedOnBoot", { count: fresh.length }),
-          channels: ["center", "toast"],
-          dedupeKey: "approval-journal-interrupted-boot",
-        })
+        await notify(
+          {
+            source: "session",
+            level: "warning",
+            title: t("interruptedOnBoot", { count: fresh.length }),
+            channels: ["center", "toast"],
+            dedupeKey: "approval-journal-interrupted-boot",
+          },
+          { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+        )
       } catch {
         // Boot notice is best-effort; the entries remain in the attention panel.
       }

@@ -16,6 +16,7 @@
  *     `drafted`: it waits for a person to approve it in the draft center.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { z } from "zod"
 
 import { registerBuiltInSkill } from "../registry"
@@ -102,6 +103,13 @@ const skill: BuiltInSkill<typeof schema> = {
         channelId: parsed.remoteChatId,
       }
       batch.push({
+        personalContext: personalSinkHost.personalSinkContextForRun(
+          {
+            sessionId: resolveBuiltInSkillRunScope(ctx).sessionId,
+            executionRunId: resolveBuiltInSkillRunScope(ctx).runId,
+          },
+          "skill run unavailable"
+        ),
         adapterId: parsed.adapterId,
         conversationKey: key,
         request: {
@@ -123,7 +131,7 @@ const skill: BuiltInSkill<typeof schema> = {
     const runScope = resolveBuiltInSkillRunScope(ctx)
     const results = await enqueueGovernedMany(batch, {
       signal: ctx.signal,
-      executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId ?? "" },
+      executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId },
     })
     results.forEach((result, index) => {
       if (result.kind === "drafted") batchOutcomes[index].status = "drafted"

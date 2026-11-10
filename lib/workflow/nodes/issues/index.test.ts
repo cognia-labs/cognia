@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => undefined),
+}))
 const mockResolve = jest.fn(async (_ref: string): Promise<unknown> => undefined)
 const mockCreate = jest.fn(async (req: unknown) => ({
   id: "new",

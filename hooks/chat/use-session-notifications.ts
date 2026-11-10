@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 // Notify when a conversation the user is not watching needs them: it finished,
 // it failed, or it is waiting for an approval. Every live session counts — the
@@ -76,7 +77,7 @@ export function useSessionNotifications(): void {
         state.sessions,
         focused ? state.activeSessionId : null
       )
-      for (const event of events) void deliver(event, focused, tRef.current)
+      for (const event of events) void deliverSessionNotification(event, focused, tRef.current)
     })
     return () => {
       unsub()
@@ -84,7 +85,7 @@ export function useSessionNotifications(): void {
   }, [])
 }
 
-async function deliver(
+export async function deliverSessionNotification(
   event: SessionNotificationEvent,
   focused: boolean,
   t: ReturnType<typeof useTranslations>
@@ -104,24 +105,34 @@ async function deliver(
     sourceRef: { kind: "session", id: event.sessionId },
   }
   if (event.kind === "approval") {
-    await notify({
-      ...common,
-      level: "warning",
-      title: t("approvalTitle"),
-      body: named("approvalBody", "approvalBodyUnnamed"),
-      // Work is blocked on a person, which is what the numeric badge counts.
-      directed: true,
-      dedupeKey: `session-approval:${event.sessionId}`,
-    })
+    await notify(
+      {
+        ...common,
+        level: "warning",
+        title: t("approvalTitle"),
+        body: named("approvalBody", "approvalBodyUnnamed"),
+        // Work is blocked on a person, which is what the numeric badge counts.
+        directed: true,
+        dedupeKey: `session-approval:${event.sessionId}`,
+      },
+      {
+        personalContext: personalSinkHost.sessionPersonalSinkContext(event.sessionId),
+      }
+    )
     return
   }
   const errored = event.kind === "error"
-  await notify({
-    ...common,
-    level: errored ? "error" : "success",
-    title: errored ? t("errorTitle") : t("readyTitle"),
-    body: errored
-      ? event.errorMessage || named("errorBodyNamed", "errorBody")
-      : named("readyBodyNamed", "readyBody"),
-  })
+  await notify(
+    {
+      ...common,
+      level: errored ? "error" : "success",
+      title: errored ? t("errorTitle") : t("readyTitle"),
+      body: errored
+        ? event.errorMessage || named("errorBodyNamed", "errorBody")
+        : named("readyBodyNamed", "readyBody"),
+    },
+    {
+      personalContext: personalSinkHost.sessionPersonalSinkContext(event.sessionId),
+    }
+  )
 }

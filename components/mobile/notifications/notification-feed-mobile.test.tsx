@@ -1,3 +1,5 @@
+
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { NotificationRecord } from "@/types/notifications"
@@ -31,7 +33,7 @@ jest.mock("@/hooks/notifications/use-notifications", () => ({ useNotifications: 
 import { NotificationFeedMobile } from "./notification-feed-mobile"
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
-  return {
+  return { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "connector",
     level: "info",

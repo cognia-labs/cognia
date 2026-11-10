@@ -21,6 +21,7 @@ import type { CollabClient } from "./client"
 import { SharedChatTeamSessionUnsupportedError } from "./shared-chat-conversion"
 import { assertSharedChatClientEnabled } from "./shared-chat-feature"
 import { syncSharedSession } from "./shared-chat-sync"
+import { projectSharedDerivedText } from "./shared-personal-projection"
 
 type ShareFromNowClient = { readonly baseUrl?: string } & Pick<
   CollabClient,
@@ -42,6 +43,8 @@ export interface ShareFromNowInput {
   attemptId: string
   /** The owner-confirmed background, already prefixed with its heading. Empty posts nothing. */
   background?: string
+  /** Host-held summary producer, retained when its draft is edited. */
+  backgroundRunId?: string
 }
 
 export interface ShareFromNowResult {
@@ -67,7 +70,11 @@ export async function shareConversationFromNow(
   const source = await readPrivateSource(input.localSessionId)
   const prefix = `chat-share-from-now:${source.id}:${input.attemptId}`
   const created = await client.createSharedSession(input.orgId, input.workspaceId, {
-    title: source.title,
+    title: await projectSharedDerivedText(source.title, source.id, undefined, {
+      kind: "shared-title",
+      orgId: input.orgId,
+      workspaceId: input.workspaceId,
+    }),
     importing: false,
     operationId: `${prefix}:create`,
   })
@@ -76,6 +83,11 @@ export async function shareConversationFromNow(
     throw new Error("The server did not open the shared conversation")
 
   const background = input.background?.trim()
+    ? await projectSharedDerivedText(input.background.trim(), source.id, input.backgroundRunId, {
+        kind: "shared-background",
+        sharedSessionId: created.id,
+      })
+    : undefined
   if (background) {
     // Content-addressed, and timed by the server (no `createdAt`): a retry
     // after a lost response replays the same payload instead of conflicting,

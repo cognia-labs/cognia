@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 import { useEffect } from "react"
 import { useTranslations } from "next-intl"
@@ -61,13 +62,16 @@ export function BackgroundTaskInitializer() {
       onResumed: async (count) => {
         const { notify } = await import("@/lib/notifications/runtime")
         if (disposed) return
-        await notify({
-          source: "session",
-          level: "info",
-          title: t("autoResumed", { count }),
-          channels: ["center", "toast"],
-          dedupeKey: "background-auto-resume",
-        })
+        await notify(
+          {
+            source: "session",
+            level: "info",
+            title: t("autoResumed", { count }),
+            channels: ["center", "toast"],
+            dedupeKey: "background-auto-resume",
+          },
+          { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+        )
       },
     })
     return () => {

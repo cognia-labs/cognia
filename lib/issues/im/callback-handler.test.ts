@@ -9,6 +9,7 @@ jest.mock("@/lib/connectors/session-bindings", () => ({
   findSessionByConversationKey: (key: string) => mockFindSession(key),
 }))
 
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
 import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { patchConversationOverride, readForResolution } from "@/lib/db/conversation-overrides"
@@ -93,6 +94,26 @@ async function seed(status: "todo" | "in_review" | "in_progress" = "todo") {
     assignee: { kind: "agent", id: "c1" },
   })
   return { project, issue }
+}
+
+async function seedProposalProof(
+  projectId: string,
+  draft: { draftId: string; title: string; description?: string; sourceMessageId?: string }
+) {
+  await getDb().connectorCallbackBindings.put({
+    id: `lark-1:issue-source:${draft.draftId}`,
+    actionId: `issue-source:${draft.draftId}`,
+    adapterId: "lark-1",
+    surfaceId: "s1",
+    conversationKey: CONV,
+    kind: "issue_action",
+    createdAt: 1,
+    issueProposalSource: {
+      personalContext: { hostOrigin: "typed-send" },
+      draft,
+      issueProjectIds: [projectId],
+    },
+  })
 }
 
 describe("readIssueActionPayload / actorFromUser", () => {
@@ -324,6 +345,12 @@ describe("handleIssueActionCallback", () => {
     // in-chat command); the remembered project lands on it.
     await patchConversationOverride(CONV, {}, "sess-1")
     const { deps, sent } = harness()
+    await seedProposalProof(project.id, {
+      draftId: "d1",
+      title: "From chat",
+      description: "body",
+      sourceMessageId: "m9",
+    })
     const out = await handleIssueActionCallback(
       {
         binding: binding({
@@ -354,6 +381,7 @@ describe("handleIssueActionCallback", () => {
   it("still creates when the conversation cannot be remembered (no row, no session)", async () => {
     const { project } = await seed()
     const { deps, sent } = harness()
+    await seedProposalProof(project.id, { draftId: "d2", title: "Unremembered" })
     const out = await handleIssueActionCallback(
       {
         binding: binding({
@@ -548,4 +576,66 @@ describe("▶ Run with more than one capable engine", () => {
     expect(started).toEqual(["only"])
     expect(out).toMatchObject({ kind: "run_started", adapterId: "only" })
   })
+})
+
+it("rechecks a proposed issue's live Host producer before a later confirmation", async () => {
+  const { project } = await seed()
+
+  const { proposeIssueFromIm } = await import("./propose")
+  const run = await startToolExecutionRun("issue-proposal", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const { deps } = harness()
+  await proposeIssueFromIm(
+    {
+      personalContext: { executionRunId: run.id },
+      adapterId: "lark-1",
+      conversationKey: CONV,
+      workspaceId: "w1",
+      title: "Private draft",
+    },
+    {
+      push: {
+        enqueue: async () => undefined,
+        buildSegment: () => ({}) as never,
+        audit: async () => undefined,
+        isPiiSafe: () => true,
+        now: () => Date.now(),
+      },
+      newId: () => "late-mark",
+    }
+  )
+  await getDb().executionRuns.update(run.id, {
+    personalMarks: [{ person: { kind: "local-person" }, source: "private", markedAt: 1 }],
+  })
+  const action = binding({
+    action: "create",
+    issueProjectId: project.id,
+    draft: { draftId: "late-mark", title: "Private draft" },
+  })
+  action.surfaceId = "issue-create:late-mark"
+  const before = await getDb().issues.count()
+  await expect(
+    handleIssueActionCallback({ binding: action, adapterId: "lark-1" }, deps)
+  ).rejects.toMatchObject({ name: "PersonalSinkWithheldError" })
+  expect(await getDb().issues.count()).toBe(before)
+})
+
+it("refuses legacy or forged proposal source claims without matching Host storage", async () => {
+  const { project } = await seed()
+  const { deps } = harness()
+  const action = binding({
+    action: "create",
+    issueProjectId: project.id,
+    draft: {
+      draftId: "no-proof",
+      title: "Unproven",
+      personalContext: { hostOrigin: "typed-send" },
+    },
+  })
+  const before = await getDb().issues.count()
+  await expect(
+    handleIssueActionCallback({ binding: action, adapterId: "lark-1" }, deps)
+  ).rejects.toMatchObject({ name: "PersonalSinkWithheldError" })
+  expect(await getDb().issues.count()).toBe(before)
 })

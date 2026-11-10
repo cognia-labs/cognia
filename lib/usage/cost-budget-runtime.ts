@@ -18,6 +18,7 @@
  *     with no new UI. Approving grants exactly one override.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { localDayString, getCostRange } from "@/lib/db/provider-cost-daily"
 import { listLocalUsageForProjectSince } from "@/lib/db/session-usage"
 import { notify } from "@/lib/notifications/runtime"
@@ -153,23 +154,26 @@ export async function notifyCostBudgetThreshold(
 ): Promise<void> {
   if (verdict.level === "ok") return
   const exceeded = verdict.level === "exceeded"
-  await notify({
-    source: "system",
-    // `critical` bypasses DND and per-source mute — correct for a ceiling that
-    // is now blocking work, wrong for an 80% heads-up.
-    level: exceeded || verdict.level === "critical" ? "critical" : "warning",
-    title: exceeded
-      ? `${scopeLabel(verdict)} exhausted`
-      : `${scopeLabel(verdict)} at ${formatBudgetRatio(verdict.ratio)}`,
-    body: `${money(verdict.usedUsd)} of ${money(verdict.limitUsd)} used.`,
-    dedupeKey: `cost-budget:${verdict.scopeKey}:${verdict.level}:${localDayString(now)}`,
-    // An exhausted budget blocks work until a human answers, so it belongs on
-    // the numeric badge rather than in ambient activity.
-    directed: exceeded,
-    icon: "wallet",
-    // The spend breakdown lives on the Traces channel's dashboard sub-view.
-    href: "/logs?channel=traces&tview=dashboard",
-  })
+  await notify(
+    {
+      source: "system",
+      // `critical` bypasses DND and per-source mute — correct for a ceiling that
+      // is now blocking work, wrong for an 80% heads-up.
+      level: exceeded || verdict.level === "critical" ? "critical" : "warning",
+      title: exceeded
+        ? `${scopeLabel(verdict)} exhausted`
+        : `${scopeLabel(verdict)} at ${formatBudgetRatio(verdict.ratio)}`,
+      body: `${money(verdict.usedUsd)} of ${money(verdict.limitUsd)} used.`,
+      dedupeKey: `cost-budget:${verdict.scopeKey}:${verdict.level}:${localDayString(now)}`,
+      // An exhausted budget blocks work until a human answers, so it belongs on
+      // the numeric badge rather than in ambient activity.
+      directed: exceeded,
+      icon: "wallet",
+      // The spend breakdown lives on the Traces channel's dashboard sub-view.
+      href: "/logs?channel=traces&tview=dashboard",
+    },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+  )
 }
 
 /** Approval key for one blocked scope. */

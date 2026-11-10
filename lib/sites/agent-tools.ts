@@ -1,3 +1,4 @@
+import { assertPersonalSink, personalSinkContextForRun } from "@/lib/execution/personal-sink"
 /**
  * Cognia Sites tools (agent ⇄ Sites), ADR-0084.
  *
@@ -210,7 +211,14 @@ export const toolFamily: ModuleToolFamily = {
   surface(ctx: ToolSurfaceContext) {
     return ctx.host === "desktop" ? { tools: buildSitesManifestEntries() } : null
   },
-  async run(name, args) {
+  async run(name, args, call) {
+    if (name !== LIST_SITES_TOOL_NAME)
+      await assertPersonalSink(
+        personalSinkContextForRun(call, "site tool producer unavailable"),
+        { kind: "unknown", label: "site write" },
+        undefined,
+        { tool: name }
+      )
     return runSitesBuiltinTool(name, args, await resolveSitesToolDeps())
   },
 }

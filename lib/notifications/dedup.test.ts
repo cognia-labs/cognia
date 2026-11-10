@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   coalesceSince,
   decideCoalesce,
@@ -9,6 +10,7 @@ import type { NotificationRecord } from "@/types/notifications"
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "e",
     source: "connector",
     level: "info",

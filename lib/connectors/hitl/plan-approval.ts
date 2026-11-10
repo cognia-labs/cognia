@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { settleApprovalCard } from "./approval-card-state"
 /**
  * IM plan-approval card — the delegate behind `GateBehavior: "delegate"`.
@@ -202,6 +203,7 @@ export function makeImPlanApprovalDelegate(
         )
       )
       const approvalJob = await enqueue({
+        personalContext: { executionRunId: ctx.runId },
         adapterId: ctx.adapterId,
         conversationKey: ctx.conversationKey,
         request: {
@@ -251,6 +253,10 @@ export function makeImPlanApprovalDelegate(
       },
     })
     void settleApprovalCard({
+      personalContext: personalSinkHost.personalSinkContextForRun(
+        { executionRunId: ctx.runId },
+        "legacy approval run unavailable"
+      ),
       adapterId: ctx.adapterId,
       conversationKey: ctx.conversationKey,
       conversationRef: ctx.conversationRef,

@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { Meta, StoryObj } from "@storybook/nextjs-vite"
 import { fn } from "storybook/test"
 
@@ -11,6 +12,7 @@ import {
 const NOW = Date.now()
 
 const baseRecord = (over: Partial<NotificationRecord> = {}): NotificationRecord => ({
+  personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
   id: "n1",
   source: "session",
   level: "info",

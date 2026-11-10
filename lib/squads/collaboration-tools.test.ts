@@ -1,4 +1,6 @@
 /** @jest-environment jsdom */
+import { unverifiedPersonalSinkContext } from "@/lib/execution/personal-sink"
+
 /**
  * Team-collaboration built-in tools — manifest + host-side router.
  *
@@ -932,6 +934,7 @@ describe("team_post_to_chat", () => {
     )
     expect(out).toMatch(/Posted to this run's conversation/)
     expect((calls.postToConversation[0] as [Record<string, unknown>])[0]).toEqual({
+      personalContext: unverifiedPersonalSinkContext("team producer unavailable"),
       adapterId: "bot-a",
       conversationKey: "lark:bot-a:chat-1",
       text: "status: done",
@@ -960,6 +963,7 @@ describe("team_post_to_chat", () => {
     )
     expect(out).toMatch(/sibling conversation .* adapter bot-b/)
     expect((calls.postToConversation[0] as [Record<string, unknown>])[0]).toEqual({
+      personalContext: unverifiedPersonalSinkContext("team producer unavailable"),
       adapterId: "bot-b",
       conversationKey: "lark:bot-b:chat-1",
       text: "posting as B",
@@ -1074,6 +1078,7 @@ describe("defaultTeamToolDeps — team_post_to_chat wiring", () => {
   it("postToConversation enqueues on the durable outbound queue with a fresh idempotency key", async () => {
     const deps = await defaultTeamToolDeps()
     await deps.postToConversation({
+      personalContext: unverifiedPersonalSinkContext("team producer unavailable"),
       adapterId: "bot-b",
       conversationKey: "lark:bot-b:chat-1",
       text: "hello",
@@ -1115,6 +1120,7 @@ describe("defaultTeamToolDeps — team_post_to_chat wiring", () => {
     } as never)
     const deps = await defaultTeamToolDeps()
     await deps.postToConversation({
+      personalContext: unverifiedPersonalSinkContext("team producer unavailable"),
       adapterId: "bot-b",
       conversationKey: "lark:bot-b:chat-1",
       text: "hello",

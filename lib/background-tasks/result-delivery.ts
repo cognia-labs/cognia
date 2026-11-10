@@ -31,6 +31,7 @@
  * acceptance. Module-scope, so every caller in a process shares one queue.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type {
   BackgroundTaskJournalRecord,
   BackgroundTaskSettleInfo,
@@ -569,16 +570,19 @@ async function fireCompletionNotification(
       ? strings.title({ subagentId: meta.subagentId, status: entry.status, elapsed })
       : `Background subagent "${meta.subagentId}" ${entry.status === "done" ? "finished" : "failed"} (${elapsed})`
     const body = strings ? strings.body({ runId }) : `Run ${runId}`
-    await notify({
-      source: "session",
-      level: entry.status === "done" ? "success" : "error",
-      title,
-      body,
-      channels: ["center", "toast"],
-      groupKey: runId,
-      sourceRef: { kind: "background-run", id: runId },
-      directed: true,
-    })
+    await notify(
+      {
+        source: "session",
+        level: entry.status === "done" ? "success" : "error",
+        title,
+        body,
+        channels: ["center", "toast"],
+        groupKey: runId,
+        sourceRef: { kind: "background-run", id: runId },
+        directed: true,
+      },
+      { personalContext: { executionRunId: `execution:job:${runId}` } }
+    )
   } catch {
     // Notifications are best-effort; delivery/journal state is unaffected.
   }
@@ -592,23 +596,26 @@ async function fireWakeDeferredNotification(
   try {
     const { notify } = await import("@/lib/notifications/runtime")
     const strings = notifyStrings
-    await notify({
-      source: "session",
-      level: "info",
-      title:
-        strings?.wakeDeferredTitle?.({ count, reason }) ??
-        `${count} background job result(s) are waiting`,
-      body:
-        strings?.wakeDeferredBody?.({ reason }) ??
-        (reason === "cap"
-          ? "They will reach the conversation with its next turn."
-          : "The spending limit is reached, so the conversation was not started for them."),
-      channels: ["center", "toast"],
-      groupKey: `background-wake:${sessionId}`,
-      dedupeKey: `background-wake:${sessionId}:${reason}`,
-      sourceRef: { kind: "session", id: sessionId },
-      directed: true,
-    })
+    await notify(
+      {
+        source: "session",
+        level: "info",
+        title:
+          strings?.wakeDeferredTitle?.({ count, reason }) ??
+          `${count} background job result(s) are waiting`,
+        body:
+          strings?.wakeDeferredBody?.({ reason }) ??
+          (reason === "cap"
+            ? "They will reach the conversation with its next turn."
+            : "The spending limit is reached, so the conversation was not started for them."),
+        channels: ["center", "toast"],
+        groupKey: `background-wake:${sessionId}`,
+        dedupeKey: `background-wake:${sessionId}:${reason}`,
+        sourceRef: { kind: "session", id: sessionId },
+        directed: true,
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
   } catch {
     // Notifications are best-effort; the results stay pending either way.
   }

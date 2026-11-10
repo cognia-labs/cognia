@@ -1,3 +1,4 @@
+import { unverifiedPersonalSinkContext } from "@/lib/execution/personal-sink"
 import type {
   IntegrationEventEnvelope,
   IntegrationInboxProjectionDef,
@@ -219,7 +220,10 @@ function reportProjectionFailure(
         },
       },
     }),
-    { kind: "background" }
+    { kind: "background" },
+    unverifiedPersonalSinkContext(
+      "integration projection error may contain plugin/run output without a producer"
+    )
   )
 }
 

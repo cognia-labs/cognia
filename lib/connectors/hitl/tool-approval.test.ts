@@ -47,6 +47,7 @@ function req(over: Partial<PermissionRequestEvent> = {}): PermissionRequestEvent
 
 interface Harness {
   enqueued: Array<{
+    personalContext?: unknown
     segments: unknown[]
     deliveryTarget?: ConversationDeliveryTarget
     authorization?: unknown
@@ -77,10 +78,12 @@ function harness(
     deliveryTarget,
     approvalMode,
     enqueue: (async (job: {
+      personalContext: unknown
       request: { segments: unknown[]; deliveryTarget?: ConversationDeliveryTarget }
       authorization?: unknown
     }) => {
       enqueued.push({
+        personalContext: job.personalContext,
         authorization: job.authorization,
         segments: job.request.segments,
         deliveryTarget: job.request.deliveryTarget,
@@ -549,4 +552,17 @@ it("keeps existing prefix exports compatible with the shared registry", async ()
     registry.TOOL_DENY_PREFIX,
     registry.TOOL_ALLOW_SESSION_PREFIX,
   ])
+})
+
+it("retains Host session provenance for goal approvals without an exact turn run", async () => {
+  const h = harness()
+  const pending = makeImPermissionResponder(h.ctx)(req())
+  for (let n = 0; n < 50 && !h.enqueued.length; n++)
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  expect(h.enqueued[0].personalContext).toEqual({ sessionId: "s1", sessionDerived: true })
+  resolveApproval("s1", "req_1", { decision: "deny" })
+  await pending
+  expect(settleApprovalCard).toHaveBeenLastCalledWith(
+    expect.objectContaining({ personalContext: { sessionId: "s1", sessionDerived: true } })
+  )
 })

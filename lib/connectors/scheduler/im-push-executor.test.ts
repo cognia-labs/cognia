@@ -149,6 +149,7 @@ describe("executeImPushTask", () => {
           metadata: { idempotencyKey: "task-im:exec-im" },
         },
         source: "manual",
+        personalContext: { executionRunId: "exec-im" },
         // Nobody watches the push when it fires: the task's own origin decides.
         authorization: {
           kind: "unattended",
@@ -156,7 +157,7 @@ describe("executeImPushTask", () => {
           origin: { rootSessionId: "task:task-im", instructionEpoch: expect.any(String) },
         },
       },
-      { executionContext: { automation: "schedule" } }
+      { executionContext: { executionRunId: "exec-im", automation: "schedule" } }
     )
     expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ kind: "notify.im_pushed" }))
     expect(r.output).toMatchObject({ jobId: "job-1", adapterId: "lark-1", segments: 1 })
@@ -178,7 +179,7 @@ describe("executeImPushTask", () => {
         conversationKey: "c2",
         request: expect.objectContaining({ segments, metadata: { idempotencyKey: "k9" } }),
       }),
-      { executionContext: { automation: "schedule" } }
+      { executionContext: { executionRunId: "exec-im", automation: "schedule" } }
     )
   })
 

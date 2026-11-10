@@ -1,3 +1,5 @@
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { personalSinkContextForRun } from "@/lib/execution/personal-sink"
 /**
  * Host-governed workflow authoring and execution façade for plugins.
  *
@@ -126,7 +128,7 @@ async function approvalChannel(origin: ConversationWorkflowOrigin) {
   return channel
 }
 
-export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
+export function createWorkflowAuthorAPI(pluginId?: string): PluginWorkflowAuthorAPI {
   return {
     resolveEditor(workflowId) {
       if (workflowId) {
@@ -245,17 +247,31 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
     resolveTriggerOrigin: resolveWorkflowTriggerOrigin,
     approvalActorScope,
     prepareWorkflowApproval: async ({ workflowId, runParams, triggeredFrom: requestedOrigin }) => {
+      const personalContext = personalSinkContextForRun(
+        pluginId ? (pluginExecutionContext(pluginId) ?? {}) : {},
+        "workflow plugin invocation unavailable"
+      )
       const triggeredFrom = await resolveApprovalOrigin(requestedOrigin)
       const card = await (
         await approvalChannel(triggeredFrom)
-      ).approveWorkflowRun({ workflowId, ...(runParams ? { runParams } : {}), triggeredFrom })
+      ).approveWorkflowRun({
+        personalContext,
+        workflowId,
+        ...(runParams ? { runParams } : {}),
+        triggeredFrom,
+      })
       return { sent: true, ...card }
     },
     prepareFanoutApproval: async ({ workflowId, workflowName, triggeredFrom: requestedOrigin }) => {
+      const personalContext = personalSinkContextForRun(
+        pluginId ? (pluginExecutionContext(pluginId) ?? {}) : {},
+        "workflow plugin invocation unavailable"
+      )
       const triggeredFrom = await resolveApprovalOrigin(requestedOrigin)
       const card = await (
         await approvalChannel(triggeredFrom)
       ).approveWorkflowFanout({
+        personalContext,
         workflowId,
         workflowName,
         triggeredFrom,

@@ -1,3 +1,12 @@
+jest.mock("@/lib/connectors/personal-delivery", () => ({
+  ...jest.requireActual("@/lib/connectors/personal-delivery"),
+  checkConnectorPersonalSink: jest.fn(async () => ({ outcome: "allow" })),
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  checkPersonalSink: jest.fn(async () => ({ outcome: "allow" })),
+  readRunPersonalTaint: jest.fn(async () => ({ verified: true, marks: [] })),
+}))
 jest.mock("./_helpers", () => ({
   ...jest.requireActual("./_helpers"),
   resolveChatCapableAdapter: jest.fn(),
@@ -200,7 +209,7 @@ describe("im.dispatch_task execute — create-new path", () => {
     )
     expect(mEnqueue).toHaveBeenCalledWith(
       expect.objectContaining({ authorizedBy: expect.objectContaining({ receiptId: "req_1" }) }),
-      { signal: undefined, executionContext: { sessionId: "s", executionRunId: "" } }
+      { signal: undefined, executionContext: { sessionId: "s", executionRunId: undefined } }
     )
     expect(out).toMatchObject({ brief: "sent", run: "started" })
   })
@@ -284,7 +293,7 @@ describe("im.dispatch_task execute — existing-conversation path", () => {
 
     expect(mEnqueue).toHaveBeenCalledWith(
       expect.objectContaining({ adapterId: "a2", conversationKey: "lark:a2:oc_ex" }),
-      expect.objectContaining({ executionContext: { sessionId: "s", executionRunId: "" } })
+      expect.objectContaining({ executionContext: { sessionId: "s", executionRunId: undefined } })
     )
     expect(mEnqueue.mock.calls[0][0].request.conversationRef).toEqual({
       platform: "lark",

@@ -1308,7 +1308,7 @@ describe("executeChatTask", () => {
     await executeChatTask(task, makeExecution(), makeSignal())
     expect(answerWithOutboundPolicyMock).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: "req-1", toolName: "Edit" }),
-      expect.objectContaining({ unattended: true }),
+      expect.objectContaining({ unattended: true, executionRunId: makeExecution().id }),
       expect.any(Function)
     )
     const options = answerWithOutboundPolicyMock.mock.calls[0]?.[1] as {

@@ -11,6 +11,7 @@
  * Mounted once at app startup by `CompanionEventBridgeProvider`.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { DEFAULT_ACCOUNT_NAMESPACE } from "@/lib/companion/account-namespace"
 import { detachDevice } from "@/lib/companion/remote-attach-registry"
 import { releaseDeviceAttachmentUploads } from "@/lib/db/session-attachment-uploads"
@@ -191,19 +192,22 @@ export async function announceDevicePaired(
     if (ownDeviceId && ownDeviceId === payload.device_id) return
     if (now - payload.paired_at_ms > PAIRING_ALERT_WINDOW_MS) return
     const t = await getRuntimeTranslator("devices.pairingAlert")
-    await notify({
-      source: "system",
-      level: "warning",
-      title: t("title"),
-      body: t("body", {
-        label: payload.label || payload.device_id,
-        platform: normalizePlatform(payload.platform),
-      }),
-      href: "/devices",
-      dedupeKey: `device-paired:${payload.device_id}`,
-      sourceRef: { kind: "paired-device", id: payload.device_id },
-      directed: true,
-    })
+    await notify(
+      {
+        source: "system",
+        level: "warning",
+        title: t("title"),
+        body: t("body", {
+          label: payload.label || payload.device_id,
+          platform: normalizePlatform(payload.platform),
+        }),
+        href: "/devices",
+        dedupeKey: `device-paired:${payload.device_id}`,
+        sourceRef: { kind: "paired-device", id: payload.device_id },
+        directed: true,
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+    )
   } catch (err) {
     // A failed alert must not undo the pairing row written above.
     console.warn("companion event-bridge: pairing alert failed", err)

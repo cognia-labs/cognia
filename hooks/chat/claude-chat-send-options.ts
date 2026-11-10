@@ -62,15 +62,19 @@ import {
 export async function preparePersonalSteer(
   sessionId: string,
   localAuthorization?: LocalPersonRun,
-  engine: { kind: "builtin" } | { kind: "external"; sessionId?: string } = { kind: "builtin" }
+  engine: { kind: "builtin" } | { kind: "external"; sessionId?: string } = { kind: "builtin" },
+  executionRunId?: string
 ): Promise<boolean> {
-  const identity = await resolveRunActingIdentity(sessionId)
+  const identity = executionRunId
+    ? await resolveRunActingIdentity(sessionId, executionRunId)
+    : undefined
   if (localAuthorization === LOCAL_PERSON_RUN && identity?.rootRunId) {
     await recordAbsorbedRequester(identity.rootRunId, { kind: "local-person" })
   }
   const session = await getSession(sessionId)
   const filtered = await preparePersonalHistory(sessionId, await listMessages(sessionId), {
     session,
+    executionRunId,
   })
   const retainedDigest =
     engine.kind === "builtin"
@@ -148,6 +152,7 @@ export async function prepareTranscriptRuntimeSend(
   sessionId: string,
   options: SendOptions,
   preparation: {
+    executionRunId?: string
     currentMessageId?: string | null
     replacesHistory?: boolean
     skipHydration?: boolean
@@ -168,14 +173,14 @@ export async function prepareTranscriptRuntimeSend(
       canonical,
       preparation.activeBranchByGroup ?? session?.activeBranchByGroup ?? {}
     ),
-    { session }
+    { session, executionRunId: preparation.executionRunId }
   )
   assertDatabaseCurrent()
   const visibilityChanged =
     session?.runtimePersonalVisibilityDigest !== personalHistory.visibilityDigest
   const visibilityRequiresRebuild =
     personalHistory.withheldMessageIds.length > 0 && visibilityChanged
-  await assertPersonalContextReaders(sessionId, options)
+  await assertPersonalContextReaders(sessionId, options, preparation.executionRunId)
   assertDatabaseCurrent()
   if (
     visibilityRequiresRebuild &&
@@ -359,7 +364,7 @@ export async function prepareTranscriptRuntimeSend(
             ? (options.turnId ?? null)
             : preparation.currentMessageId,
           options.contentSafety,
-          { sessionId }
+          { sessionId, executionRunId: preparation.executionRunId }
         ),
       }
     }

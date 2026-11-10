@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { NotificationRecord } from "@/types/notifications"
@@ -43,6 +44,7 @@ import { NotificationCenter } from "./notification-center"
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "connector",
     level: "info",

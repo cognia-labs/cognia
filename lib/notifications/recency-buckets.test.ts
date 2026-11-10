@@ -1,8 +1,10 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { bucketByRecency, startOfLocalDay } from "./recency-buckets"
 import type { NotificationRecord } from "@/types/notifications"
 
 function rec(id: string, createdAt: number): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id,
     source: "system",
     level: "info",

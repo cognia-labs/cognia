@@ -1,3 +1,8 @@
+import {
+  assertPersonalSink,
+  explicitHostPersonalSinkContext,
+  unverifiedPersonalSinkContext,
+} from "@/lib/execution/personal-sink"
 /**
  * Bus-side dispatcher for `issue_action` callback bindings (ADR-0132 slice ③).
  *
@@ -36,6 +41,7 @@ import { IssueRunRefusedError, listIssueRunOptions, startIssueRun } from "@/lib/
 import { issueRunOptionLabel, type IssueActionPayload, type IssueDraft } from "./card"
 import { pushIssueCard, pushIssueRunChoice, pushIssueText, type IssueImPushDeps } from "./push"
 
+// Issue mutations reject marked run output before persistence; callbacks render stored service records.
 export interface HandleIssueActionInput {
   binding: ConnectorCallbackBindingRow
   adapterId: string
@@ -212,7 +218,13 @@ export async function handleIssueActionCallback(
   const by = actorFromUser(input.user)
   const reply = (text: string, key: string) =>
     pushIssueText(
-      { adapterId: input.adapterId, conversationKey, text, idempotencyKey: key },
+      {
+        personalContext: explicitHostPersonalSinkContext("background-service"),
+        adapterId: input.adapterId,
+        conversationKey,
+        text,
+        idempotencyKey: key,
+      },
       deps.push
     )
   const audit = (
@@ -247,7 +259,15 @@ export async function handleIssueActionCallback(
       }
       const issue = (await getIssue(payload.issueId))!
       await audit("issue.card_action", { issueId: issue.id, to: payload.to })
-      await pushIssueCard({ adapterId: input.adapterId, conversationKey, issue }, deps.push)
+      await pushIssueCard(
+        {
+          personalContext: explicitHostPersonalSinkContext("background-service"),
+          adapterId: input.adapterId,
+          conversationKey,
+          issue,
+        },
+        deps.push
+      )
       return { kind: "moved", issue }
     }
     case "run": {
@@ -268,6 +288,7 @@ export async function handleIssueActionCallback(
         // extra tap is spent only when the ambiguity is real.
         const issue = (await getIssue(payload.issueId))!
         await deps.pushRunChoice({
+          personalContext: explicitHostPersonalSinkContext("background-service"),
           adapterId: input.adapterId,
           conversationKey,
           issue,
@@ -319,7 +340,15 @@ export async function handleIssueActionCallback(
         `▶ ${issue.identifier} dispatched to ${first.adapter.id}`,
         `issue-run-started:${issue.id}:${deps.now()}`
       )
-      await pushIssueCard({ adapterId: input.adapterId, conversationKey, issue }, deps.push)
+      await pushIssueCard(
+        {
+          personalContext: explicitHostPersonalSinkContext("background-service"),
+          adapterId: input.adapterId,
+          conversationKey,
+          issue,
+        },
+        deps.push
+      )
       return { kind: "run_started", issue, adapterId: first.adapter.id }
     }
     case "create": {
@@ -328,6 +357,31 @@ export async function handleIssueActionCallback(
         await deleteSiblingBindings(input.adapterId, input.binding.surfaceId)
         return { kind: "ignored", reason: "no-workspace" }
       }
+      const source = await getDb().connectorCallbackBindings.get(
+        `${input.adapterId}:issue-source:${payload.draft.draftId}`
+      )
+      const proof = source?.issueProposalSource
+      const valid =
+        source?.surfaceId === input.binding.surfaceId &&
+        source.conversationKey === conversationKey &&
+        (source.expiresAt === undefined || source.expiresAt > deps.now()) &&
+        proof?.draft.draftId === payload.draft.draftId &&
+        proof.draft.title === payload.draft.title &&
+        proof.draft.description === payload.draft.description &&
+        proof.draft.sourceMessageId === payload.draft.sourceMessageId &&
+        proof.issueProjectIds.includes(payload.issueProjectId)
+      await assertPersonalSink(
+        valid
+          ? proof!.personalContext
+          : unverifiedPersonalSinkContext("issue proposal has no matching Host source proof"),
+        { kind: "unknown", label: "issue write" },
+        undefined,
+        {
+          kind: "issue-create",
+          draftId: payload.draft.draftId,
+          issueProjectId: payload.issueProjectId,
+        }
+      )
       const issue = await createIssue({
         projectId: workspaceId,
         issueProjectId: payload.issueProjectId,
@@ -347,7 +401,15 @@ export async function handleIssueActionCallback(
       // Consume the confirmation card: one click files, the rest are dead.
       await deleteSiblingBindings(input.adapterId, input.binding.surfaceId)
       await audit("issue.card_action", { issueId: issue.id, draftId: payload.draft.draftId })
-      await pushIssueCard({ adapterId: input.adapterId, conversationKey, issue }, deps.push)
+      await pushIssueCard(
+        {
+          personalContext: explicitHostPersonalSinkContext("background-service"),
+          adapterId: input.adapterId,
+          conversationKey,
+          issue,
+        },
+        deps.push
+      )
       return { kind: "created", issue }
     }
     case "cancel_create": {

@@ -8,15 +8,18 @@ describe("notifyBecameUnwell", () => {
       { notify }
     )
     expect(ok).toBe(true)
-    expect(notify).toHaveBeenCalledWith({
-      source: "system",
-      level: "info",
-      title: "Pip feels low",
-      body: "Give some care",
-      dedupeKey: CARE_UNWELL_DEDUPE_KEY,
-      icon: "Heart",
-      directed: true,
-    })
+    expect(notify).toHaveBeenCalledWith(
+      {
+        source: "system",
+        level: "info",
+        title: "Pip feels low",
+        body: "Give some care",
+        dedupeKey: CARE_UNWELL_DEDUPE_KEY,
+        icon: "Heart",
+        directed: true,
+      },
+      expect.objectContaining({ personalContext: expect.any(Object) })
+    )
   })
 
   it("swallows notify failures and returns false", async () => {

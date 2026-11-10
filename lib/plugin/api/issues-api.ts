@@ -1,3 +1,9 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import {
+  assertPersonalSink,
+  explicitHostPersonalSinkContext,
+  personalSinkContextForRun,
+} from "@/lib/execution/personal-sink"
 /**
  * Plugin Issues API (spec 2026-09-06 D9): `ctx.issues`.
  *
@@ -17,6 +23,7 @@
 import { listIssueEvents } from "@/lib/db/issue-events"
 import {
   bindPluginCallbacks,
+  pluginExecutionContext,
   HOST_BACKGROUND,
   withPluginExecutionContext,
 } from "../core/invocation-identity"
@@ -399,6 +406,26 @@ export function createIssuesAPI(
       owned.add(dispose)
       return dispose
     },
+  }
+
+  // These mutations can persist model output that later appears in system
+  // notifications. Fence it before any issue/label write or asynchronous lookup.
+  for (const method of ["create", "update", "assign", "comment", "label"] as const) {
+    const operation = api[method]
+    Object.defineProperty(api, method, {
+      value: (...args: unknown[]) => {
+        const invocation = pluginExecutionContext(pluginId)
+        const context =
+          invocation?.executionRunId === undefined &&
+          invocation?.localAuthorization === LOCAL_PERSON_RUN
+            ? explicitHostPersonalSinkContext("typed-send")
+            : personalSinkContextForRun(invocation ?? {}, "plugin issue producer unavailable")
+        return assertPersonalSink(context, { kind: "unknown", label: "issue write" }, undefined, {
+          pluginId,
+          method,
+        }).then(() => Reflect.apply(operation, api, args))
+      },
+    })
   }
 
   return createGuardedAPI(

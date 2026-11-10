@@ -233,6 +233,7 @@ async function defaultTurnDeps(): Promise<HostAutomatedTurnDeps> {
       await withTranscriptRuntimeLock(sessionId, async () => {
         const prepared = await prepareTranscriptRuntimeSend(sessionId, options, {
           currentMessageId: turn.messageId,
+          executionRunId: turn.receipt.runId,
         })
         await chatAdapter.bindChatTurnContext({
           runId: turn.receipt.runId,

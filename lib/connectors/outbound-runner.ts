@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { validateOutboundFeatures } from "./outbound-features"
 
 /**
@@ -41,6 +42,16 @@ import type { PlatformAdapter } from "@/types/connectors"
 import { createMutex, computeBackoffDelay } from "@cognia/primitives"
 import { isInQuietRange, msUntilQuietRangeEnd } from "@/lib/notifications/policy/quiet-hours"
 import { placeMessage } from "./message-placement"
+import {
+  checkConnectorPersonalSink,
+  narrowPersonalDelivery,
+  sendPersonalDeliveryNotice,
+} from "./personal-delivery"
+import {
+  checkPersonalSink,
+  withPersonalSinkAttempt,
+  recordPersonalSinkReceipt,
+} from "@/lib/execution/personal-sink"
 import {
   deleteOutboundJob,
   listDueNow,
@@ -695,6 +706,15 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       try {
         newJob = await enqueueOutbound(
           {
+            personalContext: job.personalSourceContext
+              ? personalSinkHost.mergePersonalSinkContexts(job.personalSourceContext, {
+                  executionRunId: `execution:job:outbound:${job.id}`,
+                })
+              : { executionRunId: `execution:job:outbound:${job.id}` },
+            ...(job.personalNarrowing ? { personalNarrowing: job.personalNarrowing } : {}),
+            ...(job.personalDeliveryNotice
+              ? { personalDeliveryNotice: job.personalDeliveryNotice }
+              : {}),
             adapterId: targetId,
             conversationKey: newConversationKey,
             request: {
@@ -811,6 +831,9 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     let decision: DeliveryDecision
     try {
       const input: DeliveryPlanInput = {
+        personalContext: { executionRunId: `execution:job:outbound:${job.id}` },
+        payload: request,
+        canNarrowPersonal: !request.editTargetMessageId,
         adapterId: job.adapterId,
         conversationKey: job.conversationKey,
         source: job.source,
@@ -887,9 +910,32 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       return updated
     }
 
+    if (decision.action === "draft") {
+      const personal = await checkPersonalSink(
+        { executionRunId: `execution:job:outbound:${job.id}` },
+        { kind: "host-local" },
+        request,
+        { kind: "connector-draft", conversationKey: job.conversationKey }
+      )
+      if (personal.outcome !== "allow") {
+        await markDeadlettered(
+          job.id,
+          "personal_withheld",
+          "Personal content cannot enter a Host draft"
+        )
+        await sendPersonalDeliveryNotice(
+          opts.adapters.get(job.adapterId),
+          job.conversationKey,
+          request,
+          false
+        )
+        return false
+      }
+    }
     const draft =
       decision.action === "draft"
         ? await prepareDraftRow({
+            personalExecutionRunId: `execution:job:outbound:${job.id}`,
             conversationKey: job.conversationKey,
             sessionId: decision.draftSessionId,
             segments: request.segments,
@@ -958,7 +1004,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     if (job.status !== "pending" && job.status !== "failed") return
 
     const { conversationKey } = job
-    const request = job.request.deliveryTarget
+    let request = job.request.deliveryTarget
       ? { ...job.request, conversationRef: job.request.deliveryTarget.conversationRef }
       : { ...job.request }
     const { idempotencyKey } = request.metadata
@@ -1484,6 +1530,106 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     // Only the Host enqueue's exact job execution is proof. Serialized source,
     // message ids and result-card metadata cannot mint or recover admission.
     const deliveryRun = await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)
+    const jobContext = deliveryRun
+      ? { sessionId: deliveryRun.sessionId, executionRunId: deliveryRun.id }
+      : personalSinkHost.unverifiedPersonalSinkContext("outbound execution unavailable")
+    const personalContext = withPersonalSinkAttempt(
+      job.personalSourceContext
+        ? personalSinkHost.mergePersonalSinkContexts(job.personalSourceContext, jobContext)
+        : jobContext
+    )
+    const personalDecision = await checkConnectorPersonalSink(
+      personalContext,
+      adapterId,
+      conversationKey,
+      request,
+      { request, canNarrow: !request.editTargetMessageId, adapter }
+    )
+    const originalRequest = request
+    let narrowed =
+      personalDecision.outcome === "narrow"
+        ? await narrowPersonalDelivery(
+            adapter,
+            conversationKey,
+            request,
+            personalDecision.person
+          ).catch(() => undefined)
+        : undefined
+    const sendPersonalNotice = async (sentPrivately: boolean) => {
+      const destination = job.personalDeliveryNotice ?? {
+        conversationKey,
+        request: originalRequest,
+      }
+      await sendPersonalDeliveryNotice(
+        adapter,
+        destination.conversationKey,
+        destination.request,
+        sentPrivately
+      )
+    }
+    if (personalDecision.outcome !== "allow" && !narrowed) {
+      if (personalDecision.outcome === "narrow")
+        await checkConnectorPersonalSink(personalContext, adapterId, conversationKey, request, {
+          request,
+          adapter,
+        })
+      await markDeadlettered(
+        job.id,
+        "personal_withheld",
+        "Personal content withheld: the person must disclose it before sharing"
+      )
+      await sendPersonalNotice(false)
+      return
+    }
+    if (narrowed) request = narrowed.request
+    let finalPersonalWithheld = false
+    const recheckBeforeWire = async (): Promise<boolean> => {
+      const checked = await checkConnectorPersonalSink(
+        personalContext,
+        adapterId,
+        narrowed?.conversationKey ?? conversationKey,
+        request,
+        { request, canNarrow: !request.editTargetMessageId, adapter }
+      )
+      const receiptNarrowed = async () => {
+        const person =
+          job.personalNarrowing?.person ??
+          (personalDecision.outcome === "narrow"
+            ? personalDecision.person
+            : checked.outcome === "narrow"
+              ? checked.person
+              : undefined)
+        if (person && (narrowed || job.personalNarrowing))
+          await recordPersonalSinkReceipt(
+            personalContext,
+            [person],
+            "narrow",
+            request,
+            job.personalNarrowing?.originalTarget ?? { adapterId, conversationKey }
+          )
+      }
+      if (checked.outcome === "allow") {
+        await receiptNarrowed()
+        return true
+      }
+      const latestNarrow =
+        checked.outcome === "narrow"
+          ? await narrowPersonalDelivery(
+              adapter,
+              narrowed?.conversationKey ?? conversationKey,
+              request,
+              checked.person
+            ).catch(() => undefined)
+          : undefined
+      if (latestNarrow) {
+        narrowed = latestNarrow
+        request = latestNarrow.request
+        await receiptNarrowed()
+        return true
+      }
+      finalPersonalWithheld = true
+      return false
+    }
     const identityOptions: AdapterSendOptions | undefined = deliveryRun?.sessionId
       ? { executionIdentity: { sessionId: deliveryRun.sessionId, runId: deliveryRun.id } }
       : undefined
@@ -1498,7 +1644,18 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     const editTargetId = request.editTargetMessageId
     try {
       if (editTargetId && typeof adapter.edit === "function") {
-        result = await sendSemaphore.run(() => adapter.edit!(editTargetId, request))
+        result = await sendSemaphore.run(async () =>
+          (await recheckBeforeWire())
+            ? adapter.edit!(editTargetId, request)
+            : {
+                ok: false,
+                error: {
+                  code: "personal_withheld",
+                  message: "Personal content withheld",
+                  retryable: false,
+                },
+              }
+        )
       } else {
         if (editTargetId) {
           await appendAudit({
@@ -1511,17 +1668,26 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             message: `${adapterId} adapter has no edit() — falling back to send()`,
           })
         }
-        result = await sendSemaphore.run(() =>
-          adapter.meta.capabilities.includes("events.delivery-status")
-            ? adapter.send(request, {
-                ...identityOptions,
-                onPendingReceipt: async (receipt) => {
-                  await markAwaitingDeliveryReceipt(job.id, receipt)
+        result = await sendSemaphore.run(async () =>
+          !(await recheckBeforeWire())
+            ? {
+                ok: false,
+                error: {
+                  code: "personal_withheld",
+                  message: "Personal content withheld",
+                  retryable: false,
                 },
-              })
-            : identityOptions
-              ? adapter.send(request, identityOptions)
-              : adapter.send(request)
+              }
+            : adapter.meta.capabilities.includes("events.delivery-status")
+              ? adapter.send(request, {
+                  ...identityOptions,
+                  onPendingReceipt: async (receipt) => {
+                    await markAwaitingDeliveryReceipt(job.id, receipt)
+                  },
+                })
+              : identityOptions
+                ? adapter.send(request, identityOptions)
+                : adapter.send(request)
         )
       }
     } catch (err: unknown) {
@@ -1571,6 +1737,15 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       return
     }
 
+    if (finalPersonalWithheld) {
+      await markDeadlettered(
+        job.id,
+        "personal_withheld",
+        "Personal content withheld before the wire send"
+      )
+      await sendPersonalNotice(false)
+      return
+    }
     if (!result.ok && result.pendingReceipt) {
       const settled = await markAwaitingDeliveryReceipt(job.id, result.pendingReceipt)
       if (settled?.status === "sent") {
@@ -1595,6 +1770,10 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     if (result.ok) {
       const platformMsgId = result.platformMessageId ?? idempotencyKey
       await markSent(job.id, platformMsgId)
+      if (narrowed || job.personalDeliveryNotice)
+        await sendPersonalNotice(true).catch((error) =>
+          console.warn("[outbound-runner] personal notice delivery failed", error)
+        )
       // Delivered-message ledger (exact `reply-to-bot` rule): only a REAL
       // platform id counts — the idempotencyKey fallback is never something a
       // user can reply to. Best-effort, never throws.
@@ -1637,6 +1816,8 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         outcome: "succeeded",
       })
     } else {
+      if (narrowed || job.personalDeliveryNotice)
+        await sendPersonalNotice(false).catch(() => undefined)
       const err = result.error!
       void trackEvent("connector.message.sent", {
         adapterId,
@@ -1663,7 +1844,23 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       if (err.code === "identity_reauthorization_required") {
         const resolution = await readForResolution(conversationKey).catch(() => null)
         if (resolution?.sessionId) {
+          const localDraft = await checkPersonalSink(
+            personalContext,
+            { kind: "host-local" },
+            request,
+            { kind: "connector-draft", conversationKey }
+          )
+          if (localDraft.outcome !== "allow") {
+            await markDeadlettered(
+              job.id,
+              "personal_withheld",
+              "Personal content cannot enter a Host draft"
+            )
+            await sendPersonalNotice(false)
+            return
+          }
           const draft = await createDraft({
+            personalExecutionRunId: `execution:job:outbound:${job.id}`,
             conversationKey,
             sessionId: resolution.sessionId,
             segments: request.segments,

@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   createPluginCredentialAccess,
   pluginExecutionContext,
@@ -9,6 +10,7 @@ import {
   resolveRunActingIdentity,
   startJobExecutionRun,
 } from "@/lib/execution/acting-authority"
+import { assertPersonalSink, explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 import {
   isIntegrationActionJobTerminal,
   reconcileIntegrationJobExecutions,
@@ -283,7 +285,8 @@ async function planAuthenticatedRequest(
   connectorAccountId: string,
   input: string,
   method: string,
-  authorization: IntegrationAuthorization
+  authorization: IntegrationAuthorization,
+  payload?: unknown
 ): Promise<void> {
   if (READ_METHODS.has(method)) return
   const account = await getIntegrationAccount(pluginId, connectorAccountId)
@@ -321,6 +324,7 @@ async function planAuthenticatedRequest(
           },
         ],
     operation: method,
+    payload,
     ...(apiBaseUrl ? { host: githubWebHost(apiBaseUrl) } : {}),
     ...(category === "integration"
       ? { request: { integrationId: account.integrationId, method, url: requestUrl } }
@@ -732,6 +736,17 @@ async function authenticatedRequest<T>(
     verifiedBotAccount?: VerifiedBotAccount
   }
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
+  if (!READ_METHODS.has((init?.method ?? "GET").toUpperCase())) {
+    await assertPersonalSink(
+      personalSinkHost.personalSinkContextForRun(
+        init?.credentialContext ?? { executionRunId: "" },
+        "lib/integrations/action-runner.ts"
+      ),
+      { kind: "unknown", label: "integration HTTP write" },
+      { method: init?.method ?? "GET", headers: init?.headers, body: init?.body },
+      input
+    )
+  }
   if (
     !hasNoLeakingPiiDeep({
       url: input,
@@ -790,12 +805,35 @@ export async function authenticatedIntegrationRequest<T>(
       }
     : undefined
   if (request?.signal?.aborted) throw new Error("Action cancelled or timed out")
+  // A raw request has no declared read contract: even GET query strings and
+  // custom headers can disclose run-derived content. Check before borrowing
+  // credentials or entering the transport, regardless of authorization mode.
+  await assertPersonalSink(
+    personalSinkHost.personalSinkContextForRun(
+      captured ?? { executionRunId: "" },
+      "lib/integrations/action-runner.ts"
+    ),
+    { kind: "unknown", label: "raw integration HTTP request" },
+    {
+      url: input,
+      method: (request?.method ?? "GET").toUpperCase(),
+      headers: request?.headers,
+      body: request?.body,
+    },
+    input
+  )
   await planAuthenticatedRequest(
     pluginId,
     connectorAccountId,
     input,
     (request?.method ?? "GET").toUpperCase(),
-    { kind: "plugin", pluginId }
+    {
+      kind: "plugin",
+      pluginId,
+      sessionId: captured?.sessionId,
+      executionRunId: captured?.executionRunId,
+    },
+    { url: input, method: request?.method ?? "GET", headers: request?.headers, body: request?.body }
   )
   return authenticatedRequest<T>(pluginId, connectorAccountId, input, {
     ...request,
@@ -968,6 +1006,28 @@ export async function executeIntegrationAction(
     throw new Error(`Integration action "${input.actionId}" requires an idempotency key`)
   }
   assertActionInput(action.inputSchema, input.input)
+  if (action.risk !== "read") {
+    await assertPersonalSink(
+      personalSinkHost.personalSinkContextForRun(
+        botAuthorization
+          ? { executionRunId: botAuthorization.runId }
+          : caller?.kind === "person"
+            ? explicitHostPersonalSinkContext("typed-send")
+            : (credentialContext ?? { executionRunId: "" }),
+        "lib/integrations/action-runner.ts"
+      ),
+      { kind: "unknown", label: `${input.integrationId}.${input.actionId}` },
+      // Plugin handlers can transform inputs or read referenced files. Only
+      // their later authenticated HTTP boundary knows the actual payload.
+      undefined,
+      {
+        pluginId,
+        integrationId: input.integrationId,
+        accountId: input.accountId,
+        actionId: input.actionId,
+      }
+    )
+  }
   await authorizeAccountConnection(account, "GET", { actionId: action.id, input: input.input })
 
   // A replay of an existing job keeps that job's plan.
@@ -986,6 +1046,7 @@ export async function executeIntegrationAction(
             kind: "tool-call",
             pluginId,
             ...(caller.sessionId ? { sessionId: caller.sessionId } : {}),
+            executionRunId: caller.executionRunId,
           }
         : caller?.kind === "workflow"
           ? caller.workflowId && caller.runId
@@ -997,7 +1058,12 @@ export async function executeIntegrationAction(
                 surface: caller.surface,
                 ...(caller.sessionId ? { sessionId: caller.sessionId } : {}),
               }
-            : { kind: "plugin", pluginId: callerPluginId })
+            : {
+                kind: "plugin",
+                pluginId: callerPluginId,
+                sessionId: credentialContext?.sessionId,
+                executionRunId: credentialContext?.executionRunId,
+              })
     planned = await planIntegrationWrite({
       targets,
       operation: `${input.integrationId}.${input.actionId}`,
@@ -1385,12 +1451,19 @@ export async function runIntegrationActionJob(
         // planned in the job's origin (ADR-0239 phase 2).
         const method = (init?.method ?? "GET").toUpperCase()
         if (!READ_METHODS.has(method)) {
-          await planAuthenticatedRequest(job.pluginId, job.accountId, input, method, {
-            kind: "job",
-            jobId,
-            ...(job.outbound ? { outbound: job.outbound } : {}),
-            covers: await githubJobTargets(job),
-          })
+          await planAuthenticatedRequest(
+            job.pluginId,
+            job.accountId,
+            input,
+            method,
+            {
+              kind: "job",
+              jobId,
+              ...(job.outbound ? { outbound: job.outbound } : {}),
+              covers: await githubJobTargets(job),
+            },
+            { url: input, method, headers: init?.headers, body: init?.body }
+          )
         }
         if (controller.signal.aborted) throw new Error("Action cancelled or timed out")
         return authenticatedRequest(job.pluginId, job.accountId, input, {
@@ -1405,6 +1478,22 @@ export async function runIntegrationActionJob(
       ...(jobAccount ? { apiBaseUrl: await integrationApiBaseUrl(jobAccount) } : {}),
     }
     await assertActiveClaim()
+    if (action.risk !== "read") {
+      await assertPersonalSink(
+        personalSinkHost.personalSinkContextForRun(
+          jobCredentialContext(job.id),
+          "lib/integrations/action-runner.ts"
+        ),
+        { kind: "unknown", label: `${job.integrationId}.${job.actionId}` },
+        undefined,
+        {
+          pluginId: job.pluginId,
+          accountId: job.accountId,
+          integrationId: job.integrationId,
+          actionId: job.actionId,
+        }
+      )
+    }
     // Keep persisted/approved input immutable. This value comes only from the host publication.
     const output = await withPluginJobExecutionContext(job.pluginId, job.id, () =>
       handler(

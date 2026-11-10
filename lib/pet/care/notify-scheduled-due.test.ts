@@ -29,7 +29,8 @@ describe("notifyScheduledDue", () => {
         sourceRef: { kind: "task", id: "t1" },
         icon: "Clock",
         directed: true,
-      })
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 
@@ -47,7 +48,8 @@ describe("notifyScheduledDue", () => {
 
     expect(ok).toBe(true)
     expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ meta, actions, href: "/scheduler?item=app%3At1" })
+      expect.objectContaining({ meta, actions, href: "/scheduler?item=app%3At1" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 

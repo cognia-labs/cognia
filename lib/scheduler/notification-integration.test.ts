@@ -1,6 +1,13 @@
 /**
  * @jest-environment jsdom
  */
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
+jest.mock("@/lib/connectors/personal-delivery", () => ({
+  resolveConnectorSinkAudience: jest.fn(async () => ({ kind: "group" })),
+}))
 
 import {
   __setSchedulerNotificationSettingsForTesting,
@@ -104,6 +111,13 @@ describe("notification-integration", () => {
   })
 
   describe("notifyTaskEvent", () => {
+    it("passes the canonical Host execution outside the notification's public input", async () => {
+      await notifyTaskEvent(mockTask, mockExecution, "error")
+      expect(mockCenterNotify.mock.calls[0]?.[1]).toEqual({
+        personalContext: { executionRunId: mockExecution.id },
+      })
+      expect(mockCenterNotify.mock.calls[0]?.[0]).not.toHaveProperty("personalContext")
+    })
     it("keeps per-execution identity for a one-shot task", async () => {
       const onceTask = {
         ...mockTask,
@@ -159,7 +173,7 @@ describe("notification-integration", () => {
 
         await notifyTaskEvent(housekeeping, mockExecution, eventType)
 
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({ dedupeKey: `task:task-1:${eventType}` })
         )
       }
@@ -178,7 +192,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(optedIn, mockExecution, "complete")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({ channels: ["center", "toast"], level: "success" })
       )
     })
@@ -213,7 +227,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(desktopOnlyTask, mockExecution, "start")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({
           source: "scheduler",
           level: "info",
@@ -234,7 +248,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(toastOnlyTask, mockExecution, "complete")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({
           level: "success",
           channels: ["center", "toast"],
@@ -253,7 +267,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(toastOnlyTask, errorExecution, "error")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({
           level: "error",
           body: expect.stringContaining("Test error"),
@@ -265,7 +279,7 @@ describe("notification-integration", () => {
       await notifyTaskEvent(mockTask, mockExecution, "complete")
 
       expect(mockCenterNotify).toHaveBeenCalledTimes(1)
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({ channels: ["center", "toast", "os"] })
       )
     })
@@ -273,7 +287,7 @@ describe("notification-integration", () => {
     it("describes a progress event", async () => {
       await notifyTaskEvent(mockTask, mockExecution, "progress")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({
           level: "info",
           title: "Task Progress: Test Task",
@@ -291,7 +305,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(pausedTask, mockExecution, "auto-paused")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({
           level: "warning",
           title: "Task Auto-Paused: Test Task",
@@ -312,7 +326,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(mockTask, blocked, "needs-approval")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({
           level: "warning",
           title: "Task Needs Approval: Test Task",
@@ -327,7 +341,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(pausedTask, mockExecution, "auto-paused")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({ body: expect.stringContaining("several consecutive failures") })
       )
     })
@@ -337,7 +351,7 @@ describe("notification-integration", () => {
 
       await notifyTaskEvent(mockTask, noDuration, "complete")
 
-      expect(mockCenterNotify).toHaveBeenCalledWith(
+      expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
         expect.objectContaining({ body: expect.stringContaining("Completed successfully") })
       )
     })
@@ -369,7 +383,7 @@ describe("notification-integration", () => {
         )
 
         expect(mockCenterNotify).toHaveBeenCalledTimes(1)
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({
             channels: ["center", "im"],
             // im-deliver resolves its destination from this and nothing else.
@@ -387,7 +401,7 @@ describe("notification-integration", () => {
 
         await notifyTaskEvent(imTask(undefined), mockExecution, "error")
 
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({
             channels: ["center", "im"],
             sourceRef: { kind: "conversation", id: "slack:ops:C123" },
@@ -406,7 +420,7 @@ describe("notification-integration", () => {
           "error"
         )
 
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({
             sourceRef: { kind: "conversation", id: "discord:a1:ch_own" },
           })
@@ -420,7 +434,7 @@ describe("notification-integration", () => {
 
         await notifyTaskEvent(imTask(undefined, ["im", "toast"]), mockExecution, "error")
 
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({
             channels: ["center", "toast"],
             sourceRef: { kind: "task", id: "task-1" },
@@ -438,7 +452,7 @@ describe("notification-integration", () => {
         )
 
         expect(mockCenterNotify).toHaveBeenCalledTimes(1)
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({ channels: ["center", "toast", "os", "im"] })
         )
       })
@@ -454,7 +468,7 @@ describe("notification-integration", () => {
           "error"
         )
 
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({ channels: ["center", "toast"] })
         )
       })
@@ -467,7 +481,7 @@ describe("notification-integration", () => {
 
         await notifyTaskEvent(imTask(undefined, ["im", "toast"]), mockExecution, "error")
 
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({ channels: ["center", "toast"] })
         )
       })
@@ -491,7 +505,7 @@ describe("notification-integration", () => {
           const result = await testNotificationChannel("im", undefined, "discord:a1:ch_typed")
 
           expect(result.success).toBe(true)
-          expect(mockNotifyConversationOverIM).toHaveBeenCalledWith(
+          expect(mockNotifyConversationOverIM.mock.calls.map(([input]) => input)).toContainEqual(
             expect.objectContaining({
               conversationKey: "discord:a1:ch_typed",
               source: "scheduler",
@@ -507,7 +521,7 @@ describe("notification-integration", () => {
           const result = await testNotificationChannel("im")
 
           expect(result.success).toBe(true)
-          expect(mockNotifyConversationOverIM).toHaveBeenCalledWith(
+          expect(mockNotifyConversationOverIM.mock.calls.map(([input]) => input)).toContainEqual(
             expect.objectContaining({ conversationKey: "slack:ops:C123" })
           )
         })
@@ -524,7 +538,7 @@ describe("notification-integration", () => {
         await notifyTaskEvent(imTask(undefined), mockExecution, "error")
 
         expect(mockGetSettings).toHaveBeenCalled()
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({
             channels: ["center", "im"],
             sourceRef: { kind: "conversation", id: "lark:ops:oc_1" },
@@ -538,7 +552,7 @@ describe("notification-integration", () => {
 
         await notifyTaskEvent(imTask(undefined, ["im", "toast"]), mockExecution, "error")
 
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({ channels: ["center", "toast"] })
         )
       })
@@ -550,7 +564,7 @@ describe("notification-integration", () => {
         await notifyTaskEvent(imTask(undefined, ["toast"]), mockExecution, "complete")
 
         expect(read).not.toHaveBeenCalled()
-        expect(mockCenterNotify).toHaveBeenCalledWith(
+        expect(mockCenterNotify.mock.calls.map(([input]) => input)).toContainEqual(
           expect.objectContaining({ channels: ["center", "toast"] })
         )
       })

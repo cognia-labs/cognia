@@ -38,7 +38,8 @@ describe("human-input-notify", () => {
         title: "Review request",
         body: "Contains foreground-only detail",
         dedupeKey: "hir_1",
-      })
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
     expect(emit).toHaveBeenCalledWith(HUMAN_INPUT_REQUEST_CHANNEL, request)
     expect(emit).toHaveBeenCalledWith(HUMAN_INPUT_PENDING_PUSH_CHANNEL, {

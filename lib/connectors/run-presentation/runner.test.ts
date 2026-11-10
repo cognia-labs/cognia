@@ -1,7 +1,12 @@
 /** @jest-environment jsdom */
+import type { ProjectionDependencies } from "./runner"
 
 import "fake-indexeddb/auto"
 import Dexie from "dexie"
+import { checkConnectorPersonalSink } from "@/lib/connectors/personal-delivery"
+jest.mock("@/lib/connectors/personal-delivery", () => ({
+  checkConnectorPersonalSink: jest.fn(async () => ({ outcome: "allow" })),
+}))
 import { createSlackRunPresentationDriver } from "./slack-driver"
 
 import {
@@ -198,6 +203,14 @@ describe("QQ group Agent status presentation", () => {
     try {
       await createExecutionRun({
         id: running.runId,
+        actingIdentity: {
+          schemaVersion: 1,
+          rootRunId: running.runId,
+          lane: "service",
+          trigger: "external-event",
+          requesters: [],
+          authorityRevision: 0,
+        },
         kind: "agent-turn",
         sourceId: "qq-heartbeat",
         title: "QQ test",
@@ -337,6 +350,7 @@ describe("execution run presentation projection", () => {
           deliverFallback,
           saveBinding: jest.fn(async () => undefined),
           recordDegraded: jest.fn(),
+          checkPersonal: async () => true,
           nativeEnabled: () => native,
         }
       )
@@ -384,6 +398,7 @@ describe("execution run presentation projection", () => {
       deliverFallback,
       saveBinding: async () => undefined,
       recordDegraded: jest.fn(),
+      checkPersonal: async () => true,
       nativeEnabled: () => true,
     })
     expect(open.mock.calls[0][0].sourceMessageId).toBeUndefined()
@@ -413,6 +428,7 @@ describe("execution run presentation projection", () => {
       deliverFallback: jest.fn(),
       saveBinding: async (row) => void saved.push(row),
       recordDegraded: jest.fn(),
+      checkPersonal: async () => true,
       nativeEnabled: () => true,
     })
 
@@ -451,6 +467,7 @@ describe("execution run presentation projection", () => {
       deliverFallback,
       saveBinding: async () => undefined,
       recordDegraded,
+      checkPersonal: async () => true,
       nativeEnabled: () => true,
     })
 
@@ -487,6 +504,7 @@ describe("execution run presentation projection", () => {
       })),
       saveBinding: async (row) => void saved.push(row),
       recordDegraded,
+      checkPersonal: async () => true,
       nativeEnabled: () => true,
     })
 
@@ -526,6 +544,7 @@ describe("execution run presentation projection", () => {
       deliverMilestone,
       saveBinding: jest.fn(async () => undefined),
       recordDegraded: jest.fn(),
+      checkPersonal: async () => true,
       nativeEnabled: () => true,
     })
 
@@ -551,6 +570,7 @@ describe("execution run presentation projection", () => {
         deliverMilestone,
         saveBinding: jest.fn(async () => undefined),
         recordDegraded: jest.fn(),
+        checkPersonal: async () => true,
         nativeEnabled: () => true,
       }
     )
@@ -576,6 +596,7 @@ describe("execution run presentation projection", () => {
         deliverFallback: jest.fn(),
         saveBinding: jest.fn(),
         recordDegraded: jest.fn(),
+        checkPersonal: async () => true,
         nativeEnabled: () => true,
       })
     ).resolves.toBe(row)
@@ -623,6 +644,7 @@ describe("execution run presentation projection", () => {
         deliverFallback: jest.fn(),
         saveBinding: jest.fn(async () => undefined),
         recordDegraded,
+        checkPersonal: async () => true,
         nativeEnabled: () => true,
       }
     )
@@ -682,6 +704,7 @@ describe("execution run presentation projection", () => {
         deliverFallback: jest.fn(),
         saveBinding: jest.fn(async () => undefined),
         recordDegraded,
+        checkPersonal: async () => true,
         nativeEnabled: () => true,
       }
     )
@@ -746,6 +769,7 @@ describe("execution run presentation projection", () => {
         deliverFallback: jest.fn(),
         saveBinding: jest.fn(async () => undefined),
         recordDegraded,
+        checkPersonal: async () => true,
         nativeEnabled: () => true,
       }
     )
@@ -892,6 +916,14 @@ describe("execution run presentation projection", () => {
     }
     await createExecutionRun({
       id: terminalSnapshot.runId,
+      actingIdentity: {
+        schemaVersion: 1,
+        rootRunId: terminalSnapshot.runId,
+        lane: "service",
+        trigger: "external-event",
+        requesters: [],
+        authorityRevision: 0,
+      },
       kind: "agent-turn",
       sourceId: "freeze-timeout",
       title: "Agent run",
@@ -930,6 +962,14 @@ describe("execution run presentation projection", () => {
     __resetLifecycleForTesting()
     await createExecutionRun({
       id: snapshot.runId,
+      actingIdentity: {
+        schemaVersion: 1,
+        rootRunId: snapshot.runId,
+        lane: "service",
+        trigger: "external-event",
+        requesters: [],
+        authorityRevision: 0,
+      },
       kind: "agent-turn",
       sourceId: "append-authorization",
       title: "Agent run",
@@ -1011,6 +1051,14 @@ describe("execution run presentation projection", () => {
     })
     await createExecutionRun({
       id: snapshot.runId,
+      actingIdentity: {
+        schemaVersion: 1,
+        rootRunId: snapshot.runId,
+        lane: "service",
+        trigger: "external-event",
+        requesters: [],
+        authorityRevision: 0,
+      },
       kind: "agent-turn",
       sourceId: "heartbeat-freeze",
       title: "Agent run",
@@ -1065,3 +1113,156 @@ describe("execution run presentation projection", () => {
     unregisterRunningAdapter(adapter.id)
   })
 })
+
+it("withholds a newly tainted presentation before a native update or fallback can send", async () => {
+  const update = jest.fn()
+  const deliverFallback = jest.fn()
+  const deliverPersonalNotice = jest.fn(async () => undefined)
+  const saveBinding = jest.fn(async () => undefined)
+  const checkPersonal = jest.fn(async () => false)
+  const row = await projectExecutionRunBinding(
+    { ...binding, platformMessageId: "old-card" },
+    snapshot,
+    {
+      checkPersonal,
+      deliverPersonalNotice,
+      saveBinding,
+      deliverFallback,
+      nativeEnabled: () => true,
+      resolveDriver: () => ({
+        capabilities: { interactiveControls: true },
+        open: jest.fn(),
+        update,
+        finish: jest.fn(),
+      }),
+      recordDegraded: jest.fn(),
+    }
+  )
+  expect(checkPersonal).toHaveBeenCalledWith(
+    expect.objectContaining({ runId: binding.runId }),
+    snapshot
+  )
+  expect(update).not.toHaveBeenCalled()
+  expect(deliverFallback).not.toHaveBeenCalled()
+  expect(deliverPersonalNotice).toHaveBeenCalledTimes(1)
+  expect(row.presentationState?.personalWithheld).toBe(true)
+})
+
+it("does not bypass a mid-call taint when a native presentation fails over", async () => {
+  const deliverFallback = jest.fn()
+  const checkPersonal = jest.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+  await projectExecutionRunBinding(binding, snapshot, {
+    checkPersonal,
+    deliverFallback,
+    saveBinding: jest.fn(async () => undefined),
+    nativeEnabled: () => true,
+    resolveDriver: () => ({
+      capabilities: { interactiveControls: true },
+      open: jest.fn(async () => {
+        throw new Error("native failed")
+      }),
+      update: jest.fn(),
+      finish: jest.fn(),
+    }),
+    recordDegraded: jest.fn(),
+  })
+  expect(checkPersonal).toHaveBeenCalledTimes(2)
+  expect(deliverFallback).not.toHaveBeenCalled()
+})
+
+it("checks the default native heartbeat against real Host taint before the driver receives content", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  __resetLifecycleForTesting()
+  const authority = await import("@/lib/execution/acting-authority")
+  const run = await authority.startToolExecutionRun("native-private", {
+    localAuthorization: authority.LOCAL_PERSON_RUN,
+  })
+  const privateSnapshot = { ...snapshot, runId: run.id }
+  await getDb().executionRuns.update(run.id, {
+    latestSnapshot: privateSnapshot,
+    personalMarks: [{ person: { kind: "local-person" }, source: "private-read", markedAt: 1 }],
+  })
+  const update = jest.fn()
+  const adapter = {
+    id: "native-private",
+    meta: { type: "lark" },
+    stop: jest.fn(async () => undefined),
+    resolvePersonalAudience: async () => ({ kind: "group" }),
+    runPresentation: {
+      capabilities: { interactiveControls: true },
+      open: jest.fn(),
+      update,
+      finish: jest.fn(),
+    },
+  } as unknown as PlatformAdapter
+  registerRunningAdapter(adapter.id, {
+    adapter,
+    abortController: new AbortController(),
+    restart: jest.fn(),
+  })
+  await createExecutionRunBinding({
+    ...binding,
+    id: "native-private-binding",
+    runId: run.id,
+    adapterId: adapter.id,
+    conversationKey: "lark:native-private:group",
+    platformMessageId: "card",
+  })
+  jest
+    .mocked(checkConnectorPersonalSink)
+    .mockImplementationOnce(
+      jest.requireActual("@/lib/connectors/personal-delivery").checkConnectorPersonalSink
+    )
+  try {
+    await heartbeatExecutionRunBinding("native-private-binding")
+    expect(update).not.toHaveBeenCalled()
+    expect(jest.mocked(checkConnectorPersonalSink).mock.calls.at(-1)?.[0]).toEqual({
+      executionRunId: run.id,
+    })
+    const [receipt] = await getDb().actionReviewReceipts.toArray()
+    expect(receipt.personal).toMatchObject({
+      outcome: "withheld",
+      originalTarget: { adapterId: adapter.id, conversationKey: "lark:native-private:group" },
+    })
+    expect(receipt.personal).not.toHaveProperty("contentHash")
+  } finally {
+    unregisterRunningAdapter(adapter.id)
+    __resetExecutionRunPresentationRunnerForTesting()
+    await getDb().delete()
+    __resetDbForTesting()
+  }
+})
+
+it.each(["running", "completed"] as const)(
+  "rechecks immediately before native %s delivery after asynchronous queue lookup",
+  async (status) => {
+    const open = jest.fn()
+    const update = jest.fn()
+    const finish = jest.fn()
+    let clean = true
+    const notice = jest.fn(async () => undefined)
+    const deps: ProjectionDependencies = {
+      checkPersonal: async () => clean,
+      deliverPersonalNotice: notice,
+      nativeEnabled: () => true,
+      resolveDriver: () => ({ open, update, finish, capabilities: { interactiveControls: true } }),
+      resolveQueueDepth: async () => {
+        clean = false
+        return 0
+      },
+      saveBinding: async () => undefined,
+      recordDegraded: async () => undefined,
+      deliverFallback: async () => ({ ref: {}, deliveryMode: "append", delivered: false }),
+    }
+    await projectExecutionRunBinding(
+      { ...binding, platformMessageId: "existing" },
+      { ...snapshot, status },
+      deps
+    )
+    expect(open).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(finish).not.toHaveBeenCalled()
+    expect(notice).toHaveBeenCalledTimes(1)
+  }
+)

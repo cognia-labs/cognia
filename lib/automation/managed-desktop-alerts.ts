@@ -1,3 +1,4 @@
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 /**
  * Turn a Host's managed desktop monitor into notification-centre entries
  * (ADR-0233 §5, amendment A7): a billed desktop past its hard deadline, and
@@ -37,7 +38,11 @@ async function defaultDeps(): Promise<ManagedDesktopAlertDeps> {
     import("@/lib/i18n/runtime-translator"),
   ])
   const t = await getRuntimeTranslator("settings.managedDesktops.alerts")
-  return { notify, translate: (key, values) => t(key, values) }
+  return {
+    notify: (input) =>
+      notify(input, { personalContext: explicitHostPersonalSinkContext("background-service") }),
+    translate: (key, values) => t(key, values),
+  }
 }
 
 /** One centre entry per alert episode: the same kind, subject and start. */

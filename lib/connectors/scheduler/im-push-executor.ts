@@ -185,13 +185,14 @@ export function createImPushExecutor(deps: ImPushExecutorDeps = {}) {
             metadata: { idempotencyKey },
           },
           source: "manual",
+          personalContext: { executionRunId: execution.id },
           authorization: {
             kind: "unattended",
             ownerRef: `task:${task.id}`,
             origin: taskPlanOrigin(task),
           },
         },
-        { executionContext: { automation: "schedule" } }
+        { executionContext: { executionRunId: execution.id, automation: "schedule" } }
       )
       if (delivered.kind === "drafted") {
         log.info("Scheduler im-push held as a draft", {

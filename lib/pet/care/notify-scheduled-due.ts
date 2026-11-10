@@ -11,6 +11,7 @@
 // directed row per fire (a 5-minute interval task alone produced hundreds of
 // unread rows under the old 45 s window). Archiving the row starts a new one.
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NotificationAction, NotificationInput } from "@/types/notifications"
 import { COALESCE_UNTIL_ARCHIVED } from "@/lib/notifications/dedup"
 
@@ -59,22 +60,25 @@ export async function notifyScheduledDue(
 ): Promise<boolean> {
   try {
     const notify = deps.notify ?? (await import("@/lib/notifications/runtime")).notify
-    await notify({
-      source: "system",
-      level: "info",
-      title: options.title,
-      body: options.body,
-      channels: ["center", "toast", "os"],
-      dedupeKey: scheduledDueDedupeKey(taskId),
-      coalesceWindowMs: COALESCE_UNTIL_ARCHIVED,
-      groupKey: SCHEDULED_DUE_GROUP_KEY,
-      sourceRef: { kind: "task", id: taskId },
-      icon: "Clock",
-      directed: true,
-      ...(options.meta ? { meta: options.meta } : {}),
-      ...(options.actions ? { actions: options.actions } : {}),
-      ...(options.href ? { href: options.href } : {}),
-    })
+    await notify(
+      {
+        source: "system",
+        level: "info",
+        title: options.title,
+        body: options.body,
+        channels: ["center", "toast", "os"],
+        dedupeKey: scheduledDueDedupeKey(taskId),
+        coalesceWindowMs: COALESCE_UNTIL_ARCHIVED,
+        groupKey: SCHEDULED_DUE_GROUP_KEY,
+        sourceRef: { kind: "task", id: taskId },
+        icon: "Clock",
+        directed: true,
+        ...(options.meta ? { meta: options.meta } : {}),
+        ...(options.actions ? { actions: options.actions } : {}),
+        ...(options.href ? { href: options.href } : {}),
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+    )
     return true
   } catch {
     return false

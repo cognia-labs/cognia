@@ -14,6 +14,7 @@
 // applies DND / quiet hours itself, and the `dedupeKey` folds repeated presses
 // into one row rather than a stack.
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { petConsoleHref } from "@/lib/pet/console-tabs"
 
 /** Already-localized notification copy supplied by the caller. */
@@ -56,18 +57,21 @@ export async function notifyPetInteractionUnavailable(
 ): Promise<boolean> {
   try {
     const notify = deps.notify ?? (await import("@/lib/notifications/runtime")).notify
-    await notify({
-      source: "system",
-      level: "info",
-      title: strings.title,
-      body: strings.body,
-      dedupeKey: PET_UNAVAILABLE_DEDUPE_KEY,
-      href: PET_UNAVAILABLE_HREF,
-      icon: "PawPrint",
-      // An explanation, not a request for action: a dot, not the red badge.
-      directed: false,
-      ttlMs: PET_UNAVAILABLE_TTL_MS,
-    })
+    await notify(
+      {
+        source: "system",
+        level: "info",
+        title: strings.title,
+        body: strings.body,
+        dedupeKey: PET_UNAVAILABLE_DEDUPE_KEY,
+        href: PET_UNAVAILABLE_HREF,
+        icon: "PawPrint",
+        // An explanation, not a request for action: a dot, not the red badge.
+        directed: false,
+        ttlMs: PET_UNAVAILABLE_TTL_MS,
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     return true
   } catch {
     return false

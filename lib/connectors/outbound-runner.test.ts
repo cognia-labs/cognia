@@ -14,6 +14,7 @@
  *   - Task 39: per-conversation FIFO ordering
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import "fake-indexeddb/auto"
 jest.mock("./tauri/commands", () => ({
   ...jest.requireActual("./tauri/commands"),
@@ -81,6 +82,7 @@ import type { OutboundJobAuthorizationProvenance } from "@cognia/plugin-contract
 import type { AdapterInstanceRow, OutboundJobRow } from "@/lib/db/connector-types"
 import { planDelivery, type DeliveryPlanInput } from "@/lib/policy/action-review/plan-delivery"
 import { ConnectorDeliveryGateway, queuedJob } from "./delivery-gateway"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 
 // Plugin connector hook + PII gate mocked so the outbound block/transform path
 // is deterministic. Default: allow + PII-clean (so the Task 38/39 tests are
@@ -104,6 +106,42 @@ jest.mock("@/lib/telemetry/events/track-event", () => ({
 
 /** Pseudo adapter id the runner uses for runner-level audit rows. */
 const RUNNER_AUDIT_ID = "__outbound_runner__"
+
+it("rechecks personal taint acquired after enqueue and sends only a fixed withheld notice", async () => {
+  const job = await enqueue("personal-late", "telegram:personal-late:chat", "private-late")
+  await getDb().executionRuns.update(`execution:job:outbound:${job.id}`, {
+    personalMarks: [{ person: { kind: "local-person" }, source: "late-doc", markedAt: 1 }],
+  })
+  const send = jest.fn(async () => ({ ok: true, platformMessageId: "notice" }))
+  const a = makeAdapter("personal-late", send)
+  const runner = createRunner(new Map([[a.id, a]]))
+  try {
+    for (
+      let i = 0;
+      i < 100 && (await getDb().outboundQueue.get(job.id))?.status !== "deadlettered";
+      i++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    expect((await getDb().outboundQueue.get(job.id))?.lastErrorCode).toBe("personal_withheld")
+    for (let i = 0; i < 100 && !send.mock.calls.length; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        segments: [{ type: "text", text: expect.stringContaining("withheld") }],
+      })
+    )
+    expect(JSON.stringify(send.mock.calls)).not.toContain('"text":"hello"')
+    expect(
+      (await getDb().actionReviewReceipts.toArray()).some(
+        (row) => row.personal?.outcome === "withheld"
+      )
+    ).toBe(true)
+  } finally {
+    runner.stop()
+    await runner.promise
+  }
+})
 
 it("blocks a later conversation job until its pending provider head settles", async () => {
   const first = await enqueue("fifo-audit", "telegram:fifo-audit:chat", "head")
@@ -676,6 +714,7 @@ describe("outbound-runner — authorization mode transitions", () => {
         conversationKey: "telegram:auth:chat",
         source: "workflow",
         authorization: { kind: "unattended", ownerRef: "workflow:w1" },
+        personalContext: explicitHostPersonalSinkContext("background-service"),
         request: {
           conversationRef: { platform: "telegram", adapterId: "auth" },
           segments: [{ type: "text", text: "wait for approval" }],
@@ -1942,6 +1981,7 @@ describe("outbound-runner — structural scheduler budgets", () => {
     })
     await enqueueOutboundMany(
       Array.from({ length: 40 }, (_, index) => ({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         adapterId,
         conversationKey: `telegram:${adapterId}:chat-${index}`,
         request: {
@@ -2116,7 +2156,15 @@ describe("outbound-runner — circuit-open failover", () => {
       grantScope: "once" as const,
     }
     const second = await enqueue(primary, `telegram:${primary}:chat`, "k_fo_2")
-    await getDb().outboundQueue.update(second.id, { authorizedBy })
+    await getDb().sessions.put({
+      id: "reroute-source",
+      title: "Clean",
+      kind: "direct",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    const personalSourceContext = personalSinkHost.sessionPersonalSinkContext("reroute-source")
+    await getDb().outboundQueue.update(second.id, { authorizedBy, personalSourceContext })
 
     const { promise, stop } = createRunner(adapters)
     const jobs = await waitForJobs((rows) =>
@@ -2137,6 +2185,18 @@ describe("outbound-runner — circuit-open failover", () => {
     expect(rerouted!.idempotencyKey).toBe(`k_fo_2:fo:${sibling}`)
     // The same chat through a sibling bot: what authorized it carries over (ADR-0239).
     expect(rerouted!.authorizedBy).toEqual(authorizedBy)
+    expect(rerouted!.personalSourceContext).toMatchObject({
+      personalSources: expect.arrayContaining([personalSourceContext]),
+    })
+    const later = await startToolExecutionRun("reroute-source", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    await getDb().executionRuns.update(later.id, {
+      personalMarks: [{ person: { kind: "local-person" }, source: "later source", markedAt: 1 }],
+    })
+    expect(
+      (await personalSinkHost.readRunPersonalTaint(rerouted!.personalSourceContext!)).marks
+    ).toHaveLength(1)
     const audits = await listRecent(primary)
     expect(audits.some((a) => a.kind === "delivery.failover")).toBe(true)
   })
@@ -2450,6 +2510,7 @@ describe("outbound-runner — stale sending recovery", () => {
   ): Record<string, unknown> {
     const at = claimedAt - 1_000
     return {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       id,
       adapterId,
       conversationKey: `telegram:${adapterId}:chat_${id}`,
@@ -2485,6 +2546,10 @@ describe("outbound-runner — stale sending recovery", () => {
         "k_stale_r"
       ) as never
     )
+    await startToolExecutionRun(undefined, {
+      runId: "execution:job:outbound:stale_job",
+      automation: "service",
+    })
 
     await runOnce(new Map([[adapterId, adapter]]))
 
@@ -2645,6 +2710,7 @@ describe("outbound-runner — breaker defer + recovery", () => {
     const adapter = makeAdapter(adapterId, async () => ({ ok: true, platformMessageId: "pm_ok" }))
     const at = Date.now() - 1_000
     await getDb().outboundQueue.add({
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       id: "maxed_job",
       adapterId,
       conversationKey: `telegram:${adapterId}:chat_maxed`,
@@ -3249,6 +3315,15 @@ describe("round 5: personal outbound producer identity", () => {
             imOverrideRow: { allowedBuiltInSkillIds: ["im.broadcast"] } as never,
           }
         )
+        if (identity === "unknown") {
+          expect(result.status).toBe("error")
+          const queued = await getDb().outboundQueue.toArray()
+          expect(
+            queued.every((row) => row.request.segments.every((segment) => segment.type === "text"))
+          ).toBe(true)
+          expect(JSON.stringify(queued)).not.toContain("Confirm this message")
+          return
+        }
         expect(result.status).toBe("pending_hitl")
         const [job] = await getDb().outboundQueue.toArray()
         expect(job.request.segments[0].type).toBe("a2ui")
@@ -3262,7 +3337,7 @@ describe("round 5: personal outbound producer identity", () => {
           ...(admitted ? { platformMessageId: "confirmation-sent" } : {}),
         })
         expect(await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)).toMatchObject({
-          ...(identity === "unknown" ? {} : { parentRunId: executionRunId }),
+          parentRunId: executionRunId,
           status: admitted ? "completed" : "failed",
         })
         if (admitted) {
@@ -3393,6 +3468,7 @@ describe("round 5: personal outbound producer identity", () => {
       const { enqueueGovernedMany } = await import("./delivery-gateway")
       const results = await enqueueGovernedMany(
         ["head", "tail"].map((key) => ({
+          personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
           adapterId: fixture.adapter.id,
           conversationKey: fixture.conversationKey,
           source: "manual",
@@ -3413,22 +3489,49 @@ describe("round 5: personal outbound producer identity", () => {
         [fixture.adapter.id, fixture.adapter],
         [siblingId, sibling],
       ])
+      for (const adapter of adapters.values()) {
+        adapter.resolvePersonalAudience = async (conversationKey) =>
+          conversationKey === `lark:${adapter.id}:ou_owner`
+            ? {
+                kind: "person",
+                person: {
+                  kind: "platform",
+                  platform: "lark",
+                  adapterId: adapter.id,
+                  remoteUserId: "ou_owner",
+                },
+              }
+            : { kind: "group" }
+      }
+      // The real gateway resolves the live destination adapter before it can
+      // narrow a tainted reroute. Mirror the runtime's bus registration.
+      const { getBus } = await import("./bus")
+      const bus = getBus()
+      for (const adapter of adapters.values()) bus.registerAdapter(adapter)
       const runner = createRunner(adapters)
+      const replacementKey = `${mode}-tail:${mode === "failover" ? "fo" : "lb"}:${siblingId}`
       let jobs: OutboundJobRow[]
       try {
         jobs = await waitForJobs((rows) =>
           rows.some(
             (job) =>
               job.adapterId === siblingId &&
+              job.request.metadata.idempotencyKey === replacementKey &&
               (job.status === "sent" || job.status === "deadlettered")
           )
         )
       } finally {
         runner.stop()
         await runner.promise
+        for (const adapter of adapters.values()) bus.unregisterAdapter(adapter.id)
       }
-      const replacement = jobs.find((job) => job.adapterId === siblingId)!
+      const replacement = jobs.find(
+        (job) => job.request.metadata.idempotencyKey === replacementKey
+      )!
+      expect(replacement.lastError).toBeUndefined()
       expect(replacement).toMatchObject({ status: "sent" })
+      if (mode === "balanced")
+        expect(replacement.conversationKey).toBe(`lark:${siblingId}:ou_owner`)
       expect(
         await getDb().executionRuns.get(`execution:job:outbound:${replacement.id}`)
       ).toMatchObject({

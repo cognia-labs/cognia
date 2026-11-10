@@ -10,6 +10,7 @@
  * + `configureAgentTeamRuntime` in tests can swap deps without leaking state.
  */
 
+import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeam, AgentTeammate, AgentTeamTask } from "@/types/agent/agent-team"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { executeAgent as defaultExecuteAgent } from "@/lib/ai/agent/agent-executor"
@@ -285,17 +286,22 @@ export function buildAgentTeamRuntimeDeps(
   const defaultNotifierDeps: TeamNotifierDeps = {
     deliver: (p) => {
       void import("@/lib/notifications/runtime").then(({ notify }) =>
-        notify({
-          source: "agent-team",
-          level: p.level === "warn" ? "warning" : p.level === "critical" ? "critical" : "info",
-          title: p.title,
-          body: p.body,
-          href: p.detailHref,
-          dedupeKey: p.dedupeKey,
-          groupKey: p.runId,
-          sourceRef: { kind: "team-run", id: p.runId },
-          directed: p.level === "critical",
-        })
+        notify(
+          {
+            source: "agent-team",
+            level: p.level === "warn" ? "warning" : p.level === "critical" ? "critical" : "info",
+            title: p.title,
+            body: p.body,
+            href: p.detailHref,
+            dedupeKey: p.dedupeKey,
+            groupKey: p.runId,
+            sourceRef: { kind: "team-run", id: p.runId },
+            directed: p.level === "critical",
+          },
+          {
+            personalContext: { executionRunId: agentTeamExecutionRunId(p.runId) },
+          }
+        )
       )
     },
     log: async (level, message, payload) => {

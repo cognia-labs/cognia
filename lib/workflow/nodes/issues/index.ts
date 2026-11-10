@@ -1,3 +1,4 @@
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 /**
  * `action.issue.*` and `trigger.issue.event` (spec 2026-09-06 D9).
  *
@@ -123,6 +124,12 @@ registerNodeExecutor({
   kind: "action.issue.create",
   typeVersion: 1,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.issue.create" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.issue.create" }
+    )
     const p = ctx.params as Record<string, unknown>
     const title = typeof p.title === "string" ? p.title.trim() : ""
     if (!title) throw nonRetryable("action.issue.create requires non-empty 'title'")
@@ -207,6 +214,12 @@ registerNodeExecutor({
   kind: "action.issue.update",
   typeVersion: 1,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.issue.update" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.issue.update" }
+    )
     const p = ctx.params as Record<string, unknown>
     const issue = await requireIssue(p, "action.issue.update")
     const actions: IssueBulkAction[] = []
@@ -245,6 +258,12 @@ registerNodeExecutor({
   kind: "action.issue.assign",
   typeVersion: 1,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.issue.assign" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.issue.assign" }
+    )
     const p = ctx.params as Record<string, unknown>
     const issue = await requireIssue(p, "action.issue.assign")
     const kind = p.assigneeKind
@@ -270,6 +289,12 @@ registerNodeExecutor({
   kind: "action.issue.comment",
   typeVersion: 1,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.issue.comment" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.issue.comment" }
+    )
     const p = ctx.params as Record<string, unknown>
     const issue = await requireIssue(p, "action.issue.comment")
     const body = typeof p.body === "string" ? p.body.trim() : ""
@@ -282,6 +307,12 @@ registerNodeExecutor({
   kind: "action.issue.label",
   typeVersion: 1,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.issue.label" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.issue.label" }
+    )
     const p = ctx.params as Record<string, unknown>
     const issue = await requireIssue(p, "action.issue.label")
     const add = nameList(p.add)

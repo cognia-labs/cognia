@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NotificationRecord } from "@/types/notifications"
 
 jest.mock("@/lib/db/notifications", () => ({
@@ -20,6 +21,7 @@ const db = dbModule as jest.Mocked<typeof dbModule>
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: over.id ?? "n1",
     source: over.source ?? "system",
     level: over.level ?? "info",

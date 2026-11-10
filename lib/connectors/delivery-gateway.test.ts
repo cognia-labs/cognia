@@ -1,8 +1,10 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { planDelivery } from "@/lib/policy/action-review/plan-delivery"
 import { outboundReceipt } from "@/lib/policy/action-review/outbound-receipt"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 import type { ConnectorDraftRow, OutboundJobRow } from "@/lib/db/connector-types"
 import { subscribeOutboundEnqueued, type EnqueueInput } from "@/lib/db/outbound-jobs"
 import type {
@@ -45,6 +47,7 @@ function input(
       metadata: { idempotencyKey: `idem-${source}` },
     },
     source,
+    personalContext: explicitHostPersonalSinkContext("background-service"),
     ...(source === "manual" || source === "draft-approved" ? {} : { authorization }),
   } as GovernedEnqueueInput
 }
@@ -91,6 +94,7 @@ function gatewayWith(overrides: Partial<ConnectorDeliveryGatewayDependencies> = 
     ),
     getAdapter: jest.fn(),
     piiGate: () => true,
+    checkPersonal: jest.fn(async () => ({ outcome: "allow" as const })),
     appendAudit: jest.fn(async () => undefined),
     planDelivery: jest.fn(async (): Promise<DeliveryDecision> => ({
       action: "send",
@@ -117,6 +121,71 @@ function gatewayWith(overrides: Partial<ConnectorDeliveryGatewayDependencies> = 
   }
   return { gateway: new ConnectorDeliveryGateway(deps), deps }
 }
+
+it("keeps the Host run through immediate sends and denies private content before policy approval", async () => {
+  const checkPersonal = jest.fn(async () => ({
+    outcome: "withhold" as const,
+    persons: [],
+    reason: "private",
+  }))
+  const h = gatewayWith({ checkPersonal })
+  const send = jest.fn(async () => ({ ok: true }))
+  const context = { executionRunId: "host-run" }
+  const segments = [{ type: "text" as const, text: "private" }]
+  const result = await h.gateway.sendNow(
+    {
+      adapterId: "adapter-1",
+      conversationKey: "slack:adapter-1:C1",
+      source: "draft-approved",
+      authorization: { kind: "human", actor: "local-user" },
+      personalContext: context,
+      segments,
+      auditKind: "delivery.legacy_direct",
+    },
+    send
+  )
+  expect(result).toMatchObject({ ok: false, error: { code: CONNECTOR_DELIVERY_DENIED_CODE } })
+  expect(send).not.toHaveBeenCalled()
+  expect(h.deps.planDelivery).not.toHaveBeenCalled()
+  expect(checkPersonal).toHaveBeenCalledWith(
+    expect.objectContaining({ ...context, receiptAttemptId: expect.any(String) }),
+    "adapter-1",
+    "slack:adapter-1:C1",
+    segments,
+    expect.any(Object)
+  )
+})
+
+it("rechecks unplanned streams per patch and emits one fixed terminal notice on taint", async () => {
+  const planStream = jest
+    .fn<
+      ReturnType<ConnectorDeliveryGatewayDependencies["planStream"]>,
+      Parameters<ConnectorDeliveryGatewayDependencies["planStream"]>
+    >()
+    .mockResolvedValueOnce({ stream: true })
+    .mockResolvedValue({ stream: false, personalWithheld: true })
+  const h = gatewayWith({ planStream })
+  const frame = {
+    adapterId: "adapter-1",
+    conversationRef: { channelId: "C1" },
+    streamKey: "stream-1",
+    source: "plugin" as const,
+    ownerRef: "plugin:p",
+    personalContext: { executionRunId: "host-run" },
+    payload: "private",
+  }
+  const stream = jest.fn(async () => true)
+  const notice = jest.fn(async () => undefined)
+  expect(await h.gateway.streamUnplanned(frame, stream, notice)).toBe(true)
+  expect(await h.gateway.streamUnplanned(frame, stream, notice)).toBe(false)
+  expect(await h.gateway.streamUnplanned(frame, stream, notice)).toBe(false)
+  expect(stream).toHaveBeenCalledTimes(1)
+  expect(notice).toHaveBeenCalledTimes(1)
+  expect(planStream).toHaveBeenCalledTimes(3)
+  expect(planStream).toHaveBeenLastCalledWith(
+    expect.objectContaining({ personalContext: frame.personalContext, payload: "private" })
+  )
+})
 
 describe("ConnectorDeliveryGateway", () => {
   it("round 5: forwards exact Host execution and cancellation for batch enqueue", async () => {
@@ -178,6 +247,12 @@ describe("ConnectorDeliveryGateway", () => {
       conversationKey: "slack:adapter-1:C1",
       source: "ai-run",
       authorization,
+      personalContext: expect.objectContaining({
+        hostOrigin: "background-service",
+        receiptAttemptId: expect.any(String),
+      }),
+      payload: input("ai-run").request,
+      canNarrowPersonal: true,
     })
     // The original claim belongs in the provenance, not at the queue row root.
     expect(deps.persistOne).toHaveBeenCalledWith(
@@ -197,17 +272,23 @@ describe("ConnectorDeliveryGateway", () => {
 
   it("freezes delivery intent while the planner is awaiting approval", async () => {
     let resolve!: (decision: DeliveryDecision) => void
+    let entered!: () => void
+    const planning = new Promise<void>((done) => {
+      entered = done
+    })
     const { gateway, deps } = gatewayWith({
       planDelivery: jest.fn(
         () =>
           new Promise<DeliveryDecision>((done) => {
             resolve = done
+            entered()
           })
       ),
     })
     const value = input("plugin", { kind: "plugin", pluginId: "p" })
     value.request.sendOptions = { mode: "reply" }
     const pending = gateway.enqueueAuthorized(value)
+    await planning
     value.request.sendOptions.mode = "proactive"
     value.request.segments = [{ type: "text", text: "changed" }]
     resolve({ action: "send", provenance: { mode: "shadow", plan: "allow" } })
@@ -265,6 +346,7 @@ describe("ConnectorDeliveryGateway", () => {
     expect(queuedJob(result)).toBeUndefined()
     expect(deps.persistOne).not.toHaveBeenCalled()
     expect(deps.createDraft).toHaveBeenCalledWith({
+      personalExecutionRunId: undefined,
       conversationKey: "slack:adapter-1:C1",
       sessionId: "task:t1",
       segments: [{ type: "text", text: "hello" }],
@@ -418,8 +500,12 @@ describe("ConnectorDeliveryGateway", () => {
     expect(piiGate).toHaveBeenCalledTimes(2)
     expect(deps.persistMany).toHaveBeenCalledTimes(1)
     expect(deps.persistMany).toHaveBeenCalledWith(
-      values.map(({ authorization, ...rest }) => ({
+      values.map(({ authorization, personalContext: _personalContext, ...rest }) => ({
         ...rest,
+        personalSourceContext: expect.objectContaining({
+          ..._personalContext,
+          receiptAttemptId: expect.any(String),
+        }),
         authorizationProvenance: {
           schemaVersion: 1,
           mode: "shadow",
@@ -481,6 +567,7 @@ describe("ConnectorDeliveryGateway", () => {
 describe("ConnectorDeliveryGateway.sendNow (ADR-0239)", () => {
   const plugin: OutboundAuthorization = { kind: "plugin", pluginId: "p1" }
   const immediate = (extra: Record<string, unknown> = {}) => ({
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: "adapter-1",
     conversationKey: "slack:adapter-1:C1",
     segments: [{ type: "text" as const, text: "hello" }],
@@ -513,6 +600,12 @@ describe("ConnectorDeliveryGateway.sendNow (ADR-0239)", () => {
       source: "plugin",
       authorization: plugin,
       immediate: true,
+      personalContext: expect.objectContaining({
+        hostOrigin: "fixed-notice",
+        receiptAttemptId: expect.any(String),
+      }),
+      payload: immediate().segments,
+      canNarrowPersonal: false,
     })
     expect(deps.recordReceipt).toHaveBeenCalledWith(receipt("r1"))
     expect(deps.appendAudit).toHaveBeenCalledWith(
@@ -601,6 +694,7 @@ describe("ConnectorDeliveryGateway.sendNow (ADR-0239)", () => {
 
 describe("ConnectorDeliveryGateway.streamUnplanned (ADR-0239)", () => {
   const frame = (conversationRef: unknown = { chatId: "c1", reqId: "r1" }) => ({
+    personalContext: explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: "bot-a",
     conversationRef,
     source: "plugin" as const,
@@ -617,6 +711,8 @@ describe("ConnectorDeliveryGateway.streamUnplanned (ADR-0239)", () => {
     expect(stream).not.toHaveBeenCalled()
     expect(deps.recordReceipt).not.toHaveBeenCalled()
     expect(deps.planStream).toHaveBeenCalledWith({
+      personalContext: explicitHostPersonalSinkContext("fixed-notice"),
+      payload: undefined,
       adapterId: "bot-a",
       ownerRef: "plugin:p1",
       source: "plugin",
@@ -710,6 +806,7 @@ describe("forwardConversationKey", () => {
 describe("ConnectorDeliveryGateway.forward (ADR-0239)", () => {
   const larkAdapter = { id: "bot-a", meta: { type: "lark" } } as unknown as PlatformAdapter
   const input = {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: "bot-a",
     forward: { messageId: "om_1", target: "oc_2" },
     source: "plugin" as const,
@@ -752,6 +849,7 @@ describe("ConnectorDeliveryGateway.forward (ADR-0239)", () => {
 
 describe("ConnectorDeliveryGateway.urgent (ADR-0239)", () => {
   const input = {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: "bot-a",
     messageId: "om_1",
     userIds: ["ou_a", " ou_b "],
@@ -772,6 +870,12 @@ describe("ConnectorDeliveryGateway.urgent (ADR-0239)", () => {
       source: "plugin",
       authorization: input.authorization,
       immediate: true,
+      personalContext: expect.objectContaining({
+        hostOrigin: "fixed-notice",
+        receiptAttemptId: expect.any(String),
+      }),
+      payload: undefined,
+      canNarrowPersonal: false,
       recipients: [personTarget("bot-a", "ou_a"), personTarget("bot-a", "ou_b")],
     })
     expect(deps.sendUrgent).toHaveBeenCalledWith("bot-a", "om_1", ["ou_a", "ou_b"], "sms")

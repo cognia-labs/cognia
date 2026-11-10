@@ -7,6 +7,7 @@
 // once per snapshot; the notification `dedupeKey` is belt-and-braces against
 // concurrent callers (boot check + scheduler tick).
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { isTauri } from "@/lib/tauri"
 
 import { checkRemoteNewerThanLocal } from "./startup-check"
@@ -32,17 +33,20 @@ export async function notifyIfRemoteNewer(strings: RemoteNewerStrings): Promise<
     const result = await checkRemoteNewerThanLocal()
     if (!result?.newer) return false
     const { notify } = await import("@/lib/notifications/runtime")
-    await notify({
-      source: "system",
-      level: "info",
-      title: strings.title,
-      body: strings.body,
-      href: remoteNewerHref(),
-      dedupeKey: `webdav-remote-newer:${result.remoteAt ?? "unknown"}`,
-      coalesceBackoff: true,
-      directed: true,
-      icon: "CloudDownload",
-    })
+    await notify(
+      {
+        source: "system",
+        level: "info",
+        title: strings.title,
+        body: strings.body,
+        href: remoteNewerHref(),
+        dedupeKey: `webdav-remote-newer:${result.remoteAt ?? "unknown"}`,
+        coalesceBackoff: true,
+        directed: true,
+        icon: "CloudDownload",
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     return true
   } catch {
     return false

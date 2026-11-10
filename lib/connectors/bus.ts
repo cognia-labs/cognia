@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { connectorRequester, recordAbsorbedRequester } from "@/lib/execution/acting-authority"
 import { publishTopic } from "@/lib/runtime/topics"
 import { conversationAutomationState, waitForConversationAutomation } from "./automation-control"
@@ -3650,9 +3651,19 @@ export class ConnectorBus {
     // kind-specific short-circuit or the authoritative callbackHandler.
     this.notifyCallbackObservers(event, resolvedConversationKey)
 
-    const settleCallbackCard = async (state: ApprovalCardState, detail?: string) => {
+    const settleCallbackCard = async (
+      state: ApprovalCardState,
+      detail?: string,
+      detailContext?: personalSinkHost.PersonalSinkContext
+    ) => {
       if (!resolvedConversationKey || !event.originatingMessageId) return
       await settleApprovalCard({
+        // Closed states contain only Host copy. Optional echoed detail has no retained producer.
+        personalContext:
+          detailContext ??
+          (detail
+            ? personalSinkHost.unverifiedPersonalSinkContext("approval detail source unavailable")
+            : personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")),
         adapterId: event.adapterId,
         conversationKey: resolvedConversationKey,
         conversationRef: event.deliveryTarget?.conversationRef ?? {
@@ -3871,7 +3882,14 @@ export class ConnectorBus {
           ...(resolvedConversationKey ? { conversationKey: resolvedConversationKey } : {}),
           ...(event.user.remoteUserId ? { remoteUserId: event.user.remoteUserId } : {}),
         })
-        await settleCallbackCard(outcome.state, outcome.detail)
+        await settleCallbackCard(
+          outcome.state,
+          outcome.detail,
+          !outcome.result.ok || outcome.result.decision.status === "declined"
+            ? personalSinkHost.explicitHostPersonalSinkContext("fixed-notice")
+            : // The outcome names the Squad (a Host configuration label) and fixed text.
+              personalSinkHost.explicitHostPersonalSinkContext("background-service")
+        )
       } catch (err) {
         decide({ status: "failed" })
         await settleCallbackCard("failed")

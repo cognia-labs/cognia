@@ -54,6 +54,7 @@ import {
 } from "@/lib/ai/finish-reason-retry"
 
 export interface StandaloneTurnParams {
+  executionRunId?: string
   sessionId: string
   /** Full UI history INCLUDING the just-appended optimistic user message. */
   messages: UIMessage[]
@@ -244,7 +245,9 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
         modelNames.get(name) ?? sanitizeStandaloneToolName(name)
       // Provider selection and message conversion may yield after the caller's
       // preparation. Only the live Host root decides this attempt's audience.
-      const personalHistory = await preparePersonalHistory(sessionId, messages)
+      const personalHistory = await preparePersonalHistory(sessionId, messages, {
+        executionRunId: params.executionRunId,
+      })
       const modelMessages = (await convertToModelMessages(personalHistory.messages)).map(
         (message) => {
           if (message.role === "assistant" && Array.isArray(message.content)) {
@@ -272,14 +275,18 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
       )
       const assertCurrentAudience = async () => {
         if (sendOptions.personalContextReadersDigest !== undefined) {
-          const readers = await preparePersonalHistory(sessionId, [])
+          const readers = await preparePersonalHistory(sessionId, [], {
+            executionRunId: params.executionRunId,
+          })
           if (readers.visibilityDigest !== sendOptions.personalContextReadersDigest) {
             const error = new Error("personal_history_context_changed")
             turnController.abort(error)
             throw error
           }
         }
-        const current = await preparePersonalHistory(sessionId, messages)
+        const current = await preparePersonalHistory(sessionId, messages, {
+          executionRunId: params.executionRunId,
+        })
         if (current.visibilityDigest !== personalHistory.visibilityDigest) {
           const error = new Error("personal_visibility_changed")
           turnController.abort(error)

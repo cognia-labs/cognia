@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { fireEvent, render, screen } from "@testing-library/react"
 
 import { FunctionalToastCard } from "./card"
@@ -33,6 +34,7 @@ function makeTask(): ScheduledTask {
 
 function makeRecord(meta: Record<string, unknown> | undefined): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "system",
     level: "info",

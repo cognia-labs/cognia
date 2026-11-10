@@ -184,6 +184,7 @@ it("refuses an audience that tightens while message conversion is pending", asyn
   })
   const stream = jest.fn(fakeStream([]))
   const { promise, events } = run({
+    executionRunId: root.id,
     messages: [personalHistoryMessage] as never,
     streamTextImpl: stream as never,
   })

@@ -1,4 +1,5 @@
 "use client"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 
 import { invoke } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
@@ -124,12 +125,15 @@ export class TauriTransport implements Transport {
         finishReady()
         // Deduped per event name by the notifier, so a boot that registers
         // twenty dead subscriptions produces one counted row, not twenty.
+        // Listener setup failure is Host transport state, never run output.
         dispatchDiagnostic(
           createDiagnostic("eventChannelLost", {
             source: "tauri",
             message: err instanceof Error ? err.message : String(err),
             meta: { extra: { event } },
-          })
+          }),
+          undefined,
+          explicitHostPersonalSinkContext("background-service")
         )
       }
     )

@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   isActionReviewDecision,
   isActionReviewRequest,
@@ -51,6 +52,7 @@ function deps(
       originThread: ORIGIN,
     }),
     configuredGrants: async () => [],
+    checkPersonal: jest.fn(async () => ({ outcome: "allow" as const })),
     now: () => 5_000,
     newRequestId: () => `n${++seq}`,
     ...extra,
@@ -63,6 +65,7 @@ function delivery(
   source: DeliveryPlanInput["source"] = "ai-run"
 ): DeliveryPlanInput {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: "bot-a",
     conversationKey,
     source,
@@ -74,6 +77,36 @@ beforeEach(() => {
   __resetAuthorizedToolCallsForTesting()
   __resetRunningBotGrantsForTesting()
 })
+
+it.each(["off", "shadow", "enforce"])(
+  "cannot override personal withholding in %s mode or by human approval",
+  async (mode) => {
+    const checkPersonal = jest.fn(async () => ({
+      outcome: "withhold" as const,
+      persons: [{ kind: "local-person" as const }],
+      reason: "private",
+    }))
+    const context = { executionRunId: "host-run" }
+    const input = {
+      ...delivery(OTHER_KEY, { kind: "human" as const, actor: "local-user" as const }),
+      personalContext: context,
+      payload: "private summary",
+    }
+    expect(
+      await planDelivery(
+        input,
+        deps({ agentPermissions: { outboundAuthorization: mode } }, {}, { checkPersonal })
+      )
+    ).toMatchObject({ action: "deny", reason: "personal" })
+    expect(checkPersonal).toHaveBeenCalledWith(
+      context,
+      "bot-a",
+      OTHER_KEY,
+      "private summary",
+      expect.any(Object)
+    )
+  }
+)
 
 it.each(["proactive", "reengagement"] as const)(
   "never lends origin-reply authority to %s, including shadow mode",
@@ -748,7 +781,12 @@ describe("planDelivery: a delivery that cannot wait (immediate)", () => {
 })
 
 describe("planUnplannedStream (ADR-0239)", () => {
-  const stream = { adapterId: "bot-a", ownerRef: "plugin:p1", source: "plugin" } as const
+  const stream = {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+    adapterId: "bot-a",
+    ownerRef: "plugin:p1",
+    source: "plugin",
+  } as const
 
   it("refuses a stream under enforcement, recording nothing", async () => {
     await expect(planUnplannedStream(stream, deps(enforce))).resolves.toEqual({ stream: false })

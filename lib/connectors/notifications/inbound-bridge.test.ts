@@ -100,7 +100,8 @@ describe("installConnectorNotificationBridge", () => {
         title: "Alice · General",
         dedupeKey: "telegram:tg:1",
         groupKey: "telegram:tg:1",
-      })
+      }),
+      { personalContext: { hostOrigin: "typed-send" } }
     )
   })
 
@@ -127,7 +128,8 @@ describe("installConnectorNotificationBridge", () => {
     mockIsViewing.mockReturnValue(true)
     fireWith(event())
     expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ channels: ["center", "toast"] })
+      expect.objectContaining({ channels: ["center", "toast"] }),
+      { personalContext: { hostOrigin: "typed-send" } }
     )
   })
 

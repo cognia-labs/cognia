@@ -1,3 +1,4 @@
+import type { PersonalSinkContext } from "@/lib/execution/personal-sink"
 /**
  * Outbound helpers for the issue tracker's IM side (ADR-0132 slice ③).
  *
@@ -46,6 +47,7 @@ export function issueOpenHref(issueId: string, origin?: string): string {
 
 export interface IssueImPushDeps {
   enqueue: (input: {
+    personalContext: PersonalSinkContext
     adapterId: string
     conversationKey: string
     request: {
@@ -91,6 +93,7 @@ async function resolveDeps(overrides?: Partial<IssueImPushDeps>): Promise<IssueI
 }
 
 export interface PushIssueTextInput {
+  personalContext: PersonalSinkContext
   adapterId: string
   conversationKey: string
   text: string
@@ -115,6 +118,7 @@ export async function pushIssueText(
   }
   const platform = parseConversationKey(input.conversationKey).platform
   await deps.enqueue({
+    personalContext: input.personalContext,
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     request: {
@@ -130,6 +134,7 @@ export async function pushIssueText(
 }
 
 export interface PushIssueCardInput {
+  personalContext: PersonalSinkContext
   adapterId: string
   conversationKey: string
   issue: Issue
@@ -187,6 +192,7 @@ export async function pushIssueCard(
   }
   const platform = parseConversationKey(input.conversationKey).platform
   await deps.enqueue({
+    personalContext: input.personalContext,
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     request: {
@@ -202,6 +208,7 @@ export async function pushIssueCard(
 }
 
 export interface PushIssueRunChoiceInput {
+  personalContext: PersonalSinkContext
   adapterId: string
   conversationKey: string
   issue: Pick<Issue, "id" | "identifier" | "title">
@@ -243,6 +250,7 @@ export async function pushIssueRunChoice(
   }
   const platform = parseConversationKey(input.conversationKey).platform
   await deps.enqueue({
+    personalContext: input.personalContext,
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     request: {

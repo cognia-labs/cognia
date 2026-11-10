@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 /**
  * The tool-call chokepoint of the outbound policy (ADR-0239).
  *
@@ -46,6 +47,8 @@ import {
 } from "@cognia/agent-config-types/action-review"
 
 import { resolveRootSessionId } from "@/lib/claude/agents/root-session"
+import { assertPersonalSink, isPersonalSinkWithheldError } from "@/lib/execution/personal-sink"
+import { resolveConnectorSinkAudience } from "@/lib/connectors/personal-delivery"
 import { classifyRisk } from "@/lib/policy/risk/classify-risk"
 import { isOutboundToolId, normalizeToolId } from "@/lib/policy/risk/outbound-tools"
 
@@ -110,6 +113,10 @@ export interface OutboundToolCallPlan {
 type SettingsLike = OutboundSettingsLike
 
 export interface OutboundToolPlannerOptions {
+  /** Exact execution identity from Host turn state, never tool arguments. */
+  executionRunId?: string
+  /** Test seam; production always uses the Host personal-content gate. */
+  personalSink?: typeof assertPersonalSink
   /** No person is watching the run. */
   unattended: boolean
   /**
@@ -319,6 +326,7 @@ async function planCall(
     : extractOutboundTargets(request.toolName, request.input, {
         ...(origin.originThread ? { defaultAdapterId: origin.originThread.channel } : {}),
       })
+  await enforcePersonalToolCall(request, options, targets)
   // The run's own lists (a Bot's), and the ones a person configured on the
   // bots and conversations these targets go through, or on the GitHub account.
   const policyGrants = [
@@ -360,6 +368,58 @@ async function planCall(
   }
   return { targets, rootSessionId, instructionEpoch, result }
 }
+
+async function enforcePersonalToolCall(
+  request: OutboundToolCallRequest,
+  options: OutboundToolPlannerOptions,
+  targets: readonly OutboundTarget[]
+): Promise<void> {
+  try {
+    const check = options.personalSink ?? assertPersonalSink
+    const context = { sessionId: request.sessionId, executionRunId: options.executionRunId }
+    if (targets.length === 0) {
+      await check(
+        personalSinkHost.personalSinkContextForRun(
+          context,
+          "lib/policy/action-review/plan-tool-call.ts"
+        ),
+        { kind: "unknown", label: request.toolName },
+        undefined,
+        request.toolName
+      )
+      return
+    }
+    for (const target of targets) {
+      const audience =
+        target.kind === "conversation" || target.kind === "person"
+          ? await resolveConnectorSinkAudience(
+              target.channel,
+              target.kind === "conversation" ? target.recipient.slice("conv:".length) : undefined,
+              target.kind === "person" ? [target] : undefined
+            )
+          : { kind: "unknown" as const, label: target.kind }
+      // A tool descriptor can load or transform content. The actual delivery
+      // boundary records an exact hash; this early gate must stay opaque.
+      await check(
+        personalSinkHost.personalSinkContextForRun(
+          context,
+          "lib/policy/action-review/plan-tool-call.ts"
+        ),
+        audience,
+        undefined,
+        target
+      )
+    }
+  } catch (error) {
+    throw new PersonalToolGateError(
+      isPersonalSinkWithheldError(error)
+        ? error.message
+        : "Withheld: personal content verification or its receipt could not be committed. A tool approval cannot disclose this content."
+    )
+  }
+}
+
+class PersonalToolGateError extends Error {}
 
 /** A planner bound to one run's options. */
 export function createOutboundToolPlanner(
@@ -528,23 +588,66 @@ export async function answerWithOutboundPolicy<R extends PermissionRequestLike>(
   if (!isOutboundToolCall(request.toolName, request.input)) return respond(request)
   let decision: OutboundToolDecision
   let review: PendingOutboundReview | undefined
+  let targets: OutboundTarget[] = []
   try {
     const plan = await planOutboundToolCall(request, options)
     decision = plan ? outboundToolDecision(plan, request.toolName) : { kind: "unchanged" }
-    if (plan) review = pendingOutboundReview(plan)
+    if (plan) {
+      review = pendingOutboundReview(plan)
+      targets = plan.targets
+    }
   } catch (error) {
+    if (error instanceof PersonalToolGateError) {
+      return { decision: "deny", message: error.message, attribution: { authority: "policy-deny" } }
+    }
+    try {
+      await enforcePersonalToolCall(request, options, [])
+    } catch (failure) {
+      return {
+        decision: "deny",
+        message: (failure as Error).message,
+        attribution: { authority: "policy-deny" },
+      }
+    }
     console.warn("[outbound] planning failed; leaving the call to a person", error)
     const mode = await fallbackMode(request, options)
     decision = mode === "enforce" ? { kind: "ask" } : { kind: "unchanged" }
   }
   switch (decision.kind) {
     case "allow":
+      try {
+        await enforcePersonalToolCall(request, options, targets)
+      } catch (failure) {
+        return {
+          decision: "deny",
+          message: (failure as Error).message,
+          attribution: { authority: "policy-deny" },
+        }
+      }
       authorizeOutboundToolCall(request.sessionId, request.requestId, decision.attribution)
       return { decision: "allow", attribution: decision.attribution }
     case "deny":
       return { decision: "deny", message: decision.message, attribution: decision.attribution }
-    case "unchanged":
-      return respond(request)
+    case "unchanged": {
+      const answer = await respond(request)
+      if (answer.decision === "deny") return answer
+      try {
+        await enforcePersonalToolCall(
+          { ...request, input: answer.updatedInput ?? request.input },
+          options,
+          answer.updatedInput === undefined
+            ? targets
+            : extractOutboundTargets(request.toolName, answer.updatedInput)
+        )
+      } catch (failure) {
+        return {
+          decision: "deny",
+          message: (failure as Error).message,
+          attribution: { authority: "policy-deny" },
+        }
+      }
+      return answer
+    }
     case "ask": {
       const reply = await respond({
         ...request,
@@ -557,6 +660,21 @@ export async function answerWithOutboundPolicy<R extends PermissionRequestLike>(
       const { forRequest, grant: _fromResponder, ...answer } = reply
       // A per-call answer never becomes a standing rule.
       if (answer.decision === "deny") return answer
+      try {
+        await enforcePersonalToolCall(
+          { ...request, input: answer.updatedInput ?? request.input },
+          options,
+          answer.updatedInput === undefined
+            ? targets
+            : extractOutboundTargets(request.toolName, answer.updatedInput)
+        )
+      } catch (failure) {
+        return {
+          decision: "deny",
+          message: (failure as Error).message,
+          attribution: { authority: "policy-deny" },
+        }
+      }
       const grant = humanOutboundGrant(forRequest, review)
       // Only a person answers an enforced ask.
       authorizeOutboundToolCall(request.sessionId, request.requestId, {
@@ -595,6 +713,16 @@ export async function planOutboundAsk(
   try {
     plan = await planOutboundToolCall(request, options)
   } catch (error) {
+    if (error instanceof PersonalToolGateError) {
+      await approve("deny", error.message, { authority: "policy-deny" })
+      return { answered: true }
+    }
+    try {
+      await enforcePersonalToolCall(request, options, [])
+    } catch (failure) {
+      await approve("deny", (failure as Error).message, { authority: "policy-deny" })
+      return { answered: true }
+    }
     console.error("[outbound] planning failed", error)
     const mode = await fallbackMode(request, options)
     return { answered: false, personOnly: mode === "enforce" }
@@ -603,6 +731,12 @@ export async function planOutboundAsk(
   const decision = outboundToolDecision(plan, request.toolName)
   if (decision.kind === "allow" || decision.kind === "deny") {
     if (decision.kind === "allow") {
+      try {
+        await enforcePersonalToolCall(request, options, plan.targets)
+      } catch (failure) {
+        await approve("deny", (failure as Error).message, { authority: "policy-deny" })
+        return { answered: true }
+      }
       authorizeOutboundToolCall(request.sessionId, request.requestId, decision.attribution)
     }
     try {

@@ -1,5 +1,10 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NotificationRecord, NotificationPreferences } from "@/types/notifications"
 import { DEFAULT_NOTIFICATION_PREFERENCES } from "@/types/notifications"
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  checkPersonalSink: jest.fn(async () => ({ outcome: "allow" })),
+}))
 
 // `mock`-prefixed names are exempt from jest's factory hoisting guard.
 const mockRows = new Map<string, NotificationRecord>()
@@ -80,7 +85,10 @@ beforeEach(() => {
 })
 
 it("persists, ingests into the store, and fires a toast", async () => {
-  const id = await notify({ source: "system", level: "warning", title: "Hello", body: "World" })
+  const id = await notify(
+    { source: "system", level: "warning", title: "Hello", body: "World" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(rows.get(id)).toBeDefined()
   expect(toastFns.warning).toHaveBeenCalledWith(
     "Hello",
@@ -89,31 +97,67 @@ it("persists, ingests into the store, and fires a toast", async () => {
   expect(useNotificationStore.getState().items.map((r) => r.id)).toEqual([id])
 })
 
+it("keeps the Host notification execution separate from public input", async () => {
+  const id = await notify(
+    { source: "scheduler", level: "info", title: "Result" },
+    {
+      personalContext: { executionRunId: "host-notification-run" },
+    }
+  )
+  expect(rows.get(id)?.personalContext).toEqual(
+    expect.objectContaining({
+      executionRunId: "host-notification-run",
+      receiptAttemptId: expect.any(String),
+    })
+  )
+})
+
 it("maps level to the matching sonner method", async () => {
-  await notify({ source: "system", level: "success", title: "ok" })
+  await notify(
+    { source: "system", level: "success", title: "ok" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(toastFns.success).toHaveBeenCalled()
-  await notify({ source: "system", level: "critical", title: "crit" })
+  await notify(
+    { source: "system", level: "critical", title: "crit" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(toastFns.error).toHaveBeenCalled() // critical → error styling
 })
 
 it("fires the OS notification when permission is granted", async () => {
-  await notify({ source: "system", level: "warning", title: "T", body: "B" })
+  await notify(
+    { source: "system", level: "warning", title: "T", body: "B" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(tauri.notify).toHaveBeenCalledWith({ title: "T", body: "B" })
 })
 
 it("suppresses OS when permission is denied", async () => {
   tauri.checkNotificationPermission.mockResolvedValue("denied")
   refreshOsPermission()
-  await notify({ source: "system", level: "warning", title: "T" })
+  await notify(
+    { source: "system", level: "warning", title: "T" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(tauri.notify).not.toHaveBeenCalled()
 })
 
 it("caches the permission check across notifications until refreshed", async () => {
-  await notify({ source: "system", level: "warning", title: "1" })
-  await notify({ source: "system", level: "warning", title: "2" })
+  await notify(
+    { source: "system", level: "warning", title: "1" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
+  await notify(
+    { source: "system", level: "warning", title: "2" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(tauri.checkNotificationPermission).toHaveBeenCalledTimes(1)
   refreshOsPermission()
-  await notify({ source: "system", level: "warning", title: "3" })
+  await notify(
+    { source: "system", level: "warning", title: "3" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(tauri.checkNotificationPermission).toHaveBeenCalledTimes(2)
 })
 
@@ -121,13 +165,16 @@ it("uses Capacitor local notifications for the OS channel on mobile", async () =
   mockPlatform.mockReturnValue("mobile")
   refreshOsPermission()
 
-  await notify({
-    source: "system",
-    level: "warning",
-    title: "Mobile",
-    body: "Native",
-    href: "/inbox",
-  })
+  await notify(
+    {
+      source: "system",
+      level: "warning",
+      title: "Mobile",
+      body: "Native",
+      href: "/inbox",
+    },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   expect(local.checkPermission).toHaveBeenCalledTimes(1)
   expect(local.schedule).toHaveBeenCalledWith([
@@ -141,7 +188,10 @@ it("does not prompt or schedule a mobile OS notification without an existing gra
   local.checkPermission.mockResolvedValue({ kind: "ok", value: "prompt" })
   refreshOsPermission()
 
-  await notify({ source: "system", level: "warning", title: "Mobile" })
+  await notify(
+    { source: "system", level: "warning", title: "Mobile" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   expect(local.checkPermission).toHaveBeenCalledTimes(1)
   expect(local.schedule).not.toHaveBeenCalled()
@@ -151,12 +201,18 @@ it("invalidates a cached mobile denial when another permission surface grants ac
   mockPlatform.mockReturnValue("mobile")
   local.checkPermission.mockResolvedValueOnce({ kind: "ok", value: "prompt" })
   refreshOsPermission()
-  await notify({ source: "system", level: "warning", title: "Before grant" })
+  await notify(
+    { source: "system", level: "warning", title: "Before grant" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(mockPermissionGrantedHandler).not.toBeNull()
 
   local.checkPermission.mockResolvedValueOnce({ kind: "ok", value: "granted" })
   mockPermissionGrantedHandler?.()
-  await notify({ source: "system", level: "warning", title: "After grant" })
+  await notify(
+    { source: "system", level: "warning", title: "After grant" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   expect(local.checkPermission).toHaveBeenCalledTimes(2)
   expect(local.schedule).toHaveBeenCalledTimes(1)
@@ -166,7 +222,10 @@ it("does not attempt an OS notification on the web", async () => {
   mockPlatform.mockReturnValue("web")
   refreshOsPermission()
 
-  await notify({ source: "system", level: "warning", title: "Web" })
+  await notify(
+    { source: "system", level: "warning", title: "Web" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   expect(tauri.checkNotificationPermission).not.toHaveBeenCalled()
   expect(local.checkPermission).not.toHaveBeenCalled()
@@ -177,13 +236,16 @@ it("does not attempt an OS notification on the web", async () => {
 it("uses the existing companion dispatcher for the push channel on desktop", async () => {
   mockStoredPrefs = { globalDefaultChannels: ["center", "push"] }
 
-  const id = await notify({
-    source: "scheduler",
-    level: "warning",
-    title: "Private task title",
-    body: "Private task body",
-    href: "/inbox",
-  })
+  const id = await notify(
+    {
+      source: "scheduler",
+      level: "warning",
+      title: "Private task title",
+      body: "Private task body",
+      href: "/inbox",
+    },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   expect(mockTransportCall).toHaveBeenCalledWith("companion_push_notification", {
     notificationId: id,
@@ -199,7 +261,10 @@ it("does not mark push delivered when no offline companion accepted it", async (
   mockStoredPrefs = { globalDefaultChannels: ["center", "push"] }
   mockTransportCall.mockResolvedValueOnce({ sent: 0 })
 
-  const id = await notify({ source: "system", level: "warning", title: "T" })
+  const id = await notify(
+    { source: "system", level: "warning", title: "T" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   expect(rows.get(id)?.deliveredVia).not.toContain("push")
 })
@@ -209,13 +274,16 @@ it("collapses toast + push into one remote_notification_publish on the headless 
   mockStoredPrefs = { globalDefaultChannels: ["center", "toast", "os", "push"] }
   mockTransportCall.mockResolvedValue({ id: "n" })
 
-  const id = await notify({
-    source: "scheduler",
-    level: "critical",
-    title: "Nightly report failed",
-    body: "step 3 blew up",
-    href: "/scheduler",
-  })
+  const id = await notify(
+    {
+      source: "scheduler",
+      level: "critical",
+      title: "Nightly report failed",
+      body: "step 3 blew up",
+      href: "/scheduler",
+    },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   const publishes = mockTransportCall.mock.calls.filter(
     (c) => c[0] === "remote_notification_publish"
@@ -249,7 +317,10 @@ it("headless publish falls back to the title as body and drops external hrefs", 
   // the remote broadcast on the brain.
   mockStoredPrefs = { globalDefaultChannels: ["center", "toast"] }
   mockTransportCall.mockResolvedValue({ id: "n" })
-  await notify({ source: "system", level: "info", title: "Only title", href: "https://x" })
+  await notify(
+    { source: "system", level: "info", title: "Only title", href: "https://x" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   expect(mockTransportCall).toHaveBeenLastCalledWith(
     "remote_notification_publish",
     expect.objectContaining({ body: "Only title", href: undefined, level: "info" })
@@ -261,7 +332,10 @@ it("records a failed mobile native delivery without marking the OS channel deliv
   local.schedule.mockResolvedValue({ kind: "error", message: "native failure" })
   refreshOsPermission()
 
-  const id = await notify({ source: "system", level: "warning", title: "Mobile" })
+  const id = await notify(
+    { source: "system", level: "warning", title: "Mobile" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
 
   expect(local.schedule).toHaveBeenCalledWith([
     expect.objectContaining({ body: "", extra: undefined }),
@@ -270,12 +344,15 @@ it("records a failed mobile native delivery without marking the OS channel deliv
 })
 
 it("wires the first action into the toast button", async () => {
-  await notify({
-    source: "system",
-    level: "info",
-    title: "T",
-    actions: [{ id: "a", label: "Open", command: "open" }],
-  })
+  await notify(
+    {
+      source: "system",
+      level: "info",
+      title: "T",
+      actions: [{ id: "a", label: "Open", command: "open" }],
+    },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   const opts = toastFns.info.mock.calls[0][1]
   expect(opts.action.label).toBe("Open")
   expect(typeof opts.action.onClick).toBe("function")
@@ -283,7 +360,10 @@ it("wires the first action into the toast button", async () => {
 
 it("falls back to default preferences when none are stored", async () => {
   mockStoredPrefs = undefined
-  await notify({ source: "system", level: "info", title: "T" })
+  await notify(
+    { source: "system", level: "info", title: "T" },
+    { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+  )
   // default channels = center+toast → toast fires, os does not
   expect(toastFns.info).toHaveBeenCalled()
   expect(DEFAULT_NOTIFICATION_PREFERENCES.globalDefaultChannels).toEqual(["center", "toast"])

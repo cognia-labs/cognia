@@ -38,6 +38,15 @@ jest.mock("./runtime-client", () => ({ resolveCurrentCollabContext: jest.fn() })
 jest.mock("@/lib/workspace/session-cwd", () => ({
   resolveSessionCwd: jest.fn().mockResolvedValue(undefined),
 }))
+jest.mock("@/lib/execution/acting-authority", () => ({
+  resolveExecutingRun: jest.fn().mockResolvedValue({ id: "host-execution" }),
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readHostPersonContext: jest.fn().mockResolvedValue({ connectedOwners: [] }),
+  readRunPersonalTaint: jest.fn().mockResolvedValue({ verified: true, marks: [] }),
+  recordPersonalSinkReceipt: jest.fn().mockResolvedValue(undefined),
+}))
 
 import { CollabConflictError, CollabError } from "./client"
 import { SHARED_STREAMING_WINDOW } from "./shared-assistant-projection"
@@ -78,6 +87,12 @@ beforeEach(() => {
   jest.requireMock("@/lib/db/schema").getDb.mockReturnValue({ name: "cognia-account-test" })
   jest.requireMock("@/lib/db/shared-run-journal").__clear()
   jest.mocked(jest.requireMock("@/lib/db/messages").listMessages).mockResolvedValue([])
+  jest
+    .requireMock("@/lib/execution/acting-authority")
+    .resolveExecutingRun.mockResolvedValue({ id: "host-execution" })
+  jest
+    .requireMock("@/lib/execution/personal-sink")
+    .readRunPersonalTaint.mockResolvedValue({ verified: true, marks: [] })
 })
 afterEach(() => resetSharedRunCoordinatorForTesting())
 
@@ -346,6 +361,10 @@ function fullClient() {
     postSessionRunLiveFrame: jest.fn().mockResolvedValue(undefined),
     commitSessionAttachment: jest.fn().mockResolvedValue({}),
     getActiveSessionRunLease: jest.fn().mockResolvedValue(null),
+    listSessionMembers: jest.fn().mockResolvedValue([
+      { sessionId: "shared-session", userId: "user" },
+      { sessionId: "shared-session", userId: "guest" },
+    ]),
   }
 }
 function useContext(client: unknown) {
@@ -1366,6 +1385,103 @@ describe("ADR-0241 WP3 live publisher", () => {
     client.postSessionRunLiveFrame.mock.calls.map((call) => call[4].frame)
 
   afterEach(() => resetSharedRunCoordinatorForTesting())
+
+  it("withholds personal stored history even with only its owner present, protecting later members", async () => {
+    const client = fullClient()
+    client.listSessionMembers.mockResolvedValue([{ sessionId: "shared-session", userId: "user" }])
+    await liveRun(client)
+    jest.requireMock("@/lib/execution/personal-sink").readRunPersonalTaint.mockResolvedValue({
+      verified: true,
+      marks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    })
+    await setReply([{ type: "text", text: `private original${TAIL}` }])
+    await publishSharedSessionRun(session.id)
+    expect(corrections(client).at(-1)?.payload.parts).toEqual([
+      { type: "text", text: "[Withheld: personal content of Host owner]" },
+    ])
+    expect(JSON.stringify(client.appendSessionRunEvent.mock.calls)).not.toContain(
+      "private original"
+    )
+    client.listSessionMembers.mockResolvedValue([
+      { sessionId: "shared-session", userId: "user" },
+      { sessionId: "shared-session", userId: "later-member" },
+    ])
+    await publishSharedSessionRun(session.id)
+    expect(JSON.stringify(client.appendSessionRunEvent.mock.calls)).not.toContain(
+      "private original"
+    )
+  })
+
+  it("rechecks Host taint for every live patch and immediately replaces private content with a placeholder", async () => {
+    const { client, timers } = await liveRun()
+    await setReply([{ type: "text", text: `public before taint${TAIL}` }])
+    await publishSharedSessionRun(session.id)
+    timers[2]!()
+    await flush()
+    expect(JSON.stringify(frames(client))).toContain("public before taint")
+    const sink = jest.requireMock("@/lib/execution/personal-sink")
+    sink.readRunPersonalTaint.mockResolvedValue({
+      verified: true,
+      marks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    })
+    await setReply([{ type: "text", text: `secret after taint${TAIL}` }])
+    timers[2]!()
+    await flush()
+    expect(JSON.stringify(frames(client).at(-1))).toContain(
+      "Withheld: personal content of Host owner"
+    )
+    expect(JSON.stringify(frames(client))).not.toContain("secret after taint")
+    expect(sink.readRunPersonalTaint).toHaveBeenLastCalledWith({
+      sessionId: session.id,
+      sessionDerived: true,
+    })
+    expect(sink.recordPersonalSinkReceipt).toHaveBeenCalledWith(
+      { sessionId: session.id, sessionDerived: true },
+      [{ kind: "local-person" }],
+      "withhold",
+      JSON.stringify([{ type: "text", text: `secret after taint${TAIL}` }]),
+      { kind: "shared-session", orgId: "org", sessionId: "shared-session" }
+    )
+  })
+
+  it("withholds private live frames for a sole owner without an atomic member-revision fence", async () => {
+    const client = fullClient()
+    client.listSessionMembers.mockResolvedValue([{ sessionId: "shared-session", userId: "user" }])
+    const { timers } = await liveRun(client)
+    jest.requireMock("@/lib/execution/personal-sink").readRunPersonalTaint.mockResolvedValue({
+      verified: true,
+      marks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    })
+    await setReply([{ type: "text", text: `owner only private${TAIL}` }])
+    await publishSharedSessionRun(session.id)
+    timers[2]!()
+    await flush()
+    expect(JSON.stringify(frames(client))).not.toContain("owner only private")
+    expect(JSON.stringify(frames(client))).toContain("Withheld: personal content of Host owner")
+  })
+
+  it("does not use a producer's executionRunId to bypass unknown Host run provenance", async () => {
+    const { client } = await liveRun()
+    jest.requireMock("@/lib/execution/personal-sink").readRunPersonalTaint.mockResolvedValue({
+      verified: false,
+      marks: [],
+      reason: "unresolved",
+    })
+    await setReplies([
+      {
+        id: "reply",
+        role: "assistant",
+        metadata: { executionRunId: "forged" },
+        parts: [{ type: "text", text: "private unknown" }],
+      },
+    ])
+    await publishSharedSessionRun(session.id)
+    expect(JSON.stringify(corrections(client))).not.toContain("private unknown")
+    expect(JSON.stringify(corrections(client))).toContain("unverified person")
+    expect(
+      jest.requireMock("@/lib/execution/personal-sink").readRunPersonalTaint
+    ).toHaveBeenLastCalledWith({ sessionId: session.id, sessionDerived: true })
+  })
 
   it("streams the newest reply live once the server knows it", async () => {
     const { client, timers } = await liveRun()

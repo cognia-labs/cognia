@@ -1,9 +1,11 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { resolveFunctionalToastFactory } from "./registry"
 import { scheduledDueToastSpec } from "./scheduled-due"
 import type { NotificationRecord } from "@/types/notifications"
 
 function rec(overrides: Partial<NotificationRecord>): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "system",
     level: "info",

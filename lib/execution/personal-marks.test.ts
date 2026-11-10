@@ -35,6 +35,22 @@ const message = (id: string): UIMessage => ({
   parts: [{ type: "text", text: "private" }],
 })
 
+it("commits a confirmed run's read to its consuming structural source", async () => {
+  const source = await startToolExecutionRun("confirm-upstream", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const confirmed = await startToolExecutionRun("confirmed-read", {
+    confirmedSkill: {
+      originRunId: source.id,
+      rootSessionId: "confirmed-read",
+      requester: { kind: "local-person" },
+    },
+  })
+  await addPersonalMarksToRun({ executionRunId: confirmed.id }, [mark])
+  expect((await getDb().executionRuns.get(source.id))?.personalMarks).toEqual([mark])
+  expect((await getDb().executionRuns.get(confirmed.id))?.personalMarks).toEqual([mark])
+})
+
 it("widens source marks on every ancestor, preserves existing marks, and leaves empty reads unmarked", async () => {
   const root = await startToolExecutionRun("root", { localAuthorization: LOCAL_PERSON_RUN })
   const parent = await startToolExecutionRun("parent", { parentRunId: root.id })
@@ -173,6 +189,32 @@ it("merges the exact child marks onto framed user results", async () => {
   bindPersonalMessageRun(framed.id, [child.id])
   await commitMessageDelta("parent", { upserts: [framed] })
   expect((await listMessages("parent"))[0].metadata).toMatchObject({ personalMarks: [mark] })
+})
+
+it("retains late structural source marks on confirmed output before a later turn consumes it", async () => {
+  const source = await startToolExecutionRun("confirm-source", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const confirmed = await startToolExecutionRun("confirmed", {
+    confirmedSkill: {
+      originRunId: source.id,
+      rootSessionId: "confirmed",
+      requester: { kind: "local-person" },
+    },
+  })
+  await getDb().executionRuns.update(source.id, { personalMarks: [mark] })
+  const reply = message("confirmed-reply")
+  bindPersonalMessageRun(reply.id, confirmed.id)
+  await commitMessageDelta("confirmed", { upserts: [reply] })
+  const [stored] = await listMessages("confirmed")
+  expect(stored.metadata).toMatchObject({ personalMarks: [mark] })
+
+  const later = await startToolExecutionRun("later-consumer", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const { preparePersonalHistory } = await import("./personal-visibility")
+  await preparePersonalHistory("later-consumer", [stored], { executionRunId: later.id })
+  expect((await getDb().executionRuns.get(later.id))?.personalMarks).toEqual([mark])
 })
 
 it("refuses a missing bound run instead of persisting an unmarked output", async () => {

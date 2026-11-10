@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NOTIFICATION_SOURCES, type NotificationRecord } from "@/types/notifications"
@@ -31,6 +32,7 @@ function seedWorkspaces(activeProjectId: string | null) {
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "connector",
     level: "info",

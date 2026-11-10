@@ -1,4 +1,8 @@
 /** @jest-environment jsdom */
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
 /**
  * Tests for lib/skills/built-in/dispatcher.ts — trust-model gates and
  * execution pipeline. Mocks PII redact + audit append + binding write
@@ -592,7 +596,7 @@ describe("runBuiltInSkill — write tier HITL routing", () => {
           ],
         }),
       }),
-      { executionContext: { sessionId: "s_x", executionRunId: "" } }
+      { executionContext: { sessionId: "s_x", executionRunId: undefined } }
     )
   })
 

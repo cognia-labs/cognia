@@ -1,4 +1,5 @@
 "use client"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 
 import { create } from "zustand"
 import { readBootLocalePreference, resolveLocalePreference } from "@/lib/i18n/locale-preference"
@@ -482,12 +483,15 @@ const DEFAULTS: AppSettings = {
  * already succeeded) but now raise a diagnostic that reaches the notification
  * center.
  */
+// Proxy/sidecar restart failures describe Host configuration, never run output.
 function reportProxyFailure(err: unknown): void {
   dispatchDiagnostic(
     createDiagnostic("proxyApplyFailed", {
       source: "settings",
       message: err instanceof Error ? err.message : String(err),
-    })
+    }),
+    undefined,
+    explicitHostPersonalSinkContext("background-service")
   )
 }
 
@@ -496,7 +500,9 @@ function reportSidecarRestartFailure(err: unknown): void {
     createDiagnostic("sidecarUnreachable", {
       source: "settings",
       message: err instanceof Error ? err.message : String(err),
-    })
+    }),
+    undefined,
+    explicitHostPersonalSinkContext("background-service")
   )
 }
 

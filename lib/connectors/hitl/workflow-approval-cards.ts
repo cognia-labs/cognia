@@ -17,6 +17,7 @@
  *     `wf_fanout_cancel`) and posts the card.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { getResolvedPermissionCeiling } from "@/lib/claude/agents/dispatch-context-registry"
 import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
 import {
@@ -72,6 +73,7 @@ async function resolveApprovalDelivery(
 
 /** Hold the run for a person's approval and post its card. Throws when refused. */
 export async function postWorkflowRunApproval(input: {
+  personalContext: personalSinkHost.PersonalSinkContext
   workflowId: string
   runParams?: Record<string, unknown>
   triggeredFrom: ConversationWorkflowOrigin
@@ -90,6 +92,7 @@ export async function postWorkflowRunApproval(input: {
   const parentCeiling = getResolvedPermissionCeiling(triggeredFrom.sessionId)
   const permissionCeiling = deriveExternalSessionPermission(parentCeiling ?? {}, currentCeiling)
   const result = await holdWorkflowDispatchForApproval({
+    personalContext: input.personalContext,
     workflowId: input.workflowId,
     runParams: input.runParams ?? {},
     triggeredFrom,
@@ -107,6 +110,7 @@ export async function postWorkflowRunApproval(input: {
 
 /** Record the fan-out card's two choices and post it. Throws when it cannot be queued. */
 export async function postWorkflowFanoutApproval(input: {
+  personalContext: personalSinkHost.PersonalSinkContext
   workflowId: string
   workflowName: string
   triggeredFrom: ConversationWorkflowOrigin
@@ -173,6 +177,7 @@ export async function postWorkflowFanoutApproval(input: {
     },
   }
   await enqueueGoverned({
+    personalContext: input.personalContext,
     adapterId,
     conversationKey,
     source: "ai-run",

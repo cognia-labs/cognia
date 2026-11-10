@@ -590,7 +590,9 @@ describe("silent side-effect failures", () => {
       await useSettingsStore.getState().save({ networkProxy: { mode: "manual" } as never })
     })
     expect(dispatchDiagnosticMock).toHaveBeenCalledWith(
-      expect.objectContaining({ code: "proxyApplyFailed", source: "settings" })
+      expect.objectContaining({ code: "proxyApplyFailed", source: "settings" }),
+      undefined,
+      { hostOrigin: "background-service" }
     )
   })
 

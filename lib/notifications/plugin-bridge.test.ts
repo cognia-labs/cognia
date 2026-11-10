@@ -49,7 +49,8 @@ it("installs a dispatcher that routes plugin notifications to the center", () =>
       body: "Body",
       dedupeKey: "plugin-x:abc",
       groupKey: "plugin-x",
-    })
+    }),
+    expect.objectContaining({ personalContext: expect.any(Object) })
   )
 })
 

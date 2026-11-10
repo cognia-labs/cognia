@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 /**
  * Make a terminally failed Host→target dispatch visible.
@@ -96,11 +97,21 @@ export async function recordHostDispatchFailure(
   failure: HostDispatchFailure,
   deps: DispatchFailureAuditDeps = {}
 ): Promise<void> {
+  const ticket = job.payload?.ticket as { source?: { sessionId?: string } } | undefined
+  const personalContext = job.runId
+    ? { executionRunId: `execution:workflow:${job.runId}` }
+    : ticket?.source?.sessionId
+      ? personalSinkHost.sessionPersonalSinkContext(ticket.source.sessionId)
+      : personalSinkHost.unverifiedPersonalSinkContext(
+          "dispatch failure detail has no source run/session"
+        )
   const notify =
     deps.notify ??
     (async (input: NotificationInput) => {
       const runtime = await import("@/lib/notifications/runtime")
-      return runtime.notify(input)
+      return runtime.notify(input, {
+        personalContext,
+      })
     })
 
   try {

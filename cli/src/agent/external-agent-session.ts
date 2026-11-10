@@ -102,6 +102,7 @@ import { mintSessionId } from "./run"
 import type { AgentModelOption, AgentSession, SendTurnOptions } from "./session-runner"
 import { appendTranscript, type TranscriptFs } from "./transcript"
 import { prepareCliPersonalHistory } from "./personal-history"
+import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 import {
   createCliContextAssembler,
   prependTextBlock,
@@ -775,6 +776,20 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
   let emitTurnAction: ((action: TuiAction) => void) | undefined
   let activeWatchdog: ReturnType<typeof createIdleWatchdog> | undefined
   let activeToolScope: { turnId: string; attemptId: string } | undefined
+  const outboundGate = async (request: PermissionRequestEvent, gate: SendTurnOptions["gate"]) => {
+    const { answerWithOutboundPolicy } = await import("@/lib/policy/action-review/plan-tool-call")
+    return answerWithOutboundPolicy(
+      request,
+      {
+        unattended: false,
+        annotateReview: false,
+        executionRunId:
+          toolCallExecutionRunId(sessionId, activeToolScope?.turnId, activeToolScope?.attemptId) ??
+          "",
+      },
+      gate
+    )
+  }
   let brokerAttempt = 0
   let skillsAnnounced = false
   let databaseErrorShown = false
@@ -925,7 +940,16 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
               await import("@/lib/policy/action-review/plan-tool-call")
             const decision = await answerWithOutboundPolicy(
               request,
-              { unattended: false, annotateReview: false },
+              {
+                unattended: false,
+                annotateReview: false,
+                executionRunId:
+                  toolCallExecutionRunId(
+                    sessionId,
+                    activeToolScope?.turnId,
+                    activeToolScope?.attemptId
+                  ) ?? "",
+              },
               (r) => turnOptions.gate(r)
             )
             return (activeTurnOptions === turnOptions ||
@@ -942,7 +966,15 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
         onExplicitToolAllowed: (event) => {
           void import("@/lib/policy/action-review/plan-tool-call")
             .then(({ recordOutboundShadowObservation }) =>
-              recordOutboundShadowObservation(event, { unattended: false })
+              recordOutboundShadowObservation(event, {
+                unattended: false,
+                executionRunId:
+                  toolCallExecutionRunId(
+                    sessionId,
+                    activeToolScope?.turnId,
+                    activeToolScope?.attemptId
+                  ) ?? "",
+              })
             )
             .catch(() => undefined)
         },
@@ -1357,7 +1389,10 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
             const requestEmitter = emitter
             void (async () => {
               const decision = autonomousGate
-                ? await autonomousGate(acpPermissionRequestToCli(event.request, sessionId))
+                ? await outboundGate(
+                    acpPermissionRequestToCli(event.request, sessionId),
+                    autonomousGate
+                  )
                 : { decision: "deny" as const, message: "No interactive permission responder" }
               if (!manager.respondToPermission)
                 throw new Error("Permission responses are not supported")
@@ -1844,7 +1879,10 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
               }
               watchdog.pause()
               try {
-                const decision = await opts.gate(acpPermissionRequestToCli(request, sessionId))
+                const decision = await outboundGate(
+                  acpPermissionRequestToCli(request, sessionId),
+                  opts.gate
+                )
                 return captureDecisionToAcp(
                   request,
                   activeTurnOptions === opts && !opts.signal?.aborted

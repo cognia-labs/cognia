@@ -1,4 +1,6 @@
 /** Governed, platform-neutral TTS delivery using an existing conversation. */
+
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { z } from "zod"
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
@@ -74,6 +76,13 @@ const skill: BuiltInSkill<typeof schema> = {
     ctx.signal?.throwIfAborted()
     const result = await enqueueAuthorized(
       {
+        personalContext: personalSinkHost.personalSinkContextForRun(
+          {
+            sessionId: resolveBuiltInSkillRunScope(ctx).sessionId,
+            executionRunId: resolveBuiltInSkillRunScope(ctx).runId,
+          },
+          "skill run unavailable"
+        ),
         adapterId: adapter.id,
         conversationKey: args.conversationKey,
         source: "skill",
@@ -87,7 +96,7 @@ const skill: BuiltInSkill<typeof schema> = {
       },
       {
         signal: ctx.signal,
-        executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId ?? "" },
+        executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId },
       }
     )
     return { status: result.kind }

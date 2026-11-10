@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
 import {
@@ -2235,7 +2236,9 @@ export function useClaudeChat() {
               createDiagnostic("turnRouteWhileBusy", {
                 source: "chat",
                 meta: { sessionId, extra: { handle: turnRoute.handle } },
-              })
+              }),
+              undefined,
+              personalSinkHost.sessionPersonalSinkContext(sessionId)
             )
             rejectSend("turn_route_while_busy")
             return
@@ -2249,7 +2252,11 @@ export function useClaudeChat() {
               const [capability] = requestedRuntimeCapabilities(opts)
               if (capability) throw new AgentCapabilityError(capability, "steer")
             } catch (error) {
-              dispatchDiagnostic(toDiagnostic(error, { source: "chat", meta: { sessionId } }))
+              dispatchDiagnostic(
+                toDiagnostic(error, { source: "chat", meta: { sessionId } }),
+                undefined,
+                personalSinkHost.sessionPersonalSinkContext(sessionId)
+              )
               throw error
             }
           }
@@ -2382,7 +2389,10 @@ export function useClaudeChat() {
                         kind: "external",
                         sessionId: externalSessionLinkForSession(sessionId)?.sessionId,
                       }
-                    : { kind: "builtin" }
+                    : { kind: "builtin" },
+                  (await import("@/lib/execution/direct-chat-run")).activeDirectChatExecutionRunId(
+                    sessionId
+                  )
                 )
           if (
             !personalSteerAllowed &&
@@ -5292,7 +5302,9 @@ export function useClaudeChat() {
                 source: "external-agent",
                 message,
                 meta: { sessionId, agentId: extAgentId },
-              })
+              }),
+              undefined,
+              personalSinkHost.sessionPersonalSinkContext(sessionId)
             )
             return
           }
@@ -6604,6 +6616,7 @@ export function useClaudeChat() {
         }
         await withTranscriptRuntimeLock(sessionId, async () => {
           sendOptions = await prepareTranscriptRuntimeSend(sessionId, sendOptions, {
+            executionRunId,
             currentMessageId:
               callOptions?.regenerateBranch?.anchorId ??
               (skipAppend ? turnMessageId(previousMessages) : userMsg.id),
@@ -6738,6 +6751,7 @@ export function useClaudeChat() {
             chatTurnPerformance.markDispatched(sessionId)
             const run = participantBinding
               ? runVscodeChatTurn({
+                  executionRunId,
                   sessionId,
                   turnId: sendOptions.turnId ?? frozenTurnId,
                   characterId: `vscode-chat:${participantBinding.pluginId}:${participantBinding.participantId}`,
@@ -6748,6 +6762,7 @@ export function useClaudeChat() {
                   signal: controller.signal,
                 })
               : runStandaloneTurn({
+                  executionRunId,
                   sessionId,
                   messages: providerPayload.messages,
                   sendOptions,

@@ -145,6 +145,7 @@ export async function deliverNotificationToConversation(
         : { type: "text" as const, text: text || rec.title }
 
     const delivered = await enqueue({
+      personalContext: rec.personalContext,
       adapterId: binding.adapterId,
       conversationKey,
       request: {

@@ -64,7 +64,10 @@ export function useConversationSummaryDraft({
   // one session's draft as another's: a summary that returns after the user
   // moved on lands in its own session's slot, never in the current one.
   const [drafts, setDrafts] = useState<
-    Record<string, { text: string; fallback: SummaryFallbackReason | null }>
+    Record<
+      string,
+      { text: string; fallback: SummaryFallbackReason | null; executionRunId?: string }
+    >
   >({})
   const [pending, setPending] = useState<Record<string, true>>({})
   // Bumped per session by every generate and reset: an older request's result is dropped.
@@ -76,7 +79,7 @@ export function useConversationSummaryDraft({
 
   const write = (
     forSession: string,
-    draft: { text: string; fallback: SummaryFallbackReason | null }
+    draft: { text: string; fallback: SummaryFallbackReason | null; executionRunId?: string }
   ) => setDrafts((previous) => ({ ...previous, [forSession]: draft }))
   const settle = (forSession: string) =>
     setPending((previous) => {
@@ -85,7 +88,11 @@ export function useConversationSummaryDraft({
     })
 
   const setText = (next: string) =>
-    write(sessionId, { text: next, fallback: own?.fallback ?? null })
+    write(sessionId, {
+      text: next,
+      fallback: own?.fallback ?? null,
+      executionRunId: own?.executionRunId,
+    })
 
   const generate = async (messages: UIMessage[]) => {
     const forSession = sessionId
@@ -126,12 +133,13 @@ export function useConversationSummaryDraft({
       failed = false
       if (!current()) return
       if (outcome.kind === "summary") {
-        write(forSession, { text: outcome.text, fallback: null })
+        write(forSession, { text: outcome.text, fallback: null, executionRunId })
       } else {
         // Still a usable draft, but it now SAYS it is not a summary, and why.
         write(forSession, {
           text: outcome.reason === "empty" ? "" : structuralSummary(history.messages),
           fallback: outcome.reason,
+          executionRunId,
         })
       }
     } catch (error) {
@@ -154,5 +162,13 @@ export function useConversationSummaryDraft({
     settle(sessionId)
   }
 
-  return { text, setText, generating, fallback, generate, reset }
+  return {
+    text,
+    setText,
+    generating,
+    fallback,
+    generate,
+    reset,
+    executionRunId: own?.executionRunId,
+  }
 }

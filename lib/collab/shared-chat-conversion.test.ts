@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
+import type { SessionEvent } from "@cognia/agent-config-types"
 import {
   SharedChatTeamSessionUnsupportedError,
   convertLocalSessionToShared,
@@ -11,6 +12,11 @@ jest.mock("@/lib/db/schema", () => {
   const actual = jest.requireActual("@/lib/db/schema")
   return { ...actual, getDb: jest.fn(actual.getDb) }
 })
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readHostPersonContext: jest.fn().mockResolvedValue({ connectedOwners: [] }),
+  recordPersonalSinkReceipt: jest.fn().mockResolvedValue(undefined),
+}))
 
 const dbFixture = createDbTestFixture()
 
@@ -107,6 +113,120 @@ describe("local-to-shared chat conversion", () => {
     ])
   })
   afterAll(dbFixture.dispose)
+
+  function personalConversionClient(existing: SessionEvent[] = []) {
+    let sequence = existing.length
+    const remote = {
+      id: "shared_1",
+      orgId: "org_1",
+      workspaceId: "workspace_1",
+      title: "Conversation",
+      status: "importing" as const,
+      createdBy: { kind: "human" as const, id: "user_1" },
+      createdAt: 10,
+      updatedAt: 10,
+      revision: 1,
+      policyRevision: 1,
+    }
+    return {
+      identity: jest.fn().mockResolvedValue({ userId: "user_1", orgId: "org_1" }),
+      createSharedSession: jest.fn().mockResolvedValue(remote),
+      appendSessionEvent: jest.fn(async (_orgId, sessionId, input) => ({
+        id: `event_${++sequence}`,
+        sessionId,
+        sequence,
+        kind: input.kind,
+        actor: { kind: "human" as const, id: "user_1" },
+        payload: input.payload,
+        createdAt: 10 + sequence,
+        operationId: input.operationId,
+      })),
+      updateSharedSession: jest
+        .fn()
+        .mockResolvedValue({ ...remote, status: "active", revision: 2 }),
+      listSessionEvents: jest.fn(async (_org, _session, cursor) => (cursor ? [] : existing)),
+    }
+  }
+
+  it("withholds personal import bytes before any attachment upload and protects later members", async () => {
+    const parts = [
+      { type: "text" as const, text: "owner private summary" },
+      { type: "file" as const, url: "cognia-media:private", mediaType: "image/png" },
+    ]
+    await getDb().messages.update("message_2", {
+      parts,
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+      },
+    })
+    const client = personalConversionClient()
+    const result = await convertLocalSessionToShared(client, {
+      localSessionId: "local_1",
+      orgId: "org_1",
+      workspaceId: "workspace_1",
+    })
+    expect(result.importedAttachmentCount).toBe(0)
+    expect(JSON.stringify(client.appendSessionEvent.mock.calls)).not.toContain(
+      "owner private summary"
+    )
+    expect(JSON.stringify(client.appendSessionEvent.mock.calls)).not.toContain(
+      "cognia-media:private"
+    )
+    expect(client.appendSessionEvent.mock.calls[1][2].payload.parts).toEqual([
+      { type: "text", text: "[Withheld: personal content of Host owner]" },
+    ])
+    expect(client.createSharedSession).toHaveBeenCalledWith(
+      "org_1",
+      "workspace_1",
+      expect.objectContaining({ title: expect.stringContaining("[Withheld:") })
+    )
+    // Local canonical history remains intact, while future members receive
+    // only the already safe event payloads.
+    expect((await getDb().messages.get("message_2"))?.parts).toEqual(parts)
+    expect(
+      jest.requireMock("@/lib/execution/personal-sink").recordPersonalSinkReceipt
+    ).toHaveBeenCalledWith(
+      { sessionId: "local_1", sessionDerived: true },
+      [{ kind: "local-person" }],
+      "withhold",
+      JSON.stringify(parts),
+      { kind: "shared-session", orgId: "org_1", sessionId: "shared_1" }
+    )
+  })
+
+  it("refuses to activate a retry whose append-only import already contains private originals", async () => {
+    await getDb().messages.update("message_1", {
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+      },
+    })
+    const client = personalConversionClient([
+      {
+        id: "old",
+        sessionId: "shared_1",
+        sequence: 1,
+        kind: "message.created",
+        actor: { kind: "human", id: "user_1" },
+        operationId: "chat-import:local_1:message:message_1",
+        createdAt: 10,
+        payload: {
+          messageId: "message_1",
+          role: "user",
+          parts: [{ type: "text", text: "hello" }],
+          imported: true,
+        },
+      },
+    ])
+    await expect(
+      convertLocalSessionToShared(client, {
+        localSessionId: "local_1",
+        orgId: "org_1",
+        workspaceId: "workspace_1",
+      })
+    ).rejects.toThrow("previously published personal content")
+    expect(client.updateSharedSession).not.toHaveBeenCalled()
+    expect((await getDb().sessions.get("local_1"))?.collaboration).toBeUndefined()
+  })
 
   it("binds the local session only after every event and activation succeed", async () => {
     await getDb().sessions.update("local_1", { programmaticCreator: "plugin:example" })

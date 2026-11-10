@@ -1,4 +1,10 @@
 /** @jest-environment jsdom */
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: jest.fn(async () => ({ verified: true, marks: [] })),
+  checkPersonalSink: jest.fn(async () => ({ outcome: "allow" })),
+  assertPersonalSink: jest.fn(async () => undefined),
+}))
 
 /**
  * Rule 7 pin for ADR-0239's intentionally inert mode: in shadow mode the
@@ -9,6 +15,7 @@
  * test.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { actionReviewAuthKeyPrefix } from "@/lib/db/action-review-receipts"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 
@@ -84,6 +91,7 @@ const DELIVERIES: [string, DeliveryPlanInput][] = [
   [
     "an unattended send to a recipient nothing authorized",
     {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       adapterId: "bot-a",
       conversationKey: OTHER_KEY,
       source: "ai-run",
@@ -93,6 +101,7 @@ const DELIVERIES: [string, DeliveryPlanInput][] = [
   [
     "a send to a recipient a person refused",
     {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       adapterId: "bot-a",
       conversationKey: ORIGIN_KEY,
       source: "ai-run",
@@ -102,6 +111,7 @@ const DELIVERIES: [string, DeliveryPlanInput][] = [
   [
     "a reply addressed to another conversation",
     {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       adapterId: "bot-a",
       conversationKey: OTHER_KEY,
       source: "ai-run",
@@ -111,6 +121,7 @@ const DELIVERIES: [string, DeliveryPlanInput][] = [
   [
     "a tool's delivery with no record of the call",
     {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       adapterId: "bot-a",
       conversationKey: OTHER_KEY,
       source: "ai-run",

@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 jest.mock("@/lib/audio/transcode", () => ({
   ...jest.requireActual("@/lib/audio/transcode"),
   transcodeAudio: jest.fn(),
@@ -358,6 +359,7 @@ describe("createQQOfficialAdapter", () => {
       const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
       const { startOutboundRunner } = await import("@/lib/connectors/outbound-runner")
       const row = await getConnectorDeliveryGateway().enqueue({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         adapterId: a.id,
         conversationKey: "qq-official:qq-1:recall-user",
         request,
@@ -1014,9 +1016,21 @@ describe("createQQOfficialAdapter", () => {
         ? await startToolExecutionRun(sessionId, { localAuthorization: LOCAL_PERSON_RUN })
         : undefined
       try {
-        expect(
-          await runBuiltInSkill(id, {}, await resolveBuiltInSkillContext(sessionId))
-        ).toMatchObject({ status: "pending_hitl" })
+        const confirmation = await runBuiltInSkill(
+          id,
+          {},
+          await resolveBuiltInSkillContext(sessionId)
+        )
+        if (!provenance) {
+          expect(confirmation).toMatchObject({ status: "error" })
+          expect(
+            (await getDb().outboundQueue.toArray()).every((row) =>
+              row.request.segments.every((segment) => segment.type !== "a2ui")
+            )
+          ).toBe(true)
+          return
+        }
+        expect(confirmation).toMatchObject({ status: "pending_hitl" })
         if (original) await finishToolExecutionRun(original.id)
         const [job] = await getDb().outboundQueue.toArray()
         expect(job.request.segments[0]).toMatchObject({ type: "a2ui" })
@@ -2717,6 +2731,7 @@ it.each(["multipart", "stream-final"] as const)(
     const { startOutboundRunner } = await import("@/lib/connectors/outbound-runner")
     const { waitForOutboundTerminal } = await import("@/lib/db/outbound-jobs")
     const job = await getConnectorDeliveryGateway().enqueue({
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       adapterId: a.id,
       conversationKey: "qq-official:qq-1:target",
       request,
@@ -3359,6 +3374,7 @@ it.each([
         appendAudit: async () => {},
       })
       const queued = await gateway.enqueueAuthorized({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         adapterId: a.id,
         conversationKey: "qq-official:qq-1:target",
         source: "skill",

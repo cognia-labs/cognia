@@ -15,6 +15,7 @@
  */
 
 export interface ScheduledNoticeI18n {
+  personalDelivery: (narrowed: boolean) => string
   /**
    * Prefix for a delivery that fired from a missed slot — the operator needs to
    * know the content is for an earlier time, or a digest arriving at 09:12 reads
@@ -24,10 +25,18 @@ export interface ScheduledNoticeI18n {
 }
 
 const EN: ScheduledNoticeI18n = {
+  personalDelivery: (narrowed) =>
+    narrowed
+      ? "This answer contains a person's private information and was sent to them privately."
+      : "This answer contains private information and has been withheld. The person must disclose it before it can be shared.",
   lateDelivery: (scheduledFor) => `_Delayed — scheduled for ${scheduledFor}._`,
 }
 
 const ZH: ScheduledNoticeI18n = {
+  personalDelivery: (narrowed) =>
+    narrowed
+      ? "此回答包含个人私密信息，已私下发送给本人。"
+      : "此回答包含个人私密信息，已停止发送。须由本人披露后才能分享。",
   lateDelivery: (scheduledFor) => `_延迟送达 —— 原定 ${scheduledFor}。_`,
 }
 

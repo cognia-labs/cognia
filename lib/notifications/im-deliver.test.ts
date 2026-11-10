@@ -5,12 +5,14 @@
  * `lib/connectors/notifications/im-deliver.ts`.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { createImDeliver, deliverRecordToIM, type ImDeliverDeps } from "./im-deliver"
 import type { NotificationRecord } from "@/types/notifications"
 import type { ConversationChannel } from "@/types/modules/ports/conversation-channel"
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n1",
     source: "connector",
     level: "info",

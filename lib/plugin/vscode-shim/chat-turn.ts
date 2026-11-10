@@ -65,6 +65,7 @@ export function participantHistory(
 }
 
 export async function runVscodeChatTurn(input: {
+  executionRunId?: string
   sessionId: string
   turnId: string
   characterId: string
@@ -91,7 +92,9 @@ export async function runVscodeChatTurn(input: {
   let text = ""
   let metadata: unknown
   try {
-    const history = await preparePersonalHistory(sessionId, input.messages.slice(0, -1))
+    const history = await preparePersonalHistory(sessionId, input.messages.slice(0, -1), {
+      executionRunId: input.executionRunId,
+    })
     const result = await runVscodeChatParticipant({
       characterId: input.characterId,
       prompt: participantPrompt(input.prompt),

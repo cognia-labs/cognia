@@ -146,7 +146,8 @@ describe("watcher", () => {
         level: "success",
         source: "session",
         dedupeKey: "im-notify:s1:done:3",
-      })
+      }),
+      { sessionId: "s1", sessionDerived: true }
     )
     un()
   })
@@ -165,7 +166,8 @@ describe("watcher", () => {
         conversationKey: "ck-auto",
         level: "error",
         title: "My chat errored",
-      })
+      }),
+      { sessionId: "s1", sessionDerived: true }
     )
     un()
   })
@@ -194,7 +196,8 @@ describe("watcher", () => {
         directed: true,
         title: "My chat needs input",
         dedupeKey: "im-notify:s2:attention:2",
-      })
+      }),
+      { sessionId: "s2", sessionDerived: true }
     )
     un()
   })
@@ -242,7 +245,8 @@ describe("watcher", () => {
     })
     await act(async () => {})
     expect(push).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationKey: "ck-1", level: "success" })
+      expect.objectContaining({ conversationKey: "ck-1", level: "success" }),
+      { sessionId: "s-active", sessionDerived: true }
     )
     un()
   })

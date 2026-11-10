@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NotificationRecord } from "@/types/notifications"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
@@ -20,6 +21,7 @@ const NOW = 1_000_000
 
 function rec(over: Partial<NotificationRecord>): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n",
     source: "scheduler",
     level: "success",

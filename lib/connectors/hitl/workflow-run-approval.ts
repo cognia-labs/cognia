@@ -47,6 +47,7 @@ import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-ma
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
 import { getDb } from "@/lib/db/schema"
 import { newIdempotencyKey } from "@/types/connectors/outbound"
+import type { PersonalSinkContext } from "@/lib/execution/personal-sink"
 
 /** Surface-id namespace, shared with the `wf_run_workflow_by_name` card. */
 export const WORKFLOW_HOLD_SURFACE_PREFIX = "wfsurf:"
@@ -63,6 +64,7 @@ export const DEFAULT_WORKFLOW_HOLD_TTL_MS = 24 * 60 * 60 * 1_000
 const REQUEST_EXCERPT_LIMIT = 280
 
 export interface HoldWorkflowDispatchInput {
+  personalContext: PersonalSinkContext
   workflowId: string
   /** Surfaced to trigger-aware nodes as `$trigger.payload` once approved. */
   runParams: Record<string, unknown>
@@ -228,6 +230,8 @@ export async function holdWorkflowDispatchForApproval(
     )
     if (input.deliverCard !== false)
       await enqueue({
+        // Preserve the Host producer binding: a plugin may request this card from a tainted run.
+        personalContext: input.personalContext,
         adapterId: input.adapterId,
         conversationKey: input.conversationKey,
         request: {

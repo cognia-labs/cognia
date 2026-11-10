@@ -186,7 +186,8 @@ it("uses the existing translated summary notification", async () => {
       expect.objectContaining({
         title: 'autoResumed:{"count":2}',
         dedupeKey: "background-auto-resume",
-      })
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   )
 })

@@ -860,12 +860,41 @@ it("admits an explicit standalone local run but refuses session mismatch, missin
 })
 it("cannot mint local job authority from an unknown or mismatched parent plus a Host symbol", async () => {
   const origin = await startToolExecutionRun("s", { localAuthorization: LOCAL_PERSON_RUN })
-  const job = await startJobExecutionRun("unknown-parent", {
-    sessionId: "other",
-    executionRunId: origin.id,
+  await expect(
+    startJobExecutionRun("unknown-parent", {
+      sessionId: "other",
+      executionRunId: origin.id,
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).rejects.toThrow("Job execution parent unavailable")
+  expect(await getDb().executionRuns.get("execution:job:unknown-parent")).toBeUndefined()
+})
+
+it("retains source taint on a confirmation's new identity root", async () => {
+  const source = await startToolExecutionRun("confirmation-source", {
     localAuthorization: LOCAL_PERSON_RUN,
   })
-  expect(job.actingIdentity).toMatchObject({ trigger: "external-event", requesters: [] })
+  const mark = { person: { kind: "local-person" as const }, source: "private-read", markedAt: 1 }
+  await getDb().executionRuns.update(source.id, { personalMarks: [mark] })
+  await finishToolExecutionRun(source.id)
+  const replay = await startToolExecutionRun("confirmation-source", {
+    confirmedSkill: {
+      originRunId: source.id,
+      rootSessionId: "confirmation-source",
+      requester: principal,
+    },
+  })
+  expect(replay.actingIdentity?.rootRunId).toBe(replay.id)
+  expect(replay.personalMarks).toEqual([mark])
+})
+
+it("marks an unverifiable confirmation origin instead of minting clean content", async () => {
+  const replay = await startToolExecutionRun("confirmation-source", {
+    confirmedSkill: { rootSessionId: "confirmation-source", requester: principal },
+  })
+  expect(replay.personalMarks).toEqual([
+    expect.objectContaining({ source: "unverified-confirmation-origin" }),
+  ])
 })
 
 it.each(["schedule", "service"] as const)(

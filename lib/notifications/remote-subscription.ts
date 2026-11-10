@@ -17,6 +17,7 @@
  * replayed frame after a reconnect coalesces onto the same record.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NotificationLevel, NotificationSource } from "@/types/notifications"
 import { notify } from "./runtime"
 import { transport as defaultTransport } from "@/lib/tauri/transport-instance"
@@ -93,20 +94,27 @@ export async function ingestRemoteNotification(
     ? (frame.level as NotificationLevel)
     : "info"
   const doNotify = options.notifyFn ?? notify
-  return doNotify({
-    source,
-    level,
-    title: frame.title,
-    body: frame.body && frame.body !== frame.title ? frame.body : undefined,
-    href:
-      frame.href && frame.href.startsWith("/") && !frame.href.startsWith("//")
-        ? frame.href
-        : undefined,
-    dedupeKey: `remote:${options.hostKey}:${frame.id}`,
-    groupKey: `remote:${options.hostKey}`,
-    // Local fan-out only — never re-publish a remote frame back to a host.
-    channels: ["center", "toast", "os"],
-  })
+  return doNotify(
+    {
+      source,
+      level,
+      title: frame.title,
+      body: frame.body && frame.body !== frame.title ? frame.body : undefined,
+      href:
+        frame.href && frame.href.startsWith("/") && !frame.href.startsWith("//")
+          ? frame.href
+          : undefined,
+      dedupeKey: `remote:${options.hostKey}:${frame.id}`,
+      groupKey: `remote:${options.hostKey}`,
+      // Local fan-out only — never re-publish a remote frame back to a host.
+      channels: ["center", "toast", "os"],
+    },
+    {
+      personalContext: personalSinkHost.unverifiedPersonalSinkContext(
+        "lib/notifications/remote-subscription.ts"
+      ),
+    }
+  )
 }
 
 export interface RemoteNotificationSubscriptionDeps {

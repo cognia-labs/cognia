@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 import type { Issue } from "@/types/issues"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -61,11 +62,18 @@ describe("pushIssueText", () => {
   it("enqueues a text segment through the governed gateway", async () => {
     const { deps, sent } = makeDeps()
     const status = await pushIssueText(
-      { adapterId: "lark-1", conversationKey: "lark:lark-1:oc_1", text: "hi", idempotencyKey: "k" },
+      {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        adapterId: "lark-1",
+        conversationKey: "lark:lark-1:oc_1",
+        text: "hi",
+        idempotencyKey: "k",
+      },
       deps
     )
     expect(status).toBe("sent")
     expect(sent[0]).toMatchObject({
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       adapterId: "lark-1",
       conversationKey: "lark:lark-1:oc_1",
       source: "skill",
@@ -82,7 +90,13 @@ describe("pushIssueText", () => {
   it("blocks and audits text that fails the PII gate", async () => {
     const { deps, sent, audits } = makeDeps({ isPiiSafe: () => false })
     const status = await pushIssueText(
-      { adapterId: "lark-1", conversationKey: "lark:lark-1:oc_1", text: "x", idempotencyKey: "k" },
+      {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        adapterId: "lark-1",
+        conversationKey: "lark:lark-1:oc_1",
+        text: "x",
+        idempotencyKey: "k",
+      },
       deps
     )
     expect(status).toBe("pii_blocked")
@@ -105,7 +119,13 @@ describe("pushIssueCard", () => {
     })
     const { deps, sent } = makeDeps()
     const result = await pushIssueCard(
-      { adapterId: "lark-1", conversationKey: "lark:lark-1:oc_1", issue, idempotencyKey: "ik" },
+      {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        adapterId: "lark-1",
+        conversationKey: "lark:lark-1:oc_1",
+        issue,
+        idempotencyKey: "ik",
+      },
       deps
     )
     expect(result.status).toBe("sent")
@@ -134,7 +154,15 @@ describe("pushIssueCard", () => {
       by: { kind: "human" },
     })
     const { deps, sent } = makeDeps()
-    await pushIssueCard({ adapterId: "lark-1", conversationKey: "lark:lark-1:oc_1", issue }, deps)
+    await pushIssueCard(
+      {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        adapterId: "lark-1",
+        conversationKey: "lark:lark-1:oc_1",
+        issue,
+      },
+      deps
+    )
     const segment = (
       sent[0] as {
         request: { segments: Array<{ content: { components: Record<string, unknown> } }> }
@@ -151,6 +179,7 @@ describe("pushIssueCard", () => {
     const { deps, sent, audits } = makeDeps({ isPiiSafe: () => false })
     const result = await pushIssueCard(
       {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         adapterId: "lark-1",
         conversationKey: "lark:lark-1:oc_1",
         issue,

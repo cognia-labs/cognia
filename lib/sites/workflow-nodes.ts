@@ -1,3 +1,4 @@
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 /**
  * Cognia Sites workflow actions (ADR-0084):
  * `action.site.{build,deploy,rollback,status}`.
@@ -115,6 +116,12 @@ registerNodeExecutor({
   retryable: false,
   timeoutMs: BUILD_TIMEOUT_MS,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.site.build" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.site.build" }
+    )
     requireDesktop("action.site.build")
     const actorAccountId = requireActor("action.site.build")
     const siteId = requireSiteId(ctx, "action.site.build")
@@ -150,6 +157,12 @@ registerNodeExecutor({
   retryable: false,
   timeoutMs: DEPLOY_TIMEOUT_MS,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.site.deploy" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.site.deploy" }
+    )
     requireDesktop("action.site.deploy")
     const actorAccountId = requireActor("action.site.deploy")
     const siteId = requireSiteId(ctx, "action.site.deploy")
@@ -178,6 +191,12 @@ registerNodeExecutor({
   retryable: false,
   timeoutMs: DEPLOY_TIMEOUT_MS,
   execute: async (ctx) => {
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "unknown", label: "action.site.rollback" },
+      undefined,
+      { workflowId: ctx.workflowId, sink: "action.site.rollback" }
+    )
     requireDesktop("action.site.rollback")
     const actorAccountId = requireActor("action.site.rollback")
     const siteId = requireSiteId(ctx, "action.site.rollback")

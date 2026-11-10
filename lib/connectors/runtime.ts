@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   preparePersonalHistory,
   preparePersonalDerivedHistory,
@@ -95,6 +96,8 @@ import { assertLocalMutationAllowed } from "@/lib/collab/shared-session-access"
 import { publishSyncInvalidate } from "@/lib/sync/host-invalidate"
 import { publishInboundMessageAdded } from "@/lib/connectors/inbox-relay/host-events"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
+import { checkPersonalSink, explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
+import { sendPersonalDeliveryNotice } from "./personal-delivery"
 import { createDraft } from "@/lib/db/connector-drafts"
 import type { ConversationOverrideRow, AdapterInstanceRow } from "@/lib/db/connector-types"
 import { resolveCharacterById } from "@/lib/db/characters"
@@ -135,7 +138,7 @@ import {
 import { connectorInjectionProtection, inspectConnectorText } from "./content-safety"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import { appendAudit } from "./audit"
-import { getBus } from "./bus"
+import type { getBus } from "./bus"
 import {
   createPlatformSession,
   findActiveSessionForConversation,
@@ -380,14 +383,17 @@ function notifyImFailure(
 ): void {
   void import("@/lib/notifications/conversation-notify")
     .then(({ notifyConversationOverIM }) =>
-      notifyConversationOverIM({
-        conversationKey,
-        level: "error",
-        title: notice.title,
-        body: notice.body,
-        dedupeKey,
-        ...(options.centerOnly ? { centerOnly: true } : {}),
-      })
+      notifyConversationOverIM(
+        {
+          conversationKey,
+          level: "error",
+          title: notice.title,
+          body: notice.body,
+          dedupeKey,
+          ...(options.centerOnly ? { centerOnly: true } : {}),
+        },
+        { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+      )
     )
     .catch(() => undefined)
 }
@@ -431,6 +437,7 @@ async function replyImFailure(
       },
       source: "ai-run",
       authorization: { kind: "origin-reply", inboundConversationKey: event.conversationKey },
+      personalContext: explicitHostPersonalSinkContext("fixed-notice"),
     })
   } catch {
     notifyImFailure(event.conversationKey, notice, dedupeKey)
@@ -650,7 +657,7 @@ interface ImRoomMemberRun {
 
 /** How one reply through the reply path ended. */
 type DirectReplyOutcome =
-  | { kind: "delivered"; text: string; messageId: string }
+  | { kind: "delivered"; text: string; messageId: string; executionRunId: string }
   /** It stopped before delivering; it already audited and told the conversation. */
   | { kind: "halted" }
 
@@ -1003,6 +1010,7 @@ async function postImRoomHandoffCards(input: {
   event: NormalizedInboundEvent
   roomId: string
   proposer: Pick<Character, "id" | "name">
+  executionRunId: string
   calls: readonly ImRoomHandoffCall[]
 }): Promise<void> {
   const proposed = input.calls.filter((call) => call.output.status === "proposed")
@@ -1013,6 +1021,8 @@ async function postImRoomHandoffCards(input: {
     try {
       await postRoomHandoffCard({
         roomId: input.roomId,
+        sessionId: input.roomId,
+        executionRunId: input.executionRunId,
         toolUseId: call.toolUseId,
         proposerId: input.proposer.id,
         proposerName: input.proposer.name,
@@ -1166,7 +1176,7 @@ async function insertInboundMessageWithRevision(
   const now = overrideTimestamp ?? Date.now()
   const existing = canonicalSource
     ? await getDb().messages.get(canonicalSource.id)
-    : await getBus().findStoredPlatformMessage(event, event.messageId)
+    : await (await import("./bus")).getBus().findStoredPlatformMessage(event, event.messageId)
   if (existing) {
     projectStoredInboundMessage(existing)
     return {
@@ -1249,7 +1259,11 @@ async function insertInboundMessageWithRevision(
     db.connectorInboundJobs,
     async () => {
       // Concurrent redeliveries must neither insert nor increment unread twice.
-      const duplicate = await getBus().findStoredPlatformMessage(event, event.messageId)
+      const duplicate = await (
+        await import("./bus")
+      )
+        .getBus()
+        .findStoredPlatformMessage(event, event.messageId)
       if (duplicate) return duplicate
       const mutation = await findConnectorInboundMutation(event)
       const recalledAt = mutation?.recalledAt
@@ -2220,6 +2234,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           // already exists, which is why nothing is dispatched here.
           if (requireAcceptance) {
             const held = await holdWorkflowDispatchForApproval({
+              personalContext: explicitHostPersonalSinkContext("typed-send"),
               workflowId: effectiveWorkflowId,
               runParams,
               triggeredFrom,
@@ -2721,6 +2736,8 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             ? AbortSignal.any([adapterSignal, runController.signal])
             : runController.signal
           const replyStream = createReplyStream({
+            personalContext: { sessionId: session.id, executionRunId },
+            conversationKey: event.conversationKey,
             adapter: targetAdapter,
             conversationRef: event.conversationRef,
             streamKey: executionRunId,
@@ -3072,7 +3089,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             if (recoveryMarkFailure !== undefined) throw err
             return { kind: "halted" }
           } finally {
-            replyStream?.captured()
+            await replyStream?.captured()
             approvalController.abort()
             unregisterImElicitation()
             if (member)
@@ -3253,6 +3270,10 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           }
           // ── The one place acceptance changes anything ──
           //
+          // Canonical member history survives an outbound privacy withhold.
+          // Its readers still pass through the 2B history projection.
+          if (member)
+            await recordImRoomMemberReply(member, recoveredText, captured.text, executionRunId)
           // The turn is finished and identical either way; what differs is
           // whether its product ships or waits for a human. That is why `draft`
           // stopped being a route: routing it separately meant deciding WHO runs
@@ -3261,7 +3282,23 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             const draftSegments: MessageSegment[] = outboundSegments.length
               ? outboundSegments
               : [{ type: "text", text: deliveredText }]
+            const localDraft = await checkPersonalSink(
+              { sessionId: session.id, executionRunId },
+              { kind: "host-local" },
+              { ...outboundRequest, segments: draftSegments },
+              { kind: "connector-draft", conversationKey: event.conversationKey }
+            )
+            if (localDraft.outcome !== "allow") {
+              await sendPersonalDeliveryNotice(
+                targetAdapter,
+                event.conversationKey,
+                outboundRequest,
+                false
+              )
+              return { kind: "halted" }
+            }
             const draft = await createDraft({
+              personalExecutionRunId: executionRunId,
               conversationKey: event.conversationKey,
               sessionId: session.id,
               segments: draftSegments,
@@ -3285,9 +3322,12 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                 ...(effectiveWorkflowId ? { workflowId: effectiveWorkflowId } : {}),
               },
             })
-            if (member)
-              await recordImRoomMemberReply(member, recoveredText, captured.text, executionRunId)
-            return { kind: "delivered", text: captured.text, messageId: captured.messageId }
+            return {
+              kind: "delivered",
+              text: captured.text,
+              messageId: captured.messageId,
+              executionRunId,
+            }
           }
 
           // ── Vendor-drawn final answer ──
@@ -3324,6 +3364,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             for (const [index, group] of vendorGroups.entries()) {
               await enqueueOutbound(
                 {
+                  personalContext: { sessionId: session.id, executionRunId },
                   adapterId: outboundTarget.adapterId,
                   conversationKey: outboundTarget.conversationKey,
                   request: {
@@ -3369,6 +3410,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             try {
               await enqueueOutbound(
                 {
+                  personalContext: { sessionId: session.id, executionRunId },
                   adapterId: outboundTarget.adapterId,
                   conversationKey: outboundTarget.conversationKey,
                   request: outboundRequest,
@@ -3433,9 +3475,12 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               metadata: { assistantMessageId: captured.messageId },
             })
           }
-          if (member)
-            await recordImRoomMemberReply(member, recoveredText, captured.text, executionRunId)
-          return { kind: "delivered", text: captured.text, messageId: captured.messageId }
+          return {
+            kind: "delivered",
+            text: captured.text,
+            messageId: captured.messageId,
+            executionRunId,
+          }
         }
 
         if (!roomTeam) {
@@ -3551,6 +3596,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               event,
               roomId: session.id,
               proposer: step.character,
+              executionRunId: outcome.executionRunId,
               calls: handoff.calls(),
             })
           }

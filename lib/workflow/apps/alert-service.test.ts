@@ -47,7 +47,8 @@ it("fans budget exhaustion out to durable notifications and signed webhooks", as
       channels: ["center", "toast", "push"],
       dedupeKey: "workflow-app-budget:app_1:token_budget_exhausted:2",
       meta: expect.objectContaining({ appId: "app_1", appReleaseId: "release_2" }),
-    })
+    }),
+    expect.objectContaining({ personalContext: expect.any(Object) })
   )
   expect(publishOutboundEvent).toHaveBeenCalledWith(
     expect.objectContaining({

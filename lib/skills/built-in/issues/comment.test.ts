@@ -1,6 +1,10 @@
 /**
  * @jest-environment jsdom
  */
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => undefined),
+}))
 
 /**
  * `issue.comment`: append-only, attributed to the assistant rather than to

@@ -13,6 +13,7 @@ import {
 } from "@/lib/connectors/delivery-gateway"
 import { createDraft } from "@/lib/db/connector-drafts"
 import { nonRetryable } from "@/lib/workflow/nodes/shared/executor-support"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 
 // ── action.connector.send ─────────────────────────────────────────────────
 // Enqueue an outbound message via the existing `outboundQueue`. The queue
@@ -115,43 +116,47 @@ registerNodeExecutor({
       import("@/lib/policy/action-review/plan-context"),
     ])
     const run = await getDb().workflowRuns.get(ctx.runId)
-    const delivered = await enqueueOutbound({
-      adapterId,
-      conversationKey,
-      request: {
-        conversationRef: {
-          platform: parsedKey.platform,
-          adapterId,
-          channelId: parsedKey.remoteChatId,
-          ...(threadId ? { threadTs: threadId } : {}),
-        } as Parameters<typeof enqueueOutbound>[0]["request"]["conversationRef"],
-        segments,
-        replyTo: params.replyToMessageId ? { messageId: params.replyToMessageId } : undefined,
-        // Edit-in-place: the outbound runner routes jobs carrying an
-        // editTargetMessageId to `adapter.edit()` (falling back to send()
-        // with an `edit_unsupported` audit on platforms without edit).
-        ...(editTargetMessageId ? { editTargetMessageId } : {}),
-        metadata: { idempotencyKey },
+    const delivered = await enqueueOutbound(
+      {
+        personalContext: { executionRunId: `execution:workflow:${ctx.runId}` },
+        adapterId,
+        conversationKey,
+        request: {
+          conversationRef: {
+            platform: parsedKey.platform,
+            adapterId,
+            channelId: parsedKey.remoteChatId,
+            ...(threadId ? { threadTs: threadId } : {}),
+          } as Parameters<typeof enqueueOutbound>[0]["request"]["conversationRef"],
+          segments,
+          replyTo: params.replyToMessageId ? { messageId: params.replyToMessageId } : undefined,
+          // Edit-in-place: the outbound runner routes jobs carrying an
+          // editTargetMessageId to `adapter.edit()` (falling back to send()
+          // with an `edit_unsupported` audit on platforms without edit).
+          ...(editTargetMessageId ? { editTargetMessageId } : {}),
+          metadata: { idempotencyKey },
+        },
+        // Provenance per ADR-0009 v41 — the inbox UI uses this to render a
+        // "from workflow" badge with click-to-jump on the conversation
+        // timeline. `ctx.workflowId` carries the user-authored workflow id
+        // (distinct from `ctx.runId` which is the per-execution token).
+        source: "workflow",
+        sourceWorkflow: {
+          workflowId: ctx.workflowId,
+          runId: ctx.runId,
+          nodeId: ctx.stepId,
+        },
+        authorization: {
+          kind: "unattended",
+          ownerRef: `workflow:${ctx.workflowId}`,
+          origin: workflowRunPlanOrigin({
+            id: ctx.runId,
+            ...(run?.triggeredBy ? { triggeredBy: run.triggeredBy } : {}),
+          }),
+        },
       },
-      // Provenance per ADR-0009 v41 — the inbox UI uses this to render a
-      // "from workflow" badge with click-to-jump on the conversation
-      // timeline. `ctx.workflowId` carries the user-authored workflow id
-      // (distinct from `ctx.runId` which is the per-execution token).
-      source: "workflow",
-      sourceWorkflow: {
-        workflowId: ctx.workflowId,
-        runId: ctx.runId,
-        nodeId: ctx.stepId,
-      },
-      authorization: {
-        kind: "unattended",
-        ownerRef: `workflow:${ctx.workflowId}`,
-        origin: workflowRunPlanOrigin({
-          id: ctx.runId,
-          ...(run?.triggeredBy ? { triggeredBy: run.triggeredBy } : {}),
-        }),
-      },
-    })
+      { executionContext: { executionRunId: `execution:workflow:${ctx.runId}` } }
+    )
     if (delivered.kind === "drafted") {
       return {
         output: {
@@ -218,7 +223,14 @@ registerNodeExecutor({
     if (!content) throw nonRetryable("action.connector.draft requires non-empty 'content'")
     const expiresAt =
       typeof params.ttlMs === "number" && params.ttlMs > 0 ? Date.now() + params.ttlMs : undefined
+    await assertPersonalSink(
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      { kind: "host-local" },
+      content,
+      { kind: "connector-draft", conversationKey }
+    )
     const draft = await createDraft({
+      personalExecutionRunId: `execution:workflow:${ctx.runId}`,
       conversationKey,
       sessionId,
       segments: [{ type: "text", text: content }],
@@ -362,6 +374,7 @@ registerNodeExecutor({
     ])
     const run = await getDb().workflowRuns.get(ctx.runId)
     const result = await forwardGoverned({
+      personalContext: { executionRunId: `execution:workflow:${ctx.runId}` },
       adapterId,
       forward: {
         ...(messageId ? { messageId } : {}),

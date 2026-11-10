@@ -33,6 +33,19 @@ import type {
 } from "@/types/connectors"
 import { buildConversationKey, parseConversationKey } from "@/types/connectors/event"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
+import {
+  checkPersonalSink,
+  withPersonalSinkAttempt,
+  recordPersonalSinkReceipt,
+  explicitHostPersonalSinkContext,
+  type PersonalSinkContext,
+} from "@/lib/execution/personal-sink"
+import {
+  checkConnectorPersonalSink,
+  narrowPersonalDelivery,
+  personalDeliveryNotice,
+  sendPersonalDeliveryNotice,
+} from "./personal-delivery"
 
 export type OutboundJobInfo = OutboundJobRow
 export type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
@@ -63,6 +76,8 @@ export class ConnectorDeliveryDeniedError extends Error {
 }
 
 const DENY_REASON_TEXT: Record<DeliveryDenyReason, string> = {
+  personal:
+    "the audience cannot receive this person's private content; only that person may disclose it",
   fenced: "a person refused this recipient for the current request",
   "conversation-mismatch": "it named a conversation other than the one it answers",
   unapproved:
@@ -90,7 +105,7 @@ type AutomatedSource = Exclude<OutboundJobSource, HumanSource>
 type GovernedBase = Omit<
   EnqueueInput,
   "source" | "authorizedBy" | "authorizationProvenance" | "receipt"
->
+> & { personalContext: PersonalSinkContext }
 
 /**
  * One governed delivery. A person's own send (`manual`, `draft-approved`)
@@ -118,6 +133,9 @@ export type InThreadEnqueueInput =
  * drafted, since there is no draft to hold it in.
  */
 export interface ImmediateDeliveryInput {
+  personalContext: PersonalSinkContext
+  /** Host-addressed request, when this immediate sink supports private narrowing. */
+  request?: OutboundRequest
   deliveryMode?: "reply" | "proactive" | "reengagement"
   adapterId: string
   /** The conversation it reaches; absent when the request names only a platform reference. */
@@ -151,6 +169,7 @@ export interface ImmediateDeliveryInput {
  * of whom must be authorized.
  */
 export interface GovernedUrgentInput {
+  personalContext: PersonalSinkContext
   adapterId: string
   messageId: string
   userIds: readonly string[]
@@ -185,6 +204,7 @@ export interface ConnectorDeliveryGatewayDependencies {
   ): Promise<OutboundJobRow[]>
   getAdapter(adapterId: string): PlatformAdapter | undefined | Promise<PlatformAdapter | undefined>
   piiGate(value: unknown): boolean
+  checkPersonal: typeof checkConnectorPersonalSink
   appendAudit(entry: AuditEntryInput): Promise<unknown>
   planDelivery(input: DeliveryPlanInput): Promise<DeliveryDecision>
   createDraft(input: CreateDraftInput): Promise<ConnectorDraftRow>
@@ -194,6 +214,8 @@ export interface ConnectorDeliveryGatewayDependencies {
     adapterId: string
     ownerRef: string
     source: OutboundJobSource
+    personalContext: PersonalSinkContext
+    payload?: unknown
   }): Promise<UnplannedStreamDecision>
   /** The clock that groups a stream's frames. */
   now(): number
@@ -224,6 +246,7 @@ const defaultDependencies: ConnectorDeliveryGatewayDependencies = {
     return getBus().getAdapter(adapterId)
   },
   piiGate: hasNoLeakingPiiDeep,
+  checkPersonal: checkConnectorPersonalSink,
   appendAudit,
   planDelivery: (input) => planDelivery(input),
   createDraft,
@@ -270,6 +293,10 @@ const TRACKED_STREAM_LIMIT = 256
 
 /** One frame of a stream no plan covers (a plugin's `streamReply`). */
 export interface UnplannedStreamInput {
+  streamKey?: string
+  personalContext: PersonalSinkContext
+  conversationKey?: string
+  payload?: unknown
   adapterId: string
   /** The sender's own platform reference the frame goes to: frames to the same one are one stream. */
   conversationRef: unknown
@@ -281,6 +308,7 @@ export interface UnplannedStreamInput {
 
 /** A forward of messages already sent, by an automated sender. */
 export interface GovernedForwardInput {
+  personalContext: PersonalSinkContext
   adapterId: string
   forward: ForwardMessageInput
   source: AutomatedSource
@@ -293,6 +321,9 @@ function toPlanInput(input: GovernedEnqueueInput): DeliveryPlanInput {
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     source: input.source,
+    personalContext: input.personalContext,
+    payload: input.request,
+    canNarrowPersonal: !input.request.editTargetMessageId,
     ...(input.request.sendOptions?.mode ? { deliveryMode: input.request.sendOptions.mode } : {}),
     ...(input.authorization ? { authorization: input.authorization } : {}),
   }
@@ -303,9 +334,10 @@ async function toPersisted(
   decision: Extract<DeliveryDecision, { action: "send" }>,
   plannedAt: number
 ): Promise<EnqueueInput> {
-  const { authorization: _authorization, ...rest } = input
+  const { authorization: _authorization, personalContext: _personalContext, ...rest } = input
   return {
     ...rest,
+    personalSourceContext: structuredClone(input.personalContext),
     ...(decision.authorizedBy ? { authorizedBy: decision.authorizedBy } : {}),
     authorizationProvenance: {
       schemaVersion: 1,
@@ -335,6 +367,7 @@ export class ConnectorDeliveryGateway {
   private readonly dependencies: ConnectorDeliveryGatewayDependencies
   /** When each recent stream sent its last frame, by sender, bot and reference. */
   private readonly streams = new Map<string, number>()
+  private readonly withheldStreams = new Set<string>()
 
   constructor(dependencies: Partial<ConnectorDeliveryGatewayDependencies> = {}) {
     this.dependencies = { ...defaultDependencies, ...dependencies }
@@ -393,7 +426,8 @@ export class ConnectorDeliveryGateway {
    */
   async streamUnplanned(
     input: UnplannedStreamInput,
-    stream: () => Promise<boolean>
+    stream: () => Promise<boolean>,
+    finishWithNotice?: () => Promise<void>
   ): Promise<boolean> {
     let decision: UnplannedStreamDecision
     try {
@@ -401,11 +435,29 @@ export class ConnectorDeliveryGateway {
         adapterId: input.adapterId,
         ownerRef: input.ownerRef,
         source: input.source,
+        personalContext: input.personalContext,
+        payload: input.payload,
       })
     } catch {
       return false
     }
-    if (!decision.stream) return false
+    if (!decision.stream) {
+      if (decision.personalWithheld && finishWithNotice) {
+        const key = stableJson([
+          input.ownerRef,
+          input.adapterId,
+          input.streamKey,
+          input.conversationRef,
+        ])
+        if (!this.withheldStreams.has(key)) {
+          this.withheldStreams.add(key)
+          if (this.withheldStreams.size > TRACKED_STREAM_LIMIT)
+            this.withheldStreams.delete(this.withheldStreams.values().next().value!)
+          await finishWithNotice().catch(() => undefined)
+        }
+      }
+      return false
+    }
     if (decision.receipt && this.startsStream(input)) {
       await this.recordReceipt(decision.receipt)
       await Promise.resolve(
@@ -464,6 +516,7 @@ export class ConnectorDeliveryGateway {
         ...(conversationKey ? { conversationKey } : {}),
         source: input.source,
         authorization: input.authorization,
+        personalContext: input.personalContext,
         auditKind: "delivery.forward_direct",
         ...(input.auditFields ? { auditFields: input.auditFields } : {}),
       },
@@ -493,6 +546,7 @@ export class ConnectorDeliveryGateway {
         recipients,
         source: input.source,
         authorization: input.authorization,
+        personalContext: input.personalContext,
         auditKind: "delivery.urgent_direct",
         auditFields: {
           ...input.auditFields,
@@ -518,6 +572,24 @@ export class ConnectorDeliveryGateway {
         error: { code: "adapter_not_found", message: adapterId, retryable: false },
       }
     }
+    // This named Host-only probe sends the person's own diagnostic input;
+    // business/run output must use enqueue/sendNow instead.
+    const personal = await this.dependencies.checkPersonal(
+      explicitHostPersonalSinkContext("typed-send"),
+      adapterId,
+      request.deliveryTarget?.address.conversationKey,
+      request,
+      { request, adapter }
+    )
+    if (personal.outcome !== "allow")
+      return {
+        ok: false,
+        error: {
+          code: CONNECTOR_DELIVERY_DENIED_CODE,
+          message: "Diagnostic audience is unverified",
+          retryable: false,
+        },
+      }
     const result =
       localAuthorization === LOCAL_PERSON_RUN
         ? await adapter.send(request, { localAuthorization })
@@ -544,14 +616,61 @@ export class ConnectorDeliveryGateway {
    */
   async sendNow(
     input: ImmediateDeliveryInput,
-    send: () => Promise<OutboundResult>
+    send: (narrowedRequest?: OutboundRequest) => Promise<OutboundResult>
   ): Promise<OutboundResult> {
     input = structuredClone(input)
+    input.personalContext = withPersonalSinkAttempt(input.personalContext)
+    const personalContext = input.personalContext
+    const adapter = input.request ? await this.dependencies.getAdapter(input.adapterId) : undefined
+    const personal = await this.dependencies.checkPersonal(
+      personalContext,
+      input.adapterId,
+      input.conversationKey,
+      input.request ?? input.segments,
+      {
+        request: input.request,
+        recipients: input.recipients,
+        canNarrow: Boolean(input.request) && !input.request?.editTargetMessageId,
+        adapter,
+      }
+    )
+    let narrowed =
+      personal.outcome === "narrow" && input.request && input.conversationKey
+        ? await narrowPersonalDelivery(
+            adapter,
+            input.conversationKey,
+            input.request,
+            personal.person
+          ).catch(() => undefined)
+        : undefined
+    if (personal.outcome !== "allow" && !narrowed) {
+      if (personal.outcome === "narrow")
+        await this.dependencies.checkPersonal(
+          personalContext,
+          input.adapterId,
+          input.conversationKey,
+          input.request ?? input.segments,
+          { request: input.request, adapter }
+        )
+      if (input.request && input.conversationKey)
+        await sendPersonalDeliveryNotice(adapter, input.conversationKey, input.request, false)
+      return {
+        ok: false,
+        error: {
+          code: CONNECTOR_DELIVERY_DENIED_CODE,
+          message: new ConnectorDeliveryDeniedError(input.source, "personal").message,
+          retryable: false,
+        },
+      }
+    }
     const decision = await this.dependencies.planDelivery({
       adapterId: input.adapterId,
       conversationKey: input.conversationKey ?? "",
       source: input.source,
       authorization: input.authorization,
+      personalContext: input.personalContext,
+      payload: input.request ?? input.segments,
+      canNarrowPersonal: Boolean(input.request) && !input.request?.editTargetMessageId,
       immediate: true,
       ...(input.deliveryMode ? { deliveryMode: input.deliveryMode } : {}),
       ...(input.recipients ? { recipients: input.recipients } : {}),
@@ -580,7 +699,62 @@ export class ConnectorDeliveryGateway {
       throw new ConnectorDeliveryPiiError(input.source)
     }
     if (decision.receipt) await this.recordReceipt(decision.receipt)
-    const result = await send()
+    const finalRequest = narrowed?.request ?? input.request
+    const finalPersonal = await this.dependencies.checkPersonal(
+      personalContext,
+      input.adapterId,
+      narrowed?.conversationKey ?? input.conversationKey,
+      finalRequest ?? input.segments,
+      {
+        request: finalRequest,
+        recipients: input.recipients,
+        canNarrow: Boolean(finalRequest) && !finalRequest?.editTargetMessageId,
+        adapter,
+      }
+    )
+    if (finalPersonal.outcome === "narrow" && finalRequest && input.conversationKey)
+      narrowed = await narrowPersonalDelivery(
+        adapter,
+        narrowed?.conversationKey ?? input.conversationKey,
+        finalRequest,
+        finalPersonal.person
+      ).catch(() => undefined)
+    if (finalPersonal.outcome === "withhold" || (finalPersonal.outcome === "narrow" && !narrowed)) {
+      if (input.request && input.conversationKey)
+        await sendPersonalDeliveryNotice(adapter, input.conversationKey, input.request, false)
+      return {
+        ok: false,
+        error: {
+          code: CONNECTOR_DELIVERY_DENIED_CODE,
+          message: new ConnectorDeliveryDeniedError(input.source, "personal").message,
+          retryable: false,
+        },
+      }
+    }
+    if (narrowed && (personal.outcome === "narrow" || finalPersonal.outcome === "narrow"))
+      await recordPersonalSinkReceipt(
+        personalContext,
+        [
+          personal.outcome === "narrow"
+            ? personal.person
+            : (
+                finalPersonal as {
+                  person: import("@cognia/plugin-contract/types/execution/acting-identity").PrincipalRefV1
+                }
+              ).person,
+        ],
+        "narrow",
+        narrowed.request,
+        { adapterId: input.adapterId, conversationKey: input.conversationKey }
+      )
+    const result = await send(narrowed?.request)
+    if (narrowed && input.request && input.conversationKey)
+      await sendPersonalDeliveryNotice(
+        adapter,
+        input.conversationKey,
+        input.request,
+        result.ok
+      ).catch((error) => console.warn("[outbound] personal notice delivery failed", error))
     await Promise.resolve(
       this.dependencies.appendAudit({
         adapterId: input.adapterId,
@@ -615,8 +789,80 @@ export class ConnectorDeliveryGateway {
     options?.signal?.throwIfAborted()
     if (inputs.length === 0) return []
     inputs = structuredClone(inputs)
+    const planningInputs: GovernedEnqueueInput[] = []
+    const prepared: GovernedEnqueueInput[] = []
+    for (const original of inputs) {
+      const personalContext = withPersonalSinkAttempt(original.personalContext)
+      const adapter = await this.dependencies.getAdapter(original.adapterId)
+      planningInputs.push({ ...original, personalContext })
+      const decision = await this.dependencies.checkPersonal(
+        personalContext,
+        original.adapterId,
+        original.conversationKey,
+        original.request,
+        { request: original.request, canNarrow: !original.request.editTargetMessageId, adapter }
+      )
+      if (decision.outcome === "allow") {
+        prepared.push({ ...original, personalContext })
+        continue
+      }
+      const narrowed =
+        decision.outcome === "narrow"
+          ? await narrowPersonalDelivery(
+              adapter,
+              original.conversationKey,
+              original.request,
+              decision.person
+            ).catch(() => undefined)
+          : undefined
+      const notice = await personalDeliveryNotice(Boolean(narrowed))
+      // A Host fixed notice carries no run content and does not inherit its taint.
+      const noticeInput: GovernedEnqueueInput = {
+        adapterId: original.adapterId,
+        conversationKey: original.conversationKey,
+        request: {
+          conversationRef: original.request.conversationRef,
+          deliveryTarget: original.request.deliveryTarget,
+          segments: [{ type: "text", text: notice }],
+          metadata: {
+            idempotencyKey: `${original.request.metadata.idempotencyKey}:personal-notice`,
+          },
+        },
+        source: "manual",
+        personalContext: explicitHostPersonalSinkContext("fixed-notice"),
+      }
+      if (!narrowed) {
+        if (decision.outcome === "narrow")
+          await this.dependencies.checkPersonal(
+            personalContext,
+            original.adapterId,
+            original.conversationKey,
+            original.request,
+            { request: original.request, adapter }
+          )
+        await this.deliver([noticeInput])
+        throw new ConnectorDeliveryDeniedError(original.source, "personal")
+      }
+      prepared.push({
+        ...original,
+        ...narrowed,
+        personalContext,
+        personalNarrowing: {
+          person: decision.outcome === "narrow" ? decision.person : { kind: "local-person" },
+          originalTarget: {
+            adapterId: original.adapterId,
+            conversationKey: original.conversationKey,
+          },
+        },
+        personalDeliveryNotice: {
+          conversationKey: original.conversationKey,
+          request: noticeInput.request,
+        },
+      })
+    }
+    inputs = prepared
     const decisions = await Promise.all(
-      inputs.map((input) => this.dependencies.planDelivery(toPlanInput(input)))
+      planningInputs.map((input) => this.dependencies.planDelivery(toPlanInput(input)))
     )
     options?.signal?.throwIfAborted()
 
@@ -640,6 +886,28 @@ export class ConnectorDeliveryGateway {
 
     const results: EnqueueGovernedResult[] = new Array(inputs.length)
     if (sends.length > 0) {
+      const inherited = options?.executionContext ?? inputs[sends[0]].personalContext
+      if (
+        sends.some((index) => {
+          const context = options?.executionContext ?? inputs[index].personalContext
+          return (
+            context?.executionRunId !== inherited?.executionRunId ||
+            context?.sessionId !== inherited?.sessionId
+          )
+        })
+      )
+        throw new Error("A connector delivery batch must retain one Host execution context")
+      const persistenceOptions: OutboundEnqueueOptions | undefined = options?.executionContext
+        ? options
+        : inherited?.executionRunId || inherited?.sessionId
+          ? {
+              ...options,
+              executionContext: {
+                sessionId: inherited.sessionId,
+                executionRunId: inherited.executionRunId,
+              },
+            }
+          : options
       const persisted = await Promise.all(
         sends.map((index) => {
           const decision = decisions[index] as Extract<DeliveryDecision, { action: "send" }>
@@ -648,8 +916,16 @@ export class ConnectorDeliveryGateway {
       )
       const rows =
         inputs.length === 1
-          ? [await this.dependencies.persistOne(persisted[0], ...(options ? [options] : []))]
-          : await this.dependencies.persistMany(persisted, ...(options ? [options] : []))
+          ? [
+              await this.dependencies.persistOne(
+                persisted[0],
+                ...(persistenceOptions ? [persistenceOptions] : [])
+              ),
+            ]
+          : await this.dependencies.persistMany(
+              persisted,
+              ...(persistenceOptions ? [persistenceOptions] : [])
+            )
       sends.forEach((index, position) => {
         results[index] = { kind: "queued", job: rows[position] }
       })
@@ -664,7 +940,24 @@ export class ConnectorDeliveryGateway {
       if (decision.action !== "draft") continue
       const input = inputs[index]
       options?.signal?.throwIfAborted()
+      const draftPersonal = await checkPersonalSink(
+        input.personalContext,
+        { kind: "host-local" },
+        input.request,
+        { kind: "connector-draft", conversationKey: input.conversationKey }
+      )
+      if (draftPersonal.outcome !== "allow") {
+        const original = planningInputs[index]
+        await sendPersonalDeliveryNotice(
+          await this.dependencies.getAdapter(original.adapterId),
+          original.conversationKey,
+          original.request,
+          false
+        )
+        throw new ConnectorDeliveryDeniedError(original.source, "personal")
+      }
       const draft = await this.dependencies.createDraft({
+        personalExecutionRunId: input.personalContext?.executionRunId,
         conversationKey: input.conversationKey,
         sessionId: decision.draftSessionId,
         segments: input.request.segments,

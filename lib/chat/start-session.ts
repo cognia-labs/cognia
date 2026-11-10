@@ -1,3 +1,4 @@
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 import { createSession, deleteSession, updateSession } from "@/lib/db/sessions"
 import { createSessionOnPairedHost, HostSessionRefusedError } from "@/lib/chat/host-session-create"
 import { resolveCharacterById } from "@/lib/db/characters"
@@ -344,11 +345,14 @@ export async function startNewSession(partial?: NewSessionInput): Promise<ChatSe
         // this dispatch. The message stays the raw error, which is what
         // `CreateDiagnosticInit.message` is for: the code owns the label.
         if (!isStandaloneChatMode()) {
+          // Workspace setup happens before execution and carries no run output.
           dispatchDiagnostic(
             createDiagnostic("workspaceUnavailable", {
               source: "chat",
               message: error instanceof Error ? error.message : String(error),
-            })
+            }),
+            undefined,
+            explicitHostPersonalSinkContext("background-service")
           )
         }
       }
@@ -382,7 +386,9 @@ export async function startNewSession(partial?: NewSessionInput): Promise<ChatSe
       useProjectStore.getState().removeSessionFromProject(ownerProjectId, session.id)
     await deleteSession(session.id)
     dispatchDiagnostic(
-      createDiagnostic("hostSessionRefused", { source: "chat", message: error.code })
+      createDiagnostic("hostSessionRefused", { source: "chat", message: error.code }),
+      undefined,
+      explicitHostPersonalSinkContext("background-service")
     )
     throw error
   }
@@ -438,7 +444,9 @@ async function applyCharacterDefaultRuntime(sessionId: string, characterId: stri
   })
   if (resolution && !resolution.ok) {
     dispatchDiagnostic(
-      createDiagnostic("agentRuntimeUnavailable", { source: "chat", message: resolution.reason })
+      createDiagnostic("agentRuntimeUnavailable", { source: "chat", message: resolution.reason }),
+      undefined,
+      explicitHostPersonalSinkContext("background-service")
     )
   }
 }

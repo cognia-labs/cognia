@@ -19,6 +19,7 @@
  * proactive-push opt-in, dedup, and audit all apply downstream.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
@@ -165,14 +166,17 @@ export interface ImNotifyStrings {
 
 export interface ImNotifyWatcherDeps {
   /** Defaults to the real notification pipe; tests inject a spy. */
-  push: (input: {
-    conversationKey: string
-    title: string
-    level: "success" | "error" | "warning"
-    source: "session"
-    dedupeKey: string
-    directed?: boolean
-  }) => Promise<unknown>
+  push: (
+    input: {
+      conversationKey: string
+      title: string
+      level: "success" | "error" | "warning"
+      source: "session"
+      dedupeKey: string
+      directed?: boolean
+    },
+    context: personalSinkHost.PersonalSinkContext
+  ) => Promise<unknown>
   resolveAuto: () => Promise<string | undefined>
   sessionTitle: (sessionId: string) => Promise<string | undefined>
 }
@@ -201,9 +205,11 @@ export function installImNotifyWatcher(
 ): () => void {
   const push =
     deps?.push ??
-    (async (input) => {
+    (async (input, personalContext) => {
       const { notifyConversationOverIM } = await import("@/lib/notifications/conversation-notify")
-      return notifyConversationOverIM(input)
+      return notifyConversationOverIM(input, {
+        personalContext,
+      })
     })
   const resolveAuto = deps?.resolveAuto ?? resolveAutoConversation
   const sessionTitle = deps?.sessionTitle ?? defaultSessionTitle
@@ -233,14 +239,17 @@ export function installImNotifyWatcher(
             : event === "error"
               ? strings.error(title)
               : strings.attention(title)
-        await push({
-          conversationKey,
-          title: text,
-          source: "session",
-          level: event === "done" ? "success" : event === "error" ? "error" : "warning",
-          directed: event === "attention",
-          dedupeKey: `im-notify:${sessionId}:${event}:${slice?.runId ?? 0}`,
-        })
+        await push(
+          {
+            conversationKey,
+            title: text,
+            source: "session",
+            level: event === "done" ? "success" : event === "error" ? "error" : "warning",
+            directed: event === "attention",
+            dedupeKey: `im-notify:${sessionId}:${event}:${slice?.runId ?? 0}`,
+          },
+          personalSinkHost.sessionPersonalSinkContext(sessionId)
+        )
       })().catch(() => undefined)
     }
   })

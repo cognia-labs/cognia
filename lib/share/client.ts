@@ -21,6 +21,7 @@ import { generateShareKey, encodeShareKey } from "./keys"
 import { encryptSharePayloadWithMaterial, prepareShareKeyMaterial } from "./crypto"
 import { resolveShareEndpoint, type ShareEndpoint } from "./config"
 import { prepareShareFileEntry, uploadShareBlob } from "./blobs"
+import { assertPersonalShareSnapshot } from "./personal-snapshot"
 import { checkShareSelectionLimits, type ShareSelectionLimitViolation } from "./file-selection"
 import {
   recordSharedLink,
@@ -251,6 +252,7 @@ export async function createShareLink(
   input: CreateShareInput,
   endpoint?: ShareEndpoint
 ): Promise<CreatedShare> {
+  await assertPersonalShareSnapshot(input.payload)
   const ep = endpoint ?? (await resolveShareEndpoint())
   const headers = authHeaders(ep)
   const files = input.files ?? []
@@ -273,6 +275,7 @@ export async function createShareLink(
   const serializedBody = JSON.stringify(body)
   assertShareRequestSize(serializedBody)
 
+  await assertPersonalShareSnapshot(input.payload)
   const res = await proxyFetch(`${ep.baseUrl}/v1/share`, {
     method: "POST",
     headers,

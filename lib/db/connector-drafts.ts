@@ -27,6 +27,8 @@ function newId(): string {
 }
 
 export interface CreateDraftInput {
+  /** Host execution that produced this content; approval never declassifies it. */
+  personalExecutionRunId?: string
   conversationKey: string
   sessionId: string
   segments: MessageSegment[]
@@ -55,6 +57,7 @@ export async function prepareDraftRow(input: CreateDraftInput): Promise<Connecto
     expiresAt: input.expiresAt,
     sourceMessageId: input.sourceMessageId,
     outboundPreview: input.outboundPreview,
+    personalExecutionRunId: input.personalExecutionRunId,
   }
 }
 

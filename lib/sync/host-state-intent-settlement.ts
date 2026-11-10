@@ -1,3 +1,7 @@
+import {
+  sessionPersonalSinkContext,
+  explicitHostPersonalSinkContext,
+} from "@/lib/execution/personal-sink"
 import { loggers } from "@cognia/logging"
 import { createDiagnostic } from "@cognia/diagnostics"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
@@ -67,6 +71,7 @@ const ANNOUNCED_REFUSALS: ReadonlySet<HostStateAction["action"]["kind"]> = new S
 ])
 
 function announceRefusal(action: HostStateAction, rejectionCode: string | undefined): void {
+  // Session actions retain their Host session; global actions are fixed Host state.
   dispatchDiagnostic(
     createDiagnostic("hostStateIntentRefused", {
       source: "chat",
@@ -75,6 +80,10 @@ function announceRefusal(action: HostStateAction, rejectionCode: string | undefi
         ...(action.sessionId ? { sessionId: action.sessionId } : {}),
         extra: { kind: action.action.kind, actionId: action.actionId },
       },
-    })
+    }),
+    undefined,
+    action.sessionId
+      ? sessionPersonalSinkContext(action.sessionId)
+      : explicitHostPersonalSinkContext("background-service")
   )
 }

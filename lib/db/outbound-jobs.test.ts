@@ -46,6 +46,7 @@ import { planDelivery } from "@/lib/policy/action-review/plan-delivery"
 import { toDeliveryReceiptRow } from "@/lib/policy/action-review/projection"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { admitPersonalCredential } from "@/lib/execution/personal-credential"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 
 const dbFixture = createDbTestFixture()
 
@@ -70,6 +71,22 @@ function enqueue(input: Omit<EnqueueInput, "source"> & { source?: EnqueueInput["
 }
 
 describe("unclaimed runner transitions", () => {
+  it("retains the Host's private-delivery completion notice outside the wire request", async () => {
+    const original = makeRequest("notice")
+    const row = await enqueue({
+      adapterId: "a",
+      conversationKey: "telegram:a:private",
+      request: makeRequest("private"),
+      personalDeliveryNotice: { conversationKey: "telegram:a:group", request: original },
+    })
+    original.segments = [{ type: "text", text: "mutated" }]
+    const stored = await getDb().outboundQueue.get(row.id)
+    expect(stored?.personalDeliveryNotice).toEqual({
+      conversationKey: "telegram:a:group",
+      request: makeRequest("notice"),
+    })
+    expect(stored?.request.metadata).not.toHaveProperty("personalDeliveryNotice")
+  })
   const job = () =>
     enqueue({ adapterId: "a", conversationKey: "telegram:a:chat", request: makeRequest() })
 
@@ -239,6 +256,7 @@ describe("outbound-jobs", () => {
         conversationKey: job.conversationKey,
         source: "workflow",
         authorization: { kind: "human", actor: "local-user" },
+        personalContext: explicitHostPersonalSinkContext("background-service"),
       },
       { settings: () => ({ agentPermissions: { outboundAuthorization: "enforce" } }) }
     )
@@ -275,7 +293,12 @@ describe("outbound-jobs", () => {
   })
   it("commits the authorization receipt with the queue row and rolls back the batch on receipt failure", async () => {
     const decision = await planDelivery(
-      { adapterId: "adp_1", conversationKey: "telegram:adp_1:chat", source: "workflow" },
+      {
+        adapterId: "adp_1",
+        conversationKey: "telegram:adp_1:chat",
+        source: "workflow",
+        personalContext: explicitHostPersonalSinkContext("background-service"),
+      },
       {
         settings: () => ({}),
         configuredGrants: async () => [],

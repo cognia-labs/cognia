@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { notify } from "@/lib/notifications/runtime"
 import { publishOutboundEvent } from "@/lib/webhooks/egress-registry"
 import type { WorkflowApp, WorkflowAppRelease } from "@/types/workflow/app"
@@ -42,18 +43,21 @@ export async function emitWorkflowAppQuotaAlert(input: {
     retryAfterSeconds: input.error.retryAfterSeconds,
   }
   const [notification, webhook] = await Promise.allSettled([
-    notify({
-      source: "workflow",
-      level: "critical",
-      title: `Workflow app budget exhausted: ${input.app.slug}`,
-      body: "New requests are blocked while in-flight runs continue. Review the deployment budget before resuming traffic.",
-      channels: ["center", "toast", "push"],
-      dedupeKey: `workflow-app-budget:${input.app.id}:${input.error.code}:${day}`,
-      groupKey: `workflow-app:${input.app.id}`,
-      sourceRef: { kind: "workflow-app", id: input.app.id },
-      directed: true,
-      meta: metadata,
-    }),
+    notify(
+      {
+        source: "workflow",
+        level: "critical",
+        title: `Workflow app budget exhausted: ${input.app.slug}`,
+        body: "New requests are blocked while in-flight runs continue. Review the deployment budget before resuming traffic.",
+        channels: ["center", "toast", "push"],
+        dedupeKey: `workflow-app-budget:${input.app.id}:${input.error.code}:${day}`,
+        groupKey: `workflow-app:${input.app.id}`,
+        sourceRef: { kind: "workflow-app", id: input.app.id },
+        directed: true,
+        meta: metadata,
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service") }
+    ),
     publishOutboundEvent({
       id: crypto.randomUUID(),
       eventType: "workflow.app.budget_exhausted",

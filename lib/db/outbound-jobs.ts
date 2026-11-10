@@ -174,6 +174,10 @@ function emitOutboundEnqueued(): void {
 }
 
 export interface EnqueueInput {
+  personalSourceContext?: OutboundJobRow["personalSourceContext"]
+  personalNarrowing?: OutboundJobRow["personalNarrowing"]
+  /** Host-only fixed notice for a personal delivery narrowed to a private audience. */
+  personalDeliveryNotice?: OutboundJobRow["personalDeliveryNotice"]
   adapterId: string
   conversationKey: string
   request: OutboundRequest
@@ -293,6 +297,15 @@ export async function enqueueOutboundMany(
               nextAttemptAt: input.nextAttemptAt ?? now,
               idempotencyKey: input.request.metadata.idempotencyKey,
               source: input.source,
+              ...(input.personalSourceContext
+                ? { personalSourceContext: structuredClone(input.personalSourceContext) }
+                : {}),
+              ...(input.personalNarrowing
+                ? { personalNarrowing: structuredClone(input.personalNarrowing) }
+                : {}),
+              ...(input.personalDeliveryNotice
+                ? { personalDeliveryNotice: structuredClone(input.personalDeliveryNotice) }
+                : {}),
               ...(input.source === "workflow" && input.sourceWorkflow
                 ? { sourceWorkflow: input.sourceWorkflow }
                 : {}),

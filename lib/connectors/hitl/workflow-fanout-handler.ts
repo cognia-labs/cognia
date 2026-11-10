@@ -1,3 +1,4 @@
+import { ConnectorDeliveryDeniedError } from "@/lib/connectors/delivery-gateway"
 /**
  * Bus-side dispatcher for `wf_fanout_approve` / `wf_fanout_cancel`
  * callback bindings.
@@ -11,6 +12,7 @@
  * Stored payloads cannot grant authority to subscribe another conversation.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import { getDb } from "@/lib/db/schema"
@@ -75,6 +77,7 @@ async function pushOutboundText(args: {
   idempotencyKey: string
 }): Promise<void> {
   await enqueueOutbound({
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     adapterId: args.adapterId,
     conversationKey: args.conversationKey,
     request: {
@@ -91,6 +94,8 @@ async function pushOutboundText(args: {
     source: "workflow",
     // A confirmation of the click, in the conversation it came from.
     authorization: { kind: "system-notice", inboundConversationKey: args.conversationKey },
+  }).catch((error) => {
+    if (!(error instanceof ConnectorDeliveryDeniedError) || error.reason !== "personal") throw error
   })
 }
 
@@ -120,15 +125,13 @@ export async function handleWorkflowFanoutCallback(
     // fall back to bus-provided platform
   }
 
-  const labelName = payload.workflowName ?? payload.workflowId
-
   if (input.cancelled) {
     await pushOutboundText({
       adapterId: input.adapterId,
       platform,
       conversationKey,
       ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-      text: `⊘ 已取消订阅「${labelName}」`,
+      text: "⊘ 已取消订阅 / Workflow subscription cancelled",
       idempotencyKey: `wf-fanout-cancel:${input.binding.surfaceId}`,
     })
     await deleteSiblingBindings(input.adapterId, input.binding.surfaceId)
@@ -146,7 +149,7 @@ export async function handleWorkflowFanoutCallback(
     platform,
     conversationKey,
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-    text: `✅ 已订阅「${labelName}」的运行进度到当前会话`,
+    text: "✅ 已订阅 Workflow 的运行进度到当前会话",
     idempotencyKey: `wf-fanout-ok:${input.binding.surfaceId}`,
   })
   await deleteSiblingBindings(input.adapterId, input.binding.surfaceId)

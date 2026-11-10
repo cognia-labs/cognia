@@ -3476,7 +3476,7 @@ const prefixKind = prefixPluginKind
 
 export function createWorkflowAPI(pluginId: string): PluginWorkflowAPI {
   return {
-    ...createWorkflowAuthorAPI(),
+    ...createWorkflowAuthorAPI(pluginId),
     registerNode(def: PluginNodeDef): () => void {
       const prefixed = prefixKind(pluginId, def.kind)
       const registry = getOrCreatePluginRegistry(pluginId)

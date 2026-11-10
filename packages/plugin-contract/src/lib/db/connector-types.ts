@@ -630,6 +630,14 @@ export interface OutboundJobWorkflowSource {
  * `[conversationKey+orderSeq]` order (stable FIFO per conversation lane).
  */
 export interface OutboundJobRow {
+  /** Host-written fixed notice, released only after its narrowed delivery succeeds. Unindexed. */
+  /** Host-captured live producer sources, never accepted from model metadata. */
+  personalSourceContext?: import("../../types/execution/personal-sink").PersonalSinkContext
+  personalDeliveryNotice?: { conversationKey: string; request: OutboundRequest }
+  personalNarrowing?: {
+    person: import("../../types/execution/acting-identity").PrincipalRefV1
+    originalTarget: unknown
+  }
   id: string
   adapterId: string
   /** Owning workspace id — Workspace isolation column (Dexie v86). Outbound routing is per-project. */

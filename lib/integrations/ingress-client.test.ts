@@ -217,7 +217,8 @@ it("records the failing delivery stage before returning it to the ingress spool"
         },
       },
     }),
-    { kind: "background" }
+    { kind: "background" },
+    { unverifiedReason: "integration ingress handler error has no retained producer" }
   )
   expect(mockedCall).toHaveBeenCalledWith("integration_ingress_nack", {
     routeId: "route-1",
@@ -327,7 +328,8 @@ it("keeps the wake subscription live when the catch-up pass fails", async () => 
       message: "poll rejected",
       meta: { extra: { stage: "startup", routeId: "runtime", deliveryId: "startup" } },
     }),
-    { kind: "background" }
+    { kind: "background" },
+    { hostOrigin: "background-service" }
   )
   // Not a no-op dispose: a failed catch-up used to reject out of the installer,
   // and the caller's `.catch` swallowed it into `() => undefined`, so ingress

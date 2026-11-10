@@ -1,14 +1,20 @@
 import { assertChatShareAccess, buildChatShare, buildMultiChatShare } from "./chat-export"
 import type { ChatSession } from "@cognia/agent-config-types"
+import { assertPersonalShareSnapshot } from "./personal-snapshot"
 
 const sortBy = jest.fn().mockResolvedValue([{ id: "m1" }])
 const anyOf = jest.fn(() => ({ sortBy }))
 const getCharacter = jest.fn()
+const getSession = jest.fn()
+const runRows = jest.fn().mockResolvedValue([])
+const testDb = {
+  messages: { where: () => ({ equals: () => ({ sortBy }), anyOf }) },
+  characters: { get: getCharacter },
+  sessions: { get: getSession },
+  executionRuns: { where: () => ({ equals: (id: string) => ({ toArray: () => runRows(id) }) }) },
+}
 jest.mock("@/lib/db/schema", () => ({
-  getDb: () => ({
-    messages: { where: () => ({ equals: () => ({ sortBy }), anyOf }) },
-    characters: { get: getCharacter },
-  }),
+  getDb: () => testDb,
 }))
 
 const renderSingleExport = jest.fn((_arg: unknown) => ({
@@ -34,14 +40,156 @@ const assertSharedSessionExport = jest.fn()
 jest.mock("@/lib/collab/shared-session-access", () => ({
   assertSharedSessionExport: (...args: unknown[]) => assertSharedSessionExport(...args),
 }))
+const recordPersonalSinkReceipt = jest.fn().mockResolvedValue(undefined)
+const readRunPersonalTaint = jest.fn().mockResolvedValue({ verified: true, marks: [] })
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  recordPersonalSinkReceipt: (...args: unknown[]) => recordPersonalSinkReceipt(...args),
+  readRunPersonalTaint: (...args: unknown[]) => readRunPersonalTaint(...args),
+}))
 
 beforeEach(() => {
   jest.clearAllMocks()
+  sortBy.mockResolvedValue([{ id: "m1" }])
   assertSharedSessionExport.mockResolvedValue(undefined)
   getCharacter.mockResolvedValue(undefined)
+  getSession.mockResolvedValue(session)
+  runRows.mockResolvedValue([])
+  readRunPersonalTaint.mockResolvedValue({ verified: true, marks: [] })
 })
 
 describe("buildChatShare", () => {
+  it("withholds a retained private title after all marked source messages were deleted", async () => {
+    sortBy.mockResolvedValueOnce([])
+    runRows.mockResolvedValue([{ id: "retained-private-run" }])
+    readRunPersonalTaint.mockResolvedValue({
+      verified: true,
+      marks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    })
+    const build = await buildChatShare({
+      format: "html",
+      session: { ...session, title: "private generated title" },
+    })
+    expect(build.payload.title).toBe("Conversation")
+    expect(renderSingleExport).toHaveBeenCalledWith(
+      expect.objectContaining({ session: expect.objectContaining({ title: "Conversation" }) })
+    )
+    expect(recordPersonalSinkReceipt).toHaveBeenCalledWith(
+      { sessionId: "s1", sessionDerived: true },
+      [{ kind: "local-person" }],
+      "withhold",
+      "private generated title",
+      { kind: "public-share", sessionId: "s1", artifact: "title" }
+    )
+  })
+
+  it("refuses a cached snapshot when later Host run marks change its public visibility", async () => {
+    const build = await buildChatShare({ format: "html", session })
+    runRows.mockResolvedValue([{ id: "later-marked-run" }])
+    readRunPersonalTaint.mockResolvedValue({
+      verified: true,
+      marks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    })
+    await expect(assertPersonalShareSnapshot(build.payload)).rejects.toThrow("snapshot changed")
+    expect(recordPersonalSinkReceipt).toHaveBeenCalledWith(
+      { sessionId: "s1", sessionDerived: true },
+      [{ kind: "local-person" }],
+      "withhold",
+      JSON.stringify(build.payload),
+      { kind: "public-share", sessionId: "s1", artifact: "cached-snapshot" }
+    )
+  })
+
+  it("keeps source-parent run marks on a branch title whose private rows were deleted", async () => {
+    sortBy.mockResolvedValue([])
+    getSession.mockImplementation(async (id: string) =>
+      id === "parent" ? { ...session, id } : session
+    )
+    runRows.mockImplementation(async (id: string) =>
+      id === "parent" ? [{ id: "parent-private-run" }] : []
+    )
+    readRunPersonalTaint.mockResolvedValue({
+      verified: true,
+      marks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+    })
+    const build = await buildChatShare({
+      format: "html",
+      session: {
+        ...session,
+        branchSeed: { kind: "summary", content: "private seed" },
+        parentSessionId: "parent",
+      },
+    })
+    expect(build.payload.title).toBe("Conversation")
+    expect(readRunPersonalTaint).toHaveBeenCalledWith({
+      sessionId: "parent",
+      executionRunId: "parent-private-run",
+    })
+  })
+  it("withholds legacy connector history and its title before resolving share media", async () => {
+    const privateMessage = {
+      id: "legacy-private",
+      sessionId: "s1",
+      role: "assistant",
+      createdAt: 1,
+      parts: [
+        { type: "text", text: "Private owner summary" },
+        { type: "file", url: "cognia-media:private", mediaType: "image/png" },
+      ],
+    }
+    sortBy.mockResolvedValueOnce([privateMessage])
+    const build = await buildChatShare({
+      format: "html",
+      session: { ...session, platformBinding: { adapterId: "lark-owner" } } as ChatSession,
+    })
+    const messages = materializeChatShareMedia.mock.calls[0][0]
+    expect(messages).toEqual([
+      expect.objectContaining({
+        id: "legacy-private",
+        parts: [{ type: "text", text: "[Withheld: personal content of Host owner]" }],
+      }),
+    ])
+    expect(JSON.stringify(messages)).not.toContain("cognia-media:private")
+    expect(build.payload.title).toBe("Conversation")
+    expect(recordPersonalSinkReceipt).toHaveBeenCalledWith(
+      { sessionId: "s1", sessionDerived: true },
+      [{ kind: "local-person" }],
+      "withhold",
+      JSON.stringify(privateMessage.parts),
+      { kind: "public-share", sessionId: "s1", messageId: "legacy-private" }
+    )
+  })
+
+  it("withholds explicit personal rows in a multi-conversation snapshot", async () => {
+    sortBy.mockResolvedValueOnce([
+      {
+        id: "private",
+        sessionId: "s1",
+        parts: [{ type: "text", text: "private content" }],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+        },
+      },
+      { id: "ordinary", sessionId: "s2", parts: [{ type: "text", text: "ordinary" }] },
+    ])
+    await buildMultiChatShare({
+      sessions: [session, { ...session, id: "s2" }],
+      title: "Selection",
+      copy: {
+        count: "2",
+        navigationLabel: "Conversations",
+        previous: "Previous",
+        next: "Next",
+        frameTitle: "Conversation",
+      },
+    })
+    expect(JSON.stringify(materializeChatShareMedia.mock.calls[0][0])).not.toContain(
+      "private content"
+    )
+    expect(JSON.stringify(materializeChatShareMedia.mock.calls[0][0])).toContain("ordinary")
+    expect(recordPersonalSinkReceipt).toHaveBeenCalledTimes(2)
+  })
+
   it("rejects unauthorized shared exports before reading the local transcript", async () => {
     assertSharedSessionExport.mockRejectedValueOnce(new Error("forbidden"))
     await expect(buildChatShare({ format: "html", session })).rejects.toThrow("forbidden")

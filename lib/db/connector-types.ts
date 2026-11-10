@@ -755,6 +755,8 @@ export type ConnectorDraftStatus = "pending" | "approved" | "rejected" | "expire
  * One row per outbound draft awaiting human approval (manual mode).
  */
 export interface ConnectorDraftRow {
+  /** Unindexed Host provenance; approving or editing a draft never removes its taint. */
+  personalExecutionRunId?: string
   id: string
   conversationKey: string
   /** Owning workspace id — Workspace isolation column (Dexie v86); inherits the session's project. */

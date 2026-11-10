@@ -1,4 +1,6 @@
 /** @jest-environment jsdom */
+import * as personalSinkHost from "@/lib/execution/personal-sink"
+
 /**
  * Tests for lib/connectors/runtime.ts — Task 37 + IM completion §A.
  *
@@ -2957,8 +2959,11 @@ describe("installRuntime — ai-run (PII embed gate covers the fallback legs)", 
       })
     const clean = memoryDepsWithEmbedSpy()
     tryBuildMemoryDepsImpl = jest.fn(async () => clean.deps)
-    await callHandler(ownerEvent("chat_mem_c"), "ai-run")
+    await expect(callHandler(ownerEvent("chat_mem_c"), "ai-run")).rejects.toMatchObject({
+      reason: "personal",
+    })
     expect(clean.embed).toHaveBeenCalledWith("hello runtime", { signal: expect.any(AbortSignal) })
+    expect(JSON.stringify(await getDb().outboundQueue.toArray())).not.toContain("memory private")
 
     const leaky = memoryDepsWithEmbedSpy()
     tryBuildMemoryDepsImpl = jest.fn(async () => leaky.deps)
@@ -3948,11 +3953,14 @@ describe("installRuntime — ai-run (IM room bound to a character team, ADR-0177
       }
       return index === 0 ? "PRIVATE_MEMBER_REPLY" : "Public reply"
     })
-    await callHandler(roomEvent(), "ai-run")
+    await expect(callHandler(roomEvent(), "ai-run")).rejects.toMatchObject({ reason: "personal" })
     const reply = (await getDb().messages.where("sessionId").equals("s_room").toArray()).find(
       (row) => row.role === "assistant" && row.senderId === "c_ana"
     )
     expect(reply?.metadata).toMatchObject({ personalMarkVersion: 1, personalMarks: [mark] })
+    expect(JSON.stringify(await getDb().outboundQueue.toArray())).not.toContain(
+      "PRIVATE_MEMBER_REPLY"
+    )
   })
 
   describe("a member with a bot of its own (ADR-0252 P7)", () => {
@@ -4516,6 +4524,10 @@ describe("installRuntime — draft-prepare", () => {
     expect(drafts[0].status).toBe("pending")
     expect(drafts[0].conversationKey).toBe("telegram:adapter_1:chat_draft")
     expect(drafts[0].sourceMessageId).toBe(messages[0].id)
+    expect(drafts[0].personalExecutionRunId).toEqual(expect.any(String))
+    expect((await getDb().executionRuns.get(drafts[0].personalExecutionRunId!))?.sessionId).toBe(
+      drafts[0].sessionId
+    )
   })
 
   it("runs a REAL capture and stores the generated reply (not a placeholder)", async () => {
@@ -5648,7 +5660,8 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
         conversationKey: key,
         level: "error",
         dedupeKey: `dispatch-error:${key}`,
-      })
+      }),
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
     )
   })
 
@@ -5679,7 +5692,8 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
         conversationKey: key,
         level: "error",
         dedupeKey: `dispatch-error:${key}`,
-      })
+      }),
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
     )
   })
 
@@ -5764,7 +5778,9 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
     expect(replies[0].request.segments[0]).toEqual(
       expect.objectContaining({ type: "text", text: expect.stringContaining("Dispatch failed") })
     )
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ centerOnly: true }))
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ centerOnly: true }), {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+    })
   })
 
   // Telegram message ids restart in every chat, so two chats can each fail on
@@ -5840,7 +5856,9 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
     await flushNotify()
 
     expect(await failureReplies(key)).toHaveLength(0)
-    expect(notifyMock).toHaveBeenCalledWith(expect.not.objectContaining({ centerOnly: true }))
+    expect(notifyMock).toHaveBeenCalledWith(expect.not.objectContaining({ centerOnly: true }), {
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+    })
   })
 })
 

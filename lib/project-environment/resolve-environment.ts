@@ -24,6 +24,7 @@
  * less than the repository asked for.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { Project } from "@/types"
 import type { ProjectEnvironment } from "@/types/project-environment"
 import { isTauri } from "@/lib/tauri"
@@ -164,20 +165,26 @@ async function reportWorkspaceConfig(input: {
         : t(`${kind}.body`)
   const titleKey =
     input.verdict.kind === "unapproved" && input.verdict.approvedDigest ? "changed" : kind
-  await notify({
-    source: "system",
-    level: "warning",
-    title: t(`${titleKey}.title`),
-    body,
-    // Where the approval card actually is. `/settings` has no copy of it, so
-    // the one link on this row was a dead end. The row names the workspace it
-    // is about whenever that is not the one on screen.
-    href: "/workspace?tab=environments",
-    // One row per workspace and kind. A configuration awaiting approval is a
-    // standing fact, not an event — a second copy of it is noise.
-    dedupeKey: `workspace-config:${input.projectId ?? "-"}:${titleKey}`,
-    ...(input.projectId ? { projectId: input.projectId } : {}),
-  })
+  await notify(
+    {
+      source: "system",
+      level: "warning",
+      title: t(`${titleKey}.title`),
+      body,
+      // Where the approval card actually is. `/settings` has no copy of it, so
+      // the one link on this row was a dead end. The row names the workspace it
+      // is about whenever that is not the one on screen.
+      href: "/workspace?tab=environments",
+      // One row per workspace and kind. A configuration awaiting approval is a
+      // standing fact, not an event — a second copy of it is noise.
+      dedupeKey: `workspace-config:${input.projectId ?? "-"}:${titleKey}`,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+    },
+    {
+      // Repository configuration validation/read errors occur before run execution.
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service"),
+    }
+  )
 }
 
 export async function resolveEnvironmentForRun(

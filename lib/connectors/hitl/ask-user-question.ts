@@ -42,6 +42,7 @@
  * payload instead.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   formatAskUserAnswer,
   parseAskUserArgs,
@@ -312,7 +313,14 @@ export interface AskUserDeps {
 
 type CardTargetMeta = Pick<
   PendingAskUserMeta,
-  "adapterId" | "conversationKey" | "conversationRef" | "deliveryTarget" | "surfaceId" | "jobId"
+  | "adapterId"
+  | "conversationKey"
+  | "conversationRef"
+  | "deliveryTarget"
+  | "surfaceId"
+  | "jobId"
+  | "executionRunId"
+  | "sessionId"
 >
 
 /**
@@ -337,6 +345,13 @@ async function editAskUserCard(
     const target = messageId ?? delivery?.platformMessageId
     if (!target) return
     await enqueue({
+      personalContext:
+        meta.executionRunId || !meta.sessionId
+          ? personalSinkHost.personalSinkContextForRun(
+              { executionRunId: meta.executionRunId },
+              "legacy question has no run/session"
+            )
+          : personalSinkHost.sessionPersonalSinkContext(meta.sessionId),
       adapterId: delivery?.adapterId ?? meta.adapterId,
       conversationKey: delivery?.conversationKey ?? meta.conversationKey,
       request: {
@@ -390,6 +405,13 @@ export async function settleAskUserCard(
     const formatted =
       state === "answered" && answer ? formatAskUserAnswer(meta.request, answer) : undefined
     await settleApprovalCard({
+      personalContext:
+        meta.executionRunId || !meta.sessionId
+          ? personalSinkHost.personalSinkContextForRun(
+              { executionRunId: meta.executionRunId },
+              "legacy question has no run/session"
+            )
+          : personalSinkHost.sessionPersonalSinkContext(meta.sessionId),
       adapterId: meta.adapterId,
       conversationKey: meta.conversationKey,
       conversationRef: meta.conversationRef,
@@ -758,6 +780,8 @@ export async function runImAskUser(input: RunImAskUserInput): Promise<string> {
       ? AbortSignal.any([ctx.signal, input.signal])
       : (ctx.signal ?? input.signal)
   const pendingMeta: PendingAskUserMeta = {
+    sessionId: ctx.sessionId,
+    executionRunId: ctx.runId,
     surfaceId,
     request,
     adapterId: ctx.adapterId,
@@ -823,6 +847,12 @@ export async function runImAskUser(input: RunImAskUserInput): Promise<string> {
       )
     )
     const job = await enqueue({
+      personalContext: ctx.runId
+        ? personalSinkHost.personalSinkContextForRun(
+            { sessionId: ctx.sessionId, executionRunId: ctx.runId },
+            "question has no Host run"
+          )
+        : personalSinkHost.sessionPersonalSinkContext(ctx.sessionId),
       adapterId: ctx.adapterId,
       conversationKey: ctx.conversationKey,
       request: {

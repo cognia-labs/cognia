@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type {
   AuthorRef,
@@ -17,6 +18,10 @@ import { pickChatContinuationMetadata } from "@/lib/chat/continuation"
 import { initialRoomMemoryFields } from "@/lib/chat/room/settings"
 import type { CollabClient } from "./client"
 import { assertSharedChatClientEnabled } from "./shared-chat-feature"
+import { personalMarkContextForSession } from "@/lib/execution/personal-marks"
+import { readHostPersonContext, recordPersonalSinkReceipt } from "@/lib/execution/personal-sink"
+import { effectivePersonalMarks } from "@cognia/plugin-contract/types/execution/personal-visibility"
+import { projectSharedPersonalMessages } from "./shared-personal-projection"
 
 type SharedChatConversionClient = { readonly baseUrl?: string } & Pick<
   CollabClient,
@@ -268,9 +273,19 @@ export async function convertLocalSessionToShared(
 ): Promise<SharedChatConversionResult> {
   assertSharedChatClientEnabled()
   const db = getDb()
-  const { session: local, messages } = await readSource(input.localSessionId)
+  const { session: local, messages: sourceMessages } = await readSource(input.localSessionId)
   if (local.kind === "team") throw new SharedChatTeamSessionUnsupportedError()
-  const files = attachmentCount(messages)
+  // Importing creates a session that can gain new readers. Withhold personal
+  // source rows before even preparing attachment bytes or the initial title.
+  const [host, markContext] = await Promise.all([
+    readHostPersonContext(),
+    personalMarkContextForSession(db, local),
+  ])
+  const initial = projectSharedPersonalMessages(sourceMessages, [], host, {
+    session: local,
+    ...markContext,
+  })
+  const files = attachmentCount(initial.messages)
   if (
     files > 0 &&
     !input.prepareAttachmentParts &&
@@ -285,10 +300,30 @@ export async function convertLocalSessionToShared(
   if (getDb() !== db) throw new DOMException("Shared conversion cancelled", "AbortError")
   const prefix = operationPrefix(local.id)
   const remoteDraft = await client.createSharedSession(input.orgId, input.workspaceId, {
-    title: local.title,
+    title: await (
+      await import("./shared-personal-projection")
+    ).projectSharedDerivedText(local.title, local.id, undefined, {
+      kind: "shared-title",
+      orgId: input.orgId,
+      workspaceId: input.workspaceId,
+    }),
     importing: true,
     operationId: `${prefix}:create`,
   })
+  // Persistent events can be read by members who join after this import.
+  // Even a sole current owner does not prove that eventual group audience.
+  const projection = initial
+  const messages = projection.messages
+  for (const message of sourceMessages) {
+    if (!projection.withheldMessageIds.includes(message.id)) continue
+    await recordPersonalSinkReceipt(
+      personalSinkHost.sessionPersonalSinkContext(local.id),
+      effectivePersonalMarks(message, local, markContext).map((mark) => mark.person),
+      "withhold",
+      JSON.stringify(message.parts),
+      { kind: "shared-session", orgId: input.orgId, sessionId: remoteDraft.id }
+    )
+  }
 
   // A prior attempt may have published messages or even activated the session
   // before losing its response. Reuse authoritative attachment references before
@@ -333,6 +368,14 @@ export async function convertLocalSessionToShared(
       )
         throw new Error("Shared import history does not match the local message")
       const parts = existing.payload.parts as StoredMessage["parts"]
+      if (
+        projection.withheldMessageIds.includes(message.id) &&
+        JSON.stringify(parts) !== JSON.stringify(message.parts)
+      ) {
+        // A correction cannot erase the original bytes in append-only history.
+        // Never activate or adopt an old draft that already contains them.
+        throw new Error("Shared import contains previously published personal content")
+      }
       if (remoteDraft.status === "importing" && !input.prepareAttachmentParts) {
         for (const [index, part] of parts.entries()) {
           const source = message.parts[index]
@@ -353,7 +396,11 @@ export async function convertLocalSessionToShared(
           }
         }
       }
-      imported.push({ source: message, event: existing, parts })
+      imported.push({
+        source: sourceMessages.find((source) => source.id === message.id)!,
+        event: existing,
+        parts,
+      })
       continue
     }
     const uploaded = hasFilePart(message)
@@ -389,7 +436,11 @@ export async function convertLocalSessionToShared(
         client.commitSessionAttachment!(input.orgId, remoteDraft.id, attachmentId, event.id)
       )
     )
-    imported.push({ source: message, event, parts })
+    imported.push({
+      source: sourceMessages.find((source) => source.id === message.id)!,
+      event,
+      parts,
+    })
   }
 
   if (getDb() !== db) throw new DOMException("Shared conversion cancelled", "AbortError")

@@ -13,6 +13,7 @@
  * navigation needs the router.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import Dexie from "dexie"
 
 import { getDb } from "@/lib/db/schema"
@@ -265,7 +266,13 @@ async function notifySiteOperation(
   // Lazily imported so a profile that never publishes anything keeps the
   // notification runtime out of its boot graph.
   const notify = options.notify ?? (await import("@/lib/notifications/runtime")).notify
-  await notify({ ...input, source: "site" })
+  await notify(
+    { ...input, source: "site" },
+    {
+      // Marked run writes are refused before issue/site persistence; this is a stored service event.
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service"),
+    }
+  )
 }
 
 export interface SiteNotificationCommandDeps {

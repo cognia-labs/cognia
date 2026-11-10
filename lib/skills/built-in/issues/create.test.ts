@@ -117,6 +117,7 @@ describe("issue.create — IM session without an explicit project", () => {
   it("hands the proposer the conversation and the optional quoted message", async () => {
     await run({ title: "Crash", description: "on cold start", sourceMessageId: "om_9" }, imCtx)
     expect(mockProposeIssueFromIm).toHaveBeenCalledWith({
+      personalContext: { unverifiedReason: "issue source run unavailable" },
       adapterId: "ad_1",
       conversationKey: "lark:ad_1:oc_1",
       workspaceId: "ws_1",
@@ -220,6 +221,7 @@ describe("issue.create — the writing shapes", () => {
   it("pushes the issue card back to the conversation after an IM write", async () => {
     await run({ title: "Crash", issueProjectId: "ip_1" }, imCtx)
     expect(mockPushIssueCard).toHaveBeenCalledWith({
+      personalContext: { unverifiedReason: "issue source run unavailable" },
       adapterId: "ad_1",
       conversationKey: "lark:ad_1:oc_1",
       issue: { id: "iss_1", identifier: "MER-3" },

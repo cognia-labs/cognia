@@ -21,6 +21,7 @@
 // Zero-dependency hand-written guards, matching the rest of this package.
 
 import { isNonEmptyString, refViolation } from "./ref-safety"
+import type { PersonalSinkReceipt } from "../execution/personal-sink"
 
 export const ACTION_REVIEW_CONTRACT_VERSION = 1 as const
 
@@ -520,6 +521,8 @@ export interface ActionReviewReceipt {
   request: ActionReviewRequest
   decision: ActionReviewDecision
   effect?: ActionReviewEffect
+  /** ADR-0243: exact withheld/narrowed content and target, deliberately unindexed. */
+  personal?: PersonalSinkReceipt
   /** Retention watermark = `decision.decidedAt + retentionDays`. Indexed. */
   expiresAt: number
 }

@@ -1,4 +1,8 @@
 /** @jest-environment jsdom */
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
 import "fake-indexeddb/auto"
 import {
   pluginExecutionContext,

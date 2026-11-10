@@ -23,6 +23,7 @@
  */
 
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { CheckCircle2Icon, LoaderIcon, SendIcon, XCircleIcon } from "lucide-react"
@@ -164,6 +165,7 @@ export function SendTestMessageSection({ adapterId, platform }: SendTestMessageS
         conversationKey: buildConversationKey(platform, adapterId, remoteChatId),
         request,
         source: "manual",
+        personalContext: explicitHostPersonalSinkContext("typed-send"),
       })
       const terminal = await waitForOutboundTerminal(job.id, 30_000)
       if (terminal?.status === "sent") {

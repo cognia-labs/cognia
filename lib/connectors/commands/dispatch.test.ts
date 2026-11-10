@@ -72,7 +72,7 @@ function session(id: string, title = id, workingDir?: string): ChatSession {
 }
 
 interface Harness {
-  enqueued: Array<{ text: string; authorization?: unknown }>
+  enqueued: Array<{ text: string; authorization?: unknown; personalContext?: unknown }>
   audits: Array<{ kind: string; command?: unknown }>
   patches: Array<{ patch: Record<string, unknown>; sessionId?: string }>
   created: ChatSession[]
@@ -108,9 +108,11 @@ function harness(
     enqueue: (async (job: {
       request: { segments: Array<{ text?: string; card?: { payload: unknown } }> }
       authorization?: unknown
+      personalContext?: unknown
     }) => {
       enqueued.push({
         authorization: job.authorization,
+        personalContext: job.personalContext,
         text: job.request.segments
           .map((s) => s.text ?? (s.card ? JSON.stringify(s.card.payload) : ""))
           .join(""),
@@ -1391,4 +1393,27 @@ describe("conversation automation commands", () => {
       if (action === "resume") expect(h.deps.resumeAutomations).toHaveBeenCalled()
     }
   )
+})
+
+it("classifies fixed command replies separately from retained generated titles", async () => {
+  const h = harness({ sessions: [session("s", "Retained private title")] })
+  await maybeHandleControlCommand(
+    makeEvent({ plainText: "/commands" }),
+    makeAdapter(),
+    undefined,
+    RESOLVED,
+    h.deps
+  )
+  expect(h.enqueued[0].personalContext).toEqual({ hostOrigin: "fixed-notice" })
+  await maybeHandleControlCommand(
+    makeEvent({ plainText: "/sessions" }),
+    makeAdapter(),
+    undefined,
+    RESOLVED,
+    h.deps
+  )
+  expect(h.enqueued[1].personalContext).toEqual({
+    personalSources: [{ hostOrigin: "fixed-notice" }, { sessionId: "s", sessionDerived: true }],
+    receiptAttemptId: undefined,
+  })
 })

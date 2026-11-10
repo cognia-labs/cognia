@@ -6,6 +6,7 @@
 // `data.href`. No-op on web/desktop (the Capacitor plugin is absent there and
 // `subscribeToPushNotifications` returns a no-op disposer).
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { PushDelivery } from "@/lib/push/push-notifications"
 import { subscribeToPushNotifications } from "@/lib/push/push-notifications"
 import {
@@ -64,7 +65,12 @@ export async function installPushNotificationBridge(
 
   const subscription = await subscribeToPushNotifications((delivery) => {
     const input = pushToInput(delivery)
-    if (input) void notify(input)
+    if (input)
+      void notify(input, {
+        personalContext: personalSinkHost.unverifiedPersonalSinkContext(
+          "lib/notifications/inbound-push.ts"
+        ),
+      })
     onDelivery?.(delivery)
   })
   dispose = subscription

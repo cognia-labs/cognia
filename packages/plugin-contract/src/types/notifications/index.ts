@@ -203,6 +203,8 @@ export interface NotificationInput {
 
 /** Durable stored record (Dexie `notifications` table). */
 export interface NotificationRecord {
+  /** Host-only provenance, never established by plugin NotificationInput or meta. Unindexed. */
+  personalContext: import("../execution/personal-sink").PersonalSinkContext
   id: string
   source: NotificationSource
   level: NotificationLevel

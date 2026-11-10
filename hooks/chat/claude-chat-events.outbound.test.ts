@@ -5,7 +5,6 @@
 
 const mockApproveTool = jest.fn(async (..._args: unknown[]) => {})
 jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
   approveTool: (...args: unknown[]) => mockApproveTool(...args),
 }))
 const mockPlanOutboundAsk = jest.fn()
@@ -28,6 +27,8 @@ import type { PendingOutboundReview } from "@cognia/agent-config-types"
 import { useChatStore } from "@/stores/chat"
 
 import { handleEvent } from "./claude-chat-events"
+import { bindToolCallRun } from "@/lib/execution/acting-authority"
+import { dispatchPreToolUse } from "@/lib/claude/adapter-hooks"
 
 const SEND = "mcp__cognia-plugin-tools__im_broadcast"
 const REVIEW: PendingOutboundReview = {
@@ -75,6 +76,27 @@ beforeEach(() => {
 })
 
 describe("outbound permission requests on the desktop", () => {
+  it("cannot let a plugin rewrite approve a personally withheld outbound call", async () => {
+    jest.mocked(dispatchPreToolUse).mockResolvedValueOnce({
+      action: "modify",
+      modifiedArgs: { conversationKeys: ["lark:bot-a:oc_2"], text: "rewritten private content" },
+    } as never)
+    bindToolCallRun("s1", "host-outbound-turn", "host-execution-run", "host-attempt")
+    mockPlanOutboundAsk.mockImplementation(async (_evt, _options, approve) => {
+      await approve("deny", "Only that person can disclose this content", {
+        authority: "policy-deny",
+      })
+      return { answered: true }
+    })
+    await deliver({ ...request(), turnId: "host-outbound-turn", attemptId: "host-attempt" }, [SEND])
+    expect(mockPlanOutboundAsk).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-1", input: request().input }),
+      expect.objectContaining({ executionRunId: "host-execution-run" }),
+      expect.any(Function)
+    )
+    expect(mockApproveTool).toHaveBeenCalledTimes(1)
+    expect(mockApproveTool.mock.calls[0]?.[2]).toBe("deny")
+  })
   it("lets the plan answer the call, before the always-allow list", async () => {
     mockPlanOutboundAsk.mockImplementation(async (_evt, _options, approve) => {
       await approve("deny", "fenced", { authority: "policy-deny" })
@@ -82,6 +104,7 @@ describe("outbound permission requests on the desktop", () => {
     })
     await deliver(request(), [SEND])
     expect(mockPlanOutboundAsk).toHaveBeenCalledTimes(1)
+    expect(mockPlanOutboundAsk.mock.calls[0][1]).toMatchObject({ executionRunId: "" })
     expect(mockApproveTool).toHaveBeenCalledTimes(1)
     expect(mockApproveTool).toHaveBeenCalledWith(
       "s1",

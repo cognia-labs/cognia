@@ -4,6 +4,12 @@
 import { formatScheduledSlot, resolveScheduledNoticeI18n } from "./scheduled-notice-i18n"
 
 describe("resolveScheduledNoticeI18n", () => {
+  it("uses localized fixed privacy notices without accepting protected content", () => {
+    expect(resolveScheduledNoticeI18n("en").personalDelivery(true)).toContain("privately")
+    expect(resolveScheduledNoticeI18n("en").personalDelivery(false)).toContain("withheld")
+    expect(resolveScheduledNoticeI18n("zh-CN").personalDelivery(true)).toContain("私下发送")
+    expect(resolveScheduledNoticeI18n("zh-CN").personalDelivery(false)).toContain("停止发送")
+  })
   it("resolves every locale tag the app can persist", () => {
     for (const locale of ["zh-CN", "zh", "zh-Hans"]) {
       expect(resolveScheduledNoticeI18n(locale).lateDelivery("x")).toContain("延迟送达")

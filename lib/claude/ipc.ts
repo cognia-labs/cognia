@@ -300,18 +300,11 @@ export async function sendPrompt(
   delivery?: PromptDelivery
 ): Promise<void> {
   delivery?.signal?.throwIfAborted()
+  let personalExecutionRunId: string | undefined
   // Bind the existing turn/attempt wire to the canonical host run before dispatch.
   if (options?.turnId) {
-    const [
-      { bindToolCallRun, activeToolExecutionRunId, toolCallExecutionRunId },
-      { activeDirectChatExecutionRunId },
-      { getSubagentApprovalRoute },
-    ] = await Promise.all([
-      import("@/lib/execution/acting-authority"),
-      import("@/lib/execution/direct-chat-run"),
-      import("@/lib/claude/agents/subagent-approval-routes"),
-    ])
-    const route = getSubagentApprovalRoute(sessionId)
+    const { bindToolCallRun, toolCallExecutionRunId } =
+      await import("@/lib/execution/acting-authority")
     // Connector recovery binds its current attempt at Host dispatch. Provider
     // execution.identity is stable routing data, never credential authority.
     const boundRunId = toolCallExecutionRunId(
@@ -319,13 +312,12 @@ export async function sendPrompt(
       options.turnId,
       options.execution?.identity?.attemptId
     )
+    // An unbound turn never adopts a concurrent turn from this session.
+    personalExecutionRunId = boundRunId || undefined
     bindToolCallRun(
       sessionId,
       options.turnId,
-      (boundRunId || undefined) ??
-        (route ? `execution:job:${route.runId}` : undefined) ??
-        activeDirectChatExecutionRunId(sessionId) ??
-        activeToolExecutionRunId(sessionId),
+      personalExecutionRunId,
       options.execution?.identity?.attemptId,
       // This entry dispatches to the builtin transport; external engines use
       // their separate controller rail. Never infer this from a session label.
@@ -347,7 +339,7 @@ export async function sendPrompt(
   }
   if (delivery?.transcriptRuntime === "prepared" || delivery?.transcriptRuntime === "host-owned") {
     if (delivery.transcriptRuntime === "prepared") {
-      await assertPersonalVisibilityDigest(sessionId, options)
+      await assertPersonalVisibilityDigest(sessionId, options, false, personalExecutionRunId)
     }
     if (
       delivery.transcriptRuntime === "prepared" &&
@@ -355,11 +347,10 @@ export async function sendPrompt(
       !mcpRuntimeConfigurationMatches(sessionId, options)
     ) {
       const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
-      options = await prepareTranscriptRuntimeSend(
-        sessionId,
-        options,
-        delivery.messageId ? { currentMessageId: delivery.messageId } : undefined
-      )
+      options = await prepareTranscriptRuntimeSend(sessionId, options, {
+        currentMessageId: delivery.messageId,
+        executionRunId: personalExecutionRunId,
+      })
     }
     return sendPromptToTransport(sessionId, prompt, options, delivery)
   }
@@ -372,15 +363,14 @@ export async function sendPrompt(
       if (options?.transcriptInvalidationId !== session.runtimeTranscriptGeneration) {
         throw new TranscriptRuntimeRecoveryError("frozen_transcript_generation_mismatch")
       }
-      await assertPersonalVisibilityDigest(sessionId, options)
+      await assertPersonalVisibilityDigest(sessionId, options, false, personalExecutionRunId)
       return sendPromptToTransport(sessionId, prompt, options, delivery)
     }
     const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
-    const prepared = await prepareTranscriptRuntimeSend(
-      sessionId,
-      options ?? {},
-      delivery?.messageId ? { currentMessageId: delivery.messageId } : undefined
-    )
+    const prepared = await prepareTranscriptRuntimeSend(sessionId, options ?? {}, {
+      currentMessageId: delivery?.messageId,
+      executionRunId: personalExecutionRunId,
+    })
     return sendPromptToTransport(
       sessionId,
       prompt,
@@ -396,7 +386,8 @@ export async function sendPrompt(
 async function assertPersonalVisibilityDigest(
   sessionId: string,
   options?: SendOptions,
-  allowFullyVisibleEngine = false
+  allowFullyVisibleEngine = false,
+  executionRunId?: string
 ): Promise<void> {
   const [
     { getSession, updateSession },
@@ -423,7 +414,7 @@ async function assertPersonalVisibilityDigest(
   const filtered = await preparePersonalHistory(
     sessionId,
     selectVisibleMessages(await listMessages(sessionId), session?.activeBranchByGroup ?? {}),
-    { session }
+    { session, executionRunId }
   )
   if (allowFullyVisibleEngine && filtered.withheldMessageIds.length === 0) {
     if (session && session.runtimePersonalVisibilityDigest !== filtered.visibilityDigest) {

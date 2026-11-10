@@ -59,7 +59,8 @@ async function persistRunPersonalMarks(
     db.executionRunEvents,
     db.notificationProjectionWork,
     async () => {
-      const rootId = identity.rootRunId ?? run.actingIdentity?.rootRunId
+      let segmentIdentity = identity
+      let rootId = identity.rootRunId ?? run.actingIdentity?.rootRunId
       const visited = new Set<string>()
       let id: string | undefined = run.id
       let reachedRoot = false
@@ -71,7 +72,7 @@ async function persistRunPersonalMarks(
         if (current.actingIdentity.rootRunId && current.actingIdentity.rootRunId !== rootId)
           throw new Error("Personal mark identity changed")
         if (id === rootId || (!rootId && !current.parentRunId)) {
-          if (JSON.stringify(current.actingIdentity) !== JSON.stringify(identity))
+          if (JSON.stringify(current.actingIdentity) !== JSON.stringify(segmentIdentity))
             throw new Error("Personal mark authority changed")
           reachedRoot = true
         }
@@ -91,7 +92,14 @@ async function persistRunPersonalMarks(
             )
           )
         }
-        if (reachedRoot) break
+        if (reachedRoot && !current.parentRunId) break
+        if (reachedRoot && current.parentRunId) {
+          const parent = await db.executionRuns.get(current.parentRunId)
+          if (!parent?.actingIdentity) throw new Error("Personal mark source unavailable")
+          segmentIdentity = parent.actingIdentity
+          rootId = segmentIdentity.rootRunId
+          reachedRoot = false
+        }
         // Follow every parent, never jump straight over a team/plan/delegation.
         id = current.parentRunId ?? (rootId !== current.id ? rootId : undefined)
       }
@@ -176,8 +184,11 @@ export function personalMessageMetadata(
         const run: ExecutionRun | undefined = await db.executionRuns.get(id)
         if (!run) throw new Error("Personal message execution unavailable")
         marks.push(...(run.personalMarks ?? []))
-        if (run.actingIdentity?.rootRunId === id) break
-        id = run.parentRunId ?? run.actingIdentity?.rootRunId
+        // Confirmation can change the credential/reader root, but its output
+        // still consumes the structural source, including later source marks.
+        id =
+          run.parentRunId ??
+          (run.actingIdentity?.rootRunId !== id ? run.actingIdentity?.rootRunId : undefined)
       }
     }
     return finish(marks)

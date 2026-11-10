@@ -1,4 +1,5 @@
 "use client"
+import { sessionPersonalSinkContext } from "@/lib/execution/personal-sink"
 
 import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
 
@@ -282,7 +283,9 @@ async function issueRetry(
           modelId: nextEntry.modelId,
           attempts: cacheUpdate.attemptIndex,
         },
-      })
+      }),
+      undefined,
+      sessionPersonalSinkContext(sessionId)
     )
     if (dispatchOptions.spanId) {
       const attributes = {

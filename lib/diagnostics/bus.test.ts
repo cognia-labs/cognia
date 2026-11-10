@@ -5,7 +5,12 @@
 
 import { createDiagnostic } from "@cognia/diagnostics"
 
-import { DIAGNOSTIC_EVENT, dispatchDiagnostic, subscribeDiagnostic } from "./bus"
+import {
+  DIAGNOSTIC_EVENT,
+  dispatchDiagnostic,
+  subscribeDiagnostic,
+  personalContextForDiagnosticEvent,
+} from "./bus"
 
 const g = globalThis as unknown as { window?: unknown }
 
@@ -91,4 +96,25 @@ describe("dispatchDiagnostic", () => {
     expect(() => dispatchDiagnostic(diag("dbUnavailable"))).not.toThrow()
     expect(() => dispatchDiagnostic(diag("timeout", { message: "" }))).not.toThrow()
   })
+})
+
+it("keeps Host provenance separate from diagnostic and raw event fields", () => {
+  withWindow()
+  const contexts: unknown[] = []
+  const unsubscribe = subscribeDiagnostic((detail) =>
+    contexts.push(personalContextForDiagnosticEvent(detail))
+  )
+  const diagnostic = createDiagnostic("serverError", {
+    source: "storage",
+    meta: { sessionId: "claimed", runId: "claimed-run" },
+  })
+  dispatchDiagnostic(diagnostic, undefined, { sessionId: "host-session", sessionDerived: true })
+  ;(g.window as EventTarget).dispatchEvent(
+    new CustomEvent(DIAGNOSTIC_EVENT, {
+      detail: { diagnostic, personalContext: { hostOrigin: "background-service" } },
+    })
+  )
+  unsubscribe()
+  expect(contexts[0]).toEqual({ sessionId: "host-session", sessionDerived: true })
+  expect(contexts[1]).toEqual({ unverifiedReason: expect.stringContaining("no Host-bound") })
 })

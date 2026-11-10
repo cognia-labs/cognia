@@ -321,6 +321,13 @@ export interface PlatformAdapter {
   /** Optional, capability-gated reusable assets, publication and administration. */
   readonly management?: import("./management").ConnectorManagement
 
+  /** Host sink proof using existing bot-visible chat metadata; never a permission-list read. */
+  resolvePersonalAudience?(
+    conversationKey: string
+  ): Promise<import("../execution/personal-sink").SinkAudienceV1>
+  /** Open exactly one private peer conversation; Host must verify the connected owner first. */
+  personalDirectConversation?(remoteUserId: string): Promise<string | undefined>
+
   start(ctx: AdapterContext): Promise<void>
   stop(): Promise<void>
   health(): AdapterHealth

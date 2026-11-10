@@ -127,7 +127,9 @@ describe("startNewSession", () => {
     expect(useChatStore.getState().activeSessionId).not.toBe(createdId)
     expect(emitMock).not.toHaveBeenCalledWith(SystemEvents.SESSION_CREATED, expect.anything())
     expect(mockDispatchDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ code: "hostSessionRefused" })
+      expect.objectContaining({ code: "hostSessionRefused" }),
+      undefined,
+      { hostOrigin: "background-service" }
     )
   })
 
@@ -135,7 +137,9 @@ describe("startNewSession", () => {
     mockCreateOnHost.mockRejectedValue(new Error("host_state_outbox_full"))
     await expect(startNewSession()).rejects.toThrow("host_state_outbox_full")
     expect(mockDispatchDiagnostic).not.toHaveBeenCalledWith(
-      expect.objectContaining({ code: "hostSessionRefused" })
+      expect.objectContaining({ code: "hostSessionRefused" }),
+      undefined,
+      { hostOrigin: "background-service" }
     )
   })
 
@@ -897,7 +901,9 @@ describe("startNewSession — the agent's default runtime (ADR-0220)", () => {
       agentId: "codex",
     })
     expect(mockDispatchDiagnostic).not.toHaveBeenCalledWith(
-      expect.objectContaining({ code: "agentRuntimeUnavailable" })
+      expect.objectContaining({ code: "agentRuntimeUnavailable" }),
+      undefined,
+      { hostOrigin: "background-service" }
     )
   })
 
@@ -914,7 +920,9 @@ describe("startNewSession — the agent's default runtime (ADR-0220)", () => {
 
     expect(useAgentRuntimeStore.getState().sessionRuntimeRefs[session.id]).toBeUndefined()
     expect(mockDispatchDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ code: "agentRuntimeUnavailable" })
+      expect.objectContaining({ code: "agentRuntimeUnavailable" }),
+      undefined,
+      { hostOrigin: "background-service" }
     )
   })
 
@@ -935,7 +943,9 @@ describe("startNewSession — the agent's default runtime (ADR-0220)", () => {
     expect(useAgentRuntimeStore.getState().sessionRuntimeRefs[session.id]).toBeUndefined()
     expect(useExternalAgentStore.getState().agents.on.enabled).toBe(true)
     expect(mockDispatchDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ code: "agentRuntimeUnavailable" })
+      expect.objectContaining({ code: "agentRuntimeUnavailable" }),
+      undefined,
+      { hostOrigin: "background-service" }
     )
   })
 

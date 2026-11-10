@@ -1706,7 +1706,9 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
         type: "lark" as const,
         displayName: opts.displayName,
         version: "0.1.0",
-        capabilities: LARK_CAPS,
+        capabilities: opts.sendAsUser
+          ? LARK_CAPS.filter((capability) => capability !== "send.ephemeral")
+          : LARK_CAPS,
         transportModes: [opts.transport === "long-connection" ? "gateway" : "webhook"] as const,
         configSchema: LARK_CONFIG_SCHEMA,
       }
@@ -1726,6 +1728,32 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     start,
     stop,
     health,
+    resolvePersonalAudience: async (conversationKey) => {
+      const key = parseConversationKey(conversationKey)
+      if (key.adapterId !== opts.id || key.platform !== "lark")
+        return { kind: "unknown", label: "mismatched Lark conversation" }
+      if (/^ou_[A-Za-z0-9_-]+$/.test(key.remoteChatId))
+        return {
+          kind: "person",
+          person: {
+            kind: "platform",
+            platform: "lark",
+            adapterId: opts.id,
+            remoteUserId: key.remoteChatId,
+          },
+        }
+      const mode = await chatModeOf(key.remoteChatId)
+      if (mode === "group") return { kind: "group" }
+      if (mode === "p2p") {
+        const peer = await p2pPersonOf(key.remoteChatId)
+        if (peer)
+          return {
+            kind: "person",
+            person: { kind: "platform", platform: "lark", adapterId: opts.id, remoteUserId: peer },
+          }
+      }
+      return { kind: "unknown", label: "unresolved Lark chat" }
+    },
     send,
     edit,
     delete: deleteMessage,

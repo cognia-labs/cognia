@@ -146,6 +146,7 @@ it("[ACC:ISO-02] restores a persisted trip at boot, and persists and announces a
       dedupeKey: "router-fusion-breaker-utilityLedger",
       href: "/settings?section=ai-connections",
       title: expect.stringContaining("breakerToast.title"),
-    })
+    }),
+    expect.objectContaining({ personalContext: expect.any(Object) })
   )
 })

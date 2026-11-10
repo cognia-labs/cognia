@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 // Bridges the existing single-export renderer to a share payload: fetch the
 // session's messages, render in the chosen format, wrap as a SharePayload.
 // Reuses `renderSingleExport` verbatim so shared output matches downloaded output.
@@ -18,6 +19,16 @@ import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 import type { ThemeId, ThemeTokens } from "@/lib/export/html/syntax-themes"
 import { resolveSessionTwinProvenance } from "@/lib/twin/export-provenance"
 import { assertSharedSessionExport } from "@/lib/collab/shared-session-access"
+import {
+  effectivePersonalMarks,
+  withholdForReaders,
+} from "@cognia/plugin-contract/types/execution/personal-visibility"
+import { readRunPersonalTaint, recordPersonalSinkReceipt } from "@/lib/execution/personal-sink"
+import {
+  mergePersonalMarks,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
+import { bindPersonalShareSnapshot } from "./personal-snapshot"
 
 export interface BuildChatShareArgs {
   format: SingleExportFormat
@@ -62,6 +73,117 @@ export async function assertChatShareAccess(sessions: readonly ChatSession[]): P
   }
 }
 
+async function anonymousChatPrivacy(session: ChatSession, messages: StoredMessage[]) {
+  const db = getDb()
+  const unverifiedMark = {
+    person: { kind: "service" as const, ref: "unverified-personal-history" },
+    source: "unverified-share-title",
+    markedAt: 0,
+  }
+  const sourceMarks: PersonalMarkV1[][] = []
+  const seen = new Set<string>()
+  let sourceSession: ChatSession | undefined = session
+  let sourceMessages = messages
+  while (sourceSession) {
+    if (seen.has(sourceSession.id) || seen.size >= 32) {
+      sourceMarks.push([unverifiedMark])
+      break
+    }
+    seen.add(sourceSession.id)
+    const runs = await db.executionRuns.where("sessionId").equals(sourceSession.id).toArray()
+    const sourceId = sourceSession.id
+    const taints = await Promise.all(
+      runs.map((run) => readRunPersonalTaint({ sessionId: sourceId, executionRunId: run.id }))
+    )
+    sourceMarks.push(
+      ...sourceMessages.map((message) => effectivePersonalMarks(message, sourceSession!, {})),
+      effectivePersonalMarks({}, sourceSession, {}),
+      ...taints.map((taint) => (taint.verified ? taint.marks : [...taint.marks, unverifiedMark]))
+    )
+    const parentId: string | undefined =
+      sourceSession.attachedChild?.parentSessionId ??
+      (sourceSession.branchSeed
+        ? sourceSession.surfaceBinding?.kind === "session"
+          ? sourceSession.surfaceBinding.sessionId
+          : sourceSession.parentSessionId
+        : undefined)
+    if (!parentId) break
+    sourceSession = await db.sessions.get(parentId)
+    if (!sourceSession) {
+      sourceMarks.push([unverifiedMark])
+      break
+    }
+    sourceMessages = await db.messages.where("sessionId").equals(parentId).sortBy("createdAt")
+  }
+  if (getDb() !== db) throw new Error("Personal share snapshot account changed")
+  const titleMarks = mergePersonalMarks(...sourceMarks)
+  const projected = withholdForReaders(messages, [], session)
+  return {
+    ...projected,
+    titleMarks,
+    stamp: JSON.stringify([titleMarks, projected.withheldMessageIds]),
+  }
+}
+
+/** A public link has no proven reader, including when the local viewer is its owner. */
+async function anonymousChatSnapshot(session: ChatSession, messages: StoredMessage[]) {
+  // Keep legacy attribution: unlike run context taint, a public copy must also
+  // withhold old connector rows that predate personalMarkVersion.
+  const projected = await anonymousChatPrivacy(session, messages)
+  const withheld = new Set(projected.withheldMessageIds)
+  for (const message of messages) {
+    if (!withheld.has(message.id)) continue
+    await recordPersonalSinkReceipt(
+      personalSinkHost.sessionPersonalSinkContext(session.id),
+      effectivePersonalMarks(message, session, {}).map((mark) => mark.person),
+      "withhold",
+      JSON.stringify(message.parts),
+      { kind: "public-share", sessionId: session.id, messageId: message.id }
+    )
+  }
+  if (projected.titleMarks.length) {
+    await recordPersonalSinkReceipt(
+      personalSinkHost.sessionPersonalSinkContext(session.id),
+      projected.titleMarks.map((mark) => mark.person),
+      "withhold",
+      session.title,
+      { kind: "public-share", sessionId: session.id, artifact: "title" }
+    )
+  }
+  return {
+    messages: projected.messages,
+    // A generated title can repeat the withheld content.
+    session: projected.titleMarks.length ? { ...session, title: "Conversation" } : session,
+    stamp: projected.stamp,
+  }
+}
+
+function bindChatSnapshot(
+  payload: SharePayload,
+  snapshots: Array<{ session: ChatSession; stamp: string }>
+) {
+  const sourceDb = getDb()
+  return bindPersonalShareSnapshot(payload, async () => {
+    if (getDb() !== sourceDb) throw new Error("Personal share snapshot account changed")
+    for (const snapshot of snapshots) {
+      const session = await sourceDb.sessions.get(snapshot.session.id)
+      if (!session) throw new Error("Personal share snapshot source unavailable")
+      const rows = await sourceDb.messages.where("sessionId").equals(session.id).sortBy("createdAt")
+      const current = await anonymousChatPrivacy(session, rows)
+      if (current.stamp !== snapshot.stamp) {
+        await recordPersonalSinkReceipt(
+          personalSinkHost.sessionPersonalSinkContext(session.id),
+          current.titleMarks.map((mark) => mark.person),
+          "withhold",
+          JSON.stringify(payload),
+          { kind: "public-share", sessionId: session.id, artifact: "cached-snapshot" }
+        )
+        throw new Error("Personal share snapshot changed; rebuild before publishing")
+      }
+    }
+  })
+}
+
 /** Render one conversation for a share, with its media resolved. */
 export async function buildChatShare(args: BuildChatShareArgs): Promise<ShareBuild> {
   await assertSharedSessionExport(args.session)
@@ -69,14 +191,15 @@ export async function buildChatShare(args: BuildChatShareArgs): Promise<ShareBui
     .messages.where("sessionId")
     .equals(args.session.id)
     .sortBy("createdAt")
+  const snapshot = await anonymousChatSnapshot(args.session, stored)
   const [wallpaperDataUrl, provenance, media] = await Promise.all([
     resolveThemeWallpaper(args.theme, args.withWallpaper ?? false),
-    resolveSessionTwinProvenance(args.session, stored),
-    materializeChatShareMedia(stored),
+    resolveSessionTwinProvenance(snapshot.session, snapshot.messages),
+    materializeChatShareMedia(snapshot.messages),
   ])
   const rendered = renderSingleExport({
     format: args.format,
-    session: args.session,
+    session: snapshot.session,
     messages: media.messages,
     theme: args.theme,
     customTheme: args.customTheme,
@@ -88,11 +211,14 @@ export async function buildChatShare(args: BuildChatShareArgs): Promise<ShareBui
     provenance,
   })
   return {
-    payload: chatExportPayload(
-      rendered,
-      args.format,
-      args.session.title || "Conversation",
-      provenance
+    payload: bindChatSnapshot(
+      chatExportPayload(
+        rendered,
+        args.format,
+        snapshot.session.title || "Conversation",
+        provenance
+      ),
+      [{ session: args.session, stamp: snapshot.stamp }]
     ),
     attachments: media.attachments,
     unavailableMedia: media.unavailable,
@@ -119,9 +245,17 @@ export async function buildMultiChatShare(args: BuildMultiChatShareArgs): Promis
     resolveThemeWallpaper(args.theme, args.withWallpaper ?? false),
     db.messages.where("sessionId").anyOf(sessionIds).sortBy("createdAt"),
   ])
+  const snapshots = await Promise.all(
+    args.sessions.map((session) =>
+      anonymousChatSnapshot(
+        session,
+        rows.filter((row) => row.sessionId === session.id)
+      )
+    )
+  )
   // One budget for the whole bundle: the envelope is one request however many
   // conversations it carries.
-  const media = await materializeChatShareMedia(rows)
+  const media = await materializeChatShareMedia(snapshots.flatMap((entry) => entry.messages))
   const messagesBySession = new Map<string, StoredMessage[]>()
   for (const row of media.messages) {
     const messages = messagesBySession.get(row.sessionId)
@@ -130,11 +264,11 @@ export async function buildMultiChatShare(args: BuildMultiChatShareArgs): Promis
   }
   const exportedAt = new Date()
   const provenanceBySession = await Promise.all(
-    args.sessions.map((session) =>
+    snapshots.map(({ session }) =>
       resolveSessionTwinProvenance(session, messagesBySession.get(session.id) ?? [])
     )
   )
-  const conversations = args.sessions.map((session, index) => ({
+  const conversations = snapshots.map(({ session }, index) => ({
     title: session.title || args.copy.frameTitle,
     html: renderSingleExport({
       format: "html",
@@ -164,7 +298,11 @@ export async function buildMultiChatShare(args: BuildMultiChatShareArgs): Promis
     title: args.title,
     ...(provenance.length ? { provenance } : {}),
   }
-  return { payload, attachments: media.attachments, unavailableMedia: media.unavailable }
+  return {
+    payload: bindChatSnapshot(payload, snapshots),
+    attachments: media.attachments,
+    unavailableMedia: media.unavailable,
+  }
 }
 
 function renderMultiChatDocument({

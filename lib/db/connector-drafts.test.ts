@@ -39,6 +39,12 @@ describe("connector-drafts", () => {
     expect(draft.createdAt).toBeGreaterThan(0)
   })
 
+  it("retains the producing Host execution across approval", async () => {
+    const draft = await createDraft({ ...baseInput(), personalExecutionRunId: "host-run" })
+    await approveDraft(draft.id)
+    expect((await getDb().connectorDrafts.get(draft.id))?.personalExecutionRunId).toBe("host-run")
+  })
+
   it("createDraft stores optional fields (sourceMessageId, expiresAt)", async () => {
     const draft = await createDraft({
       ...baseInput(),

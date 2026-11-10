@@ -14,6 +14,12 @@ import { resolveChannels, type RoutingDecision } from "./routing"
 import { hasProjectPrefs } from "./preferences"
 import { coalesceSince, decideCoalesce, buildBumpPatch } from "./dedup"
 import { cachedNotificationScopeKey } from "./scope"
+import { mergePersonalSinkContexts, type PersonalSinkContext } from "@/lib/execution/personal-sink"
+
+/** Host call sites establish provenance separately from public notification input. */
+export interface NotifyHostOptions {
+  personalContext: PersonalSinkContext
+}
 
 export interface NotifyDbPort {
   findByDedupeKey(dedupeKey: string, sinceMs: number): Promise<NotificationRecord | undefined>
@@ -24,6 +30,8 @@ export interface NotifyDbPort {
 }
 
 export interface NotifyDeps {
+  /** Host-local projection after coalescing; IM retains the original for its own audience gate. */
+  projectLocal?: (record: NotificationRecord) => Promise<NotificationRecord>
   now: () => number
   loadPrefs: () => NotificationPreferences | Promise<NotificationPreferences>
   db: NotifyDbPort
@@ -91,7 +99,11 @@ async function resolveSourceWorkspace(
  * bump), fans out to the resolved channels, updates the reactive store, and
  * triggers best-effort retention. Returns the record id (existing id on bump).
  */
-export async function notify(input: NotificationInput, deps: NotifyDeps): Promise<string> {
+export async function notify(
+  input: NotificationInput,
+  deps: NotifyDeps,
+  host: NotifyHostOptions
+): Promise<string> {
   const now = deps.now()
   const prefs = await deps.loadPrefs()
   // Routing needs the workspace only when some workspace carries its own rule
@@ -121,6 +133,10 @@ export async function notify(input: NotificationInput, deps: NotifyDeps): Promis
   // 2. Build/merge the record (deliveredVia filled after fan-out).
   let record: NotificationRecord
   if (action === "bump" && existing) {
+    const personalContext = mergePersonalSinkContexts(
+      existing.personalContext,
+      host.personalContext
+    )
     const patch = buildBumpPatch(
       existing,
       {
@@ -134,7 +150,11 @@ export async function notify(input: NotificationInput, deps: NotifyDeps): Promis
       },
       now
     )
-    record = { ...existing, ...patch }
+    record = {
+      ...existing,
+      ...patch,
+      personalContext,
+    }
   } else {
     // Which workspace this came from. The caller knows best; failing that, a
     // session-scoped notification inherits its conversation's workspace. Never
@@ -150,6 +170,7 @@ export async function notify(input: NotificationInput, deps: NotifyDeps): Promis
     if (!projectResolved) projectId = await resolveSourceWorkspace(input, deps)
     const id = (deps.newId ?? nanoid)()
     record = {
+      personalContext: { ...host.personalContext },
       id,
       source: input.source,
       level: input.level,
@@ -189,6 +210,8 @@ export async function notify(input: NotificationInput, deps: NotifyDeps): Promis
   }
 
   // 3. Fan out (center is the persist itself).
+  const outboundRecord = record
+  if (deps.projectLocal) record = await deps.projectLocal(record)
   const delivered: NotificationChannel[] = ["center"]
   for (const channel of decision.channels) {
     if (channel === "center") continue
@@ -208,7 +231,7 @@ export async function notify(input: NotificationInput, deps: NotifyDeps): Promis
     } else if (channel === "push" && deps.push) {
       if (await runSafely("push", () => deps.push!(record))) delivered.push("push")
     } else if (channel === "im" && deps.imDeliver) {
-      if (await runSafely("im", () => deps.imDeliver!(record))) delivered.push("im")
+      if (await runSafely("im", () => deps.imDeliver!(outboundRecord))) delivered.push("im")
     }
   }
   record.deliveredVia = delivered
@@ -230,6 +253,13 @@ export async function notify(input: NotificationInput, deps: NotifyDeps): Promis
         now
       ),
       deliveredVia: delivered,
+      personalContext: record.personalContext,
+      title: record.title,
+      body: record.body,
+      href: record.href,
+      actions: record.actions,
+      icon: record.icon,
+      meta: record.meta,
     })
   } else {
     await deps.db.putNotification(record)

@@ -19,6 +19,7 @@
  * of paths that never hand off (and out of the web build until used).
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { useAgentTeamStore } from "@/stores/squads/agent-team-store/store"
 import { loggers } from "@cognia/logging"
 import type { AgentTeamTaskPayload } from "@/types/scheduler"
@@ -59,14 +60,17 @@ export interface HandoffDeps {
       notification?: { onStart?: boolean; onComplete?: boolean; onError?: boolean }
     }) => Promise<{ id: string }>
   }>
-  notify?: (input: {
-    source: "agent-team"
-    level: "info"
-    title: string
-    body: string
-    href?: string
-    sourceRef?: { kind: string; id: string }
-  }) => Promise<string>
+  notify?: (
+    input: {
+      source: "agent-team"
+      level: "info"
+      title: string
+      body: string
+      href?: string
+      sourceRef?: { kind: string; id: string }
+    },
+    personalContext: personalSinkHost.PersonalSinkContext
+  ) => Promise<string>
 }
 
 async function defaultGetScheduler(): ReturnType<NonNullable<HandoffDeps["getScheduler"]>> {
@@ -75,10 +79,13 @@ async function defaultGetScheduler(): ReturnType<NonNullable<HandoffDeps["getSch
 }
 
 async function defaultNotify(
-  input: Parameters<NonNullable<HandoffDeps["notify"]>>[0]
+  input: Parameters<NonNullable<HandoffDeps["notify"]>>[0],
+  personalContext: personalSinkHost.PersonalSinkContext
 ): Promise<string> {
   const { notify } = await import("@/lib/notifications/runtime")
-  return notify(input)
+  return notify(input, {
+    personalContext,
+  })
 }
 
 /**
@@ -138,14 +145,19 @@ export async function materializeExternalHandoff(
   const teamName = store.teams[result.teamId]?.name ?? "Auto team"
 
   try {
-    await (deps.notify ?? defaultNotify)({
-      source: "agent-team",
-      level: "info",
-      title: "Team awaiting external pickup",
-      body: `"${teamName}" is marked for external pickup — an external agent can claim it via the Cognia bridge (team_list / team_run).`,
-      href: `/squads?id=${result.teamId}`,
-      sourceRef: { kind: "team-run", id: result.teamId },
-    })
+    await (deps.notify ?? defaultNotify)(
+      {
+        source: "agent-team",
+        level: "info",
+        title: "Team awaiting external pickup",
+        body: `"${teamName}" is marked for external pickup — an external agent can claim it via the Cognia bridge (team_list / team_run).`,
+        href: `/squads?id=${result.teamId}`,
+        sourceRef: { kind: "team-run", id: result.teamId },
+      },
+      opts.sessionId
+        ? personalSinkHost.sessionPersonalSinkContext(opts.sessionId)
+        : personalSinkHost.unverifiedPersonalSinkContext("auto proposal has no source session")
+    )
   } catch (err) {
     // Notification delivery is best-effort; the pickup stamp is the contract.
     log.warn("external-handoff: notification delivery failed", {

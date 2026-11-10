@@ -3015,7 +3015,7 @@ describe("runAndCaptureAssistantReply", () => {
     await flushUntilSubscribed()
     expect(capturedTurnOf(SESSION)).toEqual({
       turnId: "quiet-turn",
-      outboundPolicy: { unattended: true },
+      outboundPolicy: { unattended: true, executionRunId: "" },
       holdWallClock: expect.any(Function),
     })
     fire(assistantEvent("done"))
@@ -3726,7 +3726,7 @@ describe("outbound calls (ADR-0239)", () => {
         requestId: "send",
         input: expect.objectContaining({ text: "redacted" }),
       }),
-      policy,
+      { ...policy, executionRunId: "" },
       expect.any(Function)
     )
     expect(responder).toHaveBeenCalledWith(
@@ -3771,7 +3771,7 @@ describe("outbound calls (ADR-0239)", () => {
     for (let i = 0; i < 50 && recordOutboundShadowMock.mock.calls.length === 0; i++) {
       await new Promise((resolve) => setTimeout(resolve, 1))
     }
-    expect(recordOutboundShadowMock).toHaveBeenCalledWith(event, policy)
+    expect(recordOutboundShadowMock).toHaveBeenCalledWith(event, { ...policy, executionRunId: "" })
     fire(assistantEvent("done"))
     fire(sessionEnded())
     await answering

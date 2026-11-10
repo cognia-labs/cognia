@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 /**
  * Record that placement did not go where it was configured to go.
@@ -67,7 +68,9 @@ export async function recordPlacementDegraded(
     deps.notify ??
     (async (input: Parameters<NonNullable<DegradedAuditDeps["notify"]>>[0]) => {
       const runtime = await import("@/lib/notifications/runtime")
-      return runtime.notify(input)
+      return runtime.notify(input, {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service"),
+      })
     })
 
   try {

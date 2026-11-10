@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { Meta, StoryObj } from "@storybook/nextjs"
 import { fn } from "storybook/test"
 
@@ -10,6 +11,7 @@ const NOW = Date.now()
 
 function record(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: `n_${Math.random().toString(36).slice(2)}`,
     source: "session",
     level: "info",

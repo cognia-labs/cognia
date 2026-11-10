@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 import type { IssueProject } from "@/types/issues"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -82,6 +83,7 @@ describe("proposeIssueFromIm", () => {
     const { deps, sent } = harness()
     const out = await proposeIssueFromIm(
       {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         adapterId: "lark-1",
         conversationKey: CONV,
         workspaceId: "w1",
@@ -98,6 +100,18 @@ describe("proposeIssueFromIm", () => {
     })
     expect((out as { projectIds: string[] }).projectIds[0]).toBe(p1.id)
     // ADR-0239: the card goes into the conversation the proposal came from.
+    expect(
+      (
+        await (
+          await import("@/lib/db/schema")
+        )
+          .getDb()
+          .connectorCallbackBindings.get("lark-1:issue-source:draft1")
+      )?.issueProposalSource
+    ).toMatchObject({
+      personalContext: { hostOrigin: "fixed-notice" },
+      draft: { title: "Fix login" },
+    })
     expect(sent[0]).toMatchObject({
       authorization: { kind: "system-notice", inboundConversationKey: CONV },
     })
@@ -128,7 +142,13 @@ describe("proposeIssueFromIm", () => {
     const { deps, sent } = harness()
     expect(
       await proposeIssueFromIm(
-        { adapterId: "a", conversationKey: CONV, workspaceId: "w1", title: "x" },
+        {
+          personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+          adapterId: "a",
+          conversationKey: CONV,
+          workspaceId: "w1",
+          title: "x",
+        },
         deps
       )
     ).toEqual({ status: "no-projects" })
@@ -147,7 +167,13 @@ describe("proposeIssueFromIm", () => {
     const blockedAudits: unknown[] = []
     expect(
       await proposeIssueFromIm(
-        { adapterId: "a", conversationKey: CONV, workspaceId: "w1", title: "x" },
+        {
+          personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+          adapterId: "a",
+          conversationKey: CONV,
+          workspaceId: "w1",
+          title: "x",
+        },
         blocked.deps
       )
     ).toEqual({ status: "pii_blocked" })

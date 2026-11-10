@@ -8,6 +8,10 @@ jest.mock("@/lib/share/client", () => ({
   revokeShareLink: jest.fn(),
 }))
 jest.mock("./app-api-service", () => ({ getWorkflowAppRun: jest.fn() }))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(),
+}))
 
 import { getSharedLinkByCode } from "@/lib/db/shared-links"
 import { resolvePublishedWorkflowApp } from "@/lib/db/workflow-apps"
@@ -15,6 +19,7 @@ import { createShareLink, revokeShareLink } from "@/lib/share/client"
 import { getWorkflowAppRun } from "./app-api-service"
 import { createWorkflowResultShare, revokeWorkflowResultShare } from "./result-sharing-service"
 import { ShareNotConfiguredError } from "@/lib/share/client"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 
 const actor = {
   authenticated: false,
@@ -57,6 +62,12 @@ it("creates an encrypted, expiring share only for an owned app run", async () =>
     })
   ).resolves.toMatchObject({ code: "share-1" })
   expect(getWorkflowAppRun).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", actor }))
+  expect(assertPersonalSink).toHaveBeenCalledWith(
+    { executionRunId: "execution:workflow:run-1" },
+    { kind: "unknown", label: "public workflow result" },
+    expect.stringContaining('"runId":"run-1"'),
+    { kind: "public-share", workflowRunId: "run-1" }
+  )
   expect(createShareLink).toHaveBeenCalledWith(
     expect.objectContaining({
       ttlSeconds: 3_600,
@@ -64,6 +75,14 @@ it("creates an encrypted, expiring share only for an owned app run", async () =>
       payload: expect.objectContaining({ kind: "workflow-result", encoding: "utf8" }),
     })
   )
+})
+
+it("withholds a personal workflow result before creating a public link", async () => {
+  jest.mocked(assertPersonalSink).mockRejectedValueOnce(new Error("personal content withheld"))
+  await expect(
+    createWorkflowResultShare({ accountId: "account-1", appSlug: "review", runId: "run-1", actor })
+  ).rejects.toThrow("personal content withheld")
+  expect(createShareLink).not.toHaveBeenCalled()
 })
 
 it("rejects disabled or unbounded result sharing", async () => {

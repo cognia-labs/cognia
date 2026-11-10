@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { ConversationReference } from "@/types/connectors/event"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 
@@ -22,6 +23,7 @@ const triggeredFrom: WorkflowTriggeredFrom = {
 
 function input(over: Partial<Parameters<typeof holdWorkflowDispatchForApproval>[0]> = {}) {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
     workflowId: "wf_1",
     runParams: { message: "ship the release notes" },
     triggeredFrom,
@@ -121,6 +123,7 @@ describe("holdWorkflowDispatchForApproval", () => {
     // ADR-0239: the hold card goes into the conversation that asked.
     expect(args.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
+        personalContext: { hostOrigin: "typed-send" },
         authorization: { kind: "system-notice", inboundConversationKey: "lark:lark-1:chat-1" },
       })
     )
@@ -203,4 +206,14 @@ describe("holdWorkflowDispatchForApproval", () => {
       expect.objectContaining({ reason: "workflow_hold_card_failed" })
     )
   })
+})
+
+it("never replaces an unresolved producer's context with typed-send authority", async () => {
+  const args = input({
+    personalContext: personalSinkHost.unverifiedPersonalSinkContext("unbound plugin"),
+  })
+  await holdWorkflowDispatchForApproval(args)
+  expect(args.enqueue).toHaveBeenCalledWith(
+    expect.objectContaining({ personalContext: { unverifiedReason: "unbound plugin" } })
+  )
 })

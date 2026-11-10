@@ -199,6 +199,7 @@ async function defaultBriefDeliverer(commandConversationKey: string) {
     const conversationRef = binding?.deliveryTarget?.conversationRef
     if (!conversationRef) return
     await enqueueGoverned({
+      personalContext: { executionRunId: input.brief.runId },
       adapterId: input.adapterId,
       conversationKey: input.conversationKey,
       request: {

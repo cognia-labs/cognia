@@ -1061,6 +1061,37 @@ export function createSlackAdapter(opts: SlackAdapterOptions): PlatformAdapter {
     start,
     stop,
     health,
+    resolvePersonalAudience: async (conversationKey) => {
+      const key = parseConversationKey(conversationKey)
+      if (key.adapterId !== opts.id || key.platform !== "slack")
+        return { kind: "unknown", label: "mismatched Slack conversation" }
+      const result = (await doRequest("GET", "conversations.info", {
+        channel: key.remoteChatId,
+      })) as { channel?: { is_im?: boolean; user?: string } }
+      if (result.channel?.is_im && result.channel.user)
+        return {
+          kind: "person",
+          person: {
+            kind: "platform",
+            platform: "slack",
+            adapterId: opts.id,
+            remoteUserId: result.channel.user,
+          },
+        }
+      return result.channel
+        ? { kind: "group" }
+        : { kind: "unknown", label: "unresolved Slack chat" }
+    },
+    personalDirectConversation: async (remoteUserId) => {
+      const result = (await doRequest("POST", "conversations.open", {
+        users: remoteUserId,
+        return_im: true,
+      })) as { channel?: { id?: string; is_im?: boolean; user?: string } }
+      const channel = result.channel
+      return channel?.id && channel.is_im === true && channel.user === remoteUserId
+        ? `slack:${opts.id}:${channel.id}`
+        : undefined
+    },
     send,
     edit,
     // A reply stays in the reference's channel; an edit goes to the channel

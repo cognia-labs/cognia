@@ -119,7 +119,7 @@ describe("handleWorkflowFanoutCallback", () => {
     )
     const jobs = await getDb().outboundQueue.toArray()
     expect(jobs).toHaveLength(1)
-    expect((jobs[0].request.segments[0] as { text: string }).text).toContain("Deploy Pipeline")
+    expect((jobs[0].request.segments[0] as { text: string }).text).toContain("Workflow")
     expect((jobs[0].request.segments[0] as { text: string }).text).toContain("已订阅")
 
     const remaining = await getDb()

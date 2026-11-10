@@ -1,9 +1,11 @@
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 // Plugin → Notification Center bridge (ADR-0042). Wires the previously-dangling
 // `setToastDispatcher` so plugin notifications become first-class, persistent
 // center entries (with history) instead of ephemeral in-memory toasts. The
 // plugin action closure is registered as a serializable command so it survives
 // persistence and still fires from the center row / toast button.
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { setToastDispatcher } from "@/lib/plugin/api/notification-api"
 import type { NotificationLevel } from "@/types/notifications"
 import { registerNotificationCommand } from "./action-registry"
@@ -30,18 +32,26 @@ export function installPluginNotificationBridge(): void {
       registerNotificationCommand(command, () => action.onClick())
       actions = [{ id: "0", label: action.label, command }]
     }
-    void notify({
-      source: "plugin",
-      pluginId,
-      level: TYPE_TO_LEVEL[type],
-      title,
-      body: message,
-      ttlMs: duration,
-      actions,
-      dedupeKey: id,
-      groupKey: pluginId,
-      sourceRef: { kind: "plugin", id: pluginId },
-    })
+    void notify(
+      {
+        source: "plugin",
+        pluginId,
+        level: TYPE_TO_LEVEL[type],
+        title,
+        body: message,
+        ttlMs: duration,
+        actions,
+        dedupeKey: id,
+        groupKey: pluginId,
+        sourceRef: { kind: "plugin", id: pluginId },
+      },
+      {
+        personalContext: personalSinkHost.personalSinkContextForRun(
+          pluginExecutionContext(pluginId) ?? {},
+          "plugin invocation unavailable"
+        ),
+      }
+    )
   })
 }
 

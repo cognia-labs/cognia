@@ -10,6 +10,7 @@
  * self-service bind path: silence is the security posture there.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { appendAudit } from "@/lib/connectors/audit"
@@ -87,6 +88,7 @@ export async function handleUnresolvedPrincipal(
     // Outbound idempotency caps the notice at once per sender per UTC day —
     // repeated messages from the same unbound user stay silent until tomorrow.
     await deps.enqueue({
+      personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
       adapterId: event.adapterId,
       conversationKey: event.conversationKey,
       request: {

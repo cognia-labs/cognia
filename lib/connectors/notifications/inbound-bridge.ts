@@ -6,6 +6,7 @@
 // viewing that conversation (and the window is focused), the OS channel is
 // suppressed while the center still records — Slack/Notion behaviour.
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { NotificationChannel } from "@/types/notifications"
 import { getBus } from "../bus"
@@ -59,18 +60,25 @@ export function installConnectorNotificationBridge(): void {
       channels = ["center", "toast"]
     }
 
-    void notify({
-      source: "connector",
-      level: "info",
-      title,
-      body,
-      directed,
-      href,
-      channels,
-      dedupeKey: event.conversationKey,
-      groupKey,
-      sourceRef: { kind: "conversation", id: event.conversationKey },
-    })
+    void notify(
+      {
+        source: "connector",
+        level: "info",
+        title,
+        body,
+        directed,
+        href,
+        channels,
+        dedupeKey: event.conversationKey,
+        groupKey,
+        sourceRef: { kind: "conversation", id: event.conversationKey },
+      },
+      {
+        // A fresh human-authored inbound event is a direct person action,
+        // not output of a Host run. Bot echoes were excluded above.
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
+      }
+    )
   })
 }
 

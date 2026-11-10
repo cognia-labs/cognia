@@ -1,4 +1,5 @@
 "use client"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 /**
  * The client half of ADR-0207: collaboration notifications reach the local
@@ -455,7 +456,11 @@ async function defaultResolve(localAccountId: string): Promise<CollabNotificatio
 async function defaultNotify(input: NotificationInput): Promise<string> {
   // Lazy: the runtime pulls in sonner and the Tauri bridge.
   const { notify } = await import("@/lib/notifications/runtime")
-  return notify(input)
+  return notify(input, {
+    personalContext: personalSinkHost.unverifiedPersonalSinkContext(
+      "lib/collab/notifications-sync.ts"
+    ),
+  })
 }
 
 async function defaultFindLocal(collabId: string): Promise<NotificationRecord | undefined> {

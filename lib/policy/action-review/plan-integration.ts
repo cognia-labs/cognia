@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 /**
  * The integration chokepoint of the outbound policy (ADR-0239 phase 2).
  *
@@ -65,6 +66,7 @@ import {
 import type { PendingOutboundReview } from "@cognia/agent-config-types"
 import type { OutboundJobAuthorization } from "@cognia/plugin-contract/lib/db/connector-types"
 import type { OutboundRecipientGrant } from "@cognia/agent-config-types/action-review"
+import { assertPersonalSink, explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 
 import type {
   IntegrationActionOutbound,
@@ -127,11 +129,11 @@ export type IntegrationAuthorization =
    * A chat tool of the plugin (`integration__<plugin>__…`), running in
    * `sessionId`. The host's record of the call decides, not the claim.
    */
-  | { kind: "tool-call"; pluginId: string; sessionId?: string }
+  | { kind: "tool-call"; pluginId: string; sessionId?: string; executionRunId?: string }
   /** A workflow step: nobody watches it. */
   | { kind: "workflow"; workflowId: string; runId: string }
   /** Plugin code (`ctx.integrations.executeAction` / `authenticatedRequest`). */
-  | { kind: "plugin"; pluginId: string }
+  | { kind: "plugin"; pluginId: string; sessionId?: string; executionRunId?: string }
   /**
    * A Bot's brokered action. `decidedBy` is who approved it: a person on the
    * Bot's approval card, or the installation's policy (automatic publication).
@@ -182,6 +184,8 @@ export type IntegrationAuthorization =
     }
 
 export interface IntegrationWritePlanInput {
+  /** Exact submitted payload, retained only long enough to hash a personal withhold. */
+  payload?: unknown
   /** Raw writes outside GitHub use `integration`; existing GitHub producers omit it. */
   category?: "github" | "integration"
   /** Where the write lands (`githubActionTargets`, `githubRequestTargets`). */
@@ -219,6 +223,7 @@ export type IntegrationWriteDecision =
   | { action: "deny"; outbound: IntegrationActionOutbound; receipt: IntegrationReceipt }
 
 export interface PlanIntegrationDeps {
+  personalSink?: typeof assertPersonalSink
   /** App settings, for the mode. Default: the settings store. */
   settings?: () => OutboundSettingsLike | Promise<OutboundSettingsLike>
   /** A session's origin. Default: `sessionPlanOrigin`. */
@@ -594,6 +599,28 @@ export async function planIntegrationWrite(
   input: IntegrationWritePlanInput,
   deps: PlanIntegrationDeps = {}
 ): Promise<IntegrationWriteDecision> {
+  const auth = input.authorization
+  const context =
+    auth.kind === "person"
+      ? explicitHostPersonalSinkContext("typed-send")
+      : auth.kind === "workflow"
+        ? { executionRunId: `execution:workflow:${auth.runId}` }
+        : auth.kind === "team-delivery"
+          ? { executionRunId: `execution:team:${auth.runId}` }
+          : auth.kind === "job"
+            ? { executionRunId: `execution:job:integration:${auth.jobId}` }
+            : auth.kind === "bot"
+              ? { executionRunId: auth.runId }
+              : { sessionId: auth.sessionId, executionRunId: auth.executionRunId }
+  await (deps.personalSink ?? assertPersonalSink)(
+    personalSinkHost.personalSinkContextForRun(
+      context,
+      "lib/policy/action-review/plan-integration.ts"
+    ),
+    { kind: "unknown", label: input.operation },
+    input.payload,
+    input.targets
+  )
   const settings = await (deps.settings ?? readAppSettings)()
   const env: PlanningEnv = {
     input,
@@ -602,7 +629,6 @@ export async function planIntegrationWrite(
     now: deps.now?.() ?? Date.now(),
     deps,
   }
-  const auth = input.authorization
 
   switch (auth.kind) {
     case "tool-call": {

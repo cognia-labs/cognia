@@ -42,6 +42,13 @@ import {
  */
 
 import { getBus } from "@/lib/connectors/bus"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import {
+  checkPersonalSink,
+  personalSinkContextForRun,
+  explicitHostPersonalSinkContext,
+} from "@/lib/execution/personal-sink"
+import { personalDeliveryNotice } from "@/lib/connectors/personal-delivery"
 import { getDb } from "@/lib/db/schema"
 import { newIdempotencyKey } from "@/types/connectors/outbound"
 import { createGuardedAPI } from "@/lib/plugin/security/permission-guard"
@@ -208,6 +215,24 @@ function resolveChatAdapter(adapterId: string, requiredCaps: readonly Capability
  * `connectors:send`, instance management needs `connectors:manage`.
  */
 export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
+  const personalContext = () =>
+    personalSinkContextForRun(
+      pluginExecutionContext(pluginId) ?? {},
+      "plugin invocation unavailable"
+    )
+  const unknownWrite = async <T>(label: string, send: () => Promise<T>): Promise<T> => {
+    const decision = await checkPersonalSink(
+      personalContext(),
+      { kind: "unknown", label },
+      // Adapter callbacks may resolve files or transform operation arguments.
+      // Their descriptors do not prove the exact content that would leave.
+      undefined,
+      { pluginId, label }
+    )
+    if (decision.outcome !== "allow")
+      throw new Error("Personal content withheld: its person must disclose it before sharing")
+    return send()
+  }
   const api: PluginConnectorsAPI = {
     listManagementOperations: (adapterId) =>
       listConnectorManagementOperations(getBus().getAdapter(adapterId)),
@@ -217,7 +242,11 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
       return executeConnectorManagement(getBus().getAdapter(adapterId), request)
     },
     manage: (adapterId, request) =>
-      executeConnectorManagement(getBus().getAdapter(adapterId), request),
+      connectorManagementIsRead(request.operation)
+        ? executeConnectorManagement(getBus().getAdapter(adapterId), request)
+        : unknownWrite("connector management", () =>
+            executeConnectorManagement(getBus().getAdapter(adapterId), request)
+          ),
     // ── reads ──────────────────────────────────────────────────────────────
     listAdapters: () => getBus().listAdapters().map(toInfo),
     getAdapter: (adapterId) => {
@@ -285,7 +314,9 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
         metadata: { idempotencyKey: newIdempotencyKey() },
       }),
     editMessage: (adapterId, messageId, patch) =>
-      getBus().editOutbound(adapterId, messageId, patch),
+      unknownWrite("connector message edit", () =>
+        getBus().editOutbound(adapterId, messageId, patch)
+      ),
     deleteMessage: (adapterId, messageId) => getBus().deleteOutbound(adapterId, messageId),
     deleteEphemeralCard: (adapterId, messageId) =>
       getBus().deleteEphemeralCard(adapterId, messageId),
@@ -300,10 +331,13 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
         forward: input,
         source: "plugin",
         authorization: { kind: "plugin", pluginId },
+        personalContext: personalContext(),
         auditFields: { pluginId },
       }),
     pinMessage: (adapterId, conversationKey, messageId) =>
-      getBus().pinOutbound(adapterId, conversationKey, messageId),
+      unknownWrite("connector message pin", () =>
+        getBus().pinOutbound(adapterId, conversationKey, messageId)
+      ),
     unpinMessage: (adapterId, messageId) => getBus().unpinOutbound(adapterId, messageId),
     // Planned as an immediate delivery to the people it notifies (ADR-0239).
     sendUrgent: (adapterId, messageId, userIds, via, opts) =>
@@ -313,6 +347,7 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
         userIds,
         ...(via ? { via } : {}),
         source: "plugin",
+        personalContext: personalContext(),
         authorization: {
           kind: "plugin",
           pluginId,
@@ -323,12 +358,42 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
     getReadReceipt: (adapterId, messageId) => getBus().getReadReceiptOutbound(adapterId, messageId),
     setTyping: (adapterId, conversationKey, on) =>
       getBus().setTypingOutbound(adapterId, conversationKey, on),
-    uploadFile: (adapterId, file) => getBus().uploadFileOutbound(adapterId, file),
+    uploadFile: (adapterId, file) =>
+      unknownWrite("connector upload", () => getBus().uploadFileOutbound(adapterId, file)),
     // Explicit intent uses the ordinary immediate planner. Legacy reference-only
     // streams return false under enforcement and are audited in shadow mode
     // so callers can fall back to governed delivery (ADR-0239).
     streamReply: async (adapterId, req) => {
       req = structuredClone(req)
+      const finishWithNotice = async () => {
+        const text = await personalDeliveryNotice(false)
+        const decision = await checkPersonalSink(
+          explicitHostPersonalSinkContext("fixed-notice"),
+          { kind: "unknown", label: "connector stream fixed notice" },
+          text,
+          { adapterId }
+        )
+        if (decision.outcome === "allow") {
+          await getBus().streamReplyOutbound(adapterId, { ...req, text })
+          const adapter = getBus().getAdapter(adapterId)
+          if (adapter?.cancelStreamReply && req.streamKey)
+            await adapter.cancelStreamReply({
+              conversationRef: req.conversationRef,
+              streamKey: req.streamKey,
+              sendOptions: req.sendOptions,
+            })
+          else
+            // WeCom's authoritative empty final closes its accepted notice
+            // preview with finish:true, without a newly protected text frame.
+            await getBus().sendOutbound(adapterId, {
+              conversationRef: req.conversationRef,
+              segments: [],
+              metadata: {
+                idempotencyKey: `personal-stream-notice:${pluginId}:${req.streamKey ?? newIdempotencyKey()}`,
+              },
+            })
+        }
+      }
       if (req.sendOptions?.mode && req.sendOptions.mode !== "reply") {
         if (!req.conversationKey || typeof req.streamKey !== "string" || !req.streamKey)
           return false
@@ -343,6 +408,7 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
           const result = await getConnectorDeliveryGateway().sendNow(
             {
               adapterId,
+              personalContext: personalContext(),
               conversationKey: req.conversationKey,
               deliveryMode: req.sendOptions.mode,
               segments: addressed.segments,
@@ -359,6 +425,8 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
               }),
             })
           )
+          if (!result.ok && result.error?.message.includes("private content"))
+            await finishWithNotice()
           return result.ok
         } catch (error) {
           if (error instanceof PluginDestinationError || error instanceof ConnectorDeliveryPiiError)
@@ -372,35 +440,43 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
           conversationRef: req.conversationRef,
           source: "plugin",
           ownerRef: `plugin:${pluginId}`,
+          personalContext: personalContext(),
+          payload: req,
+          streamKey: req.streamKey,
           auditFields: { pluginId },
         },
-        () => getBus().streamReplyOutbound(adapterId, req)
+        () => getBus().streamReplyOutbound(adapterId, req),
+        finishWithNotice
       )
     },
     enqueueSend: async (adapterId, conversationKey, req, opts) => {
-      const result = await getConnectorDeliveryGateway().enqueueAuthorized({
-        adapterId,
-        conversationKey,
-        // Sent where the host stored this conversation, never to a reference
-        // of the plugin's own (ADR-0239).
-        request: await pluginDestination(
+      const result = await getConnectorDeliveryGateway().enqueueAuthorized(
+        {
           adapterId,
           conversationKey,
-          namespaceExplicitPluginStream(pluginId, req),
-          {},
-          { queued: true }
-        ),
-        source: "plugin",
-        // Covered by one of this plugin's running, authorized tool calls, or
-        // planned as the plugin's own unattended send, with the list of the
-        // handler Bot run it names (ADR-0239).
-        authorization: {
-          kind: "plugin",
-          pluginId,
-          ...(opts?.botRunId ? { botRunId: opts.botRunId } : {}),
+          // Sent where the host stored this conversation, never to a reference
+          // of the plugin's own (ADR-0239).
+          request: await pluginDestination(
+            adapterId,
+            conversationKey,
+            namespaceExplicitPluginStream(pluginId, req),
+            {},
+            { queued: true }
+          ),
+          source: "plugin",
+          personalContext: personalContext(),
+          // Covered by one of this plugin's running, authorized tool calls, or
+          // planned as the plugin's own unattended send, with the list of the
+          // handler Bot run it names (ADR-0239).
+          authorization: {
+            kind: "plugin",
+            pluginId,
+            ...(opts?.botRunId ? { botRunId: opts.botRunId } : {}),
+          },
+          ...(opts?.nextAttemptAt !== undefined ? { nextAttemptAt: opts.nextAttemptAt } : {}),
         },
-        ...(opts?.nextAttemptAt !== undefined ? { nextAttemptAt: opts.nextAttemptAt } : {}),
-      })
+        { executionContext: personalContext() }
+      )
       if (result.kind === "drafted") throw new ConnectorDeliveryHeldError(result.draft.id)
       const row = result.job
       return {
@@ -453,26 +529,30 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
       bootstrapConversation({ ...input, source: `plugin:${pluginId}` }),
 
     // ── chat management (capability-gated, running adapter required) ────────
-    createChat: async (adapterId, input) => {
-      const resolved = resolveChatAdapter(adapterId, ["chat.create"])
-      const fn = requireMethod(resolved, "createChat")
-      return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
-    },
-    updateChat: async (adapterId, input) => {
-      const resolved = resolveChatAdapter(adapterId, ["chat.update"])
-      const fn = requireMethod(resolved, "updateChat")
-      return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
-    },
-    addChatMembers: async (adapterId, input) => {
-      const resolved = resolveChatAdapter(adapterId, ["chat.members"])
-      const fn = requireMethod(resolved, "addChatMembers")
-      return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
-    },
-    removeChatMembers: async (adapterId, input) => {
-      const resolved = resolveChatAdapter(adapterId, ["chat.members"])
-      const fn = requireMethod(resolved, "removeChatMembers")
-      return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
-    },
+    createChat: async (adapterId, input) =>
+      unknownWrite("connector chat creation", async () => {
+        const resolved = resolveChatAdapter(adapterId, ["chat.create"])
+        const fn = requireMethod(resolved, "createChat")
+        return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
+      }),
+    updateChat: async (adapterId, input) =>
+      unknownWrite("connector chat update", async () => {
+        const resolved = resolveChatAdapter(adapterId, ["chat.update"])
+        const fn = requireMethod(resolved, "updateChat")
+        return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
+      }),
+    addChatMembers: async (adapterId, input) =>
+      unknownWrite("connector chat membership", async () => {
+        const resolved = resolveChatAdapter(adapterId, ["chat.members"])
+        const fn = requireMethod(resolved, "addChatMembers")
+        return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
+      }),
+    removeChatMembers: async (adapterId, input) =>
+      unknownWrite("connector chat membership", async () => {
+        const resolved = resolveChatAdapter(adapterId, ["chat.members"])
+        const fn = requireMethod(resolved, "removeChatMembers")
+        return withScopeCapture(adapterId, () => fn.call(resolved.adapter, input))
+      }),
     resolveContacts: async (adapterId, input) => {
       const resolved = resolveChatAdapter(adapterId, ["contact.resolve"])
       const fn = requireMethod(resolved, "resolveContacts")
@@ -605,6 +685,11 @@ async function legacyDirectSend(
     return await getConnectorDeliveryGateway().sendNow(
       {
         adapterId,
+        personalContext: personalSinkContextForRun(
+          pluginExecutionContext(pluginId) ?? {},
+          "plugin invocation unavailable"
+        ),
+        request: addressed,
         ...(conversationKey ? { conversationKey } : {}),
         segments: addressed.segments,
         ...(addressed.sendOptions?.mode ? { deliveryMode: addressed.sendOptions.mode } : {}),
@@ -618,7 +703,7 @@ async function legacyDirectSend(
           migrationTarget: "ctx.connectors.enqueueSend",
         },
       },
-      () => getBus().sendOutbound(adapterId, addressed)
+      (narrowedRequest) => getBus().sendOutbound(adapterId, narrowedRequest ?? addressed)
     )
   } catch (error) {
     if (error instanceof ConnectorDeliveryPiiError) return refusedResult(error)

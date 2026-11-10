@@ -5,6 +5,15 @@
 import { createShareAPI } from "./share-api"
 import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  assertPersonalSink: jest.fn(async () => {}),
+}))
+jest.mock("@/lib/plugin/core/invocation-identity", () => ({
+  pluginExecutionContext: jest.fn(() => ({ executionRunId: "host-invocation" })),
+}))
 
 const createShareLink = jest.fn(async (..._a: unknown[]) => ({
   code: "c1",
@@ -77,10 +86,26 @@ describe("createShareAPI", () => {
       const created = await api.create({ payload: { kind: "chat-md" } } as never)
       expect(created.code).toBe("c1")
       expect(createShareLink).toHaveBeenCalled()
+      expect(assertPersonalSink).toHaveBeenCalledWith(
+        { executionRunId: "host-invocation" },
+        { kind: "unknown", label: "public share" },
+        undefined,
+        { kind: "public-share", pluginId: PLUGIN }
+      )
       await api.revoke("c1")
       expect(revokeShareLink).toHaveBeenCalledWith("c1")
       await api.delete("c1")
       expect(deleteSharedLink).toHaveBeenCalledWith("c1")
+    })
+
+    it("withholds before publishing and obtains execution only from Host invocation state", async () => {
+      jest.mocked(assertPersonalSink).mockRejectedValueOnce(new Error("personal content withheld"))
+      const api = createShareAPI(PLUGIN)
+      await expect(
+        api.create({ executionRunId: "model-claimed-clean", payload: { kind: "chat-md" } } as never)
+      ).rejects.toThrow("personal content withheld")
+      expect(pluginExecutionContext).toHaveBeenCalledWith(PLUGIN)
+      expect(createShareLink).not.toHaveBeenCalled()
     })
   })
 })

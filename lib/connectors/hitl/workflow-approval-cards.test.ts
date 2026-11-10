@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
 import { serializeOutboundAsync as serializeLark } from "../adapters/lark/serialize"
 import { serializeOutboundAsync as serializeTelegram } from "../adapters/telegram/serialize"
@@ -101,7 +102,13 @@ const triggeredFrom = {
   initiator: { platformIdentityId: "requester", remoteUserId: "requester" },
 }
 const scope = { mode: "initiator" as const, allowedUserIds: ["requester"] }
-const fanout = { workflowId: "wf", workflowName: "Daily", triggeredFrom, actorScope: scope }
+const fanout = {
+  personalContext: { executionRunId: "host-fanout-run" },
+  workflowId: "wf",
+  workflowName: "Daily",
+  triggeredFrom,
+  actorScope: scope,
+}
 
 beforeEach(() => {
   jest.clearAllMocks()
@@ -122,7 +129,12 @@ describe("postWorkflowRunApproval", () => {
       surface: {} as never,
     })
     expect(
-      await postWorkflowRunApproval({ workflowId: "wf", runParams: { a: 1 }, triggeredFrom })
+      await postWorkflowRunApproval({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
+        workflowId: "wf",
+        runParams: { a: 1 },
+        triggeredFrom,
+      })
     ).toEqual({ surfaceId: "workflow:prepared", workflowName: "Daily", surface: {} })
     expect(buildImPermissionCeiling).toHaveBeenCalledWith(
       expect.objectContaining({ platform: "lark", target: "workflow" })
@@ -143,16 +155,24 @@ describe("postWorkflowRunApproval", () => {
     jest
       .mocked(holdWorkflowDispatchForApproval)
       .mockResolvedValue({ held: false, reason: "card_delivery_failed", message: "hold failed" })
-    await expect(postWorkflowRunApproval({ workflowId: "wf", triggeredFrom })).rejects.toThrow(
-      "hold failed"
-    )
+    await expect(
+      postWorkflowRunApproval({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
+        workflowId: "wf",
+        triggeredFrom,
+      })
+    ).rejects.toThrow("hold failed")
   })
 
   it("refuses when the adapter is gone", async () => {
     jest.mocked(getAdapterInstance).mockResolvedValueOnce(undefined)
-    await expect(postWorkflowRunApproval({ workflowId: "wf", triggeredFrom })).rejects.toThrow(
-      "adapter not found"
-    )
+    await expect(
+      postWorkflowRunApproval({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
+        workflowId: "wf",
+        triggeredFrom,
+      })
+    ).rejects.toThrow("adapter not found")
     expect(holdWorkflowDispatchForApproval).not.toHaveBeenCalled()
   })
 })
@@ -187,6 +207,7 @@ describe("postWorkflowFanoutApproval", () => {
         adapterId: "ad",
         conversationKey: "lark:ad:chat",
         source: "ai-run",
+        personalContext: fanout.personalContext,
         authorization: { kind: "system-notice", inboundConversationKey: "lark:ad:chat" },
         request: expect.objectContaining({
           segments: [
@@ -218,7 +239,15 @@ describe("postWorkflowFanoutApproval", () => {
 })
 
 describe.each([
-  ["postWorkflowRunApproval", () => postWorkflowRunApproval({ workflowId: "wf", triggeredFrom })],
+  [
+    "postWorkflowRunApproval",
+    () =>
+      postWorkflowRunApproval({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
+        workflowId: "wf",
+        triggeredFrom,
+      }),
+  ],
   ["postWorkflowFanoutApproval", () => postWorkflowFanoutApproval(fanout)],
 ] as const)("%s", (_name, post) => {
   it("refuses a session with no complete delivery address", async () => {
@@ -279,7 +308,11 @@ it.each(["lark", "telegram"] as const)(
           }),
         })
       )
-      await postWorkflowRunApproval({ workflowId: "wf", triggeredFrom: origin })
+      await postWorkflowRunApproval({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("typed-send"),
+        workflowId: "wf",
+        triggeredFrom: origin,
+      })
       const workflowRequest = jest.mocked(enqueueGoverned).mock.calls.at(-1)![0].request
       for (const request of [fanoutRequest, workflowRequest]) {
         expect(request.deliveryTarget).toEqual(deliveryTarget)

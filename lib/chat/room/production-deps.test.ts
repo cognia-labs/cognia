@@ -10,6 +10,9 @@ const ipc = {
   closeSession: jest.fn(async () => undefined),
   approveTool: jest.fn(async () => undefined),
 }
+jest.mock("@/lib/policy/action-review/plan-tool-call", () => ({
+  planOutboundAsk: jest.fn(async () => ({ answered: true })),
+}))
 jest.mock("@/lib/claude/ipc", () => ({
   sendPrompt: (...args: unknown[]) => ipc.sendPrompt(...(args as [])),
   interruptSession: (...args: unknown[]) => ipc.interruptSession(...(args as [])),
@@ -89,6 +92,7 @@ import {
 } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
+  resolveExecutingRun: jest.fn(async () => ({ id: "host-member-run" })),
   startToolExecutionRun: jest.fn(async () => ({ id: "member-run" })),
   finishToolExecutionRun: jest.fn(async () => undefined),
 }))
@@ -240,4 +244,13 @@ it("writes synchronously under test unless a delay is asked for", () => {
   const deps = createProductionRoomDeps()
   expect(typeof deps.now()).toBe("number")
   expect(deps.newTurnId()).not.toBe(deps.newTurnId())
+})
+
+it("passes the Host-resolved member execution to outbound planning", async () => {
+  const request = { sessionId: "member", requestId: "send", toolName: "send_message", input: {} }
+  const approve = jest.fn(async () => {})
+  await createProductionRoomDeps().outbound!.plan(request, approve)
+  expect(
+    jest.requireMock("@/lib/policy/action-review/plan-tool-call").planOutboundAsk
+  ).toHaveBeenCalledWith(request, { unattended: false, executionRunId: "host-member-run" }, approve)
 })

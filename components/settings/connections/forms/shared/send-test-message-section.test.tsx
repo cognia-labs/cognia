@@ -59,6 +59,7 @@ describe("SendTestMessageSection", () => {
           adapterId: "tg-1",
           conversationKey: "telegram:tg-1:98765",
           source: "manual",
+          personalContext: { hostOrigin: "typed-send" },
           request: expect.objectContaining({
             conversationRef: expect.objectContaining({
               platform: "telegram",

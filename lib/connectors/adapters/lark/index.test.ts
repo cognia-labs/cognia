@@ -181,6 +181,47 @@ function createFakeLongConnSession() {
 // ---------------------------------------------------------------------------
 
 describe("createLarkAdapter", () => {
+  it("resolves a bot-verified p2p peer without reading a permission list", async () => {
+    const urls: string[] = []
+    mockInvoke.mockImplementation(async (cmd: string, args?: { req?: { url?: string } }) => {
+      if (cmd !== "connectors_http_request") return undefined
+      const url = args?.req?.url ?? ""
+      urls.push(url)
+      if (url.includes("tenant_access_token")) return makeTatOkResp()
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({
+          code: 0,
+          data: url.includes("/chats/")
+            ? { chat_mode: "p2p" }
+            : { items: [{ sender: { id: "ou_peer", id_type: "open_id", sender_type: "user" } }] },
+        }),
+      }
+    })
+    const adapter = makeAdapter()
+    await expect(adapter.resolvePersonalAudience!("lark:lark-1:oc_dm")).resolves.toEqual({
+      kind: "person",
+      person: { kind: "platform", platform: "lark", adapterId: "lark-1", remoteUserId: "ou_peer" },
+    })
+    expect(urls.some((url) => url.includes("/members"))).toBe(false)
+    await expect(adapter.resolvePersonalAudience!("lark:other:oc_dm")).resolves.toMatchObject({
+      kind: "unknown",
+    })
+  })
+  it("does not advertise recipient-only bot cards for the send-as-user lane", () => {
+    const value = createLarkAdapter({
+      id: "user-bot",
+      displayName: "User lane",
+      appId: async () => "app",
+      appSecret: async () => "secret",
+      verificationToken: async () => "verify",
+      selfBotOpenId: "ou_bot",
+      transport: "webhook",
+      sendAsUser: true,
+    })
+    expect(value.meta.capabilities).not.toContain("send.ephemeral")
+  })
   it("separates outbound transport from message-history data at the token entry", async () => {
     mockInvoke.mockImplementation(async (cmd: string, args: { req?: { url?: string } }) => {
       if (cmd !== "connectors_http_request") return undefined

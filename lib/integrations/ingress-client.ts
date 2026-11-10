@@ -1,3 +1,7 @@
+import {
+  explicitHostPersonalSinkContext,
+  unverifiedPersonalSinkContext,
+} from "@/lib/execution/personal-sink"
 import { collectPages } from "@/lib/tauri/companion-paging"
 import { createDiagnostic } from "@cognia/diagnostics"
 import { detectPlatform } from "@/lib/platform/detect"
@@ -55,7 +59,11 @@ function reportIngressFailure(
         },
       },
     }),
-    { kind: "background" }
+    { kind: "background" },
+    // Route setup and acknowledgements are Host transport; plugin handlers may echo run output.
+    stage === "normalize" || stage === "publish"
+      ? unverifiedPersonalSinkContext("integration ingress handler error has no retained producer")
+      : explicitHostPersonalSinkContext("background-service")
   )
 }
 

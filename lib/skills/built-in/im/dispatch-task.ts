@@ -13,6 +13,7 @@
  * `startTeamRunFromIM` — no new dispatch machinery.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { z } from "zod"
 
 import type { ConversationReference } from "@/types/connectors/event"
@@ -210,6 +211,13 @@ const skill: BuiltInSkill<typeof schema> = {
       const runScope = resolveBuiltInSkillRunScope(ctx)
       const delivered = await enqueueAuthorized(
         {
+          personalContext: personalSinkHost.personalSinkContextForRun(
+            {
+              sessionId: resolveBuiltInSkillRunScope(ctx).sessionId,
+              executionRunId: resolveBuiltInSkillRunScope(ctx).runId,
+            },
+            "skill run unavailable"
+          ),
           adapterId: target.adapterId,
           conversationKey: target.conversationKey,
           request: {
@@ -224,7 +232,7 @@ const skill: BuiltInSkill<typeof schema> = {
         },
         {
           signal: ctx.signal,
-          executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId ?? "" },
+          executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId },
         }
       )
       brief = delivered.kind === "drafted" ? "drafted" : "sent"

@@ -11,6 +11,9 @@ import { sha256Hex } from "@/lib/share/hash"
 import type { ResolvedWorkflowAppRelease } from "@/types/workflow/app"
 import { authorizeWorkflowAppRequest, type WorkflowAppRequestActor } from "./app-execution"
 import { getWorkflowAppRun } from "./app-api-service"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
+import { bindPersonalShareSnapshot } from "@/lib/share/personal-snapshot"
 
 const DEFAULT_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60
 const MAX_SHARE_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -98,20 +101,32 @@ export async function createWorkflowResultShare(input: {
   const localized =
     resolved.release.snapshot.localized.en ?? resolved.release.snapshot.localized["zh-CN"]
   const scopedOwner = await ownerScope(resolved, input.actor)
+  const payload = {
+    kind: "workflow-result" as const,
+    mime: "application/json",
+    encoding: "utf8" as const,
+    title: localized?.title ?? resolved.app.slug,
+    data: JSON.stringify({
+      schemaVersion: 1,
+      app: { slug: resolved.app.slug, kind: resolved.app.kind },
+      releaseId: resolved.release.id,
+      run,
+    }),
+  }
+  // getWorkflowAppRun has already checked the canonical invocation's owner.
+  // The returned run id, not an unvalidated request/plugin field, is provenance.
+  const checkPersonal = () =>
+    assertPersonalSink(
+      { executionRunId: workflowExecutionRunId(run.runId) },
+      { kind: "unknown", label: "public workflow result" },
+      payload.data,
+      { kind: "public-share", workflowRunId: run.runId }
+    )
+  await checkPersonal()
+  bindPersonalShareSnapshot(payload, checkPersonal)
   return throughShareService(() =>
     createShareLink({
-      payload: {
-        kind: "workflow-result",
-        mime: "application/json",
-        encoding: "utf8",
-        title: localized?.title ?? resolved.app.slug,
-        data: JSON.stringify({
-          schemaVersion: 1,
-          app: { slug: resolved.app.slug, kind: resolved.app.kind },
-          releaseId: resolved.release.id,
-          run,
-        }),
-      },
+      payload,
       ttlSeconds,
       ownerScope: scopedOwner,
     })

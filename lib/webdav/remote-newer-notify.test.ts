@@ -52,7 +52,8 @@ describe("notifyIfRemoteNewer", () => {
         href: "/me/backup",
         dedupeKey: "webdav-remote-newer:1750000000000",
         directed: true,
-      })
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 
@@ -60,7 +61,8 @@ describe("notifyIfRemoteNewer", () => {
     mockCheck.mockResolvedValue({ newer: true })
     await notifyIfRemoteNewer({ title: "t" })
     expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ dedupeKey: "webdav-remote-newer:unknown" })
+      expect.objectContaining({ dedupeKey: "webdav-remote-newer:unknown" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 

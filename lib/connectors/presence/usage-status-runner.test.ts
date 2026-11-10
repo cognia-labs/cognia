@@ -396,6 +396,10 @@ describe("runUsagePresenceRefresh", () => {
 
     const jobs = await getDb().outboundQueue.toArray()
     const fresh = jobs.find((j) => j.id !== "job-dead")!
+    // Numeric Host telemetry is an explicit background service, never a copied run output.
+    expect(
+      (await getDb().executionRuns.get(`execution:job:outbound:${fresh.id}`))?.actingIdentity?.lane
+    ).toBe("service")
     // A new card is created cleanly (no edit target pointing at nothing)…
     expect(fresh.request.editTargetMessageId).toBeUndefined()
     // …and the dangling pointer is REPLACED by the new creating job, so the

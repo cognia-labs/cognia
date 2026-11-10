@@ -43,6 +43,28 @@ const post = (extra: Partial<Parameters<typeof postRoomHandoffCard>[0]> = {}) =>
 }
 
 describe("the room hand-off card", () => {
+  it("keeps the exact Host member execution on a run-derived brief", async () => {
+    const { promise, enqueue } = post({
+      sessionId: "member-session",
+      executionRunId: "host-member-run",
+    })
+    await promise
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        personalContext: { sessionId: "member-session", executionRunId: "host-member-run" },
+      })
+    )
+  })
+
+  it("marks a missing Host execution as unverified instead of a fixed notice", async () => {
+    const { promise, enqueue } = post()
+    await promise
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        personalContext: { unverifiedReason: "handoff source run unavailable" },
+      })
+    )
+  })
   it("confirms the Squad a proposal names with one button", () => {
     expect(roomHandoffCardChoices(squads, "sq-2")).toEqual({
       choices: [{ id: "sq-2", name: "Reviewers" }],

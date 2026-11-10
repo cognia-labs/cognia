@@ -1,3 +1,5 @@
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
+
 import { isTauri } from "@/lib/platform/detect"
 import type { WorkflowHumanInputRequest } from "@/types/workflow/human-input"
 import { emitCompanionEvent } from "./companion-run-events"
@@ -7,25 +9,29 @@ export const HUMAN_INPUT_PENDING_PUSH_CHANNEL = "workflow://human-input-pending"
 export const HUMAN_INPUT_RESOLVED_CHANNEL = "workflow://human-input-resolved"
 
 export interface HumanInputNotifyDeps {
-  notify?: (input: {
-    source: "workflow"
-    level: "warning"
-    title: string
-    body?: string
-    href: string
-    dedupeKey: string
-    directed: true
-    sourceRef: { kind: string; id: string }
-  }) => Promise<string>
+  notify?: (
+    input: {
+      source: "workflow"
+      level: "warning"
+      title: string
+      body?: string
+      href: string
+      dedupeKey: string
+      directed: true
+      sourceRef: { kind: string; id: string }
+    },
+    host: import("@/lib/notifications/notify").NotifyHostOptions
+  ) => Promise<string>
   emit?: (event: string, payload: unknown) => Promise<void>
   isTauriFn?: () => boolean
 }
 
 async function defaultNotify(
-  input: Parameters<NonNullable<HumanInputNotifyDeps["notify"]>>[0]
+  input: Parameters<NonNullable<HumanInputNotifyDeps["notify"]>>[0],
+  host: import("@/lib/notifications/notify").NotifyHostOptions
 ): Promise<string> {
   const { notify } = await import("@/lib/notifications/runtime")
-  return notify(input)
+  return notify(input, host)
 }
 
 export async function notifyHumanInputRequested(
@@ -33,16 +39,19 @@ export async function notifyHumanInputRequested(
   deps: HumanInputNotifyDeps = {}
 ): Promise<void> {
   try {
-    await (deps.notify ?? defaultNotify)({
-      source: "workflow",
-      level: "warning",
-      title: request.title,
-      ...(request.message ? { body: request.message } : {}),
-      href: `/workflows/${request.workflowId}/runs/${request.runId}?humanInput=${request.id}`,
-      dedupeKey: request.id,
-      directed: true,
-      sourceRef: { kind: "workflow-human-input", id: request.id },
-    })
+    await (deps.notify ?? defaultNotify)(
+      {
+        source: "workflow",
+        level: "warning",
+        title: request.title,
+        ...(request.message ? { body: request.message } : {}),
+        href: `/workflows/${request.workflowId}/runs/${request.runId}?humanInput=${request.id}`,
+        dedupeKey: request.id,
+        directed: true,
+        sourceRef: { kind: "workflow-human-input", id: request.id },
+      },
+      { personalContext: { executionRunId: workflowExecutionRunId(request.runId) } }
+    )
   } catch (error) {
     console.warn("human input notify: notification center delivery failed", error)
   }

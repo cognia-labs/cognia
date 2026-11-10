@@ -377,6 +377,7 @@ export function SharedSessionPanel({
         attemptId: shareAttemptId,
         // Nothing is posted unless the owner left text here and pressed start.
         background: text ? `${t("backgroundHeading")}\n\n${text}` : undefined,
+        backgroundRunId: background.executionRunId,
       })
       toast.success(t("shareFromNowComplete"))
       setShareAttemptId(crypto.randomUUID())

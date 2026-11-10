@@ -24,6 +24,7 @@ import {
   pauseDisabledAdapterPresence,
 } from "@/lib/scheduler/connection-task-orphans"
 import { getDb } from "@/lib/db/schema"
+import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
 import { getBus } from "@/lib/connectors/bus"
@@ -233,6 +234,7 @@ async function refreshCard(args: {
         ...(state.cardMessageId ? { editTargetMessageId: state.cardMessageId } : {}),
       },
       source: "manual",
+      personalContext: explicitHostPersonalSinkContext("background-service"),
     },
     { executionContext: { automation: "service" } }
   )

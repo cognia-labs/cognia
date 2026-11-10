@@ -532,11 +532,11 @@ describe("notifyCallbackDenied", () => {
 describe("high-privilege binding writers", () => {
   const CONSUME_ONCE_SOURCES: Array<{ kind: string; file: string }> = [
     { kind: "tool_approve", file: "lib/connectors/hitl/tool-approval.ts" },
-    { kind: "skill_invoke", file: "lib/skills/built-in/dispatcher.ts" },
+    { kind: "skill_invoke", file: "lib/connectors/hitl/skill-confirmation.ts" },
     { kind: "wf_approve", file: "lib/connectors/hitl/workflow-run-approval.ts" },
     { kind: "wf_cancel", file: "lib/connectors/hitl/workflow-run-approval.ts" },
-    { kind: "wf_fanout_approve", file: "lib/plugin/api/workflow-author-api.ts" },
-    { kind: "wf_fanout_cancel", file: "lib/plugin/api/workflow-author-api.ts" },
+    { kind: "wf_fanout_approve", file: "lib/connectors/hitl/workflow-approval-cards.ts" },
+    { kind: "wf_fanout_cancel", file: "lib/connectors/hitl/workflow-approval-cards.ts" },
   ]
 
   it.each(CONSUME_ONCE_SOURCES)(
@@ -544,14 +544,14 @@ describe("high-privilege binding writers", () => {
     async ({ kind, file }) => {
       const fs = await import("node:fs/promises")
       const path = await import("node:path")
-      const source = await fs.readFile(path.join(process.cwd(), file), "utf8")
+      const source = await fs.readFile(path.join(__dirname, "..", "..", file), "utf8")
 
       // Parse complete argument objects: nested execution snapshots can contain
       // `})` before actorScope, and loop-based writers bind kind dynamically.
       const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
       const bindings: ts.ObjectLiteralExpression[] = []
       const dynamicKind =
-        file.endsWith("workflow-run-approval.ts") || file.endsWith("workflow-author-api.ts")
+        file.endsWith("workflow-run-approval.ts") || file.endsWith("workflow-approval-cards.ts")
       expect(source).toContain(`"${kind}"`)
       const visit = (node: ts.Node) => {
         if (

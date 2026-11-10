@@ -24,7 +24,7 @@ import { useTranslations } from "next-intl"
 
 import { useDiagnosticNotificationCommands } from "@/hooks/diagnostics/use-diagnostic-notification-commands"
 import { diagnosticActionCommand } from "@/lib/diagnostics/actions"
-import { subscribeDiagnostic } from "@/lib/diagnostics/bus"
+import { subscribeDiagnostic, personalContextForDiagnosticEvent } from "@/lib/diagnostics/bus"
 import { resolveSurface } from "@/lib/diagnostics/surface-router"
 import { CASCADE_WINDOW_MS } from "@/lib/diagnostics/cascade"
 import { toNotificationInput } from "@/lib/diagnostics/notification-mapping"
@@ -48,7 +48,8 @@ export function DiagnosticNotifier() {
     /** Raise times inside the cascade window, for the burst check. */
     const recent: number[] = []
 
-    return subscribeDiagnostic(({ diagnostic, origin }) => {
+    return subscribeDiagnostic((event) => {
+      const { diagnostic, origin } = event
       const now = diagnostic.at
       // Trim first, so a long-idle app doesn't count yesterday's failures.
       while (recent.length > 0 && now - recent[0] > CASCADE_WINDOW_MS) recent.shift()
@@ -83,7 +84,10 @@ export function DiagnosticNotifier() {
           ...(decision.collapsed
             ? { collapsed: true, collapsedTitle: tr("surface.cascade", { count: recent.length }) }
             : {}),
-        })
+        }),
+        {
+          personalContext: personalContextForDiagnosticEvent(event),
+        }
       ).catch(() => {
         // `dispatchDiagnostic` already wrote the structured log line, so the
         // failure is not lost. A notification-center write that throws must not

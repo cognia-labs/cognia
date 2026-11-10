@@ -163,6 +163,7 @@ describe("sendManualReplyLocally", () => {
       adapterId: ADAPTER,
       conversationKey: KEY,
       source: "manual",
+      personalContext: { hostOrigin: "typed-send" },
       request: { metadata: { idempotencyKey: "idem-1" } },
     })
     expect(result.reused).toBe(false)
@@ -300,6 +301,23 @@ describe("approveDraftLocally", () => {
 
   it("throws a typed error for an unknown draft", async () => {
     await expect(approveDraftLocally("nope")).rejects.toBeInstanceOf(DraftNotFoundError)
+  })
+
+  it("retains the producing run after an operator edits and approves a draft", async () => {
+    const draft = await seedDraft({ personalExecutionRunId: "private-run" })
+    await approveDraftLocally(
+      draft.id,
+      {
+        segments: [{ type: "text", text: "edited summary" }],
+        binding: { adapterId: ADAPTER, conversationKey: KEY, conversationRef: REF },
+      },
+      LOCAL_PERSON_RUN
+    )
+    expect(enqueueMock.mock.calls[0][0].personalContext).toEqual({ executionRunId: "private-run" })
+    expect(enqueueMock.mock.calls[0][1].executionContext).toEqual({
+      executionRunId: "private-run",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
   })
 
   it("enqueues first, then flips the draft — a failed enqueue leaves it pending", async () => {
@@ -442,6 +460,6 @@ it("forwards Host draft approval proof separately from persisted draft data", as
     LOCAL_PERSON_RUN
   )
   expect(enqueueMock.mock.calls.at(-1)?.[1]).toEqual({
-    executionContext: { sessionId: SESSION, localAuthorization: LOCAL_PERSON_RUN },
+    executionContext: { executionRunId: "", localAuthorization: LOCAL_PERSON_RUN },
   })
 })

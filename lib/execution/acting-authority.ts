@@ -11,7 +11,10 @@ import {
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { readResolvedPrincipal } from "./resolved-principal"
-import { absorbRequester } from "@cognia/plugin-contract/types/execution/acting-identity"
+import {
+  absorbRequester,
+  mergePersonalMarks,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
 import { getDb } from "@/lib/db/schema"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import { canonicalJson } from "@cognia/agent"
@@ -181,6 +184,24 @@ export async function startToolExecutionRun(
           ...metadata.actingIdentity,
           lane: originRoot.actingIdentity.lane,
         }
+      if (confirmation) {
+        // Approval changes who may execute, never whose content the approved
+        // arguments contain. A new identity root must retain its source taint.
+        metadata.personalMarks = mergePersonalMarks(
+          metadata.personalMarks,
+          origin?.personalMarks,
+          originRoot?.personalMarks,
+          originRoot
+            ? []
+            : [
+                {
+                  person: { kind: "service", ref: "unverified-personal-history" },
+                  source: "unverified-confirmation-origin",
+                  markedAt: now,
+                },
+              ]
+        )
+      }
       await db.executionRuns.add({
         id,
         sessionId,
@@ -228,6 +249,8 @@ export async function startJobExecutionRun(
     context?.executionRunId !== undefined
       ? await resolveExecutingRun(context.sessionId, context.executionRunId, options)
       : undefined
+  if (context?.executionRunId !== undefined && !parent)
+    throw new Error("Job execution parent unavailable")
   return startToolExecutionRun(parent?.sessionId ?? context?.sessionId, {
     runId: `execution:job:${jobId}`,
     // An invalid explicit run cannot fall through to the direct UI admission.

@@ -86,16 +86,19 @@ describe("ingestRemoteNotification", () => {
       { hostKey: "cloud" }
     )
     expect(id).toBe("rec-1")
-    expect(notifyMock).toHaveBeenCalledWith({
-      source: "scheduler",
-      level: "success",
-      title: "Nightly report",
-      body: "3 rows",
-      href: "/scheduler",
-      dedupeKey: "remote:cloud:n1",
-      groupKey: "remote:cloud",
-      channels: ["center", "toast", "os"],
-    })
+    expect(notifyMock).toHaveBeenCalledWith(
+      {
+        source: "scheduler",
+        level: "success",
+        title: "Nightly report",
+        body: "3 rows",
+        href: "/scheduler",
+        dedupeKey: "remote:cloud:n1",
+        groupKey: "remote:cloud",
+        channels: ["center", "toast", "os"],
+      },
+      expect.objectContaining({ personalContext: expect.any(Object) })
+    )
   })
 
   it("falls back to system/info, drops unsafe hrefs and a body equal to the title", async () => {
@@ -104,7 +107,13 @@ describe("ingestRemoteNotification", () => {
       { hostKey: "h" }
     )
     expect(notifyMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ source: "system", level: "info", body: undefined, href: undefined })
+      expect.objectContaining({
+        source: "system",
+        level: "info",
+        body: undefined,
+        href: undefined,
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
     expect(await ingestRemoteNotification({ nope: true }, { hostKey: "h" })).toBeNull()
   })
@@ -131,7 +140,10 @@ describe("subscribeRemoteNotifications", () => {
     const stop = subscribeRemoteNotifications({ transport, hostKey: "k" })
     handler!({ id: "n1", title: "T" })
     await Promise.resolve()
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: "remote:k:n1" }))
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: "remote:k:n1" }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
+    )
     stop()
     expect(unsubscribe).toHaveBeenCalled()
   })

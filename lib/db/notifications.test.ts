@@ -3,6 +3,7 @@
 // pruning (TTL + age + cap), and delete/clear. fake-indexeddb exercises the
 // real Dexie query path against in-memory IDB.
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   putNotification,
   getNotification,
@@ -28,6 +29,7 @@ afterAll(dbFixture.dispose)
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   const t = over.createdAt ?? 1000
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: over.id ?? `n_${Math.random().toString(36).slice(2, 9)}`,
     source: over.source ?? "system",
     level: over.level ?? "info",
@@ -85,7 +87,15 @@ describe("findByDedupeKey", () => {
   })
 
   it("ignores done records", async () => {
-    await putNotification(rec({ id: "d", dedupeKey: "k", createdAt: 200, readState: "done" }))
+    await putNotification(
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "d",
+        dedupeKey: "k",
+        createdAt: 200,
+        readState: "done",
+      })
+    )
     expect(await findByDedupeKey("k", 150)).toBeUndefined()
   })
 
@@ -112,7 +122,15 @@ describe("listNotifications", () => {
   beforeEach(async () => {
     await putNotification(rec({ id: "a", createdAt: 100, source: "scheduler" }))
     await putNotification(rec({ id: "b", createdAt: 300, source: "connector" }))
-    await putNotification(rec({ id: "c", createdAt: 200, source: "scheduler", readState: "done" }))
+    await putNotification(
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "c",
+        createdAt: 200,
+        source: "scheduler",
+        readState: "done",
+      })
+    )
   })
 
   it("returns newest-first and excludes done by default", async () => {
@@ -165,13 +183,48 @@ describe("listNotifications", () => {
   it("keeps reverse primary-key ties and the complete timestamp key domain", async () => {
     await getDb().notifications.clear()
     await getDb().notifications.bulkPut([
-      rec({ id: "negative-infinity", createdAt: Number.NEGATIVE_INFINITY, readState: "done" }),
-      rec({ id: "negative", createdAt: -1, readState: "done" }),
-      rec({ id: "zero", createdAt: 0, readState: "done" }),
-      rec({ id: "tie-a", createdAt: 100, readState: "done" }),
-      rec({ id: "tie-z", createdAt: 100, readState: "done" }),
-      rec({ id: "infinity", createdAt: Number.POSITIVE_INFINITY, readState: "done" }),
-      rec({ id: "legacy-date", createdAt: new Date(100) as unknown as number, readState: "done" }),
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "negative-infinity",
+        createdAt: Number.NEGATIVE_INFINITY,
+        readState: "done",
+      }),
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "negative",
+        createdAt: -1,
+        readState: "done",
+      }),
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "zero",
+        createdAt: 0,
+        readState: "done",
+      }),
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "tie-a",
+        createdAt: 100,
+        readState: "done",
+      }),
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "tie-z",
+        createdAt: 100,
+        readState: "done",
+      }),
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "infinity",
+        createdAt: Number.POSITIVE_INFINITY,
+        readState: "done",
+      }),
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "legacy-date",
+        createdAt: new Date(100) as unknown as number,
+        readState: "done",
+      }),
     ])
     const rows = await listNotifications({ includeDone: true, readStates: ["done"] })
     expect(rows.map((row) => row.id)).toEqual([
@@ -188,6 +241,7 @@ describe("listNotifications", () => {
   it("preserves source, snooze and includeDone predicates on a single-state lookup", async () => {
     await putNotification(
       rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         id: "visible",
         createdAt: 500,
         readState: "done",
@@ -197,6 +251,7 @@ describe("listNotifications", () => {
     )
     await putNotification(
       rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
         id: "snoozed",
         createdAt: 600,
         readState: "done",
@@ -205,7 +260,13 @@ describe("listNotifications", () => {
       })
     )
     await putNotification(
-      rec({ id: "other-source", createdAt: 700, readState: "done", source: "connector" })
+      rec({
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+        id: "other-source",
+        createdAt: 700,
+        readState: "done",
+        source: "connector",
+      })
     )
     const filter = {
       includeDone: true,

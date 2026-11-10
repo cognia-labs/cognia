@@ -113,7 +113,8 @@ describe("Integration runtime", () => {
         message: "db closed",
         meta: { extra: { stage: "projection-recovery" } },
       }),
-      { kind: "background" }
+      { kind: "background" },
+      { unverifiedReason: "integration action/projection error has no retained producer" }
     )
 
     dispose()
@@ -134,7 +135,8 @@ describe("Integration runtime", () => {
         message: "action drain failed",
         meta: { extra: { stage: "action-drain" } },
       }),
-      { kind: "background" }
+      { kind: "background" },
+      { unverifiedReason: "integration action/projection error has no retained producer" }
     )
     dispose()
   })
@@ -152,7 +154,8 @@ describe("Integration runtime", () => {
         message: "retention unavailable",
         meta: { extra: { stage: "retention-prune" } },
       }),
-      { kind: "background" }
+      { kind: "background" },
+      { hostOrigin: "background-service" }
     )
     dispose()
   })
@@ -168,14 +171,16 @@ describe("Integration runtime", () => {
         message: "GitHub unavailable",
         meta: { extra: { stage: "github-delivery-reconciliation" } },
       }),
-      { kind: "background" }
+      { kind: "background" },
+      { hostOrigin: "background-service" }
     )
     expect(dispatchDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "ingress unavailable",
         meta: { extra: { stage: "ingress-install" } },
       }),
-      { kind: "background" }
+      { kind: "background" },
+      { hostOrigin: "background-service" }
     )
     await jest.advanceTimersByTimeAsync(15 * 60_000)
     expect(reconcileGithubAppDeliveries).toHaveBeenCalledTimes(2)

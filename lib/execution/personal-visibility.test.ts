@@ -45,6 +45,133 @@ const privateMessage = {
   metadata: { personalMarks: [{ person: owner, source: "google-docs", markedAt: 1 }] },
 }
 
+it.each([0, 1, 2])(
+  "withholds marked context without an exact consumer among %s active runs",
+  async (count) => {
+    const runs = []
+    for (let i = 0; i < count; i++)
+      runs.push(
+        await startToolExecutionRun("ambiguous-consumer", { localAuthorization: LOCAL_PERSON_RUN })
+      )
+    const result = await preparePersonalHistory("ambiguous-consumer", [
+      privateMessage,
+      { id: "public", text: "public context" },
+    ])
+    expect(result.withheldMessageIds).toContain(privateMessage.id)
+    expect(result.messages[1]).toMatchObject({ text: "public context" })
+    for (const run of runs)
+      expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+  }
+)
+
+it("commits visible explicit history marks before releasing context to a later run", async () => {
+  const run = await startToolExecutionRun("later-turn", { localAuthorization: LOCAL_PERSON_RUN })
+  await preparePersonalHistory("later-turn", [privateMessage], { executionRunId: run.id })
+  expect((await getDb().executionRuns.get(run.id))?.personalMarks).toEqual(
+    privateMessage.metadata.personalMarks
+  )
+})
+
+it("withholds context on a failed taint commit and never taints an owner UI read", async () => {
+  const run = await startToolExecutionRun("history-failure", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const fail = () => {
+    throw new Error("context mark journal failed")
+  }
+  getDb().executionRunEvents.hook("creating", fail)
+  try {
+    await expect(
+      preparePersonalHistory("history-failure", [privateMessage], { executionRunId: run.id })
+    ).rejects.toThrow("context mark journal failed")
+    expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+    expect((await prepareOwnerHistory([privateMessage])).withheldMessageIds).toEqual([])
+  } finally {
+    getDb().executionRunEvents.hook("creating").unsubscribe(fail)
+  }
+  expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+})
+
+it("does not taint runs from inferred legacy attribution or withheld explicit messages", async () => {
+  await getDb().sessions.put({
+    id: "legacy-taint",
+    title: "IM",
+    createdAt: 1,
+    updatedAt: 1,
+    platformBinding: { platform: "lark", adapterId: "a", conversationId: "c" },
+  } as never)
+  const run = await startToolExecutionRun("legacy-taint", { localAuthorization: LOCAL_PERSON_RUN })
+  const legacy = { id: "old", text: "legacy context" }
+  await preparePersonalHistory("legacy-taint", [legacy], { executionRunId: run.id })
+  expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+  await recordAbsorbedRequester(run.id, other)
+  await preparePersonalHistory("legacy-taint", [privateMessage], { executionRunId: run.id })
+  expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+})
+
+it("re-preparing an owner's prepared legacy copy neither taints the run nor withholds it", async () => {
+  await getDb().sessions.put({
+    id: "legacy-reprepare",
+    title: "IM",
+    createdAt: 1,
+    updatedAt: 1,
+    platformBinding: { platform: "lark", adapterId: "a", conversationId: "c" },
+  } as never)
+  const run = await startToolExecutionRun("legacy-reprepare", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const legacy = { id: "old", createdAt: 5, text: "legacy owner context" }
+  const first = await preparePersonalHistory("legacy-reprepare", [legacy])
+  // The returned copy carries the materialized legacy attribution.
+  expect(first.messages[0]).toMatchObject({ metadata: { personalMarks: [expect.anything()] } })
+  const again = await preparePersonalHistory("legacy-reprepare", first.messages)
+  expect(again.withheldMessageIds).toEqual([])
+  expect(JSON.stringify(again.messages)).toContain("legacy owner context")
+  await preparePersonalHistory("legacy-reprepare", first.messages, { executionRunId: run.id })
+  expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+})
+
+it("commits explicit source-run marks from a visible derived artifact", async () => {
+  const source = await startToolExecutionRun("source", { localAuthorization: LOCAL_PERSON_RUN })
+  await getDb().executionRuns.update(source.id, {
+    personalMarks: privateMessage.metadata.personalMarks,
+  })
+  const consumer = await startToolExecutionRun("consumer", { localAuthorization: LOCAL_PERSON_RUN })
+  await preparePersonalDerivedHistory("consumer", [{ id: "summary", text: "derived" }], {
+    runIds: [source.id],
+    executionRunId: consumer.id,
+  })
+  expect((await getDb().executionRuns.get(consumer.id))?.personalMarks).toEqual(
+    privateMessage.metadata.personalMarks
+  )
+})
+
+it("retains late structural source marks across a confirmed derived identity root", async () => {
+  const source = await startToolExecutionRun("derived-confirm", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const confirmed = await startToolExecutionRun("derived-confirm", {
+    confirmedSkill: {
+      originRunId: source.id,
+      rootSessionId: "derived-confirm",
+      requester: owner,
+    },
+  })
+  await getDb().executionRuns.update(source.id, {
+    personalMarks: privateMessage.metadata.personalMarks,
+  })
+  const consumer = await startToolExecutionRun("derived-consumer", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  await preparePersonalDerivedHistory("derived-consumer", [{ id: "summary", text: "derived" }], {
+    runIds: [confirmed.id],
+    executionRunId: consumer.id,
+  })
+  expect((await getDb().executionRuns.get(consumer.id))?.personalMarks).toEqual(
+    privateMessage.metadata.personalMarks
+  )
+})
+
 it("rechecks root readers before private candidates reach a model-backed reranker", async () => {
   const root = await startToolExecutionRun("rerank", { localAuthorization: LOCAL_PERSON_RUN })
   const scorer = jest.fn(

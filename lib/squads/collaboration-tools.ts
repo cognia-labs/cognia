@@ -1,3 +1,4 @@
+import { personalSinkContextForRun, type PersonalSinkContext } from "@/lib/execution/personal-sink"
 /**
  * The Squad collaboration tools (the squads module's tool family, ADR-0250
  * §14 amendment; composed with the Squad template tools in `./agent-tools.ts`).
@@ -199,6 +200,7 @@ export interface TeamToolDeps {
    * `drafted`: the outbound policy (ADR-0239) held it for a person to approve.
    */
   postToConversation: (input: {
+    personalContext: PersonalSinkContext
     adapterId: string
     conversationKey: string
     text: string
@@ -684,7 +686,12 @@ export async function defaultTeamToolDeps(): Promise<TeamToolDeps> {
       const binding = { adapterId: input.adapterId, conversationKey: input.conversationKey }
       const channel = await conversationChannelFor(binding)
       if (!channel) throw new Error("no channel delivers to this conversation")
-      return channel.postText({ binding, text: input.text, authorization: input.authorization })
+      return channel.postText({
+        personalContext: input.personalContext,
+        binding,
+        text: input.text,
+        authorization: input.authorization,
+      })
     },
     appendAuditEntry: async (entry) => {
       const channel = await conversationChannelFor({
@@ -958,6 +965,10 @@ export async function runTeamTool(
         //    The call's own authorization covers it (ADR-0239); without one
         //    (a direct host call) it is a reply into the run's own chat.
         const delivered = await d.postToConversation({
+          personalContext: personalSinkContextForRun(
+            { executionRunId: caller.executionRunId, sessionId: caller.toolCall?.sessionId },
+            "team producer unavailable"
+          ),
           adapterId: target.adapterId,
           conversationKey,
           text: message,

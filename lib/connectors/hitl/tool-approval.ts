@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { settleApprovalCard } from "./approval-card-state"
 /**
  * IM tool-permission approval responder (control-plane HITL).
@@ -326,6 +327,12 @@ export function makeImPermissionResponder(
         )
       )
       const approvalJob = await enqueue({
+        personalContext: ctx.runId
+          ? personalSinkHost.personalSinkContextForRun(
+              { sessionId: ctx.sessionId, executionRunId: ctx.runId },
+              "tool approval run unavailable"
+            )
+          : personalSinkHost.sessionPersonalSinkContext(ctx.sessionId),
         adapterId: ctx.adapterId,
         conversationKey: ctx.conversationKey,
         request: {
@@ -386,6 +393,12 @@ export function makeImPermissionResponder(
       if (interruptId) forgetRunApprovalOutbound(interruptId)
     }
     void settleApprovalCard({
+      personalContext: ctx.runId
+        ? personalSinkHost.personalSinkContextForRun(
+            { sessionId: ctx.sessionId, executionRunId: ctx.runId },
+            "legacy approval run unavailable"
+          )
+        : personalSinkHost.sessionPersonalSinkContext(ctx.sessionId),
       adapterId: ctx.adapterId,
       conversationKey: ctx.conversationKey,
       conversationRef: ctx.conversationRef,

@@ -4,6 +4,11 @@
 // fan-out. This is the single public `notify()` every subsystem calls; mobile
 // push reception is installed once by the companion boot provider.
 
+import {
+  assertPersonalSink,
+  personalSinkContextForRun,
+  withPersonalSinkAttempt,
+} from "@/lib/execution/personal-sink"
 import { createElement } from "react"
 import { toast } from "sonner"
 import type { NotificationInput, NotificationRecord } from "@/types/notifications"
@@ -13,8 +18,14 @@ import {
   patchNotification,
   pruneNotifications,
 } from "@/lib/db/notifications"
-import { notify as notifyCore, type NotifyDeps, type NotifyDbPort } from "./notify"
+import {
+  notify as notifyCore,
+  type NotifyDeps,
+  type NotifyDbPort,
+  type NotifyHostOptions,
+} from "./notify"
 import { createImDeliver } from "./im-deliver"
+import { resolveScheduledNoticeI18n } from "@/lib/connectors/scheduled-notice-i18n"
 import { resolvePreferences } from "./preferences"
 import { dispatchNotificationCommand } from "./action-registry"
 import { FunctionalToastCard } from "./functional-toast/card"
@@ -99,6 +110,17 @@ async function hostNotify(opts: { title: string; body?: string; href?: string })
 }
 
 async function pushToCompanions(record: NotificationRecord): Promise<void> {
+  // Native push resolves the notification id to content outside this Host
+  // boundary. Its descriptor cannot be a disclosure hash for those bytes.
+  await assertPersonalSink(
+    personalSinkContextForRun(
+      record.personalContext ?? {},
+      "companion notification source unavailable"
+    ),
+    { kind: "unknown", label: "offline companion readers" },
+    undefined,
+    { sink: "companion-notification", channel: "push" }
+  )
   const result = (await transport.call("companion_push_notification", {
     notificationId: record.id,
     source: record.source,
@@ -126,12 +148,7 @@ export async function publishRemoteNotification(record: NotificationRecord): Pro
   // A record can resolve to both `toast` and `push` on headless (both map
   // here); publish once per record so companions do not see it twice.
   if (recentlyPublished.has(record.id)) return
-  recentlyPublished.add(record.id)
-  if (recentlyPublished.size > 256) {
-    const first = recentlyPublished.values().next().value
-    if (first !== undefined) recentlyPublished.delete(first)
-  }
-  await transport.call("remote_notification_publish", {
+  const payload = {
     id: record.id,
     title: record.title.slice(0, 160),
     body: (record.body && record.body.trim().length > 0 ? record.body : record.title).slice(
@@ -144,7 +161,22 @@ export async function publishRemoteNotification(record: NotificationRecord): Pro
         ? record.href
         : undefined,
     source: record.source,
-  })
+  }
+  await assertPersonalSink(
+    personalSinkContextForRun(
+      record.personalContext ?? {},
+      "remote notification source unavailable"
+    ),
+    { kind: "unknown", label: "remote companion readers" },
+    payload,
+    { sink: "companion-notification", channel: "remote" }
+  )
+  await transport.call("remote_notification_publish", payload)
+  recentlyPublished.add(record.id)
+  if (recentlyPublished.size > 256) {
+    const first = recentlyPublished.values().next().value
+    if (first !== undefined) recentlyPublished.delete(first)
+  }
 }
 
 /**
@@ -245,6 +277,50 @@ function buildDeps(): NotifyDeps {
 const imDeliverFn = createImDeliver()
 
 /** The single notification entry point for the whole app. */
-export async function notify(input: NotificationInput): Promise<string> {
-  return notifyCore(input, buildDeps())
+export async function notify(input: NotificationInput, host: NotifyHostOptions): Promise<string> {
+  return notifyCore(
+    input,
+    {
+      ...buildDeps(),
+      projectLocal: async (record) => {
+        if (!record.personalContext) return record
+        let allowed = false
+        try {
+          const { checkPersonalSink } = await import("@/lib/execution/personal-sink")
+          allowed =
+            (
+              await checkPersonalSink(
+                record.personalContext,
+                { kind: "host-local" },
+                {
+                  title: record.title,
+                  body: record.body,
+                  href: record.href,
+                  actions: record.actions,
+                  icon: record.icon,
+                  meta: record.meta,
+                },
+                "host-notification"
+              )
+            ).outcome === "allow"
+        } catch {
+          /* An unavailable receipt or identity cannot release local content. */
+        }
+        if (allowed) return record
+        const notice = resolveScheduledNoticeI18n(
+          useSettingsStore.getState().settings?.language
+        ).personalDelivery(false)
+        return {
+          ...record,
+          title: notice,
+          body: notice,
+          href: undefined,
+          actions: undefined,
+          icon: undefined,
+          meta: undefined,
+        }
+      },
+    },
+    { personalContext: withPersonalSinkAttempt(host.personalContext) }
+  )
 }

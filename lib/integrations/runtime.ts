@@ -1,3 +1,7 @@
+import {
+  explicitHostPersonalSinkContext,
+  unverifiedPersonalSinkContext,
+} from "@/lib/execution/personal-sink"
 import { installExternalSyncRuntime } from "@/lib/external-services/sync/runtime"
 import { syncExternalSyncRenewalSchedule } from "@/lib/external-services/sync/renewal"
 import { createDiagnostic } from "@cognia/diagnostics"
@@ -32,7 +36,18 @@ function reportRecurringFailure(
       message: error instanceof Error ? error.message : String(error),
       meta: { extra: { stage } },
     }),
-    { kind: "background" }
+    { kind: "background" },
+    // Installation/retention operate on Host lifecycle state; action errors may contain run output.
+    [
+      "retention-prune",
+      "ingress-install",
+      "sync-renewal-install",
+      "github-delivery-reconciliation",
+    ].includes(stage)
+      ? explicitHostPersonalSinkContext("background-service")
+      : unverifiedPersonalSinkContext(
+          "integration action/projection error has no retained producer"
+        )
   )
 }
 

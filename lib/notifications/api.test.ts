@@ -5,6 +5,7 @@
  * the delivery diagnostics list/detail, and the operator retry/cancel actions.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { upsertNotificationTarget } from "@/lib/db/notification-targets"
@@ -32,7 +33,9 @@ jest.mock("./runtime", () => {
       if (input.title === "__force_center_failure__") {
         throw new Error("forced center write failure")
       }
-      return actual.notify(input as never)
+      return actual.notify(input as never, {
+        personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
+      })
     }),
   }
 })
@@ -101,7 +104,10 @@ describe("emitNotification", () => {
   it("commits a governed intent for a connector target", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    const result = await emitNotification({ ...emit, logicalKey: "fact:c1" })
+    const result = await emitNotification(
+      { ...emit, logicalKey: "fact:c1" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     expect(result.outcome).toBe("notified")
     expect(result.intentIds).toHaveLength(1)
     const intents = await getDb().notificationDeliveryIntents.toArray()
@@ -117,7 +123,10 @@ describe("emitNotification", () => {
   it("commits a prepared webhook intent for a feishu-webhook target", async () => {
     const t = await webhookTarget()
     await scopeSub([t.id])
-    const result = await emitNotification({ ...emit, logicalKey: "fact:w1" })
+    const result = await emitNotification(
+      { ...emit, logicalKey: "fact:w1" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     expect(result.intentIds).toHaveLength(1)
     const intents = await getDb().notificationDeliveryIntents.toArray()
     expect(intents[0].status).toBe("prepared") // webhook lane sends it, not the queue
@@ -127,21 +136,33 @@ describe("emitNotification", () => {
   it("is idempotent across a retry — the operation key collapses", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    await emitNotification({ ...emit, logicalKey: "fact:dup" })
-    await emitNotification({ ...emit, logicalKey: "fact:dup" })
+    await emitNotification(
+      { ...emit, logicalKey: "fact:dup" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
+    await emitNotification(
+      { ...emit, logicalKey: "fact:dup" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     expect(await getDb().notificationDeliveryIntents.count()).toBe(1)
     expect(await getDb().outboundQueue.count()).toBe(1)
   })
 
   it("commits no intent when no route subscribes the fact", async () => {
-    const result = await emitNotification({ ...emit, logicalKey: "fact:none" })
+    const result = await emitNotification(
+      { ...emit, logicalKey: "fact:none" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     expect(result.intentIds).toHaveLength(0)
   })
 
   it("stamps the run source-ref + href on the center record when runId is given", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    await emitNotification({ ...emit, logicalKey: "run:r-9:terminal", runId: "r-9" })
+    await emitNotification(
+      { ...emit, logicalKey: "run:r-9:terminal", runId: "r-9" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     const record = await getDb()
       .notifications.where("logicalKey")
       .equals("run:r-9:terminal")
@@ -156,11 +177,14 @@ describe("emitNotification", () => {
     await scopeSub([t.id])
     // The marker title makes the mocked `notify` throw — the inbox is
     // best-effort so the durable external intent must still persist.
-    const result = await emitNotification({
-      ...emit,
-      logicalKey: "fact:hardy",
-      title: "__force_center_failure__",
-    })
+    const result = await emitNotification(
+      {
+        ...emit,
+        logicalKey: "fact:hardy",
+        title: "__force_center_failure__",
+      },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     expect(result.centerRecordId).toBeUndefined() // center write failed
     expect(result.intentIds).toHaveLength(1) // external intent committed anyway
     const intents = await getDb().notificationDeliveryIntents.toArray()
@@ -171,9 +195,18 @@ describe("emitNotification", () => {
   it("lists every intent serving a run via its logical-key prefix", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    await emitNotification({ ...emit, logicalKey: "run:r-1:a", runId: "r-1" })
-    await emitNotification({ ...emit, logicalKey: "run:r-1:b", runId: "r-1" })
-    await emitNotification({ ...emit, logicalKey: "run:r-2:a", runId: "r-2" })
+    await emitNotification(
+      { ...emit, logicalKey: "run:r-1:a", runId: "r-1" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
+    await emitNotification(
+      { ...emit, logicalKey: "run:r-1:b", runId: "r-1" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
+    await emitNotification(
+      { ...emit, logicalKey: "run:r-2:a", runId: "r-2" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     const intents = await listNotificationDeliveriesForRun("r-1")
     expect(intents).toHaveLength(2)
     expect(intents.every((i) => i.logicalKey?.startsWith("run:r-1:"))).toBe(true)
@@ -192,7 +225,10 @@ describe("emitNotification", () => {
       createdBy: "a",
       rules: [{ kind: "aggregate", aggregateKeyTemplate: "bucket:{category}" }],
     })
-    const result = await emitNotification({ ...emit, logicalKey: "fact:digest" })
+    const result = await emitNotification(
+      { ...emit, logicalKey: "fact:digest" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     // A digest route mints no intent — the fact folds into the bucket.
     expect(result.intentIds).toHaveLength(0)
     const members = await getDb().notificationAggregateMembers.toArray()
@@ -222,7 +258,10 @@ describe("diagnostics + operator actions", () => {
   it("lists intents for a fact's logical key", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    await emitNotification({ ...emit, logicalKey: "fact:diag" })
+    await emitNotification(
+      { ...emit, logicalKey: "fact:diag" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     const intents = await listNotificationDeliveries("fact:diag")
     expect(intents).toHaveLength(1)
   })
@@ -230,7 +269,10 @@ describe("diagnostics + operator actions", () => {
   it("returns the intent + its attempt history", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    const { intentIds } = await emitNotification({ ...emit, logicalKey: "fact:d2" })
+    const { intentIds } = await emitNotification(
+      { ...emit, logicalKey: "fact:d2" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     const detail = await getNotificationDeliveryDetail(intentIds[0])
     expect(detail?.intent.id).toBe(intentIds[0])
     expect(detail?.attempts).toEqual([])
@@ -243,7 +285,10 @@ describe("diagnostics + operator actions", () => {
   it("operator-retries a terminal intent back to queued", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    const { intentIds } = await emitNotification({ ...emit, logicalKey: "fact:r" })
+    const { intentIds } = await emitNotification(
+      { ...emit, logicalKey: "fact:r" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     await getDb().notificationDeliveryIntents.update(intentIds[0], { status: "failed" })
     const retried = await retryNotificationDelivery(intentIds[0])
     expect(retried?.status).toBe("queued")
@@ -252,7 +297,10 @@ describe("diagnostics + operator actions", () => {
   it("refuses to retry a live (non-terminal) intent", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    const { intentIds } = await emitNotification({ ...emit, logicalKey: "fact:r2" })
+    const { intentIds } = await emitNotification(
+      { ...emit, logicalKey: "fact:r2" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     // The intent is `queued` (live) — retry must NOT touch it.
     const retried = await retryNotificationDelivery(intentIds[0])
     expect(retried).toBeUndefined()
@@ -261,7 +309,10 @@ describe("diagnostics + operator actions", () => {
   it("operator-cancels a queued intent", async () => {
     const t = await connectorTarget()
     await scopeSub([t.id])
-    const { intentIds } = await emitNotification({ ...emit, logicalKey: "fact:c" })
+    const { intentIds } = await emitNotification(
+      { ...emit, logicalKey: "fact:c" },
+      { personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice") }
+    )
     const cancelled = await cancelNotificationDelivery(intentIds[0])
     expect(cancelled?.status).toBe("cancelled")
   })

@@ -264,6 +264,7 @@ describe("handleWorkflowApprovalCallback", () => {
     const wf = await createWorkflow({ name: "Original approved version" })
     const first = await publishWorkflowLifecycle(wf.id, 10)
     await holdWorkflowDispatchForApproval({
+      personalContext: { hostOrigin: "typed-send" },
       workflowId: wf.id,
       runParams: {},
       triggeredFrom: { source: "im", adapterId: "tg", conversationKey: "telegram:tg:room" },
@@ -321,7 +322,7 @@ describe("handleWorkflowApprovalCallback", () => {
     expect(jobs[0].source).toBe("workflow")
     const seg = jobs[0].request.segments[0] as { type: string; text: string }
     expect(seg.type).toBe("text")
-    expect(seg.text).toContain("Daily Standup")
+    expect(seg.text).toContain("Workflow")
     expect(seg.text).toContain("已启动")
 
     const runs = await getDb().workflowRuns.toArray()

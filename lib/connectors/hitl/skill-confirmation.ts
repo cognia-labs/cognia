@@ -15,6 +15,7 @@
  * never outlives the turn that asked for it.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { SKILL_CANCEL_PREFIX, SKILL_INVOKE_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
 import { append as appendAudit } from "@/lib/db/connector-audit"
 import { getDb } from "@/lib/db/schema"
@@ -173,6 +174,10 @@ export async function postSkillConfirmation(
     if (signal?.aborted || live?.drafting) throw new Error("Confirmation request was cancelled")
     await enqueueGoverned(
       {
+        personalContext: personalSinkHost.personalSinkContextForRun(
+          { executionRunId: originalRun?.id },
+          "confirmation source unavailable"
+        ),
         adapterId: ctx.imBinding.adapterId,
         conversationKey: ctx.imBinding.conversationKey,
         source: "skill",
@@ -191,7 +196,7 @@ export async function postSkillConfirmation(
         ...(signal ? { signal } : {}),
         executionContext: {
           sessionId: runScope.sessionId,
-          executionRunId: originalRun?.id ?? "",
+          executionRunId: originalRun?.id,
         },
       }
     )

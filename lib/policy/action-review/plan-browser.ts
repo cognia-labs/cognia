@@ -1,3 +1,4 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 /**
  * The browser chokepoint of the outbound policy (ADR-0239 phase 2b).
  *
@@ -52,6 +53,7 @@ import {
   type ActionReviewPlanOutcome,
 } from "@cognia/agent-config-types/action-review"
 import type { PendingOutboundReview } from "@cognia/agent-config-types"
+import { assertPersonalSink } from "@/lib/execution/personal-sink"
 
 import { configuredSiteGrants, liveBotRun } from "./configured-grants"
 import {
@@ -81,30 +83,32 @@ import {
 /** Who drives the browser action a submission comes from. */
 export type BrowserSubmissionAsker =
   /** The built-in browser tools in a desktop chat a person is driving. */
-  | { kind: "chat"; sessionId: string }
-  /**
-   * The built-in browser tools in a turn a runner drives (a scheduled task, a
-   * Bot, an IM reply): its own planning options, as `run-and-capture` holds
-   * them for the turn's other outbound calls.
-   */
-  | {
-      kind: "turn"
-      sessionId: string
-      unattended: boolean
-      origin?: ActionReviewPlanOrigin | (() => Promise<ActionReviewPlanOrigin>)
-      policyGrants?: readonly OutboundPolicyGrantList[]
-    }
-  /** A workflow run's browser node: nobody watches it. */
-  | { kind: "workflow"; workflowId: string; runId: string }
-  /** An External Bridge client driving the browser tools from this computer. */
-  | { kind: "external-bridge"; clientId: string }
-  /** Another plugin's own browser use. */
-  | {
-      kind: "plugin"
-      pluginId: string
-      /** The handler Bot run it acts for, which lends the installation's sites while it runs. */
-      botRunId?: string
-    }
+  (
+    | { kind: "chat"; sessionId: string }
+    /**
+     * The built-in browser tools in a turn a runner drives (a scheduled task, a
+     * Bot, an IM reply): its own planning options, as `run-and-capture` holds
+     * them for the turn's other outbound calls.
+     */
+    | {
+        kind: "turn"
+        sessionId: string
+        unattended: boolean
+        origin?: ActionReviewPlanOrigin | (() => Promise<ActionReviewPlanOrigin>)
+        policyGrants?: readonly OutboundPolicyGrantList[]
+      }
+    /** A workflow run's browser node: nobody watches it. */
+    | { kind: "workflow"; workflowId: string; runId: string }
+    /** An External Bridge client driving the browser tools from this computer. */
+    | { kind: "external-bridge"; clientId: string }
+    /** Another plugin's own browser use. */
+    | {
+        kind: "plugin"
+        pluginId: string
+        /** The handler Bot run it acts for, which lends the installation's sites while it runs. */
+        botRunId?: string
+      }
+  ) & { executionRunId?: string }
 
 export interface BrowserSubmissionPlanInput {
   /** The request URL (`request`), or the page URL the action runs on (`possible`). */
@@ -140,6 +144,7 @@ export type BrowserSubmissionDecision =
   | { action: "refuse"; receipt: BrowserSubmissionReceipt }
 
 export interface PlanBrowserDeps {
+  personalSink?: typeof assertPersonalSink
   /** App settings, for the mode and the global site list. Default: the settings store. */
   settings?: () => OutboundSettingsLike | Promise<OutboundSettingsLike>
   /** A session's origin. Default: `sessionPlanOrigin`. */
@@ -298,6 +303,20 @@ export async function planBrowserSubmission(
   input: BrowserSubmissionPlanInput,
   deps: PlanBrowserDeps = {}
 ): Promise<BrowserSubmissionDecision> {
+  const asker = input.asker
+  await (deps.personalSink ?? assertPersonalSink)(
+    personalSinkHost.personalSinkContextForRun(
+      asker.kind === "workflow"
+        ? { executionRunId: `execution:workflow:${asker.runId}` }
+        : { sessionId: askerSessionId(asker), executionRunId: asker.executionRunId },
+      "lib/policy/action-review/plan-browser.ts"
+    ),
+    { kind: "unknown", label: "browser submission" },
+    // The runtime reports no submitted bytes. Opaque withholding has no
+    // content hash and therefore cannot authorize a later disclosure.
+    undefined,
+    input.url
+  )
   const settings = await (deps.settings ?? readAppSettings)()
   const mode: OutboundAuthorizationMode = readOutboundAuthorizationMode(settings, "browser")
   const now = deps.now?.() ?? Date.now()

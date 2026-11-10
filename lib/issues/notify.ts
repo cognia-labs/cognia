@@ -21,6 +21,7 @@
  * stays mechanical.
  */
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import Dexie from "dexie"
 import type { Issue, IssueActor, IssueEvent, IssueEventPayload } from "@/types/issues"
 import type { NotificationInput, NotificationLevel } from "@/types/notifications"
@@ -203,20 +204,32 @@ export async function notifyIssueEvent(
   const conversationKeys = await conversationKeysFor(issue)
   if (conversationKeys.length === 0) {
     return [
-      await notify({ ...projected, source: "issue", sourceRef: { kind: "issue", id: issue.id } }),
+      await notify(
+        { ...projected, source: "issue", sourceRef: { kind: "issue", id: issue.id } },
+        {
+          // Marked run writes are refused before issue/site persistence; this is a stored service event.
+          personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service"),
+        }
+      ),
     ]
   }
   const ids: string[] = []
   for (const conversationKey of conversationKeys) {
     ids.push(
-      await notify({
-        ...projected,
-        // One row per conversation; the key keeps them from coalescing into each other.
-        dedupeKey: `${projected.dedupeKey}:${conversationKey}`,
-        source: "issue",
-        channels: ["center", "im"],
-        sourceRef: { kind: "conversation", id: conversationKey },
-      })
+      await notify(
+        {
+          ...projected,
+          // One row per conversation; the key keeps them from coalescing into each other.
+          dedupeKey: `${projected.dedupeKey}:${conversationKey}`,
+          source: "issue",
+          channels: ["center", "im"],
+          sourceRef: { kind: "conversation", id: conversationKey },
+        },
+        {
+          // Marked run writes are refused before issue/site persistence; this is a stored service event.
+          personalContext: personalSinkHost.explicitHostPersonalSinkContext("background-service"),
+        }
+      )
     )
   }
   return ids

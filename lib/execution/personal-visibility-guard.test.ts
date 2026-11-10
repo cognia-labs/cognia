@@ -17,6 +17,9 @@ const ROOT = join(__dirname, "..", "..")
 // Memory additions: the job fence reads only source existence/session identity;
 // workflow recall filters through its Host execution reader. Memory tool windows
 // filter their exact selected rows and receipt returned evidence before output.
+// Baseline 0df5707536 inventory repairs: BinaryPrefetcher's complete() is its
+// local durability callback; selection actions no longer call the transcript
+// renderer. Both source files are unchanged by phase 2C-1.
 const REVIEWED_SITES: Record<string, string> = {
   "cli/src/agent/cli-host-runtime.ts": "complete:1",
   "cli/src/agent/external-agent-session.ts":
@@ -36,6 +39,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "cli/src/cli/handoff-cmd.ts":
     "buildHandoffContext:2;complete:1;prepareCliPersonalMessages:1;prepareHandoffContext:1;readTranscript:3",
   "cli/src/cli/run-command.ts": "resume:sdkSessionId:2",
+  "cli/src/serve/persistence/binary-prefetch.ts": "complete:1",
   "cli/src/tui/clipboard-image.ts": "complete:1",
   "cli/src/tui/components/App.tsx": "iterTranscriptEntries:1",
   "cli/src/tui/components/app/use-apply-effect.ts": "resumeSession:1",
@@ -148,7 +152,7 @@ const REVIEWED_SITES: Record<string, string> = {
     "complete:1;listMessages:13;preparePersonalDerivedHistory:2;preparePersonalHistory:2",
   "lib/chat/selection/message-excerpt.ts": "stored-message-read:1",
   "lib/chat/selection/run-selection-action.ts":
-    "complete:1;preparePersonalHistory:1;renderConversationSegments:1;stored-message-read:1",
+    "complete:1;preparePersonalHistory:1;stored-message-read:1",
   "lib/chat/session-aside-context.ts": "resume:sdkSessionId:1",
   "lib/chat/turn-route/history.ts":
     "buildHandoffContext:1;prepareHandoffContext:1;preparePersonalHistory:1",
@@ -165,6 +169,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/cli-bridge/handlers/twin-context.ts":
     "preparePersonalHistory:2;withPersonalRerankerVisibility:1",
   "lib/collab/shared-chat-sync.ts": "stored-message-read:1",
+  "lib/collab/shared-personal-projection.ts": "withholdForReaders:2",
   "lib/collab/shared-reference-scan.ts": "stored-message-read:2",
   "lib/collab/shared-room-catch-up.ts": "complete:1;prepareOwnerHistory:1",
   "lib/collab/shared-run-coordinator.ts": "listMessages:1",
@@ -192,8 +197,9 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/db/resource-workbench-sessions.ts": "resume:forkedFromSdkSessionId:1;resume:sdkSessionId:3",
   "lib/db/sessions.ts": "resume:forkedFromSdkSessionId:2;resume:sdkSessionId:6",
   "lib/dev/expose-test-globals.tsx": "stored-message-read:1",
+  "lib/execution/personal-sink.ts": "stored-message-read:1",
   "lib/execution/personal-visibility.ts":
-    "prepareOwnerDerivedHistory:1;prepareOwnerHistory:2;preparePairedOwnerHistory:1;preparePersonalHistory:2;resume:forkedFromSdkSessionId:1;resume:sdkSessionId:1;stored-message-read:1;withholdForReaders:1",
+    "prepareOwnerDerivedHistory:1;prepareOwnerHistory:2;preparePairedOwnerHistory:1;preparePersonalHistory:1;resume:forkedFromSdkSessionId:1;resume:sdkSessionId:1;stored-message-read:1;withholdForReaders:2",
   "lib/execution/promote-to-pane.ts": "listMessages:1",
   "lib/execution/run-retrospective.ts": "complete:1",
   "lib/execution/steer.ts": "steerSession:1",
@@ -257,6 +263,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/session-import/index.ts": "buildHandoffContext:1",
   "lib/session-import/native-resume.ts": "resumeSession:1",
   "lib/session-import/to-parts.ts": "buildHandoffContext:1",
+  "lib/share/chat-export.ts": "withholdForReaders:1",
   "lib/skills/recording/controller.ts": "prepareOwnerDerivedHistory:1",
   "lib/skills/recording/generate-skill.ts": "complete:1",
   "lib/skills/session-suggestion.ts":
@@ -679,6 +686,12 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
   "lib/ai/generation/run-title-task.ts": ["prepareOwnerDerivedHistory", "sourceRunIds"],
   "lib/workflow/runtime/run-title.ts": ["sourceRunIds: [workflowExecutionRunId(runId)]"],
   "lib/sync/host-state-service.ts": ["prepareOwnerHistory"],
+  "lib/execution/personal-sink.ts": [
+    "readSessionPersonalTaint",
+    "metadata",
+    "personalMarks",
+    "readExecutionRunPersonalTaint",
+  ],
   "lib/execution/personal-visibility.ts": [
     "withholdForReaders",
     "resolveRunActingIdentity",

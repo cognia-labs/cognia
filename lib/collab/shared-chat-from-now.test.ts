@@ -1,3 +1,4 @@
+import { startToolExecutionRun, LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { SharedChatTeamSessionUnsupportedError } from "./shared-chat-conversion"
@@ -70,6 +71,7 @@ describe("share a conversation from now on", () => {
   beforeAll(dbFixture.initialize)
   beforeEach(async () => {
     await dbFixture.restore()
+    await startToolExecutionRun("local_1", { localAuthorization: LOCAL_PERSON_RUN })
     await getDb().sessions.put({
       id: "local_1",
       projectId: "workspace_1",

@@ -1,3 +1,7 @@
+import {
+  unverifiedPersonalSinkContext,
+  type PersonalSinkContext,
+} from "@/lib/execution/personal-sink"
 /**
  * Emit point for diagnostics raised outside React.
  *
@@ -25,6 +29,18 @@ export interface DiagnosticEventDetail {
   origin?: DiagnosticOrigin
 }
 
+const hostContexts = new WeakMap<DiagnosticEventDetail, PersonalSinkContext>()
+
+/** Raw event/diagnostic metadata cannot establish Host provenance. */
+export function personalContextForDiagnosticEvent(
+  detail: DiagnosticEventDetail
+): PersonalSinkContext {
+  return (
+    hostContexts.get(detail) ??
+    unverifiedPersonalSinkContext("diagnostic event has no Host-bound producer context")
+  )
+}
+
 export type DiagnosticHandler = (detail: DiagnosticEventDetail) => void
 
 /**
@@ -32,7 +48,11 @@ export type DiagnosticHandler = (detail: DiagnosticEventDetail) => void
  * is skipped but the structured log line is still written, so headless runs and
  * node tests keep the trace.
  */
-export function dispatchDiagnostic(diagnostic: CogniaDiagnostic, origin?: DiagnosticOrigin): void {
+export function dispatchDiagnostic(
+  diagnostic: CogniaDiagnostic,
+  origin?: DiagnosticOrigin,
+  personalContext?: PersonalSinkContext
+): void {
   const summary = `[${diagnostic.source}] ${diagnostic.code}${diagnostic.message ? `: ${diagnostic.message}` : ""}`
   const context = {
     code: diagnostic.code,
@@ -48,11 +68,9 @@ export function dispatchDiagnostic(diagnostic: CogniaDiagnostic, origin?: Diagno
   }
 
   if (typeof window === "undefined") return
-  window.dispatchEvent(
-    new CustomEvent<DiagnosticEventDetail>(DIAGNOSTIC_EVENT, {
-      detail: { diagnostic, ...(origin ? { origin } : {}) },
-    })
-  )
+  const detail: DiagnosticEventDetail = { diagnostic, ...(origin ? { origin } : {}) }
+  if (personalContext) hostContexts.set(detail, personalContext)
+  window.dispatchEvent(new CustomEvent<DiagnosticEventDetail>(DIAGNOSTIC_EVENT, { detail }))
 }
 
 /** Subscribe to raised diagnostics. Returns an unsubscribe function. */

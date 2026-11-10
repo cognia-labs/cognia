@@ -1,3 +1,4 @@
+/** @jest-environment jsdom */
 import {
   APPROVAL_PENDING_PUSH_CHANNEL,
   APPROVAL_REQUEST_CHANNEL,
@@ -67,7 +68,8 @@ describe("notifyApprovalRequested", () => {
             args: { approvalId: entry.approvalId, decision: "rejected" },
           }),
         ],
-      })
+      }),
+      expect.objectContaining({ personalContext: expect.any(Object) })
     )
   })
 
@@ -149,5 +151,5 @@ describe("installApprovalNotificationActions", () => {
     off()
   })
 })
-/** @jest-environment jsdom */
+
 import "fake-indexeddb/auto"

@@ -1,3 +1,5 @@
+import { assertPersonalSink, personalSinkContextForRun } from "@/lib/execution/personal-sink"
+import { resolveBuiltInSkillRunScope } from "../context"
 /**
  * `issue.comment`: append a comment to an issue's activity trail.
  *
@@ -46,6 +48,16 @@ const skill: BuiltInSkill<typeof schema> = {
       return { status: "refused", reason: "federated-read-only", identifier: issue.identifier }
     }
 
+    const scope = resolveBuiltInSkillRunScope(ctx)
+    await assertPersonalSink(
+      personalSinkContextForRun(
+        { executionRunId: scope.runId, sessionId: scope.sessionId },
+        "issue comment run unavailable"
+      ),
+      { kind: "host-local" },
+      args.body,
+      { issueId: issue.id }
+    )
     const { addIssueComment } = await import("@/lib/db/issues")
     await addIssueComment(issue.id, args.body, by)
     return { status: "added", identifier: issue.identifier, by }

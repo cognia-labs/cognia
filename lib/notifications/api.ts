@@ -15,6 +15,7 @@
 // binds to. No function here re-implements routing — they all delegate to the
 // planner, the disclosure renderer, and the governed/webhook persist lanes.
 
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { nanoid } from "nanoid"
 import { getDb } from "@/lib/db/schema"
 import { resolvePreferences } from "./preferences"
@@ -102,7 +103,8 @@ export interface EmitNotificationResult {
  * this function only ever COMMITS (it never performs a platform call).
  */
 export async function emitNotification(
-  input: EmitNotificationInput
+  input: EmitNotificationInput,
+  host: import("./notify").NotifyHostOptions
 ): Promise<EmitNotificationResult> {
   const now = input.now ?? Date.now()
   const factKey = input.logicalKey ?? `manual:${nanoid()}`
@@ -136,26 +138,29 @@ export async function emitNotification(
   let centerRecordId: string | undefined
   try {
     const { notify } = await import("./runtime")
-    centerRecordId = await notify({
-      source: (input.source as never) ?? "system",
-      level: input.level,
-      title: input.title,
-      ...(input.body ? { body: input.body } : {}),
-      dedupeKey: factKey,
-      ...(input.runId
-        ? {
-            groupKey: input.runId,
-            href: `/agent-runs?run=${encodeURIComponent(input.runId)}`,
-            sourceRef: { kind: "run", id: input.runId },
-          }
-        : {}),
-      logicalKey: factKey,
-      category: input.category,
-      directed: input.purpose === "approval-request",
-      ...(input.operationKey ? { operationKey: input.operationKey } : {}),
-      ...(input.validUntil !== undefined ? { validUntil: input.validUntil } : {}),
-      ...(input.scopeHint ? { scopeHint: input.scopeHint } : {}),
-    })
+    centerRecordId = await notify(
+      {
+        source: (input.source as never) ?? "system",
+        level: input.level,
+        title: input.title,
+        ...(input.body ? { body: input.body } : {}),
+        dedupeKey: factKey,
+        ...(input.runId
+          ? {
+              groupKey: input.runId,
+              href: `/agent-runs?run=${encodeURIComponent(input.runId)}`,
+              sourceRef: { kind: "run", id: input.runId },
+            }
+          : {}),
+        logicalKey: factKey,
+        category: input.category,
+        directed: input.purpose === "approval-request",
+        ...(input.operationKey ? { operationKey: input.operationKey } : {}),
+        ...(input.validUntil !== undefined ? { validUntil: input.validUntil } : {}),
+        ...(input.scopeHint ? { scopeHint: input.scopeHint } : {}),
+      },
+      host
+    )
     if (centerRecordId) derived.fact.notificationId = centerRecordId
   } catch {
     /* inbox best-effort */
@@ -172,6 +177,7 @@ export async function emitNotification(
   })
 
   const intentIds = await commitFactRoutes({
+    personalContext: host.personalContext,
     derived,
     decision,
     scopeKey,
@@ -196,6 +202,7 @@ export async function emitNotification(
  * never silently sent).
  */
 export async function commitFactRoutes(input: {
+  personalContext: personalSinkHost.PersonalSinkContext
   derived: DerivedNotificationFact
   decision: NotificationDecision
   scopeKey: string
@@ -223,6 +230,13 @@ export async function commitFactRoutes(input: {
         // wider profile — a public-capped subscription stays counts-only.
         profileId: route.effectiveProfileId ?? target.disclosureProfileId,
       })
+      const personal = await personalSinkHost.checkPersonalSink(
+        input.personalContext,
+        { kind: "unknown", label: "notification route" },
+        payload,
+        target.address
+      )
+      if (personal.outcome !== "allow") continue
       try {
         if (target.address.kind === "feishu-webhook") {
           const webhook = await prepareWebhookNotificationDelivery({

@@ -1,8 +1,10 @@
+import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { snoozeUntil, isSnoozed, selectAutoWake, SNOOZE_PRESETS_MS } from "./snooze"
 import type { NotificationRecord } from "@/types/notifications"
 
 function rec(over: Partial<NotificationRecord> = {}): NotificationRecord {
   return {
+    personalContext: personalSinkHost.explicitHostPersonalSinkContext("fixed-notice"),
     id: "n",
     source: "connector",
     level: "info",

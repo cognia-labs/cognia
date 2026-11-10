@@ -499,6 +499,7 @@ export function createAgentRpcHostStateDispatcher(
             ) =>
               withTranscriptRuntimeLock(sessionId, async () => {
                 const prepared = await prepareTranscriptRuntimeSend(sessionId, sendOptions, {
+                  executionRunId: receipt?.runId,
                   // Partition RPC admits no runtimeStatus probe. Always hydrate
                   // from this account's canonical history, including after a restart.
                   ...(partitionChat ? { replacesHistory: true } : {}),

@@ -1,3 +1,4 @@
+jest.mock("@/lib/notifications/runtime", () => ({ notify: jest.fn(async () => "notice") }))
 jest.mock("@/lib/execution/personal-visibility", () => ({
   preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
     messages,
@@ -706,5 +707,21 @@ describe("runLeadPlanning", () => {
       ).rejects.toThrow("boom")
       expect(events).toEqual(["SessionStart", "UserPromptSubmit", "StopFailure", "SessionEnd"])
     })
+  })
+})
+
+it("keeps the notifying team's exact Host run instead of an unresolved session", async () => {
+  const { notify } = await import("@/lib/notifications/runtime")
+  buildAgentTeamRuntimeDeps().notifierDeps!.deliver!({
+    teamId: "team",
+    runId: "team-notice-run",
+    level: "info",
+    title: "Team result",
+    body: "Result",
+    dedupeKey: "team-notice",
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(notify).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Team result" }), {
+    personalContext: { executionRunId: "execution:team:team-notice-run" },
   })
 })

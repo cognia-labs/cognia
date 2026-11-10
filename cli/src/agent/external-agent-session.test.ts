@@ -532,7 +532,7 @@ describe("createExternalAgentSession", () => {
       await session.send("send it", { gate })
       expect(mockAnswerWithOutboundPolicy).toHaveBeenCalledWith(
         request,
-        { unattended: false, annotateReview: false },
+        { unattended: false, annotateReview: false, executionRunId: "" },
         expect.any(Function)
       )
       expect(gate).toHaveBeenCalledWith(expect.objectContaining({ requiresPerCallApproval: true }))
@@ -540,7 +540,10 @@ describe("createExternalAgentSession", () => {
       for (let i = 0; i < 50 && mockRecordOutboundShadow.mock.calls.length === 0; i++) {
         await new Promise((resolve) => setTimeout(resolve, 1))
       }
-      expect(mockRecordOutboundShadow).toHaveBeenCalledWith(shadow, { unattended: false })
+      expect(mockRecordOutboundShadow).toHaveBeenCalledWith(shadow, {
+        unattended: false,
+        executionRunId: "",
+      })
     } finally {
       await session.close()
     }
