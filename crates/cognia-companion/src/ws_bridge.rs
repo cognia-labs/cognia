@@ -633,6 +633,13 @@ pub fn account_rss_bytes(account_id: &str) -> u64 { SOCKET_BRIDGE.read().get(acc
 pub fn account_activity(account_id: &str) -> Option<BrainActivity> {
     SOCKET_BRIDGE.read().get(account_id).and_then(|slot| slot.activity)
 }
+/// Ask a connected person-brain slot for an activity pong now. Operator
+/// slots are excluded; returns false if absent or the ping cannot be queued.
+pub fn request_account_activity(account_id: &str) -> bool {
+    let slots = SOCKET_BRIDGE.read();
+    let Some(slot) = slots.get(account_id).filter(|slot| slot.person.is_some()) else { return false; };
+    slot.transport.send_frame(&BridgeFrame::Ping { v: BRIDGE_PROTOCOL_VERSION, ts: now_ms() }).is_ok()
+}
 /// Every connected person brain's last activity report, `None` for one that
 /// has not reported since it connected.
 pub fn person_activities() -> Vec<Option<BrainActivity>> {
@@ -2759,6 +2766,43 @@ mod tests {
         assert_eq!(account_rss_bytes("pb_runs"), 5);
         test_support::clear_socket_for_testing();
         assert_eq!(account_activity("pb_runs"), None);
+    }
+
+    #[tokio::test]
+    async fn an_activity_request_pings_only_the_named_person_slot() {
+        let _guard = lock_slot().await;
+        test_support::clear_socket_for_testing();
+        let state = test_state();
+        let mut operator = test_support::install_socket_for_testing(&state);
+        let mut person = test_support::install_person_socket_for_testing(&state, "pb_probe");
+        let mut other = test_support::install_person_socket_for_testing(&state, "pb_other");
+        assert!(!request_account_activity("missing"));
+        assert!(!request_account_activity("local_acct_a"));
+        let before = now_ms();
+        assert!(request_account_activity("pb_probe"));
+        let ping = person.try_recv().expect("queued activity ping");
+        let frame: Value = serde_json::from_str(ping.to_text().unwrap()).unwrap();
+        assert_eq!(frame["type"], "ping");
+        assert_eq!(frame["v"], BRIDGE_PROTOCOL_VERSION);
+        assert!(frame["ts"].as_i64().is_some_and(|at| at >= before && at <= now_ms()));
+        assert!(operator.try_recv().is_err());
+        assert!(other.try_recv().is_err());
+        assert_eq!(account_activity("pb_probe"), None, "a ping alone is not a report");
+        let transport = SOCKET_BRIDGE.read().get("pb_probe").unwrap().transport.clone();
+        let pong = json!({
+            "v": BRIDGE_PROTOCOL_VERSION, "type": "pong", "ts": frame["ts"], "rssBytes": 0, "lastFlushAt": 0, "activeRuns": 0
+        }).to_string();
+        handle_brain_frame(&state, &pong, &transport, "pb_probe");
+        let report = account_activity("pb_probe").expect("activity response recorded");
+        assert_eq!(report.active_runs, 0);
+        assert!(report.reported_at_ms >= before);
+        assert_eq!(account_activity("pb_other"), None);
+        assert_eq!(brain_activity(), None);
+        drop(person);
+        assert!(!request_account_activity("pb_probe"), "a closed transport cannot queue a ping");
+        disconnect_account("pb_probe");
+        assert!(!request_account_activity("pb_probe"));
+        test_support::clear_socket_for_testing();
     }
 
     #[test]

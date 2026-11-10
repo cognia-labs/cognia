@@ -85,7 +85,7 @@ async fn wait_stopped(stopped: Option<watch::Receiver<bool>>) {
 struct PurgeMarker { flag: Arc<AtomicBool>, durable: bool }
 impl Drop for PurgeMarker { fn drop(&mut self) { if !self.durable { self.flag.store(false, Ordering::SeqCst); } } }
 /// What one locked pass of `acquire` decided.
-enum Admission { Ready(RequestGuard), Wait(watch::Receiver<bool>) }
+enum Admission { Ready(RequestGuard), Wait(watch::Receiver<bool>), Probe(Vec<(String, Arc<Usage>)>) }
 
 pub struct Fleet {
     template: BrainConfig,
@@ -115,11 +115,22 @@ fn standing_person(person: &PersonPartition) -> cognia_companion::host_surface_g
 /// How long a departure waits for interrupted work to report its end before
 /// it stops what is left.
 const DEPARTURE_SETTLE: Duration = Duration::from_secs(10);
+/// One admission's total wait for person brains to answer an activity ping.
+const ACTIVITY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Whether the account's brain says it is running something: its member agent
 /// turns hold execution-broker leases, and the count rides each heartbeat pong.
 /// A report gone stale reads as not running, so a hung brain is still reaped.
 fn reports_runs(account_id: &str, now: i64) -> bool {
     ws_bridge::account_activity(account_id).and_then(|report| report.fresh_runs(now)).is_some_and(|runs| runs > 0)
+}
+/// A zero count only rules out turns whose requests ended before the report.
+/// Protect unconfirmed requests for three heartbeats, not a hung brain forever.
+fn may_be_running(account_id: &str, usage: &Usage, now: i64) -> bool {
+    let report = ws_bridge::account_activity(account_id);
+    let last = usage.last_used_ms.load(Ordering::SeqCst);
+    report.and_then(|report| report.fresh_runs(now)).is_some_and(|runs| runs > 0)
+        || (report.is_none_or(|report| report.reported_at_ms <= last)
+            && now.saturating_sub(last) <= 3 * ws_bridge::BRAIN_HEARTBEAT.as_millis() as i64)
 }
 fn positive_env(name: &str, default: u64) -> Result<u64, String> {
     match std::env::var(name) {
@@ -262,9 +273,9 @@ impl Fleet {
             for entry in entries.values_mut() {
                 self.persist_usage(entry);
                 let now = now_ms();
-                if entry.task.is_some() && reports_runs(&entry.person.account_id, now) {
+                if entry.task.is_some() && may_be_running(&entry.person.account_id, &entry.usage, now) {
                     // Idle time counts from the end of the brain's last run.
-                    entry.usage.last_busy_ms.store(now, Ordering::SeqCst);
+                    if reports_runs(&entry.person.account_id, now) { entry.usage.last_busy_ms.store(now, Ordering::SeqCst); }
                     continue;
                 }
                 if entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
@@ -317,14 +328,18 @@ impl Fleet {
             if entries.values().filter(|entry| entry.occupies_slot()).count() >= self.maximum {
                 let now = now_ms();
                 let oldest = entries.iter().filter(|(key, entry)| entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
-                        && !reports_runs(key, now))
+                        && !may_be_running(key, &entry.usage, now))
                     .min_by_key(|(_, entry)| entry.usage.last_active_ms()).map(|(key, _)| key.clone());
                 // A brain that is already stopping frees its slot soon.
                 let stopped = match oldest {
                     Some(oldest) => self.stop_entry(entries.get_mut(&oldest).expect("selected entry")),
                     None => entries.values().find_map(Entry::pending_stop),
                 };
-                return stopped.map(Admission::Wait).ok_or("person_brain_capacity");
+                if let Some(stopped) = stopped { return Ok(Admission::Wait(stopped)); }
+                let unconfirmed: Vec<_> = entries.iter().filter(|(key, entry)| entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
+                        && may_be_running(key, &entry.usage, now) && !reports_runs(key, now))
+                    .map(|(key, entry)| (key.clone(), entry.usage.clone())).collect();
+                return if unconfirmed.is_empty() { Err("person_brain_capacity") } else { Ok(Admission::Probe(unconfirmed)) };
             }
             let root = self.template.data_dir.join("persons").join(&person.account_id);
             std::fs::create_dir_all(&root).map_err(|_| "person_storage_failed")?;
@@ -361,16 +376,30 @@ impl PersonBrainFleet for Fleet {
         // A brain runs only for a member (ADR-0253 §3); its own requests are
         // then exempt, because a negative change stops it.
         cognia_companion::standing::authority().admit(&standing_person(person)).await?;
+        let mut probed = false;
         let guard = loop {
-            let stopped = {
+            let admission = {
                 let mut entries = self.entries.lock().await;
                 if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_stopping"); }
-                match self.admit_locked(&mut entries, person)? {
-                    Admission::Ready(guard) => break guard,
-                    Admission::Wait(stopped) => stopped,
-                }
+                self.admit_locked(&mut entries, person)?
             };
-            wait_stopped(Some(stopped)).await;
+            match admission {
+                Admission::Ready(guard) => break guard,
+                Admission::Wait(stopped) => wait_stopped(Some(stopped)).await,
+                Admission::Probe(accounts) => {
+                    if probed { return Err("person_brain_capacity"); }
+                    probed = true;
+                    let deadline = tokio::time::Instant::now() + ACTIVITY_PROBE_TIMEOUT;
+                    for (account, _) in &accounts { ws_bridge::request_account_activity(account); }
+                    loop {
+                        if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_stopping"); }
+                        if accounts.iter().all(|(account, usage)| ws_bridge::account_activity(account)
+                            .is_some_and(|report| report.reported_at_ms > usage.last_used_ms.load(Ordering::SeqCst))) { break; }
+                        if tokio::time::Instant::now() >= deadline { break; }
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                }
+            }
         };
         let deadline = tokio::time::Instant::now() + self.template.ready_timeout;
         loop {
@@ -754,6 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn p5_eviction_and_server_restart_revoke_child_tokens_but_keep_data_generation() {
+        use cognia_companion::ws_bridge::test_support::report_account_activity_for_testing;
         let _slot = lock_slot().await; clear_socket_for_testing();
         let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 1);
         let a = person("generation-a"); let b = person("generation-b");
@@ -762,13 +792,18 @@ mod tests {
         let scope = request.receipt_scope();
         let authority = fleet.bridge_authority(&a.account_id).unwrap();
         let _child = authority.begin_child().unwrap();
+        let _socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
         let old = authority.current().unwrap();
         assert!(fleet.accepts_bridge(&a.account_id, &old));
         drop(request);
+        fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_used_ms.store(now_ms() - 1, Ordering::SeqCst);
+        report_account_activity_for_testing(&a.account_id, 0, now_ms());
         let _b = install_person_socket_for_testing(&fleet.state, &b.account_id);
         drop(fleet.acquire(&b).await.unwrap()); // capacity eviction
         assert!(!fleet.accepts_bridge(&a.account_id, &old));
         assert!(!authority.accepts(&old));
+        fleet.entries.lock().await.get(&b.account_id).unwrap().usage.last_used_ms.store(now_ms() - 1, Ordering::SeqCst);
+        report_account_activity_for_testing(&b.account_id, 0, now_ms());
         let _socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
         let request = fleet.acquire(&a).await.unwrap();
         assert_eq!(request.receipt_scope(), scope);
@@ -787,6 +822,7 @@ mod tests {
 
     #[tokio::test]
     async fn p5_fleet_capacity_never_evicts_in_flight_and_uses_idle_lru() {
+        use cognia_companion::ws_bridge::test_support::report_account_activity_for_testing;
         let _slot = lock_slot().await; clear_socket_for_testing();
         let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 1);
         let a = person("capacity-a"); let b = person("capacity-b");
@@ -799,6 +835,8 @@ mod tests {
         fleet.reap().await;
         assert!(ws_bridge::account_connected(&a.account_id));
         drop(a_request);
+        fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_used_ms.store(now_ms() - 1, Ordering::SeqCst);
+        report_account_activity_for_testing(&a.account_id, 0, now_ms());
         let _b_socket = install_person_socket_for_testing(&fleet.state, &b.account_id);
         let b_request = fleet.acquire(&b).await.unwrap();
         assert!(!ws_bridge::account_connected(&a.account_id));
@@ -836,6 +874,109 @@ mod tests {
         let request = fleet.acquire(&b).await.unwrap();
         assert!(!ws_bridge::account_connected(&a.account_id));
         assert!(ws_bridge::account_connected(&b.account_id));
+        drop(request); fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fleet_unconfirmed_activity_obeys_request_order_and_freshness() {
+        use cognia_companion::ws_bridge::test_support::report_account_activity_for_testing;
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let state = crate::brain::tests::test_state(); let a = person("activity-window-a");
+        let _socket = install_person_socket_for_testing(&state, &a.account_id);
+        let entry = Fleet::entry(a.clone(), 1_000);
+        let window = 3 * ws_bridge::BRAIN_HEARTBEAT.as_millis() as i64;
+        assert!(may_be_running(&a.account_id, &entry.usage, 1_000));
+        assert!(may_be_running(&a.account_id, &entry.usage, 1_000 + window));
+        assert!(!may_be_running(&a.account_id, &entry.usage, 1_001 + window));
+        for at in [999, 1_000] {
+            report_account_activity_for_testing(&a.account_id, 0, at);
+            assert!(may_be_running(&a.account_id, &entry.usage, 1_001));
+            assert!(!may_be_running(&a.account_id, &entry.usage, 1_001 + window));
+        }
+        report_account_activity_for_testing(&a.account_id, 0, 1_001);
+        assert!(!may_be_running(&a.account_id, &entry.usage, 1_001));
+        report_account_activity_for_testing(&a.account_id, 1, 1_001 + window);
+        assert!(may_be_running(&a.account_id, &entry.usage, 1_001 + window));
+        assert!(!may_be_running(&a.account_id, &entry.usage, 1_002 + 2 * window));
+        clear_socket_for_testing();
+    }
+
+    #[tokio::test]
+    async fn fleet_protects_unconfirmed_turns_until_a_bounded_activity_probe() {
+        use cognia_companion::ws_bridge::test_support::report_account_activity_for_testing;
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let mut fleet = fixture(temp.path(), 1);
+        Arc::get_mut(&mut fleet).unwrap().idle = Duration::from_millis(1);
+        let a = person("unconfirmed-a"); let b = person("unconfirmed-b");
+        let mut socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
+        drop(fleet.acquire(&a).await.unwrap());
+        let last = fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_used_ms.load(Ordering::SeqCst);
+        report_account_activity_for_testing(&a.account_id, 0, last - 1);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        fleet.reap().await;
+        assert!(ws_bridge::account_connected(&a.account_id), "the reaper trusted a report from before the request ended");
+        assert_eq!(fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_busy_ms.load(Ordering::SeqCst), 0);
+        let started = tokio::time::Instant::now();
+        let attempt = { let fleet = fleet.clone(); tokio::spawn(async move { fleet.acquire(&b).await.map(drop) }) };
+        let ping = tokio::time::timeout(Duration::from_secs(1), socket.recv()).await.unwrap().unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(ping.to_text().unwrap()).unwrap()["type"], "ping");
+        assert!(fleet.entries.try_lock().is_ok(), "activity probing held the fleet lock");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(3), attempt).await.unwrap().unwrap(), Err("person_brain_capacity"));
+        assert!(started.elapsed() >= ACTIVITY_PROBE_TIMEOUT, "the activity probe did not wait for a report");
+        assert!(socket.try_recv().is_err(), "an admission probed more than once");
+        assert!(ws_bridge::account_connected(&a.account_id));
+        fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fleet_activity_probe_allows_eviction_after_a_later_idle_report() {
+        use cognia_companion::ws_bridge::test_support::report_account_activity_for_testing;
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 1);
+        let a = person("probe-a"); let b = person("probe-b");
+        let mut socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
+        drop(fleet.acquire(&a).await.unwrap());
+        let last = fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_used_ms.load(Ordering::SeqCst);
+        report_account_activity_for_testing(&a.account_id, 0, last);
+        let _b_socket = install_person_socket_for_testing(&fleet.state, &b.account_id);
+        let report = { let account = a.account_id.clone(); tokio::spawn(async move {
+            let ping = socket.recv().await.unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(ping.to_text().unwrap()).unwrap()["type"], "ping");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            report_account_activity_for_testing(&account, 0, now_ms());
+        }) };
+        let request = tokio::time::timeout(Duration::from_secs(1), fleet.acquire(&b)).await.unwrap().unwrap();
+        report.await.unwrap();
+        assert!(!ws_bridge::account_connected(&a.account_id));
+        assert!(ws_bridge::account_connected(&b.account_id));
+        drop(request); fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fleet_activity_probe_observes_shutdown() {
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 1);
+        let a = person("probe-stop-a"); let b = person("probe-stop-b");
+        let mut socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
+        drop(fleet.acquire(&a).await.unwrap());
+        let attempt = { let fleet = fleet.clone(); tokio::spawn(async move { fleet.acquire(&b).await.map(drop) }) };
+        tokio::time::timeout(Duration::from_secs(1), socket.recv()).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), fleet.shutdown()).await.unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), attempt).await.unwrap().unwrap(), Err("person_brain_stopping"));
+    }
+
+    #[tokio::test]
+    async fn fleet_evicts_a_brain_silent_since_an_old_request() {
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 1);
+        let a = person("silent-a"); let b = person("silent-b");
+        let _a_socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
+        drop(fleet.acquire(&a).await.unwrap());
+        let last = now_ms() - 3 * ws_bridge::BRAIN_HEARTBEAT.as_millis() as i64 - 1;
+        fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_used_ms.store(last, Ordering::SeqCst);
+        let _b_socket = install_person_socket_for_testing(&fleet.state, &b.account_id);
+        let request = tokio::time::timeout(Duration::from_secs(1), fleet.acquire(&b)).await.unwrap().unwrap();
+        assert!(!ws_bridge::account_connected(&a.account_id));
         drop(request); fleet.shutdown().await;
     }
 
@@ -916,6 +1057,7 @@ mod tests {
 
     #[tokio::test]
     async fn p5_fleet_chooses_oldest_idle_partition_and_coalesces_same_person() {
+        use cognia_companion::ws_bridge::test_support::report_account_activity_for_testing;
         let _slot = lock_slot().await; clear_socket_for_testing();
         let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
         let a = person("lru-a"); let b = person("lru-b"); let c = person("lru-c");
@@ -928,6 +1070,7 @@ mod tests {
         let _b = install_person_socket_for_testing(&fleet.state, &b.account_id);
         drop(fleet.acquire(&b).await.unwrap());
         fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_used_ms.store(now_ms() - 100, Ordering::SeqCst);
+        report_account_activity_for_testing(&a.account_id, 0, now_ms());
         let _c = install_person_socket_for_testing(&fleet.state, &c.account_id);
         let request = fleet.acquire(&c).await.unwrap();
         assert!(!ws_bridge::account_connected(&a.account_id));
