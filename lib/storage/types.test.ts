@@ -121,3 +121,18 @@ describe("lib/storage/types", () => {
     expect(proj.recovery).toBeNull()
   })
 })
+
+it("supports an explicitly unknown storage health status", () => {
+  const health: StorageHealth = {
+    status: "unknown",
+    usagePercent: 0,
+    issues: [],
+    recommendations: [],
+  }
+  expect(health.status).toBe("unknown")
+})
+
+it("names Host-managed cleanup availability explicitly", () => {
+  const availability: import("./types").StorageCleanupAvailability = "host-managed"
+  expect(availability).toBe("host-managed")
+})

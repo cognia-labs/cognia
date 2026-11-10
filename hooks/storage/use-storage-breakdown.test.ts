@@ -183,3 +183,33 @@ describe("useStorageBreakdown", () => {
     }
   })
 })
+
+it("skips periodic table scans while the page is hidden", async () => {
+  const stats = await StorageManager.getStats()
+  const health = await StorageManager.getHealth(stats)
+  const read = jest.spyOn(StorageManager, "getStats").mockResolvedValue(stats)
+  const healthSpy = jest.spyOn(StorageManager, "getHealth").mockResolvedValue(health)
+  const visibility = jest.spyOn(document, "visibilityState", "get").mockReturnValue("hidden")
+  jest.useFakeTimers()
+  const { result, unmount } = renderHook(() => useStorageBreakdown({ refreshInterval: 1000 }))
+  try {
+    await act(async () => {})
+    expect(result.current.isLoading).toBe(false)
+    read.mockClear()
+    await act(async () => {
+      jest.advanceTimersByTime(3000)
+    })
+    expect(read).not.toHaveBeenCalled()
+    visibility.mockReturnValue("visible")
+    await act(async () => {
+      jest.advanceTimersByTime(1000)
+    })
+    expect(read).toHaveBeenCalledTimes(1)
+  } finally {
+    unmount()
+    jest.useRealTimers()
+    read.mockRestore()
+    healthSpy.mockRestore()
+    visibility.mockRestore()
+  }
+})

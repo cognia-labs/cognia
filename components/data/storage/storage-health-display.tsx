@@ -10,6 +10,7 @@ import {
   CheckCircle2Icon,
   ChevronRightIcon,
   LightbulbIcon,
+  HelpCircleIcon,
   XCircleIcon,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -34,6 +35,12 @@ export function StorageHealthDisplay({
   if (!health) return null
 
   const statusConfig = {
+    unknown: {
+      icon: HelpCircleIcon,
+      color: "text-muted-foreground",
+      bgColor: "bg-muted",
+      label: t("unknown"),
+    },
     healthy: {
       icon: CheckCircle2Icon,
       color: "text-green-500",
@@ -66,9 +73,11 @@ export function StorageHealthDisplay({
           </div>
           <span className="text-sm font-medium">{config.label}</span>
         </div>
-        <Badge variant="outline" className="text-[10px]">
-          {health.usagePercent.toFixed(1)}% {t("used")}
-        </Badge>
+        {health.status !== "unknown" && (
+          <Badge variant="outline" className="text-[10px]">
+            {health.usagePercent.toFixed(1)}% {t("used")}
+          </Badge>
+        )}
       </div>
 
       {health.issues.length > 0 && (

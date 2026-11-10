@@ -100,3 +100,14 @@ it("wraps long diagnostic text and recommendation descriptions", () => {
   expect(container.firstChild).toHaveClass("[overflow-wrap:anywhere]")
   expect(screen.getByText(text)).toBeInTheDocument()
 })
+
+it("renders unknown quota without a healthy message or a fabricated percentage", () => {
+  Object.assign(
+    jest.requireActual("@/i18n/messages/en.json").settings.data,
+    jest.requireActual("@/i18n/messages/en/settings/data.json")
+  )
+  renderHealth({ status: "unknown", usagePercent: 0, issues: [], recommendations: [] })
+  expect(screen.getByText("Unknown")).toBeInTheDocument()
+  expect(screen.queryByText("Healthy")).toBeNull()
+  expect(screen.queryByText(/0.0%/)).toBeNull()
+})

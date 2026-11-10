@@ -16,4 +16,6 @@ export {
   previewCleanup,
   quickCleanup,
   selectableCategories,
+  getCleanupTargetKey,
+  getCleanupCategoryAvailability,
 } from "./cleanup"

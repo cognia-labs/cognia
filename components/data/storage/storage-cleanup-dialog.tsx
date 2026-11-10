@@ -6,7 +6,7 @@
 // is filtered through `selectableCategories` from `lib/storage` so users only
 // see buckets that are safe to clear.
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   AlertCircleIcon,
@@ -33,7 +33,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { useStorageCleanup } from "@/hooks/storage"
-import { CATEGORY_INFO, defaultDisplayName, selectableCategories } from "@/lib/storage"
+import {
+  selectableCategories,
+  getCleanupTargetKey,
+  getCleanupCategoryAvailability,
+} from "@/lib/storage"
 import type { CleanupResult, StorageCategory } from "@/lib/storage"
 import { createLogger } from "@cognia/logging"
 
@@ -51,24 +55,49 @@ export function StorageCleanupDialog({
   onCleanupComplete,
 }: StorageCleanupDialogProps) {
   const t = useTranslations("settings.data.cleanup")
+  const categoryLabel = useTranslations("settings.data.breakdown.categories")
+  const request = useRef(0)
+  const [previewCategories, setPreviewCategories] = useState<StorageCategory[]>([])
+  const [previewTarget, setPreviewTarget] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<StorageCategory[]>([])
   const [previewResult, setPreviewResult] = useState<CleanupResult | null>(null)
   const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null)
   const [step, setStep] = useState<"select" | "preview" | "result">("select")
 
-  const { cleanup, preview, quick, deep, isRunning } = useStorageCleanup()
+  const { cleanup, preview, quick, deep, targetKey, isRunning } = useStorageCleanup()
+  const invalidPreview =
+    previewTarget !== null && (!targetKey || !previewTarget || previewTarget !== targetKey)
+  const currentStep = invalidPreview && step === "preview" ? "select" : step
+  const currentSelected = invalidPreview ? [] : selected
 
   const categories = selectableCategories()
 
-  const toggle = (cat: StorageCategory) =>
-    setSelected((prev) => (prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]))
+  const toggle = (cat: StorageCategory) => {
+    setSelected((prev) => {
+      const active = invalidPreview ? [] : prev
+      return active.includes(cat) ? active.filter((c) => c !== cat) : [...active, cat]
+    })
+    if (invalidPreview) {
+      setPreviewResult(null)
+      setPreviewTarget(null)
+      setStep("select")
+    }
+  }
 
   const onPreview = async () => {
-    log.info("cleanup-start", { mode: "preview", categories: selected })
+    if (currentSelected.length === 0 || isRunning) return
+    const snapshot = [...currentSelected]
+    const snapshotTarget = getCleanupTargetKey()
+    if (!snapshotTarget) return
+    const id = ++request.current
+    setPreviewCategories(snapshot)
+    setPreviewTarget(snapshotTarget)
+    log.info("cleanup-start", { mode: "preview", categories: snapshot })
     try {
       const result = await preview({
-        categories: selected.length > 0 ? selected : undefined,
+        categories: snapshot,
+        targetKey: snapshotTarget,
       })
       log.info("cleanup-done", {
         mode: "preview",
@@ -76,19 +105,43 @@ export function StorageCleanupDialog({
         deletedItems: result.deletedItems,
         errors: result.errors,
       })
-      setPreviewResult(result)
-      setStep("preview")
+      if (id !== request.current || snapshotTarget !== getCleanupTargetKey()) return
+      if (result.errors.length > 0) {
+        setCleanupResult(result)
+        setStep("result")
+      } else {
+        setPreviewResult(result)
+        setStep("preview")
+      }
     } catch (error) {
       log.error("cleanup-failed", { mode: "preview", error })
-      throw error
+      if (id === request.current) {
+        setCleanupResult({ deletedItems: 0, freedSpace: 0, details: [], errors: [String(error)] })
+        setStep("result")
+      }
     }
   }
 
   const onCleanup = async () => {
+    const currentTarget = getCleanupTargetKey()
+    if (
+      !currentTarget ||
+      (step === "preview" && (!previewTarget || previewTarget !== currentTarget))
+    ) {
+      setPreviewResult(null)
+      setPreviewTarget(null)
+      setSelected([])
+      setStep("select")
+      return
+    }
+    const snapshot = [...(step === "preview" ? previewCategories : currentSelected)]
+    if (snapshot.length === 0 || isRunning) return
+    const id = ++request.current
     log.info("cleanup-start", { mode: "custom", categories: selected })
     try {
       const result = await cleanup({
-        categories: selected.length > 0 ? selected : undefined,
+        categories: snapshot,
+        targetKey: step === "preview" ? previewTarget! : currentTarget,
       })
       log.info("cleanup-done", {
         mode: "custom",
@@ -96,12 +149,14 @@ export function StorageCleanupDialog({
         deletedItems: result.deletedItems,
         errors: result.errors,
       })
+      if (id !== request.current) return
       setCleanupResult(result)
       setStep("result")
       onCleanupComplete?.()
     } catch (error) {
       log.error("cleanup-failed", { mode: "custom", error })
-      throw error
+      setCleanupResult({ deletedItems: 0, freedSpace: 0, details: [], errors: [String(error)] })
+      setStep("result")
     }
   }
 
@@ -120,7 +175,8 @@ export function StorageCleanupDialog({
       onCleanupComplete?.()
     } catch (error) {
       log.error("cleanup-failed", { mode: "quick", error })
-      throw error
+      setCleanupResult({ deletedItems: 0, freedSpace: 0, details: [], errors: [String(error)] })
+      setStep("result")
     }
   }
 
@@ -139,19 +195,20 @@ export function StorageCleanupDialog({
       onCleanupComplete?.()
     } catch (error) {
       log.error("cleanup-failed", { mode: "deep", error })
-      throw error
+      setCleanupResult({ deletedItems: 0, freedSpace: 0, details: [], errors: [String(error)] })
+      setStep("result")
     }
   }
 
   const onClose = () => {
     setOpen(false)
-    // Reset on close so the next open starts at "select".
-    setTimeout(() => {
-      setStep("select")
-      setPreviewResult(null)
-      setCleanupResult(null)
-      setSelected([])
-    }, 200)
+    request.current += 1
+    setStep("select")
+    setPreviewResult(null)
+    setCleanupResult(null)
+    setPreviewCategories([])
+    setPreviewTarget(null)
+    setSelected([])
   }
 
   return (
@@ -170,18 +227,18 @@ export function StorageCleanupDialog({
           <DialogDescription>{t("desc")}</DialogDescription>
         </DialogHeader>
 
-        {step === "select" && (
+        {currentStep === "select" && (
           <Tabs defaultValue="quick" className="w-full">
             <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="quick" className="text-xs">
+              <TabsTrigger value="quick" disabled={isRunning} className="text-xs">
                 <ZapIcon className="mr-1 size-3" />
                 {t("tabs.quick")}
               </TabsTrigger>
-              <TabsTrigger value="custom" className="text-xs">
+              <TabsTrigger value="custom" disabled={isRunning} className="text-xs">
                 <SparklesIcon className="mr-1 size-3" />
                 {t("tabs.custom")}
               </TabsTrigger>
-              <TabsTrigger value="deep" className="text-xs">
+              <TabsTrigger value="deep" disabled={isRunning} className="text-xs">
                 <Trash2Icon className="mr-1 size-3" />
                 {t("tabs.deep")}
               </TabsTrigger>
@@ -203,31 +260,45 @@ export function StorageCleanupDialog({
               <p className="text-xs text-muted-foreground">{t("customDesc")}</p>
               <ScrollArea className="h-48 rounded-md border p-2">
                 <div className="space-y-2">
-                  {categories.map((category) => (
-                    <div key={category} className="flex items-center space-x-2">
-                      <Checkbox
-                        id={category}
-                        checked={selected.includes(category)}
-                        onCheckedChange={() => toggle(category)}
-                      />
-                      <Label htmlFor={category} className="cursor-pointer text-xs font-normal">
-                        {CATEGORY_INFO[category]?.defaultName ?? defaultDisplayName(category)}
-                      </Label>
-                    </div>
-                  ))}
+                  {categories.map((category) => {
+                    const availability = getCleanupCategoryAvailability(category)
+                    const managed = availability === "host-managed"
+                    return (
+                      <div key={category} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={category}
+                          checked={currentSelected.includes(category)}
+                          disabled={isRunning || managed || availability === "protected"}
+                          onCheckedChange={() => toggle(category)}
+                        />
+                        <Label htmlFor={category} className="cursor-pointer text-xs font-normal">
+                          {categoryLabel(category)}
+                          {(managed || availability === "local-only") && (
+                            <span className="block text-muted-foreground">
+                              {t(managed ? "hostManaged" : "hostManagedLocalOnly")}
+                            </span>
+                          )}
+                        </Label>
+                      </div>
+                    )
+                  })}
                 </div>
               </ScrollArea>
               <div className="flex gap-2">
                 <Button
                   variant="outline"
                   onClick={() => void onPreview()}
-                  disabled={isRunning}
+                  disabled={isRunning || currentSelected.length === 0}
                   className="flex-1"
                 >
                   <EyeIcon className="mr-2 size-4" />
                   {t("preview")}
                 </Button>
-                <Button onClick={() => void onCleanup()} disabled={isRunning} className="flex-1">
+                <Button
+                  onClick={() => void onCleanup()}
+                  disabled={isRunning || currentSelected.length === 0}
+                  className="flex-1"
+                >
                   {isRunning ? (
                     <Loader2Icon className="mr-2 size-4 animate-spin" />
                   ) : (
@@ -261,7 +332,7 @@ export function StorageCleanupDialog({
           </Tabs>
         )}
 
-        {step === "preview" && previewResult && (
+        {currentStep === "preview" && previewResult && (
           <div className="space-y-3">
             <div className="text-center">
               <p className="text-2xl font-bold">{formatBytes(previewResult.freedSpace)}</p>
@@ -273,7 +344,7 @@ export function StorageCleanupDialog({
             <ScrollArea className="h-32 rounded-md border p-2">
               {previewResult.details.map((detail) => (
                 <div key={detail.category} className="flex justify-between py-1 text-xs">
-                  <span>{defaultDisplayName(detail.category)}</span>
+                  <span>{categoryLabel(detail.category)}</span>
                   <Badge variant="outline" className="text-[10px]">
                     {detail.deletedItems}
                   </Badge>
@@ -281,7 +352,15 @@ export function StorageCleanupDialog({
               ))}
             </ScrollArea>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setStep("select")}>
+              <Button
+                variant="outline"
+                disabled={isRunning}
+                onClick={() => {
+                  request.current += 1
+                  setPreviewResult(null)
+                  setStep("select")
+                }}
+              >
                 {t("back")}
               </Button>
               <Button onClick={() => void onCleanup()} disabled={isRunning}>
@@ -299,8 +378,19 @@ export function StorageCleanupDialog({
         {step === "result" && cleanupResult && (
           <div className="space-y-3">
             <div className="text-center">
-              <CheckCircle2Icon className="mx-auto mb-2 size-12 text-green-500" />
-              <p className="text-lg font-bold">{t("complete")}</p>
+              {cleanupResult.errors.length > 0 ? (
+                <>
+                  <AlertCircleIcon className="mx-auto mb-2 size-12 text-destructive" />
+                  <p className="text-lg font-bold" role="alert">
+                    {t("failed")}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2Icon className="mx-auto mb-2 size-12 text-green-500" />
+                  <p className="text-lg font-bold">{t("complete")}</p>
+                </>
+              )}
             </div>
             <div className="space-y-2 rounded-md border p-3">
               <div className="flex justify-between text-sm">

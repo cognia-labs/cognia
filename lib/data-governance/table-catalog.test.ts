@@ -7,6 +7,8 @@ import {
   COMPANION_SYNC_DELETE_STRATEGY,
   COMPANION_SYNC_PROTOCOL_TABLE_NAMES,
   COMPANION_SYNC_TABLES,
+  SYNC_TABLE_SOURCES,
+  companionSyncTablesForSources,
   CORE_TABLE_NAMES,
   DATA_TABLE_CATALOG,
   PORTABLE_BACKUP_BINDINGS,
@@ -17,6 +19,35 @@ import {
   tableNamesForCategory,
 } from "./table-catalog"
 import CONTENT_PROTECTION_BASELINE from "./content-protection-baseline.json"
+
+describe("companion sync source names", () => {
+  it("maps every protocol table to exactly one real Dexie source", () => {
+    expect(Object.keys(SYNC_TABLE_SOURCES).sort()).toEqual(
+      [...COMPANION_SYNC_PROTOCOL_TABLE_NAMES].sort()
+    )
+    expect(new Set(Object.values(SYNC_TABLE_SOURCES)).size).toBe(
+      COMPANION_SYNC_PROTOCOL_TABLE_NAMES.length
+    )
+    for (const source of Object.values(SYNC_TABLE_SOURCES))
+      expect(CORE_TABLE_NAMES).toContain(source)
+  })
+
+  it("resolves wire aliases and projections without inventing protocol tables", () => {
+    expect(
+      companionSyncTablesForSources([
+        "chatGoals",
+        "chatGoalEvents",
+        "agentPlans",
+        "agentPlanEvents",
+        "messages",
+        "chatGoals",
+      ])
+    ).toEqual(["messages", "goals", "goalEvents", "plans"])
+    // Plan events have no standalone pull in the current protocol.
+    expect(companionSyncTablesForSources(["agentPlanEvents", "unknown", "mcpServers"])).toEqual([])
+    expect(companionSyncTablesForSources(["mcpServerSummaries"])).toEqual(["mcpServers"])
+  })
+})
 
 describe("DataTableCatalog", () => {
   it("keeps shared execution credentials encrypted and device-local", () => {

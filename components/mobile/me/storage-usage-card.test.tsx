@@ -94,6 +94,16 @@ describe("<StorageUsageCard />", () => {
     expect(screen.getByTestId("storage-usage-segment-chat").style.width).toBe("60%")
   })
 
+  it("labels an unknown quota as unknown rather than healthy", () => {
+    renderCard({
+      usage: { totalBytes: null, quotaBytes: null, backupBytes: 0, backups: [] },
+      health: { status: "unknown", usagePercent: 0, issues: [], recommendations: [] },
+    })
+    const badge = screen.getByTestId("storage-health-badge")
+    expect(badge).toHaveTextContent("Unknown")
+    expect(badge).not.toHaveTextContent("Healthy")
+  })
+
   it("explains an empty device instead of drawing an empty legend", () => {
     renderCard({ stats: { ...makeStats(), byCategory: [] } })
     expect(screen.queryByTestId("storage-usage-legend")).toBeNull()

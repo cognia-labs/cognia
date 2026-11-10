@@ -127,6 +127,53 @@ import {
 describe("workspace port lease wire contracts", () => {
   beforeEach(() => call.mockReset())
 
+  it("acquires and releases desktop-session leases through the same selected Host transport", async () => {
+    const selected = { kind: "remote" as const, hostId: "host-selected" }
+    const remoteCall = jest.fn(async (command: string) =>
+      command === "host_admin_lease_issue" ? { token: "release-approval" } : undefined
+    )
+    const capture = jest.mocked(captureTaskWorkspaceOrigin)
+    const open = jest.mocked(openTaskWorkspaceOrigin)
+    const originalCapture = capture.getMockImplementation()!
+    const originalOpen = open.getMockImplementation()!
+    capture.mockReturnValue(selected)
+    open.mockImplementation(async (origin) => ({
+      origin,
+      transport: { call: remoteCall } as never,
+      assertCurrent() {},
+      close() {},
+    }))
+    const runAction = jest.requireActual("./user-action").runWorkspaceUserAction
+    const subject = { kind: "desktop-session" as const, key: "selected-session" }
+    try {
+      await runAction("task_workspace_port_lease_subject_ensure", () =>
+        workspaceClient.ensureSubjectPortLease({ ...subject, root: "/managed/session" })
+      )
+      await runAction("task_workspace_port_lease_subject_release", () =>
+        workspaceClient.releaseSubjectPortLeases(subject)
+      )
+      expect(call).not.toHaveBeenCalled()
+      expect(remoteCall.mock.calls).toEqual([
+        ["task_workspace_port_lease_subject_ensure", { ...subject, root: "/managed/session" }],
+        [
+          "host_admin_lease_issue",
+          {
+            operations: ["task_workspace_port_lease_subject_release"],
+            ttlSeconds: 120,
+          },
+        ],
+        [
+          "task_workspace_port_lease_subject_release",
+          { ...subject, adminLease: "release-approval" },
+        ],
+      ])
+      expect(open.mock.calls.every(([origin]) => origin === selected)).toBe(true)
+    } finally {
+      capture.mockImplementation(originalCapture)
+      open.mockImplementation(originalOpen)
+    }
+  })
+
   const cases: Array<[string, () => Promise<unknown>, Record<string, unknown>?]> = [
     ["get", () => workspaceClient.getWorkspacePortLease("ws"), { workspaceId: "ws" }],
     [

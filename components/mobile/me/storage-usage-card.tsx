@@ -38,6 +38,7 @@ import {
 import { cn } from "@/lib/utils"
 
 export const STORAGE_HEALTH_BADGE: Record<StorageHealthStatus, string> = {
+  unknown: "border-transparent bg-muted text-muted-foreground",
   healthy: "border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   warning: "border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400",
   critical: "border-transparent bg-destructive/15 text-destructive",

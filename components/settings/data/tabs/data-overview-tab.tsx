@@ -45,7 +45,18 @@ import { StorageBreakdown } from "@/components/data/storage/storage-breakdown"
 import { StorageHealthDisplay } from "@/components/data/storage/storage-health-display"
 import { LocalPersistenceVisibilityPanel } from "@/components/data/storage/local-persistence-visibility-panel"
 import { useStorageBreakdown, useStorageCleanup } from "@/hooks/storage"
-import type { StorageCategory } from "@/lib/storage"
+import { getCleanupTargetKey, getCleanupCategoryAvailability } from "@/lib/storage"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import type { CleanupResult, StorageCategory } from "@/lib/storage"
 import type { RetentionSnapshot } from "@/lib/storage/retention"
 
 const log = createLogger("settings.data.overview")
@@ -58,7 +69,12 @@ export function DataOverviewTab() {
   const { stats, health, isLoading, refresh, formatBytes } = useStorageBreakdown({
     refreshInterval: 30_000,
   })
-  const { clearCategory, isRunning: isClearing } = useStorageCleanup()
+  const { cleanup, preview, targetKey, isRunning: isClearing } = useStorageCleanup()
+  const [pendingClear, setPendingClear] = useState<{
+    category: StorageCategory
+    preview: CleanupResult
+    targetKey: string
+  } | null>(null)
   const [retention, setRetention] = useState<RetentionSnapshot | null>(null)
   useEffect(() => {
     let active = true
@@ -76,21 +92,78 @@ export function DataOverviewTab() {
 
   const handleClearCategory = useCallback(
     async (category: StorageCategory) => {
+      const availability = getCleanupCategoryAvailability(category)
+      if (availability !== "cleanable" && availability !== "local-only") return
+      const previewTarget = getCleanupTargetKey()
+      if (!previewTarget) {
+        toast.error(t("cleanup.targetChanged"))
+        return
+      }
       try {
-        const deleted = await clearCategory(category)
-        log.info("clear_category", { category, deleted })
-        toast.success(t("breakdown.cleared", { count: deleted }))
-        await refresh()
+        const result = await preview({ categories: [category], targetKey: previewTarget })
+        if (getCleanupTargetKey() !== previewTarget) return
+        if (result.errors.length) {
+          toast.error(t("cleanup.failed"))
+          return
+        }
+        setPendingClear({ category, preview: result, targetKey: previewTarget })
       } catch (err) {
-        log.error("clear_category_failed", err, { category })
-        toast.error(err instanceof Error ? err.message : String(err))
+        log.error("clear_category_preview_failed", err, { category })
+        toast.error(t("cleanup.failed"))
       }
     },
-    [clearCategory, refresh, t]
+    [preview, t]
   )
+
+  const confirmClearCategory = async () => {
+    if (!pendingClear) return
+    const { category } = pendingClear
+    setPendingClear(null)
+    const currentTarget = getCleanupTargetKey()
+    if (!currentTarget || !pendingClear.targetKey || pendingClear.targetKey !== currentTarget) {
+      toast.error(t("cleanup.targetChanged"))
+      return
+    }
+    try {
+      const result = await cleanup({ categories: [category], targetKey: pendingClear.targetKey })
+      if (result.errors.length > 0) {
+        toast.error(t("cleanup.failed"))
+      } else {
+        toast.success(t("breakdown.cleared", { count: result.deletedItems }))
+      }
+      await refresh()
+    } catch (err) {
+      log.error("clear_category_failed", err, { category })
+      toast.error(t("cleanup.failed"))
+    }
+  }
 
   return (
     <div className="space-y-6">
+      <AlertDialog
+        open={Boolean(targetKey) && pendingClear !== null && pendingClear.targetKey === targetKey}
+        onOpenChange={(open) => {
+          if (!open && !isClearing) setPendingClear(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("breakdown.confirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("breakdown.confirmDescription", {
+                category: pendingClear ? t(`breakdown.categories.${pendingClear.category}`) : "",
+                count: pendingClear?.preview.deletedItems ?? 0,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isClearing}>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={isClearing} onClick={() => void confirmClearCategory()}>
+              {t("cleanup.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <ReminderBanner />
       <StorageUsageDisplay />
 

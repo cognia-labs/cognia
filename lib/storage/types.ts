@@ -64,7 +64,7 @@ export interface StorageStats {
   generatedAt: number
 }
 
-export type StorageHealthStatus = "healthy" | "warning" | "critical"
+export type StorageHealthStatus = "unknown" | "healthy" | "warning" | "critical"
 
 export interface StorageIssue {
   severity: "low" | "medium" | "high"
@@ -109,11 +109,20 @@ export interface CleanupResult {
 }
 
 export interface CleanupOptions {
-  /** Restrict cleanup to these categories. Empty / undefined = all. */
+  /** Preview target binding. A different runtime scope or DB activation refuses deletion. */
+  targetKey?: string
+  /** Restrict cleanup to these categories. Undefined = defaults; empty = none. */
   categories?: StorageCategory[]
   /** Only delete rows older than this epoch ms. */
   olderThan?: number
 }
+
+/**
+ * Paired mirrors are Host-authoritative: synced source tables cannot be
+ * cleaned here. `host-managed` is inert; `local-only` can clean only the
+ * category's unsynced tables. Both have explicit Host labels in the UI.
+ */
+export type StorageCleanupAvailability = "cleanable" | "local-only" | "host-managed" | "protected"
 
 /** Backend identifier used by `LocalPersistenceVisibilityPanel`. */
 export interface LocalPersistenceVisibilityProjection {

@@ -1,6 +1,19 @@
 jest.mock("@/lib/sandbox/delivery-source-hosts", () => ({
   revokeDeliverySourceHosts: jest.fn(async () => undefined),
 }))
+jest.mock("dexie", () => {
+  // Align Dexie's async-zone probe with Jest's callback Promise realm while
+  // retaining real WebCrypto and real IndexedDB transactions.
+  const digest = crypto.subtle.digest.bind(crypto.subtle)
+  const probe = jest
+    .spyOn(crypto.subtle, "digest")
+    .mockImplementation((...args) => Promise.resolve(digest(...args)))
+  try {
+    return jest.requireActual("dexie")
+  } finally {
+    probe.mockRestore()
+  }
+})
 import {
   createOperationPerformanceRecorder,
   getOperationPerformanceRecorder,
@@ -49,7 +62,8 @@ import {
 import { saveSettings } from "./settings"
 import { DEFAULT_AUTO_ROUTING } from "@/types/routing/tool-route"
 import { createPreset, setDefaultPreset } from "./prompt-presets"
-import { getDb } from "./schema"
+import { activateAccountDatabase, clearAccountDatabaseSelection, getDb } from "./schema"
+import { AccountContentCipher, activateAccountContentCipher } from "@/lib/accounts/content-cipher"
 import {
   ensureSessionListReady,
   projectSessionListRow,
@@ -1291,6 +1305,63 @@ describe("updateSession + listSessions", () => {
 })
 
 describe("bulkDeleteSessions", () => {
+  it.each(["commit", "rollback"])(
+    "keeps encrypted session cascade %s atomic after prior reads",
+    async (outcome) => {
+      const accountId = "storage-encrypted-cascade"
+      activateAccountDatabase(accountId, "web-standalone")
+      const db = getDb()
+      activateAccountContentCipher(await AccountContentCipher.createForTesting(accountId, db.name))
+      try {
+        const sessionIds = ["encrypted-session", "encrypted-child", "encrypted-sidechat"]
+        await db.sessions.bulkPut([
+          { id: sessionIds[0], title: "Encrypted" },
+          {
+            id: sessionIds[1],
+            parentSessionId: sessionIds[0],
+            attachedChild: {
+              parentSessionId: sessionIds[0],
+              lifecycleOwnerSessionId: sessionIds[0],
+            },
+          },
+          { id: sessionIds[2], surfaceBindingKey: `session:${sessionIds[0]}` },
+        ] as never)
+        await db.messages.bulkPut(
+          sessionIds.map((sessionId) => ({
+            id: `message-${sessionId}`,
+            sessionId,
+            parts: [],
+          })) as never
+        )
+        await db.sessions.toArray()
+        await db.sessions.where("parentSessionId").equals("encrypted-session").toArray()
+        if (outcome === "rollback") {
+          const failure = new Error("Encrypted cascade write rejected")
+          const remove = jest.spyOn(db.sessions, "delete").mockRejectedValueOnce(failure)
+          try {
+            await expect(bulkDeleteSessions(["encrypted-session"])).rejects.toBe(failure)
+            for (const id of sessionIds) {
+              expect(await db.sessions.get(id)).toBeDefined()
+              expect(await db.messages.get(`message-${id}`)).toBeDefined()
+              expect(await db.syncTombstones.get(["sessions", id])).toBeUndefined()
+            }
+          } finally {
+            remove.mockRestore()
+          }
+        } else {
+          await expect(bulkDeleteSessions(["encrypted-session"])).resolves.toBeUndefined()
+          for (const id of sessionIds) {
+            expect(await db.sessions.get(id)).toBeUndefined()
+            expect(await db.messages.get(`message-${id}`)).toBeUndefined()
+            expect(await db.syncTombstones.get(["sessions", id])).toBeDefined()
+          }
+        }
+      } finally {
+        await db.delete()
+        clearAccountDatabaseSelection()
+      }
+    }
+  )
   it("keeps the converted project's port numbers after deleting its original session and executing", async () => {
     jest.mocked(isTauri).mockReturnValue(true)
     const root = "/managed/converted"

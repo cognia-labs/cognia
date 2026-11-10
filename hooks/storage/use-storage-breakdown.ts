@@ -78,7 +78,7 @@ export function useStorageBreakdown(
   useEffect(() => {
     if (refreshInterval <= 0) return
     intervalRef.current = setInterval(() => {
-      void refresh()
+      if (document.visibilityState === "visible") void refresh()
     }, refreshInterval)
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)

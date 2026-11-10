@@ -36,6 +36,7 @@
  * `sync_pull` per window.
  */
 
+import { SYNC_TABLE_SOURCES } from "@/lib/data-governance/table-catalog"
 import { getDb } from "@/lib/db/schema"
 import { loggers } from "@cognia/logging"
 import type { Table } from "dexie"
@@ -45,86 +46,7 @@ import { SYNCABLE_TABLE_NAMES, type SyncableTable } from "./types"
 
 const log = loggers.sync
 
-/**
- * Protocol table name → the Dexie table the sync source reads for it.
- *
- * Most are identity; the exceptions are the wire aliases (`goals` →
- * `chatGoals`, `plans` → `agentPlans`, ADR-0045) and `mcpServers`, which is a
- * *projection* table: `mcpServerSummaries` is what crosses the wire, while the
- * `mcpServers` table itself holds the full configuration and never leaves the
- * Host. Hooking the projection rather than the config is deliberate — an edit
- * to a server's secret must not announce itself to a paired phone, and the
- * projection is rewritten whenever anything the phone can see changes.
- *
- * Typed against `SyncableTable` so the protocol list and this map cannot drift:
- * adding a table to `COMPANION_SYNC_PROTOCOL_TABLE_NAMES` without a source
- * table here is a type error.
- */
-export const SYNC_TABLE_SOURCES: Readonly<Record<SyncableTable, string>> = Object.freeze({
-  characters: "characters",
-  skills: "skills",
-  sessions: "sessions",
-  messages: "messages",
-  workflows: "workflows",
-  twinProfile: "twinProfile",
-  plugins: "plugins",
-  pluginCogsets: "pluginCogsets",
-  pluginCogsetState: "pluginCogsetState",
-  adapterInstances: "adapterInstances",
-  settings: "settings",
-  conversationOverrides: "conversationOverrides",
-  goals: "chatGoals",
-  goalEvents: "chatGoalEvents",
-  plans: "agentPlans",
-  memories: "memories",
-  executionRuns: "executionRuns",
-  workflowRuns: "workflowRuns",
-  mcpServers: "mcpServerSummaries",
-  terminalHistory: "terminalHistory",
-  agentTeamBoard: "agentTeamBoard",
-  bestOfNRuns: "bestOfNRuns",
-  agentTasks: "agentTasks",
-  agentTaskAttempts: "agentTaskAttempts",
-  chatTemplates: "chatTemplates",
-  templateDefinitions: "templateDefinitions",
-  templatePackages: "templatePackages",
-  templateInstances: "templateInstances",
-  // Squad definitions (v215). These reached the protocol list without
-  // reaching this map, so a squad edited on the Host announced nothing and
-  // a paired phone only caught up on its next mount. Identity names.
-  agentTeams: "agentTeams",
-  agentTeammates: "agentTeammates",
-  agentTeamTasks: "agentTeamTasks",
-  connectorDrafts: "connectorDrafts",
-  outboundQueue: "outboundQueue",
-  sessionState: "sessionState",
-  twins: "twins",
-  twinDrafts: "twinDrafts",
-  projects: "projects",
-  issues: "issues",
-  issueProjects: "issueProjects",
-  labels: "labels",
-  issueEvents: "issueEvents",
-  issueRuns: "issueRuns",
-  issueCycles: "issueCycles",
-  botDefinitions: "botDefinitions",
-  botInstallations: "botInstallations",
-  botEventDeliveries: "botEventDeliveries",
-  connectorHeartbeats: "connectorHeartbeats",
-  platformIdentities: "platformIdentities",
-  connectorCallbackBindings: "connectorCallbackBindings",
-  workflowDeployments: "workflowDeployments",
-  sessionFolders: "sessionFolders",
-  executionRunBindings: "executionRunBindings",
-  // Remote pet care (ADR-0219). Identity names. `Table.clear()` fires none of
-  // these hooks, so a pet reset publishes its invalidation explicitly.
-  petProfile: "petProfile",
-  petAchievements: "petAchievements",
-  petInventory: "petInventory",
-  petCharacterBindings: "petCharacterBindings",
-  petActivityLog: "petActivityLog",
-  sessionUsage: "sessionUsage",
-})
+export { SYNC_TABLE_SOURCES } from "@/lib/data-governance/table-catalog"
 
 /** The Dexie surface this module needs — narrowed so tests can hand it a stub. */
 interface HookableTable {

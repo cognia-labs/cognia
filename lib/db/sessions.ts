@@ -37,6 +37,9 @@ import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 export interface SessionPersistenceScope {
   db: ReturnType<typeof getDb>
   assertActive(): void
+  /** Storage cleanup may own only local rows in a mixed native database. */
+  assertSessionsDeletable?(ids: readonly string[]): Promise<void>
+  allowsCleanupRow?(table: string, row: unknown): boolean
 }
 
 function newId() {
@@ -719,15 +722,15 @@ async function listOwnedAttachedDescendantIds(
   let frontier = existingRoots
 
   while (frontier.length > 0) {
-    const [children, sideChats] = await Promise.all([
-      db.sessions.where("parentSessionId").anyOf(frontier).toArray(),
-      includeSideChats
-        ? db.sessions
-            .where("surfaceBindingKey")
-            .anyOf(frontier.map((id) => surfaceBindingKey({ kind: "session", sessionId: id })))
-            .primaryKeys()
-        : Promise.resolve([] as string[]),
-    ])
+    // Encrypted cursors hold their transaction while decrypting. Keep reads
+    // sequential so two cursor holds cannot wait on each other in the cascade.
+    const children = await db.sessions.where("parentSessionId").anyOf(frontier).toArray()
+    const sideChats = includeSideChats
+      ? await db.sessions
+          .where("surfaceBindingKey")
+          .anyOf(frontier.map((id) => surfaceBindingKey({ kind: "session", sessionId: id })))
+          .primaryKeys()
+      : []
     const next: string[] = []
     for (const child of children) {
       if (
@@ -1199,6 +1202,7 @@ export async function bulkDeleteSessions(
   scope?.assertActive()
   const cleanupRows = await db.sessions.bulkGet(cleanupIds)
   scope?.assertActive()
+  if (scope?.assertSessionsDeletable) await scope.assertSessionsDeletable(cleanupIds)
   // Desktop-source rows retain their external links in the deletion journal.
   // Native evidence and tasks must survive a rejected or rolled-back Dexie delete.
   await cleanupManagedExternalAgentSessions(
@@ -1218,6 +1222,7 @@ export async function bulkDeleteSessions(
     for (const row of cleanupRows) {
       if (!row) continue
       scope?.assertActive()
+      if (scope?.assertSessionsDeletable) await scope.assertSessionsDeletable([row.id])
       await runWorkspaceUserAction("task_workspace_port_lease_subject_release", () => {
         scope?.assertActive()
         return releaseSubjectPortLeases({ kind: "desktop-session", key: row.id })
@@ -1266,6 +1271,7 @@ export async function bulkDeleteSessions(
         db.executionRunInterrupts,
         db.runResultSummaries,
         db.notificationProjectionWork,
+        ...(scope?.assertSessionsDeletable ? [db.hostStateChannels] : []),
       ],
       async () => {
         scope?.assertActive()
@@ -1279,6 +1285,7 @@ export async function bulkDeleteSessions(
           includeSideChats: true,
         })
         deletedIds = [...new Set([...deletedIds, ...attachedDescendants])]
+        if (scope?.assertSessionsDeletable) await scope.assertSessionsDeletable(deletedIds)
         await desktopDeletion.commitInsideTransaction(deletedIds)
         await deleteManagedDesktopRunProjections(db, deletedIds)
         const doomedIds = new Set(deletedIds)
@@ -1364,7 +1371,9 @@ export async function bulkDeleteSessions(
         }
         await db.sessionPeerMessages
           .filter(
-            (row) => doomedIds.has(row.senderSessionId) || doomedIds.has(row.receiverSessionId)
+            (row) =>
+              (doomedIds.has(row.senderSessionId) || doomedIds.has(row.receiverSessionId)) &&
+              (scope?.allowsCleanupRow?.("sessionPeerMessages", row) ?? true)
           )
           .delete()
         // Video jobs a conversation started (ADR-0205); their video is one of

@@ -9,6 +9,8 @@ jest.mock("./cleanup", () => ({
   previewCleanup: jest.fn(),
   quickCleanup: jest.fn(),
   selectableCategories: jest.fn(),
+  getCleanupTargetKey: jest.fn(),
+  getCleanupCategoryAvailability: jest.fn(),
 }))
 
 import * as storage from "./index"
@@ -33,5 +35,7 @@ describe("storage barrel", () => {
     expect(typeof storage.previewCleanup).toBe("function")
     expect(typeof storage.quickCleanup).toBe("function")
     expect(typeof storage.selectableCategories).toBe("function")
+    expect(typeof storage.getCleanupTargetKey).toBe("function")
+    expect(typeof storage.getCleanupCategoryAvailability).toBe("function")
   })
 })

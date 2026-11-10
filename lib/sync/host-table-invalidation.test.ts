@@ -12,6 +12,7 @@ import {
   SYNC_TABLE_SOURCES,
 } from "./host-table-invalidation"
 import { SYNCABLE_TABLE_NAMES, type SyncableTable } from "./types"
+import { SYNC_TABLE_SOURCES as CATALOG_SYNC_TABLE_SOURCES } from "@/lib/data-governance/table-catalog"
 
 type Handler = (...args: unknown[]) => void
 
@@ -52,6 +53,9 @@ beforeEach(() => {
 })
 
 describe("SYNC_TABLE_SOURCES", () => {
+  it("re-exports the foundation's single source mapping", () => {
+    expect(SYNC_TABLE_SOURCES).toBe(CATALOG_SYNC_TABLE_SOURCES)
+  })
   it("names a source table for every table in the sync protocol", () => {
     expect(Object.keys(SYNC_TABLE_SOURCES).sort()).toEqual([...SYNCABLE_TABLE_NAMES].sort())
   })

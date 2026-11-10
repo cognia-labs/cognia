@@ -67,7 +67,7 @@ function readLocalStorageBytes(): number {
   return total
 }
 
-function estimateRowSize(row: unknown): number {
+export function estimateRowSize(row: unknown): number {
   // A row that declares its own footprint is telling the truth about bytes
   // JSON cannot see. `JSON.stringify` turns a Blob into `{}`, so a 25 MiB
   // sprite atlas measured this way reported about two bytes, and the largest
@@ -79,7 +79,19 @@ function estimateRowSize(row: unknown): number {
     }
   }
   try {
-    return JSON.stringify(row).length
+    let binaryBytes = 0
+    const json = JSON.stringify(row, (_key, value: unknown) => {
+      if (typeof Blob !== "undefined" && value instanceof Blob) {
+        binaryBytes += value.size
+        return null
+      }
+      if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        binaryBytes += value.byteLength
+        return null
+      }
+      return value
+    })
+    return (json?.length ?? 0) + binaryBytes
   } catch {
     return 0
   }
@@ -112,11 +124,14 @@ async function buildBreakdown(): Promise<StorageCategoryInfo[]> {
     let count = 0
     let bytes = 0
     try {
-      const rows = await table.toArray()
-      count = rows.length
-      bytes = rows.reduce<number>((sum, row) => sum + estimateRowSize(row), 0)
+      await table.each((row) => {
+        count += 1
+        bytes += estimateRowSize(row)
+      })
     } catch {
       // Skip tables we can't read — they'll just show 0 rather than crashing the panel.
+      count = 0
+      bytes = 0
     }
 
     bucket.itemCount += count
@@ -134,15 +149,15 @@ function computeHealth(stats: StorageStats): StorageHealth {
   const recommendations: StorageRecommendation[] = []
   const usagePercent = stats.total.usagePercent
 
-  let status: StorageHealth["status"] = "healthy"
-  if (usagePercent >= HEALTH_CRITICAL_PERCENT) {
+  let status: StorageHealth["status"] = stats.total.quota > 0 ? "healthy" : "unknown"
+  if (status !== "unknown" && usagePercent >= HEALTH_CRITICAL_PERCENT) {
     status = "critical"
     issues.push({
       severity: "high",
       message: `Storage is ${usagePercent.toFixed(1)}% full`,
       suggestedAction: "Clear unused data or export and remove old conversations.",
     })
-  } else if (usagePercent >= HEALTH_WARNING_PERCENT) {
+  } else if (status !== "unknown" && usagePercent >= HEALTH_WARNING_PERCENT) {
     status = "warning"
     issues.push({
       severity: "medium",
@@ -234,4 +249,5 @@ export const __TESTING__ = {
   formatBytes,
   readLocalStorageBytes,
   computeHealth,
+  estimateRowSize,
 }

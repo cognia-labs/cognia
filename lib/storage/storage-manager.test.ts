@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import Dexie from "dexie"
 import { StorageManager, __TESTING__ } from "./storage-manager"
 import { appendBackupHistory } from "@/lib/db/backup-history"
 import { getDb, whenSeeded, __resetDbForTesting } from "@/lib/db/schema"
@@ -97,9 +98,9 @@ describe("StorageManager.getHealth", () => {
     }
   })
 
-  it("returns healthy when usage is under the warning threshold", async () => {
+  it("returns unknown when quota is unavailable", async () => {
     const health = await StorageManager.getHealth()
-    expect(health.status).toBe("healthy")
+    expect(health.status).toBe("unknown")
     expect(health.issues).toEqual([])
   })
 
@@ -344,7 +345,7 @@ describe("readQuota fallbacks (storage-manager.ts:36-44)", () => {
 })
 
 describe("buildBreakdown table-read errors (storage-manager.ts:99-101)", () => {
-  it("skips a table whose toArray() rejects without crashing the breakdown", async () => {
+  it("skips a table whose cursor scan rejects without crashing the breakdown", async () => {
     await appendBackupHistory({
       completedAt: 1,
       type: "manual",
@@ -354,9 +355,7 @@ describe("buildBreakdown table-read errors (storage-manager.ts:99-101)", () => {
     const db = getDb()
     const table = db.tables.find((t) => t.name === "backupHistory")
     if (!table) throw new Error("backupHistory table missing")
-    const spy = jest
-      .spyOn(table, "toArray")
-      .mockRejectedValueOnce(new Error("simulated read failure"))
+    const spy = jest.spyOn(table, "each").mockRejectedValueOnce(new Error("simulated read failure"))
 
     const stats = await StorageManager.getStats()
     const bucket = stats.byCategory.find((c) => c.category === "backupHistory")
@@ -371,8 +370,11 @@ describe("buildBreakdown table-read errors (storage-manager.ts:99-101)", () => {
     if (!table) throw new Error("backupHistory table missing")
     const cyclic: Record<string, unknown> = { id: "c1", completedAt: 1 }
     cyclic.self = cyclic
-    // Return the cyclic row from toArray() so estimateRowSize hits its catch.
-    const spy = jest.spyOn(table, "toArray").mockResolvedValueOnce([cyclic])
+    // Visit the cyclic row so estimateRowSize hits its catch.
+    const spy = jest.spyOn(table, "each").mockImplementationOnce((visit) => {
+      visit(cyclic, {} as never)
+      return Dexie.Promise.resolve()
+    })
     const stats = await StorageManager.getStats()
     const bucket = stats.byCategory.find((c) => c.category === "backupHistory")
     // 1 row counted, but bytes==0 because JSON.stringify threw on the cycle.
@@ -424,4 +426,27 @@ describe("row size estimation", () => {
     const pet = stats.byCategory.find((row) => row.category === "pet")
     expect(pet!.totalSize).toBeGreaterThan(0)
   })
+})
+
+it("walks tables with cursors rather than materializing arrays", async () => {
+  const table = getDb().tables.find((entry) => entry.name === "backupHistory")!
+  const spy = jest.spyOn(table, "toArray").mockRejectedValue(new Error("unbounded read"))
+  await getDb().backupHistory.put({ id: "cursor-row", completedAt: 1 } as never)
+  try {
+    const stats = await StorageManager.getStats()
+    expect(stats.byCategory.find((bucket) => bucket.category === "backupHistory")?.itemCount).toBe(
+      1
+    )
+    expect(spy).not.toHaveBeenCalled()
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+it("counts nested Blob, ArrayBuffer and typed-array bytes", () => {
+  expect(
+    __TESTING__.estimateRowSize({
+      nested: [new Blob([new Uint8Array(4096)]), new ArrayBuffer(2048), new Uint16Array(512)],
+    })
+  ).toBeGreaterThanOrEqual(7168)
 })
