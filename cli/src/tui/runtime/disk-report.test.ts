@@ -2,9 +2,12 @@
  * @jest-environment node
  */
 import { buildDiskReport, diskReportTargets, formatDiskReport } from "./disk-report"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { execFileSync } from "node:child_process"
 
 const HOME = "/home/u/.cognia"
-const ROOT = "/repo"
 
 /**
  * A filesystem facade that records reads and throws on any mutation. The
@@ -56,13 +59,59 @@ function guardedFs(files: Record<string, number>) {
 describe("diskReportTargets", () => {
   it("lists the three config-home directories, plus the build dirs inside a checkout", () => {
     expect(diskReportTargets(HOME).map((t) => t.label)).toEqual(["Sessions", "Logs", "Checkpoints"])
-    expect(diskReportTargets(HOME, ROOT).map((t) => t.path)).toEqual([
+    expect(diskReportTargets(HOME, process.cwd()).map((t) => t.path)).toEqual([
       `${HOME}/sessions`,
       `${HOME}/logs`,
       `${HOME}/checkpoints`,
-      `${ROOT}/cli/dist`,
-      `${ROOT}/target`,
+      path.join(process.cwd(), "cli/dist"),
+      path.join(process.cwd(), "target"),
     ])
+  })
+
+  it("omits build advice for an unrelated checkout even when its build directories exist", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-unrelated-"))
+    try {
+      fs.mkdirSync(path.join(root, "cli/dist"), { recursive: true })
+      fs.mkdirSync(path.join(root, "target"))
+      fs.writeFileSync(path.join(root, "package.json"), '{"name":"another-project"}')
+      expect(diskReportTargets(HOME, root).map((t) => t.label)).toEqual([
+        "Sessions",
+        "Logs",
+        "Checkpoints",
+      ])
+      fs.writeFileSync(path.join(root, "package.json"), "{broken")
+      expect(diskReportTargets(HOME, root)).toHaveLength(3)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("passes shell metacharacters literally in every printed path", () => {
+    const home = '/tmp/doctor $HOME `echo injected` $(echo injected) \' "quoted"'
+    for (const entry of diskReportTargets(home).filter((entry) => entry.label !== "Sessions")) {
+      const command = entry.reclaim!.replace(/^rm -rf(?: --)? /, "printf '%s' ")
+      expect(execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" })).toBe(entry.path)
+    }
+  })
+
+  it("quotes checkout paths in executable build advice, including line breaks", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-checkout-"))
+    const root = path.join(parent, '$HOME `echo injected` \' "quoted"\n$(echo injected)')
+    try {
+      fs.mkdirSync(root)
+      fs.writeFileSync(path.join(root, "package.json"), '{"name":"cognia-next"}')
+      const entries = diskReportTargets(HOME, root)
+      const dist = entries.find((entry) => entry.label === "CLI build")!
+      const cargo = entries.find((entry) => entry.label === "Cargo target")!
+      const literal = (command: string) =>
+        execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" })
+      expect(literal(dist.reclaim!.replace(/^rm -rf -- /, "printf '%s' "))).toBe(dist.path)
+      expect(literal(cargo.reclaim!.replace(/^cargo clean --manifest-path /, "printf '%s' "))).toBe(
+        path.join(root, "Cargo.toml")
+      )
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true })
+    }
   })
 })
 
@@ -72,11 +121,11 @@ describe("buildDiskReport", () => {
       [`${HOME}/sessions/s1/manifest.json`]: 100,
       [`${HOME}/sessions/s1/events.jsonl`]: 900,
       [`${HOME}/logs/cli.log`]: 5000,
-      [`${ROOT}/target/debug/app`]: 4_000_000,
+      [path.join(process.cwd(), "target/debug/app")]: 4_000_000,
     })
     const report = await buildDiskReport({
       home: HOME,
-      repoRoot: ROOT,
+      repoRoot: process.cwd(),
       fsx: facade,
       statfs: async () => ({ bavail: BigInt(1000), bsize: BigInt(4096) }),
       now: () => 42,
@@ -93,7 +142,9 @@ describe("buildDiskReport", () => {
     ])
     // An absent directory has nothing to reclaim, so it carries no command.
     expect(report.entries[2]!.reclaim).toBeUndefined()
-    expect(report.entries[4]!.reclaim).toBe(`cargo clean   # in "${ROOT}"`)
+    expect(report.entries[4]!.reclaim).toBe(
+      `cargo clean --manifest-path '${path.join(process.cwd(), "Cargo.toml")}'`
+    )
   })
 
   it("survives a failing statfs", async () => {

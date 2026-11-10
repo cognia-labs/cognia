@@ -9,6 +9,7 @@
  */
 import fs from "node:fs"
 import path from "node:path"
+import os from "node:os"
 
 import { backendHeldByUnpinnedRoot, inspectDurabilityRoot, openBackend } from "./backend"
 import {
@@ -38,7 +39,15 @@ import {
   collectBinaryReferences,
   pinBinaryReferences,
   pruneBinaries,
+  readBinarySync,
 } from "./binary-store"
+import {
+  decodeSnapshotRows,
+  parseMultiSnapshot,
+  reportLegacySnapshotRows,
+  selectSnapshotRestoreTables,
+  snapshotRowsForTable,
+} from "../../db/snapshot"
 import { collectSqliteBinaryReferences, readSqliteState, sqliteFile } from "./sqlite"
 import {
   decodeDurableValue,
@@ -76,6 +85,9 @@ export interface DurabilityStatus {
    * store is intact; those rows simply never held their bytes.
    */
   legacyValueLoss: LegacyValueFinding[]
+  /** Snapshot tables restore ignores because they are derived or no longer installed. */
+  skippedSnapshotTables: Array<{ database: string; table: string }>
+  snapshotRoot?: string
 }
 
 function recordFault(status: DurabilityStatus, error: unknown): void {
@@ -112,11 +124,38 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     faults: [],
     parity: null,
     legacyValueLoss: [],
+    skippedSnapshotTables: [],
   }
   const legacy = new LegacyValueReport()
   try {
-    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+    if (!fs.existsSync(root)) {
       throw new DurabilityFault("manifest-corrupt", `durability root does not exist: ${root}`)
+    }
+    if (fs.statSync(root).isFile()) {
+      status.manifest.activeBackend = "snapshot-v3"
+      status.snapshotRoot = root
+      await verifySnapshotFile(root, legacy, status.skippedSnapshotTables)
+      status.legacyValueLoss = legacy.findings()
+      return status
+    }
+    if (!fs.statSync(root).isDirectory()) {
+      throw new DurabilityFault("manifest-corrupt", `invalid durability root: ${root}`)
+    }
+    const ledger = [
+      manifestFile(root),
+      path.join(root, "generations"),
+      path.join(root, "sqlite"),
+    ].some((file) => fs.existsSync(file))
+    if (
+      !ledger &&
+      (path.basename(root).endsWith(".json.tables") ||
+        fs.existsSync(path.join(root, "manifest.json")))
+    ) {
+      status.manifest.activeBackend = "snapshot-v3"
+      status.snapshotRoot = root
+      await verifySnapshotTables(root, legacy, status.skippedSnapshotTables)
+      status.legacyValueLoss = legacy.findings()
+      return status
     }
     status.manifest = readManifest(root)
     const inventory = inspectDurabilityRoot(root)
@@ -126,10 +165,26 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
       for (const backend of [status.manifest.activeBackend, status.manifest.shadowBackend]) {
         if (!backend) continue
         const generation = latestGeneration(root, status.manifest)
-        const present =
-          backend === "sqlite-v5"
-            ? inventory.sqlite
-            : generation !== null && listGenerations(root).includes(generation)
+        let present: boolean
+        if (backend === "snapshot-v3" && backend === status.manifest.activeBackend) {
+          // serve's snapshot backend owns a sibling table store, whereas a
+          // snapshot shadow is the checkpoint half of the journal backend.
+          const home = path.dirname(path.dirname(root))
+          const account = decodeURIComponent(path.basename(root))
+          const snapshot = path.join(home, `db-${account}.json`)
+          status.snapshotRoot = fs.existsSync(`${snapshot}.tables/manifest.json`)
+            ? `${snapshot}.tables`
+            : snapshot
+          if (status.snapshotRoot === snapshot)
+            await verifySnapshotFile(snapshot, legacy, status.skippedSnapshotTables)
+          else await verifySnapshotTables(status.snapshotRoot, legacy, status.skippedSnapshotTables)
+          present = true
+        } else {
+          present =
+            backend === "sqlite-v5"
+              ? inventory.sqlite
+              : generation !== null && listGenerations(root).includes(generation)
+        }
         if (!present)
           recordFault(
             status,
@@ -174,7 +229,21 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
   let sqliteState: DurabilityState | null = null
   if (status.sqlitePresent) {
     try {
-      sqliteState = readSqliteState(root)
+      // SQLite can create WAL/SHM files even for a read-only connection. Read
+      // an exact disposable copy so verify never changes the operator's root.
+      const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-verify-"))
+      try {
+        const file = sqliteFile(temporary)
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        fs.copyFileSync(sqliteFile(root), file)
+        for (const suffix of ["-wal", "-journal"]) {
+          if (fs.existsSync(`${sqliteFile(root)}${suffix}`))
+            fs.copyFileSync(`${sqliteFile(root)}${suffix}`, `${file}${suffix}`)
+        }
+        sqliteState = readSqliteState(temporary)
+      } finally {
+        fs.rmSync(temporary, { recursive: true, force: true })
+      }
       assertDecodable(root, sqliteState)
       status.sqliteSequence = sqliteState.sequence
       for (const finding of sqliteState.legacyValueFindings ?? []) legacy.merge(finding)
@@ -204,6 +273,157 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
   status.legacyValueLoss = legacy.findings()
 
   return status
+}
+
+/** The snapshot-v3 rung uses bootstrap's table layout and the shared value codec. */
+async function verifySnapshotTables(
+  root: string,
+  legacy: LegacyValueReport,
+  skipped: DurabilityStatus["skippedSnapshotTables"]
+): Promise<void> {
+  let manifest
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"))
+  } catch (error) {
+    throw new DurabilityFault(
+      "manifest-corrupt",
+      `invalid snapshot-v3 manifest: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  if (
+    !manifest ||
+    ![3, 4].includes(manifest.snapshotFormat) ||
+    !manifest.dbs ||
+    typeof manifest.dbs !== "object" ||
+    Array.isArray(manifest.dbs)
+  )
+    throw new DurabilityFault("manifest-corrupt", "invalid snapshot-v3 table manifest")
+  const verifyRows = await snapshotRowVerifier(skipped)
+  try {
+    for (const [database, raw] of Object.entries(manifest.dbs)) {
+      const schema = raw as { version?: unknown; tables?: unknown } | null
+      if (
+        !schema ||
+        typeof schema.version !== "number" ||
+        !Number.isFinite(schema.version) ||
+        !Array.isArray(schema.tables) ||
+        schema.tables.some((name: unknown) => typeof name !== "string")
+      )
+        throw new DurabilityFault("manifest-corrupt", `invalid snapshot-v3 schema: ${database}`)
+      for (const table of verifyRows.selectTables(database, schema.tables as string[])) {
+        const file = path.join(
+          root,
+          `${encodeURIComponent(database)}--${encodeURIComponent(table)}.json`
+        )
+        const rows: unknown = JSON.parse(fs.readFileSync(file, "utf8"))
+        const decoded = decodeSnapshotRows(rows, {
+          read: (reference, length) => readBinarySync(root, reference, length),
+        })
+        await verifyRows.check(database, table, decoded)
+        if (manifest.snapshotFormat === 3) {
+          reportLegacySnapshotRows(rows as unknown[], database, table, (...args) =>
+            legacy.add(...args)
+          )
+        }
+      }
+    }
+    verifyRows.assertRestorable()
+  } finally {
+    await verifyRows.close()
+  }
+}
+
+async function verifySnapshotFile(
+  file: string,
+  legacy: LegacyValueReport,
+  skipped: DurabilityStatus["skippedSnapshotTables"]
+): Promise<void> {
+  const parsed = parseMultiSnapshot(fs.readFileSync(file, "utf8"), "CogniaDB")
+  if (parsed.kind !== "valid") {
+    throw new DurabilityFault(
+      "manifest-corrupt",
+      `invalid snapshot-v3 file: ${parsed.kind === "absent" ? "absent" : parsed.reason}`
+    )
+  }
+  const verifyRows = await snapshotRowVerifier(skipped)
+  try {
+    for (const [database, snapshot] of Object.entries(parsed.snapshot.dbs)) {
+      for (const table of verifyRows.selectTables(database, Object.keys(snapshot.tables))) {
+        const rows = snapshot.tables[table]
+        await verifyRows.check(database, table, decodeSnapshotRows(rows))
+        if (parsed.snapshot.legacyValueCodec) {
+          reportLegacySnapshotRows(rows, database, table, (...args) => legacy.add(...args))
+        }
+      }
+    }
+    verifyRows.assertRestorable()
+  } finally {
+    await verifyRows.close()
+  }
+}
+
+/** Use restore's actual schemas and IndexedDB constraints, without opening any account database. */
+async function snapshotRowVerifier(skipped: DurabilityStatus["skippedSnapshotTables"]) {
+  const [
+    { default: Dexie },
+    { IDBFactory, IDBKeyRange },
+    { CURRENT_SCHEMA },
+    { getBrowserBuiltinRegistry },
+    { toNamespacedTableName },
+  ] = await Promise.all([
+    import("dexie"),
+    import("fake-indexeddb"),
+    import("@/lib/db/schema"),
+    import("@/lib/plugin/core/browser-builtin-registry"),
+    import("@/lib/plugin/dexie/namespace"),
+  ])
+  const schemas = { ...CURRENT_SCHEMA }
+  for (const { manifest } of getBrowserBuiltinRegistry()) {
+    for (const table of manifest.dexie?.tables ?? []) {
+      schemas[toNamespacedTableName(manifest.id, table.name)] = table.schema
+    }
+  }
+  // A private factory cannot reach the caller's IndexedDB, even in a long-lived CLI process.
+  const db = new Dexie("snapshot-verify", { indexedDB: new IDBFactory(), IDBKeyRange })
+  db.version(1).stores(schemas)
+  const schemaTableNames = new Set(db.tables.map((table) => table.name))
+  let offered = 0
+  let restorable = 0
+  return {
+    selectTables(database: string, tableNames: string[]) {
+      const targets = selectSnapshotRestoreTables(tableNames, schemaTableNames)
+      const selected = new Set(targets)
+      for (const table of tableNames) {
+        if (!selected.has(table)) skipped.push({ database, table })
+      }
+      offered += tableNames.length
+      restorable += targets.length
+      return targets
+    },
+    /** A snapshot whose every table restore would skip restores nothing; it is not a verified backup. */
+    assertRestorable() {
+      if (offered > 0 && restorable === 0)
+        throw new DurabilityFault(
+          "manifest-corrupt",
+          `snapshot holds ${offered} table(s), but restore would load none of them`
+        )
+    },
+    async check(database: string, table: string, rows: unknown[]) {
+      try {
+        const target = db.table(table)
+        const authoritative = snapshotRowsForTable(table, rows)
+        if (authoritative.length > 0) await target.bulkPut(authoritative)
+        // Keep only the current table in memory; no whole-database restore accumulates here.
+        await target.clear()
+      } catch (error) {
+        throw new DurabilityFault(
+          "manifest-corrupt",
+          `snapshot rows for ${database}.${table} cannot be restored: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    },
+    close: () => db.delete(),
+  }
 }
 
 function assertDecodable(root: string, state: DurabilityState): void {

@@ -11,6 +11,7 @@ import {
   reportLegacySnapshotRows,
   restoreMultiSnapshot,
   restoreSnapshot,
+  selectSnapshotRestoreTables,
   serializeDb,
   serializeSnapshot,
   serializeSources,
@@ -40,6 +41,32 @@ class FakeTable {
 function fakeDb(tables: FakeTable[], verno = 82): DbLike {
   return { verno, tables }
 }
+
+describe("selectSnapshotRestoreTables", () => {
+  it("keeps available authoritative targets in caller order, including installed plugin tables", () => {
+    const names = [
+      "messages",
+      "petConversation",
+      "sessionList",
+      "uninstalled-plugin:records",
+      "installed-plugin:records",
+      "goals",
+      "messages",
+    ]
+    const originalNames = [...names]
+    const schema = new Set(["goals", "sessionList", "messages", "installed-plugin:records"])
+    expect(selectSnapshotRestoreTables(names, schema)).toEqual([
+      "messages",
+      "installed-plugin:records",
+      "goals",
+      "messages",
+    ])
+    expect(names).toEqual(originalNames)
+    expect([...schema]).toEqual(["goals", "sessionList", "messages", "installed-plugin:records"])
+    expect(selectSnapshotRestoreTables([], schema)).toEqual([])
+    expect(selectSnapshotRestoreTables(names, new Set())).toEqual([])
+  })
+})
 
 describe("serializeDb", () => {
   it("persists v250 connection and attempt metadata across a snapshot restart", async () => {
@@ -213,6 +240,38 @@ describe("restoreSnapshot", () => {
       tables: { goals: [{ id: "g" }], gone: [{ id: "x" }] },
     })
     expect(goals.rows).toEqual([{ id: "g" }])
+  })
+
+  it("keeps schema order and seeds while skipping dropped, unavailable and derived tables", async () => {
+    const messages = new FakeTable("messages", [{ id: "seed-message" }])
+    const goals = new FakeTable("goals", [{ id: "seed-goal" }])
+    const seeded = new FakeTable("characters", [{ id: "builtin" }])
+    const derived = new FakeTable("sessionList", [{ id: "derived" }])
+    const clears: string[] = []
+    for (const table of [messages, goals, seeded, derived]) {
+      jest.spyOn(table, "clear").mockImplementation(async () => {
+        clears.push(table.name)
+        table.rows = []
+      })
+    }
+    const snapshot = {
+      version: 219,
+      tables: {
+        goals: [],
+        petConversation: [{ id: "legacy" }],
+        "uninstalled-plugin:records": [{ id: "plugin-row" }],
+        sessionList: [null],
+        messages: [{ id: "restored-message" }],
+      },
+    }
+    const before = JSON.stringify(snapshot)
+    await restoreSnapshot(fakeDb([messages, goals, seeded, derived], 250), snapshot)
+    expect(clears).toEqual(["messages", "goals"])
+    expect(messages.rows).toEqual([{ id: "restored-message" }])
+    expect(goals.rows).toEqual([])
+    expect(seeded.rows).toEqual([{ id: "builtin" }])
+    expect(derived.rows).toEqual([{ id: "derived" }])
+    expect(JSON.stringify(snapshot)).toBe(before)
   })
 
   it("restores an older snapshot as an ordinary forward move", async () => {

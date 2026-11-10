@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite"
 
 import { DurabilityFault } from "./types"
 
-type Store = "journal" | "sqlite" | "binary" | "checkpoint"
+type Store = "journal" | "sqlite" | "binary" | "checkpoint" | "backup"
 const localSharedLeases = new Map<string, { holders: number; release: () => void }>()
 
 function lockFile(root: string, store: Store): string {

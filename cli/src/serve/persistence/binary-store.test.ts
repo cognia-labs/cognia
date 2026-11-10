@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { DatabaseSync } from "node:sqlite"
 
 import {
   BINARY_PRUNE_GRACE_MS,
@@ -105,5 +106,23 @@ describe("binary side files", () => {
     expect(pruneBinaries(root, new Set())).toEqual([orphan])
     release()
     expect(pruneBinaries(root, new Set())).toEqual([pinned])
+  })
+
+  it("defers GC under the native backup lease while allowing new binary writes", () => {
+    const reference = writeBinarySync(root, bytes)
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    fs.utimesSync(path.join(binaryDir(root), reference), old, old)
+    // This is the same kernel lock acquired by Rust before its SQLite snapshot.
+    const backup = new DatabaseSync(path.join(root, ".backup-writer.sqlite"))
+    backup.exec("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;")
+    try {
+      const next = writeBinarySync(root, Uint8Array.from([9]))
+      expect(readBinarySync(root, next, 1)).toEqual(Uint8Array.from([9]))
+      expect(pruneBinaries(root, new Set())).toEqual([])
+      expect(readBinarySync(root, reference, bytes.length)).toEqual(bytes)
+    } finally {
+      backup.close()
+    }
+    expect(pruneBinaries(root, new Set())).toEqual([reference])
   })
 })

@@ -1,5 +1,6 @@
 import os from "node:os"
 import path from "node:path"
+import fs from "node:fs"
 
 import {
   buildDoctorReport,
@@ -173,6 +174,25 @@ describe("runDoctor", () => {
     if (actions[0].type === "OVERLAY_OPEN" && actions[0].overlay.kind === "doctor") {
       expect(actions[0].overlay.report.version).toBe("9.9.9")
       expect(actions[0].overlay.report.model).toBe("claude-opus-4-8")
+    }
+  })
+
+  it("does not call an unrelated cwd's build output reclaimable", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-cwd-"))
+    try {
+      fs.mkdirSync(path.join(root, "cli/dist"), { recursive: true })
+      fs.writeFileSync(path.join(root, "cli/dist/user-data"), "keep")
+      const actions = await run({ cwd: root })
+      expect(actions[0]).toMatchObject({ type: "OVERLAY_OPEN" })
+      if (actions[0].type === "OVERLAY_OPEN" && actions[0].overlay.kind === "doctor") {
+        expect(actions[0].overlay.report.disk?.entries.map((entry) => entry.label)).toEqual([
+          "Sessions",
+          "Logs",
+          "Checkpoints",
+        ])
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
     }
   })
 

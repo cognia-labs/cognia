@@ -165,32 +165,45 @@ export function pruneBinaries(
 ): string[] {
   const dir = binaryDir(root)
   if (!fs.existsSync(dir)) return []
-  let release: () => void
+  let releaseBackup: () => void
   try {
-    // Local prefetches share the kernel lease and publish pins. A prefetch in
-    // another process excludes this sweep until its commit or abandonment.
-    release = acquireWriterLease(root, "binary", { shared: true })
+    // Rust holds this same cross-process lease from before the SQLite snapshot
+    // until all side files are copied. Ordinary binary writes remain enabled.
+    releaseBackup = acquireWriterLease(root, "backup")
   } catch (error) {
     if (error instanceof DurabilityFault && error.code === "writer-busy") return []
     throw error
   }
   try {
-    const pins = pinnedReferences(root)
-    if (pins === null) return []
-    const removed: string[] = []
-    for (const name of fs.readdirSync(dir)) {
-      if (keep.has(name) || pins.has(name)) continue
-      if (!REFERENCE.test(name) && !name.startsWith(".tmp-")) continue
-      const file = path.join(dir, name)
-      if (now - fs.statSync(file).mtimeMs < graceMs) continue
-      const currentPins = pinnedReferences(root)
-      if (currentPins === null || currentPins.has(name)) continue
-      fs.rmSync(file, { force: true })
-      removed.push(name)
+    let release: () => void
+    try {
+      // Local prefetches share the kernel lease and publish pins. A prefetch in
+      // another process excludes this sweep until its commit or abandonment.
+      release = acquireWriterLease(root, "binary", { shared: true })
+    } catch (error) {
+      if (error instanceof DurabilityFault && error.code === "writer-busy") return []
+      throw error
     }
-    if (removed.length > 0) syncDirectory(dir)
-    return removed.sort()
+    try {
+      const pins = pinnedReferences(root)
+      if (pins === null) return []
+      const removed: string[] = []
+      for (const name of fs.readdirSync(dir)) {
+        if (keep.has(name) || pins.has(name)) continue
+        if (!REFERENCE.test(name) && !name.startsWith(".tmp-")) continue
+        const file = path.join(dir, name)
+        if (now - fs.statSync(file).mtimeMs < graceMs) continue
+        const currentPins = pinnedReferences(root)
+        if (currentPins === null || currentPins.has(name)) continue
+        fs.rmSync(file, { force: true })
+        removed.push(name)
+      }
+      if (removed.length > 0) syncDirectory(dir)
+      return removed.sort()
+    } finally {
+      release()
+    }
   } finally {
-    release()
+    releaseBackup()
   }
 }

@@ -35,6 +35,7 @@ import {
 import {
   decodeSnapshotRowsAsync,
   SNAPSHOT_DERIVED_TABLES,
+  selectSnapshotRestoreTables,
   snapshotRowsForTable,
   prepareRestoredSessionLists,
   encodeSnapshotRows,
@@ -614,10 +615,11 @@ async function restoreTableStore(
       )
     }
     const tablesByName = new Map(source.db.tables.map((table) => [table.name, table]))
-    for (const tableName of entry.tables) {
-      if (SNAPSHOT_DERIVED_TABLES.includes(tableName)) continue
-      const table = tablesByName.get(tableName)
-      if (!table) continue
+    for (const tableName of selectSnapshotRestoreTables(
+      entry.tables,
+      new Set(tablesByName.keys())
+    )) {
+      const table = tablesByName.get(tableName)!
       const tableFile = path.join(tableDirectory, tableFileName(source.name, tableName))
       let rows: unknown
       try {

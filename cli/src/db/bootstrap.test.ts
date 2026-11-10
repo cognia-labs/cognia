@@ -1377,6 +1377,56 @@ describe("importSnapshotStore", () => {
     expect(fs.existsSync(`${file}.lock`)).toBe(false)
   })
 
+  it("keeps manifest order and seeds while skipping missing dropped, plugin and derived files", async () => {
+    const directory = path.join(home, "db-acct.json.tables")
+    fs.mkdirSync(directory)
+    const manifest = JSON.stringify({
+      snapshotFormat: 4,
+      dbs: {
+        CogniaDB: {
+          version: 219,
+          tables: [
+            "goals",
+            "petConversation",
+            "uninstalled-plugin:records",
+            "sessionList",
+            "messages",
+          ],
+        },
+      },
+    })
+    fs.writeFileSync(path.join(directory, "manifest.json"), manifest)
+    fs.writeFileSync(path.join(directory, "CogniaDB--goals.json"), "[]")
+    fs.writeFileSync(path.join(directory, "CogniaDB--messages.json"), '[{"id":"restored"}]')
+    const messages = new FakeTable("messages", [{ id: "seed-message" }])
+    const goals = new FakeTable("goals", [{ id: "seed-goal" }])
+    const seeded = new FakeTable("characters", [{ id: "builtin" }])
+    const derived = new FakeTable("sessionList", [{ id: "derived" }])
+    const clears: string[] = []
+    for (const table of [messages, goals, seeded, derived]) {
+      jest.spyOn(table, "clear").mockImplementation(async () => {
+        clears.push(table.name)
+        table.rows = []
+      })
+    }
+    const result = await importSnapshotStore(
+      [{ name: "CogniaDB", db: { verno: 250, tables: [messages, goals, seeded, derived] } }],
+      { home, fileName: "db-acct.json", prepareDynamicSchema: noDynamicSchema }
+    )
+    expect(result).toEqual({ kind: "table-store", tables: 2 })
+    expect(clears).toEqual(["goals", "messages"])
+    expect(messages.rows).toEqual([{ id: "restored" }])
+    expect(goals.rows).toEqual([])
+    expect(seeded.rows).toEqual([{ id: "builtin" }])
+    expect(derived.rows).toEqual([{ id: "derived" }])
+    expect(fs.readFileSync(path.join(directory, "manifest.json"), "utf8")).toBe(manifest)
+    expect(fs.readdirSync(directory).sort()).toEqual([
+      "CogniaDB--goals.json",
+      "CogniaDB--messages.json",
+      "manifest.json",
+    ])
+  })
+
   it("imports table-store Blobs into memory, readable by the durability ledger's worker", async () => {
     const bytes = Uint8Array.from({ length: 70_000 }, (_, index) => index % 253)
     const media = new FakeTable("messageMedia", [

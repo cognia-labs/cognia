@@ -15,14 +15,14 @@ describe("writer leases", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
-  it("excludes a second owner until the writer releases the lease", () => {
-    const release = acquireWriterLease(root, "journal")
-    expect(hasLiveWriter(root, "journal")).toBe(true)
-    expect(() => acquireWriterLease(root, "journal")).toThrow(/live writer/)
+  it.each(["journal", "backup"] as const)("excludes a second %s owner until release", (store) => {
+    const release = acquireWriterLease(root, store)
+    expect(hasLiveWriter(root, store)).toBe(true)
+    expect(() => acquireWriterLease(root, store)).toThrow(/live writer/)
     release()
     release()
-    expect(hasLiveWriter(root, "journal")).toBe(false)
-    acquireWriterLease(root, "journal")()
+    expect(hasLiveWriter(root, store)).toBe(false)
+    acquireWriterLease(root, store)()
   })
 
   it("keeps an operator excluded until every local SQLite connection closes", () => {

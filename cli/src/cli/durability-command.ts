@@ -2,10 +2,10 @@
  * `cognia-agent durability …` — headless recovery tooling for ADR-0059's
  * durability ladder.
  *
- * Six verbs, all account-scoped:
+ * Six verbs; verify also accepts an explicit staged account root:
  *
  * ```
- * durability verify   --account <id>
+ * durability verify   --account <id> | --root <path>
  * durability migrate  --account <id> --to journal|sqlite
  * durability recover  --account <id> --from auto|snapshot|journal|sqlite [--activate]
  * durability rollback --account <id> --to <generation>
@@ -37,7 +37,7 @@ import type { OutputSink } from "./output"
 
 export const DURABILITY_HELP = `cognia-agent durability — headless persistence tooling
 
-  durability verify   --account <id>                         report backends, generations, faults
+  durability verify   --account <id> | --root <path>         report backends, generations, faults
   durability migrate  --account <id> --to journal|sqlite     parity-gated backend switch
   durability recover  --account <id> --from auto|snapshot|journal|sqlite [--activate]
   durability rollback --account <id> --to <generation>       re-point at an existing generation
@@ -46,6 +46,7 @@ export const DURABILITY_HELP = `cognia-agent durability — headless persistence
 
 Flags:
   --home <dir>   explicit persistence home (default: COGNIA_DATA_DIR/serve or ~/.cognia/serve)
+  --root <path>  verify only: inspect staged durability, snapshot tables or a snapshot file
   --json         emit one machine-readable record instead of the summary
 `
 
@@ -75,13 +76,18 @@ export async function durabilityCommand(args: ParsedArgs, deps: DurabilityDeps):
     return verb ? 0 : 2
   }
 
+  const explicitRoot = stringFlag(args, "root")
+  if (args.flags.root !== undefined && (verb !== "verify" || !explicitRoot)) {
+    out.error("durability: --root is only supported by verify and requires <path>\n")
+    return 2
+  }
   const accountId = stringFlag(args, "account")
-  if (!accountId) {
+  if (!accountId && !explicitRoot) {
     out.error("durability: --account <id> is required\n")
     return 2
   }
-  const home = resolveServeHome(env, stringFlag(args, "home"))
-  const root = durabilityRoot(home, accountId)
+  const root =
+    explicitRoot ?? durabilityRoot(resolveServeHome(env, stringFlag(args, "home")), accountId!)
 
   try {
     switch (verb) {
@@ -147,6 +153,9 @@ async function runVerify(root: string, out: OutputSink, json: boolean): Promise<
   )
   out.write(`rollback mark:   ${status.manifest.rollbackWatermark ?? "-"}\n`)
   if (status.parity) out.write(`${formatParityReport(status.parity)}\n`)
+  for (const { database, table } of status.skippedSnapshotTables) {
+    out.write(`skipped table:   ${database}.${table}\n`)
+  }
   if (status.legacyValueLoss.length > 0) {
     out.write(
       `value loss:      ${status.legacyValueLoss.length} field path(s) written before value codec 1 may have lost their value or type\n`

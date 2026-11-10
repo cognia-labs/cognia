@@ -4,10 +4,11 @@ import path from "node:path"
 
 import { openBackend } from "../serve/persistence/backend"
 import { writeCheckpoint } from "../serve/persistence/checkpoint"
-import { journalFile } from "../serve/persistence/journal"
-import { readManifest } from "../serve/persistence/manifest"
+import { encodeCommitLine, journalFile } from "../serve/persistence/journal"
+import { readManifest, writeManifest } from "../serve/persistence/manifest"
 import type { DurabilityCommit, DurabilityState } from "../serve/persistence/types"
-import { recordLegacyValueFindings } from "../serve/persistence/value-codec"
+import { encodeDurableValue, recordLegacyValueFindings } from "../serve/persistence/value-codec"
+import { binaryDir } from "../serve/persistence/binary-store"
 import { parseArgv } from "./args"
 import { durabilityCommand, DURABILITY_HELP } from "./durability-command"
 import type { OutputSink } from "./output"
@@ -108,6 +109,229 @@ describe("durability verify", () => {
     home = tempHome()
   })
   afterEach(() => fs.rmSync(home, { recursive: true, force: true }))
+
+  function verifyRoot(root: string, out = sink()) {
+    return durabilityCommand(parseArgv(["durability", "verify", "--root", root, "--json"]), {
+      out,
+      env: { COGNIA_DATA_DIR: path.join(home, "unused") },
+    }).then((code) => ({ code, out }))
+  }
+
+  it("verifies an explicit staged root without an account or the operator's home", async () => {
+    const root = await seed(home)
+    const before = fs.readdirSync(root)
+    const { code, out } = await verifyRoot(root)
+    expect(code).toBe(0)
+    expect(out.records[0]).toMatchObject({ ok: true, root })
+    expect(fs.readdirSync(root)).toEqual(before)
+    expect(fs.existsSync(path.join(home, "unused"))).toBe(false)
+  })
+
+  it("verifies a ledger whose account name ends with .json.tables", async () => {
+    const original = await seed(home)
+    const root = `${original}.json.tables`
+    fs.renameSync(original, root)
+    const before = treeBytes(root)
+    const { code, out } = await verifyRoot(root)
+    expect(code).toBe(0)
+    expect(out.records[0]).toMatchObject({ ok: true, root })
+    expect(treeBytes(root)).toEqual(before)
+  })
+
+  it.each(["compact", "migrate", "recover", "rollback", "finalize"])(
+    "refuses an explicit root for %s",
+    async (verb) => {
+      const out = sink()
+      expect(
+        await durabilityCommand(
+          parseArgv(["durability", verb, "--root", home, "--account", "acct"]),
+          { out }
+        )
+      ).toBe(2)
+      expect(out.err.join("")).toContain("--root is only supported by verify")
+    }
+  )
+
+  function treeBytes(root: string): Record<string, string> {
+    return Object.fromEntries(
+      fs
+        .readdirSync(root, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => {
+          const file = path.join(entry.parentPath, entry.name)
+          return [path.relative(root, file), fs.readFileSync(file).toString("hex")]
+        })
+    )
+  }
+
+  it.each(["single-file", "table-store"])(
+    "reports skipped historical and uninstalled plugin tables for a %s snapshot",
+    async (format) => {
+      const tables = {
+        messages: [{ id: "message-1" }],
+        petConversation: [{ id: "legacy" }],
+        "uninstalled-plugin:records": [{ id: "plugin-row" }],
+      }
+      const root = path.join(home, format === "single-file" ? "db.json" : "db.json.tables")
+      if (format === "single-file") {
+        fs.writeFileSync(root, JSON.stringify({ version: 219, tables }))
+      } else {
+        fs.mkdirSync(root)
+        fs.writeFileSync(
+          path.join(root, "manifest.json"),
+          JSON.stringify({
+            snapshotFormat: 4,
+            dbs: { CogniaDB: { version: 219, tables: Object.keys(tables) } },
+          })
+        )
+        for (const [table, rows] of Object.entries(tables)) {
+          fs.writeFileSync(
+            path.join(root, `CogniaDB--${encodeURIComponent(table)}.json`),
+            JSON.stringify(rows)
+          )
+        }
+      }
+      const before = treeBytes(home)
+      const { code, out } = await verifyRoot(root)
+      expect(code).toBe(0)
+      expect(out.records[0]).toMatchObject({
+        ok: true,
+        faults: [],
+        skippedSnapshotTables: [
+          { database: "CogniaDB", table: "petConversation" },
+          { database: "CogniaDB", table: "uninstalled-plugin:records" },
+        ],
+      })
+      const text = sink()
+      expect(await run(["verify", "--root", root], text, home)).toBe(0)
+      expect(text.out.join("")).toContain("skipped table:   CogniaDB.petConversation")
+      expect(text.out.join("")).toContain("skipped table:   CogniaDB.uninstalled-plugin:records")
+      expect(text.err).toEqual([])
+      expect(treeBytes(home)).toEqual(before)
+    }
+  )
+
+  it.each([undefined, 2, 3])(
+    "verifies a format-%s single-file snapshot read-only",
+    async (format) => {
+      const root = path.join(home, "db-account.json")
+      const db = { version: 1, tables: { messages: [{ id: "message-1" }] } }
+      fs.writeFileSync(
+        root,
+        JSON.stringify(format ? { snapshotFormat: format, dbs: { CogniaDB: db } } : db)
+      )
+      const before = treeBytes(home)
+      const { code, out } = await verifyRoot(root)
+      expect(code).toBe(0)
+      expect(out.records[0]).toMatchObject({ ok: true, root })
+      expect(treeBytes(home)).toEqual(before)
+      expect(fs.existsSync(path.join(home, "unused"))).toBe(false)
+    }
+  )
+
+  it.each(["{broken", JSON.stringify({ snapshotFormat: 99, dbs: {} })])(
+    "rejects a corrupt or newer single-file snapshot without changing it: %s",
+    async (text) => {
+      const root = path.join(home, "db-account.json")
+      fs.writeFileSync(root, text)
+      const before = treeBytes(home)
+      const { code, out } = await verifyRoot(root)
+      expect(code).toBe(1)
+      expect(out.records[0]).toMatchObject({ ok: false, faults: expect.any(Array) })
+      expect(treeBytes(home)).toEqual(before)
+    }
+  )
+
+  it.each(["journal-v4", "sqlite-v5"] as const)(
+    "keeps every file byte-identical when verifying a good %s root",
+    async (backendId) => {
+      const root = accountRoot(home)
+      const value = encodeDurableValue(new Uint8Array(20000), root)
+      const backend = openBackend(backendId, root)
+      try {
+        await backend.compact(state(0, { "s:attachment": value }))
+      } finally {
+        await backend.close()
+      }
+      const before = treeBytes(root)
+      expect((await verifyRoot(root)).code).toBe(0)
+      expect(treeBytes(root)).toEqual(before)
+    }
+  )
+
+  it("reads pending SQLite WAL without changing any source file", async () => {
+    const root = accountRoot(home)
+    const backend = openBackend("sqlite-v5", root)
+    try {
+      await backend.compact(state(0))
+      backend.commitSync(commit(1, "s:pending", { id: "pending" }))
+      const before = treeBytes(root)
+      const { code, out } = await verifyRoot(root)
+      expect(code).toBe(0)
+      expect(out.records[0]).toMatchObject({ ok: true, sqliteSequence: 1 })
+      expect(treeBytes(root)).toEqual(before)
+    } finally {
+      await backend.close()
+    }
+  })
+
+  it.each(["missing row file", "journal checksum", "journal sequence", "generation pointer"])(
+    "rejects a damaged %s at an explicit root",
+    async (fault) => {
+      const root = await seed(home)
+      if (fault === "missing row file") {
+        fs.rmSync(path.join(root, "generations/gen-0001/CogniaDB--sessions.rows.json"))
+      } else if (fault === "generation pointer") {
+        writeManifest(root, { ...readManifest(root), journalGeneration: "gen-9999" })
+      } else {
+        fs.mkdirSync(path.dirname(journalFile(root, "gen-0001")), { recursive: true })
+        fs.writeFileSync(
+          journalFile(root, "gen-0001"),
+          fault === "journal sequence"
+            ? encodeCommitLine(commit(2, "s:a", { id: "a" }))
+            : "{}\tinvalid-checksum\n"
+        )
+      }
+      const before = treeBytes(root)
+      const { code, out } = await verifyRoot(root)
+      expect(code).toBe(1)
+      expect(out.records[0]).toMatchObject({ ok: false, faults: expect.any(Array) })
+      expect(treeBytes(root)).toEqual(before)
+    }
+  )
+
+  it.each(["missing binary", "broken checkpoint"])(
+    "rejects %s at an explicit root",
+    async (fault) => {
+      const root = accountRoot(home)
+      const value = encodeDurableValue(new Uint8Array(20000), root)
+      writeCheckpoint(root, "gen-0001", state(0, { "s:attachment": value }))
+      if (fault === "missing binary") fs.rmSync(binaryDir(root), { recursive: true })
+      else fs.writeFileSync(path.join(root, "generations/gen-0001/checkpoint.json"), "{broken")
+      const { code, out } = await verifyRoot(root)
+      expect(code).toBe(1)
+      expect(out.records[0]).toMatchObject({ ok: false, faults: expect.any(Array) })
+      expect(JSON.stringify(out.records)).toContain(fault === "missing binary" ? "missing" : "JSON")
+    }
+  )
+
+  it.each([3, 4])(
+    "verifies a legacy format-%i table snapshot read-only",
+    async (snapshotFormat) => {
+      const root = path.join(home, "db-account.json.tables")
+      fs.mkdirSync(root)
+      fs.writeFileSync(
+        path.join(root, "manifest.json"),
+        JSON.stringify({ snapshotFormat, dbs: { "db /": { version: 1, tables: ["messages"] } } })
+      )
+      const rows = path.join(root, "db%20%2F--messages.json")
+      fs.writeFileSync(rows, '[{"id":"a"}]')
+      expect((await verifyRoot(root)).code).toBe(0)
+      expect(fs.readFileSync(rows, "utf8")).toBe('[{"id":"a"}]')
+      fs.rmSync(rows)
+      expect((await verifyRoot(root)).code).toBe(1)
+    }
+  )
 
   it("summarises a healthy account", async () => {
     await seed(home, [commit(1, "s:a", { id: "a" })])

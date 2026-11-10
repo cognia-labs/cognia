@@ -62,6 +62,226 @@ describe("verifyDurability", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
+  it.each(["petConversation", "uninstalled-plugin:records"])(
+    "skips %s in v219 single-file and format-4 snapshots without reporting a fault",
+    async (skippedTable) => {
+      const snapshot = path.join(root, "db-account.json")
+      const rows = {
+        messages: [{ id: "message-1" }],
+        [skippedTable]: [{ id: "legacy", value: {} }],
+      }
+      const bytes = JSON.stringify({ version: 219, tables: rows })
+      fs.writeFileSync(snapshot, bytes)
+      const tables = `${snapshot}.tables`
+      fs.mkdirSync(tables)
+      const manifest = JSON.stringify({
+        snapshotFormat: 4,
+        dbs: { CogniaDB: { version: 219, tables: Object.keys(rows) } },
+      })
+      fs.writeFileSync(path.join(tables, "manifest.json"), manifest)
+      for (const [table, values] of Object.entries(rows)) {
+        fs.writeFileSync(
+          path.join(tables, `CogniaDB--${encodeURIComponent(table)}.json`),
+          JSON.stringify(values)
+        )
+      }
+      const skippedFile = path.join(tables, `CogniaDB--${encodeURIComponent(skippedTable)}.json`)
+      // Restore never reads a skipped table, even when its file is absent or corrupt.
+      for (const skippedRows of [JSON.stringify(rows[skippedTable]), "{broken", null]) {
+        if (skippedRows === null) fs.rmSync(skippedFile)
+        else fs.writeFileSync(skippedFile, skippedRows)
+        for (const target of [snapshot, tables]) {
+          const status = await verifyDurability(target)
+          expect(status.faults).toEqual([])
+          expect(status).toMatchObject({
+            skippedSnapshotTables: [{ database: "CogniaDB", table: skippedTable }],
+            legacyValueLoss: [],
+          })
+        }
+        expect(fs.readFileSync(snapshot, "utf8")).toBe(bytes)
+        expect(fs.readFileSync(path.join(tables, "manifest.json"), "utf8")).toBe(manifest)
+        expect(fs.existsSync(skippedFile)).toBe(skippedRows !== null)
+        if (skippedRows !== null) expect(fs.readFileSync(skippedFile, "utf8")).toBe(skippedRows)
+      }
+    }
+  )
+
+  it("fails a snapshot whose every table restore would skip", async () => {
+    const rows = {
+      petConversation: [{ id: "legacy" }],
+      "uninstalled-plugin:records": [{ id: "plugin-row" }],
+    }
+    const snapshot = path.join(root, "db-account.json")
+    fs.writeFileSync(snapshot, JSON.stringify({ version: 219, tables: rows }))
+    const tables = `${snapshot}.tables`
+    fs.mkdirSync(tables)
+    // Missing table files: restore would never read them, so nothing here is restorable.
+    fs.writeFileSync(
+      path.join(tables, "manifest.json"),
+      JSON.stringify({
+        snapshotFormat: 4,
+        dbs: { CogniaDB: { version: 219, tables: Object.keys(rows) } },
+      })
+    )
+    for (const target of [snapshot, tables]) {
+      expect((await verifyDurability(target)).faults).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining("restore would load none of them"),
+        }),
+      ])
+    }
+  })
+
+  it("skips derived table files before decoding while still checking authoritative tables", async () => {
+    const tables = path.join(root, "db-account.json.tables")
+    fs.mkdirSync(tables)
+    fs.writeFileSync(
+      path.join(tables, "manifest.json"),
+      JSON.stringify({
+        snapshotFormat: 4,
+        dbs: { CogniaDB: { version: 241, tables: ["sessionList", "messages"] } },
+      })
+    )
+    const messages = path.join(tables, "CogniaDB--messages.json")
+    fs.writeFileSync(messages, '[{"id":"message-1"}]')
+    expect(await verifyDurability(tables)).toMatchObject({
+      faults: [],
+      skippedSnapshotTables: [{ database: "CogniaDB", table: "sessionList" }],
+    })
+    fs.writeFileSync(messages, "[{}]")
+    expect((await verifyDurability(tables)).faults).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("messages") }),
+    ])
+  })
+
+  it.each<[string, unknown[]]>([
+    ["messages", [null]],
+    ["messages", [{}]],
+    ["messages", [{ id: true }]],
+    ["messages", [{ id: {} }]],
+    ["accountSyncOutbox", [{ table: "messages" }]],
+    ["accountSyncOutbox", [{ table: "messages", rowId: null }]],
+    ["github-delivery:repos", [{ id: "wrong-key-path" }]],
+    [
+      "github-delivery:audit",
+      [
+        { runId: "run", stepId: "step", at: 1 },
+        { runId: "run", stepId: "step", at: 1 },
+      ],
+    ],
+  ])("rejects unrestorable snapshot rows in %s: %j", async (table, rows) => {
+    const snapshot = path.join(root, "db-account.json")
+    fs.writeFileSync(snapshot, JSON.stringify({ version: 1, tables: { [table]: rows } }))
+    const tables = `${snapshot}.tables`
+    fs.mkdirSync(tables)
+    fs.writeFileSync(
+      path.join(tables, "manifest.json"),
+      JSON.stringify({
+        snapshotFormat: 4,
+        dbs: { "cognia-account-test": { version: 1, tables: [table] } },
+      })
+    )
+    const file = path.join(tables, `cognia-account-test--${encodeURIComponent(table)}.json`)
+    fs.writeFileSync(file, JSON.stringify(rows))
+    for (const target of [tables, snapshot]) {
+      const before = fs.readFileSync(target === snapshot ? snapshot : file, "utf8")
+      const status = await verifyDurability(target)
+      expect(status.faults).toEqual([
+        expect.objectContaining({ message: expect.stringContaining(table) }),
+      ])
+      expect(fs.readFileSync(target === snapshot ? snapshot : file, "utf8")).toBe(before)
+    }
+  })
+
+  it("restores compound, non-id and auto-increment primary keys from the production schemas", async () => {
+    const snapshot = path.join(root, "db-account.json")
+    const rows = {
+      accountSyncOutbox: [{ table: "messages", rowId: "row-1" }],
+      "github-delivery:repos": [{ fullName: "owner/repo" }],
+      "github-delivery:workOrders": [{ status: "new" }],
+    }
+    fs.writeFileSync(snapshot, JSON.stringify({ version: 1, tables: rows }))
+    expect((await verifyDurability(snapshot)).faults).toEqual([])
+    const tables = `${snapshot}.tables`
+    fs.mkdirSync(tables)
+    fs.writeFileSync(
+      path.join(tables, "manifest.json"),
+      JSON.stringify({
+        snapshotFormat: 4,
+        dbs: { CogniaDB: { version: 1, tables: Object.keys(rows) } },
+      })
+    )
+    for (const [table, values] of Object.entries(rows)) {
+      fs.writeFileSync(
+        path.join(tables, `CogniaDB--${encodeURIComponent(table)}.json`),
+        JSON.stringify(values)
+      )
+    }
+    expect((await verifyDurability(tables)).faults).toEqual([])
+  })
+
+  it.each([3, 4])(
+    "verifies format-%s table stores with the shared binary codec",
+    async (format) => {
+      const tables = path.join(root, "db-legacy.json.tables")
+      const value = encodeDurableValue(new Uint8Array(20000), tables)
+      const manifest = path.join(tables, "manifest.json")
+      fs.writeFileSync(
+        manifest,
+        JSON.stringify({
+          snapshotFormat: format,
+          dbs: { "db /": { version: 1, tables: ["github-delivery:repos"] } },
+        })
+      )
+      const rows = path.join(tables, "db%20%2F--github-delivery%3Arepos.json")
+      fs.writeFileSync(rows, JSON.stringify([{ fullName: "owner/repo", value }]))
+      expect((await verifyDurability(tables)).faults).toEqual([])
+      fs.rmSync(binaryDir(tables), { recursive: true })
+      expect((await verifyDurability(tables)).faults).toEqual([
+        expect.objectContaining({ message: expect.stringContaining("is missing") }),
+      ])
+      fs.writeFileSync(rows, "{}")
+      expect((await verifyDurability(tables)).faults).toEqual([
+        expect.objectContaining({ message: expect.stringContaining("not an array") }),
+      ])
+      fs.writeFileSync(manifest, "{broken")
+      expect((await verifyDurability(tables)).faults).not.toEqual([])
+    }
+  )
+
+  it("checks the table store selected by an active snapshot manifest", async () => {
+    const ledger = path.join(root, "durability", "legacy%20account")
+    const tables = path.join(root, "db-legacy account.json.tables")
+    fs.mkdirSync(tables, { recursive: true })
+    fs.writeFileSync(
+      path.join(tables, "manifest.json"),
+      JSON.stringify({
+        snapshotFormat: 4,
+        dbs: { CogniaDB: { version: 1, tables: ["sessions"] } },
+      })
+    )
+    const rows = path.join(tables, "CogniaDB--sessions.json")
+    fs.writeFileSync(rows, "[]")
+    writeManifest(ledger, { ...readManifest(ledger), activeBackend: "snapshot-v3" })
+    expect((await verifyDurability(ledger)).faults).toEqual([])
+    fs.rmSync(rows)
+    expect((await verifyDurability(ledger)).faults).not.toEqual([])
+  })
+
+  it("checks a single-file snapshot selected by an active snapshot manifest read-only", async () => {
+    const ledger = path.join(root, "durability", "legacy%20account")
+    const file = path.join(root, "db-legacy account.json")
+    const bytes = JSON.stringify({ version: 1, tables: { messages: [{ id: "message-1" }] } })
+    fs.writeFileSync(file, bytes)
+    writeManifest(ledger, { ...readManifest(ledger), activeBackend: "snapshot-v3" })
+    expect((await verifyDurability(ledger)).faults).toEqual([])
+    expect(fs.readFileSync(file, "utf8")).toBe(bytes)
+    fs.writeFileSync(file, "{broken")
+    expect((await verifyDurability(ledger)).faults).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("invalid JSON") }),
+    ])
+  })
+
   it("reports an empty account with no faults", async () => {
     const status = await verifyDurability(root)
     expect(status.faults).toEqual([])

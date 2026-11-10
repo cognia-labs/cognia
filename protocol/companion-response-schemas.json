@@ -1,6 +1,17 @@
 {
   "schemaVersion": 1,
   "$defs": {
+    "HostBackupVerificationResult": {
+      "type": "object",
+      "x-cognia-wire-source": "cognia_companion::backup::VerificationResult; cognia-server verify-restore operator response.",
+      "properties": {
+        "dataDirectory": { "type": "string" },
+        "fileCount": { "type": "integer", "minimum": 0 },
+        "sqliteIntegrity": { "type": "boolean" },
+        "checks": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["dataDirectory", "fileCount", "sqliteIntegrity"]
+    },
     "PreviewPort": {
       "oneOf": [
         {

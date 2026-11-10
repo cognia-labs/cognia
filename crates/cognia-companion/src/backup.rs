@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 use tar::{Archive, Builder};
 use tempfile::Builder as TempBuilder;
@@ -22,6 +23,10 @@ use url::Url;
 const ENVELOPE_MAGIC: &[u8; 5] = b"CGBK1";
 const NONCE_LEN: usize = 12;
 const BACKUP_SCHEMA: u32 = 1;
+
+// The brain owns its codecs and recovery rules. Tests can inject the verifier
+// while exercising the same archive, envelope and restore verification paths.
+type BrainVerifier = dyn Fn(&Path) -> Result<(), String> + Send + Sync;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -75,6 +80,8 @@ pub struct VerificationResult {
     pub data_directory: PathBuf,
     pub file_count: usize,
     pub sqlite_integrity: bool,
+    #[serde(default)]
+    pub checks: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -282,29 +289,90 @@ pub async fn create_backup(data_dir: &Path, backup_id: &str) -> Result<BackupRes
     let key_version = required_env("COGNIA_BACKUP_KEY_VERSION")?;
     validate_identifier(&key_version)?;
     let key = load_backup_key(&key_version).await?;
-    let cache_dir = data_dir.join("backups");
-    fs::create_dir_all(&cache_dir).map_err(|error| format!("create backup cache: {error}"))?;
-    let archive = build_archive(data_dir, backup_id, &key_version)?;
-    let manifest_hash = hex::encode(Sha256::digest(&archive.manifest_bytes));
-    let envelope = encrypt_archive(&archive.archive_bytes, &key, &key_version)?;
-    let local_path = cache_dir.join(format!("{backup_id}.cgbk"));
-    atomic_write(&local_path, &envelope)?;
-
-    let points = vec![RecoveryPointReport {
-        id: backup_id.to_owned(),
-        kind: "object-store".into(),
-        manifest_sha256: manifest_hash,
-        size_bytes: i64::try_from(envelope.len()).unwrap_or(i64::MAX),
-        verified: true,
-        created_at: archive.manifest.created_at,
-    }];
-    if let Some(s3) = S3Config::from_env().await? {
-        s3.put(&s3.object_key(backup_id), envelope).await?;
-    } else if env_nonempty("COGNIA_REQUIRE_OBJECT_BACKUP")
-        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    let s3 = S3Config::from_env().await?;
+    if s3.is_none()
+        && env_nonempty("COGNIA_REQUIRE_OBJECT_BACKUP")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
     {
         return Err("production backup requires an S3-compatible object store".into());
     }
+    create_verified_backup(
+        data_dir,
+        backup_id,
+        &key_version,
+        &key,
+        |envelope| async move {
+            if let Some(s3) = s3 {
+                let object_key = s3.object_key(backup_id);
+                s3.put(&object_key, envelope).await?;
+                Ok(Some(s3.get(&object_key).await?))
+            } else {
+                Ok(None)
+            }
+        },
+    )
+    .await
+}
+
+async fn create_verified_backup<F, Fut>(
+    data_dir: &Path,
+    backup_id: &str,
+    key_version: &str,
+    key: &[u8; 32],
+    publish: F,
+) -> Result<BackupResult, String>
+where
+    F: FnOnce(Vec<u8>) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<Vec<u8>>, String>>,
+{
+    create_verified_backup_with_verifier(
+        data_dir,
+        backup_id,
+        key_version,
+        key,
+        publish,
+        &verify_brain_root,
+    )
+    .await
+}
+
+async fn create_verified_backup_with_verifier<F, Fut>(
+    data_dir: &Path,
+    backup_id: &str,
+    key_version: &str,
+    key: &[u8; 32],
+    publish: F,
+    verifier: &BrainVerifier,
+) -> Result<BackupResult, String>
+where
+    F: FnOnce(Vec<u8>) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<Vec<u8>>, String>>,
+{
+    let cache_dir = data_dir.join("backups");
+    fs::create_dir_all(&cache_dir).map_err(|error| format!("create backup cache: {error}"))?;
+    let archive = build_archive_with_verifier(data_dir, backup_id, key_version, verifier)?;
+    let manifest_hash = hex::encode(Sha256::digest(&archive.manifest_bytes));
+    let envelope = encrypt_archive(&archive.archive_bytes, key, key_version)?;
+    let local_path = cache_dir.join(format!("{backup_id}.cgbk"));
+    atomic_write(&local_path, &envelope)?;
+    let local_bytes =
+        fs::read(&local_path).map_err(|error| format!("read written backup: {error}"))?;
+    verify_backup_envelope_with_verifier(&local_bytes, key, backup_id, &manifest_hash, verifier)?;
+    let kind = if let Some(uploaded) = publish(envelope).await? {
+        verify_backup_envelope_with_verifier(&uploaded, key, backup_id, &manifest_hash, verifier)?;
+        "object-store"
+    } else {
+        "local"
+    };
+
+    let points = vec![RecoveryPointReport {
+        id: backup_id.to_owned(),
+        kind: kind.into(),
+        manifest_sha256: manifest_hash,
+        size_bytes: i64::try_from(local_bytes.len()).unwrap_or(i64::MAX),
+        verified: true,
+        created_at: archive.manifest.created_at,
+    }];
     Ok(BackupResult {
         recovery_points: points,
     })
@@ -315,6 +383,23 @@ pub async fn restore_backup(
     recovery_point_id: &str,
     destination: &Path,
     read_only_smoke: bool,
+) -> Result<RestoreResult, String> {
+    restore_backup_with_verifier(
+        data_dir,
+        recovery_point_id,
+        destination,
+        read_only_smoke,
+        &verify_brain_root,
+    )
+    .await
+}
+
+async fn restore_backup_with_verifier(
+    data_dir: &Path,
+    recovery_point_id: &str,
+    destination: &Path,
+    read_only_smoke: bool,
+    verifier: &BrainVerifier,
 ) -> Result<RestoreResult, String> {
     validate_identifier(recovery_point_id)?;
     validate_destination(data_dir, destination)?;
@@ -357,7 +442,7 @@ pub async fn restore_backup(
     let restored_data = unpacked.join("data");
     verify_manifest(&restored_data, &manifest)?;
     if read_only_smoke {
-        sqlite_integrity_smoke(&restored_data)?;
+        verify_data_directory_with_verifier(&restored_data, verifier)?;
     }
     if destination.exists() {
         copy_verified_restore(&restored_data, destination)?;
@@ -367,7 +452,7 @@ pub async fn restore_backup(
     }
     verify_manifest(destination, &manifest)?;
     if read_only_smoke {
-        sqlite_integrity_smoke(destination)?;
+        verify_data_directory_with_verifier(destination, verifier)?;
     }
     Ok(RestoreResult {
         recovery_point_id: recovery_point_id.to_owned(),
@@ -379,6 +464,13 @@ pub async fn restore_backup(
 }
 
 pub fn verify_data_directory(data_directory: &Path) -> Result<VerificationResult, String> {
+    verify_data_directory_with_verifier(data_directory, &verify_brain_root)
+}
+
+fn verify_data_directory_with_verifier(
+    data_directory: &Path,
+    verifier: &BrainVerifier,
+) -> Result<VerificationResult, String> {
     if !data_directory.is_absolute() || !data_directory.is_dir() {
         return Err("verification target must be an existing absolute directory".into());
     }
@@ -390,11 +482,56 @@ pub fn verify_data_directory(data_directory: &Path) -> Result<VerificationResult
     if file_count == 0 {
         return Err("verification target is empty".into());
     }
-    sqlite_integrity_smoke(data_directory)?;
+    let mut checks = vec!["Host store layout".to_owned()];
+    checks.extend(sqlite_integrity_smoke(data_directory)?);
+    for store in brain_roots(data_directory)? {
+        let brain = match store {
+            BrainStore::Ledger(brain)
+            | BrainStore::SnapshotTables(brain)
+            | BrainStore::SnapshotFile(brain) => brain,
+        };
+        let binary = brain.join("binary");
+        if binary.is_dir() {
+            for entry in fs::read_dir(&binary)
+                .map_err(|error| format!("read brain binaries: {error}"))?
+            {
+                let entry = entry.map_err(|error| format!("read brain binary: {error}"))?;
+                if is_brain_binary(data_directory, &entry.path()) {
+                    let mut file = File::open(entry.path())
+                        .map_err(|error| format!("open brain binary: {error}"))?;
+                    let mut hash = Sha256::new();
+                    let mut buffer = [0_u8; 64 * 1024];
+                    loop {
+                        let count = file
+                            .read(&mut buffer)
+                            .map_err(|error| format!("hash brain binary: {error}"))?;
+                        if count == 0 {
+                            break;
+                        }
+                        hash.update(&buffer[..count]);
+                    }
+                    if hex::encode(hash.finalize()) != entry.file_name().to_string_lossy() {
+                        return Err(format!(
+                            "brain binary content hash mismatch: {}",
+                            entry.path().display()
+                        ));
+                    }
+                }
+            }
+        }
+        verifier(&brain).map_err(|error| {
+            format!("brain verification failed for {}: {error}", brain.display())
+        })?;
+        checks.push(format!(
+            "{}: brain durability verify + binary content hashes",
+            brain.strip_prefix(data_directory).unwrap_or(&brain).display()
+        ));
+    }
     Ok(VerificationResult {
         data_directory: data_directory.to_owned(),
         file_count,
         sqlite_integrity: true,
+        checks,
     })
 }
 
@@ -404,15 +541,24 @@ struct BuiltArchive {
     manifest: BackupManifest,
 }
 
-fn build_archive(
+fn build_archive_with_verifier(
     data_dir: &Path,
     backup_id: &str,
     key_version: &str,
+    verifier: &BrainVerifier,
 ) -> Result<BuiltArchive, String> {
     let staging = tempfile::tempdir().map_err(|error| format!("create backup staging: {error}"))?;
     let staged_data = staging.path().join("data");
     fs::create_dir(&staged_data).map_err(|error| format!("create staged data: {error}"))?;
+    // Fence GC before taking the brain's database snapshot. Binary bytes are
+    // durable before their references commit, so copying them AFTER SQLite
+    // includes every snapshot reference, even as ordinary writes continue.
+    // The lease prevents GC from deleting a snapshot reference dropped later.
+    let brain_fences = snapshot_brain_databases(data_dir, &staged_data)?;
     copy_consistent_tree(data_dir, data_dir, &staged_data)?;
+    brain_fences.verify_accounts(data_dir)?;
+    drop(brain_fences);
+    verify_data_directory_with_verifier(&staged_data, verifier)?;
     let mut files = manifest_files(&staged_data)?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
     let manifest = BackupManifest {
@@ -476,18 +622,83 @@ fn copy_consistent_tree(root: &Path, current: &Path, destination: &Path) -> Resu
             fs::create_dir_all(&target).map_err(|error| format!("stage directory: {error}"))?;
             copy_consistent_tree(root, &source, destination)?;
         } else if metadata.is_file() {
-            if is_sqlite_sidecar(&source) {
+            if is_sqlite_sidecar(&source) || is_writer_lease(&source) || target.is_file() {
                 continue;
             }
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent).map_err(|error| format!("stage parent: {error}"))?;
             }
-            if is_sqlite_database(&source)? {
+            if !is_brain_binary(root, &source) && is_sqlite_database(&source)? {
                 sqlite_online_copy(&source, &target)?;
             } else {
                 fs::copy(&source, &target).map_err(|error| format!("stage file: {error}"))?;
             }
         }
+    }
+    Ok(())
+}
+
+fn is_brain_binary(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let Some(parts) = relative.iter().map(|part| part.to_str()).collect::<Option<Vec<_>>>() else {
+        return false;
+    };
+    let parts = if parts.first() == Some(&"persons") && parts.len() >= 2 {
+        &parts[2..]
+    } else {
+        &parts[..]
+    };
+    let reference = match parts {
+        ["serve", "durability", _, "binary", reference] => reference,
+        ["serve", tables, "binary", reference]
+            if tables.starts_with("db-") && tables.ends_with(".json.tables") =>
+        {
+            reference
+        }
+        _ => return false,
+    };
+    reference.len() == 64
+        && reference
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn verify_brain_root(root: &Path) -> Result<(), String> {
+    // Same deployment contract as cognia-server's brain supervisor: an
+    // explicitly configured bundle and the shared Node runtime resolver.
+    let entry = env_nonempty(crate::runtime::BRAIN_ENTRY_ENV)
+        .map(PathBuf::from)
+        .filter(|entry| entry.is_file())
+        .ok_or("brain verifier unavailable: COGNIA_BRAIN_ENTRY must name the installed brain CLI bundle")?;
+    let executable = cognia_core::node_runtime::node_executable()
+        .map_err(|error| format!("brain verifier Node runtime unavailable: {error}"))?;
+    let mut command = Command::new(executable);
+    command.arg(entry);
+    verify_brain_command(root, command)
+}
+
+fn verify_brain_command(root: &Path, mut command: Command) -> Result<(), String> {
+    let output = command
+        .args(["durability", "verify", "--root"])
+        .arg(root)
+        .arg("--json")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("brain verifier runtime could not be started: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "brain durability verify exited {}: {} {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let record: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("invalid brain verifier JSON: {error}"))?;
+    if record["ok"] != true || record["root"].as_str() != root.to_str() {
+        return Err(format!("brain verifier did not confirm the requested root: {record}"));
     }
     Ok(())
 }
@@ -507,15 +718,421 @@ fn sqlite_online_copy(source: &Path, destination: &Path) -> Result<(), String> {
         .map_err(|error| format!("start SQLite backup: {error}"))?;
     backup
         .run_to_completion(128, Duration::from_millis(5), None)
-        .map_err(|error| format!("copy SQLite database: {error}"))
+        .map_err(|error| format!("copy SQLite database: {error}"))?;
+    drop(backup);
+    destination
+        .execute_batch("PRAGMA journal_mode=DELETE;")
+        .map_err(|error| format!("seal SQLite backup: {error}"))
 }
 
-fn sqlite_integrity_smoke(root: &Path) -> Result<(), String> {
-    visit_files(root, &mut |path| {
-        if !is_sqlite_database(path)? {
-            return Ok(());
+// Server initialization creates the first two stores; serve creates the
+// idempotency store before starting brains. The remaining stores are lazy.
+const HOST_DATABASES: &[&str] = &[
+    "cognia-server.sqlite",
+    "companion-signaling.sqlite",
+    "companion-idempotency.sqlite",
+    ".cognia/provider-profiles.sqlite",
+    "cognia/agent-sessions.sqlite",
+    "cognia/jobs.sqlite",
+    "task-workspaces/task-workspaces.sqlite",
+];
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum BrainStore {
+    Ledger(PathBuf),
+    SnapshotTables(PathBuf),
+    SnapshotFile(PathBuf),
+}
+
+fn encode_snapshot_component(name: &str) -> String {
+    // Match bootstrap.ts's encodeURIComponent, including its extra safe ASCII.
+    percent_encode(name)
+        .replace("%21", "!")
+        .replace("%27", "'")
+        .replace("%28", "(")
+        .replace("%29", ")")
+        .replace("%2A", "*")
+}
+
+fn brain_roots(root: &Path) -> Result<Vec<BrainStore>, String> {
+    let mut homes = vec![root.join("serve")];
+    // Person brains receive their own COGNIA_DATA_DIR, not the Host's root.
+    let persons = root.join("persons");
+    if persons.exists() {
+        for entry in
+            fs::read_dir(&persons).map_err(|error| format!("read person partitions: {error}"))?
+        {
+            let entry = entry.map_err(|error| format!("read person partition: {error}"))?;
+            if entry
+                .file_type()
+                .map_err(|error| format!("inspect person partition: {error}"))?
+                .is_dir()
+            {
+                homes.push(entry.path().join("serve"));
+            }
         }
-        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    }
+    let mut roots = Vec::new();
+    for home in homes {
+        if !home.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&home)
+            .map_err(|error| format!("read brain home {}: {error}", home.display()))?
+        {
+            let entry = entry.map_err(|error| format!("read brain store: {error}"))?;
+            let kind = entry
+                .file_type()
+                .map_err(|error| format!("inspect brain store: {error}"))?;
+            let name = entry.file_name();
+            if kind.is_file() && name.to_str().is_some_and(|name| {
+                name.starts_with("db-") && name.ends_with(".json")
+            }) {
+                roots.push(BrainStore::SnapshotFile(entry.path()));
+            }
+            if !kind.is_dir() {
+                continue;
+            }
+            if name == "durability" {
+                for account in fs::read_dir(entry.path())
+                    .map_err(|error| format!("read brain durability: {error}"))?
+                {
+                    let account =
+                        account.map_err(|error| format!("read brain account: {error}"))?;
+                    if !account
+                        .file_type()
+                        .map_err(|error| format!("inspect brain account: {error}"))?
+                        .is_dir()
+                    {
+                        continue;
+                    }
+                    let brain = account.path();
+                    let mut initialized = false;
+                    for file in fs::read_dir(&brain)
+                        .map_err(|error| format!("read brain account store: {error}"))?
+                    {
+                        let file =
+                            file.map_err(|error| format!("read brain account file: {error}"))?;
+                        if !is_writer_lease(&file.path()) && !is_sqlite_sidecar(&file.path()) {
+                            initialized = true;
+                        }
+                    }
+                    // Startup may have created only a directory and kernel leases.
+                    if initialized {
+                        roots.push(BrainStore::Ledger(brain));
+                    }
+                }
+            } else if name
+                .to_str()
+                .is_some_and(|name| name.starts_with("db-") && name.ends_with(".json.tables"))
+            {
+                roots.push(BrainStore::SnapshotTables(entry.path()));
+            }
+        }
+    }
+    roots.sort();
+    Ok(roots)
+}
+
+fn expected_databases(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut databases = Vec::new();
+    let stores = brain_roots(root)?;
+    for (index, name) in HOST_DATABASES.iter().enumerate() {
+        let path = root.join(name);
+        if index < 2 || path.exists() || (index == 2 && !stores.is_empty()) {
+            if !path.is_file() {
+                return Err(format!("missing expected Host database: {name}"));
+            }
+            databases.push(path);
+        }
+    }
+    for store in &stores {
+        let brain = match store {
+            BrainStore::Ledger(brain) => brain,
+            // Table manifests, row files and values belong to the brain's
+            // verifier, including the legacy snapshot formats it supports.
+            BrainStore::SnapshotTables(_) | BrainStore::SnapshotFile(_) => continue,
+        };
+        let manifest = brain.join("backend-manifest.json");
+        let sqlite = brain.join("sqlite/store.sqlite");
+        let mut expects_sqlite = brain.join("sqlite").exists();
+        let mut expects_journal = false;
+        let mut expects_snapshot = false;
+        if manifest.exists() {
+            let value: serde_json::Value = serde_json::from_slice(
+                &fs::read(&manifest).map_err(|error| format!("read brain manifest: {error}"))?,
+            )
+            .map_err(|error| format!("invalid brain manifest {}: {error}", manifest.display()))?;
+            let known_backend =
+                |backend: &str| matches!(backend, "sqlite-v5" | "journal-v4" | "snapshot-v3");
+            if value["manifestFormat"] != 1
+                || !value["activeBackend"].as_str().is_some_and(known_backend)
+                || !(value["shadowBackend"].is_null()
+                    || value["shadowBackend"].as_str().is_some_and(known_backend))
+            {
+                return Err(format!(
+                    "invalid brain backend manifest: {}",
+                    manifest.display()
+                ));
+            }
+            expects_sqlite |=
+                value["activeBackend"] == "sqlite-v5" || value["shadowBackend"] == "sqlite-v5";
+            // serve uses the table store for an active snapshot-v3 backend;
+            // openBackend uses a checkpoint ledger for a snapshot-v3 shadow.
+            expects_journal = value["activeBackend"] == "journal-v4"
+                || value["shadowBackend"] == "journal-v4"
+                || value["shadowBackend"] == "snapshot-v3";
+            expects_snapshot = value["activeBackend"] == "snapshot-v3";
+        }
+        let has_snapshot = stores.iter().any(|store| {
+            let (snapshot, suffix) = match store {
+                BrainStore::SnapshotTables(tables) => (tables, ".json.tables"),
+                BrainStore::SnapshotFile(file) => (file, ".json"),
+                BrainStore::Ledger(_) => return false,
+            };
+            snapshot.parent() == brain.parent().and_then(Path::parent)
+                && snapshot
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_prefix("db-"))
+                    .and_then(|name| name.strip_suffix(suffix))
+                    .is_some_and(|account| {
+                        brain.file_name().and_then(|name| name.to_str())
+                            == Some(encode_snapshot_component(account).as_str())
+                    })
+        });
+        // An account root must contain a real durability store, not just leases.
+        if !expects_sqlite || expects_journal || expects_snapshot {
+            let mut has_checkpoint = false;
+            if brain.join("generations").is_dir() {
+                for entry in fs::read_dir(brain.join("generations"))
+                    .map_err(|error| format!("read brain generations: {error}"))?
+                {
+                    let entry = entry.map_err(|error| format!("read brain generation: {error}"))?;
+                    has_checkpoint |= entry.path().join("checkpoint.json").is_file();
+                }
+            }
+            if expects_journal && !has_checkpoint {
+                return Err(format!(
+                    "missing expected journal-v4 checkpoint: {}",
+                    brain.display()
+                ));
+            }
+            if expects_snapshot && !has_snapshot {
+                return Err(format!(
+                    "missing expected snapshot-v3 store: {}",
+                    brain.display()
+                ));
+            }
+            if !has_checkpoint && !has_snapshot {
+                return Err(format!(
+                    "unrecognized brain durability store: {}",
+                    brain.display()
+                ));
+            }
+        }
+        if expects_sqlite {
+            if !sqlite.is_file() {
+                return Err(format!(
+                    "missing expected brain database: {}",
+                    sqlite.display()
+                ));
+            }
+            databases.push(sqlite);
+        }
+    }
+    Ok(databases)
+}
+
+struct SnapshotCopyLease {
+    path: PathBuf,
+    token: String,
+}
+
+impl SnapshotCopyLease {
+    fn lock_path(snapshot: &Path) -> PathBuf {
+        if snapshot.extension().is_some_and(|extension| extension == "tables") {
+            snapshot.with_extension("lock")
+        } else {
+            snapshot.with_extension("json.lock")
+        }
+    }
+
+    fn acquire(snapshot: &Path) -> Result<Self, String> {
+        // Publish complete store-lock.ts metadata with an atomic no-clobber
+        // link, so a starting Node writer cannot mistake a partial lock for
+        // a stale one. A live snapshot writer must stop before a safe copy.
+        let path = Self::lock_path(snapshot);
+        let token = uuid::Uuid::new_v4().to_string();
+        let lock = serde_json::json!({
+            "lockVersion": 1, "pid": std::process::id(),
+            "host": sysinfo::System::host_name().ok_or("cannot identify snapshot lock host")?,
+            "startedAt": Utc::now().to_rfc3339(), "token": token,
+            "heartbeatAt": Utc::now().timestamp_millis(), "cliVersion": env!("CARGO_PKG_VERSION"),
+        });
+        let mut staging = TempBuilder::new()
+            .prefix(".cognia-backup-lock-")
+            .tempfile_in(path.parent().ok_or("snapshot lock has no parent")?)
+            .map_err(|error| format!("create snapshot copy fence: {error}"))?;
+        serde_json::to_writer(&mut staging, &lock)
+            .map_err(|error| format!("write snapshot copy fence: {error}"))?;
+        staging
+            .as_file()
+            .sync_all()
+            .map_err(|error| format!("sync snapshot copy fence: {error}"))?;
+        fs::hard_link(staging.path(), &path).map_err(|error| format!(
+            "cannot back up snapshot-v3 account store {}: stop this account's snapshot brain and retry; if it is already stopped, resolve its stale writer lock {} with the CLI before retrying: {error}", snapshot.display(), path.display()))?;
+        Ok(Self { path, token })
+    }
+}
+
+impl Drop for SnapshotCopyLease {
+    fn drop(&mut self) {
+        let owner = fs::read(&self.path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        if owner
+            .as_ref()
+            .is_some_and(|owner| owner["token"].as_str() == Some(&self.token))
+        {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+struct BrainCopyFences {
+    accounts: Vec<BrainStore>,
+    _ledgers: Vec<Connection>,
+    _snapshots: Vec<SnapshotCopyLease>,
+}
+
+impl BrainCopyFences {
+    fn verify_accounts(&self, root: &Path) -> Result<(), String> {
+        if brain_roots(root)? != self.accounts {
+            return Err("brain account stores changed during backup; retry the backup".into());
+        }
+        Ok(())
+    }
+}
+
+fn snapshot_brain_databases(root: &Path, destination: &Path) -> Result<BrainCopyFences, String> {
+    let mut leases = BrainCopyFences {
+        accounts: brain_roots(root)?,
+        _ledgers: Vec::new(),
+        _snapshots: Vec::new(),
+    };
+    for store in &leases.accounts {
+        let brain = match store {
+            BrainStore::Ledger(brain) => brain,
+            BrainStore::SnapshotTables(snapshot) | BrainStore::SnapshotFile(snapshot) => {
+                // Single-file and table snapshots for one account share the
+                // bootstrap store lock; acquire it only once when both remain.
+                if !leases._snapshots.iter().any(|lease| {
+                    lease.path == SnapshotCopyLease::lock_path(snapshot)
+                }) {
+                    leases._snapshots.push(SnapshotCopyLease::acquire(snapshot)?);
+                }
+                continue;
+            }
+        };
+        // This is the exact writer-lock.ts kernel-lock protocol. A live legacy
+        // journal writer refuses the backup rather than yielding a torn journal;
+        // SQLite writers use a different lease and remain online.
+        for store in ["backup", "checkpoint", "journal"] {
+            let file = brain.join(format!(".{store}-writer.sqlite"));
+            let lease = Connection::open(&file)
+                .map_err(|error| format!("open backup fence {}: {error}", file.display()))?;
+            lease
+                .busy_timeout(Duration::ZERO)
+                .map_err(|error| format!("set backup fence timeout: {error}"))?;
+            let remedy = match store {
+                "journal" => "stop this account's brain/journal writer, then retry the backup",
+                "checkpoint" => "wait for checkpoint maintenance, then retry the backup",
+                _ => "wait for the other backup or GC sweep, then retry the backup",
+            };
+            lease
+                .execute_batch("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;")
+                .map_err(|error| {
+                    format!(
+                        "brain account {} ({}) {store} store is busy; {remedy}: {error}",
+                        brain.file_name().unwrap_or_default().to_string_lossy(),
+                        brain.strip_prefix(root).unwrap_or(&brain).display()
+                    )
+                })?;
+            leases._ledgers.push(lease);
+        }
+        let source = brain.join("sqlite/store.sqlite");
+        if source.exists() {
+            let target = destination.join(
+                source
+                    .strip_prefix(root)
+                    .map_err(|_| "brain path escaped backup root")?,
+            );
+            fs::create_dir_all(target.parent().ok_or("brain snapshot has no parent")?)
+                .map_err(|error| format!("create brain snapshot directory: {error}"))?;
+            sqlite_online_copy(&source, &target)?;
+        }
+    }
+    Ok(leases)
+}
+
+fn is_writer_lease(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(
+            ".backup-writer.sqlite"
+                | ".binary-writer.sqlite"
+                | ".checkpoint-writer.sqlite"
+                | ".journal-writer.sqlite"
+                | ".sqlite-writer.sqlite"
+        )
+    ) || (path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "serve")
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("db-") && name.ends_with(".json.lock")))
+}
+
+fn sqlite_integrity_smoke(root: &Path) -> Result<Vec<String>, String> {
+    let mut databases = expected_databases(root)?;
+    let mut checks = Vec::new();
+    visit_files(root, &mut |path| {
+        if !databases.iter().any(|known| known == path)
+            && !is_writer_lease(path)
+            && !is_sqlite_sidecar(path)
+            && !is_brain_binary(root, path)
+            && is_sqlite_database(path)?
+        {
+            databases.push(path.to_owned());
+        }
+        Ok(())
+    })?;
+    databases.sort();
+    let staging = tempfile::tempdir()
+        .map_err(|error| format!("create SQLite verification staging: {error}"))?;
+    for (index, path) in databases.into_iter().enumerate() {
+        if !is_sqlite_database(&path)? {
+            return Err(format!("invalid SQLite header: {}", path.display()));
+        }
+        // Even a read-only connection can create WAL/SHM files. Check an exact
+        // disposable copy (including pending WAL), never the operator's volume.
+        let copy = staging.path().join(format!("{index}.sqlite"));
+        fs::copy(&path, &copy)
+            .map_err(|error| format!("stage verification database {}: {error}", path.display()))?;
+        for suffix in ["-wal", "-journal"] {
+            let sidecar = PathBuf::from(format!("{}{suffix}", path.display()));
+            if sidecar.exists() {
+                fs::copy(
+                    &sidecar,
+                    PathBuf::from(format!("{}{suffix}", copy.display())),
+                )
+                .map_err(|error| format!("stage verification sidecar: {error}"))?;
+            }
+        }
+        let connection = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| format!("open restored SQLite {}: {error}", path.display()))?;
         let result: String = connection
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))
@@ -526,8 +1143,54 @@ fn sqlite_integrity_smoke(root: &Path) -> Result<(), String> {
                 path.display()
             ));
         }
-        Ok(())
-    })
+        checks.push(format!(
+            "{}: SQLite header + integrity_check",
+            path.strip_prefix(root).unwrap_or(&path).display()
+        ));
+    }
+    Ok(checks)
+}
+
+#[cfg(test)]
+fn verify_backup_envelope(
+    envelope: &[u8],
+    key: &[u8; 32],
+    backup_id: &str,
+    manifest_hash: &str,
+) -> Result<(), String> {
+    verify_backup_envelope_with_verifier(envelope, key, backup_id, manifest_hash, &verify_brain_root)
+}
+
+fn verify_backup_envelope_with_verifier(
+    envelope: &[u8],
+    key: &[u8; 32],
+    backup_id: &str,
+    manifest_hash: &str,
+    verifier: &BrainVerifier,
+) -> Result<(), String> {
+    let bytes = decrypt_archive(envelope, key)?;
+    let staging = tempfile::tempdir()
+        .map_err(|error| format!("create backup verification staging: {error}"))?;
+    Archive::new(GzDecoder::new(bytes.as_slice()))
+        .unpack(staging.path())
+        .map_err(|error| format!("unpack backup for verification: {error}"))?;
+    let manifest_bytes = fs::read(staging.path().join("manifest.json"))
+        .map_err(|error| format!("read verification manifest: {error}"))?;
+    if hex::encode(Sha256::digest(&manifest_bytes)) != manifest_hash {
+        return Err("backup verification manifest hash does not match".into());
+    }
+    let manifest: BackupManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| format!("parse verification manifest: {error}"))?;
+    if manifest.schema != BACKUP_SCHEMA || manifest.backup_id != backup_id {
+        return Err("backup verification identity or schema does not match".into());
+    }
+    if manifest.key_version != envelope_key_version(envelope)? {
+        return Err("backup envelope key version does not match the manifest".into());
+    }
+    let data = staging.path().join("data");
+    verify_manifest(&data, &manifest)?;
+    verify_data_directory_with_verifier(&data, verifier)?;
+    Ok(())
 }
 
 fn manifest_files(root: &Path) -> Result<Vec<ManifestFile>, String> {
@@ -803,9 +1466,937 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    // Exercise the current TS verifier without needing a rebuilt CLI bundle or
+    // changing the operator's process environment. Production still resolves
+    // COGNIA_BRAIN_ENTRY and Node through the Host's deployment contract.
+    fn source_brain_verifier(root: &Path) -> Result<(), String> {
+        let script = format!(
+            "const c = await import({}); const a = await import({}); process.exitCode = await (c.default ?? c).durabilityCommand((a.default ?? a).parseArgv(process.argv.slice(1)), {{out:{{write: s => process.stdout.write(s), error: s => process.stderr.write(s), json: v => console.log(JSON.stringify(v))}},env:{{}}}});",
+            brain_module("cli/src/cli/durability-command.ts"),
+            brain_module("cli/src/cli/args.ts")
+        );
+        verify_brain_command(root, node_script_command(&script))
+    }
+
+    fn brain_module(file: &str) -> String {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        serde_json::to_string(&format!("file://{}", repo.join(file).display())).unwrap()
+    }
+
+    fn node_script_command(script: &str) -> Command {
+        let mut command = Command::new(cognia_core::node_runtime::node_executable().unwrap());
+        command.args(["--import", "tsx", "--input-type=module", "-e", script])
+            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+        command
+    }
+
+    fn verify_data_directory(root: &Path) -> Result<VerificationResult, String> {
+        verify_data_directory_with_verifier(root, &source_brain_verifier)
+    }
+
+    fn build_archive(root: &Path, id: &str, key: &str) -> Result<BuiltArchive, String> {
+        build_archive_with_verifier(root, id, key, &source_brain_verifier)
+    }
+
+    async fn restore_backup(
+        root: &Path, id: &str, destination: &Path, smoke: bool,
+    ) -> Result<RestoreResult, String> {
+        restore_backup_with_verifier(root, id, destination, smoke, &source_brain_verifier).await
+    }
+
+    struct BackupTestEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl BackupTestEnv {
+        fn new() -> Self {
+            let names = [
+                "COGNIA_BACKUP_KEY_VERSION",
+                "COGNIA_BACKUP_KEY_FILE",
+                "COGNIA_BACKUP_KEY_DIR",
+                "COGNIA_REQUIRE_OBJECT_BACKUP",
+                "COGNIA_S3_ENDPOINT",
+                "COGNIA_S3_BUCKET",
+                "COGNIA_S3_ACCESS_KEY_FILE",
+                "COGNIA_S3_SECRET_KEY_FILE",
+                "COGNIA_S3_SESSION_TOKEN_FILE",
+                "COGNIA_S3_PATH_STYLE",
+                "COGNIA_BACKUP_PREFIX",
+                crate::runtime::BRAIN_ENTRY_ENV,
+            ];
+            let values = names
+                .into_iter()
+                .map(|name| (name, std::env::var_os(name)))
+                .collect();
+            for name in names {
+                std::env::remove_var(name);
+            }
+            Self(values)
+        }
+    }
+
+    impl Drop for BackupTestEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    fn seed_host(root: &Path) {
+        for name in &HOST_DATABASES[..3] {
+            Connection::open(root.join(name))
+                .unwrap()
+                .execute_batch("CREATE TABLE fixture(value TEXT);")
+                .unwrap();
+        }
+    }
+
+    fn seed_brain(root: &Path) -> PathBuf {
+        seed_brain_account(root, "local-account")
+    }
+
+    fn seed_brain_account(root: &Path, account: &str) -> PathBuf {
+        let brain = root.join("serve/durability").join(account);
+        fs::create_dir_all(brain.join("sqlite")).unwrap();
+        fs::write(
+            brain.join("backend-manifest.json"),
+            br#"{"manifestFormat":1,"activeBackend":"sqlite-v5","shadowBackend":null}"#,
+        )
+        .unwrap();
+        Connection::open(brain.join("sqlite/store.sqlite"))
+            .unwrap()
+            .execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE rows(value TEXT);
+                CREATE TABLE durability_schema(database TEXT PRIMARY KEY, version INTEGER, tables TEXT);
+                CREATE TABLE durability_rows(database TEXT, table_name TEXT, row_key TEXT, value TEXT);")
+            .unwrap();
+        brain
+    }
+
+    fn seed_snapshot_tables(root: &Path) -> PathBuf {
+        let tables = root.join("serve/db-legacy-account.json.tables");
+        fs::create_dir_all(&tables).unwrap();
+        fs::write(
+            tables.join("manifest.json"),
+            br#"{"snapshotFormat":4,"dbs":{"cognia":{"version":1,"tables":["messages"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            tables.join("cognia--messages.json"),
+            br#"[{"id":"message-1"}]"#,
+        )
+        .unwrap();
+        tables
+    }
+
+    fn seed_snapshot_file(root: &Path) -> PathBuf {
+        let file = root.join("serve/db-legacy-account.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, br#"{"version":1,"tables":{"messages":[{"id":"message-1"}]}}"#).unwrap();
+        file
+    }
+
+    fn seed_attachment(brain: &Path, attachment: &Path, snapshot: bool) {
+        fs::create_dir_all(brain).unwrap();
+        let script = format!(
+            "import fs from 'node:fs'; const v = await import({}); const c = await import({}); const root = {}; const value = (v.default ?? v).encodeDurableValue(new Uint8Array(fs.readFileSync({})), root); {}",
+            brain_module("cli/src/serve/persistence/value-codec.ts"),
+            brain_module("cli/src/serve/persistence/checkpoint.ts"),
+            serde_json::to_string(brain).unwrap(),
+            serde_json::to_string(attachment).unwrap(),
+            if snapshot {
+                "fs.writeFileSync(root + '/manifest.json', JSON.stringify({snapshotFormat:4,dbs:{cognia:{version:1,tables:['messages']}}})); fs.writeFileSync(root + '/cognia--messages.json', JSON.stringify([{id:'attachment',value}]));"
+            } else {
+                "(c.default ?? c).writeCheckpoint(root, 'gen-0001', {sequence:0,dbs:{cognia:{schema:{version:1,tables:['messages']},rows:{messages:{'s:attachment':{id:'attachment',value}}}}}});"
+            }
+        );
+        let output = node_script_command(&script).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn backup_preserves_sqlite_header_attachments_in_every_brain_layout() {
+        let attachments = tempfile::tempdir().unwrap();
+        let file = attachments.path().join("attachment.sqlite");
+        Connection::open(&file).unwrap()
+            .execute_batch("CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES (zeroblob(24000));")
+            .unwrap();
+        let bytes = fs::read(&file).unwrap();
+        assert!(bytes.len() > 16 * 1024);
+        assert_eq!(&bytes[..16], b"SQLite format 3\0");
+        let reference = hex::encode(Sha256::digest(&bytes));
+        for partition in ["", "persons/member-A"] {
+            for snapshot in [false, true] {
+                let source = tempfile::tempdir().unwrap();
+                seed_host(source.path());
+                let home = source.path().join(partition).join("serve");
+                let brain = if snapshot {
+                    home.join("db-member-A.json.tables")
+                } else {
+                    home.join("durability/member-A")
+                };
+                seed_attachment(&brain, &file, snapshot);
+                // Also prove that SQLite-looking bytes need not be a database.
+                let mut opaque = vec![7_u8; 20000];
+                opaque[..16].copy_from_slice(b"SQLite format 3\0");
+                let opaque_ref = hex::encode(Sha256::digest(&opaque));
+                fs::write(brain.join("binary").join(&opaque_ref), &opaque).unwrap();
+                let built = build_archive(source.path(), "sqlite-attachment", "v1").unwrap();
+                let staged = tempfile::tempdir().unwrap();
+                Archive::new(GzDecoder::new(built.archive_bytes.as_slice())).unpack(staged.path()).unwrap();
+                let staged_data = staged.path().join("data");
+                let copy = staged_data.join(brain.strip_prefix(source.path()).unwrap());
+                assert_eq!(fs::read(copy.join("binary").join(&reference)).unwrap(), bytes);
+                assert_eq!(fs::read(copy.join("binary").join(&opaque_ref)).unwrap(), opaque);
+                verify_data_directory(&staged_data).unwrap();
+                fs::write(copy.join("binary").join(&opaque_ref), b"changed orphan").unwrap();
+                assert!(verify_data_directory(&staged_data).unwrap_err().contains("content hash mismatch"));
+            }
+        }
+    }
+
+    #[test]
+    fn backup_delegates_missing_references_and_broken_checkpoints_to_the_brain() {
+        for fault in ["missing binary", "broken checkpoint"] {
+            let source = tempfile::tempdir().unwrap();
+            seed_host(source.path());
+            let attachment = source.path().join("attachment");
+            fs::write(&attachment, vec![1_u8; 20000]).unwrap();
+            let brain = source.path().join("persons/member-A/serve/durability/member-A");
+            seed_attachment(&brain, &attachment, false);
+            verify_data_directory(source.path()).unwrap();
+            if fault == "missing binary" {
+                fs::remove_dir_all(brain.join("binary")).unwrap();
+            } else {
+                fs::write(brain.join("generations/gen-0001/checkpoint.json"), b"{broken").unwrap();
+            }
+            let error = verify_data_directory(source.path()).unwrap_err();
+            assert!(error.contains("brain verification failed"), "{error}");
+            assert!(error.contains(if fault == "missing binary" { "is missing" } else { "JSON" }), "{error}");
+            assert!(build_archive(source.path(), "damaged", "v1").is_err());
+            // A valid archive manifest cannot conceal a brain recovery fault.
+            let archive = previous_backup_archive(source.path(), "damaged");
+            let unpacked = tempfile::tempdir().unwrap();
+            Archive::new(GzDecoder::new(archive.as_slice())).unpack(unpacked.path()).unwrap();
+            let hash = hex::encode(Sha256::digest(fs::read(unpacked.path().join("manifest.json")).unwrap()));
+            let key = [1_u8; 32];
+            let envelope = encrypt_archive(&archive, &key, "key-v1").unwrap();
+            assert!(verify_backup_envelope_with_verifier(&envelope, &key, "damaged", &hash, &source_brain_verifier).is_err());
+        }
+    }
+
+    #[test]
+    fn backup_verifier_seam_requires_every_account_and_fails_closed_without_runtime() {
+        let source = tempfile::tempdir().unwrap();
+        seed_host(source.path());
+        seed_brain(source.path());
+        seed_brain_account(&source.path().join("persons/member-A"), "member-A");
+        seed_snapshot_tables(&source.path().join("persons/member-B"));
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let calls = seen.clone();
+        let pass = move |root: &Path| {
+            calls.lock().unwrap().push(root.to_owned());
+            Ok(())
+        };
+        verify_data_directory_with_verifier(source.path(), &pass).unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 3);
+        let fail = |root: &Path| {
+            if root.ends_with("member-A") { Err("injected brain fault".into()) } else { Ok(()) }
+        };
+        assert!(verify_data_directory_with_verifier(source.path(), &fail).unwrap_err().contains("injected brain fault"));
+        assert!(build_archive_with_verifier(source.path(), "refused", "v1", &fail).is_err());
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = BackupTestEnv::new();
+        assert!(super::verify_data_directory(source.path()).unwrap_err().contains("COGNIA_BRAIN_ENTRY"));
+    }
+
+    #[test]
+    fn backup_verifier_requires_successful_json_for_the_requested_root() {
+        let root = Path::new("/staged/account");
+        for script in [
+            "console.log(JSON.stringify({ok:true,root:process.argv[4]}))",
+            "console.log(JSON.stringify({ok:false,root:process.argv[4]}))",
+            "console.log(JSON.stringify({ok:true,root:'/other'}))",
+            "console.log('not JSON')",
+            "console.log(JSON.stringify({ok:true,root:process.argv[4]})); process.exitCode=1",
+        ] {
+            let mut command = Command::new(cognia_core::node_runtime::node_executable().unwrap());
+            command.args(["-e", script]);
+            let result = verify_brain_command(root, command);
+            assert_eq!(result.is_ok(), script == "console.log(JSON.stringify({ok:true,root:process.argv[4]}))", "{result:?}");
+        }
+        assert!(verify_brain_command(root, Command::new("/missing/brain-node")).unwrap_err().contains("could not be started"));
+    }
+
+    #[test]
+    fn backup_uses_configured_brain_entry_with_the_host_node_runtime() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = BackupTestEnv::new();
+        let source = tempfile::tempdir().unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        seed_host(source.path());
+        seed_brain(source.path());
+        let entry = runtime.path().join("brain verifier.mjs");
+        std::env::set_var(crate::runtime::BRAIN_ENTRY_ENV, &entry);
+        assert!(super::verify_data_directory(source.path())
+            .unwrap_err()
+            .contains("brain verifier unavailable"));
+        // This fixture checks the production process boundary; codec and
+        // recovery behavior are exercised by source_brain_verifier above.
+        fs::write(&entry, r#"
+            const args = process.argv.slice(2);
+            const valid = args.length === 5 && args[0] === 'durability'
+                && args[1] === 'verify' && args[2] === '--root' && args[4] === '--json';
+            console.log(JSON.stringify({ok: valid, root: args[3]}));
+            process.exitCode = valid ? 0 : 1;
+        "#).unwrap();
+        super::verify_data_directory(source.path()).unwrap();
+        fs::write(&entry, "console.log(JSON.stringify({ok:false,root:process.argv[5]}))").unwrap();
+        assert!(super::verify_data_directory(source.path())
+            .unwrap_err()
+            .contains("did not confirm the requested root"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn backup_restore_and_publication_require_the_injected_brain_verifier() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = BackupTestEnv::new();
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        seed_host(source.path());
+        seed_brain(source.path());
+        let key = [9_u8; 32];
+        let key_file = secrets.path().join("backup.key");
+        fs::write(&key_file, hex::encode(key)).unwrap();
+        std::env::set_var("COGNIA_BACKUP_KEY_VERSION", "key-v1");
+        std::env::set_var("COGNIA_BACKUP_KEY_FILE", key_file);
+        let refused = create_verified_backup_with_verifier(
+            source.path(), "refused", "key-v1", &key,
+            |_| async { panic!("failed brain verification must prevent publication") },
+            &|_| Err("injected brain fault".into()),
+        ).await;
+        assert!(refused.unwrap_err().contains("injected brain fault"));
+        assert!(!source.path().join("backups/refused.cgbk").exists());
+        let result = create_verified_backup_with_verifier(
+            source.path(), "accepted", "key-v1", &key,
+            |_| async { Ok(None) }, &source_brain_verifier,
+        ).await.unwrap();
+        assert!(result.recovery_points[0].verified);
+        let target = destination.path().join("restored");
+        assert!(restore_backup_with_verifier(
+            source.path(), "accepted", &target, true,
+            &|_| Err("injected restore fault".into()),
+        ).await.unwrap_err().contains("injected restore fault"));
+        assert!(!target.exists());
+        let observed = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let calls = observed.clone();
+        let verifier = move |root: &Path| {
+            calls.lock().unwrap().push(root.to_owned());
+            source_brain_verifier(root)
+        };
+        restore_backup_with_verifier(source.path(), "accepted", &target, true, &verifier).await.unwrap();
+        let calls = observed.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].starts_with(destination.path()));
+        assert_eq!(calls[1], target.join("serve/durability/local-account"));
+    }
+
+    // Schema-1 archive writer from before H09-H11. These fixtures contain
+    // closed SQLite databases and stable table files, so no online copy is
+    // needed. Do not call today's builder or its layout/fence verification.
+    fn previous_backup_archive(data: &Path, id: &str) -> Vec<u8> {
+        let mut files = manifest_files(data).unwrap();
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        let manifest = BackupManifest {
+            schema: 1,
+            build: "0.1.0".into(),
+            backup_id: id.into(),
+            created_at: Utc::now(),
+            key_version: "key-v1".into(),
+            files,
+        };
+        let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        let mut tar = Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o600);
+        header.set_cksum();
+        tar.append_data(&mut header, "manifest.json", bytes.as_slice())
+            .unwrap();
+        tar.append_dir_all("data", data).unwrap();
+        tar.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn backup_restores_previous_archives_without_ledger_or_with_snapshot_tables() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = BackupTestEnv::new();
+        let secrets = tempfile::tempdir().unwrap();
+        let key = [9_u8; 32];
+        let key_file = secrets.path().join("backup.key");
+        fs::write(&key_file, hex::encode(key)).unwrap();
+        std::env::set_var("COGNIA_BACKUP_KEY_VERSION", "key-v1");
+        std::env::set_var("COGNIA_BACKUP_KEY_FILE", &key_file);
+        for layout in [
+            "no-brain",
+            "not-booted",
+            "snapshot-format-3",
+            "snapshot-format-4",
+            "snapshot-single-file",
+        ] {
+            let source = tempfile::tempdir().unwrap();
+            let destination = tempfile::tempdir().unwrap();
+            seed_host(source.path());
+            if layout == "not-booted" {
+                fs::create_dir(source.path().join("serve")).unwrap();
+                fs::remove_file(source.path().join("companion-idempotency.sqlite")).unwrap();
+            }
+            if layout == "snapshot-single-file" {
+                seed_snapshot_file(source.path());
+            } else if layout.starts_with("snapshot") {
+                let tables = seed_snapshot_tables(source.path());
+                if layout == "snapshot-format-3" {
+                    let file = tables.join("manifest.json");
+                    let mut value: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+                    value["snapshotFormat"] = 3.into();
+                    fs::write(file, serde_json::to_vec(&value).unwrap()).unwrap();
+                }
+            }
+            let archive = previous_backup_archive(source.path(), layout);
+            fs::create_dir(source.path().join("backups")).unwrap();
+            fs::write(
+                source.path().join("backups").join(format!("{layout}.cgbk")),
+                encrypt_archive(&archive, &key, "key-v1").unwrap(),
+            )
+            .unwrap();
+            let target = destination.path().join("restored");
+            let report = restore_backup(source.path(), layout, &target, true)
+                .await
+                .unwrap();
+            assert!(report.read_only_smoke);
+            let verified = verify_data_directory(&target).unwrap();
+            assert!(verified.sqlite_integrity);
+            if layout == "snapshot-single-file" {
+                assert!(verified.checks.iter().any(|check| {
+                    check.contains("serve/db-legacy-account.json: brain durability verify")
+                }));
+                assert_eq!(fs::read(target.join("serve/db-legacy-account.json")).unwrap(),
+                    fs::read(source.path().join("serve/db-legacy-account.json")).unwrap());
+            } else if layout.starts_with("snapshot") {
+                assert!(verified.checks.contains(
+                    &"serve/db-legacy-account.json.tables: brain durability verify + binary content hashes"
+                        .to_owned()
+                ));
+                assert_eq!(
+                    fs::read(
+                        target.join("serve/db-legacy-account.json.tables/cognia--messages.json")
+                    )
+                    .unwrap(),
+                    br#"[{"id":"message-1"}]"#
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backup_accepts_snapshot_tables_and_uninitialized_serve_without_a_ledger() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        fs::create_dir_all(root.path().join("serve")).unwrap();
+        verify_data_directory(root.path()).unwrap();
+        build_archive(root.path(), "not-booted", "v1").unwrap();
+        let tables = seed_snapshot_tables(root.path());
+        verify_data_directory(root.path()).unwrap();
+        build_archive(root.path(), "snapshot-tables", "v1").unwrap();
+        fs::remove_file(tables.join("cognia--messages.json")).unwrap();
+        assert!(verify_data_directory(root.path()).is_err());
+    }
+
+    #[test]
+    fn backup_verifies_legacy_single_file_snapshots_in_every_partition() {
+        for partition in ["", "persons/member-A"] {
+            let root = tempfile::tempdir().unwrap();
+            seed_host(root.path());
+            let snapshot = seed_snapshot_file(&root.path().join(partition));
+            let bytes = fs::read(&snapshot).unwrap();
+            let before = manifest_files(root.path()).unwrap();
+            let report = verify_data_directory(root.path()).unwrap();
+            assert!(report.checks.iter().any(|check| check.contains("db-legacy-account.json: brain durability verify")));
+            assert_eq!(manifest_files(root.path()).unwrap(), before);
+            let built = build_archive(root.path(), "legacy-file", "key-v1").unwrap();
+            let copy = tempfile::tempdir().unwrap();
+            Archive::new(GzDecoder::new(built.archive_bytes.as_slice())).unpack(copy.path()).unwrap();
+            assert_eq!(fs::read(copy.path().join("data").join(snapshot.strip_prefix(root.path()).unwrap())).unwrap(), bytes);
+
+            fs::write(&snapshot, b"{broken").unwrap();
+            let error = verify_data_directory(root.path()).unwrap_err();
+            assert!(error.contains("brain verification failed") && error.contains("JSON"), "{error}");
+            assert!(build_archive(root.path(), "corrupt-legacy-file", "key-v1").is_err());
+        }
+    }
+
+    #[test]
+    fn backup_snapshot_file_and_table_store_share_the_same_copy_fence() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let file = seed_snapshot_file(root.path());
+        seed_snapshot_tables(root.path());
+        let fence = snapshot_brain_databases(root.path(), staging.path()).unwrap();
+        assert_eq!(fence._snapshots.len(), 1);
+        assert!(file.with_extension("json.lock").is_file());
+        drop(fence);
+        assert!(!file.with_extension("json.lock").exists());
+        build_archive(root.path(), "both-snapshot-formats", "key-v1").unwrap();
+    }
+
+    #[test]
+    fn backup_validates_snapshot_manifest_rows_and_encoded_table_paths() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let tables = seed_snapshot_tables(root.path());
+        let manifest = tables.join("manifest.json");
+        fs::write(
+            &manifest,
+            br#"{"snapshotFormat":4,"dbs":{"db /'!":{"version":1,"tables":["github-delivery:repos"]}}}"#,
+        )
+        .unwrap();
+        let rows = tables.join("db%20%2F'!--github-delivery%3Arepos.json");
+        fs::write(&rows, b"[]").unwrap();
+        verify_data_directory(root.path()).unwrap();
+        fs::write(&rows, b"{}").unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("not an array"));
+        fs::write(&manifest, b"{broken").unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("snapshot-v3 manifest"));
+    }
+
+    #[test]
+    fn backup_respects_manifest_selected_snapshot_table_layout() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let tables = seed_snapshot_tables(root.path());
+        let ledger = root.path().join("serve/durability/legacy-account");
+        fs::create_dir_all(&ledger).unwrap();
+        fs::write(
+            ledger.join("backend-manifest.json"),
+            br#"{"manifestFormat":1,"activeBackend":"snapshot-v3","shadowBackend":null}"#,
+        )
+        .unwrap();
+        verify_data_directory(root.path()).unwrap();
+        build_archive(root.path(), "pinned-snapshot", "v1").unwrap();
+        let checkpoint = ledger.join("generations/gen-0001");
+        fs::create_dir_all(&checkpoint).unwrap();
+        fs::write(
+            checkpoint.join("checkpoint.json"),
+            br#"{"checkpointFormat":4,"generation":"gen-0001","createdAt":0,"sequence":0,"valueCodec":1,"dbs":{}}"#,
+        ).unwrap();
+        fs::remove_dir_all(tables).unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("missing expected snapshot-v3 store"));
+    }
+
+    #[test]
+    fn backup_discovers_person_and_host_accounts_and_notices_partition_changes() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let host = seed_brain(root.path());
+        let member = seed_brain_account(&root.path().join("persons/member-A"), "member-A");
+        let before = brain_roots(root.path()).unwrap();
+        assert_eq!(
+            before.len(),
+            2,
+            "must discover both {} and {}",
+            host.display(),
+            member.display()
+        );
+        let staged = tempfile::tempdir().unwrap();
+        let fences = snapshot_brain_databases(root.path(), staged.path()).unwrap();
+        fences.verify_accounts(root.path()).unwrap();
+        seed_brain_account(&root.path().join("persons/member-B"), "member-B");
+        assert_ne!(brain_roots(root.path()).unwrap(), before);
+        assert!(fences
+            .verify_accounts(root.path())
+            .unwrap_err()
+            .contains("stores changed during backup"));
+    }
+
+    #[test]
+    fn backup_verification_rejects_unrecognized_and_damaged_stores() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("readme.txt"), b"not a Host").unwrap();
+        assert!(verify_data_directory(root.path()).is_err());
+        fs::write(
+            root.path().join("cognia-server.sqlite"),
+            b"damaged SQLite header",
+        )
+        .unwrap();
+        assert!(verify_data_directory(root.path()).is_err());
+    }
+
+    #[test]
+    fn backup_verification_requires_host_databases_and_reports_checks_read_only() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        for name in &HOST_DATABASES[3..] {
+            let file = root.path().join(name);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            Connection::open(file)
+                .unwrap()
+                .execute_batch("CREATE TABLE lazy(value TEXT);")
+                .unwrap();
+        }
+        let brain = seed_brain(root.path());
+        let before = manifest_files(root.path()).unwrap();
+        let report = verify_data_directory(root.path()).unwrap();
+        assert!(report.sqlite_integrity);
+        for name in HOST_DATABASES {
+            assert!(report
+                .checks
+                .contains(&format!("{name}: SQLite header + integrity_check")));
+        }
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check.contains("serve/durability/local-account/sqlite/store.sqlite")));
+        assert_eq!(manifest_files(root.path()).unwrap(), before);
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/companion-response-schemas.json"
+        ))
+        .unwrap();
+        let serialized = serde_json::to_value(report).unwrap();
+        for name in serialized.as_object().unwrap().keys() {
+            assert!(
+                schema["$defs"]["HostBackupVerificationResult"]["properties"]
+                    .get(name)
+                    .is_some()
+            );
+        }
+        fs::remove_file(brain.join("sqlite/store.sqlite")).unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("missing expected brain database"));
+    }
+
+    #[test]
+    fn backup_verification_rejects_missing_headers_and_corrupt_pages_in_known_databases() {
+        for name in HOST_DATABASES {
+            let root = tempfile::tempdir().unwrap();
+            seed_host(root.path());
+            let file = root.path().join(name);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, b"damaged header").unwrap();
+            let error = verify_data_directory(root.path()).unwrap_err();
+            assert!(
+                error.contains("invalid SQLite header") && error.contains(name),
+                "{error}"
+            );
+        }
+        for name in &HOST_DATABASES[..3] {
+            let root = tempfile::tempdir().unwrap();
+            seed_host(root.path());
+            seed_brain(root.path());
+            fs::remove_file(root.path().join(name)).unwrap();
+            assert!(verify_data_directory(root.path())
+                .unwrap_err()
+                .contains(name));
+        }
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let brain = seed_brain(root.path());
+        let file = brain.join("sqlite/store.sqlite");
+        let mut bytes = fs::read(&file).unwrap();
+        bytes[100] = 0xff;
+        fs::write(&file, bytes).unwrap();
+        assert!(is_sqlite_database(&file).unwrap());
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("integrity-check SQLite"));
+        fs::write(file, b"damaged brain header").unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("invalid SQLite header"));
+    }
+
+    #[test]
+    fn backup_verification_checks_initialized_brain_layouts() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        fs::create_dir_all(root.path().join("serve/durability")).unwrap();
+        verify_data_directory(root.path()).unwrap();
+        let brain = seed_brain(root.path());
+        fs::remove_dir_all(brain.join("sqlite")).unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("missing expected brain database"));
+        fs::write(brain.join("backend-manifest.json"), b"{invalid}").unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("invalid brain manifest"));
+        fs::remove_file(brain.join("backend-manifest.json")).unwrap();
+        fs::create_dir_all(brain.join("generations")).unwrap();
+        assert!(verify_data_directory(root.path())
+            .unwrap_err()
+            .contains("unrecognized brain durability store"));
+    }
+
+    #[test]
+    fn backup_verification_checks_pending_wal_without_modifying_the_target() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let brain = seed_brain(root.path());
+        let live = Connection::open(brain.join("sqlite/store.sqlite")).unwrap();
+        live.execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_master SET rootpage=999999 WHERE name='rows';").unwrap();
+        assert!(
+            fs::metadata(brain.join("sqlite/store.sqlite-wal"))
+                .unwrap()
+                .len()
+                > 0
+        );
+        let before = manifest_files(root.path()).unwrap();
+        assert!(verify_data_directory(root.path()).is_err());
+        assert_eq!(manifest_files(root.path()).unwrap(), before);
+    }
+
+    fn brain_gc(brain: &Path) -> Vec<String> {
+        // Exercise the actual Node GC against Rust's SQLite kernel lock.
+        let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src/serve/persistence/binary-store.ts");
+        let script = format!(
+            "const m = await import({}); const {{pruneBinaries}} = m.default ?? m; console.log(JSON.stringify(pruneBinaries({}, new Set(), Date.now(), 0)));",
+            serde_json::to_string(&format!("file://{}", module.display())).unwrap(),
+            serde_json::to_string(brain).unwrap(),
+        );
+        let output = std::process::Command::new("node")
+            .args(["--import", "tsx", "--input-type=module", "-e", &script])
+            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    struct NodeBrainWriter(std::process::Child);
+
+    impl Drop for NodeBrainWriter {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn node_brain_writer(brain: &Path, snapshot: bool) -> NodeBrainWriter {
+        use std::io::BufRead;
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let module = |file: &str| {
+            serde_json::to_string(&format!("file://{}", repo.join(file).display())).unwrap()
+        };
+        let path = serde_json::to_string(brain).unwrap();
+        let script = if snapshot {
+            format!("const m = await import({}); const {{acquireStoreLock}} = m.default ?? m; const result = acquireStoreLock({path}); if (!result.ok) throw Error('cannot acquire snapshot writer'); process.stdin.resume(); console.log('ready');",
+                module("cli/src/db/store-lock.ts"))
+        } else {
+            format!("const c = await import({}); const j = await import({}); await (c.default ?? c).writeCheckpoint({path}, 'gen-0001', {{sequence:0,dbs:{{}}}}); const backend = (j.default ?? j).openJournalBackend({{root:{path}}}); await backend.load(); backend.commitSync({{sequence:1,committedAt:Date.now(),mutations:[]}}); globalThis.writer = backend; process.stdin.on('data', () => {{ void backend; }}); process.stdin.resume(); console.log('ready');",
+                module("cli/src/serve/persistence/checkpoint.ts"), module("cli/src/serve/persistence/journal.ts"))
+        };
+        let mut child = NodeBrainWriter(
+            std::process::Command::new("node")
+                .args(["--import", "tsx", "--input-type=module", "-e", &script])
+                .current_dir(repo)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut ready = String::new();
+        std::io::BufReader::new(child.0.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "brain writer must remain alive"
+        );
+        child
+    }
+
+    #[test]
+    fn backup_live_legacy_journal_error_names_person_account_and_remedy() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let account = "member-journal";
+        let brain = root
+            .path()
+            .join("persons")
+            .join(account)
+            .join("serve/durability")
+            .join(account);
+        fs::create_dir_all(&brain).unwrap();
+        let writer = node_brain_writer(&brain, false);
+        let error = build_archive(root.path(), "live-journal", "v1")
+            .err()
+            .unwrap();
+        assert!(
+            error.contains(account)
+                && error.contains("persons/member-journal/serve/durability/member-journal"),
+            "{error}"
+        );
+        assert!(
+            error.contains("stop this account's brain/journal writer")
+                && error.contains("retry the backup"),
+            "{error}"
+        );
+        drop(writer);
+        build_archive(root.path(), "stopped-journal", "v1").unwrap();
+    }
+
+    #[test]
+    fn backup_uses_snapshot_writer_protocol_and_releases_its_copy_fence() {
+        let root = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let tables = seed_snapshot_tables(root.path());
+        let snapshot = tables.with_extension("");
+        let writer = node_brain_writer(&snapshot, true);
+        let error = build_archive(root.path(), "snapshot-busy", "v1")
+            .err()
+            .unwrap();
+        assert!(
+            error.contains("legacy-account")
+                && error.contains("stop this account's snapshot brain"),
+            "{error}"
+        );
+        // SIGKILL leaves the old store's PID lock. Rust must not steal it.
+        drop(writer);
+        fs::remove_file(tables.with_extension("lock")).unwrap();
+        let fence = snapshot_brain_databases(root.path(), staged.path()).unwrap();
+        let lock: serde_json::Value =
+            serde_json::from_slice(&fs::read(tables.with_extension("lock")).unwrap()).unwrap();
+        assert_eq!(lock["pid"], std::process::id());
+        let module = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/db/store-lock.ts");
+        let script = format!("const m = await import({}); console.log(JSON.stringify((m.default ?? m).acquireStoreLock({}).ok));",
+            serde_json::to_string(&format!("file://{}", module.display())).unwrap(), serde_json::to_string(&snapshot).unwrap());
+        let probe = std::process::Command::new("node")
+            .args(["--import", "tsx", "--input-type=module", "-e", &script])
+            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .output()
+            .unwrap();
+        assert!(
+            probe.status.success(),
+            "{}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        assert_eq!(String::from_utf8(probe.stdout).unwrap().trim(), "false");
+        copy_consistent_tree(root.path(), root.path(), staged.path()).unwrap();
+        assert!(!staged
+            .path()
+            .join("serve/db-legacy-account.json.lock")
+            .exists());
+        drop(fence);
+        assert!(!tables.with_extension("lock").exists());
+        build_archive(root.path(), "snapshot-stopped", "v1").unwrap();
+    }
+
+    #[test]
+    fn backup_snapshots_brain_before_side_files_and_fences_cross_process_gc() {
+        backup_snapshot_interleaving("");
+    }
+
+    #[test]
+    fn backup_snapshots_person_brain_before_side_files_and_fences_cross_process_gc() {
+        backup_snapshot_interleaving("persons/member-A");
+    }
+
+    fn backup_snapshot_interleaving(partition: &str) {
+        let root = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let account = if partition.is_empty() {
+            "local-account"
+        } else {
+            "member-A"
+        };
+        let brain = seed_brain_account(&root.path().join(partition), account);
+        fs::create_dir_all(brain.join("binary")).unwrap();
+        let reference = hex::encode(Sha256::digest(b"snapshot bytes"));
+        fs::write(brain.join("binary").join(&reference), b"snapshot bytes").unwrap();
+        let live = Connection::open(brain.join("sqlite/store.sqlite")).unwrap();
+        live.execute("INSERT INTO rows VALUES (?1)", [&reference])
+            .unwrap();
+        let leases = snapshot_brain_databases(root.path(), destination.path()).unwrap();
+        // Drop the reference AFTER the snapshot, and try to collect its bytes.
+        live.execute_batch("DELETE FROM rows;").unwrap();
+        assert!(brain_gc(&brain).is_empty());
+        // A commit after the snapshot must not enter the staged database.
+        let next = hex::encode(Sha256::digest(b"new bytes"));
+        fs::write(brain.join("binary").join(&next), b"new bytes").unwrap();
+        live.execute("INSERT INTO rows VALUES (?1)", [&next])
+            .unwrap();
+        copy_consistent_tree(root.path(), root.path(), destination.path()).unwrap();
+        verify_data_directory(destination.path()).unwrap();
+        let staged_brain = destination
+            .path()
+            .join(brain.strip_prefix(root.path()).unwrap());
+        let staged_db = Connection::open(staged_brain.join("sqlite/store.sqlite")).unwrap();
+        let references: Vec<String> = staged_db
+            .prepare("SELECT value FROM rows")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(references, vec![reference.clone()]);
+        assert_eq!(
+            fs::read(staged_brain.join("binary").join(&reference)).unwrap(),
+            b"snapshot bytes"
+        );
+        assert!(!staged_brain.join(".backup-writer.sqlite").exists());
+        drop(leases);
+        assert!(brain_gc(&brain).contains(&reference));
+    }
+
+    #[test]
+    fn backup_refuses_a_busy_fence_and_releases_it_on_copy_failure() {
+        let root = tempfile::tempdir().unwrap();
+        seed_host(root.path());
+        let brain = seed_brain(root.path());
+        let lease = Connection::open(brain.join(".backup-writer.sqlite")).unwrap();
+        lease.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        assert!(build_archive(root.path(), "busy", "v1")
+            .err()
+            .unwrap()
+            .contains("busy"));
+        drop(lease);
+        let journal = Connection::open(brain.join(".journal-writer.sqlite")).unwrap();
+        journal.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        assert!(build_archive(root.path(), "journal-busy", "v1")
+            .err()
+            .unwrap()
+            .contains("journal"));
+        drop(journal);
+        fs::write(brain.join("sqlite/store.sqlite"), b"broken").unwrap();
+        assert!(build_archive(root.path(), "broken", "v1").is_err());
+        let lease = Connection::open(brain.join(".backup-writer.sqlite")).unwrap();
+        lease.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+    }
+
     #[test]
     fn archive_round_trip_uses_online_sqlite_copy_and_rejects_tampering() {
         let source = tempfile::tempdir().unwrap();
+        seed_host(source.path());
         let db_path = source.path().join("cognia-server.sqlite");
         let connection = Connection::open(&db_path).unwrap();
         connection
@@ -815,7 +2406,7 @@ mod tests {
 
         let built = build_archive(source.path(), "backup-1", "key-v1").unwrap();
         assert_eq!(built.manifest.schema, BACKUP_SCHEMA);
-        assert_eq!(built.manifest.files.len(), 2);
+        assert_eq!(built.manifest.files.len(), 4);
         assert!(built
             .manifest
             .files
@@ -829,22 +2420,31 @@ mod tests {
             decrypt_archive(&envelope, &key).unwrap(),
             built.archive_bytes
         );
+        let hash = hex::encode(Sha256::digest(&built.manifest_bytes));
+        verify_backup_envelope(&envelope, &key, "backup-1", &hash).unwrap();
+        let mut wrong_version = envelope.clone();
+        wrong_version[ENVELOPE_MAGIC.len() + 2 + "key-v1".len() - 1] = b'2';
+        assert!(verify_backup_envelope(&wrong_version, &key, "backup-1", &hash).is_err());
+        assert!(verify_backup_envelope(&envelope, &key, "another-backup", &hash).is_err());
+        assert!(verify_backup_envelope(&envelope, &key, "backup-1", "wrong hash").is_err());
         let mut tampered = envelope;
         *tampered.last_mut().unwrap() ^= 1;
         assert!(decrypt_archive(&tampered, &key).is_err());
+        assert!(verify_backup_envelope(&tampered, &key, "backup-1", &hash).is_err());
     }
 
     #[test]
     fn archive_excludes_acceptance_metadata_images_and_pending_evidence_files() {
         let source = tempfile::tempdir().unwrap();
+        seed_host(source.path());
         let evidence = source.path().join("managed-desktop-evidence");
         fs::create_dir_all(evidence.join("staging")).unwrap();
         fs::write(evidence.join("index.enc"), b"private decisions").unwrap();
         fs::write(evidence.join("staging/frame.enc"), b"private screenshot").unwrap();
         fs::write(source.path().join("config.json"), b"{}").unwrap();
         let built = build_archive(source.path(), "private-evidence", "key-v1").unwrap();
-        assert_eq!(built.manifest.files.len(), 1);
-        assert_eq!(built.manifest.files[0].path, "config.json");
+        assert_eq!(built.manifest.files.len(), 4);
+        assert!(built.manifest.files.iter().any(|file| file.path == "config.json"));
         let decoder = flate2::read::GzDecoder::new(built.archive_bytes.as_slice());
         let mut archive = tar::Archive::new(decoder);
         for entry in archive.entries().unwrap() {
@@ -917,12 +2517,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backup_object_report_requires_verified_readback_and_propagates_upload_failure() {
+        let source = tempfile::tempdir().unwrap();
+        seed_host(source.path());
+        let key = [9_u8; 32];
+        let result = create_verified_backup(
+            source.path(),
+            "remote-1",
+            "key-v1",
+            &key,
+            |uploaded| async { Ok(Some(uploaded)) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.recovery_points[0].kind, "object-store");
+        assert!(result.recovery_points[0].verified);
+        let corrupt = create_verified_backup(
+            source.path(),
+            "remote-bad",
+            "key-v1",
+            &key,
+            |mut uploaded| async move {
+                *uploaded.last_mut().unwrap() ^= 1;
+                Ok(Some(uploaded))
+            },
+        )
+        .await;
+        assert!(corrupt.is_err());
+        let failed =
+            create_verified_backup(source.path(), "upload-failed", "key-v1", &key, |_| async {
+                Err("S3 PUT failed with 503".into())
+            })
+            .await
+            .unwrap_err();
+        assert!(failed.contains("S3 PUT failed with 503"));
+        fs::write(source.path().join("cognia-server.sqlite"), b"bad header").unwrap();
+        let published = std::cell::Cell::new(false);
+        let invalid = create_verified_backup(source.path(), "invalid", "key-v1", &key, |_| {
+            published.set(true);
+            async { Ok(None) }
+        })
+        .await;
+        assert!(invalid.is_err());
+        assert!(!published.get());
+    }
+
+    #[tokio::test]
     // Backup configuration is read from process-global environment variables;
     // the guard covers the complete asynchronous backup/restore transaction.
     #[allow(clippy::await_holding_lock)]
     async fn complete_backup_and_new_directory_restore_preserve_verified_data() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = BackupTestEnv::new();
         let source = tempfile::tempdir().unwrap();
+        seed_host(source.path());
         let destination_parent = tempfile::tempdir().unwrap();
         let secrets = tempfile::tempdir().unwrap();
         let key_file = secrets.path().join("backup.key");
@@ -942,6 +2590,7 @@ mod tests {
 
         let backup = create_backup(source.path(), "recovery-1").await.unwrap();
         assert_eq!(backup.recovery_points.len(), 1);
+        assert_eq!(backup.recovery_points[0].kind, "local");
         assert!(backup.recovery_points[0].verified);
         let destination = destination_parent.path().join("restored-data");
         let restored = restore_backup(source.path(), "recovery-1", &destination, true)
@@ -958,7 +2607,11 @@ mod tests {
             .unwrap();
         assert_eq!(value, "yes");
 
-        std::env::remove_var("COGNIA_BACKUP_KEY_VERSION");
-        std::env::remove_var("COGNIA_BACKUP_KEY_FILE");
+        std::env::set_var("COGNIA_REQUIRE_OBJECT_BACKUP", "true");
+        assert!(create_backup(source.path(), "requires-object")
+            .await
+            .unwrap_err()
+            .contains("requires an S3-compatible object store"));
+        assert!(!source.path().join("backups/requires-object.cgbk").exists());
     }
 }

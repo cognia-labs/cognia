@@ -7,6 +7,7 @@
 
 import fs from "node:fs"
 import path from "node:path"
+import { shellQuote } from "../../util/shell"
 
 import {
   directoryBytes,
@@ -42,8 +43,14 @@ export interface DiskReportDeps {
   now?: () => number
 }
 
-function quoted(p: string): string {
-  return `"${p}"`
+function isCogniaCheckout(root: string): boolean {
+  try {
+    return (
+      JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name === "cognia-next"
+    )
+  } catch {
+    return false
+  }
 }
 
 /** The directories the report measures, with the reclaim command for each. */
@@ -57,19 +64,23 @@ export function diskReportTargets(home: string, repoRoot?: string): DiskReportEn
       path: sessions,
       reclaim: "cognia-agent sdk sessions   # review, then: cognia-agent sdk delete <id>",
     },
-    { label: "Logs", path: logs, reclaim: `rm -rf ${quoted(logs)}` },
-    { label: "Checkpoints", path: checkpoints, reclaim: `rm -rf ${quoted(checkpoints)}` },
+    { label: "Logs", path: logs, reclaim: `rm -rf -- ${shellQuote(logs)}` },
+    { label: "Checkpoints", path: checkpoints, reclaim: `rm -rf -- ${shellQuote(checkpoints)}` },
   ]
-  if (repoRoot) {
+  if (repoRoot && isCogniaCheckout(repoRoot)) {
     const dist = path.join(repoRoot, "cli", "dist")
     const target = path.join(repoRoot, "target")
     targets.push(
       {
         label: "CLI build",
         path: dist,
-        reclaim: `rm -rf ${quoted(dist)}   # pnpm cli:build rebuilds it`,
+        reclaim: `rm -rf -- ${shellQuote(dist)}   # pnpm cli:build rebuilds it`,
       },
-      { label: "Cargo target", path: target, reclaim: `cargo clean   # in ${quoted(repoRoot)}` }
+      {
+        label: "Cargo target",
+        path: target,
+        reclaim: `cargo clean --manifest-path ${shellQuote(path.join(repoRoot, "Cargo.toml"))}`,
+      }
     )
   }
   return targets
