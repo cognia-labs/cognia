@@ -7,9 +7,11 @@ import { AccountContentCipher, activateAccountContentCipher } from "@/lib/accoun
 import { LEGACY_MIXED_TARGET_ID } from "@/lib/runtime/target-registry"
 import {
   CLAIM_ABANDONED_AFTER_MS,
+  captureOutboundQueueScope,
   claimNext,
   discardCollabConflict,
   enqueue,
+  enqueueInScope,
   enqueueCollabMutation,
   enqueueHostStateAction,
   enqueueHostStateIntentIfAvailable,
@@ -47,6 +49,7 @@ import {
   setRuntimeSnapshot,
 } from "@/lib/runtime/runtime-snapshot-store"
 import {
+  clearActiveRuntimeTargetContext,
   getActiveRuntimeTargetContext,
   setActiveRuntimeTargetContext,
 } from "@/lib/runtime/runtime-target-context"
@@ -193,6 +196,135 @@ describe("mobile outbound queue target isolation", () => {
     await expect(getDb().mobileOutboundQueue.get(row.id)).resolves.toMatchObject({
       accountId: scope.accountId,
       targetId: scope.targetId,
+    })
+  })
+
+  describe("explicit scope enqueue", () => {
+    const input = {
+      command: "plugin_set_enabled" as const,
+      payload: { id: "p1", enabled: true },
+    }
+
+    it("persists the captured scope in the captured database", async () => {
+      const captured = captureOutboundQueueScope()
+      const row = await enqueueInScope(captured, input)
+
+      expect(captured.db).toBe(getDb())
+      expect(await captured.db.mobileOutboundQueue.get(row.id)).toMatchObject({
+        accountId: scope.accountId,
+        targetId: scope.targetId,
+        ...input,
+      })
+    })
+
+    it("keeps the captured destination even when an input object carries scope fields", async () => {
+      const captured = captureOutboundQueueScope()
+      const inputWithScope = { ...input, accountId: "acct_other", targetId: "host-other" }
+      const row = await enqueueInScope(captured, inputWithScope)
+
+      expect(await captured.db.mobileOutboundQueue.get(row.id)).toMatchObject({
+        accountId: scope.accountId,
+        targetId: scope.targetId,
+      })
+    })
+
+    it("requires a runtime target whose account owns the database", () => {
+      clearActiveRuntimeTargetContext()
+      expect(() => captureOutboundQueueScope()).toThrow("requires an active account")
+      setActiveRuntimeTargetContext("acct_other", scope.targetId)
+      expect(() => captureOutboundQueueScope()).toThrow("outbound_queue_scope_changed")
+    })
+
+    it.each(["target", "account", "generation", "cleared"])(
+      "refuses a captured scope overtaken by a %s change",
+      async (change) => {
+        const captured = captureOutboundQueueScope()
+        if (change === "cleared") {
+          clearActiveRuntimeTargetContext()
+        } else {
+          setActiveRuntimeTargetContext(
+            change === "account" ? "acct_other" : scope.accountId,
+            change === "target" ? "host-other" : scope.targetId,
+            change === "generation" ? captured.routingGeneration + 1 : undefined
+          )
+        }
+
+        await expect(enqueueInScope(captured, input)).rejects.toThrow(
+          "outbound_queue_scope_changed"
+        )
+        expect(await captured.db.mobileOutboundQueue.count()).toBe(0)
+      }
+    )
+
+    it("does not write to a new account's database", async () => {
+      const captured = captureOutboundQueueScope()
+      activateAccountDatabase("acct_other", "host-other")
+      setActiveRuntimeTargetContext("acct_other", "host-other")
+      try {
+        await expect(enqueueInScope(captured, input)).rejects.toThrow(
+          "outbound_queue_scope_changed"
+        )
+        expect(await getDb().mobileOutboundQueue.count()).toBe(0)
+      } finally {
+        await getDb().delete()
+        activateAccountDatabase(scope.accountId, scope.targetId)
+        setActiveRuntimeTargetContext(scope.accountId, scope.targetId)
+      }
+      expect(await getDb().mobileOutboundQueue.count()).toBe(0)
+    })
+
+    it("refuses a replaced database handle even for the same account and target", async () => {
+      const captured = captureOutboundQueueScope()
+      __resetDbForTesting()
+      activateAccountDatabase(scope.accountId, scope.targetId)
+
+      expect(getDb().name).toBe(captured.db.name)
+      expect(getDb()).not.toBe(captured.db)
+      await expect(enqueueInScope(captured, input)).rejects.toThrow("outbound_queue_scope_changed")
+      expect(await getDb().mobileOutboundQueue.count()).toBe(0)
+    })
+
+    it("rolls back an insert overtaken by a routing change", async () => {
+      const captured = captureOutboundQueueScope()
+      const queue = captured.db.mobileOutboundQueue
+      const put = queue.put.bind(queue)
+      const insert = jest.spyOn(queue, "put").mockImplementationOnce(async (row) => {
+        const id = await put(row)
+        setActiveRuntimeTargetContext(scope.accountId, "host-other")
+        return id
+      })
+      try {
+        await expect(enqueueInScope(captured, input)).rejects.toThrow(
+          "outbound_queue_scope_changed"
+        )
+        expect(await queue.count()).toBe(0)
+      } finally {
+        insert.mockRestore()
+      }
+    })
+
+    it("joins a caller's transaction so a later failure rolls back the queue insert", async () => {
+      const captured = captureOutboundQueueScope()
+      const { db } = captured
+      await expect(
+        db.transaction("rw", db.mobileOutboundQueue, async () => {
+          await enqueueInScope(captured, input)
+          throw new Error("caller failed")
+        })
+      ).rejects.toThrow("caller failed")
+      expect(await db.mobileOutboundQueue.count()).toBe(0)
+    })
+
+    it("refuses a route change before the caller's outer transaction commits", async () => {
+      const captured = captureOutboundQueueScope()
+      const { db } = captured
+      await expect(
+        db.transaction("rw", db.mobileOutboundQueue, async () => {
+          await enqueueInScope(captured, input)
+          setActiveRuntimeTargetContext(scope.accountId, "host-other")
+        })
+      ).rejects.toThrow()
+      expect(await db.mobileOutboundQueue.count()).toBe(0)
     })
   })
 

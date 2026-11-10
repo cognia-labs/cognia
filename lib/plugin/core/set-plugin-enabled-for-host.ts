@@ -37,8 +37,7 @@
  * to behave.
  */
 
-import { enqueue } from "@/lib/db/mobile-outbound-queue"
-import { getDb } from "@/lib/db/schema"
+import { captureOutboundQueueScope, enqueueInScope } from "@/lib/db/mobile-outbound-queue"
 import { isMirroredPluginClient } from "./mirrored-client"
 
 import { PLUGIN_ANALYTIC_KEYS, recordPluginAnalytic } from "@/lib/plugin/analytics/record"
@@ -75,18 +74,23 @@ export async function setPluginEnabledForHost(
   }
 
   try {
-    // Optimistic local write first so the switch settles immediately. The row
-    // is a mirror, so the host's next `sync_pull` is what makes it durable.
-    await getDb().plugins.update(pluginId, { enabled: next, updatedAt: Date.now() })
-    await enqueue({
-      command: "plugin_set_enabled",
-      payload: { id: pluginId, enabled: next },
-      // Machine-readable, for the same reason `mirrorSettingsPatchToHost`
-      // writes a key list: `MobileOutboundJobRow.label` has no renderer, and
-      // this runs outside React where resolving a locale would mean pulling
-      // the message bundle into a Dexie write. A queue UI localises around
-      // this, it does not print it raw.
-      label: `plugin_set_enabled:${pluginId}:${next ? "enabled" : "disabled"}`,
+    const scope = captureOutboundQueueScope()
+    const { db } = scope
+    // The optimistic flag must never outlive a failed or misdirected intent.
+    await db.transaction("rw", db.plugins, db.mobileOutboundQueue, async () => {
+      scope.assertActive()
+      await db.plugins.update(pluginId, { enabled: next, updatedAt: Date.now() })
+      await enqueueInScope(scope, {
+        command: "plugin_set_enabled",
+        payload: { id: pluginId, enabled: next },
+        // Machine-readable, for the same reason `mirrorSettingsPatchToHost`
+        // writes a key list: `MobileOutboundJobRow.label` has no renderer, and
+        // this runs outside React where resolving a locale would mean pulling
+        // the message bundle into a Dexie write. A queue UI localises around
+        // this, it does not print it raw.
+        label: `plugin_set_enabled:${pluginId}:${next ? "enabled" : "disabled"}`,
+      })
+      scope.assertActive()
     })
     return { ok: true, queued: true }
   } catch (error) {

@@ -24,11 +24,12 @@ import type {
   MobileOutboundStatus,
 } from "./mobile-outbound-types"
 import { decideNextAttempt } from "@/lib/queue/retry-policy"
-import { getDb } from "./schema"
+import { getDb, type CogniaDB } from "./schema"
 import type { CollabFieldClash } from "@/lib/collab/client"
 import {
   getActiveRuntimeTargetContext,
   getRuntimeTargetScopeKey,
+  subscribeRuntimeTargetContext,
   type RuntimeTargetScope,
 } from "@/lib/runtime/runtime-target-context"
 import { LEGACY_MIXED_TARGET_ID } from "@/lib/runtime/target-registry"
@@ -337,9 +338,82 @@ export async function enqueue(input: EnqueueInput): Promise<MobileOutboundJobRow
   return row
 }
 
-function buildQueueRow(input: EnqueueInput): MobileOutboundJobRow {
+export interface OutboundQueueScope extends Readonly<RuntimeTargetScope> {
+  readonly db: CogniaDB
+  assertActive(): void
+}
+
+/** Capture the database and routing lifetime before a caller's first await. */
+export function captureOutboundQueueScope(): OutboundQueueScope {
+  const db = getDb()
+  const scope = getActiveRuntimeTargetContext()
+  if (!scope) {
+    throw new Error("Outbound queue requires an active account and runtime target.")
+  }
+  const key = getRuntimeTargetScopeKey()
+  const assertActive = () => {
+    if (
+      key !== getRuntimeTargetScopeKey() ||
+      db !== getDb() ||
+      scope.accountId !== getActiveAccountId()
+    ) {
+      throw new Error("outbound_queue_scope_changed")
+    }
+  }
+  assertActive()
+  return { ...scope, db, assertActive }
+}
+
+/** Join the caller's transaction, refusing a route change before it can commit. */
+export async function enqueueInScope(
+  scope: OutboundQueueScope,
+  input: Omit<EnqueueInput, "accountId" | "targetId">
+): Promise<MobileOutboundJobRow> {
+  scope.assertActive()
+  const row = buildQueueRow(
+    { ...input, accountId: scope.accountId, targetId: scope.targetId },
+    scope
+  )
+  try {
+    return await scope.db.transaction("rw", scope.db.mobileOutboundQueue, async (transaction) => {
+      scope.assertActive()
+      // A nested enqueue returns before its parent commits. Fence that entire
+      // lifetime, including the gap after the final asynchronous scope check.
+      let root = transaction
+      while (root.parent) root = root.parent
+      const unsubscribe = subscribeRuntimeTargetContext(() => {
+        try {
+          scope.assertActive()
+          // A notification that kept this scope is not a route change.
+          return
+        } catch {
+          // Scope changed: abort below.
+        }
+        try {
+          root.abort()
+        } catch (error) {
+          // IndexedDB may have committed before its completion event arrives.
+          if (!(error instanceof Error) || error.name !== "InvalidStateError") throw error
+        }
+      })
+      root.on("complete", unsubscribe)
+      root.on("abort", unsubscribe)
+      root.on("error", unsubscribe)
+      await scope.db.mobileOutboundQueue.put(row)
+      scope.assertActive()
+      return row
+    })
+  } catch (error) {
+    scope.assertActive()
+    throw error
+  }
+}
+
+function buildQueueRow(
+  input: EnqueueInput,
+  activeScope = getActiveRuntimeTargetContext()
+): MobileOutboundJobRow {
   const now = input.nowMs ?? Date.now()
-  const activeScope = getActiveRuntimeTargetContext()
   const localAccountId = input.accountId ?? activeScope?.accountId
   const targetId = input.targetId ?? activeScope?.targetId
   if (!localAccountId || !targetId) {
