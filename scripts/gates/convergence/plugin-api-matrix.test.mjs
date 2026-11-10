@@ -310,6 +310,108 @@ test("TS follows the mounted factory, barrels, spreads, groups and guards, not u
   assert.equal(inspect(ns("missing", []), method("missing", "get")).value, "unclear")
 })
 
+test("TS follows callback-bound context spreads without inventing missing or unresolved members", () => {
+  const inspect = inspectTypeScript({
+    "lib/plugin/core/context.ts": `
+      function createPluginContext() {
+        const base = { agent: { run() {}, refused() { throw Error('NOT_SUPPORTED'); } },
+          events: { on() {} } };
+        if (debug) return debugger_.createDebugContext('id', bindPluginContextCallbacks('id', base));
+        return bindPluginContextCallbacks('id', base);
+      }
+      function createFullPluginContext() {
+        const baseContext = createPluginContext();
+        const events = { ...baseContext.events, bus: { emit() {} } };
+        const fullContext = { ...baseContext, events, storage: externalFactory() };
+        return fullContext;
+      }`,
+  })
+  for (const [namespace, name] of [
+    ["agent", "run"],
+    ["events", "on"],
+    ["events", "bus.emit"],
+  ])
+    assert.equal(inspect(ns(namespace, []), method(namespace, name)).value, "yes", name)
+  assert.equal(inspect(ns("agent", []), method("agent", "refused")).value, "no")
+  assert.equal(inspect(ns("agent", []), method("agent", "missing")).value, "no")
+  assert.equal(inspect(ns("storage", []), method("storage", "get")).value, "unclear")
+})
+
+test("generation discovers module plugin API factories and their spread imports from the registry", (t) => {
+  const root = fixture(t, {
+    "packages/plugin-contract/contract/catalog.json": {
+      contractVersion: "fixture",
+      apiNamespaces: [
+        ns("a2ui", ["createSurface", "group.update", "missing", "refused"]),
+        ns("connectors", ["listAdapters", "missing", "dynamic.get"]),
+        ns("sync", ["register"]),
+        ns("docsProviders", ["register"]),
+      ],
+    },
+    "lib/plugin/core/context.ts": `
+      function createPluginContext() {
+        return bindPluginContextCallbacks('id', {
+          a2ui: buildModulePluginNamespace('a2ui', 'id', host)
+        });
+      }
+      function createFullPluginContext() {
+        const fullContext = { ...createPluginContext(),
+          connectors: buildModulePluginNamespace('connectors', 'id', host),
+          sync: { register() {} }, docsProviders: { register() {} } };
+        return fullContext;
+      }`,
+    "lib/modules/generated/plugin-api.ts": `export const MODULE_PLUGIN_API = [
+      { module: 'dormant', stage: 'experimental', namespaces: ['a2ui'],
+        load: () => import('@/lib/dormant/contribution') },
+      { module: 'surfaces', stage: 'stable', namespaces: ['a2ui'],
+        load: () => import('@/lib/surfaces/contribution') },
+      { module: 'delivery', stage: 'stable', namespaces: ['connectors'],
+        load: () => import('@/lib/delivery/contribution') }
+    ] as const;`,
+    "lib/dormant/contribution.ts": `export const pluginApi = {
+      namespaces: { a2ui: () => ({ missing() {} }) }
+    };`,
+    "lib/unregistered/contribution.ts": `export const pluginApi = {
+      namespaces: { connectors: () => ({ missing() {} }) }
+    };`,
+    "lib/surfaces/contribution.ts": `import { makeSurfaceAPI } from './factories';
+      export const pluginApi = { namespaces: { a2ui: () => makeSurfaceAPI() } };`,
+    "lib/surfaces/factories/index.ts": "export { makeSurfaceAPI } from './surface';",
+    "lib/surfaces/factories/surface.ts": `import { shared } from '@/lib/shared-surface/members';
+      export function makeSurfaceAPI() { return { ...shared, createSurface() {},
+        group: { update() {} }, refused() { throw Error('NOT_SUPPORTED'); } }; }`,
+    "lib/shared-surface/members.ts": "export const shared = { extra() {} };",
+    "lib/delivery/contribution.ts": `import { makeDeliveryAPI } from './factory';
+      export const pluginApi = { namespaces: { connectors: makeDeliveryAPI } };`,
+    "lib/delivery/factory.ts": `import { members } from '@/lib/shared-delivery/members';
+      export function makeDeliveryAPI() {
+        return createGuardedAPI('id', { ...members, dynamic: externalFactory() }, {});
+      }`,
+    "lib/shared-delivery/members.ts": "export const members = { listAdapters() {} };",
+    "packages/plugin-sdk/wit/cognia-plugin.wit": "world p {}",
+    "crates/cognia-plugin-runtime/frozen/v0_1/cognia-plugin.wit": "world p {}",
+    "scripts/gates/convergence/plugin-api-layer-overrides.json": {},
+  })
+  const { rows } = generate(root)
+  const provided = (id) => rows.find((row) => row.id === id).providedTs
+  for (const id of [
+    "a2ui.createSurface",
+    "a2ui.group.update",
+    "connectors.listAdapters",
+    "sync.register",
+    "docsProviders.register",
+  ])
+    assert.equal(provided(id), "yes", id)
+  for (const id of ["a2ui.missing", "a2ui.refused", "connectors.missing"])
+    assert.equal(provided(id), "no", id)
+  assert.equal(provided("connectors.dynamic.get"), "unclear")
+  root.files.delete("lib/delivery/factory.ts")
+  assert.equal(
+    generate(root).rows.find((row) => row.id === "connectors.listAdapters").providedTs,
+    "unclear"
+  )
+})
+
 test("an explicitly undefined host member is not an implementation", () => {
   const inspect = inspectTypeScript({
     "lib/plugin/core/context.ts":

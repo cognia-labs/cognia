@@ -5,6 +5,7 @@ import { dirname, posix, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { spawnSync } from "node:child_process"
 import ts from "typescript"
+import { computeModuleRegistries } from "../../build/gen-module-registry.mjs"
 
 // Classification is policy, not a claim that today's implementations are headless.
 // Explicit namespace lists make catalog additions fail until reviewed.
@@ -29,6 +30,7 @@ export const LAYER_RULES = {
     "connectors",
     "db",
     "decisions",
+    "docsProviders",
     "prompts",
     "dexie",
     "eval",
@@ -67,6 +69,7 @@ export const LAYER_RULES = {
     "sites",
     "storage",
     "subscription",
+    "sync",
     "team",
     "templates",
     "terminal",
@@ -310,6 +313,7 @@ export const WIT_ALIASES = {
 const PATHS = {
   catalog: "packages/plugin-contract/contract/catalog.json",
   context: "lib/plugin/core/context.ts",
+  modulePluginApi: "lib/modules/generated/plugin-api.ts",
   pythonCtx: "plugin-sdk/python/src/cognia/ctx.py",
   pythonMirror: "plugin-sdk/python/src/cognia/_generated_contract.py",
   router: "lib/plugin/python/host-request-router.ts",
@@ -716,10 +720,22 @@ function evidence(node) {
 }
 
 /** Static object-shape evaluator. Never searches unrelated object keys or interface declarations. */
-export function inspectTypeScript(sources) {
-  const files = Object.fromEntries(
-    Object.entries(sources).map(([path, text]) => [path, parseTs(path, text)])
-  )
+export function inspectTypeScript(sources, loadSource = () => undefined) {
+  const files = {}
+  const available = new Proxy(sources, {
+    get(target, path) {
+      if (target[path] === undefined) {
+        const text = loadSource(path)
+        if (text !== undefined) target[path] = text
+      }
+      return target[path]
+    },
+  })
+  function sourceFile(path) {
+    const text = available[path]
+    if (text === undefined) return undefined
+    return (files[path] ??= parseTs(path, text))
+  }
   const cache = new Map()
   const unknown = (reason) => ({ kind: "unknown", reason })
   const object = (members = new Map(), incomplete = false) => ({
@@ -728,7 +744,7 @@ export function inspectTypeScript(sources) {
     incomplete,
   })
   function exported(path, name, seen = new Set()) {
-    const sf = files[path]
+    const sf = sourceFile(path)
     const key = `${path}:${name}`
     if (!sf || seen.has(key)) return undefined
     seen.add(key)
@@ -739,7 +755,7 @@ export function inspectTypeScript(sources) {
         if (decl) return decl.initializer
       }
       if (ts.isExportDeclaration(statement) && statement.moduleSpecifier) {
-        const next = modulePath(path, statement.moduleSpecifier.text, sources)
+        const next = modulePath(path, statement.moduleSpecifier.text, available)
         if (!next || statement.isTypeOnly) continue
         if (!statement.exportClause) {
           const result = exported(next, name, seen)
@@ -770,6 +786,40 @@ export function inspectTypeScript(sources) {
       for (const [key, value] of shape.members) result.members.set(key, value)
     }
     return result
+  }
+  function moduleFactory(namespace, ev) {
+    const registry = unwrap(exported(PATHS.modulePluginApi, "MODULE_PLUGIN_API"))
+    if (!namespace || !registry || !ts.isArrayLiteralExpression(registry))
+      return unknown("unresolved module plugin API registry or namespace")
+    for (const entry of registry.elements) {
+      if (!ts.isObjectLiteralExpression(entry)) return unknown("unresolved module plugin API entry")
+      const property = (name) =>
+        unwrap(entry.properties.find((p) => nameOf(p.name) === name)?.initializer)
+      const stage = property("stage")
+      if (!stage || !ts.isStringLiteralLike(stage))
+        return unknown("unresolved module plugin API stage")
+      if (stage.text === "experimental") continue
+      const namespaces = property("namespaces")
+      if (!namespaces || !ts.isArrayLiteralExpression(namespaces))
+        return unknown("unresolved module plugin API namespaces")
+      if (!namespaces.elements.some((n) => ts.isStringLiteralLike(n) && n.text === namespace))
+        continue
+      const loader = member(ev(entry), "load")
+      if (loader.kind !== "function") return unknown(`unresolved module loader for ${namespace}`)
+      const imports = [
+        loader.node.body,
+        ...descendants(loader.node.body, ts.isCallExpression),
+      ].filter((n) => ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword)
+      if (imports.length !== 1 || !ts.isStringLiteralLike(imports[0].arguments[0]))
+        return unknown(`unresolved module import for ${namespace}`)
+      const path = modulePath(
+        loader.node.getSourceFile().fileName,
+        imports[0].arguments[0].text,
+        available
+      )
+      return member(member(ev(exported(path, "pluginApi")), "namespaces"), namespace)
+    }
+    return unknown(`no active module declares ${namespace}`)
   }
   function evaluate(input, stack = new Set()) {
     const node = unwrap(input)
@@ -807,7 +857,7 @@ export function inspectTypeScript(sources) {
         const path = modulePath(
           node.getSourceFile().fileName,
           binding.target.moduleSpecifier.text,
-          sources
+          available
         )
         result = ev(exported(path, binding.imported))
       } else if (binding) {
@@ -831,14 +881,18 @@ export function inspectTypeScript(sources) {
         createApiGuardedAPI: 1,
         withGovernedPluginContext: 0,
         withPluginDisposableScope: 2,
+        bindPluginContextCallbacks: 1,
       }
       if (calleeName in transparent) result = ev(node.arguments[transparent[calleeName]])
       else if (calleeName === "debugger_.createDebugContext") result = ev(node.arguments[1])
       else if (calleeName === "Object.assign") result = merge(node.arguments.map(ev))
       else {
-        let fn = ev(node.expression)
+        let fn =
+          calleeName === "buildModulePluginNamespace"
+            ? moduleFactory(nameOf(node.arguments[0]), ev)
+            : ev(node.expression)
         if (calleeName === "manager.createPluginServicesAPI") {
-          const manager = files["lib/plugin/core/manager.ts"]
+          const manager = sourceFile("lib/plugin/core/manager.ts")
           const method =
             manager &&
             descendants(
@@ -1018,7 +1072,7 @@ export function inspectTypeScript(sources) {
       ? [...new Set(outcomes.map((o) => o.reason))].join("; ")
       : undefined
   }
-  const sf = files[PATHS.context]
+  const sf = sourceFile(PATHS.context)
   let mounted = unknown("context module missing")
   if (sf) {
     const full = sf.statements.find(
@@ -1685,7 +1739,7 @@ export function scanPluginSources(root, catalog) {
       if (id) {
         const key = `${call.path}:${call.line}:${call.column}:${id}`
         if (!unique.has(key) || call.contextResolution === "known") {
-          const { segments, ...site } = call
+          const { segments: _segments, ...site } = call
           unique.set(key, { id, ...site })
         }
       }
@@ -1758,10 +1812,10 @@ export function buildMatrix({
       const runtimes = method.runtimes ?? namespace.runtimes
       const sites = calls
         .filter((call) => call.id === method.id && call.contextResolution !== "unknown")
-        .map(({ id, ...call }) => call)
+        .map(({ id: _id, ...call }) => call)
       const unknownSites = calls
         .filter((call) => call.id === method.id && call.contextResolution === "unknown")
-        .map(({ id, ...call }) => call)
+        .map(({ id: _id, ...call }) => call)
       const layer = classifyLayer(namespace, method, overrides)
       const transport = python.transport?.[method.id]
       const transportIssues = transport
@@ -2116,6 +2170,16 @@ export function generate(root) {
   ])
     if (hasSource(root, path)) sources[path] = read(path)
   if (typeof root === "string") {
+    // The module plugin-API registry is generated and gitignored. Render it
+    // from the manifests so a fresh or stale checkout reads the same truth.
+    const registries = computeModuleRegistries(root)
+    if (registries.errors.length)
+      throw new Error(
+        `Feature module manifests are not data (run \`pnpm audit:modules\`):\n${registries.errors.join("\n")}`
+      )
+    sources[PATHS.modulePluginApi] = registries.files[PATHS.modulePluginApi]
+  }
+  if (typeof root === "string") {
     const libraryRoot = dirname(ts.getDefaultLibFilePath({ target: ts.ScriptTarget.ES2022 }))
     const libraries = ["lib.es2022.full.d.ts"]
     for (const name of libraries) {
@@ -2164,7 +2228,11 @@ export function generate(root) {
   }
   const rows = buildMatrix({
     catalog,
-    tsProvider: inspectTypeScript(sources),
+    // Resolve only imports reached while evaluating mounted factories. Module
+    // contributions come from their registry, without scanning the runtime graph.
+    tsProvider: inspectTypeScript(sources, (path) =>
+      /\.[cm]?tsx?$/.test(path) && hasSource(root, path) ? read(path) : undefined
+    ),
     python: pythonCoverage(root, catalog, sources),
     currentWit: parseWit(read(PATHS.wit)),
     frozenWit: parseWit(read(PATHS.frozen)),
