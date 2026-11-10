@@ -7,6 +7,7 @@
 import "fake-indexeddb/auto"
 import { getDb } from "@/lib/db/schema"
 import { runPluginMigrations } from "@/lib/plugin/dexie/migration-runner"
+import { invoke } from "@tauri-apps/api/core"
 
 import {
   PLUGIN_UPDATES_AVAILABLE_EVENT,
@@ -22,6 +23,8 @@ jest.mock("@/stores/plugin-runtime", () => ({
   },
 }))
 
+jest.mock("@tauri-apps/api/core", () => ({ invoke: jest.fn() }))
+
 // Defined inside the factory (jest.mock factories hit the TDZ otherwise) and
 // re-imported below so assertions can reach the spy.
 jest.mock("../package/marketplace", () => {
@@ -31,6 +34,13 @@ jest.mock("../package/marketplace", () => {
     updatedAt: new Date(),
   })
   const installPlugin = jest.fn().mockResolvedValue({ success: true })
+  const getVersions = jest.fn().mockResolvedValue([
+    {
+      version: "2.0.0",
+      publishedAt: new Date(),
+      downloadUrl: "https://example.com/plugin-a-2.0.0.zip",
+    },
+  ])
   const stagePluginUpdate = jest.fn().mockResolvedValue({
     transactionId: "123e4567-e89b-42d3-a456-426614174000",
     pluginId: "plugin-a",
@@ -52,6 +62,7 @@ jest.mock("../package/marketplace", () => {
   const finalizeStagedPluginUpdate = jest.fn().mockResolvedValue(undefined)
   return {
     __getPluginSpy: getPlugin,
+    __getVersionsSpy: getVersions,
     __installPluginSpy: installPlugin,
     __stagePluginUpdateSpy: stagePluginUpdate,
     __commitStagedPluginUpdateSpy: commitStagedPluginUpdate,
@@ -59,13 +70,7 @@ jest.mock("../package/marketplace", () => {
     __finalizeStagedPluginUpdateSpy: finalizeStagedPluginUpdate,
     getPluginMarketplace: () => ({
       getPlugin,
-      getVersions: jest.fn().mockResolvedValue([
-        {
-          version: "2.0.0",
-          publishedAt: new Date(),
-          downloadUrl: "https://example.com/plugin-a-2.0.0.zip",
-        },
-      ]),
+      getVersions,
       installPlugin,
       stagePluginUpdate,
       commitStagedPluginUpdate,
@@ -166,6 +171,7 @@ import { getCached, putCached } from "@/lib/plugin/vscode-shim/openvsx-cache"
 
 const marketplaceModule = jest.requireMock("../package/marketplace") as {
   __getPluginSpy: jest.Mock
+  __getVersionsSpy: jest.Mock
   __installPluginSpy: jest.Mock
   __stagePluginUpdateSpy: jest.Mock
   __commitStagedPluginUpdateSpy: jest.Mock
@@ -173,6 +179,7 @@ const marketplaceModule = jest.requireMock("../package/marketplace") as {
   __finalizeStagedPluginUpdateSpy: jest.Mock
 }
 const cogniaGetPlugin = marketplaceModule.__getPluginSpy
+const cogniaGetVersions = marketplaceModule.__getVersionsSpy
 const cogniaInstallPlugin = marketplaceModule.__installPluginSpy
 const stagePluginUpdate = marketplaceModule.__stagePluginUpdateSpy
 const commitStagedPluginUpdate = marketplaceModule.__commitStagedPluginUpdateSpy
@@ -224,6 +231,13 @@ describe("PluginUpdater", () => {
       latestVersion: "2.0.0",
       updatedAt: new Date(),
     })
+    cogniaGetVersions.mockReset().mockResolvedValue([
+      {
+        version: "2.0.0",
+        publishedAt: new Date(),
+        downloadUrl: "https://example.com/plugin-a-2.0.0.zip",
+      },
+    ])
     getCachedMock.mockResolvedValue(undefined)
     const runtimeState = {
       plugins: {
@@ -286,6 +300,106 @@ describe("PluginUpdater", () => {
   })
 
   describe("Update Checking", () => {
+    const configurePrerelease = (allowPrerelease: boolean) => {
+      updater.configureAutoUpdate({
+        enabled: false,
+        checkInterval: 3600000,
+        autoInstall: true,
+        notifyOnly: false,
+        excludePlugins: [],
+        allowPrerelease,
+      })
+    }
+
+    it.each([
+      ["1.0.0-beta.1", "1.0.0", true],
+      ["1.0.0-beta.1", "1.0.0-beta.2", true],
+      ["1.0.0-beta.2", "1.0.0-beta.11", true],
+      ["1.0.0-alpha", "1.0.0-beta", true],
+      ["1.0.0-1", "1.0.0-alpha", true],
+      ["1.0.0-beta", "1.0.0-beta.1", true],
+      ["1.0.0-beta.11", "1.0.0-beta.2", false],
+      ["1.0.0", "1.0.0-rc.1", false],
+      ["1.0.0+build.1", "1.0.0+build.2", false],
+      ["1.0.0-rc.1+build.1", "1.0.0-rc.1+build.2", false],
+      ["1.9.9", "1.10.0", true],
+    ])("uses SemVer precedence for %s → %s (B20)", async (current, latest, expected) => {
+      configurePrerelease(true)
+      mockGetStoreState().plugins["plugin-a"].manifest.version = current
+      cogniaGetPlugin.mockResolvedValueOnce({ latestVersion: latest })
+
+      expect(await updater.checkForUpdates()).toHaveLength(expected ? 1 : 0)
+    })
+
+    it.each([undefined, false, true])(
+      "honours Cognia prerelease policy %s (B21)",
+      async (allow) => {
+        if (allow !== undefined) configurePrerelease(allow)
+        cogniaGetPlugin.mockResolvedValue({ latestVersion: "1.1.0-beta.1" })
+        cogniaGetVersions.mockResolvedValue([{ version: "1.1.0-beta.1" }])
+
+        const updates = await updater.checkForUpdates()
+
+        expect(updates).toHaveLength(allow ? 1 : 0)
+        expect(updater.getPendingUpdates()).toEqual(updates)
+      }
+    )
+
+    it("finds the newest stable Cognia fallback when latest is a beta (B21)", async () => {
+      configurePrerelease(false)
+      cogniaGetPlugin.mockResolvedValueOnce({ latestVersion: "1.2.0-beta.1" })
+      cogniaGetVersions.mockResolvedValueOnce([
+        { version: "1.0.1" },
+        { version: "1.2.0-beta.1" },
+        { version: "1.1.0", publishedAt: new Date("2026-11-01") },
+      ])
+
+      expect(await updater.checkForUpdates()).toEqual([
+        expect.objectContaining({ latestVersion: "1.1.0", releaseDate: new Date("2026-11-01") }),
+      ])
+    })
+
+    it("does not auto-install a Cognia beta without opt-in (B21)", async () => {
+      configurePrerelease(false)
+      cogniaGetPlugin.mockResolvedValueOnce({ latestVersion: "1.1.0-beta.1" })
+      cogniaGetVersions.mockResolvedValueOnce([{ version: "1.1.0-beta.1" }])
+      const install = jest.spyOn(updater, "update")
+
+      await updater.runAutoUpdateOnce()
+
+      expect(install).not.toHaveBeenCalled()
+    })
+
+    it("removes a pending beta after prerelease opt-out and rechecking (B21)", async () => {
+      cogniaGetPlugin.mockResolvedValue({ latestVersion: "1.1.0-beta.1" })
+      cogniaGetVersions.mockResolvedValue([{ version: "1.1.0-beta.1" }])
+      configurePrerelease(true)
+      expect(await updater.checkForUpdates()).toHaveLength(1)
+      configurePrerelease(false)
+
+      expect(await updater.checkForUpdates()).toEqual([])
+      expect(updater.getPendingUpdates()).toEqual([])
+    })
+
+    it("includes suspended plugins in general and automatic checks (B22)", async () => {
+      mockGetStoreState().plugins["plugin-a"].status = "suspended"
+      const explicit = await updater.checkForUpdates(["plugin-a"])
+
+      expect(explicit).toHaveLength(1)
+      expect(await updater.checkForUpdates()).toEqual(explicit)
+      configurePrerelease(false)
+      const install = jest.spyOn(updater, "update").mockResolvedValue({
+        success: true,
+        pluginId: "plugin-a",
+        previousVersion: "1.0.0",
+        newVersion: "1.1.0",
+        duration: 0,
+      })
+      cogniaGetPlugin.mockResolvedValueOnce({ latestVersion: "1.1.0" })
+      await updater.runAutoUpdateOnce()
+      expect(install).toHaveBeenCalledWith("plugin-a")
+    })
+
     it("should check for updates for specific plugins", async () => {
       const updates = await updater.checkForUpdates(["plugin-a"])
 
@@ -311,6 +425,69 @@ describe("PluginUpdater", () => {
   })
 
   describe("Open VSX routing", () => {
+    it.each([false, true])(
+      "honours Open VSX prerelease opt-in %s (B21)",
+      async (allowPrerelease) => {
+        updater.configureAutoUpdate({
+          enabled: false,
+          checkInterval: 3600000,
+          autoInstall: false,
+          notifyOnly: true,
+          excludePlugins: [],
+          allowPrerelease,
+        })
+        mockGetStoreState.mockReturnValue({
+          plugins: {
+            "ns.ext": storePlugin({ id: "ns.ext", version: "1.0.0", type: "vscode-extension" }),
+          },
+        } as never)
+        getOpenVsxClientMock.mockReturnValue({
+          queryExtension: jest.fn().mockResolvedValue({
+            extensions: [
+              { namespace: "ns", name: "ext", version: "1.1.0", preRelease: true, files: {} },
+            ],
+          }),
+        })
+
+        expect(await updater.checkForUpdates()).toHaveLength(allowPrerelease ? 1 : 0)
+        // The shared cache cannot record a prerelease as the stable selection.
+        expect(putCachedMock).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each([
+      [true, { latestVersion: "1.0.0", payload: { preRelease: false } }, "1.1.0", true],
+      [false, { latestVersion: "1.2.0", payload: { preRelease: true } }, "1.1.0", false],
+      [false, { latestVersion: "1.2.0-beta.1" }, "1.1.0", false],
+    ])(
+      "reselects cached metadata for policy %s (B21)",
+      async (allowPrerelease, cached, version, preRelease) => {
+        updater.configureAutoUpdate({
+          enabled: false,
+          checkInterval: 3600000,
+          autoInstall: false,
+          notifyOnly: true,
+          excludePlugins: [],
+          allowPrerelease,
+        })
+        mockGetStoreState.mockReturnValue({
+          plugins: {
+            "ns.ext": storePlugin({ id: "ns.ext", version: "1.0.0", type: "vscode-extension" }),
+          },
+        } as never)
+        getCachedMock.mockResolvedValue(cached)
+        const queryExtension = jest.fn().mockResolvedValue({
+          extensions: [{ namespace: "ns", name: "ext", version, preRelease, files: {} }],
+        })
+        getOpenVsxClientMock.mockReturnValue({ queryExtension })
+
+        expect(await updater.checkForUpdates()).toEqual([
+          expect.objectContaining({ pluginId: "ns.ext", latestVersion: version }),
+        ])
+        expect(queryExtension).toHaveBeenCalledTimes(1)
+      }
+    )
+
     /**
      * A query client returning one stable version. The parameter is typed so
      * `mock.calls[0][0]` is reachable — an untyped `jest.fn(async () => …)`
@@ -1009,6 +1186,84 @@ describe("PluginUpdater", () => {
       expect(commitStagedPluginUpdate.mock.invocationCallOrder[0]).toBeLessThan(
         (codeServerClient.activateProxy as jest.Mock).mock.invocationCallOrder[0]
       )
+    })
+
+    it("discards native ownership before backup restore after a committed update fails (B17)", async () => {
+      const { PluginBackupManager } = jest.requireActual<typeof import("./backup")>("./backup")
+      const backupPath = "/audit-b17-backups"
+      const backups = new PluginBackupManager({ backupPath })
+      const backupGetter = jest
+        .spyOn(jest.requireMock("./backup"), "getPluginBackupManager")
+        .mockReturnValue(backups)
+      const state = mockGetStoreState()
+      state.plugins["plugin-a"].path = "/plugins/plugin-a"
+      state.plugins["plugin-a"].status = "enabled"
+      const nativeInvoke = invoke as jest.Mock
+      let ownedByTransaction = false
+      nativeInvoke.mockImplementation(async (command) => {
+        if (command === "plugin_backup_create") {
+          return {
+            backupId: "plugin-a-before-update",
+            pluginId: "plugin-a",
+            createdAt: "2026-11-10T00:00:00Z",
+            sizeBytes: 1,
+            path: "/backups/plugin-a-before-update",
+          }
+        }
+        if (command === "plugin_commit_staged_update") ownedByTransaction = true
+        if (command === "plugin_discard_staged_update") {
+          expect(ownedByTransaction).toBe(true)
+          ownedByTransaction = false
+        }
+        if (command === "plugin_backup_restore") {
+          expect(ownedByTransaction).toBe(false)
+          state.plugins["plugin-a"].manifest.version = "1.0.0"
+        }
+        if (command === "plugin_finalize_staged_update" && !ownedByTransaction) {
+          throw new Error("installed package does not belong to this transaction")
+        }
+      })
+      commitStagedPluginUpdate.mockImplementationOnce(async (staged) => {
+        await invoke("plugin_commit_staged_update", {
+          pluginId: staged.pluginId,
+          transactionId: staged.transactionId,
+        })
+        state.plugins["plugin-a"].manifest.version = "2.0.0"
+      })
+      finalizeStagedPluginUpdate.mockImplementationOnce((staged) =>
+        invoke("plugin_finalize_staged_update", {
+          pluginId: staged.pluginId,
+          transactionId: staged.transactionId,
+        })
+      )
+      managerModule.__enablePluginSpy.mockRejectedValueOnce(new Error("proxy handshake failed"))
+
+      try {
+        const result = await updater.update("plugin-a", { force: true, version: "2.0.0" })
+        expect(result.error).toBe("proxy handshake failed")
+        expect(result).toMatchObject({
+          success: false,
+          rollback: { attempted: true, succeeded: true },
+        })
+        expect(nativeInvoke.mock.calls.map(([command]) => command)).toEqual([
+          "plugin_backup_create",
+          "plugin_commit_staged_update",
+          "plugin_discard_staged_update",
+          "plugin_backup_restore",
+        ])
+        expect(nativeInvoke).toHaveBeenNthCalledWith(3, "plugin_discard_staged_update", {
+          pluginId: "plugin-a",
+          transactionId: "123e4567-e89b-42d3-a456-426614174000",
+        })
+        expect(backups.getPendingUpdateRestore("plugin-a", true)).toBeUndefined()
+        expect(state.plugins["plugin-a"].manifest.version).toBe("1.0.0")
+      } finally {
+        backupGetter.mockRestore()
+        nativeInvoke.mockReset()
+        // The one-shot finalize implementation was deliberately never reached.
+        finalizeStagedPluginUpdate.mockReset().mockResolvedValue(undefined)
+        localStorage.removeItem(`plugin:backup:index:${backupPath}`)
+      }
     })
 
     it("restores package and host state when live activation rejects the update", async () => {

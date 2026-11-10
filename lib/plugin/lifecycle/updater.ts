@@ -31,7 +31,9 @@
  */
 
 import { usePluginStore } from "@/stores/plugin-runtime"
+import { prerelease, valid } from "semver"
 import { getPluginMarketplace } from "../package/marketplace"
+import { compareVersions } from "../package/dependency-resolver"
 import { loggers } from "../core/logger"
 import { getPluginBackupManager } from "./backup"
 import { getPluginManager } from "../core/manager"
@@ -265,14 +267,16 @@ export class PluginUpdater {
       const installedPlugins = pluginIds
         ? await this.getPluginVersions(pluginIds)
         : await this.getAllInstalledPlugins()
+      const allowPrerelease = this.autoUpdateConfig?.allowPrerelease ?? false
+      for (const { id } of installedPlugins) this.pendingUpdates.delete(id)
 
       // Partition before any lookup. A VS Code extension id must never reach
       // the cognia registry — see the module doc.
       const vscodeExtensions = installedPlugins.filter((p) => p.type === "vscode-extension")
       const cogniaPlugins = installedPlugins.filter((p) => p.type !== "vscode-extension")
 
-      updates.push(...(await this.checkCogniaUpdates(cogniaPlugins)))
-      updates.push(...(await this.checkOpenVsxUpdates(vscodeExtensions)))
+      updates.push(...(await this.checkCogniaUpdates(cogniaPlugins, allowPrerelease)))
+      updates.push(...(await this.checkOpenVsxUpdates(vscodeExtensions, allowPrerelease)))
 
       return updates
     } finally {
@@ -281,10 +285,12 @@ export class PluginUpdater {
   }
 
   /**
-   * Check the cognia registry. Unchanged behaviour, now scoped to plugins that
-   * actually come from it.
+   * Check the cognia registry for the newest version allowed by policy.
    */
-  private async checkCogniaUpdates(plugins: InstalledPluginRef[]): Promise<UpdateInfo[]> {
+  private async checkCogniaUpdates(
+    plugins: InstalledPluginRef[],
+    allowPrerelease: boolean
+  ): Promise<UpdateInfo[]> {
     if (plugins.length === 0) return []
     const marketplace = getPluginMarketplace()
     const updates: UpdateInfo[] = []
@@ -299,13 +305,24 @@ export class PluginUpdater {
 
       try {
         const latestInfo = await marketplace.getPlugin(id)
-        if (latestInfo && this.isNewerVersion(version, latestInfo.latestVersion)) {
+        if (!latestInfo) continue
+        let latestVersion = latestInfo.latestVersion
+        let releaseDate = latestInfo.updatedAt
+        if (!allowPrerelease && prerelease(latestVersion)) {
+          const stable = (await marketplace.getVersions(id))
+            .filter((candidate) => valid(candidate.version) && !prerelease(candidate.version))
+            .sort((a, b) => compareVersions(b.version, a.version))[0]
+          if (!stable) continue
+          latestVersion = stable.version
+          releaseDate = stable.publishedAt
+        }
+        if (this.isNewerVersion(version, latestVersion)) {
           const updateInfo: UpdateInfo = {
             pluginId: id,
             currentVersion: version,
-            latestVersion: latestInfo.latestVersion,
-            releaseDate: latestInfo.updatedAt,
-            breaking: this.isMajorUpdate(version, latestInfo.latestVersion),
+            latestVersion,
+            releaseDate,
+            breaking: this.isMajorUpdate(version, latestVersion),
           }
 
           updates.push(updateInfo)
@@ -327,7 +344,10 @@ export class PluginUpdater {
    * skipped rather than failing the whole check — an unreachable registry
    * shouldn't hide the cognia updates that resolved fine.
    */
-  private async checkOpenVsxUpdates(extensions: InstalledPluginRef[]): Promise<UpdateInfo[]> {
+  private async checkOpenVsxUpdates(
+    extensions: InstalledPluginRef[],
+    allowPrerelease: boolean
+  ): Promise<UpdateInfo[]> {
     if (extensions.length === 0) return []
 
     // Lazy: the Open VSX client + cache are desktop-install concerns and have
@@ -350,7 +370,7 @@ export class PluginUpdater {
           message: `Checking ${ref.id} for updates...`,
         })
         try {
-          const latestVersion = await this.resolveOpenVsxLatest(ref, {
+          const latestVersion = await this.resolveOpenVsxLatest(ref, allowPrerelease, {
             client,
             cache,
             resolveVersion,
@@ -376,8 +396,8 @@ export class PluginUpdater {
   }
 
   /**
-   * Newest **stable** version of one extension, or `null` if the registry has
-   * nothing installable.
+   * Resolve one extension under the effective prerelease policy, or `null` if
+   * the registry has nothing installable.
    *
    * Two things this deliberately does not do:
    *
@@ -394,6 +414,7 @@ export class PluginUpdater {
    */
   private async resolveOpenVsxLatest(
     ref: InstalledPluginRef,
+    allowPrerelease: boolean,
     deps: {
       client: Pick<OpenVsxClient, "queryExtension">
       cache: typeof import("@/lib/plugin/vscode-shim/openvsx-cache")
@@ -402,8 +423,18 @@ export class PluginUpdater {
   ): Promise<string | null> {
     // `getCached` returns undefined for a row past its 24h TTL, so a stale
     // entry falls through to a real query without any check here.
-    const cached = await deps.cache.getCached(ref.id)
-    if (cached) return cached.latestVersion
+    // The shared cache stores a single selection, not the available channels.
+    // Opt-in must query again; a stable cache hit cannot prove no beta exists.
+    const cached = allowPrerelease ? undefined : await deps.cache.getCached(ref.id)
+    const cachedPayload = cached?.payload
+    const cachedPrerelease =
+      cachedPayload !== null &&
+      typeof cachedPayload === "object" &&
+      "preRelease" in cachedPayload &&
+      cachedPayload.preRelease === true
+    if (cached && !cachedPrerelease && !prerelease(cached.latestVersion)) {
+      return cached.latestVersion
+    }
 
     const response = await deps.client.queryExtension({
       extensionId: ref.id,
@@ -412,10 +443,10 @@ export class PluginUpdater {
     })
     if (response.extensions.length === 0) return null
 
-    const chosen = deps.resolveVersion(response.extensions, { allowPrerelease: false })
-    // The row records the resolved **stable** entry, which is what makes the
-    // cache safe for the next check to read straight back out of.
-    await deps.cache.putCached([deps.cache.cacheRowFromQueryEntry(chosen)])
+    const chosen = deps.resolveVersion(response.extensions, { allowPrerelease })
+    if (!allowPrerelease) {
+      await deps.cache.putCached([deps.cache.cacheRowFromQueryEntry(chosen)])
+    }
     return chosen.version
   }
 
@@ -994,17 +1025,7 @@ export class PluginUpdater {
   // ===========================================================================
 
   private isNewerVersion(current: string, latest: string): boolean {
-    const currentParts = current.split(".").map((p) => parseInt(p) || 0)
-    const latestParts = latest.split(".").map((p) => parseInt(p) || 0)
-
-    for (let i = 0; i < Math.max(currentParts.length, latestParts.length); i++) {
-      const c = currentParts[i] || 0
-      const l = latestParts[i] || 0
-      if (l > c) return true
-      if (l < c) return false
-    }
-
-    return false
+    return compareVersions(latest, current) > 0
   }
 
   private isMajorUpdate(current: string, latest: string): boolean {
@@ -1034,6 +1055,7 @@ export class PluginUpdater {
       "loaded",
       "enabling",
       "enabled",
+      "suspended",
       "disabling",
       "disabled",
       "unloading",
