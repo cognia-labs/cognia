@@ -1786,7 +1786,8 @@ export class PluginManager {
     return Boolean(
       this.disposableScopes.get(pluginId)?.hasUnresolvedResources() ||
       this.loader.getDirtyTeardown(pluginId) ||
-      this.runtimeCleanupFailures.has(pluginId)
+      this.runtimeCleanupFailures.has(pluginId) ||
+      this.pythonRuntimeGenerations.has(pluginId)
     )
   }
 
@@ -1816,6 +1817,11 @@ export class PluginManager {
       })
       if (info !== null && info !== undefined) {
         await this.invokeNativeHost("plugin_python_unload", { pluginId, generation })
+      }
+      if (this.pythonRuntimeGenerations.get(pluginId) === generation) {
+        this.pythonRuntimeGenerations.delete(pluginId)
+        unbindPythonRuntimeGeneration(pluginId, generation)
+        this.pendingPythonEvents.delete(pluginId)
       }
       return true
     }
@@ -2004,13 +2010,15 @@ export class PluginManager {
       const scope = this.disposableScopes.get(pluginId)
       const report = await scope?.dispose()
       const runtimeFailure = this.runtimeCleanupFailures.get(pluginId)
-      if (runtimeFailure?.runtime === "python") {
+      if (runtimeFailure?.runtime === "python" || this.pythonRuntimeGenerations.has(pluginId)) {
         try {
           await this.unloadPythonPlugin(pluginId)
           this.runtimeCleanupFailures.delete(pluginId)
         } catch (error) {
           const runtimeGeneration =
-            runtimeFailure.runtimeGeneration ?? lifecycle.dirty?.runtimeGeneration
+            this.pythonRuntimeGenerations.get(pluginId) ??
+            runtimeFailure?.runtimeGeneration ??
+            lifecycle.dirty?.runtimeGeneration
           this.runtimeCleanupFailures.set(pluginId, {
             runtime: "python",
             error,
@@ -2067,6 +2075,7 @@ export class PluginManager {
         loaderDirty ||
         missingRuntimeProbe ||
         this.runtimeCleanupFailures.has(pluginId) ||
+        this.pythonRuntimeGenerations.has(pluginId) ||
         report?.failures.length ||
         scope?.hasUnresolvedResources()
       )
@@ -2085,6 +2094,9 @@ export class PluginManager {
                   : "Runtime cleanup unconfirmed")
             ).slice(0, 512),
             hostEpoch: PLUGIN_HOST_EPOCH,
+            ...(lifecycle.dirty?.runtimeGeneration
+              ? { runtimeGeneration: lifecycle.dirty.runtimeGeneration }
+              : {}),
             labels: scope?.getUnresolvedLabels(),
           },
         })
@@ -6411,7 +6423,11 @@ export class PluginManager {
       // `this.contexts.delete(pluginId)` runs AFTER this in every caller, so
       // the entry is still live here.
       try {
-        await Promise.resolve(definition.deactivate(deactivateContext))
+        await withTimeout(
+          Promise.resolve(definition.deactivate(deactivateContext)),
+          LIFECYCLE_HOOK_TIMEOUT_MS,
+          `plugin.deactivate:${pluginId}`
+        )
       } catch (error) {
         const runtimeGeneration = this.loader.getRuntimeGeneration(pluginId)
         this.runtimeCleanupFailures.set(pluginId, {
@@ -6431,16 +6447,32 @@ export class PluginManager {
       }
     }
 
-    if (plugin && (plugin.manifest.type === "python" || plugin.manifest.type === "hybrid")) {
+    // Only a bound generation proves a Python runtime was loaded. Without one
+    // (web/test hosts, or a load that failed before the host replied) there is
+    // nothing to unload, and recording a cleanup failure would leave the plugin
+    // dirty with no generation any retry could retire.
+    if (
+      plugin &&
+      (plugin.manifest.type === "python" || plugin.manifest.type === "hybrid") &&
+      this.pythonRuntimeGenerations.has(pluginId)
+    ) {
       try {
         await this.unloadPythonPlugin(pluginId)
       } catch (error) {
+        const runtimeGeneration = this.pythonRuntimeGenerations.get(pluginId)
+        if (runtimeGeneration) {
+          this.runtimeCleanupFailures.set(pluginId, {
+            runtime: "python",
+            error,
+            runtimeGeneration,
+          })
+        }
         recordSilentFailure(
           pluginId,
           {
             site: "manager.deactivatePluginRuntime.python.unload",
             message: "Failed to unload Python plugin module.",
-            expected: !canUseTauriInvoke(),
+            expected: false,
           },
           error
         )

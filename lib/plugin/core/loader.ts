@@ -3,7 +3,6 @@
  */
 
 import { detectPlatform, isTauri } from "@/lib/platform/detect"
-import { loggers } from "@cognia/logging"
 import type {
   Plugin,
   PluginContext,
@@ -38,8 +37,6 @@ import { evaluatePluginBundleAsync, PluginEvaluationError } from "./evaluate-plu
 export { PluginEvaluationError } from "./evaluate-plugin-bundle"
 import { persistRuntimeStubWarning, RUNTIME_STUB_WARNINGS } from "./runtime-stub-warning"
 
-const pluginLoaderLogger = loggers.plugin.child("loader")
-
 /**
  * Per-runtime teardown budget. WASM / VSCode unload calls cross an IPC
  * boundary and can stall under host pressure; 5s is enough for clean
@@ -59,6 +56,8 @@ interface LoadedModule {
   definition: PluginDefinition
   exports: Record<string, unknown>
   runtimeGeneration?: string
+  /** False only for VS Code contributions that never needed a native runtime. */
+  requiresRuntimeTeardown?: boolean
 }
 
 /**
@@ -277,7 +276,7 @@ export class PluginLoader {
       case "frontend":
         return this.loadFrontendModule(manifest, path)
       case "python":
-        return this.loadPythonModule(manifest, path)
+        return this.loadPythonModule(manifest)
       case "hybrid":
         return this.loadHybridModule(manifest, path)
       case "wasm":
@@ -300,10 +299,12 @@ export class PluginLoader {
     pluginPath: string
   ): Promise<PluginDefinition> {
     const definition = await loadVscodeDefinition(manifest, pluginPath)
+    const runtimeGeneration = getVscodeRuntimeGeneration(manifest.id)
     this.loadedModules.set(manifest.id, {
       definition,
       exports: { default: definition },
-      runtimeGeneration: getVscodeRuntimeGeneration(manifest.id),
+      runtimeGeneration,
+      requiresRuntimeTeardown: Boolean(manifest.vscodeMain || runtimeGeneration),
     })
     return definition
   }
@@ -456,88 +457,19 @@ export class PluginLoader {
   }
 
   /**
-   * Load a Python plugin via Tauri/PyO3 backend
+   * Create the definition used for manager-owned Python execution.
    *
-   * In Tauri, Python plugins are loaded by the Rust backend which manages
-   * the Python runtime. The loader creates a definition that delegates
-   * activation/deactivation to Tauri IPC commands.
+   * The manager owns native Python loading, hooks and teardown. The loader
+   * only supplies the definition and warns on hosts without that runtime.
    */
-  private async loadPythonModule(
-    manifest: PluginManifest,
-    pluginPath: string
-  ): Promise<PluginDefinition> {
-    // In the supervised headless brain the canonical PluginManager owns the
-    // Python subprocess lifecycle through `plugin_python_*` service RPCs. This
-    // loader still needs a definition so hybrid/frontend activation can run,
-    // but it must neither create a duplicate host nor stamp the web-only
-    // degraded warning. `PluginManager.loadPythonPlugin()` performs the real
-    // load immediately after this definition activates.
-    if (detectPlatform() === "headless") {
+  private async loadPythonModule(manifest: PluginManifest): Promise<PluginDefinition> {
+    // Both native hosts use the manager's generation-aware `plugin_python_*`
+    // lifecycle. Do not start a duplicate runtime or stamp a degraded warning.
+    if (detectPlatform() === "headless" || (await this.checkTauriAvailable())) {
       return {
         manifest,
         activate: async () => ({}),
         deactivate: async () => {},
-      }
-    }
-
-    // Check if Tauri is available for native Python execution
-    const isTauriAvailable = await this.checkTauriAvailable()
-
-    if (isTauriAvailable) {
-      try {
-        // Load the Python plugin via Tauri's Python runtime
-        const { invoke } = await import("@tauri-apps/api/core")
-
-        // invoke-parity-exempt: Python plugin runtime not yet shipped in Rust; caught and surfaced as load failure
-        await invoke("plugin_load_python", {
-          pluginId: manifest.id,
-          manifestJson: JSON.stringify(manifest),
-          pluginPath,
-        })
-
-        return {
-          manifest,
-          activate: async (context) => {
-            context.logger.info(`Activating Python plugin ${manifest.id} via Tauri`)
-
-            // Activate the Python plugin via Tauri
-            const result = await invoke<{
-              tools?: Array<{ name: string; description: string; parameters?: unknown }>
-              hooks?: string[]
-            }>("plugin_activate_python", {
-              pluginId: manifest.id,
-              config: JSON.stringify({}),
-            })
-
-            // Register tools returned from Python runtime
-            if (result?.tools && Array.isArray(result.tools)) {
-              for (const tool of result.tools) {
-                context.logger.debug(`Registering Python tool: ${tool.name}`)
-              }
-            }
-
-            return result?.hooks ? this.buildHooksFromPython(manifest.id, result.hooks, invoke) : {}
-          },
-          deactivate: async () => {
-            try {
-              // invoke-parity-exempt: Python plugin runtime not yet shipped in Rust; caught and logged
-              await invoke("plugin_deactivate_python", {
-                pluginId: manifest.id,
-              })
-            } catch (error) {
-              // Log but don't throw on deactivation failure
-              pluginLoaderLogger.warn("Failed to deactivate Python plugin", {
-                pluginId: manifest.id,
-                error: error instanceof Error ? error.message : String(error),
-              })
-            }
-          },
-        }
-      } catch (error) {
-        pluginLoaderLogger.warn("Failed to load Python plugin via Tauri, falling back to stub", {
-          pluginId: manifest.id,
-          error: error instanceof Error ? error.message : String(error),
-        })
       }
     }
 
@@ -570,37 +502,6 @@ export class PluginLoader {
   }
 
   /**
-   * Build hook handlers that delegate to the Python runtime via Tauri IPC
-   */
-  private buildHooksFromPython(
-    pluginId: string,
-    hookNames: string[],
-    invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
-  ): Record<string, (...args: unknown[]) => void | Promise<void>> {
-    const hooks: Record<string, (...args: unknown[]) => void | Promise<void>> = {}
-
-    for (const hookName of hookNames) {
-      hooks[hookName] = async (...args: unknown[]) => {
-        try {
-          // invoke-parity-exempt: Python plugin runtime not yet shipped in Rust; caught and logged
-          await invoke("plugin_dispatch_python_hook", {
-            pluginId,
-            hookName,
-            argsJson: JSON.stringify(args),
-          })
-        } catch (error) {
-          pluginLoaderLogger.error("Failed to dispatch Python hook", error, {
-            pluginId,
-            hookName,
-          })
-        }
-      }
-    }
-
-    return hooks
-  }
-
-  /**
    * Load a hybrid plugin (both frontend and Python)
    *
    * Hybrid plugins have both a TypeScript/JS frontend part and a Python backend part.
@@ -620,7 +521,7 @@ export class PluginLoader {
     // Load Python part
     let pythonDefinition: PluginDefinition | null = null
     if (manifest.pythonMain) {
-      pythonDefinition = await this.loadPythonModule(manifest, pluginPath)
+      pythonDefinition = await this.loadPythonModule(manifest)
     }
 
     // Return combined definition that coordinates both parts
@@ -906,7 +807,7 @@ export class PluginLoader {
         () => unloadWasmPlugin(pluginId, entry?.runtimeGeneration),
         entry?.runtimeGeneration
       )
-    } else if (manifestType === "vscode-extension") {
+    } else if (manifestType === "vscode-extension" && entry?.requiresRuntimeTeardown !== false) {
       await this.runTeardown(
         pluginId,
         manifestType,

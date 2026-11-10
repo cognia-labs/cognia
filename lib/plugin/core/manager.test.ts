@@ -57,6 +57,7 @@ import {
 } from "./manager"
 import {
   getPluginPointDiagnostics,
+  subscribePluginPointDiagnostics,
   __resetDiagnosticsStoreForTesting,
 } from "@/lib/plugin/contracts/diagnostics-store"
 import type { Plugin, PluginContext, PluginManifest } from "@/types/plugin"
@@ -147,6 +148,8 @@ jest.mock("@/lib/plugin/core/plugins-policy-storage", () => {
 })
 
 jest.mock("@/lib/plugin/security/permission-guard", () => ({
+  expandLegacyPermissions: jest.requireActual("@/lib/plugin/security/permission-guard")
+    .expandLegacyPermissions,
   getPermissionGuard: jest.fn(),
   createGuardedAPI: jest.fn((_pluginId, api) => api),
 }))
@@ -4059,6 +4062,91 @@ describe("PluginManager", () => {
       })
     })
 
+    it("bounds a hanging deactivate and continues teardown and the lifecycle queue (B10)", async () => {
+      jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick"] })
+      const id = "deactivate-timeout"
+      const manifest = { ...createManifest(id), permissions: ["network:fetch" as const] }
+      const store = {
+        plugins: {
+          [id]: {
+            manifest,
+            status: "enabled",
+            source: "local",
+            path: `/plugins/${id}`,
+            config: {},
+          },
+        } as Record<string, Plugin>,
+        disablePlugin: jest.fn(async () => undefined),
+      }
+      mockGetState.mockReturnValue(store)
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const diagnostics: ReturnType<typeof getPluginPointDiagnostics> = []
+      const unsubscribeDiagnostics = subscribePluginPointDiagnostics(() => {
+        diagnostics.push(...getPluginPointDiagnostics(id))
+      })
+      const internals = manager as unknown as {
+        loader: {
+          restoreModule: (id: string, definition: unknown) => void
+          isLoaded: (id: string) => boolean
+        }
+        contexts: Map<string, unknown>
+        ensureActivationLease: (id: string) => unknown
+        activationLeases: Map<string, unknown>
+        withLifecycleLock: (id: string, run: () => Promise<void>) => Promise<void>
+      }
+      let finishDeactivate!: () => void
+      const pendingDeactivate = new Promise<void>((resolve) => {
+        finishDeactivate = resolve
+      })
+      let notifyStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        notifyStarted = resolve
+      })
+      const deactivate = jest.fn(() => {
+        notifyStarted()
+        return pendingDeactivate
+      })
+      internals.loader.restoreModule(id, { manifest, activate: jest.fn(), deactivate })
+      internals.contexts.set(id, { pluginId: id })
+      internals.ensureActivationLease(id)
+      const nextOperation = jest.fn(async () => undefined)
+      const disabling = manager.disablePlugin(id)
+      const queued = internals.withLifecycleLock(id, nextOperation)
+
+      try {
+        await started
+        await jest.advanceTimersByTimeAsync(30_001)
+        expect(deactivate).toHaveBeenCalledWith({ pluginId: id })
+        expect(internals.loader.isLoaded(id)).toBe(false)
+        jest.useRealTimers()
+        await disabling
+        await queued
+        expect(nextOperation).toHaveBeenCalledTimes(1)
+        expect(mockGuard.revokeAll).toHaveBeenCalledWith(id)
+        expect(getPluginConsentBroker().clearSessionGrantsForPlugin).toHaveBeenCalledWith(id)
+        expect(manager.hasUnresolvedActivationResources(id)).toBe(true)
+        expect(internals.activationLeases.has(id)).toBe(true)
+        await expect(manager.getPluginLifecycleState(id)).resolves.toMatchObject({
+          actual: "dirty",
+          dirty: { runtime: "frontend", reason: "error" },
+        })
+        expect(diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              pointId: "manager.deactivatePluginRuntime.deactivate",
+              hint: expect.stringMatching(/timed out/i),
+            }),
+          ])
+        )
+      } finally {
+        unsubscribeDiagnostics()
+        finishDeactivate()
+        jest.useRealTimers()
+        await disabling
+        await queued
+      }
+    })
+
     it("keeps runtime inactive when disable fails after cleanup has started", async () => {
       const manifest = {
         ...createManifest("rollback-plugin"),
@@ -7478,6 +7566,152 @@ describe("PluginManager", () => {
       mockGetState.mockReturnValue(wasmStore)
       await manager.disablePlugin("wasm-plugin")
       expect(mockInvoke).not.toHaveBeenCalledWith("plugin_python_unload", expect.anything())
+    })
+
+    it.each([
+      ["python", true],
+      ["hybrid", true],
+      ["python", false],
+    ] as const)(
+      "keeps failed %s unload dirty until its generation is retired (Tauri=%s, B11)",
+      async (type, tauri) => {
+        const id = `unload-failure-${type}-${tauri}`
+        const plugin = createTypedPlugin(id, type, "enabled")
+        mockGetState.mockReturnValue({
+          plugins: { [id]: plugin },
+          disablePlugin: jest.fn(async () => undefined),
+        })
+        let stopped = false
+        const unloadError = new Error("Python process is still running")
+        mockInvoke.mockImplementation(async (command) => {
+          if (command === "plugin_python_unload" && !stopped) throw unloadError
+          if (command === "plugin_python_get_info") return stopped ? null : { loaded: true }
+          return undefined
+        })
+        mockCanUseTauriInvoke.mockReturnValue(tauri)
+        const manager = new PluginManager({
+          pluginDirectory: "/plugins",
+          enablePython: true,
+          ...(!tauri ? { nodeHostInvoker: mockInvoke } : {}),
+        })
+        const internals = manager as unknown as {
+          bindPythonGeneration: (id: string, generation: string) => void
+          ensureActivationLease: (id: string) => unknown
+          activationLeases: Map<string, unknown>
+          pythonRuntimeGenerations: Map<string, string>
+          runtimeCleanupFailures: Map<string, unknown>
+        }
+        internals.bindPythonGeneration(id, "failed-python-generation")
+        internals.ensureActivationLease(id)
+
+        await manager.disablePlugin(id)
+
+        expect(manager.hasUnresolvedActivationResources(id)).toBe(true)
+        expect(internals.activationLeases.has(id)).toBe(true)
+        expect(internals.runtimeCleanupFailures.get(id)).toEqual({
+          runtime: "python",
+          error: unloadError,
+          runtimeGeneration: "failed-python-generation",
+        })
+        await expect(manager.getPluginLifecycleState(id)).resolves.toMatchObject({
+          actual: "dirty",
+          dirty: { runtime: "python", runtimeGeneration: "failed-python-generation" },
+        })
+        await expect(manager.recoverPluginRuntime(id)).resolves.toBe(false)
+        expect(internals.pythonRuntimeGenerations.get(id)).toBe("failed-python-generation")
+        await expect(manager.getPluginLifecycleState(id)).resolves.toMatchObject({
+          actual: "dirty",
+          dirty: { runtimeGeneration: "failed-python-generation" },
+        })
+        stopped = true
+        await expect(manager.recoverPluginRuntime(id)).resolves.toBe(true)
+        expect(internals.pythonRuntimeGenerations.has(id)).toBe(false)
+        expect(internals.activationLeases.has(id)).toBe(false)
+        expect(internals.runtimeCleanupFailures.has(id)).toBe(false)
+        expect(manager.hasUnresolvedActivationResources(id)).toBe(false)
+        expect(mockInvoke).toHaveBeenCalledWith("plugin_python_unload", {
+          pluginId: id,
+          generation: "failed-python-generation",
+        })
+      }
+    )
+
+    it("treats a retained Python generation as unresolved before cleanup fails (B11)", () => {
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      ;(
+        manager as unknown as { bindPythonGeneration: (id: string, generation: string) => void }
+      ).bindPythonGeneration("retained-python", "retained-generation")
+      expect(manager.hasUnresolvedActivationResources("retained-python")).toBe(true)
+    })
+
+    it("retires a retained Python generation when its host confirms it is already absent (B11)", async () => {
+      const id = "python-already-stopped"
+      mockGetState.mockReturnValue({
+        plugins: { [id]: createTypedPlugin(id, "python", "enabled") },
+        disablePlugin: jest.fn(async () => undefined),
+      })
+      mockInvoke.mockImplementation(async (command) => {
+        if (command === "plugin_python_unload") throw new Error("Runtime already stopped")
+        return command === "plugin_python_get_info" ? null : undefined
+      })
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      const internals = manager as unknown as {
+        bindPythonGeneration: (id: string, generation: string) => void
+        pythonRuntimeGenerations: Map<string, string>
+      }
+      internals.bindPythonGeneration(id, "stopped-python-generation")
+
+      await manager.disablePlugin(id)
+      await expect(manager.recoverPluginRuntime(id)).resolves.toBe(true)
+
+      expect(mockInvoke).toHaveBeenCalledWith("plugin_python_get_info", {
+        pluginId: id,
+        generation: "stopped-python-generation",
+      })
+      expect(internals.pythonRuntimeGenerations.has(id)).toBe(false)
+      expect(manager.hasUnresolvedActivationResources(id)).toBe(false)
+    })
+
+    it("does not mark Python cleanup dirty on hosts where no runtime was loaded (B11)", async () => {
+      const id = "python-without-native-host"
+      const plugin = createTypedPlugin(id, "python", "enabled")
+      mockCanUseTauriInvoke.mockReturnValue(false)
+      mockGetState.mockReturnValue({
+        plugins: { [id]: plugin },
+        disablePlugin: jest.fn(async () => undefined),
+      })
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      await manager.disablePlugin(id)
+      expect(manager.hasUnresolvedActivationResources(id)).toBe(false)
+      await expect(manager.getPluginLifecycleState(id)).resolves.toMatchObject({
+        actual: "inactive",
+      })
+      expect(getPluginPointDiagnostics(id)).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ pointId: "manager.deactivatePluginRuntime.python.unload" }),
+        ])
+      )
+    })
+
+    it("keeps a desktop Python plugin clean when no runtime generation was ever bound (B11)", async () => {
+      const id = "python-load-never-bound"
+      const plugin = createTypedPlugin(id, "python", "enabled")
+      mockCanUseTauriInvoke.mockReturnValue(true)
+      mockGetState.mockReturnValue({
+        plugins: { [id]: plugin },
+        disablePlugin: jest.fn(async () => undefined),
+      })
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      await manager.disablePlugin(id)
+      expect(manager.hasUnresolvedActivationResources(id)).toBe(false)
+      await expect(manager.getPluginLifecycleState(id)).resolves.toMatchObject({
+        actual: "inactive",
+      })
+      expect(getPluginPointDiagnostics(id)).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ pointId: "manager.deactivatePluginRuntime.python.unload" }),
+        ])
+      )
     })
 
     it("initializes and subscribes through the service transport in the headless brain", async () => {

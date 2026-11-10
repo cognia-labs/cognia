@@ -695,56 +695,42 @@ describe("PluginLoader", () => {
       expect(mockContext.logger.warn).toHaveBeenCalledWith(expect.stringContaining("Python plugin"))
     })
 
-    it("delegates Python activation, hook dispatch, and deactivation through Tauri IPC", async () => {
+    it("defers native Python lifecycle to the manager without legacy IPC or false warnings (B14)", async () => {
       jest.useRealTimers()
       jest.resetModules()
       const invoke = jest.fn(async (cmd: string) => {
-        if (cmd === "plugin_activate_python") {
-          return {
-            tools: [{ name: "native-tool", description: "Native tool" }],
-            hooks: ["onLoad"],
-          }
-        }
-        return undefined
+        throw new Error(`Command ${cmd} not found`)
       })
+      const persistRuntimeStubWarning = jest.fn()
       jest.doMock("@/lib/platform/detect", () => ({
         ...jest.requireActual("@/lib/platform/detect"),
         detectPlatform: () => "tauri",
         isTauri: () => true,
       }))
       jest.doMock("@tauri-apps/api/core", () => ({ invoke }))
+      jest.doMock("./runtime-stub-warning", () => ({
+        ...jest.requireActual("./runtime-stub-warning"),
+        persistRuntimeStubWarning,
+      }))
 
-      const { PluginLoader: FreshLoader } = await import("./loader")
-      const fresh = new FreshLoader()
-      const plugin = createMockPlugin("python-native", "python")
-      const definition = await fresh.load(plugin)
-      const logger = { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() }
+      try {
+        const { PluginLoader: FreshLoader } = await import("./loader")
+        const fresh = new FreshLoader()
+        const definition = await fresh.load(createMockPlugin("python-native", "python"))
+        const logger = { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() }
 
-      const hooks = await definition.activate({ logger } as never)
-      await hooks?.onLoad?.()
-      await definition.deactivate?.(deactivateContext)
+        await expect(definition.activate({ logger } as never)).resolves.toEqual({})
+        await definition.deactivate?.(deactivateContext)
 
-      expect(invoke).toHaveBeenNthCalledWith(1, "plugin_load_python", {
-        pluginId: "python-native",
-        manifestJson: JSON.stringify(plugin.manifest),
-        pluginPath: "/plugins/python-native",
-      })
-      expect(invoke).toHaveBeenCalledWith("plugin_activate_python", {
-        pluginId: "python-native",
-        config: JSON.stringify({}),
-      })
-      expect(invoke).toHaveBeenCalledWith("plugin_dispatch_python_hook", {
-        pluginId: "python-native",
-        hookName: "onLoad",
-        argsJson: JSON.stringify([]),
-      })
-      expect(invoke).toHaveBeenCalledWith("plugin_deactivate_python", {
-        pluginId: "python-native",
-      })
-      expect(logger.debug).toHaveBeenCalledWith("Registering Python tool: native-tool")
-      jest.dontMock("@/lib/platform/detect")
-      jest.dontMock("@tauri-apps/api/core")
-      jest.useFakeTimers()
+        expect(persistRuntimeStubWarning).not.toHaveBeenCalled()
+        expect(invoke).not.toHaveBeenCalled()
+        expect(logger.warn).not.toHaveBeenCalled()
+      } finally {
+        jest.dontMock("@/lib/platform/detect")
+        jest.dontMock("@tauri-apps/api/core")
+        jest.dontMock("./runtime-stub-warning")
+        jest.useFakeTimers()
+      }
     })
 
     /**
@@ -921,6 +907,105 @@ describe("PluginLoader", () => {
             message: "vscode boom",
           })
         )
+      })
+
+      it.each([
+        { themes: [{ id: "theme", name: "Theme", vscodeJsonPath: "themes/theme.json" }] },
+        { vscodeGrammars: [{ scopeName: "source.test", path: "syntaxes/test.json" }] },
+        { vscodeSnippets: [{ language: "test", path: "snippets/test.json" }] },
+      ])(
+        "unloads sidecar-free VS Code contributions %j without a generation (B12)",
+        async (contributions) => {
+          const plugin = createMockPlugin("vscode-contributions")
+          plugin.manifest.type = "vscode-extension"
+          plugin.manifest.vscodeMain = undefined
+          Object.assign(plugin.manifest, contributions)
+          plugin.manifest.vscodeExtension = {
+            identifier: plugin.manifest.id,
+            version: "1.0.0",
+            engineVscode: "*",
+            vsixSha256: "",
+            source: "dev",
+            bundleFormat: "cjs",
+            activationEvents: [],
+          }
+          const nativeLoader =
+            jest.requireActual<typeof import("./vscode-loader")>("./vscode-loader")
+          vscodeLoader.loadVscodeDefinition.mockImplementationOnce(
+            nativeLoader.loadVscodeDefinition
+          )
+          vscodeLoader.getVscodeRuntimeGeneration.mockImplementationOnce(
+            nativeLoader.getVscodeRuntimeGeneration
+          )
+          vscodeLoader.unloadVscodeExtension.mockImplementationOnce(
+            nativeLoader.unloadVscodeExtension
+          )
+          const runtime = globalThis as Record<string, unknown>
+          const previousHeadless = runtime.__COGNIA_HEADLESS__
+          runtime.__COGNIA_HEADLESS__ = true
+
+          try {
+            await (await loader.load(plugin)).activate(deactivateContext)
+            expect(loader.getRuntimeGeneration(plugin.manifest.id)).toBeUndefined()
+            await loader.unload(plugin.manifest.id)
+
+            expect(loader.getDirtyTeardown(plugin.manifest.id)).toBeNull()
+            expect(vscodeLoader.unloadVscodeExtension).not.toHaveBeenCalled()
+            expect(diagModule.recordSilentFailure).not.toHaveBeenCalled()
+            expect(loader.isLoaded(plugin.manifest.id)).toBe(false)
+          } finally {
+            if (previousHeadless === undefined) delete runtime.__COGNIA_HEADLESS__
+            else runtime.__COGNIA_HEADLESS__ = previousHeadless
+          }
+        }
+      )
+
+      it("retains a VS Code generation for failed teardown and recovery (B12)", async () => {
+        const plugin = createMockPlugin("vscode-with-generation")
+        plugin.manifest.type = "vscode-extension"
+        plugin.manifest.vscodeMain = "extension.js"
+        vscodeLoader.loadVscodeDefinition.mockResolvedValueOnce({
+          manifest: plugin.manifest,
+          activate: jest.fn(),
+        })
+        vscodeLoader.getVscodeRuntimeGeneration.mockReturnValueOnce("vscode-lived-generation")
+        vscodeLoader.unloadVscodeExtension.mockRejectedValueOnce(new Error("sidecar busy"))
+
+        await loader.load(plugin)
+        await loader.unload(plugin.manifest.id)
+
+        expect(loader.getDirtyTeardown(plugin.manifest.id)).toMatchObject({
+          runtimeGeneration: "vscode-lived-generation",
+          reason: "error",
+        })
+        await expect(loader.recoverDirtyTeardown(plugin.manifest.id)).resolves.toBe(true)
+        expect(vscodeLoader.unloadVscodeExtension).toHaveBeenNthCalledWith(
+          2,
+          plugin.manifest.id,
+          "vscode-lived-generation"
+        )
+        expect(loader.getDirtyTeardown(plugin.manifest.id)).toBeNull()
+      })
+
+      it("still requires a generation for VS Code code extensions (B12)", async () => {
+        const plugin = createMockPlugin("vscode-missing-generation")
+        plugin.manifest.type = "vscode-extension"
+        plugin.manifest.vscodeMain = "extension.js"
+        vscodeLoader.loadVscodeDefinition.mockResolvedValueOnce({
+          manifest: plugin.manifest,
+          activate: jest.fn(),
+        })
+        vscodeLoader.getVscodeRuntimeGeneration.mockReturnValueOnce(undefined)
+        vscodeLoader.unloadVscodeExtension.mockRejectedValueOnce(new Error("Missing generation"))
+
+        await loader.load(plugin)
+        await loader.unload(plugin.manifest.id)
+
+        expect(vscodeLoader.unloadVscodeExtension).toHaveBeenCalledWith(
+          plugin.manifest.id,
+          undefined
+        )
+        expect(loader.getDirtyTeardown(plugin.manifest.id)).toMatchObject({ reason: "error" })
       })
 
       it("retries a dirty isolated runtime teardown before clearing its marker", async () => {
