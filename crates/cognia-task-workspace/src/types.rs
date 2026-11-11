@@ -375,7 +375,85 @@ pub struct PatchSet {
     pub applied_selection_known: bool,
     #[serde(default = "default_true")]
     pub reversible: bool,
+    /// Why `reversible` is false. `None` beside `reversible == false` is a
+    /// row written before reasons existed: still not reversible, reason unknown.
+    #[serde(default)]
+    pub irreversible_reason: Option<IrreversibleReason>,
     pub created_at: i64,
+}
+
+/// Why a patch set cannot be undone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum IrreversibleReason {
+    /// The ledger had no room for the inverse data and the caller accepted that.
+    Capacity,
+    /// The executor was not confirmed stopped when the run settled.
+    StopUnproven,
+    /// Another run was active on the same directory during this run.
+    Overlap,
+    /// A changed path has no lossless ledger key.
+    PathUnsupported,
+    /// The bytes on disk before the run could not be established.
+    FidelityUnknown,
+}
+
+impl IrreversibleReason {
+    /// Set by an apply and lifted by the next apply that retains its inverse
+    /// data. Every other reason describes the run itself and stays for good.
+    fn is_apply_scoped(self) -> bool {
+        matches!(self, Self::Capacity)
+    }
+
+    pub(crate) fn undo_refusal(reason: Option<Self>) -> &'static str {
+        match reason {
+            Some(Self::Capacity) | None => {
+                "patch set was applied irreversibly because inverse data was not retained"
+            }
+            Some(Self::StopUnproven) => {
+                "patch set cannot be undone because its executor was not confirmed stopped"
+            }
+            Some(Self::Overlap) => {
+                "patch set cannot be undone because another run shared its directory"
+            }
+            Some(Self::PathUnsupported) => {
+                "patch set cannot be undone because a changed path has no lossless key"
+            }
+            Some(Self::FidelityUnknown) => {
+                "patch set cannot be undone because the original bytes are unknown"
+            }
+        }
+    }
+}
+
+impl PatchSet {
+    /// Mark the patch not reversible for `reason`. A run-scoped reason is
+    /// never replaced by an apply-scoped one.
+    pub(crate) fn mark_irreversible(&mut self, reason: IrreversibleReason) {
+        let keeps_existing = !self.reversible
+            && self
+                .irreversible_reason
+                .is_some_and(|existing| !existing.is_apply_scoped());
+        self.reversible = false;
+        if !keeps_existing {
+            self.irreversible_reason = Some(reason);
+        }
+    }
+
+    /// Record whether an apply retained its inverse data, or reset that
+    /// outcome before a retry (`retained == true`). Only apply-scoped
+    /// irreversibility is lifted; a run-scoped reason survives.
+    pub(crate) fn record_inverse_retention(&mut self, retained: bool) {
+        if !retained {
+            self.mark_irreversible(IrreversibleReason::Capacity);
+        } else if self
+            .irreversible_reason
+            .is_none_or(IrreversibleReason::is_apply_scoped)
+        {
+            self.reversible = true;
+            self.irreversible_reason = None;
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -1362,6 +1440,7 @@ mod tests {
         for (name, schema) in [
             ("IsolationKind", schemars::schema_for!(IsolationKind)),
             ("PatchFile", schemars::schema_for!(PatchFile)),
+            ("PatchSet", schemars::schema_for!(PatchSet)),
         ] {
             let mut expected = serde_json::to_value(schema).unwrap();
             let defs = expected.as_object_mut().unwrap().remove("$defs");
@@ -1881,5 +1960,110 @@ mod port_policy_tests {
         }
         .validate_ports()
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod irreversible_reason_tests {
+    use super::*;
+
+    fn patch_set_json(extra: &str) -> String {
+        format!(
+            r#"{{"patchId":"p","taskId":"t","runId":"r","state":"ready","baseRevision":0,
+            "appliedRevision":null,"files":[],"appliedFiles":[],"createdAt":1{extra}}}"#
+        )
+    }
+
+    #[test]
+    fn a_patch_row_without_a_reason_stays_irreversible_with_the_reason_unknown() {
+        let legacy: PatchSet =
+            serde_json::from_str(&patch_set_json(r#","reversible":false"#)).unwrap();
+        assert!(!legacy.reversible);
+        assert_eq!(legacy.irreversible_reason, None);
+
+        let oldest: PatchSet = serde_json::from_str(&patch_set_json("")).unwrap();
+        assert!(oldest.reversible);
+        assert_eq!(oldest.irreversible_reason, None);
+    }
+
+    #[test]
+    fn irreversible_reasons_use_camel_case_on_the_wire() {
+        let mut patch: PatchSet = serde_json::from_str(&patch_set_json("")).unwrap();
+        patch.mark_irreversible(IrreversibleReason::StopUnproven);
+        let wire = serde_json::to_value(&patch).unwrap();
+        assert_eq!(wire["reversible"], false);
+        assert_eq!(wire["irreversibleReason"], "stopUnproven");
+        for (reason, name) in [
+            (IrreversibleReason::Capacity, "capacity"),
+            (IrreversibleReason::Overlap, "overlap"),
+            (IrreversibleReason::PathUnsupported, "pathUnsupported"),
+            (IrreversibleReason::FidelityUnknown, "fidelityUnknown"),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), name);
+        }
+    }
+
+    #[test]
+    fn an_apply_that_retains_its_inverse_lifts_only_apply_scoped_irreversibility() {
+        let mut patch: PatchSet = serde_json::from_str(&patch_set_json("")).unwrap();
+        patch.record_inverse_retention(false);
+        assert!(!patch.reversible);
+        assert_eq!(
+            patch.irreversible_reason,
+            Some(IrreversibleReason::Capacity)
+        );
+        patch.record_inverse_retention(true);
+        assert!(patch.reversible);
+        assert_eq!(patch.irreversible_reason, None);
+
+        let mut legacy: PatchSet =
+            serde_json::from_str(&patch_set_json(r#","reversible":false"#)).unwrap();
+        legacy.record_inverse_retention(true);
+        assert!(legacy.reversible);
+
+        for reason in [
+            IrreversibleReason::StopUnproven,
+            IrreversibleReason::Overlap,
+            IrreversibleReason::PathUnsupported,
+            IrreversibleReason::FidelityUnknown,
+        ] {
+            let mut patch: PatchSet = serde_json::from_str(&patch_set_json("")).unwrap();
+            patch.mark_irreversible(reason);
+            patch.record_inverse_retention(true);
+            assert!(!patch.reversible, "{reason:?} must survive a clean apply");
+            patch.record_inverse_retention(false);
+            assert_eq!(
+                patch.irreversible_reason,
+                Some(reason),
+                "{reason:?} must outrank capacity"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_scoped_reason_replaces_an_apply_scoped_one() {
+        let mut patch: PatchSet = serde_json::from_str(&patch_set_json("")).unwrap();
+        patch.record_inverse_retention(false);
+        patch.mark_irreversible(IrreversibleReason::Overlap);
+        assert_eq!(patch.irreversible_reason, Some(IrreversibleReason::Overlap));
+    }
+
+    #[test]
+    fn every_reason_has_its_own_undo_refusal() {
+        let texts: std::collections::BTreeSet<_> = [
+            Some(IrreversibleReason::Capacity),
+            Some(IrreversibleReason::StopUnproven),
+            Some(IrreversibleReason::Overlap),
+            Some(IrreversibleReason::PathUnsupported),
+            Some(IrreversibleReason::FidelityUnknown),
+        ]
+        .into_iter()
+        .map(IrreversibleReason::undo_refusal)
+        .collect();
+        assert_eq!(texts.len(), 5);
+        assert_eq!(
+            IrreversibleReason::undo_refusal(None),
+            IrreversibleReason::undo_refusal(Some(IrreversibleReason::Capacity))
+        );
     }
 }

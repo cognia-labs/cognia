@@ -3020,6 +3020,7 @@ mod tests {
             applied_selection: Vec::new(),
             applied_selection_known: true,
             reversible: true,
+            irreversible_reason: None,
             created_at: 1,
         };
         store.put_patch_set(&patch).unwrap();

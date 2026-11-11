@@ -9739,6 +9739,36 @@
       "required": ["branch", "executionRoot", "gitCommonDir", "sourceRoot"],
       "type": "object"
     },
+    "IrreversibleReason": {
+      "description": "Why a patch set cannot be undone.",
+      "oneOf": [
+        {
+          "const": "capacity",
+          "description": "The ledger had no room for the inverse data and the caller accepted that.",
+          "type": "string"
+        },
+        {
+          "const": "stopUnproven",
+          "description": "The executor was not confirmed stopped when the run settled.",
+          "type": "string"
+        },
+        {
+          "const": "overlap",
+          "description": "Another run was active on the same directory during this run.",
+          "type": "string"
+        },
+        {
+          "const": "pathUnsupported",
+          "description": "A changed path has no lossless ledger key.",
+          "type": "string"
+        },
+        {
+          "const": "fidelityUnknown",
+          "description": "The bytes on disk before the run could not be established.",
+          "type": "string"
+        }
+      ]
+    },
     "IsolationKind": {
       "enum": ["gitWorktree", "shadow", "observed"],
       "type": "string"
@@ -10109,6 +10139,18 @@
           },
           "type": "array"
         },
+        "irreversibleReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IrreversibleReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why `reversible` is false. `None` beside `reversible == false` is a\nrow written before reasons existed: still not reversible, reason unknown."
+        },
         "patchId": {
           "type": "string"
         },
@@ -10134,6 +10176,7 @@
         "baseRevision",
         "createdAt",
         "files",
+        "irreversibleReason",
         "patchId",
         "reversible",
         "runId",

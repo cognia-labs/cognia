@@ -950,7 +950,28 @@ describe("TaskResourcesPanel", () => {
       await user.click(screen.getByRole("button", { name: "moreActions" }))
       const undo = await screen.findByRole("menuitem", { name: /undo/ })
       expect(undo).toHaveAttribute("data-disabled")
-      expect(undo).toHaveTextContent("undoUnavailableIrreversible")
+      expect(undo).toHaveTextContent("undoUnavailableUnknownReason")
+    })
+
+    it.each([
+      ["capacity", "undoUnavailableIrreversible"],
+      ["stopUnproven", "undoUnavailableStopUnproven"],
+      ["overlap", "undoUnavailableOverlap"],
+      ["pathUnsupported", "undoUnavailablePathUnsupported"],
+      ["fidelityUnknown", "undoUnavailableFidelityUnknown"],
+    ])("names the %s reason on the disabled undo", async (irreversibleReason, key) => {
+      const user = userEvent.setup()
+      jest
+        .mocked(getTaskPatchSet)
+        .mockResolvedValue({ reversible: false, irreversibleReason, files: [] } as never)
+      render(<TaskResourcesPanel sessionId="session-1" layout="mobile" />)
+      await screen.findByText("src/result.md")
+      await waitFor(() => expect(getTaskPatchSet).toHaveBeenCalled())
+
+      await user.click(screen.getByRole("button", { name: "moreActions" }))
+      const undo = await screen.findByRole("menuitem", { name: /undo/ })
+      expect(undo).toHaveAttribute("data-disabled")
+      expect(undo).toHaveTextContent(key)
     })
 
     it("keeps every action inline on the desktop dock", async () => {

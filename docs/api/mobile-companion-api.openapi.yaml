@@ -113520,9 +113520,13 @@ paths:
                     - string
                     - "null"
                   format: date-time
+                expectedAccountId:
+                  type: string
                 plugin_id:
                   type: string
                 granted_by:
+                  type: string
+                expected_account_id:
                   type: string
               additionalProperties: false
               allOf:
@@ -113908,7 +113912,11 @@ paths:
                   type: string
                 permission:
                   type: string
+                expectedAccountId:
+                  type: string
                 plugin_id:
+                  type: string
+                expected_account_id:
                   type: string
               additionalProperties: false
               allOf:

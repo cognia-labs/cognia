@@ -67585,10 +67585,16 @@
             ],
             "format": "date-time"
           },
+          "expectedAccountId": {
+            "type": "string"
+          },
           "plugin_id": {
             "type": "string"
           },
           "granted_by": {
+            "type": "string"
+          },
+          "expected_account_id": {
             "type": "string"
           }
         },
@@ -67724,7 +67730,13 @@
           "permission": {
             "type": "string"
           },
+          "expectedAccountId": {
+            "type": "string"
+          },
           "plugin_id": {
+            "type": "string"
+          },
+          "expected_account_id": {
             "type": "string"
           }
         },
@@ -94681,6 +94693,45 @@
                 },
                 "type": "array"
               },
+              "irreversibleReason": {
+                "anyOf": [
+                  {
+                    "description": "Why a patch set cannot be undone.",
+                    "oneOf": [
+                      {
+                        "const": "capacity",
+                        "description": "The ledger had no room for the inverse data and the caller accepted that.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "stopUnproven",
+                        "description": "The executor was not confirmed stopped when the run settled.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "overlap",
+                        "description": "Another run was active on the same directory during this run.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "pathUnsupported",
+                        "description": "A changed path has no lossless ledger key.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fidelityUnknown",
+                        "description": "The bytes on disk before the run could not be established.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Why `reversible` is false. `None` beside `reversible == false` is a\nrow written before reasons existed: still not reversible, reason unknown."
+              },
               "patchId": {
                 "type": "string"
               },
@@ -94712,6 +94763,7 @@
               "baseRevision",
               "createdAt",
               "files",
+              "irreversibleReason",
               "patchId",
               "reversible",
               "runId",
@@ -112667,5 +112719,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "42ac4ccbf39c21b4aec7f35efad1b68c9547446dd0ef6069ccd291b92603cb6f"
+  "catalogHash": "18b80b98775026d65ae2f10dd04f1ac944e764a49704b0b9f77efd169f796e4b"
 }

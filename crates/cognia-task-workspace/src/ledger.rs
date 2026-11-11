@@ -80,6 +80,7 @@ pub fn build_patch_set(
         applied_selection: Vec::new(),
         applied_selection_known: false,
         reversible: true,
+        irreversible_reason: None,
         created_at: now,
     })
 }
@@ -112,7 +113,8 @@ pub fn apply(
         });
     }
 
-    patch.reversible = persist_plan_blobs(store, &plans, options.now, options.allow_irreversible)?;
+    let retained = persist_plan_blobs(store, &plans, options.now, options.allow_irreversible)?;
+    patch.record_inverse_retention(retained);
     let mut captured_patch = patch.clone();
     fill_applied_patch(&mut captured_patch, &plans, selection, options.revision);
     let capture = prepare_capture(PreflightContext { workspace_root, scratch_root, store, now: options.now }, &captured_patch, &plans, selection, options.revision, "apply");
@@ -200,9 +202,7 @@ pub fn undo(
         return Err(format!("patch set is not applied: {:?}", patch.state));
     }
     if !patch.reversible {
-        return Err(
-            "patch set was applied irreversibly because inverse data was not retained".into(),
-        );
+        return Err(crate::IrreversibleReason::undo_refusal(patch.irreversible_reason).into());
     }
     let mut plans = Vec::new();
     let mut conflicts = Vec::new();
@@ -342,7 +342,8 @@ pub fn force_apply(
             after: desired,
         });
     }
-    patch.reversible = persist_plan_blobs(store, &plans, options.now, options.allow_irreversible)?;
+    let retained = persist_plan_blobs(store, &plans, options.now, options.allow_irreversible)?;
+    patch.record_inverse_retention(retained);
     let mut captured_patch = patch.clone();
     fill_applied_patch(&mut captured_patch, &plans, selection, options.revision);
     let capture = prepare_capture(PreflightContext { workspace_root, scratch_root, store, now: options.now }, &captured_patch, &plans, selection, options.revision, "force");
@@ -1506,5 +1507,50 @@ mod tests {
         let override_data = TempDir::new().unwrap();
         let mut override_store = WorkspaceStore::open(override_data.path(), 0).unwrap();
         assert!(!persist_plan_blobs(&mut override_store, &plans, 1, true).unwrap());
+    }
+
+    #[test]
+    fn undo_refuses_an_irreversible_patch_with_its_reason() {
+        use crate::IrreversibleReason as Reason;
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let scratch = TempDir::new().unwrap();
+        let mut store = WorkspaceStore::open(data.path(), 0).unwrap();
+        let applied = |reason: Option<Reason>| PatchSet {
+            patch_id: "patch".into(),
+            task_id: "task".into(),
+            run_id: "run".into(),
+            state: PatchState::Applied,
+            base_revision: 0,
+            applied_revision: Some(1),
+            files: Vec::new(),
+            applied_files: Vec::new(),
+            applied_selection: Vec::new(),
+            applied_selection_known: true,
+            reversible: false,
+            irreversible_reason: reason,
+            created_at: 1,
+        };
+        for (reason, expected) in [
+            (None, "inverse data was not retained"),
+            (Some(Reason::Capacity), "inverse data was not retained"),
+            (Some(Reason::StopUnproven), "not confirmed stopped"),
+            (Some(Reason::Overlap), "another run shared its directory"),
+            (Some(Reason::PathUnsupported), "no lossless key"),
+            (Some(Reason::FidelityUnknown), "original bytes are unknown"),
+        ] {
+            let mut patch = applied(reason);
+            let error = undo(
+                workspace.path(),
+                scratch.path(),
+                &mut store,
+                &mut patch,
+                2,
+                2,
+            )
+            .unwrap_err();
+            assert!(error.contains(expected), "{reason:?}: {error}");
+            assert_eq!(patch.state, PatchState::Applied);
+        }
     }
 }

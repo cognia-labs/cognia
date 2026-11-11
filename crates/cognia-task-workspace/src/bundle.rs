@@ -843,6 +843,7 @@ mod tests {
             applied_selection: Vec::new(),
             applied_selection_known: false,
             reversible: true,
+            irreversible_reason: None,
             created_at: 0,
         }
     }

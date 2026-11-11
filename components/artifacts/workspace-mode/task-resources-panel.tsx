@@ -46,6 +46,7 @@ import {
   undoTaskWorkspace,
   uploadTaskResource,
 } from "@/lib/task-workspace/client"
+import { undoUnavailableKey } from "@/lib/task-workspace/irreversible-reason"
 import type {
   PatchSet,
   ResourceChange,
@@ -94,6 +95,7 @@ export function TaskResourcesPanel({
   const [diff, setDiff] = useState<string | null>(null)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [patchSet, setPatchSet] = useState<PatchSet | null>(null)
+  const undoUnavailable = undoUnavailableKey(patchSet)
   const [adoption, setAdoption] = useState<CodeAdoptionTurnRow | null>(null)
   const [selectedHunks, setSelectedHunks] = useState<string[]>([])
   const [sensitiveAuthorized, setSensitiveAuthorized] = useState(false)
@@ -663,16 +665,16 @@ export function TaskResourcesPanel({
                         {t("upload")}
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        disabled={patchSet?.reversible === false}
+                        disabled={undoUnavailable !== null}
                         onSelect={() => void undo()}
                         className="items-start"
                       >
                         <Undo2Icon aria-hidden className="mt-0.5 size-4" />
                         <span className="flex min-w-0 flex-col">
                           {t("undo")}
-                          {patchSet?.reversible === false && (
+                          {undoUnavailable && (
                             <span className="text-xs text-muted-foreground">
-                              {t("undoUnavailableIrreversible")}
+                              {t(undoUnavailable)}
                             </span>
                           )}
                         </span>
@@ -727,10 +729,8 @@ export function TaskResourcesPanel({
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={patchSet?.reversible === false}
-                  title={
-                    patchSet?.reversible === false ? t("undoUnavailableIrreversible") : undefined
-                  }
+                  disabled={undoUnavailable !== null}
+                  title={undoUnavailable ? t(undoUnavailable) : undefined}
                   onClick={() => void undo()}
                 >
                   {t("undo")}

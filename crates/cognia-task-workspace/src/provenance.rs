@@ -2071,7 +2071,7 @@ pub(crate) mod tests {
                 state: if n == 2 { crate::PatchState::Conflict } else { crate::PatchState::Applied },
                 base_revision: n as u64 - 1, applied_revision: Some(n as u64), files: vec![],
                 applied_files: vec![crate::AppliedFile { path: "notes.txt".into(), before_apply_hash: Some(undo_blob.clone()), after_apply_hash: Some(key.clone()), before_kind: Some(crate::ResourceKind::File), after_kind: Some(crate::ResourceKind::File), before_mode: None, after_mode: None, binary: false }],
-                applied_selection: vec![], applied_selection_known: true, reversible: true, created_at: n,
+                applied_selection: vec![], applied_selection_known: true, reversible: true, irreversible_reason: None, created_at: n,
             };
             store.put_patch_set(&patch).unwrap();
             let next = version(&resource, Some(previous), &key, &key, &bytes);

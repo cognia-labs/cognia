@@ -677,6 +677,10 @@ export interface PatchSelection {
   hunkIds: string[]
 }
 
+/** Why a patch set cannot be undone. Mirrors the host's `IrreversibleReason`. */
+export type IrreversibleReason =
+  "capacity" | "stopUnproven" | "overlap" | "pathUnsupported" | "fidelityUnknown"
+
 export interface PatchSet {
   patchId: string
   taskId: string
@@ -685,6 +689,11 @@ export interface PatchSet {
   baseRevision: number
   appliedRevision: number | null
   reversible: boolean
+  /**
+   * Why `reversible` is false. Absent or null beside `reversible: false` is a
+   * patch recorded before reasons existed: still not reversible, reason unknown.
+   */
+  irreversibleReason?: IrreversibleReason | null
   files: Array<{
     path: string
     origin?: ContributionOrigin

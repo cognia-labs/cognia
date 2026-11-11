@@ -148114,9 +148114,13 @@ paths:
                     - string
                     - "null"
                   format: date-time
+                expectedAccountId:
+                  type: string
                 plugin_id:
                   type: string
                 granted_by:
+                  type: string
+                expected_account_id:
                   type: string
               additionalProperties: false
               allOf:
@@ -148494,7 +148498,11 @@ paths:
                   type: string
                 permission:
                   type: string
+                expectedAccountId:
+                  type: string
                 plugin_id:
+                  type: string
+                expected_account_id:
                   type: string
               additionalProperties: false
               allOf:
@@ -195348,6 +195356,30 @@ paths:
                             - resourceKind
                           type: object
                         type: array
+                      irreversibleReason:
+                        anyOf:
+                          - description: Why a patch set cannot be undone.
+                            oneOf:
+                              - const: capacity
+                                description: The ledger had no room for the inverse data and the caller accepted that.
+                                type: string
+                              - const: stopUnproven
+                                description: The executor was not confirmed stopped when the run settled.
+                                type: string
+                              - const: overlap
+                                description: Another run was active on the same directory during this run.
+                                type: string
+                              - const: pathUnsupported
+                                description: A changed path has no lossless ledger key.
+                                type: string
+                              - const: fidelityUnknown
+                                description: The bytes on disk before the run could not be established.
+                                type: string
+                          - type: "null"
+                        default: null
+                        description: |-
+                          Why `reversible` is false. `None` beside `reversible == false` is a
+                          row written before reasons existed: still not reversible, reason unknown.
                       patchId:
                         type: string
                       reversible:
@@ -195372,6 +195404,7 @@ paths:
                       - baseRevision
                       - createdAt
                       - files
+                      - irreversibleReason
                       - patchId
                       - reversible
                       - runId

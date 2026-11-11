@@ -2747,7 +2747,7 @@ impl TaskWorkspaceService {
                         patch.applied_files.clear();
                         patch.applied_selection.clear();
                         patch.applied_selection_known = false;
-                        patch.reversible = true;
+                        patch.record_inverse_retention(true);
                         store.put_patch_set(&patch)?;
                     }
                     crate::PatchState::Ready | crate::PatchState::Conflict => {}
