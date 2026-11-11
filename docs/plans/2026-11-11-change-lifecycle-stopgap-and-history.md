@@ -68,6 +68,8 @@
 
 ### S1-0 不可逆原因字段
 
+**已实现**（`21b3168222`，2026-11-11）。与下文的出入：枚举值按仓库惯例用 camelCase（`capacity`、`stopUnproven`、`overlap`、`pathUnsupported`、`fidelityUnknown`）。`capacity` 是唯一随 apply 设置、并在下一次保留了反向数据的 apply 时解除的原因；其余原因描述运行本身，一旦设置不解除，bundle 重试的复位也不清它们。后续各项用 `PatchSet::mark_irreversible` 置原因。聊天里的 turn card 和 Restore 对话框还没有按原因显示说明，只有 Task Resources 面板有。
+
 给 `PatchSet` 加 `irreversible_reason`（`capacity`、`stop_unproven`、`overlap`、`path_unsupported`、`fidelity_unknown`），现有容量路径填 `capacity`。同步 serde、TS 类型、companion 契约生成物和面板文案（en、zh-CN 分片）。后续各项只是置这个字段，不再各自改 DTO。
 
 验收：旧记录缺字段时读作「未知原因的不可逆」，不读作可逆；面板按原因显示说明。
